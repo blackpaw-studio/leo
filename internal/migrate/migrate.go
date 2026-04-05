@@ -421,13 +421,13 @@ func parseCronJobs(ocRoot string, cfg *config.Config) {
 		return
 	}
 
-	skipped := 0
+	var skipped []string
 	for _, job := range jobsWrapper.Jobs {
 		name := sanitizeTaskName(job.Name)
 
 		lower := strings.ToLower(name)
 		if strings.Contains(lower, "gateway") || strings.Contains(lower, "openclaw") {
-			skipped++
+			skipped = append(skipped, name)
 			continue
 		}
 
@@ -463,8 +463,8 @@ func parseCronJobs(ocRoot string, cfg *config.Config) {
 		prompt.Info.Printf("  Migrated task: %s (%s)\n", name, job.Schedule.Expr)
 	}
 
-	if skipped > 0 {
-		prompt.Info.Printf("  Skipped %d OpenClaw-specific jobs\n", skipped)
+	for _, name := range skipped {
+		prompt.Info.Printf("  Skipped: %s\n", name)
 	}
 }
 
