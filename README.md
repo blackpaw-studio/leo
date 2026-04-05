@@ -102,12 +102,37 @@ cron ──> leo run <task> ──> claude -p "<assembled prompt>" ──> Agent
 
 Tasks can run silently — if there's nothing to report, the agent outputs `NO_REPLY` and exits.
 
+### Running in the Background
+
+For production use, you'll want the Telegram session to stay alive and automatically restart if it crashes. Leo provides two options:
+
+**Simple background mode** — spawns a supervised process with automatic restart and exponential backoff. No OS-level daemon installation required.
+
+```bash
+leo chat start            # start in background with auto-restart
+leo chat status           # check if running
+leo chat stop             # stop the background session
+```
+
+**Daemon mode** — installs a launchd plist (macOS) or systemd user unit (Linux) for OS-level supervision that persists across reboots.
+
+```bash
+leo chat start --daemon   # install and start as OS service
+leo chat status --daemon  # check daemon status
+leo chat stop --daemon    # uninstall OS service
+```
+
+Logs for both modes are written to `<workspace>/state/chat.log`.
+
 ## CLI Reference
 
 | Command | Description |
 |---|---|
 | `leo setup` | Interactive setup wizard for a new agent |
-| `leo chat` | Start an interactive Telegram session |
+| `leo chat` | Start an interactive Telegram session (foreground) |
+| `leo chat start` | Start chat in background with auto-restart |
+| `leo chat stop` | Stop background chat session |
+| `leo chat status` | Show chat session status |
 | `leo run <task>` | Run a scheduled task once (cron entry point) |
 | `leo cron install` | Install all enabled tasks to system crontab |
 | `leo cron remove` | Remove all Leo-managed cron entries |
@@ -118,6 +143,8 @@ Tasks can run silently — if there's nothing to report, the agent outputs `NO_R
 | `leo task disable <name>` | Disable a task |
 | `leo migrate` | Migrate from an existing OpenClaw installation |
 | `leo version` | Print version |
+
+The `start`, `stop`, and `status` subcommands accept a `--daemon` flag to use OS-level service management (launchd/systemd) instead of a simple background process.
 
 ### Global Flags
 
