@@ -80,6 +80,11 @@ func Stop(agentName, workDir string) error {
 		return fmt.Errorf("not running (no pid file)")
 	}
 
+	if !isRunning(pid) {
+		_ = removeFile(pidFile)
+		return fmt.Errorf("not running (stale pid file cleaned up)")
+	}
+
 	proc, err := findProcess(pid)
 	if err != nil {
 		_ = removeFile(pidFile)
