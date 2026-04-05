@@ -41,7 +41,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	claudeArgs := buildClaudeArgs(cfg, supervised)
+	claudeArgs := buildClaudeArgs(cfg)
 
 	if supervised {
 		claudePath, err := exec.LookPath("claude")
@@ -62,20 +62,10 @@ func runChat(cmd *cobra.Command, args []string) error {
 	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), os.Environ())
 }
 
-func buildClaudeArgs(cfg *config.Config, daemonMode bool) []string {
+func buildClaudeArgs(cfg *config.Config) []string {
 	claudeArgs := []string{
 		"--agent", cfg.Agent.Name,
-		"--channels", "plugin:telegram@claude-plugins-official",
 		"--add-dir", cfg.Agent.Workspace,
-	}
-
-	// In daemon mode (no TTY), claude requires -p to avoid "Input must be
-	// provided" error. Provide a bootstrap prompt that starts the channel listener.
-	if daemonMode {
-		claudeArgs = append(claudeArgs,
-			"-p", "You are now running as a persistent daemon. Listen for incoming Telegram messages and respond to them. Stay active and wait for messages.",
-			"--output-format", "text",
-		)
 	}
 
 	mcpConfig := cfg.MCPConfigPath()

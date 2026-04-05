@@ -145,7 +145,12 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir strin
 	backoff := initialBackoff
 
 	for {
-		cmd := exec.CommandContext(ctx, claudePath, claudeArgs...)
+		// Use 'script' to allocate a PTY so claude starts in interactive
+		// mode (loads plugins, channels) even when running as a daemon.
+		scriptArgs := []string{"-q", "/dev/null"}
+		scriptArgs = append(scriptArgs, claudePath)
+		scriptArgs = append(scriptArgs, claudeArgs...)
+		cmd := exec.CommandContext(ctx, "script", scriptArgs...)
 		cmd.Dir = workDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
