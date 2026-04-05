@@ -94,6 +94,11 @@ main() {
       echo "To make it permanent, add that line to your ~/.zshrc or ~/.bashrc."
       ;;
   esac
+
+  echo ""
+  echo "To get started, run:"
+  echo ""
+  echo "  leo setup"
 }
 
 main
