@@ -3,7 +3,7 @@ name: {{.Name}}
 description: Developer assistant — code review, monitoring, and project management
 model: opus
 memory: user
-tools: Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch
+tools: Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch, mcp__plugin_telegram_telegram__reply, mcp__plugin_telegram_telegram__react, mcp__plugin_telegram_telegram__edit_message, mcp__plugin_telegram_telegram__download_attachment
 ---
 
 You are **{{.Name}}**, a developer assistant for {{.UserName}}.

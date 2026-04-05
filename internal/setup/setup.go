@@ -2,9 +2,12 @@ package setup
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -69,6 +72,33 @@ func RunInteractive(reader *bufio.Reader) error {
 		versionStr = "installed"
 	}
 	prompt.Success.Printf("    claude CLI    ✓ %s\n", versionStr)
+
+	if prereq.CheckTmux() {
+		prompt.Success.Println("    tmux          ✓ installed")
+	} else {
+		prompt.Err.Println("    tmux          ✗ not found")
+		fmt.Println()
+		fmt.Println("  tmux is required for the chat daemon. Install it:")
+		fmt.Println()
+		fmt.Println("    brew install tmux")
+		fmt.Println()
+		fmt.Println("  Then run 'leo setup' again.")
+		return fmt.Errorf("tmux not found")
+	}
+
+	if prereq.CheckBun() {
+		prompt.Success.Println("    bun           ✓ installed")
+	} else {
+		prompt.Err.Println("    bun           ✗ not found")
+		fmt.Println()
+		fmt.Println("  bun is required for the Telegram plugin. Install it:")
+		fmt.Println()
+		fmt.Println("    curl -fsSL https://bun.sh/install | bash")
+		fmt.Println()
+		fmt.Println("  Then run 'leo setup' again.")
+		return fmt.Errorf("bun not found")
+	}
+
 	fmt.Println()
 
 	// Try to load existing config
@@ -330,14 +360,15 @@ func RunInteractive(reader *bufio.Reader) error {
 	// 9. Configure Telegram channel plugin for Claude Code
 	if botToken != "" {
 		prompt.Bold.Println("\nConfiguring Telegram channel plugin...")
-		if err := installTelegramPlugin(botToken, chatID); err != nil {
+		if err := installTelegramPlugin(botToken, chatID, groupID, workspace); err != nil {
 			prompt.Warn.Printf("  Failed to configure Telegram plugin: %v\n", err)
 		} else {
 			prompt.Success.Println("  Telegram channel plugin configured.")
-			fmt.Println()
-			fmt.Println("  To pair with your Telegram bot, start a chat session and")
-			fmt.Println("  send /start to your bot. Then approve the pairing in the")
-			fmt.Println("  terminal with: /telegram:access")
+		}
+	} else {
+		// Still write settings.json for trusted dirs even without telegram
+		if err := writeClaudeSettings(workspace); err != nil {
+			prompt.Warn.Printf("  Failed to write Claude settings: %v\n", err)
 		}
 	}
 
@@ -470,57 +501,122 @@ func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefaul
 	return
 }
 
-// installTelegramPlugin configures the Claude Code telegram channel plugin.
-// Writes the bot token to ~/.claude/channels/telegram/.env and sets up access.json.
-func installTelegramPlugin(botToken, chatID string) error {
+// installTelegramPlugin fully configures the Claude Code telegram channel plugin:
+// - Installs the plugin via claude CLI if not already installed
+// - Writes bot token to ~/.claude/channels/telegram/.env
+// - Writes access.json with allowlist policy, allowFrom, and groups
+// - Writes ~/.claude/settings.json with trustedDirectories, skipDangerousModePermissionPrompt, enabledPlugins
+func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 	home, _ := os.UserHomeDir()
-	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
 
+	// 1. Install the telegram plugin if not already installed
+	pluginDir := filepath.Join(home, ".claude", "plugins", "marketplaces", "claude-plugins-official", "external_plugins", "telegram")
+	if _, err := os.Stat(pluginDir); os.IsNotExist(err) {
+		claudePath, lookErr := exec.LookPath("claude")
+		if lookErr == nil {
+			prompt.Info.Println("  Installing telegram plugin...")
+			cmd := exec.Command(claudePath, "plugin", "install", "telegram@claude-plugins-official")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				prompt.Warn.Printf("  Plugin install failed: %v (you can install manually: claude plugin install telegram@claude-plugins-official)\n", err)
+			} else {
+				prompt.Success.Println("  Telegram plugin installed.")
+			}
+		}
+	} else {
+		prompt.Info.Println("  Telegram plugin already installed.")
+	}
+
+	// 2. Write bot token to .env
+	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
 	if err := os.MkdirAll(channelDir, 0755); err != nil {
 		return fmt.Errorf("creating channel directory: %w", err)
 	}
 
-	// Write bot token to .env
 	envContent := fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", botToken)
 	envPath := filepath.Join(channelDir, ".env")
 	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
 	}
 
-	// Write access.json if it doesn't exist, or update allowFrom
+	// 3. Write access.json with allowlist policy and groups
 	accessPath := filepath.Join(channelDir, "access.json")
-	if _, err := os.Stat(accessPath); os.IsNotExist(err) {
-		allowFrom := []string{}
-		if chatID != "" {
-			allowFrom = append(allowFrom, chatID)
-		}
-		accessContent := fmt.Sprintf(`{
-  "dmPolicy": "pairing",
-  "allowFrom": [%s],
-  "groups": {},
+	allowFromJSON := "[]"
+	if chatID != "" {
+		allowFromJSON = fmt.Sprintf("[\n    \"%s\"\n  ]", chatID)
+	}
+	groupsJSON := "{}"
+	if groupID != "" {
+		groupsJSON = fmt.Sprintf("{\n    \"%s\": {\n      \"requireMention\": false\n    }\n  }", groupID)
+	}
+	accessContent := fmt.Sprintf(`{
+  "dmPolicy": "allowlist",
+  "allowFrom": %s,
+  "groups": %s,
   "pending": {}
 }
-`, formatStringSlice(allowFrom))
-		if err := os.WriteFile(accessPath, []byte(accessContent), 0644); err != nil {
-			return fmt.Errorf("writing access.json: %w", err)
-		}
+`, allowFromJSON, groupsJSON)
+	if err := os.WriteFile(accessPath, []byte(accessContent), 0644); err != nil {
+		return fmt.Errorf("writing access.json: %w", err)
+	}
+
+	// 4. Write/update ~/.claude/settings.json
+	if err := writeClaudeSettings(workspace); err != nil {
+		return fmt.Errorf("writing settings.json: %w", err)
 	}
 
 	return nil
 }
 
-func formatStringSlice(ss []string) string {
-	if len(ss) == 0 {
-		return ""
+// writeClaudeSettings writes ~/.claude/settings.json with the settings needed
+// for headless daemon operation: trustedDirectories, skipDangerousModePermissionPrompt,
+// and enabledPlugins for telegram.
+func writeClaudeSettings(workspace string) error {
+	home, _ := os.UserHomeDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+
+	// Read existing settings if present
+	existing := make(map[string]any)
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		json.Unmarshal(data, &existing)
 	}
-	result := ""
-	for i, s := range ss {
-		if i > 0 {
-			result += ", "
+
+	// Ensure trustedDirectories includes the workspace
+	trusted, _ := existing["trustedDirectories"].([]any)
+	found := false
+	for _, d := range trusted {
+		if d == workspace {
+			found = true
+			break
 		}
-		result += fmt.Sprintf(`"%s"`, s)
 	}
-	return "\n    " + result + "\n  "
+	if !found {
+		trusted = append(trusted, workspace)
+	}
+	existing["trustedDirectories"] = trusted
+
+	// Set skip prompts and enable telegram plugin
+	existing["skipDangerousModePermissionPrompt"] = true
+
+	plugins, _ := existing["enabledPlugins"].(map[string]any)
+	if plugins == nil {
+		plugins = make(map[string]any)
+	}
+	plugins["telegram@claude-plugins-official"] = true
+	existing["enabledPlugins"] = plugins
+
+	// Keep schema if present
+	if _, ok := existing["$schema"]; !ok {
+		existing["$schema"] = "https://json.schemastore.org/claude-code-settings.json"
+	}
+
+	data, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling settings: %w", err)
+	}
+
+	return os.WriteFile(settingsPath, append(data, '\n'), 0644)
 }
 
 func installCron(cfg *config.Config) {
@@ -562,6 +658,7 @@ func installDaemon(name, workspace, cfgPath, botToken string) {
 }
 
 func captureEnv() map[string]string {
+	home, _ := os.UserHomeDir()
 	env := make(map[string]string)
 	for _, key := range []string{
 		"ANTHROPIC_API_KEY",
@@ -576,5 +673,19 @@ func captureEnv() map[string]string {
 			env[key] = v
 		}
 	}
+
+	// Ensure bun and homebrew are in PATH for the daemon
+	if path, ok := env["PATH"]; ok {
+		bunDir := filepath.Join(home, ".bun", "bin")
+		if _, err := os.Stat(bunDir); err == nil && !strings.Contains(path, bunDir) {
+			env["PATH"] = bunDir + ":" + path
+		}
+		if !strings.Contains(path, "/opt/homebrew/bin") {
+			if _, err := os.Stat("/opt/homebrew/bin"); err == nil {
+				env["PATH"] = "/opt/homebrew/bin:" + env["PATH"]
+			}
+		}
+	}
+
 	return env
 }
