@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Leo
 
-Leo is a Go CLI that sets up and manages Claude Code agents as persistent, proactive personal assistants. It handles workspace setup, Telegram integration, and cron/launchd scheduling. After setup, system cron runs `claude` directly — Leo manages the config and cron entries, not a daemon.
+Leo is a Go CLI that sets up and manages a single Claude Code agent as a persistent, mobile-accessible personal assistant. It handles workspace scaffolding, persistent memory management, Telegram integration, and cron scheduling. After setup, system cron runs `claude` directly — Leo manages the config and cron entries, not a daemon. Leo is not a multi-agent orchestration framework.
 
 Two runtime modes (both invoke stock `claude` CLI):
 - **Interactive** (`leo chat`): long-running Telegram session via channel plugin

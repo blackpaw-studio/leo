@@ -14,9 +14,9 @@
 
 ---
 
-Leo is a CLI tool that sets up and manages [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents with **Telegram integration** and **cron scheduling**. It turns the stock `claude` CLI into a persistent assistant that can chat interactively over Telegram and run scheduled background tasks — all from a single config file.
+Leo is a CLI tool that sets up and manages a single [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agent as a persistent, mobile-accessible personal assistant. It handles workspace scaffolding, persistent memory, Telegram integration, and cron scheduling — giving your agent a personality, continuity across sessions, and the ability to work on a schedule or respond to messages from your phone.
 
-For scheduled tasks, Leo is not a daemon — your system's cron runs `claude` directly, and Leo manages the config, prompt assembly, and cron entries. For interactive Telegram messaging, `leo chat` starts a long-running `claude` session that listens for inbound messages.
+Leo is **not** a multi-agent orchestration framework, and it is **not** a direct replacement for [OpenClaw](https://github.com/openclaw). While Leo includes a migration path for existing OpenClaw users (`leo migrate`), it is a simpler, more focused tool: one agent, one workspace, one config file. Leo manages the config, prompt assembly, and cron entries — your system's cron runs `claude` directly.
 
 ## Install
 
@@ -237,15 +237,31 @@ Leo ships with three agent personality templates, selected during setup:
 
 Templates are rendered into standard [Claude Code custom agents](https://docs.anthropic.com/en/docs/claude-code) at `~/.claude/agents/<name>.md` with `memory: user` enabled for persistent memory across sessions.
 
+## What Leo Is (and Isn't)
+
+**Leo is** a setup and management tool for a single Claude Code agent. It gives your agent:
+
+- A **personality** via agent templates (chief-of-staff, dev-assistant, or custom)
+- **Persistent memory** across sessions via `MEMORY.md` and Claude Code's `memory: user` feature
+- **Mobile access** via Telegram — chat with your agent from your phone
+- **Scheduled tasks** via cron — your agent can check in, send briefings, and run background work autonomously
+
+**Leo is not:**
+
+- A multi-agent orchestration framework — it manages a single agent
+- A replacement for the Claude API or Agent SDK — it wraps the stock `claude` CLI
+- A daemon or long-running service (except during `leo chat`) — cron runs `claude` directly
+- A direct replacement for [OpenClaw](https://github.com/openclaw) — Leo is simpler and more focused, though it includes `leo migrate` for OpenClaw users who want to transition
+
 ## Migrating from OpenClaw
 
-If you have an existing OpenClaw installation:
+If you have an existing OpenClaw installation, Leo can import your workspace, agent files, cron jobs, and Telegram config:
 
 ```bash
 leo migrate
 ```
 
-This converts your OpenClaw workspace, agent files, cron jobs, and Telegram config into Leo's format. See `leo migrate --help` for details.
+See `leo migrate --help` for details.
 
 ## Development
 

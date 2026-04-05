@@ -7,7 +7,9 @@ hide:
 
 **Claude Code agents as persistent, proactive personal assistants**
 
-Leo is a CLI tool that sets up and manages [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents with Telegram integration and cron scheduling. It turns the stock `claude` CLI into a persistent assistant that can chat interactively over Telegram and run scheduled background tasks — all from a single config file.
+Leo is a CLI tool that sets up and manages a single [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agent as a persistent, mobile-accessible personal assistant. It handles workspace scaffolding, persistent memory, Telegram integration, and cron scheduling — giving your agent a personality, continuity across sessions, and the ability to work on a schedule or respond to messages from your phone.
+
+Leo is not a multi-agent orchestration framework. It manages one agent, one workspace, one config file.
 
 ---
 
