@@ -159,9 +159,9 @@ Leo is configured via a single `leo.yaml` file in your workspace directory.
 
 ```yaml
 agent:
-  name: rocket
-  workspace: ~/rocket
-  agent_file: ~/.claude/agents/rocket.md    # optional, defaults to ~/.claude/agents/<name>.md
+  name: leo
+  workspace: ~/leo
+  agent_file: ~/.claude/agents/leo.md    # optional, defaults to ~/.claude/agents/<name>.md
 
 telegram:
   bot_token: "YOUR_BOT_TOKEN"
@@ -212,7 +212,7 @@ tasks:
 ## Workspace Structure
 
 ```
-~/rocket/
+~/leo/
 ├── leo.yaml                    # Leo config
 ├── USER.md                     # Your profile (created during setup)
 ├── HEARTBEAT.md                # Heartbeat checklist prompt
