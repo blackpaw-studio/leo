@@ -20,10 +20,10 @@ Leo is **not** a multi-agent orchestration framework, and it is **not** a direct
 
 ## Install
 
-**Homebrew**
+**Install script** (macOS and Linux)
 
 ```bash
-brew install blackpaw-studio/tap/leo
+curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
 ```
 
 **Go**
