@@ -16,7 +16,7 @@
 
 Leo is a CLI tool that sets up and manages [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents with **Telegram integration** and **cron scheduling**. It turns the stock `claude` CLI into a persistent assistant that can chat interactively over Telegram and run scheduled background tasks — all from a single config file.
 
-Leo is not a daemon. After setup, your system's cron runs `claude` directly. Leo manages the config, prompt assembly, and cron entries.
+For scheduled tasks, Leo is not a daemon — your system's cron runs `claude` directly, and Leo manages the config, prompt assembly, and cron entries. For interactive Telegram messaging, `leo chat` starts a long-running `claude` session that listens for inbound messages.
 
 ## Install
 
