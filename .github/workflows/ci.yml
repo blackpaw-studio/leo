@@ -13,7 +13,10 @@ permissions:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
 
@@ -28,8 +31,19 @@ jobs:
       - name: Test
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
+      - name: Check coverage threshold
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          total=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          threshold=50
+          if [ "$(echo "$total < $threshold" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${total}% is below threshold ${threshold}%"
+            exit 1
+          fi
+
       - name: Upload coverage
-        if: always()
+        if: always() && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v7
         with:
           name: coverage
@@ -68,3 +82,9 @@ jobs:
 
       - name: Staticcheck
         run: staticcheck ./...
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Security scan
+        run: gosec -quiet ./...
