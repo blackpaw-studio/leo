@@ -165,6 +165,24 @@ func DaemonStatus(agentName string) (string, error) {
 	return "installed", nil
 }
 
+// RestartDaemon force-restarts the launchd service.
+func RestartDaemon(agentName string) error {
+	path := plistPath(agentName)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("daemon not installed (no plist found)")
+	}
+
+	label := daemonLabel(agentName)
+	uid := fmt.Sprintf("%d", os.Getuid())
+	target := fmt.Sprintf("gui/%s/%s", uid, label)
+
+	if _, err := runCommand("launchctl", "kickstart", "-k", target); err != nil {
+		return fmt.Errorf("launchctl kickstart: %w", err)
+	}
+
+	return nil
+}
+
 func bootout(label, path string) error {
 	uid := fmt.Sprintf("%d", os.Getuid())
 	target := fmt.Sprintf("gui/%s/%s", uid, label)

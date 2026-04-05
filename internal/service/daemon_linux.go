@@ -134,6 +134,21 @@ func DaemonStatus(agentName string) (string, error) {
 	return status, nil
 }
 
+// RestartDaemon restarts the systemd user service.
+func RestartDaemon(agentName string) error {
+	path := unitPath(agentName)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("daemon not installed (no unit file found)")
+	}
+
+	name := unitName(agentName)
+	if _, err := runCommand("systemctl", "--user", "restart", name); err != nil {
+		return fmt.Errorf("systemctl restart: %w", err)
+	}
+
+	return nil
+}
+
 func defaultRunCommand(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()

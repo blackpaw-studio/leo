@@ -28,6 +28,7 @@ func newChatCmd() *cobra.Command {
 	cmd.AddCommand(
 		newChatStartCmd(),
 		newChatStopCmd(),
+		newChatRestartCmd(),
 		newChatStatusCmd(),
 	)
 
@@ -159,6 +160,31 @@ func newChatStopCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "remove OS service (launchd/systemd)")
+
+	return cmd
+}
+
+func newChatRestartCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart chat daemon",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Restarting chat daemon for agent %q...\n", cfg.Agent.Name)
+			if err := service.RestartDaemon(cfg.Agent.Name); err != nil {
+				return fmt.Errorf("restarting daemon: %w", err)
+			}
+
+			status, _ := service.DaemonStatus(cfg.Agent.Name)
+			success.Printf("Daemon restarted (%s).\n", status)
+			info.Printf("Logs: %s\n", service.LogPathFor(cfg.Agent.Workspace))
+			return nil
+		},
+	}
 
 	return cmd
 }
