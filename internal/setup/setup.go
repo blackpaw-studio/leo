@@ -48,7 +48,10 @@ func Run() error {
 // RunInteractive executes the setup wizard using the given reader, without printing a banner.
 // This allows the onboard command to call it after its own welcome screen.
 func RunInteractive(reader *bufio.Reader) error {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("determining home directory: %w", err)
+	}
 
 	// 0. Check prerequisites
 	prompt.Bold.Println("Checking prerequisites...")
@@ -194,7 +197,10 @@ func RunInteractive(reader *bufio.Reader) error {
 	var topics map[string]int
 
 	if botTokenDefault != "" {
-		masked := botTokenDefault[:8] + "..." + botTokenDefault[len(botTokenDefault)-4:]
+		masked := botTokenDefault
+		if len(botTokenDefault) > 12 {
+			masked = botTokenDefault[:8] + "..." + botTokenDefault[len(botTokenDefault)-4:]
+		}
 		prompt.Info.Printf("  Telegram bot token: %s\n", masked)
 		if chatIDDefault != "" {
 			prompt.Info.Printf("  Chat ID: %s\n", chatIDDefault)
@@ -389,8 +395,11 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	// 11. Install chat daemon
 	fmt.Println()
-	daemonStatus, _ := service.DaemonStatus(name)
-	if daemonStatus == "not installed" {
+	daemonStatus, daemonErr := service.DaemonStatus(name)
+	if daemonErr != nil {
+		prompt.Warn.Printf("  Could not check daemon status: %v\n", daemonErr)
+	}
+	if daemonStatus == "not installed" || daemonErr != nil {
 		if prompt.YesNo(reader, "Install chat daemon (runs on login)?", true) {
 			fmt.Println("  Installing chat daemon...")
 			installDaemon(name, workspace, cfgPath, botToken)
@@ -507,7 +516,10 @@ func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefaul
 // - Writes access.json with allowlist policy, allowFrom, and groups
 // - Writes ~/.claude/settings.json with trustedDirectories, skipDangerousModePermissionPrompt, enabledPlugins
 func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("determining home directory: %w", err)
+	}
 
 	// 1. Install the telegram plugin if not already installed
 	pluginDir := filepath.Join(home, ".claude", "plugins", "marketplaces", "claude-plugins-official", "external_plugins", "telegram")
@@ -542,22 +554,50 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 
 	// 3. Write access.json with allowlist policy and groups
 	accessPath := filepath.Join(channelDir, "access.json")
-	allowFromJSON := "[]"
+
+	// Read existing access.json to preserve approved peers
+	accessDoc := map[string]any{
+		"dmPolicy": "allowlist",
+		"allowFrom": []string{},
+		"groups":    map[string]any{},
+		"pending":   map[string]any{},
+	}
+	if existingData, readErr := os.ReadFile(accessPath); readErr == nil {
+		if unmarshalErr := json.Unmarshal(existingData, &accessDoc); unmarshalErr != nil {
+			return fmt.Errorf("parsing existing access.json: %w", unmarshalErr)
+		}
+	}
+
 	if chatID != "" {
-		allowFromJSON = fmt.Sprintf("[\n    \"%s\"\n  ]", chatID)
+		allowFrom, _ := accessDoc["allowFrom"].([]any)
+		found := false
+		for _, v := range allowFrom {
+			if v == chatID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			allowFrom = append(allowFrom, chatID)
+		}
+		accessDoc["allowFrom"] = allowFrom
 	}
-	groupsJSON := "{}"
 	if groupID != "" {
-		groupsJSON = fmt.Sprintf("{\n    \"%s\": {\n      \"requireMention\": false\n    }\n  }", groupID)
+		groups, _ := accessDoc["groups"].(map[string]any)
+		if groups == nil {
+			groups = make(map[string]any)
+		}
+		if _, exists := groups[groupID]; !exists {
+			groups[groupID] = map[string]any{"requireMention": false}
+		}
+		accessDoc["groups"] = groups
 	}
-	accessContent := fmt.Sprintf(`{
-  "dmPolicy": "allowlist",
-  "allowFrom": %s,
-  "groups": %s,
-  "pending": {}
-}
-`, allowFromJSON, groupsJSON)
-	if err := os.WriteFile(accessPath, []byte(accessContent), 0644); err != nil {
+
+	accessData, marshalErr := json.MarshalIndent(accessDoc, "", "  ")
+	if marshalErr != nil {
+		return fmt.Errorf("marshaling access.json: %w", marshalErr)
+	}
+	if err := os.WriteFile(accessPath, append(accessData, '\n'), 0600); err != nil {
 		return fmt.Errorf("writing access.json: %w", err)
 	}
 
@@ -573,13 +613,24 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 // for headless daemon operation: trustedDirectories, skipDangerousModePermissionPrompt,
 // and enabledPlugins for telegram.
 func writeClaudeSettings(workspace string) error {
-	home, _ := os.UserHomeDir()
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("determining home directory: %w", err)
+	}
+
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0700); err != nil {
+		return fmt.Errorf("creating .claude directory: %w", err)
+	}
+
+	settingsPath := filepath.Join(claudeDir, "settings.json")
 
 	// Read existing settings if present
 	existing := make(map[string]any)
 	if data, err := os.ReadFile(settingsPath); err == nil {
-		json.Unmarshal(data, &existing)
+		if unmarshalErr := json.Unmarshal(data, &existing); unmarshalErr != nil {
+			return fmt.Errorf("parsing existing settings.json: %w", unmarshalErr)
+		}
 	}
 
 	// Ensure trustedDirectories includes the workspace
@@ -616,7 +667,7 @@ func writeClaudeSettings(workspace string) error {
 		return fmt.Errorf("marshaling settings: %w", err)
 	}
 
-	return os.WriteFile(settingsPath, append(data, '\n'), 0644)
+	return os.WriteFile(settingsPath, append(data, '\n'), 0600)
 }
 
 func installCron(cfg *config.Config) {
@@ -658,7 +709,7 @@ func installDaemon(name, workspace, cfgPath, botToken string) {
 }
 
 func captureEnv() map[string]string {
-	home, _ := os.UserHomeDir()
+	home, _ := os.UserHomeDir() // best-effort; PATH augmentation is non-critical
 	env := make(map[string]string)
 	for _, key := range []string{
 		"ANTHROPIC_API_KEY",

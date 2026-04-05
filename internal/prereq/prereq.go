@@ -48,14 +48,15 @@ func CheckTmux() bool {
 	return false
 }
 
-// CheckBun checks if bun is installed and reachable.
+// CheckBun checks if bun is installed and executable.
 func CheckBun() bool {
 	home, _ := userHomeDir()
-	for _, p := range []string{"bun", filepath.Join(home, ".bun", "bin", "bun"), "/opt/homebrew/bin/bun", "/usr/local/bin/bun"} {
+	candidates := []string{"bun", "/opt/homebrew/bin/bun", "/usr/local/bin/bun"}
+	if home != "" {
+		candidates = append(candidates, filepath.Join(home, ".bun", "bin", "bun"))
+	}
+	for _, p := range candidates {
 		if path, err := lookPath(p); err == nil && path != "" {
-			return true
-		}
-		if _, err := os.Stat(p); err == nil {
 			return true
 		}
 	}
