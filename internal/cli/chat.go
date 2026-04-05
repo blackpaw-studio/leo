@@ -69,6 +69,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 func buildClaudeArgs(cfg *config.Config) []string {
 	claudeArgs := []string{
 		"--agent", cfg.Agent.Name,
+		"--channels", "plugin:telegram@claude-plugins-official",
 		"--add-dir", cfg.Agent.Workspace,
 	}
 

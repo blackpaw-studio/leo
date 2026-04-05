@@ -1,10 +1,8 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -15,8 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/creack/pty/v2"
 )
 
 // Testability seams
@@ -148,59 +144,63 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir strin
 
 	backoff := initialBackoff
 
-	for {
-		// Use a PTY so claude runs in interactive mode (required for
-		// plugins/channels to load). We monitor output for the trust
-		// dialog and auto-accept it by writing Enter.
-		cmd := exec.CommandContext(ctx, claudePath, claudeArgs...)
-		cmd.Dir = workDir
-		cmd.Env = os.Environ()
+	// Find tmux
+	tmuxPath, tmuxErr := exec.LookPath("tmux")
+	if tmuxErr != nil {
+		// Try common locations
+		for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
+			if _, err := os.Stat(p); err == nil {
+				tmuxPath = p
+				break
+			}
+		}
+		if tmuxPath == "" {
+			return fmt.Errorf("tmux not found: install with 'brew install tmux'")
+		}
+	}
 
-		ptmx, err := pty.Start(cmd)
-		if err != nil {
-			return fmt.Errorf("starting claude with pty: %w", err)
+	sessionName := fmt.Sprintf("leo-%d", os.Getpid())
+
+	for {
+		// Use tmux to provide a real terminal for claude. This is
+		// required for plugins (telegram) to communicate with claude
+		// via MCP stdio pipes — a Go PTY breaks this communication.
+		claudeCmd := strings.Join(append([]string{claudePath}, claudeArgs...), " ")
+
+		// Create a detached tmux session running claude
+		createCmd := exec.CommandContext(ctx, tmuxPath,
+			"new-session", "-d", "-s", sessionName,
+			"-x", "200", "-y", "50",
+			claudeCmd,
+		)
+		createCmd.Dir = workDir
+		createCmd.Env = os.Environ()
+
+		if err := createCmd.Run(); err != nil {
+			return fmt.Errorf("creating tmux session: %w", err)
 		}
 
-		// Copy PTY output to stdout, watching for trust dialog
-		done := make(chan error, 1)
-		go func() {
-			var buf [4096]byte
-			var accumulated bytes.Buffer
-			for {
-				n, readErr := ptmx.Read(buf[:])
-				if n > 0 {
-					os.Stdout.Write(buf[:n])
-					accumulated.Write(buf[:n])
+		fmt.Fprintf(os.Stdout, "tmux session '%s' created, claude running\n", sessionName)
 
-					// Auto-accept workspace trust dialog — escape sequences
-				// separate words so we match on just "trust" keyword
-					if bytes.Contains(accumulated.Bytes(), []byte("trust")) {
-						time.Sleep(500 * time.Millisecond)
-						ptmx.Write([]byte("\r"))
-						accumulated.Reset()
-					}
-					// Keep buffer from growing unbounded
-					if accumulated.Len() > 8192 {
-						accumulated.Reset()
-					}
-				}
-				if readErr != nil {
-					if readErr != io.EOF {
-						done <- readErr
-					} else {
-						done <- nil
-					}
-					return
-				}
+		// Wait for the tmux session to end (claude exits)
+		for {
+			select {
+			case <-ctx.Done():
+				// Kill tmux session on shutdown
+				exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
+				return nil
+			case <-time.After(5 * time.Second):
 			}
-		}()
 
-		// Wait for command to finish
-		cmdErr := cmd.Wait()
-		ptmx.Close()
-		<-done
+			// Check if session still exists
+			check := exec.Command(tmuxPath, "has-session", "-t", sessionName)
+			if check.Run() != nil {
+				// Session gone — claude exited
+				break
+			}
+		}
 
-		err = cmdErr
+		var err error = fmt.Errorf("claude session ended")
 
 		// Check if we were signaled to stop
 		select {
