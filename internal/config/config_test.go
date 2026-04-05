@@ -251,6 +251,53 @@ func containsSubstr(s, substr string) bool {
 	return false
 }
 
+func TestValidateCronExpr(t *testing.T) {
+	tests := []struct {
+		name    string
+		expr    string
+		wantErr bool
+	}{
+		{"valid simple", "0 7 * * *", false},
+		{"valid ranges", "0,30 7-22 * * *", false},
+		{"valid step", "*/5 * * * *", false},
+		{"valid complex", "0 7 1-15 1,6 1-5", false},
+		{"too few fields", "0 7 * *", true},
+		{"too many fields", "0 7 * * * *", true},
+		{"invalid minute", "60 * * * *", true},
+		{"invalid hour", "0 25 * * *", true},
+		{"invalid day", "0 0 32 * *", true},
+		{"invalid month", "0 0 * 13 *", true},
+		{"invalid dow", "0 0 * * 8", true},
+		{"non-numeric", "abc * * * *", true},
+		{"negative value", "0 -1 * * *", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCronExpr(tt.expr)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateCronExpr(%q) error = %v, wantErr %v", tt.expr, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsBadSchedule(t *testing.T) {
+	cfg := &Config{
+		Agent: AgentConfig{Name: "test", Workspace: "/tmp"},
+		Tasks: map[string]TaskConfig{
+			"bad": {Schedule: "not a cron", PromptFile: "test.md"},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for bad schedule")
+	}
+	if got := err.Error(); !contains(got, "tasks.bad.schedule") {
+		t.Errorf("error = %q, want mention of schedule", got)
+	}
+}
+
 func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "leo.yaml")

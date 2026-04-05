@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -82,6 +83,8 @@ func (c *Config) Validate() error {
 	for name, task := range c.Tasks {
 		if task.Schedule == "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.schedule is required", name))
+		} else if err := validateCronExpr(task.Schedule); err != nil {
+			errs = append(errs, fmt.Sprintf("tasks.%s.schedule: %v", name, err))
 		}
 		if task.PromptFile == "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.prompt_file is required", name))
@@ -210,6 +213,49 @@ func FindConfig(dir string) (string, error) {
 // LoadFromWorkspace loads config from a workspace directory.
 func LoadFromWorkspace(workspace string) (*Config, error) {
 	return Load(filepath.Join(workspace, "leo.yaml"))
+}
+
+// validateCronExpr checks that a cron expression has 5 fields with valid ranges.
+func validateCronExpr(expr string) error {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return fmt.Errorf("expected 5 fields, got %d", len(fields))
+	}
+
+	names := []string{"minute", "hour", "day-of-month", "month", "day-of-week"}
+	maxVals := []int{59, 23, 31, 12, 7}
+
+	for i, field := range fields {
+		if field == "*" {
+			continue
+		}
+		// Handle step values like */5 or 1-5/2
+		parts := strings.SplitN(field, "/", 2)
+		if len(parts) == 2 {
+			if _, err := strconv.Atoi(parts[1]); err != nil {
+				return fmt.Errorf("%s: invalid step %q", names[i], parts[1])
+			}
+			field = parts[0]
+			if field == "*" {
+				continue
+			}
+		}
+		// Handle lists like 1,5,10
+		for _, item := range strings.Split(field, ",") {
+			// Handle ranges like 1-5
+			rangeParts := strings.SplitN(item, "-", 2)
+			for _, p := range rangeParts {
+				n, err := strconv.Atoi(p)
+				if err != nil {
+					return fmt.Errorf("%s: %q is not a valid number", names[i], p)
+				}
+				if n < 0 || n > maxVals[i] {
+					return fmt.Errorf("%s: %d is out of range (0-%d)", names[i], n, maxVals[i])
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func expandHome(path string) string {
