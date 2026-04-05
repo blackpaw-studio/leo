@@ -45,10 +45,15 @@ func Run() error {
 // RunInteractive executes the setup wizard using the given reader, without printing a banner.
 // This allows the onboard command to call it after its own welcome screen.
 func RunInteractive(reader *bufio.Reader) error {
+	home, _ := os.UserHomeDir()
+
 	// 0. Check prerequisites
+	prompt.Bold.Println("Checking prerequisites...")
+	fmt.Println()
+
 	claude := prereq.CheckClaude()
 	if !claude.OK {
-		prompt.Err.Println("  claude CLI not found")
+		prompt.Err.Println("    claude CLI    ✗ not found")
 		fmt.Println()
 		fmt.Println("  Claude Code CLI is required. Install it:")
 		fmt.Println()
@@ -63,16 +68,31 @@ func RunInteractive(reader *bufio.Reader) error {
 	if versionStr == "" {
 		versionStr = "installed"
 	}
-	prompt.Success.Printf("  claude CLI: %s\n\n", versionStr)
+	prompt.Success.Printf("    claude CLI    ✓ %s\n", versionStr)
+	fmt.Println()
 
-	home, _ := os.UserHomeDir()
-
-	// Try to load existing config for defaults
+	// Try to load existing config
 	var existing *config.Config
 	defaultWorkspace := filepath.Join(home, ".leo")
+
+	// Check default location first
 	if cfg, err := config.LoadFromWorkspace(defaultWorkspace); err == nil {
 		existing = cfg
-		prompt.Info.Printf("  Found existing config at %s\n\n", defaultWorkspace)
+	}
+
+	// Also check any existing workspaces found by prereq
+	if existing == nil {
+		for _, ws := range prereq.FindExistingWorkspaces() {
+			if cfg, err := config.LoadFromWorkspace(ws); err == nil {
+				existing = cfg
+				defaultWorkspace = ws
+				break
+			}
+		}
+	}
+
+	if existing != nil {
+		prompt.Info.Printf("  Found existing config at %s/leo.yaml\n\n", existing.Agent.Workspace)
 	}
 
 	// 1. Agent name
@@ -307,7 +327,21 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	// 9. Install cron
+	// 9. Configure Telegram channel plugin for Claude Code
+	if botToken != "" {
+		prompt.Bold.Println("\nConfiguring Telegram channel plugin...")
+		if err := installTelegramPlugin(botToken, chatID); err != nil {
+			prompt.Warn.Printf("  Failed to configure Telegram plugin: %v\n", err)
+		} else {
+			prompt.Success.Println("  Telegram channel plugin configured.")
+			fmt.Println()
+			fmt.Println("  To pair with your Telegram bot, start a chat session and")
+			fmt.Println("  send /start to your bot. Then approve the pairing in the")
+			fmt.Println("  terminal with: /telegram:access")
+		}
+	}
+
+	// 10. Install cron
 	if len(cfg.Tasks) > 0 {
 		cronInstalled := cron.Installed(name)
 		if cronInstalled {
@@ -322,20 +356,23 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	// 10. Install chat daemon
+	// 11. Install chat daemon
+	fmt.Println()
 	daemonStatus, _ := service.DaemonStatus(name)
 	if daemonStatus == "not installed" {
-		if prompt.YesNo(reader, "\nInstall chat daemon (runs on login)?", true) {
-			installDaemon(name, workspace, cfgPath)
+		if prompt.YesNo(reader, "Install chat daemon (runs on login)?", true) {
+			fmt.Println("  Installing chat daemon...")
+			installDaemon(name, workspace, cfgPath, botToken)
 		}
 	} else {
-		prompt.Info.Printf("\n  Chat daemon: %s\n", daemonStatus)
+		prompt.Info.Printf("  Chat daemon: %s\n", daemonStatus)
 		if prompt.YesNo(reader, "  Reinstall chat daemon?", false) {
-			installDaemon(name, workspace, cfgPath)
+			fmt.Println("  Installing chat daemon...")
+			installDaemon(name, workspace, cfgPath, botToken)
 		}
 	}
 
-	// 11. Test
+	// 12. Test
 	if botToken != "" && chatID != "" && prompt.YesNo(reader, "\nSend test Telegram message?", true) {
 		effectiveChatID := chatID
 		if groupID != "" {
@@ -433,6 +470,59 @@ func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefaul
 	return
 }
 
+// installTelegramPlugin configures the Claude Code telegram channel plugin.
+// Writes the bot token to ~/.claude/channels/telegram/.env and sets up access.json.
+func installTelegramPlugin(botToken, chatID string) error {
+	home, _ := os.UserHomeDir()
+	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
+
+	if err := os.MkdirAll(channelDir, 0755); err != nil {
+		return fmt.Errorf("creating channel directory: %w", err)
+	}
+
+	// Write bot token to .env
+	envContent := fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", botToken)
+	envPath := filepath.Join(channelDir, ".env")
+	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
+		return fmt.Errorf("writing .env: %w", err)
+	}
+
+	// Write access.json if it doesn't exist, or update allowFrom
+	accessPath := filepath.Join(channelDir, "access.json")
+	if _, err := os.Stat(accessPath); os.IsNotExist(err) {
+		allowFrom := []string{}
+		if chatID != "" {
+			allowFrom = append(allowFrom, chatID)
+		}
+		accessContent := fmt.Sprintf(`{
+  "dmPolicy": "pairing",
+  "allowFrom": [%s],
+  "groups": {},
+  "pending": {}
+}
+`, formatStringSlice(allowFrom))
+		if err := os.WriteFile(accessPath, []byte(accessContent), 0644); err != nil {
+			return fmt.Errorf("writing access.json: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func formatStringSlice(ss []string) string {
+	if len(ss) == 0 {
+		return ""
+	}
+	result := ""
+	for i, s := range ss {
+		if i > 0 {
+			result += ", "
+		}
+		result += fmt.Sprintf(`"%s"`, s)
+	}
+	return "\n    " + result + "\n  "
+}
+
 func installCron(cfg *config.Config) {
 	leoPath, _ := os.Executable()
 	if leoPath == "" {
@@ -445,10 +535,14 @@ func installCron(cfg *config.Config) {
 	}
 }
 
-func installDaemon(name, workspace, cfgPath string) {
+func installDaemon(name, workspace, cfgPath, botToken string) {
 	leoPath, _ := os.Executable()
 	if leoPath == "" {
 		leoPath = "leo"
+	}
+	env := captureEnv()
+	if botToken != "" {
+		env["TELEGRAM_BOT_TOKEN"] = botToken
 	}
 	sc := service.ServiceConfig{
 		AgentName:  name,
@@ -456,7 +550,7 @@ func installDaemon(name, workspace, cfgPath string) {
 		ConfigPath: cfgPath,
 		WorkDir:    workspace,
 		LogPath:    service.LogPathFor(workspace),
-		Env:        captureEnv(),
+		Env:        env,
 	}
 	if err := service.InstallDaemon(sc); err != nil {
 		prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
@@ -476,6 +570,7 @@ func captureEnv() map[string]string {
 		"PATH",
 		"SHELL",
 		"USER",
+		"TELEGRAM_BOT_TOKEN",
 	} {
 		if v := os.Getenv(key); v != "" {
 			env[key] = v

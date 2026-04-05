@@ -211,6 +211,7 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 		"PATH",
 		"SHELL",
 		"USER",
+		"TELEGRAM_BOT_TOKEN",
 	} {
 		if v := os.Getenv(key); v != "" {
 			env[key] = v

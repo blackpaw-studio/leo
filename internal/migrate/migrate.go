@@ -196,18 +196,24 @@ func RunInteractive(reader *bufio.Reader) error {
 		if leoPath == "" {
 			leoPath = "leo"
 		}
+		fmt.Println("  Installing chat daemon...")
+		env := captureEnv()
+		if cfg.Telegram.BotToken != "" {
+			env["TELEGRAM_BOT_TOKEN"] = cfg.Telegram.BotToken
+		}
 		sc := service.ServiceConfig{
 			AgentName:  agentName,
 			LeoPath:    leoPath,
 			ConfigPath: cfgPath,
 			WorkDir:    workspace,
 			LogPath:    service.LogPathFor(workspace),
-			Env:        captureEnv(),
+			Env:        env,
 		}
 		if err := service.InstallDaemon(sc); err != nil {
 			prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
 		} else {
-			prompt.Success.Println("  Chat daemon installed.")
+			status, _ := service.DaemonStatus(agentName)
+			prompt.Success.Printf("  Chat daemon installed (%s).\n", status)
 			prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
 		}
 	}
@@ -605,6 +611,7 @@ func captureEnv() map[string]string {
 		"PATH",
 		"SHELL",
 		"USER",
+		"TELEGRAM_BOT_TOKEN",
 	} {
 		if v := os.Getenv(key); v != "" {
 			env[key] = v
