@@ -11,6 +11,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/prompt"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/telegram"
 )
 
@@ -189,7 +190,29 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	// 12. Test
+	// 12. Install chat daemon
+	if prompt.YesNo(reader, "\nInstall chat daemon (runs on login)?", true) {
+		leoPath, _ := os.Executable()
+		if leoPath == "" {
+			leoPath = "leo"
+		}
+		sc := service.ServiceConfig{
+			AgentName:  agentName,
+			LeoPath:    leoPath,
+			ConfigPath: cfgPath,
+			WorkDir:    workspace,
+			LogPath:    service.LogPathFor(workspace),
+			Env:        captureEnv(),
+		}
+		if err := service.InstallDaemon(sc); err != nil {
+			prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
+		} else {
+			prompt.Success.Println("  Chat daemon installed.")
+			prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
+		}
+	}
+
+	// 13. Test
 	if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
 		if prompt.YesNo(reader, "\nSend test Telegram message?", true) {
 			chatID := cfg.Telegram.ChatID
@@ -204,7 +227,7 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	// 13. Summary
+	// 14. Summary
 	prompt.Bold.Println("\nMigration complete!")
 	fmt.Printf("  Workspace: %s\n", workspace)
 	fmt.Printf("  Agent file: %s\n", agentPath)
@@ -571,4 +594,21 @@ func sanitizeTaskName(name string) string {
 	name = strings.ReplaceAll(name, " ", "-")
 	name = strings.ReplaceAll(name, "_", "-")
 	return name
+}
+
+func captureEnv() map[string]string {
+	env := make(map[string]string)
+	for _, key := range []string{
+		"ANTHROPIC_API_KEY",
+		"CLAUDE_CODE_ENTRYPOINT",
+		"HOME",
+		"PATH",
+		"SHELL",
+		"USER",
+	} {
+		if v := os.Getenv(key); v != "" {
+			env[key] = v
+		}
+	}
+	return env
 }

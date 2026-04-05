@@ -12,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/migrate"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/prompt"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/telegram"
 	"github.com/blackpaw-studio/leo/internal/templates"
 )
@@ -262,7 +263,30 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	// 10. Test
+	// 10. Install chat daemon
+	if prompt.YesNo(reader, "\nInstall chat daemon (runs on login)?", true) {
+		leoPath, _ := os.Executable()
+		if leoPath == "" {
+			leoPath = "leo"
+		}
+		cfgPathAbs := filepath.Join(workspace, "leo.yaml")
+		sc := service.ServiceConfig{
+			AgentName:  name,
+			LeoPath:    leoPath,
+			ConfigPath: cfgPathAbs,
+			WorkDir:    workspace,
+			LogPath:    service.LogPathFor(workspace),
+			Env:        captureEnv(),
+		}
+		if err := service.InstallDaemon(sc); err != nil {
+			prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
+		} else {
+			prompt.Success.Println("  Chat daemon installed.")
+			prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
+		}
+	}
+
+	// 11. Test
 	if botToken != "" && chatID != "" && prompt.YesNo(reader, "\nSend test Telegram message?", true) {
 		effectiveChatID := chatID
 		if groupID != "" {
@@ -282,4 +306,21 @@ func RunInteractive(reader *bufio.Reader) error {
 	fmt.Printf("  leo task list            # View configured tasks\n")
 
 	return nil
+}
+
+func captureEnv() map[string]string {
+	env := make(map[string]string)
+	for _, key := range []string{
+		"ANTHROPIC_API_KEY",
+		"CLAUDE_CODE_ENTRYPOINT",
+		"HOME",
+		"PATH",
+		"SHELL",
+		"USER",
+	} {
+		if v := os.Getenv(key); v != "" {
+			env[key] = v
+		}
+	}
+	return env
 }
