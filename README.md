@@ -23,7 +23,7 @@ Leo is **not** a multi-agent orchestration framework, and it is **not** a direct
 **Install script** (macOS and Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
 ```
 
 **Go**

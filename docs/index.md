@@ -82,7 +82,7 @@ System cron calls `leo run <task>`, which reads the config, assembles a prompt, 
 === "Install Script"
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
     ```
 
 === "Go"

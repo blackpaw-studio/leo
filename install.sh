@@ -2,7 +2,7 @@
 # Leo installer — downloads the latest release from GitHub.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
 #
 # Options (via environment variables):
 #   INSTALL_DIR  — where to place the binary (default: ~/.local/bin)

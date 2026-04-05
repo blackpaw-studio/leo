@@ -81,7 +81,7 @@ To edit release notes after publishing, use the GitHub Releases web UI.
 The repo includes an `install.sh` that users can curl-pipe to install the latest release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
 ```
 
 The script auto-detects OS and architecture, downloads the matching archive from the GitHub Release, and installs the binary to `/usr/local/bin` (or `INSTALL_DIR`).
