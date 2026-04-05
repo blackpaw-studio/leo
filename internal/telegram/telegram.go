@@ -30,6 +30,12 @@ func SendMessage(botToken, chatID, text string, topicID int) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		var apiErr struct {
+			Description string `json:"description"`
+		}
+		if json.Unmarshal(body, &apiErr) == nil && apiErr.Description != "" {
+			return fmt.Errorf("telegram API error (%d): %s", resp.StatusCode, apiErr.Description)
+		}
 		return fmt.Errorf("telegram API error (%d): %s", resp.StatusCode, string(body))
 	}
 
