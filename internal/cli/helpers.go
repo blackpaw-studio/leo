@@ -6,13 +6,13 @@ import (
 	"os/exec"
 
 	"github.com/blackpaw-studio/leo/internal/config"
-	"github.com/fatih/color"
+	"github.com/blackpaw-studio/leo/internal/prompt"
 )
 
 var (
-	success = color.New(color.FgGreen, color.Bold)
-	warn    = color.New(color.FgYellow, color.Bold)
-	info    = color.New(color.FgCyan)
+	success = prompt.Success
+	warn    = prompt.Warn
+	info    = prompt.Info
 )
 
 func loadConfig() (*config.Config, error) {

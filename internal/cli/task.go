@@ -69,12 +69,12 @@ func newTaskAddCmd() *cobra.Command {
 
 			reader := bufio.NewReader(os.Stdin)
 
-			name := prompt(reader, "Task name: ")
-			schedule := prompt(reader, "Cron schedule (e.g. '0 7 * * *'): ")
-			promptFile := prompt(reader, "Prompt file (relative to workspace): ")
-			model := prompt(reader, fmt.Sprintf("Model [%s]: ", cfg.Defaults.Model))
-			topic := prompt(reader, "Telegram topic (optional): ")
-			silentStr := prompt(reader, "Silent mode? [y/N]: ")
+			name := promptLine(reader, "Task name: ")
+			schedule := promptLine(reader, "Cron schedule (e.g. '0 7 * * *'): ")
+			promptFile := promptLine(reader, "Prompt file (relative to workspace): ")
+			model := promptLine(reader, fmt.Sprintf("Model [%s]: ", cfg.Defaults.Model))
+			topic := promptLine(reader, "Telegram topic (optional): ")
+			silentStr := promptLine(reader, "Silent mode? [y/N]: ")
 
 			task := config.TaskConfig{
 				Schedule:   schedule,
@@ -199,7 +199,7 @@ func configPath() (string, error) {
 	return config.FindConfig("")
 }
 
-func prompt(reader *bufio.Reader, label string) string {
+func promptLine(reader *bufio.Reader, label string) string {
 	fmt.Print(label)
 	line, _ := reader.ReadString('\n')
 	return strings.TrimSpace(line)
