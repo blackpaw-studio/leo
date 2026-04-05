@@ -469,17 +469,44 @@ func parseCronJobs(ocRoot string, cfg *config.Config) {
 }
 
 func configureTelegram(reader *bufio.Reader, ocRoot string, cfg *config.Config) {
-	home, _ := os.UserHomeDir()
-	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
-	if data, err := os.ReadFile(envPath); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "TELEGRAM_BOT_TOKEN=") {
-				cfg.Telegram.BotToken = strings.TrimPrefix(line, "TELEGRAM_BOT_TOKEN=")
-				cfg.Telegram.BotToken = strings.Trim(cfg.Telegram.BotToken, "\"'")
+	// Primary source: openclaw.json channels.telegram
+	ocConfigPath := filepath.Join(ocRoot, "openclaw.json")
+	if data, err := os.ReadFile(ocConfigPath); err == nil {
+		var ocConfig map[string]any
+		if err := json.Unmarshal(data, &ocConfig); err == nil {
+			if channels, ok := ocConfig["channels"].(map[string]any); ok {
+				if tg, ok := channels["telegram"].(map[string]any); ok {
+					if token, ok := tg["botToken"].(string); ok && token != "" {
+						cfg.Telegram.BotToken = token
+					}
+					// Extract group IDs from the groups map
+					if groups, ok := tg["groups"].(map[string]any); ok {
+						for groupID := range groups {
+							if groupID != "*" {
+								cfg.Telegram.GroupID = groupID
+							}
+						}
+					}
+				}
 			}
 		}
 	}
 
+	// Fallback: .claude/channels/telegram/.env for bot token
+	if cfg.Telegram.BotToken == "" {
+		home, _ := os.UserHomeDir()
+		envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
+		if data, err := os.ReadFile(envPath); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, "TELEGRAM_BOT_TOKEN=") {
+					cfg.Telegram.BotToken = strings.TrimPrefix(line, "TELEGRAM_BOT_TOKEN=")
+					cfg.Telegram.BotToken = strings.Trim(cfg.Telegram.BotToken, "\"'")
+				}
+			}
+		}
+	}
+
+	// Fallback: credentials directory for chat/group/topics
 	credDir := filepath.Join(ocRoot, "credentials")
 	entries, _ := os.ReadDir(credDir)
 	for _, e := range entries {
@@ -495,7 +522,7 @@ func configureTelegram(reader *bufio.Reader, ocRoot string, cfg *config.Config) 
 			if chatID, ok := cred["chat_id"]; ok {
 				cfg.Telegram.ChatID = fmt.Sprintf("%v", chatID)
 			}
-			if groupID, ok := cred["group_id"]; ok {
+			if groupID, ok := cred["group_id"]; ok && cfg.Telegram.GroupID == "" {
 				cfg.Telegram.GroupID = fmt.Sprintf("%v", groupID)
 			}
 			if topics, ok := cred["topics"].(map[string]any); ok {
@@ -504,6 +531,19 @@ func configureTelegram(reader *bufio.Reader, ocRoot string, cfg *config.Config) 
 					if n, ok := v.(float64); ok {
 						cfg.Telegram.Topics[k] = int(n)
 					}
+				}
+			}
+		}
+	}
+
+	// Chat ID from allowFrom in credentials
+	if cfg.Telegram.ChatID == "" {
+		allowPath := filepath.Join(credDir, "telegram-default-allowFrom.json")
+		if data, err := os.ReadFile(allowPath); err == nil {
+			var allow map[string]any
+			if err := json.Unmarshal(data, &allow); err == nil {
+				if ids, ok := allow["allowFrom"].([]any); ok && len(ids) > 0 {
+					cfg.Telegram.ChatID = fmt.Sprintf("%v", ids[0])
 				}
 			}
 		}
