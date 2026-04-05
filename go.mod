@@ -3,6 +3,7 @@ module github.com/blackpaw-studio/leo
 go 1.25.1
 
 require (
+	github.com/creack/pty/v2 v2.0.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect

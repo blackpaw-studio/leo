@@ -41,9 +41,12 @@ func runChat(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	claudeArgs := buildClaudeArgs(cfg)
-
 	if supervised {
+		// Supervised/daemon mode: launch claude in interactive mode via
+		// script(1) PTY wrapper. Plugins (telegram) only load in interactive
+		// mode. The open stdin pipe keeps the session alive.
+		claudeArgs := buildClaudeArgs(cfg)
+
 		claudePath, err := exec.LookPath("claude")
 		if err != nil {
 			return fmt.Errorf("claude not found: %w", err)
@@ -53,6 +56,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 
 	// Foreground mode: exec replaces this process
+	claudeArgs := buildClaudeArgs(cfg)
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		return fmt.Errorf("claude not found: %w", err)

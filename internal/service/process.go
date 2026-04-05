@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -13,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/creack/pty/v2"
 )
 
 // Testability seams
@@ -145,31 +149,58 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir strin
 	backoff := initialBackoff
 
 	for {
-		// Use 'script' to allocate a PTY so claude starts in interactive
-		// mode (loads plugins, channels) even when running as a daemon.
-		// The blocking pipe on stdin keeps claude alive waiting for input.
-		scriptArgs := []string{"-q", "/dev/null"}
-		scriptArgs = append(scriptArgs, claudePath)
-		scriptArgs = append(scriptArgs, claudeArgs...)
-		cmd := exec.CommandContext(ctx, "script", scriptArgs...)
+		// Use a PTY so claude runs in interactive mode (required for
+		// plugins/channels to load). We monitor output for the trust
+		// dialog and auto-accept it by writing Enter.
+		cmd := exec.CommandContext(ctx, claudePath, claudeArgs...)
 		cmd.Dir = workDir
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 		cmd.Env = os.Environ()
 
-		// Create a pipe for stdin that stays open — claude will block
-		// waiting for input, keeping the interactive session alive.
-		stdinR, stdinW, pipeErr := os.Pipe()
-		if pipeErr != nil {
-			return fmt.Errorf("creating stdin pipe: %w", pipeErr)
+		ptmx, err := pty.Start(cmd)
+		if err != nil {
+			return fmt.Errorf("starting claude with pty: %w", err)
 		}
-		cmd.Stdin = stdinR
 
-		err := cmd.Run()
+		// Copy PTY output to stdout, watching for trust dialog
+		done := make(chan error, 1)
+		go func() {
+			var buf [4096]byte
+			var accumulated bytes.Buffer
+			for {
+				n, readErr := ptmx.Read(buf[:])
+				if n > 0 {
+					os.Stdout.Write(buf[:n])
+					accumulated.Write(buf[:n])
 
-		// Close pipe ends
-		stdinR.Close()
-		stdinW.Close()
+					// Auto-accept workspace trust dialog — escape sequences
+				// separate words so we match on just "trust" keyword
+					if bytes.Contains(accumulated.Bytes(), []byte("trust")) {
+						time.Sleep(500 * time.Millisecond)
+						ptmx.Write([]byte("\r"))
+						accumulated.Reset()
+					}
+					// Keep buffer from growing unbounded
+					if accumulated.Len() > 8192 {
+						accumulated.Reset()
+					}
+				}
+				if readErr != nil {
+					if readErr != io.EOF {
+						done <- readErr
+					} else {
+						done <- nil
+					}
+					return
+				}
+			}
+		}()
+
+		// Wait for command to finish
+		cmdErr := cmd.Wait()
+		ptmx.Close()
+		<-done
+
+		err = cmdErr
 
 		// Check if we were signaled to stop
 		select {
