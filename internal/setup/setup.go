@@ -9,6 +9,8 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/migrate"
+	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/telegram"
 	"github.com/blackpaw-studio/leo/internal/templates"
@@ -21,6 +23,20 @@ func Run() error {
 	fmt.Println()
 	prompt.Bold.Println("  Leo Setup Wizard")
 	fmt.Println()
+
+	// Check for existing OpenClaw installation
+	if ocPath := prereq.FindOpenClaw(); ocPath != "" {
+		prompt.Info.Printf("  Found OpenClaw installation at %s\n\n", ocPath)
+		fmt.Println("What would you like to do?")
+		fmt.Println("  1. Migrate from OpenClaw — import your existing agent")
+		fmt.Println("  2. Fresh setup — create a new agent from scratch")
+		choice := prompt.Prompt(reader, "Choose", "1")
+		fmt.Println()
+
+		if prompt.ParseChoice(choice, 2) == 1 {
+			return migrate.RunInteractive(reader)
+		}
+	}
 
 	return RunInteractive(reader)
 }
