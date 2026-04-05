@@ -1,5 +1,6 @@
+<h1 align="center">Leo</h1>
+
 <p align="center">
-  <strong>Leo</strong><br>
   <em>Claude Code agents as persistent, proactive personal assistants</em>
 </p>
 
