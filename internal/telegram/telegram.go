@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,14 +57,35 @@ type updateResponse struct {
 }
 
 // PollChatID polls getUpdates to detect the chat ID from the first message received.
+// It derives a context with the given timeout; use PollChatIDCtx for explicit context control.
 func PollChatID(botToken string, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return PollChatIDCtx(ctx, botToken)
+}
 
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(apiBaseURL + botToken + "/getUpdates?timeout=5&limit=1")
+// PollChatIDCtx polls getUpdates to detect the chat ID, respecting the given context.
+func PollChatIDCtx(ctx context.Context, botToken string) (string, error) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL+botToken+"/getUpdates?timeout=5&limit=1", nil)
 		if err != nil {
-			time.Sleep(2 * time.Second)
-			continue
+			return "", fmt.Errorf("creating request: %w", err)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("timed out waiting for a message — send any message to your bot")
+			}
+			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("timed out waiting for a message — send any message to your bot")
+			case <-ticker.C:
+				continue
+			}
 		}
 
 		body, err := io.ReadAll(resp.Body)
@@ -82,8 +104,10 @@ func PollChatID(botToken string, timeout time.Duration) (string, error) {
 			return chatID, nil
 		}
 
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("timed out waiting for a message — send any message to your bot")
+		case <-ticker.C:
+		}
 	}
-
-	return "", fmt.Errorf("timed out waiting for a message — send any message to your bot")
 }
