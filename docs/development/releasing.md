@@ -1,6 +1,6 @@
 # Releasing
 
-Leo uses [GoReleaser](https://goreleaser.com/) and GitHub Actions to automate releases. Pushing a version tag triggers the full pipeline: CI validation, cross-platform builds, GitHub Release creation, and Homebrew formula updates.
+Leo uses [GoReleaser](https://goreleaser.com/) and GitHub Actions to automate releases. Pushing a version tag triggers the full pipeline: CI validation, cross-platform builds, and GitHub Release creation.
 
 ## How It Works
 
@@ -11,8 +11,7 @@ git tag v0.2.0 ──> GitHub Actions ──> CI (test + lint)
                                     GoReleaser
                                     ├── Build binaries (darwin/linux × amd64/arm64)
                                     ├── Create GitHub Release with changelog
-                                    ├── Upload archives + checksums
-                                    └── Update Homebrew tap formula
+                                    └── Upload archives + checksums
 ```
 
 The release workflow (`.github/workflows/release.yml`) calls the CI workflow as a prerequisite — no release is published unless tests and lint pass.
@@ -77,14 +76,15 @@ refactor: simplify cron marker parsing
 
 To edit release notes after publishing, use the GitHub Releases web UI.
 
-## Homebrew
+## Install Script
 
-Releases automatically update the formula in [`blackpaw-studio/homebrew-tap`](https://github.com/blackpaw-studio/homebrew-tap). After a release, users can install or upgrade with:
+The repo includes an `install.sh` that users can curl-pipe to install the latest release:
 
 ```bash
-brew install blackpaw-studio/tap/leo
-brew upgrade leo
+curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
 ```
+
+The script auto-detects OS and architecture, downloads the matching archive from the GitHub Release, and installs the binary to `/usr/local/bin` (or `INSTALL_DIR`).
 
 ## Testing Locally
 
@@ -98,13 +98,7 @@ This creates a full build in `dist/` without pushing anything.
 
 ## Setup (Maintainers)
 
-The release workflow requires one repository secret:
-
-| Secret | Purpose |
-|--------|---------|
-| `HOMEBREW_TAP_TOKEN` | GitHub PAT with `repo` scope for pushing to the Homebrew tap repo |
-
-`GITHUB_TOKEN` is provided automatically by GitHub Actions and handles release creation.
+`GITHUB_TOKEN` is provided automatically by GitHub Actions — no additional secrets are needed.
 
 ## Troubleshooting
 
@@ -117,9 +111,6 @@ The release workflow requires one repository secret:
     # fix and push to main
     make tag V=0.1.0
     ```
-
-**Homebrew tap not updated**
-:   Verify the `HOMEBREW_TAP_TOKEN` secret is set and has write access to `blackpaw-studio/homebrew-tap`.
 
 **GoReleaser config errors**
 :   Validate locally before tagging:
