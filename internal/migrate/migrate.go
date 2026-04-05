@@ -220,11 +220,37 @@ func detectAgentName(workspace string) string {
 
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "# ") {
-			return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "#")))
+
+		// Look for **Name:** field (e.g. "- **Name:** Susie (also responds to ...)")
+		if idx := strings.Index(line, "**Name:**"); idx >= 0 {
+			name := strings.TrimSpace(line[idx+len("**Name:**"):])
+			// Take first word/name before parenthetical or comma
+			if i := strings.IndexAny(name, "(,"); i > 0 {
+				name = strings.TrimSpace(name[:i])
+			}
+			if name != "" {
+				return strings.ToLower(name)
+			}
 		}
-		if strings.HasPrefix(strings.ToLower(line), "name:") {
-			return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "name:")))
+
+		// Look for "name:" field (YAML-style)
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "name:") {
+			name := strings.TrimSpace(line[len("name:"):])
+			if name != "" {
+				return strings.ToLower(name)
+			}
+		}
+	}
+
+	// Fallback: use first heading that isn't the filename
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "# ") {
+			heading := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "#")))
+			if heading != "identity.md" && heading != "identity" {
+				return heading
+			}
 		}
 	}
 
