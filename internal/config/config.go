@@ -29,8 +29,9 @@ type TelegramConfig struct {
 }
 
 type DefaultsConfig struct {
-	Model    string `yaml:"model"`
-	MaxTurns int    `yaml:"max_turns"`
+	Model             string `yaml:"model"`
+	MaxTurns          int    `yaml:"max_turns"`
+	BypassPermissions bool   `yaml:"bypass_permissions,omitempty"`
 }
 
 type TaskConfig struct {

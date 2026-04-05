@@ -68,6 +68,10 @@ func buildClaudeArgs(cfg *config.Config) []string {
 		"--add-dir", cfg.Agent.Workspace,
 	}
 
+	if cfg.Defaults.BypassPermissions {
+		claudeArgs = append(claudeArgs, "--dangerously-skip-permissions")
+	}
+
 	mcpConfig := cfg.MCPConfigPath()
 	if _, err := os.Stat(mcpConfig); err == nil {
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfig)
