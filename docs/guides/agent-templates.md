@@ -21,7 +21,6 @@ A proactive executive assistant that triages messages, manages your calendar, an
 
 - Triages incoming messages by priority
 - Maintains a daily observation log in `daily/YYYY-MM-DD.md`
-- Uses persistent memory across sessions
 - Proactively surfaces items that need attention
 
 ### Dev Assistant
@@ -42,6 +41,7 @@ A development-focused agent for code review, monitoring, and technical tasks.
 - Monitors build status and alerts
 - Tracks security advisories
 - Surfaces technical debt and issues
+- Tracks architecture decisions and patterns in persistent memory
 
 ### Skeleton
 
@@ -51,8 +51,8 @@ A minimal starting point with basic workspace and memory support but no predefin
 
 **What's included:**
 
-- Workspace and memory configuration
-- Daily log structure
+- Persistent memory across sessions
+- Workspace configuration and daily log structure
 - Basic tool access
 
 **What's not included:**
@@ -60,6 +60,14 @@ A minimal starting point with basic workspace and memory support but no predefin
 - No predefined personality or communication style
 - No default behaviors or routines
 - No specific domain focus
+
+## Shared Defaults
+
+All templates include the following out of the box:
+
+- **Persistent memory** — `memory: user` is enabled and a `MEMORY.md` symlink is created in the workspace, giving the agent continuity across sessions
+- **Daily logs** — agents write observations to `daily/YYYY-MM-DD.md`
+- **Standard tool access** — Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch
 
 ## Template Structure
 
