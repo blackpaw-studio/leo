@@ -2,8 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/spf13/cobra"
@@ -95,11 +93,3 @@ func newCronListCmd() *cobra.Command {
 	}
 }
 
-func leoExecutablePath() (string, error) {
-	path, err := os.Executable()
-	if err != nil {
-		// Fallback to looking up in PATH
-		return exec.LookPath("leo")
-	}
-	return path, nil
-}

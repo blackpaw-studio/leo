@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/fatih/color"
@@ -40,6 +41,15 @@ func loadConfig() (*config.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func leoExecutablePath() (string, error) {
+	path, err := os.Executable()
+	if err != nil {
+		// Fallback to looking up in PATH
+		return exec.LookPath("leo")
+	}
+	return path, nil
 }
 
 func fatal(format string, args ...any) {
