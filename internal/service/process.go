@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -23,7 +24,6 @@ var (
 	removeFile       = os.Remove
 	mkdirAll         = os.MkdirAll
 	openLogFile      = defaultOpenLogFile
-	execLookPath     = exec.LookPath
 	supervisedExecFn = defaultSupervisedExec
 )
 

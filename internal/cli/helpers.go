@@ -10,10 +10,8 @@ import (
 )
 
 var (
-	bold    = color.New(color.Bold)
 	success = color.New(color.FgGreen, color.Bold)
 	warn    = color.New(color.FgYellow, color.Bold)
-	errC    = color.New(color.FgRed, color.Bold)
 	info    = color.New(color.FgCyan)
 )
 
@@ -52,7 +50,3 @@ func leoExecutablePath() (string, error) {
 	return path, nil
 }
 
-func fatal(format string, args ...any) {
-	errC.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
-	os.Exit(1)
-}
