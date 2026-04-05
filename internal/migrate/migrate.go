@@ -14,17 +14,36 @@ import (
 	"github.com/blackpaw-studio/leo/internal/telegram"
 )
 
+type openClawJobsFile struct {
+	Version int            `json:"version"`
+	Jobs    []openClawJob  `json:"jobs"`
+}
+
+type openClawSchedule struct {
+	Kind string `json:"kind"`
+	Expr string `json:"expr"`
+	Tz   string `json:"tz"`
+}
+
+type openClawPayload struct {
+	Kind           string `json:"kind"`
+	Message        string `json:"message"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
+}
+
+type openClawDelivery struct {
+	Mode    string `json:"mode"`
+	Channel string `json:"channel"`
+	To      string `json:"to"`
+}
+
 type openClawJob struct {
-	Name       string `json:"name"`
-	Schedule   string `json:"schedule"`
-	Prompt     string `json:"prompt"`
-	PromptFile string `json:"prompt_file"`
-	Timeout    int    `json:"timeout"`
-	Model      string `json:"model"`
-	MaxTurns   int    `json:"max_turns"`
-	Topic      string `json:"topic"`
-	Silent     bool   `json:"silent"`
-	Enabled    bool   `json:"enabled"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Enabled     bool             `json:"enabled"`
+	Schedule    openClawSchedule `json:"schedule"`
+	Payload     openClawPayload  `json:"payload"`
+	Delivery    openClawDelivery `json:"delivery"`
 }
 
 // Run executes the OpenClaw migration wizard with its own banner.
@@ -68,7 +87,7 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	// 3. Workspace directory
 	home, _ := os.UserHomeDir()
-	defaultWorkspace := filepath.Join(filepath.Dir(ocPath), agentName)
+	defaultWorkspace := filepath.Join(home, ".leo")
 	workspace := prompt.Prompt(reader, "New workspace directory", defaultWorkspace)
 	workspace = prompt.ExpandHome(workspace)
 
@@ -396,14 +415,14 @@ func parseCronJobs(ocRoot string, cfg *config.Config) {
 		return
 	}
 
-	var jobs []openClawJob
-	if err := json.Unmarshal(data, &jobs); err != nil {
+	var jobsWrapper openClawJobsFile
+	if err := json.Unmarshal(data, &jobsWrapper); err != nil {
 		prompt.Warn.Printf("  Failed to parse jobs.json: %v\n", err)
 		return
 	}
 
 	skipped := 0
-	for _, job := range jobs {
+	for _, job := range jobsWrapper.Jobs {
 		name := sanitizeTaskName(job.Name)
 
 		lower := strings.ToLower(name)
@@ -412,27 +431,36 @@ func parseCronJobs(ocRoot string, cfg *config.Config) {
 			continue
 		}
 
-		task := config.TaskConfig{
-			Schedule:   job.Schedule,
-			Timezone:   "America/New_York",
-			PromptFile: job.PromptFile,
-			Model:      job.Model,
-			MaxTurns:   job.MaxTurns,
-			Topic:      job.Topic,
-			Enabled:    job.Enabled,
-			Silent:     job.Silent,
+		tz := job.Schedule.Tz
+		if tz == "" {
+			tz = "America/New_York"
 		}
 
-		if task.PromptFile == "" && job.Prompt != "" {
+		task := config.TaskConfig{
+			Schedule: job.Schedule.Expr,
+			Timezone: tz,
+			Enabled:  job.Enabled,
+		}
+
+		// Write inline prompt to a file
+		if job.Payload.Message != "" {
 			promptFile := fmt.Sprintf("reports/%s.md", name)
 			promptPath := filepath.Join(cfg.Agent.Workspace, promptFile)
 			os.MkdirAll(filepath.Dir(promptPath), 0755)
-			os.WriteFile(promptPath, []byte(job.Prompt), 0644)
+			os.WriteFile(promptPath, []byte(job.Payload.Message), 0644)
 			task.PromptFile = promptFile
 		}
 
+		// Parse delivery target for topic
+		if job.Delivery.To != "" && strings.Contains(job.Delivery.To, ":topic:") {
+			parts := strings.SplitN(job.Delivery.To, ":topic:", 2)
+			if len(parts) == 2 {
+				task.Topic = parts[1]
+			}
+		}
+
 		cfg.Tasks[name] = task
-		prompt.Info.Printf("  Migrated task: %s (%s)\n", name, job.Schedule)
+		prompt.Info.Printf("  Migrated task: %s (%s)\n", name, job.Schedule.Expr)
 	}
 
 	if skipped > 0 {

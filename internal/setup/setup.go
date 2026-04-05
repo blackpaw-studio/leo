@@ -50,7 +50,7 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	// 2. Workspace directory
 	home, _ := os.UserHomeDir()
-	defaultWorkspace := filepath.Join(home, name)
+	defaultWorkspace := filepath.Join(home, ".leo")
 	workspace := prompt.Prompt(reader, "Workspace directory", defaultWorkspace)
 	workspace = prompt.ExpandHome(workspace)
 

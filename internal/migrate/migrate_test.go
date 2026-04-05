@@ -199,25 +199,25 @@ func TestParseCronJobs(t *testing.T) {
 	workspace := t.TempDir()
 	os.MkdirAll(filepath.Join(workspace, "reports"), 0755)
 
-	jobs := []openClawJob{
-		{
-			Name:     "heartbeat",
-			Schedule: "0,30 7-22 * * *",
-			Prompt:   "Check inbox",
-			Model:    "sonnet",
-			MaxTurns: 10,
-			Enabled:  true,
-			Silent:   true,
-		},
-		{
-			Name:     "gateway-health",
-			Schedule: "*/5 * * * *",
-			Enabled:  true,
-		},
-		{
-			Name:     "openclaw-status",
-			Schedule: "0 * * * *",
-			Enabled:  true,
+	jobs := openClawJobsFile{
+		Version: 1,
+		Jobs: []openClawJob{
+			{
+				Name:     "heartbeat",
+				Schedule: openClawSchedule{Kind: "cron", Expr: "0,30 7-22 * * *", Tz: "America/New_York"},
+				Payload:  openClawPayload{Kind: "agentTurn", Message: "Check inbox"},
+				Enabled:  true,
+			},
+			{
+				Name:     "gateway-health",
+				Schedule: openClawSchedule{Kind: "cron", Expr: "*/5 * * * *"},
+				Enabled:  true,
+			},
+			{
+				Name:     "openclaw-status",
+				Schedule: openClawSchedule{Kind: "cron", Expr: "0 * * * *"},
+				Enabled:  true,
+			},
 		},
 	}
 
@@ -245,11 +245,11 @@ func TestParseCronJobs(t *testing.T) {
 	if task.Schedule != "0,30 7-22 * * *" {
 		t.Errorf("schedule = %q", task.Schedule)
 	}
-	if !task.Silent {
-		t.Error("expected silent = true")
+	if task.Timezone != "America/New_York" {
+		t.Errorf("timezone = %q", task.Timezone)
 	}
-	if task.Model != "sonnet" {
-		t.Errorf("model = %q", task.Model)
+	if task.PromptFile == "" {
+		t.Error("expected prompt file to be written")
 	}
 }
 
