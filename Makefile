@@ -3,7 +3,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/blackpaw-studio/leo/internal/cli.Version=$(VERSION)
 GOFLAGS := -trimpath
 
-.PHONY: build install clean test lint docs docs-serve tag
+.PHONY: build install clean test e2e lint docs docs-serve tag
 
 build:
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/leo
@@ -16,6 +16,9 @@ clean:
 
 test:
 	go test -race -cover ./...
+
+e2e:
+	go test -tags=e2e -v -count=1 ./e2e/...
 
 lint:
 	go vet ./...
