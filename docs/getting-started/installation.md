@@ -10,7 +10,7 @@
     curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
     ```
 
-    This downloads the latest release binary for your platform and installs it to `/usr/local/bin`.
+    This downloads the latest release binary for your platform and installs it to `~/.local/bin`.
 
     **Options:**
 

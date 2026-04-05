@@ -84,7 +84,7 @@ The repo includes an `install.sh` that users can curl-pipe to install the latest
 curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
 ```
 
-The script auto-detects OS and architecture, downloads the matching archive from the GitHub Release, and installs the binary to `/usr/local/bin` (or `INSTALL_DIR`).
+The script auto-detects OS and architecture, downloads the matching archive from the GitHub Release, and installs the binary to `~/.local/bin` (or `INSTALL_DIR`).
 
 ## Testing Locally
 
