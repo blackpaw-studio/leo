@@ -265,6 +265,130 @@ func TestParseCronJobsNoFile(t *testing.T) {
 	}
 }
 
+func TestDetectAgentNameBoldField(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("- **Name:** Susie (also responds to Sue)"), 0644)
+
+	name := detectAgentName(dir)
+	if name != "susie" {
+		t.Errorf("detectAgentName() = %q, want %q", name, "susie")
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.txt")
+	dst := filepath.Join(dir, "dst.txt")
+
+	os.WriteFile(src, []byte("hello"), 0644)
+
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(dst)
+	if string(data) != "hello" {
+		t.Errorf("dst content = %q, want %q", string(data), "hello")
+	}
+}
+
+func TestCopyFileMissingSrc(t *testing.T) {
+	err := copyFile("/nonexistent", "/tmp/dst")
+	if err == nil {
+		t.Error("expected error for missing source")
+	}
+}
+
+func TestParseCronJobsWithDeliveryTopic(t *testing.T) {
+	dir := t.TempDir()
+	cronDir := filepath.Join(dir, "cron")
+	os.MkdirAll(cronDir, 0755)
+
+	workspace := t.TempDir()
+	os.MkdirAll(filepath.Join(workspace, "reports"), 0755)
+
+	jobs := openClawJobsFile{
+		Version: 1,
+		Jobs: []openClawJob{
+			{
+				Name:     "daily-report",
+				Schedule: openClawSchedule{Kind: "cron", Expr: "0 7 * * *"},
+				Payload:  openClawPayload{Kind: "agentTurn", Message: "Run report"},
+				Delivery: openClawDelivery{To: "telegram:topic:news"},
+				Enabled:  true,
+			},
+		},
+	}
+
+	data, _ := json.Marshal(jobs)
+	os.WriteFile(filepath.Join(cronDir, "jobs.json"), data, 0644)
+
+	cfg := &config.Config{
+		Agent: config.AgentConfig{Workspace: workspace},
+		Tasks: make(map[string]config.TaskConfig),
+	}
+
+	parseCronJobs(dir, cfg)
+
+	task, ok := cfg.Tasks["daily-report"]
+	if !ok {
+		t.Fatal("daily-report task not found")
+	}
+	if task.Topic != "news" {
+		t.Errorf("topic = %q, want %q", task.Topic, "news")
+	}
+}
+
+func TestConfigureTelegramFromOpenClawJSON(t *testing.T) {
+	dir := t.TempDir()
+
+	ocConfig := map[string]any{
+		"channels": map[string]any{
+			"telegram": map[string]any{
+				"botToken": "test-token-12345678",
+				"groups": map[string]any{
+					"-100999": map[string]any{"requireMention": false},
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(ocConfig)
+	os.WriteFile(filepath.Join(dir, "openclaw.json"), data, 0644)
+
+	cfg := &config.Config{}
+	reader := strings.NewReader("\n\n")
+
+	configureTelegram(newBufioReader(reader), dir, cfg)
+
+	if cfg.Telegram.BotToken != "test-token-12345678" {
+		t.Errorf("BotToken = %q, want %q", cfg.Telegram.BotToken, "test-token-12345678")
+	}
+	if cfg.Telegram.GroupID != "-100999" {
+		t.Errorf("GroupID = %q, want %q", cfg.Telegram.GroupID, "-100999")
+	}
+}
+
+func TestConfigureTelegramAllowFrom(t *testing.T) {
+	dir := t.TempDir()
+	credDir := filepath.Join(dir, "credentials")
+	os.MkdirAll(credDir, 0755)
+
+	allow := map[string]any{
+		"allowFrom": []any{"11111"},
+	}
+	data, _ := json.Marshal(allow)
+	os.WriteFile(filepath.Join(credDir, "telegram-default-allowFrom.json"), data, 0644)
+
+	cfg := &config.Config{}
+	reader := strings.NewReader("mytoken\n\n")
+
+	configureTelegram(newBufioReader(reader), dir, cfg)
+
+	if cfg.Telegram.ChatID != "11111" {
+		t.Errorf("ChatID = %q, want %q", cfg.Telegram.ChatID, "11111")
+	}
+}
+
 func TestConfigureTelegram(t *testing.T) {
 	dir := t.TempDir()
 	credDir := filepath.Join(dir, "credentials")
