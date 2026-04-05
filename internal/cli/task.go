@@ -19,6 +19,7 @@ func newTaskCmd() *cobra.Command {
 	cmd.AddCommand(
 		newTaskListCmd(),
 		newTaskAddCmd(),
+		newTaskRemoveCmd(),
 		newTaskEnableCmd(),
 		newTaskDisableCmd(),
 	)
@@ -100,6 +101,39 @@ func newTaskAddCmd() *cobra.Command {
 			}
 
 			success.Printf("Task %q added.\n", name)
+			return nil
+		},
+	}
+}
+
+func newTaskRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove a task from the config",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			name := args[0]
+			if _, ok := cfg.Tasks[name]; !ok {
+				return fmt.Errorf("task %q not found", name)
+			}
+
+			delete(cfg.Tasks, name)
+
+			cfgPath, err := configPath()
+			if err != nil {
+				return err
+			}
+
+			if err := config.Save(cfgPath, cfg); err != nil {
+				return err
+			}
+
+			success.Printf("Task %q removed.\n", name)
 			return nil
 		},
 	}
