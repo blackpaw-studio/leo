@@ -14,6 +14,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/telegram"
 )
 
+var execCommand = exec.Command
+
 // Run executes the unified onboarding flow.
 func Run() error {
 	reader := prompt.NewReader()
@@ -78,8 +80,8 @@ func Run() error {
 	case ocPath != "" && len(workspaces) > 0:
 		// Both found — ask what to do
 		fmt.Println("What would you like to do?")
-		fmt.Println("  1. Fresh setup — create a new agent from scratch")
-		fmt.Println("  2. Migrate from OpenClaw — import your existing agent")
+		fmt.Println("  1. Fresh setup ��� create a new agent from scratch")
+		fmt.Println("  2. Migrate from OpenClaw ��� import your existing agent")
 		fmt.Println("  3. Reconfigure — edit an existing Leo workspace")
 		choice := prompt.Prompt(reader, "Choose", "1")
 		fmt.Println()
@@ -257,7 +259,7 @@ func reconfigureTasks(reader *bufio.Reader, cfg *config.Config, ws string) error
 
 // SmokeTest runs a quick claude invocation to verify it works.
 func SmokeTest() error {
-	cmd := exec.Command("claude",
+	cmd := execCommand("claude",
 		"-p", "Reply with exactly: LEO_SMOKE_OK",
 		"--max-turns", "1",
 		"--output-format", "text",

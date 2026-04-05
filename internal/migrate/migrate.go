@@ -202,20 +202,10 @@ func RunInteractive(reader *bufio.Reader) error {
 // FindOpenClaw searches for an OpenClaw installation in common locations.
 func FindOpenClaw() string {
 	home, _ := os.UserHomeDir()
-	candidates := []string{
-		filepath.Join(home, ".openclaw"),
-	}
 
-	// Check /Volumes
-	entries, _ := os.ReadDir("/Volumes")
-	for _, e := range entries {
-		candidates = append(candidates, filepath.Join("/Volumes", e.Name(), ".openclaw"))
-	}
-
-	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			return c
-		}
+	ocPath := filepath.Join(home, ".openclaw")
+	if _, err := os.Stat(ocPath); err == nil {
+		return ocPath
 	}
 
 	return ""

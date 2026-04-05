@@ -11,6 +11,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
+var execCommand = exec.Command
+
 const silentPreamble = `SILENT SCHEDULED RUN — You are running as a scheduled background task, not responding to a user message.
 Work silently. Do not narrate your process or describe your tool usage.
 When finished:
@@ -47,7 +49,7 @@ func Run(cfg *config.Config, taskName string) error {
 
 	args := buildArgs(cfg, task, prompt)
 
-	cmd := exec.Command("claude", args...)
+	cmd := execCommand("claude", args...)
 	cmd.Dir = cfg.Agent.Workspace
 	cmd.Env = append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
 

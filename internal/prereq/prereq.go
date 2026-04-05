@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+var (
+	lookPath    = exec.LookPath
+	runCommand  = func(path string, args ...string) ([]byte, error) {
+		return exec.Command(path, args...).Output()
+	}
+	userHomeDir = os.UserHomeDir
+)
+
 // ClaudeResult holds the result of checking for the claude CLI.
 type ClaudeResult struct {
 	Path    string
@@ -16,13 +24,12 @@ type ClaudeResult struct {
 
 // CheckClaude checks if the claude CLI is installed and reachable.
 func CheckClaude() ClaudeResult {
-	path, err := exec.LookPath("claude")
+	path, err := lookPath("claude")
 	if err != nil {
 		return ClaudeResult{}
 	}
 
-	cmd := exec.Command(path, "--version")
-	output, err := cmd.Output()
+	output, err := runCommand(path, "--version")
 	if err != nil {
 		return ClaudeResult{Path: path, OK: true}
 	}
@@ -33,20 +40,11 @@ func CheckClaude() ClaudeResult {
 
 // FindOpenClaw searches for an OpenClaw installation in common locations.
 func FindOpenClaw() string {
-	home, _ := os.UserHomeDir()
-	candidates := []string{
-		filepath.Join(home, ".openclaw"),
-	}
+	home, _ := userHomeDir()
 
-	entries, _ := os.ReadDir("/Volumes")
-	for _, e := range entries {
-		candidates = append(candidates, filepath.Join("/Volumes", e.Name(), ".openclaw"))
-	}
-
-	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			return c
-		}
+	ocPath := filepath.Join(home, ".openclaw")
+	if _, err := os.Stat(ocPath); err == nil {
+		return ocPath
 	}
 
 	return ""
@@ -54,10 +52,9 @@ func FindOpenClaw() string {
 
 // FindExistingWorkspaces scans common locations for existing leo.yaml files.
 func FindExistingWorkspaces() []string {
-	home, _ := os.UserHomeDir()
+	home, _ := userHomeDir()
 	var found []string
 
-	// Check direct children of home directory
 	entries, err := os.ReadDir(home)
 	if err != nil {
 		return nil
@@ -70,25 +67,6 @@ func FindExistingWorkspaces() []string {
 		candidate := filepath.Join(home, e.Name(), "leo.yaml")
 		if _, err := os.Stat(candidate); err == nil {
 			found = append(found, filepath.Join(home, e.Name()))
-		}
-	}
-
-	// Check /Volumes
-	volumes, _ := os.ReadDir("/Volumes")
-	for _, v := range volumes {
-		vPath := filepath.Join("/Volumes", v.Name())
-		vEntries, err := os.ReadDir(vPath)
-		if err != nil {
-			continue
-		}
-		for _, e := range vEntries {
-			if !e.IsDir() {
-				continue
-			}
-			candidate := filepath.Join(vPath, e.Name(), "leo.yaml")
-			if _, err := os.Stat(candidate); err == nil {
-				found = append(found, filepath.Join(vPath, e.Name()))
-			}
 		}
 	}
 

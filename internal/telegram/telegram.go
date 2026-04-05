@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const apiBase = "https://api.telegram.org/bot"
+var apiBaseURL = "https://api.telegram.org/bot"
 
 // SendMessage sends a text message to a Telegram chat.
 func SendMessage(botToken, chatID, text string, topicID int) error {
@@ -22,7 +22,7 @@ func SendMessage(botToken, chatID, text string, topicID int) error {
 		params.Set("message_thread_id", fmt.Sprintf("%d", topicID))
 	}
 
-	resp, err := http.PostForm(apiBase+botToken+"/sendMessage", params)
+	resp, err := http.PostForm(apiBaseURL+botToken+"/sendMessage", params)
 	if err != nil {
 		return fmt.Errorf("sending telegram message: %w", err)
 	}
@@ -54,7 +54,7 @@ func PollChatID(botToken string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(apiBase + botToken + "/getUpdates?timeout=5&limit=1")
+		resp, err := http.Get(apiBaseURL + botToken + "/getUpdates?timeout=5&limit=1")
 		if err != nil {
 			time.Sleep(2 * time.Second)
 			continue
