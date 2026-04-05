@@ -37,6 +37,14 @@ Leo is a CLI tool that sets up and manages [Claude Code](https://docs.anthropic.
 
     [:octicons-arrow-right-24: Browse templates](guides/agent-templates.md)
 
+-   :material-file-cog-outline:{ .lg .middle } **Configuration**
+
+    ---
+
+    A single `leo.yaml` controls your agent, Telegram credentials, defaults, and task schedules. Full field-by-field reference included.
+
+    [:octicons-arrow-right-24: Config reference](configuration/config-reference.md)
+
 </div>
 
 ---
