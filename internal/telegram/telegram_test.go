@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -182,5 +183,42 @@ func TestPollChatIDTimeout(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("error = %q, want to contain 'timed out'", err.Error())
+	}
+}
+
+func TestPollChatIDCtxCancellation(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		resp := updateResponse{OK: true}
+		data, _ := json.Marshal(resp)
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately
+	cancel()
+
+	_, err := PollChatIDCtx(ctx, "test-token")
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("error = %q, want to contain 'timed out'", err.Error())
+	}
+}
+
+func TestSendMessageParsesAPIDescription(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}`))
+	})
+
+	err := SendMessage("test-token", "123", "hello", 0)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Should extract the description, not dump raw JSON
+	if !strings.Contains(err.Error(), "bot was blocked by the user") {
+		t.Errorf("error = %q, want parsed description", err.Error())
 	}
 }

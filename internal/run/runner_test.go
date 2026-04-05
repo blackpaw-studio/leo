@@ -198,6 +198,57 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 	}
 }
 
+func TestPreview(t *testing.T) {
+	dir := t.TempDir()
+	promptFile := filepath.Join(dir, "HEARTBEAT.md")
+	os.WriteFile(promptFile, []byte("Check inbox"), 0644)
+
+	cfg := &config.Config{
+		Agent: config.AgentConfig{
+			Name:      "myagent",
+			Workspace: dir,
+		},
+		Telegram: config.TelegramConfig{
+			BotToken: "123:ABC",
+			ChatID:   "456",
+		},
+		Defaults: config.DefaultsConfig{
+			Model:    "sonnet",
+			MaxTurns: 15,
+		},
+		Tasks: map[string]config.TaskConfig{
+			"heartbeat": {
+				Schedule:   "0 * * * *",
+				PromptFile: "HEARTBEAT.md",
+				Model:      "opus",
+			},
+		},
+	}
+
+	prompt, args, err := Preview(cfg, "heartbeat")
+	if err != nil {
+		t.Fatalf("Preview() error: %v", err)
+	}
+
+	if !strings.Contains(prompt, "Check inbox") {
+		t.Error("prompt should contain file content")
+	}
+
+	argsStr := strings.Join(args, " ")
+	if !strings.Contains(argsStr, "--model opus") {
+		t.Error("args should contain task model override")
+	}
+}
+
+func TestPreviewTaskNotFound(t *testing.T) {
+	cfg := &config.Config{Tasks: map[string]config.TaskConfig{}}
+
+	_, _, err := Preview(cfg, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent task")
+	}
+}
+
 func TestRunTaskNotFound(t *testing.T) {
 	cfg := &config.Config{
 		Tasks: map[string]config.TaskConfig{},
