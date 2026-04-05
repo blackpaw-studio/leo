@@ -4,9 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+var validModels = map[string]bool{
+	"sonnet": true,
+	"opus":   true,
+	"haiku":  true,
+}
 
 type Config struct {
 	Agent    AgentConfig    `yaml:"agent"`
@@ -43,6 +50,59 @@ type TaskConfig struct {
 	Topic      string `yaml:"topic,omitempty"`
 	Enabled    bool   `yaml:"enabled"`
 	Silent     bool   `yaml:"silent,omitempty"`
+}
+
+// Validate checks the config for required fields and valid values.
+func (c *Config) Validate() error {
+	var errs []string
+
+	if c.Agent.Name == "" {
+		errs = append(errs, "agent.name is required")
+	}
+	if c.Agent.Workspace == "" {
+		errs = append(errs, "agent.workspace is required")
+	}
+
+	if c.Defaults.Model != "" && !validModels[c.Defaults.Model] {
+		errs = append(errs, fmt.Sprintf("defaults.model %q is not valid (use sonnet, opus, or haiku)", c.Defaults.Model))
+	}
+	if c.Defaults.MaxTurns < 0 {
+		errs = append(errs, "defaults.max_turns must not be negative")
+	}
+
+	if c.Telegram.BotToken != "" || c.Telegram.ChatID != "" {
+		if c.Telegram.BotToken == "" {
+			errs = append(errs, "telegram.bot_token is required when telegram is configured")
+		}
+		if c.Telegram.ChatID == "" && c.Telegram.GroupID == "" {
+			errs = append(errs, "telegram.chat_id or telegram.group_id is required when telegram is configured")
+		}
+	}
+
+	for name, task := range c.Tasks {
+		if task.Schedule == "" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.schedule is required", name))
+		}
+		if task.PromptFile == "" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.prompt_file is required", name))
+		}
+		if task.Model != "" && !validModels[task.Model] {
+			errs = append(errs, fmt.Sprintf("tasks.%s.model %q is not valid (use sonnet, opus, or haiku)", name, task.Model))
+		}
+		if task.MaxTurns < 0 {
+			errs = append(errs, fmt.Sprintf("tasks.%s.max_turns must not be negative", name))
+		}
+		if task.Topic != "" && c.Telegram.Topics != nil {
+			if _, ok := c.Telegram.Topics[task.Topic]; !ok {
+				errs = append(errs, fmt.Sprintf("tasks.%s.topic %q not found in telegram.topics", name, task.Topic))
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return nil
 }
 
 // AgentFilePath returns the resolved path to the agent .md file.

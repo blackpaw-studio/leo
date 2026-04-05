@@ -38,6 +38,10 @@ func loadConfig() (*config.Config, error) {
 		cfg.Agent.Workspace = workspace
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
 }
 
