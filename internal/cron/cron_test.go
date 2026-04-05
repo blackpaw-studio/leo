@@ -10,8 +10,8 @@ import (
 func TestBuildBlock(t *testing.T) {
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
-			Name:      "rocket",
-			Workspace: "/home/user/rocket",
+			Name:      "myagent",
+			Workspace: "/home/user/myagent",
 		},
 		Tasks: map[string]config.TaskConfig{
 			"heartbeat": {
@@ -31,10 +31,10 @@ func TestBuildBlock(t *testing.T) {
 
 	block := buildBlock(cfg, "/usr/local/bin/leo")
 
-	if !strings.Contains(block, "# === LEO:rocket — DO NOT EDIT ===") {
+	if !strings.Contains(block, "# === LEO:myagent — DO NOT EDIT ===") {
 		t.Error("missing start marker")
 	}
-	if !strings.Contains(block, "# === END LEO:rocket ===") {
+	if !strings.Contains(block, "# === END LEO:myagent ===") {
 		t.Error("missing end marker")
 	}
 	if !strings.Contains(block, "heartbeat") {
@@ -54,16 +54,16 @@ func TestBuildBlock(t *testing.T) {
 func TestRemoveBlock(t *testing.T) {
 	crontab := `# other stuff
 0 * * * * /some/other/job
-# === LEO:rocket — DO NOT EDIT ===
-# leo:rocket:heartbeat
+# === LEO:myagent — DO NOT EDIT ===
+# leo:myagent:heartbeat
 0,30 7-22 * * * /usr/local/bin/leo run heartbeat
-# === END LEO:rocket ===
+# === END LEO:myagent ===
 # more stuff
 `
 
-	result := removeBlock(crontab, "rocket")
+	result := removeBlock(crontab, "myagent")
 
-	if strings.Contains(result, "LEO:rocket") {
+	if strings.Contains(result, "LEO:myagent") {
 		t.Error("block was not removed")
 	}
 	if !strings.Contains(result, "other stuff") {
@@ -97,13 +97,13 @@ func TestRemoveBlockPreservesOtherAgents(t *testing.T) {
 
 func TestExtractBlock(t *testing.T) {
 	crontab := `# other stuff
-# === LEO:rocket — DO NOT EDIT ===
-# leo:rocket:heartbeat
+# === LEO:myagent — DO NOT EDIT ===
+# leo:myagent:heartbeat
 0,30 7-22 * * * /usr/local/bin/leo run heartbeat
-# === END LEO:rocket ===
+# === END LEO:myagent ===
 `
 
-	block := extractBlock(crontab, "rocket")
+	block := extractBlock(crontab, "myagent")
 
 	if !strings.Contains(block, "heartbeat") {
 		t.Error("block should contain heartbeat")
@@ -114,7 +114,7 @@ func TestExtractBlock(t *testing.T) {
 }
 
 func TestExtractBlockMissing(t *testing.T) {
-	block := extractBlock("no leo content here", "rocket")
+	block := extractBlock("no leo content here", "myagent")
 	if block != "" {
 		t.Errorf("extractBlock() = %q, want empty", block)
 	}
@@ -173,7 +173,7 @@ func TestInstall(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "rocket", Workspace: "/home/user/rocket"},
+		Agent: config.AgentConfig{Name: "myagent", Workspace: "/home/user/myagent"},
 		Tasks: map[string]config.TaskConfig{
 			"heartbeat": {Schedule: "0,30 7-22 * * *", Enabled: true},
 		},
@@ -187,7 +187,7 @@ func TestInstall(t *testing.T) {
 	if !strings.Contains(written, "existing content") {
 		t.Error("should preserve existing content")
 	}
-	if !strings.Contains(written, "# === LEO:rocket") {
+	if !strings.Contains(written, "# === LEO:myagent") {
 		t.Error("should contain leo block")
 	}
 	if !strings.Contains(written, "heartbeat") {
@@ -205,10 +205,10 @@ func TestRemoveViaAPI(t *testing.T) {
 
 	readCrontab = func() (string, error) {
 		return `# other job
-# === LEO:rocket — DO NOT EDIT ===
-# leo:rocket:heartbeat
+# === LEO:myagent — DO NOT EDIT ===
+# leo:myagent:heartbeat
 0,30 7-22 * * * /usr/local/bin/leo run heartbeat
-# === END LEO:rocket ===
+# === END LEO:myagent ===
 `, nil
 	}
 
@@ -219,7 +219,7 @@ func TestRemoveViaAPI(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "rocket"},
+		Agent: config.AgentConfig{Name: "myagent"},
 	}
 
 	err := Remove(cfg)
@@ -227,7 +227,7 @@ func TestRemoveViaAPI(t *testing.T) {
 		t.Fatalf("Remove() error: %v", err)
 	}
 
-	if strings.Contains(written, "LEO:rocket") {
+	if strings.Contains(written, "LEO:myagent") {
 		t.Error("should remove leo block")
 	}
 	if !strings.Contains(written, "other job") {
@@ -240,15 +240,15 @@ func TestListViaAPI(t *testing.T) {
 	defer func() { readCrontab = originalRead }()
 
 	readCrontab = func() (string, error) {
-		return `# === LEO:rocket — DO NOT EDIT ===
-# leo:rocket:heartbeat
+		return `# === LEO:myagent — DO NOT EDIT ===
+# leo:myagent:heartbeat
 0,30 7-22 * * * /usr/local/bin/leo run heartbeat
-# === END LEO:rocket ===
+# === END LEO:myagent ===
 `, nil
 	}
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "rocket"},
+		Agent: config.AgentConfig{Name: "myagent"},
 	}
 
 	result, err := List(cfg)

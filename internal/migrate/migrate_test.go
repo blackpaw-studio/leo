@@ -18,11 +18,11 @@ func newBufioReader(r io.Reader) *bufio.Reader {
 
 func TestDetectAgentNameHeading(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("# Rocket\nSome description"), 0644)
+	os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("# MyAgent\nSome description"), 0644)
 
 	name := detectAgentName(dir)
-	if name != "rocket" {
-		t.Errorf("detectAgentName() = %q, want %q", name, "rocket")
+	if name != "myagent" {
+		t.Errorf("detectAgentName() = %q, want %q", name, "myagent")
 	}
 }
 
@@ -110,20 +110,20 @@ func TestSanitizeTaskName(t *testing.T) {
 func TestMergeAgentFiles(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("# Soul\nI am helpful."), 0644)
-	os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("# Rocket\nI am Rocket."), 0644)
+	os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("# MyAgent\nI am MyAgent."), 0644)
 
-	result := mergeAgentFiles(dir, "rocket", "/home/user/rocket")
+	result := mergeAgentFiles(dir, "myagent", "/home/user/myagent")
 
-	if !strings.Contains(result, "name: rocket") {
+	if !strings.Contains(result, "name: myagent") {
 		t.Error("should contain agent name in frontmatter")
 	}
 	if !strings.Contains(result, "I am helpful") {
 		t.Error("should contain SOUL.md content")
 	}
-	if !strings.Contains(result, "I am Rocket") {
+	if !strings.Contains(result, "I am MyAgent") {
 		t.Error("should contain IDENTITY.md content")
 	}
-	if !strings.Contains(result, "/home/user/rocket") {
+	if !strings.Contains(result, "/home/user/myagent") {
 		t.Error("should contain workspace path")
 	}
 }

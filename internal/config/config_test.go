@@ -8,9 +8,9 @@ import (
 
 const testYAML = `
 agent:
-  name: rocket
+  name: myagent
   workspace: /tmp/test-workspace
-  agent_file: ~/.claude/agents/rocket.md
+  agent_file: ~/.claude/agents/myagent.md
 
 telegram:
   bot_token: "123:ABC"
@@ -59,8 +59,8 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if cfg.Agent.Name != "rocket" {
-		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "rocket")
+	if cfg.Agent.Name != "myagent" {
+		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "myagent")
 	}
 
 	if cfg.Agent.Workspace != "/tmp/test-workspace" {
@@ -234,18 +234,18 @@ func TestLoadFromWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if cfg.Agent.Name != "rocket" {
-		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "rocket")
+	if cfg.Agent.Name != "myagent" {
+		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "myagent")
 	}
 }
 
 func TestMCPConfigPath(t *testing.T) {
 	cfg := &Config{
-		Agent: AgentConfig{Workspace: "/home/user/rocket"},
+		Agent: AgentConfig{Workspace: "/home/user/myagent"},
 	}
 
 	got := cfg.MCPConfigPath()
-	want := filepath.Join("/home/user/rocket", "config", "mcp-servers.json")
+	want := filepath.Join("/home/user/myagent", "config", "mcp-servers.json")
 	if got != want {
 		t.Errorf("MCPConfigPath() = %q, want %q", got, want)
 	}

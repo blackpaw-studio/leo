@@ -18,7 +18,7 @@ func TestAssemblePrompt(t *testing.T) {
 
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
-			Name:      "rocket",
+			Name:      "myagent",
 			Workspace: dir,
 		},
 		Telegram: config.TelegramConfig{
@@ -130,7 +130,7 @@ func TestBuildArgs(t *testing.T) {
 
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
-			Name:      "rocket",
+			Name:      "myagent",
 			Workspace: dir,
 		},
 		Defaults: config.DefaultsConfig{
@@ -144,7 +144,7 @@ func TestBuildArgs(t *testing.T) {
 
 	argsStr := strings.Join(args, " ")
 
-	if !strings.Contains(argsStr, "--agent rocket") {
+	if !strings.Contains(argsStr, "--agent myagent") {
 		t.Error("missing agent flag")
 	}
 	if !strings.Contains(argsStr, "--model opus") {
@@ -170,7 +170,7 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
-			Name:      "rocket",
+			Name:      "myagent",
 			Workspace: dir,
 		},
 		Defaults: config.DefaultsConfig{

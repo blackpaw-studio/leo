@@ -27,9 +27,9 @@ func TestAgentTemplates(t *testing.T) {
 
 func TestRenderAgent(t *testing.T) {
 	data := AgentData{
-		Name:      "rocket",
-		UserName:  "Evan",
-		Workspace: "/home/user/rocket",
+		Name:      "myagent",
+		UserName:  "Alice",
+		Workspace: "/home/user/myagent",
 	}
 
 	for _, name := range AgentTemplates() {
@@ -70,7 +70,7 @@ func TestRenderHeartbeat(t *testing.T) {
 
 func TestRenderUserProfile(t *testing.T) {
 	data := UserProfileData{
-		UserName:    "Evan",
+		UserName:    "Alice",
 		Role:        "Engineer",
 		About:       "Builds things",
 		Preferences: "Dark mode",
