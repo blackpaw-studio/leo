@@ -147,6 +147,7 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir strin
 	for {
 		// Use 'script' to allocate a PTY so claude starts in interactive
 		// mode (loads plugins, channels) even when running as a daemon.
+		// The blocking pipe on stdin keeps claude alive waiting for input.
 		scriptArgs := []string{"-q", "/dev/null"}
 		scriptArgs = append(scriptArgs, claudePath)
 		scriptArgs = append(scriptArgs, claudeArgs...)
@@ -154,10 +155,21 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir strin
 		cmd.Dir = workDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
 		cmd.Env = os.Environ()
 
+		// Create a pipe for stdin that stays open — claude will block
+		// waiting for input, keeping the interactive session alive.
+		stdinR, stdinW, pipeErr := os.Pipe()
+		if pipeErr != nil {
+			return fmt.Errorf("creating stdin pipe: %w", pipeErr)
+		}
+		cmd.Stdin = stdinR
+
 		err := cmd.Run()
+
+		// Close pipe ends
+		stdinR.Close()
+		stdinW.Close()
 
 		// Check if we were signaled to stop
 		select {
