@@ -5,13 +5,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
 #
 # Options (via environment variables):
-#   INSTALL_DIR  — where to place the binary (default: /usr/local/bin)
+#   INSTALL_DIR  — where to place the binary (default: ~/.local/bin)
 #   VERSION      — specific version to install (default: latest)
 
 set -eu
 
 REPO="blackpaw-studio/leo"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # Detect OS and architecture
 detect_platform() {
@@ -75,17 +75,25 @@ main() {
   echo "Extracting..."
   tar -xzf "${tmpdir}/${archive}" -C "$tmpdir"
 
-  echo "Installing to ${INSTALL_DIR}/leo..."
-  if [ -w "$INSTALL_DIR" ]; then
-    mv "${tmpdir}/leo" "${INSTALL_DIR}/leo"
-  else
-    sudo mv "${tmpdir}/leo" "${INSTALL_DIR}/leo"
-  fi
+  mkdir -p "$INSTALL_DIR"
+  mv "${tmpdir}/leo" "${INSTALL_DIR}/leo"
   chmod +x "${INSTALL_DIR}/leo"
 
-  echo "leo ${version} installed successfully."
-  echo ""
-  echo "Run 'leo version' to verify."
+  echo "leo ${version} installed to ${INSTALL_DIR}/leo"
+
+  # Check if INSTALL_DIR is in PATH
+  case ":$PATH:" in
+    *":${INSTALL_DIR}:"*) ;;
+    *)
+      echo ""
+      echo "Warning: ${INSTALL_DIR} is not in your PATH."
+      echo "Add it by running:"
+      echo ""
+      echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+      echo ""
+      echo "To make it permanent, add that line to your ~/.zshrc or ~/.bashrc."
+      ;;
+  esac
 }
 
 main
