@@ -122,7 +122,6 @@ main() {
           echo "export PATH=\"${INSTALL_DIR}:\$PATH\"" >> "$profile"
         fi
         echo "Added ${INSTALL_DIR} to PATH in ${profile}"
-        echo "Run 'source ${profile}' or open a new terminal to use leo."
       else
         echo ""
         echo "Warning: ${INSTALL_DIR} is not in your PATH."
@@ -134,7 +133,7 @@ main() {
   esac
 
   echo ""
-  echo "To get started, run:"
+  echo "To get started, open a new terminal and run:"
   echo ""
   echo "  leo setup"
 }
