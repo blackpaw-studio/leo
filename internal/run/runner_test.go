@@ -164,6 +164,54 @@ func TestBuildArgs(t *testing.T) {
 	}
 }
 
+func TestBuildArgsWithoutMCPConfig(t *testing.T) {
+	dir := t.TempDir()
+	// No mcp-servers.json created
+
+	cfg := &config.Config{
+		Agent: config.AgentConfig{
+			Name:      "rocket",
+			Workspace: dir,
+		},
+		Defaults: config.DefaultsConfig{
+			Model:    "sonnet",
+			MaxTurns: 15,
+		},
+	}
+
+	task := config.TaskConfig{}
+	args := buildArgs(cfg, task, "test prompt")
+	argsStr := strings.Join(args, " ")
+
+	if strings.Contains(argsStr, "--mcp-config") {
+		t.Error("should not contain --mcp-config when file doesn't exist")
+	}
+
+	// Should use default model
+	if !strings.Contains(argsStr, "--model sonnet") {
+		t.Error("should use default model")
+	}
+
+	// Should use default max-turns
+	if !strings.Contains(argsStr, "--max-turns 15") {
+		t.Error("should use default max-turns")
+	}
+}
+
+func TestRunTaskNotFound(t *testing.T) {
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{},
+	}
+
+	err := Run(cfg, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent task")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want to contain 'not found'", err.Error())
+	}
+}
+
 func TestWriteLog(t *testing.T) {
 	dir := t.TempDir()
 
