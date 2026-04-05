@@ -135,7 +135,7 @@ func argValue(args []string, flag string) string {
 
 const minimalConfig = `agent:
   name: test-agent
-  workspace: %s
+  workspace: WORKSPACE_PLACEHOLDER
 telegram:
   bot_token: "fake-bot-token"
   chat_id: "12345"
@@ -154,7 +154,7 @@ func TestRunHappyPath(t *testing.T) {
 	argLog := filepath.Join(t.TempDir(), "args.json")
 
 	ws := setupWorkspace(t,
-		strings.ReplaceAll(minimalConfig, "%s", ""),
+		minimalConfig,
 		map[string]string{
 			"prompts/HEARTBEAT.md": "Check in with the user.\n",
 		},
@@ -455,6 +455,7 @@ func fixWorkspaceInConfig(t *testing.T, ws string) {
 		content = minimalConfig
 	}
 
+	content = strings.ReplaceAll(content, "WORKSPACE_PLACEHOLDER", ws)
 	content = strings.ReplaceAll(content, "%s", ws)
 	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
