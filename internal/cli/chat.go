@@ -95,10 +95,13 @@ func newChatStartCmd() *cobra.Command {
 			}
 
 			if daemon {
+				fmt.Printf("Installing daemon for agent %q...\n", cfg.Agent.Name)
 				if err := service.InstallDaemon(sc); err != nil {
 					return fmt.Errorf("installing daemon: %w", err)
 				}
-				success.Printf("Daemon installed for agent %q.\n", cfg.Agent.Name)
+				// Verify it's running
+				status, _ := service.DaemonStatus(cfg.Agent.Name)
+				success.Printf("Daemon installed for agent %q (%s).\n", cfg.Agent.Name, status)
 				info.Printf("Logs: %s\n", sc.LogPath)
 				info.Println("Note: run 'leo chat start --daemon' again if you update environment variables.")
 				return nil

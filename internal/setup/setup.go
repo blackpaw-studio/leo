@@ -45,6 +45,26 @@ func Run() error {
 // RunInteractive executes the setup wizard using the given reader, without printing a banner.
 // This allows the onboard command to call it after its own welcome screen.
 func RunInteractive(reader *bufio.Reader) error {
+	// 0. Check prerequisites
+	claude := prereq.CheckClaude()
+	if !claude.OK {
+		prompt.Err.Println("  claude CLI not found")
+		fmt.Println()
+		fmt.Println("  Claude Code CLI is required. Install it:")
+		fmt.Println()
+		fmt.Println("    brew install claude-code")
+		fmt.Println("    — or —")
+		fmt.Println("    npm install -g @anthropic-ai/claude-code")
+		fmt.Println()
+		fmt.Println("  Then run 'leo setup' again.")
+		return fmt.Errorf("claude CLI not found")
+	}
+	versionStr := claude.Version
+	if versionStr == "" {
+		versionStr = "installed"
+	}
+	prompt.Success.Printf("  claude CLI: %s\n\n", versionStr)
+
 	// 1. Agent name
 	name := prompt.Prompt(reader, "Agent name", "assistant")
 	prompt.Info.Printf("  Agent: %s\n\n", name)
