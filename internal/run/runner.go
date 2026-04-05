@@ -35,6 +35,22 @@ If nothing needs attention, reply NO_REPLY and exit.
 Do not include process narration, status updates, or tool output. Only emit the final user-facing message or NO_REPLY.
 `
 
+// Preview returns the assembled prompt and CLI args without executing.
+func Preview(cfg *config.Config, taskName string) (string, []string, error) {
+	task, ok := cfg.Tasks[taskName]
+	if !ok {
+		return "", nil, fmt.Errorf("task %q not found in config", taskName)
+	}
+
+	prompt, err := assemblePrompt(cfg, task)
+	if err != nil {
+		return "", nil, fmt.Errorf("assembling prompt: %w", err)
+	}
+
+	args := buildArgs(cfg, task, prompt)
+	return prompt, args, nil
+}
+
 // Run executes a scheduled task.
 func Run(cfg *config.Config, taskName string) error {
 	task, ok := cfg.Tasks[taskName]
