@@ -58,6 +58,34 @@ resolve_version() {
   echo "$version"
 }
 
+# Find the user's shell profile file
+detect_shell_profile() {
+  shell_name="$(basename "${SHELL:-}")"
+
+  case "$shell_name" in
+    zsh)
+      echo "$HOME/.zshrc"
+      ;;
+    bash)
+      # Prefer .bashrc on Linux, .bash_profile on macOS
+      if [ -f "$HOME/.bashrc" ]; then
+        echo "$HOME/.bashrc"
+      elif [ -f "$HOME/.bash_profile" ]; then
+        echo "$HOME/.bash_profile"
+      else
+        echo "$HOME/.bashrc"
+      fi
+      ;;
+    fish)
+      echo "$HOME/.config/fish/config.fish"
+      ;;
+    *)
+      # Unknown shell — return empty, caller will print manual instructions
+      echo ""
+      ;;
+  esac
+}
+
 main() {
   platform="$(detect_platform)"
   version="$(resolve_version)"
@@ -81,17 +109,27 @@ main() {
 
   echo "leo ${version} installed to ${INSTALL_DIR}/leo"
 
-  # Check if INSTALL_DIR is in PATH
+  # Add INSTALL_DIR to PATH if needed
   case ":$PATH:" in
     *":${INSTALL_DIR}:"*) ;;
     *)
-      echo ""
-      echo "Warning: ${INSTALL_DIR} is not in your PATH."
-      echo "Add it by running:"
-      echo ""
-      echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-      echo ""
-      echo "To make it permanent, add that line to your ~/.zshrc or ~/.bashrc."
+      profile="$(detect_shell_profile)"
+
+      if [ -n "$profile" ]; then
+        if echo "$profile" | grep -q "fish"; then
+          echo "fish_add_path ${INSTALL_DIR}" >> "$profile"
+        else
+          echo "export PATH=\"${INSTALL_DIR}:\$PATH\"" >> "$profile"
+        fi
+        echo "Added ${INSTALL_DIR} to PATH in ${profile}"
+        echo "Run 'source ${profile}' or open a new terminal to use leo."
+      else
+        echo ""
+        echo "Warning: ${INSTALL_DIR} is not in your PATH."
+        echo "Add this line to your shell profile:"
+        echo ""
+        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+      fi
       ;;
   esac
 
