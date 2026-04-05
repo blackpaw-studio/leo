@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -258,5 +259,44 @@ func TestListViaAPI(t *testing.T) {
 
 	if !strings.Contains(result, "heartbeat") {
 		t.Error("List should contain heartbeat")
+	}
+}
+
+func TestInstalledTrue(t *testing.T) {
+	originalRead := readCrontab
+	defer func() { readCrontab = originalRead }()
+
+	readCrontab = func() (string, error) {
+		return "# === LEO:myagent — DO NOT EDIT ===\n# === END LEO:myagent ===\n", nil
+	}
+
+	if !Installed("myagent") {
+		t.Error("expected Installed() = true")
+	}
+}
+
+func TestInstalledFalse(t *testing.T) {
+	originalRead := readCrontab
+	defer func() { readCrontab = originalRead }()
+
+	readCrontab = func() (string, error) {
+		return "# some other cron entries\n", nil
+	}
+
+	if Installed("myagent") {
+		t.Error("expected Installed() = false")
+	}
+}
+
+func TestInstalledReadError(t *testing.T) {
+	originalRead := readCrontab
+	defer func() { readCrontab = originalRead }()
+
+	readCrontab = func() (string, error) {
+		return "", fmt.Errorf("crontab error")
+	}
+
+	if Installed("myagent") {
+		t.Error("expected Installed() = false on read error")
 	}
 }
