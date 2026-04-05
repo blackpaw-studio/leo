@@ -1,0 +1,104 @@
+site_name: Leo
+site_url: https://blackpaw-studio.github.io/leo/
+site_description: Claude Code agents as persistent, proactive personal assistants
+site_author: Blackpaw Studio
+repo_url: https://github.com/blackpaw-studio/leo
+repo_name: blackpaw-studio/leo
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - tables
+  - def_list
+  - toc:
+      permalink: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/blackpaw-studio/leo
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - Installation: getting-started/installation.md
+      - Prerequisites: getting-started/prerequisites.md
+  - Configuration:
+      - configuration/index.md
+      - Config Reference: configuration/config-reference.md
+      - Workspace Structure: configuration/workspace-structure.md
+  - CLI Reference:
+      - cli/index.md
+      - leo setup: cli/setup.md
+      - leo onboard: cli/onboard.md
+      - leo chat: cli/chat.md
+      - leo run: cli/run.md
+      - leo cron: cli/cron.md
+      - leo task: cli/task.md
+      - leo migrate: cli/migrate.md
+      - leo version: cli/version.md
+  - Guides:
+      - Telegram Setup: guides/telegram-setup.md
+      - Scheduling: guides/scheduling.md
+      - Agent Templates: guides/agent-templates.md
+      - Background Mode: guides/background-mode.md
+      - Writing Tasks: guides/writing-tasks.md
+  - Development:
+      - development/index.md
+      - Contributing: development/contributing.md
