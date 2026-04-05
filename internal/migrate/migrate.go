@@ -10,6 +10,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/telegram"
@@ -207,9 +208,9 @@ func RunInteractive(reader *bufio.Reader) error {
 			leoPath = "leo"
 		}
 		fmt.Println("  Installing chat daemon...")
-		env := captureEnv()
+		environ := env.Capture()
 		if cfg.Telegram.BotToken != "" {
-			env["TELEGRAM_BOT_TOKEN"] = cfg.Telegram.BotToken
+			environ["TELEGRAM_BOT_TOKEN"] = cfg.Telegram.BotToken
 		}
 		sc := service.ServiceConfig{
 			AgentName:  agentName,
@@ -217,7 +218,7 @@ func RunInteractive(reader *bufio.Reader) error {
 			ConfigPath: cfgPath,
 			WorkDir:    workspace,
 			LogPath:    service.LogPathFor(workspace),
-			Env:        env,
+			Env:        environ,
 		}
 		if err := service.InstallDaemon(sc); err != nil {
 			prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
@@ -622,20 +623,3 @@ func sanitizeTaskName(name string) string {
 	return name
 }
 
-func captureEnv() map[string]string {
-	env := make(map[string]string)
-	for _, key := range []string{
-		"ANTHROPIC_API_KEY",
-		"CLAUDE_CODE_ENTRYPOINT",
-		"HOME",
-		"PATH",
-		"SHELL",
-		"USER",
-		"TELEGRAM_BOT_TOKEN",
-	} {
-		if v := os.Getenv(key); v != "" {
-			env[key] = v
-		}
-	}
-	return env
-}

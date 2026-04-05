@@ -2,12 +2,9 @@ package setup
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -54,75 +51,12 @@ func RunInteractive(reader *bufio.Reader) error {
 	}
 
 	// 0. Check prerequisites
-	prompt.Bold.Println("Checking prerequisites...")
-	fmt.Println()
-
-	claude := prereq.CheckClaude()
-	if !claude.OK {
-		prompt.Err.Println("    claude CLI    ✗ not found")
-		fmt.Println()
-		fmt.Println("  Claude Code CLI is required. Install it:")
-		fmt.Println()
-		fmt.Println("    brew install claude-code")
-		fmt.Println("    — or —")
-		fmt.Println("    npm install -g @anthropic-ai/claude-code")
-		fmt.Println()
-		fmt.Println("  Then run 'leo setup' again.")
-		return fmt.Errorf("claude CLI not found")
+	if err := checkPrerequisites(); err != nil {
+		return err
 	}
-	versionStr := claude.Version
-	if versionStr == "" {
-		versionStr = "installed"
-	}
-	prompt.Success.Printf("    claude CLI    ✓ %s\n", versionStr)
-
-	if prereq.CheckTmux() {
-		prompt.Success.Println("    tmux          ✓ installed")
-	} else {
-		prompt.Err.Println("    tmux          ✗ not found")
-		fmt.Println()
-		fmt.Println("  tmux is required for the chat daemon. Install it:")
-		fmt.Println()
-		fmt.Println("    brew install tmux")
-		fmt.Println()
-		fmt.Println("  Then run 'leo setup' again.")
-		return fmt.Errorf("tmux not found")
-	}
-
-	if prereq.CheckBun() {
-		prompt.Success.Println("    bun           ✓ installed")
-	} else {
-		prompt.Err.Println("    bun           ✗ not found")
-		fmt.Println()
-		fmt.Println("  bun is required for the Telegram plugin. Install it:")
-		fmt.Println()
-		fmt.Println("    curl -fsSL https://bun.sh/install | bash")
-		fmt.Println()
-		fmt.Println("  Then run 'leo setup' again.")
-		return fmt.Errorf("bun not found")
-	}
-
-	fmt.Println()
 
 	// Try to load existing config
-	var existing *config.Config
-	defaultWorkspace := filepath.Join(home, ".leo")
-
-	// Check default location first
-	if cfg, err := config.LoadFromWorkspace(defaultWorkspace); err == nil {
-		existing = cfg
-	}
-
-	// Also check any existing workspaces found by prereq
-	if existing == nil {
-		for _, ws := range prereq.FindExistingWorkspaces() {
-			if cfg, err := config.LoadFromWorkspace(ws); err == nil {
-				existing = cfg
-				defaultWorkspace = ws
-				break
-			}
-		}
-	}
+	existing, defaultWorkspace := findExistingConfig(home)
 
 	if existing != nil {
 		prompt.Info.Printf("  Found existing config at %s/leo.yaml\n\n", existing.Agent.Workspace)
@@ -184,44 +118,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	}
 
 	// 5. Telegram
-	botTokenDefault := ""
-	chatIDDefault := ""
-	groupIDDefault := ""
-	if existing != nil {
-		botTokenDefault = existing.Telegram.BotToken
-		chatIDDefault = existing.Telegram.ChatID
-		groupIDDefault = existing.Telegram.GroupID
-	}
-
-	var botToken, chatID, groupID string
-	var topics map[string]int
-
-	if botTokenDefault != "" {
-		masked := botTokenDefault
-		if len(botTokenDefault) > 12 {
-			masked = botTokenDefault[:8] + "..." + botTokenDefault[len(botTokenDefault)-4:]
-		}
-		prompt.Info.Printf("  Telegram bot token: %s\n", masked)
-		if chatIDDefault != "" {
-			prompt.Info.Printf("  Chat ID: %s\n", chatIDDefault)
-		}
-		if groupIDDefault != "" {
-			prompt.Info.Printf("  Group ID: %s\n", groupIDDefault)
-		}
-
-		if prompt.YesNo(reader, "  Reconfigure Telegram?", false) {
-			botToken, chatID, groupID, topics = promptTelegram(reader, botTokenDefault, chatIDDefault, groupIDDefault)
-		} else {
-			botToken = botTokenDefault
-			chatID = chatIDDefault
-			groupID = groupIDDefault
-			if existing != nil {
-				topics = existing.Telegram.Topics
-			}
-		}
-	} else {
-		botToken, chatID, groupID, topics = promptTelegram(reader, "", "", "")
-	}
+	botToken, chatID, groupID, topics := promptTelegramConfig(reader, existing)
 
 	// 6. Build config
 	cfg := &config.Config{
@@ -271,6 +168,152 @@ func RunInteractive(reader *bufio.Reader) error {
 	// 8. Create workspace and write files
 	prompt.Bold.Println("\nCreating workspace...")
 
+	if err := scaffoldWorkspace(workspace, home, name, cfg, agentDir, agentPath, agentContent, userPath, userName, role, about, preferences, timezone); err != nil {
+		return err
+	}
+
+	// 9. Configure Telegram channel plugin for Claude Code
+	if botToken != "" {
+		prompt.Bold.Println("\nConfiguring Telegram channel plugin...")
+		if err := installTelegramPlugin(botToken, chatID, groupID, workspace); err != nil {
+			prompt.Warn.Printf("  Failed to configure Telegram plugin: %v\n", err)
+		} else {
+			prompt.Success.Println("  Telegram channel plugin configured.")
+		}
+	} else {
+		// Still write settings.json for trusted dirs even without telegram
+		if err := writeClaudeSettings(workspace); err != nil {
+			prompt.Warn.Printf("  Failed to write Claude settings: %v\n", err)
+		}
+	}
+
+	// 10. Install cron
+	cfgPath := filepath.Join(workspace, "leo.yaml")
+	if len(cfg.Tasks) > 0 {
+		cronInstalled := cron.Installed(name)
+		if cronInstalled {
+			prompt.Info.Println("\n  Cron entries already installed.")
+			if prompt.YesNo(reader, "  Reinstall cron entries?", false) {
+				installCron(cfg)
+			}
+		} else {
+			if prompt.YesNo(reader, "\nInstall cron entries?", true) {
+				installCron(cfg)
+			}
+		}
+	}
+
+	// 11. Install chat daemon
+	fmt.Println()
+	daemonStatus, daemonErr := service.DaemonStatus(name)
+	if daemonErr != nil {
+		prompt.Warn.Printf("  Could not check daemon status: %v\n", daemonErr)
+	}
+	if daemonStatus == "not installed" || daemonErr != nil {
+		if prompt.YesNo(reader, "Install chat daemon (runs on login)?", true) {
+			fmt.Println("  Installing chat daemon...")
+			installDaemon(name, workspace, cfgPath, botToken)
+		}
+	} else {
+		prompt.Info.Printf("  Chat daemon: %s\n", daemonStatus)
+		if prompt.YesNo(reader, "  Reinstall chat daemon?", false) {
+			fmt.Println("  Installing chat daemon...")
+			installDaemon(name, workspace, cfgPath, botToken)
+		}
+	}
+
+	// 12. Test
+	if botToken != "" && chatID != "" && prompt.YesNo(reader, "\nSend test Telegram message?", true) {
+		effectiveChatID := chatID
+		if groupID != "" {
+			effectiveChatID = groupID
+		}
+		if err := telegram.SendMessage(botToken, effectiveChatID, "Hello from Leo! Setup complete.", 0); err != nil {
+			prompt.Warn.Printf("  Test message failed: %v\n", err)
+		} else {
+			prompt.Success.Println("  Test message sent!")
+		}
+	}
+
+	prompt.Bold.Printf("\nSetup complete! Workspace: %s\n", workspace)
+	fmt.Println("\nNext steps:")
+	fmt.Printf("  leo chat                 # Start interactive session\n")
+	fmt.Printf("  leo run heartbeat        # Test heartbeat task\n")
+	fmt.Printf("  leo task list            # View configured tasks\n")
+
+	return nil
+}
+
+func checkPrerequisites() error {
+	prompt.Bold.Println("Checking prerequisites...")
+	fmt.Println()
+
+	claude := prereq.CheckClaude()
+	if !claude.OK {
+		prompt.Err.Println("    claude CLI    ✗ not found")
+		fmt.Println()
+		fmt.Println("  Claude Code CLI is required. Install it:")
+		fmt.Println()
+		fmt.Println("    brew install claude-code")
+		fmt.Println("    — or —")
+		fmt.Println("    npm install -g @anthropic-ai/claude-code")
+		fmt.Println()
+		fmt.Println("  Then run 'leo setup' again.")
+		return fmt.Errorf("claude CLI not found")
+	}
+	versionStr := claude.Version
+	if versionStr == "" {
+		versionStr = "installed"
+	}
+	prompt.Success.Printf("    claude CLI    ✓ %s\n", versionStr)
+
+	if prereq.CheckTmux() {
+		prompt.Success.Println("    tmux          ✓ installed")
+	} else {
+		prompt.Err.Println("    tmux          ✗ not found")
+		fmt.Println()
+		fmt.Println("  tmux is required for the chat daemon. Install it:")
+		fmt.Println()
+		fmt.Println("    brew install tmux")
+		fmt.Println()
+		fmt.Println("  Then run 'leo setup' again.")
+		return fmt.Errorf("tmux not found")
+	}
+
+	if prereq.CheckBun() {
+		prompt.Success.Println("    bun           ✓ installed")
+	} else {
+		prompt.Err.Println("    bun           ✗ not found")
+		fmt.Println()
+		fmt.Println("  bun is required for the Telegram plugin. Install it:")
+		fmt.Println()
+		fmt.Println("    curl -fsSL https://bun.sh/install | bash")
+		fmt.Println()
+		fmt.Println("  Then run 'leo setup' again.")
+		return fmt.Errorf("bun not found")
+	}
+
+	fmt.Println()
+	return nil
+}
+
+func findExistingConfig(home string) (*config.Config, string) {
+	defaultWorkspace := filepath.Join(home, ".leo")
+
+	if cfg, err := config.LoadFromWorkspace(defaultWorkspace); err == nil {
+		return cfg, defaultWorkspace
+	}
+
+	for _, ws := range prereq.FindExistingWorkspaces() {
+		if cfg, err := config.LoadFromWorkspace(ws); err == nil {
+			return cfg, ws
+		}
+	}
+
+	return nil, defaultWorkspace
+}
+
+func scaffoldWorkspace(workspace, home, name string, cfg *config.Config, agentDir, agentPath, agentContent, userPath, userName, role, about, preferences, timezone string) error {
 	dirs := []string{
 		workspace,
 		filepath.Join(workspace, "daily"),
@@ -363,74 +406,6 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	// 9. Configure Telegram channel plugin for Claude Code
-	if botToken != "" {
-		prompt.Bold.Println("\nConfiguring Telegram channel plugin...")
-		if err := installTelegramPlugin(botToken, chatID, groupID, workspace); err != nil {
-			prompt.Warn.Printf("  Failed to configure Telegram plugin: %v\n", err)
-		} else {
-			prompt.Success.Println("  Telegram channel plugin configured.")
-		}
-	} else {
-		// Still write settings.json for trusted dirs even without telegram
-		if err := writeClaudeSettings(workspace); err != nil {
-			prompt.Warn.Printf("  Failed to write Claude settings: %v\n", err)
-		}
-	}
-
-	// 10. Install cron
-	if len(cfg.Tasks) > 0 {
-		cronInstalled := cron.Installed(name)
-		if cronInstalled {
-			prompt.Info.Println("\n  Cron entries already installed.")
-			if prompt.YesNo(reader, "  Reinstall cron entries?", false) {
-				installCron(cfg)
-			}
-		} else {
-			if prompt.YesNo(reader, "\nInstall cron entries?", true) {
-				installCron(cfg)
-			}
-		}
-	}
-
-	// 11. Install chat daemon
-	fmt.Println()
-	daemonStatus, daemonErr := service.DaemonStatus(name)
-	if daemonErr != nil {
-		prompt.Warn.Printf("  Could not check daemon status: %v\n", daemonErr)
-	}
-	if daemonStatus == "not installed" || daemonErr != nil {
-		if prompt.YesNo(reader, "Install chat daemon (runs on login)?", true) {
-			fmt.Println("  Installing chat daemon...")
-			installDaemon(name, workspace, cfgPath, botToken)
-		}
-	} else {
-		prompt.Info.Printf("  Chat daemon: %s\n", daemonStatus)
-		if prompt.YesNo(reader, "  Reinstall chat daemon?", false) {
-			fmt.Println("  Installing chat daemon...")
-			installDaemon(name, workspace, cfgPath, botToken)
-		}
-	}
-
-	// 12. Test
-	if botToken != "" && chatID != "" && prompt.YesNo(reader, "\nSend test Telegram message?", true) {
-		effectiveChatID := chatID
-		if groupID != "" {
-			effectiveChatID = groupID
-		}
-		if err := telegram.SendMessage(botToken, effectiveChatID, "Hello from Leo! Setup complete.", 0); err != nil {
-			prompt.Warn.Printf("  Test message failed: %v\n", err)
-		} else {
-			prompt.Success.Println("  Test message sent!")
-		}
-	}
-
-	prompt.Bold.Printf("\nSetup complete! Workspace: %s\n", workspace)
-	fmt.Println("\nNext steps:")
-	fmt.Printf("  leo chat                 # Start interactive session\n")
-	fmt.Printf("  leo run heartbeat        # Test heartbeat task\n")
-	fmt.Printf("  leo task list            # View configured tasks\n")
-
 	return nil
 }
 
@@ -473,6 +448,45 @@ func promptUserProfile(reader *bufio.Reader) (userName, role, about, preferences
 	return
 }
 
+func promptTelegramConfig(reader *bufio.Reader, existing *config.Config) (botToken, chatID, groupID string, topics map[string]int) {
+	botTokenDefault := ""
+	chatIDDefault := ""
+	groupIDDefault := ""
+	if existing != nil {
+		botTokenDefault = existing.Telegram.BotToken
+		chatIDDefault = existing.Telegram.ChatID
+		groupIDDefault = existing.Telegram.GroupID
+	}
+
+	if botTokenDefault != "" {
+		masked := botTokenDefault
+		if len(botTokenDefault) > 12 {
+			masked = botTokenDefault[:8] + "..." + botTokenDefault[len(botTokenDefault)-4:]
+		}
+		prompt.Info.Printf("  Telegram bot token: %s\n", masked)
+		if chatIDDefault != "" {
+			prompt.Info.Printf("  Chat ID: %s\n", chatIDDefault)
+		}
+		if groupIDDefault != "" {
+			prompt.Info.Printf("  Group ID: %s\n", groupIDDefault)
+		}
+
+		if prompt.YesNo(reader, "  Reconfigure Telegram?", false) {
+			botToken, chatID, groupID, topics = promptTelegram(reader, botTokenDefault, chatIDDefault, groupIDDefault)
+		} else {
+			botToken = botTokenDefault
+			chatID = chatIDDefault
+			groupID = groupIDDefault
+			if existing != nil {
+				topics = existing.Telegram.Topics
+			}
+		}
+	} else {
+		botToken, chatID, groupID, topics = promptTelegram(reader, "", "", "")
+	}
+	return
+}
+
 func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefault string) (botToken, chatID, groupID string, topics map[string]int) {
 	prompt.Bold.Println("\nTelegram Setup")
 	fmt.Println("Create a bot via @BotFather on Telegram, then paste the token.")
@@ -508,235 +522,4 @@ func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefaul
 		}
 	}
 	return
-}
-
-// installTelegramPlugin fully configures the Claude Code telegram channel plugin:
-// - Installs the plugin via claude CLI if not already installed
-// - Writes bot token to ~/.claude/channels/telegram/.env
-// - Writes access.json with allowlist policy, allowFrom, and groups
-// - Writes ~/.claude/settings.json with trustedDirectories, skipDangerousModePermissionPrompt, enabledPlugins
-func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("determining home directory: %w", err)
-	}
-
-	// 1. Install the telegram plugin if not already installed
-	pluginDir := filepath.Join(home, ".claude", "plugins", "marketplaces", "claude-plugins-official", "external_plugins", "telegram")
-	if _, err := os.Stat(pluginDir); os.IsNotExist(err) {
-		claudePath, lookErr := exec.LookPath("claude")
-		if lookErr == nil {
-			prompt.Info.Println("  Installing telegram plugin...")
-			cmd := exec.Command(claudePath, "plugin", "install", "telegram@claude-plugins-official")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				prompt.Warn.Printf("  Plugin install failed: %v (you can install manually: claude plugin install telegram@claude-plugins-official)\n", err)
-			} else {
-				prompt.Success.Println("  Telegram plugin installed.")
-			}
-		}
-	} else {
-		prompt.Info.Println("  Telegram plugin already installed.")
-	}
-
-	// 2. Write bot token to .env
-	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
-	if err := os.MkdirAll(channelDir, 0755); err != nil {
-		return fmt.Errorf("creating channel directory: %w", err)
-	}
-
-	envContent := fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", botToken)
-	envPath := filepath.Join(channelDir, ".env")
-	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
-		return fmt.Errorf("writing .env: %w", err)
-	}
-
-	// 3. Write access.json with allowlist policy and groups
-	accessPath := filepath.Join(channelDir, "access.json")
-
-	// Read existing access.json to preserve approved peers
-	accessDoc := map[string]any{
-		"dmPolicy": "allowlist",
-		"allowFrom": []string{},
-		"groups":    map[string]any{},
-		"pending":   map[string]any{},
-	}
-	if existingData, readErr := os.ReadFile(accessPath); readErr == nil {
-		if unmarshalErr := json.Unmarshal(existingData, &accessDoc); unmarshalErr != nil {
-			return fmt.Errorf("parsing existing access.json: %w", unmarshalErr)
-		}
-	}
-
-	if chatID != "" {
-		allowFrom, _ := accessDoc["allowFrom"].([]any)
-		found := false
-		for _, v := range allowFrom {
-			if v == chatID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			allowFrom = append(allowFrom, chatID)
-		}
-		accessDoc["allowFrom"] = allowFrom
-	}
-	if groupID != "" {
-		groups, _ := accessDoc["groups"].(map[string]any)
-		if groups == nil {
-			groups = make(map[string]any)
-		}
-		if _, exists := groups[groupID]; !exists {
-			groups[groupID] = map[string]any{"requireMention": false}
-		}
-		accessDoc["groups"] = groups
-	}
-
-	accessData, marshalErr := json.MarshalIndent(accessDoc, "", "  ")
-	if marshalErr != nil {
-		return fmt.Errorf("marshaling access.json: %w", marshalErr)
-	}
-	if err := os.WriteFile(accessPath, append(accessData, '\n'), 0600); err != nil {
-		return fmt.Errorf("writing access.json: %w", err)
-	}
-
-	// 4. Write/update ~/.claude/settings.json
-	if err := writeClaudeSettings(workspace); err != nil {
-		return fmt.Errorf("writing settings.json: %w", err)
-	}
-
-	return nil
-}
-
-// writeClaudeSettings writes ~/.claude/settings.json with the settings needed
-// for headless daemon operation: trustedDirectories, skipDangerousModePermissionPrompt,
-// and enabledPlugins for telegram.
-func writeClaudeSettings(workspace string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("determining home directory: %w", err)
-	}
-
-	claudeDir := filepath.Join(home, ".claude")
-	if err := os.MkdirAll(claudeDir, 0700); err != nil {
-		return fmt.Errorf("creating .claude directory: %w", err)
-	}
-
-	settingsPath := filepath.Join(claudeDir, "settings.json")
-
-	// Read existing settings if present
-	existing := make(map[string]any)
-	if data, err := os.ReadFile(settingsPath); err == nil {
-		if unmarshalErr := json.Unmarshal(data, &existing); unmarshalErr != nil {
-			return fmt.Errorf("parsing existing settings.json: %w", unmarshalErr)
-		}
-	}
-
-	// Ensure trustedDirectories includes the workspace
-	trusted, _ := existing["trustedDirectories"].([]any)
-	found := false
-	for _, d := range trusted {
-		if d == workspace {
-			found = true
-			break
-		}
-	}
-	if !found {
-		trusted = append(trusted, workspace)
-	}
-	existing["trustedDirectories"] = trusted
-
-	// Set skip prompts and enable telegram plugin
-	existing["skipDangerousModePermissionPrompt"] = true
-
-	plugins, _ := existing["enabledPlugins"].(map[string]any)
-	if plugins == nil {
-		plugins = make(map[string]any)
-	}
-	plugins["telegram@claude-plugins-official"] = true
-	existing["enabledPlugins"] = plugins
-
-	// Keep schema if present
-	if _, ok := existing["$schema"]; !ok {
-		existing["$schema"] = "https://json.schemastore.org/claude-code-settings.json"
-	}
-
-	data, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling settings: %w", err)
-	}
-
-	return os.WriteFile(settingsPath, append(data, '\n'), 0600)
-}
-
-func installCron(cfg *config.Config) {
-	leoPath, _ := os.Executable()
-	if leoPath == "" {
-		leoPath = "leo"
-	}
-	if err := cron.Install(cfg, leoPath); err != nil {
-		prompt.Warn.Printf("  Failed to install cron: %v\n", err)
-	} else {
-		prompt.Success.Println("  Cron entries installed.")
-	}
-}
-
-func installDaemon(name, workspace, cfgPath, botToken string) {
-	leoPath, _ := os.Executable()
-	if leoPath == "" {
-		leoPath = "leo"
-	}
-	env := captureEnv()
-	if botToken != "" {
-		env["TELEGRAM_BOT_TOKEN"] = botToken
-	}
-	sc := service.ServiceConfig{
-		AgentName:  name,
-		LeoPath:    leoPath,
-		ConfigPath: cfgPath,
-		WorkDir:    workspace,
-		LogPath:    service.LogPathFor(workspace),
-		Env:        env,
-	}
-	if err := service.InstallDaemon(sc); err != nil {
-		prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
-	} else {
-		status, _ := service.DaemonStatus(name)
-		prompt.Success.Printf("  Chat daemon installed (%s).\n", status)
-		prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
-	}
-}
-
-func captureEnv() map[string]string {
-	home, _ := os.UserHomeDir() // best-effort; PATH augmentation is non-critical
-	env := make(map[string]string)
-	for _, key := range []string{
-		"ANTHROPIC_API_KEY",
-		"CLAUDE_CODE_ENTRYPOINT",
-		"HOME",
-		"PATH",
-		"SHELL",
-		"USER",
-		"TELEGRAM_BOT_TOKEN",
-	} {
-		if v := os.Getenv(key); v != "" {
-			env[key] = v
-		}
-	}
-
-	// Ensure bun and homebrew are in PATH for the daemon
-	if path, ok := env["PATH"]; ok {
-		bunDir := filepath.Join(home, ".bun", "bin")
-		if _, err := os.Stat(bunDir); err == nil && !strings.Contains(path, bunDir) {
-			env["PATH"] = bunDir + ":" + path
-		}
-		if !strings.Contains(path, "/opt/homebrew/bin") {
-			if _, err := os.Stat("/opt/homebrew/bin"); err == nil {
-				env["PATH"] = "/opt/homebrew/bin:" + env["PATH"]
-			}
-		}
-	}
-
-	return env
 }
