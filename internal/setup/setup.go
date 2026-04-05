@@ -308,15 +308,17 @@ func RunInteractive(reader *bufio.Reader) error {
 	}
 
 	// 9. Install cron
-	if len(cfg.Tasks) > 0 && prompt.YesNo(reader, "\nInstall cron entries?", true) {
-		leoPath, _ := os.Executable()
-		if leoPath == "" {
-			leoPath = "leo"
-		}
-		if err := cron.Install(cfg, leoPath); err != nil {
-			prompt.Warn.Printf("  Failed to install cron: %v\n", err)
+	if len(cfg.Tasks) > 0 {
+		cronInstalled := cron.Installed(name)
+		if cronInstalled {
+			prompt.Info.Println("\n  Cron entries already installed.")
+			if prompt.YesNo(reader, "  Reinstall cron entries?", false) {
+				installCron(cfg)
+			}
 		} else {
-			prompt.Success.Println("  Cron entries installed.")
+			if prompt.YesNo(reader, "\nInstall cron entries?", true) {
+				installCron(cfg)
+			}
 		}
 	}
 
@@ -429,6 +431,18 @@ func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefaul
 		}
 	}
 	return
+}
+
+func installCron(cfg *config.Config) {
+	leoPath, _ := os.Executable()
+	if leoPath == "" {
+		leoPath = "leo"
+	}
+	if err := cron.Install(cfg, leoPath); err != nil {
+		prompt.Warn.Printf("  Failed to install cron: %v\n", err)
+	} else {
+		prompt.Success.Println("  Cron entries installed.")
+	}
 }
 
 func installDaemon(name, workspace, cfgPath string) {

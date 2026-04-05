@@ -61,6 +61,15 @@ func List(cfg *config.Config) (string, error) {
 	return extractBlock(existing, cfg.Agent.Name), nil
 }
 
+// Installed returns true if leo-managed cron entries exist for this agent.
+func Installed(agentName string) bool {
+	existing, err := readCrontab()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(existing, markerStart(agentName))
+}
+
 func buildBlock(cfg *config.Config, leoPath string) string {
 	if leoPath == "" {
 		leoPath = "leo"
