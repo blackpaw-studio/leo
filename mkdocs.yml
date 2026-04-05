@@ -102,3 +102,4 @@ nav:
   - Development:
       - development/index.md
       - Contributing: development/contributing.md
+      - Releasing: development/releasing.md

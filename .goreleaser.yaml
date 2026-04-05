@@ -22,6 +22,7 @@ brews:
   - repository:
       owner: blackpaw-studio
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     name: leo
     homepage: https://github.com/blackpaw-studio/leo
     description: CLI for managing Claude Code agents as persistent personal assistants

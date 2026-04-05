@@ -39,13 +39,11 @@ go install honnef.co/go/tools/cmd/staticcheck@latest
 
 ## Release
 
-Leo uses [GoReleaser](https://goreleaser.com/) for builds and releases:
+See the [Releasing](releasing.md) guide for the full release pipeline. To test a release build locally:
 
 ```bash
 make snapshot       # test a release build locally
 ```
-
-Release targets: macOS (amd64, arm64) and Linux (amd64, arm64). Homebrew tap is at `blackpaw-studio/homebrew-tap`.
 
 ## Documentation
 

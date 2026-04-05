@@ -3,7 +3,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/blackpaw-studio/leo/internal/cli.Version=$(VERSION)
 GOFLAGS := -trimpath
 
-.PHONY: build install clean test lint docs docs-serve
+.PHONY: build install clean test lint docs docs-serve tag
 
 build:
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/leo
@@ -29,3 +29,8 @@ docs:
 
 docs-serve:
 	mkdocs serve
+
+tag:
+	@test -n "$(V)" || (echo "Usage: make tag V=0.1.0" && exit 1)
+	git tag -a v$(V) -m "Release v$(V)"
+	git push origin v$(V)
