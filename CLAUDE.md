@@ -39,10 +39,11 @@ internal/cron/            → Crontab management with marker-delimited blocks pe
 internal/telegram/        → Telegram Bot API helpers (test message, getUpdates polling)
 internal/prompt/          → Interactive terminal helpers (colored prompts, yes/no, choice parsing)
 internal/templates/       → embed.FS templates for agent personas, heartbeat, user profile
-internal/setup/           → Setup wizard
+internal/setup/           → Setup wizard (wizard.go, telegram.go, daemon.go)
 internal/migrate/         → OpenClaw migration
 internal/onboard/         → Onboarding flow
 internal/prereq/          → Prerequisite checks (claude CLI, etc.)
+internal/env/             → Shared environment capture for daemon/cron processes
 ```
 
 Key design patterns:
@@ -54,6 +55,8 @@ Key design patterns:
 ## Config
 
 Workspace config lives at `<workspace>/leo.yaml`. Key sections: `agent` (name, workspace, agent_file), `telegram` (bot_token, chat_id, group_id, topics), `defaults` (model, max_turns), `tasks` (per-task schedule, prompt_file, overrides).
+
+`Config.Validate()` checks required fields, model names (sonnet/opus/haiku), cron schedule syntax, telegram consistency, and topic references. Called automatically by CLI on config load.
 
 ## Dependencies
 
