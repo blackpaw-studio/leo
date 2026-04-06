@@ -52,7 +52,11 @@ func runChat(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("claude not found: %w", err)
 		}
 		info.Printf("Starting supervised session for agent %q...\n", cfg.Agent.Name)
-		return service.RunSupervised(claudePath, claudeArgs, cfg.Agent.Workspace)
+		cfgPath, err := resolveConfigPath(cfg)
+		if err != nil {
+			return fmt.Errorf("resolving config path: %w", err)
+		}
+		return service.RunSupervised(claudePath, claudeArgs, cfg.Agent.Workspace, cfgPath)
 	}
 
 	// Foreground mode: exec replaces this process

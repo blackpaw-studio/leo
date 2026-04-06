@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
 // Testability seams
@@ -139,13 +141,23 @@ func Status(agentName, workDir string) (string, error) {
 // RunSupervised runs claude in a restart loop with exponential backoff.
 // This is invoked when leo chat --supervised is used. It handles SIGTERM/SIGINT
 // for graceful shutdown.
-func RunSupervised(claudePath string, claudeArgs []string, workDir string) error {
-	return supervisedExecFn(claudePath, claudeArgs, workDir)
+func RunSupervised(claudePath string, claudeArgs []string, workDir, configPath string) error {
+	return supervisedExecFn(claudePath, claudeArgs, workDir, configPath)
 }
 
-func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir string) error {
+func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, configPath string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+
+	// Start daemon IPC server
+	sockPath := filepath.Join(workDir, "state", "leo.sock")
+	srv := daemon.New(sockPath, configPath)
+	if err := srv.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
+	} else {
+		defer srv.Shutdown()
+		fmt.Fprintf(os.Stdout, "daemon IPC server listening on %s\n", sockPath)
+	}
 
 	backoff := initialBackoff
 

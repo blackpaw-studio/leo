@@ -403,13 +403,15 @@ func TestRunSupervisedDelegates(t *testing.T) {
 
 	var calledPath string
 	var calledArgs []string
-	supervisedExecFn = func(claudePath string, claudeArgs []string, workDir string) error {
+	var calledConfigPath string
+	supervisedExecFn = func(claudePath string, claudeArgs []string, workDir, configPath string) error {
 		calledPath = claudePath
 		calledArgs = claudeArgs
+		calledConfigPath = configPath
 		return nil
 	}
 
-	err := RunSupervised("/usr/bin/claude", []string{"--agent", "test"}, "/workspace")
+	err := RunSupervised("/usr/bin/claude", []string{"--agent", "test"}, "/workspace", "/workspace/leo.yaml")
 	if err != nil {
 		t.Fatalf("RunSupervised() error: %v", err)
 	}
@@ -418,5 +420,8 @@ func TestRunSupervisedDelegates(t *testing.T) {
 	}
 	if len(calledArgs) != 2 || calledArgs[0] != "--agent" {
 		t.Errorf("args = %v, want [--agent test]", calledArgs)
+	}
+	if calledConfigPath != "/workspace/leo.yaml" {
+		t.Errorf("configPath = %q, want /workspace/leo.yaml", calledConfigPath)
 	}
 }
