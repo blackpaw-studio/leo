@@ -26,10 +26,12 @@ const telegramProtocolTemplate = `
 If anything needs the user's attention, send a Telegram message using:
 ` + "```bash" + `
 curl -s -X POST "https://api.telegram.org/bot%s/sendMessage" \
-  -d chat_id="%s" \
-  %s-d parse_mode=Markdown \
-  -d text="<your message>"
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "%s", %s"parse_mode": "Markdown", "text": "<your message>"}'
 ` + "```" + `
+
+IMPORTANT: The message is sent as a JSON payload. Escape any double quotes in your
+message text with a backslash. Do not use shell variables or unescaped special characters.
 
 If nothing needs attention, reply NO_REPLY and exit.
 Do not include process narration, status updates, or tool output. Only emit the final user-facing message or NO_REPLY.
@@ -106,7 +108,7 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 
 	topicLine := ""
 	if topicID := cfg.TopicID(task.Topic); topicID > 0 {
-		topicLine = fmt.Sprintf(`-d message_thread_id="%d" \`+"\n  ", topicID)
+		topicLine = fmt.Sprintf(`"message_thread_id": %d, `, topicID)
 	}
 
 	telegramProtocol := fmt.Sprintf(telegramProtocolTemplate,
