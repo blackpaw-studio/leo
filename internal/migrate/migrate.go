@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -430,8 +431,12 @@ func copyFile(src, dst string) error {
 
 func rewritePaths(workspace, oldPath, newPath string) int {
 	count := 0
-	filepath.Walk(workspace, func(path string, fi os.FileInfo, err error) error {
-		if err != nil || fi.IsDir() || !strings.HasSuffix(path, ".md") {
+	filepath.WalkDir(workspace, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		// Skip symlinks to avoid TOCTOU issues
+		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		data, err := os.ReadFile(path)

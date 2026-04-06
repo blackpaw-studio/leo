@@ -184,7 +184,9 @@ func extractBinaryFromTarGz(r io.Reader, w io.Writer) error {
 		}
 
 		if filepath.Base(hdr.Name) == "leo" && hdr.Typeflag == tar.TypeReg {
-			if _, err := io.Copy(w, tr); err != nil {
+			// Limit extraction to 500MB to prevent decompression bombs
+			const maxBinarySize = 500 << 20
+			if _, err := io.Copy(w, io.LimitReader(tr, maxBinarySize)); err != nil {
 				return fmt.Errorf("writing binary: %w", err)
 			}
 			return nil
