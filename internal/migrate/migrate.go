@@ -104,7 +104,7 @@ func RunInteractive(reader *bufio.Reader) error {
 		filepath.Join(workspace, "scripts"),
 	}
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0750); err != nil {
 			return fmt.Errorf("creating directory %s: %w", dir, err)
 		}
 	}
@@ -114,7 +114,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	agentContent := mergeAgentFiles(ocWorkspace, agentName, workspace)
 
 	agentDir := filepath.Join(home, ".claude", "agents")
-	if err := os.MkdirAll(agentDir, 0755); err != nil {
+	if err := os.MkdirAll(agentDir, 0750); err != nil {
 		return fmt.Errorf("creating agent directory: %w", err)
 	}
 	agentPath := filepath.Join(agentDir, agentName+".md")
@@ -130,7 +130,7 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	// 7. Set up memory
 	memDir := filepath.Join(home, ".claude", "agent-memory", agentName)
-	if err := os.MkdirAll(memDir, 0755); err != nil {
+	if err := os.MkdirAll(memDir, 0750); err != nil {
 		return fmt.Errorf("creating memory directory: %w", err)
 	}
 	memFile := filepath.Join(memDir, "MEMORY.md")
@@ -408,7 +408,7 @@ func copyDir(src, dst string, count *int) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(dst, 0755); err != nil {
+	if err := os.MkdirAll(dst, 0750); err != nil {
 		return
 	}
 	for _, e := range entries {
@@ -430,23 +430,32 @@ func copyFile(src, dst string) error {
 }
 
 func rewritePaths(workspace, oldPath, newPath string) int {
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return 0
+	}
+	defer root.Close()
+
 	count := 0
 	filepath.WalkDir(workspace, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
 			return nil
 		}
-		// Skip symlinks to avoid TOCTOU issues
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		rel, err := filepath.Rel(workspace, path)
+		if err != nil {
+			return nil
+		}
+		data, err := root.ReadFile(rel)
 		if err != nil {
 			return nil
 		}
 		content := string(data)
 		if strings.Contains(content, oldPath) {
 			content = strings.ReplaceAll(content, oldPath, newPath)
-			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil { // #nosec G122 -- path validated via WalkDir with symlink skip
 				return nil
 			}
 			count++
@@ -495,7 +504,7 @@ func parseCronJobs(ocRoot string, cfg *config.Config) {
 		if job.Payload.Message != "" {
 			promptFile := fmt.Sprintf("reports/%s.md", name)
 			promptPath := filepath.Join(cfg.Agent.Workspace, promptFile)
-			if err := os.MkdirAll(filepath.Dir(promptPath), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(promptPath), 0750); err != nil {
 				prompt.Warn.Printf("  Failed to create prompt directory for %s: %v\n", name, err)
 				continue
 			}

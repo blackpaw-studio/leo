@@ -323,7 +323,7 @@ func scaffoldWorkspace(workspace, home, name string, cfg *config.Config, agentDi
 		filepath.Join(workspace, "scripts"),
 	}
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0750); err != nil {
 			return fmt.Errorf("creating directory %s: %w", dir, err)
 		}
 	}
@@ -337,7 +337,7 @@ func scaffoldWorkspace(workspace, home, name string, cfg *config.Config, agentDi
 
 	// Write agent file (only if we have new content)
 	if agentContent != "" {
-		if err := os.MkdirAll(agentDir, 0755); err != nil {
+		if err := os.MkdirAll(agentDir, 0750); err != nil {
 			return fmt.Errorf("creating agent directory: %w", err)
 		}
 		if err := os.WriteFile(agentPath, []byte(agentContent), 0644); err != nil {
@@ -395,7 +395,7 @@ func scaffoldWorkspace(workspace, home, name string, cfg *config.Config, agentDi
 
 	// Write skill files (only if missing)
 	skillsDir := filepath.Join(workspace, "skills")
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+	if err := os.MkdirAll(skillsDir, 0750); err != nil {
 		return fmt.Errorf("creating skills directory: %w", err)
 	}
 	for _, skillName := range templates.SkillFiles() {
@@ -414,7 +414,7 @@ func scaffoldWorkspace(workspace, home, name string, cfg *config.Config, agentDi
 
 	// Create agent memory directory and symlink
 	memDir := filepath.Join(home, ".claude", "agent-memory", name)
-	if err := os.MkdirAll(memDir, 0755); err != nil {
+	if err := os.MkdirAll(memDir, 0750); err != nil {
 		return fmt.Errorf("creating memory directory: %w", err)
 	}
 

@@ -54,7 +54,7 @@ func unitPath(agentName string) string {
 // InstallDaemon writes a systemd user unit and enables/starts the service.
 func InstallDaemon(sc ServiceConfig) error {
 	// Ensure state directory exists for log file
-	if err := mkdirAll(filepath.Dir(sc.LogPath), 0755); err != nil {
+	if err := mkdirAll(filepath.Dir(sc.LogPath), 0750); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
 
@@ -72,7 +72,7 @@ func InstallDaemon(sc ServiceConfig) error {
 	}
 
 	path := unitPath(sc.AgentName)
-	if err := mkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := mkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating systemd user directory: %w", err)
 	}
 

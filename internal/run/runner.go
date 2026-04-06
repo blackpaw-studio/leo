@@ -141,7 +141,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string) []stri
 
 func writeLog(cfg *config.Config, taskName string, output []byte) error {
 	stateDir := filepath.Join(cfg.Agent.Workspace, "state")
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		return err
 	}
 

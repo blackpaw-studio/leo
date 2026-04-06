@@ -42,7 +42,7 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 
 	// 2. Write bot token to .env
 	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
-	if err := os.MkdirAll(channelDir, 0755); err != nil {
+	if err := os.MkdirAll(channelDir, 0750); err != nil {
 		return fmt.Errorf("creating channel directory: %w", err)
 	}
 

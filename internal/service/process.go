@@ -48,7 +48,7 @@ func Start(sc ServiceConfig) error {
 
 	// Ensure state directory exists
 	stateDir := filepath.Dir(pidFile)
-	if err := mkdirAll(stateDir, 0755); err != nil {
+	if err := mkdirAll(stateDir, 0750); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
 
@@ -250,7 +250,7 @@ func defaultStartProcess(leoPath, configPath, workDir string, logFile *os.File) 
 }
 
 func defaultOpenLogFile(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 }
 
 func readPid(path string) (int, error) {

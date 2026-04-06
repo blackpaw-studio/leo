@@ -31,7 +31,7 @@ func RefreshWorkspace(agentName, workspace string) ([]string, error) {
 
 	// Always overwrite skill files
 	skillsDir := filepath.Join(workspace, "skills")
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+	if err := os.MkdirAll(skillsDir, 0750); err != nil {
 		return written, fmt.Errorf("creating skills directory: %w", err)
 	}
 	for _, skillName := range templates.SkillFiles() {

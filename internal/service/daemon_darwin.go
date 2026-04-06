@@ -74,7 +74,7 @@ func InstallDaemon(sc ServiceConfig) error {
 	label := daemonLabel(sc.AgentName)
 
 	// Ensure state directory exists for log file
-	if err := mkdirAll(filepath.Dir(sc.LogPath), 0755); err != nil {
+	if err := mkdirAll(filepath.Dir(sc.LogPath), 0750); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
 
@@ -99,7 +99,7 @@ func InstallDaemon(sc ServiceConfig) error {
 	}
 
 	path := plistPath(sc.AgentName)
-	if err := mkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := mkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating LaunchAgents directory: %w", err)
 	}
 
