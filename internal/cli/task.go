@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +37,31 @@ func newTaskListCmd() *cobra.Command {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
+			}
+
+			if daemon.IsRunning(cfg.Agent.Workspace) {
+				resp, err := daemon.Send(cfg.Agent.Workspace, "GET", "/task/list", nil)
+				if err != nil {
+					return fmt.Errorf("daemon request failed: %w", err)
+				}
+				if !resp.OK {
+					return fmt.Errorf("daemon error: %s", resp.Error)
+				}
+				var tasks map[string]config.TaskConfig
+				json.Unmarshal(resp.Data, &tasks)
+				if len(tasks) == 0 {
+					info.Println("No tasks configured.")
+					return nil
+				}
+				for name, task := range tasks {
+					status := "disabled"
+					if task.Enabled {
+						status = "enabled"
+					}
+					model := cfg.TaskModel(task)
+					fmt.Printf("  %-25s %-20s %-8s %s\n", name, task.Schedule, model, status)
+				}
+				return nil
 			}
 
 			if len(cfg.Tasks) == 0 {
@@ -118,6 +145,20 @@ func newTaskRemoveCmd() *cobra.Command {
 			}
 
 			name := args[0]
+
+			if daemon.IsRunning(cfg.Agent.Workspace) {
+				resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/task/remove",
+					daemon.TaskNameRequest{Name: name})
+				if err != nil {
+					return fmt.Errorf("daemon request failed: %w", err)
+				}
+				if !resp.OK {
+					return fmt.Errorf("daemon error: %s", resp.Error)
+				}
+				success.Printf("Task %q removed (via daemon).\n", name)
+				return nil
+			}
+
 			if _, ok := cfg.Tasks[name]; !ok {
 				return fmt.Errorf("task %q not found", name)
 			}
@@ -165,6 +206,27 @@ func setTaskEnabled(name string, enabled bool) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
+	}
+
+	if daemon.IsRunning(cfg.Agent.Workspace) {
+		path := "/task/enable"
+		if !enabled {
+			path = "/task/disable"
+		}
+		resp, err := daemon.Send(cfg.Agent.Workspace, "POST", path,
+			daemon.TaskNameRequest{Name: name})
+		if err != nil {
+			return fmt.Errorf("daemon request failed: %w", err)
+		}
+		if !resp.OK {
+			return fmt.Errorf("daemon error: %s", resp.Error)
+		}
+		action := "enabled"
+		if !enabled {
+			action = "disabled"
+		}
+		success.Printf("Task %q %s (via daemon).\n", name, action)
+		return nil
 	}
 
 	task, ok := cfg.Tasks[name]
