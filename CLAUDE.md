@@ -34,6 +34,7 @@ Version is injected via ldflags: `-X github.com/blackpaw-studio/leo/internal/cli
 cmd/leo/main.go          → cli.Execute() entry point
 internal/cli/             → Cobra command definitions (root.go wires all subcommands)
 internal/config/          → Config types + YAML loading/saving (leo.yaml)
+internal/daemon/          → Daemon IPC server (Unix socket HTTP) + client for CLI passthrough
 internal/run/             → Task runner: prompt assembly (silent preamble + prompt file + telegram protocol) + claude invocation
 internal/cron/            → Crontab management with marker-delimited blocks per agent
 internal/telegram/        → Telegram Bot API helpers (test message, getUpdates polling)
