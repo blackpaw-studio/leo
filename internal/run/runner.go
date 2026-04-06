@@ -125,8 +125,11 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string) []stri
 		"-p", prompt,
 		"--model", cfg.TaskModel(task),
 		"--max-turns", strconv.Itoa(cfg.TaskMaxTurns(task)),
-		"--dangerously-skip-permissions",
 		"--output-format", "text",
+	}
+
+	if cfg.Defaults.BypassPermissions {
+		args = append(args, "--dangerously-skip-permissions")
 	}
 
 	mcpConfig := cfg.MCPConfigPath()

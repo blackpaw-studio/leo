@@ -33,8 +33,8 @@ claude --agent <name> \
        -p "<assembled prompt>" \
        --model <effective-model> \
        --max-turns <effective-max-turns> \
-       --dangerously-skip-permissions \
        --output-format text \
+       --dangerously-skip-permissions \  # only if bypass_permissions: true
        --mcp-config <workspace>/config/mcp-servers.json  # if exists
 ```
 

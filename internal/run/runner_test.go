@@ -134,8 +134,9 @@ func TestBuildArgs(t *testing.T) {
 			Workspace: dir,
 		},
 		Defaults: config.DefaultsConfig{
-			Model:    "sonnet",
-			MaxTurns: 15,
+			Model:             "sonnet",
+			MaxTurns:          15,
+			BypassPermissions: true,
 		},
 	}
 
@@ -154,13 +155,36 @@ func TestBuildArgs(t *testing.T) {
 		t.Error("should use task max-turns override")
 	}
 	if !strings.Contains(argsStr, "--dangerously-skip-permissions") {
-		t.Error("missing permissions flag")
+		t.Error("missing permissions flag when bypass_permissions is true")
 	}
 	if !strings.Contains(argsStr, "--mcp-config") {
 		t.Error("missing mcp-config when file exists")
 	}
 	if !strings.Contains(argsStr, "--add-dir") {
 		t.Error("missing add-dir flag")
+	}
+}
+
+func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := &config.Config{
+		Agent: config.AgentConfig{
+			Name:      "myagent",
+			Workspace: dir,
+		},
+		Defaults: config.DefaultsConfig{
+			Model:    "sonnet",
+			MaxTurns: 15,
+		},
+	}
+
+	task := config.TaskConfig{}
+	args := buildArgs(cfg, task, "test prompt")
+	argsStr := strings.Join(args, " ")
+
+	if strings.Contains(argsStr, "--dangerously-skip-permissions") {
+		t.Error("should not contain --dangerously-skip-permissions when bypass_permissions is false")
 	}
 }
 
