@@ -18,8 +18,9 @@ import (
 const (
 	repoOwner = "blackpaw-studio"
 	repoName  = "leo"
-	apiURL    = "https://api.github.com/repos/" + repoOwner + "/" + repoName + "/releases/latest"
 )
+
+var apiURL = "https://api.github.com/repos/" + repoOwner + "/" + repoName + "/releases/latest"
 
 type releaseAsset struct {
 	Name               string `json:"name"`
@@ -31,7 +32,11 @@ type releaseResponse struct {
 	Assets  []releaseAsset `json:"assets"`
 }
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var (
+	httpClient          = &http.Client{Timeout: 30 * time.Second}
+	osExecutable        = os.Executable
+	downloadURLTemplate = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/%s"
+)
 
 // CheckLatestVersion returns the latest release tag from GitHub (e.g. "v0.5.2").
 func CheckLatestVersion() (string, error) {
@@ -108,7 +113,7 @@ func parseVersion(v string) [3]int {
 // extracts the binary, and atomically replaces the running binary.
 // Returns the path that was replaced.
 func DownloadAndReplace(version string) (string, error) {
-	binaryPath, err := os.Executable()
+	binaryPath, err := osExecutable()
 	if err != nil {
 		return "", fmt.Errorf("finding current binary: %w", err)
 	}
@@ -119,8 +124,7 @@ func DownloadAndReplace(version string) (string, error) {
 
 	versionNum := strings.TrimPrefix(version, "v")
 	archiveName := fmt.Sprintf("leo_%s_%s_%s.tar.gz", versionNum, runtime.GOOS, runtime.GOARCH)
-	downloadURL := fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/%s",
-		repoOwner, repoName, version, archiveName)
+	downloadURL := fmt.Sprintf(downloadURLTemplate, version, archiveName)
 
 	resp, err := httpClient.Get(downloadURL)
 	if err != nil {

@@ -2,6 +2,7 @@ package update
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"net/http"
@@ -65,100 +66,177 @@ func TestParseVersion(t *testing.T) {
 
 func TestCheckLatestVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := releaseResponse{
+		json.NewEncoder(w).Encode(releaseResponse{
 			TagName: "v0.5.0",
 			Assets: []releaseAsset{
 				{Name: "leo_0.5.0_darwin_arm64.tar.gz", BrowserDownloadURL: "https://example.com/leo.tar.gz"},
 			},
-		}
-		json.NewEncoder(w).Encode(resp)
+		})
 	}))
 	defer server.Close()
 
-	// Override the API URL for testing
-	origClient := httpClient
 	origURL := apiURL
-	defer func() { httpClient = origClient }()
+	defer func() { apiURL = origURL }()
+	apiURL = server.URL
 
-	// We need to override the URL, but it's a const. Use a custom transport instead.
-	httpClient = server.Client()
-
-	// Can't easily override the const URL, so test the parsing logic directly
-	// by hitting the test server via a custom request
-	req, _ := http.NewRequest("GET", server.URL, nil)
-	req.Header.Set("Accept", "application/json")
-	resp, err := httpClient.Do(req)
+	version, err := CheckLatestVersion()
 	if err != nil {
-		t.Fatalf("request failed: %v", err)
+		t.Fatalf("CheckLatestVersion() error: %v", err)
 	}
-	defer resp.Body.Close()
-
-	var release releaseResponse
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		t.Fatalf("decode failed: %v", err)
+	if version != "v0.5.0" {
+		t.Errorf("version = %q, want %q", version, "v0.5.0")
 	}
-
-	if release.TagName != "v0.5.0" {
-		t.Errorf("tag = %q, want %q", release.TagName, "v0.5.0")
-	}
-
-	_ = origURL // acknowledge we read it
 }
 
-func TestExtractBinaryFromTarGz(t *testing.T) {
-	// Create a tar.gz with a "leo" binary inside
-	tmpDir := t.TempDir()
-	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+func TestCheckLatestVersionAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
 
-	binaryContent := []byte("#!/bin/sh\necho hello\n")
-	f, err := os.Create(archivePath)
-	if err != nil {
-		t.Fatal(err)
+	origURL := apiURL
+	defer func() { apiURL = origURL }()
+	apiURL = server.URL
+
+	_, err := CheckLatestVersion()
+	if err == nil {
+		t.Error("expected error for 500 response")
 	}
+}
 
-	gw := gzip.NewWriter(f)
+func TestCheckLatestVersionEmptyTag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(releaseResponse{TagName: ""})
+	}))
+	defer server.Close()
+
+	origURL := apiURL
+	defer func() { apiURL = origURL }()
+	apiURL = server.URL
+
+	_, err := CheckLatestVersion()
+	if err == nil {
+		t.Error("expected error for empty tag")
+	}
+}
+
+func TestCheckLatestVersionBadJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("not json"))
+	}))
+	defer server.Close()
+
+	origURL := apiURL
+	defer func() { apiURL = origURL }()
+	apiURL = server.URL
+
+	_, err := CheckLatestVersion()
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+// buildTestArchive creates a tar.gz containing a "leo" binary with the given content.
+func buildTestArchive(t *testing.T, content []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
-
-	// Write the leo binary entry
 	tw.WriteHeader(&tar.Header{
 		Name:     "leo",
-		Size:     int64(len(binaryContent)),
+		Size:     int64(len(content)),
 		Mode:     0755,
 		Typeflag: tar.TypeReg,
 	})
-	tw.Write(binaryContent)
+	tw.Write(content)
 	tw.Close()
 	gw.Close()
-	f.Close()
+	return buf.Bytes()
+}
 
-	// Extract it
-	archive, _ := os.Open(archivePath)
-	defer archive.Close()
+func TestDownloadAndReplace(t *testing.T) {
+	binaryContent := []byte("#!/bin/sh\necho updated\n")
+	archive := buildTestArchive(t, binaryContent)
 
-	outPath := filepath.Join(tmpDir, "extracted")
-	out, _ := os.Create(outPath)
-	defer out.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(archive)
+	}))
+	defer server.Close()
 
-	if err := extractBinaryFromTarGz(archive, out); err != nil {
+	// Create a fake binary to replace
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("old binary"), 0750)
+
+	// Override os.Executable by replacing the binary path resolution
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	// Override the download URL pattern
+	origURL := downloadURLTemplate
+	defer func() { downloadURLTemplate = origURL }()
+	downloadURLTemplate = server.URL + "/%s/%s"
+
+	path, err := DownloadAndReplace("v0.5.0")
+	if err != nil {
+		t.Fatalf("DownloadAndReplace() error: %v", err)
+	}
+
+	// EvalSymlinks may resolve /var → /private/var on macOS
+	resolvedFake, _ := filepath.EvalSymlinks(fakeBinary)
+	if path != resolvedFake {
+		t.Errorf("replaced path = %q, want %q", path, resolvedFake)
+	}
+
+	data, _ := os.ReadFile(fakeBinary)
+	if string(data) != string(binaryContent) {
+		t.Errorf("binary content = %q, want %q", string(data), string(binaryContent))
+	}
+}
+
+func TestDownloadAndReplaceHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("old"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	origURL := downloadURLTemplate
+	defer func() { downloadURLTemplate = origURL }()
+	downloadURLTemplate = server.URL + "/%s/%s"
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Error("expected error for 404 response")
+	}
+}
+
+func TestExtractBinaryFromTarGz(t *testing.T) {
+	binaryContent := []byte("#!/bin/sh\necho hello\n")
+	archive := buildTestArchive(t, binaryContent)
+
+	var out bytes.Buffer
+	if err := extractBinaryFromTarGz(bytes.NewReader(archive), &out); err != nil {
 		t.Fatalf("extractBinaryFromTarGz() error: %v", err)
 	}
 
-	out.Close()
-	data, _ := os.ReadFile(outPath)
-	if string(data) != string(binaryContent) {
-		t.Errorf("extracted content = %q, want %q", string(data), string(binaryContent))
+	if out.String() != string(binaryContent) {
+		t.Errorf("extracted content = %q, want %q", out.String(), string(binaryContent))
 	}
 }
 
 func TestExtractBinaryFromTarGzMissing(t *testing.T) {
-	tmpDir := t.TempDir()
-	archivePath := filepath.Join(tmpDir, "test.tar.gz")
-
-	// Create a tar.gz without a "leo" binary
-	f, _ := os.Create(archivePath)
-	gw := gzip.NewWriter(f)
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
-
 	tw.WriteHeader(&tar.Header{
 		Name:     "README.md",
 		Size:     5,
@@ -168,16 +246,9 @@ func TestExtractBinaryFromTarGzMissing(t *testing.T) {
 	tw.Write([]byte("hello"))
 	tw.Close()
 	gw.Close()
-	f.Close()
 
-	archive, _ := os.Open(archivePath)
-	defer archive.Close()
-
-	outPath := filepath.Join(tmpDir, "extracted")
-	out, _ := os.Create(outPath)
-	defer out.Close()
-
-	err := extractBinaryFromTarGz(archive, out)
+	var out bytes.Buffer
+	err := extractBinaryFromTarGz(bytes.NewReader(buf.Bytes()), &out)
 	if err == nil {
 		t.Error("expected error when binary not found in archive")
 	}
