@@ -128,33 +128,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	copyCount := copyWorkspaceFiles(ocWorkspace, workspace, ocPath)
 	prompt.Info.Printf("  Copied %d files\n", copyCount)
 
-	// 7. Set up memory
-	memDir := filepath.Join(home, ".claude", "agent-memory", agentName)
-	if err := os.MkdirAll(memDir, 0750); err != nil {
-		return fmt.Errorf("creating memory directory: %w", err)
-	}
-	memFile := filepath.Join(memDir, "MEMORY.md")
-
-	// Copy existing MEMORY.md if present
-	ocMemory := filepath.Join(ocWorkspace, "MEMORY.md")
-	if data, err := os.ReadFile(ocMemory); err == nil {
-		if err := os.WriteFile(memFile, data, 0644); err != nil {
-			return fmt.Errorf("writing MEMORY.md: %w", err)
-		}
-		prompt.Info.Println("  Migrated MEMORY.md")
-	} else if _, err := os.Stat(memFile); os.IsNotExist(err) {
-		if err := os.WriteFile(memFile, []byte("# Memory\n\n"), 0644); err != nil {
-			return fmt.Errorf("creating MEMORY.md: %w", err)
-		}
-	}
-
-	memLink := filepath.Join(workspace, "MEMORY.md")
-	_ = os.Remove(memLink) // best-effort: may not exist
-	if err := os.Symlink(memFile, memLink); err != nil {
-		return fmt.Errorf("creating MEMORY.md symlink: %w", err)
-	}
-
-	// 8. Rewrite paths in all .md files
+	// 7. Rewrite paths in all .md files
 	prompt.Bold.Println("\nRewriting paths...")
 	rewriteCount := rewritePaths(workspace, ocWorkspace, workspace)
 	if ocPath != ocWorkspace {
@@ -338,7 +312,6 @@ func mergeAgentFiles(ocWorkspace, agentName, newWorkspace string) string {
 	sb.WriteString(fmt.Sprintf("name: %s\n", agentName))
 	sb.WriteString("description: Personal assistant (migrated from OpenClaw)\n")
 	sb.WriteString("model: opus\n")
-	sb.WriteString("memory: user\n")
 	sb.WriteString("tools: Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch\n")
 	sb.WriteString("---\n\n")
 
@@ -346,12 +319,8 @@ func mergeAgentFiles(ocWorkspace, agentName, newWorkspace string) string {
 
 	sb.WriteString(fmt.Sprintf("\n\n## Workspace\n\nYour workspace is `%s`. On startup:\n", newWorkspace))
 	sb.WriteString("1. Read `USER.md` for context about the person you assist\n")
-	sb.WriteString(fmt.Sprintf("2. Read `MEMORY.md` (symlinked to `~/.claude/agent-memory/%s/MEMORY.md`) for persistent memory\n", agentName))
-	sb.WriteString("3. Read `HEARTBEAT.md` if it exists\n")
-	sb.WriteString("4. Check `daily/` for recent daily logs\n")
-
-	sb.WriteString("\n## Memory Protocol\n\n")
-	sb.WriteString("Your `MEMORY.md` persists across sessions. Curate actively — keep it under 200 lines.\n")
+	sb.WriteString("2. Read `HEARTBEAT.md` if it exists\n")
+	sb.WriteString("3. Check `daily/` for recent daily logs\n")
 
 	return sb.String()
 }

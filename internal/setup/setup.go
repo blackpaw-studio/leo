@@ -412,27 +412,6 @@ func scaffoldWorkspace(workspace, home, name string, cfg *config.Config, agentDi
 		}
 	}
 
-	// Create agent memory directory and symlink
-	memDir := filepath.Join(home, ".claude", "agent-memory", name)
-	if err := os.MkdirAll(memDir, 0750); err != nil {
-		return fmt.Errorf("creating memory directory: %w", err)
-	}
-
-	memFile := filepath.Join(memDir, "MEMORY.md")
-	if _, err := os.Stat(memFile); os.IsNotExist(err) {
-		if err := os.WriteFile(memFile, []byte("# Memory\n\n"), 0644); err != nil {
-			return fmt.Errorf("creating MEMORY.md: %w", err)
-		}
-	}
-
-	memLink := filepath.Join(workspace, "MEMORY.md")
-	if _, err := os.Lstat(memLink); os.IsNotExist(err) {
-		if err := os.Symlink(memFile, memLink); err != nil {
-			return fmt.Errorf("creating MEMORY.md symlink: %w", err)
-		}
-		prompt.Info.Printf("  Linked MEMORY.md -> %s\n", memFile)
-	}
-
 	// Write empty MCP config if not exists
 	mcpPath := filepath.Join(workspace, "config", "mcp-servers.json")
 	if _, err := os.Stat(mcpPath); os.IsNotExist(err) {

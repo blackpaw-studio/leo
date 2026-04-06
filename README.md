@@ -216,7 +216,6 @@ tasks:
 ├── leo.yaml                    # Leo config
 ├── USER.md                     # Your profile (created during setup)
 ├── HEARTBEAT.md                # Heartbeat checklist prompt
-├── MEMORY.md                   # Symlink → ~/.claude/agent-memory/<name>/MEMORY.md
 ├── daily/                      # Raw daily logs
 ├── reports/                    # Task prompt files
 ├── state/                      # Runtime logs
@@ -235,14 +234,14 @@ Leo ships with three agent personality templates, selected during setup:
 | **dev-assistant** | Development-focused agent — monitors repos, runs checks, surfaces issues |
 | **skeleton** | Minimal starting point — bring your own personality and instructions |
 
-Templates are rendered into standard [Claude Code custom agents](https://docs.anthropic.com/en/docs/claude-code) at `~/.claude/agents/<name>.md` with `memory: user` enabled for persistent memory across sessions.
+Templates are rendered into standard [Claude Code custom agents](https://docs.anthropic.com/en/docs/claude-code) at `~/.claude/agents/<name>.md`.
 
 ## What Leo Is (and Isn't)
 
 **Leo is** a setup and management tool for a single Claude Code agent. It gives your agent:
 
 - A **personality** via agent templates (chief-of-staff, dev-assistant, or custom)
-- **Persistent memory** across sessions via `MEMORY.md` and Claude Code's `memory: user` feature
+- **Persistent memory** via user-configured MCP memory servers (`config/mcp-servers.json`)
 - **Mobile access** via Telegram — chat with your agent from your phone
 - **Scheduled tasks** via cron — your agent can check in, send briefings, and run background work autonomously
 

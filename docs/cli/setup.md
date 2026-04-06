@@ -29,7 +29,6 @@ The setup wizard guides you through configuring a new agent from scratch. It cre
 - `<workspace>/leo.yaml` — configuration file
 - `<workspace>/USER.md` — user profile
 - `<workspace>/HEARTBEAT.md` — heartbeat checklist template
-- `<workspace>/MEMORY.md` — symlink to Claude's agent memory
 - `<workspace>/daily/` — directory for daily logs
 - `<workspace>/reports/` — directory for task prompts
 - `<workspace>/state/` — directory for runtime logs

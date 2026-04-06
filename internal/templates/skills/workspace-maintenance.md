@@ -1,20 +1,10 @@
 # Workspace Maintenance
 
-## Memory (MEMORY.md)
+## Memory
 
-`MEMORY.md` is symlinked to `~/.claude/agent-memory/<name>/MEMORY.md` and persists across sessions.
+Leo does not include a built-in memory system. To add persistent memory, configure an MCP memory server in `config/mcp-servers.json`. This file is passed to Claude via `--mcp-config` in both chat and task modes.
 
-### Guidelines
-- Keep it under **200 lines** — curate actively
-- Remove stale entries (completed projects, resolved issues)
-- Update changing facts (current priorities, recent decisions)
-- Organize by topic, not chronologically
-- Track: ongoing projects, deadlines, user preferences, recurring issues
-
-### What NOT to store
-- Information derivable from code or git history
-- Ephemeral task details or temporary state
-- Debugging solutions (the fix is in the code)
+Popular options include [Basic Memory](https://github.com/basicmachines-co/basic-memory) (Markdown + SQLite + semantic search) and [Mem0](https://mem0.ai/) (cloud or self-hosted). Any MCP server that provides memory tools will work.
 
 ## Daily Logs (daily/)
 

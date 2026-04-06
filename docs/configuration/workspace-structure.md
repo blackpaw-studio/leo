@@ -9,7 +9,6 @@ Leo creates a workspace directory during setup that holds all config, prompts, l
 ├── leo.yaml                    # Leo config
 ├── USER.md                     # Your profile (created during setup)
 ├── HEARTBEAT.md                # Heartbeat checklist prompt
-├── MEMORY.md                   # Symlink -> ~/.claude/agent-memory/<name>/MEMORY.md
 ├── daily/                      # Raw daily observation logs
 ├── reports/                    # Task prompt files
 ├── state/                      # Runtime state and logs
@@ -34,10 +33,6 @@ A user profile filled in during setup. This is included in the agent's context s
 ### `HEARTBEAT.md`
 
 A checklist template used by the default heartbeat task. It tells the agent what to check (unread messages, calendar, pending tasks, alerts) and how to format the output.
-
-### `MEMORY.md`
-
-A symlink to `~/.claude/agent-memory/<name>/MEMORY.md`. This is Claude Code's persistent memory system — the agent reads and writes to this file across sessions to maintain continuity.
 
 ### `daily/`
 

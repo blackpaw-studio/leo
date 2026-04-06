@@ -105,16 +105,6 @@ func TestScaffoldWorkspace(t *testing.T) {
 		t.Error("HEARTBEAT.md not created")
 	}
 
-	// Verify MEMORY.md symlink
-	memLink := filepath.Join(dir, "MEMORY.md")
-	fi, err := os.Lstat(memLink)
-	if err != nil {
-		t.Fatal("MEMORY.md symlink not created")
-	}
-	if fi.Mode()&os.ModeSymlink == 0 {
-		t.Error("MEMORY.md should be a symlink")
-	}
-
 	// Verify MCP config
 	if _, err := os.Stat(filepath.Join(dir, "config", "mcp-servers.json")); err != nil {
 		t.Error("mcp-servers.json not created")

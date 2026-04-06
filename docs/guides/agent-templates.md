@@ -65,7 +65,7 @@ A minimal starting point with basic workspace and memory support but no predefin
 
 All templates include the following out of the box:
 
-- **Persistent memory** — `memory: user` is enabled and a `MEMORY.md` symlink is created in the workspace, giving the agent continuity across sessions
+- **Persistent memory** — available via MCP servers configured in `config/mcp-servers.json`
 - **Daily logs** — agents write observations to `daily/YYYY-MM-DD.md`
 - **Standard tool access** — Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch
 
@@ -75,7 +75,6 @@ All templates share a common structure:
 
 ```markdown
 ---
-memory: user
 tools:
   - Read
   - Write

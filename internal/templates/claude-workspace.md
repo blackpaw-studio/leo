@@ -7,7 +7,6 @@ You are **{{.Name}}**, managed by Leo. This file gives you baseline knowledge ab
 - **Workspace**: `{{.Workspace}}`
 - **Config**: `{{.Workspace}}/leo.yaml`
 - **Agent persona**: `~/.claude/agents/{{.Name}}.md`
-- **Memory**: `{{.Workspace}}/MEMORY.md` → `~/.claude/agent-memory/{{.Name}}/MEMORY.md`
 - **Leo binary**: run `leo` commands via Bash tool
 
 ## What is Leo?
@@ -28,7 +27,6 @@ You are not Leo. Leo is the management layer; you are the agent it manages.
 ├── leo.yaml           # Config (tasks, telegram, defaults)
 ├── CLAUDE.md          # This file
 ├── USER.md            # Who you work for
-├── MEMORY.md          # Persistent memory (symlink)
 ├── HEARTBEAT.md       # Heartbeat task checklist
 ├── daily/             # Daily observation logs (YYYY-MM-DD.md)
 ├── reports/           # Task prompt files
@@ -50,7 +48,7 @@ Read these on demand when you need to perform specific operations:
 - `skills/debugging-logs.md` — Log locations, reading output, common failures
 - `skills/daemon-management.md` — Chat start/stop/restart/status, launchd/systemd
 - `skills/config-reference.md` — Full leo.yaml field reference
-- `skills/workspace-maintenance.md` — Memory curation, daily logs, workspace hygiene
+- `skills/workspace-maintenance.md` — Daily logs, MCP config, workspace hygiene
 
 ## Common Operations
 
