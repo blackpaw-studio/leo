@@ -27,6 +27,9 @@ func New(sockPath, configPath string) *Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /cron/install", s.handleCronInstall)
+	mux.HandleFunc("POST /cron/remove", s.handleCronRemove)
+	mux.HandleFunc("GET /cron/list", s.handleCronList)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,

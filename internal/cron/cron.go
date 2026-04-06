@@ -156,6 +156,11 @@ func extractBlock(crontab, agentName string) string {
 var readCrontab = defaultReadCrontab
 var writeCrontab = defaultWriteCrontab
 
+func ExportReadCrontab() func() (string, error)  { return readCrontab }
+func SetReadCrontab(fn func() (string, error))    { readCrontab = fn }
+func ExportWriteCrontab() func(string) error      { return writeCrontab }
+func SetWriteCrontab(fn func(string) error)       { writeCrontab = fn }
+
 func defaultReadCrontab() (string, error) {
 	cmd := exec.Command("crontab", "-l")
 	output, err := cmd.Output()
