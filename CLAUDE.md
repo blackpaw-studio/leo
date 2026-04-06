@@ -38,11 +38,12 @@ internal/run/             → Task runner: prompt assembly (silent preamble + pr
 internal/cron/            → Crontab management with marker-delimited blocks per agent
 internal/telegram/        → Telegram Bot API helpers (test message, getUpdates polling)
 internal/prompt/          → Interactive terminal helpers (colored prompts, yes/no, choice parsing)
-internal/templates/       → embed.FS templates for agent personas, heartbeat, user profile
+internal/templates/       → embed.FS templates for agent personas, heartbeat, user profile, CLAUDE.md, skills/
 internal/setup/           → Setup wizard (wizard.go, telegram.go, daemon.go)
 internal/migrate/         → OpenClaw migration
 internal/onboard/         → Onboarding flow
 internal/prereq/          → Prerequisite checks (claude CLI, etc.)
+internal/update/          → Self-update (binary download from GitHub releases + workspace file refresh)
 internal/env/             → Shared environment capture for daemon/cron processes
 ```
 

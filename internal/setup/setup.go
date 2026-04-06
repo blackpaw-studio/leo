@@ -377,6 +377,41 @@ func scaffoldWorkspace(workspace, home, name string, cfg *config.Config, agentDi
 		prompt.Info.Printf("  Wrote %s\n", heartbeatPath)
 	}
 
+	// Write CLAUDE.md (only if missing)
+	claudeMDPath := filepath.Join(workspace, "CLAUDE.md")
+	if _, err := os.Stat(claudeMDPath); os.IsNotExist(err) {
+		claudeContent, err := templates.RenderClaudeWorkspace(templates.AgentData{
+			Name:      name,
+			Workspace: workspace,
+		})
+		if err != nil {
+			return fmt.Errorf("rendering CLAUDE.md: %w", err)
+		}
+		if err := os.WriteFile(claudeMDPath, []byte(claudeContent), 0644); err != nil {
+			return fmt.Errorf("writing CLAUDE.md: %w", err)
+		}
+		prompt.Info.Printf("  Wrote %s\n", claudeMDPath)
+	}
+
+	// Write skill files (only if missing)
+	skillsDir := filepath.Join(workspace, "skills")
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		return fmt.Errorf("creating skills directory: %w", err)
+	}
+	for _, skillName := range templates.SkillFiles() {
+		skillPath := filepath.Join(skillsDir, skillName)
+		if _, err := os.Stat(skillPath); os.IsNotExist(err) {
+			content, err := templates.ReadSkill(skillName)
+			if err != nil {
+				return fmt.Errorf("reading skill template %s: %w", skillName, err)
+			}
+			if err := os.WriteFile(skillPath, []byte(content), 0644); err != nil {
+				return fmt.Errorf("writing skill %s: %w", skillName, err)
+			}
+			prompt.Info.Printf("  Wrote %s\n", skillPath)
+		}
+	}
+
 	// Create agent memory directory and symlink
 	memDir := filepath.Join(home, ".claude", "agent-memory", name)
 	if err := os.MkdirAll(memDir, 0755); err != nil {

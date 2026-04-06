@@ -119,6 +119,22 @@ func TestScaffoldWorkspace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "config", "mcp-servers.json")); err != nil {
 		t.Error("mcp-servers.json not created")
 	}
+
+	// Verify CLAUDE.md
+	data, err = os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatal("CLAUDE.md not created")
+	}
+	if len(data) == 0 {
+		t.Error("CLAUDE.md is empty")
+	}
+
+	// Verify skills directory and files
+	for _, skill := range templates.SkillFiles() {
+		if _, err := os.Stat(filepath.Join(dir, "skills", skill)); err != nil {
+			t.Errorf("skill file %s not created", skill)
+		}
+	}
 }
 
 func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
@@ -135,9 +151,17 @@ func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
 		Tasks:    map[string]config.TaskConfig{},
 	}
 
-	// Pre-create HEARTBEAT.md to verify it's not overwritten
+	// Pre-create HEARTBEAT.md and CLAUDE.md to verify they're not overwritten
 	heartbeatPath := filepath.Join(dir, "HEARTBEAT.md")
 	os.WriteFile(heartbeatPath, []byte("custom heartbeat"), 0644)
+
+	claudeMDPath := filepath.Join(dir, "CLAUDE.md")
+	os.WriteFile(claudeMDPath, []byte("custom claude"), 0644)
+
+	// Pre-create a skill file
+	os.MkdirAll(filepath.Join(dir, "skills"), 0755)
+	customSkillPath := filepath.Join(dir, "skills", templates.SkillFiles()[0])
+	os.WriteFile(customSkillPath, []byte("custom skill"), 0644)
 
 	// No agent content, no user profile — should skip those
 	err := scaffoldWorkspace(dir, home, "test", cfg,
@@ -151,6 +175,18 @@ func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
 	data, _ := os.ReadFile(heartbeatPath)
 	if string(data) != "custom heartbeat" {
 		t.Errorf("HEARTBEAT.md was overwritten: %q", string(data))
+	}
+
+	// CLAUDE.md should be unchanged
+	data, _ = os.ReadFile(claudeMDPath)
+	if string(data) != "custom claude" {
+		t.Errorf("CLAUDE.md was overwritten: %q", string(data))
+	}
+
+	// Custom skill file should be unchanged
+	data, _ = os.ReadFile(customSkillPath)
+	if string(data) != "custom skill" {
+		t.Errorf("skill file was overwritten: %q", string(data))
 	}
 }
 

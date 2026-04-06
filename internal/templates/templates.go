@@ -7,7 +7,7 @@ import (
 	"text/template"
 )
 
-//go:embed *.md
+//go:embed *.md skills/*.md
 var fs embed.FS
 
 type AgentData struct {
@@ -47,6 +47,31 @@ func RenderHeartbeat() (string, error) {
 // RenderUserProfile renders the user profile template.
 func RenderUserProfile(data UserProfileData) (string, error) {
 	return renderTemplate("user-profile.md", data)
+}
+
+// RenderClaudeWorkspace renders the CLAUDE.md template for the agent workspace.
+func RenderClaudeWorkspace(data AgentData) (string, error) {
+	return renderTemplate("claude-workspace.md", data)
+}
+
+// SkillFiles returns the list of skill file names to deploy.
+func SkillFiles() []string {
+	return []string{
+		"managing-tasks.md",
+		"debugging-logs.md",
+		"daemon-management.md",
+		"config-reference.md",
+		"workspace-maintenance.md",
+	}
+}
+
+// ReadSkill returns the raw content of a skill file.
+func ReadSkill(name string) (string, error) {
+	content, err := fs.ReadFile("skills/" + name)
+	if err != nil {
+		return "", fmt.Errorf("reading skill %s: %w", name, err)
+	}
+	return string(content), nil
 }
 
 func renderTemplate(filename string, data any) (string, error) {
