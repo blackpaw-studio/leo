@@ -30,6 +30,11 @@ func New(sockPath, configPath string) *Server {
 	mux.HandleFunc("POST /cron/install", s.handleCronInstall)
 	mux.HandleFunc("POST /cron/remove", s.handleCronRemove)
 	mux.HandleFunc("GET /cron/list", s.handleCronList)
+	mux.HandleFunc("POST /task/add", s.handleTaskAdd)
+	mux.HandleFunc("POST /task/remove", s.handleTaskRemove)
+	mux.HandleFunc("POST /task/enable", s.handleTaskEnable)
+	mux.HandleFunc("POST /task/disable", s.handleTaskDisable)
+	mux.HandleFunc("GET /task/list", s.handleTaskList)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
