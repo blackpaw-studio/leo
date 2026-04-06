@@ -125,17 +125,21 @@ func Status(agentName, workDir string) (string, error) {
 	pidFile := PidPath(workDir, agentName)
 
 	pid, err := readPid(pidFile)
-	if err != nil {
-		return "stopped", nil
+	if err == nil {
+		if isRunning(pid) {
+			return fmt.Sprintf("running (pid %d)", pid), nil
+		}
+		// Stale PID file
+		_ = removeFile(pidFile)
 	}
 
-	if isRunning(pid) {
-		return fmt.Sprintf("running (pid %d)", pid), nil
+	// No valid PID file — check if the daemon IPC socket is alive
+	// (covers launchd/systemd-managed processes that don't write a PID file)
+	if daemon.IsRunning(workDir) {
+		return "running (daemon)", nil
 	}
 
-	// Stale PID file
-	_ = removeFile(pidFile)
-	return "stopped (stale pid file cleaned up)", nil
+	return "stopped", nil
 }
 
 // RunSupervised runs claude in a restart loop with exponential backoff.
