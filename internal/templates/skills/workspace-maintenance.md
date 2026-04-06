@@ -2,7 +2,10 @@
 
 ## Memory
 
-Leo does not include a built-in memory system. To add persistent memory, configure an MCP memory server in `config/mcp-servers.json`. This file is passed to Claude via `--mcp-config` in both chat and task modes.
+Leo does not include a built-in memory system. To add persistent memory, configure an MCP memory server in either location:
+
+- **`~/.claude/mcp-servers.json`** — standard Claude Code config, available to all sessions
+- **`config/mcp-servers.json`** — workspace-specific, only available to this agent's chat and task runs
 
 Popular options include [Basic Memory](https://github.com/basicmachines-co/basic-memory) (Markdown + SQLite + semantic search) and [Mem0](https://mem0.ai/) (cloud or self-hosted). Any MCP server that provides memory tools will work.
 

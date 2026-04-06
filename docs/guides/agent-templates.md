@@ -65,7 +65,7 @@ A minimal starting point with basic workspace and memory support but no predefin
 
 All templates include the following out of the box:
 
-- **Persistent memory** — available via MCP servers configured in `config/mcp-servers.json`
+- **Persistent memory** — available via MCP servers configured in `~/.claude/mcp-servers.json` or `config/mcp-servers.json`
 - **Daily logs** — agents write observations to `daily/YYYY-MM-DD.md`
 - **Standard tool access** — Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch
 

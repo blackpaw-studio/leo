@@ -19,4 +19,4 @@ Write daily observations and notes to `daily/YYYY-MM-DD.md`. Append, don't overw
 
 ## Memory
 
-Persistent memory is available via MCP servers configured in `config/mcp-servers.json`. See `skills/workspace-maintenance.md` for details.
+Persistent memory is available via MCP servers — configure in `~/.claude/mcp-servers.json` (global) or `config/mcp-servers.json` (this agent only). See `skills/workspace-maintenance.md` for details.

@@ -241,7 +241,7 @@ Templates are rendered into standard [Claude Code custom agents](https://docs.an
 **Leo is** a setup and management tool for a single Claude Code agent. It gives your agent:
 
 - A **personality** via agent templates (chief-of-staff, dev-assistant, or custom)
-- **Persistent memory** via user-configured MCP memory servers (`config/mcp-servers.json`)
+- **Persistent memory** via user-configured MCP memory servers
 - **Mobile access** via Telegram — chat with your agent from your phone
 - **Scheduled tasks** via cron — your agent can check in, send briefings, and run background work autonomously
 
