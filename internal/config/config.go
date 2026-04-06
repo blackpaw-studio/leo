@@ -185,6 +185,15 @@ func Save(path string, cfg *Config) error {
 
 // FindConfig searches for leo.yaml starting from the given directory and walking up.
 // If dir is empty, starts from the current working directory.
+// DefaultWorkspace returns the default workspace path (~/.leo).
+func DefaultWorkspace() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".leo")
+}
+
 func FindConfig(dir string) (string, error) {
 	if dir == "" {
 		var err error
@@ -194,17 +203,26 @@ func FindConfig(dir string) (string, error) {
 		}
 	}
 
-	for {
-		path := filepath.Join(dir, "leo.yaml")
+	// Walk up from dir looking for leo.yaml
+	for d := dir; ; {
+		path := filepath.Join(d, "leo.yaml")
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}
 
-		parent := filepath.Dir(dir)
-		if parent == dir {
+		parent := filepath.Dir(d)
+		if parent == d {
 			break
 		}
-		dir = parent
+		d = parent
+	}
+
+	// Fall back to default workspace
+	if ws := DefaultWorkspace(); ws != "" {
+		path := filepath.Join(ws, "leo.yaml")
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
 	}
 
 	return "", fmt.Errorf("leo.yaml not found")
