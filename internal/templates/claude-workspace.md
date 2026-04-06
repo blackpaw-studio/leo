@@ -81,3 +81,7 @@ leo cron install             # Sync crontab after changes
 leo run <task>               # Execute now
 leo run <task> --dry-run     # Show assembled prompt only
 ```
+
+## Telegram Topic Routing
+
+When replying to messages from a Telegram group (forum), **always** pass `reply_to` with the `message_id` from the inbound `<channel>` block — even for the most recent message. This ensures your reply lands in the same topic thread the user wrote from. Without `reply_to`, Telegram routes the message to the General topic instead of the correct one.
