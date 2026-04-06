@@ -4,12 +4,17 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
 var (
@@ -142,6 +147,7 @@ telegram:
 defaults:
   model: sonnet
   max_turns: 15
+  bypass_permissions: true
 tasks:
   heartbeat:
     schedule: "0 9 * * *"
@@ -437,6 +443,166 @@ func TestConfigNotFound(t *testing.T) {
 
 	if code == 0 {
 		t.Fatal("expected non-zero exit code when no config exists")
+	}
+}
+
+func TestDaemonIPC(t *testing.T) {
+	// Use /tmp to stay well under macOS 104-char Unix socket path limit.
+	dir, err := os.MkdirTemp("/tmp", "leo-e2e-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	// Create state directory for the socket.
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
+		t.Fatalf("creating state dir: %v", err)
+	}
+
+	// Write leo.yaml with the temp dir as workspace.
+	cfgYAML := fmt.Sprintf(`agent:
+  name: test-agent
+  workspace: %s
+telegram:
+  bot_token: "fake-token"
+  chat_id: "12345"
+defaults:
+  model: sonnet
+  max_turns: 15
+tasks:
+  heartbeat:
+    schedule: "0 9 * * *"
+    prompt_file: HEARTBEAT.md
+    enabled: true
+`, dir)
+
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0600); err != nil {
+		t.Fatalf("writing leo.yaml: %v", err)
+	}
+
+	sockPath := filepath.Join(stateDir, "leo.sock")
+
+	// Daemon should not be running yet.
+	if daemon.IsRunning(dir) {
+		t.Fatal("expected daemon not running before start")
+	}
+
+	// Start the daemon server.
+	srv := daemon.New(sockPath, cfgPath)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("starting daemon: %v", err)
+	}
+	t.Cleanup(func() { srv.Shutdown() }) //nolint:errcheck
+
+	// Give the goroutine a moment to begin accepting.
+	deadline := time.Now().Add(2 * time.Second)
+	for !daemon.IsRunning(dir) {
+		if time.Now().After(deadline) {
+			t.Fatal("daemon did not become ready within 2s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// IsRunning should now return true.
+	if !daemon.IsRunning(dir) {
+		t.Fatal("expected daemon to be running after start")
+	}
+
+	// GET /task/list — should include the "heartbeat" task from config.
+	resp, err := daemon.Send(dir, "GET", "/task/list", nil)
+	if err != nil {
+		t.Fatalf("task/list: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("task/list not OK: %s", resp.Error)
+	}
+	var tasks map[string]config.TaskConfig
+	if err := json.Unmarshal(resp.Data, &tasks); err != nil {
+		t.Fatalf("unmarshaling task list: %v", err)
+	}
+	if _, ok := tasks["heartbeat"]; !ok {
+		t.Error("expected heartbeat task in list")
+	}
+
+	// POST /task/add — add a "news" task.
+	addResp, err := daemon.Send(dir, "POST", "/task/add", daemon.TaskAddRequest{
+		Name:       "news",
+		Schedule:   "0 8 * * *",
+		PromptFile: "NEWS.md",
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("task/add: %v", err)
+	}
+	if !addResp.OK {
+		t.Fatalf("task/add not OK: %s", addResp.Error)
+	}
+
+	// Verify "news" task persisted on disk.
+	diskCfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config after add: %v", err)
+	}
+	newsTask, ok := diskCfg.Tasks["news"]
+	if !ok {
+		t.Fatal("expected news task in config after add")
+	}
+	if newsTask.Schedule != "0 8 * * *" {
+		t.Errorf("expected schedule '0 8 * * *', got %q", newsTask.Schedule)
+	}
+	if newsTask.PromptFile != "NEWS.md" {
+		t.Errorf("expected prompt_file 'NEWS.md', got %q", newsTask.PromptFile)
+	}
+	if !newsTask.Enabled {
+		t.Error("expected news task to be enabled")
+	}
+
+	// POST /task/disable — disable "news".
+	disResp, err := daemon.Send(dir, "POST", "/task/disable", daemon.TaskNameRequest{Name: "news"})
+	if err != nil {
+		t.Fatalf("task/disable: %v", err)
+	}
+	if !disResp.OK {
+		t.Fatalf("task/disable not OK: %s", disResp.Error)
+	}
+
+	// Verify disabled on disk.
+	diskCfg, err = config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config after disable: %v", err)
+	}
+	if diskCfg.Tasks["news"].Enabled {
+		t.Error("expected news task to be disabled after disable call")
+	}
+
+	// POST /task/remove — remove "news".
+	rmResp, err := daemon.Send(dir, "POST", "/task/remove", daemon.TaskNameRequest{Name: "news"})
+	if err != nil {
+		t.Fatalf("task/remove: %v", err)
+	}
+	if !rmResp.OK {
+		t.Fatalf("task/remove not OK: %s", rmResp.Error)
+	}
+
+	// Verify removed from disk.
+	diskCfg, err = config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config after remove: %v", err)
+	}
+	if _, ok := diskCfg.Tasks["news"]; ok {
+		t.Error("expected news task to be removed from config")
+	}
+
+	// Shutdown server.
+	if err := srv.Shutdown(); err != nil {
+		t.Errorf("shutting down daemon: %v", err)
+	}
+
+	// IsRunning should now return false.
+	if daemon.IsRunning(dir) {
+		t.Error("expected daemon not running after shutdown")
 	}
 }
 
