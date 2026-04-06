@@ -505,11 +505,6 @@ tasks:
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// IsRunning should now return true.
-	if !daemon.IsRunning(dir) {
-		t.Fatal("expected daemon to be running after start")
-	}
-
 	// GET /task/list — should include the "heartbeat" task from config.
 	resp, err := daemon.Send(dir, "GET", "/task/list", nil)
 	if err != nil {

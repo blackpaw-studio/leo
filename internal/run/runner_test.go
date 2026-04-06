@@ -122,13 +122,8 @@ func TestAssemblePromptMissingFile(t *testing.T) {
 	}
 }
 
-func TestBuildArgs(t *testing.T) {
-	dir := t.TempDir()
-	mcpDir := filepath.Join(dir, "config")
-	os.MkdirAll(mcpDir, 0755)
-	os.WriteFile(filepath.Join(mcpDir, "mcp-servers.json"), []byte("{}"), 0644)
-
-	cfg := &config.Config{
+func makeTestConfig(dir string, bypassPermissions bool) *config.Config {
+	return &config.Config{
 		Agent: config.AgentConfig{
 			Name:      "myagent",
 			Workspace: dir,
@@ -136,10 +131,18 @@ func TestBuildArgs(t *testing.T) {
 		Defaults: config.DefaultsConfig{
 			Model:             "sonnet",
 			MaxTurns:          15,
-			BypassPermissions: true,
+			BypassPermissions: bypassPermissions,
 		},
 	}
+}
 
+func TestBuildArgs(t *testing.T) {
+	dir := t.TempDir()
+	mcpDir := filepath.Join(dir, "config")
+	os.MkdirAll(mcpDir, 0755)
+	os.WriteFile(filepath.Join(mcpDir, "mcp-servers.json"), []byte("{}"), 0644)
+
+	cfg := makeTestConfig(dir, true)
 	task := config.TaskConfig{Model: "opus", MaxTurns: 20}
 	args := buildArgs(cfg, task, "test prompt")
 
@@ -167,20 +170,9 @@ func TestBuildArgs(t *testing.T) {
 
 func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
 	dir := t.TempDir()
+	cfg := makeTestConfig(dir, false)
 
-	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Name:      "myagent",
-			Workspace: dir,
-		},
-		Defaults: config.DefaultsConfig{
-			Model:    "sonnet",
-			MaxTurns: 15,
-		},
-	}
-
-	task := config.TaskConfig{}
-	args := buildArgs(cfg, task, "test prompt")
+	args := buildArgs(cfg, config.TaskConfig{}, "test prompt")
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--dangerously-skip-permissions") {
@@ -192,31 +184,17 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 	dir := t.TempDir()
 	// No mcp-servers.json created
 
-	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Name:      "myagent",
-			Workspace: dir,
-		},
-		Defaults: config.DefaultsConfig{
-			Model:    "sonnet",
-			MaxTurns: 15,
-		},
-	}
+	cfg := makeTestConfig(dir, false)
 
-	task := config.TaskConfig{}
-	args := buildArgs(cfg, task, "test prompt")
+	args := buildArgs(cfg, config.TaskConfig{}, "test prompt")
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--mcp-config") {
 		t.Error("should not contain --mcp-config when file doesn't exist")
 	}
-
-	// Should use default model
 	if !strings.Contains(argsStr, "--model sonnet") {
 		t.Error("should use default model")
 	}
-
-	// Should use default max-turns
 	if !strings.Contains(argsStr, "--max-turns 15") {
 		t.Error("should use default max-turns")
 	}
