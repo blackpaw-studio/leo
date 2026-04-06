@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 
+	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/prompt"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/update"
 	"github.com/spf13/cobra"
 )
@@ -67,6 +72,18 @@ func newUpdateCmd() *cobra.Command {
 				info.Printf("  Updated %s\n", path)
 			}
 			success.Printf("Refreshed %d file(s)\n", len(written))
+
+			// Offer to restart daemon if it's running
+			if daemon.IsRunning(cfg.Agent.Workspace) {
+				reader := bufio.NewReader(os.Stdin)
+				if prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
+					info.Println("Restarting daemon...")
+					if err := service.RestartDaemon(cfg.Agent.Name); err != nil {
+						return fmt.Errorf("restarting daemon: %w", err)
+					}
+					success.Println("Daemon restarted")
+				}
+			}
 
 			return nil
 		},
