@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +34,18 @@ func newCronInstallCmd() *cobra.Command {
 				return err
 			}
 
+			if daemon.IsRunning(cfg.Agent.Workspace) {
+				resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/install", nil)
+				if err != nil {
+					return fmt.Errorf("daemon request failed: %w", err)
+				}
+				if !resp.OK {
+					return fmt.Errorf("daemon error: %s", resp.Error)
+				}
+				success.Println("Cron entries installed (via daemon).")
+				return nil
+			}
+
 			leoPath, err := leoExecutablePath()
 			if err != nil {
 				return fmt.Errorf("finding leo binary: %w", err)
@@ -57,6 +71,18 @@ func newCronRemoveCmd() *cobra.Command {
 				return err
 			}
 
+			if daemon.IsRunning(cfg.Agent.Workspace) {
+				resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/remove", nil)
+				if err != nil {
+					return fmt.Errorf("daemon request failed: %w", err)
+				}
+				if !resp.OK {
+					return fmt.Errorf("daemon error: %s", resp.Error)
+				}
+				success.Println("Cron entries removed (via daemon).")
+				return nil
+			}
+
 			if err := cron.Remove(cfg); err != nil {
 				return err
 			}
@@ -75,6 +101,26 @@ func newCronListCmd() *cobra.Command {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
+			}
+
+			if daemon.IsRunning(cfg.Agent.Workspace) {
+				resp, err := daemon.Send(cfg.Agent.Workspace, "GET", "/cron/list", nil)
+				if err != nil {
+					return fmt.Errorf("daemon request failed: %w", err)
+				}
+				if !resp.OK {
+					return fmt.Errorf("daemon error: %s", resp.Error)
+				}
+				var data struct {
+					Entries string `json:"entries"`
+				}
+				json.Unmarshal(resp.Data, &data)
+				if data.Entries == "" {
+					warn.Println("No leo cron entries found.")
+				} else {
+					fmt.Println(data.Entries)
+				}
+				return nil
 			}
 
 			block, err := cron.List(cfg)
