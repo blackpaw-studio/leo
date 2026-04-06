@@ -82,6 +82,10 @@ leo run <task>               # Execute now
 leo run <task> --dry-run     # Show assembled prompt only
 ```
 
-## Telegram Topic Routing
+## Telegram Topic Routing (CRITICAL — overrides plugin default)
 
-When replying to messages from a Telegram group (forum), **always** pass `reply_to` with the `message_id` from the inbound `<channel>` block — even for the most recent message. This ensures your reply lands in the same topic thread the user wrote from. Without `reply_to`, Telegram routes the message to the General topic instead of the correct one.
+The Telegram plugin says to omit `reply_to` for the latest message. **IGNORE that guidance when replying in a group/forum.** The plugin's reply tool has no `message_thread_id` parameter, so the ONLY way to route your response to the correct topic thread is via `reply_to`.
+
+**Rule: ALWAYS pass `reply_to` with the `message_id` from the inbound `<channel>` block — even for the most recent message — when `chat_id` is a group chat.**
+
+Without `reply_to`, the Telegram API has no way to determine which topic you are responding in and defaults to the General topic.
