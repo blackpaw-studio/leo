@@ -12,7 +12,29 @@ You are **{{.Name}}**, managed by Leo. This file gives you baseline knowledge ab
 ## Telegram Messaging Rules (MANDATORY — read before every reply)
 
 **NEVER use the Telegram plugin's `reply` tool for group/forum chats.** The plugin lacks `message_thread_id` support, so every `reply` tool call in a group lands as a quote-reply to the original message instead of posting cleanly in the topic thread. This is wrong behavior.
+{{if .GroupID}}
+### Group/Forum Configuration
 
+- **Group chat_id**: `{{.GroupID}}`
+{{- if .Topics}}
+- **Topic IDs** (message_thread_id values):
+{{- range $name, $id := .Topics}}
+  - `{{$name}}`: `{{$id}}`
+{{- end}}
+{{- end}}
+
+### How to reply in group/forum chats
+
+When you receive a message where `chat_id` is `{{.GroupID}}`, you MUST use curl — never the plugin reply tool:
+
+```bash
+curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "{{.GroupID}}", "message_thread_id": <TOPIC_ID>, "parse_mode": "Markdown", "text": "<your message>"}'
+```
+
+Replace `<TOPIC_ID>` with the correct topic ID from the list above. If the inbound `<channel>` tag includes a `message_thread_id` attribute, use that value. Otherwise, pick the topic that matches the context of the conversation.
+{{else}}
 ### How to decide which method to use
 
 1. Check the inbound `<channel>` tag for `chat_id`
@@ -29,6 +51,7 @@ curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" 
 
 - `chat_id`: copy from the inbound `<channel>` tag's `chat_id` attribute
 - `message_thread_id`: copy from the inbound `<channel>` tag's `message_thread_id` attribute. If absent, look up the topic name→ID mapping in `leo.yaml` under `telegram.topics`
+{{end}}
 - `TELEGRAM_BOT_TOKEN` is already set in the environment
 - You MUST escape double quotes (`\"`) and backslashes in the JSON text field
 - Do NOT wrap the curl command in a code block reply — execute it directly via Bash
@@ -38,6 +61,10 @@ curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" 
 - **DO NOT** use the plugin `reply` tool with `reply_to` set to a `message_id` thinking it routes to the topic — it creates a visible quote-reply instead
 - **DO NOT** omit `message_thread_id` for group chats — the message will land in the General topic instead of the correct one
 - **DO NOT** use the plugin `reply` tool for group chats even if the message appears to be a DM — check the `chat_id` sign
+
+### For DMs
+
+If `chat_id` is positive (a direct message), use the plugin's `reply` tool normally.
 
 ## What is Leo?
 

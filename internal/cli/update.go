@@ -63,7 +63,10 @@ func newUpdateCmd() *cobra.Command {
 			}
 
 			info.Println("Refreshing workspace files...")
-			written, err := update.RefreshWorkspace(cfg.Agent.Name, cfg.Agent.Workspace)
+			written, err := update.RefreshWorkspace(cfg.Agent.Name, cfg.Agent.Workspace, update.TelegramInfo{
+					GroupID: cfg.Telegram.GroupID,
+					Topics:  cfg.Telegram.Topics,
+				})
 			if err != nil {
 				return fmt.Errorf("refreshing workspace: %w", err)
 			}
