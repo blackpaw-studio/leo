@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/telegram"
@@ -31,7 +32,10 @@ func newTelegramTopicsCmd() *cobra.Command {
 
 Requires telegram.group_id in leo.yaml. Topics are discovered from
 pending getUpdates results — send a message in each topic first if
-no topics appear.`,
+no topics appear. Results are cached to state/topics.json.
+
+During an active chat session, reads from the cache (seeded at startup)
+since the plugin consumes getUpdates.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -42,12 +46,22 @@ no topics appear.`,
 				return fmt.Errorf("telegram.group_id is not configured in leo.yaml")
 			}
 
+			cachePath := filepath.Join(cfg.Agent.Workspace, "state", "topics.json")
+
+			// Try live discovery first
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
 			topics, err := telegram.FetchTopics(ctx, cfg.Telegram.BotToken, cfg.Telegram.GroupID)
-			if err != nil {
-				return fmt.Errorf("fetching topics: %w", err)
+			if err == nil && len(topics) > 0 {
+				// Update cache with fresh data
+				_ = telegram.WriteTopicCache(cachePath, topics)
+			} else {
+				// Fall back to cache (e.g. during active chat session)
+				cached, cacheErr := telegram.ReadTopicCache(cachePath)
+				if cacheErr == nil && len(cached) > 0 {
+					topics = cached
+				}
 			}
 
 			if len(topics) == 0 {

@@ -1,14 +1,17 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/service"
+	"github.com/blackpaw-studio/leo/internal/telegram"
 	"github.com/spf13/cobra"
 )
 
@@ -39,6 +42,11 @@ func runChat(cmd *cobra.Command, args []string) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
+	}
+
+	// Seed topic cache before the plugin starts consuming getUpdates
+	if cfg.Telegram.GroupID != "" {
+		seedTopicCache(cfg)
 	}
 
 	if supervised {
@@ -264,6 +272,26 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 		LogPath:    logPath,
 		Env:        env,
 	}, nil
+}
+
+// seedTopicCache discovers forum topics via getUpdates (before the plugin
+// starts consuming them) and writes the result to state/topics.json.
+// This is best-effort — failures are silently ignored.
+func seedTopicCache(cfg *config.Config) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	topics, err := telegram.FetchTopics(ctx, cfg.Telegram.BotToken, cfg.Telegram.GroupID)
+	if err != nil || len(topics) == 0 {
+		return
+	}
+
+	stateDir := filepath.Join(cfg.Agent.Workspace, "state")
+	_ = os.MkdirAll(stateDir, 0750)
+
+	if err := telegram.WriteTopicCache(filepath.Join(stateDir, "topics.json"), topics); err != nil {
+		warn.Printf("  Could not cache topics: %v\n", err)
+	}
 }
 
 func resolveConfigPath(cfg *config.Config) (string, error) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"net/url"
 	"time"
 )
@@ -145,6 +146,28 @@ type topicMessage struct {
 	ForumTopicCreated  *struct {
 		Name string `json:"name"`
 	} `json:"forum_topic_created"`
+}
+
+// WriteTopicCache writes topics to a JSON cache file.
+func WriteTopicCache(path string, topics []Topic) error {
+	data, err := json.MarshalIndent(topics, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling topics: %w", err)
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// ReadTopicCache reads topics from a JSON cache file.
+func ReadTopicCache(path string) ([]Topic, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var topics []Topic
+	if err := json.Unmarshal(data, &topics); err != nil {
+		return nil, fmt.Errorf("parsing topic cache: %w", err)
+	}
+	return topics, nil
 }
 
 // PollChatID polls getUpdates to detect the chat ID from the first message received.

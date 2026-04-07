@@ -32,12 +32,12 @@ curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" 
 #### Finding the correct `message_thread_id`
 
 1. **Best**: use the `message_thread_id` from the inbound `<channel>` tag if present
-2. **Fallback**: run `leo telegram topics --json` to discover topic IDs dynamically:
+2. **Fallback**: read the topic cache seeded at chat startup:
    ```bash
-   leo telegram topics --json
+   cat {{.Workspace}}/state/topics.json
    # Returns: [{"id":3,"name":"Chat"},{"id":7,"name":"Alerts"}]
    ```
-   Pick the topic matching the context of the conversation.
+   Pick the topic matching the context of the conversation. If the file is missing or empty, ask the user to restart the chat session after sending a message in each topic.
 
 - `TELEGRAM_BOT_TOKEN` is already set in the environment
 - You MUST escape double quotes (`\"`) and backslashes in the JSON text field
