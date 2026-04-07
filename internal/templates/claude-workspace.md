@@ -9,6 +9,36 @@ You are **{{.Name}}**, managed by Leo. This file gives you baseline knowledge ab
 - **Agent persona**: `~/.claude/agents/{{.Name}}.md`
 - **Leo binary**: run `leo` commands via Bash tool
 
+## Telegram Messaging Rules (MANDATORY — read before every reply)
+
+**NEVER use the Telegram plugin's `reply` tool for group/forum chats.** The plugin lacks `message_thread_id` support, so every `reply` tool call in a group lands as a quote-reply to the original message instead of posting cleanly in the topic thread. This is wrong behavior.
+
+### How to decide which method to use
+
+1. Check the inbound `<channel>` tag for `chat_id`
+2. If `chat_id` is negative (starts with `-`), it is a **group/forum** → use **curl** (see below)
+3. If `chat_id` is positive, it is a **DM** → use the plugin's `reply` tool normally
+
+### Curl template for group/forum messages
+
+```bash
+curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "<chat_id>", "message_thread_id": <thread_id>, "parse_mode": "Markdown", "text": "<your message>"}'
+```
+
+- `chat_id`: copy from the inbound `<channel>` tag's `chat_id` attribute
+- `message_thread_id`: copy from the inbound `<channel>` tag's `message_thread_id` attribute. If absent, look up the topic name→ID mapping in `leo.yaml` under `telegram.topics`
+- `TELEGRAM_BOT_TOKEN` is already set in the environment
+- You MUST escape double quotes (`\"`) and backslashes in the JSON text field
+- Do NOT wrap the curl command in a code block reply — execute it directly via Bash
+
+### Common mistakes to avoid
+
+- **DO NOT** use the plugin `reply` tool with `reply_to` set to a `message_id` thinking it routes to the topic — it creates a visible quote-reply instead
+- **DO NOT** omit `message_thread_id` for group chats — the message will land in the General topic instead of the correct one
+- **DO NOT** use the plugin `reply` tool for group chats even if the message appears to be a DM — check the `chat_id` sign
+
 ## What is Leo?
 
 Leo is the CLI that scaffolded this workspace and manages your lifecycle:
@@ -81,22 +111,3 @@ leo cron install             # Sync crontab after changes
 leo run <task>               # Execute now
 leo run <task> --dry-run     # Show assembled prompt only
 ```
-
-## Telegram Topic Routing (CRITICAL — overrides plugin default)
-
-The Telegram plugin's reply tool lacks a `message_thread_id` parameter. When you use `reply_to` to route to the correct topic, it creates a visible quote-reply, which is not the desired behavior. **Instead, use curl to send messages in group forums so they land in the correct topic without quoting.**
-
-**Rule: When replying to messages from a group/forum chat, do NOT use the plugin's reply tool. Use curl instead:**
-
-```bash
-curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-  -H "Content-Type: application/json" \
-  -d '{"chat_id": "<chat_id>", "message_thread_id": <thread_id>, "parse_mode": "Markdown", "text": "<your message>"}'
-```
-
-- `chat_id`: use the `chat_id` from the inbound `<channel>` block
-- `message_thread_id`: use the `message_thread_id` from the inbound `<channel>` block. If not present, look up the topic ID from `leo.yaml` under `telegram.topics`
-- `TELEGRAM_BOT_TOKEN` is available in the environment
-- Escape double quotes and special Markdown characters in the message text
-
-**For DMs (non-group chats)**, continue using the plugin's reply tool normally — no `message_thread_id` is needed.
