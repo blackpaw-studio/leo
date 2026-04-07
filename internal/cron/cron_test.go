@@ -38,6 +38,9 @@ func TestBuildBlock(t *testing.T) {
 	if !strings.Contains(block, "# === END LEO:myagent ===") {
 		t.Error("missing end marker")
 	}
+	if !strings.Contains(block, "PATH=") {
+		t.Error("missing PATH line — cron needs explicit PATH to find claude")
+	}
 	if !strings.Contains(block, "heartbeat") {
 		t.Error("missing heartbeat task")
 	}

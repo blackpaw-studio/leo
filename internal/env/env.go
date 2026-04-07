@@ -25,13 +25,17 @@ func Capture() map[string]string {
 		}
 	}
 
-	// Ensure bun and homebrew are in PATH for the daemon
+	// Ensure common tool directories are in PATH for daemon/cron
 	if path, ok := env["PATH"]; ok && home != "" {
 		bunDir := filepath.Join(home, ".bun", "bin")
 		if _, err := os.Stat(bunDir); err == nil && !strings.Contains(path, bunDir) {
 			env["PATH"] = bunDir + ":" + path
 		}
-		if !strings.Contains(path, "/opt/homebrew/bin") {
+		localBinDir := filepath.Join(home, ".local", "bin")
+		if _, err := os.Stat(localBinDir); err == nil && !strings.Contains(env["PATH"], localBinDir) {
+			env["PATH"] = localBinDir + ":" + env["PATH"]
+		}
+		if !strings.Contains(env["PATH"], "/opt/homebrew/bin") {
 			if _, err := os.Stat("/opt/homebrew/bin"); err == nil {
 				env["PATH"] = "/opt/homebrew/bin:" + env["PATH"]
 			}

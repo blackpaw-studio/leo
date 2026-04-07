@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/env"
 )
 
 func markerStart(agentName string) string {
@@ -77,6 +78,12 @@ func buildBlock(cfg *config.Config, leoPath string) string {
 
 	var lines []string
 	lines = append(lines, markerStart(cfg.Agent.Name))
+
+	// Emit PATH so cron can find claude and other tools
+	captured := env.Capture()
+	if path, ok := captured["PATH"]; ok {
+		lines = append(lines, fmt.Sprintf("PATH=%s", path))
+	}
 
 	cfgPath := cfg.Agent.Workspace + "/leo.yaml"
 
