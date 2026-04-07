@@ -194,15 +194,31 @@ func defaultReadCrontab() (string, error) {
 }
 
 func defaultWriteCrontab(content string) error {
+	// Write to a temp file and pass the filename to crontab.
+	// Using "crontab <file>" instead of "crontab -" (stdin) avoids
+	// pipe/stdin issues in launchd agent contexts.
+	f, err := os.CreateTemp("", "leo-crontab-*")
+	if err != nil {
+		return fmt.Errorf("creating temp crontab file: %w", err)
+	}
+	defer os.Remove(f.Name())
+
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		return fmt.Errorf("writing temp crontab file: %w", err)
+	}
+	f.Close()
+
 	ctx, cancel := context.WithTimeout(context.Background(), crontabTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "crontab", "-")
-	cmd.Stdin = strings.NewReader(content)
+	cmd := exec.CommandContext(ctx, "crontab", f.Name())
 	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
-		return fmt.Errorf("crontab - timed out after %s", crontabTimeout)
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("crontab timed out after %s", crontabTimeout)
+		}
+		return err
 	}
-	return err
+	return nil
 }
