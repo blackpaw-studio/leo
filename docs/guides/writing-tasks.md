@@ -19,7 +19,7 @@ tasks:
     prompt_file: reports/daily-briefing.md
     model: opus
     max_turns: 20
-    topic: news
+    topic_id: 3
     enabled: true
     silent: true
 ```
@@ -59,7 +59,7 @@ Leo appends a protocol section with:
 
 - A `curl` command template for sending Telegram messages
 - The bot token and chat ID (from config)
-- The `message_thread_id` if topic routing is configured
+- The `message_thread_id` (from `topic_id`) if topic routing is configured
 
 The agent uses this protocol to send its final output as a Telegram message.
 
@@ -77,7 +77,7 @@ tasks:
     prompt_file: HEARTBEAT.md
     model: sonnet
     max_turns: 10
-    topic: alerts
+    topic_id: 1                          # discover IDs via `leo telegram topics`
     enabled: true
     silent: true      # silent: only report if something needs attention
 ```
@@ -108,7 +108,7 @@ tasks:
     prompt_file: reports/weekly.md
     model: opus                      # use opus for deeper analysis
     max_turns: 30
-    topic: reports
+    topic_id: 7
     enabled: true
 ```
 

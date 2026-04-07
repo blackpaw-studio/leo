@@ -118,7 +118,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	}
 
 	// 5. Telegram
-	botToken, chatID, groupID, topics := promptTelegramConfig(reader, existing)
+	botToken, chatID, groupID := promptTelegramConfig(reader, existing)
 
 	// 6. Build config
 	cfg := &config.Config{
@@ -130,7 +130,6 @@ func RunInteractive(reader *bufio.Reader) error {
 			BotToken: botToken,
 			ChatID:   chatID,
 			GroupID:  groupID,
-			Topics:   topics,
 		},
 		Defaults: config.DefaultsConfig{
 			Model:    "sonnet",
@@ -157,7 +156,7 @@ func RunInteractive(reader *bufio.Reader) error {
 				PromptFile: "HEARTBEAT.md",
 				Model:      "sonnet",
 				MaxTurns:   10,
-				Topic:      "alerts",
+				// topic_id is discovered dynamically; set via 'leo telegram topics' after setup
 				Enabled:    true,
 			}
 		}
@@ -462,7 +461,7 @@ func promptUserProfile(reader *bufio.Reader) (userName, role, about, preferences
 	return
 }
 
-func promptTelegramConfig(reader *bufio.Reader, existing *config.Config) (botToken, chatID, groupID string, topics map[string]int) {
+func promptTelegramConfig(reader *bufio.Reader, existing *config.Config) (botToken, chatID, groupID string) {
 	botTokenDefault := ""
 	chatIDDefault := ""
 	groupIDDefault := ""
@@ -486,22 +485,19 @@ func promptTelegramConfig(reader *bufio.Reader, existing *config.Config) (botTok
 		}
 
 		if prompt.YesNo(reader, "  Reconfigure Telegram?", false) {
-			botToken, chatID, groupID, topics = promptTelegram(reader, botTokenDefault, chatIDDefault, groupIDDefault)
+			botToken, chatID, groupID = promptTelegram(reader, botTokenDefault, chatIDDefault, groupIDDefault)
 		} else {
 			botToken = botTokenDefault
 			chatID = chatIDDefault
 			groupID = groupIDDefault
-			if existing != nil {
-				topics = existing.Telegram.Topics
-			}
 		}
 	} else {
-		botToken, chatID, groupID, topics = promptTelegram(reader, "", "", "")
+		botToken, chatID, groupID = promptTelegram(reader, "", "", "")
 	}
 	return
 }
 
-func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefault string) (botToken, chatID, groupID string, topics map[string]int) {
+func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefault string) (botToken, chatID, groupID string) {
 	prompt.Bold.Println("\nTelegram Setup")
 	fmt.Println("Create a bot via @BotFather on Telegram, then paste the token.")
 	botToken = prompt.Prompt(reader, "Bot token", tokenDefault)
@@ -523,17 +519,7 @@ func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefaul
 	groupID = prompt.Prompt(reader, "Forum group ID (optional, press enter to skip)", groupDefault)
 
 	if groupID != "" {
-		topics = make(map[string]int)
-		fmt.Println("Enter topic IDs (press enter to skip each):")
-		if id := prompt.PromptInt(reader, "  alerts topic ID", 0); id > 0 {
-			topics["alerts"] = id
-		}
-		if id := prompt.PromptInt(reader, "  construction topic ID", 0); id > 0 {
-			topics["construction"] = id
-		}
-		if id := prompt.PromptInt(reader, "  news topic ID", 0); id > 0 {
-			topics["news"] = id
-		}
+		fmt.Println("  Topic IDs are discovered automatically. Run 'leo telegram topics' after setup.")
 	}
 	return
 }

@@ -100,15 +100,20 @@ func newTaskAddCmd() *cobra.Command {
 			schedule := promptLine(reader, "Cron schedule (e.g. '0 7 * * *'): ")
 			promptFile := promptLine(reader, "Prompt file (relative to workspace): ")
 			model := promptLine(reader, fmt.Sprintf("Model [%s]: ", cfg.Defaults.Model))
-			topic := promptLine(reader, "Telegram topic (optional): ")
+			topicIDStr := promptLine(reader, "Topic ID (optional, run 'leo telegram topics' to discover): ")
 			silentStr := promptLine(reader, "Silent mode? [y/N]: ")
+
+			var topicID int
+			if topicIDStr != "" {
+				fmt.Sscanf(topicIDStr, "%d", &topicID)
+			}
 
 			task := config.TaskConfig{
 				Schedule:   schedule,
 				Timezone:   "America/New_York",
 				PromptFile: promptFile,
 				Model:      model,
-				Topic:      topic,
+				TopicID:    topicID,
 				Enabled:    true,
 				Silent:     strings.ToLower(silentStr) == "y",
 			}

@@ -30,10 +30,9 @@ type AgentConfig struct {
 }
 
 type TelegramConfig struct {
-	BotToken string            `yaml:"bot_token"`
-	ChatID   string            `yaml:"chat_id"`
-	GroupID  string            `yaml:"group_id,omitempty"`
-	Topics   map[string]int    `yaml:"topics,omitempty"`
+	BotToken string `yaml:"bot_token"`
+	ChatID   string `yaml:"chat_id"`
+	GroupID  string `yaml:"group_id,omitempty"`
 }
 
 type DefaultsConfig struct {
@@ -48,7 +47,7 @@ type TaskConfig struct {
 	PromptFile string `yaml:"prompt_file"`
 	Model      string `yaml:"model,omitempty"`
 	MaxTurns   int    `yaml:"max_turns,omitempty"`
-	Topic      string `yaml:"topic,omitempty"`
+	TopicID    int    `yaml:"topic_id,omitempty"`
 	Enabled    bool   `yaml:"enabled"`
 	Silent     bool   `yaml:"silent,omitempty"`
 }
@@ -95,11 +94,6 @@ func (c *Config) Validate() error {
 		if task.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.max_turns must not be negative", name))
 		}
-		if task.Topic != "" && c.Telegram.Topics != nil {
-			if _, ok := c.Telegram.Topics[task.Topic]; !ok {
-				errs = append(errs, fmt.Sprintf("tasks.%s.topic %q not found in telegram.topics", name, task.Topic))
-			}
-		}
 	}
 
 	if len(errs) > 0 {
@@ -136,14 +130,6 @@ func (c *Config) TaskMaxTurns(t TaskConfig) int {
 		return t.MaxTurns
 	}
 	return c.Defaults.MaxTurns
-}
-
-// TopicID returns the message_thread_id for a topic name, or 0 if not found.
-func (c *Config) TopicID(topicName string) int {
-	if topicName == "" || c.Telegram.Topics == nil {
-		return 0
-	}
-	return c.Telegram.Topics[topicName]
 }
 
 // Load reads and parses a leo.yaml config file.

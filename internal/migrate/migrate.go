@@ -484,13 +484,9 @@ func parseCronJobs(ocRoot string, cfg *config.Config) {
 			task.PromptFile = promptFile
 		}
 
-		// Parse delivery target for topic
-		if job.Delivery.To != "" && strings.Contains(job.Delivery.To, ":topic:") {
-			parts := strings.SplitN(job.Delivery.To, ":topic:", 2)
-			if len(parts) == 2 {
-				task.Topic = parts[1]
-			}
-		}
+		// Note: OpenClaw used named topics (e.g. "telegram:topic:news").
+		// Leo now uses numeric topic_id. Run `leo telegram topics` after
+		// migration to discover IDs and set topic_id on tasks manually.
 
 		cfg.Tasks[name] = task
 		prompt.Info.Printf("  Migrated task: %s (%s)\n", name, job.Schedule.Expr)
@@ -558,14 +554,9 @@ func configureTelegram(reader *bufio.Reader, ocRoot string, cfg *config.Config) 
 			if groupID, ok := cred["group_id"]; ok && cfg.Telegram.GroupID == "" {
 				cfg.Telegram.GroupID = fmt.Sprintf("%v", groupID)
 			}
-			if topics, ok := cred["topics"].(map[string]any); ok {
-				cfg.Telegram.Topics = make(map[string]int)
-				for k, v := range topics {
-					if n, ok := v.(float64); ok {
-						cfg.Telegram.Topics[k] = int(n)
-					}
-				}
-			}
+			// Note: OpenClaw stored topic name→ID maps in credentials.
+			// Leo now uses numeric topic_id on tasks directly.
+			// Run `leo telegram topics` after migration to discover IDs.
 		}
 	}
 

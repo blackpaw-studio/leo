@@ -334,8 +334,10 @@ func TestParseCronJobsWithDeliveryTopic(t *testing.T) {
 	if !ok {
 		t.Fatal("daily-report task not found")
 	}
-	if task.Topic != "news" {
-		t.Errorf("topic = %q, want %q", task.Topic, "news")
+	// Topic name migration is no longer supported (Leo uses numeric topic_id).
+	// Just verify the task was created.
+	if task.PromptFile == "" {
+		t.Error("task should have a prompt file")
 	}
 }
 
@@ -422,10 +424,6 @@ func TestConfigureTelegram(t *testing.T) {
 	if cfg.Telegram.GroupID != "-100999" {
 		t.Errorf("GroupID = %q, want %q", cfg.Telegram.GroupID, "-100999")
 	}
-	if cfg.Telegram.Topics["alerts"] != 1 {
-		t.Errorf("Topics[alerts] = %d, want 1", cfg.Telegram.Topics["alerts"])
-	}
-	if cfg.Telegram.Topics["news"] != 3 {
-		t.Errorf("Topics[news] = %d, want 3", cfg.Telegram.Topics["news"])
-	}
+	// Topics are no longer migrated (Leo uses numeric topic_id on tasks).
+	// Just verify chat_id and group_id were migrated correctly.
 }

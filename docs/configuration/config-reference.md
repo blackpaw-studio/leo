@@ -17,20 +17,11 @@ Complete field-by-field reference for `leo.yaml`.
 | `bot_token` | string | Yes | Telegram Bot API token from [@BotFather](https://t.me/BotFather). |
 | `chat_id` | string | Yes | Your personal Telegram chat ID. Auto-detected during setup. |
 | `group_id` | string | No | Forum group chat ID (starts with `-100`). Enables topic routing. |
-| `topics` | map[string]int | No | Maps topic names to Telegram `message_thread_id` values. |
-
 ### Topic Routing
 
-When a task specifies `topic: alerts`, Leo looks up `telegram.topics.alerts` to get the `message_thread_id`. This routes the task's output to a specific forum topic in a Telegram group.
+Tasks can route output to specific forum topics in a Telegram group by setting `topic_id` to the numeric thread ID. Use `leo telegram topics` to discover available topic IDs for your group.
 
-```yaml
-telegram:
-  group_id: "-1001234567890"
-  topics:
-    alerts: 1
-    news: 3
-    reports: 7
-```
+If `group_id` is set, messages go to the group. The `topic_id` field adds a `message_thread_id` to route to a specific thread. If no `topic_id` is specified, messages go to the General thread.
 
 ## `defaults`
 
@@ -57,7 +48,7 @@ tasks:
 | `prompt_file` | string | Yes | — | Path to prompt file, relative to workspace. |
 | `model` | string | No | `defaults.model` | Claude model override for this task. |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override for this task. |
-| `topic` | string | No | — | Telegram topic key (maps to `telegram.topics`). |
+| `topic_id` | int | No | — | Telegram forum topic ID (discover via `leo telegram topics`). |
 | `enabled` | bool | No | `false` | Whether cron should run this task. |
 | `silent` | bool | No | `false` | Prepend silent-mode preamble to the prompt. |
 

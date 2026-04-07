@@ -23,9 +23,6 @@ telegram:
   bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
   chat_id: "123456789"
   group_id: "-100XXXXXXXXXX"          # optional: forum group
-  topics:                              # optional: forum topic IDs
-    alerts: 1
-    news: 3
 
 defaults:
   model: sonnet
@@ -38,7 +35,7 @@ tasks:
     prompt_file: HEARTBEAT.md
     model: sonnet
     max_turns: 10
-    topic: alerts
+    topic_id: 1                        # discover IDs via `leo telegram topics`
     enabled: true
 
   daily-news-briefing:
@@ -47,7 +44,7 @@ tasks:
     prompt_file: reports/daily-news-briefing.md
     model: opus
     max_turns: 20
-    topic: news
+    topic_id: 3
     enabled: true
     silent: true
 ```

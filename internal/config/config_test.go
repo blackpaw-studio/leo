@@ -16,9 +16,6 @@ telegram:
   bot_token: "123:ABC"
   chat_id: "456"
   group_id: "-100999"
-  topics:
-    alerts: 1
-    news: 3
 
 defaults:
   model: sonnet
@@ -31,14 +28,14 @@ tasks:
     prompt_file: HEARTBEAT.md
     model: sonnet
     max_turns: 10
-    topic: alerts
+    topic_id: 1
     enabled: true
   daily-news:
     schedule: "0 7 * * *"
     prompt_file: reports/news.md
     model: opus
     max_turns: 20
-    topic: news
+    topic_id: 3
     enabled: true
     silent: true
   disabled-task:
@@ -57,7 +54,6 @@ func TestValidate(t *testing.T) {
 			Telegram: TelegramConfig{
 				BotToken: "123:ABC",
 				ChatID:   "456",
-				Topics:   map[string]int{"alerts": 1},
 			},
 			Defaults: DefaultsConfig{
 				Model:    "sonnet",
@@ -67,7 +63,7 @@ func TestValidate(t *testing.T) {
 				"heartbeat": {
 					Schedule:   "0 * * * *",
 					PromptFile: "HEARTBEAT.md",
-					Topic:      "alerts",
+					TopicID:    1,
 					Enabled:    true,
 				},
 			},
@@ -188,22 +184,6 @@ func TestValidate(t *testing.T) {
 		}
 		if got := err.Error(); !contains(got, "tasks.heartbeat.model") {
 			t.Errorf("error = %q, want mention of task model", got)
-		}
-	})
-
-	t.Run("task references unknown topic", func(t *testing.T) {
-		cfg := validConfig()
-		cfg.Tasks["heartbeat"] = TaskConfig{
-			Schedule:   "0 * * * *",
-			PromptFile: "HEARTBEAT.md",
-			Topic:      "nonexistent",
-		}
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if got := err.Error(); !contains(got, "topic \"nonexistent\" not found") {
-			t.Errorf("error = %q, want mention of unknown topic", got)
 		}
 	})
 
@@ -379,27 +359,6 @@ func TestTaskModel(t *testing.T) {
 				t.Errorf("TaskMaxTurns() = %d, want %d", got, tt.wantTurns)
 			}
 		})
-	}
-}
-
-func TestTopicID(t *testing.T) {
-	cfg := &Config{
-		Telegram: TelegramConfig{
-			Topics: map[string]int{"alerts": 1, "news": 3},
-		},
-	}
-
-	if got := cfg.TopicID("alerts"); got != 1 {
-		t.Errorf("TopicID(alerts) = %d, want 1", got)
-	}
-	if got := cfg.TopicID("news"); got != 3 {
-		t.Errorf("TopicID(news) = %d, want 3", got)
-	}
-	if got := cfg.TopicID("missing"); got != 0 {
-		t.Errorf("TopicID(missing) = %d, want 0", got)
-	}
-	if got := cfg.TopicID(""); got != 0 {
-		t.Errorf("TopicID('') = %d, want 0", got)
 	}
 }
 

@@ -107,8 +107,8 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 	}
 
 	topicLine := ""
-	if topicID := cfg.TopicID(task.Topic); topicID > 0 {
-		topicLine = fmt.Sprintf(`"message_thread_id": %d, `, topicID)
+	if task.TopicID > 0 {
+		topicLine = fmt.Sprintf(`"message_thread_id": %d, `, task.TopicID)
 	}
 
 	telegramProtocol := fmt.Sprintf(telegramProtocolTemplate,

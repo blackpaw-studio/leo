@@ -21,7 +21,7 @@ type TaskAddRequest struct {
 	PromptFile string `json:"prompt_file"`
 	Model      string `json:"model,omitempty"`
 	MaxTurns   int    `json:"max_turns,omitempty"`
-	Topic      string `json:"topic,omitempty"`
+	TopicID    int    `json:"topic_id,omitempty"`
 	Silent     bool   `json:"silent,omitempty"`
 	Enabled    bool   `json:"enabled"`
 }

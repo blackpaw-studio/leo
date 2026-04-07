@@ -167,9 +167,6 @@ telegram:
   bot_token: "YOUR_BOT_TOKEN"
   chat_id: "YOUR_CHAT_ID"
   group_id: "-100XXXXXXXXXX"                # optional: forum group
-  topics:                                    # optional: forum topic IDs
-    alerts: 1
-    news: 3
 
 defaults:
   model: sonnet
@@ -182,7 +179,7 @@ tasks:
     prompt_file: HEARTBEAT.md               # relative to workspace
     model: sonnet                            # overrides defaults.model
     max_turns: 10
-    topic: alerts                            # routes to telegram.topics.alerts
+    topic_id: 1                              # Telegram forum topic ID (use `leo telegram topics` to discover)
     enabled: true
 
   daily-news-briefing:
@@ -191,7 +188,7 @@ tasks:
     prompt_file: reports/daily-news-briefing.md
     model: opus
     max_turns: 20
-    topic: news
+    topic_id: 3                              # Telegram forum topic ID
     enabled: true
     silent: true                             # agent works silently, only sends final message
 ```
@@ -205,7 +202,7 @@ tasks:
 | `prompt_file` | Path to prompt (relative to workspace) | *required* |
 | `model` | Claude model override | `defaults.model` |
 | `max_turns` | Max agent turns override | `defaults.max_turns` |
-| `topic` | Telegram topic key (maps to `telegram.topics`) | — |
+| `topic_id` | Telegram forum topic ID (discover via `leo telegram topics`) | — |
 | `enabled` | Whether cron should run this task | `false` |
 | `silent` | Prepend silent-mode preamble to prompt | `false` |
 

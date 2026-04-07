@@ -135,7 +135,7 @@ func TestTaskAddRequestMarshalUnmarshal(t *testing.T) {
 				PromptFile: "reports/news.md",
 				Model:      "opus",
 				MaxTurns:   20,
-				Topic:      "alerts",
+				TopicID:    1,
 				Silent:     true,
 				Enabled:    true,
 			},
@@ -188,8 +188,8 @@ func TestTaskAddRequestMarshalUnmarshal(t *testing.T) {
 			if got.MaxTurns != tt.request.MaxTurns {
 				t.Errorf("MaxTurns = %d, want %d", got.MaxTurns, tt.request.MaxTurns)
 			}
-			if got.Topic != tt.request.Topic {
-				t.Errorf("Topic = %q, want %q", got.Topic, tt.request.Topic)
+			if got.TopicID != tt.request.TopicID {
+				t.Errorf("TopicID = %d, want %d", got.TopicID, tt.request.TopicID)
 			}
 			if got.Silent != tt.request.Silent {
 				t.Errorf("Silent = %v, want %v", got.Silent, tt.request.Silent)
@@ -317,8 +317,8 @@ func TestTaskAddRequestOmittedFields(t *testing.T) {
 	if val, ok := m["max_turns"]; ok && val != nil {
 		t.Errorf("max_turns should not be present, got %v", val)
 	}
-	if val, ok := m["topic"]; ok && val != nil {
-		t.Errorf("topic should not be present, got %v", val)
+	if val, ok := m["topic_id"]; ok && val != nil {
+		t.Errorf("topic_id should not be present, got %v", val)
 	}
 }
 

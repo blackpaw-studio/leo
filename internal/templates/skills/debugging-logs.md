@@ -78,5 +78,5 @@ leo task list
 If task output isn't reaching Telegram:
 1. Check the task log for curl errors
 2. Verify `telegram.bot_token` and `telegram.chat_id` in `leo.yaml`
-3. For topic-routed messages, verify the topic name maps to a valid `message_thread_id` in `telegram.topics`
+3. For topic-routed messages, verify the `topic_id` is a valid forum topic ID (use `leo telegram topics` to list available topics)
 4. Test manually: `leo run <task>` and watch the output

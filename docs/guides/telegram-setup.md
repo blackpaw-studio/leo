@@ -52,6 +52,14 @@ Telegram forum groups (supergroups with topics enabled) let you organize message
 3. Create topics for your use case (e.g., "Alerts", "News", "Reports")
 4. Get the group ID and topic thread IDs
 
+### Discovering Topic IDs
+
+Use `leo telegram topics` to list all available topics and their IDs for your configured group:
+
+```bash
+leo telegram topics
+```
+
 ### Configuration
 
 ```yaml
@@ -59,22 +67,18 @@ telegram:
   bot_token: "YOUR_TOKEN"
   chat_id: "YOUR_PERSONAL_CHAT_ID"
   group_id: "-1001234567890"
-  topics:
-    alerts: 1
-    news: 3
-    reports: 7
 ```
 
 ### Task Routing
 
-Reference topic names in your task definitions:
+Reference topic IDs directly in your task definitions:
 
 ```yaml
 tasks:
   heartbeat:
-    topic: alerts       # routes to telegram.topics.alerts (thread ID 1)
+    topic_id: 1         # routes to forum topic with thread ID 1
   daily-briefing:
-    topic: news         # routes to telegram.topics.news (thread ID 3)
+    topic_id: 3         # routes to forum topic with thread ID 3
 ```
 
 ## Troubleshooting
@@ -88,8 +92,8 @@ tasks:
 ### Messages going to the wrong place
 
 - Personal messages use `chat_id`
-- Group messages use `group_id` with optional `topic` routing
-- If `topic` is set but `group_id` is empty, messages go to your personal chat
+- Group messages use `group_id` with optional `topic_id` routing
+- If `topic_id` is set but `group_id` is empty, messages go to your personal chat
 
 ### Test message failed
 

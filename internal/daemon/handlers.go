@@ -45,7 +45,7 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		PromptFile: req.PromptFile,
 		Model:      req.Model,
 		MaxTurns:   req.MaxTurns,
-		Topic:      req.Topic,
+		TopicID:    req.TopicID,
 		Silent:     req.Silent,
 		Enabled:    req.Enabled,
 	}

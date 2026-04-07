@@ -242,7 +242,6 @@ func reconfigureTasks(reader *bufio.Reader, cfg *config.Config, ws string) error
 				PromptFile: "HEARTBEAT.md",
 				Model:      "sonnet",
 				MaxTurns:   10,
-				Topic:      "alerts",
 				Enabled:    true,
 			}
 		}

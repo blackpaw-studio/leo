@@ -25,7 +25,6 @@ func TestAssemblePrompt(t *testing.T) {
 			BotToken: "123:ABC",
 			ChatID:   "456",
 			GroupID:  "-100999",
-			Topics:   map[string]int{"alerts": 42},
 		},
 	}
 
@@ -39,7 +38,7 @@ func TestAssemblePrompt(t *testing.T) {
 			name: "basic task",
 			task: config.TaskConfig{
 				PromptFile: "HEARTBEAT.md",
-				Topic:      "alerts",
+				TopicID:    42,
 			},
 			wantSilent: false,
 			wantTopic:  true,
@@ -48,7 +47,7 @@ func TestAssemblePrompt(t *testing.T) {
 			name: "silent task",
 			task: config.TaskConfig{
 				PromptFile: "HEARTBEAT.md",
-				Topic:      "alerts",
+				TopicID:    42,
 				Silent:     true,
 			},
 			wantSilent: true,

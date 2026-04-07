@@ -14,10 +14,6 @@ telegram:
   bot_token: <string>         # Telegram Bot API token from @BotFather (required)
   chat_id: <string>           # Your personal chat ID (required)
   group_id: <string>          # Forum group chat ID (optional — use instead of chat_id for groups)
-  topics:                     # Topic name → message_thread_id mapping (optional)
-    alerts: 123
-    news: 456
-    daily: 789
 
 defaults:
   model: <string>             # Default model: sonnet, opus, or haiku (required)
@@ -31,7 +27,7 @@ tasks:
     prompt_file: <path>       # Path relative to workspace (required)
     model: <string>           # Override defaults.model (optional)
     max_turns: <int>          # Override defaults.max_turns (optional)
-    topic: <string>           # Route output to telegram.topics[topic] (optional)
+    topic_id: <int>           # Telegram forum topic ID (optional — discover via `leo telegram topics`)
     enabled: <bool>           # Whether cron runs this task (default: true)
     silent: <bool>            # Suppress narration, output NO_REPLY if nothing to report (optional)
 ```
@@ -53,9 +49,9 @@ effective max_turns = task.max_turns OR defaults.max_turns
 
 ## Telegram Topics
 
-Topics route messages to specific threads in a Telegram forum group. Define topic names in `telegram.topics`, then reference them in tasks via `topic: <name>`.
+Topics route messages to specific threads in a Telegram forum group. Use `leo telegram topics` to discover available topic IDs for your group, then reference them directly in tasks via `topic_id: <id>`.
 
-If `group_id` is set, messages go to the group. The `topic` field adds a `message_thread_id` to route to a specific thread. If no topic is specified, messages go to the General thread.
+If `group_id` is set, messages go to the group. The `topic_id` field adds a `message_thread_id` to route to a specific thread. If no `topic_id` is specified, messages go to the General thread.
 
 ## Paths
 
@@ -69,4 +65,4 @@ If `group_id` is set, messages go to the group. The `topic` field adds a `messag
 leo validate
 ```
 
-Checks: required fields, model names, cron syntax, telegram consistency, topic references, file existence.
+Checks: required fields, model names, cron syntax, telegram consistency, topic IDs, file existence.
