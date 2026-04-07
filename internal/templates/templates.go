@@ -14,8 +14,6 @@ type AgentData struct {
 	Name      string
 	UserName  string
 	Workspace string
-	GroupID   string
-	Topics    map[string]int
 }
 
 type UserProfileData struct {

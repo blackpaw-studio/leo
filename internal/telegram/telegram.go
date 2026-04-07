@@ -56,6 +56,97 @@ type updateResponse struct {
 	} `json:"result"`
 }
 
+// Topic represents a discovered forum topic.
+type Topic struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// FetchTopics discovers forum topics by calling getForumTopicInfo for known thread IDs
+// found via getUpdates. It returns unique topics sorted by ID.
+func FetchTopics(ctx context.Context, botToken, groupID string) ([]Topic, error) {
+	// Get recent updates to find message_thread_id values
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		apiBaseURL+botToken+"/getUpdates?timeout=1&limit=100", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching updates: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	var result struct {
+		OK     bool `json:"ok"`
+		Result []struct {
+			Message *topicMessage `json:"message"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+
+	if !result.OK {
+		return nil, fmt.Errorf("telegram API returned ok=false")
+	}
+
+	seen := make(map[int]string)
+	for _, u := range result.Result {
+		if u.Message == nil {
+			continue
+		}
+		chatID := fmt.Sprintf("%d", u.Message.Chat.ID)
+		if chatID != groupID {
+			continue
+		}
+		if u.Message.MessageThreadID > 0 {
+			// Use forum_topic_created name if available, otherwise keep existing
+			if u.Message.ForumTopicCreated != nil {
+				seen[u.Message.MessageThreadID] = u.Message.ForumTopicCreated.Name
+			} else if _, ok := seen[u.Message.MessageThreadID]; !ok {
+				seen[u.Message.MessageThreadID] = ""
+			}
+		}
+	}
+
+	var topics []Topic
+	for id, name := range seen {
+		topics = append(topics, Topic{ID: id, Name: name})
+	}
+
+	// Sort by ID for stable output
+	sortTopics(topics)
+
+	return topics, nil
+}
+
+func sortTopics(topics []Topic) {
+	for i := 1; i < len(topics); i++ {
+		for j := i; j > 0 && topics[j].ID < topics[j-1].ID; j-- {
+			topics[j], topics[j-1] = topics[j-1], topics[j]
+		}
+	}
+}
+
+type topicMessage struct {
+	Chat struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"`
+	} `json:"chat"`
+	MessageThreadID    int    `json:"message_thread_id"`
+	Text               string `json:"text"`
+	ForumTopicCreated  *struct {
+		Name string `json:"name"`
+	} `json:"forum_topic_created"`
+}
+
 // PollChatID polls getUpdates to detect the chat ID from the first message received.
 // It derives a context with the given timeout; use PollChatIDCtx for explicit context control.
 func PollChatID(botToken string, timeout time.Duration) (string, error) {

@@ -207,6 +207,81 @@ func TestPollChatIDCtxCancellation(t *testing.T) {
 	}
 }
 
+func TestFetchTopics(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "getUpdates") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"ok": true,
+			"result": [
+				{"message": {"chat": {"id": -100999, "type": "supergroup"}, "message_thread_id": 3, "text": "hello"}},
+				{"message": {"chat": {"id": -100999, "type": "supergroup"}, "message_thread_id": 7, "text": "world"}},
+				{"message": {"chat": {"id": -100999, "type": "supergroup"}, "message_thread_id": 3, "text": "again"}},
+				{"message": {"chat": {"id": 12345, "type": "private"}, "text": "dm"}}
+			]
+		}`))
+	})
+
+	topics, err := FetchTopics(context.Background(), "test-token", "-100999")
+	if err != nil {
+		t.Fatalf("FetchTopics() error: %v", err)
+	}
+
+	if len(topics) != 2 {
+		t.Fatalf("got %d topics, want 2", len(topics))
+	}
+
+	// Should be sorted by ID
+	if topics[0].ID != 3 || topics[1].ID != 7 {
+		t.Errorf("topics = %v, want IDs [3, 7]", topics)
+	}
+}
+
+func TestFetchTopicsWithNames(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"ok": true,
+			"result": [
+				{"message": {"chat": {"id": -100999, "type": "supergroup"}, "message_thread_id": 5, "forum_topic_created": {"name": "Chat"}, "text": ""}},
+				{"message": {"chat": {"id": -100999, "type": "supergroup"}, "message_thread_id": 5, "text": "hello"}}
+			]
+		}`))
+	})
+
+	topics, err := FetchTopics(context.Background(), "test-token", "-100999")
+	if err != nil {
+		t.Fatalf("FetchTopics() error: %v", err)
+	}
+
+	if len(topics) != 1 {
+		t.Fatalf("got %d topics, want 1", len(topics))
+	}
+
+	if topics[0].Name != "Chat" {
+		t.Errorf("topic name = %q, want %q", topics[0].Name, "Chat")
+	}
+}
+
+func TestFetchTopicsEmpty(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok": true, "result": []}`))
+	})
+
+	topics, err := FetchTopics(context.Background(), "test-token", "-100999")
+	if err != nil {
+		t.Fatalf("FetchTopics() error: %v", err)
+	}
+
+	if len(topics) != 0 {
+		t.Errorf("got %d topics, want 0", len(topics))
+	}
+}
+
 func TestSendMessageParsesAPIDescription(t *testing.T) {
 	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

@@ -12,46 +12,33 @@ You are **{{.Name}}**, managed by Leo. This file gives you baseline knowledge ab
 ## Telegram Messaging Rules (MANDATORY — read before every reply)
 
 **NEVER use the Telegram plugin's `reply` tool for group/forum chats.** The plugin lacks `message_thread_id` support, so every `reply` tool call in a group lands as a quote-reply to the original message instead of posting cleanly in the topic thread. This is wrong behavior.
-{{if .GroupID}}
-### Group/Forum Configuration
 
-- **Group chat_id**: `{{.GroupID}}`
-{{- if .Topics}}
-- **Topic IDs** (message_thread_id values):
-{{- range $name, $id := .Topics}}
-  - `{{$name}}`: `{{$id}}`
-{{- end}}
-{{- end}}
-
-### How to reply in group/forum chats
-
-When you receive a message where `chat_id` is `{{.GroupID}}`, you MUST use curl — never the plugin reply tool:
-
-```bash
-curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-  -H "Content-Type: application/json" \
-  -d '{"chat_id": "{{.GroupID}}", "message_thread_id": <TOPIC_ID>, "parse_mode": "Markdown", "text": "<your message>"}'
-```
-
-Replace `<TOPIC_ID>` with the correct topic ID from the list above. If the inbound `<channel>` tag includes a `message_thread_id` attribute, use that value. Otherwise, pick the topic that matches the context of the conversation.
-{{else}}
 ### How to decide which method to use
 
 1. Check the inbound `<channel>` tag for `chat_id`
 2. If `chat_id` is negative (starts with `-`), it is a **group/forum** → use **curl** (see below)
 3. If `chat_id` is positive, it is a **DM** → use the plugin's `reply` tool normally
 
-### Curl template for group/forum messages
+### How to reply in group/forum chats
+
+Use curl — never the plugin reply tool:
 
 ```bash
 curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
   -H "Content-Type: application/json" \
-  -d '{"chat_id": "<chat_id>", "message_thread_id": <thread_id>, "parse_mode": "Markdown", "text": "<your message>"}'
+  -d '{"chat_id": "<chat_id>", "message_thread_id": <TOPIC_ID>, "parse_mode": "Markdown", "text": "<your message>"}'
 ```
 
-- `chat_id`: copy from the inbound `<channel>` tag's `chat_id` attribute
-- `message_thread_id`: copy from the inbound `<channel>` tag's `message_thread_id` attribute. If absent, look up the topic name→ID mapping in `leo.yaml` under `telegram.topics`
-{{end}}
+#### Finding the correct `message_thread_id`
+
+1. **Best**: use the `message_thread_id` from the inbound `<channel>` tag if present
+2. **Fallback**: run `leo telegram topics --json` to discover topic IDs dynamically:
+   ```bash
+   leo telegram topics --json
+   # Returns: [{"id":3,"name":"Chat"},{"id":7,"name":"Alerts"}]
+   ```
+   Pick the topic matching the context of the conversation.
+
 - `TELEGRAM_BOT_TOKEN` is already set in the environment
 - You MUST escape double quotes (`\"`) and backslashes in the JSON text field
 - Do NOT wrap the curl command in a code block reply — execute it directly via Bash

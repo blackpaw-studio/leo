@@ -383,8 +383,6 @@ func scaffoldWorkspace(workspace, home, name string, cfg *config.Config, agentDi
 		claudeContent, err := templates.RenderClaudeWorkspace(templates.AgentData{
 			Name:      name,
 			Workspace: workspace,
-			GroupID:   cfg.Telegram.GroupID,
-			Topics:    cfg.Telegram.Topics,
 		})
 		if err != nil {
 			return fmt.Errorf("rendering CLAUDE.md: %w", err)

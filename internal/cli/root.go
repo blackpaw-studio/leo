@@ -32,6 +32,7 @@ func newRootCmd() *cobra.Command {
 		newMigrateCmd(),
 		newValidateCmd(),
 		newUpdateCmd(),
+		newTelegramCmd(),
 	)
 
 	return cmd

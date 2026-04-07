@@ -12,7 +12,7 @@ import (
 func TestRefreshWorkspace(t *testing.T) {
 	dir := t.TempDir()
 
-	written, err := RefreshWorkspace("testagent", dir, TelegramInfo{})
+	written, err := RefreshWorkspace("testagent", dir)
 	if err != nil {
 		t.Fatalf("RefreshWorkspace() error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRefreshWorkspaceOverwrites(t *testing.T) {
 	firstSkill := templates.SkillFiles()[0]
 	os.WriteFile(filepath.Join(dir, "skills", firstSkill), []byte("old skill"), 0644)
 
-	_, err := RefreshWorkspace("testagent", dir, TelegramInfo{})
+	_, err := RefreshWorkspace("testagent", dir)
 	if err != nil {
 		t.Fatalf("RefreshWorkspace() error: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestRefreshWorkspaceSkipsExistingHeartbeat(t *testing.T) {
 	// Pre-create HEARTBEAT.md with custom content
 	os.WriteFile(filepath.Join(dir, "HEARTBEAT.md"), []byte("custom heartbeat"), 0644)
 
-	written, err := RefreshWorkspace("testagent", dir, TelegramInfo{})
+	written, err := RefreshWorkspace("testagent", dir)
 	if err != nil {
 		t.Fatalf("RefreshWorkspace() error: %v", err)
 	}

@@ -12,21 +12,13 @@ import (
 // CLAUDE.md and skills/*.md are always overwritten (generated reference material).
 // HEARTBEAT.md is only written if missing (may be user-customized).
 // Returns a list of files that were written.
-// TelegramInfo holds the Telegram config fields needed for workspace rendering.
-type TelegramInfo struct {
-	GroupID string
-	Topics  map[string]int
-}
-
-func RefreshWorkspace(agentName, workspace string, telegram TelegramInfo) ([]string, error) {
+func RefreshWorkspace(agentName, workspace string) ([]string, error) {
 	var written []string
 
 	// Always overwrite CLAUDE.md
 	claudeContent, err := templates.RenderClaudeWorkspace(templates.AgentData{
 		Name:      agentName,
 		Workspace: workspace,
-		GroupID:   telegram.GroupID,
-		Topics:    telegram.Topics,
 	})
 	if err != nil {
 		return written, fmt.Errorf("rendering CLAUDE.md: %w", err)
