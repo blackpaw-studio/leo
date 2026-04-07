@@ -84,8 +84,19 @@ leo run <task> --dry-run     # Show assembled prompt only
 
 ## Telegram Topic Routing (CRITICAL — overrides plugin default)
 
-The Telegram plugin says to omit `reply_to` for the latest message. **IGNORE that guidance when replying in a group/forum.** The plugin's reply tool has no `message_thread_id` parameter, so the ONLY way to route your response to the correct topic thread is via `reply_to`.
+The Telegram plugin's reply tool lacks a `message_thread_id` parameter. When you use `reply_to` to route to the correct topic, it creates a visible quote-reply, which is not the desired behavior. **Instead, use curl to send messages in group forums so they land in the correct topic without quoting.**
 
-**Rule: ALWAYS pass `reply_to` with the `message_id` from the inbound `<channel>` block — even for the most recent message — when `chat_id` is a group chat.**
+**Rule: When replying to messages from a group/forum chat, do NOT use the plugin's reply tool. Use curl instead:**
 
-Without `reply_to`, the Telegram API has no way to determine which topic you are responding in and defaults to the General topic.
+```bash
+curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "<chat_id>", "message_thread_id": <thread_id>, "parse_mode": "Markdown", "text": "<your message>"}'
+```
+
+- `chat_id`: use the `chat_id` from the inbound `<channel>` block
+- `message_thread_id`: use the `message_thread_id` from the inbound `<channel>` block. If not present, look up the topic ID from `leo.yaml` under `telegram.topics`
+- `TELEGRAM_BOT_TOKEN` is available in the environment
+- Escape double quotes and special Markdown characters in the message text
+
+**For DMs (non-group chats)**, continue using the plugin's reply tool normally — no `message_thread_id` is needed.
