@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
-	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
@@ -163,16 +163,14 @@ func RunInteractive(reader *bufio.Reader) error {
 	}
 	prompt.Info.Printf("  Wrote %s\n", cfgPath)
 
-	// 11. Install cron
-	if len(cfg.Tasks) > 0 && prompt.YesNo(reader, "\nInstall cron entries?", true) {
-		leoPath, _ := os.Executable()
-		if leoPath == "" {
-			leoPath = "leo"
-		}
-		if err := cron.Install(cfg, leoPath); err != nil {
-			prompt.Warn.Printf("  Failed to install cron: %v\n", err)
+	// 11. Sync schedules with daemon if running
+	if len(cfg.Tasks) > 0 {
+		if daemon.IsRunning(workspace) {
+			if resp, err := daemon.Send(workspace, "POST", "/cron/install", nil); err == nil && resp.OK {
+				prompt.Success.Println("  Schedules synced with daemon.")
+			}
 		} else {
-			prompt.Success.Println("  Cron entries installed.")
+			prompt.Info.Println("  Schedules will load when daemon starts.")
 		}
 	}
 

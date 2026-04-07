@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/daemon"
@@ -12,7 +13,7 @@ import (
 func newCronCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cron",
-		Short: "Manage cron entries",
+		Short: "Manage scheduled tasks",
 	}
 
 	cmd.AddCommand(
@@ -27,35 +28,26 @@ func newCronCmd() *cobra.Command {
 func newCronInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
-		Short: "Install all enabled tasks to system crontab",
+		Short: "Register all enabled task schedules with the daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
 
-			if daemon.IsRunning(cfg.Agent.Workspace) {
-				resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/install", nil)
-				if err == nil {
-					if !resp.OK {
-						return fmt.Errorf("daemon error: %s", resp.Error)
-					}
-					success.Println("Cron entries installed (via daemon).")
-					return nil
-				}
-				warn.Printf("Daemon request failed (%v), falling back to direct install.\n", err)
+			if !daemon.IsRunning(cfg.Agent.Workspace) {
+				return fmt.Errorf("daemon is not running — start it with 'leo chat start' first")
 			}
 
-			leoPath, err := leoExecutablePath()
+			resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/install", nil)
 			if err != nil {
-				return fmt.Errorf("finding leo binary: %w", err)
+				return fmt.Errorf("sending to daemon: %w", err)
+			}
+			if !resp.OK {
+				return fmt.Errorf("daemon error: %s", resp.Error)
 			}
 
-			if err := cron.Install(cfg, leoPath); err != nil {
-				return err
-			}
-
-			success.Println("Cron entries installed.")
+			success.Println("Schedules registered with daemon.")
 			return nil
 		},
 	}
@@ -64,30 +56,26 @@ func newCronInstallCmd() *cobra.Command {
 func newCronRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove",
-		Short: "Remove all leo-managed cron entries",
+		Short: "Unregister all scheduled tasks from the daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
 
-			if daemon.IsRunning(cfg.Agent.Workspace) {
-				resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/remove", nil)
-				if err == nil {
-					if !resp.OK {
-						return fmt.Errorf("daemon error: %s", resp.Error)
-					}
-					success.Println("Cron entries removed (via daemon).")
-					return nil
-				}
-				warn.Printf("Daemon request failed (%v), falling back to direct removal.\n", err)
+			if !daemon.IsRunning(cfg.Agent.Workspace) {
+				return fmt.Errorf("daemon is not running — start it with 'leo chat start' first")
 			}
 
-			if err := cron.Remove(cfg); err != nil {
-				return err
+			resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/remove", nil)
+			if err != nil {
+				return fmt.Errorf("sending to daemon: %w", err)
+			}
+			if !resp.OK {
+				return fmt.Errorf("daemon error: %s", resp.Error)
 			}
 
-			success.Println("Cron entries removed.")
+			success.Println("Schedules unregistered.")
 			return nil
 		},
 	}
@@ -96,7 +84,7 @@ func newCronRemoveCmd() *cobra.Command {
 func newCronListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "Show installed schedules",
+		Short: "Show scheduled tasks",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -105,37 +93,32 @@ func newCronListCmd() *cobra.Command {
 
 			if daemon.IsRunning(cfg.Agent.Workspace) {
 				resp, err := daemon.Send(cfg.Agent.Workspace, "GET", "/cron/list", nil)
-				if err == nil {
-					if !resp.OK {
-						return fmt.Errorf("daemon error: %s", resp.Error)
+				if err == nil && resp.OK {
+					var entries []cron.EntryInfo
+					if err := json.Unmarshal(resp.Data, &entries); err == nil {
+						if len(entries) == 0 {
+							warn.Println("No schedules registered.")
+						} else {
+							for _, e := range entries {
+								fmt.Printf("  %-25s  %-20s  next: %s\n",
+									e.Name, e.Schedule, e.Next.Format(time.RFC3339))
+							}
+						}
+						return nil
 					}
-					var data struct {
-						Entries string `json:"entries"`
-					}
-					json.Unmarshal(resp.Data, &data)
-					if data.Entries == "" {
-						warn.Println("No leo cron entries found.")
-					} else {
-						fmt.Println(data.Entries)
-					}
-					return nil
 				}
-				warn.Printf("Daemon request failed (%v), falling back to direct listing.\n", err)
 			}
 
-			block, err := cron.List(cfg)
-			if err != nil {
-				return err
+			// Fallback: show config-defined tasks
+			warn.Println("Daemon not running — showing config-defined tasks:")
+			for name, task := range cfg.Tasks {
+				status := "disabled"
+				if task.Enabled {
+					status = "enabled"
+				}
+				fmt.Printf("  %-25s  %-20s  [%s]\n", name, task.Schedule, status)
 			}
-
-			if block == "" {
-				warn.Println("No leo cron entries found.")
-				return nil
-			}
-
-			fmt.Println(block)
 			return nil
 		},
 	}
 }
-

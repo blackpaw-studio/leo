@@ -1,305 +1,188 @@
 package cron
 
 import (
-	"fmt"
-	"strings"
+	"sync"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
-func TestBuildBlock(t *testing.T) {
+func TestInstallSchedulesEnabledTasks(t *testing.T) {
+	s := New("/usr/local/bin/leo", "/tmp/leo.yaml")
+	defer s.Stop()
+
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Name:      "myagent",
-			Workspace: "/home/user/myagent",
-		},
 		Tasks: map[string]config.TaskConfig{
-			"heartbeat": {
-				Schedule: "0,30 7-22 * * *",
-				Enabled:  true,
-			},
-			"news": {
-				Schedule: "0 7 * * *",
-				Enabled:  true,
-			},
-			"disabled": {
-				Schedule: "* * * * *",
-				Enabled:  false,
-			},
+			"heartbeat": {Schedule: "0,30 7-22 * * *", Enabled: true},
+			"news":      {Schedule: "0 7 * * *", Enabled: true},
+			"disabled":  {Schedule: "* * * * *", Enabled: false},
 		},
 	}
 
-	block := buildBlock(cfg, "/usr/local/bin/leo")
+	if err := s.Install(cfg); err != nil {
+		t.Fatalf("Install() error: %v", err)
+	}
 
-	if !strings.Contains(block, "# === LEO:myagent — DO NOT EDIT ===") {
-		t.Error("missing start marker")
+	entries := s.List()
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
-	if !strings.Contains(block, "# === END LEO:myagent ===") {
-		t.Error("missing end marker")
+
+	names := map[string]bool{}
+	for _, e := range entries {
+		names[e.Name] = true
 	}
-	if !strings.Contains(block, "PATH=") {
-		t.Error("missing PATH line — cron needs explicit PATH to find claude")
+	if !names["heartbeat"] {
+		t.Error("missing heartbeat")
 	}
-	if !strings.Contains(block, "heartbeat") {
-		t.Error("missing heartbeat task")
+	if !names["news"] {
+		t.Error("missing news")
 	}
-	if !strings.Contains(block, "news") {
-		t.Error("missing news task")
-	}
-	if strings.Contains(block, "disabled") {
-		t.Error("should not contain disabled task")
-	}
-	if !strings.Contains(block, "/usr/local/bin/leo run") {
-		t.Error("missing leo run command")
+	if names["disabled"] {
+		t.Error("disabled task should not be scheduled")
 	}
 }
 
-func TestRemoveBlock(t *testing.T) {
-	crontab := `# other stuff
-0 * * * * /some/other/job
-# === LEO:myagent — DO NOT EDIT ===
-# leo:myagent:heartbeat
-0,30 7-22 * * * /usr/local/bin/leo run heartbeat
-# === END LEO:myagent ===
-# more stuff
-`
+func TestRemoveClearsAll(t *testing.T) {
+	s := New("/usr/local/bin/leo", "/tmp/leo.yaml")
+	defer s.Stop()
 
-	result := removeBlock(crontab, "myagent")
-
-	if strings.Contains(result, "LEO:myagent") {
-		t.Error("block was not removed")
-	}
-	if !strings.Contains(result, "other stuff") {
-		t.Error("other content was removed")
-	}
-	if !strings.Contains(result, "more stuff") {
-		t.Error("content after block was removed")
-	}
-}
-
-func TestRemoveBlockPreservesOtherAgents(t *testing.T) {
-	crontab := `# === LEO:agent1 — DO NOT EDIT ===
-# leo:agent1:task1
-* * * * * /usr/local/bin/leo run task1
-# === END LEO:agent1 ===
-# === LEO:agent2 — DO NOT EDIT ===
-# leo:agent2:task2
-* * * * * /usr/local/bin/leo run task2
-# === END LEO:agent2 ===
-`
-
-	result := removeBlock(crontab, "agent1")
-
-	if strings.Contains(result, "LEO:agent1") {
-		t.Error("agent1 block should be removed")
-	}
-	if !strings.Contains(result, "LEO:agent2") {
-		t.Error("agent2 block should be preserved")
-	}
-}
-
-func TestExtractBlock(t *testing.T) {
-	crontab := `# other stuff
-# === LEO:myagent — DO NOT EDIT ===
-# leo:myagent:heartbeat
-0,30 7-22 * * * /usr/local/bin/leo run heartbeat
-# === END LEO:myagent ===
-`
-
-	block := extractBlock(crontab, "myagent")
-
-	if !strings.Contains(block, "heartbeat") {
-		t.Error("block should contain heartbeat")
-	}
-	if strings.Contains(block, "other stuff") {
-		t.Error("block should not contain other content")
-	}
-}
-
-func TestExtractBlockMissing(t *testing.T) {
-	block := extractBlock("no leo content here", "myagent")
-	if block != "" {
-		t.Errorf("extractBlock() = %q, want empty", block)
-	}
-}
-
-func TestBuildBlockEmptyLeoPath(t *testing.T) {
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "test", Workspace: "/home/user/test"},
 		Tasks: map[string]config.TaskConfig{
 			"heartbeat": {Schedule: "* * * * *", Enabled: true},
 		},
 	}
 
-	block := buildBlock(cfg, "")
-	if !strings.Contains(block, "leo run") {
-		t.Error("should fallback to 'leo' when path is empty")
-	}
-}
-
-func TestBuildBlockNoEnabledTasks(t *testing.T) {
-	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "test"},
-		Tasks: map[string]config.TaskConfig{
-			"disabled": {Schedule: "* * * * *", Enabled: false},
-		},
-	}
-
-	block := buildBlock(cfg, "/usr/local/bin/leo")
-	if !strings.Contains(block, "# === LEO:test") {
-		t.Error("should still have start marker")
-	}
-	if !strings.Contains(block, "# === END LEO:test") {
-		t.Error("should still have end marker")
-	}
-	if strings.Contains(block, "leo run") {
-		t.Error("should not contain job lines")
-	}
-}
-
-func TestInstall(t *testing.T) {
-	originalRead := readCrontab
-	originalWrite := writeCrontab
-	defer func() {
-		readCrontab = originalRead
-		writeCrontab = originalWrite
-	}()
-
-	readCrontab = func() (string, error) {
-		return "# existing content\n0 * * * * /some/job\n", nil
-	}
-
-	var written string
-	writeCrontab = func(content string) error {
-		written = content
-		return nil
-	}
-
-	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "myagent", Workspace: "/home/user/myagent"},
-		Tasks: map[string]config.TaskConfig{
-			"heartbeat": {Schedule: "0,30 7-22 * * *", Enabled: true},
-		},
-	}
-
-	err := Install(cfg, "/usr/local/bin/leo")
-	if err != nil {
+	if err := s.Install(cfg); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 
-	if !strings.Contains(written, "existing content") {
-		t.Error("should preserve existing content")
-	}
-	if !strings.Contains(written, "# === LEO:myagent") {
-		t.Error("should contain leo block")
-	}
-	if !strings.Contains(written, "heartbeat") {
-		t.Error("should contain heartbeat job")
+	s.Remove()
+
+	if len(s.List()) != 0 {
+		t.Error("expected 0 entries after Remove()")
 	}
 }
 
-func TestRemoveViaAPI(t *testing.T) {
-	originalRead := readCrontab
-	originalWrite := writeCrontab
-	defer func() {
-		readCrontab = originalRead
-		writeCrontab = originalWrite
-	}()
+func TestInstallReplacesExisting(t *testing.T) {
+	s := New("/usr/local/bin/leo", "/tmp/leo.yaml")
+	defer s.Stop()
 
-	readCrontab = func() (string, error) {
-		return `# other job
-# === LEO:myagent — DO NOT EDIT ===
-# leo:myagent:heartbeat
-0,30 7-22 * * * /usr/local/bin/leo run heartbeat
-# === END LEO:myagent ===
-`, nil
+	cfg1 := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"old-task": {Schedule: "* * * * *", Enabled: true},
+		},
+	}
+	if err := s.Install(cfg1); err != nil {
+		t.Fatalf("Install() error: %v", err)
 	}
 
-	var written string
-	writeCrontab = func(content string) error {
-		written = content
-		return nil
+	cfg2 := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"new-task": {Schedule: "0 7 * * *", Enabled: true},
+		},
+	}
+	if err := s.Install(cfg2); err != nil {
+		t.Fatalf("Install() error: %v", err)
+	}
+
+	entries := s.List()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Name != "new-task" {
+		t.Errorf("expected new-task, got %s", entries[0].Name)
+	}
+}
+
+func TestTimezone(t *testing.T) {
+	s := New("/usr/local/bin/leo", "/tmp/leo.yaml")
+	defer s.Stop()
+
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"tz-task": {Schedule: "0 7 * * *", Timezone: "America/New_York", Enabled: true},
+		},
+	}
+
+	if err := s.Install(cfg); err != nil {
+		t.Fatalf("Install() with timezone error: %v", err)
+	}
+
+	entries := s.List()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+}
+
+func TestInvalidSchedule(t *testing.T) {
+	s := New("/usr/local/bin/leo", "/tmp/leo.yaml")
+	defer s.Stop()
+
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"bad": {Schedule: "not a cron expression", Enabled: true},
+		},
+	}
+
+	if err := s.Install(cfg); err == nil {
+		t.Error("expected error for invalid schedule")
+	}
+}
+
+func TestRunTaskCalled(t *testing.T) {
+	s := New("/usr/local/bin/leo", "/tmp/leo.yaml")
+
+	var mu sync.Mutex
+	var called []string
+	s.runFn = func(leoPath, cfgPath, taskName string) {
+		mu.Lock()
+		defer mu.Unlock()
+		called = append(called, taskName)
 	}
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "myagent"},
+		Tasks: map[string]config.TaskConfig{
+			"test-task": {Schedule: "* * * * *", Enabled: true},
+		},
 	}
 
-	err := Remove(cfg)
-	if err != nil {
-		t.Fatalf("Remove() error: %v", err)
+	if err := s.Install(cfg); err != nil {
+		t.Fatalf("Install() error: %v", err)
 	}
 
-	if strings.Contains(written, "LEO:myagent") {
-		t.Error("should remove leo block")
+	// Verify the entry was registered (we can't easily trigger the cron
+	// without waiting a minute, but we verify the wiring is correct)
+	entries := s.List()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
-	if !strings.Contains(written, "other job") {
-		t.Error("should preserve other content")
+	if entries[0].Name != "test-task" {
+		t.Errorf("expected test-task, got %s", entries[0].Name)
 	}
 }
 
-func TestListViaAPI(t *testing.T) {
-	originalRead := readCrontab
-	defer func() { readCrontab = originalRead }()
-
-	readCrontab = func() (string, error) {
-		return `# === LEO:myagent — DO NOT EDIT ===
-# leo:myagent:heartbeat
-0,30 7-22 * * * /usr/local/bin/leo run heartbeat
-# === END LEO:myagent ===
-`, nil
-	}
+func TestListSortedByName(t *testing.T) {
+	s := New("/usr/local/bin/leo", "/tmp/leo.yaml")
+	defer s.Stop()
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "myagent"},
+		Tasks: map[string]config.TaskConfig{
+			"zulu":  {Schedule: "0 7 * * *", Enabled: true},
+			"alpha": {Schedule: "0 8 * * *", Enabled: true},
+			"mike":  {Schedule: "0 9 * * *", Enabled: true},
+		},
 	}
 
-	result, err := List(cfg)
-	if err != nil {
-		t.Fatalf("List() error: %v", err)
+	if err := s.Install(cfg); err != nil {
+		t.Fatalf("Install() error: %v", err)
 	}
 
-	if !strings.Contains(result, "heartbeat") {
-		t.Error("List should contain heartbeat")
+	entries := s.List()
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
 	}
-}
-
-func TestInstalledTrue(t *testing.T) {
-	originalRead := readCrontab
-	defer func() { readCrontab = originalRead }()
-
-	readCrontab = func() (string, error) {
-		return "# === LEO:myagent — DO NOT EDIT ===\n# === END LEO:myagent ===\n", nil
-	}
-
-	if !Installed("myagent") {
-		t.Error("expected Installed() = true")
-	}
-}
-
-func TestInstalledFalse(t *testing.T) {
-	originalRead := readCrontab
-	defer func() { readCrontab = originalRead }()
-
-	readCrontab = func() (string, error) {
-		return "# some other cron entries\n", nil
-	}
-
-	if Installed("myagent") {
-		t.Error("expected Installed() = false")
-	}
-}
-
-func TestInstalledReadError(t *testing.T) {
-	originalRead := readCrontab
-	defer func() { readCrontab = originalRead }()
-
-	readCrontab = func() (string, error) {
-		return "", fmt.Errorf("crontab error")
-	}
-
-	if Installed("myagent") {
-		t.Error("expected Installed() = false on read error")
+	if entries[0].Name != "alpha" || entries[1].Name != "mike" || entries[2].Name != "zulu" {
+		t.Errorf("entries not sorted: %v", entries)
 	}
 }

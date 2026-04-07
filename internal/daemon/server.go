@@ -7,7 +7,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/cron"
 )
 
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
@@ -16,13 +20,20 @@ type Server struct {
 	configPath string
 	httpServer *http.Server
 	listener   net.Listener
+	scheduler  *cron.Scheduler
 }
 
 // New creates a new daemon server.
 func New(sockPath, configPath string) *Server {
+	leoPath, err := exec.LookPath("leo")
+	if err != nil {
+		leoPath = "leo"
+	}
+
 	s := &Server{
 		sockPath:   sockPath,
 		configPath: configPath,
+		scheduler:  cron.New(leoPath, configPath),
 	}
 
 	mux := http.NewServeMux()
@@ -64,6 +75,15 @@ func (s *Server) Start() error {
 	}
 
 	s.listener = ln
+
+	// Auto-load schedules from config
+	if cfg, err := config.Load(s.configPath); err == nil {
+		if err := s.scheduler.Install(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to load cron schedules: %v\n", err)
+		}
+	}
+	s.scheduler.Start()
+
 	go s.httpServer.Serve(ln) //nolint:errcheck
 
 	return nil
@@ -71,6 +91,8 @@ func (s *Server) Start() error {
 
 // Shutdown gracefully stops the server and removes the socket file.
 func (s *Server) Shutdown() error {
+	s.scheduler.Stop()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

@@ -9,11 +9,6 @@ type Response struct {
 	Error string          `json:"error,omitempty"`
 }
 
-// CronRequest is the body for POST /cron/install and /cron/remove.
-type CronRequest struct {
-	ConfigPath string `json:"config_path"`
-}
-
 // TaskAddRequest is the body for POST /task/add.
 type TaskAddRequest struct {
 	Name       string `json:"name"`

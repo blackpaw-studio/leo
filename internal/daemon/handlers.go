@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os/exec"
 
 	"github.com/blackpaw-studio/leo/internal/config"
-	"github.com/blackpaw-studio/leo/internal/cron"
 )
 
 func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +53,7 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.syncScheduler(cfg)
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
@@ -83,6 +82,7 @@ func (s *Server) handleTaskRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.syncScheduler(cfg)
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
@@ -121,6 +121,7 @@ func (s *Server) setTaskEnabled(w http.ResponseWriter, r *http.Request, enabled 
 		return
 	}
 
+	s.syncScheduler(cfg)
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
@@ -147,14 +148,8 @@ func (s *Server) handleCronInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	leoPath, err := exec.LookPath("leo")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("finding leo binary: %v", err))
-		return
-	}
-
-	if err := cron.Install(cfg, leoPath); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("installing cron: %v", err))
+	if err := s.scheduler.Install(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("installing schedules: %v", err))
 		return
 	}
 
@@ -162,33 +157,17 @@ func (s *Server) handleCronInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCronRemove(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.Load(s.configPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("loading config: %v", err))
-		return
-	}
-
-	if err := cron.Remove(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("removing cron: %v", err))
-		return
-	}
-
+	s.scheduler.Remove()
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
 func (s *Server) handleCronList(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.Load(s.configPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("loading config: %v", err))
-		return
-	}
-
-	block, err := cron.List(cfg)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("listing cron: %v", err))
-		return
-	}
-
-	data, _ := json.Marshal(map[string]string{"entries": block})
+	entries := s.scheduler.List()
+	data, _ := json.Marshal(entries)
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
+// syncScheduler re-syncs the in-process scheduler with the current config.
+func (s *Server) syncScheduler(cfg *config.Config) {
+	_ = s.scheduler.Install(cfg)
 }

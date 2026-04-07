@@ -69,50 +69,6 @@ func TestResponseMarshalUnmarshal(t *testing.T) {
 	}
 }
 
-func TestCronRequestMarshalUnmarshal(t *testing.T) {
-	tests := []struct {
-		name    string
-		request CronRequest
-	}{
-		{
-			name: "basic cron request",
-			request: CronRequest{
-				ConfigPath: "/home/user/.leo/leo.yaml",
-			},
-		},
-		{
-			name: "cron request with relative path",
-			request: CronRequest{
-				ConfigPath: "leo.yaml",
-			},
-		},
-		{
-			name: "cron request with empty path",
-			request: CronRequest{
-				ConfigPath: "",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := json.Marshal(tt.request)
-			if err != nil {
-				t.Fatalf("marshal failed: %v", err)
-			}
-
-			var got CronRequest
-			if err := json.Unmarshal(data, &got); err != nil {
-				t.Fatalf("unmarshal failed: %v", err)
-			}
-
-			if got.ConfigPath != tt.request.ConfigPath {
-				t.Errorf("ConfigPath = %q, want %q", got.ConfigPath, tt.request.ConfigPath)
-			}
-		})
-	}
-}
-
 func TestTaskAddRequestMarshalUnmarshal(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
-	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/migrate"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/prompt"
@@ -186,23 +185,10 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	// 10. Install cron
+	// 10. Config path for daemon install
 	cfgPath := filepath.Join(workspace, "leo.yaml")
-	if len(cfg.Tasks) > 0 {
-		cronInstalled := cron.Installed(name)
-		if cronInstalled {
-			prompt.Info.Println("\n  Cron entries already installed.")
-			if prompt.YesNo(reader, "  Reinstall cron entries?", false) {
-				installCron(cfg)
-			}
-		} else {
-			if prompt.YesNo(reader, "\nInstall cron entries?", true) {
-				installCron(cfg)
-			}
-		}
-	}
 
-	// 11. Install chat daemon
+	// 11. Install chat daemon (schedules auto-load on daemon startup)
 	fmt.Println()
 	daemonStatus, daemonErr := service.DaemonStatus(name)
 	if daemonErr != nil {
