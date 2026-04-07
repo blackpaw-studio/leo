@@ -36,14 +36,14 @@ func newCronInstallCmd() *cobra.Command {
 
 			if daemon.IsRunning(cfg.Agent.Workspace) {
 				resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/install", nil)
-				if err != nil {
-					return fmt.Errorf("daemon request failed: %w", err)
+				if err == nil {
+					if !resp.OK {
+						return fmt.Errorf("daemon error: %s", resp.Error)
+					}
+					success.Println("Cron entries installed (via daemon).")
+					return nil
 				}
-				if !resp.OK {
-					return fmt.Errorf("daemon error: %s", resp.Error)
-				}
-				success.Println("Cron entries installed (via daemon).")
-				return nil
+				warn.Printf("Daemon request failed (%v), falling back to direct install.\n", err)
 			}
 
 			leoPath, err := leoExecutablePath()
@@ -73,14 +73,14 @@ func newCronRemoveCmd() *cobra.Command {
 
 			if daemon.IsRunning(cfg.Agent.Workspace) {
 				resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/remove", nil)
-				if err != nil {
-					return fmt.Errorf("daemon request failed: %w", err)
+				if err == nil {
+					if !resp.OK {
+						return fmt.Errorf("daemon error: %s", resp.Error)
+					}
+					success.Println("Cron entries removed (via daemon).")
+					return nil
 				}
-				if !resp.OK {
-					return fmt.Errorf("daemon error: %s", resp.Error)
-				}
-				success.Println("Cron entries removed (via daemon).")
-				return nil
+				warn.Printf("Daemon request failed (%v), falling back to direct removal.\n", err)
 			}
 
 			if err := cron.Remove(cfg); err != nil {
@@ -105,22 +105,22 @@ func newCronListCmd() *cobra.Command {
 
 			if daemon.IsRunning(cfg.Agent.Workspace) {
 				resp, err := daemon.Send(cfg.Agent.Workspace, "GET", "/cron/list", nil)
-				if err != nil {
-					return fmt.Errorf("daemon request failed: %w", err)
+				if err == nil {
+					if !resp.OK {
+						return fmt.Errorf("daemon error: %s", resp.Error)
+					}
+					var data struct {
+						Entries string `json:"entries"`
+					}
+					json.Unmarshal(resp.Data, &data)
+					if data.Entries == "" {
+						warn.Println("No leo cron entries found.")
+					} else {
+						fmt.Println(data.Entries)
+					}
+					return nil
 				}
-				if !resp.OK {
-					return fmt.Errorf("daemon error: %s", resp.Error)
-				}
-				var data struct {
-					Entries string `json:"entries"`
-				}
-				json.Unmarshal(resp.Data, &data)
-				if data.Entries == "" {
-					warn.Println("No leo cron entries found.")
-				} else {
-					fmt.Println(data.Entries)
-				}
-				return nil
+				warn.Printf("Daemon request failed (%v), falling back to direct listing.\n", err)
 			}
 
 			block, err := cron.List(cfg)

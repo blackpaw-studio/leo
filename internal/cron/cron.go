@@ -1,10 +1,12 @@
 package cron
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/env"
@@ -168,10 +170,18 @@ func SetReadCrontab(fn func() (string, error))    { readCrontab = fn }
 func ExportWriteCrontab() func(string) error      { return writeCrontab }
 func SetWriteCrontab(fn func(string) error)       { writeCrontab = fn }
 
+const crontabTimeout = 10 * time.Second
+
 func defaultReadCrontab() (string, error) {
-	cmd := exec.Command("crontab", "-l")
+	ctx, cancel := context.WithTimeout(context.Background(), crontabTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "crontab", "-l")
 	output, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("crontab -l timed out after %s", crontabTimeout)
+		}
 		// Empty crontab returns error on some systems
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if strings.Contains(string(exitErr.Stderr), "no crontab") {
@@ -184,8 +194,15 @@ func defaultReadCrontab() (string, error) {
 }
 
 func defaultWriteCrontab(content string) error {
-	cmd := exec.Command("crontab", "-")
+	ctx, cancel := context.WithTimeout(context.Background(), crontabTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "crontab", "-")
 	cmd.Stdin = strings.NewReader(content)
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("crontab - timed out after %s", crontabTimeout)
+	}
+	return err
 }
