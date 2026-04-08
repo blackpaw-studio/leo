@@ -227,13 +227,29 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 	}
 
 	mcpConfig := cfg.MCPConfigPath()
-	if _, err := os.Stat(mcpConfig); err == nil {
+	if hasMCPServers(mcpConfig) {
 		args = append(args, "--mcp-config", mcpConfig)
 	}
 
 	args = append(args, "--add-dir", cfg.Agent.Workspace)
 
 	return args
+}
+
+// hasMCPServers returns true if the MCP config file exists and contains
+// at least one server entry.
+func hasMCPServers(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+	return len(cfg.MCPServers) > 0
 }
 
 func writeLog(cfg *config.Config, taskName string, output []byte) error {

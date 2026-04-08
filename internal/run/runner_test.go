@@ -140,7 +140,7 @@ func TestBuildArgs(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "config")
 	os.MkdirAll(mcpDir, 0755)
-	os.WriteFile(filepath.Join(mcpDir, "mcp-servers.json"), []byte("{}"), 0644)
+	os.WriteFile(filepath.Join(mcpDir, "mcp-servers.json"), []byte(`{"mcpServers":{"test":{"command":"echo"}}}`), 0644)
 
 	cfg := makeTestConfig(dir, true)
 	task := config.TaskConfig{Model: "opus", MaxTurns: 20}

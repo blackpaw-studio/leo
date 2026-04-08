@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -106,7 +107,7 @@ func buildClaudeArgs(cfg *config.Config) []string {
 	}
 
 	mcpConfig := cfg.MCPConfigPath()
-	if _, err := os.Stat(mcpConfig); err == nil {
+	if hasMCPServers(mcpConfig) {
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfig)
 	}
 
@@ -318,4 +319,21 @@ func resolveConfigPath(cfg *config.Config) (string, error) {
 		return filepath.Abs(cfgFile)
 	}
 	return filepath.Abs(filepath.Join(cfg.Agent.Workspace, "leo.yaml"))
+}
+
+// hasMCPServers returns true if the MCP config file exists and contains
+// at least one server entry. An empty or malformed file returns false
+// to avoid passing an invalid config to claude.
+func hasMCPServers(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+	return len(cfg.MCPServers) > 0
 }

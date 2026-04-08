@@ -182,20 +182,27 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 
 	sessionName := fmt.Sprintf("leo-%d", os.Getpid())
 
+	// Keep a mutable copy of args so we can strip --resume on failure
+	currentArgs := make([]string, len(claudeArgs))
+	copy(currentArgs, claudeArgs)
+
 	for {
 		// Use tmux to provide a real terminal for claude. This is
 		// required for plugins (telegram) to communicate with claude
 		// via MCP stdio pipes — a Go PTY breaks this communication.
-		claudeCmd := strings.Join(append([]string{claudePath}, claudeArgs...), " ")
+		claudeCmd := strings.Join(append([]string{claudePath}, currentArgs...), " ")
 
 		// Create a detached tmux session running claude
 		createCmd := exec.CommandContext(ctx, tmuxPath,
 			"new-session", "-d", "-s", sessionName,
+			"-c", workDir,
 			"-x", "200", "-y", "50",
 			claudeCmd,
 		)
 		createCmd.Dir = workDir
 		createCmd.Env = os.Environ()
+
+		startTime := time.Now()
 
 		if err := createCmd.Run(); err != nil {
 			return fmt.Errorf("creating tmux session: %w", err)
@@ -221,7 +228,7 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 			}
 		}
 
-		var err error = fmt.Errorf("claude session ended")
+		elapsed := time.Since(startTime)
 
 		// Check if we were signaled to stop
 		select {
@@ -230,11 +237,18 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 		default:
 		}
 
-		if err == nil {
-			// Clean exit, restart with initial backoff
+		// If claude exited very quickly, it likely failed to resume a stale
+		// session. Strip --resume and clear the session store so the next
+		// iteration starts fresh.
+		if elapsed < 15*time.Second {
+			currentArgs = stripResumeArg(currentArgs)
+			clearSessionStore(workDir)
+			fmt.Fprintf(os.Stderr, "claude exited quickly (%.0fs), cleared stale session — retrying fresh\n", elapsed.Seconds())
 			backoff = initialBackoff
 		} else {
-			fmt.Fprintf(os.Stderr, "claude exited with error: %v, restarting in %s\n", err, backoff)
+			fmt.Fprintf(os.Stderr, "claude exited after %s, restarting in %s\n", elapsed.Round(time.Second), backoff)
+			// Exponential backoff with cap
+			backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
 		}
 
 		select {
@@ -242,10 +256,26 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 			return nil
 		case <-time.After(backoff):
 		}
-
-		// Exponential backoff with cap
-		backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
 	}
+}
+
+// stripResumeArg removes --resume and its value from claude args.
+func stripResumeArg(args []string) []string {
+	var result []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--resume" && i+1 < len(args) {
+			i++ // skip the value too
+			continue
+		}
+		result = append(result, args[i])
+	}
+	return result
+}
+
+// clearSessionStore removes the stored session so the next launch creates a fresh one.
+func clearSessionStore(workDir string) {
+	sessFile := filepath.Join(workDir, "state", "sessions.json")
+	_ = writeFile(sessFile, []byte("{}"), 0600)
 }
 
 func defaultStartProcess(leoPath, configPath, workDir string, logFile *os.File) (int, error) {
