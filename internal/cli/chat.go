@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,6 +50,13 @@ func runChat(cmd *cobra.Command, args []string) error {
 	// Seed topic cache before the plugin starts consuming getUpdates
 	if cfg.Telegram.GroupID != "" {
 		seedTopicCache(cfg)
+	}
+
+	// Ensure the telegram plugin's .env has the correct bot token from
+	// leo.yaml. The agent can accidentally overwrite this file, so we
+	// re-sync on every startup.
+	if cfg.Telegram.BotToken != "" {
+		syncPluginEnv(cfg.Telegram.BotToken)
 	}
 
 	claudeArgs := buildClaudeArgs(cfg)
@@ -319,6 +327,37 @@ func resolveConfigPath(cfg *config.Config) (string, error) {
 		return filepath.Abs(cfgFile)
 	}
 	return filepath.Abs(filepath.Join(cfg.Agent.Workspace, "leo.yaml"))
+}
+
+// syncPluginEnv ensures the telegram plugin's .env file has the correct
+// bot token from leo.yaml. Preserves other keys in the file. Creates
+// the file and parent directories if they don't exist.
+func syncPluginEnv(botToken string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	envDir := filepath.Join(home, ".claude", "channels", "telegram")
+	envFile := filepath.Join(envDir, ".env")
+
+	// Read existing env to preserve other keys
+	lines := []string{}
+	if data, err := os.ReadFile(envFile); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if line == "" || strings.HasPrefix(line, "TELEGRAM_BOT_TOKEN=") {
+				continue
+			}
+			lines = append(lines, line)
+		}
+	}
+
+	// Prepend the bot token
+	lines = append([]string{"TELEGRAM_BOT_TOKEN=" + botToken}, lines...)
+
+	if err := os.MkdirAll(envDir, 0750); err != nil {
+		return
+	}
+	_ = os.WriteFile(envFile, []byte(strings.Join(lines, "\n")+"\n"), 0600)
 }
 
 // hasMCPServers returns true if the MCP config file exists and contains

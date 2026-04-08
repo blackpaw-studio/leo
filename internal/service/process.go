@@ -238,7 +238,10 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 
 		fmt.Fprintf(os.Stdout, "tmux session '%s' created, claude running\n", sessionName)
 
-		// Wait for the tmux session to end (claude exits)
+		// Wait for the tmux session to end (claude exits) or the
+		// telegram plugin to die (requires session restart).
+		pluginLockFile := filepath.Join(os.Getenv("HOME"), ".claude", "channels", "telegram", "data", "telegram.lock")
+		pluginChecksAfterStartup := 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -248,11 +251,30 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 			case <-time.After(5 * time.Second):
 			}
 
-			// Check if session still exists
+			// Check if tmux session still exists
 			check := exec.Command(tmuxPath, "has-session", "-t", sessionName)
 			if check.Run() != nil {
 				// Session gone — claude exited
 				break
+			}
+
+			// After a grace period for plugin startup, monitor the
+			// telegram plugin lock file. If it disappears, the plugin
+			// crashed while claude is still running. Kill the session
+			// so the supervised loop restarts everything together.
+			if time.Since(startTime) > 30*time.Second {
+				if _, err := os.Stat(pluginLockFile); err != nil {
+					pluginChecksAfterStartup++
+					// Require 3 consecutive missing checks to avoid
+					// false positives during plugin restarts.
+					if pluginChecksAfterStartup >= 3 {
+						fmt.Fprintf(os.Stderr, "telegram plugin died (lock file gone), restarting session\n")
+						exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
+						break
+					}
+				} else {
+					pluginChecksAfterStartup = 0
+				}
 			}
 		}
 
