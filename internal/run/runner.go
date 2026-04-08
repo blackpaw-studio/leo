@@ -130,6 +130,10 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string) []stri
 		"--output-format", "text",
 	}
 
+	if task.ContinueSession {
+		args = append(args, "--continue")
+	}
+
 	if cfg.Defaults.BypassPermissions {
 		args = append(args, "--dangerously-skip-permissions")
 	}

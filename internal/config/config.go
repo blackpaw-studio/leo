@@ -43,15 +43,16 @@ type DefaultsConfig struct {
 }
 
 type HeartbeatConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	Interval   string `yaml:"interval,omitempty"`   // e.g. "30m", "1h" — default "30m"
-	StartHour  *int   `yaml:"start_hour,omitempty"` // default 7
-	EndHour    *int   `yaml:"end_hour,omitempty"`   // default 22
-	Timezone   string `yaml:"timezone,omitempty"`
-	Model      string `yaml:"model,omitempty"`
-	MaxTurns   int    `yaml:"max_turns,omitempty"`
-	TopicID    int    `yaml:"topic_id,omitempty"`
-	PromptFile string `yaml:"prompt_file,omitempty"` // default "HEARTBEAT.md"
+	Enabled         bool   `yaml:"enabled"`
+	Interval        string `yaml:"interval,omitempty"`          // e.g. "30m", "1h" — default "30m"
+	StartHour       *int   `yaml:"start_hour,omitempty"`        // default 7
+	EndHour         *int   `yaml:"end_hour,omitempty"`          // default 22
+	Timezone        string `yaml:"timezone,omitempty"`
+	Model           string `yaml:"model,omitempty"`
+	MaxTurns        int    `yaml:"max_turns,omitempty"`
+	TopicID         int    `yaml:"topic_id,omitempty"`
+	PromptFile      string `yaml:"prompt_file,omitempty"`       // default "HEARTBEAT.md"
+	ContinueSession bool   `yaml:"continue_session,omitempty"` // resume the same conversation each run
 }
 
 // HeartbeatDefaults returns the heartbeat config with defaults applied.
@@ -116,14 +117,15 @@ func (h HeartbeatConfig) ToTaskConfig() (TaskConfig, error) {
 		return TaskConfig{}, err
 	}
 	return TaskConfig{
-		Schedule:   schedule,
-		Timezone:   hb.Timezone,
-		PromptFile: hb.PromptFile,
-		Model:      hb.Model,
-		MaxTurns:   hb.MaxTurns,
-		TopicID:    hb.TopicID,
-		Enabled:    hb.Enabled,
-		Silent:     true,
+		Schedule:        schedule,
+		Timezone:        hb.Timezone,
+		PromptFile:      hb.PromptFile,
+		Model:           hb.Model,
+		MaxTurns:        hb.MaxTurns,
+		TopicID:         hb.TopicID,
+		Enabled:         hb.Enabled,
+		Silent:          true,
+		ContinueSession: hb.ContinueSession,
 	}, nil
 }
 
@@ -151,14 +153,15 @@ func parseIntervalMinutes(s string) (int, error) {
 }
 
 type TaskConfig struct {
-	Schedule   string `yaml:"schedule"`
-	Timezone   string `yaml:"timezone,omitempty"`
-	PromptFile string `yaml:"prompt_file"`
-	Model      string `yaml:"model,omitempty"`
-	MaxTurns   int    `yaml:"max_turns,omitempty"`
-	TopicID    int    `yaml:"topic_id,omitempty"`
-	Enabled    bool   `yaml:"enabled"`
-	Silent     bool   `yaml:"silent,omitempty"`
+	Schedule        string `yaml:"schedule"`
+	Timezone        string `yaml:"timezone,omitempty"`
+	PromptFile      string `yaml:"prompt_file"`
+	Model           string `yaml:"model,omitempty"`
+	MaxTurns        int    `yaml:"max_turns,omitempty"`
+	TopicID         int    `yaml:"topic_id,omitempty"`
+	Enabled         bool   `yaml:"enabled"`
+	Silent          bool   `yaml:"silent,omitempty"`
+	ContinueSession bool   `yaml:"continue_session,omitempty"`
 }
 
 // Validate checks the config for required fields and valid values.

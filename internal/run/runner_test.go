@@ -199,6 +199,31 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 	}
 }
 
+func TestBuildArgsContinueSession(t *testing.T) {
+	dir := t.TempDir()
+	cfg := makeTestConfig(dir, false)
+
+	task := config.TaskConfig{ContinueSession: true}
+	args := buildArgs(cfg, task, "test prompt")
+	argsStr := strings.Join(args, " ")
+
+	if !strings.Contains(argsStr, "--continue") {
+		t.Error("should contain --continue when ContinueSession is true")
+	}
+}
+
+func TestBuildArgsNoContinueByDefault(t *testing.T) {
+	dir := t.TempDir()
+	cfg := makeTestConfig(dir, false)
+
+	args := buildArgs(cfg, config.TaskConfig{}, "test prompt")
+	argsStr := strings.Join(args, " ")
+
+	if strings.Contains(argsStr, "--continue") {
+		t.Error("should not contain --continue by default")
+	}
+}
+
 func TestPreview(t *testing.T) {
 	dir := t.TempDir()
 	promptFile := filepath.Join(dir, "HEARTBEAT.md")
