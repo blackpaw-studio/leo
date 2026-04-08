@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -91,6 +92,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	}
 
 	configureTelegramPlugin(botToken, chatID, groupID, workspace)
+	PromptVoiceTranscription(reader)
 	cfgPath := filepath.Join(workspace, "leo.yaml")
 	promptDaemonInstall(reader, name, workspace, cfgPath, botToken)
 	sendTestMessage(reader, botToken, chatID, groupID)
@@ -510,6 +512,58 @@ func promptTelegramConfig(reader *bufio.Reader, existing *config.Config) (botTok
 		botToken, chatID, groupID = promptTelegram(reader, "", "", "")
 	}
 	return
+}
+
+// PromptVoiceTranscription asks the user to configure OpenAI Whisper for voice message transcription.
+func PromptVoiceTranscription(reader *bufio.Reader) {
+	prompt.Bold.Println("\nVoice Transcription")
+	fmt.Println("The Telegram plugin can transcribe voice messages using OpenAI Whisper.")
+	fmt.Println("An OpenAI API key enables the fastest, highest-quality transcription.")
+
+	if prompt.YesNo(reader, "Configure voice transcription?", true) {
+		apiKey := prompt.Prompt(reader, "OpenAI API key (sk-proj-...)", "")
+		if apiKey != "" {
+			if err := appendTelegramEnv("OPENAI_API_KEY", apiKey); err != nil {
+				prompt.Warn.Printf("  Failed to write API key: %v\n", err)
+			} else {
+				prompt.Success.Println("  OpenAI API key saved for voice transcription.")
+			}
+		} else {
+			fmt.Println("  Skipped. Voice messages will use local whisper if installed, or remain untranscribed.")
+		}
+	}
+}
+
+func appendTelegramEnv(key, value string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
+	existing, _ := os.ReadFile(envPath)
+
+	// Check if key already exists and replace it
+	lines := strings.Split(string(existing), "\n")
+	found := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, key+"=") {
+			lines[i] = key + "=" + value
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Append, ensuring there's a newline before the new entry
+		content := strings.TrimRight(string(existing), "\n")
+		if content != "" {
+			content += "\n"
+		}
+		content += key + "=" + value + "\n"
+		return os.WriteFile(envPath, []byte(content), 0600)
+	}
+
+	return os.WriteFile(envPath, []byte(strings.Join(lines, "\n")), 0600)
 }
 
 func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefault string) (botToken, chatID, groupID string) {

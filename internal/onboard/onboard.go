@@ -204,6 +204,9 @@ func reconfigureTelegram(reader *bufio.Reader, cfg *config.Config, ws string) er
 	}
 	prompt.Success.Println("Telegram settings updated.")
 
+	// Voice transcription
+	setup.PromptVoiceTranscription(reader)
+
 	// Test
 	if botToken != "" && chatID != "" && prompt.YesNo(reader, "Send test message?", true) {
 		effectiveChatID := chatID
