@@ -12,7 +12,10 @@ import (
 	"text/template"
 )
 
-var runCommand = defaultRunCommand
+var (
+	runCommand    = defaultRunCommand
+	userHomeDirFn = os.UserHomeDir
+)
 
 const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,7 +68,7 @@ func daemonLabel(agentName string) string {
 }
 
 func plistPath(agentName string) string {
-	home, _ := os.UserHomeDir()
+	home, _ := userHomeDirFn()
 	return filepath.Join(home, "Library", "LaunchAgents", daemonLabel(agentName)+".plist")
 }
 
