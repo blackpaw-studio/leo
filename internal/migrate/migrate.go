@@ -458,7 +458,7 @@ func rewritePaths(workspace, oldPath, newPath string) int {
 		content := string(data)
 		if strings.Contains(content, oldPath) {
 			content = strings.ReplaceAll(content, oldPath, newPath)
-			if err := os.WriteFile(path, []byte(content), 0644); err != nil { // #nosec G122 -- path validated via WalkDir with symlink skip
+			if err := root.WriteFile(rel, []byte(content), 0644); err != nil {
 				return nil
 			}
 			count++

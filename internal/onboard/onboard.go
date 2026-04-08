@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -197,7 +198,7 @@ func reconfigureTelegram(reader *bufio.Reader, cfg *config.Config, ws string) er
 	groupID := prompt.Prompt(reader, "Forum group ID (optional)", cfg.Telegram.GroupID)
 	cfg.Telegram.GroupID = groupID
 
-	cfgPath := ws + "/leo.yaml"
+	cfgPath := filepath.Join(ws, "leo.yaml")
 	if err := config.Save(cfgPath, cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)
 	}
@@ -248,7 +249,7 @@ func reconfigureTasks(reader *bufio.Reader, cfg *config.Config, ws string) error
 	// Remove legacy heartbeat task if it exists
 	delete(cfg.Tasks, "heartbeat")
 
-	cfgPath := ws + "/leo.yaml"
+	cfgPath := filepath.Join(ws, "leo.yaml")
 	if err := config.Save(cfgPath, cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)
 	}
