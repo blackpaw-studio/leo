@@ -17,6 +17,18 @@ import (
 	"github.com/blackpaw-studio/leo/internal/telegram"
 )
 
+// Testability seams: package-level vars replaced in tests.
+var (
+	findOpenClawFn    = FindOpenClaw
+	daemonIsRunningFn = daemon.IsRunning
+	daemonSendFn      = daemon.Send
+	installDaemonFn   = service.InstallDaemon
+	daemonStatusFn    = service.DaemonStatus
+	sendMessageFn     = telegram.SendMessage
+	envCaptureFn      = env.Capture
+	osExecutableFn    = os.Executable
+)
+
 type openClawJobsFile struct {
 	Version int            `json:"version"`
 	Jobs    []openClawJob  `json:"jobs"`
@@ -109,7 +121,7 @@ func RunInteractive(reader *bufio.Reader) error {
 }
 
 func promptOpenClawPath(reader *bufio.Reader) (ocPath, ocWorkspace string, err error) {
-	ocPath = FindOpenClaw()
+	ocPath = findOpenClawFn()
 	if ocPath == "" {
 		ocPath = prompt.Prompt(reader, "OpenClaw workspace path", "")
 		if ocPath == "" {
@@ -212,8 +224,8 @@ func buildMigrationConfig(agentName, workspace string, reader *bufio.Reader, ocP
 
 func syncDaemonSchedules(cfg *config.Config, workspace string) {
 	if len(cfg.Tasks) > 0 {
-		if daemon.IsRunning(workspace) {
-			if resp, err := daemon.Send(workspace, "POST", "/cron/install", nil); err == nil && resp.OK {
+		if daemonIsRunningFn(workspace) {
+			if resp, err := daemonSendFn(workspace, "POST", "/cron/install", nil); err == nil && resp.OK {
 				prompt.Success.Println("  Schedules synced with daemon.")
 			}
 		} else {
@@ -224,12 +236,12 @@ func syncDaemonSchedules(cfg *config.Config, workspace string) {
 
 func promptMigrationDaemonInstall(reader *bufio.Reader, cfg *config.Config, agentName, workspace, cfgPath string) {
 	if prompt.YesNo(reader, "\nInstall chat daemon (runs on login)?", true) {
-		leoPath, _ := os.Executable()
+		leoPath, _ := osExecutableFn()
 		if leoPath == "" {
 			leoPath = "leo"
 		}
 		fmt.Println("  Installing chat daemon...")
-		environ := env.Capture()
+		environ := envCaptureFn()
 		if cfg.Telegram.BotToken != "" {
 			environ["TELEGRAM_BOT_TOKEN"] = cfg.Telegram.BotToken
 		}
@@ -241,10 +253,10 @@ func promptMigrationDaemonInstall(reader *bufio.Reader, cfg *config.Config, agen
 			LogPath:    service.LogPathFor(workspace),
 			Env:        environ,
 		}
-		if err := service.InstallDaemon(sc); err != nil {
+		if err := installDaemonFn(sc); err != nil {
 			prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
 		} else {
-			status, _ := service.DaemonStatus(agentName)
+			status, _ := daemonStatusFn(agentName)
 			prompt.Success.Printf("  Chat daemon installed (%s).\n", status)
 			prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
 		}
@@ -258,7 +270,7 @@ func sendMigrationTestMessage(reader *bufio.Reader, cfg *config.Config) {
 			if cfg.Telegram.GroupID != "" {
 				chatID = cfg.Telegram.GroupID
 			}
-			if err := telegram.SendMessage(cfg.Telegram.BotToken, chatID, "Hello from Leo! Migration complete.", 0); err != nil {
+			if err := sendMessageFn(cfg.Telegram.BotToken, chatID, "Hello from Leo! Migration complete.", 0); err != nil {
 				prompt.Warn.Printf("  Test message failed: %v\n", err)
 			} else {
 				prompt.Success.Println("  Test message sent!")
@@ -630,4 +642,3 @@ func sanitizeTaskName(name string) string {
 	name = strings.ReplaceAll(name, "_", "-")
 	return name
 }
-

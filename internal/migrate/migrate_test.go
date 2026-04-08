@@ -3,6 +3,7 @@ package migrate
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/service"
 )
 
 func newBufioReader(r io.Reader) *bufio.Reader {
@@ -388,6 +391,196 @@ func TestConfigureTelegramAllowFrom(t *testing.T) {
 
 	if cfg.Telegram.ChatID != "11111" {
 		t.Errorf("ChatID = %q, want %q", cfg.Telegram.ChatID, "11111")
+	}
+}
+
+func TestCopyDir(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	// Create test files in src
+	os.WriteFile(filepath.Join(src, "file1.txt"), []byte("content1"), 0644)
+	os.WriteFile(filepath.Join(src, "file2.txt"), []byte("content2"), 0644)
+
+	count := 0
+	copyDir(src, filepath.Join(dst, "copied"), &count)
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+
+	// Verify files exist in dst
+	data, err := os.ReadFile(filepath.Join(dst, "copied", "file1.txt"))
+	if err != nil {
+		t.Fatalf("reading file1.txt: %v", err)
+	}
+	if string(data) != "content1" {
+		t.Error("file1 content mismatch")
+	}
+}
+
+func TestCopyDirEmpty(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	count := 0
+	copyDir(src, filepath.Join(dst, "empty"), &count)
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}
+
+func TestCopyDirNonexistent(t *testing.T) {
+	dst := t.TempDir()
+	count := 0
+	// Should not panic for nonexistent source
+	copyDir("/nonexistent/path", filepath.Join(dst, "out"), &count)
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}
+
+func TestCopyDirSkipsSubdirs(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	os.WriteFile(filepath.Join(src, "file.txt"), []byte("content"), 0644)
+	os.MkdirAll(filepath.Join(src, "subdir"), 0755)
+	os.WriteFile(filepath.Join(src, "subdir", "nested.txt"), []byte("nested"), 0644)
+
+	count := 0
+	copyDir(src, filepath.Join(dst, "copied"), &count)
+	// Should only copy the top-level file, not the subdir
+	if count != 1 {
+		t.Errorf("count = %d, want 1 (subdirs skipped)", count)
+	}
+}
+
+func TestFindOpenClawNotFound(t *testing.T) {
+	// FindOpenClaw looks for ~/.openclaw -- if it doesn't exist, should return ""
+	result := FindOpenClaw()
+	// We can't guarantee whether ~/.openclaw exists, but we can test it doesn't panic
+	_ = result
+}
+
+func TestRunInteractiveNoOCPath(t *testing.T) {
+	origFindOC := findOpenClawFn
+	t.Cleanup(func() { findOpenClawFn = origFindOC })
+	findOpenClawFn = func() string { return "" }
+
+	// Provide empty OC path -> should error
+	reader := strings.NewReader("\n")
+	err := RunInteractive(newBufioReader(reader))
+	if err == nil {
+		t.Error("expected error for empty OC path")
+	}
+	if !strings.Contains(err.Error(), "no OpenClaw installation found") {
+		t.Errorf("error = %q, want 'no OpenClaw installation found'", err.Error())
+	}
+}
+
+func TestRunInteractiveFullMigration(t *testing.T) {
+	// Set up a fake OpenClaw workspace
+	ocDir := t.TempDir()
+	ocWorkspace := filepath.Join(ocDir, "workspace")
+	os.MkdirAll(ocWorkspace, 0755)
+	os.WriteFile(filepath.Join(ocWorkspace, "IDENTITY.md"), []byte("# TestBot\nI am a test bot."), 0644)
+	os.WriteFile(filepath.Join(ocWorkspace, "USER.md"), []byte("Test user"), 0644)
+
+	// Set up cron jobs
+	cronDir := filepath.Join(ocDir, "cron")
+	os.MkdirAll(cronDir, 0755)
+	jobs := openClawJobsFile{
+		Version: 1,
+		Jobs: []openClawJob{
+			{
+				Name:     "heartbeat",
+				Schedule: openClawSchedule{Kind: "cron", Expr: "0 * * * *", Tz: "America/New_York"},
+				Payload:  openClawPayload{Kind: "agentTurn", Message: "Check in"},
+				Enabled:  true,
+			},
+		},
+	}
+	jobsData, _ := json.Marshal(jobs)
+	os.WriteFile(filepath.Join(cronDir, "jobs.json"), jobsData, 0644)
+
+	// Set up openclaw.json with telegram config
+	ocConfig := map[string]any{
+		"channels": map[string]any{
+			"telegram": map[string]any{
+				"botToken": "test-token-12345678",
+				"groups":   map[string]any{"-100999": map[string]any{}},
+			},
+		},
+	}
+	ocConfigData, _ := json.Marshal(ocConfig)
+	os.WriteFile(filepath.Join(ocDir, "openclaw.json"), ocConfigData, 0644)
+
+	// Set up credentials for chat_id
+	credDir := filepath.Join(ocDir, "credentials")
+	os.MkdirAll(credDir, 0755)
+	cred := map[string]any{"chat_id": "12345"}
+	credData, _ := json.Marshal(cred)
+	os.WriteFile(filepath.Join(credDir, "telegram-bot.json"), credData, 0644)
+
+	newWorkspace := filepath.Join(t.TempDir(), "workspace")
+
+	// Mock seams
+	origFindOC := findOpenClawFn
+	origDaemonIsRunning := daemonIsRunningFn
+	origDaemonSend := daemonSendFn
+	origInstallDaemon := installDaemonFn
+	origDaemonStatus := daemonStatusFn
+	origSendMessage := sendMessageFn
+	origEnvCapture := envCaptureFn
+	origOsExecutable := osExecutableFn
+	t.Cleanup(func() {
+		findOpenClawFn = origFindOC
+		daemonIsRunningFn = origDaemonIsRunning
+		daemonSendFn = origDaemonSend
+		installDaemonFn = origInstallDaemon
+		daemonStatusFn = origDaemonStatus
+		sendMessageFn = origSendMessage
+		envCaptureFn = origEnvCapture
+		osExecutableFn = origOsExecutable
+	})
+
+	findOpenClawFn = func() string { return "" }
+	daemonIsRunningFn = func(string) bool { return false }
+	daemonSendFn = func(string, string, string, any) (*daemon.Response, error) {
+		return &daemon.Response{OK: true}, nil
+	}
+	installDaemonFn = func(sc service.ServiceConfig) error { return nil }
+	daemonStatusFn = func(string) (string, error) { return "running", nil }
+	sendMessageFn = func(string, string, string, int) error { return nil }
+	envCaptureFn = func() map[string]string { return map[string]string{} }
+	osExecutableFn = func() (string, error) { return "/usr/bin/leo", nil }
+
+	// Input sequence:
+	// 1. OpenClaw workspace path: provide ocDir
+	// 2. Agent name: accept default (empty line)
+	// 3. New workspace directory: provide newWorkspace
+	// 4. configureTelegram: token/chat_id found, accept defaults (empty lines)
+	// 5. Install chat daemon: "y"
+	// 6. Send test Telegram message: "n"
+	input := fmt.Sprintf("%s\n\n%s\n\n\ny\nn\n", ocDir, newWorkspace)
+	reader := newBufioReader(strings.NewReader(input))
+
+	err := RunInteractive(reader)
+	if err != nil {
+		t.Fatalf("RunInteractive() error: %v", err)
+	}
+
+	// Verify config was written
+	cfgPath := filepath.Join(newWorkspace, "leo.yaml")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	if cfg.Agent.Name != "testbot" {
+		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "testbot")
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Errorf("tasks count = %d, want 1", len(cfg.Tasks))
 	}
 }
 
