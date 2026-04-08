@@ -143,7 +143,7 @@ func TestBuildArgs(t *testing.T) {
 
 	cfg := makeTestConfig(dir, true)
 	task := config.TaskConfig{Model: "opus", MaxTurns: 20}
-	args := buildArgs(cfg, task, "test prompt")
+	args := buildArgs(cfg, task, "test prompt", "")
 
 	argsStr := strings.Join(args, " ")
 
@@ -165,13 +165,16 @@ func TestBuildArgs(t *testing.T) {
 	if !strings.Contains(argsStr, "--add-dir") {
 		t.Error("missing add-dir flag")
 	}
+	if !strings.Contains(argsStr, "--output-format json") {
+		t.Error("should use json output format")
+	}
 }
 
 func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "test prompt")
+	args := buildArgs(cfg, config.TaskConfig{}, "test prompt", "")
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--dangerously-skip-permissions") {
@@ -185,7 +188,7 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "test prompt")
+	args := buildArgs(cfg, config.TaskConfig{}, "test prompt", "")
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--mcp-config") {
@@ -199,28 +202,120 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 	}
 }
 
-func TestBuildArgsContinueSession(t *testing.T) {
+func TestBuildArgsWithSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	task := config.TaskConfig{ContinueSession: true}
-	args := buildArgs(cfg, task, "test prompt")
+	args := buildArgs(cfg, config.TaskConfig{}, "test prompt", "session-abc-123")
 	argsStr := strings.Join(args, " ")
 
-	if !strings.Contains(argsStr, "--continue") {
-		t.Error("should contain --continue when ContinueSession is true")
+	if !strings.Contains(argsStr, "--resume session-abc-123") {
+		t.Error("should contain --resume with session ID")
 	}
 }
 
-func TestBuildArgsNoContinueByDefault(t *testing.T) {
+func TestBuildArgsWithoutSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "test prompt")
+	args := buildArgs(cfg, config.TaskConfig{}, "test prompt", "")
 	argsStr := strings.Join(args, " ")
 
+	if strings.Contains(argsStr, "--resume") {
+		t.Error("should not contain --resume without session ID")
+	}
 	if strings.Contains(argsStr, "--continue") {
-		t.Error("should not contain --continue by default")
+		t.Error("should not contain --continue")
+	}
+}
+
+func TestParseClaudeOutput(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    string
+		wantSID   string
+		wantText  string
+		wantError bool
+	}{
+		{
+			name:     "valid JSON",
+			output:   `{"session_id":"abc-123","result":"Hello world","is_error":false}`,
+			wantSID:  "abc-123",
+			wantText: "Hello world",
+		},
+		{
+			name:     "error response",
+			output:   `{"session_id":"def-456","result":"failed","is_error":true}`,
+			wantSID:  "def-456",
+			wantText: "failed",
+		},
+		{
+			name:    "invalid JSON",
+			output:  "not json at all",
+			wantSID: "",
+		},
+		{
+			name:    "empty",
+			output:  "",
+			wantSID: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseClaudeOutput([]byte(tt.output))
+			if result.SessionID != tt.wantSID {
+				t.Errorf("SessionID = %q, want %q", result.SessionID, tt.wantSID)
+			}
+			if result.Result != tt.wantText {
+				t.Errorf("Result = %q, want %q", result.Result, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestIsSessionError(t *testing.T) {
+	tests := []struct {
+		name   string
+		result claudeResult
+		output string
+		want   bool
+	}{
+		{
+			name:   "session not found in result",
+			result: claudeResult{Result: "Session not found"},
+			want:   true,
+		},
+		{
+			name:   "invalid session in output",
+			result: claudeResult{},
+			output: "Error: invalid session ID",
+			want:   true,
+		},
+		{
+			name:   "expired session",
+			result: claudeResult{Result: "session expired"},
+			want:   true,
+		},
+		{
+			name:   "unrelated error",
+			result: claudeResult{Result: "model overloaded"},
+			want:   false,
+		},
+		{
+			name:   "empty",
+			result: claudeResult{},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isSessionError(tt.result, []byte(tt.output))
+			if got != tt.want {
+				t.Errorf("isSessionError() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -251,7 +346,7 @@ func TestPreview(t *testing.T) {
 		},
 	}
 
-	prompt, args, err := Preview(cfg, "heartbeat")
+	prompt, args, err := Preview(cfg, "heartbeat", nil)
 	if err != nil {
 		t.Fatalf("Preview() error: %v", err)
 	}
@@ -269,7 +364,7 @@ func TestPreview(t *testing.T) {
 func TestPreviewTaskNotFound(t *testing.T) {
 	cfg := &config.Config{Tasks: map[string]config.TaskConfig{}}
 
-	_, _, err := Preview(cfg, "nonexistent")
+	_, _, err := Preview(cfg, "nonexistent", nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent task")
 	}
@@ -280,7 +375,7 @@ func TestRunTaskNotFound(t *testing.T) {
 		Tasks: map[string]config.TaskConfig{},
 	}
 
-	err := Run(cfg, "nonexistent")
+	err := Run(cfg, "nonexistent", nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent task")
 	}

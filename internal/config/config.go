@@ -62,8 +62,7 @@ type HeartbeatConfig struct {
 	Model           string `yaml:"model,omitempty"`
 	MaxTurns        int    `yaml:"max_turns,omitempty"`
 	TopicID         int    `yaml:"topic_id,omitempty"`
-	PromptFile      string `yaml:"prompt_file,omitempty"`       // default "HEARTBEAT.md"
-	ContinueSession bool   `yaml:"continue_session,omitempty"` // resume the same conversation each run
+	PromptFile      string `yaml:"prompt_file,omitempty"` // default "HEARTBEAT.md"
 }
 
 // HeartbeatDefaults returns the heartbeat config with defaults applied.
@@ -128,15 +127,14 @@ func (h HeartbeatConfig) ToTaskConfig() (TaskConfig, error) {
 		return TaskConfig{}, err
 	}
 	return TaskConfig{
-		Schedule:        schedule,
-		Timezone:        hb.Timezone,
-		PromptFile:      hb.PromptFile,
-		Model:           hb.Model,
-		MaxTurns:        hb.MaxTurns,
-		TopicID:         hb.TopicID,
-		Enabled:         hb.Enabled,
-		Silent:          true,
-		ContinueSession: hb.ContinueSession,
+		Schedule:   schedule,
+		Timezone:   hb.Timezone,
+		PromptFile: hb.PromptFile,
+		Model:      hb.Model,
+		MaxTurns:   hb.MaxTurns,
+		TopicID:    hb.TopicID,
+		Enabled:    hb.Enabled,
+		Silent:     true,
 	}, nil
 }
 
@@ -172,7 +170,6 @@ type TaskConfig struct {
 	TopicID         int    `yaml:"topic_id,omitempty"`
 	Enabled         bool   `yaml:"enabled"`
 	Silent          bool   `yaml:"silent,omitempty"`
-	ContinueSession bool   `yaml:"continue_session,omitempty"`
 }
 
 // Validate checks the config for required fields and valid values.
