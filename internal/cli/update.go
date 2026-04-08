@@ -8,6 +8,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
+	"github.com/blackpaw-studio/leo/internal/setup"
 	"github.com/blackpaw-studio/leo/internal/update"
 	"github.com/spf13/cobra"
 )
@@ -53,6 +54,14 @@ func newUpdateCmd() *cobra.Command {
 
 			if checkOnly {
 				return nil
+			}
+
+			// Telegram plugin refresh
+			info.Println("Updating telegram plugin...")
+			if err := setup.UpdateSuperchargedPlugin(); err != nil {
+				warn.Printf("Plugin update skipped: %v\n", err)
+			} else {
+				success.Println("Telegram plugin updated.")
 			}
 
 			// Workspace refresh

@@ -408,7 +408,7 @@ func TestRunSuccess(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask")
+	err := Run(cfg, "mytask", nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestRunCommandError(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask")
+	err := Run(cfg, "mytask", nil)
 	if err == nil {
 		t.Fatal("Run() should return error when command fails")
 	}
@@ -468,7 +468,7 @@ func TestRunMissingPromptFile(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask")
+	err := Run(cfg, "mytask", nil)
 	if err == nil {
 		t.Fatal("Run() should return error for missing prompt file")
 	}

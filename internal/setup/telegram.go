@@ -19,8 +19,11 @@ var (
 	execCommandFn = exec.Command
 )
 
+const superchargedRepo = "https://github.com/k1p1l0/claude-telegram-supercharged.git"
+
 // installTelegramPlugin fully configures the Claude Code telegram channel plugin:
-// - Installs the plugin via claude CLI if not already installed
+// - Installs the official plugin via claude CLI if not already installed
+// - Upgrades to the supercharged fork (forum topics, voice, stickers, etc.)
 // - Writes bot token to ~/.claude/channels/telegram/.env
 // - Writes access.json with allowlist policy, allowFrom, and groups
 // - Writes ~/.claude/settings.json with trustedDirectories, skipDangerousModePermissionPrompt, enabledPlugins
@@ -30,7 +33,7 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 		return fmt.Errorf("determining home directory: %w", err)
 	}
 
-	// 1. Install the telegram plugin if not already installed
+	// 1. Install the official telegram plugin if not already installed
 	pluginDir := filepath.Join(home, ".claude", "plugins", "marketplaces", "claude-plugins-official", "external_plugins", "telegram")
 	if _, err := statFn(pluginDir); os.IsNotExist(err) {
 		claudePath, lookErr := lookPathFn("claude")
@@ -47,6 +50,12 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 		}
 	} else {
 		prompt.Info.Println("  Telegram plugin already installed.")
+	}
+
+	// 2. Upgrade to supercharged fork (forum topics, voice, stickers, etc.)
+	if err := installSuperchargedPlugin(home); err != nil {
+		prompt.Warn.Printf("  Supercharged plugin upgrade failed: %v\n", err)
+		prompt.Info.Println("  Continuing with official plugin (no forum topic support).")
 	}
 
 	// 2. Write bot token to .env
@@ -177,4 +186,98 @@ func writeClaudeSettings(workspace string) error {
 	}
 
 	return writeFileFn(settingsPath, append(data, '\n'), 0600)
+}
+
+// SuperchargedCacheDir returns the path to the cached supercharged plugin clone.
+func SuperchargedCacheDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".leo", "cache", "telegram-supercharged"), nil
+}
+
+// installSuperchargedPlugin clones or updates the supercharged telegram plugin
+// and copies server.ts over the official plugin's cached version.
+func installSuperchargedPlugin(home string) error {
+	cacheDir, err := SuperchargedCacheDir()
+	if err != nil {
+		return fmt.Errorf("determining cache directory: %w", err)
+	}
+
+	// Clone or pull the supercharged repo
+	if _, err := os.Stat(filepath.Join(cacheDir, "server.ts")); os.IsNotExist(err) {
+		prompt.Info.Println("  Cloning supercharged telegram plugin...")
+		if err := os.MkdirAll(filepath.Dir(cacheDir), 0750); err != nil {
+			return fmt.Errorf("creating cache directory: %w", err)
+		}
+		cmd := exec.Command("git", "clone", "--depth", "1", superchargedRepo, cacheDir)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("cloning repo: %w\n%s", err, output)
+		}
+	} else {
+		prompt.Info.Println("  Updating supercharged telegram plugin...")
+		cmd := exec.Command("git", "-C", cacheDir, "pull", "--ff-only")
+		cmd.CombinedOutput() // best-effort update
+	}
+
+	// Find the official plugin cache directory and overwrite server.ts
+	return copySuperchargedServer(home, cacheDir)
+}
+
+// UpdateSuperchargedPlugin pulls the latest version and re-copies server.ts.
+func UpdateSuperchargedPlugin() error {
+	cacheDir, err := SuperchargedCacheDir()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, "server.ts")); os.IsNotExist(err) {
+		return nil // not installed, skip
+	}
+
+	cmd := exec.Command("git", "-C", cacheDir, "pull", "--ff-only")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("pulling latest: %w\n%s", err, output)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	return copySuperchargedServer(home, cacheDir)
+}
+
+// copySuperchargedServer finds the official plugin's cache dir and overwrites server.ts.
+func copySuperchargedServer(home, cacheDir string) error {
+	pluginCacheBase := filepath.Join(home, ".claude", "plugins", "cache", "claude-plugins-official", "telegram")
+	entries, err := os.ReadDir(pluginCacheBase)
+	if err != nil {
+		return fmt.Errorf("reading plugin cache: %w", err)
+	}
+
+	srcPath := filepath.Join(cacheDir, "server.ts")
+	srcData, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("reading supercharged server.ts: %w", err)
+	}
+
+	copied := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dstPath := filepath.Join(pluginCacheBase, e.Name(), "server.ts")
+		if _, err := os.Stat(dstPath); err == nil {
+			if err := os.WriteFile(dstPath, srcData, 0644); err != nil {
+				return fmt.Errorf("writing %s: %w", dstPath, err)
+			}
+			copied++
+			prompt.Success.Printf("  Upgraded plugin (%s) with supercharged fork.\n", e.Name())
+		}
+	}
+
+	if copied == 0 {
+		return fmt.Errorf("no official plugin cache found at %s", pluginCacheBase)
+	}
+	return nil
 }
