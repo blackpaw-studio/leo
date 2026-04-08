@@ -129,22 +129,30 @@ Logs for both modes are written to `<workspace>/state/chat.log`.
 | Command | Description |
 |---|---|
 | `leo setup` | Interactive setup wizard for a new agent |
+| `leo onboard` | Guided first-time setup (prerequisites + setup wizard) |
 | `leo chat` | Start an interactive Telegram session (foreground) |
 | `leo chat start` | Start chat in background with auto-restart |
 | `leo chat stop` | Stop background chat session |
 | `leo chat status` | Show chat session status |
+| `leo chat restart` | Restart background chat session |
 | `leo run <task>` | Run a scheduled task once (cron entry point) |
 | `leo cron install` | Install all enabled tasks to system crontab |
 | `leo cron remove` | Remove all Leo-managed cron entries |
 | `leo cron list` | Show installed schedules |
 | `leo task list` | List configured tasks |
 | `leo task add` | Add a new scheduled task interactively |
+| `leo task remove <name>` | Remove a task from the config |
 | `leo task enable <name>` | Enable a task |
 | `leo task disable <name>` | Disable a task |
+| `leo telegram topics` | Discover forum topics from recent messages |
+| `leo session list` | List stored sessions |
+| `leo session clear` | Clear stored session(s) |
+| `leo validate` | Check config, prerequisites, and workspace health |
+| `leo update` | Update leo binary and refresh workspace files |
 | `leo migrate` | Migrate from an existing OpenClaw installation |
 | `leo version` | Print version |
 
-The `start`, `stop`, and `status` subcommands accept a `--daemon` flag to use OS-level service management (launchd/systemd) instead of a simple background process.
+The `start`, `stop`, `status`, and `restart` subcommands accept a `--daemon` flag to use OS-level service management (launchd/systemd) instead of a simple background process.
 
 ### Global Flags
 
@@ -171,6 +179,16 @@ telegram:
 defaults:
   model: sonnet
   max_turns: 15
+  # bypass_permissions: false          # pass --dangerously-skip-permissions to claude
+
+heartbeat:
+  enabled: true
+  interval: "30m"                      # how often to check in (e.g. "15m", "30m", "1h", "2h")
+  start_hour: 7                        # first check-in hour (default: 7)
+  end_hour: 22                         # last check-in hour (default: 22)
+  timezone: America/New_York
+  prompt_file: HEARTBEAT.md            # relative to workspace (default: HEARTBEAT.md)
+  topic_id: 1                          # optional: Telegram forum topic
 
 tasks:
   heartbeat:
@@ -205,6 +223,22 @@ tasks:
 | `topic_id` | Telegram forum topic ID (discover via `leo telegram topics`) | — |
 | `enabled` | Whether cron should run this task | `false` |
 | `silent` | Prepend silent-mode preamble to prompt | `false` |
+
+### Heartbeat Options
+
+The `heartbeat` section is a shorthand for a recurring check-in task. Instead of writing a cron expression, you specify an interval and active hours — Leo generates the cron schedule automatically.
+
+| Field | Description | Default |
+|---|---|---|
+| `enabled` | Enable heartbeat scheduling | `false` |
+| `interval` | Check-in frequency (`"15m"`, `"30m"`, `"1h"`, `"2h"`) | `"30m"` |
+| `start_hour` | First check-in hour (0-23) | `7` |
+| `end_hour` | Last check-in hour (0-23) | `22` |
+| `timezone` | IANA timezone | — |
+| `prompt_file` | Path to prompt (relative to workspace) | `HEARTBEAT.md` |
+| `model` | Claude model override | `defaults.model` |
+| `max_turns` | Max agent turns override | `defaults.max_turns` |
+| `topic_id` | Telegram forum topic ID | — |
 
 ## Workspace Structure
 
