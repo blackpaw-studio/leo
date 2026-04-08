@@ -17,10 +17,11 @@ var validModels = map[string]bool{
 }
 
 type Config struct {
-	Agent    AgentConfig    `yaml:"agent"`
-	Telegram TelegramConfig `yaml:"telegram"`
-	Defaults DefaultsConfig `yaml:"defaults"`
-	Tasks    map[string]TaskConfig `yaml:"tasks"`
+	Agent     AgentConfig           `yaml:"agent"`
+	Telegram  TelegramConfig        `yaml:"telegram"`
+	Defaults  DefaultsConfig        `yaml:"defaults"`
+	Heartbeat HeartbeatConfig       `yaml:"heartbeat"`
+	Tasks     map[string]TaskConfig `yaml:"tasks"`
 }
 
 type AgentConfig struct {
@@ -39,6 +40,114 @@ type DefaultsConfig struct {
 	Model             string `yaml:"model"`
 	MaxTurns          int    `yaml:"max_turns"`
 	BypassPermissions bool   `yaml:"bypass_permissions,omitempty"`
+}
+
+type HeartbeatConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Interval   string `yaml:"interval,omitempty"`   // e.g. "30m", "1h" — default "30m"
+	StartHour  *int   `yaml:"start_hour,omitempty"` // default 7
+	EndHour    *int   `yaml:"end_hour,omitempty"`   // default 22
+	Timezone   string `yaml:"timezone,omitempty"`
+	Model      string `yaml:"model,omitempty"`
+	MaxTurns   int    `yaml:"max_turns,omitempty"`
+	TopicID    int    `yaml:"topic_id,omitempty"`
+	PromptFile string `yaml:"prompt_file,omitempty"` // default "HEARTBEAT.md"
+}
+
+// HeartbeatDefaults returns the heartbeat config with defaults applied.
+func (h HeartbeatConfig) WithDefaults() HeartbeatConfig {
+	out := h
+	if out.Interval == "" {
+		out.Interval = "30m"
+	}
+	if out.StartHour == nil {
+		v := 7
+		out.StartHour = &v
+	}
+	if out.EndHour == nil {
+		v := 22
+		out.EndHour = &v
+	}
+	if out.PromptFile == "" {
+		out.PromptFile = "HEARTBEAT.md"
+	}
+	return out
+}
+
+// Schedule generates a cron expression from the heartbeat config.
+// Interval is converted to minute steps within the start/end hour window.
+func (h HeartbeatConfig) Schedule() (string, error) {
+	hb := h.WithDefaults()
+
+	minutes, err := parseIntervalMinutes(hb.Interval)
+	if err != nil {
+		return "", fmt.Errorf("heartbeat.interval: %w", err)
+	}
+
+	// Build minute field
+	var minuteField string
+	if minutes >= 60 {
+		minuteField = "0"
+	} else {
+		var mins []string
+		for m := 0; m < 60; m += minutes {
+			mins = append(mins, strconv.Itoa(m))
+		}
+		minuteField = strings.Join(mins, ",")
+	}
+
+	// Build hour field
+	var hourField string
+	if minutes >= 60 {
+		step := minutes / 60
+		hourField = fmt.Sprintf("%d-%d/%d", *hb.StartHour, *hb.EndHour, step)
+	} else {
+		hourField = fmt.Sprintf("%d-%d", *hb.StartHour, *hb.EndHour)
+	}
+
+	return fmt.Sprintf("%s %s * * *", minuteField, hourField), nil
+}
+
+// ToTaskConfig converts the heartbeat config to a TaskConfig for the scheduler.
+func (h HeartbeatConfig) ToTaskConfig() (TaskConfig, error) {
+	hb := h.WithDefaults()
+	schedule, err := hb.Schedule()
+	if err != nil {
+		return TaskConfig{}, err
+	}
+	return TaskConfig{
+		Schedule:   schedule,
+		Timezone:   hb.Timezone,
+		PromptFile: hb.PromptFile,
+		Model:      hb.Model,
+		MaxTurns:   hb.MaxTurns,
+		TopicID:    hb.TopicID,
+		Enabled:    hb.Enabled,
+		Silent:     true,
+	}, nil
+}
+
+// parseIntervalMinutes parses a duration string like "30m", "1h", "2h" into minutes.
+func parseIntervalMinutes(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 30, nil
+	}
+	if strings.HasSuffix(s, "h") {
+		n, err := strconv.Atoi(strings.TrimSuffix(s, "h"))
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("%q is not a valid interval (e.g. 30m, 1h)", s)
+		}
+		return n * 60, nil
+	}
+	if strings.HasSuffix(s, "m") {
+		n, err := strconv.Atoi(strings.TrimSuffix(s, "m"))
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("%q is not a valid interval (e.g. 30m, 1h)", s)
+		}
+		return n, nil
+	}
+	return 0, fmt.Errorf("%q is not a valid interval (use e.g. 30m, 1h)", s)
 }
 
 type TaskConfig struct {
@@ -76,6 +185,25 @@ func (c *Config) Validate() error {
 		}
 		if c.Telegram.ChatID == "" && c.Telegram.GroupID == "" {
 			errs = append(errs, "telegram.chat_id or telegram.group_id is required when telegram is configured")
+		}
+	}
+
+	if c.Heartbeat.Enabled {
+		if _, err := c.Heartbeat.Schedule(); err != nil {
+			errs = append(errs, fmt.Sprintf("heartbeat: %v", err))
+		}
+		if c.Heartbeat.Model != "" && !validModels[c.Heartbeat.Model] {
+			errs = append(errs, fmt.Sprintf("heartbeat.model %q is not valid (use sonnet, opus, or haiku)", c.Heartbeat.Model))
+		}
+		hb := c.Heartbeat.WithDefaults()
+		if *hb.StartHour < 0 || *hb.StartHour > 23 {
+			errs = append(errs, "heartbeat.start_hour must be 0-23")
+		}
+		if *hb.EndHour < 0 || *hb.EndHour > 23 {
+			errs = append(errs, "heartbeat.end_hour must be 0-23")
+		}
+		if *hb.StartHour >= *hb.EndHour {
+			errs = append(errs, "heartbeat.start_hour must be less than end_hour")
 		}
 	}
 

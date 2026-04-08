@@ -484,3 +484,129 @@ func TestFindConfig(t *testing.T) {
 		t.Errorf("found = %q, want %q", found, cfgPath)
 	}
 }
+
+func TestHeartbeatSchedule30m(t *testing.T) {
+	h := HeartbeatConfig{Enabled: true, Interval: "30m"}
+	sched, err := h.Schedule()
+	if err != nil {
+		t.Fatalf("Schedule() error: %v", err)
+	}
+	if sched != "0,30 7-22 * * *" {
+		t.Errorf("Schedule() = %q, want %q", sched, "0,30 7-22 * * *")
+	}
+}
+
+func TestHeartbeatSchedule15m(t *testing.T) {
+	h := HeartbeatConfig{Enabled: true, Interval: "15m"}
+	sched, err := h.Schedule()
+	if err != nil {
+		t.Fatalf("Schedule() error: %v", err)
+	}
+	if sched != "0,15,30,45 7-22 * * *" {
+		t.Errorf("Schedule() = %q, want %q", sched, "0,15,30,45 7-22 * * *")
+	}
+}
+
+func TestHeartbeatSchedule1h(t *testing.T) {
+	h := HeartbeatConfig{Enabled: true, Interval: "1h"}
+	sched, err := h.Schedule()
+	if err != nil {
+		t.Fatalf("Schedule() error: %v", err)
+	}
+	if sched != "0 7-22/1 * * *" {
+		t.Errorf("Schedule() = %q, want %q", sched, "0 7-22/1 * * *")
+	}
+}
+
+func TestHeartbeatSchedule2h(t *testing.T) {
+	h := HeartbeatConfig{Enabled: true, Interval: "2h"}
+	sched, err := h.Schedule()
+	if err != nil {
+		t.Fatalf("Schedule() error: %v", err)
+	}
+	if sched != "0 7-22/2 * * *" {
+		t.Errorf("Schedule() = %q, want %q", sched, "0 7-22/2 * * *")
+	}
+}
+
+func TestHeartbeatScheduleCustomHours(t *testing.T) {
+	start, end := 9, 17
+	h := HeartbeatConfig{Enabled: true, Interval: "30m", StartHour: &start, EndHour: &end}
+	sched, err := h.Schedule()
+	if err != nil {
+		t.Fatalf("Schedule() error: %v", err)
+	}
+	if sched != "0,30 9-17 * * *" {
+		t.Errorf("Schedule() = %q, want %q", sched, "0,30 9-17 * * *")
+	}
+}
+
+func TestHeartbeatScheduleDefaults(t *testing.T) {
+	h := HeartbeatConfig{Enabled: true}
+	sched, err := h.Schedule()
+	if err != nil {
+		t.Fatalf("Schedule() error: %v", err)
+	}
+	// Default: 30m interval, 7-22 hours
+	if sched != "0,30 7-22 * * *" {
+		t.Errorf("Schedule() = %q, want %q", sched, "0,30 7-22 * * *")
+	}
+}
+
+func TestHeartbeatInvalidInterval(t *testing.T) {
+	h := HeartbeatConfig{Enabled: true, Interval: "abc"}
+	_, err := h.Schedule()
+	if err == nil {
+		t.Error("expected error for invalid interval")
+	}
+}
+
+func TestHeartbeatToTaskConfig(t *testing.T) {
+	h := HeartbeatConfig{
+		Enabled:  true,
+		Interval: "30m",
+		Timezone: "America/New_York",
+		Model:    "sonnet",
+		MaxTurns: 10,
+		TopicID:  42,
+	}
+
+	tc, err := h.ToTaskConfig()
+	if err != nil {
+		t.Fatalf("ToTaskConfig() error: %v", err)
+	}
+	if tc.Schedule != "0,30 7-22 * * *" {
+		t.Errorf("Schedule = %q", tc.Schedule)
+	}
+	if tc.Timezone != "America/New_York" {
+		t.Errorf("Timezone = %q", tc.Timezone)
+	}
+	if tc.Model != "sonnet" {
+		t.Errorf("Model = %q", tc.Model)
+	}
+	if !tc.Silent {
+		t.Error("expected Silent = true")
+	}
+	if tc.PromptFile != "HEARTBEAT.md" {
+		t.Errorf("PromptFile = %q", tc.PromptFile)
+	}
+	if tc.TopicID != 42 {
+		t.Errorf("TopicID = %d", tc.TopicID)
+	}
+}
+
+func TestHeartbeatValidation(t *testing.T) {
+	start, end := 22, 7
+	cfg := &Config{
+		Agent:    AgentConfig{Name: "test", Workspace: "/tmp"},
+		Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 10},
+		Heartbeat: HeartbeatConfig{
+			Enabled:   true,
+			StartHour: &start,
+			EndHour:   &end,
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for start_hour >= end_hour")
+	}
+}

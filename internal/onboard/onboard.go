@@ -233,19 +233,20 @@ func reconfigureTasks(reader *bufio.Reader, cfg *config.Config, ws string) error
 	}
 	fmt.Println()
 
-	// For now, just offer to add the heartbeat task if missing
-	if _, ok := cfg.Tasks["heartbeat"]; !ok {
-		if prompt.YesNo(reader, "Add heartbeat task?", true) {
-			cfg.Tasks["heartbeat"] = config.TaskConfig{
-				Schedule:   "0,30 7-22 * * *",
-				Timezone:   "America/New_York",
-				PromptFile: "HEARTBEAT.md",
-				Model:      "sonnet",
-				MaxTurns:   10,
-				Enabled:    true,
+	// Offer to enable heartbeat if not already configured
+	if !cfg.Heartbeat.Enabled {
+		if prompt.YesNo(reader, "Enable heartbeat? (checks in every 30 minutes during waking hours)", true) {
+			cfg.Heartbeat = config.HeartbeatConfig{
+				Enabled:  true,
+				Interval: "30m",
+				Timezone: "America/New_York",
+				Model:    "sonnet",
+				MaxTurns: 10,
 			}
 		}
 	}
+	// Remove legacy heartbeat task if it exists
+	delete(cfg.Tasks, "heartbeat")
 
 	cfgPath := ws + "/leo.yaml"
 	if err := config.Save(cfgPath, cfg); err != nil {

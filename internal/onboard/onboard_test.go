@@ -91,8 +91,8 @@ func TestReconfigureTasksAddHeartbeat(t *testing.T) {
 		t.Fatalf("reconfigureTasks() error: %v", err)
 	}
 
-	if _, ok := cfg.Tasks["heartbeat"]; !ok {
-		t.Error("expected heartbeat task to be added")
+	if !cfg.Heartbeat.Enabled {
+		t.Error("expected heartbeat to be enabled")
 	}
 
 	// Verify it was saved
@@ -100,8 +100,8 @@ func TestReconfigureTasksAddHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := loaded.Tasks["heartbeat"]; !ok {
-		t.Error("heartbeat task should be persisted")
+	if !loaded.Heartbeat.Enabled {
+		t.Error("heartbeat should be persisted as enabled")
 	}
 }
 
@@ -114,13 +114,11 @@ func TestReconfigureTasksSkipExisting(t *testing.T) {
 			Name:      "test",
 			Workspace: dir,
 		},
-		Tasks: map[string]config.TaskConfig{
-			"heartbeat": {
-				Schedule:   "0 * * * *",
-				PromptFile: "HEARTBEAT.md",
-				Enabled:    true,
-			},
+		Heartbeat: config.HeartbeatConfig{
+			Enabled:  true,
+			Interval: "30m",
 		},
+		Tasks: map[string]config.TaskConfig{},
 	}
 
 	if err := config.Save(cfgPath, cfg); err != nil {

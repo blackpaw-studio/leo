@@ -145,23 +145,24 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	// 7. Optional built-in tasks
-	if _, hasHeartbeat := cfg.Tasks["heartbeat"]; !hasHeartbeat {
-		prompt.Bold.Println("\nScheduled Tasks")
-		if prompt.YesNo(reader, "Add heartbeat task?", true) {
-			cfg.Tasks["heartbeat"] = config.TaskConfig{
-				Schedule:   "0,30 7-22 * * *",
-				Timezone:   timezone,
-				PromptFile: "HEARTBEAT.md",
-				Model:      "sonnet",
-				MaxTurns:   10,
-				// topic_id is discovered dynamically; set via 'leo telegram topics' after setup
-				Enabled:    true,
+	// 7. Heartbeat configuration
+	if !cfg.Heartbeat.Enabled {
+		prompt.Bold.Println("\nHeartbeat")
+		if prompt.YesNo(reader, "Enable heartbeat? (checks in every 30 minutes during waking hours)", true) {
+			cfg.Heartbeat = config.HeartbeatConfig{
+				Enabled:  true,
+				Interval: "30m",
+				Timezone: timezone,
+				Model:    "sonnet",
+				MaxTurns: 10,
 			}
 		}
 	} else {
-		prompt.Info.Println("\n  Heartbeat task already configured.")
+		prompt.Info.Println("\n  Heartbeat already configured.")
 	}
+
+	// Remove legacy heartbeat task if it exists alongside the new config
+	delete(cfg.Tasks, "heartbeat")
 
 	// 8. Create workspace and write files
 	prompt.Bold.Println("\nCreating workspace...")
