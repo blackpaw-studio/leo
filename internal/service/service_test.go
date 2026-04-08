@@ -436,3 +436,164 @@ func TestRunSupervisedDelegates(t *testing.T) {
 		t.Errorf("configPath = %q, want /workspace/leo.yaml", calledConfigPath)
 	}
 }
+
+func TestStripResumeArg(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "removes resume and value",
+			args: []string{"--agent", "test", "--resume", "abc-123", "--add-dir", "/workspace"},
+			want: []string{"--agent", "test", "--add-dir", "/workspace"},
+		},
+		{
+			name: "no resume present",
+			args: []string{"--agent", "test", "--session-id", "abc-123"},
+			want: []string{"--agent", "test", "--session-id", "abc-123"},
+		},
+		{
+			name: "resume at end without value",
+			args: []string{"--agent", "test", "--resume"},
+			want: []string{"--agent", "test", "--resume"},
+		},
+		{
+			name: "empty args",
+			args: []string{},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripResumeArg(tt.args)
+			if len(got) != len(tt.want) {
+				t.Errorf("stripResumeArg(%v) = %v, want %v", tt.args, got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("stripResumeArg(%v)[%d] = %q, want %q", tt.args, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestClearSessionStore(t *testing.T) {
+	origWrite := writeFile
+	defer func() { writeFile = origWrite }()
+
+	var writtenPath string
+	var writtenData []byte
+	writeFile = func(name string, data []byte, perm os.FileMode) error {
+		writtenPath = name
+		writtenData = data
+		return nil
+	}
+
+	clearSessionStore("/workspace")
+
+	wantPath := filepath.Join("/workspace", "state", "sessions.json")
+	if writtenPath != wantPath {
+		t.Errorf("path = %q, want %q", writtenPath, wantPath)
+	}
+	if string(writtenData) != "{}" {
+		t.Errorf("data = %q, want {}", string(writtenData))
+	}
+}
+
+func TestCleanupOrphanedPlugins_StaleLock(t *testing.T) {
+	origRead := readFile
+	origFind := findProcess
+	origRemove := removeFile
+	origHome := os.Getenv("HOME")
+	defer func() {
+		readFile = origRead
+		findProcess = origFind
+		removeFile = origRemove
+		os.Setenv("HOME", origHome)
+	}()
+
+	os.Setenv("HOME", "/fakehome")
+
+	readFile = func(name string) ([]byte, error) {
+		return []byte("99999"), nil
+	}
+	findProcess = func(pid int) (*os.Process, error) {
+		return nil, errors.New("no such process")
+	}
+
+	var removedPath string
+	removeFile = func(name string) error {
+		removedPath = name
+		return nil
+	}
+
+	cleanupOrphanedPlugins()
+
+	wantPath := filepath.Join("/fakehome", ".claude", "channels", "telegram", "data", "telegram.lock")
+	if removedPath != wantPath {
+		t.Errorf("removed %q, want %q", removedPath, wantPath)
+	}
+}
+
+func TestCleanupOrphanedPlugins_NoLockFile(t *testing.T) {
+	origRead := readFile
+	origRemove := removeFile
+	defer func() {
+		readFile = origRead
+		removeFile = origRemove
+	}()
+
+	readFile = func(name string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+
+	removeCalled := false
+	removeFile = func(name string) error {
+		removeCalled = true
+		return nil
+	}
+
+	cleanupOrphanedPlugins()
+
+	if removeCalled {
+		t.Error("should not remove anything when no lock file exists")
+	}
+}
+
+func TestCleanupOrphanedPlugins_AliveProcess(t *testing.T) {
+	origRead := readFile
+	origFind := findProcess
+	origRemove := removeFile
+	origHome := os.Getenv("HOME")
+	defer func() {
+		readFile = origRead
+		findProcess = origFind
+		removeFile = origRemove
+		os.Setenv("HOME", origHome)
+	}()
+
+	os.Setenv("HOME", "/fakehome")
+
+	// Lock file references current process (which is alive)
+	readFile = func(name string) ([]byte, error) {
+		return []byte(strconv.Itoa(os.Getpid())), nil
+	}
+	findProcess = func(pid int) (*os.Process, error) {
+		return os.FindProcess(pid)
+	}
+
+	removeCalled := false
+	removeFile = func(name string) error {
+		removeCalled = true
+		return nil
+	}
+
+	cleanupOrphanedPlugins()
+
+	if removeCalled {
+		t.Error("should not remove lock when process is alive")
+	}
+}

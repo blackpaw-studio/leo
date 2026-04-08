@@ -187,6 +187,11 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 	copy(currentArgs, claudeArgs)
 
 	for {
+		// Clean up orphaned plugin processes from previous iterations.
+		// If the telegram plugin's bun process outlived claude, it holds
+		// the lock file and blocks the new plugin from polling.
+		cleanupOrphanedPlugins()
+
 		// Use tmux to provide a real terminal for claude. This is
 		// required for plugins (telegram) to communicate with claude
 		// via MCP stdio pipes — a Go PTY breaks this communication.
@@ -198,6 +203,10 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 		if p := os.Getenv("PATH"); p != "" {
 			claudeCmd = fmt.Sprintf("export PATH=%q; %s", p, claudeCmd)
 		}
+
+		// Kill any stale tmux session with our name (can happen if the
+		// tmux server restarted or a previous iteration left a zombie).
+		exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
 
 		// Create a detached tmux session running claude
 		createCmd := exec.CommandContext(ctx, tmuxPath,
@@ -212,8 +221,20 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 		startTime := time.Now()
 
 		if err := createCmd.Run(); err != nil {
-			return fmt.Errorf("creating tmux session: %w", err)
+			// tmux can fail transiently (server died, socket stale, etc.).
+			// Retry instead of exiting the supervised loop permanently.
+			fmt.Fprintf(os.Stderr, "tmux new-session failed: %v, retrying in %s\n", err, backoff)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
+			backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
+			continue
 		}
+
+		// Reset backoff after successful session creation
+		backoff = initialBackoff
 
 		fmt.Fprintf(os.Stdout, "tmux session '%s' created, claude running\n", sessionName)
 
@@ -251,17 +272,14 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 			currentArgs = stripResumeArg(currentArgs)
 			clearSessionStore(workDir)
 			fmt.Fprintf(os.Stderr, "claude exited quickly (%.0fs), cleared stale session — retrying fresh\n", elapsed.Seconds())
-			backoff = initialBackoff
 		} else {
 			fmt.Fprintf(os.Stderr, "claude exited after %s, restarting in %s\n", elapsed.Round(time.Second), backoff)
-			// Exponential backoff with cap
-			backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
 		}
 
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(backoff):
+		case <-time.After(initialBackoff):
 		}
 	}
 }
@@ -283,6 +301,31 @@ func stripResumeArg(args []string) []string {
 func clearSessionStore(workDir string) {
 	sessFile := filepath.Join(workDir, "state", "sessions.json")
 	_ = writeFile(sessFile, []byte("{}"), 0600)
+}
+
+// cleanupOrphanedPlugins removes stale telegram plugin lock files so the
+// next session's plugin can acquire the lock and start polling. If the
+// lock references a dead PID, the lock is removed.
+func cleanupOrphanedPlugins() {
+	lockFile := filepath.Join(os.Getenv("HOME"), ".claude", "channels", "telegram", "data", "telegram.lock")
+	data, err := readFile(lockFile)
+	if err != nil {
+		return // no lock file
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		_ = removeFile(lockFile)
+		return
+	}
+	proc, err := findProcess(pid)
+	if err != nil {
+		_ = removeFile(lockFile)
+		return
+	}
+	// signal 0 checks if process exists without killing it
+	if proc.Signal(syscall.Signal(0)) != nil {
+		_ = removeFile(lockFile)
+	}
 }
 
 func defaultStartProcess(leoPath, configPath, workDir string, logFile *os.File) (int, error) {
