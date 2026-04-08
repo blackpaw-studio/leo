@@ -367,14 +367,18 @@ func TestInstallDaemonWithHomeSeam(t *testing.T) {
 }
 
 func TestInstallDaemonWriteError(t *testing.T) {
+	origHome := userHomeDirFn
 	origMkdir := mkdirAll
 	origWrite := writeFile
 	origRun := runCommand
 	defer func() {
+		userHomeDirFn = origHome
 		mkdirAll = origMkdir
 		writeFile = origWrite
 		runCommand = origRun
 	}()
+
+	userHomeDirFn = func() (string, error) { return t.TempDir(), nil }
 
 	mkdirAll = func(path string, perm os.FileMode) error { return nil }
 	writeFile = func(name string, data []byte, perm os.FileMode) error {
@@ -399,14 +403,18 @@ func TestInstallDaemonWriteError(t *testing.T) {
 }
 
 func TestInstallDaemonBootstrapError(t *testing.T) {
+	origHome := userHomeDirFn
 	origMkdir := mkdirAll
 	origWrite := writeFile
 	origRun := runCommand
 	defer func() {
+		userHomeDirFn = origHome
 		mkdirAll = origMkdir
 		writeFile = origWrite
 		runCommand = origRun
 	}()
+
+	userHomeDirFn = func() (string, error) { return t.TempDir(), nil }
 
 	mkdirAll = func(path string, perm os.FileMode) error { return nil }
 	writeFile = func(name string, data []byte, perm os.FileMode) error { return nil }

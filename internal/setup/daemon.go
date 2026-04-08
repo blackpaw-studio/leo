@@ -14,6 +14,8 @@ var (
 	installDaemonFn = service.InstallDaemon
 )
 
+// installDaemon installs the LaunchAgent/systemd service.
+// daemonStatusFn is declared in setup.go (same package).
 func installDaemon(name, workspace, cfgPath, botToken string) {
 	leoPath, _ := osExecutableFn()
 	if leoPath == "" {

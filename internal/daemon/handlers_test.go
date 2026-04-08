@@ -702,7 +702,9 @@ func TestHandleConfigLoadError(t *testing.T) {
 	_, client := startTestServer(t, cfgPath)
 
 	// Remove the config file so handlers that load config will fail
-	os.Remove(cfgPath)
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatalf("removing config: %v", err)
+	}
 
 	// Test task/list
 	resp, err := client.Get("http://localhost/task/list")
@@ -789,5 +791,13 @@ func TestHandleTaskEnableMalformedJSON(t *testing.T) {
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for malformed JSON")
 	}
 }

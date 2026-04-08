@@ -644,10 +644,10 @@ func TestInstallTelegramPluginFreshInstall(t *testing.T) {
 		return os.Stat(name) // Use real stat - plugin dir won't exist in temp
 	}
 	lookPathFn = func(file string) (string, error) {
-		return "", fmt.Errorf("not found")
+		return "/usr/bin/claude", nil
 	}
 	execCommandFn = func(name string, arg ...string) *exec.Cmd {
-		return exec.Command("true") // no-op
+		return exec.Command("true") // no-op instead of real plugin install
 	}
 	// Use real file operations on the temp dir
 	mkdirAllFn = os.MkdirAll
@@ -848,9 +848,14 @@ func TestWriteClaudeSettingsMerge(t *testing.T) {
 		t.Fatalf("writeClaudeSettings() error: %v", err)
 	}
 
-	settingsData, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	settingsData, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("reading settings.json: %v", err)
+	}
 	var settings map[string]any
-	json.Unmarshal(settingsData, &settings)
+	if err := json.Unmarshal(settingsData, &settings); err != nil {
+		t.Fatalf("parsing settings.json: %v", err)
+	}
 
 	// Existing schema should be preserved
 	if settings["$schema"] != "https://existing-schema.json" {
@@ -902,9 +907,14 @@ func TestWriteClaudeSettingsDeduplicates(t *testing.T) {
 		t.Fatalf("writeClaudeSettings() error: %v", err)
 	}
 
-	settingsData, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	settingsData, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("reading settings.json: %v", err)
+	}
 	var settings map[string]any
-	json.Unmarshal(settingsData, &settings)
+	if err := json.Unmarshal(settingsData, &settings); err != nil {
+		t.Fatalf("parsing settings.json: %v", err)
+	}
 
 	trusted, _ := settings["trustedDirectories"].([]any)
 	if len(trusted) != 1 {
@@ -1016,17 +1026,24 @@ func TestRunInteractiveHappyPath(t *testing.T) {
 	origDaemonStatus := daemonStatusFn
 	origSendMsg := sendMessageFn
 	origPoll := pollChatIDFn
+	origLookPath := lookPathFn
+	origExecCmd := execCommandFn
 	t.Cleanup(func() {
 		userHomeDirFn = origHome
 		findExistingWorkspacesFn = origFindWs
 		daemonStatusFn = origDaemonStatus
 		sendMessageFn = origSendMsg
 		pollChatIDFn = origPoll
+		lookPathFn = origLookPath
+		execCommandFn = origExecCmd
 	})
 
 	mockAllPrereqs(t)
 
 	userHomeDirFn = func() (string, error) { return home, nil }
+	// Prevent real claude lookups and plugin install attempts
+	lookPathFn = func(file string) (string, error) { return "", fmt.Errorf("not found") }
+	execCommandFn = exec.Command
 	findExistingWorkspacesFn = func() []string { return nil }
 	daemonStatusFn = func(name string) (string, error) { return "not installed", nil }
 	sendMessageFn = func(botToken, chatID, text string, topicID int) error { return nil }

@@ -456,10 +456,29 @@ func TestCopyDirSkipsSubdirs(t *testing.T) {
 }
 
 func TestFindOpenClawNotFound(t *testing.T) {
-	// FindOpenClaw looks for ~/.openclaw -- if it doesn't exist, should return ""
+	// Point home at an empty temp dir so ~/.openclaw won't exist
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
 	result := FindOpenClaw()
-	// We can't guarantee whether ~/.openclaw exists, but we can test it doesn't panic
-	_ = result
+	if result != "" {
+		t.Errorf("FindOpenClaw() = %q, want empty string when ~/.openclaw doesn't exist", result)
+	}
+}
+
+func TestFindOpenClawFound(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ocPath := filepath.Join(home, ".openclaw")
+	if err := os.MkdirAll(ocPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	result := FindOpenClaw()
+	if result != ocPath {
+		t.Errorf("FindOpenClaw() = %q, want %q", result, ocPath)
+	}
 }
 
 func TestRunInteractiveNoOCPath(t *testing.T) {

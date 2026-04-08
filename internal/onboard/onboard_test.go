@@ -221,6 +221,7 @@ func stubDefaults(t *testing.T) {
 	origSetup := setupInteractiveFn
 	origMigrate := migrateInteractiveFn
 	origReader := newReaderFn
+	origSend := sendMessageFn
 	t.Cleanup(func() {
 		checkClaudeFn = origCheck
 		findOpenClawFn = origOC
@@ -228,7 +229,17 @@ func stubDefaults(t *testing.T) {
 		setupInteractiveFn = origSetup
 		migrateInteractiveFn = origMigrate
 		newReaderFn = origReader
+		sendMessageFn = origSend
 	})
+
+	// Safe no-op defaults to prevent accidental calls to real implementations
+	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: true, Version: "1.0.0"} }
+	findOpenClawFn = func() string { return "" }
+	findWorkspacesFn = func() []string { return nil }
+	setupInteractiveFn = func(r *bufio.Reader) error { return nil }
+	migrateInteractiveFn = func(r *bufio.Reader) error { return nil }
+	sendMessageFn = func(botToken, chatID, text string, topicID int) error { return nil }
+	newReaderFn = func() *bufio.Reader { return bufio.NewReader(strings.NewReader("\n")) }
 }
 
 func TestRunClaudeNotFound(t *testing.T) {
@@ -275,7 +286,7 @@ func TestRunNothingFound(t *testing.T) {
 	}
 }
 
-func TestRunBothFound_FreshSetup(t *testing.T) {
+func TestRunBothFoundFreshSetup(t *testing.T) {
 	stubDefaults(t)
 	newReaderFn = func() *bufio.Reader {
 		return bufio.NewReader(strings.NewReader("1\n"))
@@ -301,7 +312,7 @@ func TestRunBothFound_FreshSetup(t *testing.T) {
 	}
 }
 
-func TestRunBothFound_Migrate(t *testing.T) {
+func TestRunBothFoundMigrate(t *testing.T) {
 	stubDefaults(t)
 	newReaderFn = func() *bufio.Reader {
 		return bufio.NewReader(strings.NewReader("2\n"))
@@ -327,7 +338,7 @@ func TestRunBothFound_Migrate(t *testing.T) {
 	}
 }
 
-func TestRunOnlyOpenClaw_Migrate(t *testing.T) {
+func TestRunOnlyOpenClawMigrate(t *testing.T) {
 	stubDefaults(t)
 	newReaderFn = func() *bufio.Reader {
 		return bufio.NewReader(strings.NewReader("1\n"))
@@ -353,7 +364,7 @@ func TestRunOnlyOpenClaw_Migrate(t *testing.T) {
 	}
 }
 
-func TestRunOnlyOpenClaw_FreshSetup(t *testing.T) {
+func TestRunOnlyOpenClawFreshSetup(t *testing.T) {
 	stubDefaults(t)
 	newReaderFn = func() *bufio.Reader {
 		return bufio.NewReader(strings.NewReader("2\n"))
@@ -379,7 +390,7 @@ func TestRunOnlyOpenClaw_FreshSetup(t *testing.T) {
 	}
 }
 
-func TestRunOnlyWorkspaces_Reconfigure(t *testing.T) {
+func TestRunOnlyWorkspacesReconfigure(t *testing.T) {
 	stubDefaults(t)
 
 	dir := t.TempDir()
@@ -409,7 +420,7 @@ func TestRunOnlyWorkspaces_Reconfigure(t *testing.T) {
 	}
 }
 
-func TestRunOnlyWorkspaces_FreshSetup(t *testing.T) {
+func TestRunOnlyWorkspacesFreshSetup(t *testing.T) {
 	stubDefaults(t)
 	newReaderFn = func() *bufio.Reader {
 		return bufio.NewReader(strings.NewReader("2\n"))
