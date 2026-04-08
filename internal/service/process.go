@@ -209,7 +209,7 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 		exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
 
 		// Create a detached tmux session running claude
-		createCmd := exec.CommandContext(ctx, tmuxPath,
+		createCmd := exec.CommandContext(ctx, tmuxPath, // #nosec G702 -- tmuxPath from exec.LookPath, not user input
 			"new-session", "-d", "-s", sessionName,
 			"-c", workDir,
 			"-x", "200", "-y", "50",
