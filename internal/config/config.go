@@ -10,6 +10,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Default configuration values used across the codebase.
+const (
+	DefaultModel             = "sonnet"
+	DefaultMaxTurns          = 15
+	DefaultTimezone          = "America/New_York"
+	DefaultHeartbeatInterval = "30m"
+	DefaultHeartbeatStart    = 7
+	DefaultHeartbeatEnd      = 22
+	DefaultHeartbeatFile     = "HEARTBEAT.md"
+)
+
 var validModels = map[string]bool{
 	"sonnet": true,
 	"opus":   true,
@@ -59,18 +70,18 @@ type HeartbeatConfig struct {
 func (h HeartbeatConfig) WithDefaults() HeartbeatConfig {
 	out := h
 	if out.Interval == "" {
-		out.Interval = "30m"
+		out.Interval = DefaultHeartbeatInterval
 	}
 	if out.StartHour == nil {
-		v := 7
+		v := DefaultHeartbeatStart
 		out.StartHour = &v
 	}
 	if out.EndHour == nil {
-		v := 22
+		v := DefaultHeartbeatEnd
 		out.EndHour = &v
 	}
 	if out.PromptFile == "" {
-		out.PromptFile = "HEARTBEAT.md"
+		out.PromptFile = DefaultHeartbeatFile
 	}
 	return out
 }

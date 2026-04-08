@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
@@ -163,11 +164,18 @@ func (s *Server) handleCronRemove(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCronList(w http.ResponseWriter, r *http.Request) {
 	entries := s.scheduler.List()
-	data, _ := json.Marshal(entries)
+	data, err := json.Marshal(entries)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling cron entries: %v", err))
+		return
+	}
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
 // syncScheduler re-syncs the in-process scheduler with the current config.
+// Errors are logged but not returned because the on-disk config write already succeeded.
 func (s *Server) syncScheduler(cfg *config.Config) {
-	_ = s.scheduler.Install(cfg)
+	if err := s.scheduler.Install(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: scheduler sync failed: %v\n", err)
+	}
 }
