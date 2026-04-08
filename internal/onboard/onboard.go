@@ -238,9 +238,9 @@ func reconfigureTasks(reader *bufio.Reader, cfg *config.Config, ws string) error
 		if prompt.YesNo(reader, "Enable heartbeat? (checks in every 30 minutes during waking hours)", true) {
 			cfg.Heartbeat = config.HeartbeatConfig{
 				Enabled:  true,
-				Interval: "30m",
-				Timezone: "America/New_York",
-				Model:    "sonnet",
+				Interval: config.DefaultHeartbeatInterval,
+				Timezone: config.DefaultTimezone,
+				Model:    config.DefaultModel,
 				MaxTurns: 10,
 			}
 		}

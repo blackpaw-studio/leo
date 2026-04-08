@@ -48,7 +48,9 @@ func newTaskListCmd() *cobra.Command {
 					return fmt.Errorf("daemon error: %s", resp.Error)
 				}
 				var tasks map[string]config.TaskConfig
-				json.Unmarshal(resp.Data, &tasks)
+				if err := json.Unmarshal(resp.Data, &tasks); err != nil {
+					return fmt.Errorf("parsing task list: %w", err)
+				}
 				if len(tasks) == 0 {
 					info.Println("No tasks configured.")
 					return nil
@@ -110,7 +112,7 @@ func newTaskAddCmd() *cobra.Command {
 
 			task := config.TaskConfig{
 				Schedule:   schedule,
-				Timezone:   "America/New_York",
+				Timezone:   config.DefaultTimezone,
 				PromptFile: promptFile,
 				Model:      model,
 				TopicID:    topicID,

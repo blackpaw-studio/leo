@@ -63,9 +63,12 @@ func TestScaffoldWorkspace(t *testing.T) {
 		Tasks:    map[string]config.TaskConfig{},
 	}
 
-	err := scaffoldWorkspace(dir, home, "test", cfg,
-		agentDir, agentPath, "# Test Agent",
-		filepath.Join(dir, "USER.md"), "TestUser", "developer", "about me", "concise", "UTC")
+	err := scaffoldWorkspace(scaffoldOptions{
+		workspace: dir, home: home, name: "test", cfg: cfg,
+		agentDir: agentDir, agentPath: agentPath, agentContent: "# Test Agent",
+		userPath: filepath.Join(dir, "USER.md"), userName: "TestUser",
+		role: "developer", about: "about me", preferences: "concise", timezone: "UTC",
+	})
 	if err != nil {
 		t.Fatalf("scaffoldWorkspace() error: %v", err)
 	}
@@ -154,9 +157,11 @@ func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
 	os.WriteFile(customSkillPath, []byte("custom skill"), 0644)
 
 	// No agent content, no user profile — should skip those
-	err := scaffoldWorkspace(dir, home, "test", cfg,
-		agentDir, filepath.Join(agentDir, "test.md"), "",
-		filepath.Join(dir, "USER.md"), "", "", "", "", "")
+	err := scaffoldWorkspace(scaffoldOptions{
+		workspace: dir, home: home, name: "test", cfg: cfg,
+		agentDir: agentDir, agentPath: filepath.Join(agentDir, "test.md"),
+		userPath: filepath.Join(dir, "USER.md"),
+	})
 	if err != nil {
 		t.Fatalf("scaffoldWorkspace() error: %v", err)
 	}

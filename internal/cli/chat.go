@@ -287,7 +287,10 @@ func seedTopicCache(cfg *config.Config) {
 	}
 
 	stateDir := filepath.Join(cfg.Agent.Workspace, "state")
-	_ = os.MkdirAll(stateDir, 0750)
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
+		warn.Printf("  Could not create state directory: %v\n", err)
+		return
+	}
 
 	if err := telegram.WriteTopicCache(filepath.Join(stateDir, "topics.json"), topics); err != nil {
 		warn.Printf("  Could not cache topics: %v\n", err)

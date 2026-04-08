@@ -62,12 +62,58 @@ func Run() error {
 
 // RunInteractive executes the migration wizard using the given reader, without printing a banner.
 func RunInteractive(reader *bufio.Reader) error {
-	// 1. Find OpenClaw
-	ocPath := FindOpenClaw()
+	ocPath, ocWorkspace, err := promptOpenClawPath(reader)
+	if err != nil {
+		return err
+	}
+
+	agentName, workspace, home, err := promptMigrationIdentity(reader, ocWorkspace)
+	if err != nil {
+		return err
+	}
+
+	if err := createWorkspaceDirs(workspace); err != nil {
+		return err
+	}
+
+	agentPath, err := migrateAgentFiles(ocWorkspace, agentName, workspace, home)
+	if err != nil {
+		return err
+	}
+
+	migrateWorkspaceFiles(ocWorkspace, ocPath, workspace)
+
+	cfg := buildMigrationConfig(agentName, workspace, reader, ocPath)
+
+	cfgPath := filepath.Join(workspace, "leo.yaml")
+	if err := config.Save(cfgPath, cfg); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	prompt.Info.Printf("  Wrote %s\n", cfgPath)
+
+	syncDaemonSchedules(cfg, workspace)
+	promptMigrationDaemonInstall(reader, cfg, agentName, workspace, cfgPath)
+	sendMigrationTestMessage(reader, cfg)
+
+	prompt.Bold.Println("\nMigration complete!")
+	fmt.Printf("  Workspace: %s\n", workspace)
+	fmt.Printf("  Agent file: %s\n", agentPath)
+	fmt.Printf("  Config: %s\n", cfgPath)
+	fmt.Printf("  Tasks: %d\n", len(cfg.Tasks))
+	fmt.Println("\nNext steps:")
+	fmt.Println("  1. Review the agent file and edit as needed")
+	fmt.Println("  2. Run 'leo chat' to test interactive mode")
+	fmt.Println("  3. Run 'leo run <task>' to test scheduled tasks")
+
+	return nil
+}
+
+func promptOpenClawPath(reader *bufio.Reader) (ocPath, ocWorkspace string, err error) {
+	ocPath = FindOpenClaw()
 	if ocPath == "" {
 		ocPath = prompt.Prompt(reader, "OpenClaw workspace path", "")
 		if ocPath == "" {
-			return fmt.Errorf("no OpenClaw installation found")
+			return "", "", fmt.Errorf("no OpenClaw installation found")
 		}
 	} else {
 		prompt.Info.Printf("  Found OpenClaw at: %s\n", ocPath)
@@ -76,25 +122,28 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
-	ocWorkspace := filepath.Join(ocPath, "workspace")
+	ocWorkspace = filepath.Join(ocPath, "workspace")
 	if _, err := os.Stat(ocWorkspace); os.IsNotExist(err) {
 		ocWorkspace = ocPath
 	}
+	return ocPath, ocWorkspace, nil
+}
 
-	// 2. Agent name
-	agentName := detectAgentName(ocWorkspace)
+func promptMigrationIdentity(reader *bufio.Reader, ocWorkspace string) (agentName, workspace, home string, err error) {
+	agentName = detectAgentName(ocWorkspace)
 	if agentName != "" {
 		prompt.Info.Printf("  Detected agent name: %s\n", agentName)
 	}
 	agentName = prompt.Prompt(reader, "Agent name", agentName)
 
-	// 3. Workspace directory
-	home, _ := os.UserHomeDir()
+	home, _ = os.UserHomeDir()
 	defaultWorkspace := filepath.Join(home, ".leo")
-	workspace := prompt.Prompt(reader, "New workspace directory", defaultWorkspace)
+	workspace = prompt.Prompt(reader, "New workspace directory", defaultWorkspace)
 	workspace = prompt.ExpandHome(workspace)
+	return agentName, workspace, home, nil
+}
 
-	// 4. Create workspace dirs
+func createWorkspaceDirs(workspace string) error {
 	dirs := []string{
 		workspace,
 		filepath.Join(workspace, "daily"),
@@ -108,35 +157,39 @@ func RunInteractive(reader *bufio.Reader) error {
 			return fmt.Errorf("creating directory %s: %w", dir, err)
 		}
 	}
+	return nil
+}
 
-	// 5. Merge agent files
+func migrateAgentFiles(ocWorkspace, agentName, workspace, home string) (agentPath string, err error) {
 	prompt.Bold.Println("\nMerging agent files...")
 	agentContent := mergeAgentFiles(ocWorkspace, agentName, workspace)
 
 	agentDir := filepath.Join(home, ".claude", "agents")
 	if err := os.MkdirAll(agentDir, 0750); err != nil {
-		return fmt.Errorf("creating agent directory: %w", err)
+		return "", fmt.Errorf("creating agent directory: %w", err)
 	}
-	agentPath := filepath.Join(agentDir, agentName+".md")
+	agentPath = filepath.Join(agentDir, agentName+".md")
 	if err := os.WriteFile(agentPath, []byte(agentContent), 0644); err != nil {
-		return fmt.Errorf("writing agent file: %w", err)
+		return "", fmt.Errorf("writing agent file: %w", err)
 	}
 	prompt.Info.Printf("  Wrote %s\n", agentPath)
+	return agentPath, nil
+}
 
-	// 6. Copy workspace files
+func migrateWorkspaceFiles(ocWorkspace, ocPath, workspace string) {
 	prompt.Bold.Println("\nCopying workspace files...")
 	copyCount := copyWorkspaceFiles(ocWorkspace, workspace, ocPath)
 	prompt.Info.Printf("  Copied %d files\n", copyCount)
 
-	// 7. Rewrite paths in all .md files
 	prompt.Bold.Println("\nRewriting paths...")
 	rewriteCount := rewritePaths(workspace, ocWorkspace, workspace)
 	if ocPath != ocWorkspace {
 		rewriteCount += rewritePaths(workspace, ocPath, workspace)
 	}
 	prompt.Info.Printf("  Updated %d files\n", rewriteCount)
+}
 
-	// 9. Parse cron jobs
+func buildMigrationConfig(agentName, workspace string, reader *bufio.Reader, ocPath string) *config.Config {
 	prompt.Bold.Println("\nConverting cron jobs...")
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
@@ -144,26 +197,20 @@ func RunInteractive(reader *bufio.Reader) error {
 			Workspace: workspace,
 		},
 		Defaults: config.DefaultsConfig{
-			Model:    "sonnet",
-			MaxTurns: 15,
+			Model:    config.DefaultModel,
+			MaxTurns: config.DefaultMaxTurns,
 		},
 		Tasks: make(map[string]config.TaskConfig),
 	}
 
 	parseCronJobs(ocPath, cfg)
 
-	// 10. Telegram config
 	prompt.Bold.Println("\nTelegram configuration...")
 	configureTelegram(reader, ocPath, cfg)
+	return cfg
+}
 
-	// Write config
-	cfgPath := filepath.Join(workspace, "leo.yaml")
-	if err := config.Save(cfgPath, cfg); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-	prompt.Info.Printf("  Wrote %s\n", cfgPath)
-
-	// 11. Sync schedules with daemon if running
+func syncDaemonSchedules(cfg *config.Config, workspace string) {
 	if len(cfg.Tasks) > 0 {
 		if daemon.IsRunning(workspace) {
 			if resp, err := daemon.Send(workspace, "POST", "/cron/install", nil); err == nil && resp.OK {
@@ -173,8 +220,9 @@ func RunInteractive(reader *bufio.Reader) error {
 			prompt.Info.Println("  Schedules will load when daemon starts.")
 		}
 	}
+}
 
-	// 12. Install chat daemon
+func promptMigrationDaemonInstall(reader *bufio.Reader, cfg *config.Config, agentName, workspace, cfgPath string) {
 	if prompt.YesNo(reader, "\nInstall chat daemon (runs on login)?", true) {
 		leoPath, _ := os.Executable()
 		if leoPath == "" {
@@ -201,8 +249,9 @@ func RunInteractive(reader *bufio.Reader) error {
 			prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
 		}
 	}
+}
 
-	// 13. Test
+func sendMigrationTestMessage(reader *bufio.Reader, cfg *config.Config) {
 	if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
 		if prompt.YesNo(reader, "\nSend test Telegram message?", true) {
 			chatID := cfg.Telegram.ChatID
@@ -216,19 +265,6 @@ func RunInteractive(reader *bufio.Reader) error {
 			}
 		}
 	}
-
-	// 14. Summary
-	prompt.Bold.Println("\nMigration complete!")
-	fmt.Printf("  Workspace: %s\n", workspace)
-	fmt.Printf("  Agent file: %s\n", agentPath)
-	fmt.Printf("  Config: %s\n", cfgPath)
-	fmt.Printf("  Tasks: %d\n", len(cfg.Tasks))
-	fmt.Println("\nNext steps:")
-	fmt.Println("  1. Review the agent file and edit as needed")
-	fmt.Println("  2. Run 'leo chat' to test interactive mode")
-	fmt.Println("  3. Run 'leo run <task>' to test scheduled tasks")
-
-	return nil
 }
 
 // FindOpenClaw searches for an OpenClaw installation in common locations.
@@ -458,7 +494,7 @@ func parseCronJobs(ocRoot string, cfg *config.Config) {
 
 		tz := job.Schedule.Tz
 		if tz == "" {
-			tz = "America/New_York"
+			tz = config.DefaultTimezone
 		}
 
 		task := config.TaskConfig{
