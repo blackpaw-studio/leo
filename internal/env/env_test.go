@@ -2,6 +2,8 @@ package env
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +38,110 @@ func TestCaptureIncludesPath(t *testing.T) {
 
 	if _, ok := result["PATH"]; !ok {
 		t.Error("PATH should be present")
+	}
+}
+
+func TestCaptureBunInPath(t *testing.T) {
+	origHome := userHomeDirFn
+	origStat := statFn
+	defer func() {
+		userHomeDirFn = origHome
+		statFn = origStat
+	}()
+
+	home := t.TempDir()
+	bunDir := filepath.Join(home, ".bun", "bin")
+	os.MkdirAll(bunDir, 0755)
+
+	userHomeDirFn = func() (string, error) { return home, nil }
+	statFn = os.Stat // real stat, temp dirs exist
+
+	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("HOME", home)
+
+	env := Capture()
+	if !strings.Contains(env["PATH"], bunDir) {
+		t.Errorf("PATH should contain bun dir: %s", env["PATH"])
+	}
+}
+
+func TestCaptureLocalBinInPath(t *testing.T) {
+	origHome := userHomeDirFn
+	origStat := statFn
+	defer func() {
+		userHomeDirFn = origHome
+		statFn = origStat
+	}()
+
+	home := t.TempDir()
+	localBinDir := filepath.Join(home, ".local", "bin")
+	os.MkdirAll(localBinDir, 0755)
+
+	userHomeDirFn = func() (string, error) { return home, nil }
+	statFn = os.Stat
+
+	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("HOME", home)
+
+	env := Capture()
+	if !strings.Contains(env["PATH"], localBinDir) {
+		t.Errorf("PATH should contain local bin dir: %s", env["PATH"])
+	}
+}
+
+func TestCaptureHomebrewInPath(t *testing.T) {
+	origHome := userHomeDirFn
+	origStat := statFn
+	defer func() {
+		userHomeDirFn = origHome
+		statFn = origStat
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+
+	// Mock statFn so /opt/homebrew/bin "exists"
+	statFn = func(name string) (os.FileInfo, error) {
+		if name == "/opt/homebrew/bin" {
+			// Return info for any existing dir
+			return os.Stat(home)
+		}
+		return os.Stat(name)
+	}
+
+	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("HOME", home)
+
+	env := Capture()
+	if !strings.Contains(env["PATH"], "/opt/homebrew/bin") {
+		t.Errorf("PATH should contain /opt/homebrew/bin: %s", env["PATH"])
+	}
+}
+
+func TestCaptureNoDuplicatePaths(t *testing.T) {
+	origHome := userHomeDirFn
+	origStat := statFn
+	defer func() {
+		userHomeDirFn = origHome
+		statFn = origStat
+	}()
+
+	home := t.TempDir()
+	bunDir := filepath.Join(home, ".bun", "bin")
+	os.MkdirAll(bunDir, 0755)
+
+	userHomeDirFn = func() (string, error) { return home, nil }
+	statFn = os.Stat
+
+	// PATH already contains the bun dir
+	t.Setenv("PATH", bunDir+":/usr/bin")
+	t.Setenv("HOME", home)
+
+	env := Capture()
+	// Count occurrences of bunDir in PATH
+	count := strings.Count(env["PATH"], bunDir)
+	if count != 1 {
+		t.Errorf("bunDir should appear once in PATH, appeared %d times: %s", count, env["PATH"])
 	}
 }
 

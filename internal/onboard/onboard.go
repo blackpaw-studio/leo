@@ -15,11 +15,20 @@ import (
 	"github.com/blackpaw-studio/leo/internal/telegram"
 )
 
-var execCommand = exec.Command
+var (
+	execCommand        = exec.Command
+	checkClaudeFn      = prereq.CheckClaude
+	findOpenClawFn     = prereq.FindOpenClaw
+	findWorkspacesFn   = prereq.FindExistingWorkspaces
+	setupInteractiveFn = setup.RunInteractive
+	migrateInteractiveFn = migrate.RunInteractive
+	sendMessageFn      = telegram.SendMessage
+	newReaderFn        = prompt.NewReader
+)
 
 // Run executes the unified onboarding flow.
 func Run() error {
-	reader := prompt.NewReader()
+	reader := newReaderFn()
 
 	// 1. Welcome
 	fmt.Println()
@@ -35,7 +44,7 @@ func Run() error {
 	prompt.Bold.Println("Checking prerequisites...")
 	fmt.Println()
 
-	claude := prereq.CheckClaude()
+	claude := checkClaudeFn()
 	if !claude.OK {
 		prompt.Err.Println("    claude CLI    ✗ not found")
 		fmt.Println()
@@ -60,8 +69,8 @@ func Run() error {
 	prompt.Bold.Println("Detecting existing installations...")
 	fmt.Println()
 
-	ocPath := prereq.FindOpenClaw()
-	workspaces := prereq.FindExistingWorkspaces()
+	ocPath := findOpenClawFn()
+	workspaces := findWorkspacesFn()
 
 	if ocPath != "" {
 		prompt.Info.Printf("    OpenClaw      ✓ found at %s\n", ocPath)
@@ -89,9 +98,9 @@ func Run() error {
 
 		switch prompt.ParseChoice(choice, 3) {
 		case 1:
-			return setup.RunInteractive(reader)
+			return setupInteractiveFn(reader)
 		case 2:
-			return migrate.RunInteractive(reader)
+			return migrateInteractiveFn(reader)
 		case 3:
 			return reconfigure(reader, workspaces)
 		}
@@ -106,9 +115,9 @@ func Run() error {
 
 		switch prompt.ParseChoice(choice, 2) {
 		case 1:
-			return migrate.RunInteractive(reader)
+			return migrateInteractiveFn(reader)
 		case 2:
-			return setup.RunInteractive(reader)
+			return setupInteractiveFn(reader)
 		}
 
 	case len(workspaces) > 0:
@@ -123,14 +132,14 @@ func Run() error {
 		case 1:
 			return reconfigure(reader, workspaces)
 		case 2:
-			return setup.RunInteractive(reader)
+			return setupInteractiveFn(reader)
 		}
 
 	default:
 		// Nothing found — fresh setup
 		fmt.Println("No existing installation found. Starting fresh setup.")
 		fmt.Println()
-		return setup.RunInteractive(reader)
+		return setupInteractiveFn(reader)
 	}
 
 	return nil
@@ -179,7 +188,7 @@ func reconfigure(reader *bufio.Reader, workspaces []string) error {
 		return reconfigureTasks(reader, cfg, ws)
 	case 3:
 		// Full setup will overwrite
-		return setup.RunInteractive(reader)
+		return setupInteractiveFn(reader)
 	}
 
 	return nil
@@ -210,7 +219,7 @@ func reconfigureTelegram(reader *bufio.Reader, cfg *config.Config, ws string) er
 		if groupID != "" {
 			effectiveChatID = groupID
 		}
-		if err := telegram.SendMessage(botToken, effectiveChatID, "Hello from Leo! Reconfiguration complete.", 0); err != nil {
+		if err := sendMessageFn(botToken, effectiveChatID, "Hello from Leo! Reconfiguration complete.", 0); err != nil {
 			prompt.Warn.Printf("  Test message failed: %v\n", err)
 		} else {
 			prompt.Success.Println("  Test message sent!")

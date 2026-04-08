@@ -10,24 +10,33 @@ import (
 	"github.com/blackpaw-studio/leo/internal/prompt"
 )
 
+var (
+	lookPathFn    = exec.LookPath
+	statFn        = os.Stat
+	writeFileFn   = os.WriteFile
+	readFileFn    = os.ReadFile
+	mkdirAllFn    = os.MkdirAll
+	execCommandFn = exec.Command
+)
+
 // installTelegramPlugin fully configures the Claude Code telegram channel plugin:
 // - Installs the plugin via claude CLI if not already installed
 // - Writes bot token to ~/.claude/channels/telegram/.env
 // - Writes access.json with allowlist policy, allowFrom, and groups
 // - Writes ~/.claude/settings.json with trustedDirectories, skipDangerousModePermissionPrompt, enabledPlugins
 func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDirFn()
 	if err != nil {
 		return fmt.Errorf("determining home directory: %w", err)
 	}
 
 	// 1. Install the telegram plugin if not already installed
 	pluginDir := filepath.Join(home, ".claude", "plugins", "marketplaces", "claude-plugins-official", "external_plugins", "telegram")
-	if _, err := os.Stat(pluginDir); os.IsNotExist(err) {
-		claudePath, lookErr := exec.LookPath("claude")
+	if _, err := statFn(pluginDir); os.IsNotExist(err) {
+		claudePath, lookErr := lookPathFn("claude")
 		if lookErr == nil {
 			prompt.Info.Println("  Installing telegram plugin...")
-			cmd := exec.Command(claudePath, "plugin", "install", "telegram@claude-plugins-official")
+			cmd := execCommandFn(claudePath, "plugin", "install", "telegram@claude-plugins-official")
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
@@ -42,13 +51,13 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 
 	// 2. Write bot token to .env
 	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
-	if err := os.MkdirAll(channelDir, 0750); err != nil {
+	if err := mkdirAllFn(channelDir, 0750); err != nil {
 		return fmt.Errorf("creating channel directory: %w", err)
 	}
 
 	envContent := fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", botToken)
 	envPath := filepath.Join(channelDir, ".env")
-	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
+	if err := writeFileFn(envPath, []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
 	}
 
@@ -62,7 +71,7 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 		"groups":    map[string]any{},
 		"pending":   map[string]any{},
 	}
-	if existingData, readErr := os.ReadFile(accessPath); readErr == nil {
+	if existingData, readErr := readFileFn(accessPath); readErr == nil {
 		if unmarshalErr := json.Unmarshal(existingData, &accessDoc); unmarshalErr != nil {
 			return fmt.Errorf("parsing existing access.json: %w", unmarshalErr)
 		}
@@ -97,7 +106,7 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 	if marshalErr != nil {
 		return fmt.Errorf("marshaling access.json: %w", marshalErr)
 	}
-	if err := os.WriteFile(accessPath, append(accessData, '\n'), 0600); err != nil {
+	if err := writeFileFn(accessPath, append(accessData, '\n'), 0600); err != nil {
 		return fmt.Errorf("writing access.json: %w", err)
 	}
 
@@ -113,13 +122,13 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 // for headless daemon operation: trustedDirectories, skipDangerousModePermissionPrompt,
 // and enabledPlugins for telegram.
 func writeClaudeSettings(workspace string) error {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDirFn()
 	if err != nil {
 		return fmt.Errorf("determining home directory: %w", err)
 	}
 
 	claudeDir := filepath.Join(home, ".claude")
-	if err := os.MkdirAll(claudeDir, 0700); err != nil {
+	if err := mkdirAllFn(claudeDir, 0700); err != nil {
 		return fmt.Errorf("creating .claude directory: %w", err)
 	}
 
@@ -127,7 +136,7 @@ func writeClaudeSettings(workspace string) error {
 
 	// Read existing settings if present
 	existing := make(map[string]any)
-	if data, err := os.ReadFile(settingsPath); err == nil {
+	if data, err := readFileFn(settingsPath); err == nil {
 		if unmarshalErr := json.Unmarshal(data, &existing); unmarshalErr != nil {
 			return fmt.Errorf("parsing existing settings.json: %w", unmarshalErr)
 		}
@@ -167,5 +176,5 @@ func writeClaudeSettings(workspace string) error {
 		return fmt.Errorf("marshaling settings: %w", err)
 	}
 
-	return os.WriteFile(settingsPath, append(data, '\n'), 0600)
+	return writeFileFn(settingsPath, append(data, '\n'), 0600)
 }

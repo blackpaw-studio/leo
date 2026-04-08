@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -419,5 +420,384 @@ func TestHandleTaskList(t *testing.T) {
 
 	if _, ok := tasks["heartbeat"]; !ok {
 		t.Error("expected 'heartbeat' task in list response")
+	}
+}
+
+func TestHandleTaskAddMalformedJSON(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	resp, err := client.Post("http://localhost/task/add", "application/json", bytes.NewReader([]byte("not json")))
+	if err != nil {
+		t.Fatalf("POST /task/add error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for malformed JSON")
+	}
+}
+
+func TestHandleTaskAddMissingName(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	body, _ := json.Marshal(TaskAddRequest{
+		Schedule:   "0 9 * * *",
+		PromptFile: "daily.md",
+	})
+
+	resp, err := client.Post("http://localhost/task/add", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /task/add error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for missing name")
+	}
+	if !strings.Contains(result.Error, "name") {
+		t.Errorf("error = %q, want to contain 'name'", result.Error)
+	}
+}
+
+func TestHandleTaskAddMissingSchedule(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	body, _ := json.Marshal(TaskAddRequest{
+		Name:       "test",
+		PromptFile: "daily.md",
+	})
+
+	resp, err := client.Post("http://localhost/task/add", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /task/add error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for missing schedule")
+	}
+}
+
+func TestHandleTaskAddMissingPromptFile(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	body, _ := json.Marshal(TaskAddRequest{
+		Name:     "test",
+		Schedule: "* * * * *",
+	})
+
+	resp, err := client.Post("http://localhost/task/add", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /task/add error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for missing prompt_file")
+	}
+}
+
+func TestHandleTaskRemoveMalformedJSON(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	resp, err := client.Post("http://localhost/task/remove", "application/json", bytes.NewReader([]byte("not json")))
+	if err != nil {
+		t.Fatalf("POST /task/remove error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for malformed JSON")
+	}
+}
+
+func TestHandleTaskEnableNotFound(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	body, _ := json.Marshal(TaskNameRequest{Name: "nonexistent"})
+
+	resp, err := client.Post("http://localhost/task/enable", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /task/enable error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for not found task")
+	}
+}
+
+func TestHandleTaskDisableNotFound(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	body, _ := json.Marshal(TaskNameRequest{Name: "nonexistent"})
+
+	resp, err := client.Post("http://localhost/task/disable", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /task/disable error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for not found task")
+	}
+}
+
+func TestHandleTaskListEmpty(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	// Write config with no tasks
+	cfgYAML := `
+agent:
+  name: test-agent
+  workspace: /tmp/test-workspace
+defaults:
+  model: sonnet
+  max_turns: 10
+`
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0600); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+
+	_, client := startTestServer(t, cfgPath)
+
+	resp, err := client.Get("http://localhost/task/list")
+	if err != nil {
+		t.Fatalf("GET /task/list error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !result.OK {
+		t.Errorf("expected OK=true, got OK=false (error: %s)", result.Error)
+	}
+}
+
+func TestHandleConfigLoadError(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	// Write a valid config so the server can start, then delete it
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	// Remove the config file so handlers that load config will fail
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatalf("removing config: %v", err)
+	}
+
+	// Test task/list
+	resp, err := client.Get("http://localhost/task/list")
+	if err != nil {
+		t.Fatalf("GET /task/list error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for config load error")
+	}
+
+	// Test task/add config load error
+	addBody, _ := json.Marshal(TaskAddRequest{
+		Name:       "test",
+		Schedule:   "* * * * *",
+		PromptFile: "test.md",
+	})
+	resp2, err := client.Post("http://localhost/task/add", "application/json", bytes.NewReader(addBody))
+	if err != nil {
+		t.Fatalf("POST /task/add error: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusInternalServerError {
+		t.Errorf("task/add: expected status 500, got %d", resp2.StatusCode)
+	}
+
+	// Test task/remove config load error
+	removeBody, _ := json.Marshal(TaskNameRequest{Name: "heartbeat"})
+	resp3, err := client.Post("http://localhost/task/remove", "application/json", bytes.NewReader(removeBody))
+	if err != nil {
+		t.Fatalf("POST /task/remove error: %v", err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusInternalServerError {
+		t.Errorf("task/remove: expected status 500, got %d", resp3.StatusCode)
+	}
+
+	// Test task/enable config load error
+	enableBody, _ := json.Marshal(TaskNameRequest{Name: "heartbeat"})
+	resp4, err := client.Post("http://localhost/task/enable", "application/json", bytes.NewReader(enableBody))
+	if err != nil {
+		t.Fatalf("POST /task/enable error: %v", err)
+	}
+	defer resp4.Body.Close()
+	if resp4.StatusCode != http.StatusInternalServerError {
+		t.Errorf("task/enable: expected status 500, got %d", resp4.StatusCode)
+	}
+
+	// Test cron/install config load error
+	resp5, err := client.Post("http://localhost/cron/install", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /cron/install error: %v", err)
+	}
+	defer resp5.Body.Close()
+	if resp5.StatusCode != http.StatusInternalServerError {
+		t.Errorf("cron/install: expected status 500, got %d", resp5.StatusCode)
+	}
+}
+
+func TestHandleTaskEnableMalformedJSON(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	resp, err := client.Post("http://localhost/task/enable", "application/json", bytes.NewReader([]byte("not json")))
+	if err != nil {
+		t.Fatalf("POST /task/enable error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result.OK {
+		t.Error("expected OK=false for malformed JSON")
 	}
 }

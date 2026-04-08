@@ -2,6 +2,7 @@ package run
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -381,6 +382,98 @@ func TestRunTaskNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("error = %q, want to contain 'not found'", err.Error())
+	}
+}
+
+func TestRunSuccess(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	// Create prompt file
+	os.WriteFile(filepath.Join(dir, "task.md"), []byte("test prompt"), 0644)
+	// Create state dir for logs
+	os.MkdirAll(filepath.Join(dir, "state"), 0755)
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "task output")
+	}
+
+	cfg := &config.Config{
+		Agent: config.AgentConfig{Name: "test", Workspace: dir},
+		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+
+	err := Run(cfg, "mytask")
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	// Verify log was written
+	logData, err := os.ReadFile(filepath.Join(dir, "state", "mytask.log"))
+	if err != nil {
+		t.Fatalf("reading log: %v", err)
+	}
+	if !strings.Contains(string(logData), "task output") {
+		t.Errorf("log = %q, want to contain 'task output'", string(logData))
+	}
+}
+
+func TestRunCommandError(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "task.md"), []byte("test prompt"), 0644)
+	os.MkdirAll(filepath.Join(dir, "state"), 0755)
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("false")
+	}
+
+	cfg := &config.Config{
+		Agent: config.AgentConfig{Name: "test", Workspace: dir},
+		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+
+	err := Run(cfg, "mytask")
+	if err == nil {
+		t.Fatal("Run() should return error when command fails")
+	}
+	if !strings.Contains(err.Error(), "claude exited with error") {
+		t.Errorf("error = %q, want to contain 'claude exited with error'", err.Error())
+	}
+}
+
+func TestRunMissingPromptFile(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+
+	cfg := &config.Config{
+		Agent: config.AgentConfig{Name: "test", Workspace: dir},
+		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "nonexistent.md", Schedule: "0 * * * *"},
+		},
+	}
+
+	err := Run(cfg, "mytask")
+	if err == nil {
+		t.Fatal("Run() should return error for missing prompt file")
+	}
+	if !strings.Contains(err.Error(), "assembling prompt") {
+		t.Errorf("error = %q, want to contain 'assembling prompt'", err.Error())
 	}
 }
 

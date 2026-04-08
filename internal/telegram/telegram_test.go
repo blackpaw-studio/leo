@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -279,6 +281,87 @@ func TestFetchTopicsEmpty(t *testing.T) {
 
 	if len(topics) != 0 {
 		t.Errorf("got %d topics, want 0", len(topics))
+	}
+}
+
+func TestWriteAndReadTopicCache(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "topics.json")
+	topics := []Topic{{ID: 1, Name: "General"}, {ID: 5, Name: "News"}}
+
+	if err := WriteTopicCache(path, topics); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := ReadTopicCache(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(loaded) != 2 {
+		t.Fatalf("len = %d, want 2", len(loaded))
+	}
+	if loaded[0].Name != "General" || loaded[1].Name != "News" {
+		t.Errorf("topics = %v", loaded)
+	}
+}
+
+func TestReadTopicCacheNotFound(t *testing.T) {
+	_, err := ReadTopicCache("/nonexistent/path")
+	if err == nil {
+		t.Error("expected error for missing file")
+	}
+}
+
+func TestReadTopicCacheInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "topics.json")
+	os.WriteFile(path, []byte("not json"), 0644)
+
+	_, err := ReadTopicCache(path)
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestSortTopics(t *testing.T) {
+	topics := []Topic{
+		{ID: 5, Name: "Five"},
+		{ID: 1, Name: "One"},
+		{ID: 3, Name: "Three"},
+	}
+	sortTopics(topics)
+
+	if topics[0].ID != 1 || topics[1].ID != 3 || topics[2].ID != 5 {
+		t.Errorf("sort order wrong: %v", topics)
+	}
+}
+
+func TestSortTopicsEmpty(t *testing.T) {
+	sortTopics(nil)       // should not panic
+	sortTopics([]Topic{}) // should not panic
+}
+
+func TestSortTopicsSingleElement(t *testing.T) {
+	topics := []Topic{{ID: 1, Name: "One"}}
+	sortTopics(topics)
+	if topics[0].ID != 1 {
+		t.Error("single element sort failed")
+	}
+}
+
+func TestFetchTopicsAPIError(t *testing.T) {
+	withTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok": false, "result": []}`))
+	})
+
+	_, err := FetchTopics(context.Background(), "test-token", "-100999")
+	if err == nil {
+		t.Error("expected error when API returns ok=false")
+	}
+	if !strings.Contains(err.Error(), "ok=false") {
+		t.Errorf("error = %q, want to contain 'ok=false'", err.Error())
 	}
 }
 

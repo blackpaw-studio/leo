@@ -297,7 +297,7 @@ func TestStopStalePid(t *testing.T) {
 	}
 }
 
-func TestStopSuccess(t *testing.T) {
+func TestStopProcessNotFound(t *testing.T) {
 	origRead := readFile
 	origFind := findProcess
 	origRemove := removeFile
@@ -311,17 +311,28 @@ func TestStopSuccess(t *testing.T) {
 		return []byte(strconv.Itoa(os.Getpid())), nil
 	}
 
-	signalCount := 0
+	// First call to isRunning (via findProcess) returns true (running),
+	// then findProcess in Stop itself returns error
+	callCount := 0
 	findProcess = func(pid int) (*os.Process, error) {
-		return os.FindProcess(pid)
+		callCount++
+		if callCount <= 1 {
+			// isRunning check succeeds
+			return os.FindProcess(pid)
+		}
+		// findProcess in Stop returns error
+		return nil, fmt.Errorf("process not found")
 	}
-	_ = signalCount
 
 	removeFile = func(name string) error { return nil }
 
-	// This test is tricky because we'd be sending SIGTERM to ourselves.
-	// Just verify the stale PID path is covered above.
-	// The happy path is integration-tested via E2E.
+	err := Stop("myagent", "/workspace")
+	if err == nil {
+		t.Fatal("Stop() should error when process not found")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want 'not found'", err.Error())
+	}
 }
 
 func TestStartProcessError(t *testing.T) {

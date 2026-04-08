@@ -16,16 +16,30 @@ import (
 	"github.com/blackpaw-studio/leo/internal/templates"
 )
 
+var (
+	userHomeDirFn            = os.UserHomeDir
+	checkClaudeFn            = prereq.CheckClaude
+	checkTmuxFn              = prereq.CheckTmux
+	checkBunFn               = prereq.CheckBun
+	findOpenClawFn           = prereq.FindOpenClaw
+	migrateInteractiveFn     = migrate.RunInteractive
+	findExistingWorkspacesFn = prereq.FindExistingWorkspaces
+	daemonStatusFn           = service.DaemonStatus
+	sendMessageFn            = telegram.SendMessage
+	pollChatIDFn             = telegram.PollChatID
+	newReaderFn              = prompt.NewReader
+)
+
 // Run executes the interactive setup wizard with its own banner.
 func Run() error {
-	reader := prompt.NewReader()
+	reader := newReaderFn()
 
 	fmt.Println()
 	prompt.Bold.Println("  Leo Setup Wizard")
 	fmt.Println()
 
 	// Check for existing OpenClaw installation
-	if ocPath := prereq.FindOpenClaw(); ocPath != "" {
+	if ocPath := findOpenClawFn(); ocPath != "" {
 		prompt.Info.Printf("  Found OpenClaw installation at %s\n\n", ocPath)
 		fmt.Println("What would you like to do?")
 		fmt.Println("  1. Migrate from OpenClaw — import your existing agent")
@@ -34,7 +48,7 @@ func Run() error {
 		fmt.Println()
 
 		if prompt.ParseChoice(choice, 2) == 1 {
-			return migrate.RunInteractive(reader)
+			return migrateInteractiveFn(reader)
 		}
 	}
 
@@ -44,7 +58,7 @@ func Run() error {
 // RunInteractive executes the setup wizard using the given reader, without printing a banner.
 // This allows the onboard command to call it after its own welcome screen.
 func RunInteractive(reader *bufio.Reader) error {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDirFn()
 	if err != nil {
 		return fmt.Errorf("determining home directory: %w", err)
 	}
@@ -215,7 +229,7 @@ func configureTelegramPlugin(botToken, chatID, groupID, workspace string) {
 
 func promptDaemonInstall(reader *bufio.Reader, name, workspace, cfgPath, botToken string) {
 	fmt.Println()
-	daemonStatus, daemonErr := service.DaemonStatus(name)
+	daemonStatus, daemonErr := daemonStatusFn(name)
 	if daemonErr != nil {
 		prompt.Warn.Printf("  Could not check daemon status: %v\n", daemonErr)
 	}
@@ -239,7 +253,7 @@ func sendTestMessage(reader *bufio.Reader, botToken, chatID, groupID string) {
 		if groupID != "" {
 			effectiveChatID = groupID
 		}
-		if err := telegram.SendMessage(botToken, effectiveChatID, "Hello from Leo! Setup complete.", 0); err != nil {
+		if err := sendMessageFn(botToken, effectiveChatID, "Hello from Leo! Setup complete.", 0); err != nil {
 			prompt.Warn.Printf("  Test message failed: %v\n", err)
 		} else {
 			prompt.Success.Println("  Test message sent!")
@@ -251,7 +265,7 @@ func checkPrerequisites() error {
 	prompt.Bold.Println("Checking prerequisites...")
 	fmt.Println()
 
-	claude := prereq.CheckClaude()
+	claude := checkClaudeFn()
 	if !claude.OK {
 		prompt.Err.Println("    claude CLI    ✗ not found")
 		fmt.Println()
@@ -270,7 +284,7 @@ func checkPrerequisites() error {
 	}
 	prompt.Success.Printf("    claude CLI    ✓ %s\n", versionStr)
 
-	if prereq.CheckTmux() {
+	if checkTmuxFn() {
 		prompt.Success.Println("    tmux          ✓ installed")
 	} else {
 		prompt.Err.Println("    tmux          ✗ not found")
@@ -283,7 +297,7 @@ func checkPrerequisites() error {
 		return fmt.Errorf("tmux not found")
 	}
 
-	if prereq.CheckBun() {
+	if checkBunFn() {
 		prompt.Success.Println("    bun           ✓ installed")
 	} else {
 		prompt.Err.Println("    bun           ✗ not found")
@@ -307,7 +321,7 @@ func findExistingConfig(home string) (*config.Config, string) {
 		return cfg, defaultWorkspace
 	}
 
-	for _, ws := range prereq.FindExistingWorkspaces() {
+	for _, ws := range findExistingWorkspacesFn() {
 		if cfg, err := config.LoadFromWorkspace(ws); err == nil {
 			return cfg, ws
 		}
@@ -520,7 +534,7 @@ func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefaul
 	if botToken != "" && chatDefault == "" {
 		fmt.Println("\nSend any message to your bot now. Waiting for chat ID...")
 		var err error
-		chatID, err = telegram.PollChatID(botToken, 60*time.Second)
+		chatID, err = pollChatIDFn(botToken, 60*time.Second)
 		if err != nil {
 			prompt.Warn.Printf("  Could not detect chat ID: %v\n", err)
 			chatID = prompt.Prompt(reader, "Enter chat ID manually", "")

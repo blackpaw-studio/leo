@@ -183,6 +183,267 @@ func TestRemoveDaemonNotInstalled(t *testing.T) {
 	}
 }
 
+func TestRemoveDaemonSuccess(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	origRemove := removeFile
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+		removeFile = origRemove
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+
+	// Create the plist file at the expected path
+	label := daemonLabel("testagent")
+	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+	os.MkdirAll(launchAgentsDir, 0755)
+	plist := filepath.Join(launchAgentsDir, label+".plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0644)
+
+	// Mock runCommand (bootout) to succeed
+	runCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+
+	// Use real removeFile
+	removeFile = os.Remove
+
+	err := RemoveDaemon("testagent")
+	if err != nil {
+		t.Fatalf("RemoveDaemon() error: %v", err)
+	}
+
+	// Verify plist file was removed
+	if _, err := os.Stat(plist); !os.IsNotExist(err) {
+		t.Error("plist file should have been removed")
+	}
+}
+
+func TestDaemonStatusInstalledNotRunning(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+
+	// Create the plist file
+	label := daemonLabel("testagent")
+	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+	os.MkdirAll(launchAgentsDir, 0755)
+	plist := filepath.Join(launchAgentsDir, label+".plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0644)
+
+	// Mock runCommand: "launchctl print" returns error (not loaded)
+	runCommand = func(name string, args ...string) (string, error) {
+		return "", fmt.Errorf("could not find service")
+	}
+
+	status, err := DaemonStatus("testagent")
+	if err != nil {
+		t.Fatalf("DaemonStatus() error: %v", err)
+	}
+	if status != "installed but not running" {
+		t.Errorf("status = %q, want %q", status, "installed but not running")
+	}
+}
+
+func TestDaemonStatusRunningWithPid(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+
+	// Create the plist file
+	label := daemonLabel("testagent")
+	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+	os.MkdirAll(launchAgentsDir, 0755)
+	plist := filepath.Join(launchAgentsDir, label+".plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0644)
+
+	// Mock runCommand: "launchctl print" returns pid
+	runCommand = func(name string, args ...string) (string, error) {
+		return "pid = 12345\nstate = running\n", nil
+	}
+
+	status, err := DaemonStatus("testagent")
+	if err != nil {
+		t.Fatalf("DaemonStatus() error: %v", err)
+	}
+	if !strings.Contains(status, "running") {
+		t.Errorf("status = %q, want to contain 'running'", status)
+	}
+	if !strings.Contains(status, "12345") {
+		t.Errorf("status = %q, want to contain '12345'", status)
+	}
+}
+
+func TestDaemonStatusInstalled(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+
+	// Create the plist file
+	label := daemonLabel("testagent")
+	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+	os.MkdirAll(launchAgentsDir, 0755)
+	plist := filepath.Join(launchAgentsDir, label+".plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0644)
+
+	// Mock runCommand: "launchctl print" succeeds but no pid line
+	runCommand = func(name string, args ...string) (string, error) {
+		return "state = running\n", nil
+	}
+
+	status, err := DaemonStatus("testagent")
+	if err != nil {
+		t.Fatalf("DaemonStatus() error: %v", err)
+	}
+	if status != "installed" {
+		t.Errorf("status = %q, want %q", status, "installed")
+	}
+}
+
+func TestInstallDaemonWithHomeSeam(t *testing.T) {
+	origHome := userHomeDirFn
+	origMkdir := mkdirAll
+	origWrite := writeFile
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		mkdirAll = origMkdir
+		writeFile = origWrite
+		runCommand = origRun
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+	mkdirAll = func(path string, perm os.FileMode) error { return nil }
+
+	var writtenPath string
+	writeFile = func(name string, data []byte, perm os.FileMode) error {
+		writtenPath = name
+		return nil
+	}
+
+	runCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+
+	sc := ServiceConfig{
+		AgentName:  "testagent",
+		LeoPath:    "/usr/local/bin/leo",
+		ConfigPath: "/workspace/leo.yaml",
+		WorkDir:    "/workspace",
+		LogPath:    "/workspace/state/chat.log",
+	}
+
+	err := InstallDaemon(sc)
+	if err != nil {
+		t.Fatalf("InstallDaemon() error: %v", err)
+	}
+
+	expectedPlistDir := filepath.Join(home, "Library", "LaunchAgents")
+	if !strings.HasPrefix(writtenPath, expectedPlistDir) {
+		t.Errorf("plist written to %q, want prefix %q", writtenPath, expectedPlistDir)
+	}
+}
+
+func TestInstallDaemonWriteError(t *testing.T) {
+	origHome := userHomeDirFn
+	origMkdir := mkdirAll
+	origWrite := writeFile
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		mkdirAll = origMkdir
+		writeFile = origWrite
+		runCommand = origRun
+	}()
+
+	userHomeDirFn = func() (string, error) { return t.TempDir(), nil }
+
+	mkdirAll = func(path string, perm os.FileMode) error { return nil }
+	writeFile = func(name string, data []byte, perm os.FileMode) error {
+		return fmt.Errorf("disk full")
+	}
+	runCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+
+	sc := ServiceConfig{
+		AgentName: "test",
+		LogPath:   "/workspace/state/chat.log",
+	}
+
+	err := InstallDaemon(sc)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "writing plist") {
+		t.Errorf("error = %q, want mention of writing plist", err.Error())
+	}
+}
+
+func TestInstallDaemonBootstrapError(t *testing.T) {
+	origHome := userHomeDirFn
+	origMkdir := mkdirAll
+	origWrite := writeFile
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		mkdirAll = origMkdir
+		writeFile = origWrite
+		runCommand = origRun
+	}()
+
+	userHomeDirFn = func() (string, error) { return t.TempDir(), nil }
+
+	mkdirAll = func(path string, perm os.FileMode) error { return nil }
+	writeFile = func(name string, data []byte, perm os.FileMode) error { return nil }
+
+	callCount := 0
+	runCommand = func(name string, args ...string) (string, error) {
+		callCount++
+		if callCount == 1 {
+			// bootout call - succeed
+			return "", nil
+		}
+		// bootstrap call - fail
+		return "", fmt.Errorf("service already loaded")
+	}
+
+	sc := ServiceConfig{
+		AgentName: "test",
+		LogPath:   "/workspace/state/chat.log",
+	}
+
+	err := InstallDaemon(sc)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "launchctl bootstrap") {
+		t.Errorf("error = %q, want mention of launchctl bootstrap", err.Error())
+	}
+}
+
 func TestRestartDaemonNotInstalled(t *testing.T) {
 	err := RestartDaemon("nonexistent-agent-xyz")
 	if err == nil {
@@ -190,5 +451,47 @@ func TestRestartDaemonNotInstalled(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not installed") {
 		t.Errorf("error = %q, want mention of not installed", err.Error())
+	}
+}
+
+func TestRestartDaemonSuccess(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+
+	// Create the plist file
+	label := daemonLabel("testagent")
+	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+	os.MkdirAll(launchAgentsDir, 0755)
+	plist := filepath.Join(launchAgentsDir, label+".plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0644)
+
+	// Mock runCommand to succeed
+	var ranCommands []string
+	runCommand = func(name string, args ...string) (string, error) {
+		ranCommands = append(ranCommands, fmt.Sprintf("%s %s", name, strings.Join(args, " ")))
+		return "", nil
+	}
+
+	err := RestartDaemon("testagent")
+	if err != nil {
+		t.Fatalf("RestartDaemon() error: %v", err)
+	}
+
+	// Verify kickstart was called
+	foundKickstart := false
+	for _, cmd := range ranCommands {
+		if strings.Contains(cmd, "kickstart") {
+			foundKickstart = true
+		}
+	}
+	if !foundKickstart {
+		t.Errorf("expected launchctl kickstart, got commands: %v", ranCommands)
 	}
 }

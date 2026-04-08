@@ -8,12 +8,20 @@ import (
 	"github.com/blackpaw-studio/leo/internal/service"
 )
 
+var (
+	osExecutableFn  = os.Executable
+	envCaptureFn    = env.Capture
+	installDaemonFn = service.InstallDaemon
+)
+
+// installDaemon installs the LaunchAgent/systemd service.
+// daemonStatusFn is declared in setup.go (same package).
 func installDaemon(name, workspace, cfgPath, botToken string) {
-	leoPath, _ := os.Executable()
+	leoPath, _ := osExecutableFn()
 	if leoPath == "" {
 		leoPath = "leo"
 	}
-	environ := env.Capture()
+	environ := envCaptureFn()
 	if botToken != "" {
 		environ["TELEGRAM_BOT_TOKEN"] = botToken
 	}
@@ -25,10 +33,10 @@ func installDaemon(name, workspace, cfgPath, botToken string) {
 		LogPath:    service.LogPathFor(workspace),
 		Env:        environ,
 	}
-	if err := service.InstallDaemon(sc); err != nil {
+	if err := installDaemonFn(sc); err != nil {
 		prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
 	} else {
-		status, _ := service.DaemonStatus(name)
+		status, _ := daemonStatusFn(name)
 		prompt.Success.Printf("  Chat daemon installed (%s).\n", status)
 		prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
 	}
