@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -75,7 +76,7 @@ func (s *Store) List() (map[string]Entry, error) {
 func (s *Store) load() (map[string]Entry, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return make(map[string]Entry), nil
 		}
 		return nil, fmt.Errorf("reading sessions: %w", err)

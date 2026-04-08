@@ -54,7 +54,10 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	// Add session persistence for DM chat
 	store := session.NewStore(cfg.Agent.Workspace)
-	sid, found, _ := store.Get("chat:dm")
+	sid, found, getErr := store.Get("chat:dm")
+	if getErr != nil {
+		warn.Printf("  Could not read session store: %v\n", getErr)
+	}
 	if found {
 		claudeArgs = append(claudeArgs, "--resume", sid)
 	} else {

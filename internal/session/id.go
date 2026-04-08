@@ -6,6 +6,7 @@ import (
 )
 
 // NewID generates a random UUID v4 string.
+// Panics if the system's cryptographic random source is unavailable.
 func NewID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

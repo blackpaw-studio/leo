@@ -141,8 +141,12 @@ func TestStoreAtomicWrite(t *testing.T) {
 func TestStoreCorruptFile(t *testing.T) {
 	dir := t.TempDir()
 	stateDir := filepath.Join(dir, "state")
-	os.MkdirAll(stateDir, 0750)
-	os.WriteFile(filepath.Join(stateDir, "sessions.json"), []byte("not json"), 0600)
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
+		t.Fatalf("creating state dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "sessions.json"), []byte("not json"), 0600); err != nil {
+		t.Fatalf("writing corrupt file: %v", err)
+	}
 
 	store := NewStore(dir)
 	_, _, err := store.Get("key")
