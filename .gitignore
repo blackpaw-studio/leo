@@ -1,6 +1,7 @@
 bin/
 dist/
 site/
+.claude/
 *.exe
 *.test
 *.out
