@@ -64,9 +64,7 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 		return fmt.Errorf("creating channel directory: %w", err)
 	}
 
-	envContent := fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", botToken)
-	envPath := filepath.Join(channelDir, ".env")
-	if err := writeFileFn(envPath, []byte(envContent), 0600); err != nil {
+	if err := appendTelegramEnv("TELEGRAM_BOT_TOKEN", botToken); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
 	}
 

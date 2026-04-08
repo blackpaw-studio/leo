@@ -549,13 +549,18 @@ func PromptVoiceTranscription(reader *bufio.Reader) {
 }
 
 func appendTelegramEnv(key, value string) error {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDirFn()
 	if err != nil {
 		return err
 	}
 
-	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
-	existing, _ := os.ReadFile(envPath)
+	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
+	if err := mkdirAllFn(channelDir, 0750); err != nil {
+		return fmt.Errorf("creating channel directory: %w", err)
+	}
+
+	envPath := filepath.Join(channelDir, ".env")
+	existing, _ := readFileFn(envPath)
 
 	// Check if key already exists and replace it
 	lines := strings.Split(string(existing), "\n")
@@ -574,10 +579,10 @@ func appendTelegramEnv(key, value string) error {
 			content += "\n"
 		}
 		content += key + "=" + value + "\n"
-		return os.WriteFile(envPath, []byte(content), 0600)
+		return writeFileFn(envPath, []byte(content), 0600)
 	}
 
-	return os.WriteFile(envPath, []byte(strings.Join(lines, "\n")), 0600)
+	return writeFileFn(envPath, []byte(strings.Join(lines, "\n")), 0600)
 }
 
 func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefault string) (botToken, chatID, groupID string) {
