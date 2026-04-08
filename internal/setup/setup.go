@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -83,6 +84,10 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
+	if err := checkWorkspaceWritable(workspace); err != nil {
+		return err
+	}
+
 	agentContent, agentDir, agentPath := promptAgentPersonality(reader, home, name, workspace)
 	userName, role, about, preferences, timezone := promptUserProfileIfNeeded(reader, workspace)
 	botToken, chatID, groupID := promptTelegramConfig(reader, existing)
@@ -92,6 +97,30 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	// Remove legacy heartbeat task if it exists alongside the new config
 	delete(cfg.Tasks, "heartbeat")
+
+	// Summary
+	prompt.Bold.Println("\nConfiguration Summary")
+	fmt.Printf("  Agent:     %s\n", name)
+	fmt.Printf("  Workspace: %s\n", workspace)
+	if userName != "" {
+		fmt.Printf("  User:      %s\n", userName)
+	}
+	if botToken != "" {
+		fmt.Printf("  Telegram:  configured\n")
+	} else {
+		fmt.Printf("  Telegram:  skipped\n")
+	}
+	if cfg.Heartbeat.Enabled {
+		fmt.Printf("  Heartbeat: every %s\n", cfg.Heartbeat.Interval)
+	} else {
+		fmt.Printf("  Heartbeat: disabled\n")
+	}
+	fmt.Printf("  Tasks:     %d\n", len(cfg.Tasks))
+	fmt.Println()
+
+	if !prompt.YesNo(reader, "Proceed with setup?", true) {
+		return fmt.Errorf("setup cancelled")
+	}
 
 	prompt.Bold.Println("\nCreating workspace...")
 	scaffoldOpts := scaffoldOptions{
@@ -125,7 +154,13 @@ func promptAgentIdentity(reader *bufio.Reader, existing *config.Config, defaultW
 	if existing != nil {
 		nameDefault = existing.Agent.Name
 	}
-	name = prompt.Prompt(reader, "Agent name", nameDefault)
+	for {
+		name = prompt.Prompt(reader, "Agent name", nameDefault)
+		if name != "" {
+			break
+		}
+		prompt.Warn.Println("  Agent name cannot be empty.")
+	}
 	prompt.Info.Printf("  Agent: %s\n\n", name)
 
 	wsDefault := defaultWorkspace
@@ -134,6 +169,9 @@ func promptAgentIdentity(reader *bufio.Reader, existing *config.Config, defaultW
 	}
 	workspace = prompt.Prompt(reader, "Workspace directory", wsDefault)
 	workspace = prompt.ExpandHome(workspace)
+	if absPath, err := filepath.Abs(workspace); err == nil {
+		workspace = absPath
+	}
 	return
 }
 
@@ -155,19 +193,58 @@ func promptAgentPersonality(reader *bufio.Reader, home, name, workspace string) 
 func promptUserProfileIfNeeded(reader *bufio.Reader, workspace string) (userName, role, about, preferences, timezone string) {
 	userPath := filepath.Join(workspace, "USER.md")
 
-	if _, err := os.Stat(userPath); err == nil {
-		prompt.Info.Printf("  USER.md exists: %s\n", userPath)
-		if prompt.YesNo(reader, "  Overwrite user profile?", false) {
-			userName, role, about, preferences, timezone = promptUserProfile(reader)
-		}
-	} else {
-		userName, role, about, preferences, timezone = promptUserProfile(reader)
-	}
+	// Try to parse existing values as defaults
+	defaults := parseUserProfile(userPath)
+	userName, role, about, preferences, timezone = promptUserProfile(reader, defaults)
 
 	if timezone == "" {
 		timezone = config.DefaultTimezone
 	}
 	return
+}
+
+// parseUserProfile reads an existing USER.md and extracts field values.
+func parseUserProfile(path string) templates.UserProfileData {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return templates.UserProfileData{}
+	}
+
+	var result templates.UserProfileData
+	lines := strings.Split(string(data), "\n")
+	var currentField string
+	for _, line := range lines {
+		switch strings.TrimSpace(line) {
+		case "## Name":
+			currentField = "name"
+		case "## Role":
+			currentField = "role"
+		case "## About":
+			currentField = "about"
+		case "## Preferences":
+			currentField = "preferences"
+		case "## Timezone":
+			currentField = "timezone"
+		case "# User Profile", "":
+			continue
+		default:
+			val := strings.TrimSpace(line)
+			switch currentField {
+			case "name":
+				result.UserName = val
+			case "role":
+				result.Role = val
+			case "about":
+				result.About = val
+			case "preferences":
+				result.Preferences = val
+			case "timezone":
+				result.Timezone = val
+			}
+			currentField = ""
+		}
+	}
+	return result
 }
 
 func buildConfig(name, workspace, botToken, chatID, groupID, timezone string, existing *config.Config) *config.Config {
@@ -190,6 +267,7 @@ func buildConfig(name, workspace, botToken, chatID, groupID, timezone string, ex
 
 	if existing != nil {
 		cfg.Defaults = existing.Defaults
+		cfg.Heartbeat = existing.Heartbeat
 		for k, v := range existing.Tasks {
 			cfg.Tasks[k] = v
 		}
@@ -313,6 +391,18 @@ func checkPrerequisites() error {
 	}
 
 	fmt.Println()
+	return nil
+}
+
+func checkWorkspaceWritable(workspace string) error {
+	if err := os.MkdirAll(workspace, 0750); err != nil {
+		return fmt.Errorf("cannot create workspace directory %s: %w", workspace, err)
+	}
+	testFile := filepath.Join(workspace, ".leo-write-test")
+	if err := os.WriteFile(testFile, []byte(""), 0600); err != nil {
+		return fmt.Errorf("workspace directory %s is not writable: %w", workspace, err)
+	}
+	os.Remove(testFile)
 	return nil
 }
 
@@ -482,13 +572,21 @@ func chooseAgentTemplate(reader *bufio.Reader, name, userName, workspace string)
 	return ""
 }
 
-func promptUserProfile(reader *bufio.Reader) (userName, role, about, preferences, timezone string) {
+func promptUserProfile(reader *bufio.Reader, defaults templates.UserProfileData) (userName, role, about, preferences, timezone string) {
 	prompt.Bold.Println("\nUser Profile")
-	userName = prompt.Prompt(reader, "Your name", "")
-	role = prompt.Prompt(reader, "Your role", "")
-	about = prompt.Prompt(reader, "About you (brief)", "")
-	preferences = prompt.Prompt(reader, "Communication preferences", "Direct and concise")
-	timezone = prompt.Prompt(reader, "Timezone", config.DefaultTimezone)
+	userName = prompt.Prompt(reader, "Your name", defaults.UserName)
+	role = prompt.Prompt(reader, "Your role", defaults.Role)
+	about = prompt.Prompt(reader, "About you (brief)", defaults.About)
+	prefsDefault := defaults.Preferences
+	if prefsDefault == "" {
+		prefsDefault = "Direct and concise"
+	}
+	preferences = prompt.Prompt(reader, "Communication preferences", prefsDefault)
+	tzDefault := defaults.Timezone
+	if tzDefault == "" {
+		tzDefault = config.DefaultTimezone
+	}
+	timezone = prompt.Prompt(reader, "Timezone", tzDefault)
 	return
 }
 
@@ -534,28 +632,65 @@ func PromptVoiceTranscription(reader *bufio.Reader) {
 	fmt.Println("The Telegram plugin can transcribe voice messages using OpenAI Whisper.")
 	fmt.Println("An OpenAI API key enables the fastest, highest-quality transcription.")
 
-	if prompt.YesNo(reader, "Configure voice transcription?", true) {
-		apiKey := prompt.Prompt(reader, "OpenAI API key (sk-proj-...)", "")
-		if apiKey != "" {
-			if err := appendTelegramEnv("OPENAI_API_KEY", apiKey); err != nil {
-				prompt.Warn.Printf("  Failed to write API key: %v\n", err)
-			} else {
-				prompt.Success.Println("  OpenAI API key saved for voice transcription.")
-			}
-		} else {
-			fmt.Println("  Skipped. Voice messages will use local whisper if installed, or remain untranscribed.")
+	// Check for existing key
+	existingKey := readTelegramEnv("OPENAI_API_KEY")
+	if existingKey != "" {
+		masked := existingKey
+		if len(existingKey) > 12 {
+			masked = existingKey[:8] + "..." + existingKey[len(existingKey)-4:]
 		}
+		prompt.Info.Printf("  OpenAI API key: %s\n", masked)
+		if !prompt.YesNo(reader, "  Update API key?", false) {
+			return
+		}
+	} else if !prompt.YesNo(reader, "Configure voice transcription?", true) {
+		return
+	}
+
+	apiKey := prompt.Prompt(reader, "OpenAI API key (sk-proj-...)", "")
+	if apiKey != "" {
+		if err := appendTelegramEnv("OPENAI_API_KEY", apiKey); err != nil {
+			prompt.Warn.Printf("  Failed to write API key: %v\n", err)
+		} else {
+			prompt.Success.Println("  OpenAI API key saved for voice transcription.")
+		}
+	} else {
+		fmt.Println("  Skipped. Voice messages will use local whisper if installed, or remain untranscribed.")
 	}
 }
 
+// readTelegramEnv reads a value from the telegram .env file.
+func readTelegramEnv(key string) string {
+	home, err := userHomeDirFn()
+	if err != nil {
+		return ""
+	}
+	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
+	data, err := readFileFn(envPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, key+"=") {
+			return strings.TrimPrefix(line, key+"=")
+		}
+	}
+	return ""
+}
+
 func appendTelegramEnv(key, value string) error {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDirFn()
 	if err != nil {
 		return err
 	}
 
-	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
-	existing, _ := os.ReadFile(envPath)
+	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
+	if err := mkdirAllFn(channelDir, 0750); err != nil {
+		return fmt.Errorf("creating channel directory: %w", err)
+	}
+
+	envPath := filepath.Join(channelDir, ".env")
+	existing, _ := readFileFn(envPath)
 
 	// Check if key already exists and replace it
 	lines := strings.Split(string(existing), "\n")
@@ -574,16 +709,23 @@ func appendTelegramEnv(key, value string) error {
 			content += "\n"
 		}
 		content += key + "=" + value + "\n"
-		return os.WriteFile(envPath, []byte(content), 0600)
+		return writeFileFn(envPath, []byte(content), 0600)
 	}
 
-	return os.WriteFile(envPath, []byte(strings.Join(lines, "\n")), 0600)
+	return writeFileFn(envPath, []byte(strings.Join(lines, "\n")), 0600)
 }
+
+// botTokenPattern matches the Telegram bot token format: digits:alphanumeric
+var botTokenPattern = regexp.MustCompile(`^\d+:[A-Za-z0-9_-]+$`)
 
 func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefault string) (botToken, chatID, groupID string) {
 	prompt.Bold.Println("\nTelegram Setup")
 	fmt.Println("Create a bot via @BotFather on Telegram, then paste the token.")
 	botToken = prompt.Prompt(reader, "Bot token", tokenDefault)
+
+	if botToken != "" && !botTokenPattern.MatchString(botToken) {
+		prompt.Warn.Println("  Token doesn't match expected format (DIGITS:ALPHANUMERIC). Double-check your token from @BotFather.")
+	}
 
 	if botToken != "" && chatDefault == "" {
 		fmt.Println("\nSend any message to your bot now. Waiting for chat ID...")

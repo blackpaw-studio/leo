@@ -64,9 +64,7 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 		return fmt.Errorf("creating channel directory: %w", err)
 	}
 
-	envContent := fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", botToken)
-	envPath := filepath.Join(channelDir, ".env")
-	if err := writeFileFn(envPath, []byte(envContent), 0600); err != nil {
+	if err := appendTelegramEnv("TELEGRAM_BOT_TOKEN", botToken); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
 	}
 
@@ -207,6 +205,10 @@ func installSuperchargedPlugin(home string) error {
 
 	// Clone or pull the supercharged repo
 	if _, err := os.Stat(filepath.Join(cacheDir, "server.ts")); os.IsNotExist(err) {
+		// Clean up partial clone if directory exists but server.ts is missing
+		if _, dirErr := os.Stat(cacheDir); dirErr == nil {
+			os.RemoveAll(cacheDir)
+		}
 		prompt.Info.Println("  Cloning supercharged telegram plugin...")
 		if err := os.MkdirAll(filepath.Dir(cacheDir), 0750); err != nil {
 			return fmt.Errorf("creating cache directory: %w", err)
