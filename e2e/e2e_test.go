@@ -228,7 +228,7 @@ func TestRunWithMCPConfig(t *testing.T) {
 
 	ws := setupWorkspace(t, "", map[string]string{
 		"prompts/HEARTBEAT.md":        "Hello.\n",
-		"config/mcp-servers.json":     `{"servers":{}}`,
+		"config/mcp-servers.json":     `{"mcpServers":{"test":{}}}`,
 	})
 	fixWorkspaceInConfig(t, ws)
 
