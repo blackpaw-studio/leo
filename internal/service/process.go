@@ -192,6 +192,13 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 		// via MCP stdio pipes — a Go PTY breaks this communication.
 		claudeCmd := strings.Join(append([]string{claudePath}, currentArgs...), " ")
 
+		// Propagate PATH into the tmux session. tmux uses its own global
+		// environment, which may not include paths from the launchd plist
+		// (e.g. ~/.bun/bin needed by the telegram plugin).
+		if p := os.Getenv("PATH"); p != "" {
+			claudeCmd = fmt.Sprintf("export PATH=%q; %s", p, claudeCmd)
+		}
+
 		// Create a detached tmux session running claude
 		createCmd := exec.CommandContext(ctx, tmuxPath,
 			"new-session", "-d", "-s", sessionName,
