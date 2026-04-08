@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/run"
+	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -23,9 +24,10 @@ func newRunCmd() *cobra.Command {
 			}
 
 			taskName := args[0]
+			sessions := session.NewStore(cfg.Agent.Workspace)
 
 			if dryRun {
-				prompt, cliArgs, err := run.Preview(cfg, taskName)
+				prompt, cliArgs, err := run.Preview(cfg, taskName, sessions)
 				if err != nil {
 					return err
 				}
@@ -36,7 +38,7 @@ func newRunCmd() *cobra.Command {
 				return nil
 			}
 
-			return run.Run(cfg, taskName)
+			return run.Run(cfg, taskName, sessions)
 		},
 	}
 

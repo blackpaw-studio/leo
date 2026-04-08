@@ -11,6 +11,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/service"
+	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/telegram"
 	"github.com/spf13/cobra"
 )
@@ -49,12 +50,25 @@ func runChat(cmd *cobra.Command, args []string) error {
 		seedTopicCache(cfg)
 	}
 
+	claudeArgs := buildClaudeArgs(cfg)
+
+	// Add session persistence for DM chat
+	store := session.NewStore(cfg.Agent.Workspace)
+	sid, found, _ := store.Get("chat:dm")
+	if found {
+		claudeArgs = append(claudeArgs, "--resume", sid)
+	} else {
+		sid = session.NewID()
+		if err := store.Set("chat:dm", sid); err != nil {
+			warn.Printf("  Could not store session ID: %v\n", err)
+		}
+		claudeArgs = append(claudeArgs, "--session-id", sid)
+	}
+
 	if supervised {
 		// Supervised/daemon mode: launch claude in interactive mode via
 		// script(1) PTY wrapper. Plugins (telegram) only load in interactive
 		// mode. The open stdin pipe keeps the session alive.
-		claudeArgs := buildClaudeArgs(cfg)
-
 		claudePath, err := exec.LookPath("claude")
 		if err != nil {
 			return fmt.Errorf("claude not found: %w", err)
@@ -68,7 +82,6 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 
 	// Foreground mode: exec replaces this process
-	claudeArgs := buildClaudeArgs(cfg)
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		return fmt.Errorf("claude not found: %w", err)
