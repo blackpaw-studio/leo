@@ -193,8 +193,14 @@ func promptAgentPersonality(reader *bufio.Reader, home, name, workspace string) 
 func promptUserProfileIfNeeded(reader *bufio.Reader, workspace string) (userName, role, about, preferences, timezone string) {
 	userPath := filepath.Join(workspace, "USER.md")
 
-	// Try to parse existing values as defaults
 	defaults := parseUserProfile(userPath)
+	if defaults.UserName != "" {
+		prompt.Info.Printf("  USER.md exists: %s (%s)\n", userPath, defaults.UserName)
+		if !prompt.YesNo(reader, "  Update user profile?", false) {
+			return defaults.UserName, defaults.Role, defaults.About, defaults.Preferences, defaults.Timezone
+		}
+	}
+
 	userName, role, about, preferences, timezone = promptUserProfile(reader, defaults)
 
 	if timezone == "" {
