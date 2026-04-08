@@ -37,11 +37,22 @@ If nothing needs attention, reply NO_REPLY and exit.
 Do not include process narration, status updates, or tool output. Only emit the final user-facing message or NO_REPLY.
 `
 
+// resolveTask looks up a task by name, checking both the tasks map and heartbeat config.
+func resolveTask(cfg *config.Config, taskName string) (config.TaskConfig, error) {
+	if task, ok := cfg.Tasks[taskName]; ok {
+		return task, nil
+	}
+	if taskName == "heartbeat" && cfg.Heartbeat.Enabled {
+		return cfg.Heartbeat.ToTaskConfig()
+	}
+	return config.TaskConfig{}, fmt.Errorf("task %q not found in config", taskName)
+}
+
 // Preview returns the assembled prompt and CLI args without executing.
 func Preview(cfg *config.Config, taskName string) (string, []string, error) {
-	task, ok := cfg.Tasks[taskName]
-	if !ok {
-		return "", nil, fmt.Errorf("task %q not found in config", taskName)
+	task, err := resolveTask(cfg, taskName)
+	if err != nil {
+		return "", nil, err
 	}
 
 	prompt, err := assemblePrompt(cfg, task)
@@ -55,9 +66,9 @@ func Preview(cfg *config.Config, taskName string) (string, []string, error) {
 
 // Run executes a scheduled task.
 func Run(cfg *config.Config, taskName string) error {
-	task, ok := cfg.Tasks[taskName]
-	if !ok {
-		return fmt.Errorf("task %q not found in config", taskName)
+	task, err := resolveTask(cfg, taskName)
+	if err != nil {
+		return err
 	}
 
 	prompt, err := assemblePrompt(cfg, task)
