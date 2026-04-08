@@ -205,6 +205,10 @@ func installSuperchargedPlugin(home string) error {
 
 	// Clone or pull the supercharged repo
 	if _, err := os.Stat(filepath.Join(cacheDir, "server.ts")); os.IsNotExist(err) {
+		// Clean up partial clone if directory exists but server.ts is missing
+		if _, dirErr := os.Stat(cacheDir); dirErr == nil {
+			os.RemoveAll(cacheDir)
+		}
 		prompt.Info.Println("  Cloning supercharged telegram plugin...")
 		if err := os.MkdirAll(filepath.Dir(cacheDir), 0750); err != nil {
 			return fmt.Errorf("creating cache directory: %w", err)

@@ -152,7 +152,11 @@ func reconfigure(reader *bufio.Reader, workspaces []string) error {
 	} else {
 		fmt.Println("Found multiple workspaces:")
 		for i, w := range workspaces {
-			fmt.Printf("  %d. %s\n", i+1, w)
+			label := w
+			if cfg, err := config.LoadFromWorkspace(w); err == nil {
+				label = fmt.Sprintf("%s (agent: %s)", w, cfg.Agent.Name)
+			}
+			fmt.Printf("  %d. %s\n", i+1, label)
 		}
 		choice := prompt.Prompt(reader, "Choose", "1")
 		idx := prompt.ParseChoice(choice, len(workspaces)) - 1

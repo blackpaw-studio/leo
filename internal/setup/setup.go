@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -83,6 +84,10 @@ func RunInteractive(reader *bufio.Reader) error {
 		}
 	}
 
+	if err := checkWorkspaceWritable(workspace); err != nil {
+		return err
+	}
+
 	agentContent, agentDir, agentPath := promptAgentPersonality(reader, home, name, workspace)
 	userName, role, about, preferences, timezone := promptUserProfileIfNeeded(reader, workspace)
 	botToken, chatID, groupID := promptTelegramConfig(reader, existing)
@@ -92,6 +97,30 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	// Remove legacy heartbeat task if it exists alongside the new config
 	delete(cfg.Tasks, "heartbeat")
+
+	// Summary
+	prompt.Bold.Println("\nConfiguration Summary")
+	fmt.Printf("  Agent:     %s\n", name)
+	fmt.Printf("  Workspace: %s\n", workspace)
+	if userName != "" {
+		fmt.Printf("  User:      %s\n", userName)
+	}
+	if botToken != "" {
+		fmt.Printf("  Telegram:  configured\n")
+	} else {
+		fmt.Printf("  Telegram:  skipped\n")
+	}
+	if cfg.Heartbeat.Enabled {
+		fmt.Printf("  Heartbeat: every %s\n", cfg.Heartbeat.Interval)
+	} else {
+		fmt.Printf("  Heartbeat: disabled\n")
+	}
+	fmt.Printf("  Tasks:     %d\n", len(cfg.Tasks))
+	fmt.Println()
+
+	if !prompt.YesNo(reader, "Proceed with setup?", true) {
+		return fmt.Errorf("setup cancelled")
+	}
 
 	prompt.Bold.Println("\nCreating workspace...")
 	scaffoldOpts := scaffoldOptions{
@@ -125,7 +154,13 @@ func promptAgentIdentity(reader *bufio.Reader, existing *config.Config, defaultW
 	if existing != nil {
 		nameDefault = existing.Agent.Name
 	}
-	name = prompt.Prompt(reader, "Agent name", nameDefault)
+	for {
+		name = prompt.Prompt(reader, "Agent name", nameDefault)
+		if name != "" {
+			break
+		}
+		prompt.Warn.Println("  Agent name cannot be empty.")
+	}
 	prompt.Info.Printf("  Agent: %s\n\n", name)
 
 	wsDefault := defaultWorkspace
@@ -134,6 +169,9 @@ func promptAgentIdentity(reader *bufio.Reader, existing *config.Config, defaultW
 	}
 	workspace = prompt.Prompt(reader, "Workspace directory", wsDefault)
 	workspace = prompt.ExpandHome(workspace)
+	if absPath, err := filepath.Abs(workspace); err == nil {
+		workspace = absPath
+	}
 	return
 }
 
@@ -229,6 +267,7 @@ func buildConfig(name, workspace, botToken, chatID, groupID, timezone string, ex
 
 	if existing != nil {
 		cfg.Defaults = existing.Defaults
+		cfg.Heartbeat = existing.Heartbeat
 		for k, v := range existing.Tasks {
 			cfg.Tasks[k] = v
 		}
@@ -352,6 +391,18 @@ func checkPrerequisites() error {
 	}
 
 	fmt.Println()
+	return nil
+}
+
+func checkWorkspaceWritable(workspace string) error {
+	if err := os.MkdirAll(workspace, 0750); err != nil {
+		return fmt.Errorf("cannot create workspace directory %s: %w", workspace, err)
+	}
+	testFile := filepath.Join(workspace, ".leo-write-test")
+	if err := os.WriteFile(testFile, []byte(""), 0600); err != nil {
+		return fmt.Errorf("workspace directory %s is not writable: %w", workspace, err)
+	}
+	os.Remove(testFile)
 	return nil
 }
 
@@ -664,10 +715,17 @@ func appendTelegramEnv(key, value string) error {
 	return writeFileFn(envPath, []byte(strings.Join(lines, "\n")), 0600)
 }
 
+// botTokenPattern matches the Telegram bot token format: digits:alphanumeric
+var botTokenPattern = regexp.MustCompile(`^\d+:[A-Za-z0-9_-]+$`)
+
 func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefault string) (botToken, chatID, groupID string) {
 	prompt.Bold.Println("\nTelegram Setup")
 	fmt.Println("Create a bot via @BotFather on Telegram, then paste the token.")
 	botToken = prompt.Prompt(reader, "Bot token", tokenDefault)
+
+	if botToken != "" && !botTokenPattern.MatchString(botToken) {
+		prompt.Warn.Println("  Token doesn't match expected format (DIGITS:ALPHANUMERIC). Double-check your token from @BotFather.")
+	}
 
 	if botToken != "" && chatDefault == "" {
 		fmt.Println("\nSend any message to your bot now. Waiting for chat ID...")

@@ -369,6 +369,68 @@ func TestPromptUserProfileDefaults(t *testing.T) {
 	}
 }
 
+// --- parseUserProfile ---
+
+func TestParseUserProfileValid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "USER.md")
+	content := "# User Profile\n\n## Name\nAlice\n\n## Role\nEngineer\n\n## About\nLoves Go\n\n## Preferences\nTerse\n\n## Timezone\nUTC\n"
+	os.WriteFile(path, []byte(content), 0644)
+
+	result := parseUserProfile(path)
+	if result.UserName != "Alice" {
+		t.Errorf("UserName = %q, want %q", result.UserName, "Alice")
+	}
+	if result.Role != "Engineer" {
+		t.Errorf("Role = %q, want %q", result.Role, "Engineer")
+	}
+	if result.About != "Loves Go" {
+		t.Errorf("About = %q, want %q", result.About, "Loves Go")
+	}
+	if result.Preferences != "Terse" {
+		t.Errorf("Preferences = %q, want %q", result.Preferences, "Terse")
+	}
+	if result.Timezone != "UTC" {
+		t.Errorf("Timezone = %q, want %q", result.Timezone, "UTC")
+	}
+}
+
+func TestParseUserProfileMissing(t *testing.T) {
+	result := parseUserProfile("/nonexistent/path/USER.md")
+	if result.UserName != "" || result.Role != "" {
+		t.Error("expected empty result for missing file")
+	}
+}
+
+func TestParseUserProfileEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "USER.md")
+	os.WriteFile(path, []byte(""), 0644)
+
+	result := parseUserProfile(path)
+	if result.UserName != "" {
+		t.Errorf("expected empty UserName, got %q", result.UserName)
+	}
+}
+
+func TestParseUserProfilePartial(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "USER.md")
+	content := "# User Profile\n\n## Name\nBob\n\n## Timezone\nEurope/London\n"
+	os.WriteFile(path, []byte(content), 0644)
+
+	result := parseUserProfile(path)
+	if result.UserName != "Bob" {
+		t.Errorf("UserName = %q, want %q", result.UserName, "Bob")
+	}
+	if result.Role != "" {
+		t.Errorf("Role = %q, want empty", result.Role)
+	}
+	if result.Timezone != "Europe/London" {
+		t.Errorf("Timezone = %q, want %q", result.Timezone, "Europe/London")
+	}
+}
+
 // --- promptTelegramConfig ---
 
 func TestPromptTelegramConfigNoExisting(t *testing.T) {
@@ -1058,8 +1120,10 @@ func TestRunInteractiveHappyPath(t *testing.T) {
 	// 4. User profile: name, role, about, prefs, timezone
 	// 5. Telegram: token, (poll for chat), group
 	// 6. Heartbeat: "n"
-	// 7. Install daemon: "n"
-	// 8. Send test message: "n"
+	// 7. Confirm summary: "y"
+	// 8. Voice transcription: "n"
+	// 9. Install daemon: "n"
+	// 10. Send test message: "n"
 	input := strings.Join([]string{
 		"",            // agent name -> default "assistant"
 		workspace,     // workspace
@@ -1072,6 +1136,8 @@ func TestRunInteractiveHappyPath(t *testing.T) {
 		"test-bot-tk", // telegram bot token
 		"",            // group ID (skip)
 		"n",           // heartbeat
+		"y",           // confirm summary
+		"n",           // voice transcription
 		"n",           // install daemon
 		"n",           // send test message
 	}, "\n") + "\n"
