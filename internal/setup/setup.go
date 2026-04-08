@@ -155,19 +155,58 @@ func promptAgentPersonality(reader *bufio.Reader, home, name, workspace string) 
 func promptUserProfileIfNeeded(reader *bufio.Reader, workspace string) (userName, role, about, preferences, timezone string) {
 	userPath := filepath.Join(workspace, "USER.md")
 
-	if _, err := os.Stat(userPath); err == nil {
-		prompt.Info.Printf("  USER.md exists: %s\n", userPath)
-		if prompt.YesNo(reader, "  Overwrite user profile?", false) {
-			userName, role, about, preferences, timezone = promptUserProfile(reader)
-		}
-	} else {
-		userName, role, about, preferences, timezone = promptUserProfile(reader)
-	}
+	// Try to parse existing values as defaults
+	defaults := parseUserProfile(userPath)
+	userName, role, about, preferences, timezone = promptUserProfile(reader, defaults)
 
 	if timezone == "" {
 		timezone = config.DefaultTimezone
 	}
 	return
+}
+
+// parseUserProfile reads an existing USER.md and extracts field values.
+func parseUserProfile(path string) templates.UserProfileData {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return templates.UserProfileData{}
+	}
+
+	var result templates.UserProfileData
+	lines := strings.Split(string(data), "\n")
+	var currentField string
+	for _, line := range lines {
+		switch strings.TrimSpace(line) {
+		case "## Name":
+			currentField = "name"
+		case "## Role":
+			currentField = "role"
+		case "## About":
+			currentField = "about"
+		case "## Preferences":
+			currentField = "preferences"
+		case "## Timezone":
+			currentField = "timezone"
+		case "# User Profile", "":
+			continue
+		default:
+			val := strings.TrimSpace(line)
+			switch currentField {
+			case "name":
+				result.UserName = val
+			case "role":
+				result.Role = val
+			case "about":
+				result.About = val
+			case "preferences":
+				result.Preferences = val
+			case "timezone":
+				result.Timezone = val
+			}
+			currentField = ""
+		}
+	}
+	return result
 }
 
 func buildConfig(name, workspace, botToken, chatID, groupID, timezone string, existing *config.Config) *config.Config {
@@ -482,13 +521,21 @@ func chooseAgentTemplate(reader *bufio.Reader, name, userName, workspace string)
 	return ""
 }
 
-func promptUserProfile(reader *bufio.Reader) (userName, role, about, preferences, timezone string) {
+func promptUserProfile(reader *bufio.Reader, defaults templates.UserProfileData) (userName, role, about, preferences, timezone string) {
 	prompt.Bold.Println("\nUser Profile")
-	userName = prompt.Prompt(reader, "Your name", "")
-	role = prompt.Prompt(reader, "Your role", "")
-	about = prompt.Prompt(reader, "About you (brief)", "")
-	preferences = prompt.Prompt(reader, "Communication preferences", "Direct and concise")
-	timezone = prompt.Prompt(reader, "Timezone", config.DefaultTimezone)
+	userName = prompt.Prompt(reader, "Your name", defaults.UserName)
+	role = prompt.Prompt(reader, "Your role", defaults.Role)
+	about = prompt.Prompt(reader, "About you (brief)", defaults.About)
+	prefsDefault := defaults.Preferences
+	if prefsDefault == "" {
+		prefsDefault = "Direct and concise"
+	}
+	preferences = prompt.Prompt(reader, "Communication preferences", prefsDefault)
+	tzDefault := defaults.Timezone
+	if tzDefault == "" {
+		tzDefault = config.DefaultTimezone
+	}
+	timezone = prompt.Prompt(reader, "Timezone", tzDefault)
 	return
 }
 
@@ -534,18 +581,50 @@ func PromptVoiceTranscription(reader *bufio.Reader) {
 	fmt.Println("The Telegram plugin can transcribe voice messages using OpenAI Whisper.")
 	fmt.Println("An OpenAI API key enables the fastest, highest-quality transcription.")
 
-	if prompt.YesNo(reader, "Configure voice transcription?", true) {
-		apiKey := prompt.Prompt(reader, "OpenAI API key (sk-proj-...)", "")
-		if apiKey != "" {
-			if err := appendTelegramEnv("OPENAI_API_KEY", apiKey); err != nil {
-				prompt.Warn.Printf("  Failed to write API key: %v\n", err)
-			} else {
-				prompt.Success.Println("  OpenAI API key saved for voice transcription.")
-			}
+	// Check for existing key
+	existingKey := readTelegramEnv("OPENAI_API_KEY")
+	if existingKey != "" {
+		masked := existingKey
+		if len(existingKey) > 12 {
+			masked = existingKey[:8] + "..." + existingKey[len(existingKey)-4:]
+		}
+		prompt.Info.Printf("  OpenAI API key: %s\n", masked)
+		if !prompt.YesNo(reader, "  Update API key?", false) {
+			return
+		}
+	} else if !prompt.YesNo(reader, "Configure voice transcription?", true) {
+		return
+	}
+
+	apiKey := prompt.Prompt(reader, "OpenAI API key (sk-proj-...)", "")
+	if apiKey != "" {
+		if err := appendTelegramEnv("OPENAI_API_KEY", apiKey); err != nil {
+			prompt.Warn.Printf("  Failed to write API key: %v\n", err)
 		} else {
-			fmt.Println("  Skipped. Voice messages will use local whisper if installed, or remain untranscribed.")
+			prompt.Success.Println("  OpenAI API key saved for voice transcription.")
+		}
+	} else {
+		fmt.Println("  Skipped. Voice messages will use local whisper if installed, or remain untranscribed.")
+	}
+}
+
+// readTelegramEnv reads a value from the telegram .env file.
+func readTelegramEnv(key string) string {
+	home, err := userHomeDirFn()
+	if err != nil {
+		return ""
+	}
+	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
+	data, err := readFileFn(envPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, key+"=") {
+			return strings.TrimPrefix(line, key+"=")
 		}
 	}
+	return ""
 }
 
 func appendTelegramEnv(key, value string) error {

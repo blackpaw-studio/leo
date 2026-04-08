@@ -334,7 +334,7 @@ func TestCheckPrerequisitesClaudeNoVersion(t *testing.T) {
 
 func TestPromptUserProfile(t *testing.T) {
 	reader := readerFrom("John\nDeveloper\nLoves Go\nDirect\nUTC\n")
-	name, role, about, prefs, tz := promptUserProfile(reader)
+	name, role, about, prefs, tz := promptUserProfile(reader, templates.UserProfileData{})
 
 	if name != "John" {
 		t.Errorf("name = %q, want %q", name, "John")
@@ -356,7 +356,7 @@ func TestPromptUserProfile(t *testing.T) {
 func TestPromptUserProfileDefaults(t *testing.T) {
 	// Empty inputs -> defaults
 	reader := readerFrom("\n\n\n\n\n")
-	name, _, _, prefs, tz := promptUserProfile(reader)
+	name, _, _, prefs, tz := promptUserProfile(reader, templates.UserProfileData{})
 
 	if name != "" {
 		t.Errorf("name = %q, want empty", name)
