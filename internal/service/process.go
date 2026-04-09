@@ -234,8 +234,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
-	srv := daemon.New(sockPath, configPath)
-	srv.SetProcessProvider(supervisor)
+	srv := daemon.New(sockPath, configPath, supervisor)
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
@@ -321,9 +320,6 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			continue
 		}
 
-		// Reset backoff after successful session creation
-		backoff = initialBackoff
-
 		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", spec.Name, sessionName)
 
 		// Wait for the tmux session to end or the plugin to die
@@ -372,12 +368,16 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		sv.setState(spec.Name, "restarting")
 		sv.incrementRestarts(spec.Name)
 
-		// If claude exited very quickly, strip --resume and clear this process's session
+		// If claude exited very quickly, strip --resume and clear this process's session.
+		// Keep growing the backoff to avoid tight restart loops.
 		if elapsed < 15*time.Second {
 			currentArgs = stripResumeArg(currentArgs)
 			clearProcessSession(homePath, spec.Name)
-			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session — retrying fresh\n", spec.Name, elapsed.Seconds())
+			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session — retrying in %s\n", spec.Name, elapsed.Seconds(), backoff)
+			backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
 		} else {
+			// Session ran long enough — reset backoff
+			backoff = initialBackoff
 			fmt.Fprintf(os.Stderr, "[%s] claude exited after %s, restarting in %s\n", spec.Name, elapsed.Round(time.Second), backoff)
 		}
 

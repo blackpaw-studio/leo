@@ -1,9 +1,11 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -15,6 +17,9 @@ const (
 	DefaultModel    = "sonnet"
 	DefaultMaxTurns = 15
 )
+
+// channelPattern validates channel plugin identifiers (e.g. "plugin:telegram@claude-plugins-official").
+var channelPattern = regexp.MustCompile(`^[a-zA-Z0-9:@._-]+$`)
 
 var validModels = map[string]bool{
 	"sonnet": true,
@@ -205,6 +210,11 @@ func (c *Config) Validate() error {
 		if proc.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("processes.%s.max_turns must not be negative", name))
 		}
+		for i, ch := range proc.Channels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("processes.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
 	}
 
 	for name, task := range c.Tasks {
@@ -383,6 +393,22 @@ func validateCronExpr(expr string) error {
 		}
 	}
 	return nil
+}
+
+// HasMCPServers returns true if the MCP config file exists and contains
+// at least one server entry.
+func HasMCPServers(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+	return len(cfg.MCPServers) > 0
 }
 
 func expandHome(path string) string {

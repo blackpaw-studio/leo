@@ -37,7 +37,7 @@ func tmpSockPath(t *testing.T, name string) string {
 func TestServerStartStop(t *testing.T) {
 	sockPath := tmpSockPath(t, "d.sock")
 
-	s := New(sockPath, "/tmp/leo.yaml")
+	s := New(sockPath, "/tmp/leo.yaml", nil)
 
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start() error: %v", err)
@@ -94,7 +94,7 @@ func TestServerRemovesStaleSocket(t *testing.T) {
 		t.Fatalf("stale socket file not found: %v", err)
 	}
 
-	s := New(sockPath, "/tmp/leo.yaml")
+	s := New(sockPath, "/tmp/leo.yaml", nil)
 
 	// Start should remove the stale file and bind successfully
 	if err := s.Start(); err != nil {

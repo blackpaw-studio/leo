@@ -38,8 +38,8 @@ type Server struct {
 	processes  ProcessStateProvider
 }
 
-// New creates a new daemon server.
-func New(sockPath, configPath string) *Server {
+// New creates a new daemon server. The processes provider is optional (may be nil).
+func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	leoPath, err := exec.LookPath("leo")
 	if err != nil {
 		leoPath = "leo"
@@ -49,6 +49,7 @@ func New(sockPath, configPath string) *Server {
 		sockPath:   sockPath,
 		configPath: configPath,
 		scheduler:  cron.New(leoPath, configPath),
+		processes:  processes,
 	}
 
 	mux := http.NewServeMux()
@@ -125,11 +126,6 @@ func (s *Server) Shutdown() error {
 // SockPath returns the path to the Unix socket.
 func (s *Server) SockPath() string {
 	return s.sockPath
-}
-
-// SetProcessProvider sets the process state provider for the server.
-func (s *Server) SetProcessProvider(p ProcessStateProvider) {
-	s.processes = p
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

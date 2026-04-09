@@ -39,7 +39,7 @@ func writeTestConfig(t *testing.T, dir string) string {
 func startTestServer(t *testing.T, cfgPath string) (*Server, *http.Client) {
 	t.Helper()
 	sockPath := tmpSockPath(t, "h.sock")
-	s := New(sockPath, cfgPath)
+	s := New(sockPath, cfgPath, nil)
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}

@@ -28,7 +28,7 @@ func tmpWorkDir(t *testing.T) string {
 func startServerAt(t *testing.T, workDir string) *Server {
 	t.Helper()
 	sockPath := SockPath(workDir)
-	s := New(sockPath, "/tmp/leo.yaml")
+	s := New(sockPath, "/tmp/leo.yaml", nil)
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
@@ -97,7 +97,7 @@ tasks:
 	}
 
 	sockPath := SockPath(workDir)
-	s := New(sockPath, cfgPath)
+	s := New(sockPath, cfgPath, nil)
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}

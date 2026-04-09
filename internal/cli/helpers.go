@@ -21,7 +21,7 @@ func loadConfig() (*config.Config, error) {
 		var err error
 		path, err = config.FindConfig("")
 		if err != nil {
-			return nil, fmt.Errorf("no leo.yaml found — run 'leo setup' first")
+			return nil, fmt.Errorf("no leo.yaml found — run 'leo setup' first: %w", err)
 		}
 	}
 

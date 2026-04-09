@@ -28,13 +28,14 @@ const telegramProtocolTemplate = `
 ## Telegram Notification Protocol
 If anything needs the user's attention, send a Telegram message using:
 ` + "```bash" + `
-curl -s -X POST "https://api.telegram.org/bot%s/sendMessage" \
+curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
   -H "Content-Type: application/json" \
   -d '{"chat_id": "%s", %s"parse_mode": "Markdown", "text": "<your message>"}'
 ` + "```" + `
 
 IMPORTANT: The message is sent as a JSON payload. Escape any double quotes in your
-message text with a backslash. Do not use shell variables or unescaped special characters.
+message text with a backslash. Do not use shell variables or unescaped special characters
+(except $TELEGRAM_BOT_TOKEN which is provided via the environment).
 
 If nothing needs attention, reply NO_REPLY and exit.
 Do not include process narration, status updates, or tool output. Only emit the final user-facing message or NO_REPLY.
@@ -104,7 +105,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	args := buildArgs(cfg, task, prompt, sessionID)
 
 	taskWorkspace := cfg.TaskWorkspace(task)
-	output, execErr := executeCommand(taskWorkspace, args)
+	output, execErr := executeCommand(taskWorkspace, args, cfg.Telegram.BotToken)
 	result := parseClaudeOutput(output)
 
 	// If --resume failed with a stale session, retry without it.
@@ -116,7 +117,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		}
 
 		args = buildArgs(cfg, task, prompt, "")
-		output, execErr = executeCommand(taskWorkspace, args)
+		output, execErr = executeCommand(taskWorkspace, args, cfg.Telegram.BotToken)
 		result = parseClaudeOutput(output)
 	}
 
@@ -163,10 +164,14 @@ func isSessionError(result claudeResult, output []byte) bool {
 		(strings.Contains(text, "not found") || strings.Contains(text, "invalid") || strings.Contains(text, "expired"))
 }
 
-func executeCommand(workDir string, args []string) ([]byte, error) {
+func executeCommand(workDir string, args []string, botToken string) ([]byte, error) {
 	cmd := execCommand("claude", args...)
 	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
+	env := append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
+	if botToken != "" {
+		env = append(env, "TELEGRAM_BOT_TOKEN="+botToken)
+	}
+	cmd.Env = env
 	return cmd.CombinedOutput()
 }
 
@@ -207,7 +212,7 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 
 	parts = append(parts, string(promptData))
 
-	// Append Telegram notification protocol
+	// Append Telegram notification protocol (bot token is passed via env var, not in prompt)
 	chatID := cfg.Telegram.ChatID
 	if cfg.Telegram.GroupID != "" {
 		chatID = cfg.Telegram.GroupID
@@ -219,7 +224,6 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 	}
 
 	telegramProtocol := fmt.Sprintf(telegramProtocolTemplate,
-		cfg.Telegram.BotToken,
 		chatID,
 		topicLine,
 	)
@@ -245,7 +249,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 	}
 
 	mcpConfig := cfg.TaskMCPConfigPath(task)
-	if hasMCPServers(mcpConfig) {
+	if config.HasMCPServers(mcpConfig) {
 		args = append(args, "--mcp-config", mcpConfig)
 	}
 
@@ -253,22 +257,6 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 	args = append(args, "--add-dir", taskWorkspace)
 
 	return args
-}
-
-// hasMCPServers returns true if the MCP config file exists and contains
-// at least one server entry.
-func hasMCPServers(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var cfg struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return false
-	}
-	return len(cfg.MCPServers) > 0
 }
 
 func writeLog(cfg *config.Config, taskName string, output []byte) error {

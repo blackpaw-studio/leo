@@ -490,7 +490,7 @@ tasks:
 	}
 
 	// Start the daemon server.
-	srv := daemon.New(sockPath, cfgPath)
+	srv := daemon.New(sockPath, cfgPath, nil)
 	if err := srv.Start(); err != nil {
 		t.Fatalf("starting daemon: %v", err)
 	}

@@ -75,8 +75,11 @@ func TestAssemblePrompt(t *testing.T) {
 				t.Error("prompt should contain prompt file content")
 			}
 
-			if !strings.Contains(prompt, "123:ABC") {
-				t.Error("prompt should contain bot token")
+			if strings.Contains(prompt, "123:ABC") {
+				t.Error("prompt should NOT contain bot token (passed via env var)")
+			}
+			if !strings.Contains(prompt, "$TELEGRAM_BOT_TOKEN") {
+				t.Error("prompt should reference TELEGRAM_BOT_TOKEN env var")
 			}
 
 			// Should use group_id when set

@@ -2,11 +2,11 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -115,7 +115,7 @@ func runService(cmd *cobra.Command, args []string) error {
 	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), os.Environ())
 }
 
-// resolveProcess finds the target process by name or returns the first enabled process.
+// resolveProcess finds the target process by name or returns the first enabled process (sorted by name).
 func resolveProcess(cfg *config.Config, args []string) (string, config.ProcessConfig, error) {
 	if len(args) > 0 {
 		name := args[0]
@@ -123,11 +123,21 @@ func resolveProcess(cfg *config.Config, args []string) (string, config.ProcessCo
 		if !ok {
 			return "", config.ProcessConfig{}, fmt.Errorf("process %q not found in config", name)
 		}
+		if !proc.Enabled {
+			return "", config.ProcessConfig{}, fmt.Errorf("process %q is disabled", name)
+		}
 		return name, proc, nil
 	}
 
-	// Find first enabled process
-	for name, proc := range cfg.Processes {
+	// Find first enabled process, sorted by name for deterministic selection
+	names := make([]string, 0, len(cfg.Processes))
+	for name := range cfg.Processes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		proc := cfg.Processes[name]
 		if proc.Enabled {
 			return name, proc, nil
 		}
@@ -159,12 +169,17 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 		// Add session persistence
 		store := session.NewStore(cfg.HomePath)
 		sessionKey := "process:" + name
-		sid, found, _ := store.Get(sessionKey)
+		sid, found, getErr := store.Get(sessionKey)
+		if getErr != nil {
+			warn.Printf("  [%s] Could not read session store: %v\n", name, getErr)
+		}
 		if found {
 			args = append(args, "--resume", sid)
 		} else {
 			sid = session.NewID()
-			_ = store.Set(sessionKey, sid)
+			if setErr := store.Set(sessionKey, sid); setErr != nil {
+				warn.Printf("  [%s] Could not store session ID: %v\n", name, setErr)
+			}
 			args = append(args, "--session-id", sid)
 		}
 
@@ -207,7 +222,7 @@ func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig
 	}
 
 	mcpConfig := cfg.ProcessMCPConfigPath(proc)
-	if hasMCPServers(mcpConfig) {
+	if config.HasMCPServers(mcpConfig) {
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfig)
 	}
 
@@ -488,19 +503,3 @@ func syncPluginEnv(botToken string) {
 	_ = os.WriteFile(envFile, []byte(strings.Join(lines, "\n")+"\n"), 0600)
 }
 
-// hasMCPServers returns true if the MCP config file exists and contains
-// at least one server entry. An empty or malformed file returns false
-// to avoid passing an invalid config to claude.
-func hasMCPServers(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var cfg struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return false
-	}
-	return len(cfg.MCPServers) > 0
-}
