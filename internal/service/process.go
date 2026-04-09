@@ -333,6 +333,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			continue
 		}
 
+		// Pipe tmux pane output to a per-process log file
+		processLogPath := filepath.Join(homePath, "state", spec.Name+".log")
+		exec.Command(tmuxPath, "pipe-pane", "-t", sessionName,
+			"-o", fmt.Sprintf("cat >> %s", shellQuote(processLogPath))).Run()
+
 		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", spec.Name, sessionName)
 
 		if waitForSessionEnd(ctx, tmuxPath, sessionName, spec, startTime) {
