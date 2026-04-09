@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 )
 
 var (
@@ -106,22 +107,26 @@ func InstallDaemon(sc ServiceConfig) error {
 		return fmt.Errorf("creating LaunchAgents directory: %w", err)
 	}
 
-	// Unload existing service if present (ignore errors)
+	// Unload existing service if present and wait for launchd to finish
 	_ = bootout(label, path)
-
-	// Remove old plist before writing new one — launchctl bootstrap
-	// fails with exit 5 if the plist file already exists from a
-	// previous install even when the service isn't loaded.
 	_ = removeFile(path)
 
+	// launchd may need a moment to fully unregister after bootout.
+	// Retry bootstrap a few times with a short delay.
 	if err := writeFile(path, buf.Bytes(), 0644); err != nil {
 		return fmt.Errorf("writing plist: %w", err)
 	}
 
-	// Bootstrap the service
 	uid := fmt.Sprintf("%d", os.Getuid())
-	if _, err := runCommand("launchctl", "bootstrap", "gui/"+uid, path); err != nil {
-		return fmt.Errorf("launchctl bootstrap: %w", err)
+	var bootstrapErr error
+	for i := 0; i < 3; i++ {
+		if _, bootstrapErr = runCommand("launchctl", "bootstrap", "gui/"+uid, path); bootstrapErr == nil {
+			break
+		}
+		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+	}
+	if bootstrapErr != nil {
+		return fmt.Errorf("launchctl bootstrap: %w", bootstrapErr)
 	}
 
 	return nil
