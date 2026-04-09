@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prereq"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/spf13/cobra"
 )
 
@@ -13,6 +16,7 @@ func newValidateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate",
 		Short: "Check config, prerequisites, and workspace health",
+		Long:  "Run diagnostic checks on config, prerequisites, daemon, and workspace. Like a doctor's checkup for your leo setup.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issues := 0
 
@@ -45,14 +49,14 @@ func newValidateCmd() *cobra.Command {
 			if prereq.CheckTmux() {
 				success.Println("tmux: installed")
 			} else {
-				warn.Println("tmux: not found")
+				warn.Println("tmux: not found (required for background service)")
 				issues++
 			}
 
 			if prereq.CheckBun() {
 				success.Println("bun: installed")
 			} else {
-				warn.Println("bun: not found")
+				warn.Println("bun: not found (required for telegram plugin)")
 				issues++
 			}
 
@@ -76,13 +80,65 @@ func newValidateCmd() *cobra.Command {
 				}
 			}
 
-			// 5. Summary
+			// 5. Check MCP config
+			mcpPath := cfg.MCPConfigPath()
+			if _, err := os.Stat(mcpPath); err == nil {
+				data, readErr := os.ReadFile(mcpPath)
+				if readErr != nil {
+					warn.Printf("MCP config: %s unreadable\n", mcpPath)
+					issues++
+				} else {
+					var parsed map[string]json.RawMessage
+					if json.Unmarshal(data, &parsed) != nil {
+						warn.Printf("MCP config: %s is not valid JSON\n", mcpPath)
+						issues++
+					} else {
+						success.Printf("MCP config: %s\n", mcpPath)
+					}
+				}
+			} else {
+				info.Println("MCP config: not configured (optional)")
+			}
+
+			// 6. Check daemon health
+			if daemon.IsRunning(cfg.Agent.Workspace) {
+				resp, err := daemon.Send(cfg.Agent.Workspace, "GET", "/health", nil)
+				if err != nil {
+					warn.Println("Daemon: socket exists but not responding")
+					issues++
+				} else if resp.OK {
+					success.Println("Daemon: healthy")
+				} else {
+					warn.Printf("Daemon: unhealthy (%s)\n", resp.Error)
+					issues++
+				}
+			} else {
+				info.Println("Daemon: not running")
+			}
+
+			// 7. Check service status
+			svcStatus, _ := service.Status(cfg.Agent.Workspace)
+			if svcStatus == "stopped" {
+				info.Println("Service: stopped")
+			} else {
+				success.Printf("Service: %s\n", svcStatus)
+			}
+
+			// 8. Check service log
+			logPath := service.LogPathFor(cfg.Agent.Workspace)
+			if fi, err := os.Stat(logPath); err == nil {
+				success.Printf("Service log: %s (%.0f KB)\n", logPath, float64(fi.Size())/1024)
+			} else {
+				info.Println("Service log: not present (service hasn't run yet)")
+			}
+
+			// 9. Summary
 			fmt.Println()
 			if issues == 0 {
 				success.Println("All checks passed.")
 				return nil
 			}
-			return fmt.Errorf("%d issue(s) found", issues)
+			return fmt.Errorf("%d issue(s) found — run 'leo validate' after fixing to verify", issues)
 		},
 	}
 }
