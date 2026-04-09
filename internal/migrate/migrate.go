@@ -104,7 +104,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	prompt.Info.Printf("  Wrote %s\n", cfgPath)
 
 	syncDaemonSchedules(cfg, workspace)
-	promptMigrationDaemonInstall(reader, cfg, agentName, workspace, cfgPath)
+	promptMigrationDaemonInstall(reader, cfg, workspace, cfgPath)
 	sendMigrationTestMessage(reader, cfg)
 
 	prompt.Bold.Println("\nMigration complete!")
@@ -234,7 +234,7 @@ func syncDaemonSchedules(cfg *config.Config, workspace string) {
 	}
 }
 
-func promptMigrationDaemonInstall(reader *bufio.Reader, cfg *config.Config, agentName, workspace, cfgPath string) {
+func promptMigrationDaemonInstall(reader *bufio.Reader, cfg *config.Config, workspace, cfgPath string) {
 	if prompt.YesNo(reader, "\nInstall chat daemon (runs on login)?", true) {
 		leoPath, _ := osExecutableFn()
 		if leoPath == "" {
@@ -246,7 +246,6 @@ func promptMigrationDaemonInstall(reader *bufio.Reader, cfg *config.Config, agen
 			environ["TELEGRAM_BOT_TOKEN"] = cfg.Telegram.BotToken
 		}
 		sc := service.ServiceConfig{
-			AgentName:  agentName,
 			LeoPath:    leoPath,
 			ConfigPath: cfgPath,
 			WorkDir:    workspace,
@@ -256,7 +255,7 @@ func promptMigrationDaemonInstall(reader *bufio.Reader, cfg *config.Config, agen
 		if err := installDaemonFn(sc); err != nil {
 			prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
 		} else {
-			status, _ := daemonStatusFn(agentName)
+			status, _ := daemonStatusFn()
 			prompt.Success.Printf("  Chat daemon installed (%s).\n", status)
 			prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
 		}

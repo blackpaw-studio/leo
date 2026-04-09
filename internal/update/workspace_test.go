@@ -12,14 +12,13 @@ import (
 func TestRefreshWorkspace(t *testing.T) {
 	dir := t.TempDir()
 
-	written, err := RefreshWorkspace("testagent", dir)
+	written, err := RefreshWorkspace(dir)
 	if err != nil {
 		t.Fatalf("RefreshWorkspace() error: %v", err)
 	}
 
-	// Should write CLAUDE.md + 5 skills = 6 files (no HEARTBEAT.md since it doesn't exist yet... wait, it should write it)
-	// Actually HEARTBEAT.md is written when missing, so 7 total
-	expectedCount := 1 + len(templates.SkillFiles()) + 1 // CLAUDE.md + skills + HEARTBEAT.md
+	// Should write CLAUDE.md + 5 skills + HEARTBEAT.md = 7 files
+	expectedCount := 1 + len(templates.SkillFiles()) + 1
 	if len(written) != expectedCount {
 		t.Errorf("wrote %d files, want %d", len(written), expectedCount)
 	}
@@ -28,9 +27,6 @@ func TestRefreshWorkspace(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
 	if err != nil {
 		t.Fatal("CLAUDE.md not created")
-	}
-	if !strings.Contains(string(data), "testagent") {
-		t.Error("CLAUDE.md missing agent name")
 	}
 	if !strings.Contains(string(data), dir) {
 		t.Error("CLAUDE.md missing workspace path")
@@ -58,7 +54,7 @@ func TestRefreshWorkspaceOverwrites(t *testing.T) {
 	firstSkill := templates.SkillFiles()[0]
 	os.WriteFile(filepath.Join(dir, "skills", firstSkill), []byte("old skill"), 0644)
 
-	_, err := RefreshWorkspace("testagent", dir)
+	_, err := RefreshWorkspace(dir)
 	if err != nil {
 		t.Fatalf("RefreshWorkspace() error: %v", err)
 	}
@@ -82,7 +78,7 @@ func TestRefreshWorkspaceSkipsExistingHeartbeat(t *testing.T) {
 	// Pre-create HEARTBEAT.md with custom content
 	os.WriteFile(filepath.Join(dir, "HEARTBEAT.md"), []byte("custom heartbeat"), 0644)
 
-	written, err := RefreshWorkspace("testagent", dir)
+	written, err := RefreshWorkspace(dir)
 	if err != nil {
 		t.Fatalf("RefreshWorkspace() error: %v", err)
 	}

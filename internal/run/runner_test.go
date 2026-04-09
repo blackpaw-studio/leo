@@ -148,8 +148,8 @@ func TestBuildArgs(t *testing.T) {
 
 	argsStr := strings.Join(args, " ")
 
-	if !strings.Contains(argsStr, "--agent myagent") {
-		t.Error("missing agent flag")
+	if strings.Contains(argsStr, "--agent") {
+		t.Error("should not contain --agent flag")
 	}
 	if !strings.Contains(argsStr, "--model opus") {
 		t.Error("should use task model override")

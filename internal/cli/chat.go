@@ -85,7 +85,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("claude not found: %w", err)
 		}
-		info.Printf("Starting supervised session for agent %q...\n", cfg.Agent.Name)
+		info.Println("Starting supervised session...")
 		cfgPath, err := resolveConfigPath(cfg)
 		if err != nil {
 			return fmt.Errorf("resolving config path: %w", err)
@@ -99,15 +99,18 @@ func runChat(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("claude not found: %w", err)
 	}
 
-	info.Printf("Starting interactive session for agent %q...\n", cfg.Agent.Name)
+	info.Println("Starting interactive session...")
 	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), os.Environ())
 }
 
 func buildClaudeArgs(cfg *config.Config) []string {
 	claudeArgs := []string{
-		"--agent", cfg.Agent.Name,
 		"--channels", "plugin:telegram@claude-plugins-official",
 		"--add-dir", cfg.Agent.Workspace,
+	}
+
+	if cfg.Defaults.RemoteControl {
+		claudeArgs = append(claudeArgs, "--remote-control", "Leo")
 	}
 
 	if cfg.Defaults.BypassPermissions {
@@ -141,13 +144,13 @@ func newChatStartCmd() *cobra.Command {
 			}
 
 			if daemon {
-				fmt.Printf("Installing daemon for agent %q...\n", cfg.Agent.Name)
+				fmt.Println("Installing daemon...")
 				if err := service.InstallDaemon(sc); err != nil {
 					return fmt.Errorf("installing daemon: %w", err)
 				}
 				// Verify it's running
-				status, _ := service.DaemonStatus(cfg.Agent.Name)
-				success.Printf("Daemon installed for agent %q (%s).\n", cfg.Agent.Name, status)
+				status, _ := service.DaemonStatus()
+				success.Printf("Daemon installed (%s).\n", status)
 				info.Printf("Logs: %s\n", sc.LogPath)
 				info.Println("Note: run 'leo chat start --daemon' again if you update environment variables.")
 				return nil
@@ -156,7 +159,7 @@ func newChatStartCmd() *cobra.Command {
 			if err := service.Start(sc); err != nil {
 				return err
 			}
-			success.Printf("Chat session started for agent %q.\n", cfg.Agent.Name)
+			success.Println("Chat session started.")
 			info.Printf("Logs: %s\n", sc.LogPath)
 			return nil
 		},
@@ -180,17 +183,17 @@ func newChatStopCmd() *cobra.Command {
 			}
 
 			if daemon {
-				if err := service.RemoveDaemon(cfg.Agent.Name); err != nil {
+				if err := service.RemoveDaemon(); err != nil {
 					return fmt.Errorf("removing daemon: %w", err)
 				}
-				success.Printf("Daemon removed for agent %q.\n", cfg.Agent.Name)
+				success.Println("Daemon removed.")
 				return nil
 			}
 
-			if err := service.Stop(cfg.Agent.Name, cfg.Agent.Workspace); err != nil {
+			if err := service.Stop(cfg.Agent.Workspace); err != nil {
 				return err
 			}
-			success.Printf("Chat session stopped for agent %q.\n", cfg.Agent.Name)
+			success.Println("Chat session stopped.")
 			return nil
 		},
 	}
@@ -210,12 +213,12 @@ func newChatRestartCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Restarting chat daemon for agent %q...\n", cfg.Agent.Name)
-			if err := service.RestartDaemon(cfg.Agent.Name); err != nil {
+			fmt.Println("Restarting chat daemon...")
+			if err := service.RestartDaemon(); err != nil {
 				return fmt.Errorf("restarting daemon: %w", err)
 			}
 
-			status, _ := service.DaemonStatus(cfg.Agent.Name)
+			status, _ := service.DaemonStatus()
 			success.Printf("Daemon restarted (%s).\n", status)
 			info.Printf("Logs: %s\n", service.LogPathFor(cfg.Agent.Workspace))
 			return nil
@@ -238,7 +241,7 @@ func newChatStatusCmd() *cobra.Command {
 			}
 
 			if daemon {
-				status, err := service.DaemonStatus(cfg.Agent.Name)
+				status, err := service.DaemonStatus()
 				if err != nil {
 					return err
 				}
@@ -246,7 +249,7 @@ func newChatStatusCmd() *cobra.Command {
 				return nil
 			}
 
-			status, err := service.Status(cfg.Agent.Name, cfg.Agent.Workspace)
+			status, err := service.Status(cfg.Agent.Workspace)
 			if err != nil {
 				return err
 			}
@@ -290,7 +293,6 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 	}
 
 	return service.ServiceConfig{
-		AgentName:  cfg.Agent.Name,
 		LeoPath:    leoPath,
 		ConfigPath: configPath,
 		WorkDir:    cfg.Agent.Workspace,

@@ -181,8 +181,8 @@ func TestRunHappyPath(t *testing.T) {
 	args := readArgLog(t, argLog)
 
 	// Verify key flags
-	if v := argValue(args, "--agent"); v != "test-agent" {
-		t.Errorf("expected --agent test-agent, got %q", v)
+	if slices.Contains(args, "--agent") {
+		t.Error("should not contain --agent flag")
 	}
 	if v := argValue(args, "--model"); v != "sonnet" {
 		t.Errorf("expected --model sonnet, got %q", v)

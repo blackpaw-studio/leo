@@ -74,7 +74,7 @@ func RunInteractive(reader *bufio.Reader) error {
 		prompt.Info.Printf("  Found existing config at %s/leo.yaml\n\n", existing.Agent.Workspace)
 	}
 
-	name, workspace := promptAgentIdentity(reader, existing, defaultWorkspace)
+	workspace := promptWorkspace(reader, existing, defaultWorkspace)
 
 	// If workspace changed, try loading config from the new location too
 	if existing == nil && workspace != defaultWorkspace {
@@ -88,11 +88,10 @@ func RunInteractive(reader *bufio.Reader) error {
 		return err
 	}
 
-	agentContent, agentDir, agentPath := promptAgentPersonality(reader, home, name, workspace)
 	userName, role, about, preferences, timezone := promptUserProfileIfNeeded(reader, workspace)
 	botToken, chatID, groupID := promptTelegramConfig(reader, existing)
 
-	cfg := buildConfig(name, workspace, botToken, chatID, groupID, timezone, existing)
+	cfg := buildConfig(workspace, botToken, chatID, groupID, timezone, existing)
 	promptHeartbeat(reader, cfg, timezone)
 
 	// Remove legacy heartbeat task if it exists alongside the new config
@@ -100,7 +99,6 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	// Summary
 	prompt.Bold.Println("\nConfiguration Summary")
-	fmt.Printf("  Agent:     %s\n", name)
 	fmt.Printf("  Workspace: %s\n", workspace)
 	if userName != "" {
 		fmt.Printf("  User:      %s\n", userName)
@@ -124,8 +122,7 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	prompt.Bold.Println("\nCreating workspace...")
 	scaffoldOpts := scaffoldOptions{
-		workspace: workspace, home: home, name: name, cfg: cfg,
-		agentDir: agentDir, agentPath: agentPath, agentContent: agentContent,
+		workspace: workspace, home: home, cfg: cfg,
 		userPath: filepath.Join(workspace, "USER.md"),
 		userName: userName, role: role, about: about,
 		preferences: preferences, timezone: timezone,
@@ -137,7 +134,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	configureTelegramPlugin(botToken, chatID, groupID, workspace)
 	PromptVoiceTranscription(reader)
 	cfgPath := filepath.Join(workspace, "leo.yaml")
-	promptDaemonInstall(reader, name, workspace, cfgPath, botToken)
+	promptDaemonInstall(reader, workspace, cfgPath, botToken)
 	sendTestMessage(reader, botToken, chatID, groupID)
 
 	prompt.Bold.Printf("\nSetup complete! Workspace: %s\n", workspace)
@@ -149,45 +146,17 @@ func RunInteractive(reader *bufio.Reader) error {
 	return nil
 }
 
-func promptAgentIdentity(reader *bufio.Reader, existing *config.Config, defaultWorkspace string) (name, workspace string) {
-	nameDefault := "assistant"
-	if existing != nil {
-		nameDefault = existing.Agent.Name
-	}
-	for {
-		name = prompt.Prompt(reader, "Agent name", nameDefault)
-		if name != "" {
-			break
-		}
-		prompt.Warn.Println("  Agent name cannot be empty.")
-	}
-	prompt.Info.Printf("  Agent: %s\n\n", name)
-
+func promptWorkspace(reader *bufio.Reader, existing *config.Config, defaultWorkspace string) string {
 	wsDefault := defaultWorkspace
 	if existing != nil {
 		wsDefault = existing.Agent.Workspace
 	}
-	workspace = prompt.Prompt(reader, "Workspace directory", wsDefault)
+	workspace := prompt.Prompt(reader, "Workspace directory", wsDefault)
 	workspace = prompt.ExpandHome(workspace)
 	if absPath, err := filepath.Abs(workspace); err == nil {
 		workspace = absPath
 	}
-	return
-}
-
-func promptAgentPersonality(reader *bufio.Reader, home, name, workspace string) (agentContent, agentDir, agentPath string) {
-	agentDir = filepath.Join(home, ".claude", "agents")
-	agentPath = filepath.Join(agentDir, name+".md")
-
-	if _, err := os.Stat(agentPath); err == nil {
-		prompt.Info.Printf("  Agent file exists: %s\n", agentPath)
-		if prompt.YesNo(reader, "  Overwrite agent personality?", false) {
-			agentContent = chooseAgentTemplate(reader, name, "", workspace)
-		}
-	} else {
-		agentContent = chooseAgentTemplate(reader, name, "", workspace)
-	}
-	return
+	return workspace
 }
 
 func promptUserProfileIfNeeded(reader *bufio.Reader, workspace string) (userName, role, about, preferences, timezone string) {
@@ -253,10 +222,9 @@ func parseUserProfile(path string) templates.UserProfileData {
 	return result
 }
 
-func buildConfig(name, workspace, botToken, chatID, groupID, timezone string, existing *config.Config) *config.Config {
+func buildConfig(workspace, botToken, chatID, groupID, timezone string, existing *config.Config) *config.Config {
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
-			Name:      name,
 			Workspace: workspace,
 		},
 		Telegram: config.TelegramConfig{
@@ -313,22 +281,22 @@ func configureTelegramPlugin(botToken, chatID, groupID, workspace string) {
 	}
 }
 
-func promptDaemonInstall(reader *bufio.Reader, name, workspace, cfgPath, botToken string) {
+func promptDaemonInstall(reader *bufio.Reader, workspace, cfgPath, botToken string) {
 	fmt.Println()
-	daemonStatus, daemonErr := daemonStatusFn(name)
+	daemonStatus, daemonErr := daemonStatusFn()
 	if daemonErr != nil {
 		prompt.Warn.Printf("  Could not check daemon status: %v\n", daemonErr)
 	}
 	if daemonStatus == "not installed" || daemonErr != nil {
 		if prompt.YesNo(reader, "Install chat daemon (runs on login)?", true) {
 			fmt.Println("  Installing chat daemon...")
-			installDaemon(name, workspace, cfgPath, botToken)
+			installDaemon(workspace, cfgPath, botToken)
 		}
 	} else {
 		prompt.Info.Printf("  Chat daemon: %s\n", daemonStatus)
 		if prompt.YesNo(reader, "  Reinstall chat daemon?", false) {
 			fmt.Println("  Installing chat daemon...")
-			installDaemon(name, workspace, cfgPath, botToken)
+			installDaemon(workspace, cfgPath, botToken)
 		}
 	}
 }
@@ -429,16 +397,14 @@ func findExistingConfig(home string) (*config.Config, string) {
 }
 
 type scaffoldOptions struct {
-	workspace, home, name                          string
-	cfg                                            *config.Config
-	agentDir, agentPath, agentContent              string
-	userPath, userName, role, about, preferences   string
-	timezone                                       string
+	workspace, home                              string
+	cfg                                          *config.Config
+	userPath, userName, role, about, preferences string
+	timezone                                     string
 }
 
 func scaffoldWorkspace(opts scaffoldOptions) error {
 	workspace := opts.workspace
-	name := opts.name
 	cfg := opts.cfg
 	dirs := []string{
 		workspace,
@@ -460,17 +426,6 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	prompt.Info.Printf("  Wrote %s\n", cfgPath)
-
-	// Write agent file (only if we have new content)
-	if opts.agentContent != "" {
-		if err := os.MkdirAll(opts.agentDir, 0750); err != nil {
-			return fmt.Errorf("creating agent directory: %w", err)
-		}
-		if err := os.WriteFile(opts.agentPath, []byte(opts.agentContent), 0644); err != nil {
-			return fmt.Errorf("writing agent file: %w", err)
-		}
-		prompt.Info.Printf("  Wrote %s\n", opts.agentPath)
-	}
 
 	// Write USER.md (only if we collected new profile data)
 	if opts.userName != "" {
@@ -507,7 +462,6 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 	claudeMDPath := filepath.Join(workspace, "CLAUDE.md")
 	if _, err := os.Stat(claudeMDPath); os.IsNotExist(err) {
 		claudeContent, err := templates.RenderClaudeWorkspace(templates.AgentData{
-			Name:      name,
 			Workspace: workspace,
 		})
 		if err != nil {
@@ -547,35 +501,6 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 	}
 
 	return nil
-}
-
-func chooseAgentTemplate(reader *bufio.Reader, name, userName, workspace string) string {
-	fmt.Println("\nAgent personality:")
-	templateNames := templates.AgentTemplates()
-	for i, t := range templateNames {
-		fmt.Printf("  %d. %s\n", i+1, t)
-	}
-	fmt.Printf("  %d. custom (opens $EDITOR)\n", len(templateNames)+1)
-
-	templateChoice := prompt.Prompt(reader, "Choose", "1")
-	templateIdx := 0
-	if n := prompt.ParseChoice(templateChoice, len(templateNames)+1); n > 0 {
-		templateIdx = n - 1
-	}
-
-	if templateIdx < len(templateNames) {
-		content, err := templates.RenderAgent(templateNames[templateIdx], templates.AgentData{
-			Name:      name,
-			UserName:  userName,
-			Workspace: workspace,
-		})
-		if err != nil {
-			prompt.Warn.Printf("  Failed to render template: %v\n", err)
-			return ""
-		}
-		return content
-	}
-	return ""
 }
 
 func promptUserProfile(reader *bufio.Reader, defaults templates.UserProfileData) (userName, role, about, preferences, timezone string) {

@@ -36,9 +36,8 @@ type Config struct {
 }
 
 type AgentConfig struct {
-	Name      string `yaml:"name"`
+	Name      string `yaml:"name,omitempty"` // deprecated: kept for backwards compat, not used
 	Workspace string `yaml:"workspace"`
-	AgentFile string `yaml:"agent_file,omitempty"`
 }
 
 type TelegramConfig struct {
@@ -51,6 +50,7 @@ type DefaultsConfig struct {
 	Model             string `yaml:"model"`
 	MaxTurns          int    `yaml:"max_turns"`
 	BypassPermissions bool   `yaml:"bypass_permissions,omitempty"`
+	RemoteControl     bool   `yaml:"remote_control,omitempty"`
 }
 
 type HeartbeatConfig struct {
@@ -176,9 +176,6 @@ type TaskConfig struct {
 func (c *Config) Validate() error {
 	var errs []string
 
-	if c.Agent.Name == "" {
-		errs = append(errs, "agent.name is required")
-	}
 	if c.Agent.Workspace == "" {
 		errs = append(errs, "agent.workspace is required")
 	}
@@ -239,15 +236,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
 	}
 	return nil
-}
-
-// AgentFilePath returns the resolved path to the agent .md file.
-func (c *Config) AgentFilePath() string {
-	if c.Agent.AgentFile != "" {
-		return expandHome(c.Agent.AgentFile)
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "agents", c.Agent.Name+".md")
 }
 
 // MCPConfigPath returns the path to the MCP servers config.

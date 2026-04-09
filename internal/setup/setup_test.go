@@ -80,9 +80,6 @@ func TestFindExistingConfigFound(t *testing.T) {
 	if found == nil {
 		t.Fatal("expected to find existing config")
 	}
-	if found.Agent.Name != "test" {
-		t.Errorf("agent name = %q, want %q", found.Agent.Name, "test")
-	}
 	if ws != leoDir {
 		t.Errorf("workspace = %q, want %q", ws, leoDir)
 	}
@@ -96,7 +93,6 @@ func TestFindExistingConfigViaWorkspaces(t *testing.T) {
 
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
-			Name:      "found-via-ws",
 			Workspace: wsDir,
 		},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
@@ -112,9 +108,6 @@ func TestFindExistingConfigViaWorkspaces(t *testing.T) {
 	if found == nil {
 		t.Fatal("expected to find config via workspaces")
 	}
-	if found.Agent.Name != "found-via-ws" {
-		t.Errorf("agent name = %q, want %q", found.Agent.Name, "found-via-ws")
-	}
 }
 
 // --- scaffoldWorkspace ---
@@ -122,12 +115,9 @@ func TestFindExistingConfigViaWorkspaces(t *testing.T) {
 func TestScaffoldWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
-	agentDir := filepath.Join(home, ".claude", "agents")
-	agentPath := filepath.Join(agentDir, "test.md")
 
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
-			Name:      "test",
 			Workspace: dir,
 		},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
@@ -135,8 +125,7 @@ func TestScaffoldWorkspace(t *testing.T) {
 	}
 
 	err := scaffoldWorkspace(scaffoldOptions{
-		workspace: dir, home: home, name: "test", cfg: cfg,
-		agentDir: agentDir, agentPath: agentPath, agentContent: "# Test Agent",
+		workspace: dir, home: home, cfg: cfg,
 		userPath: filepath.Join(dir, "USER.md"), userName: "TestUser",
 		role: "developer", about: "about me", preferences: "concise", timezone: "UTC",
 	})
@@ -156,17 +145,8 @@ func TestScaffoldWorkspace(t *testing.T) {
 		t.Error("leo.yaml not created")
 	}
 
-	// Verify agent file
-	data, err := os.ReadFile(agentPath)
-	if err != nil {
-		t.Fatal("agent file not created")
-	}
-	if string(data) != "# Test Agent" {
-		t.Errorf("agent content = %q", string(data))
-	}
-
 	// Verify USER.md
-	data, err = os.ReadFile(filepath.Join(dir, "USER.md"))
+	data, err := os.ReadFile(filepath.Join(dir, "USER.md"))
 	if err != nil {
 		t.Fatal("USER.md not created")
 	}
@@ -204,11 +184,9 @@ func TestScaffoldWorkspace(t *testing.T) {
 func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
-	agentDir := filepath.Join(home, ".claude", "agents")
 
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
-			Name:      "test",
 			Workspace: dir,
 		},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
@@ -227,10 +205,9 @@ func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
 	customSkillPath := filepath.Join(dir, "skills", templates.SkillFiles()[0])
 	os.WriteFile(customSkillPath, []byte("custom skill"), 0644)
 
-	// No agent content, no user profile — should skip those
+	// No user profile — should skip those
 	err := scaffoldWorkspace(scaffoldOptions{
-		workspace: dir, home: home, name: "test", cfg: cfg,
-		agentDir: agentDir, agentPath: filepath.Join(agentDir, "test.md"),
+		workspace: dir, home: home, cfg: cfg,
 		userPath: filepath.Join(dir, "USER.md"),
 	})
 	if err != nil {
@@ -253,23 +230,6 @@ func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
 	data, _ = os.ReadFile(customSkillPath)
 	if string(data) != "custom skill" {
 		t.Errorf("skill file was overwritten: %q", string(data))
-	}
-}
-
-func TestChooseAgentTemplateReturnsContent(t *testing.T) {
-	names := templates.AgentTemplates()
-	if len(names) == 0 {
-		t.Skip("no agent templates available")
-	}
-	content, err := templates.RenderAgent(names[0], templates.AgentData{
-		Name:      "test",
-		Workspace: "/tmp",
-	})
-	if err != nil {
-		t.Fatalf("RenderAgent() error: %v", err)
-	}
-	if content == "" {
-		t.Error("expected non-empty template content")
 	}
 }
 
@@ -598,10 +558,10 @@ func TestInstallDaemonSuccess(t *testing.T) {
 	osExecutableFn = func() (string, error) { return "/usr/local/bin/leo", nil }
 	envCaptureFn = func() map[string]string { return map[string]string{"PATH": "/usr/bin"} }
 	installDaemonFn = func(sc service.ServiceConfig) error { return nil }
-	daemonStatusFn = func(name string) (string, error) { return "running", nil }
+	daemonStatusFn = func() (string, error) { return "running", nil }
 
 	// Should not panic
-	installDaemon("test-agent", "/tmp/workspace", "/tmp/workspace/leo.yaml", "bot-token")
+	installDaemon("/tmp/workspace", "/tmp/workspace/leo.yaml", "bot-token")
 }
 
 func TestInstallDaemonFailure(t *testing.T) {
@@ -619,7 +579,7 @@ func TestInstallDaemonFailure(t *testing.T) {
 	installDaemonFn = func(sc service.ServiceConfig) error { return fmt.Errorf("install failed") }
 
 	// Should not panic even on error
-	installDaemon("test-agent", "/tmp/workspace", "/tmp/workspace/leo.yaml", "")
+	installDaemon("/tmp/workspace", "/tmp/workspace/leo.yaml", "")
 }
 
 func TestInstallDaemonNoExecutable(t *testing.T) {
@@ -642,9 +602,9 @@ func TestInstallDaemonNoExecutable(t *testing.T) {
 		capturedSC = sc
 		return nil
 	}
-	daemonStatusFn = func(name string) (string, error) { return "running", nil }
+	daemonStatusFn = func() (string, error) { return "running", nil }
 
-	installDaemon("test", "/tmp/ws", "/tmp/ws/leo.yaml", "")
+	installDaemon("/tmp/ws", "/tmp/ws/leo.yaml", "")
 	if capturedSC.LeoPath != "leo" {
 		t.Errorf("LeoPath = %q, want %q (fallback)", capturedSC.LeoPath, "leo")
 	}
@@ -670,9 +630,9 @@ func TestInstallDaemonWithBotToken(t *testing.T) {
 		capturedSC = sc
 		return nil
 	}
-	daemonStatusFn = func(name string) (string, error) { return "running", nil }
+	daemonStatusFn = func() (string, error) { return "running", nil }
 
-	installDaemon("test", "/tmp/ws", "/tmp/ws/leo.yaml", "my-bot-token")
+	installDaemon("/tmp/ws", "/tmp/ws/leo.yaml", "my-bot-token")
 	if capturedSC.Env["TELEGRAM_BOT_TOKEN"] != "my-bot-token" {
 		t.Errorf("TELEGRAM_BOT_TOKEN = %q, want %q", capturedSC.Env["TELEGRAM_BOT_TOKEN"], "my-bot-token")
 	}
@@ -1107,27 +1067,23 @@ func TestRunInteractiveHappyPath(t *testing.T) {
 	lookPathFn = func(file string) (string, error) { return "", fmt.Errorf("not found") }
 	execCommandFn = exec.Command
 	findExistingWorkspacesFn = func() []string { return nil }
-	daemonStatusFn = func(name string) (string, error) { return "not installed", nil }
+	daemonStatusFn = func() (string, error) { return "not installed", nil }
 	sendMessageFn = func(botToken, chatID, text string, topicID int) error { return nil }
 	pollChatIDFn = func(token string, timeout time.Duration) (string, error) {
 		return "auto-chat-id", nil
 	}
 
 	// Input flow:
-	// 1. Agent name (default "assistant")
-	// 2. Workspace directory (default ~/.leo)
-	// 3. Agent template choice ("1")
-	// 4. User profile: name, role, about, prefs, timezone
-	// 5. Telegram: token, (poll for chat), group
-	// 6. Heartbeat: "n"
-	// 7. Confirm summary: "y"
-	// 8. Voice transcription: "n"
-	// 9. Install daemon: "n"
-	// 10. Send test message: "n"
+	// 1. Workspace directory (default ~/.leo)
+	// 2. User profile: name, role, about, prefs, timezone
+	// 3. Telegram: token, (poll for chat), group
+	// 4. Heartbeat: "n"
+	// 5. Confirm summary: "y"
+	// 6. Voice transcription: "n"
+	// 7. Install daemon: "n"
+	// 8. Send test message: "n"
 	input := strings.Join([]string{
-		"",            // agent name -> default "assistant"
 		workspace,     // workspace
-		"1",           // template choice
 		"TestUser",    // name
 		"Developer",   // role
 		"About me",    // about
@@ -1157,9 +1113,6 @@ func TestRunInteractiveHappyPath(t *testing.T) {
 	cfg, err := config.LoadFromWorkspace(workspace)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
-	}
-	if cfg.Agent.Name != "assistant" {
-		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "assistant")
 	}
 	if cfg.Telegram.BotToken != "test-bot-tk" {
 		t.Errorf("bot token = %q, want %q", cfg.Telegram.BotToken, "test-bot-tk")
@@ -1198,34 +1151,3 @@ func TestRunInteractivePrereqFails(t *testing.T) {
 	}
 }
 
-// --- chooseAgentTemplate ---
-
-func TestChooseAgentTemplateValidChoice(t *testing.T) {
-	reader := readerFrom("1\n")
-	content := chooseAgentTemplate(reader, "test-agent", "TestUser", "/tmp/ws")
-
-	if content == "" {
-		t.Error("expected non-empty template content for choice 1")
-	}
-}
-
-func TestChooseAgentTemplateInvalidChoice(t *testing.T) {
-	// Invalid choice defaults to 1
-	reader := readerFrom("999\n")
-	content := chooseAgentTemplate(reader, "test-agent", "", "/tmp/ws")
-
-	if content == "" {
-		t.Error("expected non-empty template content for invalid choice (should default to 1)")
-	}
-}
-
-func TestChooseAgentTemplateCustomChoice(t *testing.T) {
-	// Choose custom (last option = len(templates)+1)
-	numTemplates := len(templates.AgentTemplates())
-	reader := readerFrom(fmt.Sprintf("%d\n", numTemplates+1))
-	content := chooseAgentTemplate(reader, "test-agent", "", "/tmp/ws")
-
-	if content != "" {
-		t.Errorf("expected empty content for custom choice, got %q", content)
-	}
-}

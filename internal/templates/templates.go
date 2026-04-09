@@ -11,8 +11,6 @@ import (
 var fs embed.FS
 
 type AgentData struct {
-	Name      string
-	UserName  string
 	Workspace string
 }
 
@@ -22,17 +20,6 @@ type UserProfileData struct {
 	About       string
 	Preferences string
 	Timezone    string
-}
-
-// AgentTemplates returns the available agent template names.
-func AgentTemplates() []string {
-	return []string{"chief-of-staff", "dev-assistant", "skeleton"}
-}
-
-// RenderAgent renders an agent template with the given data.
-func RenderAgent(templateName string, data AgentData) (string, error) {
-	filename := fmt.Sprintf("agent-%s.md", templateName)
-	return renderTemplate(filename, data)
 }
 
 // RenderHeartbeat returns the heartbeat template content.

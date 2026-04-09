@@ -37,7 +37,7 @@ const (
 
 // Start spawns a supervised leo chat process in the background and writes a PID file.
 func Start(sc ServiceConfig) error {
-	pidFile := PidPath(sc.WorkDir, sc.AgentName)
+	pidFile := PidPath(sc.WorkDir)
 
 	// Check if already running
 	if pid, err := readPid(pidFile); err == nil {
@@ -74,8 +74,8 @@ func Start(sc ServiceConfig) error {
 }
 
 // Stop sends SIGTERM to the supervised process, waits, then SIGKILL if needed.
-func Stop(agentName, workDir string) error {
-	pidFile := PidPath(workDir, agentName)
+func Stop(workDir string) error {
+	pidFile := PidPath(workDir)
 
 	pid, err := readPid(pidFile)
 	if err != nil {
@@ -121,8 +121,8 @@ func Stop(agentName, workDir string) error {
 }
 
 // Status returns a human-readable status string for the background process.
-func Status(agentName, workDir string) (string, error) {
-	pidFile := PidPath(workDir, agentName)
+func Status(workDir string) (string, error) {
+	pidFile := PidPath(workDir)
 
 	pid, err := readPid(pidFile)
 	if err == nil {

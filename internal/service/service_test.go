@@ -11,7 +11,7 @@ import (
 )
 
 func TestPidPath(t *testing.T) {
-	got := PidPath("/home/user/workspace", "myagent")
+	got := PidPath("/home/user/workspace")
 	want := filepath.Join("/home/user/workspace", "state", "chat.pid")
 	if got != want {
 		t.Errorf("PidPath() = %q, want %q", got, want)
@@ -70,7 +70,6 @@ func TestStartWritesPidFile(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName:  "myagent",
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
@@ -107,8 +106,7 @@ func TestStartAlreadyRunning(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName: "myagent",
-		WorkDir:   "/workspace",
+		WorkDir: "/workspace",
 	}
 
 	err := Start(sc)
@@ -160,7 +158,6 @@ func TestStartCleansStalesPid(t *testing.T) {
 	writeFile = func(name string, data []byte, perm os.FileMode) error { return nil }
 
 	sc := ServiceConfig{
-		AgentName:  "myagent",
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
@@ -184,7 +181,7 @@ func TestStopNoPidFile(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 
-	err := Stop("myagent", "/workspace")
+	err := Stop("/workspace")
 	if err == nil {
 		t.Fatal("Stop() should error when no pid file")
 	}
@@ -209,7 +206,7 @@ func TestStatusRunning(t *testing.T) {
 		return os.FindProcess(p)
 	}
 
-	status, err := Status("myagent", "/workspace")
+	status, err := Status("/workspace")
 	if err != nil {
 		t.Fatalf("Status() error: %v", err)
 	}
@@ -226,7 +223,7 @@ func TestStatusStopped(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 
-	status, err := Status("myagent", "/workspace")
+	status, err := Status("/workspace")
 	if err != nil {
 		t.Fatalf("Status() error: %v", err)
 	}
@@ -253,7 +250,7 @@ func TestStatusStalePid(t *testing.T) {
 	}
 	removeFile = func(name string) error { return nil }
 
-	status, err := Status("myagent", "/workspace")
+	status, err := Status("/workspace")
 	if err != nil {
 		t.Fatalf("Status() error: %v", err)
 	}
@@ -285,7 +282,7 @@ func TestStopStalePid(t *testing.T) {
 		return nil
 	}
 
-	err := Stop("myagent", "/workspace")
+	err := Stop("/workspace")
 	if err == nil {
 		t.Fatal("Stop() should error for stale pid")
 	}
@@ -326,7 +323,7 @@ func TestStopProcessNotFound(t *testing.T) {
 
 	removeFile = func(name string) error { return nil }
 
-	err := Stop("myagent", "/workspace")
+	err := Stop("/workspace")
 	if err == nil {
 		t.Fatal("Stop() should error when process not found")
 	}
@@ -359,7 +356,6 @@ func TestStartProcessError(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName:  "test",
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
@@ -394,9 +390,8 @@ func TestStartLogFileError(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName: "test",
-		WorkDir:   "/workspace",
-		LogPath:   "/workspace/state/chat.log",
+		WorkDir: "/workspace",
+		LogPath: "/workspace/state/chat.log",
 	}
 
 	err := Start(sc)
@@ -422,15 +417,15 @@ func TestRunSupervisedDelegates(t *testing.T) {
 		return nil
 	}
 
-	err := RunSupervised("/usr/bin/claude", []string{"--agent", "test"}, "/workspace", "/workspace/leo.yaml")
+	err := RunSupervised("/usr/bin/claude", []string{"--add-dir", "/workspace"}, "/workspace", "/workspace/leo.yaml")
 	if err != nil {
 		t.Fatalf("RunSupervised() error: %v", err)
 	}
 	if calledPath != "/usr/bin/claude" {
 		t.Errorf("path = %q, want /usr/bin/claude", calledPath)
 	}
-	if len(calledArgs) != 2 || calledArgs[0] != "--agent" {
-		t.Errorf("args = %v, want [--agent test]", calledArgs)
+	if len(calledArgs) != 2 || calledArgs[0] != "--add-dir" {
+		t.Errorf("args = %v, want [--add-dir /workspace]", calledArgs)
 	}
 	if calledConfigPath != "/workspace/leo.yaml" {
 		t.Errorf("configPath = %q, want /workspace/leo.yaml", calledConfigPath)
@@ -445,18 +440,18 @@ func TestStripResumeArg(t *testing.T) {
 	}{
 		{
 			name: "removes resume and value",
-			args: []string{"--agent", "test", "--resume", "abc-123", "--add-dir", "/workspace"},
-			want: []string{"--agent", "test", "--add-dir", "/workspace"},
+			args: []string{"--add-dir", "/workspace", "--resume", "abc-123", "--model", "sonnet"},
+			want: []string{"--add-dir", "/workspace", "--model", "sonnet"},
 		},
 		{
 			name: "no resume present",
-			args: []string{"--agent", "test", "--session-id", "abc-123"},
-			want: []string{"--agent", "test", "--session-id", "abc-123"},
+			args: []string{"--add-dir", "/workspace", "--session-id", "abc-123"},
+			want: []string{"--add-dir", "/workspace", "--session-id", "abc-123"},
 		},
 		{
 			name: "resume at end without value",
-			args: []string{"--agent", "test", "--resume"},
-			want: []string{"--agent", "test", "--resume"},
+			args: []string{"--add-dir", "/workspace", "--resume"},
+			want: []string{"--add-dir", "/workspace", "--resume"},
 		},
 		{
 			name: "empty args",

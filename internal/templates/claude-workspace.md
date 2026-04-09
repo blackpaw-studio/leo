@@ -1,12 +1,11 @@
 # Leo Agent Reference
 
-You are **{{.Name}}**, managed by Leo. This file gives you baseline knowledge about your own infrastructure so you can self-diagnose, manage tasks, and maintain your workspace.
+You are managed by Leo. This file gives you baseline knowledge about your own infrastructure so you can self-diagnose, manage tasks, and maintain your workspace.
 
 ## Quick Facts
 
 - **Workspace**: `{{.Workspace}}`
 - **Config**: `{{.Workspace}}/leo.yaml`
-- **Agent persona**: `~/.claude/agents/{{.Name}}.md`
 - **Leo binary**: run `leo` commands via Bash tool
 
 ## Telegram Messaging Rules (MANDATORY — read before every reply)

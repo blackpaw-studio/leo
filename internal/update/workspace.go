@@ -12,12 +12,11 @@ import (
 // CLAUDE.md and skills/*.md are always overwritten (generated reference material).
 // HEARTBEAT.md is only written if missing (may be user-customized).
 // Returns a list of files that were written.
-func RefreshWorkspace(agentName, workspace string) ([]string, error) {
+func RefreshWorkspace(workspace string) ([]string, error) {
 	var written []string
 
 	// Always overwrite CLAUDE.md
 	claudeContent, err := templates.RenderClaudeWorkspace(templates.AgentData{
-		Name:      agentName,
 		Workspace: workspace,
 	})
 	if err != nil {

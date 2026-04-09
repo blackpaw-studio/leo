@@ -6,7 +6,6 @@ import (
 
 // ServiceConfig holds everything needed to manage a chat service.
 type ServiceConfig struct {
-	AgentName  string
 	LeoPath    string
 	ConfigPath string
 	WorkDir    string
@@ -15,7 +14,7 @@ type ServiceConfig struct {
 }
 
 // PidPath returns the path to the PID file for simple background mode.
-func PidPath(workDir, agentName string) string {
+func PidPath(workDir string) string {
 	return filepath.Join(workDir, "state", "chat.pid")
 }
 

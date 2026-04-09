@@ -64,16 +64,7 @@ func newValidateCmd() *cobra.Command {
 				success.Printf("Workspace: %s\n", cfg.Agent.Workspace)
 			}
 
-			// 4. Check agent file
-			agentFile := cfg.AgentFilePath()
-			if _, err := os.Stat(agentFile); err != nil {
-				warn.Printf("Agent file: %s not found\n", agentFile)
-				issues++
-			} else {
-				success.Printf("Agent file: %s\n", agentFile)
-			}
-
-			// 5. Check prompt files for enabled tasks
+			// 4. Check prompt files for enabled tasks
 			for name, task := range cfg.Tasks {
 				if !task.Enabled {
 					continue
@@ -85,7 +76,7 @@ func newValidateCmd() *cobra.Command {
 				}
 			}
 
-			// 6. Summary
+			// 5. Summary
 			fmt.Println()
 			if issues == 0 {
 				success.Println("All checks passed.")

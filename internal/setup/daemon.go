@@ -16,7 +16,7 @@ var (
 
 // installDaemon installs the LaunchAgent/systemd service.
 // daemonStatusFn is declared in setup.go (same package).
-func installDaemon(name, workspace, cfgPath, botToken string) {
+func installDaemon(workspace, cfgPath, botToken string) {
 	leoPath, _ := osExecutableFn()
 	if leoPath == "" {
 		leoPath = "leo"
@@ -26,7 +26,6 @@ func installDaemon(name, workspace, cfgPath, botToken string) {
 		environ["TELEGRAM_BOT_TOKEN"] = botToken
 	}
 	sc := service.ServiceConfig{
-		AgentName:  name,
 		LeoPath:    leoPath,
 		ConfigPath: cfgPath,
 		WorkDir:    workspace,
@@ -36,7 +35,7 @@ func installDaemon(name, workspace, cfgPath, botToken string) {
 	if err := installDaemonFn(sc); err != nil {
 		prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
 	} else {
-		status, _ := daemonStatusFn(name)
+		status, _ := daemonStatusFn()
 		prompt.Success.Printf("  Chat daemon installed (%s).\n", status)
 		prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
 	}

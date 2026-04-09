@@ -569,7 +569,7 @@ func TestRunInteractiveFullMigration(t *testing.T) {
 		return &daemon.Response{OK: true}, nil
 	}
 	installDaemonFn = func(sc service.ServiceConfig) error { return nil }
-	daemonStatusFn = func(string) (string, error) { return "running", nil }
+	daemonStatusFn = func() (string, error) { return "running", nil }
 	sendMessageFn = func(string, string, string, int) error { return nil }
 	envCaptureFn = func() map[string]string { return map[string]string{} }
 	osExecutableFn = func() (string, error) { return "/usr/bin/leo", nil }
@@ -594,9 +594,6 @@ func TestRunInteractiveFullMigration(t *testing.T) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
-	}
-	if cfg.Agent.Name != "testbot" {
-		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "testbot")
 	}
 	if len(cfg.Tasks) != 1 {
 		t.Errorf("tasks count = %d, want 1", len(cfg.Tasks))

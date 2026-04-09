@@ -5,58 +5,6 @@ import (
 	"testing"
 )
 
-func TestAgentTemplates(t *testing.T) {
-	templates := AgentTemplates()
-
-	if len(templates) != 3 {
-		t.Fatalf("AgentTemplates() returned %d templates, want 3", len(templates))
-	}
-
-	want := map[string]bool{
-		"chief-of-staff": true,
-		"dev-assistant":  true,
-		"skeleton":       true,
-	}
-
-	for _, name := range templates {
-		if !want[name] {
-			t.Errorf("unexpected template name: %q", name)
-		}
-	}
-}
-
-func TestRenderAgent(t *testing.T) {
-	data := AgentData{
-		Name:      "myagent",
-		UserName:  "Alice",
-		Workspace: "/home/user/myagent",
-	}
-
-	for _, name := range AgentTemplates() {
-		t.Run(name, func(t *testing.T) {
-			result, err := RenderAgent(name, data)
-			if err != nil {
-				t.Fatalf("RenderAgent(%q) error: %v", name, err)
-			}
-
-			if result == "" {
-				t.Error("RenderAgent returned empty string")
-			}
-
-			if strings.Contains(result, "{{") {
-				t.Error("rendered output contains unresolved template directives")
-			}
-		})
-	}
-}
-
-func TestRenderAgentInvalid(t *testing.T) {
-	_, err := RenderAgent("nonexistent", AgentData{Name: "test"})
-	if err == nil {
-		t.Error("expected error for nonexistent template")
-	}
-}
-
 func TestRenderHeartbeat(t *testing.T) {
 	result, err := RenderHeartbeat()
 	if err != nil {
@@ -70,7 +18,6 @@ func TestRenderHeartbeat(t *testing.T) {
 
 func TestRenderClaudeWorkspace(t *testing.T) {
 	data := AgentData{
-		Name:      "myagent",
 		Workspace: "/home/user/myagent",
 	}
 
@@ -87,10 +34,6 @@ func TestRenderClaudeWorkspace(t *testing.T) {
 		t.Error("rendered output contains unresolved template directives")
 	}
 
-	if !strings.Contains(result, "myagent") {
-		t.Error("rendered output missing agent name")
-	}
-
 	if !strings.Contains(result, "/home/user/myagent") {
 		t.Error("rendered output missing workspace path")
 	}
@@ -104,11 +47,11 @@ func TestSkillFiles(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"managing-tasks.md":         true,
-		"debugging-logs.md":         true,
-		"daemon-management.md":      true,
-		"config-reference.md":       true,
-		"workspace-maintenance.md":  true,
+		"managing-tasks.md":        true,
+		"debugging-logs.md":        true,
+		"daemon-management.md":     true,
+		"config-reference.md":      true,
+		"workspace-maintenance.md": true,
 	}
 
 	for _, name := range skills {

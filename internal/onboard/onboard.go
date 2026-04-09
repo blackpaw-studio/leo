@@ -153,8 +153,8 @@ func reconfigure(reader *bufio.Reader, workspaces []string) error {
 		fmt.Println("Found multiple workspaces:")
 		for i, w := range workspaces {
 			label := w
-			if cfg, err := config.LoadFromWorkspace(w); err == nil {
-				label = fmt.Sprintf("%s (agent: %s)", w, cfg.Agent.Name)
+			if _, err := config.LoadFromWorkspace(w); err == nil {
+				label = fmt.Sprintf("%s (configured)", w)
 			}
 			fmt.Printf("  %d. %s\n", i+1, label)
 		}
@@ -169,7 +169,6 @@ func reconfigure(reader *bufio.Reader, workspaces []string) error {
 	}
 
 	prompt.Bold.Printf("\nWorkspace: %s\n", ws)
-	fmt.Printf("  Agent: %s\n", cfg.Agent.Name)
 	if cfg.Telegram.BotToken != "" {
 		fmt.Printf("  Telegram: configured\n")
 	} else {

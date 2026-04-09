@@ -11,17 +11,17 @@ import (
 )
 
 func TestDaemonLabel(t *testing.T) {
-	got := daemonLabel("myagent")
-	want := "com.blackpaw.leo.myagent"
+	got := daemonLabel()
+	want := "com.blackpaw.leo"
 	if got != want {
 		t.Errorf("daemonLabel() = %q, want %q", got, want)
 	}
 }
 
 func TestPlistPath(t *testing.T) {
-	got := plistPath("myagent")
+	got := plistPath()
 	home, _ := os.UserHomeDir()
-	want := filepath.Join(home, "Library", "LaunchAgents", "com.blackpaw.leo.myagent.plist")
+	want := filepath.Join(home, "Library", "LaunchAgents", "com.blackpaw.leo.plist")
 	if got != want {
 		t.Errorf("plistPath() = %q, want %q", got, want)
 	}
@@ -54,7 +54,6 @@ func TestInstallDaemon(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName:  "testagent",
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
@@ -70,12 +69,12 @@ func TestInstallDaemon(t *testing.T) {
 	}
 
 	// Verify plist was written
-	if !strings.HasSuffix(writtenPath, "com.blackpaw.leo.testagent.plist") {
-		t.Errorf("plist written to %q, want suffix com.blackpaw.leo.testagent.plist", writtenPath)
+	if !strings.HasSuffix(writtenPath, "com.blackpaw.leo.plist") {
+		t.Errorf("plist written to %q, want suffix com.blackpaw.leo.plist", writtenPath)
 	}
 
 	content := string(writtenContent)
-	if !strings.Contains(content, "<string>com.blackpaw.leo.testagent</string>") {
+	if !strings.Contains(content, "<string>com.blackpaw.leo</string>") {
 		t.Error("plist should contain label")
 	}
 	if !strings.Contains(content, "<string>/usr/local/bin/leo</string>") {
@@ -109,8 +108,7 @@ func TestInstallDaemonMkdirError(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName: "test",
-		LogPath:   "/workspace/state/chat.log",
+		LogPath: "/workspace/state/chat.log",
 	}
 
 	err := InstallDaemon(sc)
@@ -123,9 +121,13 @@ func TestInstallDaemonMkdirError(t *testing.T) {
 }
 
 func TestDaemonStatusNotInstalled(t *testing.T) {
-	// plistPath depends on UserHomeDir, just verify it doesn't panic
-	// with a non-existent plist file
-	status, err := DaemonStatus("nonexistent-agent-xyz")
+	origHome := userHomeDirFn
+	defer func() { userHomeDirFn = origHome }()
+
+	// Point to a temp dir so no plist exists
+	userHomeDirFn = func() (string, error) { return t.TempDir(), nil }
+
+	status, err := DaemonStatus()
 	if err != nil {
 		t.Fatalf("DaemonStatus() error: %v", err)
 	}
@@ -136,24 +138,21 @@ func TestDaemonStatusNotInstalled(t *testing.T) {
 
 func TestDaemonStatusRunning(t *testing.T) {
 	origRun := runCommand
-	origMkdir := mkdirAll
-	origWrite := writeFile
+	origHome := userHomeDirFn
 	defer func() {
 		runCommand = origRun
-		mkdirAll = origMkdir
-		writeFile = origWrite
+		userHomeDirFn = origHome
 	}()
 
-	// Create a fake plist file
-	dir := t.TempDir()
-	label := daemonLabel("testagent")
-	fakePlistPath := filepath.Join(dir, label+".plist")
-	os.WriteFile(fakePlistPath, []byte("<plist/>"), 0644)
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
 
-	// We can't easily override plistPath since it's a function not a var.
-	// Instead, test the real DaemonStatus for a non-installed agent.
-	// The installed-case test is covered by TestInstallDaemon verifying
-	// the bootstrap call and plist content.
+	// Create a fake plist file at the expected path
+	label := daemonLabel()
+	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+	os.MkdirAll(launchAgentsDir, 0755)
+	plist := filepath.Join(launchAgentsDir, label+".plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0644)
 
 	runCommand = func(name string, args ...string) (string, error) {
 		if strings.Contains(strings.Join(args, " "), "print") {
@@ -162,19 +161,22 @@ func TestDaemonStatusRunning(t *testing.T) {
 		return "", nil
 	}
 
-	// This will check the real plist path which doesn't exist for "testagent"
-	status, err := DaemonStatus("testagent")
+	status, err := DaemonStatus()
 	if err != nil {
 		t.Fatalf("DaemonStatus() error: %v", err)
 	}
-	// Since there's no real plist, it should be "not installed"
-	if status != "not installed" {
-		t.Logf("status = %q (expected 'not installed' since no plist exists at real path)", status)
+	if !strings.Contains(status, "running") {
+		t.Errorf("status = %q, want to contain 'running'", status)
 	}
 }
 
 func TestRemoveDaemonNotInstalled(t *testing.T) {
-	err := RemoveDaemon("nonexistent-agent-xyz")
+	origHome := userHomeDirFn
+	defer func() { userHomeDirFn = origHome }()
+
+	userHomeDirFn = func() (string, error) { return t.TempDir(), nil }
+
+	err := RemoveDaemon()
 	if err == nil {
 		t.Fatal("expected error for non-installed daemon")
 	}
@@ -197,7 +199,7 @@ func TestRemoveDaemonSuccess(t *testing.T) {
 	userHomeDirFn = func() (string, error) { return home, nil }
 
 	// Create the plist file at the expected path
-	label := daemonLabel("testagent")
+	label := daemonLabel()
 	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
 	os.MkdirAll(launchAgentsDir, 0755)
 	plist := filepath.Join(launchAgentsDir, label+".plist")
@@ -211,7 +213,7 @@ func TestRemoveDaemonSuccess(t *testing.T) {
 	// Use real removeFile
 	removeFile = os.Remove
 
-	err := RemoveDaemon("testagent")
+	err := RemoveDaemon()
 	if err != nil {
 		t.Fatalf("RemoveDaemon() error: %v", err)
 	}
@@ -234,7 +236,7 @@ func TestDaemonStatusInstalledNotRunning(t *testing.T) {
 	userHomeDirFn = func() (string, error) { return home, nil }
 
 	// Create the plist file
-	label := daemonLabel("testagent")
+	label := daemonLabel()
 	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
 	os.MkdirAll(launchAgentsDir, 0755)
 	plist := filepath.Join(launchAgentsDir, label+".plist")
@@ -245,7 +247,7 @@ func TestDaemonStatusInstalledNotRunning(t *testing.T) {
 		return "", fmt.Errorf("could not find service")
 	}
 
-	status, err := DaemonStatus("testagent")
+	status, err := DaemonStatus()
 	if err != nil {
 		t.Fatalf("DaemonStatus() error: %v", err)
 	}
@@ -266,7 +268,7 @@ func TestDaemonStatusRunningWithPid(t *testing.T) {
 	userHomeDirFn = func() (string, error) { return home, nil }
 
 	// Create the plist file
-	label := daemonLabel("testagent")
+	label := daemonLabel()
 	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
 	os.MkdirAll(launchAgentsDir, 0755)
 	plist := filepath.Join(launchAgentsDir, label+".plist")
@@ -277,7 +279,7 @@ func TestDaemonStatusRunningWithPid(t *testing.T) {
 		return "pid = 12345\nstate = running\n", nil
 	}
 
-	status, err := DaemonStatus("testagent")
+	status, err := DaemonStatus()
 	if err != nil {
 		t.Fatalf("DaemonStatus() error: %v", err)
 	}
@@ -301,7 +303,7 @@ func TestDaemonStatusInstalled(t *testing.T) {
 	userHomeDirFn = func() (string, error) { return home, nil }
 
 	// Create the plist file
-	label := daemonLabel("testagent")
+	label := daemonLabel()
 	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
 	os.MkdirAll(launchAgentsDir, 0755)
 	plist := filepath.Join(launchAgentsDir, label+".plist")
@@ -312,7 +314,7 @@ func TestDaemonStatusInstalled(t *testing.T) {
 		return "state = running\n", nil
 	}
 
-	status, err := DaemonStatus("testagent")
+	status, err := DaemonStatus()
 	if err != nil {
 		t.Fatalf("DaemonStatus() error: %v", err)
 	}
@@ -348,7 +350,6 @@ func TestInstallDaemonWithHomeSeam(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName:  "testagent",
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
@@ -389,8 +390,7 @@ func TestInstallDaemonWriteError(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName: "test",
-		LogPath:   "/workspace/state/chat.log",
+		LogPath: "/workspace/state/chat.log",
 	}
 
 	err := InstallDaemon(sc)
@@ -431,8 +431,7 @@ func TestInstallDaemonBootstrapError(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		AgentName: "test",
-		LogPath:   "/workspace/state/chat.log",
+		LogPath: "/workspace/state/chat.log",
 	}
 
 	err := InstallDaemon(sc)
@@ -445,7 +444,12 @@ func TestInstallDaemonBootstrapError(t *testing.T) {
 }
 
 func TestRestartDaemonNotInstalled(t *testing.T) {
-	err := RestartDaemon("nonexistent-agent-xyz")
+	origHome := userHomeDirFn
+	defer func() { userHomeDirFn = origHome }()
+
+	userHomeDirFn = func() (string, error) { return t.TempDir(), nil }
+
+	err := RestartDaemon()
 	if err == nil {
 		t.Fatal("expected error for non-installed daemon")
 	}
@@ -466,7 +470,7 @@ func TestRestartDaemonSuccess(t *testing.T) {
 	userHomeDirFn = func() (string, error) { return home, nil }
 
 	// Create the plist file
-	label := daemonLabel("testagent")
+	label := daemonLabel()
 	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
 	os.MkdirAll(launchAgentsDir, 0755)
 	plist := filepath.Join(launchAgentsDir, label+".plist")
@@ -479,7 +483,7 @@ func TestRestartDaemonSuccess(t *testing.T) {
 		return "", nil
 	}
 
-	err := RestartDaemon("testagent")
+	err := RestartDaemon()
 	if err != nil {
 		t.Fatalf("RestartDaemon() error: %v", err)
 	}

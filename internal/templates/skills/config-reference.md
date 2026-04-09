@@ -6,9 +6,8 @@ Leo's config lives at `leo.yaml` in the workspace root.
 
 ```yaml
 agent:
-  name: <string>              # Agent name (required) — matches ~/.claude/agents/<name>.md
+  name: <string>              # Agent name (required) — used for service labels and cron markers
   workspace: <path>           # Workspace directory path (required)
-  agent_file: <path>          # Override agent file location (optional)
 
 telegram:
   bot_token: <string>         # Telegram Bot API token from @BotFather (required)
@@ -19,6 +18,7 @@ defaults:
   model: <string>             # Default model: sonnet, opus, or haiku (required)
   max_turns: <int>            # Default max conversation turns (required)
   bypass_permissions: <bool>  # Skip permission prompts in task runs (optional)
+  remote_control: <bool>      # Enable Remote Control for web/mobile access (optional)
 
 tasks:
   <task-name>:
@@ -55,7 +55,7 @@ If `group_id` is set, messages go to the group. The `topic_id` field adds a `mes
 
 ## Paths
 
-- Paths in `agent.workspace` and `agent.agent_file` support `~` expansion
+- Paths in `agent.workspace` support `~` expansion
 - `prompt_file` is relative to the workspace directory
 - Config is auto-discovered by searching up from the current directory, or specify with `--config`
 

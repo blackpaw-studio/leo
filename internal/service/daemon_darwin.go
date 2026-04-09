@@ -63,18 +63,18 @@ type plistData struct {
 	Env        map[string]string
 }
 
-func daemonLabel(agentName string) string {
-	return fmt.Sprintf("com.blackpaw.leo.%s", agentName)
+func daemonLabel() string {
+	return "com.blackpaw.leo"
 }
 
-func plistPath(agentName string) string {
+func plistPath() string {
 	home, _ := userHomeDirFn()
-	return filepath.Join(home, "Library", "LaunchAgents", daemonLabel(agentName)+".plist")
+	return filepath.Join(home, "Library", "LaunchAgents", daemonLabel()+".plist")
 }
 
 // InstallDaemon writes a launchd plist and bootstraps the service.
 func InstallDaemon(sc ServiceConfig) error {
-	label := daemonLabel(sc.AgentName)
+	label := daemonLabel()
 
 	// Ensure state directory exists for log file
 	if err := mkdirAll(filepath.Dir(sc.LogPath), 0750); err != nil {
@@ -101,7 +101,7 @@ func InstallDaemon(sc ServiceConfig) error {
 		return fmt.Errorf("rendering plist: %w", err)
 	}
 
-	path := plistPath(sc.AgentName)
+	path := plistPath()
 	if err := mkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating LaunchAgents directory: %w", err)
 	}
@@ -123,9 +123,9 @@ func InstallDaemon(sc ServiceConfig) error {
 }
 
 // RemoveDaemon stops and removes the launchd service.
-func RemoveDaemon(agentName string) error {
-	label := daemonLabel(agentName)
-	path := plistPath(agentName)
+func RemoveDaemon() error {
+	label := daemonLabel()
+	path := plistPath()
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("daemon not installed (no plist found)")
@@ -141,13 +141,13 @@ func RemoveDaemon(agentName string) error {
 }
 
 // DaemonStatus returns the status of the launchd service.
-func DaemonStatus(agentName string) (string, error) {
-	path := plistPath(agentName)
+func DaemonStatus() (string, error) {
+	path := plistPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return "not installed", nil
 	}
 
-	label := daemonLabel(agentName)
+	label := daemonLabel()
 	uid := fmt.Sprintf("%d", os.Getuid())
 	target := fmt.Sprintf("gui/%s/%s", uid, label)
 
@@ -169,13 +169,13 @@ func DaemonStatus(agentName string) (string, error) {
 }
 
 // RestartDaemon force-restarts the launchd service.
-func RestartDaemon(agentName string) error {
-	path := plistPath(agentName)
+func RestartDaemon() error {
+	path := plistPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("daemon not installed (no plist found)")
 	}
 
-	label := daemonLabel(agentName)
+	label := daemonLabel()
 	uid := fmt.Sprintf("%d", os.Getuid())
 	target := fmt.Sprintf("gui/%s/%s", uid, label)
 

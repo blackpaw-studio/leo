@@ -10,7 +10,6 @@ const testYAML = `
 agent:
   name: myagent
   workspace: /tmp/test-workspace
-  agent_file: ~/.claude/agents/myagent.md
 
 telegram:
   bot_token: "123:ABC"
@@ -48,7 +47,6 @@ func TestValidate(t *testing.T) {
 	validConfig := func() *Config {
 		return &Config{
 			Agent: AgentConfig{
-				Name:      "myagent",
 				Workspace: "/tmp/workspace",
 			},
 			Telegram: TelegramConfig{
@@ -74,18 +72,6 @@ func TestValidate(t *testing.T) {
 		cfg := validConfig()
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected no error, got %v", err)
-		}
-	})
-
-	t.Run("empty agent name", func(t *testing.T) {
-		cfg := validConfig()
-		cfg.Agent.Name = ""
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if got := err.Error(); !contains(got, "agent.name is required") {
-			t.Errorf("error = %q, want mention of agent.name", got)
 		}
 	})
 
@@ -187,21 +173,21 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("multiple errors collected", func(t *testing.T) {
+	t.Run("empty config has workspace error", func(t *testing.T) {
 		cfg := &Config{}
 		err := cfg.Validate()
 		if err == nil {
 			t.Fatal("expected error")
 		}
 		got := err.Error()
-		if !contains(got, "agent.name") || !contains(got, "agent.workspace") {
-			t.Errorf("expected multiple errors, got %q", got)
+		if !contains(got, "agent.workspace") {
+			t.Errorf("expected workspace error, got %q", got)
 		}
 	})
 
 	t.Run("no telegram section is fine", func(t *testing.T) {
 		cfg := &Config{
-			Agent: AgentConfig{Name: "test", Workspace: "/tmp"},
+			Agent: AgentConfig{Workspace: "/tmp"},
 		}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected no error, got %v", err)
@@ -210,7 +196,7 @@ func TestValidate(t *testing.T) {
 
 	t.Run("empty model is fine", func(t *testing.T) {
 		cfg := &Config{
-			Agent: AgentConfig{Name: "test", Workspace: "/tmp"},
+			Agent: AgentConfig{Workspace: "/tmp"},
 		}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected no error, got %v", err)
@@ -288,10 +274,6 @@ func TestLoadConfig(t *testing.T) {
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	if cfg.Agent.Name != "myagent" {
-		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "myagent")
 	}
 
 	if cfg.Agent.Workspace != "/tmp/test-workspace" {
@@ -406,9 +388,6 @@ func TestSaveAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if loaded.Agent.Name != cfg.Agent.Name {
-		t.Errorf("loaded name = %q, want %q", loaded.Agent.Name, cfg.Agent.Name)
-	}
 	if loaded.Telegram.BotToken != cfg.Telegram.BotToken {
 		t.Errorf("loaded token = %q, want %q", loaded.Telegram.BotToken, cfg.Telegram.BotToken)
 	}
@@ -444,8 +423,8 @@ func TestLoadFromWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if cfg.Agent.Name != "myagent" {
-		t.Errorf("agent name = %q, want %q", cfg.Agent.Name, "myagent")
+	if cfg.Agent.Workspace != "/tmp/test-workspace" {
+		t.Errorf("workspace = %q, want %q", cfg.Agent.Workspace, "/tmp/test-workspace")
 	}
 }
 

@@ -211,7 +211,6 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 
 func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessionID string) []string {
 	args := []string{
-		"--agent", cfg.Agent.Name,
 		"-p", prompt,
 		"--model", cfg.TaskModel(task),
 		"--max-turns", strconv.Itoa(cfg.TaskMaxTurns(task)),
