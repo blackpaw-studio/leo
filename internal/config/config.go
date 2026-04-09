@@ -412,6 +412,13 @@ func HasMCPServers(path string) bool {
 }
 
 func expandHome(path string) string {
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return home
+	}
 	if len(path) > 1 && path[:2] == "~/" {
 		home, err := os.UserHomeDir()
 		if err != nil {

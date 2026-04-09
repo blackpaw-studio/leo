@@ -77,5 +77,14 @@ func (s *Store) save(entries map[string]Entry) error {
 		return fmt.Errorf("marshaling history: %w", err)
 	}
 
-	return os.WriteFile(s.path, data, 0600)
+	// Atomic write via temp file + rename
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("writing history: %w", err)
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("renaming history file: %w", err)
+	}
+	return nil
 }

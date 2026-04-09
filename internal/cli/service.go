@@ -478,6 +478,7 @@ func resolveConfigPath(cfg *config.Config) (string, error) {
 func syncPluginEnv(botToken string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot sync telegram plugin env: %v\n", err)
 		return
 	}
 	envDir := filepath.Join(home, ".claude", "channels", "telegram")
@@ -498,8 +499,11 @@ func syncPluginEnv(botToken string) {
 	lines = append([]string{"TELEGRAM_BOT_TOKEN=" + botToken}, lines...)
 
 	if err := os.MkdirAll(envDir, 0750); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot create telegram plugin dir: %v\n", err)
 		return
 	}
-	_ = os.WriteFile(envFile, []byte(strings.Join(lines, "\n")+"\n"), 0600)
+	if err := os.WriteFile(envFile, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot write telegram plugin env: %v\n", err)
+	}
 }
 
