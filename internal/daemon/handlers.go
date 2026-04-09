@@ -9,10 +9,19 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
+// decodeJSON decodes a JSON request body into v and writes an error response on failure.
+// Returns true if decoding succeeded, false if an error was written.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("decoding request: %v", err))
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 	var req TaskAddRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("decoding request: %v", err))
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -60,8 +69,7 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTaskRemove(w http.ResponseWriter, r *http.Request) {
 	var req TaskNameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("decoding request: %v", err))
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -97,8 +105,7 @@ func (s *Server) handleTaskDisable(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setTaskEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
 	var req TaskNameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("decoding request: %v", err))
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 

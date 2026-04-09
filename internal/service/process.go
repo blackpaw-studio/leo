@@ -328,40 +328,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", spec.Name, sessionName)
 
-		// Wait for the tmux session to end or the plugin to die
-		var pluginLockFile string
-		if home, err := os.UserHomeDir(); err == nil {
-			pluginLockFile = filepath.Join(home, ".claude", "channels", "telegram", "data", "telegram.lock")
-		}
-		pluginChecksAfterStartup := 0
-		for {
-			select {
-			case <-ctx.Done():
-				exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
-				sv.setState(spec.Name, "stopped")
-				return
-			case <-time.After(5 * time.Second):
-			}
-
-			// Check if tmux session still exists
-			check := exec.Command(tmuxPath, "has-session", "-t", sessionName)
-			if check.Run() != nil {
-				break
-			}
-
-			// Monitor telegram plugin lock file (only for telegram processes)
-			if spec.HasTelegram && pluginLockFile != "" && time.Since(startTime) > 30*time.Second {
-				if _, err := os.Stat(pluginLockFile); err != nil {
-					pluginChecksAfterStartup++
-					if pluginChecksAfterStartup >= 3 {
-						fmt.Fprintf(os.Stderr, "[%s] telegram plugin died (lock file gone), restarting session\n", spec.Name)
-						exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
-						break
-					}
-				} else {
-					pluginChecksAfterStartup = 0
-				}
-			}
+		if waitForSessionEnd(ctx, tmuxPath, sessionName, spec, startTime) {
+			sv.setState(spec.Name, "stopped")
+			return
 		}
 
 		elapsed := time.Since(startTime)
@@ -395,6 +364,44 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			sv.setState(spec.Name, "stopped")
 			return
 		case <-time.After(initialBackoff):
+		}
+	}
+}
+
+// waitForSessionEnd blocks until the tmux session ends, the plugin dies, or the context is cancelled.
+// Returns true if the context was cancelled (should stop).
+func waitForSessionEnd(ctx context.Context, tmuxPath, sessionName string, spec ProcessSpec, startTime time.Time) bool {
+	var pluginLockFile string
+	if home, err := os.UserHomeDir(); err == nil {
+		pluginLockFile = filepath.Join(home, ".claude", "channels", "telegram", "data", "telegram.lock")
+	}
+	pluginChecksAfterStartup := 0
+	for {
+		select {
+		case <-ctx.Done():
+			exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
+			return true
+		case <-time.After(5 * time.Second):
+		}
+
+		// Check if tmux session still exists
+		check := exec.Command(tmuxPath, "has-session", "-t", sessionName)
+		if check.Run() != nil {
+			return false
+		}
+
+		// Monitor telegram plugin lock file (only for telegram processes)
+		if spec.HasTelegram && pluginLockFile != "" && time.Since(startTime) > 30*time.Second {
+			if _, err := os.Stat(pluginLockFile); err != nil {
+				pluginChecksAfterStartup++
+				if pluginChecksAfterStartup >= 3 {
+					fmt.Fprintf(os.Stderr, "[%s] telegram plugin died (lock file gone), restarting session\n", spec.Name)
+					exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
+					return false
+				}
+			} else {
+				pluginChecksAfterStartup = 0
+			}
 		}
 	}
 }
