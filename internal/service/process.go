@@ -65,12 +65,18 @@ func NewSupervisor() *Supervisor {
 }
 
 // States returns a snapshot of all process states.
-func (s *Supervisor) States() map[string]ProcessState {
+// Implements daemon.ProcessStateProvider.
+func (s *Supervisor) States() map[string]daemon.ProcessStateInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := make(map[string]ProcessState, len(s.states))
+	result := make(map[string]daemon.ProcessStateInfo, len(s.states))
 	for k, v := range s.states {
-		result[k] = *v
+		result[k] = daemon.ProcessStateInfo{
+			Name:      v.Name,
+			Status:    v.Status,
+			StartedAt: v.StartedAt,
+			Restarts:  v.Restarts,
+		}
 	}
 	return result
 }
@@ -223,9 +229,12 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	// Start daemon IPC server
+	supervisor := NewSupervisor()
+
+	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath)
+	srv.SetProcessProvider(supervisor)
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
@@ -238,8 +247,6 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	if err != nil {
 		return err
 	}
-
-	supervisor := NewSupervisor()
 
 	var wg sync.WaitGroup
 	for _, proc := range processes {

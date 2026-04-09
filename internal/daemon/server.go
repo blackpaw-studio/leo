@@ -14,6 +14,20 @@ import (
 	"github.com/blackpaw-studio/leo/internal/cron"
 )
 
+// ProcessStateProvider returns the state of all supervised processes.
+// This is implemented by service.Supervisor.
+type ProcessStateProvider interface {
+	States() map[string]ProcessStateInfo
+}
+
+// ProcessStateInfo is the daemon-facing view of a process state.
+type ProcessStateInfo struct {
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"started_at"`
+	Restarts  int       `json:"restarts"`
+}
+
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
 type Server struct {
 	sockPath   string
@@ -21,6 +35,7 @@ type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	scheduler  *cron.Scheduler
+	processes  ProcessStateProvider
 }
 
 // New creates a new daemon server.
@@ -46,6 +61,7 @@ func New(sockPath, configPath string) *Server {
 	mux.HandleFunc("POST /task/enable", s.handleTaskEnable)
 	mux.HandleFunc("POST /task/disable", s.handleTaskDisable)
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
+	mux.HandleFunc("GET /process/list", s.handleProcessList)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -111,8 +127,27 @@ func (s *Server) SockPath() string {
 	return s.sockPath
 }
 
+// SetProcessProvider sets the process state provider for the server.
+func (s *Server) SetProcessProvider(p ProcessStateProvider) {
+	s.processes = p
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true})
+}
+
+func (s *Server) handleProcessList(w http.ResponseWriter, r *http.Request) {
+	if s.processes == nil {
+		writeJSON(w, http.StatusOK, Response{OK: true, Data: json.RawMessage("[]")})
+		return
+	}
+	states := s.processes.States()
+	data, err := json.Marshal(states)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling process states: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
