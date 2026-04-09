@@ -42,6 +42,7 @@ type ProcessSpec struct {
 	ClaudeArgs  []string
 	WorkDir     string
 	HasTelegram bool
+	Env         map[string]string
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -290,6 +291,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// Propagate PATH into the tmux session
 		if p := os.Getenv("PATH"); p != "" {
 			claudeCmd = fmt.Sprintf("export PATH=%s; %s", shellQuote(p), claudeCmd)
+		}
+
+		// Add per-process env vars
+		for k, v := range spec.Env {
+			claudeCmd = fmt.Sprintf("export %s=%s; %s", k, shellQuote(v), claudeCmd)
 		}
 
 		// Kill any stale tmux session with our name

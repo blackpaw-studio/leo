@@ -1,6 +1,7 @@
 package run
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -520,4 +521,107 @@ func TestWriteLog(t *testing.T) {
 	if string(data) != "test output" {
 		t.Errorf("log content = %q, want %q", string(data), "test output")
 	}
+}
+
+func TestAcquireTaskLock(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "state", "test.lock")
+
+	// First acquire should succeed
+	if err := acquireTaskLock(lockPath); err != nil {
+		t.Fatalf("first acquireTaskLock() error: %v", err)
+	}
+
+	// Lock file should contain our PID
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("reading lock file: %v", err)
+	}
+	wantPid := fmt.Sprintf("%d", os.Getpid())
+	if string(data) != wantPid {
+		t.Errorf("lock file = %q, want %q", string(data), wantPid)
+	}
+
+	// Second acquire should fail (same PID is still alive)
+	if err := acquireTaskLock(lockPath); err == nil {
+		t.Fatal("second acquireTaskLock() should fail when lock is held")
+	}
+
+	// Release and reacquire should work
+	releaseTaskLock(lockPath)
+	if err := acquireTaskLock(lockPath); err != nil {
+		t.Fatalf("acquireTaskLock() after release error: %v", err)
+	}
+	releaseTaskLock(lockPath)
+}
+
+func TestAcquireTaskLockStaleLock(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "state", "test.lock")
+
+	// Create state dir and write a lock file with a dead PID
+	os.MkdirAll(filepath.Dir(lockPath), 0750)
+	// PID 2147483647 is unlikely to be a real running process
+	os.WriteFile(lockPath, []byte("2147483647"), 0600)
+
+	// Should succeed because the lock is stale
+	if err := acquireTaskLock(lockPath); err != nil {
+		t.Fatalf("acquireTaskLock() with stale lock error: %v", err)
+	}
+
+	// Verify it wrote our PID
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("reading lock file: %v", err)
+	}
+	wantPid := fmt.Sprintf("%d", os.Getpid())
+	if string(data) != wantPid {
+		t.Errorf("lock file = %q, want %q", string(data), wantPid)
+	}
+
+	releaseTaskLock(lockPath)
+}
+
+func TestReleaseTaskLockNoFile(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "nonexistent.lock")
+
+	// Should not panic or error
+	releaseTaskLock(lockPath)
+}
+
+func TestRunConcurrencyGuard(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+
+	// Pre-create a lock file with our own PID (simulating already-running task)
+	stateDir := filepath.Join(dir, "state")
+	os.MkdirAll(stateDir, 0750)
+	lockPath := filepath.Join(stateDir, "mytask.lock")
+	os.WriteFile(lockPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0600)
+
+	err := Run(cfg, "mytask", nil)
+	if err == nil {
+		t.Fatal("Run() should fail when task is already running")
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Errorf("error = %q, want to contain 'already running'", err.Error())
+	}
+
+	// Clean up lock
+	os.Remove(lockPath)
 }

@@ -9,16 +9,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
+	"syscall"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/session"
+	"github.com/blackpaw-studio/leo/internal/telegram"
 )
 
 var execCommand = exec.Command
-
-const defaultTaskTimeout = 30 * time.Minute
 
 const silentPreamble = `SILENT SCHEDULED RUN — You are running as a scheduled background task, not responding to a user message.
 Work silently. Do not narrate your process or describe your tool usage.
@@ -92,6 +91,13 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		return err
 	}
 
+	// Acquire task lock to prevent concurrent execution
+	lockPath := filepath.Join(cfg.StatePath(), taskName+".lock")
+	if err := acquireTaskLock(lockPath); err != nil {
+		return fmt.Errorf("task %q is already running: %w", taskName, err)
+	}
+	defer releaseTaskLock(lockPath)
+
 	prompt, err := assemblePrompt(cfg, task)
 	if err != nil {
 		return fmt.Errorf("assembling prompt: %w", err)
@@ -106,47 +112,70 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		sessionID = sid
 	}
 
-	args := buildArgs(cfg, task, prompt, sessionID)
-
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTaskTimeout)
+	timeout := cfg.TaskTimeout(task)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	taskWorkspace := cfg.TaskWorkspace(task)
-	output, execErr := executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
-	result := parseClaudeOutput(output)
 
-	// If --resume failed with a stale session, retry without it.
-	if execErr != nil && sessionID != "" && isSessionError(result, output) {
-		if sessions != nil {
-			if delErr := sessions.Delete("task:" + taskName); delErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to clear stale session: %v\n", delErr)
+	maxAttempts := task.Retries + 1
+	var lastErr error
+	var lastOutput []byte
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			fmt.Fprintf(os.Stderr, "retrying task %q (attempt %d/%d)\n", taskName, attempt, maxAttempts)
+			// Clear session for retry attempts
+			sessionID = ""
+		}
+
+		args := buildArgs(cfg, task, prompt, sessionID)
+
+		output, execErr := executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
+		result := parseClaudeOutput(output)
+
+		// If --resume failed with a stale session, retry without it.
+		if execErr != nil && sessionID != "" && isSessionError(result, output) {
+			if sessions != nil {
+				if delErr := sessions.Delete("task:" + taskName); delErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to clear stale session: %v\n", delErr)
+				}
+			}
+
+			args = buildArgs(cfg, task, prompt, "")
+			output, execErr = executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
+			result = parseClaudeOutput(output)
+		}
+
+		// Store session ID for next run
+		if sessions != nil && result.SessionID != "" {
+			if setErr := sessions.Set("task:"+taskName, result.SessionID); setErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to store session ID: %v\n", setErr)
 			}
 		}
 
-		args = buildArgs(cfg, task, prompt, "")
-		output, execErr = executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
-		result = parseClaudeOutput(output)
-	}
-
-	// Store session ID for next run
-	if sessions != nil && result.SessionID != "" {
-		if setErr := sessions.Set("task:"+taskName, result.SessionID); setErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to store session ID: %v\n", setErr)
+		// Log readable output
+		logContent := result.Result
+		if logContent == "" {
+			logContent = string(output)
 		}
-	}
+		if logErr := writeLog(cfg, taskName, []byte(logContent)); logErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to write log: %v\n", logErr)
+		}
 
-	// Log readable output
-	logContent := result.Result
-	if logContent == "" {
-		logContent = string(output)
-	}
-	if logErr := writeLog(cfg, taskName, []byte(logContent)); logErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to write log: %v\n", logErr)
+		if execErr == nil {
+			lastErr = nil
+			lastOutput = nil
+			break
+		}
+
+		lastErr = execErr
+		lastOutput = output
 	}
 
 	// Record execution history
 	exitCode := 0
-	if execErr != nil {
+	if lastErr != nil {
 		exitCode = 1
 	}
 	hist := history.NewStore(cfg.HomePath)
@@ -154,8 +183,20 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
 	}
 
-	if execErr != nil {
-		return fmt.Errorf("claude exited with error: %w\nOutput: %s", execErr, string(output))
+	// Send failure notification if configured
+	if lastErr != nil && task.NotifyOnFail && cfg.Telegram.BotToken != "" {
+		chatID := cfg.Telegram.ChatID
+		if cfg.Telegram.GroupID != "" {
+			chatID = cfg.Telegram.GroupID
+		}
+		notifyMsg := fmt.Sprintf("⚠️ Task %q failed after %d attempt(s): %v", taskName, maxAttempts, lastErr)
+		if notifyErr := telegram.SendMessage(cfg.Telegram.BotToken, chatID, notifyMsg, task.TopicID); notifyErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to send failure notification: %v\n", notifyErr)
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("claude exited with error: %w\nOutput: %s", lastErr, string(lastOutput))
 	}
 
 	return nil
@@ -293,4 +334,42 @@ func writeLog(cfg *config.Config, taskName string, output []byte) error {
 
 	logPath := filepath.Join(stateDir, taskName+".log")
 	return os.WriteFile(logPath, output, 0600)
+}
+
+// acquireTaskLock creates an exclusive lock file to prevent concurrent task execution.
+// If a lock file exists but the owning process is dead, the stale lock is removed.
+func acquireTaskLock(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		if os.IsExist(err) {
+			// Check if the lock is stale (owning process is dead)
+			data, readErr := os.ReadFile(path)
+			if readErr == nil {
+				pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
+				if parseErr == nil {
+					proc, findErr := os.FindProcess(pid)
+					if findErr == nil && proc.Signal(syscall.Signal(0)) != nil {
+						// Process is dead, remove stale lock and retry once
+						os.Remove(path)
+						return acquireTaskLock(path)
+					}
+				}
+			}
+			return fmt.Errorf("lock file exists at %s", path)
+		}
+		return err
+	}
+
+	fmt.Fprintf(f, "%d", os.Getpid())
+	f.Close()
+	return nil
+}
+
+// releaseTaskLock removes the lock file.
+func releaseTaskLock(path string) {
+	os.Remove(path)
 }

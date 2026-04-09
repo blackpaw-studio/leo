@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -58,20 +59,24 @@ type ProcessConfig struct {
 	BypassPermissions *bool    `yaml:"bypass_permissions,omitempty"`
 	RemoteControl     *bool    `yaml:"remote_control,omitempty"`
 	MCPConfig         string   `yaml:"mcp_config,omitempty"`
-	AddDirs           []string `yaml:"add_dirs,omitempty"`
-	Enabled           bool     `yaml:"enabled"`
+	AddDirs           []string          `yaml:"add_dirs,omitempty"`
+	Env               map[string]string `yaml:"env,omitempty"`
+	Enabled           bool              `yaml:"enabled"`
 }
 
 type TaskConfig struct {
-	Workspace  string `yaml:"workspace,omitempty"`
-	Schedule   string `yaml:"schedule"`
-	Timezone   string `yaml:"timezone,omitempty"`
-	PromptFile string `yaml:"prompt_file"`
-	Model      string `yaml:"model,omitempty"`
-	MaxTurns   int    `yaml:"max_turns,omitempty"`
-	TopicID    int    `yaml:"topic_id,omitempty"`
-	Enabled    bool   `yaml:"enabled"`
-	Silent     bool   `yaml:"silent,omitempty"`
+	Workspace    string `yaml:"workspace,omitempty"`
+	Schedule     string `yaml:"schedule"`
+	Timezone     string `yaml:"timezone,omitempty"`
+	PromptFile   string `yaml:"prompt_file"`
+	Model        string `yaml:"model,omitempty"`
+	MaxTurns     int    `yaml:"max_turns,omitempty"`
+	TopicID      int    `yaml:"topic_id,omitempty"`
+	Enabled      bool   `yaml:"enabled"`
+	Silent       bool   `yaml:"silent,omitempty"`
+	Timeout      string `yaml:"timeout,omitempty"`        // e.g. "30m", "1h" — default 30m
+	Retries      int    `yaml:"retries,omitempty"`        // number of retry attempts on failure, default 0
+	NotifyOnFail bool   `yaml:"notify_on_fail,omitempty"` // send telegram message on failure
 }
 
 // DefaultWorkspace returns the default workspace path (HomePath/workspace).
@@ -183,6 +188,16 @@ func (c *Config) TaskMCPConfigPath(t TaskConfig) string {
 	return filepath.Join(ws, "config", "mcp-servers.json")
 }
 
+// TaskTimeout returns the effective timeout duration for a task.
+func (c *Config) TaskTimeout(t TaskConfig) time.Duration {
+	if t.Timeout != "" {
+		if d, err := time.ParseDuration(t.Timeout); err == nil {
+			return d
+		}
+	}
+	return 30 * time.Minute
+}
+
 // Validate checks the config for required fields and valid values.
 func (c *Config) Validate() error {
 	var errs []string
@@ -231,6 +246,14 @@ func (c *Config) Validate() error {
 		}
 		if task.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.max_turns must not be negative", name))
+		}
+		if task.Timeout != "" {
+			if _, err := time.ParseDuration(task.Timeout); err != nil {
+				errs = append(errs, fmt.Sprintf("tasks.%s.timeout %q is not a valid duration", name, task.Timeout))
+			}
+		}
+		if task.Retries < 0 {
+			errs = append(errs, fmt.Sprintf("tasks.%s.retries must not be negative", name))
 		}
 	}
 

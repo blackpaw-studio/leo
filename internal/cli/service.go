@@ -193,6 +193,7 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 			ClaudeArgs:  args,
 			WorkDir:     cfg.ProcessWorkspace(proc),
 			HasTelegram: processHasTelegram(proc),
+			Env:         proc.Env,
 		})
 	}
 	return specs
