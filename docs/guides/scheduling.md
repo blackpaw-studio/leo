@@ -63,11 +63,11 @@ When `silent: true` is set on a task, Leo prepends a preamble to the prompt that
 - Only send a Telegram message if there's something meaningful to report
 - Output `NO_REPLY` if there's nothing noteworthy
 
-This is useful for tasks that run frequently (like heartbeat checks) where you only want to hear from the agent when something requires your attention.
+This is useful for tasks that run frequently where you only want to hear from the agent when something requires your attention.
 
 ```yaml
 tasks:
-  heartbeat:
+  checks:
     schedule: "0,30 7-22 * * *"
     silent: true        # only messages you when something needs attention
 ```
@@ -82,10 +82,10 @@ leo cron list
 
 ### View task logs
 
-Each task logs its output to `<workspace>/state/<task>.log`:
+Each task logs its output to `~/.leo/state/<task>.log`:
 
 ```bash
-tail -f ~/leo/state/heartbeat.log
+tail -f ~/.leo/state/checks.log
 ```
 
 ### Manual test run
@@ -93,20 +93,20 @@ tail -f ~/leo/state/heartbeat.log
 Run any task manually to verify it works:
 
 ```bash
-leo run heartbeat
+leo run checks
 ```
 
 ## Best Practices
 
-- **Start conservative** — begin with 1-2 tasks and add more as you tune your prompts
+- **Start conservative** -- begin with 1-2 tasks and add more as you tune your prompts
 - **Use silent mode** for frequent tasks to avoid notification fatigue
 - **Check logs** after the first few runs to verify the agent is behaving as expected
-- **Mind rate limits** — running many tasks frequently consumes API tokens. Space out non-urgent tasks
+- **Mind rate limits** -- running many tasks frequently consumes API tokens. Space out non-urgent tasks
 - **Use topic routing** to organize different types of notifications in a Telegram forum group
 
 ## See Also
 
-- [`leo cron`](../cli/cron.md) — managing cron entries
-- [`leo task`](../cli/task.md) — managing task definitions
-- [`leo run`](../cli/run.md) — executing tasks
-- [Writing Tasks](writing-tasks.md) — creating custom task prompts
+- [`leo cron`](../cli/cron.md) -- managing cron entries
+- [`leo task`](../cli/task.md) -- managing task definitions
+- [`leo run`](../cli/run.md) -- executing tasks
+- [Writing Tasks](writing-tasks.md) -- creating custom task prompts

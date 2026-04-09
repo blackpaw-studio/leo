@@ -7,9 +7,9 @@ hide:
 
 **Manage a persistent Claude Code assistant**
 
-Leo is a CLI tool that sets up and manages a persistent, mobile-accessible [Claude Code](https://docs.anthropic.com/en/docs/claude-code) personal assistant. It handles workspace scaffolding, persistent memory, Telegram integration, and cron scheduling — giving your assistant continuity across sessions and the ability to work on a schedule or respond to messages from your phone.
+Leo is a CLI tool that sets up and manages persistent, mobile-accessible [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions. It handles workspace scaffolding, Telegram integration, and cron scheduling -- giving your assistant continuity across sessions and the ability to work on a schedule or respond to messages from your phone.
 
-Leo is not a multi-agent orchestration framework. It manages one workspace, one config file.
+Memory is not built-in -- users configure their preferred memory MCP server in the standard `~/.claude/mcp-servers.json` or the workspace-specific `config/mcp-servers.json`.
 
 ---
 
@@ -19,7 +19,7 @@ Leo is not a multi-agent orchestration framework. It manages one workspace, one 
 
     ---
 
-    Start a long-running Telegram session where your assistant listens and responds to messages in real time via the official channel plugin.
+    Define multiple persistent Claude sessions with different channels, workspaces, and settings. Leo supervises them with auto-restart.
 
     [:octicons-arrow-right-24: Start chatting](guides/telegram-setup.md)
 
@@ -27,7 +27,7 @@ Leo is not a multi-agent orchestration framework. It manages one workspace, one 
 
     ---
 
-    Define background tasks with cron expressions. Leo assembles prompts and invokes `claude` on a schedule — no daemon required.
+    Define background tasks with cron expressions. Leo assembles prompts and invokes `claude` on a schedule -- no daemon required.
 
     [:octicons-arrow-right-24: Set up scheduling](guides/scheduling.md)
 
@@ -35,7 +35,7 @@ Leo is not a multi-agent orchestration framework. It manages one workspace, one 
 
     ---
 
-    A single `leo.yaml` controls your assistant, Telegram credentials, defaults, and task schedules. Full field-by-field reference included.
+    A single `leo.yaml` at `~/.leo/` controls Telegram credentials, defaults, processes, and task schedules. Full field-by-field reference included.
 
     [:octicons-arrow-right-24: Config reference](configuration/config-reference.md)
 
@@ -55,7 +55,7 @@ User (Telegram) --> Telegram Bot API --> claude (channel plugin) --> Agent
 User (Telegram) <-- Telegram Bot API <-- claude (channel plugin) <----+
 ```
 
-`leo service start` starts a long-running Claude session with the official Telegram channel plugin. Messages flow through Telegram in both directions.
+`leo service start` starts all enabled processes in supervised mode. Each process is a long-running Claude session that can use different channels (Telegram, etc.), workspaces, and models.
 
 ### Scheduled Tasks
 

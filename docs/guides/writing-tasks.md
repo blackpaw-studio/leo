@@ -6,8 +6,8 @@ Tasks are the core of Leo's scheduling system. Each task is a prompt file that t
 
 A task has two parts:
 
-1. **Configuration** in `leo.yaml` — schedule, model, routing
-2. **Prompt file** in your workspace — instructions for the assistant
+1. **Configuration** in `leo.yaml` -- schedule, model, routing
+2. **Prompt file** in the task's workspace -- instructions for the assistant
 
 ### Configuration
 
@@ -43,7 +43,7 @@ Format as a concise Telegram message with sections.
 
 ## What Leo Adds
 
-When `leo run <task>` executes, it assembles the final prompt from multiple parts. You only write the prompt file — Leo handles the rest.
+When `leo run <task>` executes, it assembles the final prompt from multiple parts. You only write the prompt file -- Leo handles the rest.
 
 ### Silent Preamble (if `silent: true`)
 
@@ -65,16 +65,16 @@ The agent uses this protocol to send its final output as a Telegram message.
 
 ## Examples
 
-### Heartbeat Check
+### Periodic Check
 
-The default heartbeat task runs every 30 minutes during waking hours and only messages when something needs attention:
+A task that runs every 30 minutes during waking hours and only messages when something needs attention:
 
 ```yaml
 # leo.yaml
 tasks:
-  heartbeat:
+  checks:
     schedule: "0,30 7-22 * * *"
-    prompt_file: HEARTBEAT.md
+    prompt_file: prompts/checks.md
     model: sonnet
     max_turns: 10
     topic_id: 1                          # discover IDs via `leo telegram topics`
@@ -83,8 +83,8 @@ tasks:
 ```
 
 ```markdown
-<!-- HEARTBEAT.md -->
-# Heartbeat Check
+<!-- prompts/checks.md -->
+# Periodic Check
 
 Run through this checklist. Only report items that need my attention.
 
@@ -159,20 +159,36 @@ Look for:
 Only report if there's something actionable.
 ```
 
+### Task with Custom Workspace
+
+A task that operates in a specific project directory:
+
+```yaml
+tasks:
+  project-check:
+    schedule: "0 9 * * 1-5"
+    workspace: ~/projects/my-app     # use this directory instead of default
+    prompt_file: .leo/daily-check.md
+    model: sonnet
+    max_turns: 10
+    enabled: true
+    silent: true
+```
+
 ## Best Practices
 
-- **Keep prompts focused** — one clear objective per task
+- **Keep prompts focused** -- one clear objective per task
 - **Use silent mode** for frequent checks to avoid notification spam
-- **Set appropriate max_turns** — simple checks need fewer turns than complex analysis
-- **Choose the right model** — use `sonnet` for routine tasks, `opus` for tasks requiring deeper reasoning
-- **Include output format guidance** — tell the assistant how to format its Telegram message
-- **Test manually first** — run `leo run <task>` before installing to cron
+- **Set appropriate max_turns** -- simple checks need fewer turns than complex analysis
+- **Choose the right model** -- use `sonnet` for routine tasks, `opus` for tasks requiring deeper reasoning
+- **Include output format guidance** -- tell the assistant how to format its Telegram message
+- **Test manually first** -- run `leo run <task>` before installing to cron
 
 ## Creating a New Task
 
 ```bash
 # 1. Write your prompt file
-vim ~/leo/reports/my-task.md
+vim ~/.leo/workspace/reports/my-task.md
 
 # 2. Add the task interactively
 leo task add
@@ -188,7 +204,7 @@ Or edit `leo.yaml` directly and run `leo cron install`.
 
 ## See Also
 
-- [`leo task`](../cli/task.md) — managing tasks
-- [`leo run`](../cli/run.md) — executing tasks
-- [Scheduling](scheduling.md) — cron expressions and timezone handling
-- [Config Reference](../configuration/config-reference.md#tasks) — full task field specification
+- [`leo task`](../cli/task.md) -- managing tasks
+- [`leo run`](../cli/run.md) -- executing tasks
+- [Scheduling](scheduling.md) -- cron expressions and timezone handling
+- [Config Reference](../configuration/config-reference.md#tasks) -- full task field specification

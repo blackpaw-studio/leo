@@ -12,9 +12,8 @@ leo onboard
 
 `leo onboard` is the recommended entry point for new users. It checks prerequisites, detects existing installations, and routes you to the appropriate action:
 
-- **Fresh install** — runs `leo setup`
-- **OpenClaw detected** — offers to run `leo migrate`
-- **Existing Leo install** — offers reconfiguration options
+- **Fresh install** -- runs `leo setup`
+- **Existing Leo install** -- offers reconfiguration options
 
 ## Flow
 
@@ -23,7 +22,6 @@ leo onboard
   ├── Check prerequisites (claude CLI, curl)
   ├── Detect existing installations
   │   ├── No existing install → leo setup
-  │   ├── OpenClaw found → offer leo migrate
   │   └── Leo found → offer reconfiguration
   └── Reconfigure options:
       ├── Telegram settings
@@ -33,5 +31,4 @@ leo onboard
 
 ## See Also
 
-- [`leo setup`](setup.md) — the setup wizard itself
-- [`leo migrate`](migrate.md) — OpenClaw migration
+- [`leo setup`](setup.md) -- the setup wizard itself

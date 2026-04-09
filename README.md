@@ -1,7 +1,7 @@
 <h1 align="center">Leo</h1>
 
 <p align="center">
-  <em>A persistent, mobile-accessible Claude Code assistant</em>
+  <em>A process supervisor and task scheduler for Claude Code</em>
 </p>
 
 <p align="center">
@@ -14,9 +14,9 @@
 
 ---
 
-Leo is a CLI tool that sets up and manages a persistent, mobile-accessible [Claude Code](https://docs.anthropic.com/en/docs/claude-code) personal assistant. It handles workspace scaffolding, persistent memory, Telegram integration, and cron scheduling — giving your assistant continuity across sessions and the ability to work on a schedule or respond to messages from your phone.
+Leo is a CLI tool that supervises persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) processes and schedules tasks. It manages multiple Claude processes — each with its own workspace, model, and channel configuration — along with cron-driven tasks for autonomous background work. Telegram integration gives you mobile access to your assistants, and scheduled tasks let them check in, send briefings, and work on a schedule.
 
-Leo is **not** a multi-agent orchestration framework, and it is **not** a direct replacement for [OpenClaw](https://github.com/openclaw). While Leo includes a migration path for existing OpenClaw users (`leo migrate`), it is a simpler, more focused tool: one workspace, one config file. Leo manages the config, prompt assembly, and cron entries — your system's cron runs `claude` directly.
+Leo manages the config, prompt assembly, and cron entries — your system's cron runs `claude` directly.
 
 ## Install
 
@@ -54,15 +54,14 @@ leo setup
 
 The interactive wizard will guide you through:
 
-1. Choosing a workspace directory
-2. Creating a user profile
-3. Connecting Telegram (bot token + chat ID auto-detection)
-4. Configuring MCP servers (optional)
-5. Adding scheduled tasks
-6. Installing cron entries
-7. Running a test message
+1. Creating a user profile
+2. Connecting Telegram (bot token + chat ID auto-detection)
+3. Configuring MCP servers (optional)
+4. Adding scheduled tasks
+5. Installing cron entries
+6. Running a test message
 
-Once setup is complete, start an interactive Telegram session:
+Once setup is complete, start the service:
 
 ```bash
 leo service start
@@ -78,12 +77,12 @@ leo run heartbeat
 
 Leo operates in two modes, both invoking the stock `claude` CLI:
 
-### Interactive Mode
+### Processes (Interactive Mode)
 
-`leo service start` starts a long-running Claude session with the official Telegram channel plugin. Messages flow through Telegram in both directions — the user sends messages to the bot, and the assistant replies through the channel plugin.
+`leo service start` launches one or more persistent Claude sessions defined in the `processes:` config section. Each process can have its own workspace, model, channels (like Telegram), and additional directories. The service supervises all enabled processes, restarting them on failure.
 
 ```
-User (Telegram) ──> Telegram Bot API ──> claude (channel plugin) ──> Agent
+User (Telegram) ──> Telegram Bot API ──> claude (channel plugin) ──> Process
                                                                       │
 User (Telegram) <── Telegram Bot API <── claude (channel plugin) <────┘
 ```
@@ -102,7 +101,7 @@ Tasks can run silently — if there's nothing to report, the agent outputs `NO_R
 
 ### Running in the Background
 
-For production use, you'll want the Telegram session to stay alive and automatically restart if it crashes. Leo provides two options:
+For production use, you'll want the service to stay alive and automatically restart if it crashes. Leo provides two options:
 
 **Simple background mode** — spawns a supervised process with automatic restart and exponential backoff. No OS-level daemon installation required.
 
@@ -120,7 +119,7 @@ leo service status --daemon  # check daemon status
 leo service stop --daemon    # uninstall OS service
 ```
 
-Logs for both modes are written to `<workspace>/state/service.log`.
+Logs for both modes are written to `~/.leo/state/service.log`.
 
 ## CLI Reference
 
@@ -128,10 +127,10 @@ Logs for both modes are written to `<workspace>/state/service.log`.
 |---|---|
 | `leo setup` | Interactive setup wizard |
 | `leo onboard` | Guided first-time setup (prerequisites + setup wizard) |
-| `leo service start` | Start Telegram session in background with auto-restart |
-| `leo service stop` | Stop background session |
-| `leo service status` | Show session status |
-| `leo service restart` | Restart background session |
+| `leo service start` | Start service in background with auto-restart |
+| `leo service stop` | Stop background service |
+| `leo service status` | Show service status |
+| `leo service restart` | Restart background service |
 | `leo service logs` | Tail service logs (`-n/--tail`, `-f/--follow`) |
 | `leo run <task>` | Run a scheduled task once (cron entry point) |
 | `leo cron install` | Install all enabled tasks to system crontab |
@@ -145,9 +144,11 @@ Logs for both modes are written to `<workspace>/state/service.log`.
 | `leo telegram topics` | Discover forum topics from recent messages |
 | `leo session list` | List stored sessions |
 | `leo session clear` | Clear stored session(s) |
+| `leo status` | Show overall leo status (service, processes, tasks) |
 | `leo validate` | Check config, prerequisites, and workspace health |
+| `leo config show` | Display effective config with defaults applied |
 | `leo update` | Update leo binary and refresh workspace files |
-| `leo migrate` | Migrate from an existing OpenClaw installation |
+| `leo completion` | Generate shell completion script (bash/zsh/fish) |
 | `leo version` | Print version |
 
 The `start`, `stop`, `status`, and `restart` subcommands of `leo service` accept a `--daemon` flag to use OS-level service management (launchd/systemd) instead of a simple background process.
@@ -155,18 +156,14 @@ The `start`, `stop`, `status`, and `restart` subcommands of `leo service` accept
 ### Global Flags
 
 ```
--c, --config <path>       Path to leo.yaml (default: auto-detect by walking up from cwd)
--w, --workspace <path>    Workspace directory (default: from config)
+-c, --config <path>       Path to leo.yaml (default: auto-detect)
 ```
 
 ## Configuration
 
-Leo is configured via a single `leo.yaml` file in your workspace directory.
+Leo is configured via a single `leo.yaml` file. The default location is `~/.leo/leo.yaml`.
 
 ```yaml
-agent:
-  workspace: ~/leo
-
 telegram:
   bot_token: "YOUR_BOT_TOKEN"
   chat_id: "YOUR_CHAT_ID"
@@ -175,27 +172,31 @@ telegram:
 defaults:
   model: sonnet
   max_turns: 15
-  remote_control: true                      # enable --remote-control for web/mobile access via claude.ai/code
-  # bypass_permissions: false               # pass --dangerously-skip-permissions to claude
+  bypass_permissions: false
+  remote_control: false
 
-heartbeat:
-  enabled: true
-  interval: "30m"                      # how often to check in (e.g. "15m", "30m", "1h", "2h")
-  start_hour: 7                        # first check-in hour (default: 7)
-  end_hour: 22                         # last check-in hour (default: 22)
-  timezone: America/New_York
-  prompt_file: HEARTBEAT.md            # relative to workspace (default: HEARTBEAT.md)
-  topic_id: 1                          # optional: Telegram forum topic
+processes:
+  assistant:
+    # workspace omitted -> defaults to ~/.leo/workspace
+    channels:
+      - plugin:telegram@claude-plugins-official
+    remote_control: true
+    enabled: true
+
+  researcher:
+    workspace: ~/research-agent
+    model: opus
+    add_dirs:
+      - ~/projects/data
+    enabled: true
 
 tasks:
   heartbeat:
     schedule: "0,30 7-22 * * *"
     timezone: America/New_York
-    prompt_file: HEARTBEAT.md               # relative to workspace
-    model: sonnet                            # overrides defaults.model
-    max_turns: 10
-    topic_id: 1                              # Telegram forum topic ID (use `leo telegram topics` to discover)
+    prompt_file: HEARTBEAT.md
     enabled: true
+    silent: true
 
   daily-news-briefing:
     schedule: "0 7 * * *"
@@ -203,10 +204,26 @@ tasks:
     prompt_file: reports/daily-news-briefing.md
     model: opus
     max_turns: 20
-    topic_id: 3                              # Telegram forum topic ID
+    topic_id: 3
     enabled: true
-    silent: true                             # agent works silently, only sends final message
+    silent: true
 ```
+
+### Process Options
+
+Each entry under `processes:` defines a persistent Claude session that the service supervises.
+
+| Field | Description | Default |
+|---|---|---|
+| `workspace` | Working directory for this process | `~/.leo/workspace` |
+| `channels` | Channel plugins to attach (e.g. Telegram) | — |
+| `model` | Claude model override | `defaults.model` |
+| `max_turns` | Max agent turns override | `defaults.max_turns` |
+| `bypass_permissions` | Pass `--dangerously-skip-permissions` to claude | `defaults.bypass_permissions` |
+| `remote_control` | Enable `--remote-control` for web/mobile access via claude.ai/code | `defaults.remote_control` |
+| `mcp_config` | Path to MCP config (relative to workspace, or absolute) | `<workspace>/config/mcp-servers.json` |
+| `add_dirs` | Additional directories to pass to claude | — |
+| `enabled` | Whether the service should start this process | `false` |
 
 ### Task Options
 
@@ -215,68 +232,48 @@ tasks:
 | `schedule` | Cron expression | *required* |
 | `timezone` | IANA timezone | — |
 | `prompt_file` | Path to prompt (relative to workspace) | *required* |
+| `workspace` | Working directory for this task | `~/.leo/workspace` |
 | `model` | Claude model override | `defaults.model` |
 | `max_turns` | Max agent turns override | `defaults.max_turns` |
 | `topic_id` | Telegram forum topic ID (discover via `leo telegram topics`) | — |
 | `enabled` | Whether cron should run this task | `false` |
 | `silent` | Prepend silent-mode preamble to prompt | `false` |
 
-### Heartbeat Options
-
-The `heartbeat` section is a shorthand for a recurring check-in task. Instead of writing a cron expression, you specify an interval and active hours — Leo generates the cron schedule automatically.
-
-| Field | Description | Default |
-|---|---|---|
-| `enabled` | Enable heartbeat scheduling | `false` |
-| `interval` | Check-in frequency (`"15m"`, `"30m"`, `"1h"`, `"2h"`) | `"30m"` |
-| `start_hour` | First check-in hour (0-23) | `7` |
-| `end_hour` | Last check-in hour (0-23) | `22` |
-| `timezone` | IANA timezone | — |
-| `prompt_file` | Path to prompt (relative to workspace) | `HEARTBEAT.md` |
-| `model` | Claude model override | `defaults.model` |
-| `max_turns` | Max agent turns override | `defaults.max_turns` |
-| `topic_id` | Telegram forum topic ID | — |
-
-## Workspace Structure
+## Directory Structure
 
 ```
-~/leo/
-├── leo.yaml                    # Leo config
-├── USER.md                     # Your profile (created during setup)
-├── HEARTBEAT.md                # Heartbeat checklist prompt
-├── daily/                      # Raw daily logs
-├── reports/                    # Task prompt files
-├── state/                      # Runtime logs
-├── config/
-│   └── mcp-servers.json        # MCP server configuration
-└── scripts/                    # Helper scripts
+~/.leo/                          # Leo home
+├── leo.yaml                     # Config
+├── state/
+│   ├── sessions.json            # Session state
+│   ├── service.log              # Service logs
+│   └── leo.sock                 # Daemon socket
+└── workspace/                   # Default workspace
+    ├── CLAUDE.md                # Agent instructions
+    ├── USER.md                  # Your profile
+    ├── HEARTBEAT.md             # Heartbeat checklist prompt
+    ├── config/
+    │   └── mcp-servers.json     # MCP server configuration
+    ├── reports/                 # Task prompt files
+    └── skills/                  # Agent skills
 ```
+
+Processes can use the default workspace or specify their own via the `workspace` field.
 
 ## What Leo Is (and Isn't)
 
-**Leo is** a setup and management tool for a persistent Claude Code assistant. It gives your assistant:
+**Leo is** a process supervisor and task scheduler for Claude Code. It gives your assistants:
 
+- **Multi-process management** — run multiple Claude sessions with independent workspaces, models, and channels
 - **Persistent memory** via user-configured MCP memory servers
-- **Mobile access** via Telegram — chat with your assistant from your phone
-- **Remote control** via claude.ai/code — access your assistant from any browser
-- **Scheduled tasks** via cron — your assistant can check in, send briefings, and run background work autonomously
+- **Mobile access** via Telegram — chat with your assistants from your phone
+- **Remote control** via claude.ai/code — access your assistants from any browser
+- **Scheduled tasks** via cron — your assistants can check in, send briefings, and run background work autonomously
 
 **Leo is not:**
 
-- A multi-agent orchestration framework
 - A replacement for the Claude API or Agent SDK — it wraps the stock `claude` CLI
 - A daemon or long-running service (except during `leo service`) — cron runs `claude` directly
-- A direct replacement for [OpenClaw](https://github.com/openclaw) — Leo is simpler and more focused, though it includes `leo migrate` for OpenClaw users who want to transition
-
-## Migrating from OpenClaw
-
-If you have an existing OpenClaw installation, Leo can import your workspace, agent files, cron jobs, and Telegram config:
-
-```bash
-leo migrate
-```
-
-See `leo migrate --help` for details.
 
 ## Development
 

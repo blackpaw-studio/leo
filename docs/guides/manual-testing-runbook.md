@@ -71,22 +71,20 @@ Walk through the interactive wizard:
 
 - [ ] **PASS** Wizard completes without errors
 
-### 2.2 Verify workspace scaffolding
+### 2.2 Verify directory scaffolding
 
 ```
 ls -la ~/.leo/
+ls -la ~/.leo/workspace/
+ls -la ~/.leo/state/
 ```
 
 - [ ] **PASS** The following exist:
   - `~/.leo/leo.yaml`
-  - `~/.leo/CLAUDE.md`
-  - `~/.leo/HEARTBEAT.md`
-  - `~/.leo/USER.md`
-  - `~/.leo/daily/`
-  - `~/.leo/reports/`
+  - `~/.leo/workspace/USER.md`
+  - `~/.leo/workspace/reports/`
+  - `~/.leo/workspace/config/mcp-servers.json`
   - `~/.leo/state/`
-  - `~/.leo/config/mcp-servers.json`
-  - `~/.leo/skills/` (with `.md` files)
 
 ### 2.3 Verify Telegram plugin configured
 

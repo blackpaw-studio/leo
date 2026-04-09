@@ -91,7 +91,6 @@ nav:
       - leo run: cli/run.md
       - leo cron: cli/cron.md
       - leo task: cli/task.md
-      - leo migrate: cli/migrate.md
       - leo version: cli/version.md
   - Guides:
       - Telegram Setup: guides/telegram-setup.md

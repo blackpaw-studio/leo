@@ -1,11 +1,14 @@
 # leo service
 
-Manage the interactive Telegram session.
+Manage persistent Claude sessions.
 
 ## Usage
 
 ```bash
-# Background with auto-restart
+# Run a single process in the foreground
+leo service [process-name]
+
+# Background with auto-restart (all enabled processes)
 leo service start
 leo service stop
 leo service status
@@ -20,13 +23,17 @@ leo service status --daemon
 
 ## Description
 
-`leo service` manages a long-running Claude session with the official Telegram channel plugin. Your assistant listens for inbound Telegram messages and responds through the channel.
+`leo service` manages long-running Claude sessions for the processes defined in your config. Each process can have its own workspace, channels, model, and settings.
+
+When run in **supervised mode** (via `leo service start`), Leo starts all enabled processes and restarts them on crash with exponential backoff.
+
+When run in **foreground mode** (via `leo service [process-name]`), Leo starts a single process. If no name is given, it picks the first enabled process.
 
 ## Subcommands
 
 ### `leo service start`
 
-Starts the session in the background with automatic restart on crash. Uses exponential backoff (5s initial, 60s max) to avoid rapid restart loops.
+Starts all enabled processes in the background with automatic restart on crash. Uses exponential backoff (5s initial, 60s max) to avoid rapid restart loops.
 
 **Flags:**
 
@@ -36,7 +43,7 @@ Starts the session in the background with automatic restart on crash. Uses expon
 
 ### `leo service stop`
 
-Stops a running background session.
+Stops all running background processes.
 
 **Flags:**
 
@@ -46,7 +53,7 @@ Stops a running background session.
 
 ### `leo service status`
 
-Shows whether the session is currently running.
+Shows whether the service is currently running.
 
 **Flags:**
 
@@ -56,13 +63,7 @@ Shows whether the session is currently running.
 
 ### `leo service restart`
 
-Stops and restarts the background session.
-
-**Flags:**
-
-| Flag | Description |
-|------|-------------|
-| `--daemon` | Restart the OS service instead of the background process. |
+Restarts the daemon.
 
 ### `leo service logs`
 
@@ -77,18 +78,21 @@ Tail the service log file.
 
 ## Claude Arguments
 
-Leo builds the following `claude` arguments for the session:
+For each process, Leo builds `claude` arguments based on the process config:
 
 ```
-claude --channels plugin:telegram@claude-plugins-official \
-       --add-dir <workspace> \
-       --remote-control \                                  # if defaults.remote_control: true
-       --mcp-config <workspace>/config/mcp-servers.json  # if exists
+claude --channels <channels>               \
+       --add-dir <workspace>               \
+       --add-dir <extra-dirs...>           \    # if add_dirs configured
+       --remote-control <process-name>     \    # if remote_control enabled
+       --dangerously-skip-permissions      \    # if bypass_permissions enabled
+       --mcp-config <mcp-config-path>      \    # if MCP servers exist
+       --session-id <id> | --resume <id>        # session persistence
 ```
 
 ## Logs
 
-All modes write logs to `<workspace>/state/service.log`.
+All modes write logs to `~/.leo/state/service.log`.
 
 ## Service Labels
 
@@ -97,5 +101,5 @@ All modes write logs to `<workspace>/state/service.log`.
 
 ## See Also
 
-- [Background Mode](../guides/background-mode.md) — detailed comparison of background vs daemon mode
-- [Telegram Setup](../guides/telegram-setup.md) — creating and configuring your bot
+- [Background Mode](../guides/background-mode.md) -- detailed comparison of background vs daemon mode
+- [Telegram Setup](../guides/telegram-setup.md) -- creating and configuring your bot

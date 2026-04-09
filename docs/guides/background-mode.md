@@ -18,8 +18,8 @@ leo service stop             # stop the session
 - If Claude crashes, Leo waits and restarts automatically
 - Backoff starts at 5 seconds, doubles on each consecutive failure, caps at 60 seconds
 - Resets after a successful run period
-- PID is written to `<workspace>/state/service.pid`
-- Logs go to `<workspace>/state/service.log`
+- PID is written to `~/.leo/state/service.pid`
+- Logs go to `~/.leo/state/service.log`
 
 **Pros:**
 
@@ -88,7 +88,7 @@ Leo creates a systemd user unit at `~/.config/systemd/user/leo.service` and enab
 Both modes write to the same log file:
 
 ```bash
-tail -f ~/leo/state/service.log
+tail -f ~/.leo/state/service.log
 ```
 
 Or use the built-in logs command:
