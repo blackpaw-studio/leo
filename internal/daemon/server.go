@@ -134,7 +134,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProcessList(w http.ResponseWriter, r *http.Request) {
 	if s.processes == nil {
-		writeJSON(w, http.StatusOK, Response{OK: true, Data: json.RawMessage("[]")})
+		writeJSON(w, http.StatusOK, Response{OK: true, Data: json.RawMessage("{}")})
 		return
 	}
 	states := s.processes.States()

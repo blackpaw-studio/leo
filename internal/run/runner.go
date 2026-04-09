@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -113,9 +114,6 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	}
 
 	timeout := cfg.TaskTimeout(task)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
 	taskWorkspace := cfg.TaskWorkspace(task)
 
 	maxAttempts := task.Retries + 1
@@ -131,6 +129,8 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 		args := buildArgs(cfg, task, prompt, sessionID)
 
+		// Per-attempt timeout so each retry gets the full timeout
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		output, execErr := executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
 		result := parseClaudeOutput(output)
 
@@ -162,6 +162,8 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		if logErr := writeLog(cfg, taskName, []byte(logContent)); logErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to write log: %v\n", logErr)
 		}
+
+		cancel()
 
 		if execErr == nil {
 			lastErr = nil
@@ -221,25 +223,33 @@ func executeCommand(ctx context.Context, workDir string, args []string, botToken
 	}
 	cmd.Env = env
 
-	type result struct {
-		output []byte
-		err    error
+	// Use a done channel to coordinate context cancellation with process lifecycle.
+	// Start the process explicitly so we can kill it on timeout.
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stdout
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
 	}
-	ch := make(chan result, 1)
+
+	// Monitor context in background; kill process if deadline expires
+	done := make(chan struct{})
 	go func() {
-		out, err := cmd.CombinedOutput()
-		ch <- result{out, err}
+		select {
+		case <-ctx.Done():
+			cmd.Process.Kill()
+		case <-done:
+		}
 	}()
 
-	select {
-	case r := <-ch:
-		return r.output, r.err
-	case <-ctx.Done():
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-		return nil, ctx.Err()
+	err := cmd.Wait()
+	close(done) // stop the monitor goroutine
+
+	if ctx.Err() != nil {
+		return stdout.Bytes(), ctx.Err()
 	}
+	return stdout.Bytes(), err
 }
 
 // parseClaudeOutput attempts to extract structured data from claude JSON output.
@@ -279,22 +289,24 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 
 	parts = append(parts, string(promptData))
 
-	// Append Telegram notification protocol (bot token is passed via env var, not in prompt)
+	// Append Telegram notification protocol only when Telegram is configured
 	chatID := cfg.Telegram.ChatID
 	if cfg.Telegram.GroupID != "" {
 		chatID = cfg.Telegram.GroupID
 	}
 
-	topicLine := ""
-	if task.TopicID > 0 {
-		topicLine = fmt.Sprintf(`"message_thread_id": %d, `, task.TopicID)
-	}
+	if chatID != "" && cfg.Telegram.BotToken != "" {
+		topicLine := ""
+		if task.TopicID > 0 {
+			topicLine = fmt.Sprintf(`"message_thread_id": %d, `, task.TopicID)
+		}
 
-	telegramProtocol := fmt.Sprintf(telegramProtocolTemplate,
-		chatID,
-		topicLine,
-	)
-	parts = append(parts, telegramProtocol)
+		telegramProtocol := fmt.Sprintf(telegramProtocolTemplate,
+			chatID,
+			topicLine,
+		)
+		parts = append(parts, telegramProtocol)
+	}
 
 	return strings.Join(parts, "\n"), nil
 }

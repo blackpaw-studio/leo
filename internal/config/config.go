@@ -22,6 +22,9 @@ const (
 // channelPattern validates channel plugin identifiers (e.g. "plugin:telegram@claude-plugins-official").
 var channelPattern = regexp.MustCompile(`^[a-zA-Z0-9:@._-]+$`)
 
+// envKeyPattern validates environment variable names.
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 var validModels = map[string]bool{
 	"sonnet": true,
 	"opus":   true,
@@ -228,6 +231,11 @@ func (c *Config) Validate() error {
 		for i, ch := range proc.Channels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("processes.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		for k := range proc.Env {
+			if !envKeyPattern.MatchString(k) {
+				errs = append(errs, fmt.Sprintf("processes.%s.env key %q is not a valid environment variable name", name, k))
 			}
 		}
 	}

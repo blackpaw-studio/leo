@@ -40,7 +40,9 @@ func newProcessListCmd() *cobra.Command {
 			if daemon.IsRunning(cfg.HomePath) {
 				resp, err := daemon.Send(cfg.HomePath, "GET", "/process/list", nil)
 				if err == nil && resp.OK {
-					json.Unmarshal(resp.Data, &states)
+					if jsonErr := json.Unmarshal(resp.Data, &states); jsonErr != nil {
+						warn.Printf("  Could not parse process state: %v\n", jsonErr)
+					}
 				}
 			}
 

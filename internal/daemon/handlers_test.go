@@ -802,9 +802,9 @@ func TestHandleProcessListNilProvider(t *testing.T) {
 		t.Errorf("expected OK=true, got OK=false (error: %s)", result.Error)
 	}
 
-	// With nil provider, data should be an empty JSON array
-	if string(result.Data) != "[]" {
-		t.Errorf("expected data to be [], got %s", string(result.Data))
+	// With nil provider, data should be an empty JSON object
+	if string(result.Data) != "{}" {
+		t.Errorf("expected data to be {}, got %s", string(result.Data))
 	}
 }
 

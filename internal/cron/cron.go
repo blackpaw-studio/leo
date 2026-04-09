@@ -139,7 +139,10 @@ func (s *Scheduler) addLocked(name string, task config.TaskConfig) error {
 }
 
 func defaultRunTask(leoPath, cfgPath, taskName string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	// Use a generous outer timeout; the inner `leo run` command enforces
+	// the per-task timeout from config (default 30m). This outer limit
+	// is a safety net for the subprocess itself.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Hour)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, leoPath, "run", taskName, "--config", cfgPath)
 	output, err := cmd.CombinedOutput()
