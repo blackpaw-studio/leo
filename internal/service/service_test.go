@@ -469,27 +469,30 @@ func TestRunSupervisedDelegates(t *testing.T) {
 	defer func() { supervisedExecFn = origFn }()
 
 	var calledPath string
-	var calledArgs []string
+	var calledProcesses []ProcessSpec
 	var calledConfigPath string
-	supervisedExecFn = func(claudePath string, claudeArgs []string, workDir, configPath string) error {
+	supervisedExecFn = func(claudePath string, processes []ProcessSpec, homePath, configPath string) error {
 		calledPath = claudePath
-		calledArgs = claudeArgs
+		calledProcesses = processes
 		calledConfigPath = configPath
 		return nil
 	}
 
-	err := RunSupervised("/usr/bin/claude", []string{"--add-dir", "/workspace"}, "/workspace", "/workspace/leo.yaml")
+	specs := []ProcessSpec{
+		{Name: "assistant", ClaudeArgs: []string{"--add-dir", "/workspace"}, WorkDir: "/workspace"},
+	}
+	err := RunSupervised("/usr/bin/claude", specs, "/home/.leo", "/home/.leo/leo.yaml")
 	if err != nil {
 		t.Fatalf("RunSupervised() error: %v", err)
 	}
 	if calledPath != "/usr/bin/claude" {
 		t.Errorf("path = %q, want /usr/bin/claude", calledPath)
 	}
-	if len(calledArgs) != 2 || calledArgs[0] != "--add-dir" {
-		t.Errorf("args = %v, want [--add-dir /workspace]", calledArgs)
+	if len(calledProcesses) != 1 || calledProcesses[0].Name != "assistant" {
+		t.Errorf("processes = %v, want 1 process named assistant", calledProcesses)
 	}
-	if calledConfigPath != "/workspace/leo.yaml" {
-		t.Errorf("configPath = %q, want /workspace/leo.yaml", calledConfigPath)
+	if calledConfigPath != "/home/.leo/leo.yaml" {
+		t.Errorf("configPath = %q, want /home/.leo/leo.yaml", calledConfigPath)
 	}
 }
 

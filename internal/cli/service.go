@@ -49,7 +49,30 @@ func runService(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Find the target process (first enabled, or specified by name)
+	if supervised {
+		// Seed topic cache before any telegram processes start
+		if cfg.Telegram.GroupID != "" {
+			seedTopicCache(cfg)
+		}
+		claudePath, err := exec.LookPath("claude")
+		if err != nil {
+			return fmt.Errorf("claude not found: %w", err)
+		}
+		cfgPath, err := resolveConfigPath(cfg)
+		if err != nil {
+			return fmt.Errorf("resolving config path: %w", err)
+		}
+
+		// In supervised mode, start ALL enabled processes
+		specs := buildAllProcessSpecs(cfg, claudePath)
+		if len(specs) == 0 {
+			return fmt.Errorf("no enabled processes in config")
+		}
+		info.Printf("Starting supervised mode (%d processes)...\n", len(specs))
+		return service.RunSupervised(claudePath, specs, cfg.HomePath, cfgPath)
+	}
+
+	// Foreground mode: run a single process, exec replaces this process
 	procName, proc, err := resolveProcess(cfg, args)
 	if err != nil {
 		return err
@@ -60,7 +83,6 @@ func runService(cmd *cobra.Command, args []string) error {
 		seedTopicCache(cfg)
 	}
 
-	// Sync telegram plugin env if configured
 	if cfg.Telegram.BotToken != "" && processHasTelegram(proc) {
 		syncPluginEnv(cfg.Telegram.BotToken)
 	}
@@ -84,22 +106,6 @@ func runService(cmd *cobra.Command, args []string) error {
 		claudeArgs = append(claudeArgs, "--session-id", sid)
 	}
 
-	ws := cfg.ProcessWorkspace(proc)
-
-	if supervised {
-		claudePath, err := exec.LookPath("claude")
-		if err != nil {
-			return fmt.Errorf("claude not found: %w", err)
-		}
-		info.Printf("Starting supervised session (%s)...\n", procName)
-		cfgPath, err := resolveConfigPath(cfg)
-		if err != nil {
-			return fmt.Errorf("resolving config path: %w", err)
-		}
-		return service.RunSupervised(claudePath, claudeArgs, ws, cfgPath)
-	}
-
-	// Foreground mode: exec replaces this process
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		return fmt.Errorf("claude not found: %w", err)
@@ -138,6 +144,43 @@ func processHasTelegram(proc config.ProcessConfig) bool {
 		}
 	}
 	return false
+}
+
+// buildAllProcessSpecs builds ProcessSpec for all enabled processes.
+func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.ProcessSpec {
+	var specs []service.ProcessSpec
+	for name, proc := range cfg.Processes {
+		if !proc.Enabled {
+			continue
+		}
+
+		args := buildProcessArgs(cfg, name, proc)
+
+		// Add session persistence
+		store := session.NewStore(cfg.HomePath)
+		sessionKey := "process:" + name
+		sid, found, _ := store.Get(sessionKey)
+		if found {
+			args = append(args, "--resume", sid)
+		} else {
+			sid = session.NewID()
+			_ = store.Set(sessionKey, sid)
+			args = append(args, "--session-id", sid)
+		}
+
+		// Sync telegram plugin env if this process uses it
+		if cfg.Telegram.BotToken != "" && processHasTelegram(proc) {
+			syncPluginEnv(cfg.Telegram.BotToken)
+		}
+
+		specs = append(specs, service.ProcessSpec{
+			Name:        name,
+			ClaudeArgs:  args,
+			WorkDir:     cfg.ProcessWorkspace(proc),
+			HasTelegram: processHasTelegram(proc),
+		})
+	}
+	return specs
 }
 
 // buildProcessArgs builds claude CLI args for a named process.

@@ -6,11 +6,11 @@ import (
 	"math"
 	"os"
 	"os/exec"
-
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,6 +34,73 @@ const (
 	initialBackoff = 5 * time.Second
 	stopTimeout    = 5 * time.Second
 )
+
+// ProcessSpec describes a process for the supervisor to manage.
+type ProcessSpec struct {
+	Name        string
+	ClaudeArgs  []string
+	WorkDir     string
+	HasTelegram bool
+}
+
+// ProcessState tracks the runtime state of a supervised process.
+type ProcessState struct {
+	Name      string    `json:"name"`
+	Status    string    `json:"status"` // "running", "restarting", "stopped"
+	StartedAt time.Time `json:"started_at"`
+	Restarts  int       `json:"restarts"`
+}
+
+// Supervisor manages multiple Claude processes.
+type Supervisor struct {
+	mu     sync.RWMutex
+	states map[string]*ProcessState
+}
+
+// NewSupervisor creates a new process supervisor.
+func NewSupervisor() *Supervisor {
+	return &Supervisor{
+		states: make(map[string]*ProcessState),
+	}
+}
+
+// States returns a snapshot of all process states.
+func (s *Supervisor) States() map[string]ProcessState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]ProcessState, len(s.states))
+	for k, v := range s.states {
+		result[k] = *v
+	}
+	return result
+}
+
+func (s *Supervisor) setState(name, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st, ok := s.states[name]; ok {
+		st.Status = status
+	}
+}
+
+func (s *Supervisor) initState(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.states[name] = &ProcessState{
+		Name:      name,
+		Status:    "starting",
+		StartedAt: time.Now(),
+	}
+}
+
+func (s *Supervisor) incrementRestarts(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st, ok := s.states[name]; ok {
+		st.Restarts++
+		st.StartedAt = time.Now()
+	}
+}
 
 // Start spawns a supervised leo service process in the background and writes a PID file.
 func Start(sc ServiceConfig) error {
@@ -139,7 +206,6 @@ func Status(workDir string) (string, error) {
 	}
 
 	// No valid PID file — check if the daemon IPC socket is alive
-	// (covers launchd/systemd-managed processes that don't write a PID file)
 	if daemon.IsRunning(workDir) {
 		return "running (daemon)", nil
 	}
@@ -147,19 +213,18 @@ func Status(workDir string) (string, error) {
 	return "stopped", nil
 }
 
-// RunSupervised runs claude in a restart loop with exponential backoff.
-// This is invoked when leo service --supervised is used. It handles SIGTERM/SIGINT
-// for graceful shutdown.
-func RunSupervised(claudePath string, claudeArgs []string, workDir, configPath string) error {
-	return supervisedExecFn(claudePath, claudeArgs, workDir, configPath)
+// RunSupervised starts all processes in supervised mode with a restart loop.
+// It also starts the daemon IPC server for cron scheduling and process management.
+func RunSupervised(claudePath string, processes []ProcessSpec, homePath, configPath string) error {
+	return supervisedExecFn(claudePath, processes, homePath, configPath)
 }
 
-func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, configPath string) error {
+func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath, configPath string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
 	// Start daemon IPC server
-	sockPath := filepath.Join(workDir, "state", "leo.sock")
+	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath)
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
@@ -168,70 +233,74 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 		fmt.Fprintf(os.Stdout, "daemon IPC server listening on %s\n", sockPath)
 	}
 
-	backoff := initialBackoff
-
 	// Find tmux
-	tmuxPath, tmuxErr := exec.LookPath("tmux")
-	if tmuxErr != nil {
-		// Try common locations
-		for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
-			if _, err := os.Stat(p); err == nil {
-				tmuxPath = p
-				break
-			}
-		}
-		if tmuxPath == "" {
-			return fmt.Errorf("tmux not found: install with 'brew install tmux'")
-		}
+	tmuxPath, err := findTmux()
+	if err != nil {
+		return err
 	}
 
-	sessionName := fmt.Sprintf("leo-%d", os.Getpid())
+	supervisor := NewSupervisor()
 
-	// Keep a mutable copy of args so we can strip --resume on failure
-	currentArgs := make([]string, len(claudeArgs))
-	copy(currentArgs, claudeArgs)
+	var wg sync.WaitGroup
+	for _, proc := range processes {
+		wg.Add(1)
+		go func(spec ProcessSpec) {
+			defer wg.Done()
+			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor)
+		}(proc)
+	}
+
+	fmt.Fprintf(os.Stdout, "supervising %d process(es)\n", len(processes))
+	wg.Wait()
+	return nil
+}
+
+// superviseProcess runs a single process in a tmux session with restart loop.
+func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor) {
+	sv.initState(spec.Name)
+
+	backoff := initialBackoff
+	sessionName := fmt.Sprintf("leo-%s", spec.Name)
+	currentArgs := make([]string, len(spec.ClaudeArgs))
+	copy(currentArgs, spec.ClaudeArgs)
 
 	for {
-		// Clean up orphaned plugin processes from previous iterations.
-		// If the telegram plugin's bun process outlived claude, it holds
-		// the lock file and blocks the new plugin from polling.
-		cleanupOrphanedPlugins()
+		// Clean up orphaned plugin processes if this process uses telegram
+		if spec.HasTelegram {
+			cleanupOrphanedPlugins()
+		}
 
-		// Use tmux to provide a real terminal for claude. This is
-		// required for plugins (telegram) to communicate with claude
-		// via MCP stdio pipes — a Go PTY breaks this communication.
+		sv.setState(spec.Name, "running")
+
 		claudeCmd := strings.Join(append([]string{claudePath}, currentArgs...), " ")
 
-		// Propagate PATH into the tmux session. tmux uses its own global
-		// environment, which may not include paths from the launchd plist
-		// (e.g. ~/.bun/bin needed by the telegram plugin).
+		// Propagate PATH into the tmux session
 		if p := os.Getenv("PATH"); p != "" {
 			claudeCmd = fmt.Sprintf("export PATH=%q; %s", p, claudeCmd)
 		}
 
-		// Kill any stale tmux session with our name (can happen if the
-		// tmux server restarted or a previous iteration left a zombie).
+		// Kill any stale tmux session with our name
 		exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
 
 		// Create a detached tmux session running claude
-		createCmd := exec.CommandContext(ctx, tmuxPath, // #nosec G702 -- tmuxPath from exec.LookPath, not user input
+		createCmd := exec.CommandContext(ctx, tmuxPath,
 			"new-session", "-d", "-s", sessionName,
-			"-c", workDir,
+			"-c", spec.WorkDir,
 			"-x", "200", "-y", "50",
 			claudeCmd,
 		)
-		createCmd.Dir = workDir
+		createCmd.Dir = spec.WorkDir
 		createCmd.Env = os.Environ()
 
 		startTime := time.Now()
 
 		if err := createCmd.Run(); err != nil {
-			// tmux can fail transiently (server died, socket stale, etc.).
-			// Retry instead of exiting the supervised loop permanently.
-			fmt.Fprintf(os.Stderr, "tmux new-session failed: %v, retrying in %s\n", err, backoff)
+			sv.setState(spec.Name, "restarting")
+			fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", spec.Name, err, backoff)
 			select {
 			case <-ctx.Done():
-				return nil
+				sv.setState(spec.Name, "stopped")
+				return
 			case <-time.After(backoff):
 			}
 			backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
@@ -241,39 +310,32 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 		// Reset backoff after successful session creation
 		backoff = initialBackoff
 
-		fmt.Fprintf(os.Stdout, "tmux session '%s' created, claude running\n", sessionName)
+		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", spec.Name, sessionName)
 
-		// Wait for the tmux session to end (claude exits) or the
-		// telegram plugin to die (requires session restart).
+		// Wait for the tmux session to end or the plugin to die
 		pluginLockFile := filepath.Join(os.Getenv("HOME"), ".claude", "channels", "telegram", "data", "telegram.lock")
 		pluginChecksAfterStartup := 0
 		for {
 			select {
 			case <-ctx.Done():
-				// Kill tmux session on shutdown
 				exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
-				return nil
+				sv.setState(spec.Name, "stopped")
+				return
 			case <-time.After(5 * time.Second):
 			}
 
 			// Check if tmux session still exists
 			check := exec.Command(tmuxPath, "has-session", "-t", sessionName)
 			if check.Run() != nil {
-				// Session gone — claude exited
 				break
 			}
 
-			// After a grace period for plugin startup, monitor the
-			// telegram plugin lock file. If it disappears, the plugin
-			// crashed while claude is still running. Kill the session
-			// so the supervised loop restarts everything together.
-			if time.Since(startTime) > 30*time.Second {
+			// Monitor telegram plugin lock file (only for telegram processes)
+			if spec.HasTelegram && time.Since(startTime) > 30*time.Second {
 				if _, err := os.Stat(pluginLockFile); err != nil {
 					pluginChecksAfterStartup++
-					// Require 3 consecutive missing checks to avoid
-					// false positives during plugin restarts.
 					if pluginChecksAfterStartup >= 3 {
-						fmt.Fprintf(os.Stderr, "telegram plugin died (lock file gone), restarting session\n")
+						fmt.Fprintf(os.Stderr, "[%s] telegram plugin died (lock file gone), restarting session\n", spec.Name)
 						exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
 						break
 					}
@@ -288,27 +350,43 @@ func defaultSupervisedExec(claudePath string, claudeArgs []string, workDir, conf
 		// Check if we were signaled to stop
 		select {
 		case <-ctx.Done():
-			return nil
+			sv.setState(spec.Name, "stopped")
+			return
 		default:
 		}
 
-		// If claude exited very quickly, it likely failed to resume a stale
-		// session. Strip --resume and clear the session store so the next
-		// iteration starts fresh.
+		sv.setState(spec.Name, "restarting")
+		sv.incrementRestarts(spec.Name)
+
+		// If claude exited very quickly, strip --resume and clear session
 		if elapsed < 15*time.Second {
 			currentArgs = stripResumeArg(currentArgs)
-			clearSessionStore(workDir)
-			fmt.Fprintf(os.Stderr, "claude exited quickly (%.0fs), cleared stale session — retrying fresh\n", elapsed.Seconds())
+			clearSessionStore(homePath)
+			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session — retrying fresh\n", spec.Name, elapsed.Seconds())
 		} else {
-			fmt.Fprintf(os.Stderr, "claude exited after %s, restarting in %s\n", elapsed.Round(time.Second), backoff)
+			fmt.Fprintf(os.Stderr, "[%s] claude exited after %s, restarting in %s\n", spec.Name, elapsed.Round(time.Second), backoff)
 		}
 
 		select {
 		case <-ctx.Done():
-			return nil
+			sv.setState(spec.Name, "stopped")
+			return
 		case <-time.After(initialBackoff):
 		}
 	}
+}
+
+func findTmux() (string, error) {
+	tmuxPath, err := exec.LookPath("tmux")
+	if err == nil {
+		return tmuxPath, nil
+	}
+	for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("tmux not found: install with 'brew install tmux'")
 }
 
 // stripResumeArg removes --resume and its value from claude args.
@@ -325,19 +403,17 @@ func stripResumeArg(args []string) []string {
 }
 
 // clearSessionStore removes the stored session so the next launch creates a fresh one.
-func clearSessionStore(workDir string) {
-	sessFile := filepath.Join(workDir, "state", "sessions.json")
+func clearSessionStore(homePath string) {
+	sessFile := filepath.Join(homePath, "state", "sessions.json")
 	_ = writeFile(sessFile, []byte("{}"), 0600)
 }
 
-// cleanupOrphanedPlugins removes stale telegram plugin lock files so the
-// next session's plugin can acquire the lock and start polling. If the
-// lock references a dead PID, the lock is removed.
+// cleanupOrphanedPlugins removes stale telegram plugin lock files.
 func cleanupOrphanedPlugins() {
 	lockFile := filepath.Join(os.Getenv("HOME"), ".claude", "channels", "telegram", "data", "telegram.lock")
 	data, err := readFile(lockFile)
 	if err != nil {
-		return // no lock file
+		return
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
@@ -349,7 +425,6 @@ func cleanupOrphanedPlugins() {
 		_ = removeFile(lockFile)
 		return
 	}
-	// signal 0 checks if process exists without killing it
 	if proc.Signal(syscall.Signal(0)) != nil {
 		_ = removeFile(lockFile)
 	}
@@ -389,6 +464,5 @@ func isRunning(pid int) bool {
 	if err != nil {
 		return false
 	}
-	// On Unix, FindProcess always succeeds. Signal 0 checks if process exists.
 	return proc.Signal(syscall.Signal(0)) == nil
 }
