@@ -1,0 +1,37 @@
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - gocritic
+    - gofmt
+    - goimports
+    - ineffassign
+    - unused
+    - misspell
+    - unconvert
+    - bodyclose
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - (net/http.ResponseWriter).Write
+      - (*encoding/json.Encoder).Encode
+      - fmt.Fprintf
+      - fmt.Fprintln
+      - (io.Closer).Close
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+    disabled-checks:
+      - hugeParam
+      - rangeValCopy
+
+issues:
+  exclude-dirs:
+    - vendor
+
+  max-issues-per-linter: 50
+  max-same-issues: 5

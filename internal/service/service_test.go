@@ -26,6 +26,67 @@ func TestLogPathFor(t *testing.T) {
 	}
 }
 
+func TestRotateLog(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "service.log")
+
+	// Create initial log
+	os.WriteFile(logPath, []byte("log1"), 0600)
+
+	if err := RotateLog(logPath); err != nil {
+		t.Fatalf("RotateLog() error: %v", err)
+	}
+
+	// Original should be gone
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Error("original log should be renamed")
+	}
+
+	// .1 should exist with original content
+	data, err := os.ReadFile(logPath + ".1")
+	if err != nil {
+		t.Fatalf("reading .1: %v", err)
+	}
+	if string(data) != "log1" {
+		t.Errorf("rotated content = %q, want 'log1'", string(data))
+	}
+}
+
+func TestRotateLogShifts(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "service.log")
+
+	// Create existing rotated logs
+	os.WriteFile(logPath+".1", []byte("old1"), 0600)
+	os.WriteFile(logPath, []byte("current"), 0600)
+
+	if err := RotateLog(logPath); err != nil {
+		t.Fatalf("RotateLog() error: %v", err)
+	}
+
+	// .1 should be current log
+	data, _ := os.ReadFile(logPath + ".1")
+	if string(data) != "current" {
+		t.Errorf(".1 = %q, want 'current'", string(data))
+	}
+
+	// .2 should be old .1
+	data, _ = os.ReadFile(logPath + ".2")
+	if string(data) != "old1" {
+		t.Errorf(".2 = %q, want 'old1'", string(data))
+	}
+}
+
+func TestRotateLogNoFile(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "nonexistent.log")
+
+	// Should be a no-op
+	if err := RotateLog(logPath); err != nil {
+		t.Fatalf("RotateLog() error on nonexistent: %v", err)
+	}
+}
+
 func TestStartWritesPidFile(t *testing.T) {
 	origStart := startProcess
 	origWrite := writeFile
@@ -555,6 +616,107 @@ func TestCleanupOrphanedPlugins_NoLockFile(t *testing.T) {
 
 	if removeCalled {
 		t.Error("should not remove anything when no lock file exists")
+	}
+}
+
+func TestCleanupOrphanedPlugins_InvalidLockContent(t *testing.T) {
+	origRead := readFile
+	origRemove := removeFile
+	origHome := os.Getenv("HOME")
+	defer func() {
+		readFile = origRead
+		removeFile = origRemove
+		os.Setenv("HOME", origHome)
+	}()
+
+	os.Setenv("HOME", "/fakehome")
+
+	readFile = func(name string) ([]byte, error) {
+		return []byte("not-a-number"), nil
+	}
+
+	var removedPath string
+	removeFile = func(name string) error {
+		removedPath = name
+		return nil
+	}
+
+	cleanupOrphanedPlugins()
+
+	wantPath := filepath.Join("/fakehome", ".claude", "channels", "telegram", "data", "telegram.lock")
+	if removedPath != wantPath {
+		t.Errorf("removed %q, want %q (should remove lock with invalid content)", removedPath, wantPath)
+	}
+}
+
+func TestStartMkdirError(t *testing.T) {
+	origRead := readFile
+	origMkdir := mkdirAll
+	defer func() {
+		readFile = origRead
+		mkdirAll = origMkdir
+	}()
+
+	readFile = func(name string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+	mkdirAll = func(path string, perm os.FileMode) error {
+		return fmt.Errorf("permission denied")
+	}
+
+	sc := ServiceConfig{
+		WorkDir: "/workspace",
+		LogPath: "/workspace/state/service.log",
+	}
+
+	err := Start(sc)
+	if err == nil {
+		t.Fatal("expected error when mkdir fails")
+	}
+	if !strings.Contains(err.Error(), "creating state directory") {
+		t.Errorf("error = %q, want mention of state directory", err.Error())
+	}
+}
+
+func TestStartWritePidError(t *testing.T) {
+	origStart := startProcess
+	origWrite := writeFile
+	origRead := readFile
+	origMkdir := mkdirAll
+	origLog := openLogFile
+	defer func() {
+		startProcess = origStart
+		writeFile = origWrite
+		readFile = origRead
+		mkdirAll = origMkdir
+		openLogFile = origLog
+	}()
+
+	readFile = func(name string) ([]byte, error) { return nil, os.ErrNotExist }
+	mkdirAll = func(path string, perm os.FileMode) error { return nil }
+	openLogFile = func(path string) (*os.File, error) {
+		return os.CreateTemp("", "leo-test-log")
+	}
+	startProcess = func(leoPath, configPath, workDir string, logFile *os.File) (int, error) {
+		return 12345, nil
+	}
+	writeFile = func(name string, data []byte, perm os.FileMode) error {
+		return fmt.Errorf("disk full")
+	}
+
+	sc := ServiceConfig{
+		LeoPath:    "/usr/local/bin/leo",
+		ConfigPath: "/workspace/leo.yaml",
+		WorkDir:    "/workspace",
+		LogPath:    "/workspace/state/service.log",
+	}
+
+	err := Start(sc)
+	if err == nil {
+		t.Fatal("expected error when writing pid file fails")
+	}
+	if !strings.Contains(err.Error(), "writing pid file") {
+		t.Errorf("error = %q, want mention of writing pid file", err.Error())
 	}
 }
 

@@ -36,7 +36,7 @@ jobs:
         run: |
           total=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
           echo "Total coverage: ${total}%"
-          threshold=40
+          threshold=60
           if [ "$(echo "$total < $threshold" | bc -l)" -eq 1 ]; then
             echo "::error::Coverage ${total}% is below threshold ${threshold}%"
             exit 1
@@ -74,14 +74,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
-
-      - name: Staticcheck
-        run: staticcheck ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
