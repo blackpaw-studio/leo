@@ -36,6 +36,7 @@ func newServiceCmd() *cobra.Command {
 		newServiceStopCmd(),
 		newServiceRestartCmd(),
 		newServiceStatusCmd(),
+		newServiceLogsCmd(),
 	)
 
 	return cmd
@@ -259,6 +260,43 @@ func newServiceStatusCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "check OS service status (launchd/systemd)")
+
+	return cmd
+}
+
+func newServiceLogsCmd() *cobra.Command {
+	var tail int
+	var follow bool
+
+	cmd := &cobra.Command{
+		Use:   "logs",
+		Short: "Show service logs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			logPath := service.LogPathFor(cfg.Agent.Workspace)
+			if _, err := os.Stat(logPath); err != nil {
+				return fmt.Errorf("no log file at %s", logPath)
+			}
+
+			tailArgs := []string{"-n", fmt.Sprintf("%d", tail)}
+			if follow {
+				tailArgs = append(tailArgs, "-f")
+			}
+			tailArgs = append(tailArgs, logPath)
+
+			tailCmd := exec.Command("tail", tailArgs...)
+			tailCmd.Stdout = os.Stdout
+			tailCmd.Stderr = os.Stderr
+			return tailCmd.Run()
+		},
+	}
+
+	cmd.Flags().IntVarP(&tail, "tail", "n", 50, "number of lines to show")
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow log output")
 
 	return cmd
 }
