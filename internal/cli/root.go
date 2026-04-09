@@ -12,8 +12,8 @@ var (
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "leo",
-		Short: "Manage Claude Code agents as persistent personal assistants",
-		Long:  "Leo sets up and manages Claude Code agents with Telegram integration and cron scheduling.",
+		Short: "Manage a persistent Claude Code assistant",
+		Long:  "Leo sets up and manages a persistent Claude Code session with Telegram, Remote Control, and scheduled tasks.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
