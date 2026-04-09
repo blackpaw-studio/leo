@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/spf13/cobra"
@@ -41,32 +43,19 @@ func newTaskListCmd() *cobra.Command {
 				return err
 			}
 
+			// Get next run times from daemon if available
+			var nextRuns map[string]time.Time
 			if daemon.IsRunning(cfg.HomePath) {
-				resp, err := daemon.Send(cfg.HomePath, "GET", "/task/list", nil)
-				if err != nil {
-					return fmt.Errorf("daemon request failed: %w", err)
-				}
-				if !resp.OK {
-					return fmt.Errorf("daemon error: %s", resp.Error)
-				}
-				var tasks map[string]config.TaskConfig
-				if err := json.Unmarshal(resp.Data, &tasks); err != nil {
-					return fmt.Errorf("parsing task list: %w", err)
-				}
-				if len(tasks) == 0 {
-					info.Println("No tasks configured.")
-					return nil
-				}
-				fmt.Printf("  %-20s %-18s %-8s %s\n", "NAME", "SCHEDULE", "MODEL", "STATUS")
-				for name, task := range tasks {
-					status := "disabled"
-					if task.Enabled {
-						status = "enabled"
+				resp, err := daemon.Send(cfg.HomePath, "GET", "/cron/list", nil)
+				if err == nil && resp.OK {
+					var entries []cron.EntryInfo
+					if json.Unmarshal(resp.Data, &entries) == nil {
+						nextRuns = make(map[string]time.Time, len(entries))
+						for _, e := range entries {
+							nextRuns[e.Name] = e.Next
+						}
 					}
-					model := cfg.TaskModel(task)
-					fmt.Printf("  %-20s %-18s %-8s %s\n", name, task.Schedule, model, status)
 				}
-				return nil
 			}
 
 			if len(cfg.Tasks) == 0 {
@@ -74,7 +63,7 @@ func newTaskListCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("  %-20s %-18s %-8s %-8s %s\n", "NAME", "SCHEDULE", "MODEL", "STATUS", "LAST RUN")
+			fmt.Printf("  %-20s %-18s %-8s %-8s %-20s %s\n", "NAME", "SCHEDULE", "MODEL", "STATUS", "LAST RUN", "NEXT RUN")
 			hist := history.NewStore(cfg.HomePath)
 			for name, task := range cfg.Tasks {
 				status := "disabled"
@@ -91,7 +80,11 @@ func newTaskListCmd() *cobra.Command {
 					}
 					lastRun = fmt.Sprintf("%s %s", e.RunAt.Format("Jan 02 15:04"), result)
 				}
-				fmt.Printf("  %-20s %-18s %-8s %-8s %s\n", name, task.Schedule, model, status, lastRun)
+				nextRun := ""
+				if t, ok := nextRuns[name]; ok {
+					nextRun = t.Local().Format("Jan 02 15:04")
+				}
+				fmt.Printf("  %-20s %-18s %-8s %-8s %-20s %s\n", name, task.Schedule, model, status, lastRun, nextRun)
 			}
 
 			return nil
