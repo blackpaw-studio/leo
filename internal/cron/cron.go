@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -138,7 +139,9 @@ func (s *Scheduler) addLocked(name string, task config.TaskConfig) error {
 }
 
 func defaultRunTask(leoPath, cfgPath, taskName string) {
-	cmd := exec.Command(leoPath, "run", taskName, "--config", cfgPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, leoPath, "run", taskName, "--config", cfgPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cron: task %q failed: %v\nOutput: %s\n", taskName, err, output)

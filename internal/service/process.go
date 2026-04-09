@@ -323,7 +323,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", spec.Name, sessionName)
 
 		// Wait for the tmux session to end or the plugin to die
-		pluginLockFile := filepath.Join(os.Getenv("HOME"), ".claude", "channels", "telegram", "data", "telegram.lock")
+		var pluginLockFile string
+		if home, err := os.UserHomeDir(); err == nil {
+			pluginLockFile = filepath.Join(home, ".claude", "channels", "telegram", "data", "telegram.lock")
+		}
 		pluginChecksAfterStartup := 0
 		for {
 			select {
@@ -341,7 +344,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}
 
 			// Monitor telegram plugin lock file (only for telegram processes)
-			if spec.HasTelegram && time.Since(startTime) > 30*time.Second {
+			if spec.HasTelegram && pluginLockFile != "" && time.Since(startTime) > 30*time.Second {
 				if _, err := os.Stat(pluginLockFile); err != nil {
 					pluginChecksAfterStartup++
 					if pluginChecksAfterStartup >= 3 {
@@ -443,7 +446,11 @@ func shellQuote(s string) string {
 
 // cleanupOrphanedPlugins removes stale telegram plugin lock files.
 func cleanupOrphanedPlugins() {
-	lockFile := filepath.Join(os.Getenv("HOME"), ".claude", "channels", "telegram", "data", "telegram.lock")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	lockFile := filepath.Join(home, ".claude", "channels", "telegram", "data", "telegram.lock")
 	data, err := readFile(lockFile)
 	if err != nil {
 		return

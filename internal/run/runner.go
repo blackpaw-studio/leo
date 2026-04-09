@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -15,6 +17,8 @@ import (
 )
 
 var execCommand = exec.Command
+
+const defaultTaskTimeout = 30 * time.Minute
 
 const silentPreamble = `SILENT SCHEDULED RUN — You are running as a scheduled background task, not responding to a user message.
 Work silently. Do not narrate your process or describe your tool usage.
@@ -104,8 +108,11 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 	args := buildArgs(cfg, task, prompt, sessionID)
 
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTaskTimeout)
+	defer cancel()
+
 	taskWorkspace := cfg.TaskWorkspace(task)
-	output, execErr := executeCommand(taskWorkspace, args, cfg.Telegram.BotToken)
+	output, execErr := executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
 	result := parseClaudeOutput(output)
 
 	// If --resume failed with a stale session, retry without it.
@@ -117,7 +124,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		}
 
 		args = buildArgs(cfg, task, prompt, "")
-		output, execErr = executeCommand(taskWorkspace, args, cfg.Telegram.BotToken)
+		output, execErr = executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
 		result = parseClaudeOutput(output)
 	}
 
@@ -164,7 +171,7 @@ func isSessionError(result claudeResult, output []byte) bool {
 		(strings.Contains(text, "not found") || strings.Contains(text, "invalid") || strings.Contains(text, "expired"))
 }
 
-func executeCommand(workDir string, args []string, botToken string) ([]byte, error) {
+func executeCommand(ctx context.Context, workDir string, args []string, botToken string) ([]byte, error) {
 	cmd := execCommand("claude", args...)
 	cmd.Dir = workDir
 	env := append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
@@ -172,7 +179,26 @@ func executeCommand(workDir string, args []string, botToken string) ([]byte, err
 		env = append(env, "TELEGRAM_BOT_TOKEN="+botToken)
 	}
 	cmd.Env = env
-	return cmd.CombinedOutput()
+
+	type result struct {
+		output []byte
+		err    error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		out, err := cmd.CombinedOutput()
+		ch <- result{out, err}
+	}()
+
+	select {
+	case r := <-ch:
+		return r.output, r.err
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		return nil, ctx.Err()
+	}
 }
 
 // parseClaudeOutput attempts to extract structured data from claude JSON output.
