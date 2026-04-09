@@ -15,15 +15,15 @@ func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show overall leo status",
-		Long:  "Show service status, daemon state, enabled tasks, and next scheduled run.",
+		Long:  "Show service status, daemon state, processes, tasks, and next scheduled run.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
-				// Config is invalid, but still show what we can
 				warn.Printf("Config: %v\n", err)
 				return nil
 			}
 			success.Println("Config: valid")
+			fmt.Printf("Home:    %s\n", cfg.HomePath)
 
 			// Service status
 			svcStatus, _ := service.Status(cfg.HomePath)
@@ -41,6 +41,27 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 			fmt.Printf("Processes: %d/%d enabled\n", enabledProcs, len(cfg.Processes))
+
+			// Show per-process status from daemon if available
+			if daemon.IsRunning(cfg.HomePath) {
+				resp, err := daemon.Send(cfg.HomePath, "GET", "/process/list", nil)
+				if err == nil && resp.OK {
+					var states map[string]daemon.ProcessStateInfo
+					if json.Unmarshal(resp.Data, &states) == nil && len(states) > 0 {
+						for name, state := range states {
+							uptime := ""
+							if !state.StartedAt.IsZero() {
+								uptime = fmt.Sprintf(" uptime %s", time.Since(state.StartedAt).Round(time.Second))
+							}
+							restarts := ""
+							if state.Restarts > 0 {
+								restarts = fmt.Sprintf(" %d restart(s)", state.Restarts)
+							}
+							fmt.Printf("  %-20s %s%s%s\n", name, state.Status, uptime, restarts)
+						}
+					}
+				}
+			}
 
 			// Tasks
 			enabledTasks := 0
