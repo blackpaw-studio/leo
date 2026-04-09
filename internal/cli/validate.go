@@ -112,12 +112,13 @@ func newValidateCmd() *cobra.Command {
 			// 7. Check daemon health
 			if daemon.IsRunning(cfg.HomePath) {
 				resp, err := daemon.Send(cfg.HomePath, "GET", "/health", nil)
-				if err != nil {
+				switch {
+				case err != nil:
 					warn.Println("Daemon: socket exists but not responding")
 					issues++
-				} else if resp.OK {
+				case resp.OK:
 					success.Println("Daemon: healthy")
-				} else {
+				default:
 					warn.Printf("Daemon: unhealthy (%s)\n", resp.Error)
 					issues++
 				}

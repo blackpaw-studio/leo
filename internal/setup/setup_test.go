@@ -81,7 +81,6 @@ func TestFindExistingConfigFound(t *testing.T) {
 	}
 }
 
-
 // --- scaffoldWorkspace ---
 
 func TestScaffoldWorkspace(t *testing.T) {
@@ -1043,4 +1042,3 @@ func TestRunInteractivePrereqFails(t *testing.T) {
 		t.Fatal("expected error when prereqs fail")
 	}
 }
-

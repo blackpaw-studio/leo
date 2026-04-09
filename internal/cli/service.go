@@ -513,4 +513,3 @@ func syncPluginEnv(botToken string) {
 		fmt.Fprintf(os.Stderr, "warning: cannot write telegram plugin env: %v\n", err)
 	}
 }
-

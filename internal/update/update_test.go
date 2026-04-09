@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,6 +30,27 @@ func TestIsNewer(t *testing.T) {
 		{"", "v0.1.0", true},
 		{"v0.3.0-20-g8e5070e-dirty", "v0.3.0", false},
 		{"v0.3.0-20-g8e5070e-dirty", "v0.4.0", true},
+		// major version bump
+		{"v1.2.3", "v2.0.0", true},
+		{"v2.0.0", "v1.99.99", false},
+		// patch-only bump
+		{"v1.0.0", "v1.0.1", true},
+		{"v1.0.1", "v1.0.0", false},
+		// minor-only bump
+		{"v1.0.0", "v1.1.0", true},
+		{"v1.1.0", "v1.0.0", false},
+		// same dirty version vs newer
+		{"v0.3.0-dirty", "v0.3.0", false},
+		// both dev/empty
+		{"dev", "dev", true},
+		{"", "", true},
+		// latest is empty (no release found edge case)
+		{"v1.0.0", "", false},
+		// no v prefix on either
+		{"1.0.0", "2.0.0", true},
+		// mixed v prefix
+		{"v1.0.0", "2.0.0", true},
+		{"1.0.0", "v2.0.0", true},
 	}
 
 	for _, tt := range tests {
@@ -52,6 +74,14 @@ func TestParseVersion(t *testing.T) {
 		{"10.20.30", [3]int{10, 20, 30}},
 		{"1", [3]int{1, 0, 0}},
 		{"1.2", [3]int{1, 2, 0}},
+		// empty string
+		{"", [3]int{0, 0, 0}},
+		// non-numeric parts default to 0
+		{"abc.def.ghi", [3]int{0, 0, 0}},
+		// pre-release suffix stripped
+		{"2.1.0-rc1", [3]int{2, 1, 0}},
+		// extra dots: SplitN keeps "3.4" as third element, Atoi("3.4") → 0
+		{"1.2.3.4", [3]int{1, 2, 0}},
 	}
 
 	for _, tt := range tests {
@@ -219,6 +249,17 @@ func TestDownloadAndReplaceHTTPError(t *testing.T) {
 	}
 }
 
+func TestDownloadAndReplaceExecError(t *testing.T) {
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return "", fmt.Errorf("no executable") }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Error("expected error when os.Executable fails")
+	}
+}
+
 func TestExtractBinaryFromTarGz(t *testing.T) {
 	binaryContent := []byte("#!/bin/sh\necho hello\n")
 	archive := buildTestArchive(t, binaryContent)
@@ -230,6 +271,39 @@ func TestExtractBinaryFromTarGz(t *testing.T) {
 
 	if out.String() != string(binaryContent) {
 		t.Errorf("extracted content = %q, want %q", out.String(), string(binaryContent))
+	}
+}
+
+func TestExtractBinaryFromTarGzNestedPath(t *testing.T) {
+	// The archive has leo under a subdirectory (e.g. "leo_0.5.0_darwin_arm64/leo")
+	binaryContent := []byte("nested binary")
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	tw.WriteHeader(&tar.Header{
+		Name:     "leo_0.5.0_darwin_arm64/leo",
+		Size:     int64(len(binaryContent)),
+		Mode:     0755,
+		Typeflag: tar.TypeReg,
+	})
+	tw.Write(binaryContent)
+	tw.Close()
+	gw.Close()
+
+	var out bytes.Buffer
+	if err := extractBinaryFromTarGz(bytes.NewReader(buf.Bytes()), &out); err != nil {
+		t.Fatalf("extractBinaryFromTarGz() error: %v", err)
+	}
+	if out.String() != string(binaryContent) {
+		t.Errorf("extracted = %q, want %q", out.String(), string(binaryContent))
+	}
+}
+
+func TestExtractBinaryFromTarGzInvalidGzip(t *testing.T) {
+	var out bytes.Buffer
+	err := extractBinaryFromTarGz(bytes.NewReader([]byte("not gzip data")), &out)
+	if err == nil {
+		t.Error("expected error for invalid gzip data")
 	}
 }
 

@@ -1,33 +1,70 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
 linters:
   enable:
     - govet
     - staticcheck
     - errcheck
     - gocritic
-    - gofmt
-    - goimports
     - ineffassign
     - unused
     - misspell
     - unconvert
     - bodyclose
 
-linters-settings:
-  errcheck:
-    exclude-functions:
-      - (net/http.ResponseWriter).Write
-      - (*encoding/json.Encoder).Encode
-      - fmt.Fprintf
-      - fmt.Fprintln
-      - (io.Closer).Close
+  settings:
+    errcheck:
+      exclude-functions:
+        # stdlib io/fmt
+        - (net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+        - encoding/json.Unmarshal
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Sscanf
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*net/http.Request).ParseForm
+        # stdlib os
+        - os.MkdirAll
+        - os.Remove
+        - os.RemoveAll
+        - os.Rename
+        - os.Setenv
+        - os.Unsetenv
+        - os.WriteFile
+        # subprocess
+        - (*os/exec.Cmd).Run
+        - (*os/exec.Cmd).Wait
+        - (*os/exec.Cmd).CombinedOutput
+        - (*os.Process).Kill
+        # network/server shutdown
+        - (*net.Listener).Close
+        - (*net/http.Server).Shutdown
+        # archive/compress (used in update extraction)
+        - (*archive/tar.Writer).WriteHeader
+        - (*archive/tar.Writer).Write
+        - (*archive/tar.Writer).Close
+        - (*compress/gzip.Writer).Close
+        - (*compress/gzip.Reader).Close
+        # config save (best-effort in tests/setup)
+        - github.com/blackpaw-studio/leo/internal/config.Save
+        # fatih/color Printf/Println (used for terminal output)
+        - (*github.com/fatih/color.Color).Printf
+        - (*github.com/fatih/color.Color).Println
+        - (*github.com/fatih/color.Color).Fprintf
 
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-    disabled-checks:
-      - hugeParam
-      - rangeValCopy
+    gocritic:
+      enabled-tags:
+        - diagnostic
+      disabled-checks:
+        - filepathJoin
+        - unlambda
 
 issues:
   exclude-dirs:

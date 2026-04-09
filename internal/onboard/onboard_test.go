@@ -157,7 +157,7 @@ func TestSmokeTestArgs(t *testing.T) {
 		return exec.Command("echo", "LEO_SMOKE_OK")
 	}
 
-	SmokeTest()
+	_ = SmokeTest()
 
 	expected := []string{"-p", "Reply with exactly: LEO_SMOKE_OK", "--max-turns", "1", "--output-format", "text"}
 	if len(gotArgs) != len(expected) {

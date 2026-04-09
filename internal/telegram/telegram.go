@@ -140,9 +140,9 @@ type topicMessage struct {
 		ID   int64  `json:"id"`
 		Type string `json:"type"`
 	} `json:"chat"`
-	MessageThreadID    int    `json:"message_thread_id"`
-	Text               string `json:"text"`
-	ForumTopicCreated  *struct {
+	MessageThreadID   int    `json:"message_thread_id"`
+	Text              string `json:"text"`
+	ForumTopicCreated *struct {
 		Name string `json:"name"`
 	} `json:"forum_topic_created"`
 }

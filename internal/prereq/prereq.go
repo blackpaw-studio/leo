@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	lookPath    = exec.LookPath
-	runCommand  = func(path string, args ...string) ([]byte, error) {
+	lookPath   = exec.LookPath
+	runCommand = func(path string, args ...string) ([]byte, error) {
 		return exec.Command(path, args...).Output()
 	}
 	userHomeDir = os.UserHomeDir

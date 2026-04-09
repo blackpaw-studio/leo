@@ -52,13 +52,13 @@ type DefaultsConfig struct {
 }
 
 type ProcessConfig struct {
-	Workspace         string   `yaml:"workspace,omitempty"`
-	Channels          []string `yaml:"channels,omitempty"`
-	Model             string   `yaml:"model,omitempty"`
-	MaxTurns          int      `yaml:"max_turns,omitempty"`
-	BypassPermissions *bool    `yaml:"bypass_permissions,omitempty"`
-	RemoteControl     *bool    `yaml:"remote_control,omitempty"`
-	MCPConfig         string   `yaml:"mcp_config,omitempty"`
+	Workspace         string            `yaml:"workspace,omitempty"`
+	Channels          []string          `yaml:"channels,omitempty"`
+	Model             string            `yaml:"model,omitempty"`
+	MaxTurns          int               `yaml:"max_turns,omitempty"`
+	BypassPermissions *bool             `yaml:"bypass_permissions,omitempty"`
+	RemoteControl     *bool             `yaml:"remote_control,omitempty"`
+	MCPConfig         string            `yaml:"mcp_config,omitempty"`
 	AddDirs           []string          `yaml:"add_dirs,omitempty"`
 	Env               map[string]string `yaml:"env,omitempty"`
 	Enabled           bool              `yaml:"enabled"`

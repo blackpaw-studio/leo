@@ -100,7 +100,7 @@ func TestServerRemovesStaleSocket(t *testing.T) {
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start() with stale socket error: %v", err)
 	}
-	defer s.Shutdown()
+	defer func() { _ = s.Shutdown() }()
 
 	// Verify health endpoint works (confirms the server is running)
 	client := socketHTTPClient(sockPath)

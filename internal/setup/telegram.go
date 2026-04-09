@@ -73,7 +73,7 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 
 	// Read existing access.json to preserve approved peers
 	accessDoc := map[string]any{
-		"dmPolicy": "allowlist",
+		"dmPolicy":  "allowlist",
 		"allowFrom": []string{},
 		"groups":    map[string]any{},
 		"pending":   map[string]any{},

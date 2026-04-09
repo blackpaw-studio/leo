@@ -239,7 +239,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
-		defer srv.Shutdown()
+		defer func() { _ = srv.Shutdown() }()
 		fmt.Fprintf(os.Stdout, "daemon IPC server listening on %s\n", sockPath)
 	}
 

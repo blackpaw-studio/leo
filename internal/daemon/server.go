@@ -87,7 +87,7 @@ func (s *Server) Start() error {
 
 	// Set socket permissions to owner-only
 	if err := os.Chmod(s.sockPath, 0600); err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return fmt.Errorf("setting socket permissions: %w", err)
 	}
 

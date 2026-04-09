@@ -130,10 +130,8 @@ func TestExpandHome(t *testing.T) {
 				if !strings.HasSuffix(got, tt.path[2:]) && tt.path != "~/" {
 					t.Errorf("ExpandHome(%q) = %q, suffix not preserved", tt.path, got)
 				}
-			} else {
-				if got != tt.path {
-					t.Errorf("ExpandHome(%q) = %q, want unchanged", tt.path, got)
-				}
+			} else if got != tt.path {
+				t.Errorf("ExpandHome(%q) = %q, want unchanged", tt.path, got)
 			}
 		})
 	}
