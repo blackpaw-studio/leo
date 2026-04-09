@@ -109,6 +109,11 @@ func InstallDaemon(sc ServiceConfig) error {
 	// Unload existing service if present (ignore errors)
 	_ = bootout(label, path)
 
+	// Remove old plist before writing new one — launchctl bootstrap
+	// fails with exit 5 if the plist file already exists from a
+	// previous install even when the service isn't loaded.
+	_ = removeFile(path)
+
 	if err := writeFile(path, buf.Bytes(), 0644); err != nil {
 		return fmt.Errorf("writing plist: %w", err)
 	}
