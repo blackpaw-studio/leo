@@ -56,13 +56,14 @@ func newTaskListCmd() *cobra.Command {
 					info.Println("No tasks configured.")
 					return nil
 				}
+				fmt.Printf("  %-20s %-18s %-8s %s\n", "NAME", "SCHEDULE", "MODEL", "STATUS")
 				for name, task := range tasks {
 					status := "disabled"
 					if task.Enabled {
 						status = "enabled"
 					}
 					model := cfg.TaskModel(task)
-					fmt.Printf("  %-25s %-20s %-8s %s\n", name, task.Schedule, model, status)
+					fmt.Printf("  %-20s %-18s %-8s %s\n", name, task.Schedule, model, status)
 				}
 				return nil
 			}
@@ -72,6 +73,7 @@ func newTaskListCmd() *cobra.Command {
 				return nil
 			}
 
+			fmt.Printf("  %-20s %-18s %-8s %-8s %s\n", "NAME", "SCHEDULE", "MODEL", "STATUS", "LAST RUN")
 			hist := history.NewStore(cfg.HomePath)
 			for name, task := range cfg.Tasks {
 				status := "disabled"
@@ -84,11 +86,11 @@ func newTaskListCmd() *cobra.Command {
 				if e := hist.Get(name); e != nil {
 					result := "ok"
 					if e.ExitCode != 0 {
-						result = "fail"
+						result = fmt.Sprintf("FAIL (exit %d)", e.ExitCode)
 					}
-					lastRun = fmt.Sprintf("  last: %s (%s)", e.RunAt.Format("Jan 02 15:04"), result)
+					lastRun = fmt.Sprintf("%s %s", e.RunAt.Format("Jan 02 15:04"), result)
 				}
-				fmt.Printf("  %-25s %-20s %-8s %-8s%s\n", name, task.Schedule, model, status, lastRun)
+				fmt.Printf("  %-20s %-18s %-8s %-8s %s\n", name, task.Schedule, model, status, lastRun)
 			}
 
 			return nil
