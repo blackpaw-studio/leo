@@ -59,9 +59,9 @@ If you see `NO_REPLY` in a task log, the task ran successfully with nothing to r
 ## Checking Operational Health
 
 ```bash
-# Is the chat daemon running?
-leo chat status
-leo chat status --daemon
+# Is the service running?
+leo service status
+leo service status --daemon
 
 # Are cron entries installed?
 leo cron list

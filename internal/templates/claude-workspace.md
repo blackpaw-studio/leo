@@ -34,7 +34,7 @@ For group/forum chats, you **must** pass the `thread_id` parameter to route mess
 ## What is Leo?
 
 Leo is the CLI that scaffolded this workspace and manages your lifecycle:
-- **`leo chat`** starts your interactive Telegram session
+- **`leo service`** starts your interactive Telegram session
 - **`leo run <task>`** executes a scheduled task (invoked by cron)
 - **`leo task`** manages task definitions in leo.yaml
 - **`leo cron`** installs/removes system crontab entries
@@ -53,8 +53,8 @@ You are not Leo. Leo is the management layer; you are the agent it manages.
 ├── daily/             # Daily observation logs (YYYY-MM-DD.md)
 ├── reports/           # Task prompt files
 ├── state/             # Logs and runtime state
-│   ├── chat.log       # Chat session output
-│   ├── chat.pid       # Background process PID
+│   ├── service.log    # Session output
+│   ├── service.pid    # Background process PID
 │   └── <task>.log     # Per-task execution logs
 ├── config/
 │   └── mcp-servers.json
@@ -76,8 +76,8 @@ Read these on demand when you need to perform specific operations:
 
 ### Check status
 ```bash
-leo chat status              # Chat daemon running?
-leo chat status --daemon     # OS service status
+leo service status              # Chat daemon running?
+leo service status --daemon     # OS service status
 leo task list                # Configured tasks
 leo cron list                # Installed cron entries
 leo validate                 # Config and prereq health check

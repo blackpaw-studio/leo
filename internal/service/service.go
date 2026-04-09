@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 )
 
-// ServiceConfig holds everything needed to manage a chat service.
+// ServiceConfig holds everything needed to manage the leo service.
 type ServiceConfig struct {
 	LeoPath    string
 	ConfigPath string
@@ -15,10 +15,10 @@ type ServiceConfig struct {
 
 // PidPath returns the path to the PID file for simple background mode.
 func PidPath(workDir string) string {
-	return filepath.Join(workDir, "state", "chat.pid")
+	return filepath.Join(workDir, "state", "service.pid")
 }
 
-// LogPathFor returns the default log path for the chat service.
+// LogPathFor returns the default log path for the service.
 func LogPathFor(workDir string) string {
-	return filepath.Join(workDir, "state", "chat.log")
+	return filepath.Join(workDir, "state", "service.log")
 }

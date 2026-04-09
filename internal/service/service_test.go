@@ -12,7 +12,7 @@ import (
 
 func TestPidPath(t *testing.T) {
 	got := PidPath("/home/user/workspace")
-	want := filepath.Join("/home/user/workspace", "state", "chat.pid")
+	want := filepath.Join("/home/user/workspace", "state", "service.pid")
 	if got != want {
 		t.Errorf("PidPath() = %q, want %q", got, want)
 	}
@@ -20,7 +20,7 @@ func TestPidPath(t *testing.T) {
 
 func TestLogPathFor(t *testing.T) {
 	got := LogPathFor("/home/user/workspace")
-	want := filepath.Join("/home/user/workspace", "state", "chat.log")
+	want := filepath.Join("/home/user/workspace", "state", "service.log")
 	if got != want {
 		t.Errorf("LogPathFor() = %q, want %q", got, want)
 	}
@@ -73,7 +73,7 @@ func TestStartWritesPidFile(t *testing.T) {
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
-		LogPath:    "/workspace/state/chat.log",
+		LogPath:    "/workspace/state/service.log",
 	}
 
 	err := Start(sc)
@@ -81,8 +81,8 @@ func TestStartWritesPidFile(t *testing.T) {
 		t.Fatalf("Start() error: %v", err)
 	}
 
-	if !strings.HasSuffix(writtenPath, "chat.pid") {
-		t.Errorf("wrote to %q, want path ending in chat.pid", writtenPath)
+	if !strings.HasSuffix(writtenPath, "service.pid") {
+		t.Errorf("wrote to %q, want path ending in service.pid", writtenPath)
 	}
 	if string(writtenData) != "12345" {
 		t.Errorf("wrote pid %q, want 12345", string(writtenData))
@@ -161,14 +161,14 @@ func TestStartCleansStalesPid(t *testing.T) {
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
-		LogPath:    "/workspace/state/chat.log",
+		LogPath:    "/workspace/state/service.log",
 	}
 
 	err := Start(sc)
 	if err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
-	if !strings.HasSuffix(removedPath, "chat.pid") {
+	if !strings.HasSuffix(removedPath, "service.pid") {
 		t.Errorf("should have removed stale pid file, removed: %q", removedPath)
 	}
 }
@@ -289,7 +289,7 @@ func TestStopStalePid(t *testing.T) {
 	if !strings.Contains(err.Error(), "stale pid") {
 		t.Errorf("error = %q, want 'stale pid'", err.Error())
 	}
-	if !strings.HasSuffix(removedPath, "chat.pid") {
+	if !strings.HasSuffix(removedPath, "service.pid") {
 		t.Errorf("should have removed stale pid file, removed: %q", removedPath)
 	}
 }
@@ -359,7 +359,7 @@ func TestStartProcessError(t *testing.T) {
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
-		LogPath:    "/workspace/state/chat.log",
+		LogPath:    "/workspace/state/service.log",
 	}
 
 	err := Start(sc)
@@ -391,7 +391,7 @@ func TestStartLogFileError(t *testing.T) {
 
 	sc := ServiceConfig{
 		WorkDir: "/workspace",
-		LogPath: "/workspace/state/chat.log",
+		LogPath: "/workspace/state/service.log",
 	}
 
 	err := Start(sc)

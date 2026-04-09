@@ -114,7 +114,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	fmt.Printf("  Tasks: %d\n", len(cfg.Tasks))
 	fmt.Println("\nNext steps:")
 	fmt.Println("  1. Review the agent file and edit as needed")
-	fmt.Println("  2. Run 'leo chat' to test interactive mode")
+	fmt.Println("  2. Run 'leo service' to test interactive mode")
 	fmt.Println("  3. Run 'leo run <task>' to test scheduled tasks")
 
 	return nil

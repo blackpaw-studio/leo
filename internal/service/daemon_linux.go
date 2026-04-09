@@ -15,11 +15,11 @@ import (
 var runCommand = defaultRunCommand
 
 const unitTemplate = `[Unit]
-Description=Leo chat session
+Description=Leo service
 
 [Service]
 Type=simple
-ExecStart={{.LeoPath}} chat --supervised --config {{.ConfigPath}}
+ExecStart={{.LeoPath}} service --supervised --config {{.ConfigPath}}
 WorkingDirectory={{.WorkDir}}
 Restart=always
 RestartSec=5

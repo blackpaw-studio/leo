@@ -66,7 +66,7 @@ func newSessionClearCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clear [key]",
 		Short: "Clear stored session(s)",
-		Long:  "Clear a specific session by key (e.g. 'task:heartbeat', 'chat:dm') or all sessions with --all.",
+		Long:  "Clear a specific session by key (e.g. 'task:heartbeat', 'service:dm') or all sessions with --all.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {

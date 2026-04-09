@@ -57,7 +57,7 @@ func TestInstallDaemon(t *testing.T) {
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
-		LogPath:    "/workspace/state/chat.log",
+		LogPath:    "/workspace/state/service.log",
 		Env: map[string]string{
 			"HOME": "/Users/test",
 		},
@@ -108,7 +108,7 @@ func TestInstallDaemonMkdirError(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		LogPath: "/workspace/state/chat.log",
+		LogPath: "/workspace/state/service.log",
 	}
 
 	err := InstallDaemon(sc)
@@ -353,7 +353,7 @@ func TestInstallDaemonWithHomeSeam(t *testing.T) {
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    "/workspace",
-		LogPath:    "/workspace/state/chat.log",
+		LogPath:    "/workspace/state/service.log",
 	}
 
 	err := InstallDaemon(sc)
@@ -390,7 +390,7 @@ func TestInstallDaemonWriteError(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		LogPath: "/workspace/state/chat.log",
+		LogPath: "/workspace/state/service.log",
 	}
 
 	err := InstallDaemon(sc)
@@ -431,7 +431,7 @@ func TestInstallDaemonBootstrapError(t *testing.T) {
 	}
 
 	sc := ServiceConfig{
-		LogPath: "/workspace/state/chat.log",
+		LogPath: "/workspace/state/service.log",
 	}
 
 	err := InstallDaemon(sc)

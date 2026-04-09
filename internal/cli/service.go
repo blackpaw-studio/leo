@@ -20,28 +20,28 @@ import (
 
 var supervised bool
 
-func newChatCmd() *cobra.Command {
+func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "chat",
-		Short: "Start interactive Telegram session",
-		Long:  "Start a long-running claude session with Telegram channel plugin for inbound messages.",
-		RunE:  runChat,
+		Use:   "service",
+		Short: "Start the persistent claude session",
+		Long:  "Start a long-running claude session with Telegram channel plugin and optional Remote Control.",
+		RunE:  runService,
 	}
 
 	cmd.Flags().BoolVar(&supervised, "supervised", false, "run in supervised mode with restart loop (used internally)")
 	_ = cmd.Flags().MarkHidden("supervised")
 
 	cmd.AddCommand(
-		newChatStartCmd(),
-		newChatStopCmd(),
-		newChatRestartCmd(),
-		newChatStatusCmd(),
+		newServiceStartCmd(),
+		newServiceStopCmd(),
+		newServiceRestartCmd(),
+		newServiceStatusCmd(),
 	)
 
 	return cmd
 }
 
-func runChat(cmd *cobra.Command, args []string) error {
+func runService(cmd *cobra.Command, args []string) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -61,9 +61,9 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	claudeArgs := buildClaudeArgs(cfg)
 
-	// Add session persistence for DM chat
+	// Add session persistence
 	store := session.NewStore(cfg.Agent.Workspace)
-	sid, found, getErr := store.Get("chat:dm")
+	sid, found, getErr := store.Get("service:dm")
 	if getErr != nil {
 		warn.Printf("  Could not read session store: %v\n", getErr)
 	}
@@ -71,7 +71,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		claudeArgs = append(claudeArgs, "--resume", sid)
 	} else {
 		sid = session.NewID()
-		if err := store.Set("chat:dm", sid); err != nil {
+		if err := store.Set("service:dm", sid); err != nil {
 			warn.Printf("  Could not store session ID: %v\n", err)
 		}
 		claudeArgs = append(claudeArgs, "--session-id", sid)
@@ -99,7 +99,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("claude not found: %w", err)
 	}
 
-	info.Println("Starting interactive session...")
+	info.Println("Starting session...")
 	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), os.Environ())
 }
 
@@ -125,13 +125,13 @@ func buildClaudeArgs(cfg *config.Config) []string {
 	return claudeArgs
 }
 
-func newChatStartCmd() *cobra.Command {
+func newServiceStartCmd() *cobra.Command {
 	var daemon bool
 
 	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start chat session in the background",
-		Long:  "Start a background chat session with auto-restart. Use --daemon to install as an OS service.",
+		Short: "Start service in the background",
+		Long:  "Start a background session with auto-restart. Use --daemon to install as an OS service.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -152,14 +152,14 @@ func newChatStartCmd() *cobra.Command {
 				status, _ := service.DaemonStatus()
 				success.Printf("Daemon installed (%s).\n", status)
 				info.Printf("Logs: %s\n", sc.LogPath)
-				info.Println("Note: run 'leo chat start --daemon' again if you update environment variables.")
+				info.Println("Note: run 'leo service start --daemon' again if you update environment variables.")
 				return nil
 			}
 
 			if err := service.Start(sc); err != nil {
 				return err
 			}
-			success.Println("Chat session started.")
+			success.Println("Service started.")
 			info.Printf("Logs: %s\n", sc.LogPath)
 			return nil
 		},
@@ -170,12 +170,12 @@ func newChatStartCmd() *cobra.Command {
 	return cmd
 }
 
-func newChatStopCmd() *cobra.Command {
+func newServiceStopCmd() *cobra.Command {
 	var daemon bool
 
 	cmd := &cobra.Command{
 		Use:   "stop",
-		Short: "Stop background chat session",
+		Short: "Stop background service",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -193,7 +193,7 @@ func newChatStopCmd() *cobra.Command {
 			if err := service.Stop(cfg.Agent.Workspace); err != nil {
 				return err
 			}
-			success.Println("Chat session stopped.")
+			success.Println("Service stopped.")
 			return nil
 		},
 	}
@@ -203,17 +203,17 @@ func newChatStopCmd() *cobra.Command {
 	return cmd
 }
 
-func newChatRestartCmd() *cobra.Command {
+func newServiceRestartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restart",
-		Short: "Restart chat daemon",
+		Short: "Restart daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
 
-			fmt.Println("Restarting chat daemon...")
+			fmt.Println("Restarting daemon...")
 			if err := service.RestartDaemon(); err != nil {
 				return fmt.Errorf("restarting daemon: %w", err)
 			}
@@ -228,12 +228,12 @@ func newChatRestartCmd() *cobra.Command {
 	return cmd
 }
 
-func newChatStatusCmd() *cobra.Command {
+func newServiceStatusCmd() *cobra.Command {
 	var daemon bool
 
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show chat session status",
+		Short: "Show service status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -253,7 +253,7 @@ func newChatStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Chat: %s\n", status)
+			fmt.Printf("Service: %s\n", status)
 			return nil
 		},
 	}

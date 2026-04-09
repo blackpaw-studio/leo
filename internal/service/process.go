@@ -35,7 +35,7 @@ const (
 	stopTimeout    = 5 * time.Second
 )
 
-// Start spawns a supervised leo chat process in the background and writes a PID file.
+// Start spawns a supervised leo service process in the background and writes a PID file.
 func Start(sc ServiceConfig) error {
 	pidFile := PidPath(sc.WorkDir)
 
@@ -143,7 +143,7 @@ func Status(workDir string) (string, error) {
 }
 
 // RunSupervised runs claude in a restart loop with exponential backoff.
-// This is invoked when leo chat --supervised is used. It handles SIGTERM/SIGINT
+// This is invoked when leo service --supervised is used. It handles SIGTERM/SIGINT
 // for graceful shutdown.
 func RunSupervised(claudePath string, claudeArgs []string, workDir, configPath string) error {
 	return supervisedExecFn(claudePath, claudeArgs, workDir, configPath)

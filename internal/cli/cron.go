@@ -36,7 +36,7 @@ func newCronInstallCmd() *cobra.Command {
 			}
 
 			if !daemon.IsRunning(cfg.Agent.Workspace) {
-				return fmt.Errorf("daemon is not running — start it with 'leo chat start' first")
+				return fmt.Errorf("daemon is not running — start it with 'leo service start' first")
 			}
 
 			resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/install", nil)
@@ -64,7 +64,7 @@ func newCronRemoveCmd() *cobra.Command {
 			}
 
 			if !daemon.IsRunning(cfg.Agent.Workspace) {
-				return fmt.Errorf("daemon is not running — start it with 'leo chat start' first")
+				return fmt.Errorf("daemon is not running — start it with 'leo service start' first")
 			}
 
 			resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/remove", nil)

@@ -139,7 +139,7 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	prompt.Bold.Printf("\nSetup complete! Workspace: %s\n", workspace)
 	fmt.Println("\nNext steps:")
-	fmt.Printf("  leo chat                 # Start interactive session\n")
+	fmt.Printf("  leo service              # Start interactive session\n")
 	fmt.Printf("  leo run heartbeat        # Test heartbeat task\n")
 	fmt.Printf("  leo task list            # View configured tasks\n")
 
