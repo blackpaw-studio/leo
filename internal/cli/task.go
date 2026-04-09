@@ -9,6 +9,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/spf13/cobra"
 )
 
@@ -71,6 +72,7 @@ func newTaskListCmd() *cobra.Command {
 				return nil
 			}
 
+			hist := history.NewStore(cfg.Agent.Workspace)
 			for name, task := range cfg.Tasks {
 				status := "disabled"
 				if task.Enabled {
@@ -78,7 +80,15 @@ func newTaskListCmd() *cobra.Command {
 				}
 
 				model := cfg.TaskModel(task)
-				fmt.Printf("  %-25s %-20s %-8s %s\n", name, task.Schedule, model, status)
+				lastRun := ""
+				if e := hist.Get(name); e != nil {
+					result := "ok"
+					if e.ExitCode != 0 {
+						result = "fail"
+					}
+					lastRun = fmt.Sprintf("  last: %s (%s)", e.RunAt.Format("Jan 02 15:04"), result)
+				}
+				fmt.Printf("  %-25s %-20s %-8s %-8s%s\n", name, task.Schedule, model, status, lastRun)
 			}
 
 			return nil
