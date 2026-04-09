@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const testYAML = `
@@ -650,6 +651,97 @@ func TestTaskWorkspace(t *testing.T) {
 		want := "/home/user/.leo/workspace"
 		if got := cfg.TaskWorkspace(task); got != want {
 			t.Errorf("TaskWorkspace() = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestTaskTimeout(t *testing.T) {
+	cfg := &Config{Defaults: DefaultsConfig{Model: "sonnet"}}
+
+	t.Run("custom timeout", func(t *testing.T) {
+		task := TaskConfig{Timeout: "1h"}
+		if got := cfg.TaskTimeout(task); got != time.Hour {
+			t.Errorf("TaskTimeout() = %v, want 1h", got)
+		}
+	})
+
+	t.Run("default timeout", func(t *testing.T) {
+		task := TaskConfig{}
+		if got := cfg.TaskTimeout(task); got != 30*time.Minute {
+			t.Errorf("TaskTimeout() = %v, want 30m", got)
+		}
+	})
+
+	t.Run("invalid timeout falls back", func(t *testing.T) {
+		task := TaskConfig{Timeout: "invalid"}
+		if got := cfg.TaskTimeout(task); got != 30*time.Minute {
+			t.Errorf("TaskTimeout() = %v, want 30m", got)
+		}
+	})
+}
+
+func TestValidateTaskTimeout(t *testing.T) {
+	cfg := &Config{
+		Tasks: map[string]TaskConfig{
+			"bad": {Schedule: "0 * * * *", PromptFile: "t.md", Timeout: "not-a-duration"},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid timeout")
+	}
+	if !contains(err.Error(), "timeout") {
+		t.Errorf("error = %q, want mention of timeout", err.Error())
+	}
+}
+
+func TestValidateTaskRetries(t *testing.T) {
+	cfg := &Config{
+		Tasks: map[string]TaskConfig{
+			"bad": {Schedule: "0 * * * *", PromptFile: "t.md", Retries: -1},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for negative retries")
+	}
+}
+
+func TestValidateChannelPattern(t *testing.T) {
+	cfg := &Config{
+		Processes: map[string]ProcessConfig{
+			"bad": {Channels: []string{"$(evil)"}, Enabled: true},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid channel")
+	}
+	if !contains(err.Error(), "invalid characters") {
+		t.Errorf("error = %q, want mention of invalid characters", err.Error())
+	}
+}
+
+func TestHasMCPServers(t *testing.T) {
+	t.Run("valid config", func(t *testing.T) {
+		dir := t.TempDir()
+		f := filepath.Join(dir, "mcp.json")
+		os.WriteFile(f, []byte(`{"mcpServers":{"test":{"command":"echo"}}}`), 0644)
+		if !HasMCPServers(f) {
+			t.Error("should return true for valid config with servers")
+		}
+	})
+	t.Run("empty servers", func(t *testing.T) {
+		dir := t.TempDir()
+		f := filepath.Join(dir, "mcp.json")
+		os.WriteFile(f, []byte(`{"mcpServers":{}}`), 0644)
+		if HasMCPServers(f) {
+			t.Error("should return false for empty mcpServers")
+		}
+	})
+	t.Run("missing file", func(t *testing.T) {
+		if HasMCPServers("/nonexistent/mcp.json") {
+			t.Error("should return false for missing file")
 		}
 	})
 }

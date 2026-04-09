@@ -773,6 +773,109 @@ func TestHandleConfigLoadError(t *testing.T) {
 	}
 }
 
+func TestHandleProcessListNilProvider(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	// startTestServer passes nil as the process provider
+	_, client := startTestServer(t, cfgPath)
+
+	resp, err := client.Get("http://localhost/process/list")
+	if err != nil {
+		t.Fatalf("GET /process/list error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !result.OK {
+		t.Errorf("expected OK=true, got OK=false (error: %s)", result.Error)
+	}
+
+	// With nil provider, data should be an empty JSON array
+	if string(result.Data) != "[]" {
+		t.Errorf("expected data to be [], got %s", string(result.Data))
+	}
+}
+
+type mockProcessProvider struct {
+	states map[string]ProcessStateInfo
+}
+
+func (m *mockProcessProvider) States() map[string]ProcessStateInfo {
+	return m.states
+}
+
+func TestHandleProcessListWithProvider(t *testing.T) {
+	dir, err := os.MkdirTemp("", "leo-handler-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+	sockPath := tmpSockPath(t, "h.sock")
+
+	provider := &mockProcessProvider{
+		states: map[string]ProcessStateInfo{
+			"assistant": {
+				Name:   "assistant",
+				Status: "running",
+			},
+		},
+	}
+
+	s := New(sockPath, cfgPath, provider)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	t.Cleanup(func() { s.Shutdown() }) //nolint:errcheck
+
+	client := socketHTTPClient(sockPath)
+
+	resp, err := client.Get("http://localhost/process/list")
+	if err != nil {
+		t.Fatalf("GET /process/list error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	var result Response
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !result.OK {
+		t.Errorf("expected OK=true, got OK=false (error: %s)", result.Error)
+	}
+
+	var states map[string]ProcessStateInfo
+	if err := json.Unmarshal(result.Data, &states); err != nil {
+		t.Fatalf("unmarshaling process states: %v", err)
+	}
+
+	if len(states) != 1 {
+		t.Fatalf("expected 1 process state, got %d", len(states))
+	}
+	if s, ok := states["assistant"]; !ok {
+		t.Error("expected 'assistant' in process states")
+	} else if s.Status != "running" {
+		t.Errorf("expected status 'running', got %q", s.Status)
+	}
+}
+
 func TestHandleTaskEnableMalformedJSON(t *testing.T) {
 	dir, err := os.MkdirTemp("", "leo-handler-test-*")
 	if err != nil {
