@@ -18,7 +18,7 @@ internal/setup/           -> Interactive setup wizard
 internal/onboard/         -> Onboarding flow with prerequisite checks
 internal/migrate/         -> OpenClaw migration
 internal/prompt/          -> Terminal helpers (colored prompts, yes/no, choices)
-internal/templates/       -> Embedded template files (agent personas, heartbeat, user profile)
+internal/templates/       -> Embedded template files (heartbeat, user profile)
 internal/prereq/          -> Prerequisite checks (claude CLI, curl)
 ```
 
@@ -31,10 +31,10 @@ internal/prereq/          -> Prerequisite checks (claude CLI, curl)
 :   `config.FindConfig()` walks up from the current directory to find `leo.yaml`. Task settings cascade from `defaults` with per-task overrides for model and max turns.
 
 **Cron markers**
-:   Cron entries are delimited by `# === LEO:<agent> ===` / `# === END LEO:<agent> ===` comment blocks. This allows multiple agents to coexist in a single crontab.
+:   Cron entries are delimited by `# === LEO ===` / `# === END LEO ===` comment blocks to identify Leo-managed entries in the crontab.
 
 **Embedded templates**
-:   Agent personality templates, heartbeat checklist, and user profile are embedded via `//go:embed *.md` in `internal/templates/` and rendered with `text/template`.
+:   Heartbeat checklist, user profile, and other workspace templates are embedded via `//go:embed *.md` in `internal/templates/` and rendered with `text/template`.
 
 **Prompt assembly**
 :   `leo run` builds the final prompt by concatenating an optional silent preamble, the prompt file content, and the Telegram notification protocol. The Telegram `curl` template is injected at runtime (not stored in the agent file).

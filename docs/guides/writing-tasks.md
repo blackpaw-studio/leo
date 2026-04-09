@@ -1,13 +1,13 @@
 # Writing Tasks
 
-Tasks are the core of Leo's scheduling system. Each task is a prompt file that tells the agent what to do when cron triggers it.
+Tasks are the core of Leo's scheduling system. Each task is a prompt file that tells the assistant what to do when cron triggers it.
 
 ## Anatomy of a Task
 
 A task has two parts:
 
 1. **Configuration** in `leo.yaml` — schedule, model, routing
-2. **Prompt file** in your workspace — instructions for the agent
+2. **Prompt file** in your workspace — instructions for the assistant
 
 ### Configuration
 
@@ -47,7 +47,7 @@ When `leo run <task>` executes, it assembles the final prompt from multiple part
 
 ### Silent Preamble (if `silent: true`)
 
-Leo prepends instructions telling the agent to:
+Leo prepends instructions telling the assistant to:
 
 - Work without narration or progress updates
 - Only send output if there's something meaningful
@@ -165,7 +165,7 @@ Only report if there's something actionable.
 - **Use silent mode** for frequent checks to avoid notification spam
 - **Set appropriate max_turns** — simple checks need fewer turns than complex analysis
 - **Choose the right model** — use `sonnet` for routine tasks, `opus` for tasks requiring deeper reasoning
-- **Include output format guidance** — tell the agent how to format its Telegram message
+- **Include output format guidance** — tell the assistant how to format its Telegram message
 - **Test manually first** — run `leo run <task>` before installing to cron
 
 ## Creating a New Task

@@ -29,8 +29,7 @@ Leo builds the final prompt by combining up to three parts:
 ## Claude Arguments
 
 ```
-claude --agent <name> \
-       -p "<assembled prompt>" \
+claude -p "<assembled prompt>" \
        --model <effective-model> \
        --max-turns <effective-max-turns> \
        --output-format text \

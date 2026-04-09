@@ -15,9 +15,7 @@ leo --workspace /path/to/workspace <command>
 
 ```yaml
 agent:
-  name: leo
   workspace: ~/leo
-  agent_file: ~/.claude/agents/leo.md
 
 telegram:
   bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
@@ -27,6 +25,7 @@ telegram:
 defaults:
   model: sonnet
   max_turns: 15
+  remote_control: true
 
 tasks:
   heartbeat:
@@ -53,7 +52,7 @@ tasks:
 
 ### `agent`
 
-Identifies your agent and its workspace. The `name` is used for the Claude agent file, cron markers, and log prefixes.
+Identifies your workspace.
 
 ### `telegram`
 

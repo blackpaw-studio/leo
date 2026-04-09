@@ -1,7 +1,7 @@
 <h1 align="center">Leo</h1>
 
 <p align="center">
-  <em>Claude Code agents as persistent, proactive personal assistants</em>
+  <em>A persistent, mobile-accessible Claude Code assistant</em>
 </p>
 
 <p align="center">
@@ -14,9 +14,9 @@
 
 ---
 
-Leo is a CLI tool that sets up and manages a single [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agent as a persistent, mobile-accessible personal assistant. It handles workspace scaffolding, persistent memory, Telegram integration, and cron scheduling — giving your agent a personality, continuity across sessions, and the ability to work on a schedule or respond to messages from your phone.
+Leo is a CLI tool that sets up and manages a persistent, mobile-accessible [Claude Code](https://docs.anthropic.com/en/docs/claude-code) personal assistant. It handles workspace scaffolding, persistent memory, Telegram integration, and cron scheduling — giving your assistant continuity across sessions and the ability to work on a schedule or respond to messages from your phone.
 
-Leo is **not** a multi-agent orchestration framework, and it is **not** a direct replacement for [OpenClaw](https://github.com/openclaw). While Leo includes a migration path for existing OpenClaw users (`leo migrate`), it is a simpler, more focused tool: one agent, one workspace, one config file. Leo manages the config, prompt assembly, and cron entries — your system's cron runs `claude` directly.
+Leo is **not** a multi-agent orchestration framework, and it is **not** a direct replacement for [OpenClaw](https://github.com/openclaw). While Leo includes a migration path for existing OpenClaw users (`leo migrate`), it is a simpler, more focused tool: one workspace, one config file. Leo manages the config, prompt assembly, and cron entries — your system's cron runs `claude` directly.
 
 ## Install
 
@@ -54,20 +54,18 @@ leo setup
 
 The interactive wizard will guide you through:
 
-1. Naming your agent
-2. Choosing a workspace directory
-3. Picking a personality template (chief-of-staff, dev-assistant, or skeleton)
-4. Creating a user profile
-5. Connecting Telegram (bot token + chat ID auto-detection)
-6. Configuring MCP servers (optional)
-7. Adding scheduled tasks
-8. Installing cron entries
-9. Running a test message
+1. Choosing a workspace directory
+2. Creating a user profile
+3. Connecting Telegram (bot token + chat ID auto-detection)
+4. Configuring MCP servers (optional)
+5. Adding scheduled tasks
+6. Installing cron entries
+7. Running a test message
 
 Once setup is complete, start an interactive Telegram session:
 
 ```bash
-leo chat
+leo service start
 ```
 
 Or run a scheduled task manually to verify it works:
@@ -82,7 +80,7 @@ Leo operates in two modes, both invoking the stock `claude` CLI:
 
 ### Interactive Mode
 
-`leo chat` starts a long-running Claude session with the official Telegram channel plugin. Messages flow through Telegram in both directions — the user sends messages to the bot, and the agent replies through the channel plugin.
+`leo service start` starts a long-running Claude session with the official Telegram channel plugin. Messages flow through Telegram in both directions — the user sends messages to the bot, and the assistant replies through the channel plugin.
 
 ```
 User (Telegram) ──> Telegram Bot API ──> claude (channel plugin) ──> Agent
@@ -109,32 +107,32 @@ For production use, you'll want the Telegram session to stay alive and automatic
 **Simple background mode** — spawns a supervised process with automatic restart and exponential backoff. No OS-level daemon installation required.
 
 ```bash
-leo chat start            # start in background with auto-restart
-leo chat status           # check if running
-leo chat stop             # stop the background session
+leo service start            # start in background with auto-restart
+leo service status           # check if running
+leo service stop             # stop the background session
 ```
 
 **Daemon mode** — installs a launchd plist (macOS) or systemd user unit (Linux) for OS-level supervision that persists across reboots.
 
 ```bash
-leo chat start --daemon   # install and start as OS service
-leo chat status --daemon  # check daemon status
-leo chat stop --daemon    # uninstall OS service
+leo service start --daemon   # install and start as OS service
+leo service status --daemon  # check daemon status
+leo service stop --daemon    # uninstall OS service
 ```
 
-Logs for both modes are written to `<workspace>/state/chat.log`.
+Logs for both modes are written to `<workspace>/state/service.log`.
 
 ## CLI Reference
 
 | Command | Description |
 |---|---|
-| `leo setup` | Interactive setup wizard for a new agent |
+| `leo setup` | Interactive setup wizard |
 | `leo onboard` | Guided first-time setup (prerequisites + setup wizard) |
-| `leo chat` | Start an interactive Telegram session (foreground) |
-| `leo chat start` | Start chat in background with auto-restart |
-| `leo chat stop` | Stop background chat session |
-| `leo chat status` | Show chat session status |
-| `leo chat restart` | Restart background chat session |
+| `leo service start` | Start Telegram session in background with auto-restart |
+| `leo service stop` | Stop background session |
+| `leo service status` | Show session status |
+| `leo service restart` | Restart background session |
+| `leo service logs` | Tail service logs (`-n/--tail`, `-f/--follow`) |
 | `leo run <task>` | Run a scheduled task once (cron entry point) |
 | `leo cron install` | Install all enabled tasks to system crontab |
 | `leo cron remove` | Remove all Leo-managed cron entries |
@@ -152,7 +150,7 @@ Logs for both modes are written to `<workspace>/state/chat.log`.
 | `leo migrate` | Migrate from an existing OpenClaw installation |
 | `leo version` | Print version |
 
-The `start`, `stop`, `status`, and `restart` subcommands accept a `--daemon` flag to use OS-level service management (launchd/systemd) instead of a simple background process.
+The `start`, `stop`, `status`, and `restart` subcommands of `leo service` accept a `--daemon` flag to use OS-level service management (launchd/systemd) instead of a simple background process.
 
 ### Global Flags
 
@@ -167,9 +165,7 @@ Leo is configured via a single `leo.yaml` file in your workspace directory.
 
 ```yaml
 agent:
-  name: leo
   workspace: ~/leo
-  agent_file: ~/.claude/agents/leo.md    # optional, defaults to ~/.claude/agents/<name>.md
 
 telegram:
   bot_token: "YOUR_BOT_TOKEN"
@@ -179,7 +175,8 @@ telegram:
 defaults:
   model: sonnet
   max_turns: 15
-  # bypass_permissions: false          # pass --dangerously-skip-permissions to claude
+  remote_control: true                      # enable --remote-control for web/mobile access via claude.ai/code
+  # bypass_permissions: false               # pass --dangerously-skip-permissions to claude
 
 heartbeat:
   enabled: true
@@ -255,32 +252,20 @@ The `heartbeat` section is a shorthand for a recurring check-in task. Instead of
 └── scripts/                    # Helper scripts
 ```
 
-## Agent Templates
-
-Leo ships with three agent personality templates, selected during setup:
-
-| Template | Description |
-|---|---|
-| **chief-of-staff** | Proactive executive assistant — triages messages, manages calendar, sends briefings |
-| **dev-assistant** | Development-focused agent — monitors repos, runs checks, surfaces issues |
-| **skeleton** | Minimal starting point — bring your own personality and instructions |
-
-Templates are rendered into standard [Claude Code custom agents](https://docs.anthropic.com/en/docs/claude-code) at `~/.claude/agents/<name>.md`.
-
 ## What Leo Is (and Isn't)
 
-**Leo is** a setup and management tool for a single Claude Code agent. It gives your agent:
+**Leo is** a setup and management tool for a persistent Claude Code assistant. It gives your assistant:
 
-- A **personality** via agent templates (chief-of-staff, dev-assistant, or custom)
 - **Persistent memory** via user-configured MCP memory servers
-- **Mobile access** via Telegram — chat with your agent from your phone
-- **Scheduled tasks** via cron — your agent can check in, send briefings, and run background work autonomously
+- **Mobile access** via Telegram — chat with your assistant from your phone
+- **Remote control** via claude.ai/code — access your assistant from any browser
+- **Scheduled tasks** via cron — your assistant can check in, send briefings, and run background work autonomously
 
 **Leo is not:**
 
-- A multi-agent orchestration framework — it manages a single agent
+- A multi-agent orchestration framework
 - A replacement for the Claude API or Agent SDK — it wraps the stock `claude` CLI
-- A daemon or long-running service (except during `leo chat`) — cron runs `claude` directly
+- A daemon or long-running service (except during `leo service`) — cron runs `claude` directly
 - A direct replacement for [OpenClaw](https://github.com/openclaw) — Leo is simpler and more focused, though it includes `leo migrate` for OpenClaw users who want to transition
 
 ## Migrating from OpenClaw

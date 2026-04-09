@@ -26,31 +26,29 @@ leo setup
 
 The interactive wizard walks you through:
 
-1. **Naming your agent** — pick a name like `leo`, `jarvis`, or `friday`
-2. **Choosing a workspace** — where config, prompts, and logs live (default: `~/leo`)
-3. **Picking a template** — chief-of-staff, dev-assistant, or skeleton
-4. **Creating a user profile** — tells the agent who you are
-5. **Connecting Telegram** — paste your bot token, then send a message to auto-detect your chat ID
-6. **Configuring MCP servers** — optional integrations (calendar, email, etc.)
-7. **Adding scheduled tasks** — recurring jobs like heartbeat checks or daily briefings
-8. **Installing cron entries** — writes tasks to your system crontab
-9. **Sending a test message** — verifies everything works end-to-end
+1. **Choosing a workspace** — where config, prompts, and logs live (default: `~/leo`)
+2. **Creating a user profile** — tells the assistant who you are
+3. **Connecting Telegram** — paste your bot token, then send a message to auto-detect your chat ID
+4. **Configuring MCP servers** — optional integrations (calendar, email, etc.)
+5. **Adding scheduled tasks** — recurring jobs like heartbeat checks or daily briefings
+6. **Installing cron entries** — writes tasks to your system crontab
+7. **Sending a test message** — verifies everything works end-to-end
 
 !!! tip "Don't have a Telegram bot yet?"
     The wizard will prompt you to create one. See the [Telegram Setup](../guides/telegram-setup.md) guide for a detailed walkthrough of the BotFather process.
 
-## 3. Start Chatting
+## 3. Start the Service
 
-Launch an interactive Telegram session:
+Launch the Telegram session:
 
 ```bash
-leo chat
+leo service start
 ```
 
-Your agent is now listening. Send a message to your bot on Telegram and it will respond.
+Your assistant is now listening. Send a message to your bot on Telegram and it will respond.
 
-!!! info "Foreground process"
-    `leo chat` runs in the foreground and replaces the current process. For background operation, see [Background Mode](../guides/background-mode.md).
+!!! info "Background operation"
+    `leo service start` runs in the background with automatic restart. For daemon mode (persists across reboots), see [Background Mode](../guides/background-mode.md).
 
 ## 4. Test a Scheduled Task
 
@@ -77,7 +75,6 @@ This shows the cron entries Leo manages in your system crontab.
 ## What's Next
 
 - [Telegram Setup](../guides/telegram-setup.md) — detailed guide to creating and configuring your bot
-- [Agent Templates](../guides/agent-templates.md) — understand the built-in personality templates
 - [Scheduling](../guides/scheduling.md) — deep dive into cron expressions, timezones, and silent mode
-- [Background Mode](../guides/background-mode.md) — keep your chat session alive across reboots
+- [Background Mode](../guides/background-mode.md) — keep your service alive across reboots
 - [Writing Tasks](../guides/writing-tasks.md) — create custom scheduled tasks

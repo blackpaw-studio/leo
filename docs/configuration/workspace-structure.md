@@ -1,6 +1,6 @@
 # Workspace Structure
 
-Leo creates a workspace directory during setup that holds all config, prompts, logs, and state for your agent.
+Leo creates a workspace directory during setup that holds all config, prompts, logs, and state for your assistant.
 
 ## Directory Layout
 
@@ -12,8 +12,8 @@ Leo creates a workspace directory during setup that holds all config, prompts, l
 ├── daily/                      # Raw daily observation logs
 ├── reports/                    # Task prompt files
 ├── state/                      # Runtime state and logs
-│   ├── chat.log                # Interactive session log
-│   ├── chat.pid                # Background process PID file
+│   ├── service.log             # Interactive session log
+│   ├── service.pid             # Background process PID file
 │   └── <task>.log              # Per-task execution logs
 ├── config/
 │   └── mcp-servers.json        # MCP server configuration
@@ -28,15 +28,15 @@ The main configuration file. See [Configuration](index.md) for details.
 
 ### `USER.md`
 
-A user profile filled in during setup. This is included in the agent's context so it knows who you are, your role, preferences, and timezone.
+A user profile filled in during setup. This is included in the assistant's context so it knows who you are, your role, preferences, and timezone.
 
 ### `HEARTBEAT.md`
 
-A checklist template used by the default heartbeat task. It tells the agent what to check (unread messages, calendar, pending tasks, alerts) and how to format the output.
+A checklist template used by the default heartbeat task. It tells the assistant what to check (unread messages, calendar, pending tasks, alerts) and how to format the output.
 
 ### `daily/`
 
-The agent writes daily observation logs here as `YYYY-MM-DD.md` files. These accumulate context over time.
+The assistant writes daily observation logs here as `YYYY-MM-DD.md` files. These accumulate context over time.
 
 ### `reports/`
 
@@ -46,8 +46,8 @@ Store your task prompt files here. Each task in `leo.yaml` references a `prompt_
 
 Runtime files managed by Leo:
 
-- **`chat.log`** — output from the interactive Telegram session
-- **`chat.pid`** — PID file for background chat mode (`leo chat start`)
+- **`service.log`** — output from the interactive Telegram session
+- **`service.pid`** — PID file for background service (`leo service start`)
 - **`<task>.log`** — stdout/stderr from each task execution, useful for debugging
 
 ### `config/mcp-servers.json`
@@ -56,4 +56,4 @@ MCP server configuration passed to Claude via `--mcp-config`. Configure integrat
 
 ### `scripts/`
 
-An optional directory for helper scripts your agent or tasks might use.
+An optional directory for helper scripts your assistant or tasks might use.

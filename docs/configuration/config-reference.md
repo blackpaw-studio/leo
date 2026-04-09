@@ -6,9 +6,7 @@ Complete field-by-field reference for `leo.yaml`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Agent name. Used for the Claude agent file, cron markers, and display. |
 | `workspace` | string | Yes | Workspace directory path. Supports `~` expansion. |
-| `agent_file` | string | No | Custom path to the Claude agent file. Defaults to `~/.claude/agents/<name>.md`. |
 
 ## `telegram`
 
@@ -29,6 +27,7 @@ If `group_id` is set, messages go to the group. The `topic_id` field adds a `mes
 |-------|------|----------|-------------|
 | `model` | string | Yes | Default Claude model (`sonnet`, `opus`, `haiku`). |
 | `max_turns` | int | Yes | Default maximum agent turns per task execution. |
+| `remote_control` | bool | No | Enable `--remote-control` on the claude session for web/mobile access via claude.ai/code. Default `false`. |
 
 ## `tasks`
 

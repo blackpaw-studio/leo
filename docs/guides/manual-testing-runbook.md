@@ -22,7 +22,7 @@ Before starting, confirm:
 
 **Choose your starting state:**
 
-- **Clean:** Remove `~/.leo` and `~/.claude/agents/assistant.md` before starting. Begin at Section 1.
+- **Clean:** Remove `~/.leo` before starting. Begin at Section 1.
 - **Existing:** You already have a working Leo installation. Skip Section 2, begin at Section 1, then jump to Section 3.
 
 ---
@@ -60,16 +60,14 @@ leo setup
 
 Walk through the interactive wizard:
 
-1. Enter agent name (use default `assistant` or a test name)
-2. Accept default workspace `~/.leo`
-3. Choose agent personality template
-4. Fill in user profile
-5. Paste Telegram bot token when prompted
-6. Send a message to the bot when prompted for chat ID detection
-7. Optionally enter forum group ID and topic IDs
-8. Accept heartbeat task
-9. Accept cron installation
-10. Accept daemon installation
+1. Accept default workspace `~/.leo`
+2. Fill in user profile
+3. Paste Telegram bot token when prompted
+4. Send a message to the bot when prompted for chat ID detection
+5. Optionally enter forum group ID and topic IDs
+6. Accept heartbeat task
+7. Accept cron installation
+8. Accept daemon installation
 
 - [ ] **PASS** Wizard completes without errors
 
@@ -90,15 +88,7 @@ ls -la ~/.leo/
   - `~/.leo/config/mcp-servers.json`
   - `~/.leo/skills/` (with `.md` files)
 
-### 2.3 Verify agent file
-
-```
-cat ~/.claude/agents/assistant.md
-```
-
-- [ ] **PASS** File exists and contains personality/system prompt content
-
-### 2.4 Verify Telegram plugin configured
+### 2.3 Verify Telegram plugin configured
 
 ```
 cat ~/.claude/channels/telegram/.env
@@ -112,7 +102,7 @@ cat ~/.claude/channels/telegram/access.json
 
 - [ ] **PASS** Contains `allowFrom` array with your chat ID
 
-### 2.5 Verify settings.json updated
+### 2.4 Verify settings.json updated
 
 ```
 cat ~/.claude/settings.json | python3 -m json.tool
@@ -121,7 +111,7 @@ cat ~/.claude/settings.json | python3 -m json.tool
 - [ ] **PASS** `trustedDirectories` includes workspace path
 - [ ] **PASS** `enabledPlugins` includes `telegram@claude-plugins-official`
 
-### 2.6 Verify test Telegram message received
+### 2.5 Verify test Telegram message received
 
 - [ ] **PASS** Test message appeared in your Telegram chat
 
@@ -140,7 +130,6 @@ leo validate
 - [ ] **PASS** Prints `tmux: installed`
 - [ ] **PASS** Prints `bun: installed`
 - [ ] **PASS** Prints `Workspace: <path>`
-- [ ] **PASS** Prints `Agent file: <path>`
 - [ ] **PASS** Prints `All checks passed.`
 - [ ] **PASS** Exit code is 0
 
@@ -249,7 +238,7 @@ leo task list
 leo run heartbeat --dry-run
 ```
 
-- [ ] **PASS** Prints `Command:` followed by claude CLI args including `--agent`, `-p`, `--model`, `--max-turns`
+- [ ] **PASS** Prints `Command:` followed by claude CLI args including `-p`, `--model`, `--max-turns`
 - [ ] **PASS** Prints `Assembled prompt:` followed by the full prompt
 - [ ] **PASS** Prompt contains HEARTBEAT.md content
 - [ ] **PASS** Prompt contains Telegram notification protocol with curl example
@@ -279,56 +268,55 @@ If the heartbeat task produced a Telegram message:
 
 ---
 
-## 6. Chat Lifecycle (Background Process)
+## 6. Service Lifecycle (Background Process)
 
-### 6.1 Start background chat
+### 6.1 Start background service
 
 ```
-leo chat start
+leo service start
 ```
 
-- [ ] **PASS** Prints `Chat session started for agent "<name>".`
+- [ ] **PASS** Prints service started confirmation
 - [ ] **PASS** Prints log path
 
 ### 6.2 Check status
 
 ```
-leo chat status
+leo service status
 ```
 
-- [ ] **PASS** Prints `Chat: running (pid <N>)`
+- [ ] **PASS** Prints `Service: running (pid <N>)`
 
-### 6.3 Stop background chat
-
-```
-leo chat stop
-```
-
-- [ ] **PASS** Prints `Chat session stopped for agent "<name>".`
+### 6.3 Stop background service
 
 ```
-leo chat status
+leo service stop
 ```
 
-- [ ] **PASS** Prints `Chat: stopped`
+- [ ] **PASS** Prints service stopped confirmation
+
+```
+leo service status
+```
+
+- [ ] **PASS** Prints `Service: stopped`
 
 ### 6.4 Install as daemon (launchd)
 
 ```
-leo chat start --daemon
+leo service start --daemon
 ```
 
-- [ ] **PASS** Prints `Installing daemon for agent "<name>"...`
-- [ ] **PASS** Prints `Daemon installed for agent "<name>" (<status>).`
+- [ ] **PASS** Prints daemon installation confirmation
 
 ```
-ls ~/Library/LaunchAgents/com.blackpaw.leo.*.plist
+ls ~/Library/LaunchAgents/com.blackpaw.leo.plist
 ```
 
 - [ ] **PASS** Plist file exists
 
 ```
-leo chat status --daemon
+leo service status --daemon
 ```
 
 - [ ] **PASS** Prints `Daemon: running (pid <N>)` or similar running status
@@ -336,13 +324,13 @@ leo chat status --daemon
 ### 6.5 Restart daemon
 
 ```
-leo chat restart
+leo service restart
 ```
 
 - [ ] **PASS** Prints restart confirmation
 
 ```
-leo chat status --daemon
+leo service status --daemon
 ```
 
 - [ ] **PASS** Still shows running status
@@ -350,19 +338,19 @@ leo chat status --daemon
 ### 6.6 Stop daemon
 
 ```
-leo chat stop --daemon
+leo service stop --daemon
 ```
 
-- [ ] **PASS** Prints `Daemon removed for agent "<name>".`
+- [ ] **PASS** Prints daemon removed confirmation
 
 ```
-ls ~/Library/LaunchAgents/com.blackpaw.leo.*.plist 2>&1
+ls ~/Library/LaunchAgents/com.blackpaw.leo.plist 2>&1
 ```
 
 - [ ] **PASS** Plist file no longer exists
 
 ```
-leo chat status --daemon
+leo service status --daemon
 ```
 
 - [ ] **PASS** Shows not installed/not running status
@@ -376,12 +364,12 @@ leo chat status --daemon
 ### 7.1 Start daemon for IPC tests
 
 ```
-leo chat start --daemon
+leo service start --daemon
 ```
 
 Wait ~10 seconds for Claude to initialize.
 
-- [ ] **PASS** Daemon is running (`leo chat status --daemon`)
+- [ ] **PASS** Daemon is running (`leo service status --daemon`)
 
 ### 7.2 List tasks via daemon
 
@@ -410,7 +398,7 @@ leo task enable heartbeat
 ### 7.5 Stop daemon after IPC tests
 
 ```
-leo chat stop --daemon
+leo service stop --daemon
 ```
 
 - [ ] **PASS** Daemon removed
@@ -490,25 +478,24 @@ crontab -l | grep LEO
 
 ## 9. Telegram Integration (Interactive Chat)
 
-### 9.1 Foreground chat (brief test)
+### 9.1 Foreground session (brief test)
 
 ```
-leo chat
+leo service start
 ```
 
-- [ ] **PASS** Claude interactive session starts (you see the Claude REPL)
+- [ ] **PASS** Service starts in background
 
 Send a DM to the bot from Telegram:
 
-- [ ] **PASS** Message appears in the Claude session
 - [ ] **PASS** Claude responds, and the response appears in Telegram
 
-Exit the session (Ctrl+C or `/exit`).
+Stop the session (`leo service stop`).
 
 ### 9.2 Daemon mode Telegram (DM)
 
 ```
-leo chat start --daemon
+leo service start --daemon
 ```
 
 Wait 15-20 seconds for Claude to fully initialize.
@@ -538,7 +525,7 @@ leo run heartbeat
 ### 9.5 Clean up
 
 ```
-leo chat stop --daemon
+leo service stop --daemon
 ```
 
 ---
@@ -583,8 +570,8 @@ leo update
 ### 11.1 Daemon auto-restart (KeepAlive)
 
 ```
-leo chat start --daemon
-leo chat status --daemon
+leo service start --daemon
+leo service status --daemon
 ```
 
 Note the PID, then kill it:
@@ -596,21 +583,21 @@ kill <pid>
 Wait 10 seconds:
 
 ```
-leo chat status --daemon
+leo service status --daemon
 ```
 
 - [ ] **PASS** Daemon is running again with a new PID (launchd restarted it)
 
-**Cleanup:** `leo chat stop --daemon`
+**Cleanup:** `leo service stop --daemon`
 
 ### 11.2 Stale PID file
 
 ```
-echo "99999" > ~/.leo/state/chat.pid
-leo chat status
+echo "99999" > ~/.leo/state/service.pid
+leo service status
 ```
 
-- [ ] **PASS** Shows `Chat: stopped` (detects stale PID)
+- [ ] **PASS** Shows `Service: stopped` (detects stale PID)
 
 ### 11.3 Missing prompt file at run time
 
@@ -642,13 +629,13 @@ leo task remove nonexistent-task
 ### 11.6 Double start prevention
 
 ```
-leo chat start
-leo chat start
+leo service start
+leo service start
 ```
 
 - [ ] **PASS** Second invocation prints error: `already running (pid <N>)`
 
-**Cleanup:** `leo chat stop`
+**Cleanup:** `leo service stop`
 
 ---
 
@@ -671,12 +658,12 @@ Cancel the wizard (Ctrl+C) -- this is just to verify detection works.
 
 After a full test run, return the system to a known-good state:
 
-1. Stop the daemon if running: `leo chat stop --daemon`
-2. Stop background chat if running: `leo chat stop`
+1. Stop the daemon if running: `leo service stop --daemon`
+2. Stop background service if running: `leo service stop`
 3. Remove test cron entries: `leo cron remove`
 4. Remove any leftover test tasks: `leo task remove <name>`
 5. Re-install cron for production tasks: `leo cron install`
-6. (Optional) Re-install daemon: `leo chat start --daemon`
+6. (Optional) Re-install daemon: `leo service start --daemon`
 7. Verify final state: `leo validate`
 
 ---
@@ -686,7 +673,7 @@ After a full test run, return the system to a known-good state:
 | Section | Tests | Passed | Failed | Skipped |
 |---------|-------|--------|--------|---------|
 | 1. Version & Validation | 2 | | | |
-| 2. Fresh Install | 6 | | | |
+| 2. Fresh Install | 5 | | | |
 | 3. Configuration | 3 | | | |
 | 4. Task Management | 5 | | | |
 | 5. Task Execution | 3 | | | |
@@ -697,7 +684,7 @@ After a full test run, return the system to a known-good state:
 | 10. Update | 3 | | | |
 | 11. Edge Cases | 6 | | | |
 | 12. Onboard | 1 | | | |
-| **Total** | **49** | | | |
+| **Total** | **48** | | | |
 
 **Date:** _______________
 **Leo version:** _______________

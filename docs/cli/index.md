@@ -1,14 +1,14 @@
 # CLI Reference
 
-Leo provides commands for setting up agents, running tasks, managing cron entries, and chatting over Telegram.
+Leo provides commands for setting up your assistant, running tasks, managing cron entries, and managing the Telegram service.
 
 ## Command Overview
 
 | Command | Description |
 |---------|-------------|
-| [`leo setup`](setup.md) | Interactive setup wizard for a new agent |
+| [`leo setup`](setup.md) | Interactive setup wizard |
 | [`leo onboard`](onboard.md) | Guided first-time setup with prerequisite checks |
-| [`leo chat`](chat.md) | Start an interactive Telegram session |
+| [`leo service`](service.md) | Manage the interactive Telegram session |
 | [`leo run <task>`](run.md) | Run a scheduled task once |
 | [`leo cron`](cron.md) | Manage cron entries |
 | [`leo task`](task.md) | Manage scheduled tasks |

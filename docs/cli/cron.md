@@ -14,30 +14,26 @@ leo cron list       # show installed schedules
 
 ### `leo cron install`
 
-Reads all enabled tasks from your config and writes them to the system crontab. Each agent gets a marker-delimited block:
+Reads all enabled tasks from your config and writes them to the system crontab using a marker-delimited block:
 
 ```cron
-# === LEO:leo — DO NOT EDIT ===
-# leo:leo:heartbeat
+# === LEO — DO NOT EDIT ===
+# leo:heartbeat
 0,30 7-22 * * * leo run heartbeat --config /path/to/leo.yaml >> /path/to/state/heartbeat.log 2>&1
-# leo:leo:daily-news-briefing
+# leo:daily-news-briefing
 0 7 * * * leo run daily-news-briefing --config /path/to/leo.yaml >> /path/to/state/daily-news-briefing.log 2>&1
-# === END LEO:leo ===
+# === END LEO ===
 ```
 
 Running `install` again replaces the existing block — it's safe to re-run after config changes.
 
 ### `leo cron remove`
 
-Removes all Leo-managed cron entries for the current agent from the system crontab. Other cron entries and other agents' blocks are left untouched.
+Removes all Leo-managed cron entries from the system crontab. Other cron entries are left untouched.
 
 ### `leo cron list`
 
 Displays the current Leo cron block from the system crontab. Shows nothing if no entries are installed.
-
-## Multiple Agents
-
-Leo uses marker comments (`# === LEO:<agent> ===`) to delimit each agent's block. Multiple agents can coexist in a single crontab without interfering with each other.
 
 ## Workflow
 

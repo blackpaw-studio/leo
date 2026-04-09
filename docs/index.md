@@ -5,21 +5,21 @@ hide:
 
 # Leo
 
-**Claude Code agents as persistent, proactive personal assistants**
+**Manage a persistent Claude Code assistant**
 
-Leo is a CLI tool that sets up and manages a single [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agent as a persistent, mobile-accessible personal assistant. It handles workspace scaffolding, persistent memory, Telegram integration, and cron scheduling — giving your agent a personality, continuity across sessions, and the ability to work on a schedule or respond to messages from your phone.
+Leo is a CLI tool that sets up and manages a persistent, mobile-accessible [Claude Code](https://docs.anthropic.com/en/docs/claude-code) personal assistant. It handles workspace scaffolding, persistent memory, Telegram integration, and cron scheduling — giving your assistant continuity across sessions and the ability to work on a schedule or respond to messages from your phone.
 
-Leo is not a multi-agent orchestration framework. It manages one agent, one workspace, one config file.
+Leo is not a multi-agent orchestration framework. It manages one workspace, one config file.
 
 ---
 
 <div class="grid cards" markdown>
 
--   :material-chat-outline:{ .lg .middle } **Interactive Chat**
+-   :material-chat-outline:{ .lg .middle } **Interactive Service**
 
     ---
 
-    Start a long-running Telegram session where your agent listens and responds to messages in real time via the official channel plugin.
+    Start a long-running Telegram session where your assistant listens and responds to messages in real time via the official channel plugin.
 
     [:octicons-arrow-right-24: Start chatting](guides/telegram-setup.md)
 
@@ -31,19 +31,11 @@ Leo is not a multi-agent orchestration framework. It manages one agent, one work
 
     [:octicons-arrow-right-24: Set up scheduling](guides/scheduling.md)
 
--   :material-account-outline:{ .lg .middle } **Agent Templates**
-
-    ---
-
-    Choose from built-in personality templates — chief-of-staff, dev-assistant, or skeleton — and customize from there.
-
-    [:octicons-arrow-right-24: Browse templates](guides/agent-templates.md)
-
 -   :material-file-cog-outline:{ .lg .middle } **Configuration**
 
     ---
 
-    A single `leo.yaml` controls your agent, Telegram credentials, defaults, and task schedules. Full field-by-field reference included.
+    A single `leo.yaml` controls your assistant, Telegram credentials, defaults, and task schedules. Full field-by-field reference included.
 
     [:octicons-arrow-right-24: Config reference](configuration/config-reference.md)
 
@@ -63,7 +55,7 @@ User (Telegram) --> Telegram Bot API --> claude (channel plugin) --> Agent
 User (Telegram) <-- Telegram Bot API <-- claude (channel plugin) <----+
 ```
 
-`leo chat` starts a long-running Claude session with the official Telegram channel plugin. Messages flow through Telegram in both directions.
+`leo service start` starts a long-running Claude session with the official Telegram channel plugin. Messages flow through Telegram in both directions.
 
 ### Scheduled Tasks
 

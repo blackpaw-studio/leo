@@ -1,15 +1,15 @@
 # Background Mode
 
-For production use, you'll want the Telegram chat session to stay alive and restart automatically if it crashes. Leo offers two options.
+For production use, you'll want the Telegram session to stay alive and restart automatically if it crashes. Leo offers two options.
 
 ## Simple Background Mode
 
 Spawns a supervised process with automatic restart and exponential backoff. No OS-level installation required.
 
 ```bash
-leo chat start            # start in background
-leo chat status           # check if running
-leo chat stop             # stop the session
+leo service start            # start in background
+leo service status           # check if running
+leo service stop             # stop the session
 ```
 
 **How it works:**
@@ -18,8 +18,8 @@ leo chat stop             # stop the session
 - If Claude crashes, Leo waits and restarts automatically
 - Backoff starts at 5 seconds, doubles on each consecutive failure, caps at 60 seconds
 - Resets after a successful run period
-- PID is written to `<workspace>/state/chat.pid`
-- Logs go to `<workspace>/state/chat.log`
+- PID is written to `<workspace>/state/service.pid`
+- Logs go to `<workspace>/state/service.log`
 
 **Pros:**
 
@@ -37,14 +37,14 @@ leo chat stop             # stop the session
 Installs an OS-level service for supervision that persists across reboots.
 
 ```bash
-leo chat start --daemon   # install and start as OS service
-leo chat status --daemon  # check daemon status
-leo chat stop --daemon    # uninstall OS service
+leo service start --daemon   # install and start as OS service
+leo service status --daemon  # check daemon status
+leo service stop --daemon    # uninstall OS service
 ```
 
 ### macOS (launchd)
 
-Leo creates a launchd plist at `~/Library/LaunchAgents/com.blackpaw.leo.<name>.plist` and loads it. The service:
+Leo creates a launchd plist at `~/Library/LaunchAgents/com.blackpaw.leo.plist` and loads it. The service:
 
 - Starts automatically on login
 - Restarts automatically on crash
@@ -52,7 +52,7 @@ Leo creates a launchd plist at `~/Library/LaunchAgents/com.blackpaw.leo.<name>.p
 
 ### Linux (systemd)
 
-Leo creates a systemd user unit at `~/.config/systemd/user/leo-<name>.service` and enables it. The service:
+Leo creates a systemd user unit at `~/.config/systemd/user/leo.service` and enables it. The service:
 
 - Starts automatically on login
 - Restarts automatically on crash (with 5-second delay)
@@ -67,7 +67,7 @@ Leo creates a systemd user unit at `~/.config/systemd/user/leo-<name>.service` a
 **Cons:**
 
 - Requires initial installation step
-- Environment variable changes require reinstalling (`leo chat start --daemon` again)
+- Environment variable changes require reinstalling (`leo service start --daemon` again)
 
 ## Choosing Between Modes
 
@@ -88,7 +88,13 @@ Leo creates a systemd user unit at `~/.config/systemd/user/leo-<name>.service` a
 Both modes write to the same log file:
 
 ```bash
-tail -f ~/leo/state/chat.log
+tail -f ~/leo/state/service.log
+```
+
+Or use the built-in logs command:
+
+```bash
+leo service logs -f
 ```
 
 ## Environment Variables
@@ -96,11 +102,11 @@ tail -f ~/leo/state/chat.log
 Daemon mode captures your current environment variables at installation time. If you update variables like `ANTHROPIC_API_KEY`, reinstall the daemon:
 
 ```bash
-leo chat stop --daemon
-leo chat start --daemon
+leo service stop --daemon
+leo service start --daemon
 ```
 
 ## See Also
 
-- [`leo chat`](../cli/chat.md) — full command reference
+- [`leo service`](../cli/service.md) — full command reference
 - [Telegram Setup](telegram-setup.md) — configuring your bot

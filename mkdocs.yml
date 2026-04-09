@@ -1,6 +1,6 @@
 site_name: Leo
 site_url: https://blackpaw-studio.github.io/leo/
-site_description: Claude Code agents as persistent, proactive personal assistants
+site_description: Manage a persistent Claude Code assistant
 site_author: Blackpaw Studio
 repo_url: https://github.com/blackpaw-studio/leo
 repo_name: blackpaw-studio/leo
@@ -87,7 +87,7 @@ nav:
       - cli/index.md
       - leo setup: cli/setup.md
       - leo onboard: cli/onboard.md
-      - leo chat: cli/chat.md
+      - leo service: cli/service.md
       - leo run: cli/run.md
       - leo cron: cli/cron.md
       - leo task: cli/task.md
@@ -96,7 +96,6 @@ nav:
   - Guides:
       - Telegram Setup: guides/telegram-setup.md
       - Scheduling: guides/scheduling.md
-      - Agent Templates: guides/agent-templates.md
       - Background Mode: guides/background-mode.md
       - Writing Tasks: guides/writing-tasks.md
   - Development:
