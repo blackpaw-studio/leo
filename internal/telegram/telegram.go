@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"net/url"
+	"os"
+	"sort"
 	"time"
 )
 
@@ -129,11 +130,9 @@ func FetchTopics(ctx context.Context, botToken, groupID string) ([]Topic, error)
 }
 
 func sortTopics(topics []Topic) {
-	for i := 1; i < len(topics); i++ {
-		for j := i; j > 0 && topics[j].ID < topics[j-1].ID; j-- {
-			topics[j], topics[j-1] = topics[j-1], topics[j]
-		}
-	}
+	sort.Slice(topics, func(i, j int) bool {
+		return topics[i].ID < topics[j].ID
+	})
 }
 
 type topicMessage struct {
@@ -154,7 +153,7 @@ func WriteTopicCache(path string, topics []Topic) error {
 	if err != nil {
 		return fmt.Errorf("marshaling topics: %w", err)
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }
 
 // ReadTopicCache reads topics from a JSON cache file.

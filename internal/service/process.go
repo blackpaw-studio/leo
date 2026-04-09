@@ -54,19 +54,24 @@ func Start(sc ServiceConfig) error {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
 
+	// Rotate existing log before starting
+	if err := RotateLog(sc.LogPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: log rotation failed: %v\n", err)
+	}
+
 	// Open log file
 	logFile, err := openLogFile(sc.LogPath)
 	if err != nil {
 		return fmt.Errorf("opening log file: %w", err)
 	}
+	defer logFile.Close()
 
 	pid, err := startProcess(sc.LeoPath, sc.ConfigPath, sc.WorkDir, logFile)
-	logFile.Close()
 	if err != nil {
 		return fmt.Errorf("starting process: %w", err)
 	}
 
-	if err := writeFile(pidFile, []byte(strconv.Itoa(pid)), 0644); err != nil {
+	if err := writeFile(pidFile, []byte(strconv.Itoa(pid)), 0600); err != nil {
 		return fmt.Errorf("writing pid file: %w", err)
 	}
 
@@ -351,7 +356,7 @@ func cleanupOrphanedPlugins() {
 }
 
 func defaultStartProcess(leoPath, configPath, workDir string, logFile *os.File) (int, error) {
-	cmd := exec.Command(leoPath, "chat", "--supervised", "--config", configPath)
+	cmd := exec.Command(leoPath, "service", "--supervised", "--config", configPath)
 	cmd.Dir = workDir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

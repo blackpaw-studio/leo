@@ -441,6 +441,11 @@ func TestMCPConfigPath(t *testing.T) {
 }
 
 func TestFindConfig(t *testing.T) {
+	// Override default workspace so the fallback doesn't find a real leo.yaml
+	origFn := defaultWorkspaceFn
+	defaultWorkspaceFn = func() string { return "" }
+	defer func() { defaultWorkspaceFn = origFn }()
+
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "a", "b", "c")
 	os.MkdirAll(subdir, 0755)

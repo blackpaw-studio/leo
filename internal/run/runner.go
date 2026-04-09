@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -140,6 +141,16 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		fmt.Fprintf(os.Stderr, "warning: failed to write log: %v\n", logErr)
 	}
 
+	// Record execution history
+	exitCode := 0
+	if execErr != nil {
+		exitCode = 1
+	}
+	hist := history.NewStore(cfg.Agent.Workspace)
+	if histErr := hist.Record(taskName, exitCode); histErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
+	}
+
 	if execErr != nil {
 		return fmt.Errorf("claude exited with error: %w\nOutput: %s", execErr, string(output))
 	}
@@ -175,6 +186,20 @@ func parseClaudeOutput(output []byte) claudeResult {
 
 func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) {
 	promptPath := filepath.Join(cfg.Agent.Workspace, task.PromptFile)
+
+	// Prevent path traversal: ensure the resolved path is within the workspace.
+	absPrompt, err := filepath.Abs(promptPath)
+	if err != nil {
+		return "", fmt.Errorf("resolving prompt path: %w", err)
+	}
+	absWorkspace, err := filepath.Abs(cfg.Agent.Workspace)
+	if err != nil {
+		return "", fmt.Errorf("resolving workspace path: %w", err)
+	}
+	if !strings.HasPrefix(absPrompt, absWorkspace+string(filepath.Separator)) {
+		return "", fmt.Errorf("prompt file %q escapes workspace", task.PromptFile)
+	}
+
 	promptData, err := os.ReadFile(promptPath)
 	if err != nil {
 		return "", fmt.Errorf("reading prompt file %s: %w", promptPath, err)

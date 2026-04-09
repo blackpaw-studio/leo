@@ -101,6 +101,30 @@ func TestAssemblePrompt(t *testing.T) {
 	}
 }
 
+func TestAssemblePromptPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := &config.Config{
+		Agent: config.AgentConfig{
+			Workspace: dir,
+		},
+		Telegram: config.TelegramConfig{
+			BotToken: "token",
+			ChatID:   "123",
+		},
+	}
+
+	task := config.TaskConfig{PromptFile: "../../../etc/passwd"}
+
+	_, err := assemblePrompt(cfg, task)
+	if err == nil {
+		t.Fatal("expected error for path traversal")
+	}
+	if !strings.Contains(err.Error(), "escapes workspace") {
+		t.Errorf("error = %q, want to contain 'escapes workspace'", err.Error())
+	}
+}
+
 func TestAssemblePromptMissingFile(t *testing.T) {
 	dir := t.TempDir()
 

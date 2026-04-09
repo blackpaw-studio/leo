@@ -85,7 +85,10 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 	}
 
 	if chatID != "" {
-		allowFrom, _ := accessDoc["allowFrom"].([]any)
+		allowFrom, ok := accessDoc["allowFrom"].([]any)
+		if !ok {
+			allowFrom = []any{}
+		}
 		found := false
 		for _, v := range allowFrom {
 			if v == chatID {
@@ -99,8 +102,8 @@ func installTelegramPlugin(botToken, chatID, groupID, workspace string) error {
 		accessDoc["allowFrom"] = allowFrom
 	}
 	if groupID != "" {
-		groups, _ := accessDoc["groups"].(map[string]any)
-		if groups == nil {
+		groups, ok := accessDoc["groups"].(map[string]any)
+		if !ok || groups == nil {
 			groups = make(map[string]any)
 		}
 		if _, exists := groups[groupID]; !exists {

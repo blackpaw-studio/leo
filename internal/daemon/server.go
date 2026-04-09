@@ -84,7 +84,11 @@ func (s *Server) Start() error {
 	}
 	s.scheduler.Start()
 
-	go s.httpServer.Serve(ln) //nolint:errcheck
+	go func() {
+		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "daemon HTTP server error: %v\n", err)
+		}
+	}()
 
 	return nil
 }

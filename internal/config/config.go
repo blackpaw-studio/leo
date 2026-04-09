@@ -298,8 +298,15 @@ func Save(path string, cfg *Config) error {
 
 // FindConfig searches for leo.yaml starting from the given directory and walking up.
 // If dir is empty, starts from the current working directory.
+// defaultWorkspaceFn is a testability seam for DefaultWorkspace.
+var defaultWorkspaceFn = defaultWorkspaceImpl
+
 // DefaultWorkspace returns the default workspace path (~/.leo).
 func DefaultWorkspace() string {
+	return defaultWorkspaceFn()
+}
+
+func defaultWorkspaceImpl() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
