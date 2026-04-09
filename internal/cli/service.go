@@ -354,6 +354,7 @@ func newServiceLogsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "logs [process-name]",
 		Short:             "Show service or process logs",
+		Long:              "Show the main service log, or filter for a specific process by name.",
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeProcessNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -362,14 +363,13 @@ func newServiceLogsCmd() *cobra.Command {
 				return err
 			}
 
-			var logPath string
-			if len(args) > 0 {
-				logPath = filepath.Join(cfg.HomePath, "state", args[0]+".log")
-			} else {
-				logPath = service.LogPathFor(cfg.HomePath)
-			}
+			logPath := service.LogPathFor(cfg.HomePath)
 			if _, err := os.Stat(logPath); err != nil {
 				return fmt.Errorf("no log file at %s", logPath)
+			}
+
+			if len(args) > 0 {
+				return grepLog(logPath, args[0], tail, follow)
 			}
 
 			tailArgs := []string{"-n", fmt.Sprintf("%d", tail)}
