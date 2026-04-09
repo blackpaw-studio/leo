@@ -539,9 +539,15 @@ func TestStripResumeArg(t *testing.T) {
 	}
 }
 
-func TestClearSessionStore(t *testing.T) {
+func TestClearProcessSession(t *testing.T) {
+	origRead := readFile
 	origWrite := writeFile
-	defer func() { writeFile = origWrite }()
+	defer func() { readFile = origRead; writeFile = origWrite }()
+
+	// Simulate existing sessions.json with two entries
+	readFile = func(name string) ([]byte, error) {
+		return []byte(`{"process:assistant":"sid1","process:researcher":"sid2"}`), nil
+	}
 
 	var writtenPath string
 	var writtenData []byte
@@ -551,14 +557,33 @@ func TestClearSessionStore(t *testing.T) {
 		return nil
 	}
 
-	clearSessionStore("/workspace")
+	clearProcessSession("/home/.leo", "assistant")
 
-	wantPath := filepath.Join("/workspace", "state", "sessions.json")
+	wantPath := filepath.Join("/home/.leo", "state", "sessions.json")
 	if writtenPath != wantPath {
 		t.Errorf("path = %q, want %q", writtenPath, wantPath)
 	}
-	if string(writtenData) != "{}" {
-		t.Errorf("data = %q, want {}", string(writtenData))
+	// Should only remove process:assistant, keeping process:researcher
+	if string(writtenData) != `{"process:researcher":"sid2"}` {
+		t.Errorf("data = %q, want researcher session preserved", string(writtenData))
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"simple", "'simple'"},
+		{"with spaces", "'with spaces'"},
+		{"it's", "'it'\\''s'"},
+		{"$(evil)", "'$(evil)'"},
+		{"; rm -rf /", "'; rm -rf /'"},
+	}
+	for _, tt := range tests {
+		if got := shellQuote(tt.input); got != tt.want {
+			t.Errorf("shellQuote(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }
 

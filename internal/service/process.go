@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -279,11 +280,17 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 		sv.setState(spec.Name, "running")
 
-		claudeCmd := strings.Join(append([]string{claudePath}, currentArgs...), " ")
+		// Shell-quote each token to prevent injection via config values
+		quoted := make([]string, 0, len(currentArgs)+1)
+		quoted = append(quoted, shellQuote(claudePath))
+		for _, arg := range currentArgs {
+			quoted = append(quoted, shellQuote(arg))
+		}
+		claudeCmd := strings.Join(quoted, " ")
 
 		// Propagate PATH into the tmux session
 		if p := os.Getenv("PATH"); p != "" {
-			claudeCmd = fmt.Sprintf("export PATH=%q; %s", p, claudeCmd)
+			claudeCmd = fmt.Sprintf("export PATH=%s; %s", shellQuote(p), claudeCmd)
 		}
 
 		// Kill any stale tmux session with our name
@@ -365,10 +372,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		sv.setState(spec.Name, "restarting")
 		sv.incrementRestarts(spec.Name)
 
-		// If claude exited very quickly, strip --resume and clear session
+		// If claude exited very quickly, strip --resume and clear this process's session
 		if elapsed < 15*time.Second {
 			currentArgs = stripResumeArg(currentArgs)
-			clearSessionStore(homePath)
+			clearProcessSession(homePath, spec.Name)
 			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session — retrying fresh\n", spec.Name, elapsed.Seconds())
 		} else {
 			fmt.Fprintf(os.Stderr, "[%s] claude exited after %s, restarting in %s\n", spec.Name, elapsed.Round(time.Second), backoff)
@@ -409,10 +416,29 @@ func stripResumeArg(args []string) []string {
 	return result
 }
 
-// clearSessionStore removes the stored session so the next launch creates a fresh one.
-func clearSessionStore(homePath string) {
+// clearProcessSession removes a single process's stored session so the next launch starts fresh.
+// Only affects the named process; other processes' sessions are preserved.
+func clearProcessSession(homePath, processName string) {
 	sessFile := filepath.Join(homePath, "state", "sessions.json")
-	_ = writeFile(sessFile, []byte("{}"), 0600)
+	data, err := readFile(sessFile)
+	if err != nil {
+		return
+	}
+	var store map[string]json.RawMessage
+	if json.Unmarshal(data, &store) != nil {
+		return
+	}
+	delete(store, "process:"+processName)
+	updated, err := json.Marshal(store)
+	if err != nil {
+		return
+	}
+	_ = writeFile(sessFile, updated, 0600)
+}
+
+// shellQuote wraps a string in single quotes with proper escaping.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // cleanupOrphanedPlugins removes stale telegram plugin lock files.
