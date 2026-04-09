@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,11 +23,12 @@ var supervised bool
 
 func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "service [process-name]",
-		Short: "Start a persistent claude session",
-		Long:  "Start a long-running claude session for a configured process. Defaults to the first enabled process.",
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runService,
+		Use:               "service [process-name]",
+		Short:             "Start a persistent claude session",
+		Long:              "Start a long-running claude session for a configured process. Defaults to the first enabled process.",
+		Args:              cobra.MaximumNArgs(1),
+		RunE:              runService,
+		ValidArgsFunction: completeProcessNames,
 	}
 
 	cmd.Flags().BoolVar(&supervised, "supervised", false, "run in supervised mode with restart loop (used internally)")
@@ -40,6 +40,7 @@ func newServiceCmd() *cobra.Command {
 		newServiceRestartCmd(),
 		newServiceStatusCmd(),
 		newServiceLogsCmd(),
+		newServiceReloadCmd(),
 	)
 
 	return cmd
@@ -337,45 +338,11 @@ func newServiceRestartCmd() *cobra.Command {
 
 func newServiceStatusCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Show service status",
+		Use:    "status",
+		Short:  "Show service status (alias for 'leo status')",
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
-			if err != nil {
-				return err
-			}
-
-			// Daemon (launchd/systemd)
-			daemonStatus, _ := service.DaemonStatus()
-			fmt.Printf("Daemon:  %s\n", daemonStatus)
-
-			// Process supervisor
-			svcStatus, _ := service.Status(cfg.HomePath)
-			fmt.Printf("Service: %s\n", svcStatus)
-
-			// Per-process runtime state from daemon
-			if daemon.IsRunning(cfg.HomePath) {
-				resp, err := daemon.Send(cfg.HomePath, "GET", "/process/list", nil)
-				if err == nil && resp.OK {
-					var states map[string]daemon.ProcessStateInfo
-					if json.Unmarshal(resp.Data, &states) == nil && len(states) > 0 {
-						fmt.Println("Processes:")
-						for name, state := range states {
-							uptime := ""
-							if !state.StartedAt.IsZero() {
-								uptime = fmt.Sprintf("  uptime %s", time.Since(state.StartedAt).Round(time.Second))
-							}
-							restarts := ""
-							if state.Restarts > 0 {
-								restarts = fmt.Sprintf("  %d restart(s)", state.Restarts)
-							}
-							fmt.Printf("  %-20s %s%s%s\n", name, state.Status, uptime, restarts)
-						}
-					}
-				}
-			}
-
-			return nil
+			return runStatus()
 		},
 	}
 }
@@ -385,9 +352,10 @@ func newServiceLogsCmd() *cobra.Command {
 	var follow bool
 
 	cmd := &cobra.Command{
-		Use:   "logs [process-name]",
-		Short: "Show service or process logs",
-		Args:  cobra.MaximumNArgs(1),
+		Use:               "logs [process-name]",
+		Short:             "Show service or process logs",
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeProcessNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -421,6 +389,35 @@ func newServiceLogsCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow log output")
 
 	return cmd
+}
+
+func newServiceReloadCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reload",
+		Short: "Reload config without restarting",
+		Long:  "Tell the daemon to reload leo.yaml and update task schedules.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			if !daemon.IsRunning(cfg.HomePath) {
+				return fmt.Errorf("daemon is not running")
+			}
+
+			resp, err := daemon.Send(cfg.HomePath, "POST", "/config/reload", nil)
+			if err != nil {
+				return fmt.Errorf("sending reload: %w", err)
+			}
+			if !resp.OK {
+				return fmt.Errorf("reload failed: %s", resp.Error)
+			}
+
+			success.Println("Config reloaded.")
+			return nil
+		},
+	}
 }
 
 func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
@@ -524,4 +521,21 @@ func syncPluginEnv(botToken string) {
 	if err := os.WriteFile(envFile, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: cannot write telegram plugin env: %v\n", err)
 	}
+}
+
+func completeProcessNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	var names []string
+	for name, proc := range cfg.Processes {
+		if proc.Enabled {
+			names = append(names, name)
+		}
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
 }

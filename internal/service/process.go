@@ -249,6 +249,13 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		return err
 	}
 
+	// Validate process workspaces before starting
+	for _, proc := range processes {
+		if _, err := os.Stat(proc.WorkDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: [%s] workspace %s does not exist\n", proc.Name, proc.WorkDir)
+		}
+	}
+
 	var wg sync.WaitGroup
 	for _, proc := range processes {
 		wg.Add(1)

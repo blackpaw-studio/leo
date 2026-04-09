@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -16,7 +17,7 @@ func newConfigCmd() *cobra.Command {
 		Short: "Manage leo configuration",
 	}
 
-	cmd.AddCommand(newConfigShowCmd())
+	cmd.AddCommand(newConfigShowCmd(), newConfigEditCmd())
 
 	return cmd
 }
@@ -78,4 +79,34 @@ func newConfigShowCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&raw, "raw", false, "show raw file contents without applying defaults")
 
 	return cmd
+}
+
+func newConfigEditCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "edit",
+		Short: "Open leo.yaml in your editor",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := cfgFile
+			if path == "" {
+				p, err := config.FindConfig("")
+				if err != nil {
+					// Fall back to default location
+					path = filepath.Join(config.DefaultHome(), "leo.yaml")
+				} else {
+					path = p
+				}
+			}
+
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = "vi"
+			}
+
+			editorCmd := exec.Command(editor, path)
+			editorCmd.Stdin = os.Stdin
+			editorCmd.Stdout = os.Stdout
+			editorCmd.Stderr = os.Stderr
+			return editorCmd.Run()
+		},
+	}
 }

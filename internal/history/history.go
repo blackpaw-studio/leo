@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const maxHistoryPerTask = 10
+
 // Entry records the result of a single task execution.
 type Entry struct {
 	Task     string    `json:"task"`
@@ -27,47 +29,75 @@ func NewStore(workspace string) *Store {
 	}
 }
 
-// Record saves a task execution result.
+// Record saves a task execution result, prepending to the list and trimming
+// to maxHistoryPerTask entries.
 func (s *Store) Record(task string, exitCode int) error {
 	entries := s.load()
 
-	entries[task] = Entry{
+	entry := Entry{
 		Task:     task,
 		ExitCode: exitCode,
 		RunAt:    time.Now(),
 	}
 
+	// Prepend new entry
+	list := append([]Entry{entry}, entries[task]...)
+	if len(list) > maxHistoryPerTask {
+		list = list[:maxHistoryPerTask]
+	}
+	entries[task] = list
+
 	return s.save(entries)
 }
 
-// Get returns the last execution entry for a task, or nil if not found.
+// Get returns the most recent execution entry for a task, or nil if not found.
 func (s *Store) Get(task string) *Entry {
 	entries := s.load()
-	if e, ok := entries[task]; ok {
+	if list, ok := entries[task]; ok && len(list) > 0 {
+		e := list[0]
 		return &e
 	}
 	return nil
 }
 
+// GetAll returns all stored entries for a task (most recent first).
+func (s *Store) GetAll(task string) []Entry {
+	entries := s.load()
+	return entries[task]
+}
+
 // All returns all task history entries.
-func (s *Store) All() map[string]Entry {
+func (s *Store) All() map[string][]Entry {
 	return s.load()
 }
 
-func (s *Store) load() map[string]Entry {
-	entries := make(map[string]Entry)
+func (s *Store) load() map[string][]Entry {
+	entries := make(map[string][]Entry)
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		return entries
 	}
-	if err := json.Unmarshal(data, &entries); err != nil {
+
+	// Try new format first: map[string][]Entry
+	if err := json.Unmarshal(data, &entries); err == nil {
+		return entries
+	}
+
+	// Fall back to old format: map[string]Entry (single entry per task)
+	old := make(map[string]Entry)
+	if err := json.Unmarshal(data, &old); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: corrupt task history at %s: %v\n", s.path, err)
-		return make(map[string]Entry)
+		return make(map[string][]Entry)
+	}
+
+	// Migrate old format to new
+	for task, e := range old {
+		entries[task] = []Entry{e}
 	}
 	return entries
 }
 
-func (s *Store) save(entries map[string]Entry) error {
+func (s *Store) save(entries map[string][]Entry) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0750); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}

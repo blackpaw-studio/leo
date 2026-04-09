@@ -25,6 +25,7 @@ func newTaskCmd() *cobra.Command {
 		newTaskRemoveCmd(),
 		newTaskEnableCmd(),
 		newTaskDisableCmd(),
+		newTaskHistoryCmd(),
 	)
 
 	return cmd
@@ -153,9 +154,10 @@ func newTaskAddCmd() *cobra.Command {
 
 func newTaskRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove <name>",
-		Short: "Remove a task from the config",
-		Args:  cobra.ExactArgs(1),
+		Use:               "remove <name>",
+		Short:             "Remove a task from the config",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -200,9 +202,10 @@ func newTaskRemoveCmd() *cobra.Command {
 
 func newTaskEnableCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "enable <name>",
-		Short: "Enable a task",
-		Args:  cobra.ExactArgs(1),
+		Use:               "enable <name>",
+		Short:             "Enable a task",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return setTaskEnabled(args[0], true)
 		},
@@ -211,9 +214,10 @@ func newTaskEnableCmd() *cobra.Command {
 
 func newTaskDisableCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "disable <name>",
-		Short: "Disable a task",
-		Args:  cobra.ExactArgs(1),
+		Use:               "disable <name>",
+		Short:             "Disable a task",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return setTaskEnabled(args[0], false)
 		},
@@ -270,6 +274,61 @@ func setTaskEnabled(name string, enabled bool) error {
 	}
 	success.Printf("Task %q %s.\n", name, action)
 	return nil
+}
+
+func newTaskHistoryCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "history [task-name]",
+		Short: "Show task execution history",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			hist := history.NewStore(cfg.HomePath)
+
+			if len(args) > 0 {
+				taskName := args[0]
+				entries := hist.GetAll(taskName)
+				if len(entries) == 0 {
+					info.Printf("No history for task %q\n", taskName)
+					return nil
+				}
+				fmt.Printf("History for %q (last %d runs):\n\n", taskName, len(entries))
+				for _, e := range entries {
+					result := "ok"
+					if e.ExitCode != 0 {
+						result = fmt.Sprintf("FAIL (exit %d)", e.ExitCode)
+					}
+					fmt.Printf("  %s  %s\n", e.RunAt.Local().Format("2006-01-02 15:04:05"), result)
+				}
+				return nil
+			}
+
+			all := hist.All()
+			if len(all) == 0 {
+				info.Println("No task history.")
+				return nil
+			}
+
+			fmt.Printf("  %-20s %-5s %s\n", "TASK", "RUNS", "LAST RUN")
+			for task, entries := range all {
+				if len(entries) == 0 {
+					continue
+				}
+				last := entries[0]
+				result := "ok"
+				if last.ExitCode != 0 {
+					result = fmt.Sprintf("FAIL (exit %d)", last.ExitCode)
+				}
+				fmt.Printf("  %-20s %-5d %s %s\n", task, len(entries),
+					last.RunAt.Local().Format("Jan 02 15:04"), result)
+			}
+			return nil
+		},
+	}
 }
 
 func configPath() (string, error) {

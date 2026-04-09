@@ -63,6 +63,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("POST /task/disable", s.handleTaskDisable)
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
 	mux.HandleFunc("GET /process/list", s.handleProcessList)
+	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,

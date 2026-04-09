@@ -13,10 +13,11 @@ func newRunCmd() *cobra.Command {
 	var dryRun bool
 
 	cmd := &cobra.Command{
-		Use:   "run <task>",
-		Short: "Run a scheduled task once",
-		Long:  "Execute a scheduled task. Used by cron or for manual testing.",
-		Args:  cobra.ExactArgs(1),
+		Use:               "run <task>",
+		Short:             "Run a scheduled task once",
+		Long:              "Execute a scheduled task. Used by cron or for manual testing.",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -59,4 +60,19 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show assembled prompt and args without executing")
 
 	return cmd
+}
+
+func completeTaskNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	var names []string
+	for name := range cfg.Tasks {
+		names = append(names, name)
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
 }
