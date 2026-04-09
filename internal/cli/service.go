@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/telegram"
@@ -334,9 +336,7 @@ func newServiceRestartCmd() *cobra.Command {
 }
 
 func newServiceStatusCmd() *cobra.Command {
-	var daemon bool
-
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "status",
 		Short: "Show service status",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -345,27 +345,39 @@ func newServiceStatusCmd() *cobra.Command {
 				return err
 			}
 
-			if daemon {
-				status, err := service.DaemonStatus()
-				if err != nil {
-					return err
+			// Daemon (launchd/systemd)
+			daemonStatus, _ := service.DaemonStatus()
+			fmt.Printf("Daemon:  %s\n", daemonStatus)
+
+			// Process supervisor
+			svcStatus, _ := service.Status(cfg.HomePath)
+			fmt.Printf("Service: %s\n", svcStatus)
+
+			// Per-process runtime state from daemon
+			if daemon.IsRunning(cfg.HomePath) {
+				resp, err := daemon.Send(cfg.HomePath, "GET", "/process/list", nil)
+				if err == nil && resp.OK {
+					var states map[string]daemon.ProcessStateInfo
+					if json.Unmarshal(resp.Data, &states) == nil && len(states) > 0 {
+						fmt.Println("Processes:")
+						for name, state := range states {
+							uptime := ""
+							if !state.StartedAt.IsZero() {
+								uptime = fmt.Sprintf("  uptime %s", time.Since(state.StartedAt).Round(time.Second))
+							}
+							restarts := ""
+							if state.Restarts > 0 {
+								restarts = fmt.Sprintf("  %d restart(s)", state.Restarts)
+							}
+							fmt.Printf("  %-20s %s%s%s\n", name, state.Status, uptime, restarts)
+						}
+					}
 				}
-				fmt.Printf("Daemon: %s\n", status)
-				return nil
 			}
 
-			status, err := service.Status(cfg.HomePath)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Service: %s\n", status)
 			return nil
 		},
 	}
-
-	cmd.Flags().BoolVar(&daemon, "daemon", false, "check OS service status (launchd/systemd)")
-
-	return cmd
 }
 
 func newServiceLogsCmd() *cobra.Command {
