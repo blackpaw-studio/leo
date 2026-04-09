@@ -72,7 +72,7 @@ func newUpdateCmd() *cobra.Command {
 			}
 
 			info.Println("Refreshing workspace files...")
-			written, err := update.RefreshWorkspace(cfg.Agent.Workspace)
+			written, err := update.RefreshWorkspace(cfg.DefaultWorkspace())
 			if err != nil {
 				return fmt.Errorf("refreshing workspace: %w", err)
 			}
@@ -83,7 +83,7 @@ func newUpdateCmd() *cobra.Command {
 			success.Printf("Refreshed %d file(s)\n", len(written))
 
 			// Offer to restart daemon if it's running
-			if daemon.IsRunning(cfg.Agent.Workspace) {
+			if daemon.IsRunning(cfg.HomePath) {
 				reader := bufio.NewReader(os.Stdin)
 				if prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
 					info.Println("Restarting daemon...")

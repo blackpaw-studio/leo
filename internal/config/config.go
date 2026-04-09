@@ -12,13 +12,8 @@ import (
 
 // Default configuration values used across the codebase.
 const (
-	DefaultModel             = "sonnet"
-	DefaultMaxTurns          = 15
-	DefaultTimezone          = "America/New_York"
-	DefaultHeartbeatInterval = "30m"
-	DefaultHeartbeatStart    = 7
-	DefaultHeartbeatEnd      = 22
-	DefaultHeartbeatFile     = "HEARTBEAT.md"
+	DefaultModel    = "sonnet"
+	DefaultMaxTurns = 15
 )
 
 var validModels = map[string]bool{
@@ -28,16 +23,13 @@ var validModels = map[string]bool{
 }
 
 type Config struct {
-	Agent     AgentConfig           `yaml:"agent"`
-	Telegram  TelegramConfig        `yaml:"telegram"`
-	Defaults  DefaultsConfig        `yaml:"defaults"`
-	Heartbeat HeartbeatConfig       `yaml:"heartbeat"`
-	Tasks     map[string]TaskConfig `yaml:"tasks"`
-}
+	Telegram  TelegramConfig           `yaml:"telegram"`
+	Defaults  DefaultsConfig           `yaml:"defaults"`
+	Processes map[string]ProcessConfig `yaml:"processes"`
+	Tasks     map[string]TaskConfig    `yaml:"tasks"`
 
-type AgentConfig struct {
-	Name      string `yaml:"name,omitempty"` // deprecated: kept for backwards compat, not used
-	Workspace string `yaml:"workspace"`
+	// Set at load time from the config file path, not serialized.
+	HomePath string `yaml:"-"`
 }
 
 type TelegramConfig struct {
@@ -53,132 +45,142 @@ type DefaultsConfig struct {
 	RemoteControl     bool   `yaml:"remote_control,omitempty"`
 }
 
-type HeartbeatConfig struct {
-	Enabled         bool   `yaml:"enabled"`
-	Interval        string `yaml:"interval,omitempty"`          // e.g. "30m", "1h" — default "30m"
-	StartHour       *int   `yaml:"start_hour,omitempty"`        // default 7
-	EndHour         *int   `yaml:"end_hour,omitempty"`          // default 22
-	Timezone        string `yaml:"timezone,omitempty"`
-	Model           string `yaml:"model,omitempty"`
-	MaxTurns        int    `yaml:"max_turns,omitempty"`
-	TopicID         int    `yaml:"topic_id,omitempty"`
-	PromptFile      string `yaml:"prompt_file,omitempty"` // default "HEARTBEAT.md"
-}
-
-// HeartbeatDefaults returns the heartbeat config with defaults applied.
-func (h HeartbeatConfig) WithDefaults() HeartbeatConfig {
-	out := h
-	if out.Interval == "" {
-		out.Interval = DefaultHeartbeatInterval
-	}
-	if out.StartHour == nil {
-		v := DefaultHeartbeatStart
-		out.StartHour = &v
-	}
-	if out.EndHour == nil {
-		v := DefaultHeartbeatEnd
-		out.EndHour = &v
-	}
-	if out.PromptFile == "" {
-		out.PromptFile = DefaultHeartbeatFile
-	}
-	return out
-}
-
-// Schedule generates a cron expression from the heartbeat config.
-// Interval is converted to minute steps within the start/end hour window.
-func (h HeartbeatConfig) Schedule() (string, error) {
-	hb := h.WithDefaults()
-
-	minutes, err := parseIntervalMinutes(hb.Interval)
-	if err != nil {
-		return "", fmt.Errorf("heartbeat.interval: %w", err)
-	}
-
-	// Build minute field
-	var minuteField string
-	if minutes >= 60 {
-		minuteField = "0"
-	} else {
-		var mins []string
-		for m := 0; m < 60; m += minutes {
-			mins = append(mins, strconv.Itoa(m))
-		}
-		minuteField = strings.Join(mins, ",")
-	}
-
-	// Build hour field
-	var hourField string
-	if minutes >= 60 {
-		step := minutes / 60
-		hourField = fmt.Sprintf("%d-%d/%d", *hb.StartHour, *hb.EndHour, step)
-	} else {
-		hourField = fmt.Sprintf("%d-%d", *hb.StartHour, *hb.EndHour)
-	}
-
-	return fmt.Sprintf("%s %s * * *", minuteField, hourField), nil
-}
-
-// ToTaskConfig converts the heartbeat config to a TaskConfig for the scheduler.
-func (h HeartbeatConfig) ToTaskConfig() (TaskConfig, error) {
-	hb := h.WithDefaults()
-	schedule, err := hb.Schedule()
-	if err != nil {
-		return TaskConfig{}, err
-	}
-	return TaskConfig{
-		Schedule:   schedule,
-		Timezone:   hb.Timezone,
-		PromptFile: hb.PromptFile,
-		Model:      hb.Model,
-		MaxTurns:   hb.MaxTurns,
-		TopicID:    hb.TopicID,
-		Enabled:    hb.Enabled,
-		Silent:     true,
-	}, nil
-}
-
-// parseIntervalMinutes parses a duration string like "30m", "1h", "2h" into minutes.
-func parseIntervalMinutes(s string) (int, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 30, nil
-	}
-	if strings.HasSuffix(s, "h") {
-		n, err := strconv.Atoi(strings.TrimSuffix(s, "h"))
-		if err != nil || n < 1 {
-			return 0, fmt.Errorf("%q is not a valid interval (e.g. 30m, 1h)", s)
-		}
-		return n * 60, nil
-	}
-	if strings.HasSuffix(s, "m") {
-		n, err := strconv.Atoi(strings.TrimSuffix(s, "m"))
-		if err != nil || n < 1 {
-			return 0, fmt.Errorf("%q is not a valid interval (e.g. 30m, 1h)", s)
-		}
-		return n, nil
-	}
-	return 0, fmt.Errorf("%q is not a valid interval (use e.g. 30m, 1h)", s)
+type ProcessConfig struct {
+	Workspace         string   `yaml:"workspace,omitempty"`
+	Channels          []string `yaml:"channels,omitempty"`
+	Model             string   `yaml:"model,omitempty"`
+	MaxTurns          int      `yaml:"max_turns,omitempty"`
+	BypassPermissions *bool    `yaml:"bypass_permissions,omitempty"`
+	RemoteControl     *bool    `yaml:"remote_control,omitempty"`
+	MCPConfig         string   `yaml:"mcp_config,omitempty"`
+	AddDirs           []string `yaml:"add_dirs,omitempty"`
+	Enabled           bool     `yaml:"enabled"`
 }
 
 type TaskConfig struct {
-	Schedule        string `yaml:"schedule"`
-	Timezone        string `yaml:"timezone,omitempty"`
-	PromptFile      string `yaml:"prompt_file"`
-	Model           string `yaml:"model,omitempty"`
-	MaxTurns        int    `yaml:"max_turns,omitempty"`
-	TopicID         int    `yaml:"topic_id,omitempty"`
-	Enabled         bool   `yaml:"enabled"`
-	Silent          bool   `yaml:"silent,omitempty"`
+	Workspace  string `yaml:"workspace,omitempty"`
+	Schedule   string `yaml:"schedule"`
+	Timezone   string `yaml:"timezone,omitempty"`
+	PromptFile string `yaml:"prompt_file"`
+	Model      string `yaml:"model,omitempty"`
+	MaxTurns   int    `yaml:"max_turns,omitempty"`
+	TopicID    int    `yaml:"topic_id,omitempty"`
+	Enabled    bool   `yaml:"enabled"`
+	Silent     bool   `yaml:"silent,omitempty"`
+}
+
+// DefaultWorkspace returns the default workspace path (HomePath/workspace).
+func (c *Config) DefaultWorkspace() string {
+	if c.HomePath == "" {
+		return ""
+	}
+	return filepath.Join(c.HomePath, "workspace")
+}
+
+// StatePath returns the path to the state directory.
+func (c *Config) StatePath() string {
+	return filepath.Join(c.HomePath, "state")
+}
+
+// ProcessWorkspace returns the effective workspace for a process.
+func (c *Config) ProcessWorkspace(p ProcessConfig) string {
+	if p.Workspace != "" {
+		return p.Workspace
+	}
+	return c.DefaultWorkspace()
+}
+
+// ProcessModel returns the effective model for a process.
+func (c *Config) ProcessModel(p ProcessConfig) string {
+	if p.Model != "" {
+		return p.Model
+	}
+	if c.Defaults.Model != "" {
+		return c.Defaults.Model
+	}
+	return DefaultModel
+}
+
+// ProcessMaxTurns returns the effective max turns for a process.
+func (c *Config) ProcessMaxTurns(p ProcessConfig) int {
+	if p.MaxTurns > 0 {
+		return p.MaxTurns
+	}
+	if c.Defaults.MaxTurns > 0 {
+		return c.Defaults.MaxTurns
+	}
+	return DefaultMaxTurns
+}
+
+// ProcessBypassPermissions returns the effective bypass_permissions for a process.
+func (c *Config) ProcessBypassPermissions(p ProcessConfig) bool {
+	if p.BypassPermissions != nil {
+		return *p.BypassPermissions
+	}
+	return c.Defaults.BypassPermissions
+}
+
+// ProcessRemoteControl returns the effective remote_control for a process.
+func (c *Config) ProcessRemoteControl(p ProcessConfig) bool {
+	if p.RemoteControl != nil {
+		return *p.RemoteControl
+	}
+	return c.Defaults.RemoteControl
+}
+
+// ProcessMCPConfigPath returns the MCP config path for a process.
+// If the process specifies one, it's resolved relative to its workspace.
+// Otherwise falls back to <workspace>/config/mcp-servers.json.
+func (c *Config) ProcessMCPConfigPath(p ProcessConfig) string {
+	ws := c.ProcessWorkspace(p)
+	if p.MCPConfig != "" {
+		if filepath.IsAbs(p.MCPConfig) {
+			return p.MCPConfig
+		}
+		return filepath.Join(ws, p.MCPConfig)
+	}
+	return filepath.Join(ws, "config", "mcp-servers.json")
+}
+
+// TaskWorkspace returns the effective workspace for a task.
+func (c *Config) TaskWorkspace(t TaskConfig) string {
+	if t.Workspace != "" {
+		return t.Workspace
+	}
+	return c.DefaultWorkspace()
+}
+
+// TaskModel returns the effective model for a task.
+func (c *Config) TaskModel(t TaskConfig) string {
+	if t.Model != "" {
+		return t.Model
+	}
+	if c.Defaults.Model != "" {
+		return c.Defaults.Model
+	}
+	return DefaultModel
+}
+
+// TaskMaxTurns returns the effective max turns for a task.
+func (c *Config) TaskMaxTurns(t TaskConfig) int {
+	if t.MaxTurns > 0 {
+		return t.MaxTurns
+	}
+	if c.Defaults.MaxTurns > 0 {
+		return c.Defaults.MaxTurns
+	}
+	return DefaultMaxTurns
+}
+
+// TaskMCPConfigPath returns the MCP config path for a task.
+func (c *Config) TaskMCPConfigPath(t TaskConfig) string {
+	ws := c.TaskWorkspace(t)
+	return filepath.Join(ws, "config", "mcp-servers.json")
 }
 
 // Validate checks the config for required fields and valid values.
 func (c *Config) Validate() error {
 	var errs []string
-
-	if c.Agent.Workspace == "" {
-		errs = append(errs, "agent.workspace is required")
-	}
 
 	if c.Defaults.Model != "" && !validModels[c.Defaults.Model] {
 		errs = append(errs, fmt.Sprintf("defaults.model %q is not valid (use sonnet, opus, or haiku)", c.Defaults.Model))
@@ -196,22 +198,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.Heartbeat.Enabled {
-		if _, err := c.Heartbeat.Schedule(); err != nil {
-			errs = append(errs, fmt.Sprintf("heartbeat: %v", err))
+	for name, proc := range c.Processes {
+		if proc.Model != "" && !validModels[proc.Model] {
+			errs = append(errs, fmt.Sprintf("processes.%s.model %q is not valid (use sonnet, opus, or haiku)", name, proc.Model))
 		}
-		if c.Heartbeat.Model != "" && !validModels[c.Heartbeat.Model] {
-			errs = append(errs, fmt.Sprintf("heartbeat.model %q is not valid (use sonnet, opus, or haiku)", c.Heartbeat.Model))
-		}
-		hb := c.Heartbeat.WithDefaults()
-		if *hb.StartHour < 0 || *hb.StartHour > 23 {
-			errs = append(errs, "heartbeat.start_hour must be 0-23")
-		}
-		if *hb.EndHour < 0 || *hb.EndHour > 23 {
-			errs = append(errs, "heartbeat.end_hour must be 0-23")
-		}
-		if *hb.StartHour >= *hb.EndHour {
-			errs = append(errs, "heartbeat.start_hour must be less than end_hour")
+		if proc.MaxTurns < 0 {
+			errs = append(errs, fmt.Sprintf("processes.%s.max_turns must not be negative", name))
 		}
 	}
 
@@ -238,27 +230,6 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// MCPConfigPath returns the path to the MCP servers config.
-func (c *Config) MCPConfigPath() string {
-	return filepath.Join(c.Agent.Workspace, "config", "mcp-servers.json")
-}
-
-// TaskModel returns the effective model for a task.
-func (c *Config) TaskModel(t TaskConfig) string {
-	if t.Model != "" {
-		return t.Model
-	}
-	return c.Defaults.Model
-}
-
-// TaskMaxTurns returns the effective max turns for a task.
-func (c *Config) TaskMaxTurns(t TaskConfig) int {
-	if t.MaxTurns > 0 {
-		return t.MaxTurns
-	}
-	return c.Defaults.MaxTurns
-}
-
 // Load reads and parses a leo.yaml config file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -271,11 +242,33 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	if cfg.Agent.Workspace != "" {
-		cfg.Agent.Workspace = expandHome(cfg.Agent.Workspace)
+	// Set HomePath from the config file's directory
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolving config path: %w", err)
 	}
+	cfg.HomePath = filepath.Dir(absPath)
+
+	// Expand ~ in all workspace and path fields
+	cfg.expandPaths()
 
 	return &cfg, nil
+}
+
+// expandPaths expands ~ in workspace and path fields.
+func (c *Config) expandPaths() {
+	for name, proc := range c.Processes {
+		proc.Workspace = expandHome(proc.Workspace)
+		proc.MCPConfig = expandHome(proc.MCPConfig)
+		for i, dir := range proc.AddDirs {
+			proc.AddDirs[i] = expandHome(dir)
+		}
+		c.Processes[name] = proc
+	}
+	for name, task := range c.Tasks {
+		task.Workspace = expandHome(task.Workspace)
+		c.Tasks[name] = task
+	}
 }
 
 // Save writes the config to a YAML file.
@@ -296,17 +289,15 @@ func Save(path string, cfg *Config) error {
 	return nil
 }
 
-// FindConfig searches for leo.yaml starting from the given directory and walking up.
-// If dir is empty, starts from the current working directory.
-// defaultWorkspaceFn is a testability seam for DefaultWorkspace.
-var defaultWorkspaceFn = defaultWorkspaceImpl
+// defaultHomeFn is a testability seam for DefaultHome.
+var defaultHomeFn = defaultHomeImpl
 
-// DefaultWorkspace returns the default workspace path (~/.leo).
-func DefaultWorkspace() string {
-	return defaultWorkspaceFn()
+// DefaultHome returns the default Leo home path (~/.leo).
+func DefaultHome() string {
+	return defaultHomeFn()
 }
 
-func defaultWorkspaceImpl() string {
+func defaultHomeImpl() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -314,6 +305,9 @@ func defaultWorkspaceImpl() string {
 	return filepath.Join(home, ".leo")
 }
 
+// FindConfig searches for leo.yaml. Priority:
+// 1. Walk up from dir looking for leo.yaml
+// 2. Fall back to ~/.leo/leo.yaml
 func FindConfig(dir string) (string, error) {
 	if dir == "" {
 		var err error
@@ -337,20 +331,15 @@ func FindConfig(dir string) (string, error) {
 		d = parent
 	}
 
-	// Fall back to default workspace
-	if ws := DefaultWorkspace(); ws != "" {
-		path := filepath.Join(ws, "leo.yaml")
+	// Fall back to default home
+	if home := DefaultHome(); home != "" {
+		path := filepath.Join(home, "leo.yaml")
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}
 	}
 
 	return "", fmt.Errorf("leo.yaml not found")
-}
-
-// LoadFromWorkspace loads config from a workspace directory.
-func LoadFromWorkspace(workspace string) (*Config, error) {
-	return Load(filepath.Join(workspace, "leo.yaml"))
 }
 
 // validateCronExpr checks that a cron expression has 5 fields with valid ranges.

@@ -26,30 +26,34 @@ func newStatusCmd() *cobra.Command {
 			success.Println("Config: valid")
 
 			// Service status
-			svcStatus, _ := service.Status(cfg.Agent.Workspace)
+			svcStatus, _ := service.Status(cfg.HomePath)
 			fmt.Printf("Service: %s\n", svcStatus)
 
 			// Daemon status
 			daemonStatus, _ := service.DaemonStatus()
 			fmt.Printf("Daemon:  %s\n", daemonStatus)
 
-			// Tasks
-			enabledCount := 0
-			totalCount := len(cfg.Tasks)
-			for _, t := range cfg.Tasks {
-				if t.Enabled {
-					enabledCount++
+			// Processes
+			enabledProcs := 0
+			for _, p := range cfg.Processes {
+				if p.Enabled {
+					enabledProcs++
 				}
 			}
-			if cfg.Heartbeat.Enabled {
-				enabledCount++
-				totalCount++
+			fmt.Printf("Processes: %d/%d enabled\n", enabledProcs, len(cfg.Processes))
+
+			// Tasks
+			enabledTasks := 0
+			for _, t := range cfg.Tasks {
+				if t.Enabled {
+					enabledTasks++
+				}
 			}
-			fmt.Printf("Tasks:   %d/%d enabled\n", enabledCount, totalCount)
+			fmt.Printf("Tasks:   %d/%d enabled\n", enabledTasks, len(cfg.Tasks))
 
 			// Next scheduled run (from daemon if available)
-			if daemon.IsRunning(cfg.Agent.Workspace) {
-				resp, err := daemon.Send(cfg.Agent.Workspace, "GET", "/cron/list", nil)
+			if daemon.IsRunning(cfg.HomePath) {
+				resp, err := daemon.Send(cfg.HomePath, "GET", "/cron/list", nil)
 				if err == nil && resp.OK {
 					var entries []cron.EntryInfo
 					if err := json.Unmarshal(resp.Data, &entries); err == nil && len(entries) > 0 {

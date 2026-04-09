@@ -7,10 +7,6 @@ import (
 )
 
 const testYAML = `
-agent:
-  name: myagent
-  workspace: /tmp/test-workspace
-
 telegram:
   bot_token: "123:ABC"
   chat_id: "456"
@@ -19,6 +15,20 @@ telegram:
 defaults:
   model: sonnet
   max_turns: 15
+
+processes:
+  assistant:
+    channels:
+      - "plugin:telegram@claude-plugins-official"
+    remote_control: true
+    enabled: true
+
+  researcher:
+    workspace: /tmp/research
+    model: opus
+    add_dirs:
+      - /tmp/data
+    enabled: true
 
 tasks:
   heartbeat:
@@ -45,10 +55,8 @@ tasks:
 
 func TestValidate(t *testing.T) {
 	validConfig := func() *Config {
+		tr := true
 		return &Config{
-			Agent: AgentConfig{
-				Workspace: "/tmp/workspace",
-			},
 			Telegram: TelegramConfig{
 				BotToken: "123:ABC",
 				ChatID:   "456",
@@ -56,6 +64,13 @@ func TestValidate(t *testing.T) {
 			Defaults: DefaultsConfig{
 				Model:    "sonnet",
 				MaxTurns: 15,
+			},
+			Processes: map[string]ProcessConfig{
+				"assistant": {
+					Channels:      []string{"plugin:telegram@claude-plugins-official"},
+					RemoteControl: &tr,
+					Enabled:       true,
+				},
 			},
 			Tasks: map[string]TaskConfig{
 				"heartbeat": {
@@ -65,6 +80,7 @@ func TestValidate(t *testing.T) {
 					Enabled:    true,
 				},
 			},
+			HomePath: "/tmp/leo",
 		}
 	}
 
@@ -72,18 +88,6 @@ func TestValidate(t *testing.T) {
 		cfg := validConfig()
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected no error, got %v", err)
-		}
-	})
-
-	t.Run("empty agent workspace", func(t *testing.T) {
-		cfg := validConfig()
-		cfg.Agent.Workspace = ""
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if got := err.Error(); !contains(got, "agent.workspace is required") {
-			t.Errorf("error = %q, want mention of agent.workspace", got)
 		}
 	})
 
@@ -133,6 +137,30 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("process invalid model", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Processes["bad"] = ProcessConfig{Model: "gpt-4", Enabled: true}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if got := err.Error(); !contains(got, "processes.bad.model") {
+			t.Errorf("error = %q, want mention of processes.bad.model", got)
+		}
+	})
+
+	t.Run("process negative max turns", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Processes["bad"] = ProcessConfig{MaxTurns: -1, Enabled: true}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if got := err.Error(); !contains(got, "processes.bad.max_turns") {
+			t.Errorf("error = %q, want mention of max_turns", got)
+		}
+	})
+
 	t.Run("task missing schedule", func(t *testing.T) {
 		cfg := validConfig()
 		cfg.Tasks["bad"] = TaskConfig{PromptFile: "test.md"}
@@ -173,31 +201,15 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("empty config has workspace error", func(t *testing.T) {
+	t.Run("empty config is valid", func(t *testing.T) {
 		cfg := &Config{}
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		got := err.Error()
-		if !contains(got, "agent.workspace") {
-			t.Errorf("expected workspace error, got %q", got)
-		}
-	})
-
-	t.Run("no telegram section is fine", func(t *testing.T) {
-		cfg := &Config{
-			Agent: AgentConfig{Workspace: "/tmp"},
-		}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
 	})
 
-	t.Run("empty model is fine", func(t *testing.T) {
-		cfg := &Config{
-			Agent: AgentConfig{Workspace: "/tmp"},
-		}
+	t.Run("no telegram section is fine", func(t *testing.T) {
+		cfg := &Config{HomePath: "/tmp/leo"}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -250,7 +262,6 @@ func TestValidateCronExpr(t *testing.T) {
 
 func TestValidateRejectsBadSchedule(t *testing.T) {
 	cfg := &Config{
-		Agent: AgentConfig{Name: "test", Workspace: "/tmp"},
 		Tasks: map[string]TaskConfig{
 			"bad": {Schedule: "not a cron", PromptFile: "test.md"},
 		},
@@ -276,8 +287,8 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if cfg.Agent.Workspace != "/tmp/test-workspace" {
-		t.Errorf("workspace = %q, want %q", cfg.Agent.Workspace, "/tmp/test-workspace")
+	if cfg.HomePath != dir {
+		t.Errorf("HomePath = %q, want %q", cfg.HomePath, dir)
 	}
 
 	if cfg.Telegram.BotToken != "123:ABC" {
@@ -296,9 +307,127 @@ func TestLoadConfig(t *testing.T) {
 		t.Errorf("default max_turns = %d, want %d", cfg.Defaults.MaxTurns, 15)
 	}
 
+	if len(cfg.Processes) != 2 {
+		t.Errorf("processes count = %d, want %d", len(cfg.Processes), 2)
+	}
+
 	if len(cfg.Tasks) != 3 {
 		t.Errorf("tasks count = %d, want %d", len(cfg.Tasks), 3)
 	}
+
+	// Check process workspace was kept
+	if ws := cfg.Processes["researcher"].Workspace; ws != "/tmp/research" {
+		t.Errorf("researcher workspace = %q, want /tmp/research", ws)
+	}
+
+	// Check assistant has no explicit workspace (defaults apply)
+	if ws := cfg.Processes["assistant"].Workspace; ws != "" {
+		t.Errorf("assistant workspace = %q, want empty", ws)
+	}
+}
+
+func TestDefaultWorkspace(t *testing.T) {
+	cfg := &Config{HomePath: "/home/user/.leo"}
+	want := "/home/user/.leo/workspace"
+	if got := cfg.DefaultWorkspace(); got != want {
+		t.Errorf("DefaultWorkspace() = %q, want %q", got, want)
+	}
+}
+
+func TestProcessWorkspace(t *testing.T) {
+	cfg := &Config{HomePath: "/home/user/.leo"}
+
+	t.Run("explicit workspace", func(t *testing.T) {
+		p := ProcessConfig{Workspace: "/custom/workspace"}
+		if got := cfg.ProcessWorkspace(p); got != "/custom/workspace" {
+			t.Errorf("ProcessWorkspace() = %q, want /custom/workspace", got)
+		}
+	})
+
+	t.Run("default workspace", func(t *testing.T) {
+		p := ProcessConfig{}
+		want := "/home/user/.leo/workspace"
+		if got := cfg.ProcessWorkspace(p); got != want {
+			t.Errorf("ProcessWorkspace() = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestProcessDefaults(t *testing.T) {
+	tr := true
+	fa := false
+
+	cfg := &Config{
+		Defaults: DefaultsConfig{
+			Model:             "sonnet",
+			MaxTurns:          15,
+			BypassPermissions: true,
+			RemoteControl:     false,
+		},
+	}
+
+	t.Run("process model override", func(t *testing.T) {
+		p := ProcessConfig{Model: "opus"}
+		if got := cfg.ProcessModel(p); got != "opus" {
+			t.Errorf("ProcessModel() = %q, want opus", got)
+		}
+	})
+
+	t.Run("process model default", func(t *testing.T) {
+		p := ProcessConfig{}
+		if got := cfg.ProcessModel(p); got != "sonnet" {
+			t.Errorf("ProcessModel() = %q, want sonnet", got)
+		}
+	})
+
+	t.Run("process max_turns override", func(t *testing.T) {
+		p := ProcessConfig{MaxTurns: 30}
+		if got := cfg.ProcessMaxTurns(p); got != 30 {
+			t.Errorf("ProcessMaxTurns() = %d, want 30", got)
+		}
+	})
+
+	t.Run("process max_turns default", func(t *testing.T) {
+		p := ProcessConfig{}
+		if got := cfg.ProcessMaxTurns(p); got != 15 {
+			t.Errorf("ProcessMaxTurns() = %d, want 15", got)
+		}
+	})
+
+	t.Run("process bypass override true", func(t *testing.T) {
+		p := ProcessConfig{BypassPermissions: &tr}
+		if got := cfg.ProcessBypassPermissions(p); !got {
+			t.Error("ProcessBypassPermissions() = false, want true")
+		}
+	})
+
+	t.Run("process bypass override false", func(t *testing.T) {
+		p := ProcessConfig{BypassPermissions: &fa}
+		if got := cfg.ProcessBypassPermissions(p); got {
+			t.Error("ProcessBypassPermissions() = true, want false")
+		}
+	})
+
+	t.Run("process bypass default", func(t *testing.T) {
+		p := ProcessConfig{}
+		if got := cfg.ProcessBypassPermissions(p); !got {
+			t.Error("ProcessBypassPermissions() = false, want true (from defaults)")
+		}
+	})
+
+	t.Run("process remote_control override true", func(t *testing.T) {
+		p := ProcessConfig{RemoteControl: &tr}
+		if got := cfg.ProcessRemoteControl(p); !got {
+			t.Error("ProcessRemoteControl() = false, want true")
+		}
+	})
+
+	t.Run("process remote_control default", func(t *testing.T) {
+		p := ProcessConfig{}
+		if got := cfg.ProcessRemoteControl(p); got {
+			t.Error("ProcessRemoteControl() = true, want false (from defaults)")
+		}
+	})
 }
 
 func TestTaskModel(t *testing.T) {
@@ -307,8 +436,8 @@ func TestTaskModel(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		task     TaskConfig
+		name      string
+		task      TaskConfig
 		wantModel string
 		wantTurns int
 	}{
@@ -344,15 +473,39 @@ func TestTaskModel(t *testing.T) {
 	}
 }
 
+func TestProcessMCPConfigPath(t *testing.T) {
+	cfg := &Config{HomePath: "/home/user/.leo"}
+
+	t.Run("default mcp config", func(t *testing.T) {
+		p := ProcessConfig{Workspace: "/my/workspace"}
+		want := filepath.Join("/my/workspace", "config", "mcp-servers.json")
+		if got := cfg.ProcessMCPConfigPath(p); got != want {
+			t.Errorf("ProcessMCPConfigPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("custom relative mcp config", func(t *testing.T) {
+		p := ProcessConfig{Workspace: "/my/workspace", MCPConfig: "custom/mcp.json"}
+		want := filepath.Join("/my/workspace", "custom/mcp.json")
+		if got := cfg.ProcessMCPConfigPath(p); got != want {
+			t.Errorf("ProcessMCPConfigPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("custom absolute mcp config", func(t *testing.T) {
+		p := ProcessConfig{Workspace: "/my/workspace", MCPConfig: "/abs/mcp.json"}
+		if got := cfg.ProcessMCPConfigPath(p); got != "/abs/mcp.json" {
+			t.Errorf("ProcessMCPConfigPath() = %q, want /abs/mcp.json", got)
+		}
+	})
+}
+
 func TestSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "leo.yaml")
 
+	tr := true
 	cfg := &Config{
-		Agent: AgentConfig{
-			Name:      "test",
-			Workspace: dir,
-		},
 		Telegram: TelegramConfig{
 			BotToken: "token",
 			ChatID:   "123",
@@ -361,6 +514,13 @@ func TestSaveAndLoad(t *testing.T) {
 			Model:    "sonnet",
 			MaxTurns: 10,
 		},
+		Processes: map[string]ProcessConfig{
+			"main": {
+				Channels:      []string{"plugin:telegram@claude-plugins-official"},
+				RemoteControl: &tr,
+				Enabled:       true,
+			},
+		},
 		Tasks: map[string]TaskConfig{
 			"heartbeat": {
 				Schedule:   "* * * * *",
@@ -368,6 +528,7 @@ func TestSaveAndLoad(t *testing.T) {
 				Enabled:    true,
 			},
 		},
+		HomePath: dir,
 	}
 
 	if err := Save(path, cfg); err != nil {
@@ -394,6 +555,9 @@ func TestSaveAndLoad(t *testing.T) {
 	if len(loaded.Tasks) != 1 {
 		t.Errorf("loaded tasks = %d, want 1", len(loaded.Tasks))
 	}
+	if len(loaded.Processes) != 1 {
+		t.Errorf("loaded processes = %d, want 1", len(loaded.Processes))
+	}
 }
 
 func TestLoadInvalidYAML(t *testing.T) {
@@ -414,37 +578,11 @@ func TestLoadNonexistentFile(t *testing.T) {
 	}
 }
 
-func TestLoadFromWorkspace(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "leo.yaml"), []byte(testYAML), 0644)
-
-	cfg, err := LoadFromWorkspace(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if cfg.Agent.Workspace != "/tmp/test-workspace" {
-		t.Errorf("workspace = %q, want %q", cfg.Agent.Workspace, "/tmp/test-workspace")
-	}
-}
-
-func TestMCPConfigPath(t *testing.T) {
-	cfg := &Config{
-		Agent: AgentConfig{Workspace: "/home/user/myagent"},
-	}
-
-	got := cfg.MCPConfigPath()
-	want := filepath.Join("/home/user/myagent", "config", "mcp-servers.json")
-	if got != want {
-		t.Errorf("MCPConfigPath() = %q, want %q", got, want)
-	}
-}
-
 func TestFindConfig(t *testing.T) {
-	// Override default workspace so the fallback doesn't find a real leo.yaml
-	origFn := defaultWorkspaceFn
-	defaultWorkspaceFn = func() string { return "" }
-	defer func() { defaultWorkspaceFn = origFn }()
+	// Override default home so the fallback doesn't find a real leo.yaml
+	origFn := defaultHomeFn
+	defaultHomeFn = func() string { return "" }
+	defer func() { defaultHomeFn = origFn }()
 
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "a", "b", "c")
@@ -458,7 +596,7 @@ func TestFindConfig(t *testing.T) {
 
 	// Create config at root
 	cfgPath := filepath.Join(dir, "leo.yaml")
-	os.WriteFile(cfgPath, []byte("agent:\n  name: test\n"), 0644)
+	os.WriteFile(cfgPath, []byte("defaults:\n  model: sonnet\n"), 0644)
 
 	found, err := FindConfig(subdir)
 	if err != nil {
@@ -469,128 +607,49 @@ func TestFindConfig(t *testing.T) {
 	}
 }
 
-func TestHeartbeatSchedule30m(t *testing.T) {
-	h := HeartbeatConfig{Enabled: true, Interval: "30m"}
-	sched, err := h.Schedule()
+func TestFindConfigDefaultHome(t *testing.T) {
+	dir := t.TempDir()
+	origFn := defaultHomeFn
+	defaultHomeFn = func() string { return dir }
+	defer func() { defaultHomeFn = origFn }()
+
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	os.WriteFile(cfgPath, []byte("defaults:\n  model: sonnet\n"), 0644)
+
+	// Search from a directory with no leo.yaml
+	searchDir := t.TempDir()
+	found, err := FindConfig(searchDir)
 	if err != nil {
-		t.Fatalf("Schedule() error: %v", err)
+		t.Fatal(err)
 	}
-	if sched != "0,30 7-22 * * *" {
-		t.Errorf("Schedule() = %q, want %q", sched, "0,30 7-22 * * *")
-	}
-}
-
-func TestHeartbeatSchedule15m(t *testing.T) {
-	h := HeartbeatConfig{Enabled: true, Interval: "15m"}
-	sched, err := h.Schedule()
-	if err != nil {
-		t.Fatalf("Schedule() error: %v", err)
-	}
-	if sched != "0,15,30,45 7-22 * * *" {
-		t.Errorf("Schedule() = %q, want %q", sched, "0,15,30,45 7-22 * * *")
+	if found != cfgPath {
+		t.Errorf("found = %q, want %q", found, cfgPath)
 	}
 }
 
-func TestHeartbeatSchedule1h(t *testing.T) {
-	h := HeartbeatConfig{Enabled: true, Interval: "1h"}
-	sched, err := h.Schedule()
-	if err != nil {
-		t.Fatalf("Schedule() error: %v", err)
-	}
-	if sched != "0 7-22/1 * * *" {
-		t.Errorf("Schedule() = %q, want %q", sched, "0 7-22/1 * * *")
+func TestStatePath(t *testing.T) {
+	cfg := &Config{HomePath: "/home/user/.leo"}
+	want := "/home/user/.leo/state"
+	if got := cfg.StatePath(); got != want {
+		t.Errorf("StatePath() = %q, want %q", got, want)
 	}
 }
 
-func TestHeartbeatSchedule2h(t *testing.T) {
-	h := HeartbeatConfig{Enabled: true, Interval: "2h"}
-	sched, err := h.Schedule()
-	if err != nil {
-		t.Fatalf("Schedule() error: %v", err)
-	}
-	if sched != "0 7-22/2 * * *" {
-		t.Errorf("Schedule() = %q, want %q", sched, "0 7-22/2 * * *")
-	}
-}
+func TestTaskWorkspace(t *testing.T) {
+	cfg := &Config{HomePath: "/home/user/.leo"}
 
-func TestHeartbeatScheduleCustomHours(t *testing.T) {
-	start, end := 9, 17
-	h := HeartbeatConfig{Enabled: true, Interval: "30m", StartHour: &start, EndHour: &end}
-	sched, err := h.Schedule()
-	if err != nil {
-		t.Fatalf("Schedule() error: %v", err)
-	}
-	if sched != "0,30 9-17 * * *" {
-		t.Errorf("Schedule() = %q, want %q", sched, "0,30 9-17 * * *")
-	}
-}
+	t.Run("explicit workspace", func(t *testing.T) {
+		task := TaskConfig{Workspace: "/custom/ws"}
+		if got := cfg.TaskWorkspace(task); got != "/custom/ws" {
+			t.Errorf("TaskWorkspace() = %q, want /custom/ws", got)
+		}
+	})
 
-func TestHeartbeatScheduleDefaults(t *testing.T) {
-	h := HeartbeatConfig{Enabled: true}
-	sched, err := h.Schedule()
-	if err != nil {
-		t.Fatalf("Schedule() error: %v", err)
-	}
-	// Default: 30m interval, 7-22 hours
-	if sched != "0,30 7-22 * * *" {
-		t.Errorf("Schedule() = %q, want %q", sched, "0,30 7-22 * * *")
-	}
-}
-
-func TestHeartbeatInvalidInterval(t *testing.T) {
-	h := HeartbeatConfig{Enabled: true, Interval: "abc"}
-	_, err := h.Schedule()
-	if err == nil {
-		t.Error("expected error for invalid interval")
-	}
-}
-
-func TestHeartbeatToTaskConfig(t *testing.T) {
-	h := HeartbeatConfig{
-		Enabled:  true,
-		Interval: "30m",
-		Timezone: "America/New_York",
-		Model:    "sonnet",
-		MaxTurns: 10,
-		TopicID:  42,
-	}
-
-	tc, err := h.ToTaskConfig()
-	if err != nil {
-		t.Fatalf("ToTaskConfig() error: %v", err)
-	}
-	if tc.Schedule != "0,30 7-22 * * *" {
-		t.Errorf("Schedule = %q", tc.Schedule)
-	}
-	if tc.Timezone != "America/New_York" {
-		t.Errorf("Timezone = %q", tc.Timezone)
-	}
-	if tc.Model != "sonnet" {
-		t.Errorf("Model = %q", tc.Model)
-	}
-	if !tc.Silent {
-		t.Error("expected Silent = true")
-	}
-	if tc.PromptFile != "HEARTBEAT.md" {
-		t.Errorf("PromptFile = %q", tc.PromptFile)
-	}
-	if tc.TopicID != 42 {
-		t.Errorf("TopicID = %d", tc.TopicID)
-	}
-}
-
-func TestHeartbeatValidation(t *testing.T) {
-	start, end := 22, 7
-	cfg := &Config{
-		Agent:    AgentConfig{Name: "test", Workspace: "/tmp"},
-		Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 10},
-		Heartbeat: HeartbeatConfig{
-			Enabled:   true,
-			StartHour: &start,
-			EndHour:   &end,
-		},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected validation error for start_hour >= end_hour")
-	}
+	t.Run("default workspace", func(t *testing.T) {
+		task := TaskConfig{}
+		want := "/home/user/.leo/workspace"
+		if got := cfg.TaskWorkspace(task); got != want {
+			t.Errorf("TaskWorkspace() = %q, want %q", got, want)
+		}
+	})
 }

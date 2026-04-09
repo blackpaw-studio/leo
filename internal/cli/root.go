@@ -4,22 +4,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	cfgFile   string
-	workspace string
-)
+var cfgFile string
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "leo",
 		Short: "Manage a persistent Claude Code assistant",
-		Long:  "Leo sets up and manages a persistent Claude Code session with Telegram, Remote Control, and scheduled tasks.",
+		Long:  "Leo sets up and manages persistent Claude Code sessions with Telegram, Remote Control, and scheduled tasks.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 
 	cmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "path to leo.yaml (default: auto-detect)")
-	cmd.PersistentFlags().StringVarP(&workspace, "workspace", "w", "", "workspace directory (default: from config)")
 
 	cmd.AddCommand(
 		newVersionCmd(),
@@ -29,7 +25,6 @@ func newRootCmd() *cobra.Command {
 		newCronCmd(),
 		newTaskCmd(),
 		newSetupCmd(),
-		newMigrateCmd(),
 		newValidateCmd(),
 		newUpdateCmd(),
 		newTelegramCmd(),

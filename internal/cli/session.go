@@ -33,7 +33,7 @@ func newSessionListCmd() *cobra.Command {
 				return err
 			}
 
-			store := session.NewStore(cfg.Agent.Workspace)
+			store := session.NewStore(cfg.HomePath)
 			entries, err := store.List()
 			if err != nil {
 				return fmt.Errorf("listing sessions: %w", err)
@@ -73,7 +73,7 @@ func newSessionClearCmd() *cobra.Command {
 				return err
 			}
 
-			store := session.NewStore(cfg.Agent.Workspace)
+			store := session.NewStore(cfg.HomePath)
 
 			if all {
 				if err := store.DeleteAll(); err != nil {

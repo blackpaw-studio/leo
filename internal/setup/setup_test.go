@@ -63,10 +63,6 @@ func TestFindExistingConfigFound(t *testing.T) {
 	os.MkdirAll(leoDir, 0755)
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Name:      "test",
-			Workspace: leoDir,
-		},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks:    map[string]config.TaskConfig{},
 	}
@@ -85,68 +81,47 @@ func TestFindExistingConfigFound(t *testing.T) {
 	}
 }
 
-func TestFindExistingConfigViaWorkspaces(t *testing.T) {
-	dir := t.TempDir()
-	// No .leo dir at home, but a workspace elsewhere
-	wsDir := filepath.Join(dir, "other-workspace")
-	os.MkdirAll(wsDir, 0755)
-
-	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Workspace: wsDir,
-		},
-		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-		Tasks:    map[string]config.TaskConfig{},
-	}
-	config.Save(filepath.Join(wsDir, "leo.yaml"), cfg)
-
-	orig := findExistingWorkspacesFn
-	t.Cleanup(func() { findExistingWorkspacesFn = orig })
-	findExistingWorkspacesFn = func() []string { return []string{wsDir} }
-
-	found, _ := findExistingConfig(dir)
-	if found == nil {
-		t.Fatal("expected to find config via workspaces")
-	}
-}
 
 // --- scaffoldWorkspace ---
 
 func TestScaffoldWorkspace(t *testing.T) {
-	dir := t.TempDir()
+	leoHome := t.TempDir()
+	workspace := filepath.Join(leoHome, "workspace")
 	home := t.TempDir()
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Workspace: dir,
-		},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks:    map[string]config.TaskConfig{},
 	}
 
 	err := scaffoldWorkspace(scaffoldOptions{
-		workspace: dir, home: home, cfg: cfg,
-		userPath: filepath.Join(dir, "USER.md"), userName: "TestUser",
+		workspace: workspace, home: home, leoHome: leoHome, cfg: cfg,
+		userPath: filepath.Join(workspace, "USER.md"), userName: "TestUser",
 		role: "developer", about: "about me", preferences: "concise", timezone: "UTC",
 	})
 	if err != nil {
 		t.Fatalf("scaffoldWorkspace() error: %v", err)
 	}
 
-	// Verify directories created
-	for _, subdir := range []string{"daily", "reports", "state", "config", "scripts"} {
-		if _, err := os.Stat(filepath.Join(dir, subdir)); err != nil {
+	// Verify workspace subdirectories created
+	for _, subdir := range []string{"daily", "reports", "config", "scripts"} {
+		if _, err := os.Stat(filepath.Join(workspace, subdir)); err != nil {
 			t.Errorf("directory %s not created", subdir)
 		}
 	}
 
-	// Verify leo.yaml
-	if _, err := os.Stat(filepath.Join(dir, "leo.yaml")); err != nil {
-		t.Error("leo.yaml not created")
+	// Verify state directory created under leoHome
+	if _, err := os.Stat(filepath.Join(leoHome, "state")); err != nil {
+		t.Error("state directory not created under leoHome")
+	}
+
+	// Verify leo.yaml written to leoHome
+	if _, err := os.Stat(filepath.Join(leoHome, "leo.yaml")); err != nil {
+		t.Error("leo.yaml not created in leoHome")
 	}
 
 	// Verify USER.md
-	data, err := os.ReadFile(filepath.Join(dir, "USER.md"))
+	data, err := os.ReadFile(filepath.Join(workspace, "USER.md"))
 	if err != nil {
 		t.Fatal("USER.md not created")
 	}
@@ -154,18 +129,13 @@ func TestScaffoldWorkspace(t *testing.T) {
 		t.Error("USER.md is empty")
 	}
 
-	// Verify HEARTBEAT.md
-	if _, err := os.Stat(filepath.Join(dir, "HEARTBEAT.md")); err != nil {
-		t.Error("HEARTBEAT.md not created")
-	}
-
 	// Verify MCP config
-	if _, err := os.Stat(filepath.Join(dir, "config", "mcp-servers.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(workspace, "config", "mcp-servers.json")); err != nil {
 		t.Error("mcp-servers.json not created")
 	}
 
 	// Verify CLAUDE.md
-	data, err = os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	data, err = os.ReadFile(filepath.Join(workspace, "CLAUDE.md"))
 	if err != nil {
 		t.Fatal("CLAUDE.md not created")
 	}
@@ -175,53 +145,43 @@ func TestScaffoldWorkspace(t *testing.T) {
 
 	// Verify skills directory and files
 	for _, skill := range templates.SkillFiles() {
-		if _, err := os.Stat(filepath.Join(dir, "skills", skill)); err != nil {
+		if _, err := os.Stat(filepath.Join(workspace, "skills", skill)); err != nil {
 			t.Errorf("skill file %s not created", skill)
 		}
 	}
 }
 
 func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
-	dir := t.TempDir()
+	leoHome := t.TempDir()
+	workspace := filepath.Join(leoHome, "workspace")
+	os.MkdirAll(workspace, 0755)
 	home := t.TempDir()
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Workspace: dir,
-		},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks:    map[string]config.TaskConfig{},
 	}
 
-	// Pre-create HEARTBEAT.md and CLAUDE.md to verify they're not overwritten
-	heartbeatPath := filepath.Join(dir, "HEARTBEAT.md")
-	os.WriteFile(heartbeatPath, []byte("custom heartbeat"), 0644)
-
-	claudeMDPath := filepath.Join(dir, "CLAUDE.md")
+	// Pre-create CLAUDE.md to verify it's not overwritten
+	claudeMDPath := filepath.Join(workspace, "CLAUDE.md")
 	os.WriteFile(claudeMDPath, []byte("custom claude"), 0644)
 
 	// Pre-create a skill file
-	os.MkdirAll(filepath.Join(dir, "skills"), 0755)
-	customSkillPath := filepath.Join(dir, "skills", templates.SkillFiles()[0])
+	os.MkdirAll(filepath.Join(workspace, "skills"), 0755)
+	customSkillPath := filepath.Join(workspace, "skills", templates.SkillFiles()[0])
 	os.WriteFile(customSkillPath, []byte("custom skill"), 0644)
 
 	// No user profile — should skip those
 	err := scaffoldWorkspace(scaffoldOptions{
-		workspace: dir, home: home, cfg: cfg,
-		userPath: filepath.Join(dir, "USER.md"),
+		workspace: workspace, home: home, leoHome: leoHome, cfg: cfg,
+		userPath: filepath.Join(workspace, "USER.md"),
 	})
 	if err != nil {
 		t.Fatalf("scaffoldWorkspace() error: %v", err)
 	}
 
-	// HEARTBEAT.md should be unchanged
-	data, _ := os.ReadFile(heartbeatPath)
-	if string(data) != "custom heartbeat" {
-		t.Errorf("HEARTBEAT.md was overwritten: %q", string(data))
-	}
-
 	// CLAUDE.md should be unchanged
-	data, _ = os.ReadFile(claudeMDPath)
+	data, _ := os.ReadFile(claudeMDPath)
 	if string(data) != "custom claude" {
 		t.Errorf("CLAUDE.md was overwritten: %q", string(data))
 	}
@@ -946,80 +906,14 @@ func TestWriteClaudeSettingsDeduplicates(t *testing.T) {
 
 // --- Run ---
 
-func TestRunWithOpenClaw(t *testing.T) {
-	origFindOC := findOpenClawFn
-	origNewReader := newReaderFn
-	origMigrate := migrateInteractiveFn
-	t.Cleanup(func() {
-		findOpenClawFn = origFindOC
-		newReaderFn = origNewReader
-		migrateInteractiveFn = origMigrate
-	})
-
-	findOpenClawFn = func() string { return "/home/user/.openclaw" }
-	newReaderFn = func() *bufio.Reader {
-		return readerFrom("1\n") // choose migrate
-	}
-	migrateCalled := false
-	migrateInteractiveFn = func(reader *bufio.Reader) error {
-		migrateCalled = true
-		return nil
-	}
-
-	err := Run()
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-	if !migrateCalled {
-		t.Error("expected migrate to be called")
-	}
-}
-
-func TestRunWithOpenClawChooseFresh(t *testing.T) {
-	origFindOC := findOpenClawFn
-	origNewReader := newReaderFn
-	origHome := userHomeDirFn
-	origMigrate := migrateInteractiveFn
-	t.Cleanup(func() {
-		findOpenClawFn = origFindOC
-		newReaderFn = origNewReader
-		userHomeDirFn = origHome
-		migrateInteractiveFn = origMigrate
-	})
-
-	findOpenClawFn = func() string { return "/home/user/.openclaw" }
-	// Choose "2" for fresh setup, but RunInteractive will need prereqs
-	// So mock checkClaude to fail to short-circuit
-	mockAllPrereqs(t)
-	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: false} }
-
-	home := t.TempDir()
-	userHomeDirFn = func() (string, error) { return home, nil }
-
-	newReaderFn = func() *bufio.Reader {
-		return readerFrom("2\n") // choose fresh setup
-	}
-
-	err := Run()
-	if err == nil {
-		t.Fatal("expected error from failed prereq check")
-	}
-	if !strings.Contains(err.Error(), "claude CLI not found") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
 func TestRunNoOpenClaw(t *testing.T) {
-	origFindOC := findOpenClawFn
 	origNewReader := newReaderFn
 	origHome := userHomeDirFn
 	t.Cleanup(func() {
-		findOpenClawFn = origFindOC
 		newReaderFn = origNewReader
 		userHomeDirFn = origHome
 	})
 
-	findOpenClawFn = func() string { return "" }
 	// RunInteractive will be called, but prereqs will fail
 	mockAllPrereqs(t)
 	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: false} }
@@ -1074,14 +968,13 @@ func TestRunInteractiveHappyPath(t *testing.T) {
 	}
 
 	// Input flow:
-	// 1. Workspace directory (default ~/.leo)
+	// 1. Workspace directory (default ~/.leo/workspace)
 	// 2. User profile: name, role, about, prefs, timezone
 	// 3. Telegram: token, (poll for chat), group
-	// 4. Heartbeat: "n"
-	// 5. Confirm summary: "y"
-	// 6. Voice transcription: "n"
-	// 7. Install daemon: "n"
-	// 8. Send test message: "n"
+	// 4. Confirm summary: "y"
+	// 5. Voice transcription: "n"
+	// 6. Install daemon: "n"
+	// 7. Send test message: "n"
 	input := strings.Join([]string{
 		workspace,     // workspace
 		"TestUser",    // name
@@ -1091,7 +984,6 @@ func TestRunInteractiveHappyPath(t *testing.T) {
 		"UTC",         // timezone
 		"test-bot-tk", // telegram bot token
 		"",            // group ID (skip)
-		"n",           // heartbeat
 		"y",           // confirm summary
 		"n",           // voice transcription
 		"n",           // install daemon
@@ -1104,13 +996,14 @@ func TestRunInteractiveHappyPath(t *testing.T) {
 		t.Fatalf("RunInteractive() error: %v", err)
 	}
 
-	// Verify config was written
-	cfgPath := filepath.Join(workspace, "leo.yaml")
+	// Verify config was written to leoHome (parent of workspace)
+	leoHome := filepath.Dir(workspace)
+	cfgPath := filepath.Join(leoHome, "leo.yaml")
 	if _, err := os.Stat(cfgPath); err != nil {
-		t.Error("leo.yaml not created")
+		t.Error("leo.yaml not created in leoHome")
 	}
 
-	cfg, err := config.LoadFromWorkspace(workspace)
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("loading config: %v", err)
 	}

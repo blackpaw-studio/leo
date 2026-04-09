@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
-	"github.com/blackpaw-studio/leo/internal/migrate"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
@@ -23,8 +22,6 @@ var (
 	checkClaudeFn            = prereq.CheckClaude
 	checkTmuxFn              = prereq.CheckTmux
 	checkBunFn               = prereq.CheckBun
-	findOpenClawFn           = prereq.FindOpenClaw
-	migrateInteractiveFn     = migrate.RunInteractive
 	findExistingWorkspacesFn = prereq.FindExistingWorkspaces
 	daemonStatusFn           = service.DaemonStatus
 	sendMessageFn            = telegram.SendMessage
@@ -39,20 +36,6 @@ func Run() error {
 	fmt.Println()
 	prompt.Bold.Println("  Leo Setup Wizard")
 	fmt.Println()
-
-	// Check for existing OpenClaw installation
-	if ocPath := findOpenClawFn(); ocPath != "" {
-		prompt.Info.Printf("  Found OpenClaw installation at %s\n\n", ocPath)
-		fmt.Println("What would you like to do?")
-		fmt.Println("  1. Migrate from OpenClaw — import your existing agent")
-		fmt.Println("  2. Fresh setup — create a new agent from scratch")
-		choice := prompt.Prompt(reader, "Choose", "1")
-		fmt.Println()
-
-		if prompt.ParseChoice(choice, 2) == 1 {
-			return migrateInteractiveFn(reader)
-		}
-	}
 
 	return RunInteractive(reader)
 }
@@ -69,20 +52,15 @@ func RunInteractive(reader *bufio.Reader) error {
 		return err
 	}
 
-	existing, defaultWorkspace := findExistingConfig(home)
+	existing, defaultHome := findExistingConfig(home)
 	if existing != nil {
-		prompt.Info.Printf("  Found existing config at %s/leo.yaml\n\n", existing.Agent.Workspace)
+		prompt.Info.Printf("  Found existing config at %s/leo.yaml\n\n", existing.HomePath)
 	}
 
-	workspace := promptWorkspace(reader, existing, defaultWorkspace)
+	workspace := promptWorkspace(reader, existing, filepath.Join(defaultHome, "workspace"))
 
-	// If workspace changed, try loading config from the new location too
-	if existing == nil && workspace != defaultWorkspace {
-		if cfg, err := config.LoadFromWorkspace(workspace); err == nil {
-			existing = cfg
-			prompt.Info.Printf("  Found existing config at %s\n\n", workspace)
-		}
-	}
+	// Derive the leo home from the workspace (workspace is <home>/workspace)
+	leoHome := filepath.Dir(workspace)
 
 	if err := checkWorkspaceWritable(workspace); err != nil {
 		return err
@@ -91,14 +69,12 @@ func RunInteractive(reader *bufio.Reader) error {
 	userName, role, about, preferences, timezone := promptUserProfileIfNeeded(reader, workspace)
 	botToken, chatID, groupID := promptTelegramConfig(reader, existing)
 
-	cfg := buildConfig(workspace, botToken, chatID, groupID, timezone, existing)
-	promptHeartbeat(reader, cfg, timezone)
-
-	// Remove legacy heartbeat task if it exists alongside the new config
-	delete(cfg.Tasks, "heartbeat")
+	cfg := buildConfig(workspace, botToken, chatID, groupID, existing)
+	cfg.HomePath = leoHome
 
 	// Summary
 	prompt.Bold.Println("\nConfiguration Summary")
+	fmt.Printf("  Leo home:  %s\n", leoHome)
 	fmt.Printf("  Workspace: %s\n", workspace)
 	if userName != "" {
 		fmt.Printf("  User:      %s\n", userName)
@@ -108,11 +84,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	} else {
 		fmt.Printf("  Telegram:  skipped\n")
 	}
-	if cfg.Heartbeat.Enabled {
-		fmt.Printf("  Heartbeat: every %s\n", cfg.Heartbeat.Interval)
-	} else {
-		fmt.Printf("  Heartbeat: disabled\n")
-	}
+	fmt.Printf("  Processes: %d\n", len(cfg.Processes))
 	fmt.Printf("  Tasks:     %d\n", len(cfg.Tasks))
 	fmt.Println()
 
@@ -122,7 +94,7 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	prompt.Bold.Println("\nCreating workspace...")
 	scaffoldOpts := scaffoldOptions{
-		workspace: workspace, home: home, cfg: cfg,
+		workspace: workspace, home: home, leoHome: leoHome, cfg: cfg,
 		userPath: filepath.Join(workspace, "USER.md"),
 		userName: userName, role: role, about: about,
 		preferences: preferences, timezone: timezone,
@@ -133,14 +105,13 @@ func RunInteractive(reader *bufio.Reader) error {
 
 	configureTelegramPlugin(botToken, chatID, groupID, workspace)
 	PromptVoiceTranscription(reader)
-	cfgPath := filepath.Join(workspace, "leo.yaml")
-	promptDaemonInstall(reader, workspace, cfgPath, botToken)
+	cfgPath := filepath.Join(leoHome, "leo.yaml")
+	promptDaemonInstall(reader, leoHome, cfgPath, botToken)
 	sendTestMessage(reader, botToken, chatID, groupID)
 
-	prompt.Bold.Printf("\nSetup complete! Workspace: %s\n", workspace)
+	prompt.Bold.Printf("\nSetup complete! Leo home: %s\n", leoHome)
 	fmt.Println("\nNext steps:")
 	fmt.Printf("  leo service              # Start interactive session\n")
-	fmt.Printf("  leo run heartbeat        # Test heartbeat task\n")
 	fmt.Printf("  leo task list            # View configured tasks\n")
 
 	return nil
@@ -149,7 +120,7 @@ func RunInteractive(reader *bufio.Reader) error {
 func promptWorkspace(reader *bufio.Reader, existing *config.Config, defaultWorkspace string) string {
 	wsDefault := defaultWorkspace
 	if existing != nil {
-		wsDefault = existing.Agent.Workspace
+		wsDefault = existing.DefaultWorkspace()
 	}
 	workspace := prompt.Prompt(reader, "Workspace directory", wsDefault)
 	workspace = prompt.ExpandHome(workspace)
@@ -173,7 +144,7 @@ func promptUserProfileIfNeeded(reader *bufio.Reader, workspace string) (userName
 	userName, role, about, preferences, timezone = promptUserProfile(reader, defaults)
 
 	if timezone == "" {
-		timezone = config.DefaultTimezone
+		timezone = "America/New_York"
 	}
 	return
 }
@@ -222,11 +193,9 @@ func parseUserProfile(path string) templates.UserProfileData {
 	return result
 }
 
-func buildConfig(workspace, botToken, chatID, groupID, timezone string, existing *config.Config) *config.Config {
+func buildConfig(workspace, botToken, chatID, groupID string, existing *config.Config) *config.Config {
+	tr := true
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Workspace: workspace,
-		},
 		Telegram: config.TelegramConfig{
 			BotToken: botToken,
 			ChatID:   chatID,
@@ -236,34 +205,27 @@ func buildConfig(workspace, botToken, chatID, groupID, timezone string, existing
 			Model:    config.DefaultModel,
 			MaxTurns: config.DefaultMaxTurns,
 		},
+		Processes: map[string]config.ProcessConfig{
+			"assistant": {
+				Workspace:     workspace,
+				Channels:      []string{"plugin:telegram@claude-plugins-official"},
+				RemoteControl: &tr,
+				Enabled:       true,
+			},
+		},
 		Tasks: make(map[string]config.TaskConfig),
 	}
 
 	if existing != nil {
 		cfg.Defaults = existing.Defaults
-		cfg.Heartbeat = existing.Heartbeat
+		for k, v := range existing.Processes {
+			cfg.Processes[k] = v
+		}
 		for k, v := range existing.Tasks {
 			cfg.Tasks[k] = v
 		}
 	}
 	return cfg
-}
-
-func promptHeartbeat(reader *bufio.Reader, cfg *config.Config, timezone string) {
-	if !cfg.Heartbeat.Enabled {
-		prompt.Bold.Println("\nHeartbeat")
-		if prompt.YesNo(reader, "Enable heartbeat? (checks in every 30 minutes during waking hours)", true) {
-			cfg.Heartbeat = config.HeartbeatConfig{
-				Enabled:  true,
-				Interval: config.DefaultHeartbeatInterval,
-				Timezone: timezone,
-				Model:    config.DefaultModel,
-				MaxTurns: 10,
-			}
-		}
-	} else {
-		prompt.Info.Println("\n  Heartbeat already configured.")
-	}
 }
 
 func configureTelegramPlugin(botToken, chatID, groupID, workspace string) {
@@ -381,23 +343,18 @@ func checkWorkspaceWritable(workspace string) error {
 }
 
 func findExistingConfig(home string) (*config.Config, string) {
-	defaultWorkspace := filepath.Join(home, ".leo")
+	defaultHome := filepath.Join(home, ".leo")
 
-	if cfg, err := config.LoadFromWorkspace(defaultWorkspace); err == nil {
-		return cfg, defaultWorkspace
+	cfgPath := filepath.Join(defaultHome, "leo.yaml")
+	if cfg, err := config.Load(cfgPath); err == nil {
+		return cfg, defaultHome
 	}
 
-	for _, ws := range findExistingWorkspacesFn() {
-		if cfg, err := config.LoadFromWorkspace(ws); err == nil {
-			return cfg, ws
-		}
-	}
-
-	return nil, defaultWorkspace
+	return nil, defaultHome
 }
 
 type scaffoldOptions struct {
-	workspace, home                              string
+	workspace, home, leoHome                     string
 	cfg                                          *config.Config
 	userPath, userName, role, about, preferences string
 	timezone                                     string
@@ -405,12 +362,14 @@ type scaffoldOptions struct {
 
 func scaffoldWorkspace(opts scaffoldOptions) error {
 	workspace := opts.workspace
+	leoHome := opts.leoHome
 	cfg := opts.cfg
 	dirs := []string{
+		leoHome,
+		filepath.Join(leoHome, "state"),
 		workspace,
 		filepath.Join(workspace, "daily"),
 		filepath.Join(workspace, "reports"),
-		filepath.Join(workspace, "state"),
 		filepath.Join(workspace, "config"),
 		filepath.Join(workspace, "scripts"),
 	}
@@ -420,8 +379,8 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 		}
 	}
 
-	// Write leo.yaml (always — merges existing + new settings)
-	cfgPath := filepath.Join(workspace, "leo.yaml")
+	// Write leo.yaml to leo home (always — merges existing + new settings)
+	cfgPath := filepath.Join(leoHome, "leo.yaml")
 	if err := config.Save(cfgPath, cfg); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
@@ -443,19 +402,6 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 			return fmt.Errorf("writing USER.md: %w", err)
 		}
 		prompt.Info.Printf("  Wrote %s\n", opts.userPath)
-	}
-
-	// Write HEARTBEAT.md (only if missing)
-	heartbeatPath := filepath.Join(workspace, "HEARTBEAT.md")
-	if _, err := os.Stat(heartbeatPath); os.IsNotExist(err) {
-		heartbeatContent, err := templates.RenderHeartbeat()
-		if err != nil {
-			return fmt.Errorf("rendering heartbeat: %w", err)
-		}
-		if err := os.WriteFile(heartbeatPath, []byte(heartbeatContent), 0644); err != nil {
-			return fmt.Errorf("writing HEARTBEAT.md: %w", err)
-		}
-		prompt.Info.Printf("  Wrote %s\n", heartbeatPath)
 	}
 
 	// Write CLAUDE.md (only if missing)
@@ -515,7 +461,7 @@ func promptUserProfile(reader *bufio.Reader, defaults templates.UserProfileData)
 	preferences = prompt.Prompt(reader, "Communication preferences", prefsDefault)
 	tzDefault := defaults.Timezone
 	if tzDefault == "" {
-		tzDefault = config.DefaultTimezone
+		tzDefault = "America/New_York"
 	}
 	timezone = prompt.Prompt(reader, "Timezone", tzDefault)
 	return

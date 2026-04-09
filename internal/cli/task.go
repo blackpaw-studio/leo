@@ -40,8 +40,8 @@ func newTaskListCmd() *cobra.Command {
 				return err
 			}
 
-			if daemon.IsRunning(cfg.Agent.Workspace) {
-				resp, err := daemon.Send(cfg.Agent.Workspace, "GET", "/task/list", nil)
+			if daemon.IsRunning(cfg.HomePath) {
+				resp, err := daemon.Send(cfg.HomePath, "GET", "/task/list", nil)
 				if err != nil {
 					return fmt.Errorf("daemon request failed: %w", err)
 				}
@@ -72,7 +72,7 @@ func newTaskListCmd() *cobra.Command {
 				return nil
 			}
 
-			hist := history.NewStore(cfg.Agent.Workspace)
+			hist := history.NewStore(cfg.HomePath)
 			for name, task := range cfg.Tasks {
 				status := "disabled"
 				if task.Enabled {
@@ -122,7 +122,6 @@ func newTaskAddCmd() *cobra.Command {
 
 			task := config.TaskConfig{
 				Schedule:   schedule,
-				Timezone:   config.DefaultTimezone,
 				PromptFile: promptFile,
 				Model:      model,
 				TopicID:    topicID,
@@ -163,8 +162,8 @@ func newTaskRemoveCmd() *cobra.Command {
 
 			name := args[0]
 
-			if daemon.IsRunning(cfg.Agent.Workspace) {
-				resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/task/remove",
+			if daemon.IsRunning(cfg.HomePath) {
+				resp, err := daemon.Send(cfg.HomePath, "POST", "/task/remove",
 					daemon.TaskNameRequest{Name: name})
 				if err != nil {
 					return fmt.Errorf("daemon request failed: %w", err)
@@ -225,12 +224,12 @@ func setTaskEnabled(name string, enabled bool) error {
 		return err
 	}
 
-	if daemon.IsRunning(cfg.Agent.Workspace) {
+	if daemon.IsRunning(cfg.HomePath) {
 		path := "/task/enable"
 		if !enabled {
 			path = "/task/disable"
 		}
-		resp, err := daemon.Send(cfg.Agent.Workspace, "POST", path,
+		resp, err := daemon.Send(cfg.HomePath, "POST", path,
 			daemon.TaskNameRequest{Name: name})
 		if err != nil {
 			return fmt.Errorf("daemon request failed: %w", err)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -31,11 +32,11 @@ func newConfigShowCmd() *cobra.Command {
 				// Show raw file contents
 				path := cfgFile
 				if path == "" {
-					cfg, err := loadConfig()
+					p, err := config.FindConfig("")
 					if err != nil {
-						return err
+						return fmt.Errorf("no leo.yaml found")
 					}
-					path = filepath.Join(cfg.Agent.Workspace, "leo.yaml")
+					path = p
 				}
 				data, err := os.ReadFile(path)
 				if err != nil {
@@ -51,7 +52,6 @@ func newConfigShowCmd() *cobra.Command {
 			}
 
 			// Apply defaults for display
-			cfg.Heartbeat = cfg.Heartbeat.WithDefaults()
 			if cfg.Defaults.Model == "" {
 				cfg.Defaults.Model = "sonnet"
 			}
@@ -59,11 +59,17 @@ func newConfigShowCmd() *cobra.Command {
 				cfg.Defaults.MaxTurns = 15
 			}
 
+			fmt.Printf("# Home: %s\n", cfg.HomePath)
+			fmt.Printf("# Default workspace: %s\n\n", cfg.DefaultWorkspace())
+
 			data, err := yaml.Marshal(cfg)
 			if err != nil {
 				return fmt.Errorf("marshaling config: %w", err)
 			}
 
+			// Also show resolved paths
+			path := filepath.Join(cfg.HomePath, "leo.yaml")
+			fmt.Printf("# Config file: %s\n", path)
 			fmt.Print(string(data))
 			return nil
 		},

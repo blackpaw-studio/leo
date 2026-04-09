@@ -46,7 +46,7 @@ since the plugin consumes getUpdates.`,
 				return fmt.Errorf("telegram.group_id is not configured in leo.yaml")
 			}
 
-			cachePath := filepath.Join(cfg.Agent.Workspace, "state", "topics.json")
+			cachePath := filepath.Join(cfg.HomePath, "state", "topics.json")
 
 			// Try live discovery first
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

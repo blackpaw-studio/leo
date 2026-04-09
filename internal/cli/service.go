@@ -22,9 +22,10 @@ var supervised bool
 
 func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "service",
-		Short: "Start the persistent claude session",
-		Long:  "Start a long-running claude session with Telegram channel plugin and optional Remote Control.",
+		Use:   "service [process-name]",
+		Short: "Start a persistent claude session",
+		Long:  "Start a long-running claude session for a configured process. Defaults to the first enabled process.",
+		Args:  cobra.MaximumNArgs(1),
 		RunE:  runService,
 	}
 
@@ -48,23 +49,28 @@ func runService(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Seed topic cache before the plugin starts consuming getUpdates
-	if cfg.Telegram.GroupID != "" {
+	// Find the target process (first enabled, or specified by name)
+	procName, proc, err := resolveProcess(cfg, args)
+	if err != nil {
+		return err
+	}
+
+	// Seed topic cache if this process uses telegram
+	if cfg.Telegram.GroupID != "" && processHasTelegram(proc) {
 		seedTopicCache(cfg)
 	}
 
-	// Ensure the telegram plugin's .env has the correct bot token from
-	// leo.yaml. The agent can accidentally overwrite this file, so we
-	// re-sync on every startup.
-	if cfg.Telegram.BotToken != "" {
+	// Sync telegram plugin env if configured
+	if cfg.Telegram.BotToken != "" && processHasTelegram(proc) {
 		syncPluginEnv(cfg.Telegram.BotToken)
 	}
 
-	claudeArgs := buildClaudeArgs(cfg)
+	claudeArgs := buildProcessArgs(cfg, procName, proc)
 
 	// Add session persistence
-	store := session.NewStore(cfg.Agent.Workspace)
-	sid, found, getErr := store.Get("service:dm")
+	store := session.NewStore(cfg.HomePath)
+	sessionKey := "process:" + procName
+	sid, found, getErr := store.Get(sessionKey)
 	if getErr != nil {
 		warn.Printf("  Could not read session store: %v\n", getErr)
 	}
@@ -72,26 +78,25 @@ func runService(cmd *cobra.Command, args []string) error {
 		claudeArgs = append(claudeArgs, "--resume", sid)
 	} else {
 		sid = session.NewID()
-		if err := store.Set("service:dm", sid); err != nil {
+		if err := store.Set(sessionKey, sid); err != nil {
 			warn.Printf("  Could not store session ID: %v\n", err)
 		}
 		claudeArgs = append(claudeArgs, "--session-id", sid)
 	}
 
+	ws := cfg.ProcessWorkspace(proc)
+
 	if supervised {
-		// Supervised/daemon mode: launch claude in interactive mode via
-		// script(1) PTY wrapper. Plugins (telegram) only load in interactive
-		// mode. The open stdin pipe keeps the session alive.
 		claudePath, err := exec.LookPath("claude")
 		if err != nil {
 			return fmt.Errorf("claude not found: %w", err)
 		}
-		info.Println("Starting supervised session...")
+		info.Printf("Starting supervised session (%s)...\n", procName)
 		cfgPath, err := resolveConfigPath(cfg)
 		if err != nil {
 			return fmt.Errorf("resolving config path: %w", err)
 		}
-		return service.RunSupervised(claudePath, claudeArgs, cfg.Agent.Workspace, cfgPath)
+		return service.RunSupervised(claudePath, claudeArgs, ws, cfgPath)
 	}
 
 	// Foreground mode: exec replaces this process
@@ -100,25 +105,65 @@ func runService(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("claude not found: %w", err)
 	}
 
-	info.Println("Starting session...")
+	info.Printf("Starting session (%s)...\n", procName)
 	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), os.Environ())
 }
 
-func buildClaudeArgs(cfg *config.Config) []string {
-	claudeArgs := []string{
-		"--channels", "plugin:telegram@claude-plugins-official",
-		"--add-dir", cfg.Agent.Workspace,
+// resolveProcess finds the target process by name or returns the first enabled process.
+func resolveProcess(cfg *config.Config, args []string) (string, config.ProcessConfig, error) {
+	if len(args) > 0 {
+		name := args[0]
+		proc, ok := cfg.Processes[name]
+		if !ok {
+			return "", config.ProcessConfig{}, fmt.Errorf("process %q not found in config", name)
+		}
+		return name, proc, nil
 	}
 
-	if cfg.Defaults.RemoteControl {
-		claudeArgs = append(claudeArgs, "--remote-control", "Leo")
+	// Find first enabled process
+	for name, proc := range cfg.Processes {
+		if proc.Enabled {
+			return name, proc, nil
+		}
 	}
 
-	if cfg.Defaults.BypassPermissions {
+	return "", config.ProcessConfig{}, fmt.Errorf("no enabled processes in config")
+}
+
+// processHasTelegram checks if a process uses the telegram channel plugin.
+func processHasTelegram(proc config.ProcessConfig) bool {
+	for _, ch := range proc.Channels {
+		if strings.Contains(ch, "telegram") {
+			return true
+		}
+	}
+	return false
+}
+
+// buildProcessArgs builds claude CLI args for a named process.
+func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig) []string {
+	var claudeArgs []string
+
+	for _, ch := range proc.Channels {
+		claudeArgs = append(claudeArgs, "--channels", ch)
+	}
+
+	ws := cfg.ProcessWorkspace(proc)
+	claudeArgs = append(claudeArgs, "--add-dir", ws)
+
+	for _, dir := range proc.AddDirs {
+		claudeArgs = append(claudeArgs, "--add-dir", dir)
+	}
+
+	if cfg.ProcessRemoteControl(proc) {
+		claudeArgs = append(claudeArgs, "--remote-control", name)
+	}
+
+	if cfg.ProcessBypassPermissions(proc) {
 		claudeArgs = append(claudeArgs, "--dangerously-skip-permissions")
 	}
 
-	mcpConfig := cfg.MCPConfigPath()
+	mcpConfig := cfg.ProcessMCPConfigPath(proc)
 	if hasMCPServers(mcpConfig) {
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfig)
 	}
@@ -191,7 +236,7 @@ func newServiceStopCmd() *cobra.Command {
 				return nil
 			}
 
-			if err := service.Stop(cfg.Agent.Workspace); err != nil {
+			if err := service.Stop(cfg.HomePath); err != nil {
 				return err
 			}
 			success.Println("Service stopped.")
@@ -221,7 +266,7 @@ func newServiceRestartCmd() *cobra.Command {
 
 			status, _ := service.DaemonStatus()
 			success.Printf("Daemon restarted (%s).\n", status)
-			info.Printf("Logs: %s\n", service.LogPathFor(cfg.Agent.Workspace))
+			info.Printf("Logs: %s\n", service.LogPathFor(cfg.HomePath))
 			return nil
 		},
 	}
@@ -250,7 +295,7 @@ func newServiceStatusCmd() *cobra.Command {
 				return nil
 			}
 
-			status, err := service.Status(cfg.Agent.Workspace)
+			status, err := service.Status(cfg.HomePath)
 			if err != nil {
 				return err
 			}
@@ -277,7 +322,7 @@ func newServiceLogsCmd() *cobra.Command {
 				return err
 			}
 
-			logPath := service.LogPathFor(cfg.Agent.Workspace)
+			logPath := service.LogPathFor(cfg.HomePath)
 			if _, err := os.Stat(logPath); err != nil {
 				return fmt.Errorf("no log file at %s", logPath)
 			}
@@ -312,7 +357,7 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 		return service.ServiceConfig{}, err
 	}
 
-	logPath := service.LogPathFor(cfg.Agent.Workspace)
+	logPath := service.LogPathFor(cfg.HomePath)
 
 	// Capture relevant environment variables for daemon mode
 	env := make(map[string]string)
@@ -333,7 +378,7 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 	return service.ServiceConfig{
 		LeoPath:    leoPath,
 		ConfigPath: configPath,
-		WorkDir:    cfg.Agent.Workspace,
+		WorkDir:    cfg.HomePath,
 		LogPath:    logPath,
 		Env:        env,
 	}, nil
@@ -351,7 +396,7 @@ func seedTopicCache(cfg *config.Config) {
 		return
 	}
 
-	stateDir := filepath.Join(cfg.Agent.Workspace, "state")
+	stateDir := cfg.StatePath()
 	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		warn.Printf("  Could not create state directory: %v\n", err)
 		return
@@ -366,7 +411,7 @@ func resolveConfigPath(cfg *config.Config) (string, error) {
 	if cfgFile != "" {
 		return filepath.Abs(cfgFile)
 	}
-	return filepath.Abs(filepath.Join(cfg.Agent.Workspace, "leo.yaml"))
+	return filepath.Abs(filepath.Join(cfg.HomePath, "leo.yaml"))
 }
 
 // syncPluginEnv ensures the telegram plugin's .env file has the correct

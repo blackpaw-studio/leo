@@ -18,24 +18,16 @@ var (
 func loadConfig() (*config.Config, error) {
 	path := cfgFile
 	if path == "" {
-		if workspace != "" {
-			path = workspace + "/leo.yaml"
-		} else {
-			var err error
-			path, err = config.FindConfig("")
-			if err != nil {
-				return nil, fmt.Errorf("no leo.yaml found — run 'leo setup' first")
-			}
+		var err error
+		path, err = config.FindConfig("")
+		if err != nil {
+			return nil, fmt.Errorf("no leo.yaml found — run 'leo setup' first")
 		}
 	}
 
 	cfg, err := config.Load(path)
 	if err != nil {
 		return nil, err
-	}
-
-	if workspace != "" {
-		cfg.Agent.Workspace = workspace
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -53,4 +45,3 @@ func leoExecutablePath() (string, error) {
 	}
 	return path, nil
 }
-

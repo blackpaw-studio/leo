@@ -24,7 +24,7 @@ func newRunCmd() *cobra.Command {
 			}
 
 			taskName := args[0]
-			sessions := session.NewStore(cfg.Agent.Workspace)
+			sessions := session.NewStore(cfg.HomePath)
 
 			if dryRun {
 				prompt, cliArgs, err := run.Preview(cfg, taskName, sessions)

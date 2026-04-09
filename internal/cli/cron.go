@@ -35,11 +35,11 @@ func newCronInstallCmd() *cobra.Command {
 				return err
 			}
 
-			if !daemon.IsRunning(cfg.Agent.Workspace) {
+			if !daemon.IsRunning(cfg.HomePath) {
 				return fmt.Errorf("daemon is not running — start it with 'leo service start' first")
 			}
 
-			resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/install", nil)
+			resp, err := daemon.Send(cfg.HomePath, "POST", "/cron/install", nil)
 			if err != nil {
 				return fmt.Errorf("sending to daemon: %w", err)
 			}
@@ -63,11 +63,11 @@ func newCronRemoveCmd() *cobra.Command {
 				return err
 			}
 
-			if !daemon.IsRunning(cfg.Agent.Workspace) {
+			if !daemon.IsRunning(cfg.HomePath) {
 				return fmt.Errorf("daemon is not running — start it with 'leo service start' first")
 			}
 
-			resp, err := daemon.Send(cfg.Agent.Workspace, "POST", "/cron/remove", nil)
+			resp, err := daemon.Send(cfg.HomePath, "POST", "/cron/remove", nil)
 			if err != nil {
 				return fmt.Errorf("sending to daemon: %w", err)
 			}
@@ -91,8 +91,8 @@ func newCronListCmd() *cobra.Command {
 				return err
 			}
 
-			if daemon.IsRunning(cfg.Agent.Workspace) {
-				resp, err := daemon.Send(cfg.Agent.Workspace, "GET", "/cron/list", nil)
+			if daemon.IsRunning(cfg.HomePath) {
+				resp, err := daemon.Send(cfg.HomePath, "GET", "/cron/list", nil)
 				if err == nil && resp.OK {
 					var entries []cron.EntryInfo
 					if err := json.Unmarshal(resp.Data, &entries); err == nil {

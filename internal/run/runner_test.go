@@ -18,10 +18,7 @@ func TestAssemblePrompt(t *testing.T) {
 	os.WriteFile(promptFile, []byte(promptContent), 0644)
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Name:      "myagent",
-			Workspace: dir,
-		},
+		HomePath: dir,
 		Telegram: config.TelegramConfig{
 			BotToken: "123:ABC",
 			ChatID:   "456",
@@ -38,6 +35,7 @@ func TestAssemblePrompt(t *testing.T) {
 		{
 			name: "basic task",
 			task: config.TaskConfig{
+				Workspace:  dir,
 				PromptFile: "HEARTBEAT.md",
 				TopicID:    42,
 			},
@@ -47,6 +45,7 @@ func TestAssemblePrompt(t *testing.T) {
 		{
 			name: "silent task",
 			task: config.TaskConfig{
+				Workspace:  dir,
 				PromptFile: "HEARTBEAT.md",
 				TopicID:    42,
 				Silent:     true,
@@ -57,6 +56,7 @@ func TestAssemblePrompt(t *testing.T) {
 		{
 			name: "no topic",
 			task: config.TaskConfig{
+				Workspace:  dir,
 				PromptFile: "HEARTBEAT.md",
 			},
 			wantSilent: false,
@@ -105,16 +105,14 @@ func TestAssemblePromptPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Workspace: dir,
-		},
+		HomePath: dir,
 		Telegram: config.TelegramConfig{
 			BotToken: "token",
 			ChatID:   "123",
 		},
 	}
 
-	task := config.TaskConfig{PromptFile: "../../../etc/passwd"}
+	task := config.TaskConfig{Workspace: dir, PromptFile: "../../../etc/passwd"}
 
 	_, err := assemblePrompt(cfg, task)
 	if err == nil {
@@ -129,16 +127,14 @@ func TestAssemblePromptMissingFile(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Workspace: dir,
-		},
+		HomePath: dir,
 		Telegram: config.TelegramConfig{
 			BotToken: "token",
 			ChatID:   "123",
 		},
 	}
 
-	task := config.TaskConfig{PromptFile: "nonexistent.md"}
+	task := config.TaskConfig{Workspace: dir, PromptFile: "nonexistent.md"}
 
 	_, err := assemblePrompt(cfg, task)
 	if err == nil {
@@ -148,10 +144,7 @@ func TestAssemblePromptMissingFile(t *testing.T) {
 
 func makeTestConfig(dir string, bypassPermissions bool) *config.Config {
 	return &config.Config{
-		Agent: config.AgentConfig{
-			Name:      "myagent",
-			Workspace: dir,
-		},
+		HomePath: dir,
 		Defaults: config.DefaultsConfig{
 			Model:             "sonnet",
 			MaxTurns:          15,
@@ -162,7 +155,9 @@ func makeTestConfig(dir string, bypassPermissions bool) *config.Config {
 
 func TestBuildArgs(t *testing.T) {
 	dir := t.TempDir()
-	mcpDir := filepath.Join(dir, "config")
+	// MCP config must be at <workspace>/config/mcp-servers.json.
+	// Default workspace is <HomePath>/workspace, so create it there.
+	mcpDir := filepath.Join(dir, "workspace", "config")
 	os.MkdirAll(mcpDir, 0755)
 	os.WriteFile(filepath.Join(mcpDir, "mcp-servers.json"), []byte(`{"mcpServers":{"test":{"command":"echo"}}}`), 0644)
 
@@ -346,14 +341,13 @@ func TestIsSessionError(t *testing.T) {
 
 func TestPreview(t *testing.T) {
 	dir := t.TempDir()
-	promptFile := filepath.Join(dir, "HEARTBEAT.md")
-	os.WriteFile(promptFile, []byte("Check inbox"), 0644)
+	// Default workspace is <HomePath>/workspace; create prompt file there.
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "HEARTBEAT.md"), []byte("Check inbox"), 0644)
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Name:      "myagent",
-			Workspace: dir,
-		},
+		HomePath: dir,
 		Telegram: config.TelegramConfig{
 			BotToken: "123:ABC",
 			ChatID:   "456",
@@ -414,17 +408,17 @@ func TestRunSuccess(t *testing.T) {
 	defer func() { execCommand = orig }()
 
 	dir := t.TempDir()
-	// Create prompt file
-	os.WriteFile(filepath.Join(dir, "task.md"), []byte("test prompt"), 0644)
-	// Create state dir for logs
-	os.MkdirAll(filepath.Join(dir, "state"), 0755)
+	// Default workspace is <HomePath>/workspace; create prompt file there.
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		return exec.Command("echo", "task output")
 	}
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "test", Workspace: dir},
+		HomePath: dir,
 		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks: map[string]config.TaskConfig{
@@ -437,7 +431,7 @@ func TestRunSuccess(t *testing.T) {
 		t.Fatalf("Run() error: %v", err)
 	}
 
-	// Verify log was written
+	// Verify log was written; StatePath() = <HomePath>/state
 	logData, err := os.ReadFile(filepath.Join(dir, "state", "mytask.log"))
 	if err != nil {
 		t.Fatalf("reading log: %v", err)
@@ -452,15 +446,16 @@ func TestRunCommandError(t *testing.T) {
 	defer func() { execCommand = orig }()
 
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "task.md"), []byte("test prompt"), 0644)
-	os.MkdirAll(filepath.Join(dir, "state"), 0755)
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		return exec.Command("false")
 	}
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "test", Workspace: dir},
+		HomePath: dir,
 		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks: map[string]config.TaskConfig{
@@ -484,7 +479,7 @@ func TestRunMissingPromptFile(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{Name: "test", Workspace: dir},
+		HomePath: dir,
 		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks: map[string]config.TaskConfig{
@@ -505,15 +500,14 @@ func TestWriteLog(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		Agent: config.AgentConfig{
-			Workspace: dir,
-		},
+		HomePath: dir,
 	}
 
 	if err := writeLog(cfg, "test-task", []byte("test output")); err != nil {
 		t.Fatal(err)
 	}
 
+	// StatePath() = <HomePath>/state
 	logPath := filepath.Join(dir, "state", "test-task.log")
 	data, err := os.ReadFile(logPath)
 	if err != nil {

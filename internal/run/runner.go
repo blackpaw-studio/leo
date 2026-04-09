@@ -41,20 +41,16 @@ Do not include process narration, status updates, or tool output. Only emit the 
 `
 
 // claudeResult is the minimal structure for parsing claude --output-format json.
-// See: claude --help for the JSON output schema.
 type claudeResult struct {
 	SessionID string `json:"session_id"`
 	Result    string `json:"result"`
 	IsError   bool   `json:"is_error"`
 }
 
-// resolveTask looks up a task by name, checking both the tasks map and heartbeat config.
+// resolveTask looks up a task by name.
 func resolveTask(cfg *config.Config, taskName string) (config.TaskConfig, error) {
 	if task, ok := cfg.Tasks[taskName]; ok {
 		return task, nil
-	}
-	if taskName == "heartbeat" && cfg.Heartbeat.Enabled {
-		return cfg.Heartbeat.ToTaskConfig()
 	}
 	return config.TaskConfig{}, fmt.Errorf("task %q not found in config", taskName)
 }
@@ -107,13 +103,12 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 	args := buildArgs(cfg, task, prompt, sessionID)
 
-	output, execErr := executeCommand(cfg, args)
+	taskWorkspace := cfg.TaskWorkspace(task)
+	output, execErr := executeCommand(taskWorkspace, args)
 	result := parseClaudeOutput(output)
 
 	// If --resume failed with a stale session, retry without it.
-	// Only retry when we actually used --resume and the error looks session-related.
 	if execErr != nil && sessionID != "" && isSessionError(result, output) {
-		// Clear the stale session
 		if sessions != nil {
 			if delErr := sessions.Delete("task:" + taskName); delErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to clear stale session: %v\n", delErr)
@@ -121,7 +116,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		}
 
 		args = buildArgs(cfg, task, prompt, "")
-		output, execErr = executeCommand(cfg, args)
+		output, execErr = executeCommand(taskWorkspace, args)
 		result = parseClaudeOutput(output)
 	}
 
@@ -146,7 +141,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	if execErr != nil {
 		exitCode = 1
 	}
-	hist := history.NewStore(cfg.Agent.Workspace)
+	hist := history.NewStore(cfg.HomePath)
 	if histErr := hist.Record(taskName, exitCode); histErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
 	}
@@ -168,31 +163,30 @@ func isSessionError(result claudeResult, output []byte) bool {
 		(strings.Contains(text, "not found") || strings.Contains(text, "invalid") || strings.Contains(text, "expired"))
 }
 
-func executeCommand(cfg *config.Config, args []string) ([]byte, error) {
+func executeCommand(workDir string, args []string) ([]byte, error) {
 	cmd := execCommand("claude", args...)
-	cmd.Dir = cfg.Agent.Workspace
+	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
 	return cmd.CombinedOutput()
 }
 
 // parseClaudeOutput attempts to extract structured data from claude JSON output.
-// Returns a zero-value struct if output is not valid JSON (graceful fallback).
-// Callers cannot distinguish "valid JSON with empty fields" from "non-JSON output".
 func parseClaudeOutput(output []byte) claudeResult {
 	var result claudeResult
-	_ = json.Unmarshal(output, &result) // non-JSON output treated as empty result
+	_ = json.Unmarshal(output, &result)
 	return result
 }
 
 func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) {
-	promptPath := filepath.Join(cfg.Agent.Workspace, task.PromptFile)
+	taskWorkspace := cfg.TaskWorkspace(task)
+	promptPath := filepath.Join(taskWorkspace, task.PromptFile)
 
 	// Prevent path traversal: ensure the resolved path is within the workspace.
 	absPrompt, err := filepath.Abs(promptPath)
 	if err != nil {
 		return "", fmt.Errorf("resolving prompt path: %w", err)
 	}
-	absWorkspace, err := filepath.Abs(cfg.Agent.Workspace)
+	absWorkspace, err := filepath.Abs(taskWorkspace)
 	if err != nil {
 		return "", fmt.Errorf("resolving workspace path: %w", err)
 	}
@@ -250,12 +244,13 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 		args = append(args, "--dangerously-skip-permissions")
 	}
 
-	mcpConfig := cfg.MCPConfigPath()
+	mcpConfig := cfg.TaskMCPConfigPath(task)
 	if hasMCPServers(mcpConfig) {
 		args = append(args, "--mcp-config", mcpConfig)
 	}
 
-	args = append(args, "--add-dir", cfg.Agent.Workspace)
+	taskWorkspace := cfg.TaskWorkspace(task)
+	args = append(args, "--add-dir", taskWorkspace)
 
 	return args
 }
@@ -277,7 +272,7 @@ func hasMCPServers(path string) bool {
 }
 
 func writeLog(cfg *config.Config, taskName string, output []byte) error {
-	stateDir := filepath.Join(cfg.Agent.Workspace, "state")
+	stateDir := cfg.StatePath()
 	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		return err
 	}

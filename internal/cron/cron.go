@@ -68,17 +68,6 @@ func (s *Scheduler) Install(cfg *config.Config) error {
 		delete(s.tasks, name)
 	}
 
-	// Add heartbeat if enabled
-	if cfg.Heartbeat.Enabled {
-		task, err := cfg.Heartbeat.ToTaskConfig()
-		if err != nil {
-			return fmt.Errorf("scheduling heartbeat: %w", err)
-		}
-		if err := s.addLocked("heartbeat", task); err != nil {
-			return fmt.Errorf("scheduling heartbeat: %w", err)
-		}
-	}
-
 	// Add enabled tasks
 	for name, task := range cfg.Tasks {
 		if !task.Enabled {
