@@ -73,19 +73,19 @@ func RegisterBotCommands(botToken string) error {
 
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", botToken)
 
-	// Register for default scope (group chats)
-	resp, err := http.Post(apiURL, "application/json", strings.NewReader(`{`+commands+`}`)) // #nosec G107 -- URL constructed from config bot token
-	if err != nil {
-		return fmt.Errorf("setting bot commands: %w", err)
+	// Register for all scopes so commands show up in DMs, groups, and globally
+	scopes := []string{
+		`{` + commands + `}`,
+		`{` + commands + `,"scope":{"type":"all_private_chats"}}`,
+		`{` + commands + `,"scope":{"type":"all_group_chats"}}`,
 	}
-	resp.Body.Close()
-
-	// Register for private chats
-	resp, err = http.Post(apiURL, "application/json", strings.NewReader(`{`+commands+`,"scope":{"type":"all_private_chats"}}`)) // #nosec G107
-	if err != nil {
-		return fmt.Errorf("setting bot commands (private): %w", err)
+	for _, body := range scopes {
+		resp, err := http.Post(apiURL, "application/json", strings.NewReader(body)) // #nosec G107 -- URL constructed from config bot token
+		if err != nil {
+			return fmt.Errorf("setting bot commands: %w", err)
+		}
+		resp.Body.Close()
 	}
-	resp.Body.Close()
 
 	return nil
 }
