@@ -106,6 +106,12 @@ func (s *Supervisor) setState(name, status string) {
 func (s *Supervisor) initState(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, ok := s.states[name]; ok {
+		// Preserve fields (e.g. Ephemeral) set before superviseProcess starts
+		existing.Status = "starting"
+		existing.StartedAt = time.Now()
+		return
+	}
 	s.states[name] = &ProcessState{
 		Name:      name,
 		Status:    "starting",
