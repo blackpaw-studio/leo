@@ -14,6 +14,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/telegram"
@@ -478,27 +479,14 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 	logPath := service.LogPathFor(cfg.HomePath)
 
 	// Capture relevant environment variables for daemon mode
-	env := make(map[string]string)
-	for _, key := range []string{
-		"ANTHROPIC_API_KEY",
-		"CLAUDE_CODE_ENTRYPOINT",
-		"HOME",
-		"PATH",
-		"SHELL",
-		"USER",
-		"TELEGRAM_BOT_TOKEN",
-	} {
-		if v := os.Getenv(key); v != "" {
-			env[key] = v
-		}
-	}
+	environ := env.Capture()
 
 	return service.ServiceConfig{
 		LeoPath:    leoPath,
 		ConfigPath: configPath,
 		WorkDir:    cfg.HomePath,
 		LogPath:    logPath,
-		Env:        env,
+		Env:        environ,
 	}, nil
 }
 

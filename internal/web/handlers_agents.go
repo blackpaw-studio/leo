@@ -275,7 +275,7 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		WebPort:    strconv.Itoa(cfg.WebPort()),
 	})
 
-	s.renderFlash(w, "success", fmt.Sprintf("Agent %q spawned — check claude.ai/code", agentName))
+	s.renderFlash(w, "success", fmt.Sprintf("Agent %q spawned — connect via Claude web or app", agentName))
 }
 
 // handleWebAgentStop stops an agent via the web UI (form post).
