@@ -3,6 +3,8 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -376,12 +378,25 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	name := r.PathValue("name")
 	sessionName := "leo-" + name
 
-	cmd := s.execCommand("tmux", "send-keys", "-t", sessionName, "Escape")
+	tmuxPath := findTmuxPath()
+	cmd := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape")
 	if err := cmd.Run(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to interrupt %s: %v", name, err))
 		return
 	}
 	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
+}
+
+func findTmuxPath() string {
+	if p, err := exec.LookPath("tmux"); err == nil {
+		return p
+	}
+	for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "tmux"
 }
 
 func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {

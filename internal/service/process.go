@@ -314,8 +314,8 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			claudeCmd = fmt.Sprintf("export PATH=%s; %s", shellQuote(p), claudeCmd)
 		}
 
-		// Inject Leo process name for plugin control commands
-		claudeCmd = fmt.Sprintf("export LEO_PROCESS_NAME=%s; %s", shellQuote(spec.Name), claudeCmd)
+		// Inject Leo env vars for plugin control commands
+		claudeCmd = fmt.Sprintf("export LEO_PROCESS_NAME=%s; export LEO_TMUX_PATH=%s; %s", shellQuote(spec.Name), shellQuote(tmuxPath), claudeCmd)
 
 		// Add per-process env vars
 		for k, v := range spec.Env {
