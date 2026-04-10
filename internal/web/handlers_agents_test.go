@@ -120,7 +120,9 @@ func TestAPITemplateList(t *testing.T) {
 	}
 
 	var resp apiResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("expected ok=true, got error: %s", resp.Error)
 	}
@@ -147,7 +149,9 @@ func TestAPIAgentList(t *testing.T) {
 	}
 
 	var resp apiResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
 	if !resp.OK {
 		t.Fatal("expected ok=true")
 	}
