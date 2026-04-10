@@ -15,7 +15,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/history"
-	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 // dashboardData is the template data for the full dashboard page.
@@ -379,20 +378,14 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	name := r.PathValue("name")
 	sessionName := "leo-" + name
 
-	// Clear the session ID so Claude starts fresh instead of resuming
-	// the interrupted operation.
-	cfg, _ := s.loadConfig()
-	if cfg != nil {
-		store := session.NewStore(cfg.HomePath)
-		store.Delete("process:" + name) //nolint:errcheck
-	}
-
 	tmuxPath := findTmuxPath()
-	// kill-pane terminates all processes in the pane (Claude + tool subprocesses).
-	// The supervisor will detect the exit and restart fresh (no --resume).
-	if err := s.execCommand(tmuxPath, "kill-pane", "-t", sessionName).Run(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to interrupt %s: %v", name, err))
-		return
+	// Send Escape — same as pressing Escape in the terminal.
+	// Send it a few times to catch different states.
+	for i := 0; i < 3; i++ {
+		s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+		if i < 2 {
+			time.Sleep(200 * time.Millisecond)
+		}
 	}
 	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
 }
