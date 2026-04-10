@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"html/template"
 	"net/http"
 	"os"
 	"os/exec"
@@ -458,12 +459,12 @@ func (s *Server) handleCronPreview(w http.ResponseWriter, r *http.Request) {
 	schedule, err := parser.Parse(expr)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<span class="cron-preview-error">Invalid: %s</span>`, err.Error())
+		fmt.Fprintf(w, `<span class="cron-preview-error">Invalid: %s</span>`, template.HTMLEscapeString(err.Error()))
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<span class="cron-preview-desc">%s</span>`, describeCron(expr))
+	fmt.Fprintf(w, `<span class="cron-preview-desc">%s</span>`, template.HTMLEscapeString(describeCron(expr)))
 	fmt.Fprintf(w, `<span class="cron-preview-times">Next: `)
 	t := time.Now()
 	for i := 0; i < 3; i++ {
@@ -471,7 +472,7 @@ func (s *Server) handleCronPreview(w http.ResponseWriter, r *http.Request) {
 		if i > 0 {
 			fmt.Fprintf(w, `, `)
 		}
-		fmt.Fprintf(w, `%s`, t.Format("Mon Jan 2 3:04 PM"))
+		fmt.Fprintf(w, `%s`, template.HTMLEscapeString(t.Format("Mon Jan 2 3:04 PM")))
 	}
 	fmt.Fprintf(w, `</span>`)
 }

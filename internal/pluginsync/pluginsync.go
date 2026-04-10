@@ -66,7 +66,7 @@ func RegisterBotCommands(botToken string) error {
 		`]}`
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", botToken)
-	resp, err := http.Post(url, "application/json", strings.NewReader(body)) //nolint:gosec
+	resp, err := http.Post(url, "application/json", strings.NewReader(body)) // #nosec G107 -- URL constructed from config bot token
 	if err != nil {
 		return fmt.Errorf("setting bot commands: %w", err)
 	}
