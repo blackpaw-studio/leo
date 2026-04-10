@@ -16,7 +16,9 @@
 
 Leo is a CLI tool that supervises persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) processes and schedules tasks. It manages multiple Claude processes — each with its own workspace, model, and channel configuration — along with cron-driven tasks for autonomous background work. Telegram integration gives you mobile access to your assistants, and scheduled tasks let them check in, send briefings, and work on a schedule.
 
-Leo manages the config, prompt assembly, and cron entries — your system's cron runs `claude` directly.
+Leo includes a built-in web dashboard for monitoring and managing processes and tasks from a browser on your local network.
+
+Leo manages the config, prompt assembly, and scheduling — the daemon runs `claude` directly.
 
 ## Install
 
@@ -131,20 +133,20 @@ Logs for both modes are written to `~/.leo/state/service.log`.
 | `leo service stop` | Stop background service |
 | `leo service status` | Show service status |
 | `leo service restart` | Restart background service |
+| `leo service reload` | Reload config without restarting |
 | `leo service logs` | Tail service logs (`-n/--tail`, `-f/--follow`) |
 | `leo run <task>` | Run a scheduled task once (cron entry point) |
-| `leo cron install` | Install all enabled tasks to system crontab |
-| `leo cron remove` | Remove all Leo-managed cron entries |
-| `leo cron list` | Show installed schedules |
 | `leo task list` | List configured tasks |
 | `leo task add` | Add a new scheduled task interactively |
 | `leo task remove <name>` | Remove a task from the config |
 | `leo task enable <name>` | Enable a task |
 | `leo task disable <name>` | Disable a task |
+| `leo task history <name>` | Show execution history |
+| `leo process list` | Show process states |
 | `leo telegram topics` | Discover forum topics from recent messages |
 | `leo session list` | List stored sessions |
 | `leo session clear` | Clear stored session(s) |
-| `leo status` | Show overall leo status (service, processes, tasks) |
+| `leo status` | Show overall leo status (service, processes, tasks, web UI) |
 | `leo validate` | Check config, prerequisites, and workspace health |
 | `leo config show` | Display effective config with defaults applied |
 | `leo update` | Update leo binary and refresh workspace files |
@@ -172,8 +174,13 @@ telegram:
 defaults:
   model: sonnet
   max_turns: 15
-  bypass_permissions: false
+  permission_mode: bypassPermissions        # or: default, acceptEdits, auto, dontAsk, plan
   remote_control: false
+
+web:
+  enabled: true
+  port: 8370                                # default
+  bind: "0.0.0.0"                           # LAN accessible
 
 processes:
   assistant:
@@ -186,6 +193,7 @@ processes:
   researcher:
     workspace: ~/research-agent
     model: opus
+    agent: code-reviewer                    # run as a specific agent
     add_dirs:
       - ~/projects/data
     enabled: true
@@ -194,20 +202,48 @@ tasks:
   heartbeat:
     schedule: "0,30 7-22 * * *"
     timezone: America/New_York
-    prompt_file: HEARTBEAT.md
+    prompt_file: prompts/heartbeat.md
     enabled: true
     silent: true
 
   daily-news-briefing:
     schedule: "0 7 * * *"
     timezone: America/New_York
-    prompt_file: reports/daily-news-briefing.md
+    prompt_file: prompts/daily-news-briefing.md
     model: opus
     max_turns: 20
     topic_id: 3
+    timeout: 1h
+    retries: 1
+    notify_on_fail: true
     enabled: true
     silent: true
 ```
+
+### Defaults
+
+Settings inherited by all processes and tasks unless overridden.
+
+| Field | Description | Default |
+|---|---|---|
+| `model` | Claude model | `sonnet` |
+| `max_turns` | Max agent turns | `15` |
+| `bypass_permissions` | Legacy: pass `--dangerously-skip-permissions` | `false` |
+| `remote_control` | Enable remote control by default | `false` |
+| `permission_mode` | Permission mode for all processes/tasks | — |
+| `allowed_tools` | Default tool whitelist | — |
+| `disallowed_tools` | Default tool blacklist | — |
+| `append_system_prompt` | Extra system prompt for all processes/tasks | — |
+
+### Web UI
+
+| Field | Description | Default |
+|---|---|---|
+| `web.enabled` | Enable the web dashboard | `false` |
+| `web.port` | TCP port for web UI | `8370` |
+| `web.bind` | Bind address | `0.0.0.0` |
+
+When enabled, the daemon serves a web dashboard at `http://<bind>:<port>` with process monitoring, task management, config editing, and cron preview.
 
 ### Process Options
 
@@ -219,24 +255,37 @@ Each entry under `processes:` defines a persistent Claude session that the servi
 | `channels` | Channel plugins to attach (e.g. Telegram) | — |
 | `model` | Claude model override | `defaults.model` |
 | `max_turns` | Max agent turns override | `defaults.max_turns` |
-| `bypass_permissions` | Pass `--dangerously-skip-permissions` to claude | `defaults.bypass_permissions` |
+| `agent` | Run as a specific agent definition | — |
+| `permission_mode` | Permission mode override (default, acceptEdits, auto, bypassPermissions, dontAsk, plan) | `defaults.permission_mode` |
+| `bypass_permissions` | Legacy: pass `--dangerously-skip-permissions` | `defaults.bypass_permissions` |
 | `remote_control` | Enable `--remote-control` for web/mobile access via claude.ai/code | `defaults.remote_control` |
+| `allowed_tools` | Tool whitelist (comma-separated) | `defaults.allowed_tools` |
+| `disallowed_tools` | Tool blacklist (comma-separated) | `defaults.disallowed_tools` |
+| `append_system_prompt` | Extra system prompt for this process | `defaults.append_system_prompt` |
 | `mcp_config` | Path to MCP config (relative to workspace, or absolute) | `<workspace>/config/mcp-servers.json` |
 | `add_dirs` | Additional directories to pass to claude | — |
+| `env` | Environment variables for the claude process | — |
 | `enabled` | Whether the service should start this process | `false` |
 
 ### Task Options
 
 | Field | Description | Default |
 |---|---|---|
-| `schedule` | Cron expression | *required* |
-| `timezone` | IANA timezone | — |
+| `schedule` | 5-field cron expression | *required* |
+| `timezone` | IANA timezone for schedule | — |
 | `prompt_file` | Path to prompt (relative to workspace) | *required* |
 | `workspace` | Working directory for this task | `~/.leo/workspace` |
 | `model` | Claude model override | `defaults.model` |
 | `max_turns` | Max agent turns override | `defaults.max_turns` |
+| `timeout` | Max duration before kill (e.g. `30m`, `1h`) | `30m` |
+| `retries` | Retry attempts on failure | `0` |
 | `topic_id` | Telegram forum topic ID (discover via `leo telegram topics`) | — |
-| `enabled` | Whether cron should run this task | `false` |
+| `permission_mode` | Permission mode override | `defaults.permission_mode` |
+| `allowed_tools` | Tool whitelist (comma-separated) | `defaults.allowed_tools` |
+| `disallowed_tools` | Tool blacklist (comma-separated) | `defaults.disallowed_tools` |
+| `append_system_prompt` | Extra system prompt for this task | `defaults.append_system_prompt` |
+| `notify_on_fail` | Send Telegram message on non-zero exit | `false` |
+| `enabled` | Whether the scheduler should run this task | `false` |
 | `silent` | Prepend silent-mode preamble to prompt | `false` |
 
 ## Directory Structure
@@ -246,15 +295,15 @@ Each entry under `processes:` defines a persistent Claude session that the servi
 ├── leo.yaml                     # Config
 ├── state/
 │   ├── sessions.json            # Session state
+│   ├── task-history.json        # Task execution history
 │   ├── service.log              # Service logs
 │   └── leo.sock                 # Daemon socket
 └── workspace/                   # Default workspace
     ├── CLAUDE.md                # Agent instructions
     ├── USER.md                  # Your profile
-    ├── HEARTBEAT.md             # Heartbeat checklist prompt
     ├── config/
     │   └── mcp-servers.json     # MCP server configuration
-    ├── reports/                 # Task prompt files
+    ├── prompts/                 # Task prompt files
     └── skills/                  # Agent skills
 ```
 
@@ -265,15 +314,16 @@ Processes can use the default workspace or specify their own via the `workspace`
 **Leo is** a process supervisor and task scheduler for Claude Code. It gives your assistants:
 
 - **Multi-process management** — run multiple Claude sessions with independent workspaces, models, and channels
+- **Web dashboard** — monitor processes, manage tasks, and edit config from a browser on your LAN
 - **Persistent memory** via user-configured MCP memory servers
 - **Mobile access** via Telegram — chat with your assistants from your phone
 - **Remote control** via claude.ai/code — access your assistants from any browser
-- **Scheduled tasks** via cron — your assistants can check in, send briefings, and run background work autonomously
+- **Scheduled tasks** — your assistants can check in, send briefings, and run background work autonomously
+- **Full Claude flag support** — per-process/task agent, permission mode, tool restrictions, and system prompts
 
 **Leo is not:**
 
 - A replacement for the Claude API or Agent SDK — it wraps the stock `claude` CLI
-- A daemon or long-running service (except during `leo service`) — cron runs `claude` directly
 
 ## Development
 

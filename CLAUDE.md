@@ -35,6 +35,7 @@ cmd/leo/main.go          → cli.Execute() entry point
 internal/cli/             → Cobra command definitions (root.go wires all subcommands)
 internal/config/          → Config types + YAML loading/saving (leo.yaml)
 internal/daemon/          → Daemon IPC server (Unix socket HTTP) + client for CLI passthrough
+internal/web/             → Web UI (htmx + Go html/template, embedded via embed.FS)
 internal/service/         → Process supervisor (multi-process tmux management, launchd/systemd)
 internal/run/             → Task runner: prompt assembly + claude invocation
 internal/cron/            → In-process cron scheduler (robfig/cron wrapper)
@@ -52,6 +53,8 @@ internal/env/             → Shared environment capture for daemon/cron process
 
 Key design patterns:
 - **Multi-process supervisor**: `RunSupervised()` spawns a goroutine per enabled process, each managing its own tmux session (`leo-<name>`) with restart loop and backoff
+- **Dual listener daemon**: Unix socket for CLI IPC, optional TCP listener for web UI. Both served from the same daemon process.
+- **Web UI**: htmx + Go `html/template`, embedded via `embed.FS`. Dark terminal theme. Auto-refreshing dashboard with process status, task table, config editing, and cron preview.
 - **Testability seams**: `run.execCommand`, `service.supervisedExecFn` etc. are package-level vars replaced in tests
 - **Config resolution**: `FindConfig()` walks up from cwd, falls back to `~/.leo/leo.yaml`; settings cascade from `defaults` to per-process/task overrides
 - **Templates**: embedded via `//go:embed *.md` in `internal/templates/`, rendered with `text/template`
@@ -61,15 +64,16 @@ Key design patterns:
 Config lives at `~/.leo/leo.yaml` (the "leo home"). Key sections:
 
 - `telegram` (bot_token, chat_id, group_id)
-- `defaults` (model, max_turns, bypass_permissions, remote_control)
-- `processes` (map of named process configs — workspace, channels, model overrides)
-- `tasks` (map of named task configs — schedule, prompt_file, model overrides)
+- `defaults` (model, max_turns, bypass_permissions, remote_control, permission_mode, allowed_tools, disallowed_tools, append_system_prompt)
+- `web` (enabled, port, bind — web UI configuration)
+- `processes` (map of named process configs — workspace, channels, model, agent, permission_mode, allowed_tools, disallowed_tools, append_system_prompt, env, etc.)
+- `tasks` (map of named task configs — schedule, prompt_file, model, timeout, retries, permission_mode, allowed_tools, disallowed_tools, append_system_prompt, etc.)
 
 Each process and task can specify its own `workspace`. Default workspace is `~/.leo/workspace/`.
 
 State (sessions, logs, daemon socket) lives in `~/.leo/state/`.
 
-`Config.Validate()` checks model names (sonnet/opus/haiku), cron schedule syntax, telegram consistency. Called automatically by CLI on config load.
+`Config.Validate()` checks model names (sonnet/opus/haiku), cron schedule syntax, telegram consistency, web port range, permission_mode values. Called automatically by CLI on config load and by web UI before every save.
 
 ## Dependencies
 
