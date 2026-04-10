@@ -4,8 +4,10 @@ package pluginsync
 import (
 	"embed"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //go:embed telegram/server.ts telegram/package.json
@@ -46,5 +48,32 @@ func SyncTelegramPlugin() error {
 		}
 	}
 
+	return nil
+}
+
+// RegisterBotCommands sets the Telegram bot's command menu via the Bot API.
+// This makes commands show up when users type "/" in the chat.
+func RegisterBotCommands(botToken string) error {
+	if botToken == "" {
+		return nil
+	}
+
+	body := `{"commands":[` +
+		`{"command":"stop","description":"Interrupt the current Claude operation"},` +
+		`{"command":"status","description":"Show bot connection status"},` +
+		`{"command":"help","description":"Show available commands"},` +
+		`{"command":"start","description":"Start a conversation"}` +
+		`]}`
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", botToken)
+	resp, err := http.Post(url, "application/json", strings.NewReader(body)) //nolint:gosec
+	if err != nil {
+		return fmt.Errorf("setting bot commands: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("setting bot commands: HTTP %d", resp.StatusCode)
+	}
 	return nil
 }

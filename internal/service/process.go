@@ -238,6 +238,13 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		fmt.Fprintf(os.Stderr, "warning: failed to sync telegram plugin: %v\n", err)
 	}
 
+	// Register bot commands with Telegram (best-effort)
+	if cfg, err := config.Load(configPath); err == nil && cfg.Telegram.BotToken != "" {
+		if err := pluginsync.RegisterBotCommands(cfg.Telegram.BotToken); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to register bot commands: %v\n", err)
+		}
+	}
+
 	supervisor := NewSupervisor()
 
 	// Start daemon IPC server with process state provider
