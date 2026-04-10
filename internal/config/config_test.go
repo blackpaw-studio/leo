@@ -745,3 +745,72 @@ func TestHasMCPServers(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateWebConfig(t *testing.T) {
+	t.Run("valid web config", func(t *testing.T) {
+		cfg := &Config{
+			Web: WebConfig{Enabled: true, Port: 8370, Bind: "0.0.0.0"},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("invalid port too high", func(t *testing.T) {
+		cfg := &Config{
+			Web: WebConfig{Port: 70000},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for invalid port")
+		}
+		if !contains(err.Error(), "web.port") {
+			t.Errorf("error = %q, want mention of web.port", err.Error())
+		}
+	})
+
+	t.Run("invalid port negative", func(t *testing.T) {
+		cfg := &Config{
+			Web: WebConfig{Port: -1},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for negative port")
+		}
+	})
+
+	t.Run("invalid bind address", func(t *testing.T) {
+		cfg := &Config{
+			Web: WebConfig{Bind: "not-an-ip"},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for invalid bind address")
+		}
+		if !contains(err.Error(), "web.bind") {
+			t.Errorf("error = %q, want mention of web.bind", err.Error())
+		}
+	})
+
+	t.Run("default values", func(t *testing.T) {
+		cfg := &Config{}
+		if cfg.WebPort() != 8370 {
+			t.Errorf("WebPort() = %d, want 8370", cfg.WebPort())
+		}
+		if cfg.WebBind() != "0.0.0.0" {
+			t.Errorf("WebBind() = %q, want \"0.0.0.0\"", cfg.WebBind())
+		}
+	})
+
+	t.Run("custom values", func(t *testing.T) {
+		cfg := &Config{
+			Web: WebConfig{Port: 9090, Bind: "127.0.0.1"},
+		}
+		if cfg.WebPort() != 9090 {
+			t.Errorf("WebPort() = %d, want 9090", cfg.WebPort())
+		}
+		if cfg.WebBind() != "127.0.0.1" {
+			t.Errorf("WebBind() = %q, want \"127.0.0.1\"", cfg.WebBind())
+		}
+	})
+}

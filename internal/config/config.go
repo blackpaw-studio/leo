@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,14 +32,46 @@ var validModels = map[string]bool{
 	"haiku":  true,
 }
 
+var validPermissionModes = map[string]bool{
+	"acceptEdits":       true,
+	"auto":              true,
+	"bypassPermissions": true,
+	"default":           true,
+	"dontAsk":           true,
+	"plan":              true,
+}
+
 type Config struct {
 	Telegram  TelegramConfig           `yaml:"telegram"`
 	Defaults  DefaultsConfig           `yaml:"defaults"`
+	Web       WebConfig                `yaml:"web,omitempty"`
 	Processes map[string]ProcessConfig `yaml:"processes"`
 	Tasks     map[string]TaskConfig    `yaml:"tasks"`
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
+}
+
+type WebConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Port    int    `yaml:"port,omitempty"`
+	Bind    string `yaml:"bind,omitempty"`
+}
+
+// WebPort returns the effective web UI port (default 8370).
+func (c *Config) WebPort() int {
+	if c.Web.Port > 0 {
+		return c.Web.Port
+	}
+	return 8370
+}
+
+// WebBind returns the effective web UI bind address (default "0.0.0.0").
+func (c *Config) WebBind() string {
+	if c.Web.Bind != "" {
+		return c.Web.Bind
+	}
+	return "0.0.0.0"
 }
 
 type TelegramConfig struct {
@@ -48,38 +81,51 @@ type TelegramConfig struct {
 }
 
 type DefaultsConfig struct {
-	Model             string `yaml:"model"`
-	MaxTurns          int    `yaml:"max_turns"`
-	BypassPermissions bool   `yaml:"bypass_permissions,omitempty"`
-	RemoteControl     bool   `yaml:"remote_control,omitempty"`
+	Model              string   `yaml:"model"`
+	MaxTurns           int      `yaml:"max_turns"`
+	BypassPermissions  bool     `yaml:"bypass_permissions,omitempty"`
+	RemoteControl      bool     `yaml:"remote_control,omitempty"`
+	PermissionMode     string   `yaml:"permission_mode,omitempty"`
+	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
+	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
+	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
 }
 
 type ProcessConfig struct {
-	Workspace         string            `yaml:"workspace,omitempty"`
-	Channels          []string          `yaml:"channels,omitempty"`
-	Model             string            `yaml:"model,omitempty"`
-	MaxTurns          int               `yaml:"max_turns,omitempty"`
-	BypassPermissions *bool             `yaml:"bypass_permissions,omitempty"`
-	RemoteControl     *bool             `yaml:"remote_control,omitempty"`
-	MCPConfig         string            `yaml:"mcp_config,omitempty"`
-	AddDirs           []string          `yaml:"add_dirs,omitempty"`
-	Env               map[string]string `yaml:"env,omitempty"`
-	Enabled           bool              `yaml:"enabled"`
+	Workspace           string            `yaml:"workspace,omitempty"`
+	Channels            []string          `yaml:"channels,omitempty"`
+	Model               string            `yaml:"model,omitempty"`
+	MaxTurns            int               `yaml:"max_turns,omitempty"`
+	BypassPermissions   *bool             `yaml:"bypass_permissions,omitempty"`
+	RemoteControl       *bool             `yaml:"remote_control,omitempty"`
+	MCPConfig           string            `yaml:"mcp_config,omitempty"`
+	AddDirs             []string          `yaml:"add_dirs,omitempty"`
+	Env                 map[string]string `yaml:"env,omitempty"`
+	Agent               string            `yaml:"agent,omitempty"`
+	AllowedTools        []string          `yaml:"allowed_tools,omitempty"`
+	DisallowedTools     []string          `yaml:"disallowed_tools,omitempty"`
+	AppendSystemPrompt  string            `yaml:"append_system_prompt,omitempty"`
+	PermissionMode      string            `yaml:"permission_mode,omitempty"`
+	Enabled             bool              `yaml:"enabled"`
 }
 
 type TaskConfig struct {
-	Workspace    string `yaml:"workspace,omitempty"`
-	Schedule     string `yaml:"schedule"`
-	Timezone     string `yaml:"timezone,omitempty"`
-	PromptFile   string `yaml:"prompt_file"`
-	Model        string `yaml:"model,omitempty"`
-	MaxTurns     int    `yaml:"max_turns,omitempty"`
-	TopicID      int    `yaml:"topic_id,omitempty"`
-	Enabled      bool   `yaml:"enabled"`
-	Silent       bool   `yaml:"silent,omitempty"`
-	Timeout      string `yaml:"timeout,omitempty"`        // e.g. "30m", "1h" — default 30m
-	Retries      int    `yaml:"retries,omitempty"`        // number of retry attempts on failure, default 0
-	NotifyOnFail bool   `yaml:"notify_on_fail,omitempty"` // send telegram message on failure
+	Workspace          string `yaml:"workspace,omitempty"`
+	Schedule           string `yaml:"schedule"`
+	Timezone           string `yaml:"timezone,omitempty"`
+	PromptFile         string `yaml:"prompt_file"`
+	Model              string `yaml:"model,omitempty"`
+	MaxTurns           int    `yaml:"max_turns,omitempty"`
+	TopicID            int    `yaml:"topic_id,omitempty"`
+	Enabled            bool   `yaml:"enabled"`
+	Silent             bool   `yaml:"silent,omitempty"`
+	Timeout            string `yaml:"timeout,omitempty"`               // e.g. "30m", "1h" — default 30m
+	Retries            int    `yaml:"retries,omitempty"`               // number of retry attempts on failure, default 0
+	NotifyOnFail       bool   `yaml:"notify_on_fail,omitempty"`        // send telegram message on failure
+	PermissionMode     string `yaml:"permission_mode,omitempty"`       // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
+	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
+	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
+	AppendSystemPrompt string `yaml:"append_system_prompt,omitempty"`
 }
 
 // DefaultWorkspace returns the default workspace path (HomePath/workspace).
@@ -211,6 +257,16 @@ func (c *Config) Validate() error {
 	if c.Defaults.MaxTurns < 0 {
 		errs = append(errs, "defaults.max_turns must not be negative")
 	}
+	if c.Defaults.PermissionMode != "" && !validPermissionModes[c.Defaults.PermissionMode] {
+		errs = append(errs, fmt.Sprintf("defaults.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", c.Defaults.PermissionMode))
+	}
+
+	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
+		errs = append(errs, fmt.Sprintf("web.port %d is out of range (1-65535)", c.Web.Port))
+	}
+	if c.Web.Bind != "" && net.ParseIP(c.Web.Bind) == nil {
+		errs = append(errs, fmt.Sprintf("web.bind %q is not a valid IP address", c.Web.Bind))
+	}
 
 	if c.Telegram.BotToken != "" || c.Telegram.ChatID != "" {
 		if c.Telegram.BotToken == "" {
@@ -238,6 +294,9 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("processes.%s.env key %q is not a valid environment variable name", name, k))
 			}
 		}
+		if proc.PermissionMode != "" && !validPermissionModes[proc.PermissionMode] {
+			errs = append(errs, fmt.Sprintf("processes.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, proc.PermissionMode))
+		}
 	}
 
 	for name, task := range c.Tasks {
@@ -262,6 +321,9 @@ func (c *Config) Validate() error {
 		}
 		if task.Retries < 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.retries must not be negative", name))
+		}
+		if task.PermissionMode != "" && !validPermissionModes[task.PermissionMode] {
+			errs = append(errs, fmt.Sprintf("tasks.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, task.PermissionMode))
 		}
 	}
 
