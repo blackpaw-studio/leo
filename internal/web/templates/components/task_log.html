@@ -1,5 +1,56 @@
 {{define "task_log.html"}}
 <div class="log-viewer">
-    <pre class="log-content">{{.Content}}</pre>
+    {{if .Events}}
+    <div class="log-conversation">
+        {{range .Events}}
+        {{if eq .Type "system"}}
+        <div class="log-event log-system">
+            <div class="log-event-label">system</div>
+            <div class="log-event-body">{{.Content}}</div>
+        </div>
+        {{else if eq .Type "user"}}
+        <div class="log-event log-user">
+            <div class="log-event-label">prompt</div>
+            <div class="log-event-body"><pre class="log-pre">{{.Content}}</pre></div>
+        </div>
+        {{else if eq .Type "assistant"}}
+        <div class="log-event log-assistant">
+            <div class="log-event-label">assistant</div>
+            <div class="log-event-body"><pre class="log-pre">{{.Content}}</pre></div>
+        </div>
+        {{else if eq .Type "tool_use"}}
+        <div class="log-event log-tool-use">
+            <div class="log-event-label">tool</div>
+            <div class="log-event-body">
+                <span class="log-tool-name">{{.Tool}}</span>
+                {{if .Input}}<pre class="log-pre log-tool-input">{{.Input}}</pre>{{end}}
+            </div>
+        </div>
+        {{else if eq .Type "tool_result"}}
+        <div class="log-event log-tool-result">
+            <div class="log-event-label">result</div>
+            <div class="log-event-body"><pre class="log-pre">{{truncate .Content 2000}}</pre></div>
+        </div>
+        {{else if eq .Type "result"}}
+        <div class="log-event log-final-result">
+            <div class="log-event-label">done</div>
+            <div class="log-event-body">
+                {{if .Content}}<pre class="log-pre">{{.Content}}</pre>{{end}}
+                {{if or .Cost (gt .Turns 0)}}
+                <div class="log-result-meta">
+                    {{if .Cost}}<span>Cost: {{.Cost}}</span>{{end}}
+                    {{if gt .Turns 0}}<span>Turns: {{.Turns}}</span>{{end}}
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{else if eq .Type "raw"}}
+        <pre class="log-content">{{.Content}}</pre>
+        {{end}}
+        {{end}}
+    </div>
+    {{else}}
+    <div class="log-empty">No log content</div>
+    {{end}}
 </div>
 {{end}}

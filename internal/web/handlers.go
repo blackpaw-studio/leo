@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -146,6 +148,16 @@ func (s *Server) handlePartialTaskHistory(w http.ResponseWriter, r *http.Request
 	}{Name: name, Entries: entries})
 }
 
+// logEvent represents a parsed conversation event for the log viewer template.
+type logEvent struct {
+	Type    string // "assistant", "user", "tool_use", "tool_result", "system", "result"
+	Content string // text content or tool output
+	Tool    string // tool name (for tool_use events)
+	Input   string // tool input as formatted string (for tool_use events)
+	Cost    string // cost (for result events)
+	Turns   int    // num_turns (for result events)
+}
+
 func (s *Server) handleTaskRunLog(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	logFile := r.URL.Query().Get("file")
@@ -187,13 +199,211 @@ func (s *Server) handleTaskRunLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	events := parseLogEvents(content)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "task_log.html", struct {
-		Name    string
-		Content string
-	}{Name: name, Content: string(content)}); err != nil {
+		Name   string
+		Events []logEvent
+	}{Name: name, Events: events}); err != nil {
 		fmt.Fprintf(os.Stderr, "error rendering task_log.html: %v\n", err)
 	}
+}
+
+// unmarshalString extracts a string value from a raw JSON message.
+func unmarshalString(raw json.RawMessage) string {
+	var s string
+	_ = json.Unmarshal(raw, &s)
+	return s
+}
+
+// parseLogEvents converts NDJSON stream-json output into template-friendly events.
+// Falls back to a single raw-content event if the log isn't valid NDJSON.
+func parseLogEvents(data []byte) []logEvent {
+	var events []logEvent
+	parsed := false
+
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(line, &raw) != nil {
+			continue
+		}
+
+		evtType := unmarshalString(raw["type"])
+
+		switch evtType {
+		case "assistant":
+			if evts := parseAssistantEvent(raw); len(evts) > 0 {
+				events = append(events, evts...)
+				parsed = true
+			}
+
+		case "user":
+			if evt, ok := parseUserEvent(raw); ok {
+				events = append(events, evt)
+				parsed = true
+			}
+
+		case "system":
+			if unmarshalString(raw["subtype"]) == "init" {
+				events = append(events, logEvent{
+					Type:    "system",
+					Content: fmt.Sprintf("Session started (ID: %s)", unmarshalString(raw["session_id"])),
+				})
+				parsed = true
+			}
+
+		case "tool_result":
+			var content string
+			if c, ok := raw["content"]; ok {
+				// content can be a string or a JSON array of content blocks
+				if json.Unmarshal(c, &content) != nil {
+					content = string(c)
+				}
+			}
+			if content != "" {
+				events = append(events, logEvent{Type: "tool_result", Content: content})
+				parsed = true
+			}
+
+		case "result":
+			if evt, ok := parseResultEvent(raw); ok {
+				events = append(events, evt)
+				parsed = true
+			}
+		}
+	}
+
+	// Fallback: not NDJSON, show raw content
+	if !parsed {
+		trimmed := strings.TrimSpace(string(data))
+		if trimmed != "" {
+			events = []logEvent{{Type: "raw", Content: trimmed}}
+		}
+	}
+
+	return events
+}
+
+func parseAssistantEvent(raw map[string]json.RawMessage) []logEvent {
+	msgBytes, ok := raw["message"]
+	if !ok {
+		return nil
+	}
+
+	var msg struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(msgBytes, &msg) != nil {
+		return nil
+	}
+
+	var events []logEvent
+	for _, block := range msg.Content {
+		switch block.Type {
+		case "text":
+			if strings.TrimSpace(block.Text) != "" {
+				events = append(events, logEvent{
+					Type:    "assistant",
+					Content: block.Text,
+				})
+			}
+		case "tool_use":
+			inputStr := string(block.Input)
+			// Pretty-print JSON input if possible
+			var pretty map[string]interface{}
+			if json.Unmarshal(block.Input, &pretty) == nil {
+				if formatted, err := json.MarshalIndent(pretty, "", "  "); err == nil {
+					inputStr = string(formatted)
+				}
+			}
+			events = append(events, logEvent{
+				Type:  "tool_use",
+				Tool:  block.Name,
+				Input: inputStr,
+			})
+		}
+	}
+
+	return events
+}
+
+func parseUserEvent(raw map[string]json.RawMessage) (logEvent, bool) {
+	msgBytes, ok := raw["message"]
+	if !ok {
+		return logEvent{}, false
+	}
+
+	var msg struct {
+		Content []struct {
+			Type    string `json:"type"`
+			Text    string `json:"text"`
+			Content string `json:"content"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(msgBytes, &msg) != nil {
+		return logEvent{}, false
+	}
+
+	var parts []string
+	for _, block := range msg.Content {
+		switch block.Type {
+		case "text":
+			if block.Text != "" {
+				parts = append(parts, block.Text)
+			}
+		case "tool_result":
+			// Tool results appear as user messages in Claude's API
+			text := block.Content
+			if text == "" {
+				text = block.Text
+			}
+			if text != "" {
+				return logEvent{Type: "tool_result", Content: text}, true
+			}
+		}
+	}
+
+	if len(parts) > 0 {
+		return logEvent{Type: "user", Content: strings.Join(parts, "\n")}, true
+	}
+	return logEvent{}, false
+}
+
+func parseResultEvent(raw map[string]json.RawMessage) (logEvent, bool) {
+	result := unmarshalString(raw["result"])
+
+	var costUSD float64
+	if c, ok := raw["cost_usd"]; ok {
+		_ = json.Unmarshal(c, &costUSD)
+	}
+
+	var numTurns int
+	if n, ok := raw["num_turns"]; ok {
+		_ = json.Unmarshal(n, &numTurns)
+	}
+
+	costStr := ""
+	if costUSD > 0 {
+		costStr = fmt.Sprintf("$%.4f", costUSD)
+	}
+
+	return logEvent{
+		Type:    "result",
+		Content: result,
+		Cost:    costStr,
+		Turns:   numTurns,
+	}, true
 }
 
 func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
