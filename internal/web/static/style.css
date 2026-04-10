@@ -293,6 +293,47 @@ body {
     font-family: var(--mono);
 }
 
+/* Log viewer */
+.log-toggle {
+    font-size: 12px;
+}
+
+.log-row td {
+    padding: 0 !important;
+    border-bottom: 1px solid var(--border);
+}
+
+.log-cell {
+    padding: 0 !important;
+}
+
+.log-viewer {
+    background: var(--bg-page);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 8px 0 12px;
+    max-height: 400px;
+    overflow: auto;
+}
+
+.log-content {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
+    padding: 14px 16px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log-empty {
+    color: var(--text-secondary);
+    font-size: 13px;
+    padding: 12px 16px;
+    font-style: italic;
+}
+
 /* Buttons */
 .btn {
     background: var(--bg-surface);

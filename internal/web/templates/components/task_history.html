@@ -6,14 +6,27 @@
             <tr>
                 <th>Time</th>
                 <th>Exit Code</th>
+                <th></th>
             </tr>
         </thead>
         <tbody>
-            {{range .Entries}}
+            {{range $i, $e := .Entries}}
             <tr>
-                <td>{{timeFormat .RunAt}}</td>
-                <td><span class="{{exitCodeClass .ExitCode}}">{{.ExitCode}}</span></td>
+                <td>{{timeFormat $e.RunAt}}</td>
+                <td><span class="{{exitCodeClass $e.ExitCode}}">{{$e.ExitCode}}</span></td>
+                <td>
+                    {{if $e.LogFile}}
+                    <button class="btn btn-sm log-toggle"
+                            onclick="toggleLog(this, '{{$.Name}}', '{{$e.LogFile}}')"
+                            data-expanded="false">view log</button>
+                    {{end}}
+                </td>
             </tr>
+            {{if $e.LogFile}}
+            <tr class="log-row" style="display:none" id="log-{{$.Name}}-{{$i}}">
+                <td colspan="3" class="log-cell"></td>
+            </tr>
+            {{end}}
             {{end}}
         </tbody>
     </table>

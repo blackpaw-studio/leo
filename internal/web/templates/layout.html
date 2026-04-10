@@ -41,6 +41,23 @@
             htmx.ajax('GET', '/partials/task/' + name + '/history', {target: target, swap: 'innerHTML'});
         }
     }
+    function toggleLog(btn, name, file) {
+        var row = btn.closest('tr').nextElementSibling;
+        if (!row || !row.classList.contains('log-row')) return;
+        var cell = row.querySelector('.log-cell');
+        var expanded = btn.getAttribute('data-expanded') === 'true';
+        if (expanded) {
+            row.style.display = 'none';
+            cell.innerHTML = '';
+            btn.textContent = 'view log';
+            btn.setAttribute('data-expanded', 'false');
+        } else {
+            row.style.display = '';
+            btn.textContent = 'hide log';
+            btn.setAttribute('data-expanded', 'true');
+            htmx.ajax('GET', '/partials/task/' + name + '/log?file=' + encodeURIComponent(file), {target: cell, swap: 'innerHTML'});
+        }
+    }
     function confirmDelete(form) {
         if (confirm('Are you sure you want to delete this?')) {
             htmx.trigger(form, 'confirmed');
