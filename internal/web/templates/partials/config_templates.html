@@ -1,0 +1,172 @@
+{{define "config_templates.html"}}
+<div id="config-templates">
+    <h2 class="section-title">Manage Templates</h2>
+
+    {{range $name, $tmpl := .Config.Templates}}
+    <div class="config-section">
+        <div class="config-section-header">
+            <h3>{{$name}}</h3>
+            <button class="btn btn-sm btn-danger" hx-delete="/web/template/{{$name}}" hx-target="#tab-content" hx-swap="innerHTML" hx-confirm="Delete template '{{$name}}'?">Delete</button>
+        </div>
+        <form hx-post="/web/config/template/{{$name}}" hx-target="#flash-container" hx-swap="innerHTML">
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Workspace</label>
+                    <input type="text" name="workspace" value="{{$tmpl.Workspace}}" placeholder="~/.leo/workspace" class="form-input">
+                </div>
+                <div class="form-help">Base directory for agent workspaces. Repos are cloned as subdirectories.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Model</label>
+                    <select name="model" class="form-input">
+                        <option value="" {{if not $tmpl.Model}}selected{{end}}>{{if $.Config.Defaults.Model}}({{$.Config.Defaults.Model}} from defaults){{else}}(sonnet from defaults){{end}}</option>
+                        <option value="sonnet" {{if eq $tmpl.Model "sonnet"}}selected{{end}}>sonnet</option>
+                        <option value="opus" {{if eq $tmpl.Model "opus"}}selected{{end}}>opus</option>
+                        <option value="haiku" {{if eq $tmpl.Model "haiku"}}selected{{end}}>haiku</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Channels</label>
+                    <input type="text" name="channels" value="{{range $i, $ch := $tmpl.Channels}}{{if $i}}, {{end}}{{$ch}}{{end}}" placeholder="plugin:telegram@claude-plugins-official" class="form-input">
+                </div>
+                <div class="form-help">Comma-separated channel plugins.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Remote Control</label>
+                    <select name="remote_control" class="form-input">
+                        <option value="" {{if not $tmpl.RemoteControl}}selected{{end}}>(inherit from defaults)</option>
+                        <option value="true" {{if $tmpl.RemoteControl}}{{if derefBool $tmpl.RemoteControl}}selected{{end}}{{end}}>enabled</option>
+                        <option value="false" {{if $tmpl.RemoteControl}}{{if not (derefBool $tmpl.RemoteControl)}}selected{{end}}{{end}}>disabled</option>
+                    </select>
+                </div>
+                <div class="form-help">Allow controlling spawned agents via claude.ai/code.</div>
+            </div>
+
+            <details class="advanced-details">
+                <summary class="advanced-summary">Advanced</summary>
+                <div class="advanced-content">
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Agent</label>
+                            <select name="agent" class="form-input">
+                                <option value="" {{if not $tmpl.Agent}}selected{{end}}>(none)</option>
+                                {{range $.Agents}}
+                                <option value="{{.}}" {{if eq . $tmpl.Agent}}selected{{end}}>{{.}}</option>
+                                {{end}}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Max Turns</label>
+                            <input type="number" name="max_turns" value="{{$tmpl.MaxTurns}}" min="0" max="100" class="form-input" placeholder="{{if $.Config.Defaults.MaxTurns}}{{$.Config.Defaults.MaxTurns}} from defaults{{else}}15 from defaults{{end}}">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Permission Mode</label>
+                            <select name="permission_mode" class="form-input">
+                                <option value="" {{if not $tmpl.PermissionMode}}selected{{end}}>{{if $.Config.Defaults.PermissionMode}}({{$.Config.Defaults.PermissionMode}} from defaults){{else}}(inherit from defaults){{end}}</option>
+                                <option value="default" {{if eq $tmpl.PermissionMode "default"}}selected{{end}}>default</option>
+                                <option value="acceptEdits" {{if eq $tmpl.PermissionMode "acceptEdits"}}selected{{end}}>acceptEdits</option>
+                                <option value="auto" {{if eq $tmpl.PermissionMode "auto"}}selected{{end}}>auto</option>
+                                <option value="bypassPermissions" {{if eq $tmpl.PermissionMode "bypassPermissions"}}selected{{end}}>bypassPermissions</option>
+                                <option value="dontAsk" {{if eq $tmpl.PermissionMode "dontAsk"}}selected{{end}}>dontAsk</option>
+                                <option value="plan" {{if eq $tmpl.PermissionMode "plan"}}selected{{end}}>plan</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>MCP Config</label>
+                            <input type="text" name="mcp_config" value="{{$tmpl.MCPConfig}}" placeholder="config/mcp-servers.json" class="form-input">
+                        </div>
+                        <div class="form-help">Path to MCP servers config, relative to workspace.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Extra Dirs</label>
+                            <input type="text" name="add_dirs" value="{{range $i, $d := $tmpl.AddDirs}}{{if $i}}, {{end}}{{$d}}{{end}}" placeholder="(none)" class="form-input">
+                        </div>
+                        <div class="form-help">Comma-separated additional directories for Claude to access.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Allowed Tools</label>
+                            <input type="text" name="allowed_tools" value="{{range $i, $t := $tmpl.AllowedTools}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="(all)" class="form-input">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Disallowed Tools</label>
+                            <input type="text" name="disallowed_tools" value="{{range $i, $t := $tmpl.DisallowedTools}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="(none)" class="form-input">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Environment</label>
+                            <textarea name="env" class="form-input form-textarea" placeholder="KEY=value&#10;ANOTHER=value">{{range $k, $v := $tmpl.Env}}{{$k}}={{$v}}&#10;{{end}}</textarea>
+                        </div>
+                        <div class="form-help">One KEY=value per line. Passed to spawned agent processes.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>System Prompt</label>
+                            <textarea name="append_system_prompt" class="form-input form-textarea" placeholder="Additional instructions...">{{$tmpl.AppendSystemPrompt}}</textarea>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-accent">Save</button>
+            </div>
+        </form>
+    </div>
+    {{else}}
+    <div class="empty-state">No templates configured</div>
+    {{end}}
+
+    <div class="config-section config-section-add">
+        <h3>Add Template</h3>
+        <form hx-post="/web/template/add" hx-target="#tab-content" hx-swap="innerHTML">
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Name</label>
+                    <input type="text" name="name" class="form-input" placeholder="coding" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Workspace</label>
+                    <input type="text" name="workspace" class="form-input" placeholder="~/.leo/workspace">
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Model</label>
+                    <select name="model" class="form-input">
+                        <option value="">{{if $.Config.Defaults.Model}}({{$.Config.Defaults.Model}} from defaults){{else}}(sonnet from defaults){{end}}</option>
+                        <option value="sonnet">sonnet</option>
+                        <option value="opus">opus</option>
+                        <option value="haiku">haiku</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Channels</label>
+                    <input type="text" name="channels" class="form-input" placeholder="plugin:telegram@claude-plugins-official">
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-accent">Add Template</button>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}

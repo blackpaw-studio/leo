@@ -44,11 +44,12 @@
             </div>
             <div class="form-group">
                 <div class="form-row">
-                    <label for="proc-rc-{{$name}}">Remote Control</label>
-                    <label class="toggle">
-                        <input type="checkbox" name="remote_control" value="true" id="proc-rc-{{$name}}" {{if $proc.RemoteControl}}{{if derefBool $proc.RemoteControl}}checked{{end}}{{end}}>
-                        <span class="toggle-slider"></span>
-                    </label>
+                    <label>Remote Control</label>
+                    <select name="remote_control" class="form-input">
+                        <option value="" {{if not $proc.RemoteControl}}selected{{end}}>(inherit from defaults)</option>
+                        <option value="true" {{if $proc.RemoteControl}}{{if derefBool $proc.RemoteControl}}selected{{end}}{{end}}>enabled</option>
+                        <option value="false" {{if $proc.RemoteControl}}{{if not (derefBool $proc.RemoteControl)}}selected{{end}}{{end}}>disabled</option>
+                    </select>
                 </div>
                 <div class="form-help">Allow controlling this session via claude.ai/code.</div>
             </div>
