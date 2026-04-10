@@ -445,6 +445,13 @@ body {
     flex-shrink: 0;
 }
 
+.form-hint {
+    color: var(--text-muted);
+    font-size: 12px;
+    display: block;
+    margin-top: 2px;
+}
+
 .form-input {
     background: var(--bg-input);
     border: 1px solid var(--border);

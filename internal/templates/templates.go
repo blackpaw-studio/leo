@@ -49,6 +49,7 @@ func SkillFiles() []string {
 		"daemon-management.md",
 		"config-reference.md",
 		"workspace-maintenance.md",
+		"agent-management.md",
 	}
 }
 

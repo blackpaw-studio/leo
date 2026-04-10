@@ -1,0 +1,48 @@
+{{define "agents.html"}}
+<div id="agents-content">
+    <h2 class="section-title">Spawn Agent</h2>
+    {{if .Templates}}
+    <form hx-post="/web/agent/spawn" hx-target="#flash-container" hx-swap="innerHTML">
+        <div class="form-row">
+            <label for="spawn-template">Template</label>
+            <select name="template" id="spawn-template" required>
+                <option value="">Select template...</option>
+                {{range $name, $tmpl := .Templates}}
+                <option value="{{$name}}">{{$name}}</option>
+                {{end}}
+            </select>
+        </div>
+        <div class="form-row">
+            <label for="spawn-repo">Name or Repo</label>
+            <input type="text" name="repo" id="spawn-repo" placeholder="owner/repo or project-name" required>
+            <span class="form-hint">Use owner/repo to clone from GitHub, or a plain name for the template workspace</span>
+        </div>
+        <button type="submit" class="btn">Spawn Agent</button>
+    </form>
+    {{else}}
+    <div class="empty-state">No templates configured. Add templates to your leo.yaml config.</div>
+    {{end}}
+
+    <h2 class="section-title" style="margin-top: 2rem;">Running Agents</h2>
+    <div id="agent-cards" class="cards">
+        {{range .Agents}}
+        <div class="process-card {{statusColor .Status}}">
+            <div class="process-name">{{.Name}}</div>
+            <div class="process-status">
+                <span class="status-dot {{statusColor .Status}}"></span>
+                {{.Status}}
+            </div>
+            <div class="process-meta">
+                {{if uptime .StartedAt}}{{uptime .StartedAt}}{{end}}
+                {{if gt .Restarts 0}}&middot; {{.Restarts}} restart{{if gt .Restarts 1}}s{{end}}{{end}}
+            </div>
+            <div class="process-actions">
+                <button class="btn btn-sm btn-danger" hx-post="/web/agent/{{.Name}}/stop" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Stop agent {{.Name}}?">Stop</button>
+            </div>
+        </div>
+        {{else}}
+        <div class="empty-state">No agents running</div>
+        {{end}}
+    </div>
+</div>
+{{end}}

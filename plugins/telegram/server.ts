@@ -2460,7 +2460,150 @@ bot.command("stop", async (ctx) => {
   }
 });
 
+// --- Agent management commands ---
+// Pending template selections per chat (for interactive /agent flow)
+const pendingTemplateSelection = new Map<number, string>();
+
+bot.command("agent", async (ctx) => {
+  const result = gate(ctx);
+  if (result.action !== "deliver") return;
+  const port = process.env.LEO_WEB_PORT ?? "8370";
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const args = ctx.match?.trim() ?? "";
+
+  if (!args) {
+    // Interactive: list available templates
+    try {
+      const res = await fetch(`${baseUrl}/api/template/list`);
+      const data = await res.json();
+      if (!data.ok || !data.data || Object.keys(data.data).length === 0) {
+        await ctx.reply("No templates configured. Add templates to your leo.yaml.");
+        return;
+      }
+      const names = Object.keys(data.data);
+      const keyboard = names.map((name: string) => [{ text: name, callback_data: `agent_tmpl:${name}` }]);
+      await ctx.reply("Choose a template:", {
+        reply_markup: { inline_keyboard: keyboard },
+      });
+    } catch (err) {
+      await ctx.reply(`⚠️ Failed to list templates: ${String(err)}`);
+    }
+    return;
+  }
+
+  // Shorthand: /agent <template> <repo-or-name>
+  const parts = args.split(/\s+/, 2);
+  if (parts.length < 2) {
+    await ctx.reply("Usage: /agent <template> <owner/repo or name>\n\nOr just /agent to choose interactively.");
+    return;
+  }
+  const [template, repo] = parts;
+
+  try {
+    const res = await fetch(`${baseUrl}/api/agent/spawn`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template, repo }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      await ctx.reply(`🤖 Agent spawned: ${data.data.name}\nOpen claude.ai/code to connect`);
+    } else {
+      await ctx.reply(`⚠️ ${data.error}`);
+    }
+  } catch (err) {
+    await ctx.reply(`⚠️ Failed to spawn agent: ${String(err)}`);
+  }
+});
+
+// Handle inline keyboard callback for template selection
+bot.on("callback_query:data", async (ctx) => {
+  const data = ctx.callbackQuery.data;
+  if (data.startsWith("agent_tmpl:")) {
+    const template = data.replace("agent_tmpl:", "");
+    const chatId = ctx.callbackQuery.message?.chat?.id;
+    if (chatId) {
+      pendingTemplateSelection.set(chatId, template);
+    }
+    await ctx.answerCallbackQuery();
+    await ctx.reply(`Template: ${template}\nNow send the repo (owner/repo) or a project name:`);
+    return;
+  }
+  if (data.startsWith("agent_stop:")) {
+    const name = data.replace("agent_stop:", "");
+    const port = process.env.LEO_WEB_PORT ?? "8370";
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/agent/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const result = await res.json();
+      if (result.ok) {
+        await ctx.answerCallbackQuery({ text: `Stopped ${name}` });
+        await ctx.editMessageText(`⏹ Agent ${name} stopped`);
+      } else {
+        await ctx.answerCallbackQuery({ text: `Failed: ${result.error}` });
+      }
+    } catch (err) {
+      await ctx.answerCallbackQuery({ text: `Error: ${String(err)}` });
+    }
+    return;
+  }
+  await ctx.answerCallbackQuery();
+});
+
+bot.command("agents", async (ctx) => {
+  const result = gate(ctx);
+  if (result.action !== "deliver") return;
+  const port = process.env.LEO_WEB_PORT ?? "8370";
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/agent/list`);
+    const data = await res.json();
+    if (!data.ok || !data.data || Object.keys(data.data).length === 0) {
+      await ctx.reply("No agents running.");
+      return;
+    }
+
+    let text = "🤖 Running agents:\n";
+    const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (const [name, state] of Object.entries(data.data) as [string, any][]) {
+      text += `\n• ${name} — ${state.status}`;
+      keyboard.push([{ text: `⏹ Stop ${name}`, callback_data: `agent_stop:${name}` }]);
+    }
+    await ctx.reply(text, { reply_markup: { inline_keyboard: keyboard } });
+  } catch (err) {
+    await ctx.reply(`⚠️ Failed to list agents: ${String(err)}`);
+  }
+});
+
 bot.on("message", async (ctx, next) => {
+  // Handle pending agent template selection (interactive /agent flow)
+  const chatId = ctx.message?.chat?.id;
+  const text = ctx.message?.text?.trim();
+  if (chatId && text && pendingTemplateSelection.has(chatId)) {
+    const template = pendingTemplateSelection.get(chatId)!;
+    pendingTemplateSelection.delete(chatId);
+    const port = process.env.LEO_WEB_PORT ?? "8370";
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/agent/spawn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template, repo: text }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        await ctx.reply(`🤖 Agent spawned: ${data.data.name}\nOpen claude.ai/code to connect`);
+      } else {
+        await ctx.reply(`⚠️ ${data.error}`);
+      }
+    } catch (err) {
+      await ctx.reply(`⚠️ Failed to spawn agent: ${String(err)}`);
+    }
+    return; // consumed — don't forward to Claude
+  }
+
   const msg = ctx.message;
   if (msg) {
     const from = msg.from;

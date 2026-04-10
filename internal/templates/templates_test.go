@@ -42,8 +42,8 @@ func TestRenderClaudeWorkspace(t *testing.T) {
 func TestSkillFiles(t *testing.T) {
 	skills := SkillFiles()
 
-	if len(skills) != 5 {
-		t.Fatalf("SkillFiles() returned %d files, want 5", len(skills))
+	if len(skills) != 6 {
+		t.Fatalf("SkillFiles() returned %d files, want 6", len(skills))
 	}
 
 	want := map[string]bool{
@@ -52,6 +52,7 @@ func TestSkillFiles(t *testing.T) {
 		"daemon-management.md":     true,
 		"config-reference.md":      true,
 		"workspace-maintenance.md": true,
+		"agent-management.md":      true,
 	}
 
 	for _, name := range skills {

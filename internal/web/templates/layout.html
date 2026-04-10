@@ -14,6 +14,7 @@
         <div id="flash-container"></div>
         <div class="tabs">
             <button class="tab active" hx-get="/partials/tasks" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Tasks</button>
+            <button class="tab" hx-get="/partials/agents" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Agents</button>
             <button class="tab" hx-get="/partials/config/processes" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Manage Processes</button>
             <button class="tab" hx-get="/partials/config/tasks" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Manage Tasks</button>
             <button class="tab" hx-get="/partials/config/settings" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Settings</button>
