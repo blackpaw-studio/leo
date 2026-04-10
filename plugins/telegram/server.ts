@@ -2451,15 +2451,16 @@ bot.command("stop", async (ctx) => {
   try {
     const tmux = process.env.LEO_TMUX_PATH ?? "tmux";
     const session = `leo-${processName}`;
-    // Send Escape repeatedly to interrupt generation and cancel tool calls.
-    // Don't kill the process — that causes a restart loop because the plugin
-    // dies before acknowledging the Telegram update offset.
-    execSync(`${tmux} send-keys -t ${session} Escape`);
-    execSync(`${tmux} send-keys -t ${session} Escape`);
-    // Small delay then another Escape to catch tool-call completion transitions
-    spawnSync("sleep", ["0.3"]);
-    execSync(`${tmux} send-keys -t ${session} Escape`);
+    // Reply FIRST so grammy acknowledges the update offset before we kill anything.
     await ctx.reply(`⏹ Interrupted ${processName}`);
+    // Delay the kill so grammy's next getUpdates call confirms the offset.
+    // Without this, /stop is re-delivered on restart → infinite loop.
+    setTimeout(() => {
+      try {
+        const pid = execSync(`${tmux} list-panes -t ${session} -F '#{pane_pid}'`).toString().trim();
+        if (pid) process.kill(parseInt(pid), "SIGINT");
+      } catch {}
+    }, 1000);
   } catch (err) {
     await ctx.reply(`⚠️ Failed to interrupt: ${String(err)}`);
   }
