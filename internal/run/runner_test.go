@@ -189,8 +189,8 @@ func TestBuildArgs(t *testing.T) {
 	if !strings.Contains(argsStr, "--add-dir") {
 		t.Error("missing add-dir flag")
 	}
-	if !strings.Contains(argsStr, "--output-format json") {
-		t.Error("should use json output format")
+	if !strings.Contains(argsStr, "--output-format stream-json") {
+		t.Error("should use stream-json output format")
 	}
 }
 
@@ -255,23 +255,28 @@ func TestBuildArgsWithoutSessionID(t *testing.T) {
 
 func TestParseClaudeOutput(t *testing.T) {
 	tests := []struct {
-		name      string
-		output    string
-		wantSID   string
-		wantText  string
-		wantError bool
+		name     string
+		output   string
+		wantSID  string
+		wantText string
 	}{
 		{
-			name:     "valid JSON",
-			output:   `{"session_id":"abc-123","result":"Hello world","is_error":false}`,
+			name:     "stream-json NDJSON",
+			output:   "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc-123\"}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hi\"}]}}\n{\"type\":\"result\",\"session_id\":\"abc-123\",\"result\":\"Hello world\",\"is_error\":false}\n",
 			wantSID:  "abc-123",
 			wantText: "Hello world",
 		},
 		{
-			name:     "error response",
-			output:   `{"session_id":"def-456","result":"failed","is_error":true}`,
+			name:     "stream-json error",
+			output:   "{\"type\":\"result\",\"session_id\":\"def-456\",\"result\":\"failed\",\"is_error\":true}\n",
 			wantSID:  "def-456",
 			wantText: "failed",
+		},
+		{
+			name:     "fallback single JSON object",
+			output:   `{"session_id":"abc-123","result":"Hello world","is_error":false}`,
+			wantSID:  "abc-123",
+			wantText: "Hello world",
 		},
 		{
 			name:    "invalid JSON",

@@ -424,3 +424,54 @@ func TestStatusColor(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLogEvents(t *testing.T) {
+	t.Run("stream-json NDJSON", func(t *testing.T) {
+		input := `{"type":"system","subtype":"init","session_id":"abc-123"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Let me check."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/tmp/test"}}]}}
+{"type":"tool_result","content":"file contents here"}
+{"type":"result","session_id":"abc-123","result":"Done","cost_usd":0.05,"num_turns":2}
+`
+		events := parseLogEvents([]byte(input))
+
+		if len(events) != 5 {
+			t.Fatalf("got %d events, want 5", len(events))
+		}
+
+		if events[0].Type != "system" {
+			t.Errorf("event[0].Type = %q, want system", events[0].Type)
+		}
+		if events[1].Type != "assistant" || events[1].Content != "Let me check." {
+			t.Errorf("event[1] = %+v, want assistant with text", events[1])
+		}
+		if events[2].Type != "tool_use" || events[2].Tool != "Read" {
+			t.Errorf("event[2] = %+v, want tool_use Read", events[2])
+		}
+		if events[3].Type != "tool_result" || events[3].Content != "file contents here" {
+			t.Errorf("event[3] = %+v, want tool_result", events[3])
+		}
+		if events[4].Type != "result" || events[4].Content != "Done" || events[4].Cost != "$0.0500" {
+			t.Errorf("event[4] = %+v, want result with cost", events[4])
+		}
+	})
+
+	t.Run("plain text fallback", func(t *testing.T) {
+		input := "just plain text output\nno JSON here"
+		events := parseLogEvents([]byte(input))
+
+		if len(events) != 1 {
+			t.Fatalf("got %d events, want 1", len(events))
+		}
+		if events[0].Type != "raw" {
+			t.Errorf("event[0].Type = %q, want raw", events[0].Type)
+		}
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		events := parseLogEvents([]byte(""))
+		if len(events) != 0 {
+			t.Errorf("got %d events for empty input, want 0", len(events))
+		}
+	})
+}

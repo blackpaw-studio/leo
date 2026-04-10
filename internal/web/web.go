@@ -214,6 +214,13 @@ func (s *Server) parseTemplates() {
 			}
 			return formatDuration(time.Since(t))
 		},
+		"truncate": func(s string, maxLen int) string {
+			runes := []rune(s)
+			if len(runes) <= maxLen {
+				return s
+			}
+			return string(runes[:maxLen]) + "\n... (truncated)"
+		},
 	}
 
 	s.templates = template.Must(template.New("").Funcs(funcMap).ParseFS(content, "templates/*.html", "templates/**/*.html"))

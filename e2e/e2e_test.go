@@ -188,8 +188,8 @@ func TestRunHappyPath(t *testing.T) {
 	if v := argValue(args, "--max-turns"); v != "15" {
 		t.Errorf("expected --max-turns 15, got %q", v)
 	}
-	if v := argValue(args, "--output-format"); v != "json" {
-		t.Errorf("expected --output-format json, got %q", v)
+	if v := argValue(args, "--output-format"); v != "stream-json" {
+		t.Errorf("expected --output-format stream-json, got %q", v)
 	}
 	if !slices.Contains(args, "--dangerously-skip-permissions") {
 		t.Error("expected --dangerously-skip-permissions flag")

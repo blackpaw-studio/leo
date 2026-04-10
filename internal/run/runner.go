@@ -46,11 +46,18 @@ If nothing needs attention, reply NO_REPLY and exit.
 Do not include process narration, status updates, or tool output. Only emit the final user-facing message or NO_REPLY.
 `
 
-// claudeResult is the minimal structure for parsing claude --output-format json.
+// claudeResult is the minimal structure for parsing the final "result" event
+// from claude --output-format stream-json (newline-delimited JSON).
 type claudeResult struct {
 	SessionID string `json:"session_id"`
 	Result    string `json:"result"`
 	IsError   bool   `json:"is_error"`
+}
+
+// streamEvent represents a single event line from stream-json output.
+type streamEvent struct {
+	Type string `json:"type"`
+	claudeResult
 }
 
 // resolveTask looks up a task by name.
@@ -156,11 +163,8 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 			}
 		}
 
-		// Capture log content from the final attempt
-		lastLogContent = result.Result
-		if lastLogContent == "" {
-			lastLogContent = string(output)
-		}
+		// Capture full stream output for logging (includes all conversation events)
+		lastLogContent = string(output)
 
 		cancel()
 
@@ -175,8 +179,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	}
 
 	// Write log for the final attempt only (avoids orphaned files on retries)
-	var logFile string
-	logFile = logFileName(taskName)
+	logFile := logFileName(taskName)
 	if logErr := writeLogFile(cfg, logFile, []byte(lastLogContent)); logErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to write log: %v\n", logErr)
 		logFile = ""
@@ -259,11 +262,27 @@ func executeCommand(ctx context.Context, workDir string, args []string, botToken
 	return stdout.Bytes(), err
 }
 
-// parseClaudeOutput attempts to extract structured data from claude JSON output.
+// parseClaudeOutput extracts the final result from stream-json (NDJSON) output.
+// It scans for the last line with "type":"result" to get session_id and result text.
+// Falls back to single-object JSON parsing for backwards compatibility.
 func parseClaudeOutput(output []byte) claudeResult {
-	var result claudeResult
-	_ = json.Unmarshal(output, &result)
-	return result
+	var best claudeResult
+	for _, line := range bytes.Split(output, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var evt streamEvent
+		if json.Unmarshal(line, &evt) == nil && evt.Type == "result" {
+			best = evt.claudeResult
+		}
+	}
+	if best.SessionID != "" || best.Result != "" {
+		return best
+	}
+	// Fallback: try parsing as a single JSON object (old --output-format json).
+	_ = json.Unmarshal(output, &best)
+	return best
 }
 
 func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) {
@@ -323,7 +342,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 		"-p", prompt,
 		"--model", cfg.TaskModel(task),
 		"--max-turns", strconv.Itoa(cfg.TaskMaxTurns(task)),
-		"--output-format", "json",
+		"--output-format", "stream-json",
 	}
 
 	if sessionID != "" {
