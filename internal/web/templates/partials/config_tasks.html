@@ -154,6 +154,17 @@
                 <button type="submit" class="btn btn-accent">Save</button>
             </div>
         </form>
+        {{if $task.PromptFile}}
+        <details class="advanced-details">
+            <summary class="advanced-summary">Edit Prompt Content</summary>
+            <div class="advanced-content"
+                 hx-get="/web/task/{{$name}}/prompt"
+                 hx-trigger="toggle[this.open] from:closest details"
+                 hx-swap="innerHTML">
+                <div class="form-help">Loading prompt...</div>
+            </div>
+        </details>
+        {{end}}
     </div>
     {{else}}
     <div class="empty-state">No tasks configured</div>

@@ -637,6 +637,75 @@ func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q saved", name))
 }
 
+func (s *Server) handleTaskPromptGet(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	task, ok := cfg.Tasks[name]
+	if !ok {
+		s.renderFlash(w, "error", fmt.Sprintf("Task %q not found", name))
+		return
+	}
+
+	if task.PromptFile == "" {
+		s.renderFlash(w, "error", "No prompt file configured for this task")
+		return
+	}
+
+	workspace := cfg.TaskWorkspace(task)
+	content, err := config.ReadPromptFile(workspace, task.PromptFile)
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to read prompt: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	s.templates.ExecuteTemplate(w, "prompt_editor.html", struct { //nolint:errcheck
+		Name    string
+		Content string
+	}{Name: name, Content: content})
+}
+
+func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if err := r.ParseForm(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	task, ok := cfg.Tasks[name]
+	if !ok {
+		s.renderFlash(w, "error", fmt.Sprintf("Task %q not found", name))
+		return
+	}
+
+	if task.PromptFile == "" {
+		s.renderFlash(w, "error", "No prompt file configured for this task")
+		return
+	}
+
+	workspace := cfg.TaskWorkspace(task)
+	content := r.FormValue("prompt_content")
+
+	if err := config.WritePromptFile(workspace, task.PromptFile, content); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to save prompt: %v", err))
+		return
+	}
+
+	s.renderFlash(w, "success", fmt.Sprintf("Prompt file saved for %q", name))
+}
+
 func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	sessionName := "leo-" + name

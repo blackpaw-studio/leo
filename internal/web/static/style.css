@@ -580,6 +580,15 @@ textarea.form-textarea {
     line-height: 1.5;
 }
 
+textarea.prompt-editor-textarea {
+    min-height: 200px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    tab-size: 4;
+}
+
 select.form-input {
     appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23808090'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E");

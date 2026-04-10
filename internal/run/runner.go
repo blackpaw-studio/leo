@@ -287,24 +287,15 @@ func parseClaudeOutput(output []byte) claudeResult {
 
 func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) {
 	taskWorkspace := cfg.TaskWorkspace(task)
-	promptPath := filepath.Join(taskWorkspace, task.PromptFile)
 
-	// Prevent path traversal: ensure the resolved path is within the workspace.
-	absPrompt, err := filepath.Abs(promptPath)
+	absPrompt, err := config.ResolvePromptPath(taskWorkspace, task.PromptFile)
 	if err != nil {
-		return "", fmt.Errorf("resolving prompt path: %w", err)
-	}
-	absWorkspace, err := filepath.Abs(taskWorkspace)
-	if err != nil {
-		return "", fmt.Errorf("resolving workspace path: %w", err)
-	}
-	if !strings.HasPrefix(absPrompt, absWorkspace+string(filepath.Separator)) {
-		return "", fmt.Errorf("prompt file %q escapes workspace", task.PromptFile)
+		return "", err
 	}
 
-	promptData, err := os.ReadFile(promptPath)
+	promptData, err := os.ReadFile(absPrompt)
 	if err != nil {
-		return "", fmt.Errorf("reading prompt file %s: %w", promptPath, err)
+		return "", fmt.Errorf("reading prompt file %s: %w", absPrompt, err)
 	}
 
 	var parts []string

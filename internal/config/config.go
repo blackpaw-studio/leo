@@ -570,3 +570,58 @@ func expandHome(path string) string {
 	}
 	return path
 }
+
+// ResolvePromptPath resolves a prompt file path within a task workspace and
+// validates that it does not escape the workspace via path traversal.
+// Returns the absolute path to the prompt file, or an error.
+func ResolvePromptPath(workspace, promptFile string) (string, error) {
+	if promptFile == "" {
+		return "", fmt.Errorf("prompt_file is empty")
+	}
+	promptPath := filepath.Join(workspace, promptFile)
+	absPrompt, err := filepath.Abs(promptPath)
+	if err != nil {
+		return "", fmt.Errorf("resolving prompt path: %w", err)
+	}
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", fmt.Errorf("resolving workspace path: %w", err)
+	}
+	if !strings.HasPrefix(absPrompt, absWorkspace+string(filepath.Separator)) {
+		return "", fmt.Errorf("prompt file %q escapes workspace", promptFile)
+	}
+	return absPrompt, nil
+}
+
+// ReadPromptFile reads a task's prompt file content. Returns empty string
+// and nil error if the file does not exist (new file case).
+func ReadPromptFile(workspace, promptFile string) (string, error) {
+	absPath, err := ResolvePromptPath(workspace, promptFile)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading prompt file: %w", err)
+	}
+	return string(data), nil
+}
+
+// WritePromptFile writes content to a task's prompt file, creating
+// parent directories as needed.
+func WritePromptFile(workspace, promptFile, content string) error {
+	absPath, err := ResolvePromptPath(workspace, promptFile)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(absPath), 0750); err != nil {
+		return fmt.Errorf("creating prompt file directory: %w", err)
+	}
+	if err := os.WriteFile(absPath, []byte(content), 0600); err != nil {
+		return fmt.Errorf("writing prompt file: %w", err)
+	}
+	return nil
+}
