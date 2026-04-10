@@ -1,8 +1,16 @@
 {{define "status.html"}}
-<div id="status-banner" class="status-banner" hx-get="/partials/status" hx-trigger="every 5s" hx-swap="outerHTML">
-    <div class="status-header">
-        <span class="logo">Leo</span>
-        <span class="status-meta">{{len .Processes}} processes &middot; {{len .Tasks}} tasks{{if .NextRunName}} &middot; next: <strong>{{.NextRunName}}</strong> {{relativeTime .NextRunTime}}{{end}}</span>
+<div id="status-banner" hx-get="/partials/status" hx-trigger="every 5s" hx-swap="outerHTML">
+    <div class="status-banner">
+        <div class="status-header">
+            <span class="logo">Leo</span>
+            <span class="status-meta">{{len .Processes}} processes &middot; {{len .Tasks}} tasks{{if .NextRunName}} &middot; next: <strong>{{.NextRunName}}</strong> {{relativeTime .NextRunTime}}{{end}}</span>
+        </div>
     </div>
+    {{if .RestartNeeded}}
+    <div class="restart-banner">
+        <span>Process config has changed. Restart to apply.</span>
+        <button class="btn btn-sm" hx-post="/web/service/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart the Leo service? Running processes will be restarted.">Restart Now</button>
+    </div>
+    {{end}}
 </div>
 {{end}}

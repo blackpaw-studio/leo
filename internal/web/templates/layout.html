@@ -10,12 +10,6 @@
 <body>
     <div class="container">
         {{template "status.html" .}}
-        {{if .RestartNeeded}}
-        <div class="restart-banner">
-            <span>Process config has changed. Restart the service to apply.</span>
-            <button class="btn btn-sm" hx-post="/web/service/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart the Leo service? Running processes will be restarted.">Restart Now</button>
-        </div>
-        {{end}}
         {{template "processes.html" .}}
         <div id="flash-container"></div>
         <div class="tabs">

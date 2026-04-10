@@ -301,7 +301,7 @@ func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
 		s.reloader.ReloadConfig() //nolint:errcheck
 	}
 	s.restartNeeded = true
-	s.renderFlash(w, "success", "Defaults saved — restart needed for processes to pick up changes")
+	s.renderFlash(w, "success", "Defaults saved")
 }
 
 func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
@@ -359,7 +359,7 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 		s.reloader.ReloadConfig() //nolint:errcheck
 	}
 	s.restartNeeded = true
-	s.renderFlash(w, "success", fmt.Sprintf("Process %q saved — restart needed", name))
+	s.renderFlash(w, "success", fmt.Sprintf("Process %q saved", name))
 }
 
 func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
@@ -694,7 +694,7 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q added — restart needed", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q added", name)}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
 }
@@ -732,7 +732,7 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q deleted — restart needed", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q deleted", name)}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
 }
