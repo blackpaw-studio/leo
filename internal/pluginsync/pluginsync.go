@@ -53,29 +53,36 @@ func SyncTelegramPlugin() error {
 
 // RegisterBotCommands sets the Telegram bot's command menu via the Bot API.
 // This makes commands show up when users type "/" in the chat.
+// Commands are registered for both group chats (default scope) and private chats.
 func RegisterBotCommands(botToken string) error {
 	if botToken == "" {
 		return nil
 	}
 
-	body := `{"commands":[` +
+	commands := `"commands":[` +
 		`{"command":"stop","description":"Interrupt the current Claude operation"},` +
 		`{"command":"agent","description":"Spawn a coding agent (/agent <template> <repo>)"},` +
 		`{"command":"agents","description":"List running agents"},` +
 		`{"command":"status","description":"Show bot connection status"},` +
 		`{"command":"help","description":"Show available commands"},` +
 		`{"command":"start","description":"Start a conversation"}` +
-		`]}`
+		`]`
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", botToken)
-	resp, err := http.Post(url, "application/json", strings.NewReader(body)) // #nosec G107 -- URL constructed from config bot token
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", botToken)
+
+	// Register for default scope (group chats)
+	resp, err := http.Post(apiURL, "application/json", strings.NewReader(`{`+commands+`}`)) // #nosec G107 -- URL constructed from config bot token
 	if err != nil {
 		return fmt.Errorf("setting bot commands: %w", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("setting bot commands: HTTP %d", resp.StatusCode)
+	// Register for private chats
+	resp, err = http.Post(apiURL, "application/json", strings.NewReader(`{`+commands+`,"scope":{"type":"all_private_chats"}}`)) // #nosec G107
+	if err != nil {
+		return fmt.Errorf("setting bot commands (private): %w", err)
 	}
+	resp.Body.Close()
+
 	return nil
 }
