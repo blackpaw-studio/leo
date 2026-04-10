@@ -475,3 +475,177 @@ func TestParseLogEvents(t *testing.T) {
 		}
 	})
 }
+
+func TestTaskPromptGet_FileExists(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	// Create workspace and prompt file
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0750)
+	os.WriteFile(filepath.Join(ws, "heartbeat.md"), []byte("# Heartbeat\nCheck systems"), 0644)
+
+	req := httptest.NewRequest("GET", "/web/task/heartbeat/prompt", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Check systems") {
+		t.Error("response should contain prompt file content")
+	}
+	if !strings.Contains(body, "prompt_content") {
+		t.Error("response should contain textarea with name prompt_content")
+	}
+}
+
+func TestTaskPromptGet_FileNotFound(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	// Create workspace but not the prompt file
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0750)
+
+	req := httptest.NewRequest("GET", "/web/task/heartbeat/prompt", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "prompt_content") {
+		t.Error("response should contain textarea even for missing file")
+	}
+}
+
+func TestTaskPromptGet_TaskNotFound(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/web/task/nonexistent/prompt", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "not found") {
+		t.Error("response should contain 'not found' error")
+	}
+}
+
+func TestTaskPromptGet_PathTraversal(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	// Overwrite config with a task that has a traversal path
+	cfgYAML := `
+tasks:
+  evil:
+    schedule: "0 * * * *"
+    prompt_file: "../../etc/passwd"
+    enabled: true
+`
+	os.WriteFile(filepath.Join(dir, "leo.yaml"), []byte(cfgYAML), 0600)
+
+	req := httptest.NewRequest("GET", "/web/task/evil/prompt", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "escapes workspace") {
+		t.Errorf("response should contain 'escapes workspace' error, got: %s", body)
+	}
+}
+
+func TestTaskPromptSave_Success(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	// Create workspace
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0750)
+	os.WriteFile(filepath.Join(ws, "heartbeat.md"), []byte("old content"), 0644)
+
+	form := strings.NewReader("prompt_content=new+content+here")
+	req := httptest.NewRequest("POST", "/web/task/heartbeat/prompt", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "saved") {
+		t.Errorf("response should contain 'saved', got: %s", body)
+	}
+
+	// Verify file was written
+	data, err := os.ReadFile(filepath.Join(ws, "heartbeat.md"))
+	if err != nil {
+		t.Fatalf("reading written file: %v", err)
+	}
+	if string(data) != "new content here" {
+		t.Errorf("file content = %q, want %q", string(data), "new content here")
+	}
+}
+
+func TestTaskPromptSave_CreatesFile(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	// Workspace doesn't exist yet — WritePromptFile should create it
+	form := strings.NewReader("prompt_content=brand+new+prompt")
+	req := httptest.NewRequest("POST", "/web/task/heartbeat/prompt", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "saved") {
+		t.Errorf("response should contain 'saved', got: %s", body)
+	}
+
+	// Verify file + directories were created
+	ws := filepath.Join(dir, "workspace")
+	data, err := os.ReadFile(filepath.Join(ws, "heartbeat.md"))
+	if err != nil {
+		t.Fatalf("reading created file: %v", err)
+	}
+	if string(data) != "brand new prompt" {
+		t.Errorf("file content = %q, want %q", string(data), "brand new prompt")
+	}
+}
+
+func TestTaskPromptSave_PathTraversal(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	cfgYAML := `
+tasks:
+  evil:
+    schedule: "0 * * * *"
+    prompt_file: "../../etc/evil.md"
+    enabled: true
+`
+	os.WriteFile(filepath.Join(dir, "leo.yaml"), []byte(cfgYAML), 0600)
+
+	form := strings.NewReader("prompt_content=malicious")
+	req := httptest.NewRequest("POST", "/web/task/evil/prompt", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "escapes workspace") {
+		t.Errorf("response should contain 'escapes workspace' error, got: %s", body)
+	}
+}
+
+func TestTaskPromptSave_TaskNotFound(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	form := strings.NewReader("prompt_content=test")
+	req := httptest.NewRequest("POST", "/web/task/nonexistent/prompt", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "not found") {
+		t.Error("response should contain 'not found' error")
+	}
+}

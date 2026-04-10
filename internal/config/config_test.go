@@ -814,3 +814,119 @@ func TestValidateWebConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestResolvePromptPath(t *testing.T) {
+	ws := t.TempDir()
+
+	tests := []struct {
+		name        string
+		workspace   string
+		promptFile  string
+		wantErr     bool
+		errContains string
+	}{
+		{"valid relative path", ws, "daily.md", false, ""},
+		{"valid nested path", ws, "reports/daily.md", false, ""},
+		{"path traversal with dotdot", ws, "../../etc/passwd", true, "escapes workspace"},
+		{"empty prompt file", ws, "", true, "empty"},
+		// Note: filepath.Join(ws, "/etc/passwd") produces ws+"/etc/passwd" on Unix,
+		// which stays within the workspace. This is safe — no test needed.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolvePromptPath(tt.workspace, tt.promptFile)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !contains(err.Error(), tt.errContains) {
+					t.Errorf("error = %q, want containing %q", err.Error(), tt.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !filepath.IsAbs(got) {
+				t.Errorf("expected absolute path, got %q", got)
+			}
+		})
+	}
+}
+
+func TestReadPromptFile(t *testing.T) {
+	ws := t.TempDir()
+
+	t.Run("file exists", func(t *testing.T) {
+		os.WriteFile(filepath.Join(ws, "test.md"), []byte("# Hello\nWorld"), 0644)
+		content, err := ReadPromptFile(ws, "test.md")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if content != "# Hello\nWorld" {
+			t.Errorf("content = %q, want %q", content, "# Hello\nWorld")
+		}
+	})
+
+	t.Run("file not found returns empty", func(t *testing.T) {
+		content, err := ReadPromptFile(ws, "nonexistent.md")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if content != "" {
+			t.Errorf("content = %q, want empty string", content)
+		}
+	})
+
+	t.Run("path traversal blocked", func(t *testing.T) {
+		_, err := ReadPromptFile(ws, "../../etc/passwd")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+		if !contains(err.Error(), "escapes workspace") {
+			t.Errorf("error = %q, want mention of escapes workspace", err.Error())
+		}
+	})
+}
+
+func TestWritePromptFile(t *testing.T) {
+	t.Run("creates file and parent dirs", func(t *testing.T) {
+		ws := t.TempDir()
+		err := WritePromptFile(ws, "reports/daily.md", "# Daily Report")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(ws, "reports", "daily.md"))
+		if err != nil {
+			t.Fatalf("reading written file: %v", err)
+		}
+		if string(data) != "# Daily Report" {
+			t.Errorf("content = %q, want %q", string(data), "# Daily Report")
+		}
+	})
+
+	t.Run("overwrites existing file", func(t *testing.T) {
+		ws := t.TempDir()
+		os.WriteFile(filepath.Join(ws, "old.md"), []byte("old content"), 0644)
+		err := WritePromptFile(ws, "old.md", "new content")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		data, _ := os.ReadFile(filepath.Join(ws, "old.md"))
+		if string(data) != "new content" {
+			t.Errorf("content = %q, want %q", string(data), "new content")
+		}
+	})
+
+	t.Run("path traversal blocked", func(t *testing.T) {
+		ws := t.TempDir()
+		err := WritePromptFile(ws, "../../evil.md", "malicious")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+		if !contains(err.Error(), "escapes workspace") {
+			t.Errorf("error = %q, want mention of escapes workspace", err.Error())
+		}
+	})
+}

@@ -136,6 +136,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/task/add", s.handleTaskAdd)
 	mux.HandleFunc("DELETE /web/task/{name}/delete", s.handleTaskDelete)
 
+	// Prompt file editing
+	mux.HandleFunc("GET /web/task/{name}/prompt", s.handleTaskPromptGet)
+	mux.HandleFunc("POST /web/task/{name}/prompt", s.handleTaskPromptSave)
+
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)

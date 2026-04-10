@@ -1,0 +1,11 @@
+{{define "prompt_editor.html"}}
+<form hx-post="/web/task/{{.Name}}/prompt" hx-target="#flash-container" hx-swap="innerHTML">
+    <div class="form-group">
+        <textarea name="prompt_content" class="form-input form-textarea prompt-editor-textarea"
+            placeholder="Enter prompt markdown content...">{{.Content}}</textarea>
+    </div>
+    <div class="form-actions">
+        <button type="submit" class="btn btn-accent">Save Prompt</button>
+    </div>
+</form>
+{{end}}

@@ -142,7 +142,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		return fmt.Errorf("supervisor not initialized (no context)")
 	}
 
-	childCtx, cancel := context.WithCancel(s.ctx)
+	childCtx, cancel := context.WithCancel(s.ctx) // #nosec G118 -- cancel stored in s.cancels, called by StopAgent
 	s.cancels[spec.Name] = cancel
 	s.states[spec.Name] = &ProcessState{
 		Name:      spec.Name,
