@@ -41,16 +41,16 @@ type ConfigReloader interface {
 
 // Server serves the Leo web UI over HTTP.
 type Server struct {
-	configPath     string
-	processes      ProcessStateProvider
-	scheduler      SchedulerProvider
-	reloader       ConfigReloader
-	leoPath        string
-	templates      *template.Template
-	httpServer     *http.Server
-	listener       net.Listener
-	agents         []string // cached list of available claude agents
-	restartNeeded  bool     // set when process-affecting config changes are saved
+	configPath    string
+	processes     ProcessStateProvider
+	scheduler     SchedulerProvider
+	reloader      ConfigReloader
+	leoPath       string
+	templates     *template.Template
+	httpServer    *http.Server
+	listener      net.Listener
+	agents        []string // cached list of available claude agents
+	restartNeeded bool     // set when process-affecting config changes are saved
 
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd

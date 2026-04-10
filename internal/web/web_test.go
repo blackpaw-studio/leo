@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -275,15 +274,10 @@ func TestTaskToggle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading config: %v", err)
 	}
-	// After toggling, heartbeat should be disabled
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		// YAML, not JSON — just check the string
-		if strings.Contains(string(data), "enabled: true") && strings.Contains(string(data), "heartbeat") {
-			// Need to check more carefully — the file is YAML
-		}
+	// After toggling, the config (YAML) should reflect the change
+	if !strings.Contains(string(data), "heartbeat") {
+		t.Error("expected config to still contain heartbeat task")
 	}
-	_ = raw
 }
 
 func TestTaskToggleNotFound(t *testing.T) {

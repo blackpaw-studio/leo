@@ -92,40 +92,40 @@ type DefaultsConfig struct {
 }
 
 type ProcessConfig struct {
-	Workspace           string            `yaml:"workspace,omitempty"`
-	Channels            []string          `yaml:"channels,omitempty"`
-	Model               string            `yaml:"model,omitempty"`
-	MaxTurns            int               `yaml:"max_turns,omitempty"`
-	BypassPermissions   *bool             `yaml:"bypass_permissions,omitempty"`
-	RemoteControl       *bool             `yaml:"remote_control,omitempty"`
-	MCPConfig           string            `yaml:"mcp_config,omitempty"`
-	AddDirs             []string          `yaml:"add_dirs,omitempty"`
-	Env                 map[string]string `yaml:"env,omitempty"`
-	Agent               string            `yaml:"agent,omitempty"`
-	AllowedTools        []string          `yaml:"allowed_tools,omitempty"`
-	DisallowedTools     []string          `yaml:"disallowed_tools,omitempty"`
-	AppendSystemPrompt  string            `yaml:"append_system_prompt,omitempty"`
-	PermissionMode      string            `yaml:"permission_mode,omitempty"`
-	Enabled             bool              `yaml:"enabled"`
+	Workspace          string            `yaml:"workspace,omitempty"`
+	Channels           []string          `yaml:"channels,omitempty"`
+	Model              string            `yaml:"model,omitempty"`
+	MaxTurns           int               `yaml:"max_turns,omitempty"`
+	BypassPermissions  *bool             `yaml:"bypass_permissions,omitempty"`
+	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
+	MCPConfig          string            `yaml:"mcp_config,omitempty"`
+	AddDirs            []string          `yaml:"add_dirs,omitempty"`
+	Env                map[string]string `yaml:"env,omitempty"`
+	Agent              string            `yaml:"agent,omitempty"`
+	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
+	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
+	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
+	PermissionMode     string            `yaml:"permission_mode,omitempty"`
+	Enabled            bool              `yaml:"enabled"`
 }
 
 type TaskConfig struct {
-	Workspace          string `yaml:"workspace,omitempty"`
-	Schedule           string `yaml:"schedule"`
-	Timezone           string `yaml:"timezone,omitempty"`
-	PromptFile         string `yaml:"prompt_file"`
-	Model              string `yaml:"model,omitempty"`
-	MaxTurns           int    `yaml:"max_turns,omitempty"`
-	TopicID            int    `yaml:"topic_id,omitempty"`
-	Enabled            bool   `yaml:"enabled"`
-	Silent             bool   `yaml:"silent,omitempty"`
-	Timeout            string `yaml:"timeout,omitempty"`               // e.g. "30m", "1h" — default 30m
-	Retries            int    `yaml:"retries,omitempty"`               // number of retry attempts on failure, default 0
-	NotifyOnFail       bool   `yaml:"notify_on_fail,omitempty"`        // send telegram message on failure
-	PermissionMode     string `yaml:"permission_mode,omitempty"`       // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
+	Workspace          string   `yaml:"workspace,omitempty"`
+	Schedule           string   `yaml:"schedule"`
+	Timezone           string   `yaml:"timezone,omitempty"`
+	PromptFile         string   `yaml:"prompt_file"`
+	Model              string   `yaml:"model,omitempty"`
+	MaxTurns           int      `yaml:"max_turns,omitempty"`
+	TopicID            int      `yaml:"topic_id,omitempty"`
+	Enabled            bool     `yaml:"enabled"`
+	Silent             bool     `yaml:"silent,omitempty"`
+	Timeout            string   `yaml:"timeout,omitempty"`         // e.g. "30m", "1h" — default 30m
+	Retries            int      `yaml:"retries,omitempty"`         // number of retry attempts on failure, default 0
+	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"`  // send telegram message on failure
+	PermissionMode     string   `yaml:"permission_mode,omitempty"` // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
-	AppendSystemPrompt string `yaml:"append_system_prompt,omitempty"`
+	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
 }
 
 // DefaultWorkspace returns the default workspace path (HomePath/workspace).

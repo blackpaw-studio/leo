@@ -76,11 +76,12 @@ func runStatus() error {
 					if state.Restarts > 0 {
 						restarts = fmt.Sprintf(" %d restart(s)", state.Restarts)
 					}
-					if state.Status == "running" {
+					switch state.Status {
+					case "running":
 						success.Printf("  %-20s %s%s%s\n", name, state.Status, uptime, restarts)
-					} else if state.Status == "restarting" {
+					case "restarting":
 						warn.Printf("  %-20s %s%s%s\n", name, state.Status, uptime, restarts)
-					} else {
+					default:
 						info.Printf("  %-20s %s%s%s\n", name, state.Status, uptime, restarts)
 					}
 				}

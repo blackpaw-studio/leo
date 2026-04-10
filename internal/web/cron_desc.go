@@ -219,11 +219,12 @@ func formatTime(h int, minute string) string {
 
 	suffix := "AM"
 	displayH := h
-	if h == 0 {
+	switch {
+	case h == 0:
 		displayH = 12
-	} else if h == 12 {
+	case h == 12:
 		suffix = "PM"
-	} else if h > 12 {
+	case h > 12:
 		displayH = h - 12
 		suffix = "PM"
 	}
@@ -234,11 +235,12 @@ func formatTime(h int, minute string) string {
 func formatHour(h int) string {
 	suffix := "AM"
 	displayH := h
-	if h == 0 {
+	switch {
+	case h == 0:
 		displayH = 12
-	} else if h == 12 {
+	case h == 12:
 		suffix = "PM"
-	} else if h > 12 {
+	case h > 12:
 		displayH = h - 12
 		suffix = "PM"
 	}

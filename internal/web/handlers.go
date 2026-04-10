@@ -19,16 +19,16 @@ import (
 
 // dashboardData is the template data for the full dashboard page.
 type dashboardData struct {
-	Version        string
-	Processes      []processData
-	Tasks          []taskData
-	CronMap        map[string]cron.EntryInfo
-	Config         *config.Config
-	Agents         []string
-	RestartNeeded  bool
-	StartedAt      time.Time
-	NextRunName    string
-	NextRunTime  time.Time
+	Version       string
+	Processes     []processData
+	Tasks         []taskData
+	CronMap       map[string]cron.EntryInfo
+	Config        *config.Config
+	Agents        []string
+	RestartNeeded bool
+	StartedAt     time.Time
+	NextRunName   string
+	NextRunTime   time.Time
 }
 
 type processData struct {
@@ -616,11 +616,11 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg.Processes[name] = config.ProcessConfig{
-		Workspace:          r.FormValue("workspace"),
-		Channels:           parseCommaSeparated(r.FormValue("channels")),
-		Model:              r.FormValue("model"),
-		Agent:              r.FormValue("agent"),
-		Enabled:            r.FormValue("enabled") == "true",
+		Workspace: r.FormValue("workspace"),
+		Channels:  parseCommaSeparated(r.FormValue("channels")),
+		Model:     r.FormValue("model"),
+		Agent:     r.FormValue("agent"),
+		Enabled:   r.FormValue("enabled") == "true",
 	}
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {

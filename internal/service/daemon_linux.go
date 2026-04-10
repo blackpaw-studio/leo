@@ -58,13 +58,7 @@ func InstallDaemon(sc ServiceConfig) error {
 	}
 
 	// Render unit file
-	data := unitData{
-		LeoPath:    sc.LeoPath,
-		ConfigPath: sc.ConfigPath,
-		WorkDir:    sc.WorkDir,
-		LogPath:    sc.LogPath,
-		Env:        sc.Env,
-	}
+	data := unitData(sc)
 
 	tmpl, err := template.New("unit").Parse(unitTemplate)
 	if err != nil {
