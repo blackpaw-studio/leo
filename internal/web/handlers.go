@@ -1249,11 +1249,29 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg.Templates[name] = config.TemplateConfig{
-		Workspace: r.FormValue("workspace"),
-		Channels:  parseCommaSeparated(r.FormValue("channels")),
-		Model:     r.FormValue("model"),
+	tmpl := config.TemplateConfig{
+		Workspace:          r.FormValue("workspace"),
+		Channels:           parseCommaSeparated(r.FormValue("channels")),
+		Model:              r.FormValue("model"),
+		Agent:              r.FormValue("agent"),
+		PermissionMode:     r.FormValue("permission_mode"),
+		RemoteControl:      parseOptionalBool(r.FormValue("remote_control")),
+		AllowedTools:       parseCommaSeparated(r.FormValue("allowed_tools")),
+		DisallowedTools:    parseCommaSeparated(r.FormValue("disallowed_tools")),
+		AppendSystemPrompt: r.FormValue("append_system_prompt"),
+		MCPConfig:          r.FormValue("mcp_config"),
+		AddDirs:            parseCommaSeparated(r.FormValue("add_dirs")),
+		Env:                parseEnvMap(r.FormValue("env")),
 	}
+	if mt := r.FormValue("max_turns"); mt != "" {
+		v, err := strconv.Atoi(mt)
+		if err != nil {
+			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
+			return
+		}
+		tmpl.MaxTurns = v
+	}
+	cfg.Templates[name] = tmpl
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)

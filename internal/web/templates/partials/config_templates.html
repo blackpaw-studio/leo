@@ -163,6 +163,93 @@
                     <input type="text" name="channels" class="form-input" placeholder="plugin:telegram@claude-plugins-official">
                 </div>
             </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Remote Control</label>
+                    <select name="remote_control" class="form-input">
+                        <option value="" selected>(inherit from defaults)</option>
+                        <option value="true">enabled</option>
+                        <option value="false">disabled</option>
+                    </select>
+                </div>
+            </div>
+
+            <details class="advanced-details">
+                <summary class="advanced-summary">Advanced</summary>
+                <div class="advanced-content">
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Agent</label>
+                            <select name="agent" class="form-input">
+                                <option value="">(none)</option>
+                                {{range $.Agents}}
+                                <option value="{{.}}">{{.}}</option>
+                                {{end}}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Max Turns</label>
+                            <input type="number" name="max_turns" min="0" max="100" class="form-input" placeholder="{{if $.Config.Defaults.MaxTurns}}{{$.Config.Defaults.MaxTurns}} from defaults{{else}}15 from defaults{{end}}">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Permission Mode</label>
+                            <select name="permission_mode" class="form-input">
+                                <option value="" selected>(inherit from defaults)</option>
+                                <option value="default">default</option>
+                                <option value="acceptEdits">acceptEdits</option>
+                                <option value="auto">auto</option>
+                                <option value="bypassPermissions">bypassPermissions</option>
+                                <option value="dontAsk">dontAsk</option>
+                                <option value="plan">plan</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>MCP Config</label>
+                            <input type="text" name="mcp_config" placeholder="config/mcp-servers.json" class="form-input">
+                        </div>
+                        <div class="form-help">Path to MCP servers config, relative to workspace.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Extra Dirs</label>
+                            <input type="text" name="add_dirs" placeholder="(none)" class="form-input">
+                        </div>
+                        <div class="form-help">Comma-separated additional directories for Claude to access.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Allowed Tools</label>
+                            <input type="text" name="allowed_tools" placeholder="(all)" class="form-input">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Disallowed Tools</label>
+                            <input type="text" name="disallowed_tools" placeholder="(none)" class="form-input">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Environment</label>
+                            <textarea name="env" class="form-input form-textarea" placeholder="KEY=value&#10;ANOTHER=value"></textarea>
+                        </div>
+                        <div class="form-help">One KEY=value per line. Passed to spawned agent processes.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>System Prompt</label>
+                            <textarea name="append_system_prompt" class="form-input form-textarea" placeholder="Additional instructions..."></textarea>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
             <div class="form-actions">
                 <button type="submit" class="btn btn-accent">Add Template</button>
             </div>
