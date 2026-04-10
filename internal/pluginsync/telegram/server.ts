@@ -2449,21 +2449,13 @@ bot.command("stop", async (ctx) => {
     return;
   }
   try {
-    const tmux = process.env.LEO_TMUX_PATH ?? "tmux";
-    const session = `leo-${processName}`;
-    // Reply FIRST so grammy acknowledges the update offset before we kill anything.
-    await ctx.reply(`⏹ Interrupted ${processName}`);
-    // Delay the kill so grammy's next getUpdates call confirms the offset.
-    // Without this, /stop is re-delivered on restart → infinite loop.
-    setTimeout(() => {
-      try {
-        // Kill the entire tmux pane. This kills all processes in the pane
-        // (Claude + its tool subprocesses). The Leo supervisor will detect
-        // the session died and restart it. Since we already replied above,
-        // grammy has time to acknowledge the offset — no restart loop.
-        execSync(`${tmux} kill-pane -t ${session}`);
-      } catch {}
-    }, 1000);
+    // Reply FIRST so grammy acknowledges the update offset.
+    await ctx.reply(`⏹ Interrupting ${processName}...`);
+    // Ask the Leo daemon (separate process) to kill the tmux pane.
+    // This is more reliable than killing from inside the pane.
+    const port = process.env.LEO_WEB_PORT ?? "8370";
+    const url = `http://127.0.0.1:${port}/web/process/${processName}/interrupt`;
+    fetch(url, { method: "POST" }).catch(() => {});
   } catch (err) {
     await ctx.reply(`⚠️ Failed to interrupt: ${String(err)}`);
   }

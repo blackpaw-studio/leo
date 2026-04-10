@@ -45,6 +45,7 @@ type ProcessSpec struct {
 	WorkDir     string
 	HasTelegram bool
 	Env         map[string]string
+	WebPort     string // Leo web UI port for plugin control commands
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -239,9 +240,11 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	}
 
 	// Register bot commands with Telegram (best-effort)
-	if cfg, err := config.Load(configPath); err == nil && cfg.Telegram.BotToken != "" {
-		if err := pluginsync.RegisterBotCommands(cfg.Telegram.BotToken); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to register bot commands: %v\n", err)
+	if cfg, err := config.Load(configPath); err == nil {
+		if cfg.Telegram.BotToken != "" {
+			if err := pluginsync.RegisterBotCommands(cfg.Telegram.BotToken); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to register bot commands: %v\n", err)
+			}
 		}
 	}
 
@@ -322,7 +325,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		}
 
 		// Inject Leo env vars for plugin control commands
-		claudeCmd = fmt.Sprintf("export LEO_PROCESS_NAME=%s; export LEO_TMUX_PATH=%s; %s", shellQuote(spec.Name), shellQuote(tmuxPath), claudeCmd)
+		claudeCmd = fmt.Sprintf("export LEO_PROCESS_NAME=%s; export LEO_TMUX_PATH=%s; export LEO_WEB_PORT=%s; %s", shellQuote(spec.Name), shellQuote(tmuxPath), spec.WebPort, claudeCmd)
 
 		// Add per-process env vars
 		for k, v := range spec.Env {

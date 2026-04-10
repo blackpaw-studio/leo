@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -197,6 +198,7 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 			WorkDir:     cfg.ProcessWorkspace(proc),
 			HasTelegram: processHasTelegram(proc),
 			Env:         proc.Env,
+			WebPort:     strconv.Itoa(cfg.WebPort()),
 		})
 	}
 	return specs

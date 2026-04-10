@@ -379,11 +379,9 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	sessionName := "leo-" + name
 
 	tmuxPath := findTmuxPath()
-	// Send Escape multiple times to interrupt generation and tool calls
-	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
-	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
-	time.Sleep(300 * time.Millisecond)
-	if err := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run(); err != nil {
+	// kill-pane terminates all processes in the pane (Claude + tool subprocesses).
+	// The supervisor will detect the exit and restart the process.
+	if err := s.execCommand(tmuxPath, "kill-pane", "-t", sessionName).Run(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to interrupt %s: %v", name, err))
 		return
 	}
