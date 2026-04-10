@@ -2457,8 +2457,11 @@ bot.command("stop", async (ctx) => {
     // Without this, /stop is re-delivered on restart → infinite loop.
     setTimeout(() => {
       try {
-        const pid = execSync(`${tmux} list-panes -t ${session} -F '#{pane_pid}'`).toString().trim();
-        if (pid) process.kill(parseInt(pid), "SIGINT");
+        // Kill the entire tmux pane. This kills all processes in the pane
+        // (Claude + its tool subprocesses). The Leo supervisor will detect
+        // the session died and restart it. Since we already replied above,
+        // grammy has time to acknowledge the offset — no restart loop.
+        execSync(`${tmux} kill-pane -t ${session}`);
       } catch {}
     }, 1000);
   } catch (err) {
