@@ -552,6 +552,10 @@ func waitForSessionEnd(ctx context.Context, tmuxPath, sessionName string, spec P
 			return false
 		}
 
+		// Auto-dismiss the "Resume from summary" prompt that blocks
+		// unattended sessions when they exceed the context threshold.
+		autoResumePrompt(tmuxPath, sessionName, spec.Name)
+
 		// Monitor telegram plugin lock file (only for telegram processes)
 		if spec.HasTelegram && pluginLockFile != "" && time.Since(startTime) > 30*time.Second {
 			if _, err := os.Stat(pluginLockFile); err != nil {
@@ -565,6 +569,20 @@ func waitForSessionEnd(ctx context.Context, tmuxPath, sessionName string, spec P
 				pluginChecksAfterStartup = 0
 			}
 		}
+	}
+}
+
+// autoResumePrompt captures the tmux pane and sends Enter if claude is stuck
+// at the "Resume from summary" interactive prompt.
+func autoResumePrompt(tmuxPath, sessionName, processName string) {
+	out, err := exec.Command(tmuxPath, "capture-pane", "-t", sessionName, "-p", "-S", "-10").Output()
+	if err != nil {
+		return
+	}
+	pane := string(out)
+	if strings.Contains(pane, "Resume from summary") && strings.Contains(pane, "Enter to confirm") {
+		fmt.Fprintf(os.Stderr, "[%s] detected resume prompt, auto-accepting 'Resume from summary'\n", processName)
+		exec.Command(tmuxPath, "send-keys", "-t", sessionName, "Enter").Run()
 	}
 }
 
