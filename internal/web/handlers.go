@@ -17,13 +17,15 @@ import (
 
 // dashboardData is the template data for the full dashboard page.
 type dashboardData struct {
-	Version      string
-	Processes    []processData
-	Tasks        []taskData
-	CronMap      map[string]cron.EntryInfo
-	Config       *config.Config
-	StartedAt    time.Time
-	NextRunName  string
+	Version        string
+	Processes      []processData
+	Tasks          []taskData
+	CronMap        map[string]cron.EntryInfo
+	Config         *config.Config
+	Agents         []string
+	RestartNeeded  bool
+	StartedAt      time.Time
+	NextRunName    string
 	NextRunTime  time.Time
 }
 
@@ -243,7 +245,8 @@ func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
 	if s.reloader != nil {
 		s.reloader.ReloadConfig() //nolint:errcheck
 	}
-	s.renderFlash(w, "success", "Defaults saved")
+	s.restartNeeded = true
+	s.renderFlash(w, "success", "Defaults saved — restart needed for processes to pick up changes")
 }
 
 func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
@@ -300,7 +303,8 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 	if s.reloader != nil {
 		s.reloader.ReloadConfig() //nolint:errcheck
 	}
-	s.renderFlash(w, "success", fmt.Sprintf("Process %q saved", name))
+	s.restartNeeded = true
+	s.renderFlash(w, "success", fmt.Sprintf("Process %q saved — restart needed", name))
 }
 
 func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +370,18 @@ func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
 		s.reloader.ReloadConfig() //nolint:errcheck
 	}
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q saved", name))
+}
+
+func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
+	cmd := s.execCommand(s.leoPath, "service", "restart", "--config", s.configPath)
+	if err := cmd.Start(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to restart: %v", err))
+		return
+	}
+	go cmd.Wait() //nolint:errcheck
+
+	s.restartNeeded = false
+	s.renderFlash(w, "success", "Service restarting...")
 }
 
 func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
@@ -529,12 +545,14 @@ func (s *Server) buildDashboardData() (*dashboardData, error) {
 	})
 
 	return &dashboardData{
-		Processes:   processes,
-		Tasks:       tasks,
-		CronMap:     cronMap,
-		Config:      cfg,
-		NextRunName: nextRunName,
-		NextRunTime: nextRunTime,
+		Processes:     processes,
+		Tasks:         tasks,
+		CronMap:       cronMap,
+		Config:        cfg,
+		Agents:        s.agents,
+		RestartNeeded: s.restartNeeded,
+		NextRunName:   nextRunName,
+		NextRunTime:   nextRunTime,
 	}, nil
 }
 
@@ -580,6 +598,8 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 		s.reloader.ReloadConfig() //nolint:errcheck
 	}
 
+	s.restartNeeded = true
+
 	// Re-render the processes config tab
 	data, err := s.buildDashboardData()
 	if err != nil {
@@ -588,7 +608,7 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q added", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q added — restart needed", name)}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
 }
@@ -617,6 +637,8 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 		s.reloader.ReloadConfig() //nolint:errcheck
 	}
 
+	s.restartNeeded = true
+
 	data, err := s.buildDashboardData()
 	if err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
@@ -624,7 +646,7 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q deleted", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q deleted — restart needed", name)}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
 }

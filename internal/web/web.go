@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -40,14 +41,16 @@ type ConfigReloader interface {
 
 // Server serves the Leo web UI over HTTP.
 type Server struct {
-	configPath string
-	processes  ProcessStateProvider
-	scheduler  SchedulerProvider
-	reloader   ConfigReloader
-	leoPath    string
-	templates  *template.Template
-	httpServer *http.Server
-	listener   net.Listener
+	configPath     string
+	processes      ProcessStateProvider
+	scheduler      SchedulerProvider
+	reloader       ConfigReloader
+	leoPath        string
+	templates      *template.Template
+	httpServer     *http.Server
+	listener       net.Listener
+	agents         []string // cached list of available claude agents
+	restartNeeded  bool     // set when process-affecting config changes are saved
 
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
@@ -69,6 +72,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		execCommand: exec.Command,
 	}
 
+	s.agents = s.fetchAgentList()
 	s.parseTemplates()
 
 	mux := http.NewServeMux()
@@ -111,6 +115,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Task CRUD
 	mux.HandleFunc("POST /web/task/add", s.handleTaskAdd)
 	mux.HandleFunc("DELETE /web/task/{name}/delete", s.handleTaskDelete)
+
+	// Service control
+	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -208,6 +215,34 @@ func (s *Server) parseTemplates() {
 	}
 
 	s.templates = template.Must(template.New("").Funcs(funcMap).ParseFS(content, "templates/*.html", "templates/**/*.html"))
+}
+
+// fetchAgentList runs `claude agents` and parses the agent names.
+func (s *Server) fetchAgentList() []string {
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, claudePath, "agents").Output()
+	if err != nil {
+		return nil
+	}
+
+	var agents []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, " · ") {
+			name := strings.TrimSpace(strings.SplitN(line, " · ", 2)[0])
+			if name != "" {
+				agents = append(agents, name)
+			}
+		}
+	}
+	return agents
 }
 
 func statusColor(status string) string {

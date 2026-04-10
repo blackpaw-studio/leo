@@ -64,6 +64,30 @@ body {
     color: var(--accent);
 }
 
+/* Restart banner */
+.restart-banner {
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: 8px;
+    padding: 12px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--amber);
+    font-size: 14px;
+}
+
+.restart-banner .btn {
+    color: var(--amber);
+    border-color: var(--amber);
+    white-space: nowrap;
+}
+
+.restart-banner .btn:hover {
+    background: rgba(245, 158, 11, 0.15);
+}
+
 /* Process cards */
 .process-grid { margin-bottom: 32px; }
 
