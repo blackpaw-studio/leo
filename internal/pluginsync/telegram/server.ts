@@ -2450,9 +2450,13 @@ bot.command("stop", async (ctx) => {
   }
   try {
     const tmux = process.env.LEO_TMUX_PATH ?? "tmux";
-    // Send Escape first (interrupts generation), then C-c (kills running tools)
-    execSync(`${tmux} send-keys -t leo-${processName} Escape`);
-    execSync(`${tmux} send-keys -t leo-${processName} C-c`);
+    // Get the PID of the process running in the tmux pane and send SIGINT directly.
+    // This is more reliable than send-keys because it signals the process immediately
+    // even if it's mid-tool-call.
+    const pid = execSync(`${tmux} list-panes -t leo-${processName} -F '#{pane_pid}'`).toString().trim();
+    if (pid) {
+      execSync(`kill -INT ${pid}`);
+    }
     await ctx.reply(`⏹ Interrupted ${processName}`);
   } catch (err) {
     await ctx.reply(`⚠️ Failed to interrupt: ${String(err)}`);
