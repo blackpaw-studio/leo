@@ -140,6 +140,12 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /web/task/{name}/prompt", s.handleTaskPromptGet)
 	mux.HandleFunc("POST /web/task/{name}/prompt", s.handleTaskPromptSave)
 
+	// Template config management
+	mux.HandleFunc("GET /partials/config/templates", s.handlePartialConfigTemplates)
+	mux.HandleFunc("POST /web/config/template/{name}", s.handleConfigTemplate)
+	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
+	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
+
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)

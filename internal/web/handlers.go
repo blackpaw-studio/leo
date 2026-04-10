@@ -539,8 +539,7 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 	proc.Channels = parseCommaSeparated(r.FormValue("channels"))
 	proc.Agent = r.FormValue("agent")
 	proc.PermissionMode = r.FormValue("permission_mode")
-	rc := r.FormValue("remote_control") == "true"
-	proc.RemoteControl = &rc
+	proc.RemoteControl = parseOptionalBool(r.FormValue("remote_control"))
 	proc.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
 	proc.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
 	proc.AppendSystemPrompt = r.FormValue("append_system_prompt")
@@ -548,9 +547,12 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 	proc.AddDirs = parseCommaSeparated(r.FormValue("add_dirs"))
 	proc.Env = parseEnvMap(r.FormValue("env"))
 	if mt := r.FormValue("max_turns"); mt != "" {
-		if v, err := strconv.Atoi(mt); err == nil {
-			proc.MaxTurns = v
+		v, err := strconv.Atoi(mt)
+		if err != nil {
+			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
+			return
 		}
+		proc.MaxTurns = v
 	}
 	// Clear bypass_permissions if permission_mode is set (permission_mode takes precedence)
 	if proc.PermissionMode != "" {
@@ -851,6 +853,21 @@ func parseCommaSeparated(s string) []string {
 	return result
 }
 
+// parseOptionalBool parses a three-state form value into *bool.
+// "true" → &true, "false" → &false, "" → nil (inherit from defaults).
+func parseOptionalBool(s string) *bool {
+	switch s {
+	case "true":
+		v := true
+		return &v
+	case "false":
+		v := false
+		return &v
+	default:
+		return nil
+	}
+}
+
 func parseEnvMap(s string) map[string]string {
 	if s == "" {
 		return nil
@@ -1141,4 +1158,155 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Task %q deleted", name)}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
+}
+
+// --- Template config management ---
+
+func (s *Server) handlePartialConfigTemplates(w http.ResponseWriter, r *http.Request) {
+	data, err := s.buildDashboardData()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
+}
+
+func (s *Server) handleConfigTemplate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if err := r.ParseForm(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	tmpl, ok := cfg.Templates[name]
+	if !ok {
+		s.renderFlash(w, "error", fmt.Sprintf("Template %q not found", name))
+		return
+	}
+
+	tmpl.Model = r.FormValue("model")
+	tmpl.Workspace = r.FormValue("workspace")
+	tmpl.Channels = parseCommaSeparated(r.FormValue("channels"))
+	tmpl.Agent = r.FormValue("agent")
+	tmpl.PermissionMode = r.FormValue("permission_mode")
+	tmpl.RemoteControl = parseOptionalBool(r.FormValue("remote_control"))
+	tmpl.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
+	tmpl.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
+	tmpl.AppendSystemPrompt = r.FormValue("append_system_prompt")
+	tmpl.MCPConfig = r.FormValue("mcp_config")
+	tmpl.AddDirs = parseCommaSeparated(r.FormValue("add_dirs"))
+	tmpl.Env = parseEnvMap(r.FormValue("env"))
+	if mt := r.FormValue("max_turns"); mt != "" {
+		v, err := strconv.Atoi(mt)
+		if err != nil {
+			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
+			return
+		}
+		tmpl.MaxTurns = v
+	}
+	cfg.Templates[name] = tmpl
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	if s.reloader != nil {
+		s.reloader.ReloadConfig() //nolint:errcheck
+	}
+	s.renderFlash(w, "success", fmt.Sprintf("Template %q saved", name))
+}
+
+func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
+		return
+	}
+
+	name := r.FormValue("name")
+	if name == "" {
+		s.renderFlash(w, "error", "Name is required")
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if cfg.Templates == nil {
+		cfg.Templates = make(map[string]config.TemplateConfig)
+	}
+	if _, exists := cfg.Templates[name]; exists {
+		s.renderFlash(w, "error", fmt.Sprintf("Template %q already exists", name))
+		return
+	}
+
+	cfg.Templates[name] = config.TemplateConfig{
+		Workspace: r.FormValue("workspace"),
+		Channels:  parseCommaSeparated(r.FormValue("channels")),
+		Model:     r.FormValue("model"),
+	}
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	if s.reloader != nil {
+		s.reloader.ReloadConfig() //nolint:errcheck
+	}
+
+	data, err := s.buildDashboardData()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Template %q added", name)}) //nolint:errcheck
+	fmt.Fprintf(w, `</div>`)
+	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
+}
+
+func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if _, ok := cfg.Templates[name]; !ok {
+		s.renderFlash(w, "error", fmt.Sprintf("Template %q not found", name))
+		return
+	}
+
+	delete(cfg.Templates, name)
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	if s.reloader != nil {
+		s.reloader.ReloadConfig() //nolint:errcheck
+	}
+
+	data, err := s.buildDashboardData()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Template %q deleted", name)}) //nolint:errcheck
+	fmt.Fprintf(w, `</div>`)
+	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
 }
