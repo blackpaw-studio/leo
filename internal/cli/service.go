@@ -206,6 +206,10 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig) []string {
 	var claudeArgs []string
 
+	// Model
+	model := cfg.ProcessModel(proc)
+	claudeArgs = append(claudeArgs, "--model", model)
+
 	for _, ch := range proc.Channels {
 		claudeArgs = append(claudeArgs, "--channels", ch)
 	}
@@ -221,13 +225,51 @@ func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig
 		claudeArgs = append(claudeArgs, "--remote-control", name)
 	}
 
-	if cfg.ProcessBypassPermissions(proc) {
+	// Permission mode: process > defaults > bypass_permissions legacy
+	permMode := proc.PermissionMode
+	if permMode == "" {
+		permMode = cfg.Defaults.PermissionMode
+	}
+	if permMode != "" {
+		claudeArgs = append(claudeArgs, "--permission-mode", permMode)
+	} else if cfg.ProcessBypassPermissions(proc) {
 		claudeArgs = append(claudeArgs, "--dangerously-skip-permissions")
 	}
 
 	mcpConfig := cfg.ProcessMCPConfigPath(proc)
 	if config.HasMCPServers(mcpConfig) {
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfig)
+	}
+
+	if proc.Agent != "" {
+		claudeArgs = append(claudeArgs, "--agent", proc.Agent)
+	}
+
+	// Allowed tools: process overrides defaults
+	allowedTools := proc.AllowedTools
+	if len(allowedTools) == 0 {
+		allowedTools = cfg.Defaults.AllowedTools
+	}
+	if len(allowedTools) > 0 {
+		claudeArgs = append(claudeArgs, "--allowed-tools", strings.Join(allowedTools, ","))
+	}
+
+	// Disallowed tools: process overrides defaults
+	disallowedTools := proc.DisallowedTools
+	if len(disallowedTools) == 0 {
+		disallowedTools = cfg.Defaults.DisallowedTools
+	}
+	if len(disallowedTools) > 0 {
+		claudeArgs = append(claudeArgs, "--disallowed-tools", strings.Join(disallowedTools, ","))
+	}
+
+	// System prompt: process overrides defaults
+	appendPrompt := proc.AppendSystemPrompt
+	if appendPrompt == "" {
+		appendPrompt = cfg.Defaults.AppendSystemPrompt
+	}
+	if appendPrompt != "" {
+		claudeArgs = append(claudeArgs, "--append-system-prompt", appendPrompt)
 	}
 
 	return claudeArgs

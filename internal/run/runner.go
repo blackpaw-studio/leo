@@ -323,7 +323,14 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 		args = append(args, "--resume", sessionID)
 	}
 
-	if cfg.Defaults.BypassPermissions {
+	// Permission mode: task > defaults > bypass_permissions legacy
+	permMode := task.PermissionMode
+	if permMode == "" {
+		permMode = cfg.Defaults.PermissionMode
+	}
+	if permMode != "" {
+		args = append(args, "--permission-mode", permMode)
+	} else if cfg.Defaults.BypassPermissions {
 		args = append(args, "--dangerously-skip-permissions")
 	}
 
@@ -334,6 +341,33 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 
 	taskWorkspace := cfg.TaskWorkspace(task)
 	args = append(args, "--add-dir", taskWorkspace)
+
+	// Allowed tools: task overrides defaults
+	allowedTools := task.AllowedTools
+	if len(allowedTools) == 0 {
+		allowedTools = cfg.Defaults.AllowedTools
+	}
+	if len(allowedTools) > 0 {
+		args = append(args, "--allowed-tools", strings.Join(allowedTools, ","))
+	}
+
+	// Disallowed tools: task overrides defaults
+	disallowedTools := task.DisallowedTools
+	if len(disallowedTools) == 0 {
+		disallowedTools = cfg.Defaults.DisallowedTools
+	}
+	if len(disallowedTools) > 0 {
+		args = append(args, "--disallowed-tools", strings.Join(disallowedTools, ","))
+	}
+
+	// System prompt: task overrides defaults
+	appendPrompt := task.AppendSystemPrompt
+	if appendPrompt == "" {
+		appendPrompt = cfg.Defaults.AppendSystemPrompt
+	}
+	if appendPrompt != "" {
+		args = append(args, "--append-system-prompt", appendPrompt)
+	}
 
 	return args
 }
