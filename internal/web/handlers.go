@@ -379,7 +379,9 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	sessionName := "leo-" + name
 
 	tmuxPath := findTmuxPath()
-	cmd := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape")
+	// Send Escape (interrupts generation) then C-c (kills running tools)
+	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+	cmd := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "C-c")
 	if err := cmd.Run(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to interrupt %s: %v", name, err))
 		return

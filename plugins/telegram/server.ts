@@ -2450,7 +2450,9 @@ bot.command("stop", async (ctx) => {
   }
   try {
     const tmux = process.env.LEO_TMUX_PATH ?? "tmux";
+    // Send Escape first (interrupts generation), then C-c (kills running tools)
     execSync(`${tmux} send-keys -t leo-${processName} Escape`);
+    execSync(`${tmux} send-keys -t leo-${processName} C-c`);
     await ctx.reply(`⏹ Interrupted ${processName}`);
   } catch (err) {
     await ctx.reply(`⚠️ Failed to interrupt: ${String(err)}`);
