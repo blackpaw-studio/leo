@@ -420,9 +420,17 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			cleanupOrphanedPlugins()
 		}
 
-		// Re-sync plugin before each launch (Claude may restore the official version on startup)
+		// Sync plugin before launch AND keep re-syncing in background.
+		// Claude restores the official plugin during its startup, overwriting our fork.
+		// We re-sync repeatedly for the first 30 seconds to win the race.
 		if spec.HasTelegram {
 			_ = pluginsync.SyncTelegramPlugin()
+			go func() {
+				for i := 0; i < 15; i++ {
+					time.Sleep(2 * time.Second)
+					_ = pluginsync.SyncTelegramPlugin()
+				}
+			}()
 		}
 
 		sv.setState(spec.Name, "running")
