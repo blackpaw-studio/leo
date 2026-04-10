@@ -139,6 +139,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)
+	mux.HandleFunc("POST /web/process/{name}/send", s.handleProcessSendKeys)
 
 	// Agent management (web UI)
 	mux.HandleFunc("GET /partials/agents", s.handlePartialAgents)
@@ -150,6 +151,11 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
 	mux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
 	mux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
+
+	// Task management (JSON API — used by Telegram plugin)
+	mux.HandleFunc("GET /api/task/list", s.handleAPITaskList)
+	mux.HandleFunc("POST /api/task/{name}/run", s.handleAPITaskRun)
+	mux.HandleFunc("POST /api/task/{name}/toggle", s.handleAPITaskToggle)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,

@@ -2550,6 +2550,40 @@ bot.on("callback_query:data", async (ctx) => {
     }
     return;
   }
+  if (data.startsWith("task_run:")) {
+    const name = data.replace("task_run:", "");
+    const port = process.env.LEO_WEB_PORT ?? "8370";
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/task/${name}/run`, { method: "POST" });
+      const result = await res.json();
+      if (result.ok) {
+        await ctx.answerCallbackQuery({ text: `Started ${name}` });
+        await ctx.reply(`▶ Task ${name} triggered`);
+      } else {
+        await ctx.answerCallbackQuery({ text: `Failed: ${result.error}` });
+      }
+    } catch (err) {
+      await ctx.answerCallbackQuery({ text: `Error: ${String(err)}` });
+    }
+    return;
+  }
+  if (data.startsWith("task_toggle:")) {
+    const name = data.replace("task_toggle:", "");
+    const port = process.env.LEO_WEB_PORT ?? "8370";
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/task/${name}/toggle`, { method: "POST" });
+      const result = await res.json();
+      if (result.ok) {
+        await ctx.answerCallbackQuery({ text: `${result.data.name} ${result.data.status}` });
+        await ctx.reply(`${result.data.status === "enabled" ? "✅" : "⏸"} Task ${name} ${result.data.status}`);
+      } else {
+        await ctx.answerCallbackQuery({ text: `Failed: ${result.error}` });
+      }
+    } catch (err) {
+      await ctx.answerCallbackQuery({ text: `Error: ${String(err)}` });
+    }
+    return;
+  }
   await ctx.answerCallbackQuery();
 });
 
@@ -2575,6 +2609,87 @@ bot.command("agents", async (ctx) => {
     await ctx.reply(text, { reply_markup: { inline_keyboard: keyboard } });
   } catch (err) {
     await ctx.reply(`⚠️ Failed to list agents: ${String(err)}`);
+  }
+});
+
+// --- Session control commands ---
+
+bot.command("clear", async (ctx) => {
+  const result = gate(ctx);
+  if (result.action !== "deliver") return;
+  const processName = process.env.LEO_PROCESS_NAME;
+  if (!processName) {
+    await ctx.reply("⚠️ Not running under Leo supervisor");
+    return;
+  }
+  const port = process.env.LEO_WEB_PORT ?? "8370";
+  const baseUrl = `http://127.0.0.1:${port}`;
+  // Interrupt first, then clear after delay
+  fetch(`${baseUrl}/web/process/${processName}/interrupt`, { method: "POST" }).catch(() => {});
+  setTimeout(() => {
+    fetch(`${baseUrl}/web/process/${processName}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys: ["/clear", "Enter"] }),
+    }).catch(() => {});
+  }, 3000);
+  await ctx.reply("🧹 Clearing context...");
+});
+
+bot.command("compact", async (ctx) => {
+  const result = gate(ctx);
+  if (result.action !== "deliver") return;
+  const processName = process.env.LEO_PROCESS_NAME;
+  if (!processName) {
+    await ctx.reply("⚠️ Not running under Leo supervisor");
+    return;
+  }
+  const port = process.env.LEO_WEB_PORT ?? "8370";
+  const baseUrl = `http://127.0.0.1:${port}`;
+  // Interrupt first, then compact after delay
+  fetch(`${baseUrl}/web/process/${processName}/interrupt`, { method: "POST" }).catch(() => {});
+  setTimeout(() => {
+    fetch(`${baseUrl}/web/process/${processName}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys: ["/compact", "Enter"] }),
+    }).catch(() => {});
+  }, 3000);
+  await ctx.reply("📦 Compacting context...");
+});
+
+// --- Task management commands ---
+
+bot.command("tasks", async (ctx) => {
+  const result = gate(ctx);
+  if (result.action !== "deliver") return;
+  const port = process.env.LEO_WEB_PORT ?? "8370";
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/task/list`);
+    const data = await res.json();
+    if (!data.ok || !data.data || data.data.length === 0) {
+      await ctx.reply("No tasks configured.");
+      return;
+    }
+
+    let text = "📋 Tasks:\n";
+    const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (const task of data.data as any[]) {
+      const status = task.enabled ? "✅" : "⏸";
+      const next = task.next_run ? ` · next: ${new Date(task.next_run).toLocaleString()}` : "";
+      text += `\n${status} ${task.name} — ${task.schedule}${next}`;
+      const row: Array<{ text: string; callback_data: string }> = [];
+      row.push({ text: `▶ Run ${task.name}`, callback_data: `task_run:${task.name}` });
+      row.push({
+        text: task.enabled ? `⏸ Disable` : `✅ Enable`,
+        callback_data: `task_toggle:${task.name}`,
+      });
+      keyboard.push(row);
+    }
+    await ctx.reply(text, { reply_markup: { inline_keyboard: keyboard } });
+  } catch (err) {
+    await ctx.reply(`⚠️ Failed to list tasks: ${String(err)}`);
   }
 });
 

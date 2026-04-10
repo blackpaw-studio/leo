@@ -15,18 +15,14 @@ func TestEmbeddedPluginContainsAgentCommands(t *testing.T) {
 	lines := strings.Count(content, "\n")
 	t.Logf("embedded server.ts: %d lines", lines)
 
-	if !strings.Contains(content, `bot.command("agent"`) {
-		t.Error("embedded server.ts missing /agent command")
-	}
-	if !strings.Contains(content, `bot.command("agents"`) {
-		t.Error("embedded server.ts missing /agents command")
-	}
-	if !strings.Contains(content, "pendingTemplateSelection") {
-		t.Error("embedded server.ts missing pendingTemplateSelection")
+	for _, cmd := range []string{"stop", "agent", "agents", "clear", "compact", "tasks"} {
+		if !strings.Contains(content, `bot.command("`+cmd+`"`) {
+			t.Errorf("embedded server.ts missing /%s command", cmd)
+		}
 	}
 
 	commands := strings.Count(content, "bot.command(")
-	if commands != 3 {
-		t.Errorf("expected 3 bot.command() calls, got %d", commands)
+	if commands != 6 {
+		t.Errorf("expected 6 bot.command() calls, got %d", commands)
 	}
 }

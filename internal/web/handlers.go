@@ -656,6 +656,34 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
 }
 
+// handleProcessSendKeys sends arbitrary keys/text to a process tmux session.
+// POST /web/process/{name}/send  {"keys": ["/clear", "Enter"]}
+func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionName := "leo-" + name
+
+	var req struct {
+		Keys []string `json:"keys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if len(req.Keys) == 0 {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "keys is required"})
+		return
+	}
+
+	tmuxPath := findTmuxPath()
+	args := append([]string{"send-keys", "-t", sessionName}, req.Keys...)
+	if err := s.execCommand(tmuxPath, args...).Run(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
 func findTmuxPath() string {
 	if p, err := exec.LookPath("tmux"); err == nil {
 		return p

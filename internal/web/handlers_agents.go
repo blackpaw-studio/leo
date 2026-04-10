@@ -451,3 +451,105 @@ func buildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 
 	return args
 }
+
+// --- Task API endpoints (JSON, used by Telegram plugin) ---
+
+// taskInfo is the JSON representation of a task for the API.
+type taskInfo struct {
+	Name     string `json:"name"`
+	Schedule string `json:"schedule"`
+	Enabled  bool   `json:"enabled"`
+	NextRun  string `json:"next_run,omitempty"`
+	LastExit *int   `json:"last_exit,omitempty"`
+}
+
+// handleAPITaskList returns all tasks with their status.
+// GET /api/task/list
+func (s *Server) handleAPITaskList(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		return
+	}
+
+	cronMap := make(map[string]string)
+	if s.scheduler != nil {
+		for _, e := range s.scheduler.List() {
+			cronMap[e.Name] = e.Next.Format(time.RFC3339)
+		}
+	}
+
+	var tasks []taskInfo
+	for name, task := range cfg.Tasks {
+		ti := taskInfo{
+			Name:     name,
+			Schedule: task.Schedule,
+			Enabled:  task.Enabled,
+		}
+		if next, ok := cronMap[name]; ok {
+			ti.NextRun = next
+		}
+		tasks = append(tasks, ti)
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: tasks})
+}
+
+// handleAPITaskRun triggers a task via the API.
+// POST /api/task/{name}/run
+func (s *Server) handleAPITaskRun(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		return
+	}
+	if _, ok := cfg.Tasks[name]; !ok {
+		writeJSON(w, http.StatusNotFound, apiResponse{Error: fmt.Sprintf("task %q not found", name)})
+		return
+	}
+
+	cmd := exec.Command(s.leoPath, "run", name, "--config", s.configPath)
+	if err := cmd.Start(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("starting task: %v", err)})
+		return
+	}
+	go cmd.Wait() //nolint:errcheck
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"name": name, "status": "started"}})
+}
+
+// handleAPITaskToggle toggles a task's enabled state via the API.
+// POST /api/task/{name}/toggle
+func (s *Server) handleAPITaskToggle(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		return
+	}
+	task, ok := cfg.Tasks[name]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, apiResponse{Error: fmt.Sprintf("task %q not found", name)})
+		return
+	}
+
+	task.Enabled = !task.Enabled
+	cfg.Tasks[name] = task
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: errMsg})
+		return
+	}
+	if s.reloader != nil {
+		s.reloader.ReloadConfig() //nolint:errcheck
+	}
+
+	action := "enabled"
+	if !task.Enabled {
+		action = "disabled"
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{"name": name, "status": action}})
+}
