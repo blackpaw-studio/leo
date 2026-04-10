@@ -582,6 +582,8 @@ textarea.form-textarea {
 
 textarea.prompt-editor-textarea {
     min-height: 200px;
+    width: 100%;
+    box-sizing: border-box;
     font-family: var(--mono);
     font-size: 13px;
     line-height: 1.6;
