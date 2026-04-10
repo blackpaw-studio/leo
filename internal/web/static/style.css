@@ -630,6 +630,21 @@ select.form-input {
 
 .config-section-header h3 { margin-bottom: 0; }
 
+.config-subsection {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.config-subsection-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+
 .config-section h3 {
     font-size: 15px;
     font-weight: 600;

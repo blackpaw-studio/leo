@@ -637,6 +637,14 @@ func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q saved", name))
 }
 
+type promptEditorData struct {
+	TaskName    string
+	PromptFile  string
+	Files       []string
+	Content     string
+	NewFileName string // populated when creating a new file
+}
+
 func (s *Server) handleTaskPromptGet(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -652,23 +660,35 @@ func (s *Server) handleTaskPromptGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if task.PromptFile == "" {
-		s.renderFlash(w, "error", "No prompt file configured for this task")
-		return
+	workspace := cfg.TaskWorkspace(task)
+	files, _ := config.ListPromptFiles(workspace)
+
+	// If a specific file was requested (e.g. from dropdown change), use that
+	selectedFile := task.PromptFile
+	if qf := r.URL.Query().Get("prompt_file"); qf != "" && qf != "__new__" {
+		selectedFile = qf
 	}
 
-	workspace := cfg.TaskWorkspace(task)
-	content, err := config.ReadPromptFile(workspace, task.PromptFile)
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to read prompt: %v", err))
-		return
+	data := promptEditorData{
+		TaskName:   name,
+		PromptFile: selectedFile,
+		Files:      files,
+	}
+
+	if r.URL.Query().Get("prompt_file") == "__new__" {
+		data.PromptFile = "__new__"
+		data.NewFileName = ""
+	} else if selectedFile != "" {
+		content, err := config.ReadPromptFile(workspace, selectedFile)
+		if err != nil {
+			s.renderFlash(w, "error", fmt.Sprintf("Failed to read prompt: %v", err))
+			return
+		}
+		data.Content = content
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "prompt_editor.html", struct { //nolint:errcheck
-		Name    string
-		Content string
-	}{Name: name, Content: content})
+	s.templates.ExecuteTemplate(w, "prompt_editor.html", data) //nolint:errcheck
 }
 
 func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
@@ -690,20 +710,39 @@ func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if task.PromptFile == "" {
-		s.renderFlash(w, "error", "No prompt file configured for this task")
+	// Determine the prompt file: selected existing file, or new file name
+	promptFile := r.FormValue("prompt_file")
+	newFile := r.FormValue("new_file_name")
+	if promptFile == "__new__" && newFile != "" {
+		promptFile = newFile
+	}
+	if promptFile == "" || promptFile == "__new__" {
+		s.renderFlash(w, "error", "No prompt file selected")
 		return
+	}
+
+	// Update config if prompt_file changed
+	if task.PromptFile != promptFile {
+		task.PromptFile = promptFile
+		cfg.Tasks[name] = task
+		if errMsg := s.validateAndSave(cfg); errMsg != "" {
+			s.renderFlash(w, "error", errMsg)
+			return
+		}
+		if s.reloader != nil {
+			s.reloader.ReloadConfig() //nolint:errcheck
+		}
 	}
 
 	workspace := cfg.TaskWorkspace(task)
 	content := r.FormValue("prompt_content")
 
-	if err := config.WritePromptFile(workspace, task.PromptFile, content); err != nil {
+	if err := config.WritePromptFile(workspace, promptFile, content); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to save prompt: %v", err))
 		return
 	}
 
-	s.renderFlash(w, "success", fmt.Sprintf("Prompt file saved for %q", name))
+	s.renderFlash(w, "success", fmt.Sprintf("Prompt saved for %q", name))
 }
 
 func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) {

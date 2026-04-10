@@ -815,6 +815,56 @@ func TestValidateWebConfig(t *testing.T) {
 	})
 }
 
+func TestListPromptFiles(t *testing.T) {
+	t.Run("lists md files recursively", func(t *testing.T) {
+		ws := t.TempDir()
+		os.WriteFile(filepath.Join(ws, "heartbeat.md"), []byte("h"), 0600)
+		os.MkdirAll(filepath.Join(ws, "reports"), 0750)
+		os.WriteFile(filepath.Join(ws, "reports", "daily.md"), []byte("d"), 0600)
+		os.WriteFile(filepath.Join(ws, "not-a-prompt.txt"), []byte("x"), 0600)
+
+		files, err := ListPromptFiles(ws)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(files) != 2 {
+			t.Fatalf("got %d files, want 2: %v", len(files), files)
+		}
+		// Should contain both .md files but not .txt
+		found := map[string]bool{}
+		for _, f := range files {
+			found[f] = true
+		}
+		if !found["heartbeat.md"] {
+			t.Error("missing heartbeat.md")
+		}
+		if !found[filepath.Join("reports", "daily.md")] {
+			t.Errorf("missing reports/daily.md, got: %v", files)
+		}
+	})
+
+	t.Run("nonexistent workspace returns nil", func(t *testing.T) {
+		files, err := ListPromptFiles("/nonexistent/workspace")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if files != nil {
+			t.Errorf("expected nil, got %v", files)
+		}
+	})
+
+	t.Run("empty workspace returns nil", func(t *testing.T) {
+		ws := t.TempDir()
+		files, err := ListPromptFiles(ws)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if files != nil {
+			t.Errorf("expected nil, got %v", files)
+		}
+	})
+}
+
 func TestResolvePromptPath(t *testing.T) {
 	ws := t.TempDir()
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 )
 
@@ -479,10 +480,10 @@ func TestParseLogEvents(t *testing.T) {
 func TestTaskPromptGet_FileExists(t *testing.T) {
 	s, dir := newTestServer(t)
 
-	// Create workspace and prompt file
 	ws := filepath.Join(dir, "workspace")
 	os.MkdirAll(ws, 0750)
 	os.WriteFile(filepath.Join(ws, "heartbeat.md"), []byte("# Heartbeat\nCheck systems"), 0644)
+	os.WriteFile(filepath.Join(ws, "other.md"), []byte("other"), 0644)
 
 	req := httptest.NewRequest("GET", "/web/task/heartbeat/prompt", nil)
 	w := httptest.NewRecorder()
@@ -498,12 +499,18 @@ func TestTaskPromptGet_FileExists(t *testing.T) {
 	if !strings.Contains(body, "prompt_content") {
 		t.Error("response should contain textarea with name prompt_content")
 	}
+	// Should list available files in a select dropdown
+	if !strings.Contains(body, "heartbeat.md") {
+		t.Error("response should list heartbeat.md in file picker")
+	}
+	if !strings.Contains(body, "other.md") {
+		t.Error("response should list other.md in file picker")
+	}
 }
 
 func TestTaskPromptGet_FileNotFound(t *testing.T) {
 	s, dir := newTestServer(t)
 
-	// Create workspace but not the prompt file
 	ws := filepath.Join(dir, "workspace")
 	os.MkdirAll(ws, 0750)
 
@@ -517,6 +524,28 @@ func TestTaskPromptGet_FileNotFound(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "prompt_content") {
 		t.Error("response should contain textarea even for missing file")
+	}
+}
+
+func TestTaskPromptGet_SwitchFile(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0750)
+	os.WriteFile(filepath.Join(ws, "heartbeat.md"), []byte("heartbeat content"), 0644)
+	os.WriteFile(filepath.Join(ws, "other.md"), []byte("other content"), 0644)
+
+	// Request a different file than what's configured
+	req := httptest.NewRequest("GET", "/web/task/heartbeat/prompt?prompt_file=other.md", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "other content") {
+		t.Error("response should contain content of the selected file")
 	}
 }
 
@@ -536,7 +565,6 @@ func TestTaskPromptGet_TaskNotFound(t *testing.T) {
 func TestTaskPromptGet_PathTraversal(t *testing.T) {
 	s, dir := newTestServer(t)
 
-	// Overwrite config with a task that has a traversal path
 	cfgYAML := `
 tasks:
   evil:
@@ -559,12 +587,11 @@ tasks:
 func TestTaskPromptSave_Success(t *testing.T) {
 	s, dir := newTestServer(t)
 
-	// Create workspace
 	ws := filepath.Join(dir, "workspace")
 	os.MkdirAll(ws, 0750)
 	os.WriteFile(filepath.Join(ws, "heartbeat.md"), []byte("old content"), 0644)
 
-	form := strings.NewReader("prompt_content=new+content+here")
+	form := strings.NewReader("prompt_file=heartbeat.md&prompt_content=new+content+here")
 	req := httptest.NewRequest("POST", "/web/task/heartbeat/prompt", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -575,7 +602,6 @@ func TestTaskPromptSave_Success(t *testing.T) {
 		t.Errorf("response should contain 'saved', got: %s", body)
 	}
 
-	// Verify file was written
 	data, err := os.ReadFile(filepath.Join(ws, "heartbeat.md"))
 	if err != nil {
 		t.Fatalf("reading written file: %v", err)
@@ -585,11 +611,10 @@ func TestTaskPromptSave_Success(t *testing.T) {
 	}
 }
 
-func TestTaskPromptSave_CreatesFile(t *testing.T) {
+func TestTaskPromptSave_NewFile(t *testing.T) {
 	s, dir := newTestServer(t)
 
-	// Workspace doesn't exist yet — WritePromptFile should create it
-	form := strings.NewReader("prompt_content=brand+new+prompt")
+	form := strings.NewReader("prompt_file=__new__&new_file_name=reports%2Fdaily.md&prompt_content=brand+new+prompt")
 	req := httptest.NewRequest("POST", "/web/task/heartbeat/prompt", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -602,12 +627,18 @@ func TestTaskPromptSave_CreatesFile(t *testing.T) {
 
 	// Verify file + directories were created
 	ws := filepath.Join(dir, "workspace")
-	data, err := os.ReadFile(filepath.Join(ws, "heartbeat.md"))
+	data, err := os.ReadFile(filepath.Join(ws, "reports", "daily.md"))
 	if err != nil {
 		t.Fatalf("reading created file: %v", err)
 	}
 	if string(data) != "brand new prompt" {
 		t.Errorf("file content = %q, want %q", string(data), "brand new prompt")
+	}
+
+	// Verify config was updated with new prompt_file
+	cfg, _ := config.Load(filepath.Join(dir, "leo.yaml"))
+	if cfg.Tasks["heartbeat"].PromptFile != "reports/daily.md" {
+		t.Errorf("config prompt_file = %q, want reports/daily.md", cfg.Tasks["heartbeat"].PromptFile)
 	}
 }
 
@@ -623,7 +654,7 @@ tasks:
 `
 	os.WriteFile(filepath.Join(dir, "leo.yaml"), []byte(cfgYAML), 0600)
 
-	form := strings.NewReader("prompt_content=malicious")
+	form := strings.NewReader("prompt_file=../../etc/evil.md&prompt_content=malicious")
 	req := httptest.NewRequest("POST", "/web/task/evil/prompt", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -638,7 +669,7 @@ tasks:
 func TestTaskPromptSave_TaskNotFound(t *testing.T) {
 	s, _ := newTestServer(t)
 
-	form := strings.NewReader("prompt_content=test")
+	form := strings.NewReader("prompt_file=test.md&prompt_content=test")
 	req := httptest.NewRequest("POST", "/web/task/nonexistent/prompt", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -647,5 +678,20 @@ func TestTaskPromptSave_TaskNotFound(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "not found") {
 		t.Error("response should contain 'not found' error")
+	}
+}
+
+func TestTaskPromptSave_NoFileSelected(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	form := strings.NewReader("prompt_file=&prompt_content=test")
+	req := httptest.NewRequest("POST", "/web/task/heartbeat/prompt", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "No prompt file selected") {
+		t.Errorf("response should contain 'No prompt file selected', got: %s", body)
 	}
 }

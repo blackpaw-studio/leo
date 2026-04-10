@@ -571,6 +571,39 @@ func expandHome(path string) string {
 	return path
 }
 
+// ListPromptFiles returns all .md files in the workspace, as paths relative
+// to the workspace root. Returns nil (not an error) if the workspace doesn't exist.
+func ListPromptFiles(workspace string) ([]string, error) {
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolving workspace path: %w", err)
+	}
+	if _, err := os.Stat(absWorkspace); os.IsNotExist(err) {
+		return nil, nil
+	}
+	var files []string
+	err = filepath.Walk(absWorkspace, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+			rel, err := filepath.Rel(absWorkspace, path)
+			if err != nil {
+				return nil
+			}
+			files = append(files, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing workspace files: %w", err)
+	}
+	return files, nil
+}
+
 // ResolvePromptPath resolves a prompt file path within a task workspace and
 // validates that it does not escape the workspace via path traversal.
 // Returns the absolute path to the prompt file, or an error.
