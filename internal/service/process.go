@@ -420,6 +420,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			cleanupOrphanedPlugins()
 		}
 
+		// Re-sync plugin before each launch (Claude may restore the official version on startup)
+		if spec.HasTelegram {
+			_ = pluginsync.SyncTelegramPlugin()
+		}
+
 		sv.setState(spec.Name, "running")
 
 		// Shell-quote each token to prevent injection via config values
