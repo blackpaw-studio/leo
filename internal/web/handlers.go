@@ -379,18 +379,11 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	sessionName := "leo-" + name
 
 	tmuxPath := findTmuxPath()
-	// Get the PID from the tmux pane and send SIGINT directly
-	out, err := s.execCommand(tmuxPath, "list-panes", "-t", sessionName, "-F", "#{pane_pid}").Output()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to find process %s: %v", name, err))
-		return
-	}
-	pid := strings.TrimSpace(string(out))
-	if pid == "" {
-		s.renderFlash(w, "error", fmt.Sprintf("No process found for %s", name))
-		return
-	}
-	if err := s.execCommand("kill", "-INT", pid).Run(); err != nil {
+	// Send Escape multiple times to interrupt generation and tool calls
+	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+	time.Sleep(300 * time.Millisecond)
+	if err := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to interrupt %s: %v", name, err))
 		return
 	}

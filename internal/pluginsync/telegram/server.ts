@@ -2450,13 +2450,15 @@ bot.command("stop", async (ctx) => {
   }
   try {
     const tmux = process.env.LEO_TMUX_PATH ?? "tmux";
-    // Get the PID of the process running in the tmux pane and send SIGINT directly.
-    // This is more reliable than send-keys because it signals the process immediately
-    // even if it's mid-tool-call.
-    const pid = execSync(`${tmux} list-panes -t leo-${processName} -F '#{pane_pid}'`).toString().trim();
-    if (pid) {
-      execSync(`kill -INT ${pid}`);
-    }
+    const session = `leo-${processName}`;
+    // Send Escape repeatedly to interrupt generation and cancel tool calls.
+    // Don't kill the process — that causes a restart loop because the plugin
+    // dies before acknowledging the Telegram update offset.
+    execSync(`${tmux} send-keys -t ${session} Escape`);
+    execSync(`${tmux} send-keys -t ${session} Escape`);
+    // Small delay then another Escape to catch tool-call completion transitions
+    spawnSync("sleep", ["0.3"]);
+    execSync(`${tmux} send-keys -t ${session} Escape`);
     await ctx.reply(`⏹ Interrupted ${processName}`);
   } catch (err) {
     await ctx.reply(`⚠️ Failed to interrupt: ${String(err)}`);
