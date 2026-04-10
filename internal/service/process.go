@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
@@ -241,6 +242,13 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	} else {
 		defer func() { _ = srv.Shutdown() }()
 		fmt.Fprintf(os.Stdout, "daemon IPC server listening on %s\n", sockPath)
+
+		// Start web UI if enabled
+		if cfg, err := config.Load(configPath); err == nil {
+			if err := srv.StartWeb(cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: web UI failed to start: %v\n", err)
+			}
+		}
 	}
 
 	// Find tmux

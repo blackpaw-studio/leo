@@ -12,6 +12,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/web"
 )
 
 // ProcessStateProvider returns the state of all supervised processes.
@@ -36,6 +37,7 @@ type Server struct {
 	listener   net.Listener
 	scheduler  *cron.Scheduler
 	processes  ProcessStateProvider
+	webServer  *web.Server
 }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
@@ -111,9 +113,60 @@ func (s *Server) Start() error {
 	return nil
 }
 
+// processAdapter wraps a daemon ProcessStateProvider to satisfy web.ProcessStateProvider.
+type processAdapter struct {
+	inner ProcessStateProvider
+}
+
+func (a *processAdapter) States() map[string]web.ProcessStateInfo {
+	if a.inner == nil {
+		return nil
+	}
+	states := a.inner.States()
+	result := make(map[string]web.ProcessStateInfo, len(states))
+	for k, v := range states {
+		result[k] = web.ProcessStateInfo{
+			Name:      v.Name,
+			Status:    v.Status,
+			StartedAt: v.StartedAt,
+			Restarts:  v.Restarts,
+		}
+	}
+	return result
+}
+
+// StartWeb starts the web UI on a TCP listener if web is enabled in config.
+func (s *Server) StartWeb(cfg *config.Config) error {
+	if !cfg.Web.Enabled {
+		return nil
+	}
+
+	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s)
+	addr := fmt.Sprintf("%s:%d", cfg.WebBind(), cfg.WebPort())
+	if err := s.webServer.ListenAndServe(addr); err != nil {
+		return fmt.Errorf("starting web UI: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "web UI listening on http://%s\n", addr)
+	return nil
+}
+
+// ReloadConfig reloads config from disk and re-syncs the scheduler.
+// Implements web.ConfigReloader.
+func (s *Server) ReloadConfig() error {
+	cfg, err := config.Load(s.configPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	return s.scheduler.Install(cfg)
+}
+
 // Shutdown gracefully stops the server and removes the socket file.
 func (s *Server) Shutdown() error {
 	s.scheduler.Stop()
+
+	if s.webServer != nil {
+		s.webServer.Shutdown() //nolint:errcheck
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

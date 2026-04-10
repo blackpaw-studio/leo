@@ -47,6 +47,11 @@ func runStatus() error {
 		info.Printf("Daemon:  %s\n", daemonStatus)
 	}
 
+	// Web UI
+	if cfg.Web.Enabled {
+		info.Printf("Web UI:  http://%s:%d\n", cfg.WebBind(), cfg.WebPort())
+	}
+
 	// Processes
 	enabledProcs := 0
 	for _, p := range cfg.Processes {

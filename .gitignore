@@ -5,3 +5,4 @@ site/
 *.exe
 *.test
 *.out
+.superpowers/

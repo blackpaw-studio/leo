@@ -1,0 +1,183 @@
+{{define "config_processes.html"}}
+<div id="config-processes">
+    <h2 class="section-title">Manage Processes</h2>
+
+    {{range $name, $proc := .Config.Processes}}
+    <div class="config-section">
+        <div class="config-section-header">
+            <h3>{{$name}}</h3>
+            <button class="btn btn-sm btn-danger" hx-delete="/web/process/{{$name}}" hx-target="#tab-content" hx-swap="innerHTML" hx-confirm="Delete process '{{$name}}'?">Delete</button>
+        </div>
+        <form hx-post="/web/config/process/{{$name}}" hx-target="#flash-container" hx-swap="innerHTML">
+            <div class="form-group">
+                <div class="form-row">
+                    <label for="proc-enabled-{{$name}}">Enabled</label>
+                    <label class="toggle">
+                        <input type="checkbox" name="enabled" value="true" id="proc-enabled-{{$name}}" {{if $proc.Enabled}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Workspace</label>
+                    <input type="text" name="workspace" value="{{$proc.Workspace}}" placeholder="~/.leo/workspace" class="form-input">
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Model</label>
+                    <select name="model" class="form-input">
+                        <option value="" {{if not $proc.Model}}selected{{end}}>{{if $.Config.Defaults.Model}}({{$.Config.Defaults.Model}} from defaults){{else}}(sonnet from defaults){{end}}</option>
+                        <option value="sonnet" {{if eq $proc.Model "sonnet"}}selected{{end}}>sonnet</option>
+                        <option value="opus" {{if eq $proc.Model "opus"}}selected{{end}}>opus</option>
+                        <option value="haiku" {{if eq $proc.Model "haiku"}}selected{{end}}>haiku</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Channels</label>
+                    <input type="text" name="channels" value="{{range $i, $ch := $proc.Channels}}{{if $i}}, {{end}}{{$ch}}{{end}}" placeholder="plugin:telegram@claude-plugins-official" class="form-input">
+                </div>
+                <div class="form-help">Comma-separated channel plugins.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label for="proc-rc-{{$name}}">Remote Control</label>
+                    <label class="toggle">
+                        <input type="checkbox" name="remote_control" value="true" id="proc-rc-{{$name}}" {{if $proc.RemoteControl}}{{if derefBool $proc.RemoteControl}}checked{{end}}{{end}}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="form-help">Allow controlling this session via claude.ai/code.</div>
+            </div>
+
+            <details class="advanced-details">
+                <summary class="advanced-summary">Advanced</summary>
+                <div class="advanced-content">
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Agent</label>
+                            <input type="text" name="agent" value="{{$proc.Agent}}" placeholder="(none)" class="form-input">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Max Turns</label>
+                            <input type="number" name="max_turns" value="{{$proc.MaxTurns}}" min="0" max="100" class="form-input" placeholder="{{if $.Config.Defaults.MaxTurns}}{{$.Config.Defaults.MaxTurns}} from defaults{{else}}15 from defaults{{end}}">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Permission Mode</label>
+                            <select name="permission_mode" class="form-input">
+                                <option value="" {{if not $proc.PermissionMode}}selected{{end}}>{{if $.Config.Defaults.PermissionMode}}({{$.Config.Defaults.PermissionMode}} from defaults){{else}}(inherit from defaults){{end}}</option>
+                                <option value="default" {{if eq $proc.PermissionMode "default"}}selected{{end}}>default</option>
+                                <option value="acceptEdits" {{if eq $proc.PermissionMode "acceptEdits"}}selected{{end}}>acceptEdits</option>
+                                <option value="auto" {{if eq $proc.PermissionMode "auto"}}selected{{end}}>auto</option>
+                                <option value="bypassPermissions" {{if eq $proc.PermissionMode "bypassPermissions"}}selected{{end}}>bypassPermissions</option>
+                                <option value="dontAsk" {{if eq $proc.PermissionMode "dontAsk"}}selected{{end}}>dontAsk</option>
+                                <option value="plan" {{if eq $proc.PermissionMode "plan"}}selected{{end}}>plan</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>MCP Config</label>
+                            <input type="text" name="mcp_config" value="{{$proc.MCPConfig}}" placeholder="config/mcp-servers.json" class="form-input">
+                        </div>
+                        <div class="form-help">Path to MCP servers config, relative to workspace.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Extra Dirs</label>
+                            <input type="text" name="add_dirs" value="{{range $i, $d := $proc.AddDirs}}{{if $i}}, {{end}}{{$d}}{{end}}" placeholder="(none)" class="form-input">
+                        </div>
+                        <div class="form-help">Comma-separated additional directories for Claude to access.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Allowed Tools</label>
+                            <input type="text" name="allowed_tools" value="{{range $i, $t := $proc.AllowedTools}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="(all)" class="form-input">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Disallowed Tools</label>
+                            <input type="text" name="disallowed_tools" value="{{range $i, $t := $proc.DisallowedTools}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="(none)" class="form-input">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>Environment</label>
+                            <textarea name="env" class="form-input form-textarea" placeholder="KEY=value&#10;ANOTHER=value">{{range $k, $v := $proc.Env}}{{$k}}={{$v}}&#10;{{end}}</textarea>
+                        </div>
+                        <div class="form-help">One KEY=value per line. Passed to the Claude process.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
+                            <label>System Prompt</label>
+                            <textarea name="append_system_prompt" class="form-input form-textarea" placeholder="Additional instructions...">{{$proc.AppendSystemPrompt}}</textarea>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-accent">Save</button>
+            </div>
+        </form>
+    </div>
+    {{else}}
+    <div class="empty-state">No processes configured</div>
+    {{end}}
+
+    <div class="config-section config-section-add">
+        <h3>Add Process</h3>
+        <form hx-post="/web/process/add" hx-target="#tab-content" hx-swap="innerHTML">
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Name</label>
+                    <input type="text" name="name" class="form-input" placeholder="assistant" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Workspace</label>
+                    <input type="text" name="workspace" class="form-input" placeholder="~/.leo/workspace">
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Model</label>
+                    <select name="model" class="form-input">
+                        <option value="">{{if $.Config.Defaults.Model}}({{$.Config.Defaults.Model}} from defaults){{else}}(sonnet from defaults){{end}}</option>
+                        <option value="sonnet">sonnet</option>
+                        <option value="opus">opus</option>
+                        <option value="haiku">haiku</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Channels</label>
+                    <input type="text" name="channels" class="form-input" placeholder="plugin:telegram@claude-plugins-official">
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label for="new-proc-enabled">Enabled</label>
+                    <label class="toggle">
+                        <input type="checkbox" name="enabled" value="true" id="new-proc-enabled" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-accent">Add Process</button>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}

@@ -1,0 +1,8 @@
+{{define "status.html"}}
+<div id="status-banner" class="status-banner" hx-get="/partials/status" hx-trigger="every 5s" hx-swap="outerHTML">
+    <div class="status-header">
+        <span class="logo">Leo</span>
+        <span class="status-meta">{{len .Processes}} processes &middot; {{len .Tasks}} tasks{{if .NextRunName}} &middot; next: <strong>{{.NextRunName}}</strong> {{relativeTime .NextRunTime}}{{end}}</span>
+    </div>
+</div>
+{{end}}

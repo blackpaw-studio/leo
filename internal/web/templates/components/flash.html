@@ -1,0 +1,5 @@
+{{define "flash.html"}}
+<div class="flash flash-{{.Type}}" hx-get="data:text/html," hx-trigger="load delay:3s" hx-swap="outerHTML">
+    {{.Message}}
+</div>
+{{end}}

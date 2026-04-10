@@ -1,0 +1,47 @@
+{{define "tasks.html"}}
+<div id="tasks-table">
+    <h2 class="section-title">Tasks</h2>
+    {{if .Tasks}}
+    <table class="task-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Schedule</th>
+                <th>Next Run</th>
+                <th>Last</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Tasks}}
+            <tr class="task-row{{if not .Config.Enabled}} task-disabled{{end}}">
+                <td>
+                    <span class="task-name" onclick="toggleHistory(this, '{{.Name}}')" style="cursor:pointer">{{.Name}}</span>
+                </td>
+                <td><span class="cron-desc">{{cronDesc .CronExpr}}</span><span class="cron-expr">{{.CronExpr}}</span></td>
+                <td>{{if .Config.Enabled}}{{relativeTime .NextRun}}{{else}}&mdash;{{end}}</td>
+                <td>
+                    {{if .LastRun}}
+                    <span class="{{exitCodeClass .LastRun.ExitCode}}">{{if eq .LastRun.ExitCode 0}}&#10003;{{else}}&#10007;{{end}} {{.LastRun.ExitCode}}</span>
+                    {{else}}
+                    <span class="no-history">&mdash;</span>
+                    {{end}}
+                </td>
+                <td class="task-actions">
+                    <button class="btn btn-sm" hx-post="/web/task/{{.Name}}/toggle" hx-target="#tab-content" hx-swap="innerHTML">{{if .Config.Enabled}}disable{{else}}enable{{end}}</button>
+                    {{if .Config.Enabled}}
+                    <button class="btn btn-sm btn-accent" hx-post="/web/task/{{.Name}}/run" hx-target="#flash-container" hx-swap="innerHTML">run now</button>
+                    {{end}}
+                </td>
+            </tr>
+            <tr>
+                <td colspan="5" id="history-{{.Name}}" class="history-container"></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">No tasks configured</div>
+    {{end}}
+</div>
+{{end}}

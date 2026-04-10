@@ -1,0 +1,24 @@
+{{define "processes.html"}}
+<div id="process-cards" class="process-grid" hx-get="/partials/processes" hx-trigger="every 5s" hx-swap="outerHTML">
+    <h2 class="section-title">Processes</h2>
+    <div class="cards">
+        {{range .Processes}}
+        <div class="process-card {{statusColor .Status}}">
+            <div class="process-name">{{.Name}}</div>
+            <div class="process-status">
+                <span class="status-dot {{statusColor .Status}}"></span>
+                {{.Status}}
+            </div>
+            <div class="process-meta">
+                {{if ne .Status "disabled"}}
+                    {{if uptime .StartedAt}}{{uptime .StartedAt}}{{end}}
+                    {{if gt .Restarts 0}}&middot; {{.Restarts}} restart{{if gt .Restarts 1}}s{{end}}{{end}}
+                {{end}}
+            </div>
+        </div>
+        {{else}}
+        <div class="empty-state">No processes configured</div>
+        {{end}}
+    </div>
+</div>
+{{end}}

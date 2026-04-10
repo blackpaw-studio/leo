@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Leo</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        {{template "status.html" .}}
+        {{template "processes.html" .}}
+        <div id="flash-container"></div>
+        <div class="tabs">
+            <button class="tab active" hx-get="/partials/tasks" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Tasks</button>
+            <button class="tab" hx-get="/partials/config/processes" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Manage Processes</button>
+            <button class="tab" hx-get="/partials/config/tasks" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Manage Tasks</button>
+            <button class="tab" hx-get="/partials/config/settings" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Settings</button>
+        </div>
+        <div id="tab-content">
+            {{template "tasks.html" .}}
+        </div>
+    </div>
+    <script>
+    function setActiveTab(el) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        el.classList.add('active');
+    }
+    function toggleHistory(el, name) {
+        var target = document.getElementById('history-' + name);
+        if (target.innerHTML.trim()) {
+            target.innerHTML = '';
+        } else {
+            htmx.ajax('GET', '/partials/task/' + name + '/history', {target: target, swap: 'innerHTML'});
+        }
+    }
+    function confirmDelete(form) {
+        if (confirm('Are you sure you want to delete this?')) {
+            htmx.trigger(form, 'confirmed');
+        }
+    }
+    </script>
+</body>
+</html>

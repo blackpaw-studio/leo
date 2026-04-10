@@ -1,0 +1,119 @@
+{{define "config.html"}}
+<div id="config-view">
+    <h2 class="section-title">Config</h2>
+    <div class="config-actions">
+        <button class="btn btn-accent" hx-post="/web/config/reload" hx-target="#flash-container" hx-swap="innerHTML">Reload Config</button>
+    </div>
+
+    <div class="config-section">
+        <h3>Defaults</h3>
+        <form hx-post="/web/config/defaults" hx-target="#flash-container" hx-swap="innerHTML">
+            <div class="form-row">
+                <label>Model</label>
+                <select name="model" class="form-input">
+                    <option value="sonnet" {{if eq .Defaults.Model "sonnet"}}selected{{end}}>sonnet</option>
+                    <option value="opus" {{if eq .Defaults.Model "opus"}}selected{{end}}>opus</option>
+                    <option value="haiku" {{if eq .Defaults.Model "haiku"}}selected{{end}}>haiku</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Max Turns</label>
+                <input type="number" name="max_turns" value="{{if .Defaults.MaxTurns}}{{.Defaults.MaxTurns}}{{else}}15{{end}}" min="1" max="100" class="form-input">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-accent">Save Defaults</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="config-section">
+        <h3>Telegram</h3>
+        <table class="config-table">
+            <tr><td class="config-key">Bot Token</td><td>{{if .Telegram.BotToken}}configured{{else}}not set{{end}}</td></tr>
+            <tr><td class="config-key">Chat ID</td><td>{{if .Telegram.ChatID}}{{.Telegram.ChatID}}{{else}}not set{{end}}</td></tr>
+            <tr><td class="config-key">Group ID</td><td>{{if .Telegram.GroupID}}{{.Telegram.GroupID}}{{else}}not set{{end}}</td></tr>
+        </table>
+    </div>
+
+    {{range $name, $proc := .Processes}}
+    <div class="config-section">
+        <h3>Process: {{$name}}</h3>
+        <form hx-post="/web/config/process/{{$name}}" hx-target="#flash-container" hx-swap="innerHTML">
+            <div class="form-row">
+                <label for="proc-enabled-{{$name}}">Enabled</label>
+                <label class="toggle">
+                    <input type="checkbox" name="enabled" value="true" id="proc-enabled-{{$name}}" {{if $proc.Enabled}}checked{{end}}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="form-row">
+                <label>Model</label>
+                <select name="model" class="form-input">
+                    <option value="" {{if not $proc.Model}}selected{{end}}>(default)</option>
+                    <option value="sonnet" {{if eq $proc.Model "sonnet"}}selected{{end}}>sonnet</option>
+                    <option value="opus" {{if eq $proc.Model "opus"}}selected{{end}}>opus</option>
+                    <option value="haiku" {{if eq $proc.Model "haiku"}}selected{{end}}>haiku</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Workspace</label>
+                <input type="text" name="workspace" value="{{$proc.Workspace}}" placeholder="(default)" class="form-input">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-accent">Save</button>
+            </div>
+        </form>
+    </div>
+    {{end}}
+
+    {{range $name, $task := .Tasks}}
+    <div class="config-section">
+        <h3>Task: {{$name}}</h3>
+        <form hx-post="/web/config/task/{{$name}}" hx-target="#flash-container" hx-swap="innerHTML">
+            <div class="form-row">
+                <label for="task-enabled-{{$name}}">Enabled</label>
+                <label class="toggle">
+                    <input type="checkbox" name="enabled" value="true" id="task-enabled-{{$name}}" {{if $task.Enabled}}checked{{end}}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="form-row">
+                <label>Schedule</label>
+                <input type="text" name="schedule" value="{{$task.Schedule}}" class="form-input" placeholder="0 * * * *">
+            </div>
+            <div class="form-row">
+                <label>Prompt File</label>
+                <input type="text" name="prompt_file" value="{{$task.PromptFile}}" class="form-input">
+            </div>
+            <div class="form-row">
+                <label>Model</label>
+                <select name="model" class="form-input">
+                    <option value="" {{if not $task.Model}}selected{{end}}>(default)</option>
+                    <option value="sonnet" {{if eq $task.Model "sonnet"}}selected{{end}}>sonnet</option>
+                    <option value="opus" {{if eq $task.Model "opus"}}selected{{end}}>opus</option>
+                    <option value="haiku" {{if eq $task.Model "haiku"}}selected{{end}}>haiku</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Max Turns</label>
+                <input type="number" name="max_turns" value="{{$task.MaxTurns}}" min="0" max="100" class="form-input" placeholder="(default)">
+            </div>
+            <div class="form-row">
+                <label>Timeout</label>
+                <input type="text" name="timeout" value="{{$task.Timeout}}" class="form-input" placeholder="30m">
+            </div>
+            <div class="form-row">
+                <label for="task-silent-{{$name}}">Silent</label>
+                <label class="toggle">
+                    <input type="checkbox" name="silent" value="true" id="task-silent-{{$name}}" {{if $task.Silent}}checked{{end}}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-accent">Save</button>
+            </div>
+        </form>
+    </div>
+    {{end}}
+</div>
+{{end}}

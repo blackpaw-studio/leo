@@ -1,0 +1,89 @@
+{{define "config_settings.html"}}
+<div id="config-settings">
+    <h2 class="section-title">Settings</h2>
+    <div class="config-actions">
+        <button class="btn btn-accent" hx-post="/web/config/reload" hx-target="#flash-container" hx-swap="innerHTML">Reload Config from Disk</button>
+    </div>
+
+    <div class="config-section">
+        <h3>Defaults</h3>
+        <form hx-post="/web/config/defaults" hx-target="#flash-container" hx-swap="innerHTML">
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Model</label>
+                    <select name="model" class="form-input">
+                        <option value="sonnet" {{if eq .Defaults.Model "sonnet"}}selected{{end}}>sonnet</option>
+                        <option value="opus" {{if eq .Defaults.Model "opus"}}selected{{end}}>opus</option>
+                        <option value="haiku" {{if eq .Defaults.Model "haiku"}}selected{{end}}>haiku</option>
+                    </select>
+                </div>
+                <div class="form-help">Default Claude model for all processes and tasks unless overridden.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Max Turns</label>
+                    <input type="number" name="max_turns" value="{{if .Defaults.MaxTurns}}{{.Defaults.MaxTurns}}{{else}}15{{end}}" min="1" max="100" class="form-input">
+                </div>
+                <div class="form-help">Maximum conversation turns before a session stops. Processes and tasks can override.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Permission Mode</label>
+                    <select name="permission_mode" class="form-input">
+                        <option value="" {{if not .Defaults.PermissionMode}}selected{{end}}>(none)</option>
+                        <option value="default" {{if eq .Defaults.PermissionMode "default"}}selected{{end}}>default — prompt for each action</option>
+                        <option value="acceptEdits" {{if eq .Defaults.PermissionMode "acceptEdits"}}selected{{end}}>acceptEdits — auto-approve file edits</option>
+                        <option value="auto" {{if eq .Defaults.PermissionMode "auto"}}selected{{end}}>auto — approve most actions automatically</option>
+                        <option value="bypassPermissions" {{if eq .Defaults.PermissionMode "bypassPermissions"}}selected{{end}}>bypassPermissions — skip all permission checks</option>
+                        <option value="dontAsk" {{if eq .Defaults.PermissionMode "dontAsk"}}selected{{end}}>dontAsk — never prompt, skip disallowed</option>
+                        <option value="plan" {{if eq .Defaults.PermissionMode "plan"}}selected{{end}}>plan — read-only planning mode</option>
+                    </select>
+                </div>
+                <div class="form-help">Baseline permission mode inherited by all processes and tasks. Each can override individually.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Allowed Tools</label>
+                    <input type="text" name="allowed_tools" value="{{range $i, $t := .Defaults.AllowedTools}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="(all)" class="form-input">
+                </div>
+                <div class="form-help">Default tool whitelist. Comma-separated. Processes and tasks override if they set their own.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Disallowed Tools</label>
+                    <input type="text" name="disallowed_tools" value="{{range $i, $t := .Defaults.DisallowedTools}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="(none)" class="form-input">
+                </div>
+                <div class="form-help">Default tool blacklist. Comma-separated. Processes and tasks override if they set their own.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>System Prompt</label>
+                    <textarea name="append_system_prompt" class="form-input form-textarea" placeholder="Additional instructions...">{{.Defaults.AppendSystemPrompt}}</textarea>
+                </div>
+                <div class="form-help">Appended to Claude's system prompt for all processes and tasks. Each can override with their own.</div>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-accent">Save Defaults</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="config-section">
+        <h3>Telegram</h3>
+        <table class="config-table">
+            <tr><td class="config-key">Bot Token</td><td>{{if .Telegram.BotToken}}configured{{else}}not set{{end}}</td></tr>
+            <tr><td class="config-key">Chat ID</td><td>{{if .Telegram.ChatID}}{{.Telegram.ChatID}}{{else}}not set{{end}}</td></tr>
+            <tr><td class="config-key">Group ID</td><td>{{if .Telegram.GroupID}}{{.Telegram.GroupID}}{{else}}not set{{end}}</td></tr>
+        </table>
+    </div>
+
+    <div class="config-section">
+        <h3>Web UI</h3>
+        <table class="config-table">
+            <tr><td class="config-key">Enabled</td><td>{{.Web.Enabled}}</td></tr>
+            <tr><td class="config-key">Port</td><td>{{if .Web.Port}}{{.Web.Port}}{{else}}8370{{end}}</td></tr>
+            <tr><td class="config-key">Bind</td><td>{{if .Web.Bind}}{{.Web.Bind}}{{else}}0.0.0.0{{end}}</td></tr>
+        </table>
+    </div>
+</div>
+{{end}}

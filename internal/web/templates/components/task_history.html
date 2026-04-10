@@ -1,0 +1,24 @@
+{{define "task_history.html"}}
+{{if .Entries}}
+<div class="history-entries">
+    <table class="history-table">
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Exit Code</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Entries}}
+            <tr>
+                <td>{{timeFormat .RunAt}}</td>
+                <td><span class="{{exitCodeClass .ExitCode}}">{{.ExitCode}}</span></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="empty-state" style="padding: 8px 0;">No history</div>
+{{end}}
+{{end}}
