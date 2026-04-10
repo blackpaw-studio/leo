@@ -152,6 +152,8 @@ body {
     font-family: var(--mono);
 }
 
+.process-actions { margin-top: 8px; }
+
 /* Tabs */
 .tabs {
     display: flex;

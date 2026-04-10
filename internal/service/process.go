@@ -17,6 +17,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/pluginsync"
 )
 
 // Testability seams
@@ -232,6 +233,11 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
+	// Sync forked Telegram plugin to Claude's cache
+	if err := pluginsync.SyncTelegramPlugin(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to sync telegram plugin: %v\n", err)
+	}
+
 	supervisor := NewSupervisor()
 
 	// Start daemon IPC server with process state provider
@@ -307,6 +313,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		if p := os.Getenv("PATH"); p != "" {
 			claudeCmd = fmt.Sprintf("export PATH=%s; %s", shellQuote(p), claudeCmd)
 		}
+
+		// Inject Leo process name for plugin control commands
+		claudeCmd = fmt.Sprintf("export LEO_PROCESS_NAME=%s; %s", shellQuote(spec.Name), claudeCmd)
 
 		// Add per-process env vars
 		for k, v := range spec.Env {

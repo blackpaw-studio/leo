@@ -372,6 +372,18 @@ func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q saved", name))
 }
 
+func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionName := "leo-" + name
+
+	cmd := s.execCommand("tmux", "send-keys", "-t", sessionName, "Escape")
+	if err := cmd.Run(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to interrupt %s: %v", name, err))
+		return
+	}
+	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
+}
+
 func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	cmd := s.execCommand(s.leoPath, "service", "restart", "--config", s.configPath)
 	if err := cmd.Start(); err != nil {

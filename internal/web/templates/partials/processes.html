@@ -15,6 +15,11 @@
                     {{if gt .Restarts 0}}&middot; {{.Restarts}} restart{{if gt .Restarts 1}}s{{end}}{{end}}
                 {{end}}
             </div>
+            {{if eq .Status "running"}}
+            <div class="process-actions">
+                <button class="btn btn-sm" hx-post="/web/process/{{.Name}}/interrupt" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Interrupt {{.Name}}?">Interrupt</button>
+            </div>
+            {{end}}
         </div>
         {{else}}
         <div class="empty-state">No processes configured</div>
