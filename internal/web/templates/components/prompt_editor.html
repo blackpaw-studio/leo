@@ -1,5 +1,29 @@
 {{define "prompt_editor.html"}}
-<form hx-post="/web/task/{{.Name}}/prompt" hx-target="#flash-container" hx-swap="innerHTML">
+<form hx-post="/web/task/{{.TaskName}}/prompt" hx-target="#flash-container" hx-swap="innerHTML">
+    <div class="form-group">
+        <div class="form-row">
+            <label>Prompt File</label>
+            <select name="prompt_file" class="form-input"
+                    hx-get="/web/task/{{.TaskName}}/prompt"
+                    hx-trigger="change"
+                    hx-target="#prompt-editor-{{.TaskName}}"
+                    hx-swap="innerHTML"
+                    hx-include="this"
+                    hx-params="prompt_file">
+                {{range .Files}}
+                <option value="{{.}}" {{if eq . $.PromptFile}}selected{{end}}>{{.}}</option>
+                {{end}}
+                <option value="__new__" {{if .NewFileName}}selected{{end}}>+ New file...</option>
+            </select>
+        </div>
+    </div>
+    <div class="form-group new-file-group" style="{{if not .NewFileName}}display:none{{end}}">
+        <div class="form-row">
+            <label>File Name</label>
+            <input type="text" name="new_file_name" value="{{.NewFileName}}" class="form-input" placeholder="reports/daily.md">
+        </div>
+        <div class="form-help">Relative to workspace. Will be created on save.</div>
+    </div>
     <div class="form-group">
         <textarea name="prompt_content" class="form-input form-textarea prompt-editor-textarea"
             placeholder="Enter prompt markdown content...">{{.Content}}</textarea>
@@ -8,4 +32,16 @@
         <button type="submit" class="btn btn-accent">Save Prompt</button>
     </div>
 </form>
+<script>
+(function() {
+    var container = document.getElementById('prompt-editor-{{.TaskName}}');
+    if (!container) return;
+    var select = container.querySelector('select[name="prompt_file"]');
+    var newGroup = container.querySelector('.new-file-group');
+    if (!select || !newGroup) return;
+    select.addEventListener('change', function() {
+        newGroup.style.display = this.value === '__new__' ? '' : 'none';
+    });
+})();
+</script>
 {{end}}
