@@ -2449,13 +2449,12 @@ bot.command("stop", async (ctx) => {
     return;
   }
   try {
-    // Reply FIRST so grammy acknowledges the update offset.
-    await ctx.reply(`⏹ Interrupting ${processName}...`);
-    // Ask the Leo daemon (separate process) to kill the tmux pane.
-    // This is more reliable than killing from inside the pane.
+    // Hit the daemon IMMEDIATELY — don't wait for the reply to send first.
+    // Every millisecond matters; Claude may be mid-tool-call.
     const port = process.env.LEO_WEB_PORT ?? "8370";
     const url = `http://127.0.0.1:${port}/web/process/${processName}/interrupt`;
     fetch(url, { method: "POST" }).catch(() => {});
+    await ctx.reply(`⏹ Interrupted ${processName}`);
   } catch (err) {
     await ctx.reply(`⚠️ Failed to interrupt: ${String(err)}`);
   }

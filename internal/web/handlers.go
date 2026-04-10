@@ -379,14 +379,17 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	sessionName := "leo-" + name
 
 	tmuxPath := findTmuxPath()
-	// Send Escape — same as pressing Escape in the terminal.
-	// Send it a few times to catch different states.
-	for i := 0; i < 3; i++ {
-		s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
-		if i < 2 {
-			time.Sleep(200 * time.Millisecond)
+	// Send Escape immediately, then keep sending to catch state transitions.
+	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+	// Also send delayed Escapes in background to catch tool completions
+	go func() {
+		for i := 0; i < 5; i++ {
+			time.Sleep(500 * time.Millisecond)
+			s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
 		}
-	}
+	}()
 	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
 }
 
