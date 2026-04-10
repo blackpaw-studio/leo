@@ -60,6 +60,8 @@ func RegisterBotCommands(botToken string) error {
 
 	body := `{"commands":[` +
 		`{"command":"stop","description":"Interrupt the current Claude operation"},` +
+		`{"command":"agent","description":"Spawn a coding agent (/agent <template> <repo>)"},` +
+		`{"command":"agents","description":"List running agents"},` +
 		`{"command":"status","description":"Show bot connection status"},` +
 		`{"command":"help","description":"Show available commands"},` +
 		`{"command":"start","description":"Start a conversation"}` +
