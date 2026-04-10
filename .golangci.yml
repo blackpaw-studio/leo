@@ -66,9 +66,10 @@ linters:
         - filepathJoin
         - unlambda
 
-issues:
+run:
   exclude-dirs:
     - vendor
 
+issues:
   max-issues-per-linter: 50
   max-same-issues: 5
