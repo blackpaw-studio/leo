@@ -435,8 +435,15 @@ func TestRunSuccess(t *testing.T) {
 		t.Fatalf("Run() error: %v", err)
 	}
 
-	// Verify log was written; StatePath() = <HomePath>/state
-	logData, err := os.ReadFile(filepath.Join(dir, "state", "mytask.log"))
+	// Verify log was written; logs now go to state/logs/mytask-*.log
+	logFiles, err := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
+	if err != nil {
+		t.Fatalf("globbing logs: %v", err)
+	}
+	if len(logFiles) == 0 {
+		t.Fatal("no log files found")
+	}
+	logData, err := os.ReadFile(logFiles[0])
 	if err != nil {
 		t.Fatalf("reading log: %v", err)
 	}
@@ -507,12 +514,13 @@ func TestWriteLog(t *testing.T) {
 		HomePath: dir,
 	}
 
-	if err := writeLog(cfg, "test-task", []byte("test output")); err != nil {
+	filename := "test-task-20260410-120000.log"
+	if err := writeLogFile(cfg, filename, []byte("test output")); err != nil {
 		t.Fatal(err)
 	}
 
-	// StatePath() = <HomePath>/state
-	logPath := filepath.Join(dir, "state", "test-task.log")
+	// Logs now go into state/logs/
+	logPath := filepath.Join(dir, "state", "logs", filename)
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)

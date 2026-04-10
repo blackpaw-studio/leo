@@ -1,11 +1,13 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -142,6 +144,56 @@ func (s *Server) handlePartialTaskHistory(w http.ResponseWriter, r *http.Request
 		Name    string
 		Entries []history.Entry
 	}{Name: name, Entries: entries})
+}
+
+func (s *Server) handleTaskRunLog(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	logFile := r.URL.Query().Get("file")
+	if logFile == "" {
+		http.Error(w, "missing file parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Sanitize: only allow the basename to prevent path traversal
+	logFile = filepath.Base(logFile)
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Validate task exists in config
+	if _, ok := cfg.Tasks[name]; !ok {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify the file belongs to the expected task (filename starts with task name)
+	if !strings.HasPrefix(logFile, name+"-") {
+		http.Error(w, "log file does not match task", http.StatusBadRequest)
+		return
+	}
+
+	logPath := filepath.Join(cfg.StatePath(), "logs", logFile)
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(w, `<div class="log-empty">Log file not found</div>`)
+		} else {
+			fmt.Fprintf(w, `<div class="log-empty">Error reading log file</div>`)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "task_log.html", struct {
+		Name    string
+		Content string
+	}{Name: name, Content: string(content)}); err != nil {
+		fmt.Fprintf(os.Stderr, "error rendering task_log.html: %v\n", err)
+	}
 }
 
 func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {

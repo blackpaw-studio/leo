@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -119,6 +120,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	maxAttempts := task.Retries + 1
 	var lastErr error
 	var lastOutput []byte
+	var lastLogContent string
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
@@ -154,13 +156,10 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 			}
 		}
 
-		// Log readable output
-		logContent := result.Result
-		if logContent == "" {
-			logContent = string(output)
-		}
-		if logErr := writeLog(cfg, taskName, []byte(logContent)); logErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to write log: %v\n", logErr)
+		// Capture log content from the final attempt
+		lastLogContent = result.Result
+		if lastLogContent == "" {
+			lastLogContent = string(output)
 		}
 
 		cancel()
@@ -175,13 +174,21 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		lastOutput = output
 	}
 
+	// Write log for the final attempt only (avoids orphaned files on retries)
+	var logFile string
+	logFile = logFileName(taskName)
+	if logErr := writeLogFile(cfg, logFile, []byte(lastLogContent)); logErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to write log: %v\n", logErr)
+		logFile = ""
+	}
+
 	// Record execution history
 	exitCode := 0
 	if lastErr != nil {
 		exitCode = 1
 	}
 	hist := history.NewStore(cfg.HomePath)
-	if histErr := hist.Record(taskName, exitCode); histErr != nil {
+	if histErr := hist.Record(taskName, exitCode, logFile); histErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
 	}
 
@@ -372,13 +379,18 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 	return args
 }
 
-func writeLog(cfg *config.Config, taskName string, output []byte) error {
-	stateDir := cfg.StatePath()
-	if err := os.MkdirAll(stateDir, 0750); err != nil {
+// logFileName returns a timestamped log filename for the current run.
+func logFileName(taskName string) string {
+	return fmt.Sprintf("%s-%s.log", taskName, time.Now().UTC().Format("20060102-150405.000"))
+}
+
+func writeLogFile(cfg *config.Config, filename string, output []byte) error {
+	logDir := filepath.Join(cfg.StatePath(), "logs")
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return err
 	}
 
-	logPath := filepath.Join(stateDir, taskName+".log")
+	logPath := filepath.Join(logDir, filename)
 	return os.WriteFile(logPath, output, 0600)
 }
 

@@ -12,7 +12,7 @@ func TestRecordAndGet(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	if err := store.Record("heartbeat", 0); err != nil {
+	if err := store.Record("heartbeat", 0, ""); err != nil {
 		t.Fatalf("Record() error: %v", err)
 	}
 
@@ -35,10 +35,10 @@ func TestRecordKeepsHistory(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	if err := store.Record("task1", 0); err != nil {
+	if err := store.Record("task1", 0, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record("task1", 1); err != nil {
+	if err := store.Record("task1", 1, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,7 +66,7 @@ func TestRecordTrimsToMax(t *testing.T) {
 	store := NewStore(dir)
 
 	for i := 0; i < 15; i++ {
-		if err := store.Record("task1", i); err != nil {
+		if err := store.Record("task1", i, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,10 +110,10 @@ func TestAll(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	if err := store.Record("task1", 0); err != nil {
+	if err := store.Record("task1", 0, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record("task2", 1); err != nil {
+	if err := store.Record("task2", 1, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +170,7 @@ func TestMigrateOldFormat(t *testing.T) {
 	}
 
 	// Recording should work on top of migrated data
-	if err := store.Record("heartbeat", 1); err != nil {
+	if err := store.Record("heartbeat", 1, ""); err != nil {
 		t.Fatal(err)
 	}
 	all = store.GetAll("heartbeat")

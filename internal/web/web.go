@@ -89,6 +89,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /partials/processes", s.handlePartialProcesses)
 	mux.HandleFunc("GET /partials/tasks", s.handlePartialTasks)
 	mux.HandleFunc("GET /partials/task/{name}/history", s.handlePartialTaskHistory)
+	mux.HandleFunc("GET /partials/task/{name}/log", s.handleTaskRunLog)
 
 	// Config sub-tab partials
 	mux.HandleFunc("GET /partials/config/processes", s.handlePartialConfigProcesses)

@@ -15,6 +15,7 @@ type Entry struct {
 	Task     string    `json:"task"`
 	ExitCode int       `json:"exit_code"`
 	RunAt    time.Time `json:"run_at"`
+	LogFile  string    `json:"log_file,omitempty"`
 }
 
 // Store persists task execution history to a JSON file.
@@ -31,13 +32,14 @@ func NewStore(workspace string) *Store {
 
 // Record saves a task execution result, prepending to the list and trimming
 // to maxHistoryPerTask entries.
-func (s *Store) Record(task string, exitCode int) error {
+func (s *Store) Record(task string, exitCode int, logFile string) error {
 	entries := s.load()
 
 	entry := Entry{
 		Task:     task,
 		ExitCode: exitCode,
 		RunAt:    time.Now(),
+		LogFile:  logFile,
 	}
 
 	// Prepend new entry

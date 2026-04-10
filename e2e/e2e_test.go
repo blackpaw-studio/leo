@@ -214,10 +214,10 @@ func TestRunHappyPath(t *testing.T) {
 		t.Error("prompt should contain Telegram chat ID")
 	}
 
-	// Verify log file was written
-	logPath := filepath.Join(ws, "state", "heartbeat.log")
-	if _, err := os.Stat(logPath); err != nil {
-		t.Errorf("expected log file at %s: %v", logPath, err)
+	// Verify log file was written (timestamped in state/logs/)
+	logFiles, _ := filepath.Glob(filepath.Join(ws, "state", "logs", "heartbeat-*.log"))
+	if len(logFiles) == 0 {
+		t.Error("expected log file in state/logs/heartbeat-*.log")
 	}
 }
 
@@ -312,10 +312,10 @@ func TestRunClaudeError(t *testing.T) {
 		t.Fatal("expected non-zero exit code when claude fails")
 	}
 
-	// Log should still be written even on error
-	logPath := filepath.Join(ws, "state", "heartbeat.log")
-	if _, err := os.Stat(logPath); err != nil {
-		t.Errorf("expected log file written even on error: %v", err)
+	// Log should still be written even on error (timestamped in state/logs/)
+	logFiles, _ := filepath.Glob(filepath.Join(ws, "state", "logs", "heartbeat-*.log"))
+	if len(logFiles) == 0 {
+		t.Error("expected log file written even on error")
 	}
 }
 
