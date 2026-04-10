@@ -27,6 +27,7 @@ type ProcessStateInfo struct {
 	Status    string    `json:"status"`
 	StartedAt time.Time `json:"started_at"`
 	Restarts  int       `json:"restarts"`
+	Ephemeral bool      `json:"ephemeral,omitempty"`
 }
 
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
@@ -130,18 +131,70 @@ func (a *processAdapter) States() map[string]web.ProcessStateInfo {
 			Status:    v.Status,
 			StartedAt: v.StartedAt,
 			Restarts:  v.Restarts,
+			Ephemeral: v.Ephemeral,
+		}
+	}
+	return result
+}
+
+// AgentManager can create and destroy ephemeral agents.
+type AgentManager interface {
+	SpawnAgent(spec AgentSpawnSpec) error
+	StopAgent(name string) error
+	EphemeralAgents() map[string]ProcessStateInfo
+}
+
+// AgentSpawnSpec is the minimal info needed to spawn an agent from the daemon layer.
+// This avoids importing service.ProcessSpec directly.
+type AgentSpawnSpec struct {
+	Name       string
+	ClaudeArgs []string
+	WorkDir    string
+	Env        map[string]string
+	WebPort    string
+}
+
+// agentManagerAdapter bridges daemon.AgentManager to web.AgentManager.
+type agentManagerAdapter struct {
+	inner AgentManager
+}
+
+func (a *agentManagerAdapter) SpawnAgent(spec web.AgentSpawnRequest) error {
+	return a.inner.SpawnAgent(AgentSpawnSpec{
+		Name:       spec.Name,
+		ClaudeArgs: spec.ClaudeArgs,
+		WorkDir:    spec.WorkDir,
+		Env:        spec.Env,
+		WebPort:    spec.WebPort,
+	})
+}
+
+func (a *agentManagerAdapter) StopAgent(name string) error {
+	return a.inner.StopAgent(name)
+}
+
+func (a *agentManagerAdapter) EphemeralAgents() map[string]web.ProcessStateInfo {
+	agents := a.inner.EphemeralAgents()
+	result := make(map[string]web.ProcessStateInfo, len(agents))
+	for k, v := range agents {
+		result[k] = web.ProcessStateInfo{
+			Name:      v.Name,
+			Status:    v.Status,
+			StartedAt: v.StartedAt,
+			Restarts:  v.Restarts,
+			Ephemeral: v.Ephemeral,
 		}
 	}
 	return result
 }
 
 // StartWeb starts the web UI on a TCP listener if web is enabled in config.
-func (s *Server) StartWeb(cfg *config.Config) error {
+func (s *Server) StartWeb(cfg *config.Config, agentMgr AgentManager) error {
 	if !cfg.Web.Enabled {
 		return nil
 	}
 
-	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s)
+	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, &agentManagerAdapter{inner: agentMgr})
 	addr := fmt.Sprintf("%s:%d", cfg.WebBind(), cfg.WebPort())
 	if err := s.webServer.ListenAndServe(addr); err != nil {
 		return fmt.Errorf("starting web UI: %w", err)

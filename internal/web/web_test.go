@@ -100,7 +100,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 
 	reloader := &mockReloader{}
 
-	s := New(cfgPath, processes, scheduler, reloader)
+	s := New(cfgPath, processes, scheduler, reloader, nil)
 	return s, dir
 }
 
@@ -339,7 +339,7 @@ defaults:
 	os.WriteFile(cfgPath, []byte(cfgYAML), 0600)
 	os.MkdirAll(filepath.Join(dir, "state"), 0750)
 
-	s := New(cfgPath, nil, nil, nil)
+	s := New(cfgPath, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()

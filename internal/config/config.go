@@ -42,11 +42,12 @@ var validPermissionModes = map[string]bool{
 }
 
 type Config struct {
-	Telegram  TelegramConfig           `yaml:"telegram"`
-	Defaults  DefaultsConfig           `yaml:"defaults"`
-	Web       WebConfig                `yaml:"web,omitempty"`
-	Processes map[string]ProcessConfig `yaml:"processes"`
-	Tasks     map[string]TaskConfig    `yaml:"tasks"`
+	Telegram  TelegramConfig            `yaml:"telegram"`
+	Defaults  DefaultsConfig            `yaml:"defaults"`
+	Web       WebConfig                 `yaml:"web,omitempty"`
+	Processes map[string]ProcessConfig  `yaml:"processes"`
+	Tasks     map[string]TaskConfig     `yaml:"tasks"`
+	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
@@ -126,6 +127,24 @@ type TaskConfig struct {
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
 	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
+}
+
+// TemplateConfig defines a reusable blueprint for spawning ephemeral agents.
+// Workspace is the base directory — repos are cloned as subdirectories.
+type TemplateConfig struct {
+	Workspace          string            `yaml:"workspace,omitempty"`
+	Channels           []string          `yaml:"channels,omitempty"`
+	Model              string            `yaml:"model,omitempty"`
+	MaxTurns           int               `yaml:"max_turns,omitempty"`
+	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
+	MCPConfig          string            `yaml:"mcp_config,omitempty"`
+	AddDirs            []string          `yaml:"add_dirs,omitempty"`
+	Env                map[string]string `yaml:"env,omitempty"`
+	Agent              string            `yaml:"agent,omitempty"`
+	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
+	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
+	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
+	PermissionMode     string            `yaml:"permission_mode,omitempty"`
 }
 
 // DefaultWorkspace returns the default workspace path (HomePath/workspace).
@@ -299,6 +318,28 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	for name, tmpl := range c.Templates {
+		if tmpl.Model != "" && !validModels[tmpl.Model] {
+			errs = append(errs, fmt.Sprintf("templates.%s.model %q is not valid (use sonnet, opus, or haiku)", name, tmpl.Model))
+		}
+		if tmpl.MaxTurns < 0 {
+			errs = append(errs, fmt.Sprintf("templates.%s.max_turns must not be negative", name))
+		}
+		for i, ch := range tmpl.Channels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("templates.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		for k := range tmpl.Env {
+			if !envKeyPattern.MatchString(k) {
+				errs = append(errs, fmt.Sprintf("templates.%s.env key %q is not a valid environment variable name", name, k))
+			}
+		}
+		if tmpl.PermissionMode != "" && !validPermissionModes[tmpl.PermissionMode] {
+			errs = append(errs, fmt.Sprintf("templates.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, tmpl.PermissionMode))
+		}
+	}
+
 	for name, task := range c.Tasks {
 		if task.Schedule == "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.schedule is required", name))
@@ -371,6 +412,14 @@ func (c *Config) expandPaths() {
 	for name, task := range c.Tasks {
 		task.Workspace = expandHome(task.Workspace)
 		c.Tasks[name] = task
+	}
+	for name, tmpl := range c.Templates {
+		tmpl.Workspace = expandHome(tmpl.Workspace)
+		tmpl.MCPConfig = expandHome(tmpl.MCPConfig)
+		for i, dir := range tmpl.AddDirs {
+			tmpl.AddDirs[i] = expandHome(dir)
+		}
+		c.Templates[name] = tmpl
 	}
 }
 

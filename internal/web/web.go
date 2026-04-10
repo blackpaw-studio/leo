@@ -22,6 +22,7 @@ type ProcessStateInfo struct {
 	Status    string    `json:"status"`
 	StartedAt time.Time `json:"started_at"`
 	Restarts  int       `json:"restarts"`
+	Ephemeral bool      `json:"ephemeral,omitempty"`
 }
 
 // ProcessStateProvider returns the state of all supervised processes.
@@ -39,12 +40,29 @@ type ConfigReloader interface {
 	ReloadConfig() error
 }
 
+// AgentSpawnRequest is the web-layer view of an agent spawn request.
+type AgentSpawnRequest struct {
+	Name       string
+	ClaudeArgs []string
+	WorkDir    string
+	Env        map[string]string
+	WebPort    string
+}
+
+// AgentManager can create and destroy ephemeral agents.
+type AgentManager interface {
+	SpawnAgent(spec AgentSpawnRequest) error
+	StopAgent(name string) error
+	EphemeralAgents() map[string]ProcessStateInfo
+}
+
 // Server serves the Leo web UI over HTTP.
 type Server struct {
 	configPath    string
 	processes     ProcessStateProvider
 	scheduler     SchedulerProvider
 	reloader      ConfigReloader
+	agentMgr      AgentManager
 	leoPath       string
 	templates     *template.Template
 	httpServer    *http.Server
@@ -56,8 +74,8 @@ type Server struct {
 	execCommand func(name string, args ...string) *exec.Cmd
 }
 
-// New creates a new web UI server.
-func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader) *Server {
+// New creates a new web UI server. agentMgr may be nil if agent spawning is not available.
+func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader, agentMgr AgentManager) *Server {
 	leoPath, err := exec.LookPath("leo")
 	if err != nil {
 		leoPath = "leo"
@@ -68,6 +86,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		processes:   processes,
 		scheduler:   scheduler,
 		reloader:    reloader,
+		agentMgr:    agentMgr,
 		leoPath:     leoPath,
 		execCommand: exec.Command,
 	}
@@ -120,6 +139,17 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)
+
+	// Agent management (web UI)
+	mux.HandleFunc("GET /partials/agents", s.handlePartialAgents)
+	mux.HandleFunc("POST /web/agent/spawn", s.handleWebAgentSpawn)
+	mux.HandleFunc("POST /web/agent/{name}/stop", s.handleWebAgentStop)
+
+	// Agent management (JSON API — used by Telegram plugin)
+	mux.HandleFunc("POST /api/agent/spawn", s.handleAPIAgentSpawn)
+	mux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
+	mux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
+	mux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,

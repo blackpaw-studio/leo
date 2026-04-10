@@ -54,18 +54,26 @@ type ProcessState struct {
 	Status    string    `json:"status"` // "running", "restarting", "stopped"
 	StartedAt time.Time `json:"started_at"`
 	Restarts  int       `json:"restarts"`
+	Ephemeral bool      `json:"ephemeral,omitempty"`
 }
 
 // Supervisor manages multiple Claude processes.
 type Supervisor struct {
-	mu     sync.RWMutex
-	states map[string]*ProcessState
+	mu         sync.RWMutex
+	states     map[string]*ProcessState
+	cancels    map[string]context.CancelFunc // per-process cancel functions for ephemeral agents
+	ctx        context.Context               // parent context from RunSupervised
+	tmuxPath   string
+	claudePath string
+	homePath   string
+	configPath string
 }
 
 // NewSupervisor creates a new process supervisor.
 func NewSupervisor() *Supervisor {
 	return &Supervisor{
-		states: make(map[string]*ProcessState),
+		states:  make(map[string]*ProcessState),
+		cancels: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -81,6 +89,7 @@ func (s *Supervisor) States() map[string]daemon.ProcessStateInfo {
 			Status:    v.Status,
 			StartedAt: v.StartedAt,
 			Restarts:  v.Restarts,
+			Ephemeral: v.Ephemeral,
 		}
 	}
 	return result
@@ -111,6 +120,91 @@ func (s *Supervisor) incrementRestarts(name string) {
 		st.Restarts++
 		st.StartedAt = time.Now()
 	}
+}
+
+// SpawnAgent starts an ephemeral process managed by the supervisor.
+// The process is not persisted to config — it lives only in memory.
+// Implements daemon.AgentManager.
+func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
+	s.mu.Lock()
+	if _, exists := s.states[spec.Name]; exists {
+		s.mu.Unlock()
+		return fmt.Errorf("process %q already exists", spec.Name)
+	}
+	if s.ctx == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("supervisor not initialized (no context)")
+	}
+
+	childCtx, cancel := context.WithCancel(s.ctx)
+	s.cancels[spec.Name] = cancel
+	s.states[spec.Name] = &ProcessState{
+		Name:      spec.Name,
+		Status:    "starting",
+		StartedAt: time.Now(),
+		Ephemeral: true,
+	}
+	s.mu.Unlock()
+
+	procSpec := ProcessSpec{
+		Name:       spec.Name,
+		ClaudeArgs: spec.ClaudeArgs,
+		WorkDir:    spec.WorkDir,
+		Env:        spec.Env,
+		WebPort:    spec.WebPort,
+	}
+	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s)
+	return nil
+}
+
+// StopAgent stops an ephemeral process and cleans up its tmux session.
+func (s *Supervisor) StopAgent(name string) error {
+	s.mu.Lock()
+	st, exists := s.states[name]
+	if !exists {
+		s.mu.Unlock()
+		return fmt.Errorf("agent %q not found", name)
+	}
+	if !st.Ephemeral {
+		s.mu.Unlock()
+		return fmt.Errorf("%q is not an ephemeral agent", name)
+	}
+	cancel, hasCancel := s.cancels[name]
+	s.mu.Unlock()
+
+	if hasCancel {
+		cancel()
+	}
+
+	// Kill the tmux session directly
+	sessionName := fmt.Sprintf("leo-%s", name)
+	exec.Command(s.tmuxPath, "kill-session", "-t", sessionName).Run() //nolint:errcheck
+
+	s.mu.Lock()
+	delete(s.states, name)
+	delete(s.cancels, name)
+	s.mu.Unlock()
+
+	return nil
+}
+
+// EphemeralAgents returns a snapshot of all ephemeral agent states.
+func (s *Supervisor) EphemeralAgents() map[string]daemon.ProcessStateInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]daemon.ProcessStateInfo)
+	for k, v := range s.states {
+		if v.Ephemeral {
+			result[k] = daemon.ProcessStateInfo{
+				Name:      v.Name,
+				Status:    v.Status,
+				StartedAt: v.StartedAt,
+				Restarts:  v.Restarts,
+				Ephemeral: true,
+			}
+		}
+	}
+	return result
 }
 
 // Start spawns a supervised leo service process in the background and writes a PID file.
@@ -248,7 +342,18 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		}
 	}
 
+	// Find tmux early so we can cache it
+	tmuxPath, err := findTmux()
+	if err != nil {
+		return err
+	}
+
 	supervisor := NewSupervisor()
+	supervisor.ctx = ctx
+	supervisor.tmuxPath = tmuxPath
+	supervisor.claudePath = claudePath
+	supervisor.homePath = homePath
+	supervisor.configPath = configPath
 
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
@@ -261,16 +366,16 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 
 		// Start web UI if enabled
 		if cfg, err := config.Load(configPath); err == nil {
-			if err := srv.StartWeb(cfg); err != nil {
+			if err := srv.StartWeb(cfg, supervisor); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: web UI failed to start: %v\n", err)
 			}
 		}
 	}
 
-	// Find tmux
-	tmuxPath, err := findTmux()
-	if err != nil {
-		return err
+	// Restore ephemeral agents from previous run
+	restored := RestoreAgents(homePath, tmuxPath, supervisor)
+	if restored > 0 {
+		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}
 
 	// Validate process workspaces before starting
