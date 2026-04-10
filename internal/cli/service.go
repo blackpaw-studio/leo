@@ -224,7 +224,7 @@ func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig
 	}
 
 	if cfg.ProcessRemoteControl(proc) {
-		claudeArgs = append(claudeArgs, "--remote-control", name)
+		claudeArgs = append(claudeArgs, "--remote-control", "--remote-control-session-name-prefix", name)
 	}
 
 	// Permission mode: process > defaults > bypass_permissions legacy
