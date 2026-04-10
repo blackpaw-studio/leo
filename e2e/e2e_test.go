@@ -138,10 +138,7 @@ func argValue(args []string, flag string) string {
 	return ""
 }
 
-const minimalConfig = `agent:
-  name: test-agent
-  workspace: WORKSPACE_PLACEHOLDER
-telegram:
+const minimalConfig = `telegram:
   bot_token: "fake-bot-token"
   chat_id: "12345"
 defaults:
@@ -150,6 +147,7 @@ defaults:
   bypass_permissions: true
 tasks:
   heartbeat:
+    workspace: WORKSPACE_PLACEHOLDER
     schedule: "0 9 * * *"
     prompt_file: prompts/HEARTBEAT.md
     enabled: true
@@ -208,9 +206,9 @@ func TestRunHappyPath(t *testing.T) {
 		t.Error("prompt should contain silent preamble for silent task")
 	}
 
-	// Verify Telegram protocol is injected
-	if !strings.Contains(prompt, "fake-bot-token") {
-		t.Error("prompt should contain Telegram bot token")
+	// Verify Telegram protocol is injected (uses $TELEGRAM_BOT_TOKEN env var, not literal token)
+	if !strings.Contains(prompt, "TELEGRAM_BOT_TOKEN") {
+		t.Error("prompt should contain Telegram bot token reference")
 	}
 	if !strings.Contains(prompt, "12345") {
 		t.Error("prompt should contain Telegram chat ID")
@@ -324,10 +322,7 @@ func TestRunClaudeError(t *testing.T) {
 func TestRunModelOverride(t *testing.T) {
 	argLog := filepath.Join(t.TempDir(), "args.json")
 
-	configYAML := `agent:
-  name: test-agent
-  workspace: %s
-telegram:
+	configYAML := `telegram:
   bot_token: "tok"
   chat_id: "1"
 defaults:
@@ -335,6 +330,7 @@ defaults:
   max_turns: 15
 tasks:
   heartbeat:
+    workspace: %s
     schedule: "0 9 * * *"
     prompt_file: prompts/HEARTBEAT.md
     model: opus
@@ -398,10 +394,7 @@ func TestVersionCommand(t *testing.T) {
 func TestRunGroupIDOverridesChatID(t *testing.T) {
 	argLog := filepath.Join(t.TempDir(), "args.json")
 
-	configYAML := `agent:
-  name: test-agent
-  workspace: %s
-telegram:
+	configYAML := `telegram:
   bot_token: "tok"
   chat_id: "111"
   group_id: "222"
@@ -410,6 +403,7 @@ defaults:
   max_turns: 10
 tasks:
   heartbeat:
+    workspace: %s
     schedule: "0 9 * * *"
     prompt_file: prompts/HEARTBEAT.md
     enabled: true
@@ -461,10 +455,7 @@ func TestDaemonIPC(t *testing.T) {
 	}
 
 	// Write leo.yaml with the temp dir as workspace.
-	cfgYAML := fmt.Sprintf(`agent:
-  name: test-agent
-  workspace: %s
-telegram:
+	cfgYAML := fmt.Sprintf(`telegram:
   bot_token: "fake-token"
   chat_id: "12345"
 defaults:
@@ -472,6 +463,7 @@ defaults:
   max_turns: 15
 tasks:
   heartbeat:
+    workspace: %s
     schedule: "0 9 * * *"
     prompt_file: HEARTBEAT.md
     enabled: true
