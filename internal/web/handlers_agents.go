@@ -311,10 +311,11 @@ func resolveAgentWorkspace(tmpl config.TemplateConfig, templateName, repo, nameO
 	if strings.Contains(repo, "/") {
 		// owner/repo format — clone if needed
 		parts := strings.SplitN(repo, "/", 2)
+		owner := parts[0]
 		repoShort := parts[1]
 
 		workspace = filepath.Join(baseWorkspace, repoShort)
-		agentName = fmt.Sprintf("agent-%s-%s", templateName, repoShort)
+		agentName = fmt.Sprintf("leo-%s-%s-%s", templateName, owner, repoShort)
 
 		if nameOverride != "" {
 			agentName = nameOverride
@@ -338,7 +339,7 @@ func resolveAgentWorkspace(tmpl config.TemplateConfig, templateName, repo, nameO
 	} else {
 		// Plain name — use template workspace directly
 		workspace = baseWorkspace
-		agentName = fmt.Sprintf("agent-%s-%s", templateName, repo)
+		agentName = fmt.Sprintf("leo-%s-%s", templateName, repo)
 
 		if nameOverride != "" {
 			agentName = nameOverride

@@ -95,8 +95,8 @@ func newTestServerWithAgents(t *testing.T) (*Server, string, *mockAgentManager) 
 	reloader := &mockReloader{}
 	agentMgr := &mockAgentManager{
 		agents: map[string]ProcessStateInfo{
-			"agent-coding-leo": {
-				Name: "agent-coding-leo", Status: "running",
+			"leo-coding-leo": {
+				Name: "leo-coding-leo", Status: "running",
 				StartedAt: time.Now(), Ephemeral: true,
 			},
 		},
@@ -160,8 +160,8 @@ func TestAPIAgentList(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected map data, got %T", resp.Data)
 	}
-	if _, exists := data["agent-coding-leo"]; !exists {
-		t.Error("expected agent-coding-leo in list")
+	if _, exists := data["leo-coding-leo"]; !exists {
+		t.Error("expected leo-coding-leo in list")
 	}
 }
 
@@ -199,8 +199,8 @@ func TestAPIAgentSpawn(t *testing.T) {
 	if !mgr.spawnCalled {
 		t.Fatal("expected SpawnAgent to be called")
 	}
-	if !strings.Contains(mgr.spawnSpec.Name, "agent-coding-test-project") {
-		t.Errorf("expected agent name containing 'agent-coding-test-project', got %q", mgr.spawnSpec.Name)
+	if !strings.Contains(mgr.spawnSpec.Name, "leo-coding-test-project") {
+		t.Errorf("expected agent name containing 'leo-coding-test-project', got %q", mgr.spawnSpec.Name)
 	}
 }
 
@@ -255,7 +255,7 @@ func TestAPIAgentSpawnNoManager(t *testing.T) {
 func TestAPIAgentStop(t *testing.T) {
 	s, _, mgr := newTestServerWithAgents(t)
 
-	body := `{"name":"agent-coding-leo"}`
+	body := `{"name":"leo-coding-leo"}`
 	req := httptest.NewRequest("POST", "/api/agent/stop", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -268,8 +268,8 @@ func TestAPIAgentStop(t *testing.T) {
 	if !mgr.stopCalled {
 		t.Fatal("expected StopAgent to be called")
 	}
-	if mgr.stopName != "agent-coding-leo" {
-		t.Errorf("expected stop name 'agent-coding-leo', got %q", mgr.stopName)
+	if mgr.stopName != "leo-coding-leo" {
+		t.Errorf("expected stop name 'leo-coding-leo', got %q", mgr.stopName)
 	}
 }
 
@@ -289,7 +289,7 @@ func TestAPIAgentStopMissingName(t *testing.T) {
 
 func TestAPIAgentSpawnNameDeduplication(t *testing.T) {
 	s, _, mgr := newTestServerWithAgents(t)
-	// agent-coding-leo already exists in mockAgentManager.agents
+	// leo-coding-leo already exists in mockAgentManager.agents
 
 	body := `{"template":"coding","repo":"leo"}`
 	req := httptest.NewRequest("POST", "/api/agent/spawn", strings.NewReader(body))
@@ -302,8 +302,8 @@ func TestAPIAgentSpawnNameDeduplication(t *testing.T) {
 	}
 
 	// Name should have been deduplicated (suffix -2)
-	if mgr.spawnSpec.Name != "agent-coding-leo-2" {
-		t.Errorf("expected deduplicated name 'agent-coding-leo-2', got %q", mgr.spawnSpec.Name)
+	if mgr.spawnSpec.Name != "leo-coding-leo-2" {
+		t.Errorf("expected deduplicated name 'leo-coding-leo-2', got %q", mgr.spawnSpec.Name)
 	}
 }
 
@@ -320,8 +320,8 @@ func TestResolveAgentWorkspacePlainName(t *testing.T) {
 	if workspace != dir {
 		t.Errorf("workspace = %q, want %q", workspace, dir)
 	}
-	if name != "agent-coding-myproject" {
-		t.Errorf("name = %q, want agent-coding-myproject", name)
+	if name != "leo-coding-myproject" {
+		t.Errorf("name = %q, want leo-coding-myproject", name)
 	}
 }
 
@@ -341,8 +341,8 @@ func TestResolveAgentWorkspaceWithSlashExistingClone(t *testing.T) {
 	if workspace != expected {
 		t.Errorf("workspace = %q, want %q", workspace, expected)
 	}
-	if name != "agent-coding-myrepo" {
-		t.Errorf("name = %q, want agent-coding-myrepo", name)
+	if name != "leo-coding-owner-myrepo" {
+		t.Errorf("name = %q, want leo-coding-owner-myrepo", name)
 	}
 }
 
