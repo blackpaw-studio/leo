@@ -5,39 +5,45 @@ hide:
 
 # Leo
 
-**Manage a persistent Claude Code assistant**
+**A process supervisor and task scheduler for Claude Code**
 
-Leo is a CLI tool that sets up and manages persistent, mobile-accessible [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions. It handles workspace scaffolding, Telegram integration, and cron scheduling -- giving your assistant continuity across sessions and the ability to work on a schedule or respond to messages from your phone.
-
-Memory is not built-in -- users configure their preferred memory MCP server in the standard `~/.claude/mcp-servers.json` or the workspace-specific `config/mcp-servers.json`.
+Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions, schedules autonomous tasks, and lets you spawn on-demand coding agents. Telegram gives you mobile access. A built-in web dashboard lets you manage everything from a browser.
 
 ---
 
 <div class="grid cards" markdown>
 
--   :material-chat-outline:{ .lg .middle } **Interactive Service**
+-   :material-chat-outline:{ .lg .middle } **Processes**
 
     ---
 
-    Define multiple persistent Claude sessions with different channels, workspaces, and settings. Leo supervises them with auto-restart.
+    Define multiple persistent Claude sessions with different channels, workspaces, and settings. Leo supervises them with auto-restart and exponential backoff.
 
     [:octicons-arrow-right-24: Start chatting](guides/telegram-setup.md)
+
+-   :material-rocket-launch-outline:{ .lg .middle } **Agent Templates**
+
+    ---
+
+    Define reusable blueprints and spawn ephemeral coding agents from Telegram or the web UI. Agents clone repos, run in isolated sessions, and appear in claude.ai.
+
+    [:octicons-arrow-right-24: Agent guide](guides/agents.md)
 
 -   :material-clock-outline:{ .lg .middle } **Scheduled Tasks**
 
     ---
 
-    Define background tasks with cron expressions. Leo assembles prompts and invokes `claude` on a schedule -- no daemon required.
+    Cron-driven tasks that invoke Claude in non-interactive mode. Write a prompt, set a schedule, and Leo handles prompt assembly and execution.
 
     [:octicons-arrow-right-24: Set up scheduling](guides/scheduling.md)
 
--   :material-file-cog-outline:{ .lg .middle } **Configuration**
+-   :material-monitor-dashboard:{ .lg .middle } **Web Dashboard**
 
     ---
 
-    A single `leo.yaml` at `~/.leo/` controls Telegram credentials, defaults, processes, and task schedules. Full field-by-field reference included.
+    Monitor processes, manage tasks, spawn agents, edit config, and preview cron schedules from a browser on your LAN.
 
-    [:octicons-arrow-right-24: Config reference](configuration/config-reference.md)
+    [:octicons-arrow-right-24: Configuration](configuration/config-reference.md)
 
 </div>
 
@@ -45,9 +51,9 @@ Memory is not built-in -- users configure their preferred memory MCP server in t
 
 ## How It Works
 
-Leo operates in two modes, both invoking the stock `claude` CLI:
+Leo operates in three modes, all invoking the stock `claude` CLI:
 
-### Interactive Mode
+### Processes
 
 ```
 User (Telegram) --> Telegram Bot API --> claude (channel plugin) --> Agent
@@ -55,17 +61,27 @@ User (Telegram) --> Telegram Bot API --> claude (channel plugin) --> Agent
 User (Telegram) <-- Telegram Bot API <-- claude (channel plugin) <----+
 ```
 
-`leo service start` starts all enabled processes in supervised mode. Each process is a long-running Claude session that can use different channels (Telegram, etc.), workspaces, and models.
+`leo service start` launches all enabled processes in supervised mode. Each process is a long-running Claude session with its own workspace, model, and channels.
+
+### Agent Templates
+
+```
+User (Telegram) --> /agent coding owner/repo --> Leo daemon --> tmux session
+                                                                    |
+User (claude.ai) <-- --remote-control --name leo-coding-... <------+
+```
+
+Templates let you spawn ephemeral agents on demand. Send `/agent coding owner/repo` in Telegram, and Leo clones the repo and starts a new Claude session you can connect to from claude.ai or the Claude app.
 
 ### Scheduled Tasks
 
 ```
-cron --> leo run <task> --> claude -p "<assembled prompt>" --> Agent
+cron scheduler --> leo run <task> --> claude -p "<prompt>" --> Agent
                                                                 |
-                          User (Telegram) <-- curl Bot API <----+
+                   User (Telegram) <-- curl Bot API <----------+
 ```
 
-System cron calls `leo run <task>`, which reads the config, assembles a prompt, and invokes `claude -p` in non-interactive mode. If the agent has something to report, it sends a Telegram message via `curl`.
+The in-process cron scheduler runs tasks on a schedule. Each task reads a prompt file, assembles arguments, and invokes `claude -p`. Results can be sent via Telegram or run silently.
 
 ---
 
