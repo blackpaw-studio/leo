@@ -2507,7 +2507,7 @@ bot.command("agent", async (ctx) => {
     });
     const data = await res.json();
     if (data.ok) {
-      await ctx.reply(`🤖 Agent spawned: ${data.data.name}\nOpen claude.ai/code to connect`);
+      await ctx.reply(`🤖 Agent spawned: ${data.data.name}\nConnect via Claude web or app`);
     } else {
       await ctx.reply(`⚠️ ${data.error}`);
     }
@@ -2709,7 +2709,7 @@ bot.on("message", async (ctx, next) => {
       });
       const data = await res.json();
       if (data.ok) {
-        await ctx.reply(`🤖 Agent spawned: ${data.data.name}\nOpen claude.ai/code to connect`);
+        await ctx.reply(`🤖 Agent spawned: ${data.data.name}\nConnect via Claude web or app`);
       } else {
         await ctx.reply(`⚠️ ${data.error}`);
       }
