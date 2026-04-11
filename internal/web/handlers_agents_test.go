@@ -390,7 +390,8 @@ func TestBuildTemplateArgsBasic(t *testing.T) {
 	assertContainsFlag(t, args, "--add-dir", "/tmp/workspace")
 	// Remote control should default to on
 	assertContains(t, args, "--remote-control")
-	assertContainsFlag(t, args, "--remote-control-session-name-prefix", "test-agent")
+	// Display name should be set
+	assertContainsFlag(t, args, "--name", "test-agent")
 }
 
 func TestBuildTemplateArgsInheritsDefaults(t *testing.T) {

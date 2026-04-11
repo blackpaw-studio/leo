@@ -379,14 +379,17 @@ func buildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 		args = append(args, "--add-dir", dir)
 	}
 
-	// Remote control (forced on for agents, using agent name as prefix)
+	// Remote control (forced on for agents)
 	rc := true
 	if tmpl.RemoteControl != nil {
 		rc = *tmpl.RemoteControl
 	}
 	if rc {
-		args = append(args, "--remote-control", "--remote-control-session-name-prefix", agentName)
+		args = append(args, "--remote-control")
 	}
+
+	// Set display name for the session
+	args = append(args, "--name", agentName)
 
 	// Permission mode
 	permMode := tmpl.PermissionMode
