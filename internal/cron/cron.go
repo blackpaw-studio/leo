@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,8 @@ func (s *Scheduler) Stop() {
 
 // Install loads all enabled tasks from config and schedules them.
 // It removes any previously scheduled entries first (full sync).
+// If individual tasks fail to schedule, the remaining tasks are still
+// added and a combined error is returned.
 func (s *Scheduler) Install(cfg *config.Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,14 +72,18 @@ func (s *Scheduler) Install(cfg *config.Config) error {
 		delete(s.tasks, name)
 	}
 
-	// Add enabled tasks
+	// Add enabled tasks, collecting errors instead of bailing on first failure
+	var errs []string
 	for name, task := range cfg.Tasks {
 		if !task.Enabled {
 			continue
 		}
 		if err := s.addLocked(name, task); err != nil {
-			return fmt.Errorf("scheduling task %q: %w", name, err)
+			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
 		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to schedule: %s", strings.Join(errs, "; "))
 	}
 	return nil
 }
