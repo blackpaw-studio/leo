@@ -334,6 +334,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 		"--model", cfg.TaskModel(task),
 		"--max-turns", strconv.Itoa(cfg.TaskMaxTurns(task)),
 		"--output-format", "stream-json",
+		"--verbose",
 	}
 
 	if sessionID != "" {

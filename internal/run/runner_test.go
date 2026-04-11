@@ -192,6 +192,9 @@ func TestBuildArgs(t *testing.T) {
 	if !strings.Contains(argsStr, "--output-format stream-json") {
 		t.Error("should use stream-json output format")
 	}
+	if !strings.Contains(argsStr, "--verbose") {
+		t.Error("should include --verbose for stream-json output")
+	}
 }
 
 func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
