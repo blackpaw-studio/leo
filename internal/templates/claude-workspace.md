@@ -34,10 +34,10 @@ For group/forum chats, you **must** pass the `thread_id` parameter to route mess
 ## What is Leo?
 
 Leo is the CLI that scaffolded this workspace and manages your lifecycle:
-- **`leo service`** starts your interactive Telegram session
-- **`leo run <task>`** executes a scheduled task (invoked by cron)
+- **`leo service start`** starts supervised processes (including your Telegram session)
+- **`leo service start --daemon`** installs as a persistent system service
+- **`leo run <task>`** executes a scheduled task
 - **`leo task`** manages task definitions in leo.yaml
-- **`leo cron`** installs/removes system crontab entries
 - **`leo validate`** checks config and prerequisites
 
 You are not Leo. Leo is the management layer; you are the agent it manages.
@@ -46,7 +46,7 @@ You are not Leo. Leo is the management layer; you are the agent it manages.
 
 ```
 {{.Workspace}}/
-├── leo.yaml           # Config (tasks, telegram, defaults)
+├── leo.yaml           # Config (tasks, telegram, defaults, templates)
 ├── CLAUDE.md          # This file
 ├── USER.md            # Who you work for
 ├── HEARTBEAT.md       # Heartbeat task checklist
@@ -68,24 +68,25 @@ Read these on demand when you need to perform specific operations:
 
 - `skills/managing-tasks.md` — Add, remove, enable, disable tasks; cron schedules
 - `skills/debugging-logs.md` — Log locations, reading output, common failures
-- `skills/daemon-management.md` — Chat start/stop/restart/status, launchd/systemd
+- `skills/daemon-management.md` — Service start/stop/restart/status, launchd/systemd
 - `skills/config-reference.md` — Full leo.yaml field reference
 - `skills/workspace-maintenance.md` — Daily logs, MCP config, workspace hygiene
+- `skills/agent-management.md` — Spawn and manage ephemeral coding agents
 
 ## Common Operations
 
 ### Check status
 ```bash
-leo service status              # Chat daemon running?
+leo service status              # Service running?
 leo service status --daemon     # OS service status
-leo task list                # Configured tasks
-leo cron list                # Installed cron entries
-leo validate                 # Config and prereq health check
+leo status                      # Overall status
+leo task list                   # Configured tasks
+leo validate                    # Config and prereq health check
 ```
 
 ### Read recent logs
 ```bash
-tail -50 {{.Workspace}}/state/chat.log
+tail -50 {{.Workspace}}/state/service.log
 tail -50 {{.Workspace}}/state/<task>.log
 ```
 
@@ -95,7 +96,6 @@ leo task add                 # Interactive task creation
 leo task enable <name>       # Enable a disabled task
 leo task disable <name>      # Disable without removing
 leo task remove <name>       # Remove from config
-leo cron install             # Sync crontab after changes
 ```
 
 ### Run a task manually
