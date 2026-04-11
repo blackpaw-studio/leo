@@ -8,7 +8,7 @@
   <a href="#install">Install</a> &middot;
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#features">Features</a> &middot;
-  <a href="docs/">Documentation</a>
+  <a href="https://blackpaw-studio.github.io/leo/">Documentation</a>
 </p>
 
 ---
@@ -98,7 +98,7 @@ web:
 | `/clear` | Clear conversation context |
 | `/compact` | Compact conversation context |
 
-The Telegram plugin also gives Claude tools for replies, reactions, message editing, scheduled messages, persistent memory, and more. See the [Telegram guide](docs/guides/telegram-commands.md).
+The Telegram plugin also gives Claude tools for replies, reactions, message editing, scheduled messages, persistent memory, and more. See the [Telegram guide](https://blackpaw-studio.github.io/leo/guides/telegram-commands/).
 
 ## CLI
 
@@ -119,15 +119,15 @@ The Telegram plugin also gives Claude tools for replies, reactions, message edit
 | `leo config edit` | Edit config interactively |
 | `leo update` | Self-update binary |
 
-See the [CLI reference](docs/cli/) for full details.
+See the [CLI reference](https://blackpaw-studio.github.io/leo/cli/) for full details.
 
 ## Documentation
 
-- [Getting Started](docs/getting-started/) &mdash; installation, prerequisites, first run
-- [Configuration](docs/configuration/) &mdash; full config reference and workspace structure
-- [CLI Reference](docs/cli/) &mdash; every command and flag
-- [Guides](docs/guides/) &mdash; Telegram setup, writing tasks, agents, scheduling, background mode
-- [Development](docs/development/) &mdash; contributing, architecture, releasing
+- [Getting Started](https://blackpaw-studio.github.io/leo/getting-started/) &mdash; installation, prerequisites, first run
+- [Configuration](https://blackpaw-studio.github.io/leo/configuration/) &mdash; full config reference and workspace structure
+- [CLI Reference](https://blackpaw-studio.github.io/leo/cli/) &mdash; every command and flag
+- [Guides](https://blackpaw-studio.github.io/leo/guides/) &mdash; Telegram setup, writing tasks, agents, scheduling, background mode
+- [Development](https://blackpaw-studio.github.io/leo/development/) &mdash; contributing, architecture, releasing
 
 ## Development
 

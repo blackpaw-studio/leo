@@ -1,8 +1,3 @@
----
-hide:
-  - navigation
----
-
 # Leo
 
 **A process supervisor and task scheduler for Claude Code**
