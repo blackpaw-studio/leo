@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -544,7 +545,9 @@ func (s *Server) handleAPITaskToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			log.Printf("scheduler reload failed: %v", reloadErr)
+		}
 	}
 
 	action := "enabled"

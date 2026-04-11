@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"html/template"
 	"net/http"
 	"os"
@@ -430,7 +431,9 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			log.Printf("scheduler reload failed: %v", reloadErr)
+		}
 	}
 
 	action := "enabled"
@@ -508,7 +511,10 @@ func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			s.renderFlash(w, "warning", fmt.Sprintf("Defaults saved but scheduler reload failed: %v", reloadErr))
+			return
+		}
 	}
 	s.restartNeeded = true
 	s.renderFlash(w, "success", "Defaults saved")
@@ -568,7 +574,10 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			s.renderFlash(w, "warning", fmt.Sprintf("Process %q saved but scheduler reload failed: %v", name, reloadErr))
+			return
+		}
 	}
 	s.restartNeeded = true
 	s.renderFlash(w, "success", fmt.Sprintf("Process %q saved", name))
@@ -634,7 +643,10 @@ func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			s.renderFlash(w, "warning", fmt.Sprintf("Task %q saved but scheduler reload failed: %v", name, reloadErr))
+			return
+		}
 	}
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q saved", name))
 }
@@ -732,7 +744,9 @@ func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.reloader != nil {
-			s.reloader.ReloadConfig() //nolint:errcheck
+			if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+				log.Printf("scheduler reload failed: %v", reloadErr)
+			}
 		}
 	}
 
@@ -1044,7 +1058,9 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			log.Printf("scheduler reload failed: %v", reloadErr)
+		}
 	}
 
 	s.restartNeeded = true
@@ -1083,7 +1099,9 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			log.Printf("scheduler reload failed: %v", reloadErr)
+		}
 	}
 
 	s.restartNeeded = true
@@ -1148,7 +1166,9 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			log.Printf("scheduler reload failed: %v", reloadErr)
+		}
 	}
 
 	data, err := s.buildDashboardData()
@@ -1184,7 +1204,9 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			log.Printf("scheduler reload failed: %v", reloadErr)
+		}
 	}
 
 	data, err := s.buildDashboardData()
@@ -1257,7 +1279,10 @@ func (s *Server) handleConfigTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			s.renderFlash(w, "warning", fmt.Sprintf("Template %q saved but scheduler reload failed: %v", name, reloadErr))
+			return
+		}
 	}
 	s.renderFlash(w, "success", fmt.Sprintf("Template %q saved", name))
 }
@@ -1317,7 +1342,9 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			log.Printf("scheduler reload failed: %v", reloadErr)
+		}
 	}
 
 	data, err := s.buildDashboardData()
@@ -1353,7 +1380,9 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
+		if reloadErr := s.reloader.ReloadConfig(); reloadErr != nil {
+			log.Printf("scheduler reload failed: %v", reloadErr)
+		}
 	}
 
 	data, err := s.buildDashboardData()
