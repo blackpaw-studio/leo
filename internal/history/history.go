@@ -10,34 +10,59 @@ import (
 
 const maxHistoryPerTask = 10
 
+// Exit reasons for task execution.
+const (
+	ReasonSuccess = "success"
+	ReasonFailure = "failure"
+	ReasonTimeout = "timeout"
+)
+
 // Entry records the result of a single task execution.
 type Entry struct {
 	Task     string    `json:"task"`
 	ExitCode int       `json:"exit_code"`
+	Reason   string    `json:"reason,omitempty"`
 	RunAt    time.Time `json:"run_at"`
 	LogFile  string    `json:"log_file,omitempty"`
 }
 
 // Store persists task execution history to a JSON file.
 type Store struct {
-	path string
+	path   string
+	logDir string
 }
 
 // NewStore creates a history store at <workspace>/state/task-history.json.
+// Log files recorded in history are stored as bare filenames inside
+// <workspace>/state/logs, which the store uses when pruning.
 func NewStore(workspace string) *Store {
 	return &Store{
-		path: filepath.Join(workspace, "state", "task-history.json"),
+		path:   filepath.Join(workspace, "state", "task-history.json"),
+		logDir: filepath.Join(workspace, "state", "logs"),
 	}
 }
 
+// LogPath resolves a history entry's LogFile to an absolute path.
+// Returns "" when the entry has no log file.
+func (s *Store) LogPath(e Entry) string {
+	if e.LogFile == "" {
+		return ""
+	}
+	if filepath.IsAbs(e.LogFile) {
+		return e.LogFile
+	}
+	return filepath.Join(s.logDir, e.LogFile)
+}
+
 // Record saves a task execution result, prepending to the list and trimming
-// to maxHistoryPerTask entries.
-func (s *Store) Record(task string, exitCode int, logFile string) error {
+// to maxHistoryPerTask entries. Old log files are deleted when entries are pruned.
+func (s *Store) Record(task string, exitCode int, reason string, logFile string) error {
 	entries := s.load()
 
 	entry := Entry{
 		Task:     task,
 		ExitCode: exitCode,
+		Reason:   reason,
 		RunAt:    time.Now(),
 		LogFile:  logFile,
 	}
@@ -45,6 +70,12 @@ func (s *Store) Record(task string, exitCode int, logFile string) error {
 	// Prepend new entry
 	list := append([]Entry{entry}, entries[task]...)
 	if len(list) > maxHistoryPerTask {
+		// Delete log files for pruned entries
+		for _, pruned := range list[maxHistoryPerTask:] {
+			if path := s.LogPath(pruned); path != "" {
+				os.Remove(path)
+			}
+		}
 		list = list[:maxHistoryPerTask]
 	}
 	entries[task] = list

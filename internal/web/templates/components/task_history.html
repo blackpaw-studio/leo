@@ -5,7 +5,7 @@
         <thead>
             <tr>
                 <th>Time</th>
-                <th>Exit Code</th>
+                <th>Result</th>
                 <th></th>
             </tr>
         </thead>
@@ -13,7 +13,7 @@
             {{range $i, $e := .Entries}}
             <tr>
                 <td>{{timeFormat $e.RunAt}}</td>
-                <td><span class="{{exitCodeClass $e.ExitCode}}">{{$e.ExitCode}}</span></td>
+                <td><span class="{{exitCodeClass $e.ExitCode}}">{{if eq $e.ExitCode 0}}ok{{else}}{{if $e.Reason}}{{$e.Reason}}{{else}}failure{{end}} (exit {{$e.ExitCode}}){{end}}</span></td>
                 <td>
                     {{if $e.LogFile}}
                     <button class="btn btn-sm log-toggle"

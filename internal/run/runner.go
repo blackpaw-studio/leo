@@ -129,6 +129,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	var lastOutput []byte
 	var lastLogContent string
 
+	var timedOut bool
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
 			fmt.Fprintf(os.Stderr, "retrying task %q (attempt %d/%d)\n", taskName, attempt, maxAttempts)
@@ -142,6 +143,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		output, execErr := executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
 		result := parseClaudeOutput(output)
+		timedOut = ctx.Err() == context.DeadlineExceeded
 
 		// If --resume failed with a stale session, retry without it.
 		if execErr != nil && sessionID != "" && isSessionError(result, output) {
@@ -187,11 +189,17 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 	// Record execution history
 	exitCode := 0
+	reason := history.ReasonSuccess
 	if lastErr != nil {
 		exitCode = 1
+		if timedOut {
+			reason = history.ReasonTimeout
+		} else {
+			reason = history.ReasonFailure
+		}
 	}
 	hist := history.NewStore(cfg.HomePath)
-	if histErr := hist.Record(taskName, exitCode, logFile); histErr != nil {
+	if histErr := hist.Record(taskName, exitCode, reason, logFile); histErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
 	}
 

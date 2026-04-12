@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ func newTaskCmd() *cobra.Command {
 		newTaskEnableCmd(),
 		newTaskDisableCmd(),
 		newTaskHistoryCmd(),
+		newTaskLogsCmd(),
 	)
 
 	return cmd
@@ -291,11 +293,7 @@ func newTaskHistoryCmd() *cobra.Command {
 				}
 				fmt.Printf("History for %q (last %d runs):\n\n", taskName, len(entries))
 				for _, e := range entries {
-					result := "ok"
-					if e.ExitCode != 0 {
-						result = fmt.Sprintf("FAIL (exit %d)", e.ExitCode)
-					}
-					fmt.Printf("  %s  %s\n", e.RunAt.Local().Format("2006-01-02 15:04:05"), result)
+					fmt.Printf("  %s  %s\n", e.RunAt.Local().Format("2006-01-02 15:04:05"), formatHistoryResult(e))
 				}
 				return nil
 			}
@@ -312,16 +310,89 @@ func newTaskHistoryCmd() *cobra.Command {
 					continue
 				}
 				last := entries[0]
-				result := "ok"
-				if last.ExitCode != 0 {
-					result = fmt.Sprintf("FAIL (exit %d)", last.ExitCode)
-				}
 				fmt.Printf("  %-20s %-5d %s %s\n", task, len(entries),
-					last.RunAt.Local().Format("Jan 02 15:04"), result)
+					last.RunAt.Local().Format("Jan 02 15:04"), formatHistoryResult(last))
 			}
 			return nil
 		},
 	}
+}
+
+func newTaskLogsCmd() *cobra.Command {
+	var tailLines int
+	cmd := &cobra.Command{
+		Use:               "logs <task-name>",
+		Short:             "Show the most recent log output for a task",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeTaskNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			taskName := args[0]
+			hist := history.NewStore(cfg.HomePath)
+			entry := hist.Get(taskName)
+			if entry == nil {
+				return fmt.Errorf("no history for task %q", taskName)
+			}
+			logPath := hist.LogPath(*entry)
+			if logPath == "" {
+				return fmt.Errorf("no log file recorded for latest run of %q", taskName)
+			}
+
+			f, err := os.Open(logPath)
+			if err != nil {
+				return fmt.Errorf("opening log: %w", err)
+			}
+			defer f.Close()
+
+			if tailLines <= 0 {
+				if _, err := io.Copy(cmd.OutOrStdout(), f); err != nil {
+					return fmt.Errorf("reading log: %w", err)
+				}
+				return nil
+			}
+
+			lines, err := readLastLines(f, tailLines)
+			if err != nil {
+				return fmt.Errorf("reading log tail: %w", err)
+			}
+			for _, line := range lines {
+				fmt.Fprintln(cmd.OutOrStdout(), line)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVarP(&tailLines, "tail", "n", 0, "Show only the last N lines (0 = show all)")
+	return cmd
+}
+
+// formatHistoryResult renders a history entry's outcome with its reason.
+func formatHistoryResult(e history.Entry) string {
+	if e.ExitCode == 0 {
+		return "ok"
+	}
+	reason := e.Reason
+	if reason == "" {
+		reason = "failure"
+	}
+	return fmt.Sprintf("FAIL (%s, exit %d)", reason, e.ExitCode)
+}
+
+// readLastLines reads the last n lines from r. For small log files it is
+// acceptable to load the whole file into memory.
+func readLastLines(r io.Reader, n int) ([]string, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(all) <= n {
+		return all, nil
+	}
+	return all[len(all)-n:], nil
 }
 
 func configPath() (string, error) {
