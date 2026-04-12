@@ -2,6 +2,7 @@ package history
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +13,7 @@ func TestRecordAndGet(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	if err := store.Record("heartbeat", 0, ""); err != nil {
+	if err := store.Record("heartbeat", 0, ReasonSuccess, ""); err != nil {
 		t.Fatalf("Record() error: %v", err)
 	}
 
@@ -35,10 +36,10 @@ func TestRecordKeepsHistory(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	if err := store.Record("task1", 0, ""); err != nil {
+	if err := store.Record("task1", 0, ReasonSuccess, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record("task1", 1, ""); err != nil {
+	if err := store.Record("task1", 1, ReasonFailure, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,7 +67,7 @@ func TestRecordTrimsToMax(t *testing.T) {
 	store := NewStore(dir)
 
 	for i := 0; i < 15; i++ {
-		if err := store.Record("task1", i, ""); err != nil {
+		if err := store.Record("task1", i, ReasonSuccess, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,10 +111,10 @@ func TestAll(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	if err := store.Record("task1", 0, ""); err != nil {
+	if err := store.Record("task1", 0, ReasonSuccess, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record("task2", 1, ""); err != nil {
+	if err := store.Record("task2", 1, ReasonFailure, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +171,7 @@ func TestMigrateOldFormat(t *testing.T) {
 	}
 
 	// Recording should work on top of migrated data
-	if err := store.Record("heartbeat", 1, ""); err != nil {
+	if err := store.Record("heartbeat", 1, ReasonFailure, ""); err != nil {
 		t.Fatal(err)
 	}
 	all = store.GetAll("heartbeat")
@@ -179,5 +180,66 @@ func TestMigrateOldFormat(t *testing.T) {
 	}
 	if all[0].ExitCode != 1 {
 		t.Errorf("all[0].ExitCode = %d, want 1", all[0].ExitCode)
+	}
+}
+
+func TestLogPathResolution(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	cases := []struct {
+		name    string
+		logFile string
+		wantRel bool
+		want    string
+	}{
+		{"empty", "", false, ""},
+		{"filename", "task-20260101-000000.000.log", true, "task-20260101-000000.000.log"},
+		{"absolute", "/var/log/already-absolute.log", false, "/var/log/already-absolute.log"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := store.LogPath(Entry{LogFile: tc.logFile})
+			if tc.wantRel {
+				want := filepath.Join(dir, "state", "logs", tc.want)
+				if got != want {
+					t.Errorf("LogPath(%q) = %q, want %q", tc.logFile, got, want)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("LogPath(%q) = %q, want %q", tc.logFile, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPruneRemovesLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	logDir := filepath.Join(dir, "state", "logs")
+	if err := os.MkdirAll(logDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create 11 entries with log files; the oldest should be pruned.
+	var oldestLog string
+	for i := 0; i < 11; i++ {
+		logName := fmt.Sprintf("task-%02d.log", i)
+		logPath := filepath.Join(logDir, logName)
+		if err := os.WriteFile(logPath, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			oldestLog = logPath
+		}
+		if err := store.Record("task1", 0, ReasonSuccess, logName); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := os.Stat(oldestLog); !os.IsNotExist(err) {
+		t.Errorf("expected oldest log file pruned, stat err = %v", err)
 	}
 }
