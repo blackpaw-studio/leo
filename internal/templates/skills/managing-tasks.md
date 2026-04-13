@@ -1,6 +1,6 @@
 # Managing Tasks
 
-Tasks are scheduled Claude invocations defined in `leo.yaml` and executed by system cron via `leo run <task>`.
+Tasks are scheduled Claude invocations defined in `leo.yaml` and executed by the Leo daemon's internal scheduler.
 
 ## Task Lifecycle
 
@@ -8,7 +8,7 @@ Tasks are scheduled Claude invocations defined in `leo.yaml` and executed by sys
 ```bash
 leo task list
 ```
-Shows all configured tasks with schedule, model, enabled status.
+Shows all configured tasks with schedule, model, enabled status, last run, and next run.
 
 ### Add a task
 ```bash
@@ -27,34 +27,34 @@ Removes the task from `leo.yaml`. Does not delete the prompt file.
 leo task enable <name>
 leo task disable <name>
 ```
-Disabled tasks stay in config but are skipped by `leo cron install`.
+Disabled tasks stay in config but are skipped by the scheduler.
 
-## Cron Management
+## Applying Config Changes
 
-Tasks run via system crontab. Leo manages a marked block in your crontab.
+**IMPORTANT:** After any edit to `leo.yaml` — whether via `leo task` commands or editing the file directly — the running daemon needs to reload the config to pick up the changes.
 
-### Install cron entries
+### Hot-reload (preferred)
 ```bash
-leo cron install
+leo service reload
 ```
-Writes crontab entries for all **enabled** tasks. Must re-run after adding, removing, enabling, or disabling tasks.
+Reloads `leo.yaml` in-place. The scheduler picks up new tasks, schedule changes, and enable/disable toggles **without restarting the daemon**. Supervised processes (including your assistant session) keep running uninterrupted.
 
-### Remove cron entries
-```bash
-leo cron remove
-```
-Strips all Leo-managed entries from crontab.
+Run this after:
+- Adding a new task (`leo task add` or editing `leo.yaml`)
+- Changing a task's schedule
+- Enabling or disabling a task
+- Editing `defaults:`, `telegram:`, or `processes:` blocks
 
-### View installed entries
+### Full restart (only when necessary)
 ```bash
-leo cron list
+leo service restart
 ```
+Stops the daemon and all supervised processes, then starts everything fresh. Use only when `reload` isn't enough — e.g., to restart a stuck assistant session or apply changes that the reload path doesn't cover.
 
-### Verify crontab directly
-```bash
-crontab -l
-```
-Leo entries are delimited by marker comments: `# === LEO:<agent> ===` / `# === END LEO:<agent> ===`
+### Gotcha: tasks that never fire
+If a task is configured but `leo task list` shows it with no "LAST RUN" and a correct "NEXT RUN", but it never actually runs — the most common cause is that the task was added **after** the daemon started and `leo service reload` was never called. Config on disk and live scheduler state diverge silently.
+
+Always run `leo service reload` after editing `leo.yaml`.
 
 ## Cron Schedule Syntax
 
@@ -78,12 +78,14 @@ Five-field format: `minute hour day-of-month month day-of-week`
 0 9,18 * * *    # 9 AM and 6 PM daily
 ```
 
+Leo uses a standard 5-field expression — compound expressions like `0 9 * * 1-5,0 10 * * 0,6` are **not** supported. Split differing schedules across multiple tasks or use a single expression that covers all firing times.
+
 ## Prompt Files
 
-Each task has a `prompt_file` (relative to workspace) containing the instructions for that run. Create prompt files in `reports/`:
+Each task has a `prompt_file` (relative to workspace) containing the instructions for that run. Create prompt files in `reports/` or `prompts/`:
 
 ```
-reports/
+prompts/
 ├── daily-briefing.md
 ├── weekly-review.md
 └── heartbeat.md
@@ -99,9 +101,21 @@ The prompt file content is assembled with:
 ```bash
 leo run <task>
 ```
-Executes the task immediately (same as cron would). Useful for testing.
+Executes the task immediately (same as the scheduler would). Useful for testing and for backfilling a missed run.
 
 ```bash
 leo run <task> --dry-run
 ```
 Shows the assembled prompt without executing. Good for verifying prompt assembly.
+
+## Legacy `leo cron` Commands
+
+`leo cron install` / `leo cron list` / `leo cron remove` are retained as aliases for backward compatibility:
+
+| Legacy command      | Modern equivalent   |
+|---------------------|---------------------|
+| `leo cron install`  | `leo service reload`|
+| `leo cron list`     | `leo task list`     |
+| `leo cron remove`   | unregister all scheduled tasks from the daemon |
+
+Prefer the modern commands in new workflows.
