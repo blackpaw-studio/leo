@@ -282,9 +282,10 @@ func setTaskEnabled(name string, enabled bool) error {
 
 func newTaskHistoryCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "history [task-name]",
-		Short: "Show task execution history",
-		Args:  cobra.MaximumNArgs(1),
+		Use:               "history [task-name]",
+		Short:             "Show task execution history",
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
