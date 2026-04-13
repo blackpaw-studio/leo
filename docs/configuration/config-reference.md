@@ -43,6 +43,35 @@ Settings inherited by all processes, tasks, and templates unless overridden.
 
 When enabled, the daemon serves a web dashboard with process monitoring, task management, agent dispatch, config editing, and cron preview.
 
+## `client`
+
+Remote-host definitions used by the `leo agent` CLI when `leo` is invoked as a client of a different machine. Empty on server configs.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `default_host` | string | No | — | Host name to use when `--host` and `LEO_HOST` are unset. |
+| `hosts` | map | No | `{}` | Named host definitions keyed by short name. |
+
+Each entry under `hosts` has:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ssh` | string | Yes | SSH target passed verbatim (e.g. `user@host`, or a `Host` alias from `~/.ssh/config`). |
+| `ssh_args` | list | No | Extra arguments inserted between the target and the remote command (e.g. `["-p", "2222"]`). |
+
+```yaml
+client:
+  default_host: prod
+  hosts:
+    prod:
+      ssh: evan@leo.example.com
+      ssh_args: ["-p", "2222"]
+    dev:
+      ssh: evan@devbox.local
+```
+
+Resolution order for the target host: `--host` flag → `LEO_HOST` env → `default_host` → first entry sorted by key → localhost (only when no hosts are configured). `--host localhost` is a hard override. See the [Remote CLI guide](../guides/remote-cli.md).
+
 ## `processes`
 
 Each process is a named entry under the `processes` map. Processes define long-running Claude sessions supervised by the daemon.

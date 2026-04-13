@@ -25,3 +25,20 @@ type TaskAddRequest struct {
 type TaskNameRequest struct {
 	Name string `json:"name"`
 }
+
+// AgentSpawnRequest is the body for POST /agents/spawn.
+type AgentSpawnRequest struct {
+	Template string `json:"template"`
+	Repo     string `json:"repo"`
+	Name     string `json:"name,omitempty"`
+}
+
+// AgentLogsResponse is the payload for GET /agents/{name}/logs.
+type AgentLogsResponse struct {
+	Output string `json:"output"`
+}
+
+// AgentSessionResponse is the payload for GET /agents/{name}/session.
+type AgentSessionResponse struct {
+	Session string `json:"session"`
+}

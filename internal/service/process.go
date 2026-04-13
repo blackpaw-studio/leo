@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/pluginsync"
@@ -370,9 +371,14 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		defer func() { _ = srv.Shutdown() }()
 		fmt.Fprintf(os.Stdout, "daemon IPC server listening on %s\n", sockPath)
 
+		// Build the agent.Manager shared by web, daemon, and CLI handlers.
+		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
+		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath)
+		srv.SetAgentManager(agentMgr)
+
 		// Start web UI if enabled
 		if cfg, err := config.Load(configPath); err == nil {
-			if err := srv.StartWeb(cfg, supervisor); err != nil {
+			if err := srv.StartWeb(cfg, agentMgr); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: web UI failed to start: %v\n", err)
 			}
 		}

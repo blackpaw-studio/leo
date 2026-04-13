@@ -42,15 +42,35 @@ You can also send just `/agent` to get an interactive template picker with inlin
 
 The web dashboard has an agent panel where you can spawn and stop agents. Navigate to your Leo dashboard and use the agent section.
 
+### From the CLI
+
+```bash
+leo agent spawn coding --repo blackpaw-studio/leo --name demo
+leo agent list
+leo agent attach demo      # full tmux attach to the Claude TUI
+leo agent logs demo -n 100
+leo agent stop demo
+```
+
+Run these locally on the server, or from a laptop against a remote host by adding a `client.hosts` section to `leo.yaml`. See the [Remote CLI guide](remote-cli.md) and the [`leo agent` reference](../cli/agent.md).
+
 ### From the JSON API
 
-The daemon exposes a JSON API used by the Telegram plugin:
+The daemon exposes both a Unix-socket API (used by the CLI) and an HTTP API on the web port (used by the Telegram plugin and web UI):
 
 ```
-POST /api/agent/spawn   {"template": "coding", "repo": "owner/repo"}
-POST /api/agent/stop    {"name": "leo-coding-owner-repo"}
-GET  /api/agent/list
+POST /agents/spawn        {"template": "coding", "repo": "owner/repo"}   (daemon socket)
+GET  /agents/list                                                         (daemon socket)
+POST /agents/{name}/stop                                                  (daemon socket)
+GET  /agents/{name}/logs?lines=N                                          (daemon socket)
+GET  /agents/{name}/session                                               (daemon socket)
+
+POST /api/agent/spawn     {"template": "coding", "repo": "owner/repo"}   (web HTTP)
+POST /api/agent/stop      {"name": "leo-coding-owner-repo"}              (web HTTP)
+GET  /api/agent/list                                                      (web HTTP)
 ```
+
+Both transports share the same `internal/agent` manager, so state stays consistent across CLI, web UI, and Telegram.
 
 ## Managing Agents
 
@@ -58,12 +78,18 @@ GET  /api/agent/list
 
 - **Telegram:** `/agents` — shows running agents with stop buttons
 - **Web UI:** agents panel on the dashboard
+- **CLI:** `leo agent list` (`--json` for scripting)
 - **API:** `GET /api/agent/list`
+
+### Attaching
+
+- **CLI:** `leo agent attach <name>` — full tmux attach, same TUI as running Claude locally. Works remotely via `ssh -t <host> tmux attach -t leo-<name>` when `client.hosts` is configured.
 
 ### Stopping
 
 - **Telegram:** tap the stop button next to an agent in `/agents`
 - **Web UI:** stop button in the agent panel
+- **CLI:** `leo agent stop <name>`
 - **API:** `POST /api/agent/stop {"name": "..."}`
 
 Stopping an agent kills its tmux session and removes it from the agent store.
