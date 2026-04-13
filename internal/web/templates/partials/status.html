@@ -7,9 +7,12 @@
         </div>
     </div>
     {{if .RestartNeeded}}
-    <div class="restart-banner">
-        <span>Process config has changed. Restart to apply.</span>
-        <button class="btn btn-sm" hx-post="/web/service/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart the Leo service? Running processes will be restarted.">Restart Now</button>
+    <div class="restart-banner" role="alert" aria-live="polite">
+        <span class="restart-banner-msg">
+            <span class="restart-banner-icon" aria-hidden="true">⚠</span>
+            <strong>Restart required</strong> &mdash; process config changed. Running processes will not pick up changes until you restart.
+        </span>
+        <button class="btn btn-sm restart-banner-btn" hx-post="/web/service/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart the Leo service? Running processes will be restarted.">Restart Now</button>
     </div>
     {{end}}
 </div>
