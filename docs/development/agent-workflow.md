@@ -35,7 +35,7 @@ Both are Claude Code sessions running `/loop`. They're independent — run them 
 
 ### 1. Builder (`/loop 10m /work-next`)
 
-Command: [`.claude/commands/work-next.md`](../../.claude/commands/work-next.md)
+Command: [`.claude/commands/work-next.md`](https://github.com/blackpaw-studio/leo/blob/main/.claude/commands/work-next.md)
 
 Does one iteration per tick:
 
@@ -47,7 +47,7 @@ Does one iteration per tick:
 
 ### 2. Reviewer (`/loop 5m /review-next`)
 
-Command: [`.claude/commands/review-next.md`](../../.claude/commands/review-next.md)
+Command: [`.claude/commands/review-next.md`](https://github.com/blackpaw-studio/leo/blob/main/.claude/commands/review-next.md)
 
 Does one iteration per tick against open PRs on cards in **In Review**:
 
