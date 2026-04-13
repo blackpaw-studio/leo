@@ -403,52 +403,28 @@ leo service stop --daemon
 
 ---
 
-## 8. Cron Management
+## 8. Scheduler Management
 
-### 8.1 Install cron entries
+Leo runs its own in-process scheduler inside the daemon. There is no system crontab to install. The `leo cron` command is a deprecated compatibility shim and is hidden from `leo --help`.
 
-```
-leo cron install
-```
-
-- [ ] **PASS** Prints `Cron entries installed.`
-
-### 8.2 List cron entries
+### 8.1 List scheduled tasks
 
 ```
-leo cron list
+leo task list
 ```
 
-- [ ] **PASS** Shows cron block with `LEO:` markers
-- [ ] **PASS** Each enabled task has a cron line with correct schedule
+- [ ] **PASS** Shows every task with its schedule and `NEXT RUN` column
+- [ ] **PASS** Only enabled tasks display a non-empty `NEXT RUN`
+
+### 8.2 Reload the scheduler after editing `leo.yaml`
 
 ```
-crontab -l | grep -A5 LEO
+leo service reload
 ```
 
-- [ ] **PASS** Entries present in actual system crontab
+- [ ] **PASS** Prints confirmation and the daemon picks up added/removed/modified tasks without a full restart
 
-### 8.3 Remove cron entries
-
-```
-leo cron remove
-```
-
-- [ ] **PASS** Prints `Cron entries removed.`
-
-```
-leo cron list
-```
-
-- [ ] **PASS** Prints `No leo cron entries found.`
-
-```
-crontab -l | grep LEO
-```
-
-- [ ] **PASS** No leo entries in crontab (grep returns no output)
-
-### 8.4 Cron fires automatically (optional, requires waiting)
+### 8.3 Tasks fire automatically (optional, requires waiting)
 
 1. Create a task scheduled for 1 minute from now:
    ```
@@ -456,21 +432,23 @@ crontab -l | grep LEO
    ```
    Use a schedule matching the next minute (e.g. `42 15 6 4 *` for 15:42 on April 6)
 
-2. Install cron entries:
+2. Reload the scheduler:
    ```
-   leo cron install
+   leo service reload
    ```
 
 3. Wait for the scheduled minute to pass
 
-4. Check the log:
+4. Inspect the run:
    ```
-   cat ~/.leo/state/<task-name>.log
+   leo task history <task-name>
+   leo task logs <task-name>
    ```
 
-- [ ] **PASS** Log file created with Claude output
+- [ ] **PASS** History shows a new entry with exit status
+- [ ] **PASS** Log contains Claude output
 
-**Cleanup:** `leo task remove <test-task-name> && leo cron install`
+**Cleanup:** `leo task remove <test-task-name>`
 
 ---
 
@@ -637,12 +615,12 @@ leo service start
 
 ---
 
-## 12. Onboard Command
+## 12. Setup Wizard
 
-### 12.1 Onboard detects existing installation
+### 12.1 Setup detects existing installation
 
 ```
-leo onboard
+leo setup
 ```
 
 - [ ] **PASS** Detects existing workspace and offers reconfigure option
@@ -658,11 +636,10 @@ After a full test run, return the system to a known-good state:
 
 1. Stop the daemon if running: `leo service stop --daemon`
 2. Stop background service if running: `leo service stop`
-3. Remove test cron entries: `leo cron remove`
-4. Remove any leftover test tasks: `leo task remove <name>`
-5. Re-install cron for production tasks: `leo cron install`
-6. (Optional) Re-install daemon: `leo service start --daemon`
-7. Verify final state: `leo validate`
+3. Remove any leftover test tasks: `leo task remove <name>`
+4. Reload the scheduler so the daemon forgets the removed tasks: `leo service reload`
+5. (Optional) Re-install daemon: `leo service start --daemon`
+6. Verify final state: `leo validate`
 
 ---
 
@@ -677,12 +654,12 @@ After a full test run, return the system to a known-good state:
 | 5. Task Execution | 3 | | | |
 | 6. Chat Lifecycle | 6 | | | |
 | 7. Daemon IPC | 5 | | | |
-| 8. Cron Management | 4 | | | |
+| 8. Scheduler Management | 3 | | | |
 | 9. Telegram Integration | 5 | | | |
 | 10. Update | 3 | | | |
 | 11. Edge Cases | 6 | | | |
-| 12. Onboard | 1 | | | |
-| **Total** | **48** | | | |
+| 12. Setup Wizard | 1 | | | |
+| **Total** | **47** | | | |
 
 **Date:** _______________
 **Leo version:** _______________

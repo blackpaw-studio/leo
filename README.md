@@ -105,17 +105,15 @@ The Telegram plugin also gives Claude tools for replies, reactions, message edit
 | Command | Description |
 |---|---|
 | `leo setup` | Interactive setup wizard |
-| `leo service start` | Start supervised processes |
-| `leo service stop` | Stop service |
-| `leo service restart` | Restart service |
-| `leo service logs` | Tail service logs |
+| `leo service start` / `stop` / `restart` / `logs` | Manage the supervisor |
+| `leo process list` / `add` / `remove` / `enable` / `disable` | Manage supervised processes |
+| `leo task list` / `add` / `remove` / `enable` / `disable` | Manage scheduled tasks |
+| `leo task history` / `logs` | Inspect task runs and log output |
+| `leo template list` / `show` / `remove` | Inspect and remove agent templates |
 | `leo run <task>` | Run a task once |
-| `leo task list` | List tasks |
-| `leo task add` | Add a task interactively |
-| `leo process list` | Show process states |
-| `leo status` | Overall status |
-| `leo validate` | Check config and prerequisites |
-| `leo config show` | Display effective config |
+| `leo status` | Overall status (service, processes, tasks, templates, web UI) |
+| `leo validate` | Check config, prerequisites, and workspace health |
+| `leo config show` | Display effective config (supports `--raw`, `--json`) |
 | `leo config edit` | Edit config interactively |
 | `leo update` | Self-update binary |
 

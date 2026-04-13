@@ -30,8 +30,7 @@ The interactive wizard walks you through:
 2. **Connecting Telegram** -- paste your bot token, then send a message to auto-detect your chat ID
 3. **Configuring MCP servers** -- optional integrations (calendar, email, etc.)
 4. **Adding scheduled tasks** -- recurring jobs like daily briefings
-5. **Installing cron entries** -- writes tasks to your system crontab
-6. **Sending a test message** -- verifies everything works end-to-end
+5. **Sending a test message** -- verifies everything works end-to-end
 
 !!! tip "Don't have a Telegram bot yet?"
     The wizard will prompt you to create one. See the [Telegram Setup](../guides/telegram-setup.md) guide for a detailed walkthrough of the BotFather process.
@@ -59,15 +58,15 @@ leo run <task-name>
 
 If the agent has something to report, you'll receive a Telegram message. If there's nothing noteworthy, it exits silently.
 
-## 5. Verify Cron
+## 5. Verify Your Schedule
 
-Check that your scheduled tasks are installed:
+Check that your scheduled tasks are loaded and see when each will fire next:
 
 ```bash
-leo cron list
+leo task list
 ```
 
-This shows the cron entries Leo manages in your system crontab.
+When the daemon is running, the `NEXT RUN` column shows the upcoming fire time for each task. Leo runs its own in-process scheduler — there is no system crontab to install.
 
 ---
 
