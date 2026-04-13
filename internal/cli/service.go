@@ -291,6 +291,13 @@ func newServiceStartCmd() *cobra.Command {
 				return err
 			}
 
+			// Surface non-fatal config warnings before starting so
+			// misconfigurations fail loudly instead of silently at first
+			// task/process invocation.
+			for _, msg := range startupWarnings(cfg) {
+				warn.Printf("  %s\n", msg)
+			}
+
 			sc, err := buildServiceConfig(cfg)
 			if err != nil {
 				return err
