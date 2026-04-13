@@ -391,6 +391,24 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		}
 	}
 
+	// Start a single background goroutine that periodically re-syncs the
+	// forked Telegram plugin for all telegram-enabled processes. Claude
+	// restores the official plugin during startup and periodically, so we
+	// must continuously re-apply our fork to keep /agent, /agents, /stop.
+	// Centralizing this avoids N concurrent goroutines (one per process)
+	// racing to write the same plugin files — and avoids leaking a new
+	// goroutine on every process restart.
+	anyTelegram := false
+	for _, proc := range processes {
+		if proc.HasTelegram {
+			anyTelegram = true
+			break
+		}
+	}
+	if anyTelegram {
+		go runPluginSyncLoop(ctx)
+	}
+
 	var wg sync.WaitGroup
 	for _, proc := range processes {
 		wg.Add(1)
@@ -403,6 +421,25 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	fmt.Fprintf(os.Stdout, "supervising %d process(es)\n", len(processes))
 	wg.Wait()
 	return nil
+}
+
+// pluginSyncInterval is how often the centralized plugin sync loop re-applies
+// the forked Telegram plugin. Exposed as a var so tests can tune it.
+var pluginSyncInterval = 5 * time.Second
+
+// runPluginSyncLoop re-applies the forked Telegram plugin on a fixed cadence
+// until ctx is cancelled. Intended to be started exactly once per supervisor.
+func runPluginSyncLoop(ctx context.Context) {
+	ticker := time.NewTicker(pluginSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = pluginsync.SyncTelegramPlugin()
+		}
+	}
 }
 
 // superviseProcess runs a single process in a tmux session with restart loop.
@@ -420,21 +457,12 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			cleanupOrphanedPlugins()
 		}
 
-		// Sync plugin before launch and keep re-syncing in the background.
-		// Claude restores the official plugin during startup and periodically,
-		// so we must continuously re-apply our fork to keep /agent, /agents, /stop.
+		// Sync plugin before launch. A single supervisor-level goroutine
+		// (started in RunSupervised) handles the periodic re-sync for all
+		// telegram-enabled processes — avoid spawning a new goroutine on
+		// every restart, which would leak on restart loops.
 		if spec.HasTelegram {
 			_ = pluginsync.SyncTelegramPlugin()
-			go func() {
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(5 * time.Second):
-						_ = pluginsync.SyncTelegramPlugin()
-					}
-				}
-			}()
 		}
 
 		sv.setState(spec.Name, "running")
