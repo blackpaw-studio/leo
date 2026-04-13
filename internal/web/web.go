@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -40,20 +41,14 @@ type ConfigReloader interface {
 	ReloadConfig() error
 }
 
-// AgentSpawnRequest is the web-layer view of an agent spawn request.
-type AgentSpawnRequest struct {
-	Name       string
-	ClaudeArgs []string
-	WorkDir    string
-	Env        map[string]string
-	WebPort    string
-}
-
-// AgentManager can create and destroy ephemeral agents.
-type AgentManager interface {
-	SpawnAgent(spec AgentSpawnRequest) error
-	StopAgent(name string) error
-	EphemeralAgents() map[string]ProcessStateInfo
+// AgentService owns the ephemeral-agent lifecycle. It is implemented by
+// *agent.Manager; web handlers delegate to it instead of driving the supervisor
+// directly, so the same code path backs the web UI, Telegram, the daemon socket,
+// and the CLI. A nil AgentService disables agent UI features.
+type AgentService interface {
+	Spawn(spec agent.SpawnSpec) (agent.Record, error)
+	Stop(name string) error
+	List() []agent.Record
 }
 
 // Server serves the Leo web UI over HTTP.
@@ -62,7 +57,7 @@ type Server struct {
 	processes     ProcessStateProvider
 	scheduler     SchedulerProvider
 	reloader      ConfigReloader
-	agentMgr      AgentManager
+	agentSvc      AgentService
 	leoPath       string
 	templates     *template.Template
 	httpServer    *http.Server
@@ -74,8 +69,8 @@ type Server struct {
 	execCommand func(name string, args ...string) *exec.Cmd
 }
 
-// New creates a new web UI server. agentMgr may be nil if agent spawning is not available.
-func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader, agentMgr AgentManager) *Server {
+// New creates a new web UI server. agentSvc may be nil if agent spawning is not available.
+func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader, agentSvc AgentService) *Server {
 	leoPath, err := exec.LookPath("leo")
 	if err != nil {
 		leoPath = "leo"
@@ -86,7 +81,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		processes:   processes,
 		scheduler:   scheduler,
 		reloader:    reloader,
-		agentMgr:    agentMgr,
+		agentSvc:    agentSvc,
 		leoPath:     leoPath,
 		execCommand: exec.Command,
 	}
