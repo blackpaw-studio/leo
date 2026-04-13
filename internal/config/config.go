@@ -45,12 +45,26 @@ type Config struct {
 	Telegram  TelegramConfig            `yaml:"telegram"`
 	Defaults  DefaultsConfig            `yaml:"defaults"`
 	Web       WebConfig                 `yaml:"web,omitempty"`
+	Client    ClientConfig              `yaml:"client,omitempty"`
 	Processes map[string]ProcessConfig  `yaml:"processes"`
 	Tasks     map[string]TaskConfig     `yaml:"tasks"`
 	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
+}
+
+// ClientConfig holds remote-host definitions used when leo is invoked as a
+// client to manage agents on a different machine. Empty on servers.
+type ClientConfig struct {
+	DefaultHost string                `yaml:"default_host,omitempty"`
+	Hosts       map[string]HostConfig `yaml:"hosts,omitempty"`
+}
+
+// HostConfig describes a remote leo server reachable over SSH.
+type HostConfig struct {
+	SSH     string   `yaml:"ssh"`                // e.g. "evan@leo.example.com"
+	SSHArgs []string `yaml:"ssh_args,omitempty"` // extra args passed to ssh (e.g. ["-p", "2222"])
 }
 
 type WebConfig struct {
