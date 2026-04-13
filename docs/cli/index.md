@@ -12,6 +12,7 @@ Leo provides commands for setup, process management, task scheduling, template m
 | [`leo task`](task.md) | Manage scheduled tasks (list, add, remove, enable, disable, history, logs) |
 | [`leo template`](template.md) | Inspect and remove agent templates |
 | [`leo agent`](agent.md) | Spawn and control ephemeral agents (local or via SSH) |
+| [`leo attach <name>`](#leo-attach) | Attach to a supervised process or running agent |
 | [`leo run <task>`](run.md) | Run a scheduled task once |
 | [`leo status`](#leo-status) | Show overall status (service, processes, tasks, templates, web UI) |
 | [`leo validate`](#leo-validate) | Check config, prerequisites, and workspace health |
@@ -72,3 +73,16 @@ Download the latest Leo binary from GitHub releases and refresh workspace templa
 ## leo completion
 
 Generate shell completion scripts for bash, zsh, or fish. Task, process, and template names support tab-completion across the CLI once completions are installed.
+
+## leo attach
+
+Shortcut for `leo process attach` or `leo agent attach`. Given a single name, Leo resolves against both namespaces:
+
+- If only a configured process matches, Leo attaches to its tmux session.
+- If only a running agent matches, Leo attaches to the agent's tmux session.
+- If both match, Leo refuses to guess and asks you to use the explicit subcommand.
+- If neither matches, Leo returns an error.
+
+When `--host` targets a remote, Leo delegates the whole resolution to the server by shelling `ssh -t <host> leo attach <name>` — the client does not need to know the remote's process list.
+
+See [`leo process attach`](process.md#leo-process-attach-name) and [`leo agent attach`](agent.md#leo-agent-attach-name) for the explicit forms.

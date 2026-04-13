@@ -68,6 +68,24 @@ leo agent stop leo-demo
 
 Every non-attach subcommand runs `ssh <host> leo agent <subcommand>` under the hood. Attach runs `ssh -t <host> tmux attach -t leo-<name>` so terminal resizing and scrollback work normally.
 
+## Attaching to supervised processes
+
+Configured processes (the ones managed by `leo service` on the server) expose the same attach and logs commands:
+
+```bash
+leo process attach primary        # ssh -t <host> tmux attach -t leo-primary
+leo process logs primary -n 100
+leo process logs primary --follow
+```
+
+And `leo attach <name>` resolves against both processes and agents — handy when you don't want to remember which namespace a name lives in:
+
+```bash
+leo attach primary     # process? agent? both? Leo figures it out.
+```
+
+When a name exists in both namespaces, Leo errors rather than guessing and points you at the explicit `leo process attach` / `leo agent attach` forms. For remote hosts the resolution is deferred to the server so the client never needs to know the remote's process list.
+
 ## Overriding the target host
 
 Precedence when resolving which host to talk to:

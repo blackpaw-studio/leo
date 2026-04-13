@@ -5,14 +5,18 @@ Manage supervised processes.
 ## Usage
 
 ```bash
-leo process list                 # list configured processes and their runtime state
-leo process add <name>           # add a new process (flags or interactive)
-leo process remove <name>        # remove a process from the config
-leo process enable <name>        # enable a disabled process
-leo process disable <name>       # disable a process without removing it
+leo process list                          # list configured processes and their runtime state
+leo process add <name>                    # add a new process (flags or interactive)
+leo process remove <name>                 # remove a process from the config
+leo process enable <name>                 # enable a disabled process
+leo process disable <name>                # disable a process without removing it
+leo process attach <name>                 # attach to the process's tmux session
+leo process logs <name> [-n LINES] [-f]   # tail the process's pane output
 ```
 
-Process names support shell tab-completion for `remove`, `enable`, and `disable`.
+Process names support shell tab-completion for `remove`, `enable`, `disable`, `attach`, and `logs`.
+
+Both `attach` and `logs` accept `--host NAME` to target a remote leo server via SSH — see the [Remote CLI guide](../guides/remote-cli.md) for host configuration.
 
 ## Subcommands
 
@@ -58,7 +62,24 @@ Removes the named process from the config. Reminds you to restart the service if
 
 Toggles the process `enabled` flag. Disabled processes are skipped by `leo service start`. If the daemon is already running you'll need to restart it for the change to apply.
 
+### `leo process attach <name>`
+
+Attach to the process's tmux session. Locally, Leo replaces the CLI with `tmux attach -t leo-<name>` via `syscall.Exec` so the TUI owns the TTY cleanly. Remotely, Leo runs `ssh -t <host> tmux attach -t leo-<name>` (using the host's configured `tmux_path`).
+
+Detach with the normal tmux prefix + `d` (default: `C-b d`). The process keeps running under the supervisor.
+
+### `leo process logs <name>`
+
+Capture the tmux pane for the named process.
+
+- `-n/--lines N` — tail length (default 200)
+- `-f/--follow` — stream via `tail -f` on a temp log file fed by `tmux pipe-pane`. Ctrl-C to exit.
+
+Both modes honor `--host` and the host's `tmux_path` override when running against a remote.
+
 ## See Also
 
 - [`leo service`](service.md) — start/stop/restart supervised processes
+- [`leo attach`](index.md#leo-attach) — shortcut that dispatches to `process attach` or `agent attach`
+- [Remote CLI guide](../guides/remote-cli.md) — host setup and SSH walkthrough
 - [Config Reference](../configuration/config-reference.md#processes) — full process field specification
