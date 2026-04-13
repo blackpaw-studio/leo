@@ -98,6 +98,10 @@ func runStatus() error {
 	}
 	info.Printf("Tasks:   %d/%d enabled\n", enabledTasks, len(cfg.Tasks))
 
+	if n := len(cfg.Templates); n > 0 {
+		info.Printf("Templates: %d\n", n)
+	}
+
 	// Next scheduled run (from daemon if available)
 	if daemon.IsRunning(cfg.HomePath) {
 		resp, err := daemon.Send(cfg.HomePath, "GET", "/cron/list", nil)

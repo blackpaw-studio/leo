@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,11 +25,30 @@ func newConfigCmd() *cobra.Command {
 
 func newConfigShowCmd() *cobra.Command {
 	var raw bool
+	var asJSON bool
 
 	cmd := &cobra.Command{
 		Use:   "show",
 		Short: "Display effective config with defaults applied",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if raw && asJSON {
+				return fmt.Errorf("--raw and --json are mutually exclusive")
+			}
+			if asJSON {
+				cfg, err := loadConfig()
+				if err != nil {
+					return err
+				}
+				if cfg.Defaults.Model == "" {
+					cfg.Defaults.Model = "sonnet"
+				}
+				if cfg.Defaults.MaxTurns == 0 {
+					cfg.Defaults.MaxTurns = 15
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(cfg)
+			}
 			if raw {
 				// Show raw file contents
 				path := cfgFile
@@ -77,6 +97,7 @@ func newConfigShowCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&raw, "raw", false, "show raw file contents without applying defaults")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON (suitable for scripting); defaults are applied")
 
 	return cmd
 }
