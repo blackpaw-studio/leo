@@ -203,6 +203,17 @@ type TemplateConfig struct {
 	PermissionMode     string            `yaml:"permission_mode,omitempty"`
 }
 
+// IsClientOnly reports whether the config is a client-only install: one
+// that defines remote hosts but no local processes, tasks, or templates.
+// Used to skip workspace/daemon-related operations that don't apply to
+// machines that only dispatch commands to remote leo servers.
+func (c *Config) IsClientOnly() bool {
+	return len(c.Client.Hosts) > 0 &&
+		len(c.Processes) == 0 &&
+		len(c.Tasks) == 0 &&
+		len(c.Templates) == 0
+}
+
 // DefaultWorkspace returns the default workspace path (HomePath/workspace).
 func (c *Config) DefaultWorkspace() string {
 	if c.HomePath == "" {

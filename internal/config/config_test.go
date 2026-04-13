@@ -327,6 +327,59 @@ func TestLoadConfig(t *testing.T) {
 	}
 }
 
+func TestIsClientOnly(t *testing.T) {
+	hosts := map[string]HostConfig{"alpha": {SSH: "user@host"}}
+
+	tests := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{
+			name: "client hosts only",
+			cfg:  Config{Client: ClientConfig{Hosts: hosts}},
+			want: true,
+		},
+		{
+			name: "no client hosts",
+			cfg:  Config{},
+			want: false,
+		},
+		{
+			name: "hosts plus local process",
+			cfg: Config{
+				Client:    ClientConfig{Hosts: hosts},
+				Processes: map[string]ProcessConfig{"main": {}},
+			},
+			want: false,
+		},
+		{
+			name: "hosts plus local task",
+			cfg: Config{
+				Client: ClientConfig{Hosts: hosts},
+				Tasks:  map[string]TaskConfig{"daily": {}},
+			},
+			want: false,
+		},
+		{
+			name: "hosts plus template",
+			cfg: Config{
+				Client:    ClientConfig{Hosts: hosts},
+				Templates: map[string]TemplateConfig{"scratch": {}},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.IsClientOnly(); got != tc.want {
+				t.Errorf("IsClientOnly() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDefaultWorkspace(t *testing.T) {
 	cfg := &Config{HomePath: "/home/user/.leo"}
 	want := "/home/user/.leo/workspace"

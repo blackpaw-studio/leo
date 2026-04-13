@@ -15,6 +15,10 @@ import (
 func RefreshWorkspace(workspace string) ([]string, error) {
 	var written []string
 
+	if err := os.MkdirAll(workspace, 0750); err != nil {
+		return written, fmt.Errorf("creating workspace directory: %w", err)
+	}
+
 	// Always overwrite CLAUDE.md
 	claudeContent, err := templates.RenderClaudeWorkspace(templates.AgentData{
 		Workspace: workspace,
