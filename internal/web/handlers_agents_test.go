@@ -68,7 +68,7 @@ func (m *mockAgentService) Spawn(spec agent.SpawnSpec) (agent.Record, error) {
 	name := fmt.Sprintf("leo-%s-%s", spec.Template, spec.Repo)
 	for _, r := range m.records {
 		if r.Name == name {
-			name = name + "-2"
+			name += "-2"
 			break
 		}
 	}

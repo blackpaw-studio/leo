@@ -18,10 +18,10 @@ import (
 
 // Testability seam — overridden in tests.
 var (
-	agentExecCommand = exec.Command
-	agentSyscallExec = syscall.Exec
-	agentStderr   io.Writer = os.Stderr
-	agentStdout   io.Writer = os.Stdout
+	agentExecCommand           = exec.Command
+	agentSyscallExec           = syscall.Exec
+	agentStderr      io.Writer = os.Stderr
+	agentStdout      io.Writer = os.Stdout
 )
 
 func newAgentCmd() *cobra.Command {
@@ -310,7 +310,9 @@ func newAgentLogsCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("fetching logs: %w", err)
 			}
-			fmt.Fprint(agentStdout, output)
+			if _, err := fmt.Fprint(agentStdout, output); err != nil {
+				return fmt.Errorf("writing logs: %w", err)
+			}
 			if !strings.HasSuffix(output, "\n") {
 				fmt.Fprintln(agentStdout)
 			}

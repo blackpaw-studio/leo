@@ -178,7 +178,7 @@ func TestAgentLogsHandler(t *testing.T) {
 	var env Response
 	json.NewDecoder(resp.Body).Decode(&env) //nolint:errcheck
 	var out AgentLogsResponse
-	json.Unmarshal(env.Data, &out)          //nolint:errcheck
+	json.Unmarshal(env.Data, &out) //nolint:errcheck
 	if out.Output != "hello logs" {
 		t.Errorf("output = %q", out.Output)
 	}
@@ -199,7 +199,7 @@ func TestAgentSessionHandler(t *testing.T) {
 	var env Response
 	json.NewDecoder(resp.Body).Decode(&env) //nolint:errcheck
 	var out AgentSessionResponse
-	json.Unmarshal(env.Data, &out)          //nolint:errcheck
+	json.Unmarshal(env.Data, &out) //nolint:errcheck
 	if out.Session != "leo-foo" {
 		t.Errorf("session = %q", out.Session)
 	}
