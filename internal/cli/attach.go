@@ -9,6 +9,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Testability seam — tests override this to simulate the daemon's view of
+// running agents without spinning up a real socket.
+var lookupAgentSession = daemon.AgentSession
+
 // newAttachCmd registers a top-level `leo attach <name>` shortcut that
 // disambiguates between configured processes and running agents. When the name
 // exists in both namespaces, Leo refuses to guess — the user must use the
@@ -42,22 +46,18 @@ client does not need to know the remote's process list.`,
 			_, isProcess := cfg.Processes[name]
 			// AgentSession is the authoritative presence check: the daemon only
 			// returns a session for agents the agentstore knows about.
-			isAgent := false
-			if session, err := daemon.AgentSession(cfg.HomePath, name); err == nil && session != "" {
-				isAgent = true
+			var agentSession string
+			if session, err := lookupAgentSession(cfg.HomePath, name); err == nil && session != "" {
+				agentSession = session
 			}
 
 			switch {
-			case isProcess && isAgent:
+			case isProcess && agentSession != "":
 				return fmt.Errorf("%q is both a process and an agent — use 'leo process attach %s' or 'leo agent attach %s'", name, name, name)
 			case isProcess:
 				return attachTmuxSession(res, processSessionName(name))
-			case isAgent:
-				session, err := daemon.AgentSession(cfg.HomePath, name)
-				if err != nil {
-					return fmt.Errorf("looking up agent session: %w", err)
-				}
-				return attachTmuxSession(res, session)
+			case agentSession != "":
+				return attachTmuxSession(res, agentSession)
 			default:
 				return fmt.Errorf("no process or agent named %q", name)
 			}
