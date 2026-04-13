@@ -21,7 +21,7 @@ claude auth
 See the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code) for full setup instructions.
 
 !!! warning "Authentication required"
-    Leo will not work if `claude` is not authenticated. The setup wizard checks for this automatically via `leo onboard`.
+    Leo will not work if `claude` is not authenticated. `leo setup` and `leo validate` both check for this automatically.
 
 ## curl
 
@@ -45,8 +45,8 @@ See the [Telegram Setup](../guides/telegram-setup.md) guide for a detailed walkt
 
 | Platform | Scheduled Tasks | Interactive Chat | Daemon Mode |
 |----------|----------------|-----------------|-------------|
-| macOS | crontab | Yes | launchd |
-| Linux | crontab | Yes | systemd (user) |
+| macOS | in-process scheduler | Yes | launchd |
+| Linux | in-process scheduler | Yes | systemd (user) |
 
 ## Optional: MCP Servers
 

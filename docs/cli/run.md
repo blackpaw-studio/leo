@@ -10,7 +10,7 @@ leo run <task>
 
 ## Description
 
-`leo run` is the entry point for scheduled task execution. It reads the config, finds the named task, assembles a prompt, and invokes `claude -p` in non-interactive mode. This is what your cron entries call.
+`leo run` is the entry point for scheduled task execution. It reads the config, finds the named task, assembles a prompt, and invokes `claude -p` in non-interactive mode. This is the same code path the daemon's in-process scheduler uses when a task fires.
 
 You can also run it manually to test a task:
 
@@ -49,4 +49,4 @@ The effective model and max turns are resolved via the [override cascade](../con
 
 - [Writing Tasks](../guides/writing-tasks.md) — how to create custom task prompts
 - [Scheduling](../guides/scheduling.md) — cron expressions and timezone handling
-- [`leo cron`](cron.md) — installing tasks to the system crontab
+- [`leo task`](task.md) — listing, adding, and inspecting scheduled tasks

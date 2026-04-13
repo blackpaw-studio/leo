@@ -182,7 +182,7 @@ tasks:
 - **Set appropriate max_turns** -- simple checks need fewer turns than complex analysis
 - **Choose the right model** -- use `sonnet` for routine tasks, `opus` for tasks requiring deeper reasoning
 - **Include output format guidance** -- tell the assistant how to format its Telegram message
-- **Test manually first** -- run `leo run <task>` before installing to cron
+- **Test manually first** -- run `leo run <task>` before relying on the schedule
 
 ## Creating a New Task
 
@@ -193,14 +193,11 @@ vim ~/.leo/workspace/reports/my-task.md
 # 2. Add the task interactively
 leo task add
 
-# 3. Install to cron
-leo cron install
-
-# 4. Verify
-leo cron list
+# 3. Verify it's loaded
+leo task list
 ```
 
-Or edit `leo.yaml` directly and run `leo cron install`.
+Or edit `leo.yaml` directly and run `leo service reload` to pick up the changes in the running daemon.
 
 ## See Also
 

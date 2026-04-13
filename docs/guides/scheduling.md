@@ -1,20 +1,22 @@
 # Scheduling
 
-Leo uses system cron to run tasks on a schedule. This guide covers cron expressions, timezone handling, silent mode, and monitoring.
+Leo runs scheduled tasks from an in-process scheduler inside the daemon. This guide covers cron expressions, timezone handling, silent mode, and monitoring.
 
 ## How Scheduling Works
 
-Leo is not a daemon for scheduled tasks. Instead:
+There is no system crontab. The `leo` daemon embeds a cron scheduler (via [robfig/cron](https://github.com/robfig/cron)) that reads your task definitions directly from `leo.yaml`:
 
 1. You define tasks with cron expressions in `leo.yaml`
-2. `leo cron install` writes entries to your system crontab
-3. At the scheduled time, cron calls `leo run <task>`
+2. `leo service start` starts the daemon; the scheduler reads enabled tasks
+3. At each fire time, the scheduler invokes the task runner in-process (equivalent to `leo run <task>`)
 4. Leo assembles a prompt and invokes `claude -p` in non-interactive mode
 5. The agent does its work and optionally sends a Telegram message
 
 ```
-cron --> leo run <task> --> claude -p "<prompt>" --> Agent --> Telegram (optional)
+daemon scheduler --> leo run <task> --> claude -p "<prompt>" --> Agent --> Telegram (optional)
 ```
+
+Config changes (adds, edits, toggles) are picked up automatically by the web UI and the `leo task` commands — they reload the scheduler over the daemon socket without a restart. When you edit `leo.yaml` by hand, run `leo service reload` (or restart the daemon) so the scheduler sees the change.
 
 ## Cron Expressions
 
@@ -43,7 +45,7 @@ Leo uses standard 5-field cron syntax:
 
 ## Timezones
 
-Each task can specify an IANA timezone:
+Each task can specify an IANA timezone. The in-process scheduler honors it directly — no system-cron workarounds required:
 
 ```yaml
 tasks:
@@ -52,8 +54,7 @@ tasks:
     timezone: America/New_York
 ```
 
-!!! note
-    The `timezone` field is used by Leo to annotate the cron entry. System cron itself typically runs in the system timezone. If your system timezone differs from the task timezone, you may need to adjust the schedule accordingly or use a cron implementation that supports `CRON_TZ`.
+Without a `timezone`, the schedule is evaluated against the daemon's local time.
 
 ## Silent Mode
 
@@ -74,19 +75,22 @@ tasks:
 
 ## Monitoring
 
-### Check installed entries
+### Check the schedule
 
 ```bash
-leo cron list
+leo task list       # shows each task's next scheduled run (when daemon is running)
+leo status          # also shows the single earliest upcoming run
 ```
 
-### View task logs
-
-Each task logs its output to `~/.leo/state/<task>.log`:
+### View run history
 
 ```bash
-tail -f ~/.leo/state/checks.log
+leo task history               # one-row summary per task
+leo task history <task-name>   # full history for one task
+leo task logs <task-name>      # tail the most recent run's log
 ```
+
+Run logs live under `~/.leo/state/logs/`.
 
 ### Manual test run
 
@@ -96,17 +100,25 @@ Run any task manually to verify it works:
 leo run checks
 ```
 
+## Applying Config Changes
+
+- **Edits via CLI** (`leo task add/remove/enable/disable`) reload the scheduler automatically when the daemon is running.
+- **Edits via the web UI** reload automatically on save; if the reload fails (e.g. an invalid cron expression slipped past initial validation) the UI surfaces a warning flash describing the error.
+- **Manual edits to `leo.yaml`** need a nudge:
+    ```bash
+    leo service reload     # or: restart the daemon
+    ```
+
 ## Best Practices
 
-- **Start conservative** -- begin with 1-2 tasks and add more as you tune your prompts
+- **Start conservative** — begin with 1–2 tasks and add more as you tune your prompts
 - **Use silent mode** for frequent tasks to avoid notification fatigue
-- **Check logs** after the first few runs to verify the agent is behaving as expected
-- **Mind rate limits** -- running many tasks frequently consumes API tokens. Space out non-urgent tasks
+- **Check logs** after the first few runs (`leo task logs <name>`) to verify the agent is behaving as expected
+- **Mind rate limits** — running many tasks frequently consumes API tokens. Space out non-urgent tasks
 - **Use topic routing** to organize different types of notifications in a Telegram forum group
 
 ## See Also
 
-- [`leo cron`](../cli/cron.md) -- managing cron entries
-- [`leo task`](../cli/task.md) -- managing task definitions
-- [`leo run`](../cli/run.md) -- executing tasks
-- [Writing Tasks](writing-tasks.md) -- creating custom task prompts
+- [`leo task`](../cli/task.md) — managing task definitions, history, and logs
+- [`leo run`](../cli/run.md) — executing tasks manually
+- [Writing Tasks](writing-tasks.md) — creating custom task prompts
