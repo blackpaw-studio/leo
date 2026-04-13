@@ -36,6 +36,7 @@ client:
 
 - `ssh` is passed verbatim as the SSH target. Anything SSH itself resolves (Host aliases, ProxyJump, IdentityFile) works.
 - `ssh_args` inserts extra flags between the target and the remote command. Handy for non-default ports or explicit identity files.
+- `leo_path` overrides the remote binary path. Defaults to `$HOME/.local/bin/leo` (matches `install.sh`). Set this if the remote installed leo elsewhere, or if you see `command not found: leo` over SSH — non-interactive SSH shells don't source `.zshrc` so PATH additions there don't apply.
 - `default_host` is optional — if set, commands without `--host` use it. Otherwise the first host in sorted order wins.
 
 Verify the config parses:

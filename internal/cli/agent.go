@@ -65,10 +65,13 @@ func dispatch(flagHost string) (*config.Config, config.HostResolution, error) {
 	return cfg, res, nil
 }
 
-// runRemote executes `ssh <host> leo agent <subcmd args...>` forwarding stdio.
+// runRemote executes `ssh <host> <leo_path> agent <subcmd args...>` forwarding
+// stdio. The remote binary path comes from HostConfig.LeoPath or defaults to
+// config.DefaultRemoteLeoPath — SSH's non-interactive shell typically doesn't
+// source .zshrc, so relying on bare "leo" in PATH is fragile.
 func runRemote(res config.HostResolution, subcmdArgs []string) error {
 	args := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
-	args = append(args, "leo", "agent")
+	args = append(args, res.Host.RemoteLeoPath(), "agent")
 	args = append(args, subcmdArgs...)
 	cmd := agentExecCommand("ssh", args...)
 	cmd.Stdin = os.Stdin

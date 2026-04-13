@@ -65,6 +65,24 @@ type ClientConfig struct {
 type HostConfig struct {
 	SSH     string   `yaml:"ssh"`                // e.g. "evan@leo.example.com"
 	SSHArgs []string `yaml:"ssh_args,omitempty"` // extra args passed to ssh (e.g. ["-p", "2222"])
+	// LeoPath overrides the remote leo binary path used when dispatching
+	// `leo agent ...` over SSH. Defaults to DefaultRemoteLeoPath. Useful when
+	// the remote's non-interactive shell does not have ~/.local/bin on PATH
+	// (e.g. PATH export lives in .zshrc rather than .zshenv).
+	LeoPath string `yaml:"leo_path,omitempty"`
+}
+
+// DefaultRemoteLeoPath is the default remote binary path used for SSH
+// dispatch when HostConfig.LeoPath is unset. Matches install.sh's default
+// install dir. The remote shell expands $HOME at execution time.
+const DefaultRemoteLeoPath = "$HOME/.local/bin/leo"
+
+// RemoteLeoPath returns LeoPath if set, otherwise DefaultRemoteLeoPath.
+func (h HostConfig) RemoteLeoPath() string {
+	if h.LeoPath != "" {
+		return h.LeoPath
+	}
+	return DefaultRemoteLeoPath
 }
 
 type WebConfig struct {

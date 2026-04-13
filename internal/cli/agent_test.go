@@ -76,7 +76,7 @@ func TestAgentListRemoteDispatches(t *testing.T) {
 	if len(stub.calls) != 1 {
 		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
 	}
-	want := []string{"ssh", "user@prod.example.com", "-p", "2222", "leo", "agent", "list"}
+	want := []string{"ssh", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "list"}
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
@@ -96,7 +96,7 @@ func TestAgentSpawnForwardsFlags(t *testing.T) {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
 	joined := strings.Join(stub.calls[0], " ")
-	for _, want := range []string{"leo", "agent", "spawn", "coding", "--repo", "foo/bar", "--name", "custom"} {
+	for _, want := range []string{config.DefaultRemoteLeoPath, "agent", "spawn", "coding", "--repo", "foo/bar", "--name", "custom"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ssh call missing %q: %s", want, joined)
 		}
@@ -114,8 +114,41 @@ func TestAgentStopRemote(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	joined := strings.Join(stub.calls[0], " ")
-	if !strings.Contains(joined, "leo agent stop leo-coding-bar") {
+	if !strings.Contains(joined, config.DefaultRemoteLeoPath+" agent stop leo-coding-bar") {
 		t.Errorf("unexpected call: %s", joined)
+	}
+}
+
+func TestAgentRemoteHonorsLeoPathOverride(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
+		Client: config.ClientConfig{
+			DefaultHost: "prod",
+			Hosts: map[string]config.HostConfig{
+				"prod": {
+					SSH:     "user@prod.example.com",
+					LeoPath: "/opt/leo/bin/leo",
+				},
+			},
+		},
+	}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "list"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	want := []string{"ssh", "user@prod.example.com", "/opt/leo/bin/leo", "agent", "list"}
+	if !equalStrings(stub.calls[0], want) {
+		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
 }
 

@@ -58,6 +58,7 @@ Each entry under `hosts` has:
 |-------|------|----------|-------------|
 | `ssh` | string | Yes | SSH target passed verbatim (e.g. `user@host`, or a `Host` alias from `~/.ssh/config`). |
 | `ssh_args` | list | No | Extra arguments inserted between the target and the remote command (e.g. `["-p", "2222"]`). |
+| `leo_path` | string | No | Absolute path to `leo` on the remote host. Defaults to `$HOME/.local/bin/leo` (matches `install.sh`). Override when `leo` is installed elsewhere or the remote's non-interactive SSH shell doesn't have it on PATH. |
 
 ```yaml
 client:
@@ -66,9 +67,12 @@ client:
     prod:
       ssh: evan@leo.example.com
       ssh_args: ["-p", "2222"]
+      leo_path: /usr/local/bin/leo
     dev:
       ssh: evan@devbox.local
 ```
+
+Why `leo_path` exists: SSH runs a non-interactive shell on the remote, which doesn't source `.zshrc` / `.bashrc`. If `leo` lives in `~/.local/bin` and PATH is only extended in `.zshrc`, bare `leo` won't resolve. The default full path avoids that; set `leo_path` explicitly when the remote installs leo elsewhere (Homebrew, `/usr/local/bin`, etc.).
 
 Resolution order for the target host: `--host` flag → `LEO_HOST` env → `default_host` → first entry sorted by key → localhost (only when no hosts are configured). `--host localhost` is a hard override. See the [Remote CLI guide](../guides/remote-cli.md).
 
