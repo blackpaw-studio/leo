@@ -70,6 +70,12 @@ type HostConfig struct {
 	// the remote's non-interactive shell does not have ~/.local/bin on PATH
 	// (e.g. PATH export lives in .zshrc rather than .zshenv).
 	LeoPath string `yaml:"leo_path,omitempty"`
+	// TmuxPath overrides the remote tmux binary path for `agent attach` and
+	// `agent logs --follow`. Defaults to DefaultRemoteTmuxPath. On macOS
+	// homebrew, /opt/homebrew/bin is typically added in .zprofile which is
+	// sourced for login shells but not for `ssh host cmd`, so bare `tmux`
+	// may fail to resolve.
+	TmuxPath string `yaml:"tmux_path,omitempty"`
 }
 
 // DefaultRemoteLeoPath is the default remote binary path used for SSH
@@ -77,12 +83,30 @@ type HostConfig struct {
 // install dir. The remote shell expands $HOME at execution time.
 const DefaultRemoteLeoPath = "$HOME/.local/bin/leo"
 
+// DefaultRemoteTmuxPath is the default remote tmux command used when
+// HostConfig.TmuxPath is unset. Bare "tmux" works on most Linux hosts
+// where tmux lives in /usr/bin (always on the default non-interactive
+// shell PATH). macOS remotes with homebrew typically need to set
+// tmux_path: /opt/homebrew/bin/tmux explicitly.
+const DefaultRemoteTmuxPath = "tmux"
+
 // RemoteLeoPath returns LeoPath if set, otherwise DefaultRemoteLeoPath.
 func (h HostConfig) RemoteLeoPath() string {
 	if h.LeoPath != "" {
 		return h.LeoPath
 	}
 	return DefaultRemoteLeoPath
+}
+
+// RemoteTmuxPath returns TmuxPath if set, otherwise DefaultRemoteTmuxPath.
+// The returned value is a command string that will be appended with tmux
+// arguments on the remote (ssh joins its command args with spaces before
+// handing off to the remote shell).
+func (h HostConfig) RemoteTmuxPath() string {
+	if h.TmuxPath != "" {
+		return h.TmuxPath
+	}
+	return DefaultRemoteTmuxPath
 }
 
 type WebConfig struct {

@@ -152,6 +152,75 @@ func TestAgentRemoteHonorsLeoPathOverride(t *testing.T) {
 	}
 }
 
+func TestAgentAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
+		Client: config.ClientConfig{
+			DefaultHost: "prod",
+			Hosts: map[string]config.HostConfig{
+				"prod": {
+					SSH:      "user@prod.example.com",
+					TmuxPath: "/opt/homebrew/bin/tmux",
+				},
+			},
+		},
+	}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "attach", "scratch"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	want := []string{"ssh", "-t", "user@prod.example.com", "/opt/homebrew/bin/tmux", "attach", "-t", "leo-scratch"}
+	if !equalStrings(stub.calls[0], want) {
+		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
+	}
+}
+
+func TestAgentLogsFollowRemoteUsesTmuxPath(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
+		Client: config.ClientConfig{
+			DefaultHost: "prod",
+			Hosts: map[string]config.HostConfig{
+				"prod": {
+					SSH:      "user@prod.example.com",
+					TmuxPath: "/opt/homebrew/bin/tmux",
+				},
+			},
+		},
+	}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "logs", "scratch", "--follow"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	if !strings.Contains(joined, "/opt/homebrew/bin/tmux capture-pane") {
+		t.Errorf("remote tail cmd missing tmux path: %s", joined)
+	}
+	if !strings.Contains(joined, "/opt/homebrew/bin/tmux pipe-pane") {
+		t.Errorf("remote tail cmd missing tmux path in pipe-pane: %s", joined)
+	}
+}
+
 func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
 	path := newAgentCLITestConfig(t)
 	stub := withStubExec(t)
@@ -165,7 +234,7 @@ func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
 	if len(stub.calls) != 1 {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
-	want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", "tmux", "attach", "-t", "leo-scratch"}
+	want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteTmuxPath, "attach", "-t", "leo-scratch"}
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh attach args = %v, want %v", stub.calls[0], want)
 	}

@@ -203,7 +203,7 @@ the usual tmux prefix + d (default: C-b d).`,
 					return err
 				}
 				sshArgs := append([]string{"-t", res.Host.SSH}, res.Host.SSHArgs...)
-				sshArgs = append(sshArgs, "tmux", "attach", "-t", session)
+				sshArgs = append(sshArgs, res.Host.RemoteTmuxPath(), "attach", "-t", session)
 				c := agentExecCommand("ssh", sshArgs...)
 				c.Stdin = os.Stdin
 				c.Stdout = agentStdout
@@ -286,17 +286,19 @@ func newAgentLogsCmd() *cobra.Command {
 				// Follow mode is a `tail -f` on the tmux pane — simpler than
 				// streaming over the socket. Remote follow uses ssh.
 				session := "leo-" + name
-				tailCmd := fmt.Sprintf("tmux capture-pane -t %s -p -S -%d; tmux pipe-pane -t %s 'cat >> /tmp/%s.log' 2>/dev/null; tail -f /tmp/%s.log",
-					session, lines, session, session, session)
+				buildTailCmd := func(tmuxCmd string) string {
+					return fmt.Sprintf("%s capture-pane -t %s -p -S -%d; %s pipe-pane -t %s 'cat >> /tmp/%s.log' 2>/dev/null; tail -f /tmp/%s.log",
+						tmuxCmd, session, lines, tmuxCmd, session, session, session)
+				}
 				if res.Localhost {
-					c := agentExecCommand("sh", "-c", tailCmd)
+					c := agentExecCommand("sh", "-c", buildTailCmd("tmux"))
 					c.Stdin = os.Stdin
 					c.Stdout = agentStdout
 					c.Stderr = agentStderr
 					return c.Run()
 				}
 				sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
-				sshArgs = append(sshArgs, tailCmd)
+				sshArgs = append(sshArgs, buildTailCmd(res.Host.RemoteTmuxPath()))
 				c := agentExecCommand("ssh", sshArgs...)
 				c.Stdin = os.Stdin
 				c.Stdout = agentStdout
