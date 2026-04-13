@@ -45,9 +45,21 @@ Does one iteration per tick:
 4. If the card has no plan → drafts a `[plan]` comment, labels `plan-drafted`, stops (awaits human approval).
 5. If the card has `plan-approved` → creates a worktree, spawns a coding subagent, runs tests, opens a PR, moves to **In Review**.
 
-### 2. Reviewer (separate command, out of scope for this PR)
+### 2. Reviewer (`/loop 5m /review-next`)
 
-Runs `/loop Nm /review-next` (TBD). Watches In Review cards + their PRs. Reviews, requests changes, resolves conflicts, merges when CI is green and the review passes.
+Command: [`.claude/commands/review-next.md`](../../.claude/commands/review-next.md)
+
+Does one iteration per tick against open PRs on cards in **In Review**:
+
+1. Pulls In Review cards → follows each to its PR, sorts oldest-updated first.
+2. Skips drafts, `agent-skip`/`do-not-merge` PRs, and PRs where the HEAD sha hasn't changed since the last review.
+3. Merge conflicts → attempts a clean `origin/main` merge, pushes if trivial; otherwise labels `blocked` and comments for human help.
+4. CI still running → skips.
+5. CI failed → `[ci-failed]` comment; if the failure pattern looks transient, kicks a re-run.
+6. CI green → reads the diff, the linked issue, and the approved plan. Approves or requests changes.
+7. Approved + green → squash-merges, deletes the branch, closes the issue, moves the card to **Done**, prunes the builder's worktree.
+
+State is tracked at `~/.leo/state/review-next-cursor.json` (last reviewed HEAD sha per PR) so repeated iterations don't re-review unchanged PRs.
 
 ## Human responsibilities
 
