@@ -1,7 +1,8 @@
 bin/
 dist/
 site/
-.claude/
+.claude/*
+!.claude/commands/
 *.exe
 *.test
 *.out
