@@ -206,7 +206,9 @@ func TestAttachAliasResolvesToProcess(t *testing.T) {
 	// Force localhost so we exercise the resolution branch.
 	root := newRootCmd()
 	root.SetArgs([]string{"--config", path, "attach", "primary", "--host", "localhost"})
-	// attach hits syscall.Exec — stub it out to avoid replacing the test process.
+	// attach hits exec.LookPath + syscall.Exec — stub both so the test runs
+	// without real tmux on the runner and doesn't replace the test process.
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
 	oldExec := agentSyscallExec
 	var execed bool
 	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
@@ -221,6 +223,15 @@ func TestAttachAliasResolvesToProcess(t *testing.T) {
 	if !execed {
 		t.Fatalf("expected syscall.Exec to be called for process attach; stub.calls = %v", stub.calls)
 	}
+}
+
+// stubTmuxLookPath replaces tmuxLookPath for the test so local-attach paths
+// don't require a real tmux binary on the runner.
+func stubTmuxLookPath(t *testing.T, path string, err error) {
+	t.Helper()
+	old := tmuxLookPath
+	tmuxLookPath = func(string) (string, error) { return path, err }
+	t.Cleanup(func() { tmuxLookPath = old })
 }
 
 // stubAgentSession replaces lookupAgentSession for the duration of the test.
@@ -245,7 +256,9 @@ func TestAttachAliasResolvesToAgent(t *testing.T) {
 		return "", fmt.Errorf("not found")
 	})
 
-	// Stub syscall.Exec so we can observe the attach without replacing the test.
+	// Stub exec.LookPath + syscall.Exec so the local attach works on runners
+	// without real tmux and we can capture the resolved argv.
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
 	var execed bool
 	var execedArgv []string
 	oldExec := agentSyscallExec

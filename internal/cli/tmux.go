@@ -8,6 +8,11 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
+// tmuxLookPath is a testability seam for locating the tmux binary. Tests
+// override it so the local-attach path doesn't require tmux to exist on the
+// runner (notably the macOS GitHub runner).
+var tmuxLookPath = exec.LookPath
+
 // attachTmuxSession replaces the current process with a tmux attach (local) or
 // runs `ssh -t <host> <tmux> attach -t <session>` remotely. Session names are
 // supplied fully-qualified (e.g. "leo-my-process") — callers are responsible for
@@ -24,7 +29,7 @@ func attachTmuxSession(res config.HostResolution, session string) error {
 		return c.Run()
 	}
 
-	tmuxPath, err := exec.LookPath("tmux")
+	tmuxPath, err := tmuxLookPath("tmux")
 	if err != nil {
 		return fmt.Errorf("tmux not found in PATH: %w", err)
 	}
