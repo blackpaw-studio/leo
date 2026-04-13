@@ -1136,12 +1136,13 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg.Tasks[name] = config.TaskConfig{
+	task := config.TaskConfig{
 		Schedule:   schedule,
 		PromptFile: promptFile,
 		Model:      r.FormValue("model"),
 		Enabled:    r.FormValue("enabled") == "true",
 	}
+	cfg.Tasks[name] = task
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
@@ -1156,11 +1157,37 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
 		return
 	}
+
+	// Warn (don't block) if the prompt file doesn't exist yet — users often
+	// create the task before authoring the prompt.
+	flashType := "success"
+	message := fmt.Sprintf("Task %q added", name)
+	if missing := promptFileMissing(cfg, task); missing != "" {
+		flashType = "warning"
+		message = fmt.Sprintf("Task %q added, but prompt file %s does not exist yet", name, missing)
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Task %q added", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: message}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
+}
+
+// promptFileMissing returns the absolute prompt path when a task's prompt
+// file does not exist on disk. Returns "" when the file exists or the path
+// cannot be resolved (the caller treats resolution failures as "not missing"
+// because validateAndSave already rejected invalid paths).
+func promptFileMissing(cfg *config.Config, task config.TaskConfig) string {
+	ws := cfg.TaskWorkspace(task)
+	abs, err := config.ResolvePromptPath(ws, task.PromptFile)
+	if err != nil {
+		return ""
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return abs
+	}
+	return ""
 }
 
 func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {

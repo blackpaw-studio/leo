@@ -142,6 +142,15 @@ func newTaskAddCmd() *cobra.Command {
 			}
 
 			success.Printf("Task %q added.\n", name)
+
+			// Warn if the prompt file doesn't exist yet (common when creating
+			// a task before authoring its prompt).
+			ws := cfg.TaskWorkspace(task)
+			if abs, resolveErr := config.ResolvePromptPath(ws, task.PromptFile); resolveErr == nil {
+				if _, statErr := os.Stat(abs); statErr != nil {
+					warn.Printf("Prompt file %s does not exist yet — create it before the task runs.\n", abs)
+				}
+			}
 			return nil
 		},
 	}
