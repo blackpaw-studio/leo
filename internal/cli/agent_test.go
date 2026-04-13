@@ -291,22 +291,6 @@ func TestAgentAttachLocalhostFlagExecsTmux(t *testing.T) {
 	_ = syscall.Exec // silence unused import on platforms where syscall is unused
 }
 
-func TestRepoShortCLI(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"", ""},
-		{"leo", "leo"},
-		{"blackpaw-studio/leo", "leo"},
-		{"owner/nested/repo", "nested/repo"},
-	}
-	for _, tc := range cases {
-		if got := repoShortCLI(tc.in); got != tc.want {
-			t.Errorf("repoShortCLI(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 func TestResolveSpawnCollisionForcedFlags(t *testing.T) {
 	match := agent.Record{Name: "leo-coding-blackpaw-studio-leo", Repo: "blackpaw-studio/leo", Template: "coding"}
 
@@ -362,16 +346,19 @@ func TestResolveSpawnCollisionPrompt(t *testing.T) {
 	t.Cleanup(func() { agentIsTTY = oldTTY })
 
 	cases := []struct {
-		name  string
-		input string
-		want  spawnChoice
+		name    string
+		input   string
+		want    spawnChoice
+		wantErr bool
 	}{
-		{"answer a attaches", "a\n", spawnAttachExisting},
-		{"answer b reuses repo", "b\n", spawnUseCanonicalRepo},
-		{"answer c spawns fresh", "c\n", spawnFreshTemplate},
-		{"empty line defaults to c", "\n", spawnFreshTemplate},
-		{"answer q cancels", "q\n", spawnCancel},
-		{"uppercase also works", "A\n", spawnAttachExisting},
+		{"answer a attaches", "a\n", spawnAttachExisting, false},
+		{"answer b reuses repo", "b\n", spawnUseCanonicalRepo, false},
+		{"answer c spawns fresh", "c\n", spawnFreshTemplate, false},
+		{"empty line defaults to c", "\n", spawnFreshTemplate, false},
+		{"answer q cancels", "q\n", spawnCancel, true},
+		{"uppercase also works", "A\n", spawnAttachExisting, false},
+		{"eof cancels", "", spawnCancel, true},
+		{"unknown choice errors", "x\n", spawnCancel, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -381,7 +368,10 @@ func TestResolveSpawnCollisionPrompt(t *testing.T) {
 			withStubStdio(t)
 
 			got, err := resolveSpawnCollision(match, "coding", false, false)
-			if err != nil {
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error, got nil (choice=%v)", got)
+			}
+			if !tc.wantErr && err != nil {
 				t.Fatalf("unexpected err: %v", err)
 			}
 			if got != tc.want {

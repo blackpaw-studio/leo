@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -86,14 +88,23 @@ func dispatch(flagHost string) (*config.Config, config.HostResolution, error) {
 	return cfg, res, nil
 }
 
+// buildSSHArgs returns a fresh slice of SSH argv so appends at the call site
+// cannot alias the config-loaded SSHArgs backing array.
+func buildSSHArgs(res config.HostResolution, tail ...string) []string {
+	args := make([]string, 0, 1+len(res.Host.SSHArgs)+len(tail))
+	args = append(args, res.Host.SSH)
+	args = append(args, res.Host.SSHArgs...)
+	args = append(args, tail...)
+	return args
+}
+
 // runRemote executes `ssh <host> <leo_path> agent <subcmd args...>` forwarding
 // stdio. The remote binary path comes from HostConfig.LeoPath or defaults to
 // config.DefaultRemoteLeoPath — SSH's non-interactive shell typically doesn't
 // source .zshrc, so relying on bare "leo" in PATH is fragile.
 func runRemote(res config.HostResolution, subcmdArgs []string) error {
-	args := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
-	args = append(args, res.Host.RemoteLeoPath(), "agent")
-	args = append(args, subcmdArgs...)
+	tail := append([]string{res.Host.RemoteLeoPath(), "agent"}, subcmdArgs...)
+	args := buildSSHArgs(res, tail...)
 	cmd := agentExecCommand("ssh", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = agentStdout
@@ -224,8 +235,6 @@ prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
 						repo = matches[0].Repo
 					case spawnFreshTemplate:
 						// fall through unchanged
-					case spawnCancel:
-						return fmt.Errorf("spawn cancelled")
 					}
 				default:
 					labels := make([]string, 0, len(matches))
@@ -271,6 +280,12 @@ const (
 // findRepoShortMatches queries the daemon and returns records whose Repo has
 // a short segment matching query (case-insensitive). Slashless stored Repos
 // match by their full value. Records with no Repo are skipped.
+//
+// Scope: this consults the daemon's live agent list only — stopped agents are
+// not considered. By design, once an agent is stopped its repo short-name is
+// immediately free for reuse; the collision prompt exists to prevent two
+// running agents from silently sharing a short-name, not to reserve names
+// across the agent's full history.
 func findRepoShortMatches(homePath, query string) ([]agent.Record, error) {
 	records, err := daemon.AgentList(homePath)
 	if err != nil {
@@ -278,7 +293,7 @@ func findRepoShortMatches(homePath, query string) ([]agent.Record, error) {
 	}
 	var out []agent.Record
 	for _, r := range records {
-		short := repoShortCLI(r.Repo)
+		short := agent.ShortRepo(r.Repo)
 		if short == "" {
 			continue
 		}
@@ -289,23 +304,11 @@ func findRepoShortMatches(homePath, query string) ([]agent.Record, error) {
 	return out, nil
 }
 
-// repoShortCLI mirrors agent.shortRepo — kept private here to avoid exporting
-// a 5-line helper across package boundaries.
-func repoShortCLI(repo string) string {
-	if repo == "" {
-		return ""
-	}
-	if idx := strings.Index(repo, "/"); idx >= 0 {
-		return repo[idx+1:]
-	}
-	return repo
-}
-
 // resolveSpawnCollision decides what to do when a slashless repo query matches
 // exactly one existing agent. Flags force a non-interactive choice; otherwise
-// the user is prompted when a TTY is attached. Non-interactive runs default
-// to "fresh template" to preserve the current behavior for scripts and the
-// web UI.
+// the user is prompted when a TTY is attached. Non-interactive CLI runs
+// default to "fresh template" to preserve the current scripting behavior.
+// (The web UI does not reach this path — it calls the daemon directly.)
 func resolveSpawnCollision(match agent.Record, template string, reuseOwner, attachExisting bool) (spawnChoice, error) {
 	switch {
 	case attachExisting:
@@ -319,7 +322,11 @@ func resolveSpawnCollision(match agent.Record, template string, reuseOwner, atta
 		return spawnFreshTemplate, nil
 	}
 
-	fmt.Fprintf(agentStderr, "\nAn agent already targets %s:\n", match.Repo)
+	if match.Repo != "" {
+		fmt.Fprintf(agentStderr, "\nAn agent already targets %s:\n", match.Repo)
+	} else {
+		fmt.Fprintf(agentStderr, "\nAn agent already matches %q:\n", match.Name)
+	}
 	fmt.Fprintf(agentStderr, "  name:     %s\n", match.Name)
 	fmt.Fprintf(agentStderr, "  template: %s\n\n", dashIfEmpty(match.Template))
 	fmt.Fprintln(agentStderr, "  a) attach to the existing agent")
@@ -328,11 +335,23 @@ func resolveSpawnCollision(match agent.Record, template string, reuseOwner, atta
 	}
 	fmt.Fprintf(agentStderr, "  c) spawn a fresh agent under template %q (current behavior)\n", template)
 	fmt.Fprintln(agentStderr, "  q) cancel")
-	fmt.Fprint(agentStderr, "\nchoice [c]: ")
+	if _, err := fmt.Fprint(agentStderr, "\nchoice [c]: "); err != nil {
+		return spawnCancel, fmt.Errorf("writing prompt: %w", err)
+	}
 
 	reader := bufio.NewReader(agentStdin)
-	line, _ := reader.ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return spawnCancel, fmt.Errorf("reading choice: %w", err)
+	}
+	choice := strings.ToLower(strings.TrimSpace(line))
+	// EOF with an empty line (piped input that closed, Ctrl-D without input)
+	// is treated as cancel — silently defaulting to "fresh template" would
+	// surprise a user who closed stdin expecting the command to abort.
+	if errors.Is(err, io.EOF) && choice == "" {
+		return spawnCancel, fmt.Errorf("spawn cancelled (stdin closed)")
+	}
+	switch choice {
 	case "a":
 		return spawnAttachExisting, nil
 	case "b":
@@ -343,9 +362,9 @@ func resolveSpawnCollision(match agent.Record, template string, reuseOwner, atta
 	case "", "c":
 		return spawnFreshTemplate, nil
 	case "q":
-		return spawnCancel, nil
+		return spawnCancel, fmt.Errorf("spawn cancelled")
 	default:
-		return spawnCancel, fmt.Errorf("unknown choice %q", strings.TrimSpace(line))
+		return spawnCancel, fmt.Errorf("unknown choice %q", choice)
 	}
 }
 
@@ -405,15 +424,18 @@ the usual tmux prefix + d (default: C-b d).`,
 
 // resolveRemoteSession shells `ssh <host> leo agent session-name <query>` to
 // ask the remote daemon for the canonical tmux session. Going through the
-// daemon lets the user pass shorthand (plain repo name, short suffix) over SSH
-// and surface clear "no match" / "ambiguous" errors before the tmux attach.
+// daemon lets the user pass shorthand over SSH and surface clear "no match" /
+// "ambiguous" errors before the tmux attach.
 func resolveRemoteSession(res config.HostResolution, query string) (string, error) {
-	args := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
-	args = append(args, res.Host.RemoteLeoPath(), "agent", "session-name", query)
+	args := buildSSHArgs(res, res.Host.RemoteLeoPath(), "agent", "session-name", query)
 	cmd := agentExecCommand("ssh", args...)
-	cmd.Stderr = agentStderr
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", fmt.Errorf("resolving remote agent %q: %w: %s", query, err, msg)
+		}
 		return "", fmt.Errorf("resolving remote agent %q: %w", query, err)
 	}
 	session := strings.TrimSpace(string(out))

@@ -12,7 +12,9 @@ import (
 
 // resolveAgentOrError resolves a shorthand query against the agent manager and
 // writes the appropriate HTTP error (404 not found, 409 ambiguous, 500 other)
-// when resolution fails. Returns the canonical Record and true on success.
+// when resolution fails. Ambiguous and not-found responses carry a machine-
+// readable Code and (for ambiguous) the candidate Matches so clients can
+// reconstruct typed errors. Returns the canonical Record and true on success.
 func (s *Server) resolveAgentOrError(w http.ResponseWriter, query string) (agent.Record, bool) {
 	rec, err := s.agentMgr.Resolve(query)
 	if err == nil {
@@ -22,9 +24,9 @@ func (s *Server) resolveAgentOrError(w http.ResponseWriter, query string) (agent
 	var amb *agent.ErrAmbiguous
 	switch {
 	case errors.As(err, &nf):
-		writeError(w, http.StatusNotFound, err.Error())
+		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeNotFound})
 	case errors.As(err, &amb):
-		writeError(w, http.StatusConflict, err.Error())
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAmbiguous, Matches: amb.Matches})
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}

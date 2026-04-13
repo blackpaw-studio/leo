@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"testing"
@@ -311,5 +312,108 @@ func TestAgentResolveHandlerAmbiguous(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("want 409, got %d", resp.StatusCode)
+	}
+}
+
+// --- stop/logs/session conflict and error coverage ---
+
+func TestAgentStopHandlerAmbiguous(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveErr: &agent.ErrAmbiguous{Query: "leo", Matches: []string{"a", "b"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Post("http://localhost/agents/leo/stop", "application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentStopHandlerSupervisorError(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveOut: agent.Record{Name: "leo-coding-acme-widget"}}
+	mgr.stopErr = errors.New("supervisor offline")
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Post("http://localhost/agents/widget/stop", "application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentLogsHandlerAmbiguous(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveErr: &agent.ErrAmbiguous{Query: "leo", Matches: []string{"a", "b"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/leo/logs")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentLogsHandlerSupervisorError(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveOut: agent.Record{Name: "leo-coding-acme-widget"}}
+	mgr.logsErr = errors.New("capture failed")
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/widget/logs")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentSessionHandlerAmbiguous(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveErr: &agent.ErrAmbiguous{Query: "leo", Matches: []string{"a", "b"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/leo/session")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentSessionHandlerNotFound(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveErr: &agent.ErrNotFound{Query: "leo"}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/leo/session")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentSpawnHandlerSupervisorError(t *testing.T) {
+	mgr := &fakeAgentManager{spawnErr: errors.New("template missing")}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{Template: "coding", Repo: "leo"})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", resp.StatusCode)
 	}
 }

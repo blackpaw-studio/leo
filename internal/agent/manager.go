@@ -67,6 +67,9 @@ func (m *Manager) Spawn(spec SpawnSpec) (Record, error) {
 	if spec.Template == "" || spec.Repo == "" {
 		return Record{}, fmt.Errorf("template and repo are required")
 	}
+	if err := ValidateRepo(spec.Repo); err != nil {
+		return Record{}, err
+	}
 
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -152,12 +155,7 @@ func (m *Manager) List() []Record {
 			StartedAt: state.StartedAt,
 			Restarts:  state.Restarts,
 		}
-		if s, ok := stored[name]; ok {
-			r.Template = s.Template
-			r.Repo = s.Repo
-			r.Workspace = s.Workspace
-			r.Env = s.Env
-		}
+		mergeStored(&r, stored)
 		out = append(out, r)
 	}
 	return out

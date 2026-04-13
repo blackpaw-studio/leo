@@ -194,3 +194,51 @@ func TestResolveHydratesStoreFields(t *testing.T) {
 		t.Errorf("restarts = %d, want 3", rec.Restarts)
 	}
 }
+
+func TestShortRepo(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"leo", "leo"},
+		{"blackpaw-studio/leo", "leo"},
+		{"owner/nested/repo", "nested/repo"},
+	}
+	for _, tc := range cases {
+		if got := ShortRepo(tc.in); got != tc.want {
+			t.Errorf("ShortRepo(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestValidateRepo(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		wantErr bool
+	}{
+		{"bare name", "leo", false},
+		{"owner/repo", "blackpaw-studio/leo", false},
+		{"empty", "", true},
+		{"leading space", " leo", true},
+		{"trailing space", "leo ", true},
+		{"internal space", "black paw/leo", true},
+		{"tab", "leo\t", true},
+		{"newline", "leo\n", true},
+		{"multiple slashes", "owner/middle/repo", true},
+		{"trailing slash", "owner/", true},
+		{"leading slash", "/repo", true},
+		{"only slash", "/", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateRepo(tc.in)
+			if tc.wantErr && err == nil {
+				t.Errorf("ValidateRepo(%q) = nil, want error", tc.in)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("ValidateRepo(%q) = %v, want nil", tc.in, err)
+			}
+		})
+	}
+}
