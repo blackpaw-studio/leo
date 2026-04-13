@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -98,15 +99,19 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist for daemon restart recovery
-	agentstore.Save(cfg.HomePath, agentstore.Record{ //nolint:errcheck
+	// Persist for daemon restart recovery. A Save failure doesn't kill the
+	// agent — it's already running — but we must log so the operator knows
+	// the agent won't be restored on daemon restart.
+	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:       agentName,
 		Template:   req.Template,
 		Workspace:  workspace,
 		ClaudeArgs: claudeArgs,
 		Env:        tmpl.Env,
 		WebPort:    strconv.Itoa(cfg.WebPort()),
-	})
+	}); err != nil {
+		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", agentName, err)
+	}
 
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{
 		"name":      agentName,
@@ -266,14 +271,16 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentstore.Save(cfg.HomePath, agentstore.Record{ //nolint:errcheck
+	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:       agentName,
 		Template:   templateName,
 		Workspace:  workspace,
 		ClaudeArgs: claudeArgs,
 		Env:        tmpl.Env,
 		WebPort:    strconv.Itoa(cfg.WebPort()),
-	})
+	}); err != nil {
+		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", agentName, err)
+	}
 
 	s.renderFlash(w, "success", fmt.Sprintf("Agent %q spawned — connect via Claude web or app", agentName))
 }
