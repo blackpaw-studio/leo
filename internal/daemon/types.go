@@ -39,6 +39,16 @@ type AgentLogsResponse struct {
 }
 
 // AgentSessionResponse is the payload for GET /agents/{name}/session.
+// Name is the canonical agent name the query resolved to; may differ from the
+// request path when the server accepts shorthand.
 type AgentSessionResponse struct {
 	Session string `json:"session"`
+	Name    string `json:"name,omitempty"`
+}
+
+// AgentResolveResponse is the payload for GET /agents/resolve?q=<query>.
+type AgentResolveResponse struct {
+	Name    string `json:"name"`
+	Session string `json:"session"`
+	Repo    string `json:"repo,omitempty"`
 }

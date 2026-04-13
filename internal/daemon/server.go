@@ -35,6 +35,7 @@ type AgentManager interface {
 	List() []agent.Record
 	Logs(name string, lines int) (string, error)
 	SessionName(name string) string
+	Resolve(query string) (agent.Record, error)
 }
 
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
@@ -80,6 +81,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	// SetAgentManager(). Handlers short-circuit with 503 when s.agentMgr is nil.
 	mux.HandleFunc("POST /agents/spawn", s.handleAgentSpawn)
 	mux.HandleFunc("GET /agents/list", s.handleAgentList)
+	mux.HandleFunc("GET /agents/resolve", s.handleAgentResolve)
 	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)

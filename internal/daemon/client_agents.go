@@ -74,6 +74,7 @@ func AgentLogs(workDir, name string, lines int) (string, error) {
 }
 
 // AgentSession sends GET /agents/{name}/session to the daemon, returning the tmux session name.
+// The `name` may be a shorthand query; the server resolves it before responding.
 func AgentSession(workDir, name string) (string, error) {
 	resp, err := Send(workDir, "GET", "/agents/"+url.PathEscape(name)+"/session", nil)
 	if err != nil {
@@ -87,4 +88,22 @@ func AgentSession(workDir, name string) (string, error) {
 		return "", fmt.Errorf("decoding session response: %w", err)
 	}
 	return s.Session, nil
+}
+
+// AgentResolve asks the daemon to resolve a shorthand query to the canonical
+// agent and returns the hydrated record (name, session, repo). Used by remote
+// clients that need to confirm an agent exists before acting on it.
+func AgentResolve(workDir, query string) (AgentResolveResponse, error) {
+	resp, err := Send(workDir, "GET", "/agents/resolve?q="+url.QueryEscape(query), nil)
+	if err != nil {
+		return AgentResolveResponse{}, err
+	}
+	if !resp.OK {
+		return AgentResolveResponse{}, fmt.Errorf("%s", resp.Error)
+	}
+	var out AgentResolveResponse
+	if err := json.Unmarshal(resp.Data, &out); err != nil {
+		return AgentResolveResponse{}, fmt.Errorf("decoding resolve response: %w", err)
+	}
+	return out, nil
 }

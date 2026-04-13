@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -9,6 +10,26 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 )
+
+// resolveAgentQuery resolves a shorthand query to the canonical agent name
+// using the configured AgentService. Returns a classified HTTP status so
+// callers can respond consistently (404 not found, 409 ambiguous, 500 other).
+func resolveAgentQuery(svc AgentService, query string) (agent.Record, int, error) {
+	rec, err := svc.Resolve(query)
+	if err == nil {
+		return rec, http.StatusOK, nil
+	}
+	var nf *agent.ErrNotFound
+	var amb *agent.ErrAmbiguous
+	switch {
+	case errors.As(err, &nf):
+		return agent.Record{}, http.StatusNotFound, err
+	case errors.As(err, &amb):
+		return agent.Record{}, http.StatusConflict, err
+	default:
+		return agent.Record{}, http.StatusInternalServerError, err
+	}
+}
 
 // apiResponse is the standard JSON envelope for API endpoints.
 type apiResponse struct {
@@ -74,7 +95,12 @@ func (s *Server) handleAPIAgentStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.agentSvc.Stop(req.Name); err != nil {
+	rec, status, err := resolveAgentQuery(s.agentSvc, req.Name)
+	if err != nil {
+		writeJSON(w, status, apiResponse{Error: err.Error()})
+		return
+	}
+	if err := s.agentSvc.Stop(rec.Name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return
 	}
@@ -174,12 +200,17 @@ func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.agentSvc.Stop(name); err != nil {
+	rec, _, err := resolveAgentQuery(s.agentSvc, name)
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to find agent: %v", err))
+		return
+	}
+	if err := s.agentSvc.Stop(rec.Name); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to stop agent: %v", err))
 		return
 	}
 
-	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", name))
+	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", rec.Name))
 }
 
 // --- Task API endpoints (JSON, used by Telegram plugin) ---

@@ -51,6 +51,7 @@ type SpawnSpec struct {
 type Record struct {
 	Name      string            `json:"name"`
 	Template  string            `json:"template,omitempty"`
+	Repo      string            `json:"repo,omitempty"`
 	Workspace string            `json:"workspace,omitempty"`
 	Status    string            `json:"status,omitempty"`
 	StartedAt time.Time         `json:"started_at,omitempty"`
@@ -111,6 +112,7 @@ func (m *Manager) Spawn(spec SpawnSpec) (Record, error) {
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:       agentName,
 		Template:   spec.Template,
+		Repo:       spec.Repo,
 		Workspace:  workspace,
 		ClaudeArgs: claudeArgs,
 		Env:        tmpl.Env,
@@ -123,6 +125,7 @@ func (m *Manager) Spawn(spec SpawnSpec) (Record, error) {
 	return Record{
 		Name:      agentName,
 		Template:  spec.Template,
+		Repo:      spec.Repo,
 		Workspace: workspace,
 		Status:    "starting",
 		StartedAt: time.Now(),
@@ -151,6 +154,7 @@ func (m *Manager) List() []Record {
 		}
 		if s, ok := stored[name]; ok {
 			r.Template = s.Template
+			r.Repo = s.Repo
 			r.Workspace = s.Workspace
 			r.Env = s.Env
 		}

@@ -18,8 +18,8 @@ import (
 )
 
 var (
-	leoBin      string
-	fakeclaude  string
+	leoBin     string
+	fakeclaude string
 )
 
 func TestMain(m *testing.M) {
@@ -228,8 +228,8 @@ func TestRunWithMCPConfig(t *testing.T) {
 	argLog := filepath.Join(t.TempDir(), "args.json")
 
 	ws := setupWorkspace(t, "", map[string]string{
-		"prompts/HEARTBEAT.md":        "Hello.\n",
-		"config/mcp-servers.json":     `{"mcpServers":{"test":{}}}`,
+		"prompts/HEARTBEAT.md":    "Hello.\n",
+		"config/mcp-servers.json": `{"mcpServers":{"test":{}}}`,
 	})
 	fixWorkspaceInConfig(t, ws)
 

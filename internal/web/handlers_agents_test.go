@@ -85,6 +85,18 @@ func (m *mockAgentService) List() []agent.Record {
 	return m.records
 }
 
+// Resolve does exact-name matching against the fake's records so tests that
+// drive the shorthand-aware web handlers can stick to canonical names. The
+// full Manager.Resolve algorithm is covered by internal/agent/resolve_test.go.
+func (m *mockAgentService) Resolve(query string) (agent.Record, error) {
+	for _, r := range m.records {
+		if r.Name == query {
+			return r, nil
+		}
+	}
+	return agent.Record{}, &agent.ErrNotFound{Query: query}
+}
+
 func newTestServerWithAgents(t *testing.T) (*Server, string, *mockAgentService) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "leo-web-agent-test-*")

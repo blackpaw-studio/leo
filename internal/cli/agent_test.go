@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
@@ -40,7 +41,14 @@ type stubExec struct {
 
 func (s *stubExec) fn(name string, args ...string) *exec.Cmd {
 	s.calls = append(s.calls, append([]string{name}, args...))
-	// Use `true` (which exits 0) as the underlying binary so `.Run()` succeeds.
+	// Pretend remote `leo agent session-name <q>` succeeded by echoing the
+	// canonical session — the remote attach flow captures stdout to learn it.
+	for i, a := range args {
+		if a == "session-name" && i+1 < len(args) {
+			return exec.Command("echo", "leo-"+args[i+1])
+		}
+	}
+	// Otherwise use `true` (exits 0) so `.Run()` succeeds.
 	return exec.Command("true")
 }
 
@@ -179,9 +187,16 @@ func TestAgentAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	want := []string{"ssh", "-t", "user@prod.example.com", "/opt/homebrew/bin/tmux", "attach", "-t", "leo-scratch"}
-	if !equalStrings(stub.calls[0], want) {
-		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
+	if len(stub.calls) != 2 {
+		t.Fatalf("expected 2 ssh calls (resolve + attach), got %d: %v", len(stub.calls), stub.calls)
+	}
+	wantResolve := []string{"ssh", "user@prod.example.com", config.DefaultRemoteLeoPath, "agent", "session-name", "scratch"}
+	if !equalStrings(stub.calls[0], wantResolve) {
+		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
+	}
+	wantAttach := []string{"ssh", "-t", "user@prod.example.com", "/opt/homebrew/bin/tmux", "attach", "-t", "leo-scratch"}
+	if !equalStrings(stub.calls[1], wantAttach) {
+		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}
 }
 
@@ -231,12 +246,16 @@ func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if len(stub.calls) != 1 {
-		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
+	if len(stub.calls) != 2 {
+		t.Fatalf("expected 2 ssh calls (resolve + attach), got %d: %v", len(stub.calls), stub.calls)
 	}
-	want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteTmuxPath, "attach", "-t", "leo-scratch"}
-	if !equalStrings(stub.calls[0], want) {
-		t.Errorf("ssh attach args = %v, want %v", stub.calls[0], want)
+	wantResolve := []string{"ssh", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "session-name", "scratch"}
+	if !equalStrings(stub.calls[0], wantResolve) {
+		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
+	}
+	wantAttach := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteTmuxPath, "attach", "-t", "leo-scratch"}
+	if !equalStrings(stub.calls[1], wantAttach) {
+		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}
 }
 
@@ -270,6 +289,169 @@ func TestAgentAttachLocalhostFlagExecsTmux(t *testing.T) {
 	// We're not asserting anything here beyond "no panic and no ssh call" —
 	// observed by the exec.Command stub in other tests.
 	_ = syscall.Exec // silence unused import on platforms where syscall is unused
+}
+
+func TestRepoShortCLI(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"leo", "leo"},
+		{"blackpaw-studio/leo", "leo"},
+		{"owner/nested/repo", "nested/repo"},
+	}
+	for _, tc := range cases {
+		if got := repoShortCLI(tc.in); got != tc.want {
+			t.Errorf("repoShortCLI(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestResolveSpawnCollisionForcedFlags(t *testing.T) {
+	match := agent.Record{Name: "leo-coding-blackpaw-studio-leo", Repo: "blackpaw-studio/leo", Template: "coding"}
+
+	t.Run("reuse-owner wins", func(t *testing.T) {
+		got, err := resolveSpawnCollision(match, "coding", true, false)
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if got != spawnUseCanonicalRepo {
+			t.Errorf("choice = %v, want spawnUseCanonicalRepo", got)
+		}
+	})
+
+	t.Run("attach-existing wins", func(t *testing.T) {
+		got, err := resolveSpawnCollision(match, "coding", false, true)
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if got != spawnAttachExisting {
+			t.Errorf("choice = %v, want spawnAttachExisting", got)
+		}
+	})
+
+	t.Run("reuse-owner errors without stored repo", func(t *testing.T) {
+		bare := agent.Record{Name: "bare", Template: "coding"}
+		if _, err := resolveSpawnCollision(bare, "coding", true, false); err == nil {
+			t.Error("expected error when --reuse-owner is set but Repo is empty")
+		}
+	})
+}
+
+func TestResolveSpawnCollisionNonInteractive(t *testing.T) {
+	match := agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"}
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return false }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+
+	got, err := resolveSpawnCollision(match, "coding", false, false)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != spawnFreshTemplate {
+		t.Errorf("non-TTY default = %v, want spawnFreshTemplate", got)
+	}
+}
+
+func TestResolveSpawnCollisionPrompt(t *testing.T) {
+	match := agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"}
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+
+	cases := []struct {
+		name  string
+		input string
+		want  spawnChoice
+	}{
+		{"answer a attaches", "a\n", spawnAttachExisting},
+		{"answer b reuses repo", "b\n", spawnUseCanonicalRepo},
+		{"answer c spawns fresh", "c\n", spawnFreshTemplate},
+		{"empty line defaults to c", "\n", spawnFreshTemplate},
+		{"answer q cancels", "q\n", spawnCancel},
+		{"uppercase also works", "A\n", spawnAttachExisting},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldIn := agentStdin
+			agentStdin = strings.NewReader(tc.input)
+			t.Cleanup(func() { agentStdin = oldIn })
+			withStubStdio(t)
+
+			got, err := resolveSpawnCollision(match, "coding", false, false)
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("input %q → %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentSpawnRemoteForwardsCollisionFlags(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "spawn", "coding", "--repo", "leo", "--reuse-owner"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	if !strings.Contains(joined, "spawn coding --repo leo --reuse-owner") {
+		t.Errorf("ssh call missing --reuse-owner: %s", joined)
+	}
+}
+
+func TestAgentSpawnAcceptsPositionalRepo(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "spawn", "coding", "foo/bar"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	if !strings.Contains(joined, "spawn coding --repo foo/bar") {
+		t.Errorf("positional repo not forwarded as --repo: %s", joined)
+	}
+}
+
+func TestAgentSpawnRejectsConflictingFlags(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "spawn", "coding", "--repo", "leo", "--reuse-owner", "--attach-existing"})
+	if err := root.Execute(); err == nil {
+		t.Error("expected error when both --reuse-owner and --attach-existing set")
+	}
+}
+
+func TestAgentSessionNameRemoteDispatches(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "session-name", "leo"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
+	}
+	want := []string{"ssh", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "session-name", "leo"}
+	if !equalStrings(stub.calls[0], want) {
+		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
+	}
 }
 
 func equalStrings(a, b []string) bool {
