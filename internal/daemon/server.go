@@ -27,6 +27,16 @@ type ProcessStateProvider interface {
 // a single struct without import cycles.
 type ProcessStateInfo = agent.ProcessState
 
+// AgentManager is the interface daemon socket handlers use to drive the agent
+// lifecycle. It is satisfied by *agent.Manager.
+type AgentManager interface {
+	Spawn(spec agent.SpawnSpec) (agent.Record, error)
+	Stop(name string) error
+	List() []agent.Record
+	Logs(name string, lines int) (string, error)
+	SessionName(name string) string
+}
+
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
 type Server struct {
 	sockPath   string
@@ -36,6 +46,7 @@ type Server struct {
 	scheduler  *cron.Scheduler
 	processes  ProcessStateProvider
 	webServer  *web.Server
+	agentMgr   AgentManager
 }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
@@ -64,6 +75,14 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
 	mux.HandleFunc("GET /process/list", s.handleProcessList)
 	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
+
+	// Agent lifecycle — served only when an AgentManager has been attached via
+	// SetAgentManager(). Handlers short-circuit with 503 when s.agentMgr is nil.
+	mux.HandleFunc("POST /agents/spawn", s.handleAgentSpawn)
+	mux.HandleFunc("GET /agents/list", s.handleAgentList)
+	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
+	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
+	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -185,6 +204,12 @@ func (s *Server) Shutdown() error {
 // SockPath returns the path to the Unix socket.
 func (s *Server) SockPath() string {
 	return s.sockPath
+}
+
+// SetAgentManager attaches an agent manager. Must be called before any /agents/*
+// request is served; otherwise those endpoints return 503.
+func (s *Server) SetAgentManager(m AgentManager) {
+	s.agentMgr = m
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

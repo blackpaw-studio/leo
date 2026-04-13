@@ -374,6 +374,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		// Build the agent.Manager shared by web, daemon, and CLI handlers.
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath)
+		srv.SetAgentManager(agentMgr)
 
 		// Start web UI if enabled
 		if cfg, err := config.Load(configPath); err == nil {
