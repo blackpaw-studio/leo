@@ -72,6 +72,19 @@ GET  /api/agent/list                                                      (web H
 
 Both transports share the same `internal/agent` manager, so state stays consistent across CLI, web UI, and Telegram.
 
+### Shorthand Names
+
+CLI, daemon API, and web handlers all resolve a shorthand query against live agents before performing an action. The resolver tries these tiers in order and picks the first unambiguous match:
+
+1. Exact full name (case-insensitive)
+2. Exact stored repo (`owner/name`)
+3. Repo short — the segment after the slash, or the full value for slashless repos
+4. Suffix match on the full name (`-<query>`)
+
+So if only one live agent targets `blackpaw-studio/leo`, any of these work: `leo`, `blackpaw-studio/leo`, `leo-coding-blackpaw-studio-leo`. Ambiguous queries are rejected with the list of matching names. Stopped agents are never considered — the short name is free again the moment an agent exits.
+
+The daemon also exposes `GET /agents/resolve?q=<query>` over the Unix socket for read-only lookups (returns the canonical name, tmux session, and stored repo).
+
 ## Managing Agents
 
 ### Listing

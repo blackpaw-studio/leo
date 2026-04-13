@@ -20,7 +20,7 @@ Content-Type: application/json
 }
 ```
 
-Response: `{"ok": true, "data": {"name": "agent-coding-repo", "workspace": "/path/to/workspace"}}`
+Response: `{"ok": true, "data": {"name": "leo-coding-repo", "workspace": "/path/to/workspace"}}`
 
 ### List Running Agents
 
@@ -28,7 +28,7 @@ Response: `{"ok": true, "data": {"name": "agent-coding-repo", "workspace": "/pat
 GET /api/agent/list
 ```
 
-Response: `{"ok": true, "data": {"agent-coding-leo": {"name": "...", "status": "running", ...}}}`
+Response: `{"ok": true, "data": {"leo-coding-leo": {"name": "...", "status": "running", ...}}}`
 
 ### Stop an Agent
 
@@ -36,8 +36,10 @@ Response: `{"ok": true, "data": {"agent-coding-leo": {"name": "...", "status": "
 POST /api/agent/stop
 Content-Type: application/json
 
-{"name": "agent-coding-leo"}
+{"name": "leo-coding-leo"}
 ```
+
+`name` accepts shorthand — a repo short name (`"leo"`), a full `owner/repo`, or a suffix of the full agent name will all resolve as long as the match is unambiguous among running agents. The server returns an error listing candidates when the query matches multiple live agents.
 
 ### List Available Templates
 
@@ -55,6 +57,7 @@ GET /api/template/list
 ## Notes
 
 - Agents use `--remote-control` so they appear in claude.ai/code
-- Agent names follow the pattern: `agent-{template}-{repo-short-name}`
+- Agent names follow the pattern: `leo-{template}-{owner}-{repo-short}` for `owner/repo` spawns, or `leo-{template}-{name}` for bare-name spawns
+- Stop/logs APIs accept shorthand: any unambiguous repo short, full `owner/repo`, or agent-name suffix resolves to the canonical record
 - Agents are ephemeral — they're not persisted to leo.yaml but survive daemon restarts via agents.json
 - Templates are defined in the `templates:` section of leo.yaml

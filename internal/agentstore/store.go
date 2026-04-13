@@ -15,6 +15,7 @@ import (
 type Record struct {
 	Name       string            `json:"name"`
 	Template   string            `json:"template"`
+	Repo       string            `json:"repo,omitempty"`
 	Workspace  string            `json:"workspace"`
 	ClaudeArgs []string          `json:"claude_args"`
 	Env        map[string]string `json:"env,omitempty"`

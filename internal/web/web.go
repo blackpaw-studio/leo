@@ -49,6 +49,7 @@ type AgentService interface {
 	Spawn(spec agent.SpawnSpec) (agent.Record, error)
 	Stop(name string) error
 	List() []agent.Record
+	Resolve(query string) (agent.Record, error)
 }
 
 // Server serves the Leo web UI over HTTP.

@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,13 +26,25 @@ func agentSessionName(name string) string { return "leo-" + name }
 // creates `leo-<name>` tmux sessions for configured processes.
 func processSessionName(name string) string { return "leo-" + name }
 
-// Testability seam — overridden in tests.
+// Testability seams — overridden in tests.
 var (
 	agentExecCommand           = exec.Command
 	agentSyscallExec           = syscall.Exec
 	agentStderr      io.Writer = os.Stderr
 	agentStdout      io.Writer = os.Stdout
+	agentStdin       io.Reader = os.Stdin
+	agentIsTTY                 = defaultIsTTY
 )
+
+// defaultIsTTY returns true when stdin is a character device (i.e. the user is
+// typing interactively). Used to decide whether to block on a collision prompt.
+func defaultIsTTY() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
 
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -49,6 +64,7 @@ so remote calls use your existing SSH setup.`,
 		newAgentAttachCmd(),
 		newAgentStopCmd(),
 		newAgentLogsCmd(),
+		newAgentSessionNameCmd(),
 	)
 	return cmd
 }
@@ -72,14 +88,23 @@ func dispatch(flagHost string) (*config.Config, config.HostResolution, error) {
 	return cfg, res, nil
 }
 
+// buildSSHArgs returns a fresh slice of SSH argv so appends at the call site
+// cannot alias the config-loaded SSHArgs backing array.
+func buildSSHArgs(res config.HostResolution, tail ...string) []string {
+	args := make([]string, 0, 1+len(res.Host.SSHArgs)+len(tail))
+	args = append(args, res.Host.SSH)
+	args = append(args, res.Host.SSHArgs...)
+	args = append(args, tail...)
+	return args
+}
+
 // runRemote executes `ssh <host> <leo_path> agent <subcmd args...>` forwarding
 // stdio. The remote binary path comes from HostConfig.LeoPath or defaults to
 // config.DefaultRemoteLeoPath — SSH's non-interactive shell typically doesn't
 // source .zshrc, so relying on bare "leo" in PATH is fragile.
 func runRemote(res config.HostResolution, subcmdArgs []string) error {
-	args := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
-	args = append(args, res.Host.RemoteLeoPath(), "agent")
-	args = append(args, subcmdArgs...)
+	tail := append([]string{res.Host.RemoteLeoPath(), "agent"}, subcmdArgs...)
+	args := buildSSHArgs(res, tail...)
 	cmd := agentExecCommand("ssh", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = agentStdout
@@ -141,14 +166,33 @@ func newAgentListCmd() *cobra.Command {
 
 func newAgentSpawnCmd() *cobra.Command {
 	var host, repo, name string
+	var reuseOwner, attachExisting bool
 	cmd := &cobra.Command{
-		Use:   "spawn <template>",
+		Use:   "spawn <template> [repo]",
 		Short: "Spawn a new agent from a template",
-		Args:  cobra.ExactArgs(1),
+		Long: `Spawn a new ephemeral agent from a template. Repo can be passed as a
+positional arg or via --repo. Use owner/repo to clone a canonical repo, or a
+plain name to reuse the template workspace.
+
+When repo is slashless and matches an existing agent's short name, the CLI
+prompts the user for how to proceed: attach to the existing agent, spawn using
+that agent's canonical owner/repo, or spawn a fresh template workspace. The
+prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
+--reuse-owner forces the canonical repo, --attach-existing attaches instead.`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			template := args[0]
+			if len(args) == 2 {
+				if repo != "" {
+					return fmt.Errorf("repo given both as positional arg and --repo flag; pick one")
+				}
+				repo = args[1]
+			}
 			if repo == "" {
-				return fmt.Errorf("--repo is required (use owner/repo to clone, or a plain name to reuse the template workspace)")
+				return fmt.Errorf("repo is required (pass as positional or --repo)")
+			}
+			if reuseOwner && attachExisting {
+				return fmt.Errorf("--reuse-owner and --attach-existing are mutually exclusive")
 			}
 
 			cfg, res, err := dispatch(host)
@@ -160,7 +204,46 @@ func newAgentSpawnCmd() *cobra.Command {
 				if name != "" {
 					extra = append(extra, "--name", name)
 				}
+				if reuseOwner {
+					extra = append(extra, "--reuse-owner")
+				}
+				if attachExisting {
+					extra = append(extra, "--attach-existing")
+				}
 				return runRemote(res, extra)
+			}
+
+			// Collision detection only applies to slashless repos. owner/repo
+			// input is explicit and unambiguous by construction.
+			if !strings.Contains(repo, "/") {
+				matches, err := findRepoShortMatches(cfg.HomePath, repo)
+				if err != nil {
+					return fmt.Errorf("checking existing agents: %w", err)
+				}
+				switch {
+				case len(matches) == 0:
+					// No conflict — fall through and spawn.
+				case len(matches) == 1:
+					choice, err := resolveSpawnCollision(matches[0], template, reuseOwner, attachExisting)
+					if err != nil {
+						return err
+					}
+					switch choice {
+					case spawnAttachExisting:
+						return attachLocal(cfg.HomePath, matches[0].Name)
+					case spawnUseCanonicalRepo:
+						repo = matches[0].Repo
+					case spawnFreshTemplate:
+						// fall through unchanged
+					}
+				default:
+					labels := make([]string, 0, len(matches))
+					for _, m := range matches {
+						labels = append(labels, fmt.Sprintf("%s (%s)", m.Name, m.Repo))
+					}
+					return fmt.Errorf("multiple existing agents match %q: %s — pass the full owner/repo to disambiguate",
+						repo, strings.Join(labels, ", "))
+				}
 			}
 
 			rec, err := daemon.AgentSpawn(cfg.HomePath, daemon.AgentSpawnRequest{
@@ -179,7 +262,126 @@ func newAgentSpawnCmd() *cobra.Command {
 	addHostFlag(cmd, &host)
 	cmd.Flags().StringVar(&repo, "repo", "", "owner/repo to clone, or plain name for template workspace")
 	cmd.Flags().StringVar(&name, "name", "", "override the derived agent name")
+	cmd.Flags().BoolVar(&reuseOwner, "reuse-owner", false, "on collision, spawn using the existing agent's canonical owner/repo")
+	cmd.Flags().BoolVar(&attachExisting, "attach-existing", false, "on collision, attach to the existing agent instead of spawning")
 	return cmd
+}
+
+// spawnChoice is the result of the collision prompt.
+type spawnChoice int
+
+const (
+	spawnFreshTemplate spawnChoice = iota
+	spawnAttachExisting
+	spawnUseCanonicalRepo
+	spawnCancel
+)
+
+// findRepoShortMatches queries the daemon and returns records whose Repo has
+// a short segment matching query (case-insensitive). Slashless stored Repos
+// match by their full value. Records with no Repo are skipped.
+//
+// Scope: this consults the daemon's live agent list only — stopped agents are
+// not considered. By design, once an agent is stopped its repo short-name is
+// immediately free for reuse; the collision prompt exists to prevent two
+// running agents from silently sharing a short-name, not to reserve names
+// across the agent's full history.
+func findRepoShortMatches(homePath, query string) ([]agent.Record, error) {
+	records, err := daemon.AgentList(homePath)
+	if err != nil {
+		return nil, err
+	}
+	var out []agent.Record
+	for _, r := range records {
+		short := agent.ShortRepo(r.Repo)
+		if short == "" {
+			continue
+		}
+		if strings.EqualFold(short, query) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// resolveSpawnCollision decides what to do when a slashless repo query matches
+// exactly one existing agent. Flags force a non-interactive choice; otherwise
+// the user is prompted when a TTY is attached. Non-interactive CLI runs
+// default to "fresh template" to preserve the current scripting behavior.
+// (The web UI does not reach this path — it calls the daemon directly.)
+func resolveSpawnCollision(match agent.Record, template string, reuseOwner, attachExisting bool) (spawnChoice, error) {
+	switch {
+	case attachExisting:
+		return spawnAttachExisting, nil
+	case reuseOwner:
+		if match.Repo == "" {
+			return spawnCancel, fmt.Errorf("--reuse-owner set but existing agent %s has no stored repo", match.Name)
+		}
+		return spawnUseCanonicalRepo, nil
+	case !agentIsTTY():
+		return spawnFreshTemplate, nil
+	}
+
+	if match.Repo != "" {
+		fmt.Fprintf(agentStderr, "\nAn agent already targets %s:\n", match.Repo)
+	} else {
+		fmt.Fprintf(agentStderr, "\nAn agent already matches %q:\n", match.Name)
+	}
+	fmt.Fprintf(agentStderr, "  name:     %s\n", match.Name)
+	fmt.Fprintf(agentStderr, "  template: %s\n\n", dashIfEmpty(match.Template))
+	fmt.Fprintln(agentStderr, "  a) attach to the existing agent")
+	if match.Repo != "" {
+		fmt.Fprintf(agentStderr, "  b) spawn a new agent using that canonical repo (%s)\n", match.Repo)
+	}
+	fmt.Fprintf(agentStderr, "  c) spawn a fresh agent under template %q (current behavior)\n", template)
+	fmt.Fprintln(agentStderr, "  q) cancel")
+	if _, err := fmt.Fprint(agentStderr, "\nchoice [c]: "); err != nil {
+		return spawnCancel, fmt.Errorf("writing prompt: %w", err)
+	}
+
+	reader := bufio.NewReader(agentStdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return spawnCancel, fmt.Errorf("reading choice: %w", err)
+	}
+	choice := strings.ToLower(strings.TrimSpace(line))
+	// EOF with an empty line (piped input that closed, Ctrl-D without input)
+	// is treated as cancel — silently defaulting to "fresh template" would
+	// surprise a user who closed stdin expecting the command to abort.
+	if errors.Is(err, io.EOF) && choice == "" {
+		return spawnCancel, fmt.Errorf("spawn cancelled (stdin closed)")
+	}
+	switch choice {
+	case "a":
+		return spawnAttachExisting, nil
+	case "b":
+		if match.Repo == "" {
+			return spawnCancel, fmt.Errorf("existing agent %s has no stored repo; cannot reuse owner", match.Name)
+		}
+		return spawnUseCanonicalRepo, nil
+	case "", "c":
+		return spawnFreshTemplate, nil
+	case "q":
+		return spawnCancel, fmt.Errorf("spawn cancelled")
+	default:
+		return spawnCancel, fmt.Errorf("unknown choice %q", choice)
+	}
+}
+
+// attachLocal performs the local tmux-attach flow: look up the canonical
+// session via the daemon, then hand off to tmux with syscall.Exec so the TTY
+// owner is tmux itself. Shared between `leo agent attach` and the collision
+// prompt's "attach-existing" branch.
+func attachLocal(homePath, query string) error {
+	session, err := daemon.AgentSession(homePath, query)
+	if err != nil {
+		return fmt.Errorf("looking up session: %w", err)
+	}
+	tmuxPath, err := exec.LookPath("tmux")
+	if err != nil {
+		return fmt.Errorf("tmux not found in PATH: %w", err)
+	}
+	return agentSyscallExec(tmuxPath, []string{"tmux", "attach", "-t", session}, os.Environ())
 }
 
 // --- attach ---
@@ -202,17 +404,74 @@ the usual tmux prefix + d (default: C-b d).`,
 			}
 
 			if !res.Localhost {
-				// Remote: derive the session name locally and SSH -t attach.
-				// We don't proxy through `ssh host leo agent attach` because that
-				// would require another tmux nesting level.
-				return attachTmuxSession(res, agentSessionName(name))
+				// Remote: resolve the shorthand through the remote daemon first,
+				// then SSH -t attach to the canonical tmux session. Going via the
+				// daemon lets the user pass shorthand (repo, short suffix) over SSH
+				// and surfaces clear "no match" / "ambiguous" errors before attach.
+				session, err := resolveRemoteSession(res, name)
+				if err != nil {
+					return err
+				}
+				return attachTmuxSession(res, session)
 			}
 
-			session, err := daemon.AgentSession(cfg.HomePath, name)
+			return attachLocal(cfg.HomePath, name)
+		},
+	}
+	addHostFlag(cmd, &host)
+	return cmd
+}
+
+// resolveRemoteSession shells `ssh <host> leo agent session-name <query>` to
+// ask the remote daemon for the canonical tmux session. Going through the
+// daemon lets the user pass shorthand over SSH and surface clear "no match" /
+// "ambiguous" errors before the tmux attach.
+func resolveRemoteSession(res config.HostResolution, query string) (string, error) {
+	args := buildSSHArgs(res, res.Host.RemoteLeoPath(), "agent", "session-name", query)
+	cmd := agentExecCommand("ssh", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", fmt.Errorf("resolving remote agent %q: %w: %s", query, err, msg)
+		}
+		return "", fmt.Errorf("resolving remote agent %q: %w", query, err)
+	}
+	session := strings.TrimSpace(string(out))
+	if session == "" {
+		return "", fmt.Errorf("remote returned empty session name for %q", query)
+	}
+	return session, nil
+}
+
+// --- session-name ---
+
+func newAgentSessionNameCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:   "session-name <query>",
+		Short: "Print the tmux session name for an agent (supports shorthand)",
+		Long: `Resolve a shorthand query to the canonical tmux session name and print it
+to stdout. Useful as a building block for shell scripts and the remote attach
+flow. The query can be an agent name, the canonical repo, a repo short name,
+or any unambiguous suffix.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			query := args[0]
+			cfg, res, err := dispatch(host)
 			if err != nil {
-				return fmt.Errorf("looking up session: %w", err)
+				return err
 			}
-			return attachTmuxSession(res, session)
+			if !res.Localhost {
+				return runRemote(res, []string{"session-name", query})
+			}
+			resolved, err := daemon.AgentResolve(cfg.HomePath, query)
+			if err != nil {
+				return fmt.Errorf("resolving agent: %w", err)
+			}
+			fmt.Fprintln(agentStdout, resolved.Session)
+			return nil
 		},
 	}
 	addHostFlag(cmd, &host)
