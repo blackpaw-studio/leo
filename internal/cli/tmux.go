@@ -72,4 +72,3 @@ func runShellCmd(name string, args []string) error {
 	c.Stderr = agentStderr
 	return c.Run()
 }
-
