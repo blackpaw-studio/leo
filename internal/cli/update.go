@@ -64,10 +64,18 @@ func newUpdateCmd() *cobra.Command {
 				success.Println("Telegram plugin updated.")
 			}
 
-			// Workspace refresh
+			// Workspace refresh — only when the install has a local workspace.
+			// Pure client installs (client.hosts only) and unconfigured hosts
+			// skip this step; they dispatch to remote leo servers or haven't
+			// run `leo setup` yet.
 			cfg, err := loadConfig()
 			if err != nil {
-				warn.Printf("Skipping workspace refresh: %v\n", err)
+				info.Printf("Skipping workspace refresh (no leo.yaml — client-only install?)\n")
+				return nil
+			}
+
+			if cfg.IsClientOnly() {
+				info.Println("Client-only install — skipping workspace refresh.")
 				return nil
 			}
 
