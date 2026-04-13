@@ -63,6 +63,26 @@ templates:
     workspace: ~/agents
 ```
 
+### Remote CLI
+
+The `leo` binary is dual-purpose. On a server it supervises processes and runs tasks. On a laptop, with a `client.hosts` section in `leo.yaml`, it becomes a thin remote client that manages and attaches to agents on a leo host over SSH.
+
+```yaml
+client:
+  default_host: prod
+  hosts:
+    prod:
+      ssh: evan@leo.example.com
+```
+
+```bash
+leo agent spawn coding --repo blackpaw-studio/leo --name demo
+leo agent attach demo     # full tmux attach to the remote Claude TUI
+leo agent list
+```
+
+See the [Remote CLI guide](https://blackpaw-studio.github.io/leo/guides/remote-cli/).
+
 ### Scheduled Tasks
 
 Cron-driven tasks that invoke Claude in non-interactive mode. Write a prompt file, set a schedule, and Leo handles the rest. Tasks can send Telegram messages, run silently, retry on failure, and route to forum topics.
@@ -110,6 +130,7 @@ The Telegram plugin also gives Claude tools for replies, reactions, message edit
 | `leo task list` / `add` / `remove` / `enable` / `disable` | Manage scheduled tasks |
 | `leo task history` / `logs` | Inspect task runs and log output |
 | `leo template list` / `show` / `remove` | Inspect and remove agent templates |
+| `leo agent list` / `spawn` / `attach` / `stop` / `logs` | Spawn and control ephemeral agents (local or over SSH) |
 | `leo run <task>` | Run a task once |
 | `leo status` | Overall status (service, processes, tasks, templates, web UI) |
 | `leo validate` | Check config, prerequisites, and workspace health |

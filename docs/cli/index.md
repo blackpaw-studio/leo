@@ -11,6 +11,7 @@ Leo provides commands for setup, process management, task scheduling, template m
 | [`leo process`](process.md) | List, add, remove, enable, or disable supervised processes |
 | [`leo task`](task.md) | Manage scheduled tasks (list, add, remove, enable, disable, history, logs) |
 | [`leo template`](template.md) | Inspect and remove agent templates |
+| [`leo agent`](agent.md) | Spawn and control ephemeral agents (local or via SSH) |
 | [`leo run <task>`](run.md) | Run a scheduled task once |
 | [`leo status`](#leo-status) | Show overall status (service, processes, tasks, templates, web UI) |
 | [`leo validate`](#leo-validate) | Check config, prerequisites, and workspace health |
