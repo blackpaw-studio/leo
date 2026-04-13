@@ -33,6 +33,19 @@ func attachTmuxSession(res config.HostResolution, session string) error {
 	return agentSyscallExec(tmuxPath, []string{"tmux", "attach", "-t", session}, os.Environ())
 }
 
+// captureTmuxPane runs a one-shot `tmux capture-pane -p -S -<lines>` against
+// the given session and writes output to the shared agentStdout. Local and
+// remote paths share identical shape — remote just wraps through ssh with the
+// host's configured tmux path.
+func captureTmuxPane(res config.HostResolution, session string, lines int) error {
+	if res.Localhost {
+		return runShellCmd("tmux", []string{"capture-pane", "-t", session, "-p", "-S", fmt.Sprintf("-%d", lines)})
+	}
+	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
+	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath(), "capture-pane", "-t", session, "-p", "-S", fmt.Sprintf("-%d", lines))
+	return runShellCmd("ssh", sshArgs)
+}
+
 // followTmuxSession streams tmux pane output via `tail -f` on a pipe-pane log.
 // Used by `leo agent logs -f` and `leo process logs -f`. When res is remote, it
 // shells through ssh and uses the host's configured tmux path.

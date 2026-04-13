@@ -24,7 +24,70 @@ func newProcessCmd() *cobra.Command {
 		newProcessRemoveCmd(),
 		newProcessEnableCmd(),
 		newProcessDisableCmd(),
+		newProcessAttachCmd(),
+		newProcessLogsCmd(),
 	)
+	return cmd
+}
+
+// --- attach ---
+
+func newProcessAttachCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:   "attach <name>",
+		Short: "Attach to a supervised process's tmux session",
+		Long: `Attach to the tmux session of a configured process. Locally this
+replaces the current process with tmux so the TUI owns the TTY cleanly.
+Remotely it runs 'ssh -t <host> tmux attach -t leo-<name>'. Detach with the
+normal tmux prefix + d (default: C-b d).`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProcessNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			_, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			// Processes use a stable session name — no daemon round-trip needed
+			// for either local or remote dispatch.
+			return attachTmuxSession(res, processSessionName(name))
+		},
+	}
+	addHostFlag(cmd, &host)
+	return cmd
+}
+
+// --- logs ---
+
+func newProcessLogsCmd() *cobra.Command {
+	var host string
+	var lines int
+	var follow bool
+	cmd := &cobra.Command{
+		Use:   "logs <name>",
+		Short: "Show recent output from a supervised process's tmux pane",
+		Long: `Capture the tmux pane of a configured process. --follow streams new
+output via a tail -f on a tmux pipe-pane log (use Ctrl-C to exit).`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProcessNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			_, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+
+			session := processSessionName(name)
+			if follow {
+				return followTmuxSession(res, session, lines)
+			}
+			return captureTmuxPane(res, session, lines)
+		},
+	}
+	addHostFlag(cmd, &host)
+	cmd.Flags().IntVarP(&lines, "lines", "n", 200, "number of trailing lines to show")
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "stream output (tail -f)")
 	return cmd
 }
 
