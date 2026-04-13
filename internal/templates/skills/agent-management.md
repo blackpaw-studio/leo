@@ -58,6 +58,6 @@ GET /api/template/list
 
 - Agents use `--remote-control` so they appear in claude.ai/code
 - Agent names follow the pattern: `leo-{template}-{owner}-{repo-short}` for `owner/repo` spawns, or `leo-{template}-{name}` for bare-name spawns
-- Stop/logs/session APIs accept shorthand: any unambiguous repo short, full `owner/repo`, or agent-name suffix resolves to the canonical record
+- Stop/logs APIs accept shorthand: any unambiguous repo short, full `owner/repo`, or agent-name suffix resolves to the canonical record
 - Agents are ephemeral — they're not persisted to leo.yaml but survive daemon restarts via agents.json
 - Templates are defined in the `templates:` section of leo.yaml

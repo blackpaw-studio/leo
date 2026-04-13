@@ -9,12 +9,12 @@ leo agent list                                        # list running agents
 leo agent spawn <template> --repo <owner/repo>        # spawn from a template
 leo agent spawn <template> --repo <name> --name <n>   # spawn with a custom name
 leo agent attach <name>                               # attach to the agent's tmux session
-leo agent session <name>                              # print the tmux session name
+leo agent session-name <query>                        # print the tmux session name
 leo agent stop <name>                                 # stop a running agent
 leo agent logs <name> [-n LINES] [-f]                 # tail the agent's pane output
 ```
 
-`<name>` for `attach`, `session`, `stop`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below.
+`<name>` for `attach`, `stop`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `session-name` is the explicit resolver.
 
 ## Flags
 
@@ -50,7 +50,7 @@ See the [Remote CLI guide](../guides/remote-cli.md) for a complete walkthrough.
 
 ## Shorthand Resolution
 
-Any subcommand that takes `<name>` — `attach`, `session`, `stop`, `logs` — accepts shorthand in place of the canonical agent name. Resolution walks these tiers in order and returns the first unambiguous match against live agents:
+Any subcommand that takes `<name>` — `attach`, `stop`, `logs` — accepts shorthand in place of the canonical agent name. `session-name` is the explicit resolver and accepts the same queries. Resolution walks these tiers in order and returns the first unambiguous match against live agents:
 
 1. Exact full name (case-insensitive)
 2. Exact stored repo (e.g. `owner/name`)
@@ -111,12 +111,12 @@ Attach to the agent's tmux session. Locally, Leo replaces the CLI process with `
 
 `<name>` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution). Detach with the normal tmux prefix + `d` (default: `C-b d`). The agent keeps running.
 
-### `leo agent session <name>`
+### `leo agent session-name <query>`
 
-Print the tmux session name for an agent. Shorthand resolves the same way as `attach`/`stop`/`logs` — useful in scripts that want the canonical session string without running a full attach:
+Resolve a shorthand query to the canonical tmux session name and print it to stdout. Useful in scripts that want the canonical session string without attaching, and the building block for the remote attach round-trip:
 
 ```bash
-tmux attach -t "$(leo agent session leo)"
+tmux attach -t "$(leo agent session-name leo)"
 ```
 
 ### `leo agent stop <name>`
