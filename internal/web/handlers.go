@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -429,9 +430,7 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	warn := s.reloadConfigOrWarn()
 
 	action := "enabled"
 	if !task.Enabled {
@@ -444,9 +443,10 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
 		return
 	}
+	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Task %q %s", name, action), warn)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Task %q %s", name, action)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "tasks.html", data) //nolint:errcheck
 }
@@ -507,11 +507,10 @@ func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	warn := s.reloadConfigOrWarn()
 	s.restartNeeded = true
-	s.renderFlash(w, "success", "Defaults saved")
+	typ, msg := appendReloadWarning("success", "Defaults saved", warn)
+	s.renderFlash(w, typ, msg)
 }
 
 func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
@@ -567,11 +566,10 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	warn := s.reloadConfigOrWarn()
 	s.restartNeeded = true
-	s.renderFlash(w, "success", fmt.Sprintf("Process %q saved", name))
+	typ, msg := appendReloadWarning("success", fmt.Sprintf("Process %q saved", name), warn)
+	s.renderFlash(w, typ, msg)
 }
 
 func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
@@ -633,10 +631,9 @@ func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
-	s.renderFlash(w, "success", fmt.Sprintf("Task %q saved", name))
+	warn := s.reloadConfigOrWarn()
+	typ, msg := appendReloadWarning("success", fmt.Sprintf("Task %q saved", name), warn)
+	s.renderFlash(w, typ, msg)
 }
 
 type promptEditorData struct {
@@ -724,6 +721,7 @@ func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update config if prompt_file changed
+	var reloadWarn string
 	if task.PromptFile != promptFile {
 		task.PromptFile = promptFile
 		cfg.Tasks[name] = task
@@ -731,9 +729,7 @@ func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
 			s.renderFlash(w, "error", errMsg)
 			return
 		}
-		if s.reloader != nil {
-			s.reloader.ReloadConfig() //nolint:errcheck
-		}
+		reloadWarn = s.reloadConfigOrWarn()
 	}
 
 	workspace := cfg.TaskWorkspace(task)
@@ -744,7 +740,8 @@ func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.renderFlash(w, "success", fmt.Sprintf("Prompt saved for %q", name))
+	typ, msg := appendReloadWarning("success", fmt.Sprintf("Prompt saved for %q", name), reloadWarn)
+	s.renderFlash(w, typ, msg)
 }
 
 func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) {
@@ -831,6 +828,33 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 type flashData struct {
 	Type    string // "success" or "error"
 	Message string
+}
+
+// reloadConfigOrWarn invokes the in-process scheduler reloader. It returns
+// an empty string on success or when no reloader is configured. On failure
+// it logs the error and returns a human-readable warning that callers
+// should surface via their flash message so operators notice that the
+// saved config didn't actually take effect in the scheduler.
+func (s *Server) reloadConfigOrWarn() string {
+	if s.reloader == nil {
+		return ""
+	}
+	if err := s.reloader.ReloadConfig(); err != nil {
+		msg := fmt.Sprintf("scheduler reload failed: %v", err)
+		log.Printf("web: %s", msg)
+		return msg
+	}
+	return ""
+}
+
+// appendReloadWarning elevates a success flash to a warning when a reload
+// produced a warning, appending the warning to the original message.
+// Pass-through when warn is empty, or when typ is already an error.
+func appendReloadWarning(typ, msg, warn string) (string, string) {
+	if warn == "" || typ == "error" {
+		return typ, msg
+	}
+	return "warning", fmt.Sprintf("%s — %s", msg, warn)
 }
 
 func (s *Server) renderFlash(w http.ResponseWriter, typ, msg string) {
@@ -1043,9 +1067,7 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	warn := s.reloadConfigOrWarn()
 
 	s.restartNeeded = true
 
@@ -1055,9 +1077,10 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
 		return
 	}
+	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Process %q added", name), warn)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q added", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
 }
@@ -1082,9 +1105,7 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	warn := s.reloadConfigOrWarn()
 
 	s.restartNeeded = true
 
@@ -1093,9 +1114,10 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
 		return
 	}
+	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Process %q deleted", name), warn)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Process %q deleted", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
 }
@@ -1148,9 +1170,7 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	reloadWarn := s.reloadConfigOrWarn()
 
 	data, err := s.buildDashboardData()
 	if err != nil {
@@ -1166,6 +1186,7 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		flashType = "warning"
 		message = fmt.Sprintf("Task %q added, but prompt file %s does not exist yet", name, missing)
 	}
+	flashType, message = appendReloadWarning(flashType, message, reloadWarn)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
@@ -1210,18 +1231,17 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	warn := s.reloadConfigOrWarn()
 
 	data, err := s.buildDashboardData()
 	if err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
 		return
 	}
+	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Task %q deleted", name), warn)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Task %q deleted", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
 }
@@ -1283,10 +1303,9 @@ func (s *Server) handleConfigTemplate(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
-	s.renderFlash(w, "success", fmt.Sprintf("Template %q saved", name))
+	warn := s.reloadConfigOrWarn()
+	typ, msg := appendReloadWarning("success", fmt.Sprintf("Template %q saved", name), warn)
+	s.renderFlash(w, typ, msg)
 }
 
 func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
@@ -1343,18 +1362,17 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	warn := s.reloadConfigOrWarn()
 
 	data, err := s.buildDashboardData()
 	if err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
 		return
 	}
+	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Template %q added", name), warn)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Template %q added", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
 }
@@ -1379,18 +1397,17 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	if s.reloader != nil {
-		s.reloader.ReloadConfig() //nolint:errcheck
-	}
+	warn := s.reloadConfigOrWarn()
 
 	data, err := s.buildDashboardData()
 	if err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
 		return
 	}
+	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Template %q deleted", name), warn)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: "success", Message: fmt.Sprintf("Template %q deleted", name)}) //nolint:errcheck
+	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
 	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
 }
