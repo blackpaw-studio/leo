@@ -16,6 +16,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// agentSessionName is the supervisor's stable session-name convention.
+func agentSessionName(name string) string { return "leo-" + name }
+
+// processSessionName matches internal/service.ProcessSpec.Name — the supervisor
+// creates `leo-<name>` tmux sessions for configured processes.
+func processSessionName(name string) string { return "leo-" + name }
+
 // Testability seam — overridden in tests.
 var (
 	agentExecCommand           = exec.Command
@@ -195,46 +202,21 @@ the usual tmux prefix + d (default: C-b d).`,
 			}
 
 			if !res.Localhost {
-				// Remote: confirm the agent exists (friendlier error) then SSH -t attach.
-				// We don't proxy through `ssh host leo agent attach` because that would
-				// require another tmux nesting level.
-				session, err := resolveRemoteSession(res, name)
-				if err != nil {
-					return err
-				}
-				sshArgs := append([]string{"-t", res.Host.SSH}, res.Host.SSHArgs...)
-				sshArgs = append(sshArgs, res.Host.RemoteTmuxPath(), "attach", "-t", session)
-				c := agentExecCommand("ssh", sshArgs...)
-				c.Stdin = os.Stdin
-				c.Stdout = agentStdout
-				c.Stderr = agentStderr
-				return c.Run()
+				// Remote: derive the session name locally and SSH -t attach.
+				// We don't proxy through `ssh host leo agent attach` because that
+				// would require another tmux nesting level.
+				return attachTmuxSession(res, agentSessionName(name))
 			}
 
 			session, err := daemon.AgentSession(cfg.HomePath, name)
 			if err != nil {
 				return fmt.Errorf("looking up session: %w", err)
 			}
-			tmuxPath, err := exec.LookPath("tmux")
-			if err != nil {
-				return fmt.Errorf("tmux not found in PATH: %w", err)
-			}
-			// Replace the CLI process so tmux owns the TTY cleanly. Returns an error
-			// only if exec itself fails; on success this call does not return.
-			return agentSyscallExec(tmuxPath, []string{"tmux", "attach", "-t", session}, os.Environ())
+			return attachTmuxSession(res, session)
 		},
 	}
 	addHostFlag(cmd, &host)
 	return cmd
-}
-
-// resolveRemoteSession shells `ssh <host> leo agent session-name <name>` to learn
-// the tmux session name without attaching. For now it just derives it locally
-// (leo-<name>) since the daemon uses a stable naming scheme — verifying the
-// agent exists is left to the subsequent `tmux attach` call, which returns a
-// friendly "no sessions" message on failure.
-func resolveRemoteSession(_ config.HostResolution, name string) (string, error) {
-	return "leo-" + name, nil
 }
 
 // --- stop ---
@@ -285,25 +267,7 @@ func newAgentLogsCmd() *cobra.Command {
 			if follow {
 				// Follow mode is a `tail -f` on the tmux pane — simpler than
 				// streaming over the socket. Remote follow uses ssh.
-				session := "leo-" + name
-				buildTailCmd := func(tmuxCmd string) string {
-					return fmt.Sprintf("%s capture-pane -t %s -p -S -%d; %s pipe-pane -t %s 'cat >> /tmp/%s.log' 2>/dev/null; tail -f /tmp/%s.log",
-						tmuxCmd, session, lines, tmuxCmd, session, session, session)
-				}
-				if res.Localhost {
-					c := agentExecCommand("sh", "-c", buildTailCmd("tmux"))
-					c.Stdin = os.Stdin
-					c.Stdout = agentStdout
-					c.Stderr = agentStderr
-					return c.Run()
-				}
-				sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
-				sshArgs = append(sshArgs, buildTailCmd(res.Host.RemoteTmuxPath()))
-				c := agentExecCommand("ssh", sshArgs...)
-				c.Stdin = os.Stdin
-				c.Stdout = agentStdout
-				c.Stderr = agentStderr
-				return c.Run()
+				return followTmuxSession(res, agentSessionName(name), lines)
 			}
 
 			if !res.Localhost {
