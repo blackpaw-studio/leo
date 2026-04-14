@@ -2624,15 +2624,15 @@ bot.command("clear", async (ctx) => {
   }
   const port = process.env.LEO_WEB_PORT ?? "8370";
   const baseUrl = `http://127.0.0.1:${port}`;
-  // Interrupt first, then clear after delay
-  fetch(`${baseUrl}/web/process/${processName}/interrupt`, { method: "POST" }).catch(() => {});
-  setTimeout(() => {
-    fetch(`${baseUrl}/web/process/${processName}/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keys: ["/clear", "Enter"] }),
-    }).catch(() => {});
-  }, 3000);
+  // Don't interrupt first — the Escape storm puts modern Claude Code into
+  // rewind/history mode, which swallows the slash-command keystrokes. If the
+  // user needs to interrupt an in-progress generation, they can run /stop
+  // explicitly before /clear.
+  fetch(`${baseUrl}/web/process/${processName}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keys: ["/clear", "Enter"] }),
+  }).catch(() => {});
   await ctx.reply("🧹 Clearing context...");
 });
 
@@ -2646,15 +2646,11 @@ bot.command("compact", async (ctx) => {
   }
   const port = process.env.LEO_WEB_PORT ?? "8370";
   const baseUrl = `http://127.0.0.1:${port}`;
-  // Interrupt first, then compact after delay
-  fetch(`${baseUrl}/web/process/${processName}/interrupt`, { method: "POST" }).catch(() => {});
-  setTimeout(() => {
-    fetch(`${baseUrl}/web/process/${processName}/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keys: ["/compact", "Enter"] }),
-    }).catch(() => {});
-  }, 3000);
+  fetch(`${baseUrl}/web/process/${processName}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keys: ["/compact", "Enter"] }),
+  }).catch(() => {});
   await ctx.reply("📦 Compacting context...");
 });
 
