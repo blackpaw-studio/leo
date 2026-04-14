@@ -5,16 +5,18 @@ Spawn and control ephemeral Claude agents on a leo server. The `leo` binary is d
 ## Usage
 
 ```bash
-leo agent list                                        # list running agents
-leo agent spawn <template> --repo <owner/repo>        # spawn from a template
-leo agent spawn <template> --repo <name> --name <n>   # spawn with a custom name
-leo agent attach <name>                               # attach to the agent's tmux session
-leo agent session-name <query>                        # print the tmux session name
-leo agent stop <name>                                 # stop a running agent
-leo agent logs <name> [-n LINES] [-f]                 # tail the agent's pane output
+leo agent list                                                     # list running agents
+leo agent spawn <template> --repo <owner/repo>                     # spawn from a template
+leo agent spawn <template> --repo <name> --name <n>                # spawn with a custom name
+leo agent spawn <template> --repo <owner/repo> --worktree <branch> # spawn into a dedicated git worktree
+leo agent attach <name>                                            # attach to the agent's tmux session
+leo agent session-name <query>                                     # print the tmux session name
+leo agent stop <name> [--prune]                                    # stop a running agent (optionally remove worktree)
+leo agent prune <name>                                             # remove a stopped worktree agent's on-disk state
+leo agent logs <name> [-n LINES] [-f]                              # tail the agent's pane output
 ```
 
-`<name>` for `attach`, `stop`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `session-name` is the explicit resolver.
+`<name>` for `attach`, `stop`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `prune` takes the canonical name only (stopped agents don't appear in the resolver). `session-name` is the explicit resolver.
 
 ## Flags
 
@@ -91,6 +93,23 @@ leo agent spawn coding --repo my-app --name scratch
 
 `--name` overrides the auto-derived name. When the agent already exists, Leo appends a numeric suffix (`-1`, `-2`, …) so repeated spawns never collide.
 
+#### Worktree Spawns
+
+Pass `--worktree <branch>` to isolate the agent in its own git worktree instead of sharing a single clone:
+
+```bash
+leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
+leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/new --base main
+```
+
+- `--worktree` requires `owner/repo` (slashless repos have no canonical clone to branch from).
+- If the branch exists locally or on `origin`, Leo attaches to it. Otherwise Leo creates a new branch off `--base`, defaulting to origin's default branch.
+- The worktree lives at `<baseWorkspace>/.worktrees/<repo-short>/<branch-slug>/`. See [workspace structure](../configuration/workspace-structure.md) for the full layout.
+- The agent name includes the branch slug: `leo-<template>-<owner>-<repo>-<branch-slug>`.
+- `leo agent list` shows a `BRANCH` column for worktree agents; stopped worktree agents stay in the list until you `prune` them.
+
+#### Collision Prompt
+
 When `--repo` is a bare name (no slash) that matches the short name of a running agent, Leo prompts for how to proceed:
 
 - **a** — attach to the existing agent
@@ -121,7 +140,44 @@ tmux attach -t "$(leo agent session-name leo)"
 
 ### `leo agent stop <name>`
 
-Stop a running agent. Kills the tmux session, deregisters from the supervisor, and removes the agent from the agentstore. Workspaces are left in place. Accepts shorthand.
+Stop a running agent. Kills the tmux session and deregisters from the supervisor. Accepts shorthand.
+
+- Shared-workspace agents: the record is removed; the workspace stays on disk.
+- Worktree agents: the record is preserved so you can reattach or inspect the branch. Pass `--prune` to also remove the worktree and record in a single round trip.
+
+Flags (only meaningful with `--prune`, and only for worktree agents):
+
+- `--prune` — also remove the on-disk worktree and agentstore record
+- `--force` — with `--prune`, remove even when the worktree is dirty
+- `--delete-branch` — with `--prune`, delete the local branch after the worktree is gone
+
+### `leo agent prune <name>`
+
+Remove the on-disk worktree and agentstore record for a worktree agent that has already been stopped. No-op (returns an error) for shared-workspace agents. Takes the canonical agent name — shorthand resolution only matches live agents, so `prune` requires the full name you saw in the last `leo agent list`. Use `leo agent stop --prune` instead when the agent is still running and you want shorthand.
+
+```bash
+leo agent prune leo-coding-blackpaw-studio-leo-feat-cache
+leo agent prune feat-cache --delete-branch
+```
+
+Flags:
+
+- `--force` — remove even when the worktree has uncommitted changes, or the branch is unmerged
+- `--delete-branch` — delete the local branch after the worktree is gone
+
+Typical flow:
+
+```bash
+leo agent stop feat-cache        # stop, leave worktree for inspection
+# … review the branch, push a PR, merge …
+leo agent prune feat-cache --delete-branch
+```
+
+Or in one step:
+
+```bash
+leo agent stop feat-cache --prune --delete-branch
+```
 
 ### `leo agent logs <name>`
 

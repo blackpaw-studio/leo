@@ -77,8 +77,10 @@ client:
 
 ```bash
 leo agent spawn coding --repo blackpaw-studio/leo --name demo
+leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache  # dedicated git worktree
 leo agent attach demo     # full tmux attach to the remote Claude TUI
 leo agent list
+leo agent stop feat-cache --prune --delete-branch                        # stop + clean up worktree
 ```
 
 See the [Remote CLI guide](https://blackpaw-studio.github.io/leo/guides/remote-cli/).
