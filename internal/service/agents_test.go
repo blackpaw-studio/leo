@@ -357,10 +357,10 @@ func TestRestoreAgentsRemovesFailedSharedRecord(t *testing.T) {
 
 func TestArgsWithResumeStripsExistingSessionFlags(t *testing.T) {
 	cases := []struct {
-		name    string
-		args    []string
-		sid     string
-		want    []string
+		name string
+		args []string
+		sid  string
+		want []string
 	}{
 		{
 			name: "strips --session-id and appends --resume",
