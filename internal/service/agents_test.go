@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
@@ -163,5 +165,95 @@ func TestStatesIncludesEphemeralFlag(t *testing.T) {
 	states := sv.States()
 	if !states["agent"].Ephemeral {
 		t.Error("States() should propagate Ephemeral flag")
+	}
+}
+
+func TestRestoreAgentsDropsWorktreeWithMissingWorkspace(t *testing.T) {
+	home := t.TempDir()
+	// Seed a worktree record whose Workspace path does not exist on disk.
+	rec := agentstore.Record{
+		Name:          "leo-coding-owner-repo-feat-x",
+		Template:      "coding",
+		Repo:          "owner/repo",
+		Workspace:     filepath.Join(t.TempDir(), "does-not-exist"),
+		Branch:        "feat/x",
+		CanonicalPath: filepath.Join(t.TempDir(), "canonical-missing"),
+		ClaudeArgs:    []string{"--model", "sonnet"},
+		WebPort:       "8370",
+		SpawnedAt:     time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed agentstore: %v", err)
+	}
+
+	sv := NewSupervisor()
+	restored := RestoreAgents(home, "", sv)
+	if restored != 0 {
+		t.Fatalf("expected 0 restored, got %d", restored)
+	}
+
+	stored, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("agentstore.Load: %v", err)
+	}
+	if _, ok := stored[rec.Name]; ok {
+		t.Fatalf("expected record dropped, still present: %+v", stored)
+	}
+}
+
+func TestRestoreAgentsKeepsStoppedWorktreeRecord(t *testing.T) {
+	home := t.TempDir()
+	wtDir := t.TempDir()
+	// A worktree record whose on-disk path exists but whose tmux session is
+	// dead (tmuxPath="" bypasses has-session, simulating a tmux that reports
+	// "no such session"). Worktree records must survive this to give prune a
+	// chance to clean them up.
+	rec := agentstore.Record{
+		Name:          "leo-coding-owner-repo-feat-preserve",
+		Template:      "coding",
+		Repo:          "owner/repo",
+		Workspace:     wtDir,
+		Branch:        "feat/preserve",
+		CanonicalPath: t.TempDir(),
+		ClaudeArgs:    []string{"--model", "sonnet"},
+		WebPort:       "8370",
+		SpawnedAt:     time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	sv := NewSupervisor()
+	_ = RestoreAgents(home, "", sv)
+
+	stored, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, ok := stored[rec.Name]; !ok {
+		t.Fatalf("stopped worktree record should survive restore; got %+v", stored)
+	}
+}
+
+func TestRestoreAgentsRemovesStoppedSharedRecord(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:       "leo-coding-plain",
+		Template:   "coding",
+		Workspace:  t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet"},
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	sv := NewSupervisor()
+	_ = RestoreAgents(home, "", sv)
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := stored[rec.Name]; ok {
+		t.Fatalf("stopped shared-workspace record should be removed; got %+v", stored)
 	}
 }

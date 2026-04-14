@@ -30,8 +30,9 @@ type ProcessStateInfo = agent.ProcessState
 // AgentManager is the interface daemon socket handlers use to drive the agent
 // lifecycle. It is satisfied by *agent.Manager.
 type AgentManager interface {
-	Spawn(spec agent.SpawnSpec) (agent.Record, error)
+	Spawn(ctx context.Context, spec agent.SpawnSpec) (agent.Record, error)
 	Stop(name string) error
+	Prune(ctx context.Context, name string, opts agent.PruneOptions) error
 	List() []agent.Record
 	Logs(name string, lines int) (string, error)
 	SessionName(name string) string
@@ -83,6 +84,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /agents/list", s.handleAgentList)
 	mux.HandleFunc("GET /agents/resolve", s.handleAgentResolve)
 	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
+	mux.HandleFunc("POST /agents/{name}/prune", s.handleAgentPrune)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
 

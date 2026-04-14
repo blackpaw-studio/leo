@@ -16,8 +16,15 @@ type Response struct {
 
 // Error code constants used on the wire.
 const (
-	ErrorCodeNotFound  = "not_found"
-	ErrorCodeAmbiguous = "ambiguous"
+	ErrorCodeNotFound           = "not_found"
+	ErrorCodeAmbiguous          = "ambiguous"
+	ErrorCodeWorktreeDirty      = "worktree_dirty"
+	ErrorCodeBranchCheckedOut   = "branch_checked_out"
+	ErrorCodeBranchNotMerged    = "branch_not_merged"
+	ErrorCodeBranchNotFound     = "branch_not_found"
+	ErrorCodeAgentStillRunning  = "agent_still_running"
+	ErrorCodeNotWorktreeAgent   = "not_worktree_agent"
+	ErrorCodeWorktreeRequireSep = "worktree_requires_slash"
 )
 
 // TaskAddRequest is the body for POST /task/add.
@@ -42,6 +49,23 @@ type AgentSpawnRequest struct {
 	Template string `json:"template"`
 	Repo     string `json:"repo"`
 	Name     string `json:"name,omitempty"`
+	// Branch opts into a dedicated git worktree on this branch. Requires an
+	// owner/repo Repo. When empty, the agent uses today's shared workspace.
+	Branch string `json:"branch,omitempty"`
+	// Base is the ref used to create Branch when it does not already exist.
+	// Ignored when Branch already exists locally or on origin. Defaults to the
+	// repository's default branch.
+	Base string `json:"base,omitempty"`
+}
+
+// AgentPruneRequest is the body for POST /agents/{name}/prune. Prune is a
+// no-op on shared-workspace agents; it removes the on-disk worktree and
+// agentstore record for worktree agents that have already been stopped.
+type AgentPruneRequest struct {
+	// Force lifts the dirty-worktree and unmerged-branch safety checks.
+	Force bool `json:"force,omitempty"`
+	// DeleteBranch removes the local branch after the worktree is gone.
+	DeleteBranch bool `json:"delete_branch,omitempty"`
 }
 
 // AgentLogsResponse is the payload for GET /agents/{name}/logs.

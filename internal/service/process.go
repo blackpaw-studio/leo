@@ -60,21 +60,23 @@ type ProcessState struct {
 
 // Supervisor manages multiple Claude processes.
 type Supervisor struct {
-	mu         sync.RWMutex
-	states     map[string]*ProcessState
-	cancels    map[string]context.CancelFunc // per-process cancel functions for ephemeral agents
-	ctx        context.Context               // parent context from RunSupervised
-	tmuxPath   string
-	claudePath string
-	homePath   string
-	configPath string
+	mu           sync.RWMutex
+	states       map[string]*ProcessState
+	cancels      map[string]context.CancelFunc // per-process cancel functions for ephemeral agents
+	reservations map[string]struct{}           // names atomically claimed by ReserveAgent before SpawnAgent
+	ctx          context.Context               // parent context from RunSupervised
+	tmuxPath     string
+	claudePath   string
+	homePath     string
+	configPath   string
 }
 
 // NewSupervisor creates a new process supervisor.
 func NewSupervisor() *Supervisor {
 	return &Supervisor{
-		states:  make(map[string]*ProcessState),
-		cancels: make(map[string]context.CancelFunc),
+		states:       make(map[string]*ProcessState),
+		cancels:      make(map[string]context.CancelFunc),
+		reservations: make(map[string]struct{}),
 	}
 }
 
@@ -129,6 +131,31 @@ func (s *Supervisor) incrementRestarts(name string) {
 	}
 }
 
+// ReserveAgent atomically claims a name so subsequent concurrent spawns hit a
+// collision error without waiting for slow pre-spawn work (git fetch, worktree
+// add). Pair with ReleaseAgent on any failure before SpawnAgent, or let
+// SpawnAgent consume the reservation on success.
+func (s *Supervisor) ReserveAgent(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.states[name]; exists {
+		return fmt.Errorf("process %q already exists", name)
+	}
+	if _, reserved := s.reservations[name]; reserved {
+		return fmt.Errorf("process %q already reserved", name)
+	}
+	s.reservations[name] = struct{}{}
+	return nil
+}
+
+// ReleaseAgent drops a reservation made by ReserveAgent. Safe to call on a
+// name that was never reserved (no-op) so callers don't need to track state.
+func (s *Supervisor) ReleaseAgent(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.reservations, name)
+}
+
 // SpawnAgent starts an ephemeral process managed by the supervisor.
 // The process is not persisted to config — it lives only in memory.
 // Implements daemon.AgentManager.
@@ -142,6 +169,8 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		s.mu.Unlock()
 		return fmt.Errorf("supervisor not initialized (no context)")
 	}
+	// Consume any reservation so the name is owned by states from here on.
+	delete(s.reservations, spec.Name)
 
 	childCtx, cancel := context.WithCancel(s.ctx) // #nosec G118 -- cancel stored in s.cancels, called by StopAgent
 	s.cancels[spec.Name] = cancel

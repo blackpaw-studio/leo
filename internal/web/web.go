@@ -46,7 +46,7 @@ type ConfigReloader interface {
 // directly, so the same code path backs the web UI, Telegram, the daemon socket,
 // and the CLI. A nil AgentService disables agent UI features.
 type AgentService interface {
-	Spawn(spec agent.SpawnSpec) (agent.Record, error)
+	Spawn(ctx context.Context, spec agent.SpawnSpec) (agent.Record, error)
 	Stop(name string) error
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)

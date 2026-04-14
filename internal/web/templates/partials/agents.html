@@ -33,6 +33,7 @@
                 {{.Status}}
             </div>
             <div class="process-meta">
+                {{if .Branch}}branch: {{.Branch}} &middot; {{end}}
                 {{if uptime .StartedAt}}{{uptime .StartedAt}}{{end}}
                 {{if gt .Restarts 0}}&middot; {{.Restarts}} restart{{if gt .Restarts 1}}s{{end}}{{end}}
             </div>

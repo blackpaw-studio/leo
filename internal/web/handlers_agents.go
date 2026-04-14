@@ -62,7 +62,7 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.agentSvc.Spawn(agent.SpawnSpec{Template: req.Template, Repo: req.Repo, Name: req.Name})
+	rec, err := s.agentSvc.Spawn(r.Context(), agent.SpawnSpec{Template: req.Template, Repo: req.Repo, Name: req.Name})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return
@@ -145,6 +145,7 @@ func (s *Server) handlePartialAgents(w http.ResponseWriter, r *http.Request) {
 				Status:    a.Status,
 				StartedAt: a.StartedAt,
 				Restarts:  a.Restarts,
+				Branch:    a.Branch,
 			})
 		}
 	}
@@ -162,6 +163,7 @@ type agentData struct {
 	Status    string
 	StartedAt time.Time
 	Restarts  int
+	Branch    string
 }
 
 // handleWebAgentSpawn spawns an agent via the web UI (form post).
@@ -183,7 +185,7 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.agentSvc.Spawn(agent.SpawnSpec{Template: templateName, Repo: repo})
+	rec, err := s.agentSvc.Spawn(r.Context(), agent.SpawnSpec{Template: templateName, Repo: repo})
 	if err != nil {
 		s.renderFlash(w, "error", err.Error())
 		return
