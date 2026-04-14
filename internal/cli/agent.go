@@ -63,6 +63,7 @@ so remote calls use your existing SSH setup.`,
 		newAgentSpawnCmd(),
 		newAgentAttachCmd(),
 		newAgentStopCmd(),
+		newAgentPruneCmd(),
 		newAgentLogsCmd(),
 		newAgentSessionNameCmd(),
 	)
@@ -148,11 +149,11 @@ func newAgentListCmd() *cobra.Command {
 				return nil
 			}
 			tw := tabwriter.NewWriter(agentStdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tTEMPLATE\tWORKSPACE\tSTATUS\tRESTARTS")
+			fmt.Fprintln(tw, "NAME\tTEMPLATE\tBRANCH\tWORKSPACE\tSTATUS\tRESTARTS")
 			for _, r := range records {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\n",
-					r.Name, dashIfEmpty(r.Template), dashIfEmpty(r.Workspace),
-					dashIfEmpty(r.Status), r.Restarts)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\n",
+					r.Name, dashIfEmpty(r.Template), dashIfEmpty(r.Branch),
+					dashIfEmpty(r.Workspace), dashIfEmpty(r.Status), r.Restarts)
 			}
 			return tw.Flush()
 		},
@@ -165,7 +166,7 @@ func newAgentListCmd() *cobra.Command {
 // --- spawn ---
 
 func newAgentSpawnCmd() *cobra.Command {
-	var host, repo, name string
+	var host, repo, name, branch, base string
 	var reuseOwner, attachExisting bool
 	cmd := &cobra.Command{
 		Use:   "spawn <template> [repo]",
@@ -194,6 +195,12 @@ prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
 			if reuseOwner && attachExisting {
 				return fmt.Errorf("--reuse-owner and --attach-existing are mutually exclusive")
 			}
+			if branch != "" && !strings.Contains(repo, "/") {
+				return fmt.Errorf("--worktree requires owner/repo; got %q", repo)
+			}
+			if base != "" && branch == "" {
+				return fmt.Errorf("--base only applies with --worktree")
+			}
 
 			cfg, res, err := dispatch(host)
 			if err != nil {
@@ -209,6 +216,12 @@ prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
 				}
 				if attachExisting {
 					extra = append(extra, "--attach-existing")
+				}
+				if branch != "" {
+					extra = append(extra, "--worktree", branch)
+				}
+				if base != "" {
+					extra = append(extra, "--base", base)
 				}
 				return runRemote(res, extra)
 			}
@@ -250,11 +263,17 @@ prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
 				Template: template,
 				Repo:     repo,
 				Name:     name,
+				Branch:   branch,
+				Base:     base,
 			})
 			if err != nil {
 				return fmt.Errorf("spawning agent: %w", err)
 			}
-			fmt.Fprintf(agentStdout, "spawned %s (workspace: %s)\n", rec.Name, rec.Workspace)
+			if rec.Branch != "" {
+				fmt.Fprintf(agentStdout, "spawned %s (branch: %s, worktree: %s)\n", rec.Name, rec.Branch, rec.Workspace)
+			} else {
+				fmt.Fprintf(agentStdout, "spawned %s (workspace: %s)\n", rec.Name, rec.Workspace)
+			}
 			fmt.Fprintf(agentStdout, "attach with: leo agent attach %s\n", rec.Name)
 			return nil
 		},
@@ -262,6 +281,8 @@ prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
 	addHostFlag(cmd, &host)
 	cmd.Flags().StringVar(&repo, "repo", "", "owner/repo to clone, or plain name for template workspace")
 	cmd.Flags().StringVar(&name, "name", "", "override the derived agent name")
+	cmd.Flags().StringVar(&branch, "worktree", "", "create a dedicated git worktree on this branch (requires owner/repo)")
+	cmd.Flags().StringVar(&base, "base", "", "base ref for new branches (defaults to origin HEAD)")
 	cmd.Flags().BoolVar(&reuseOwner, "reuse-owner", false, "on collision, spawn using the existing agent's canonical owner/repo")
 	cmd.Flags().BoolVar(&attachExisting, "attach-existing", false, "on collision, attach to the existing agent instead of spawning")
 	return cmd
@@ -482,10 +503,90 @@ or any unambiguous suffix.`,
 
 func newAgentStopCmd() *cobra.Command {
 	var host string
+	var prune, force, deleteBranch bool
 	cmd := &cobra.Command{
 		Use:   "stop <name>",
 		Short: "Stop a running agent",
-		Args:  cobra.ExactArgs(1),
+		Long: `Stop a running agent's tmux session. Worktree agents preserve their
+on-disk worktree so you can reattach or inspect state; pass --prune to also
+remove the worktree and agentstore record in one step.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if (force || deleteBranch) && !prune {
+				return fmt.Errorf("--force and --delete-branch require --prune")
+			}
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				extra := []string{"stop", name}
+				if prune {
+					extra = append(extra, "--prune")
+				}
+				if force {
+					extra = append(extra, "--force")
+				}
+				if deleteBranch {
+					extra = append(extra, "--delete-branch")
+				}
+				return runRemote(res, extra)
+			}
+
+			// Resolve shorthand locally first so the prune step can use the
+			// canonical name (Prune does not go through Resolve because the
+			// agent is stopped by then and the resolver only matches live
+			// agents).
+			resolved, err := daemon.AgentResolve(cfg.HomePath, name)
+			if err != nil {
+				return fmt.Errorf("resolving agent: %w", err)
+			}
+			canonical := resolved.Name
+
+			if err := daemon.AgentStop(cfg.HomePath, canonical); err != nil {
+				return fmt.Errorf("stopping agent: %w", err)
+			}
+			fmt.Fprintf(agentStdout, "stopped %s\n", canonical)
+
+			if prune {
+				if err := daemon.AgentPrune(cfg.HomePath, canonical, daemon.AgentPruneRequest{
+					Force:        force,
+					DeleteBranch: deleteBranch,
+				}); err != nil {
+					if errors.Is(err, agent.ErrNotWorktreeAgent) {
+						// Stop already cleared a shared-workspace record;
+						// nothing to prune. Treat as a no-op rather than an
+						// error so --prune is safe to default-on in scripts.
+						return nil
+					}
+					return fmt.Errorf("pruning worktree: %w", err)
+				}
+				fmt.Fprintf(agentStdout, "pruned worktree for %s\n", canonical)
+			}
+			return nil
+		},
+	}
+	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&prune, "prune", false, "also remove the worktree and agentstore record (worktree agents only)")
+	cmd.Flags().BoolVar(&force, "force", false, "with --prune: remove even when the worktree is dirty")
+	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "with --prune: delete the local branch after removing the worktree")
+	return cmd
+}
+
+// --- prune ---
+
+func newAgentPruneCmd() *cobra.Command {
+	var host string
+	var force, deleteBranch bool
+	cmd := &cobra.Command{
+		Use:   "prune <name>",
+		Short: "Remove a stopped worktree agent's worktree and record",
+		Long: `Remove the on-disk worktree and agentstore record for a worktree agent
+that has already been stopped. No-op for shared-workspace agents. Pass
+--force to override the dirty-worktree check, or --delete-branch to also
+delete the local branch after the worktree is gone.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
@@ -493,16 +594,28 @@ func newAgentStopCmd() *cobra.Command {
 				return err
 			}
 			if !res.Localhost {
-				return runRemote(res, []string{"stop", name})
+				extra := []string{"prune", name}
+				if force {
+					extra = append(extra, "--force")
+				}
+				if deleteBranch {
+					extra = append(extra, "--delete-branch")
+				}
+				return runRemote(res, extra)
 			}
-			if err := daemon.AgentStop(cfg.HomePath, name); err != nil {
-				return fmt.Errorf("stopping agent: %w", err)
+			if err := daemon.AgentPrune(cfg.HomePath, name, daemon.AgentPruneRequest{
+				Force:        force,
+				DeleteBranch: deleteBranch,
+			}); err != nil {
+				return fmt.Errorf("pruning agent: %w", err)
 			}
-			fmt.Fprintf(agentStdout, "stopped %s\n", name)
+			fmt.Fprintf(agentStdout, "pruned %s\n", name)
 			return nil
 		},
 	}
 	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&force, "force", false, "remove even when the worktree is dirty or the branch is unmerged")
+	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "delete the local branch after the worktree is removed")
 	return cmd
 }
 

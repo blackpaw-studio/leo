@@ -145,6 +145,7 @@ func (s *Server) handlePartialAgents(w http.ResponseWriter, r *http.Request) {
 				Status:    a.Status,
 				StartedAt: a.StartedAt,
 				Restarts:  a.Restarts,
+				Branch:    a.Branch,
 			})
 		}
 	}
@@ -162,6 +163,7 @@ type agentData struct {
 	Status    string
 	StartedAt time.Time
 	Restarts  int
+	Branch    string
 }
 
 // handleWebAgentSpawn spawns an agent via the web UI (form post).

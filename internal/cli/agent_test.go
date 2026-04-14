@@ -444,6 +444,111 @@ func TestAgentSessionNameRemoteDispatches(t *testing.T) {
 	}
 }
 
+func TestAgentSpawnRejectsWorktreeWithBareRepo(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "spawn", "coding", "--repo", "barerepo", "--worktree", "feat/x", "--host", "localhost"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for --worktree with bare-name repo")
+	}
+	if !strings.Contains(err.Error(), "--worktree requires owner/repo") {
+		t.Errorf("error = %v, want mention of worktree requires owner/repo", err)
+	}
+}
+
+func TestAgentSpawnRejectsBaseWithoutWorktree(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "spawn", "coding", "--repo", "owner/bar", "--base", "main", "--host", "localhost"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for --base without --worktree")
+	}
+	if !strings.Contains(err.Error(), "--base only applies with --worktree") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestAgentSpawnRemoteForwardsWorktreeFlags(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "spawn", "coding", "--repo", "owner/bar", "--worktree", "feat/x", "--base", "main"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	for _, want := range []string{"--worktree", "feat/x", "--base", "main"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ssh call missing %q: %s", want, joined)
+		}
+	}
+}
+
+func TestAgentPruneRemoteDispatches(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "prune", "leo-coding-owner-bar-feat-x", "--force", "--delete-branch"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	for _, want := range []string{"agent", "prune", "leo-coding-owner-bar-feat-x", "--force", "--delete-branch"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ssh call missing %q: %s", want, joined)
+		}
+	}
+}
+
+func TestAgentStopForceRequiresPrune(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "stop", "foo", "--force", "--host", "localhost"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--force and --delete-branch require --prune") {
+		t.Fatalf("expected --force requires --prune error, got %v", err)
+	}
+}
+
+func TestAgentStopRemoteForwardsPruneFlags(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "stop", "leo-foo", "--prune", "--force", "--delete-branch"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	for _, want := range []string{"agent", "stop", "leo-foo", "--prune", "--force", "--delete-branch"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ssh call missing %q: %s", want, joined)
+		}
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
