@@ -61,6 +61,14 @@ MCP server configuration passed to Claude via `--mcp-config`. Configure integrat
 
 Default base directory for ephemeral agent workspaces. When you dispatch `/agent coding owner/repo`, the repo is cloned into `~/.leo/agents/repo/`. Templates can override this with their own `workspace` field.
 
+For worktree spawns (`leo agent spawn ... --worktree <branch>`), the canonical clone stays at `~/.leo/agents/<repo>/` and each branch gets its own checkout under:
+
+```
+~/.leo/agents/.worktrees/<repo-short>/<branch-slug>/
+```
+
+Multiple agents can run in parallel against the same repo without stepping on each other's working tree. The agentstore record stores both paths — `workspace` (the worktree) and `canonical_path` (the shared clone).
+
 ### `~/.leo/state/`
 
 Runtime files managed by Leo:

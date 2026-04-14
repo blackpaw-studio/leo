@@ -54,21 +54,36 @@ leo agent stop demo
 
 Run these locally on the server, or from a laptop against a remote host by adding a `client.hosts` section to `leo.yaml`. See the [Remote CLI guide](remote-cli.md) and the [`leo agent` reference](../cli/agent.md).
 
+#### Worktree Spawns
+
+Pass `--worktree <branch>` to isolate the agent in its own git worktree off the canonical clone:
+
+```bash
+leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
+leo agent spawn coding --repo blackpaw-studio/leo --worktree fix/bug --base main
+leo agent stop feat-cache --prune --delete-branch   # stop and clean up in one step
+```
+
+Worktree agents run in parallel on the same repo without fighting over `.git/HEAD` — every branch gets its own checkout under `<baseWorkspace>/.worktrees/<repo-short>/<branch-slug>/`. The agent name includes the branch slug, and `leo agent list` shows a `BRANCH` column for worktree agents. See the [`leo agent` reference](../cli/agent.md#worktree-spawns) for the full flag set.
+
 ### From the JSON API
 
 The daemon exposes both a Unix-socket API (used by the CLI) and an HTTP API on the web port (used by the Telegram plugin and web UI):
 
 ```
-POST /agents/spawn        {"template": "coding", "repo": "owner/repo"}   (daemon socket)
-GET  /agents/list                                                         (daemon socket)
-POST /agents/{name}/stop                                                  (daemon socket)
-GET  /agents/{name}/logs?lines=N                                          (daemon socket)
-GET  /agents/{name}/session                                               (daemon socket)
+POST /agents/spawn        {"template": "coding", "repo": "owner/repo", "branch": "feat/x"}  (daemon socket)
+GET  /agents/list                                                                            (daemon socket)
+POST /agents/{name}/stop                                                                     (daemon socket)
+POST /agents/{name}/prune {"force": false, "delete_branch": false}                           (daemon socket)
+GET  /agents/{name}/logs?lines=N                                                             (daemon socket)
+GET  /agents/{name}/session                                                                  (daemon socket)
 
 POST /api/agent/spawn     {"template": "coding", "repo": "owner/repo"}   (web HTTP)
 POST /api/agent/stop      {"name": "leo-coding-owner-repo"}              (web HTTP)
 GET  /api/agent/list                                                      (web HTTP)
 ```
+
+On `/agents/spawn`, `branch` is optional — when present the daemon creates a worktree and the response includes `branch` and `canonical_path`. `/agents/{name}/prune` removes a stopped worktree agent's checkout and record; it returns typed error codes (`worktree_dirty`, `branch_not_merged`, `agent_still_running`, `not_worktree_agent`) so clients can dispatch on `errors.Is`.
 
 Both transports share the same `internal/agent` manager, so state stays consistent across CLI, web UI, and Telegram.
 
@@ -102,10 +117,10 @@ The daemon also exposes `GET /agents/resolve?q=<query>` over the Unix socket for
 
 - **Telegram:** tap the stop button next to an agent in `/agents`
 - **Web UI:** stop button in the agent panel
-- **CLI:** `leo agent stop <name>`
+- **CLI:** `leo agent stop <name>` (add `--prune` to also delete a worktree agent's checkout)
 - **API:** `POST /api/agent/stop {"name": "..."}`
 
-Stopping an agent kills its tmux session and removes it from the agent store.
+Stopping a shared-workspace agent kills its tmux session and removes it from the agent store. Stopping a worktree agent kills the session but keeps the record and the worktree on disk so you can reattach or inspect the branch — use `leo agent prune <name>` or `leo agent stop <name> --prune` to tear everything down.
 
 ## Session Naming
 
@@ -115,6 +130,9 @@ Agents are named based on the template and repo:
 |-------|------------|
 | `/agent coding owner/repo` | `leo-coding-owner-repo` |
 | `/agent coding my-project` | `leo-coding-my-project` |
+| `leo agent spawn coding --repo owner/repo --worktree feat/cache` | `leo-coding-owner-repo-feat-cache` |
+
+Worktree spawns append a sanitized branch slug so two agents on different branches of the same repo don't collide. Long slugs are truncated with a short content hash to stay within filesystem-friendly length bounds.
 
 This name is used as the `--name` flag for Claude, so it appears exactly as shown in claude.ai/code and the Claude app.
 
@@ -122,7 +140,7 @@ If a name collides with an existing agent, Leo appends `-2`, `-3`, etc.
 
 ## Persistence
 
-Agent records are stored in `~/.leo/state/agents.json`. When the daemon restarts, it checks if each agent's tmux session is still alive and re-registers surviving sessions with the supervisor. Dead sessions are cleaned up automatically.
+Agent records are stored in `~/.leo/state/agents.json`. When the daemon restarts, it checks if each agent's tmux session is still alive and re-registers surviving sessions with the supervisor. Dead shared-workspace sessions are cleaned up automatically; dead worktree sessions keep their record so you can `leo agent prune` the checkout. Restore also runs `git worktree prune` against each canonical clone so git's admin metadata stays consistent with the filesystem.
 
 ## Supervisor Behavior
 
