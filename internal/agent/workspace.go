@@ -60,6 +60,21 @@ type WorktreeLayout struct {
 // (non-worktree) spawn. Preserves historical behavior: owner/repo is cloned
 // into <base>/<repo-short> with `gh`; a bare name uses the base workspace
 // directly.
+// DeriveSharedAgentName computes the agent name for a shared-workspace spawn
+// without touching the filesystem. Separate from ResolveWorkspace so callers
+// can reserve the name in the supervisor before ResolveWorkspace does a
+// potentially slow `gh repo clone`.
+func DeriveSharedAgentName(templateName, repo, nameOverride string) string {
+	if nameOverride != "" {
+		return nameOverride
+	}
+	if strings.Contains(repo, "/") {
+		owner, repoShort := splitRepo(repo)
+		return fmt.Sprintf("%s-%s-%s-%s", baseAgentName, templateName, owner, repoShort)
+	}
+	return fmt.Sprintf("%s-%s-%s", baseAgentName, templateName, repo)
+}
+
 func ResolveWorkspace(tmpl config.TemplateConfig, templateName, repo, nameOverride string) (workspace, agentName string, err error) {
 	base := BaseWorkspace(tmpl)
 	if strings.Contains(repo, "/") {
@@ -109,6 +124,29 @@ func EnsureCanonical(baseWorkspace, repo string) (string, error) {
 		return "", fmt.Errorf("cloning %s: %s", repo, strings.TrimSpace(string(output)))
 	}
 	return canonical, nil
+}
+
+// DeriveWorktreeAgentName computes the agent name for a worktree spawn from
+// pure inputs — no filesystem access. Returns an error when branch slugging
+// fails so callers can reject invalid input before reserving a supervisor
+// name.
+func DeriveWorktreeAgentName(templateName, repo, branch, nameOverride string) (string, error) {
+	if nameOverride != "" {
+		return nameOverride, nil
+	}
+	if !strings.Contains(repo, "/") {
+		return "", ErrWorktreeRequiresSlash
+	}
+	if branch == "" {
+		return "", fmt.Errorf("worktree spawn requires a branch name")
+	}
+	slug, err := git.SlugifyBranch(branch)
+	if err != nil {
+		return "", fmt.Errorf("computing branch slug: %w", err)
+	}
+	owner, repoShort := splitRepo(repo)
+	boundedSlug := git.BoundedSlug(slug, maxBranchSlugInName)
+	return fmt.Sprintf("%s-%s-%s-%s-%s", baseAgentName, templateName, owner, repoShort, boundedSlug), nil
 }
 
 // ResolveWorktreeLayout computes every path and the derived agent name for a

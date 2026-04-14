@@ -8,8 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
+
+// storeMu serializes Load/Save/Remove across goroutines so concurrent daemon
+// handlers (spawn, stop, prune) don't perform interleaved read-modify-write
+// cycles that clobber each other's changes to agents.json.
+var storeMu sync.Mutex
 
 // Record persists an ephemeral agent so it can be restored after daemon restart.
 // Branch and CanonicalPath are set iff the agent was spawned with --worktree;
@@ -34,22 +40,34 @@ func FilePath(homePath string) string {
 
 // Save persists an agent record to agents.json.
 func Save(homePath string, record Record) error {
+	storeMu.Lock()
+	defer storeMu.Unlock()
 	path := FilePath(homePath)
-	records, _ := Load(path)
+	records, _ := loadLocked(path)
 	records[record.Name] = record
 	return write(path, records)
 }
 
 // Remove deletes an agent record from agents.json.
 func Remove(homePath, name string) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
 	path := FilePath(homePath)
-	records, _ := Load(path)
+	records, _ := loadLocked(path)
 	delete(records, name)
 	_ = write(path, records)
 }
 
 // Load reads all agent records from disk.
 func Load(path string) (map[string]Record, error) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	return loadLocked(path)
+}
+
+// loadLocked performs the read without acquiring storeMu. Callers that already
+// hold the lock (Save, Remove) use this to avoid a re-entrant lock acquisition.
+func loadLocked(path string) (map[string]Record, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return make(map[string]Record), err

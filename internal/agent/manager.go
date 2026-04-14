@@ -22,9 +22,20 @@ import (
 // worktree spawn so a flaky network can't stall the daemon indefinitely.
 const gitFetchTimeout = 60 * time.Second
 
+// maxNameReservationAttempts bounds the suffix-retry loop when a desired
+// agent name is already claimed. A high cap protects against runaway loops
+// without hurting the common case (one or two concurrent spawns).
+const maxNameReservationAttempts = 1000
+
 // Supervisor is the subset of service.Supervisor that the Manager needs.
 // Defined here so callers inject an implementation.
+//
+// ReserveAgent/ReleaseAgent let the Manager atomically claim a name before
+// doing slow pre-spawn work (fetch, worktree add) so concurrent spawns fail
+// fast instead of racing to completion.
 type Supervisor interface {
+	ReserveAgent(name string) error
+	ReleaseAgent(name string)
 	SpawnAgent(spec SpawnRequest) error
 	StopAgent(name string) error
 	EphemeralAgents() map[string]ProcessState
@@ -121,13 +132,28 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
 	return m.spawnShared(cfg, tmpl, spec)
 }
 
-// spawnShared is today's non-worktree flow, factored out unchanged.
+// spawnShared is the non-worktree flow. Workspace resolution may do a network
+// clone via `gh repo clone`, so we reserve the agent name first to reject
+// concurrent spawns of the same name without doing the clone twice.
 func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec) (Record, error) {
-	workspace, agentName, err := ResolveWorkspace(tmpl, spec.Template, spec.Repo, spec.Name)
+	baseName := DeriveSharedAgentName(spec.Template, spec.Repo, spec.Name)
+	agentName, err := m.reserveUniqueName(baseName)
 	if err != nil {
 		return Record{}, err
 	}
-	agentName = m.uniqueName(agentName)
+	released := false
+	release := func() {
+		if !released {
+			m.sup.ReleaseAgent(agentName)
+			released = true
+		}
+	}
+	defer release()
+
+	workspace, _, err := ResolveWorkspace(tmpl, spec.Template, spec.Repo, spec.Name)
+	if err != nil {
+		return Record{}, err
+	}
 
 	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace)
 	webPort := strconv.Itoa(cfg.WebPort())
@@ -141,6 +167,8 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}); err != nil {
 		return Record{}, fmt.Errorf("spawning agent: %w", err)
 	}
+	// SpawnAgent consumed the reservation on success; suppress the deferred release.
+	released = true
 
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:       agentName,
@@ -166,14 +194,41 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}, nil
 }
 
-// spawnWorktree implements the worktree flow: ensure canonical → fetch →
-// worktree-add → supervisor spawn → persist. Failures roll back in reverse
-// order so a half-created worktree doesn't leak on disk.
+// spawnWorktree implements the worktree flow. Ordering matters:
+//
+//  1. Reserve the agent name atomically with the supervisor so concurrent
+//     spawns of the same name fail fast instead of racing through fetch and
+//     worktree add.
+//  2. Ensure canonical clone + compute layout (needs canonical for path).
+//  3. Fetch origin.
+//  4. git worktree add.
+//  5. Supervisor spawn (consumes the reservation).
+//  6. Persist to agentstore.
+//
+// Any failure before step 5 releases the reservation and, if step 4 already
+// succeeded, removes the worktree so disk state stays consistent.
 func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec) (Record, error) {
 	if !strings.Contains(spec.Repo, "/") {
 		return Record{}, ErrWorktreeRequiresSlash
 	}
 	base := BaseWorkspace(tmpl)
+	baseName, err := DeriveWorktreeAgentName(spec.Template, spec.Repo, spec.Branch, spec.Name)
+	if err != nil {
+		return Record{}, err
+	}
+	agentName, err := m.reserveUniqueName(baseName)
+	if err != nil {
+		return Record{}, err
+	}
+	released := false
+	release := func() {
+		if !released {
+			m.sup.ReleaseAgent(agentName)
+			released = true
+		}
+	}
+	defer release()
+
 	canonical, err := EnsureCanonical(base, spec.Repo)
 	if err != nil {
 		return Record{}, err
@@ -183,7 +238,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	if err != nil {
 		return Record{}, err
 	}
-	layout.AgentName = m.uniqueName(layout.AgentName)
+	layout.AgentName = agentName
 
 	fetchCtx, cancel := context.WithTimeout(ctx, gitFetchTimeout)
 	defer cancel()
@@ -194,6 +249,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	if err := AddWorktreeForBranch(ctx, canonical, layout.WorktreePath, layout.Branch, spec.Base); err != nil {
 		return Record{}, err
 	}
+	worktreeCreated := true
 
 	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath)
 	webPort := strconv.Itoa(cfg.WebPort())
@@ -205,17 +261,20 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		Env:        tmpl.Env,
 		WebPort:    webPort,
 	}); err != nil {
-		// Supervisor rejected the spawn (almost certainly a name collision
-		// that slipped past uniqueName — e.g. a restore added an agent
-		// between the check and the spawn). Roll back the worktree so disk
-		// state matches the (empty) supervisor state.
-		rmCtx, rmCancel := context.WithTimeout(context.Background(), gitFetchTimeout)
-		defer rmCancel()
-		if rbErr := git.RemoveWorktree(rmCtx, canonical, layout.WorktreePath, true); rbErr != nil {
-			log.Printf("spawn rollback: git worktree remove failed for %s: %v", layout.WorktreePath, rbErr)
+		// Reservation protected the name, so a collision here means the
+		// supervisor state changed unexpectedly (e.g. concurrent restore).
+		// Roll back the worktree so disk matches supervisor state.
+		if worktreeCreated {
+			rmCtx, rmCancel := context.WithTimeout(context.Background(), gitFetchTimeout)
+			if rbErr := git.RemoveWorktree(rmCtx, canonical, layout.WorktreePath, true); rbErr != nil {
+				log.Printf("spawn rollback: git worktree remove failed for %s: %v", layout.WorktreePath, rbErr)
+			}
+			rmCancel()
 		}
 		return Record{}, fmt.Errorf("spawning agent: %w", err)
 	}
+	// SpawnAgent consumed the reservation on success.
+	released = true
 
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:          layout.AgentName,
@@ -245,19 +304,21 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}, nil
 }
 
-// uniqueName returns a name not currently in use by the supervisor, appending
-// -2, -3, ... until free. Returns the original when it is already unique.
-func (m *Manager) uniqueName(name string) string {
-	existing := m.sup.EphemeralAgents()
-	if _, taken := existing[name]; !taken {
-		return name
+// reserveUniqueName atomically reserves the first available variant of name
+// with the supervisor, appending -2, -3, ... on collision. The caller owns
+// the returned reservation and must either pass it to SpawnAgent (which
+// consumes it) or call sup.ReleaseAgent on failure.
+func (m *Manager) reserveUniqueName(name string) (string, error) {
+	if err := m.sup.ReserveAgent(name); err == nil {
+		return name, nil
 	}
-	for i := 2; ; i++ {
+	for i := 2; i < maxNameReservationAttempts; i++ {
 		candidate := fmt.Sprintf("%s-%d", name, i)
-		if _, taken := existing[candidate]; !taken {
-			return candidate
+		if err := m.sup.ReserveAgent(candidate); err == nil {
+			return candidate, nil
 		}
 	}
+	return "", fmt.Errorf("could not reserve a unique name for %q after %d attempts", name, maxNameReservationAttempts)
 }
 
 // List returns ephemeral agents merged with persisted metadata. Running agents

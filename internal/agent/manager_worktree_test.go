@@ -16,10 +16,31 @@ import (
 
 // capturingSupervisor records calls so tests can assert ordering + rollback.
 type capturingSupervisor struct {
-	agents    map[string]ProcessState
-	spawnCall *SpawnRequest
-	spawnErr  error
-	stopCalls []string
+	agents       map[string]ProcessState
+	reservations map[string]struct{}
+	spawnCall    *SpawnRequest
+	spawnErr     error
+	stopCalls    []string
+	releaseCalls []string
+}
+
+func (s *capturingSupervisor) ReserveAgent(name string) error {
+	if s.reservations == nil {
+		s.reservations = map[string]struct{}{}
+	}
+	if _, exists := s.agents[name]; exists {
+		return fmt.Errorf("agent %q already exists", name)
+	}
+	if _, reserved := s.reservations[name]; reserved {
+		return fmt.Errorf("agent %q already reserved", name)
+	}
+	s.reservations[name] = struct{}{}
+	return nil
+}
+
+func (s *capturingSupervisor) ReleaseAgent(name string) {
+	s.releaseCalls = append(s.releaseCalls, name)
+	delete(s.reservations, name)
 }
 
 func (s *capturingSupervisor) SpawnAgent(req SpawnRequest) error {
@@ -31,6 +52,7 @@ func (s *capturingSupervisor) SpawnAgent(req SpawnRequest) error {
 	if s.agents == nil {
 		s.agents = map[string]ProcessState{}
 	}
+	delete(s.reservations, req.Name)
 	s.agents[req.Name] = ProcessState{Name: req.Name, Status: "running"}
 	return nil
 }
