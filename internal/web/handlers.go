@@ -765,6 +765,11 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 
 // handleProcessSendKeys sends arbitrary keys/text to a process tmux session.
 // POST /web/process/{name}/send  {"keys": ["/clear", "Enter"]}
+//
+// Multi-char literal strings (e.g. "/clear") are split into individual
+// keystrokes with a small inter-key delay. Claude Code's Ink-based REPL
+// treats rapid bulk send-keys as pasted text and won't activate slash-command
+// menus; per-char sends make each key register as a real keypress.
 func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	sessionName := "leo-" + name
@@ -782,13 +787,37 @@ func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tmuxPath := findTmuxPath()
-	args := append([]string{"send-keys", "-t", sessionName}, req.Keys...)
-	if err := s.execCommand(tmuxPath, args...).Run(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
-		return
+	for _, key := range req.Keys {
+		if needsCharSplit(key) {
+			for _, ch := range key {
+				if err := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, string(ch)).Run(); err != nil {
+					writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
+					return
+				}
+				time.Sleep(30 * time.Millisecond)
+			}
+			continue
+		}
+		if err := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, key).Run(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// needsCharSplit reports whether a send-keys arg is a multi-char literal
+// string that should be typed one character at a time. Single chars and
+// tmux key names (Enter, Escape, BSpace, F1, C-u, M-a, …) are sent as one
+// keypress. Heuristic: key names begin with an uppercase letter, literals
+// do not.
+func needsCharSplit(s string) bool {
+	if len(s) <= 1 {
+		return false
+	}
+	r := rune(s[0])
+	return !(r >= 'A' && r <= 'Z')
 }
 
 func findTmuxPath() string {
