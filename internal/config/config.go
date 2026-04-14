@@ -27,9 +27,11 @@ var channelPattern = regexp.MustCompile(`^[a-zA-Z0-9:@._-]+$`)
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var validModels = map[string]bool{
-	"sonnet": true,
-	"opus":   true,
-	"haiku":  true,
+	"sonnet":     true,
+	"opus":       true,
+	"haiku":      true,
+	"sonnet[1m]": true,
+	"opus[1m]":   true,
 }
 
 var validPermissionModes = map[string]bool{
@@ -338,7 +340,7 @@ func (c *Config) Validate() error {
 	var errs []string
 
 	if c.Defaults.Model != "" && !validModels[c.Defaults.Model] {
-		errs = append(errs, fmt.Sprintf("defaults.model %q is not valid (use sonnet, opus, or haiku)", c.Defaults.Model))
+		errs = append(errs, fmt.Sprintf("defaults.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", c.Defaults.Model))
 	}
 	if c.Defaults.MaxTurns < 0 {
 		errs = append(errs, "defaults.max_turns must not be negative")
@@ -365,7 +367,7 @@ func (c *Config) Validate() error {
 
 	for name, proc := range c.Processes {
 		if proc.Model != "" && !validModels[proc.Model] {
-			errs = append(errs, fmt.Sprintf("processes.%s.model %q is not valid (use sonnet, opus, or haiku)", name, proc.Model))
+			errs = append(errs, fmt.Sprintf("processes.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, proc.Model))
 		}
 		if proc.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("processes.%s.max_turns must not be negative", name))
@@ -387,7 +389,7 @@ func (c *Config) Validate() error {
 
 	for name, tmpl := range c.Templates {
 		if tmpl.Model != "" && !validModels[tmpl.Model] {
-			errs = append(errs, fmt.Sprintf("templates.%s.model %q is not valid (use sonnet, opus, or haiku)", name, tmpl.Model))
+			errs = append(errs, fmt.Sprintf("templates.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, tmpl.Model))
 		}
 		if tmpl.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("templates.%s.max_turns must not be negative", name))
@@ -417,7 +419,7 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("tasks.%s.prompt_file is required", name))
 		}
 		if task.Model != "" && !validModels[task.Model] {
-			errs = append(errs, fmt.Sprintf("tasks.%s.model %q is not valid (use sonnet, opus, or haiku)", name, task.Model))
+			errs = append(errs, fmt.Sprintf("tasks.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, task.Model))
 		}
 		if task.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.max_turns must not be negative", name))

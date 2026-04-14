@@ -12,7 +12,9 @@
                 <label>Model</label>
                 <select name="model" class="form-input">
                     <option value="sonnet" {{if eq .Defaults.Model "sonnet"}}selected{{end}}>sonnet</option>
+                    <option value="sonnet[1m]" {{if eq .Defaults.Model "sonnet[1m]"}}selected{{end}}>sonnet[1m]</option>
                     <option value="opus" {{if eq .Defaults.Model "opus"}}selected{{end}}>opus</option>
+                    <option value="opus[1m]" {{if eq .Defaults.Model "opus[1m]"}}selected{{end}}>opus[1m]</option>
                     <option value="haiku" {{if eq .Defaults.Model "haiku"}}selected{{end}}>haiku</option>
                 </select>
             </div>
@@ -51,7 +53,9 @@
                 <select name="model" class="form-input">
                     <option value="" {{if not $proc.Model}}selected{{end}}>(default)</option>
                     <option value="sonnet" {{if eq $proc.Model "sonnet"}}selected{{end}}>sonnet</option>
+                    <option value="sonnet[1m]" {{if eq $proc.Model "sonnet[1m]"}}selected{{end}}>sonnet[1m]</option>
                     <option value="opus" {{if eq $proc.Model "opus"}}selected{{end}}>opus</option>
+                    <option value="opus[1m]" {{if eq $proc.Model "opus[1m]"}}selected{{end}}>opus[1m]</option>
                     <option value="haiku" {{if eq $proc.Model "haiku"}}selected{{end}}>haiku</option>
                 </select>
             </div>
@@ -90,7 +94,9 @@
                 <select name="model" class="form-input">
                     <option value="" {{if not $task.Model}}selected{{end}}>(default)</option>
                     <option value="sonnet" {{if eq $task.Model "sonnet"}}selected{{end}}>sonnet</option>
+                    <option value="sonnet[1m]" {{if eq $task.Model "sonnet[1m]"}}selected{{end}}>sonnet[1m]</option>
                     <option value="opus" {{if eq $task.Model "opus"}}selected{{end}}>opus</option>
+                    <option value="opus[1m]" {{if eq $task.Model "opus[1m]"}}selected{{end}}>opus[1m]</option>
                     <option value="haiku" {{if eq $task.Model "haiku"}}selected{{end}}>haiku</option>
                 </select>
             </div>

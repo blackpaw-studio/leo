@@ -30,7 +30,9 @@
                     <select name="model" class="form-input">
                         <option value="" {{if not $proc.Model}}selected{{end}}>{{if $.Config.Defaults.Model}}({{$.Config.Defaults.Model}} from defaults){{else}}(sonnet from defaults){{end}}</option>
                         <option value="sonnet" {{if eq $proc.Model "sonnet"}}selected{{end}}>sonnet</option>
+                        <option value="sonnet[1m]" {{if eq $proc.Model "sonnet[1m]"}}selected{{end}}>sonnet[1m]</option>
                         <option value="opus" {{if eq $proc.Model "opus"}}selected{{end}}>opus</option>
+                        <option value="opus[1m]" {{if eq $proc.Model "opus[1m]"}}selected{{end}}>opus[1m]</option>
                         <option value="haiku" {{if eq $proc.Model "haiku"}}selected{{end}}>haiku</option>
                     </select>
                 </div>
@@ -160,7 +162,9 @@
                     <select name="model" class="form-input">
                         <option value="">{{if $.Config.Defaults.Model}}({{$.Config.Defaults.Model}} from defaults){{else}}(sonnet from defaults){{end}}</option>
                         <option value="sonnet">sonnet</option>
+                        <option value="sonnet[1m]">sonnet[1m]</option>
                         <option value="opus">opus</option>
+                        <option value="opus[1m]">opus[1m]</option>
                         <option value="haiku">haiku</option>
                     </select>
                 </div>
