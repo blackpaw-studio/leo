@@ -817,7 +817,7 @@ func needsCharSplit(s string) bool {
 		return false
 	}
 	r := rune(s[0])
-	return !(r >= 'A' && r <= 'Z')
+	return r < 'A' || r > 'Z'
 }
 
 func findTmuxPath() string {
