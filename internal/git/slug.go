@@ -4,7 +4,7 @@
 package git
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"regexp"
@@ -42,7 +42,7 @@ func BoundedSlug(slug string, maxLen int) string {
 		return slug
 	}
 	const hashLen = 7
-	sum := sha1.Sum([]byte(slug))
+	sum := sha256.Sum256([]byte(slug))
 	hash := hex.EncodeToString(sum[:])[:hashLen]
 	keep := maxLen - hashLen - 1 // one char for the '-' separator
 	if keep < 1 {
