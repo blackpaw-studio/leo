@@ -16,6 +16,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 // gitFetchTimeout bounds the single `git fetch` issued at the start of a
@@ -155,7 +156,9 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		return Record{}, err
 	}
 
+	sessionID := session.NewID()
 	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace)
+	claudeArgs = append(claudeArgs, "--session-id", sessionID)
 	webPort := strconv.Itoa(cfg.WebPort())
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
@@ -176,6 +179,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		Repo:       spec.Repo,
 		Workspace:  workspace,
 		ClaudeArgs: claudeArgs,
+		SessionID:  sessionID,
 		Env:        tmpl.Env,
 		WebPort:    webPort,
 		SpawnedAt:  time.Now(),
@@ -251,7 +255,9 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}
 	worktreeCreated := true
 
+	sessionID := session.NewID()
 	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath)
+	claudeArgs = append(claudeArgs, "--session-id", sessionID)
 	webPort := strconv.Itoa(cfg.WebPort())
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
@@ -284,6 +290,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		Branch:        layout.Branch,
 		CanonicalPath: canonical,
 		ClaudeArgs:    claudeArgs,
+		SessionID:     sessionID,
 		Env:           tmpl.Env,
 		WebPort:       webPort,
 		SpawnedAt:     time.Now(),
@@ -374,8 +381,10 @@ func (m *Manager) List() []Record {
 
 // Stop kills the agent's tmux session. For shared-workspace agents the
 // agentstore record is also removed (nothing to clean up later). For worktree
-// agents the record is preserved so Prune can find it; operators can always
-// call Prune explicitly to drop the worktree and record in one step.
+// agents the record is preserved with Stopped=true so Prune can find the
+// checkout while RestoreAgents knows not to resurrect the agent on daemon
+// restart; operators can always call Prune explicitly to drop the worktree
+// and record in one step.
 func (m *Manager) Stop(name string) error {
 	if err := m.sup.StopAgent(name); err != nil {
 		return err
@@ -391,6 +400,10 @@ func (m *Manager) Stop(name string) error {
 		return nil
 	}
 	if rec, ok := stored[name]; ok && rec.Branch != "" {
+		rec.Stopped = true
+		if saveErr := agentstore.Save(cfg.HomePath, rec); saveErr != nil {
+			log.Printf("agent %q stopped but marking Stopped=true failed: %v — agent may be resurrected on daemon restart", name, saveErr)
+		}
 		return nil
 	}
 	agentstore.Remove(cfg.HomePath, name)

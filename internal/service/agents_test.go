@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -186,8 +187,8 @@ func TestRestoreAgentsDropsWorktreeWithMissingWorkspace(t *testing.T) {
 		t.Fatalf("seed agentstore: %v", err)
 	}
 
-	sv := NewSupervisor()
-	restored := RestoreAgents(home, "", sv)
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", spawner)
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -201,13 +202,25 @@ func TestRestoreAgentsDropsWorktreeWithMissingWorkspace(t *testing.T) {
 	}
 }
 
-func TestRestoreAgentsKeepsStoppedWorktreeRecord(t *testing.T) {
+// fakeAgentSpawner captures SpawnAgent calls so tests can assert what args
+// RestoreAgents passed without spinning up the real supervisor (which would
+// exec tmux).
+type fakeAgentSpawner struct {
+	calls   []daemon.AgentSpawnSpec
+	nextErr error
+}
+
+func (f *fakeAgentSpawner) SpawnAgent(spec daemon.AgentSpawnSpec) error {
+	f.calls = append(f.calls, spec)
+	return f.nextErr
+}
+
+func TestRestoreAgentsSkipsStoppedWorktreeRecord(t *testing.T) {
 	home := t.TempDir()
 	wtDir := t.TempDir()
-	// A worktree record whose on-disk path exists but whose tmux session is
-	// dead (tmuxPath="" bypasses has-session, simulating a tmux that reports
-	// "no such session"). Worktree records must survive this to give prune a
-	// chance to clean them up.
+	// A worktree record the user explicitly stopped (Stopped=true). It must
+	// survive restore — `leo agent prune` still needs it — but must NOT be
+	// resurrected by SpawnAgent.
 	rec := agentstore.Record{
 		Name:          "leo-coding-owner-repo-feat-preserve",
 		Template:      "coding",
@@ -215,16 +228,24 @@ func TestRestoreAgentsKeepsStoppedWorktreeRecord(t *testing.T) {
 		Workspace:     wtDir,
 		Branch:        "feat/preserve",
 		CanonicalPath: t.TempDir(),
-		ClaudeArgs:    []string{"--model", "sonnet"},
+		ClaudeArgs:    []string{"--model", "sonnet", "--session-id", "sid-1"},
+		SessionID:     "sid-1",
 		WebPort:       "8370",
 		SpawnedAt:     time.Now(),
+		Stopped:       true,
 	}
 	if err := agentstore.Save(home, rec); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	sv := NewSupervisor()
-	_ = RestoreAgents(home, "", sv)
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", spawner)
+	if restored != 0 {
+		t.Fatalf("expected 0 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("expected 0 SpawnAgent calls for stopped record, got %d", len(spawner.calls))
+	}
 
 	stored, err := agentstore.Load(agentstore.FilePath(home))
 	if err != nil {
@@ -235,10 +256,54 @@ func TestRestoreAgentsKeepsStoppedWorktreeRecord(t *testing.T) {
 	}
 }
 
-func TestRestoreAgentsRemovesStoppedSharedRecord(t *testing.T) {
+func TestRestoreAgentsRespawnsSharedWithResume(t *testing.T) {
 	home := t.TempDir()
 	rec := agentstore.Record{
 		Name:       "leo-coding-plain",
+		Template:   "coding",
+		Workspace:  t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-42"},
+		SessionID:  "sid-42",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", spawner)
+	if restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call, got %d", len(spawner.calls))
+	}
+	got := spawner.calls[0].ClaudeArgs
+	want := []string{"--model", "sonnet", "--resume", "sid-42"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args = %v, want %v", got, want)
+		}
+	}
+
+	// Shared records that successfully respawn must remain in agents.json so
+	// the next daemon restart can pick them up again.
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := stored[rec.Name]; !ok {
+		t.Fatalf("shared record should survive successful respawn; got %+v", stored)
+	}
+}
+
+func TestRestoreAgentsLegacyRecordRespawnsWithoutResume(t *testing.T) {
+	home := t.TempDir()
+	// Pre-resume daemon versions never set SessionID. We still respawn so the
+	// agent comes back; it just starts a fresh claude conversation.
+	rec := agentstore.Record{
+		Name:       "leo-coding-legacy",
 		Template:   "coding",
 		Workspace:  t.TempDir(),
 		ClaudeArgs: []string{"--model", "sonnet"},
@@ -249,11 +314,90 @@ func TestRestoreAgentsRemovesStoppedSharedRecord(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	sv := NewSupervisor()
-	_ = RestoreAgents(home, "", sv)
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", spawner)
+	if restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call, got %d", len(spawner.calls))
+	}
+	for _, a := range spawner.calls[0].ClaudeArgs {
+		if a == "--resume" {
+			t.Fatalf("legacy record should not produce --resume; got %v", spawner.calls[0].ClaudeArgs)
+		}
+	}
+}
 
+func TestRestoreAgentsRemovesFailedSharedRecord(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:       "leo-coding-doomed",
+		Template:   "coding",
+		Workspace:  t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-x"},
+		SessionID:  "sid-x",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{nextErr: fmt.Errorf("supervisor rejected spawn")}
+	restored := RestoreAgents(home, "", spawner)
+	if restored != 0 {
+		t.Fatalf("expected 0 restored, got %d", restored)
+	}
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
 	if _, ok := stored[rec.Name]; ok {
-		t.Fatalf("stopped shared-workspace record should be removed; got %+v", stored)
+		t.Fatalf("shared record whose respawn failed should be removed; got %+v", stored)
+	}
+}
+
+func TestArgsWithResumeStripsExistingSessionFlags(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		sid  string
+		want []string
+	}{
+		{
+			name: "strips --session-id and appends --resume",
+			args: []string{"--model", "sonnet", "--session-id", "old"},
+			sid:  "new",
+			want: []string{"--model", "sonnet", "--resume", "new"},
+		},
+		{
+			name: "strips existing --resume and appends fresh --resume",
+			args: []string{"--model", "sonnet", "--resume", "old"},
+			sid:  "new",
+			want: []string{"--model", "sonnet", "--resume", "new"},
+		},
+		{
+			name: "empty session ID strips flags without appending",
+			args: []string{"--model", "sonnet", "--session-id", "old"},
+			sid:  "",
+			want: []string{"--model", "sonnet"},
+		},
+		{
+			name: "no session flags, empty sid: args unchanged",
+			args: []string{"--model", "sonnet"},
+			sid:  "",
+			want: []string{"--model", "sonnet"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := argsWithResume(tc.args, tc.sid)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
 }

@@ -20,6 +20,16 @@ var storeMu sync.Mutex
 // Record persists an ephemeral agent so it can be restored after daemon restart.
 // Branch and CanonicalPath are set iff the agent was spawned with --worktree;
 // when Branch is empty the agent uses the Workspace directly as claude's cwd.
+//
+// SessionID is the claude session ID captured at spawn time. On daemon restart
+// RestoreAgents rewrites the agent's claude args to pass `--resume <SessionID>`
+// so conversation context is preserved across restarts.
+//
+// Stopped is set by Manager.Stop for worktree agents — the record is kept so
+// `leo agent prune` can find the checkout, but RestoreAgents skips records
+// marked Stopped so a user-stopped agent is not resurrected on daemon restart.
+// Shared-workspace agents delete the record on stop, so Stopped only applies
+// to worktree agents in practice.
 type Record struct {
 	Name          string            `json:"name"`
 	Template      string            `json:"template"`
@@ -28,9 +38,11 @@ type Record struct {
 	Branch        string            `json:"branch,omitempty"`
 	CanonicalPath string            `json:"canonical_path,omitempty"`
 	ClaudeArgs    []string          `json:"claude_args"`
+	SessionID     string            `json:"session_id,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
 	WebPort       string            `json:"web_port"`
 	SpawnedAt     time.Time         `json:"spawned_at"`
+	Stopped       bool              `json:"stopped,omitempty"`
 }
 
 // FilePath returns the path to agents.json in the state directory.

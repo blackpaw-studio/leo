@@ -284,8 +284,12 @@ func TestStopPreservesWorktreeRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agentstore.Load: %v", err)
 	}
-	if _, ok := stored[rec.Name]; !ok {
-		t.Errorf("worktree record should survive Stop; got %+v", stored)
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("worktree record should survive Stop; got %+v", stored)
+	}
+	if !got.Stopped {
+		t.Errorf("stopped worktree record should have Stopped=true; got %+v", got)
 	}
 }
 
