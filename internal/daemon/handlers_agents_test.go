@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,18 +17,23 @@ type fakeAgentManager struct {
 	records  []agent.Record
 	spawnErr error
 	stopErr  error
+	pruneErr error
 	logsErr  error
 	logsOut  string
 
 	lastSpawn agent.SpawnSpec
 	lastStop  string
-	lastLogs  struct {
+	lastPrune struct {
+		name string
+		opts agent.PruneOptions
+	}
+	lastLogs struct {
 		name  string
 		lines int
 	}
 }
 
-func (f *fakeAgentManager) Spawn(spec agent.SpawnSpec) (agent.Record, error) {
+func (f *fakeAgentManager) Spawn(_ context.Context, spec agent.SpawnSpec) (agent.Record, error) {
 	f.lastSpawn = spec
 	if f.spawnErr != nil {
 		return agent.Record{}, f.spawnErr
@@ -38,6 +44,12 @@ func (f *fakeAgentManager) Spawn(spec agent.SpawnSpec) (agent.Record, error) {
 func (f *fakeAgentManager) Stop(name string) error {
 	f.lastStop = name
 	return f.stopErr
+}
+
+func (f *fakeAgentManager) Prune(_ context.Context, name string, opts agent.PruneOptions) error {
+	f.lastPrune.name = name
+	f.lastPrune.opts = opts
+	return f.pruneErr
 }
 
 func (f *fakeAgentManager) List() []agent.Record {

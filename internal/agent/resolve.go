@@ -174,5 +174,7 @@ func mergeStored(r *Record, stored map[string]agentstore.Record) {
 	r.Template = s.Template
 	r.Repo = s.Repo
 	r.Workspace = s.Workspace
+	r.Branch = s.Branch
+	r.CanonicalPath = s.CanonicalPath
 	r.Env = s.Env
 }

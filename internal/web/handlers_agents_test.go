@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -55,7 +56,7 @@ type mockAgentService struct {
 	records []agent.Record
 }
 
-func (m *mockAgentService) Spawn(spec agent.SpawnSpec) (agent.Record, error) {
+func (m *mockAgentService) Spawn(_ context.Context, spec agent.SpawnSpec) (agent.Record, error) {
 	m.spawnCalled = true
 	m.spawnSpec = spec
 	if m.spawnErr != nil {

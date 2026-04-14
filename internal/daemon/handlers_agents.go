@@ -50,13 +50,15 @@ func (s *Server) handleAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.agentMgr.Spawn(agent.SpawnSpec{
+	rec, err := s.agentMgr.Spawn(r.Context(), agent.SpawnSpec{
 		Template: req.Template,
 		Repo:     req.Repo,
 		Name:     req.Name,
+		Branch:   req.Branch,
+		Base:     req.Base,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeAgentError(w, err)
 		return
 	}
 
@@ -205,4 +207,61 @@ func (s *Server) handleAgentResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
+// handleAgentPrune removes the worktree and agentstore record for a stopped
+// worktree agent. No-op (surfaced as 400) for shared-workspace agents. The
+// `name` path segment must be an exact agent name because shorthand resolution
+// only matches live agents and a prunable agent has already been stopped.
+func (s *Server) handleAgentPrune(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+
+	var req AgentPruneRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
+			return
+		}
+	}
+
+	if err := s.agentMgr.Prune(r.Context(), name, agent.PruneOptions{
+		Force:        req.Force,
+		DeleteBranch: req.DeleteBranch,
+	}); err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true})
+}
+
+// writeAgentError translates agent-package typed errors into HTTP responses
+// with stable machine-readable Code fields so the CLI client can reconstruct
+// errors.Is matches on the other side of the socket.
+func writeAgentError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, agent.ErrWorktreeRequiresSlash):
+		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeWorktreeRequireSep})
+	case errors.Is(err, agent.ErrAgentStillRunning):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentStillRunning})
+	case errors.Is(err, agent.ErrNotWorktreeAgent):
+		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeNotWorktreeAgent})
+	case errors.Is(err, agent.ErrWorktreeDirty):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeWorktreeDirty})
+	case errors.Is(err, agent.ErrBranchCheckedOut):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeBranchCheckedOut})
+	case errors.Is(err, agent.ErrBranchNotMerged):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeBranchNotMerged})
+	case errors.Is(err, agent.ErrBranchNotFound):
+		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeBranchNotFound})
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }

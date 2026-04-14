@@ -18,6 +18,20 @@ func responseError(resp *Response, query string) error {
 		return &agent.ErrNotFound{Query: query}
 	case ErrorCodeAmbiguous:
 		return &agent.ErrAmbiguous{Query: query, Matches: resp.Matches}
+	case ErrorCodeWorktreeDirty:
+		return fmt.Errorf("%w: %s", agent.ErrWorktreeDirty, resp.Error)
+	case ErrorCodeBranchCheckedOut:
+		return fmt.Errorf("%w: %s", agent.ErrBranchCheckedOut, resp.Error)
+	case ErrorCodeBranchNotMerged:
+		return fmt.Errorf("%w: %s", agent.ErrBranchNotMerged, resp.Error)
+	case ErrorCodeBranchNotFound:
+		return fmt.Errorf("%w: %s", agent.ErrBranchNotFound, resp.Error)
+	case ErrorCodeAgentStillRunning:
+		return fmt.Errorf("%w: %s", agent.ErrAgentStillRunning, resp.Error)
+	case ErrorCodeNotWorktreeAgent:
+		return fmt.Errorf("%w: %s", agent.ErrNotWorktreeAgent, resp.Error)
+	case ErrorCodeWorktreeRequireSep:
+		return fmt.Errorf("%w: %s", agent.ErrWorktreeRequiresSlash, resp.Error)
 	default:
 		return fmt.Errorf("%s", resp.Error)
 	}
@@ -30,13 +44,27 @@ func AgentSpawn(workDir string, req AgentSpawnRequest) (agent.Record, error) {
 		return agent.Record{}, err
 	}
 	if !resp.OK {
-		return agent.Record{}, fmt.Errorf("%s", resp.Error)
+		return agent.Record{}, responseError(resp, req.Name)
 	}
 	var rec agent.Record
 	if err := json.Unmarshal(resp.Data, &rec); err != nil {
 		return agent.Record{}, fmt.Errorf("decoding spawn response: %w", err)
 	}
 	return rec, nil
+}
+
+// AgentPrune sends POST /agents/{name}/prune to the daemon. On typed failures
+// (ErrWorktreeDirty, ErrBranchNotMerged, ErrAgentStillRunning, ...) it returns
+// a wrapped error that callers can match with errors.Is.
+func AgentPrune(workDir, name string, req AgentPruneRequest) error {
+	resp, err := Send(workDir, "POST", "/agents/"+url.PathEscape(name)+"/prune", req)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return responseError(resp, name)
+	}
+	return nil
 }
 
 // AgentList sends GET /agents/list to the daemon.

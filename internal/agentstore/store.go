@@ -12,15 +12,19 @@ import (
 )
 
 // Record persists an ephemeral agent so it can be restored after daemon restart.
+// Branch and CanonicalPath are set iff the agent was spawned with --worktree;
+// when Branch is empty the agent uses the Workspace directly as claude's cwd.
 type Record struct {
-	Name       string            `json:"name"`
-	Template   string            `json:"template"`
-	Repo       string            `json:"repo,omitempty"`
-	Workspace  string            `json:"workspace"`
-	ClaudeArgs []string          `json:"claude_args"`
-	Env        map[string]string `json:"env,omitempty"`
-	WebPort    string            `json:"web_port"`
-	SpawnedAt  time.Time         `json:"spawned_at"`
+	Name          string            `json:"name"`
+	Template      string            `json:"template"`
+	Repo          string            `json:"repo,omitempty"`
+	Workspace     string            `json:"workspace"`
+	Branch        string            `json:"branch,omitempty"`
+	CanonicalPath string            `json:"canonical_path,omitempty"`
+	ClaudeArgs    []string          `json:"claude_args"`
+	Env           map[string]string `json:"env,omitempty"`
+	WebPort       string            `json:"web_port"`
+	SpawnedAt     time.Time         `json:"spawned_at"`
 }
 
 // FilePath returns the path to agents.json in the state directory.
