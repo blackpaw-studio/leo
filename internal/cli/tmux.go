@@ -3,15 +3,19 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
-// tmuxLookPath is a testability seam for locating the tmux binary. Tests
-// override it so the local-attach path doesn't require tmux to exist on the
-// runner (notably the macOS GitHub runner).
-var tmuxLookPath = exec.LookPath
+// tmuxLocate is a testability seam for locating the tmux binary. Tests
+// override it so the local-attach path doesn't require tmux on the runner
+// (notably the macOS GitHub runner). It defaults to tmux.Locate, which
+// checks $PATH then a small set of well-known install locations — needed
+// because leo's local-attach branch also runs on the remote side when the
+// top-level `leo attach` is dispatched over SSH (the non-interactive shell
+// usually does not have /opt/homebrew/bin on PATH).
+var tmuxLocate = tmux.Locate
 
 // attachTmuxSession replaces the current process with a tmux attach (local) or
 // runs `ssh -t <host> <tmux> attach -t <session>` remotely. Session names are
@@ -29,9 +33,9 @@ func attachTmuxSession(res config.HostResolution, session string) error {
 		return c.Run()
 	}
 
-	tmuxPath, err := tmuxLookPath("tmux")
+	tmuxPath, err := tmuxLocate()
 	if err != nil {
-		return fmt.Errorf("tmux not found in PATH: %w", err)
+		return err
 	}
 	// Replace the CLI process so tmux owns the TTY cleanly. Returns an error
 	// only if exec itself fails; on success this call does not return.
@@ -44,7 +48,11 @@ func attachTmuxSession(res config.HostResolution, session string) error {
 // host's configured tmux path.
 func captureTmuxPane(res config.HostResolution, session string, lines int) error {
 	if res.Localhost {
-		return runShellCmd("tmux", []string{"capture-pane", "-t", session, "-p", "-S", fmt.Sprintf("-%d", lines)})
+		tmuxPath, err := tmuxLocate()
+		if err != nil {
+			return err
+		}
+		return runShellCmd(tmuxPath, []string{"capture-pane", "-t", session, "-p", "-S", fmt.Sprintf("-%d", lines)})
 	}
 	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
 	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath(), "capture-pane", "-t", session, "-p", "-S", fmt.Sprintf("-%d", lines))
@@ -60,7 +68,14 @@ func followTmuxSession(res config.HostResolution, session string, lines int) err
 			tmuxCmd, session, lines, tmuxCmd, session, session, session)
 	}
 	if res.Localhost {
-		return runShellCmd("sh", []string{"-c", buildTailCmd("tmux")})
+		// The embedded tmux invocation runs under `sh -c`, whose PATH may not
+		// include /opt/homebrew/bin when leo itself was launched from a
+		// stripped environment. Resolve to an absolute path up front.
+		tmuxPath, err := tmuxLocate()
+		if err != nil {
+			return err
+		}
+		return runShellCmd("sh", []string{"-c", buildTailCmd(tmuxPath)})
 	}
 	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
 	sshArgs = append(sshArgs, buildTailCmd(res.Host.RemoteTmuxPath()))

@@ -398,9 +398,9 @@ func attachLocal(homePath, query string) error {
 	if err != nil {
 		return fmt.Errorf("looking up session: %w", err)
 	}
-	tmuxPath, err := exec.LookPath("tmux")
+	tmuxPath, err := tmuxLocate()
 	if err != nil {
-		return fmt.Errorf("tmux not found in PATH: %w", err)
+		return err
 	}
 	return agentSyscallExec(tmuxPath, []string{"tmux", "attach", "-t", session}, os.Environ())
 }

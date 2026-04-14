@@ -19,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/pluginsync"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // Testability seams
@@ -650,16 +651,7 @@ func autoResumePrompt(tmuxPath, sessionName, processName string) {
 }
 
 func findTmux() (string, error) {
-	tmuxPath, err := exec.LookPath("tmux")
-	if err == nil {
-		return tmuxPath, nil
-	}
-	for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("tmux not found: install with 'brew install tmux'")
+	return tmux.Locate()
 }
 
 // stripResumeArg removes --resume and its value from claude args.

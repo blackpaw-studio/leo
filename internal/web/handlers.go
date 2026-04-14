@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // dashboardData is the template data for the full dashboard page.
@@ -792,13 +792,10 @@ func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func findTmuxPath() string {
-	if p, err := exec.LookPath("tmux"); err == nil {
+	// Fall back to bare "tmux" on error — preserves prior behavior for call
+	// sites that pass this directly to exec.Command without checking errors.
+	if p, err := tmux.Locate(); err == nil {
 		return p
-	}
-	for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
 	}
 	return "tmux"
 }

@@ -225,13 +225,13 @@ func TestAttachAliasResolvesToProcess(t *testing.T) {
 	}
 }
 
-// stubTmuxLookPath replaces tmuxLookPath for the test so local-attach paths
+// stubTmuxLookPath replaces tmuxLocate for the test so local-attach paths
 // don't require a real tmux binary on the runner.
 func stubTmuxLookPath(t *testing.T, path string, err error) {
 	t.Helper()
-	old := tmuxLookPath
-	tmuxLookPath = func(string) (string, error) { return path, err }
-	t.Cleanup(func() { tmuxLookPath = old })
+	old := tmuxLocate
+	tmuxLocate = func() (string, error) { return path, err }
+	t.Cleanup(func() { tmuxLocate = old })
 }
 
 // stubAgentSession replaces lookupAgentSession for the duration of the test.
