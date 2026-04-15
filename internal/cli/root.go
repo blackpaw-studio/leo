@@ -31,7 +31,6 @@ func newRootCmd() *cobra.Command {
 		newSetupCmd(),
 		newValidateCmd(),
 		newUpdateCmd(),
-		newTelegramCmd(),
 		newSessionCmd(),
 		newCompletionCmd(),
 		newStatusCmd(),

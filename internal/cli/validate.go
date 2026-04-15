@@ -53,12 +53,6 @@ func newValidateCmd() *cobra.Command {
 				issues++
 			}
 
-			if prereq.CheckBun() {
-				success.Println("bun: installed")
-			} else {
-				warn.Println("bun: not found (required for telegram plugin)")
-				issues++
-			}
 
 			// 3. Check default workspace
 			defaultWS := cfg.DefaultWorkspace()

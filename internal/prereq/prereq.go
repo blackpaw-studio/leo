@@ -48,21 +48,6 @@ func CheckTmux() bool {
 	return false
 }
 
-// CheckBun checks if bun is installed and executable.
-func CheckBun() bool {
-	home, _ := userHomeDir()
-	candidates := []string{"bun", "/opt/homebrew/bin/bun", "/usr/local/bin/bun"}
-	if home != "" {
-		candidates = append(candidates, filepath.Join(home, ".bun", "bin", "bun"))
-	}
-	for _, p := range candidates {
-		if path, err := lookPath(p); err == nil && path != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // FindOpenClaw searches for an OpenClaw installation in common locations.
 func FindOpenClaw() string {
 	home, _ := userHomeDir()
