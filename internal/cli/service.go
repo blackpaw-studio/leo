@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,14 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
-	"github.com/blackpaw-studio/leo/internal/telegram"
 	"github.com/spf13/cobra"
 )
 
@@ -55,10 +52,6 @@ func runService(cmd *cobra.Command, args []string) error {
 	}
 
 	if supervised {
-		// Seed topic cache before any telegram processes start
-		if cfg.Telegram.GroupID != "" {
-			seedTopicCache(cfg)
-		}
 		claudePath, err := exec.LookPath("claude")
 		if err != nil {
 			return fmt.Errorf("claude not found: %w", err)
@@ -81,15 +74,6 @@ func runService(cmd *cobra.Command, args []string) error {
 	procName, proc, err := resolveProcess(cfg, args)
 	if err != nil {
 		return err
-	}
-
-	// Seed topic cache if this process uses telegram
-	if cfg.Telegram.GroupID != "" && processHasTelegram(proc) {
-		seedTopicCache(cfg)
-	}
-
-	if cfg.Telegram.BotToken != "" && processHasTelegram(proc) {
-		syncPluginEnv(cfg.Telegram.BotToken)
 	}
 
 	claudeArgs := buildProcessArgs(cfg, procName, proc)
@@ -117,7 +101,21 @@ func runService(cmd *cobra.Command, args []string) error {
 	}
 
 	info.Printf("Starting session (%s)...\n", procName)
-	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), os.Environ())
+	procEnv := processEnviron(proc)
+	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), procEnv)
+}
+
+// processEnviron augments the current environment with LEO_CHANNELS (if any)
+// and per-process env vars. Returned slice is safe to pass to syscall.Exec.
+func processEnviron(proc config.ProcessConfig) []string {
+	env := os.Environ()
+	if len(proc.Channels) > 0 {
+		env = append(env, "LEO_CHANNELS="+strings.Join(proc.Channels, ","))
+	}
+	for k, v := range proc.Env {
+		env = append(env, k+"="+v)
+	}
+	return env
 }
 
 // resolveProcess finds the target process by name or returns the first enabled process (sorted by name).
@@ -151,16 +149,6 @@ func resolveProcess(cfg *config.Config, args []string) (string, config.ProcessCo
 	return "", config.ProcessConfig{}, fmt.Errorf("no enabled processes in config")
 }
 
-// processHasTelegram checks if a process uses the telegram channel plugin.
-func processHasTelegram(proc config.ProcessConfig) bool {
-	for _, ch := range proc.Channels {
-		if strings.Contains(ch, "telegram") {
-			return true
-		}
-	}
-	return false
-}
-
 // buildAllProcessSpecs builds ProcessSpec for all enabled processes.
 func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.ProcessSpec {
 	var specs []service.ProcessSpec
@@ -188,21 +176,29 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 			args = append(args, "--session-id", sid)
 		}
 
-		// Sync telegram plugin env if this process uses it
-		if cfg.Telegram.BotToken != "" && processHasTelegram(proc) {
-			syncPluginEnv(cfg.Telegram.BotToken)
-		}
-
 		specs = append(specs, service.ProcessSpec{
-			Name:        name,
-			ClaudeArgs:  args,
-			WorkDir:     cfg.ProcessWorkspace(proc),
-			HasTelegram: processHasTelegram(proc),
-			Env:         proc.Env,
-			WebPort:     strconv.Itoa(cfg.WebPort()),
+			Name:       name,
+			ClaudeArgs: args,
+			WorkDir:    cfg.ProcessWorkspace(proc),
+			Env:        mergeChannelsIntoEnv(proc),
+			WebPort:    strconv.Itoa(cfg.WebPort()),
 		})
 	}
 	return specs
+}
+
+// mergeChannelsIntoEnv returns a new env map combining the process's declared
+// env vars with an injected LEO_CHANNELS entry (if channels are configured).
+// The supervisor exports these before launching claude in the tmux session.
+func mergeChannelsIntoEnv(proc config.ProcessConfig) map[string]string {
+	merged := make(map[string]string, len(proc.Env)+1)
+	for k, v := range proc.Env {
+		merged[k] = v
+	}
+	if len(proc.Channels) > 0 {
+		merged["LEO_CHANNELS"] = strings.Join(proc.Channels, ",")
+	}
+	return merged
 }
 
 // buildProcessArgs builds claude CLI args for a named process.
@@ -497,69 +493,11 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 	}, nil
 }
 
-// seedTopicCache discovers forum topics via getUpdates (before the plugin
-// starts consuming them) and writes the result to state/topics.json.
-// This is best-effort — failures are silently ignored.
-func seedTopicCache(cfg *config.Config) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	topics, err := telegram.FetchTopics(ctx, cfg.Telegram.BotToken, cfg.Telegram.GroupID)
-	if err != nil || len(topics) == 0 {
-		return
-	}
-
-	stateDir := cfg.StatePath()
-	if err := os.MkdirAll(stateDir, 0750); err != nil {
-		warn.Printf("  Could not create state directory: %v\n", err)
-		return
-	}
-
-	if err := telegram.WriteTopicCache(filepath.Join(stateDir, "topics.json"), topics); err != nil {
-		warn.Printf("  Could not cache topics: %v\n", err)
-	}
-}
-
 func resolveConfigPath(cfg *config.Config) (string, error) {
 	if cfgFile != "" {
 		return filepath.Abs(cfgFile)
 	}
 	return filepath.Abs(filepath.Join(cfg.HomePath, "leo.yaml"))
-}
-
-// syncPluginEnv ensures the telegram plugin's .env file has the correct
-// bot token from leo.yaml. Preserves other keys in the file. Creates
-// the file and parent directories if they don't exist.
-func syncPluginEnv(botToken string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot sync telegram plugin env: %v\n", err)
-		return
-	}
-	envDir := filepath.Join(home, ".claude", "channels", "telegram")
-	envFile := filepath.Join(envDir, ".env")
-
-	// Read existing env to preserve other keys
-	lines := []string{}
-	if data, err := os.ReadFile(envFile); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if line == "" || strings.HasPrefix(line, "TELEGRAM_BOT_TOKEN=") {
-				continue
-			}
-			lines = append(lines, line)
-		}
-	}
-
-	// Prepend the bot token
-	lines = append([]string{"TELEGRAM_BOT_TOKEN=" + botToken}, lines...)
-
-	if err := os.MkdirAll(envDir, 0750); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot create telegram plugin dir: %v\n", err)
-		return
-	}
-	if err := os.WriteFile(envFile, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot write telegram plugin env: %v\n", err)
-	}
 }
 
 func completeProcessNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
