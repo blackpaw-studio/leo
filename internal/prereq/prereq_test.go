@@ -107,45 +107,6 @@ func TestCheckTmuxNotFound(t *testing.T) {
 	}
 }
 
-func TestCheckBunFound(t *testing.T) {
-	original := lookPath
-	originalHome := userHomeDir
-	defer func() {
-		lookPath = original
-		userHomeDir = originalHome
-	}()
-
-	lookPath = func(file string) (string, error) {
-		if file == "bun" {
-			return "/usr/local/bin/bun", nil
-		}
-		return "", fmt.Errorf("not found")
-	}
-	userHomeDir = func() (string, error) { return "/home/test", nil }
-
-	if !CheckBun() {
-		t.Error("expected CheckBun() = true when bun found")
-	}
-}
-
-func TestCheckBunNotFound(t *testing.T) {
-	original := lookPath
-	originalHome := userHomeDir
-	defer func() {
-		lookPath = original
-		userHomeDir = originalHome
-	}()
-
-	lookPath = func(file string) (string, error) {
-		return "", fmt.Errorf("not found")
-	}
-	userHomeDir = func() (string, error) { return "/home/test", nil }
-
-	if CheckBun() {
-		t.Error("expected CheckBun() = false when bun not found")
-	}
-}
-
 func TestFindOpenClaw(t *testing.T) {
 	tmpDir := t.TempDir()
 

@@ -611,11 +611,7 @@ func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
 	task.NotifyOnFail = r.FormValue("notify_on_fail") == "true"
 	task.Timezone = r.FormValue("timezone")
 	task.Workspace = r.FormValue("workspace")
-	if tid := r.FormValue("topic_id"); tid != "" {
-		if v, err := strconv.Atoi(tid); err == nil {
-			task.TopicID = v
-		}
-	}
+	task.Channels = parseCommaSeparated(r.FormValue("channels"))
 	if ret := r.FormValue("retries"); ret != "" {
 		if v, err := strconv.Atoi(ret); err == nil {
 			task.Retries = v

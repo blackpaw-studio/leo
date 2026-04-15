@@ -91,7 +91,7 @@ func TestTaskAddRequestMarshalUnmarshal(t *testing.T) {
 				PromptFile: "reports/news.md",
 				Model:      "opus",
 				MaxTurns:   20,
-				TopicID:    1,
+				Channels:   []string{"plugin:telegram@claude-plugins-official"},
 				Silent:     true,
 				Enabled:    true,
 			},
@@ -144,8 +144,8 @@ func TestTaskAddRequestMarshalUnmarshal(t *testing.T) {
 			if got.MaxTurns != tt.request.MaxTurns {
 				t.Errorf("MaxTurns = %d, want %d", got.MaxTurns, tt.request.MaxTurns)
 			}
-			if got.TopicID != tt.request.TopicID {
-				t.Errorf("TopicID = %d, want %d", got.TopicID, tt.request.TopicID)
+			if len(got.Channels) != len(tt.request.Channels) {
+				t.Errorf("Channels len = %d, want %d", len(got.Channels), len(tt.request.Channels))
 			}
 			if got.Silent != tt.request.Silent {
 				t.Errorf("Silent = %v, want %v", got.Silent, tt.request.Silent)

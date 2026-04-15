@@ -189,5 +189,5 @@ Capture the tmux pane for the named agent. Accepts shorthand.
 ## See Also
 
 - [Remote CLI guide](../guides/remote-cli.md) — host setup and SSH walkthrough
-- [Agents guide](../guides/agents.md) — templates, lifecycle, and Telegram/web parity
+- [Agents guide](../guides/agents.md) — templates, lifecycle, and channel/web parity
 - [`leo template`](template.md) — manage the templates `agent spawn` consumes

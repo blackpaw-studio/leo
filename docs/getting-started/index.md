@@ -1,6 +1,6 @@
 # Quick Start
 
-Get a personal AI assistant running on Telegram in under 5 minutes.
+Get a personal AI assistant running in under 5 minutes.
 
 ## 1. Install Leo
 
@@ -26,29 +26,46 @@ leo setup
 
 The interactive wizard walks you through:
 
-1. **Creating a user profile** -- tells the assistant who you are
-2. **Connecting Telegram** -- paste your bot token, then send a message to auto-detect your chat ID
-3. **Configuring MCP servers** -- optional integrations (calendar, email, etc.)
-4. **Adding scheduled tasks** -- recurring jobs like daily briefings
-5. **Sending a test message** -- verifies everything works end-to-end
+1. **Creating a user profile** — tells the assistant who you are
+2. **Picking a workspace** — the root directory for your agent's files
+3. **Scaffolding `CLAUDE.md` and skills** — baseline context for the agent
+4. **Configuring MCP servers** (optional) — integrations (calendar, email, etc.)
+5. **Adding scheduled tasks** (optional) — recurring jobs like daily briefings
+6. **Optionally installing as a daemon** — for persistence across reboots
 
-!!! tip "Don't have a Telegram bot yet?"
-    The wizard will prompt you to create one. See the [Telegram Setup](../guides/telegram-setup.md) guide for a detailed walkthrough of the BotFather process.
+The wizard does **not** install or configure any messaging channel. Leo is channel-agnostic.
 
-## 3. Start the Service
+## 3. (Optional) Install a Channel Plugin
 
-Launch the Telegram session:
+If you want mobile access or another way to chat with your assistant, install a Claude Code channel plugin separately. For example, to enable Telegram:
+
+```bash
+claude plugin install telegram@claude-plugins-official
+```
+
+Follow the plugin's own setup flow to connect your bot. Then reference the plugin in `leo.yaml`:
+
+```yaml
+processes:
+  assistant:
+    channels: [plugin:telegram@claude-plugins-official]
+    enabled: true
+```
+
+Leo passes the list to the spawned Claude process via the `LEO_CHANNELS` environment variable; the plugin owns its own auth and routing.
+
+## 4. Start the Service
 
 ```bash
 leo service start
 ```
 
-Your assistant is now listening. Send a message to your bot on Telegram and it will respond.
+Your assistant is now listening. If you configured a channel plugin, send a message to it and the agent will respond.
 
 !!! info "Background operation"
     `leo service start` runs all enabled processes in the background with automatic restart. For daemon mode (persists across reboots), see [Background Mode](../guides/background-mode.md).
 
-## 4. Test a Scheduled Task
+## 5. Test a Scheduled Task
 
 If you added a task during setup, run it manually:
 
@@ -56,9 +73,9 @@ If you added a task during setup, run it manually:
 leo run <task-name>
 ```
 
-If the agent has something to report, you'll receive a Telegram message. If there's nothing noteworthy, it exits silently.
+If the agent has something to report, you'll receive a message on your configured channel. If there's nothing noteworthy, it outputs `NO_REPLY`.
 
-## 5. Verify Your Schedule
+## 6. Verify Your Schedule
 
 Check that your scheduled tasks are loaded and see when each will fire next:
 
@@ -72,7 +89,7 @@ When the daemon is running, the `NEXT RUN` column shows the upcoming fire time f
 
 ## What's Next
 
-- [Telegram Setup](../guides/telegram-setup.md) -- detailed guide to creating and configuring your bot
-- [Scheduling](../guides/scheduling.md) -- deep dive into cron expressions, timezones, and silent mode
-- [Background Mode](../guides/background-mode.md) -- keep your service alive across reboots
-- [Writing Tasks](../guides/writing-tasks.md) -- create custom scheduled tasks
+- [Scheduling](../guides/scheduling.md) — deep dive into cron expressions, timezones, and silent mode
+- [Background Mode](../guides/background-mode.md) — keep your service alive across reboots
+- [Writing Tasks](../guides/writing-tasks.md) — create custom scheduled tasks
+- [Configuration](../configuration/config-reference.md) — full leo.yaml reference

@@ -11,14 +11,13 @@ cmd/leo/main.go          -> cli.Execute() entry point
 internal/cli/             -> Cobra command definitions (root.go wires all subcommands)
 internal/config/          -> Config types + YAML loading/saving (leo.yaml)
 internal/run/             -> Task runner: prompt assembly + claude invocation
-internal/cron/            -> Crontab management with marker-delimited blocks
-internal/telegram/        -> Telegram Bot API helpers (SendMessage, PollChatID)
+internal/cron/            -> In-process cron scheduler (robfig/cron wrapper)
 internal/service/         -> Background process and daemon management
 internal/setup/           -> Interactive setup wizard
 internal/onboard/         -> Onboarding flow with prerequisite checks
 internal/prompt/          -> Terminal helpers (colored prompts, yes/no, choices)
 internal/templates/       -> Embedded template files (user profile, etc.)
-internal/prereq/          -> Prerequisite checks (claude CLI, curl)
+internal/prereq/          -> Prerequisite checks (claude CLI, tmux)
 internal/session/         -> Session ID persistence
 internal/env/             -> Shared environment capture for daemon/cron processes
 internal/update/          -> Self-update (binary download from GitHub releases)
@@ -45,7 +44,7 @@ internal/update/          -> Self-update (binary download from GitHub releases)
 :   Workspace templates are embedded via `//go:embed *.md` in `internal/templates/` and rendered with `text/template`.
 
 **Prompt assembly**
-:   `leo run` builds the final prompt by concatenating an optional silent preamble, the prompt file content, and the Telegram notification protocol. The Telegram `curl` template is injected at runtime (not stored in a file).
+:   `leo run` builds the final prompt by concatenating an optional silent preamble with the prompt file content. The agent handles outbound messaging via whatever channel plugin(s) are configured (surfaced via the `LEO_CHANNELS` env var).
 
 ### Dependencies
 
@@ -55,7 +54,7 @@ internal/update/          -> Self-update (binary download from GitHub releases)
 | `gopkg.in/yaml.v3` | YAML config parsing |
 | `github.com/fatih/color` | Colored terminal output |
 
-**Runtime dependencies:** `claude` CLI (authenticated), `curl` (for Telegram in agent prompts).
+**Runtime dependencies:** `claude` CLI (authenticated), `tmux` (for supervised mode). Channel plugins (installed via `claude plugin install <id>`) bring their own runtime requirements.
 
 ### Version Injection
 

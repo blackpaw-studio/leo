@@ -13,7 +13,7 @@
 
 ---
 
-Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions, schedules autonomous tasks, and lets you spawn on-demand coding agents. Telegram gives you mobile access. A built-in web dashboard lets you manage everything from a browser.
+Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions, schedules autonomous tasks, and lets you spawn on-demand coding agents. Bring your own messaging channel — Leo is channel-agnostic and works with any Claude Code channel plugin (Telegram, Slack, webhook, etc.). A built-in web dashboard lets you manage everything from a browser.
 
 ## Install
 
@@ -23,16 +23,16 @@ curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main
 
 Or with Go: `go install github.com/blackpaw-studio/leo@latest`
 
-**Prerequisites:** [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (authenticated), `tmux`, a [Telegram bot token](https://core.telegram.org/bots#botfather)
+**Prerequisites:** [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (authenticated), `tmux`. Optionally, any Claude Code channel plugin you want Leo to surface messages through (e.g. `claude plugin install telegram@claude-plugins-official`).
 
 ## Quick Start
 
 ```bash
-leo setup          # interactive wizard — Telegram, profile, workspace
+leo setup          # interactive wizard — profile, workspace, first process
 leo service start  # start supervised processes
 ```
 
-The wizard walks you through connecting Telegram, creating a user profile, and configuring your first process. Once started, message your bot on Telegram to chat with your assistant.
+If you want mobile access, install a channel plugin separately (e.g. Telegram) and add its ID to your process `channels:` list.
 
 Run `leo service start --daemon` to install as a system service that persists across reboots.
 
@@ -40,7 +40,7 @@ Run `leo service start --daemon` to install as a system service that persists ac
 
 ### Processes
 
-Long-running Claude sessions supervised with auto-restart and exponential backoff. Each process gets its own workspace, model, channels, and permissions. Connect Telegram for mobile access, enable remote control for claude.ai/code.
+Long-running Claude sessions supervised with auto-restart and exponential backoff. Each process gets its own workspace, model, channel plugin list, and permissions. Enable remote control for claude.ai/code.
 
 ```yaml
 processes:
@@ -52,7 +52,7 @@ processes:
 
 ### Agent Templates
 
-Define reusable blueprints for spawning ephemeral coding agents. Dispatch them from Telegram (`/agent coding owner/repo`) or the web UI. Agents clone the repo, run in their own tmux session, and show up in claude.ai with a named session.
+Define reusable blueprints for spawning ephemeral coding agents. Dispatch them from a channel plugin (if it exposes agent commands) or from the web UI. Agents clone the repo, run in their own tmux session, and show up in claude.ai with a named session.
 
 ```yaml
 templates:
@@ -87,7 +87,7 @@ See the [Remote CLI guide](https://blackpaw-studio.github.io/leo/guides/remote-c
 
 ### Scheduled Tasks
 
-Cron-driven tasks that invoke Claude in non-interactive mode. Write a prompt file, set a schedule, and Leo handles the rest. Tasks can send Telegram messages, run silently, retry on failure, and route to forum topics.
+Cron-driven tasks that invoke Claude in non-interactive mode. Write a prompt file, set a schedule, and Leo handles the rest. Tasks can run silently, retry on failure, and notify a configured channel on failure (via `notify_on_fail`).
 
 ```yaml
 tasks:
@@ -96,6 +96,8 @@ tasks:
     timezone: America/New_York
     prompt_file: prompts/daily-briefing.md
     model: opus
+    channels: [plugin:telegram@claude-plugins-official]
+    notify_on_fail: true
     enabled: true
 ```
 
@@ -109,18 +111,14 @@ web:
   port: 8370
 ```
 
-### Telegram Commands
+### Channel Plugins
 
-| Command | Description |
-|---|---|
-| `/agent [template] [repo]` | Spawn a coding agent |
-| `/agents` | List running agents with stop buttons |
-| `/tasks` | List tasks with run/toggle buttons |
-| `/stop` | Interrupt the current process |
-| `/clear` | Clear conversation context |
-| `/compact` | Compact conversation context |
+Leo itself does not ship a messaging channel. Install any Claude Code channel plugin and reference its ID in a process or task `channels:` list. Leo passes the list to the spawned Claude process via `LEO_CHANNELS`; the plugin owns its own auth and routing.
 
-The Telegram plugin also gives Claude tools for replies, reactions, message editing, scheduled messages, persistent memory, and more. See the [Telegram guide](https://blackpaw-studio.github.io/leo/guides/telegram-commands/).
+Popular channel plugins:
+
+- `telegram@claude-plugins-official` — Telegram bot with reply/reaction/topic tools
+- (plus any other Claude Code plugin that exposes messaging tools)
 
 ## CLI
 
@@ -147,7 +145,7 @@ See the [CLI reference](https://blackpaw-studio.github.io/leo/cli/) for full det
 - [Getting Started](https://blackpaw-studio.github.io/leo/getting-started/) &mdash; installation, prerequisites, first run
 - [Configuration](https://blackpaw-studio.github.io/leo/configuration/) &mdash; full config reference and workspace structure
 - [CLI Reference](https://blackpaw-studio.github.io/leo/cli/) &mdash; every command and flag
-- [Guides](https://blackpaw-studio.github.io/leo/guides/) &mdash; Telegram setup, writing tasks, agents, scheduling, background mode
+- [Guides](https://blackpaw-studio.github.io/leo/guides/) &mdash; writing tasks, agents, scheduling, background mode
 - [Development](https://blackpaw-studio.github.io/leo/development/) &mdash; contributing, architecture, releasing
 
 ## Development

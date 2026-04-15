@@ -10,10 +10,10 @@ There is no system crontab. The `leo` daemon embeds a cron scheduler (via [robfi
 2. `leo service start` starts the daemon; the scheduler reads enabled tasks
 3. At each fire time, the scheduler invokes the task runner in-process (equivalent to `leo run <task>`)
 4. Leo assembles a prompt and invokes `claude -p` in non-interactive mode
-5. The agent does its work and optionally sends a Telegram message
+5. The agent does its work and optionally delivers a message via a configured channel plugin
 
 ```
-daemon scheduler --> leo run <task> --> claude -p "<prompt>" --> Agent --> Telegram (optional)
+daemon scheduler --> leo run <task> --> claude -p "<prompt>" --> Agent --> channel plugin (optional)
 ```
 
 Config changes (adds, edits, toggles) are picked up automatically by the web UI and the `leo task` commands — they reload the scheduler over the daemon socket without a restart. When you edit `leo.yaml` by hand, run `leo service reload` (or restart the daemon) so the scheduler sees the change.
@@ -61,7 +61,7 @@ Without a `timezone`, the schedule is evaluated against the daemon's local time.
 When `silent: true` is set on a task, Leo prepends a preamble to the prompt that instructs the agent to:
 
 - Work without narration or progress updates
-- Only send a Telegram message if there's something meaningful to report
+- Only deliver a message via a configured channel plugin if there's something meaningful to report
 - Output `NO_REPLY` if there's nothing noteworthy
 
 This is useful for tasks that run frequently where you only want to hear from the agent when something requires your attention.
@@ -115,7 +115,7 @@ leo run checks
 - **Use silent mode** for frequent tasks to avoid notification fatigue
 - **Check logs** after the first few runs (`leo task logs <name>`) to verify the agent is behaving as expected
 - **Mind rate limits** — running many tasks frequently consumes API tokens. Space out non-urgent tasks
-- **Use topic routing** to organize different types of notifications in a Telegram forum group
+- **Let the channel plugin route messages** — if you use a forum-aware plugin (e.g. Telegram topics, Slack threads), route each task to the right topic/thread from within the agent prompt rather than hardcoding routing in leo.yaml
 
 ## See Also
 

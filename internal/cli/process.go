@@ -216,7 +216,7 @@ When called without flags, an interactive prompt is shown.`,
 		},
 	}
 	cmd.Flags().StringVar(&workspace, "workspace", "", "Process workspace directory (blank = default)")
-	cmd.Flags().StringVar(&channels, "channels", "", "Comma-separated telegram channels")
+	cmd.Flags().StringVar(&channels, "channels", "", "Comma-separated channel plugin IDs (e.g. plugin:telegram@claude-plugins-official)")
 	cmd.Flags().StringVar(&model, "model", "", "Model override (defaults to global default)")
 	cmd.Flags().StringVar(&agent, "agent", "", "Agent identifier (optional)")
 	cmd.Flags().BoolVar(&disabled, "disabled", false, "Create the process in a disabled state")

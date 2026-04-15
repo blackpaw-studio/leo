@@ -18,7 +18,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
-	"github.com/blackpaw-studio/leo/internal/pluginsync"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -42,12 +41,11 @@ const (
 
 // ProcessSpec describes a process for the supervisor to manage.
 type ProcessSpec struct {
-	Name        string
-	ClaudeArgs  []string
-	WorkDir     string
-	HasTelegram bool
-	Env         map[string]string
-	WebPort     string // Leo web UI port for plugin control commands
+	Name       string
+	ClaudeArgs []string
+	WorkDir    string
+	Env        map[string]string
+	WebPort    string // Leo web UI port for plugin control commands
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -365,20 +363,6 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	// Sync forked Telegram plugin to Claude's cache
-	if err := pluginsync.SyncTelegramPlugin(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to sync telegram plugin: %v\n", err)
-	}
-
-	// Register bot commands with Telegram (best-effort)
-	if cfg, err := config.Load(configPath); err == nil {
-		if cfg.Telegram.BotToken != "" {
-			if err := pluginsync.RegisterBotCommands(cfg.Telegram.BotToken); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to register bot commands: %v\n", err)
-			}
-		}
-	}
-
 	// Find tmux early so we can cache it
 	tmuxPath, err := findTmux()
 	if err != nil {
@@ -427,24 +411,6 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		}
 	}
 
-	// Start a single background goroutine that periodically re-syncs the
-	// forked Telegram plugin for all telegram-enabled processes. Claude
-	// restores the official plugin during startup and periodically, so we
-	// must continuously re-apply our fork to keep /agent, /agents, /stop.
-	// Centralizing this avoids N concurrent goroutines (one per process)
-	// racing to write the same plugin files — and avoids leaking a new
-	// goroutine on every process restart.
-	anyTelegram := false
-	for _, proc := range processes {
-		if proc.HasTelegram {
-			anyTelegram = true
-			break
-		}
-	}
-	if anyTelegram {
-		go runPluginSyncLoop(ctx)
-	}
-
 	var wg sync.WaitGroup
 	for _, proc := range processes {
 		wg.Add(1)
@@ -459,25 +425,6 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	return nil
 }
 
-// pluginSyncInterval is how often the centralized plugin sync loop re-applies
-// the forked Telegram plugin. Exposed as a var so tests can tune it.
-var pluginSyncInterval = 5 * time.Second
-
-// runPluginSyncLoop re-applies the forked Telegram plugin on a fixed cadence
-// until ctx is cancelled. Intended to be started exactly once per supervisor.
-func runPluginSyncLoop(ctx context.Context) {
-	ticker := time.NewTicker(pluginSyncInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			_ = pluginsync.SyncTelegramPlugin()
-		}
-	}
-}
-
 // superviseProcess runs a single process in a tmux session with restart loop.
 func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor) {
 	sv.initState(spec.Name)
@@ -488,19 +435,6 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	copy(currentArgs, spec.ClaudeArgs)
 
 	for {
-		// Clean up orphaned plugin processes if this process uses telegram
-		if spec.HasTelegram {
-			cleanupOrphanedPlugins()
-		}
-
-		// Sync plugin before launch. A single supervisor-level goroutine
-		// (started in RunSupervised) handles the periodic re-sync for all
-		// telegram-enabled processes — avoid spawning a new goroutine on
-		// every restart, which would leak on restart loops.
-		if spec.HasTelegram {
-			_ = pluginsync.SyncTelegramPlugin()
-		}
-
 		sv.setState(spec.Name, "running")
 
 		// Shell-quote each token to prevent injection via config values
@@ -594,14 +528,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	}
 }
 
-// waitForSessionEnd blocks until the tmux session ends, the plugin dies, or the context is cancelled.
+// waitForSessionEnd blocks until the tmux session ends or the context is cancelled.
 // Returns true if the context was cancelled (should stop).
 func waitForSessionEnd(ctx context.Context, tmuxPath, sessionName string, spec ProcessSpec, startTime time.Time) bool {
-	var pluginLockFile string
-	if home, err := os.UserHomeDir(); err == nil {
-		pluginLockFile = filepath.Join(home, ".claude", "channels", "telegram", "data", "telegram.lock")
-	}
-	pluginChecksAfterStartup := 0
+	_ = startTime // kept in signature for future lifecycle hooks
 	for {
 		select {
 		case <-ctx.Done():
@@ -619,20 +549,6 @@ func waitForSessionEnd(ctx context.Context, tmuxPath, sessionName string, spec P
 		// Auto-dismiss the "Resume from summary" prompt that blocks
 		// unattended sessions when they exceed the context threshold.
 		autoResumePrompt(tmuxPath, sessionName, spec.Name)
-
-		// Monitor telegram plugin lock file (only for telegram processes)
-		if spec.HasTelegram && pluginLockFile != "" && time.Since(startTime) > 30*time.Second {
-			if _, err := os.Stat(pluginLockFile); err != nil {
-				pluginChecksAfterStartup++
-				if pluginChecksAfterStartup >= 3 {
-					fmt.Fprintf(os.Stderr, "[%s] telegram plugin died (lock file gone), restarting session\n", spec.Name)
-					exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
-					return false
-				}
-			} else {
-				pluginChecksAfterStartup = 0
-			}
-		}
 	}
 }
 
@@ -690,32 +606,6 @@ func clearProcessSession(homePath, processName string) {
 // shellQuote wraps a string in single quotes with proper escaping.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
-
-// cleanupOrphanedPlugins removes stale telegram plugin lock files.
-func cleanupOrphanedPlugins() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	lockFile := filepath.Join(home, ".claude", "channels", "telegram", "data", "telegram.lock")
-	data, err := readFile(lockFile)
-	if err != nil {
-		return
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		_ = removeFile(lockFile)
-		return
-	}
-	proc, err := findProcess(pid)
-	if err != nil {
-		_ = removeFile(lockFile)
-		return
-	}
-	if proc.Signal(syscall.Signal(0)) != nil {
-		_ = removeFile(lockFile)
-	}
 }
 
 func defaultStartProcess(leoPath, configPath, workDir string, logFile *os.File) (int, error) {

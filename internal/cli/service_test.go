@@ -9,47 +9,84 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
-func TestSyncPluginEnv_CreatesFile(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	syncPluginEnv("bot123:AAHtoken")
-
-	envFile := filepath.Join(dir, ".claude", "channels", "telegram", ".env")
-	data, err := os.ReadFile(envFile)
-	if err != nil {
-		t.Fatalf("failed to read .env: %v", err)
+func TestMergeChannelsIntoEnv(t *testing.T) {
+	tests := []struct {
+		name    string
+		proc    config.ProcessConfig
+		wantKey string
+		wantVal string
+		wantLen int
+	}{
+		{
+			name:    "injects LEO_CHANNELS when channels set",
+			proc:    config.ProcessConfig{Channels: []string{"plugin:telegram@claude-plugins-official"}},
+			wantKey: "LEO_CHANNELS",
+			wantVal: "plugin:telegram@claude-plugins-official",
+			wantLen: 1,
+		},
+		{
+			name: "joins multiple channels comma-separated",
+			proc: config.ProcessConfig{
+				Channels: []string{"plugin:telegram@claude-plugins-official", "plugin:slack@example"},
+			},
+			wantKey: "LEO_CHANNELS",
+			wantVal: "plugin:telegram@claude-plugins-official,plugin:slack@example",
+			wantLen: 1,
+		},
+		{
+			name:    "no channels yields no LEO_CHANNELS entry",
+			proc:    config.ProcessConfig{},
+			wantLen: 0,
+		},
+		{
+			name: "preserves existing proc.Env entries",
+			proc: config.ProcessConfig{
+				Env:      map[string]string{"FOO": "bar"},
+				Channels: []string{"plugin:telegram@claude-plugins-official"},
+			},
+			wantKey: "LEO_CHANNELS",
+			wantVal: "plugin:telegram@claude-plugins-official",
+			wantLen: 2,
+		},
 	}
 
-	if !strings.Contains(string(data), "TELEGRAM_BOT_TOKEN=bot123:AAHtoken") {
-		t.Errorf("env = %q, want bot token", string(data))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeChannelsIntoEnv(tt.proc)
+			if len(got) != tt.wantLen {
+				t.Errorf("got %d keys, want %d: %v", len(got), tt.wantLen, got)
+			}
+			if tt.wantKey != "" {
+				if got[tt.wantKey] != tt.wantVal {
+					t.Errorf("got[%q] = %q, want %q", tt.wantKey, got[tt.wantKey], tt.wantVal)
+				}
+			}
+		})
 	}
 }
 
-func TestSyncPluginEnv_PreservesOtherKeys(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	envDir := filepath.Join(dir, ".claude", "channels", "telegram")
-	os.MkdirAll(envDir, 0750)
-	os.WriteFile(filepath.Join(envDir, ".env"), []byte("TELEGRAM_BOT_TOKEN=old-token\nOPENAI_API_KEY=sk-abc123\n"), 0600)
-
-	syncPluginEnv("new-bot-token")
-
-	data, err := os.ReadFile(filepath.Join(envDir, ".env"))
-	if err != nil {
-		t.Fatalf("failed to read .env: %v", err)
+func TestProcessEnviron(t *testing.T) {
+	proc := config.ProcessConfig{
+		Channels: []string{"plugin:telegram@claude-plugins-official"},
+		Env:      map[string]string{"FOO": "bar"},
 	}
 
-	content := string(data)
-	if !strings.Contains(content, "TELEGRAM_BOT_TOKEN=new-bot-token") {
-		t.Errorf("should have new bot token, got: %q", content)
+	env := processEnviron(proc)
+
+	var sawChannels, sawFoo bool
+	for _, line := range env {
+		if strings.HasPrefix(line, "LEO_CHANNELS=") {
+			sawChannels = true
+		}
+		if line == "FOO=bar" {
+			sawFoo = true
+		}
 	}
-	if !strings.Contains(content, "OPENAI_API_KEY=sk-abc123") {
-		t.Errorf("should preserve OPENAI_API_KEY, got: %q", content)
+	if !sawChannels {
+		t.Error("processEnviron should contain LEO_CHANNELS")
 	}
-	if strings.Contains(content, "old-token") {
-		t.Errorf("should not contain old token, got: %q", content)
+	if !sawFoo {
+		t.Error("processEnviron should contain FOO=bar")
 	}
 }
 

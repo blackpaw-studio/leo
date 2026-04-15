@@ -3,6 +3,7 @@
 //
 //	FAKECLAUDE_SCENARIO: success (default), error, timeout
 //	FAKECLAUDE_ARGLOG:   path to write received args as JSON
+//	FAKECLAUDE_ENVLOG:   path to write os.Environ() as JSON (verifies env passthrough)
 package main
 
 import (
@@ -27,6 +28,19 @@ func main() {
 		}
 		if err := os.WriteFile(argLog, data, 0644); err != nil {
 			fmt.Fprintf(os.Stderr, "fakeclaude: failed to write arg log: %v\n", err)
+			os.Exit(2)
+		}
+	}
+
+	// Log environment if requested (used to verify LEO_CHANNELS passthrough).
+	if envLog := os.Getenv("FAKECLAUDE_ENVLOG"); envLog != "" {
+		data, err := json.Marshal(os.Environ())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fakeclaude: failed to marshal env: %v\n", err)
+			os.Exit(2)
+		}
+		if err := os.WriteFile(envLog, data, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "fakeclaude: failed to write env log: %v\n", err)
 			os.Exit(2)
 		}
 	}

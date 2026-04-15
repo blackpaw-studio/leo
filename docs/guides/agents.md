@@ -19,7 +19,7 @@ Templates support the same fields as processes (model, channels, permission_mode
 
 ## Dispatching Agents
 
-### From Telegram
+### From a channel plugin
 
 Send `/agent <template> <owner/repo>` to your bot:
 
@@ -68,7 +68,7 @@ Worktree agents run in parallel on the same repo without fighting over `.git/HEA
 
 ### From the JSON API
 
-The daemon exposes both a Unix-socket API (used by the CLI) and an HTTP API on the web port (used by the Telegram plugin and web UI):
+The daemon exposes both a Unix-socket API (used by the CLI) and an HTTP API on the web port (used by the channel plugin and web UI):
 
 ```
 POST /agents/spawn        {"template": "coding", "repo": "owner/repo", "branch": "feat/x"}  (daemon socket)
@@ -85,7 +85,7 @@ GET  /api/agent/list                                                      (web H
 
 On `/agents/spawn`, `branch` is optional — when present the daemon creates a worktree and the response includes `branch` and `canonical_path`. `/agents/{name}/prune` removes a stopped worktree agent's checkout and record; it returns typed error codes (`worktree_dirty`, `branch_not_merged`, `agent_still_running`, `not_worktree_agent`) so clients can dispatch on `errors.Is`.
 
-Both transports share the same `internal/agent` manager, so state stays consistent across CLI, web UI, and Telegram.
+Both transports share the same `internal/agent` manager, so state stays consistent across CLI, web UI, and any channel plugin that invokes the HTTP API.
 
 ### Shorthand Names
 
@@ -104,7 +104,7 @@ The daemon also exposes `GET /agents/resolve?q=<query>` over the Unix socket for
 
 ### Listing
 
-- **Telegram:** `/agents` — shows running agents with stop buttons
+- **Channel plugin:** if your plugin exposes an agent-list command, it shows running agents with stop buttons
 - **Web UI:** agents panel on the dashboard
 - **CLI:** `leo agent list` (`--json` for scripting)
 - **API:** `GET /api/agent/list`
@@ -115,7 +115,7 @@ The daemon also exposes `GET /agents/resolve?q=<query>` over the Unix socket for
 
 ### Stopping
 
-- **Telegram:** tap the stop button next to an agent in `/agents`
+- **Channel plugin:** tap the stop button next to an agent (if the plugin exposes one)
 - **Web UI:** stop button in the agent panel
 - **CLI:** `leo agent stop <name>` (add `--prune` to also delete a worktree agent's checkout)
 - **API:** `POST /api/agent/stop {"name": "..."}`
@@ -149,4 +149,4 @@ Ephemeral agents use the same supervisor as regular processes:
 - Auto-restart on exit with exponential backoff
 - Quick-exit detection (< 15s) clears stale sessions
 - Resume prompt auto-dismissal (the "Resume from summary" prompt is handled automatically)
-- Telegram plugin lock file monitoring (for agents with Telegram channels)
+- process supervisor lifecycle (restart on crash, backoff)

@@ -5,11 +5,6 @@ Leo's config lives at `~/.leo/leo.yaml`.
 ## Full Structure
 
 ```yaml
-telegram:
-  bot_token: <string>         # Telegram Bot API token from @BotFather (required)
-  chat_id: <string>           # Your personal chat ID (required)
-  group_id: <string>          # Forum group chat ID (optional — use instead of chat_id for groups)
-
 defaults:
   model: <string>             # Default model: sonnet, opus, or haiku (required)
   max_turns: <int>            # Default max conversation turns (required)
@@ -19,7 +14,7 @@ defaults:
 processes:
   <process-name>:
     workspace: <path>           # Workspace directory (optional — defaults to ~/.leo/workspace)
-    channels: [<string>]        # Channel plugins, e.g. plugin:telegram@claude-plugins-official
+    channels: [<string>]        # Channel plugin IDs, e.g. plugin:telegram@claude-plugins-official
     model: <string>             # Override defaults.model (optional)
     max_turns: <int>            # Override defaults.max_turns (optional)
     bypass_permissions: <bool>  # Override defaults.bypass_permissions (optional — pointer, unset != false)
@@ -36,10 +31,32 @@ tasks:
     prompt_file: <path>       # Path relative to workspace (required)
     model: <string>           # Override defaults.model (optional)
     max_turns: <int>          # Override defaults.max_turns (optional)
-    topic_id: <int>           # Telegram forum topic ID (optional — discover via `leo telegram topics`)
+    channels: [<string>]      # Channel plugin IDs used for notify_on_fail (optional)
+    notify_on_fail: <bool>    # Spawn a child claude to notify configured channels on failure (optional)
     enabled: <bool>           # Whether cron runs this task (default: true)
     silent: <bool>            # Suppress narration, output NO_REPLY if nothing to report (optional)
 ```
+
+## Channels
+
+Channels are Claude Code plugin IDs (not bot tokens or chat IDs). Install the plugin via `claude plugin install <id>`, configure it with the plugin's own setup flow, then reference the plugin ID in the `channels:` list on a process or task.
+
+Example:
+
+```bash
+claude plugin install telegram@claude-plugins-official
+```
+
+Then in `leo.yaml`:
+
+```yaml
+processes:
+  assistant:
+    channels:
+      - plugin:telegram@claude-plugins-official
+```
+
+Leo passes the resolved list to the spawned Claude process via the `LEO_CHANNELS` environment variable. The plugin owns its own credentials and routing.
 
 ## Override Cascade
 
@@ -60,15 +77,9 @@ For `bypass_permissions` and `remote_control` in processes, a pointer type is us
 
 ## Processes vs Tasks
 
-**Processes** are long-running interactive sessions (e.g. a Telegram bot). They use channel plugins and run via `leo service`.
+**Processes** are long-running interactive sessions. They subscribe to channel plugins and run via `leo service`.
 
 **Tasks** are one-shot scheduled invocations triggered by cron. They run via `leo run <task>` with an assembled prompt.
-
-## Telegram Topics
-
-Topics route messages to specific threads in a Telegram forum group. Use `leo telegram topics` to discover available topic IDs for your group, then reference them directly in tasks via `topic_id: <id>`.
-
-If `group_id` is set, messages go to the group. The `topic_id` field adds a `message_thread_id` to route to a specific thread. If no `topic_id` is specified, messages go to the General thread.
 
 ## Paths
 
@@ -83,4 +94,4 @@ If `group_id` is set, messages go to the group. The `topic_id` field adds a `mes
 leo validate
 ```
 
-Checks: required fields, model names, cron syntax, telegram consistency, topic IDs, file existence.
+Checks: required fields, model names, cron syntax, channel ID shape, file existence.

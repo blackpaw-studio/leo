@@ -29,14 +29,15 @@ const (
 
 // TaskAddRequest is the body for POST /task/add.
 type TaskAddRequest struct {
-	Name       string `json:"name"`
-	Schedule   string `json:"schedule"`
-	PromptFile string `json:"prompt_file"`
-	Model      string `json:"model,omitempty"`
-	MaxTurns   int    `json:"max_turns,omitempty"`
-	TopicID    int    `json:"topic_id,omitempty"`
-	Silent     bool   `json:"silent,omitempty"`
-	Enabled    bool   `json:"enabled"`
+	Name         string   `json:"name"`
+	Schedule     string   `json:"schedule"`
+	PromptFile   string   `json:"prompt_file"`
+	Model        string   `json:"model,omitempty"`
+	MaxTurns     int      `json:"max_turns,omitempty"`
+	Channels     []string `json:"channels,omitempty"`
+	NotifyOnFail bool     `json:"notify_on_fail,omitempty"`
+	Silent       bool     `json:"silent,omitempty"`
+	Enabled      bool     `json:"enabled"`
 }
 
 // TaskNameRequest is the body for POST /task/remove, /task/enable, /task/disable.

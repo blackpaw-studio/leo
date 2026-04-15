@@ -12,7 +12,7 @@ var (
 )
 
 // Capture returns a map of environment variables relevant to Leo's daemon
-// and cron processes. It ensures bun and Homebrew are in PATH.
+// and cron processes. It ensures common user/Homebrew bin directories are in PATH.
 func Capture() map[string]string {
 	home, _ := userHomeDirFn()
 	env := make(map[string]string)
@@ -23,7 +23,6 @@ func Capture() map[string]string {
 		"PATH",
 		"SHELL",
 		"USER",
-		"TELEGRAM_BOT_TOKEN",
 	} {
 		if v := os.Getenv(key); v != "" {
 			env[key] = v
@@ -31,11 +30,7 @@ func Capture() map[string]string {
 	}
 
 	// Ensure common tool directories are in PATH for daemon/cron
-	if path, ok := env["PATH"]; ok && home != "" {
-		bunDir := filepath.Join(home, ".bun", "bin")
-		if _, err := statFn(bunDir); err == nil && !strings.Contains(path, bunDir) {
-			env["PATH"] = bunDir + ":" + path
-		}
+	if _, ok := env["PATH"]; ok && home != "" {
 		localBinDir := filepath.Join(home, ".local", "bin")
 		if _, err := statFn(localBinDir); err == nil && !strings.Contains(env["PATH"], localBinDir) {
 			env["PATH"] = localBinDir + ":" + env["PATH"]

@@ -71,15 +71,6 @@
     </div>
 
     <div class="config-section">
-        <h3>Telegram</h3>
-        <table class="config-table">
-            <tr><td class="config-key">Bot Token</td><td>{{if .Telegram.BotToken}}configured{{else}}not set{{end}}</td></tr>
-            <tr><td class="config-key">Chat ID</td><td>{{if .Telegram.ChatID}}{{.Telegram.ChatID}}{{else}}not set{{end}}</td></tr>
-            <tr><td class="config-key">Group ID</td><td>{{if .Telegram.GroupID}}{{.Telegram.GroupID}}{{else}}not set{{end}}</td></tr>
-        </table>
-    </div>
-
-    <div class="config-section">
         <h3>Web UI</h3>
         <table class="config-table">
             <tr><td class="config-key">Enabled</td><td>{{.Web.Enabled}}</td></tr>

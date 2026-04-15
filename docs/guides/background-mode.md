@@ -1,6 +1,6 @@
 # Background Mode
 
-For production use, you'll want the Telegram session to stay alive and restart automatically if it crashes. Leo offers two options.
+For production use, you'll want the supervised session to stay alive and restart automatically if it crashes. Leo offers two options.
 
 ## Simple Background Mode
 
@@ -109,4 +109,4 @@ leo service start --daemon
 ## See Also
 
 - [`leo service`](../cli/service.md) — full command reference
-- [Telegram Setup](telegram-setup.md) — configuring your bot
+- [Configuration → Channels](../configuration/config-reference.md#channels) — wiring up a channel plugin

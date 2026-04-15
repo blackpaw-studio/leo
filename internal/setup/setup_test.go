@@ -1,508 +1,279 @@
 package setup
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/service"
-	"github.com/blackpaw-studio/leo/internal/templates"
 )
 
-// --- helpers ---
+// --- buildConfig ---
 
-func mockAllPrereqs(t *testing.T) {
-	t.Helper()
-	origClaude := checkClaudeFn
-	origTmux := checkTmuxFn
-	origBun := checkBunFn
-	t.Cleanup(func() {
-		checkClaudeFn = origClaude
-		checkTmuxFn = origTmux
-		checkBunFn = origBun
-	})
-	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: true, Version: "1.0.0"} }
-	checkTmuxFn = func() bool { return true }
-	checkBunFn = func() bool { return true }
-}
+func TestBuildConfig_FreshWorkspace(t *testing.T) {
+	cfg := buildConfig("/my/workspace", nil)
 
-func readerFrom(input string) *bufio.Reader {
-	return bufio.NewReader(strings.NewReader(input))
-}
-
-// --- findExistingConfig ---
-
-func TestFindExistingConfigNone(t *testing.T) {
-	dir := t.TempDir()
-
-	orig := findExistingWorkspacesFn
-	t.Cleanup(func() { findExistingWorkspacesFn = orig })
-	findExistingWorkspacesFn = func() []string { return nil }
-
-	cfg, defaultWs := findExistingConfig(dir)
-
-	if cfg != nil {
-		t.Error("expected nil config when none exists")
+	if cfg.Defaults.Model != config.DefaultModel {
+		t.Errorf("Defaults.Model = %q, want %q", cfg.Defaults.Model, config.DefaultModel)
 	}
-	if defaultWs != filepath.Join(dir, ".leo") {
-		t.Errorf("defaultWorkspace = %q, want %q", defaultWs, filepath.Join(dir, ".leo"))
+	if cfg.Defaults.MaxTurns != config.DefaultMaxTurns {
+		t.Errorf("Defaults.MaxTurns = %d, want %d", cfg.Defaults.MaxTurns, config.DefaultMaxTurns)
+	}
+	proc, ok := cfg.Processes["assistant"]
+	if !ok {
+		t.Fatal("expected default 'assistant' process")
+	}
+	if proc.Workspace != "/my/workspace" {
+		t.Errorf("process workspace = %q, want %q", proc.Workspace, "/my/workspace")
+	}
+	if !proc.Enabled {
+		t.Error("default process should be enabled")
+	}
+	if proc.RemoteControl == nil || !*proc.RemoteControl {
+		t.Error("default process should have remote_control enabled")
+	}
+	if len(proc.Channels) != 0 {
+		t.Errorf("expected empty channels (channel-agnostic default), got %v", proc.Channels)
 	}
 }
 
-func TestFindExistingConfigFound(t *testing.T) {
-	dir := t.TempDir()
-	leoDir := filepath.Join(dir, ".leo")
-	os.MkdirAll(leoDir, 0755)
-
-	cfg := &config.Config{
-		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-		Tasks:    map[string]config.TaskConfig{},
-	}
-	config.Save(filepath.Join(leoDir, "leo.yaml"), cfg)
-
-	orig := findExistingWorkspacesFn
-	t.Cleanup(func() { findExistingWorkspacesFn = orig })
-	findExistingWorkspacesFn = func() []string { return nil }
-
-	found, ws := findExistingConfig(dir)
-	if found == nil {
-		t.Fatal("expected to find existing config")
-	}
-	if ws != leoDir {
-		t.Errorf("workspace = %q, want %q", ws, leoDir)
-	}
-}
-
-// --- scaffoldWorkspace ---
-
-func TestScaffoldWorkspace(t *testing.T) {
-	leoHome := t.TempDir()
-	workspace := filepath.Join(leoHome, "workspace")
-	home := t.TempDir()
-
-	cfg := &config.Config{
-		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-		Tasks:    map[string]config.TaskConfig{},
+func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
+	existing := &config.Config{
+		Defaults: config.DefaultsConfig{
+			Model:    "opus",
+			MaxTurns: 99,
+		},
+		Processes: map[string]config.ProcessConfig{
+			"custom": {
+				Workspace: "/custom/ws",
+				Channels:  []string{"plugin:telegram@claude-plugins-official"},
+				Enabled:   true,
+			},
+		},
+		Tasks: map[string]config.TaskConfig{
+			"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"},
+		},
 	}
 
-	err := scaffoldWorkspace(scaffoldOptions{
-		workspace: workspace, home: home, leoHome: leoHome, cfg: cfg,
-		userPath: filepath.Join(workspace, "USER.md"), userName: "TestUser",
-		role: "developer", about: "about me", preferences: "concise", timezone: "UTC",
-	})
-	if err != nil {
-		t.Fatalf("scaffoldWorkspace() error: %v", err)
-	}
+	cfg := buildConfig("/my/workspace", existing)
 
-	// Verify workspace subdirectories created
-	for _, subdir := range []string{"daily", "reports", "config", "scripts"} {
-		if _, err := os.Stat(filepath.Join(workspace, subdir)); err != nil {
-			t.Errorf("directory %s not created", subdir)
-		}
+	if cfg.Defaults.Model != "opus" {
+		t.Errorf("Defaults.Model = %q, want 'opus'", cfg.Defaults.Model)
 	}
-
-	// Verify state directory created under leoHome
-	if _, err := os.Stat(filepath.Join(leoHome, "state")); err != nil {
-		t.Error("state directory not created under leoHome")
+	if _, ok := cfg.Processes["custom"]; !ok {
+		t.Error("expected existing 'custom' process preserved")
 	}
-
-	// Verify leo.yaml written to leoHome
-	if _, err := os.Stat(filepath.Join(leoHome, "leo.yaml")); err != nil {
-		t.Error("leo.yaml not created in leoHome")
-	}
-
-	// Verify USER.md
-	data, err := os.ReadFile(filepath.Join(workspace, "USER.md"))
-	if err != nil {
-		t.Fatal("USER.md not created")
-	}
-	if len(data) == 0 {
-		t.Error("USER.md is empty")
-	}
-
-	// Verify MCP config
-	if _, err := os.Stat(filepath.Join(workspace, "config", "mcp-servers.json")); err != nil {
-		t.Error("mcp-servers.json not created")
-	}
-
-	// Verify CLAUDE.md
-	data, err = os.ReadFile(filepath.Join(workspace, "CLAUDE.md"))
-	if err != nil {
-		t.Fatal("CLAUDE.md not created")
-	}
-	if len(data) == 0 {
-		t.Error("CLAUDE.md is empty")
-	}
-
-	// Verify skills directory and files
-	for _, skill := range templates.SkillFiles() {
-		if _, err := os.Stat(filepath.Join(workspace, "skills", skill)); err != nil {
-			t.Errorf("skill file %s not created", skill)
-		}
-	}
-}
-
-func TestScaffoldWorkspaceSkipsExisting(t *testing.T) {
-	leoHome := t.TempDir()
-	workspace := filepath.Join(leoHome, "workspace")
-	os.MkdirAll(workspace, 0755)
-	home := t.TempDir()
-
-	cfg := &config.Config{
-		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-		Tasks:    map[string]config.TaskConfig{},
-	}
-
-	// Pre-create CLAUDE.md to verify it's not overwritten
-	claudeMDPath := filepath.Join(workspace, "CLAUDE.md")
-	os.WriteFile(claudeMDPath, []byte("custom claude"), 0644)
-
-	// Pre-create a skill file
-	os.MkdirAll(filepath.Join(workspace, "skills"), 0755)
-	customSkillPath := filepath.Join(workspace, "skills", templates.SkillFiles()[0])
-	os.WriteFile(customSkillPath, []byte("custom skill"), 0644)
-
-	// No user profile — should skip those
-	err := scaffoldWorkspace(scaffoldOptions{
-		workspace: workspace, home: home, leoHome: leoHome, cfg: cfg,
-		userPath: filepath.Join(workspace, "USER.md"),
-	})
-	if err != nil {
-		t.Fatalf("scaffoldWorkspace() error: %v", err)
-	}
-
-	// CLAUDE.md should be unchanged
-	data, _ := os.ReadFile(claudeMDPath)
-	if string(data) != "custom claude" {
-		t.Errorf("CLAUDE.md was overwritten: %q", string(data))
-	}
-
-	// Custom skill file should be unchanged
-	data, _ = os.ReadFile(customSkillPath)
-	if string(data) != "custom skill" {
-		t.Errorf("skill file was overwritten: %q", string(data))
-	}
-}
-
-// --- checkPrerequisites ---
-
-func TestCheckPrerequisitesAllFound(t *testing.T) {
-	mockAllPrereqs(t)
-	if err := checkPrerequisites(); err != nil {
-		t.Errorf("checkPrerequisites() error: %v", err)
-	}
-}
-
-func TestCheckPrerequisitesClaudeNotFound(t *testing.T) {
-	mockAllPrereqs(t)
-	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: false} }
-
-	err := checkPrerequisites()
-	if err == nil {
-		t.Fatal("expected error when claude not found")
-	}
-	if !strings.Contains(err.Error(), "claude CLI not found") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestCheckPrerequisitesTmuxNotFound(t *testing.T) {
-	mockAllPrereqs(t)
-	checkTmuxFn = func() bool { return false }
-
-	err := checkPrerequisites()
-	if err == nil {
-		t.Fatal("expected error when tmux not found")
-	}
-	if !strings.Contains(err.Error(), "tmux not found") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestCheckPrerequisitesBunNotFound(t *testing.T) {
-	mockAllPrereqs(t)
-	checkBunFn = func() bool { return false }
-
-	err := checkPrerequisites()
-	if err == nil {
-		t.Fatal("expected error when bun not found")
-	}
-	if !strings.Contains(err.Error(), "bun not found") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestCheckPrerequisitesClaudeNoVersion(t *testing.T) {
-	mockAllPrereqs(t)
-	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: true, Version: ""} }
-
-	if err := checkPrerequisites(); err != nil {
-		t.Errorf("checkPrerequisites() should succeed with no version: %v", err)
-	}
-}
-
-// --- promptUserProfile ---
-
-func TestPromptUserProfile(t *testing.T) {
-	reader := readerFrom("John\nDeveloper\nLoves Go\nDirect\nUTC\n")
-	name, role, about, prefs, tz := promptUserProfile(reader, templates.UserProfileData{})
-
-	if name != "John" {
-		t.Errorf("name = %q, want %q", name, "John")
-	}
-	if role != "Developer" {
-		t.Errorf("role = %q, want %q", role, "Developer")
-	}
-	if about != "Loves Go" {
-		t.Errorf("about = %q, want %q", about, "Loves Go")
-	}
-	if prefs != "Direct" {
-		t.Errorf("preferences = %q, want %q", prefs, "Direct")
-	}
-	if tz != "UTC" {
-		t.Errorf("timezone = %q, want %q", tz, "UTC")
-	}
-}
-
-func TestPromptUserProfileDefaults(t *testing.T) {
-	// Empty inputs -> defaults
-	reader := readerFrom("\n\n\n\n\n")
-	name, _, _, prefs, tz := promptUserProfile(reader, templates.UserProfileData{})
-
-	if name != "" {
-		t.Errorf("name = %q, want empty", name)
-	}
-	if prefs != "Direct and concise" {
-		t.Errorf("preferences = %q, want %q", prefs, "Direct and concise")
-	}
-	if tz != "America/New_York" {
-		t.Errorf("timezone = %q, want %q", tz, "America/New_York")
+	if _, ok := cfg.Tasks["heartbeat"]; !ok {
+		t.Error("expected existing 'heartbeat' task preserved")
 	}
 }
 
 // --- parseUserProfile ---
 
-func TestParseUserProfileValid(t *testing.T) {
+func TestParseUserProfile_FullFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "USER.md")
-	content := "# User Profile\n\n## Name\nAlice\n\n## Role\nEngineer\n\n## About\nLoves Go\n\n## Preferences\nTerse\n\n## Timezone\nUTC\n"
+	content := `# User Profile
+
+## Name
+Alice
+
+## Role
+Engineer
+
+## About
+Builds things
+
+## Preferences
+Dark mode
+
+## Timezone
+America/New_York
+`
 	os.WriteFile(path, []byte(content), 0644)
 
-	result := parseUserProfile(path)
-	if result.UserName != "Alice" {
-		t.Errorf("UserName = %q, want %q", result.UserName, "Alice")
+	got := parseUserProfile(path)
+	if got.UserName != "Alice" {
+		t.Errorf("UserName = %q, want %q", got.UserName, "Alice")
 	}
-	if result.Role != "Engineer" {
-		t.Errorf("Role = %q, want %q", result.Role, "Engineer")
+	if got.Role != "Engineer" {
+		t.Errorf("Role = %q, want %q", got.Role, "Engineer")
 	}
-	if result.About != "Loves Go" {
-		t.Errorf("About = %q, want %q", result.About, "Loves Go")
+	if got.About != "Builds things" {
+		t.Errorf("About = %q, want %q", got.About, "Builds things")
 	}
-	if result.Preferences != "Terse" {
-		t.Errorf("Preferences = %q, want %q", result.Preferences, "Terse")
+	if got.Preferences != "Dark mode" {
+		t.Errorf("Preferences = %q, want %q", got.Preferences, "Dark mode")
 	}
-	if result.Timezone != "UTC" {
-		t.Errorf("Timezone = %q, want %q", result.Timezone, "UTC")
-	}
-}
-
-func TestParseUserProfileMissing(t *testing.T) {
-	result := parseUserProfile("/nonexistent/path/USER.md")
-	if result.UserName != "" || result.Role != "" {
-		t.Error("expected empty result for missing file")
+	if got.Timezone != "America/New_York" {
+		t.Errorf("Timezone = %q, want %q", got.Timezone, "America/New_York")
 	}
 }
 
-func TestParseUserProfileEmpty(t *testing.T) {
+func TestParseUserProfile_MissingFile(t *testing.T) {
+	got := parseUserProfile("/nonexistent/path.md")
+	if got.UserName != "" {
+		t.Errorf("UserName = %q, want empty for missing file", got.UserName)
+	}
+}
+
+// --- checkWorkspaceWritable ---
+
+func TestCheckWorkspaceWritable_Success(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "USER.md")
-	os.WriteFile(path, []byte(""), 0644)
-
-	result := parseUserProfile(path)
-	if result.UserName != "" {
-		t.Errorf("expected empty UserName, got %q", result.UserName)
+	if err := checkWorkspaceWritable(filepath.Join(dir, "new")); err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
-func TestParseUserProfilePartial(t *testing.T) {
+// --- findExistingConfig ---
+
+func TestFindExistingConfig_None(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "USER.md")
-	content := "# User Profile\n\n## Name\nBob\n\n## Timezone\nEurope/London\n"
-	os.WriteFile(path, []byte(content), 0644)
-
-	result := parseUserProfile(path)
-	if result.UserName != "Bob" {
-		t.Errorf("UserName = %q, want %q", result.UserName, "Bob")
+	cfg, defaultHome := findExistingConfig(dir)
+	if cfg != nil {
+		t.Error("expected nil config for empty home")
 	}
-	if result.Role != "" {
-		t.Errorf("Role = %q, want empty", result.Role)
-	}
-	if result.Timezone != "Europe/London" {
-		t.Errorf("Timezone = %q, want %q", result.Timezone, "Europe/London")
+	if defaultHome != filepath.Join(dir, ".leo") {
+		t.Errorf("defaultHome = %q, want %q", defaultHome, filepath.Join(dir, ".leo"))
 	}
 }
 
-// --- promptTelegramConfig ---
+func TestFindExistingConfig_Found(t *testing.T) {
+	dir := t.TempDir()
+	leoHome := filepath.Join(dir, ".leo")
+	os.MkdirAll(leoHome, 0750)
 
-func TestPromptTelegramConfigNoExisting(t *testing.T) {
-	origPoll := pollChatIDFn
-	t.Cleanup(func() { pollChatIDFn = origPoll })
-	pollChatIDFn = func(token string, timeout time.Duration) (string, error) {
-		return "12345", nil
+	cfg := &config.Config{
+		Defaults:  config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Processes: map[string]config.ProcessConfig{"assistant": {Enabled: true}},
+	}
+	if err := config.Save(filepath.Join(leoHome, "leo.yaml"), cfg); err != nil {
+		t.Fatalf("saving config: %v", err)
 	}
 
-	// No existing config: token, then poll picks up chatID, then groupID
-	reader := readerFrom("bottoken123\nmygroup\n")
-	botToken, chatID, groupID := promptTelegramConfig(reader, nil)
-
-	if botToken != "bottoken123" {
-		t.Errorf("botToken = %q, want %q", botToken, "bottoken123")
+	got, _ := findExistingConfig(dir)
+	if got == nil {
+		t.Fatal("expected config to be found")
 	}
-	if chatID != "12345" {
-		t.Errorf("chatID = %q, want %q", chatID, "12345")
-	}
-	if groupID != "mygroup" {
-		t.Errorf("groupID = %q, want %q", groupID, "mygroup")
+	if got.Defaults.Model != "sonnet" {
+		t.Errorf("Model = %q, want 'sonnet'", got.Defaults.Model)
 	}
 }
 
-func TestPromptTelegramConfigKeepExisting(t *testing.T) {
-	existing := &config.Config{
-		Telegram: config.TelegramConfig{
-			BotToken: "existing-token-12345678",
-			ChatID:   "existing-chat",
-			GroupID:  "existing-group",
-		},
+// --- scaffoldWorkspace ---
+
+func TestScaffoldWorkspace_CreatesFiles(t *testing.T) {
+	dir := t.TempDir()
+	leoHome := filepath.Join(dir, ".leo")
+	workspace := filepath.Join(leoHome, "workspace")
+
+	cfg := buildConfig(workspace, nil)
+
+	opts := scaffoldOptions{
+		workspace: workspace,
+		home:      dir,
+		leoHome:   leoHome,
+		cfg:       cfg,
+		userPath:  filepath.Join(workspace, "USER.md"),
+		userName:  "Test User",
+		role:      "Developer",
+		about:     "Writes tests",
+		timezone:  "UTC",
 	}
 
-	// User says "n" to reconfigure
-	reader := readerFrom("n\n")
-	botToken, chatID, groupID := promptTelegramConfig(reader, existing)
+	if err := scaffoldWorkspace(opts); err != nil {
+		t.Fatalf("scaffoldWorkspace() error: %v", err)
+	}
 
-	if botToken != "existing-token-12345678" {
-		t.Errorf("botToken = %q, want %q", botToken, "existing-token-12345678")
+	if _, err := os.Stat(filepath.Join(leoHome, "leo.yaml")); err != nil {
+		t.Errorf("expected leo.yaml in leo home: %v", err)
 	}
-	if chatID != "existing-chat" {
-		t.Errorf("chatID = %q, want %q", chatID, "existing-chat")
+
+	for _, rel := range []string{
+		"USER.md",
+		"CLAUDE.md",
+		"skills/managing-tasks.md",
+		"config/mcp-servers.json",
+	} {
+		if _, err := os.Stat(filepath.Join(workspace, rel)); err != nil {
+			t.Errorf("expected %s in workspace: %v", rel, err)
+		}
 	}
-	if groupID != "existing-group" {
-		t.Errorf("groupID = %q, want %q", groupID, "existing-group")
+
+	claudeData, err := os.ReadFile(filepath.Join(workspace, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("reading CLAUDE.md: %v", err)
+	}
+	if strings.Contains(string(claudeData), "Telegram Messaging Rules") {
+		t.Error("CLAUDE.md should not reference telegram-specific rules")
+	}
+	if !strings.Contains(string(claudeData), "LEO_CHANNELS") {
+		t.Error("CLAUDE.md should reference LEO_CHANNELS env var")
 	}
 }
 
-func TestPromptTelegramConfigReconfigure(t *testing.T) {
-	existing := &config.Config{
-		Telegram: config.TelegramConfig{
-			BotToken: "old-token-12345678",
-			ChatID:   "old-chat",
-			GroupID:  "old-group",
-		},
-	}
+// --- checkPrerequisites ---
 
-	// User says "y" to reconfigure, then enters new values
-	reader := readerFrom("y\nnew-token\nnewchat\nnewgroup\n")
-	botToken, chatID, groupID := promptTelegramConfig(reader, existing)
+func TestCheckPrerequisites_ClaudeMissing(t *testing.T) {
+	origClaude := checkClaudeFn
+	origTmux := checkTmuxFn
+	t.Cleanup(func() {
+		checkClaudeFn = origClaude
+		checkTmuxFn = origTmux
+	})
 
-	if botToken != "new-token" {
-		t.Errorf("botToken = %q, want %q", botToken, "new-token")
-	}
-	if chatID != "newchat" {
-		t.Errorf("chatID = %q, want %q", chatID, "newchat")
-	}
-	if groupID != "newgroup" {
-		t.Errorf("groupID = %q, want %q", groupID, "newgroup")
+	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: false} }
+	checkTmuxFn = func() bool { return true }
+
+	if err := checkPrerequisites(); err == nil {
+		t.Error("expected error when claude missing")
 	}
 }
 
-// --- promptTelegram ---
+func TestCheckPrerequisites_TmuxMissing(t *testing.T) {
+	origClaude := checkClaudeFn
+	origTmux := checkTmuxFn
+	t.Cleanup(func() {
+		checkClaudeFn = origClaude
+		checkTmuxFn = origTmux
+	})
 
-func TestPromptTelegramPollsChat(t *testing.T) {
-	origPoll := pollChatIDFn
-	t.Cleanup(func() { pollChatIDFn = origPoll })
-	pollChatIDFn = func(token string, timeout time.Duration) (string, error) {
-		return "polled-chat-id", nil
+	checkClaudeFn = func() prereq.ClaudeResult {
+		return prereq.ClaudeResult{OK: true, Path: "/usr/bin/claude", Version: "1.0.0"}
 	}
+	checkTmuxFn = func() bool { return false }
 
-	// botToken, then empty chatDefault triggers poll, then groupID
-	reader := readerFrom("bot-token-value\nmy-group\n")
-	botToken, chatID, groupID := promptTelegram(reader, "", "", "")
-
-	if botToken != "bot-token-value" {
-		t.Errorf("botToken = %q, want %q", botToken, "bot-token-value")
-	}
-	if chatID != "polled-chat-id" {
-		t.Errorf("chatID = %q, want %q", chatID, "polled-chat-id")
-	}
-	if groupID != "my-group" {
-		t.Errorf("groupID = %q, want %q", groupID, "my-group")
+	if err := checkPrerequisites(); err == nil {
+		t.Error("expected error when tmux missing")
 	}
 }
 
-func TestPromptTelegramPollFails(t *testing.T) {
-	origPoll := pollChatIDFn
-	t.Cleanup(func() { pollChatIDFn = origPoll })
-	pollChatIDFn = func(token string, timeout time.Duration) (string, error) {
-		return "", fmt.Errorf("timeout")
-	}
+func TestCheckPrerequisites_AllPresent(t *testing.T) {
+	origClaude := checkClaudeFn
+	origTmux := checkTmuxFn
+	t.Cleanup(func() {
+		checkClaudeFn = origClaude
+		checkTmuxFn = origTmux
+	})
 
-	// Poll fails -> manual entry for chatID
-	reader := readerFrom("bot-token\nmanual-chat\nmy-group\n")
-	botToken, chatID, groupID := promptTelegram(reader, "", "", "")
+	checkClaudeFn = func() prereq.ClaudeResult {
+		return prereq.ClaudeResult{OK: true, Path: "/usr/bin/claude", Version: "1.0.0"}
+	}
+	checkTmuxFn = func() bool { return true }
 
-	if botToken != "bot-token" {
-		t.Errorf("botToken = %q, want %q", botToken, "bot-token")
-	}
-	if chatID != "manual-chat" {
-		t.Errorf("chatID = %q, want %q", chatID, "manual-chat")
-	}
-	if groupID != "my-group" {
-		t.Errorf("groupID = %q, want %q", groupID, "my-group")
-	}
-}
-
-func TestPromptTelegramExistingChat(t *testing.T) {
-	// chatDefault provided, skips poll
-	reader := readerFrom("bot-token\nchat-id\ngroup-id\n")
-	botToken, chatID, groupID := promptTelegram(reader, "default-token", "default-chat", "default-group")
-
-	if botToken != "bot-token" {
-		t.Errorf("botToken = %q, want %q", botToken, "bot-token")
-	}
-	if chatID != "chat-id" {
-		t.Errorf("chatID = %q, want %q", chatID, "chat-id")
-	}
-	if groupID != "group-id" {
-		t.Errorf("groupID = %q, want %q", groupID, "group-id")
-	}
-}
-
-func TestPromptTelegramEmptyToken(t *testing.T) {
-	// Empty token, skips everything
-	reader := readerFrom("\n\n\n")
-	botToken, chatID, groupID := promptTelegram(reader, "", "", "")
-
-	if botToken != "" {
-		t.Errorf("botToken = %q, want empty", botToken)
-	}
-	if chatID != "" {
-		t.Errorf("chatID = %q, want empty", chatID)
-	}
-	if groupID != "" {
-		t.Errorf("groupID = %q, want empty", groupID)
+	if err := checkPrerequisites(); err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
 // --- installDaemon ---
 
-func TestInstallDaemonSuccess(t *testing.T) {
+func TestInstallDaemon_Success(t *testing.T) {
 	origExec := osExecutableFn
 	origEnv := envCaptureFn
 	origInstall := installDaemonFn
@@ -519,11 +290,10 @@ func TestInstallDaemonSuccess(t *testing.T) {
 	installDaemonFn = func(sc service.ServiceConfig) error { return nil }
 	daemonStatusFn = func() (string, error) { return "running", nil }
 
-	// Should not panic
-	installDaemon("/tmp/workspace", "/tmp/workspace/leo.yaml", "bot-token")
+	installDaemon("/tmp/workspace", "/tmp/workspace/leo.yaml")
 }
 
-func TestInstallDaemonFailure(t *testing.T) {
+func TestInstallDaemon_Failure(t *testing.T) {
 	origExec := osExecutableFn
 	origEnv := envCaptureFn
 	origInstall := installDaemonFn
@@ -537,11 +307,10 @@ func TestInstallDaemonFailure(t *testing.T) {
 	envCaptureFn = func() map[string]string { return map[string]string{} }
 	installDaemonFn = func(sc service.ServiceConfig) error { return fmt.Errorf("install failed") }
 
-	// Should not panic even on error
-	installDaemon("/tmp/workspace", "/tmp/workspace/leo.yaml", "")
+	installDaemon("/tmp/workspace", "/tmp/workspace/leo.yaml")
 }
 
-func TestInstallDaemonNoExecutable(t *testing.T) {
+func TestInstallDaemon_NoExecutable(t *testing.T) {
 	origExec := osExecutableFn
 	origEnv := envCaptureFn
 	origInstall := installDaemonFn
@@ -563,482 +332,8 @@ func TestInstallDaemonNoExecutable(t *testing.T) {
 	}
 	daemonStatusFn = func() (string, error) { return "running", nil }
 
-	installDaemon("/tmp/ws", "/tmp/ws/leo.yaml", "")
+	installDaemon("/tmp/ws", "/tmp/ws/leo.yaml")
 	if capturedSC.LeoPath != "leo" {
 		t.Errorf("LeoPath = %q, want %q (fallback)", capturedSC.LeoPath, "leo")
-	}
-}
-
-func TestInstallDaemonWithBotToken(t *testing.T) {
-	origExec := osExecutableFn
-	origEnv := envCaptureFn
-	origInstall := installDaemonFn
-	origStatus := daemonStatusFn
-	t.Cleanup(func() {
-		osExecutableFn = origExec
-		envCaptureFn = origEnv
-		installDaemonFn = origInstall
-		daemonStatusFn = origStatus
-	})
-
-	osExecutableFn = func() (string, error) { return "/usr/local/bin/leo", nil }
-	envCaptureFn = func() map[string]string { return map[string]string{} }
-
-	var capturedSC service.ServiceConfig
-	installDaemonFn = func(sc service.ServiceConfig) error {
-		capturedSC = sc
-		return nil
-	}
-	daemonStatusFn = func() (string, error) { return "running", nil }
-
-	installDaemon("/tmp/ws", "/tmp/ws/leo.yaml", "my-bot-token")
-	if capturedSC.Env["TELEGRAM_BOT_TOKEN"] != "my-bot-token" {
-		t.Errorf("TELEGRAM_BOT_TOKEN = %q, want %q", capturedSC.Env["TELEGRAM_BOT_TOKEN"], "my-bot-token")
-	}
-}
-
-// --- installTelegramPlugin ---
-
-func TestInstallTelegramPluginFreshInstall(t *testing.T) {
-	home := t.TempDir()
-
-	origHome := userHomeDirFn
-	origStat := statFn
-	origLookPath := lookPathFn
-	origExecCmd := execCommandFn
-	origMkdir := mkdirAllFn
-	origWrite := writeFileFn
-	origRead := readFileFn
-	t.Cleanup(func() {
-		userHomeDirFn = origHome
-		statFn = origStat
-		lookPathFn = origLookPath
-		execCommandFn = origExecCmd
-		mkdirAllFn = origMkdir
-		writeFileFn = origWrite
-		readFileFn = origRead
-	})
-
-	userHomeDirFn = func() (string, error) { return home, nil }
-	// Plugin dir does not exist
-	statFn = func(name string) (os.FileInfo, error) {
-		return os.Stat(name) // Use real stat - plugin dir won't exist in temp
-	}
-	lookPathFn = func(file string) (string, error) {
-		return "/usr/bin/claude", nil
-	}
-	execCommandFn = func(name string, arg ...string) *exec.Cmd {
-		return exec.Command("true") // no-op instead of real plugin install
-	}
-	// Use real file operations on the temp dir
-	mkdirAllFn = os.MkdirAll
-	writeFileFn = os.WriteFile
-	readFileFn = os.ReadFile
-
-	err := installTelegramPlugin("test-bot-token", "test-chat-id", "test-group-id", filepath.Join(home, "workspace"))
-	if err != nil {
-		t.Fatalf("installTelegramPlugin() error: %v", err)
-	}
-
-	// Verify .env was written
-	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf("reading .env: %v", err)
-	}
-	if !strings.Contains(string(data), "TELEGRAM_BOT_TOKEN=test-bot-token") {
-		t.Errorf(".env content = %q, missing bot token", string(data))
-	}
-
-	// Verify access.json was written
-	accessPath := filepath.Join(home, ".claude", "channels", "telegram", "access.json")
-	data, err = os.ReadFile(accessPath)
-	if err != nil {
-		t.Fatalf("reading access.json: %v", err)
-	}
-	var accessDoc map[string]any
-	if err := json.Unmarshal(data, &accessDoc); err != nil {
-		t.Fatalf("parsing access.json: %v", err)
-	}
-	if accessDoc["dmPolicy"] != "allowlist" {
-		t.Errorf("dmPolicy = %v, want %q", accessDoc["dmPolicy"], "allowlist")
-	}
-
-	// Verify settings.json was written
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	data, err = os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("reading settings.json: %v", err)
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(data, &settings); err != nil {
-		t.Fatalf("parsing settings.json: %v", err)
-	}
-	if settings["skipDangerousModePermissionPrompt"] != true {
-		t.Error("skipDangerousModePermissionPrompt not set")
-	}
-}
-
-func TestInstallTelegramPluginAlreadyInstalled(t *testing.T) {
-	home := t.TempDir()
-
-	origHome := userHomeDirFn
-	origStat := statFn
-	origMkdir := mkdirAllFn
-	origWrite := writeFileFn
-	origRead := readFileFn
-	t.Cleanup(func() {
-		userHomeDirFn = origHome
-		statFn = origStat
-		mkdirAllFn = origMkdir
-		writeFileFn = origWrite
-		readFileFn = origRead
-	})
-
-	// Create plugin dir so it appears installed
-	pluginDir := filepath.Join(home, ".claude", "plugins", "marketplaces", "claude-plugins-official", "external_plugins", "telegram")
-	os.MkdirAll(pluginDir, 0755)
-
-	userHomeDirFn = func() (string, error) { return home, nil }
-	statFn = os.Stat
-	mkdirAllFn = os.MkdirAll
-	writeFileFn = os.WriteFile
-	readFileFn = os.ReadFile
-
-	err := installTelegramPlugin("token", "chat", "", filepath.Join(home, "ws"))
-	if err != nil {
-		t.Fatalf("installTelegramPlugin() error: %v", err)
-	}
-
-	// Verify .env was still written
-	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf("reading .env: %v", err)
-	}
-	if !strings.Contains(string(data), "TELEGRAM_BOT_TOKEN=token") {
-		t.Errorf(".env content = %q, missing bot token", string(data))
-	}
-}
-
-// --- writeClaudeSettings ---
-
-func TestWriteClaudeSettingsFresh(t *testing.T) {
-	home := t.TempDir()
-
-	origHome := userHomeDirFn
-	origMkdir := mkdirAllFn
-	origWrite := writeFileFn
-	origRead := readFileFn
-	t.Cleanup(func() {
-		userHomeDirFn = origHome
-		mkdirAllFn = origMkdir
-		writeFileFn = origWrite
-		readFileFn = origRead
-	})
-
-	userHomeDirFn = func() (string, error) { return home, nil }
-	mkdirAllFn = os.MkdirAll
-	writeFileFn = os.WriteFile
-	readFileFn = os.ReadFile
-
-	err := writeClaudeSettings("/my/workspace")
-	if err != nil {
-		t.Fatalf("writeClaudeSettings() error: %v", err)
-	}
-
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("reading settings.json: %v", err)
-	}
-
-	var settings map[string]any
-	if err := json.Unmarshal(data, &settings); err != nil {
-		t.Fatalf("parsing settings.json: %v", err)
-	}
-
-	// Verify trustedDirectories
-	trusted, ok := settings["trustedDirectories"].([]any)
-	if !ok {
-		t.Fatal("trustedDirectories not an array")
-	}
-	found := false
-	for _, d := range trusted {
-		if d == "/my/workspace" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("workspace not in trustedDirectories")
-	}
-
-	// Verify skipDangerousModePermissionPrompt
-	if settings["skipDangerousModePermissionPrompt"] != true {
-		t.Error("skipDangerousModePermissionPrompt not set")
-	}
-
-	// Verify enabledPlugins
-	plugins, ok := settings["enabledPlugins"].(map[string]any)
-	if !ok {
-		t.Fatal("enabledPlugins not a map")
-	}
-	if plugins["telegram@claude-plugins-official"] != true {
-		t.Error("telegram plugin not enabled")
-	}
-
-	// Verify schema
-	if settings["$schema"] != "https://json.schemastore.org/claude-code-settings.json" {
-		t.Error("schema not set")
-	}
-}
-
-func TestWriteClaudeSettingsMerge(t *testing.T) {
-	home := t.TempDir()
-
-	origHome := userHomeDirFn
-	origMkdir := mkdirAllFn
-	origWrite := writeFileFn
-	origRead := readFileFn
-	t.Cleanup(func() {
-		userHomeDirFn = origHome
-		mkdirAllFn = origMkdir
-		writeFileFn = origWrite
-		readFileFn = origRead
-	})
-
-	userHomeDirFn = func() (string, error) { return home, nil }
-	mkdirAllFn = os.MkdirAll
-	writeFileFn = os.WriteFile
-	readFileFn = os.ReadFile
-
-	// Pre-create settings with existing data
-	claudeDir := filepath.Join(home, ".claude")
-	os.MkdirAll(claudeDir, 0700)
-	existing := map[string]any{
-		"$schema":            "https://existing-schema.json",
-		"trustedDirectories": []any{"/existing/dir"},
-		"customSetting":      "keep-me",
-	}
-	data, _ := json.MarshalIndent(existing, "", "  ")
-	os.WriteFile(filepath.Join(claudeDir, "settings.json"), data, 0600)
-
-	err := writeClaudeSettings("/new/workspace")
-	if err != nil {
-		t.Fatalf("writeClaudeSettings() error: %v", err)
-	}
-
-	settingsData, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
-	if err != nil {
-		t.Fatalf("reading settings.json: %v", err)
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(settingsData, &settings); err != nil {
-		t.Fatalf("parsing settings.json: %v", err)
-	}
-
-	// Existing schema should be preserved
-	if settings["$schema"] != "https://existing-schema.json" {
-		t.Errorf("schema = %q, want %q", settings["$schema"], "https://existing-schema.json")
-	}
-
-	// Custom setting preserved
-	if settings["customSetting"] != "keep-me" {
-		t.Errorf("customSetting = %q, want %q", settings["customSetting"], "keep-me")
-	}
-
-	// Both workspace dirs present
-	trusted, _ := settings["trustedDirectories"].([]any)
-	if len(trusted) != 2 {
-		t.Errorf("trustedDirectories length = %d, want 2", len(trusted))
-	}
-}
-
-func TestWriteClaudeSettingsDeduplicates(t *testing.T) {
-	home := t.TempDir()
-
-	origHome := userHomeDirFn
-	origMkdir := mkdirAllFn
-	origWrite := writeFileFn
-	origRead := readFileFn
-	t.Cleanup(func() {
-		userHomeDirFn = origHome
-		mkdirAllFn = origMkdir
-		writeFileFn = origWrite
-		readFileFn = origRead
-	})
-
-	userHomeDirFn = func() (string, error) { return home, nil }
-	mkdirAllFn = os.MkdirAll
-	writeFileFn = os.WriteFile
-	readFileFn = os.ReadFile
-
-	// Pre-create settings with the same workspace already trusted
-	claudeDir := filepath.Join(home, ".claude")
-	os.MkdirAll(claudeDir, 0700)
-	existing := map[string]any{
-		"trustedDirectories": []any{"/my/workspace"},
-	}
-	data, _ := json.MarshalIndent(existing, "", "  ")
-	os.WriteFile(filepath.Join(claudeDir, "settings.json"), data, 0600)
-
-	err := writeClaudeSettings("/my/workspace")
-	if err != nil {
-		t.Fatalf("writeClaudeSettings() error: %v", err)
-	}
-
-	settingsData, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
-	if err != nil {
-		t.Fatalf("reading settings.json: %v", err)
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(settingsData, &settings); err != nil {
-		t.Fatalf("parsing settings.json: %v", err)
-	}
-
-	trusted, _ := settings["trustedDirectories"].([]any)
-	if len(trusted) != 1 {
-		t.Errorf("trustedDirectories length = %d, want 1 (should deduplicate)", len(trusted))
-	}
-}
-
-// --- Run ---
-
-func TestRunNoOpenClaw(t *testing.T) {
-	origNewReader := newReaderFn
-	origHome := userHomeDirFn
-	t.Cleanup(func() {
-		newReaderFn = origNewReader
-		userHomeDirFn = origHome
-	})
-
-	// RunInteractive will be called, but prereqs will fail
-	mockAllPrereqs(t)
-	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: false} }
-
-	home := t.TempDir()
-	userHomeDirFn = func() (string, error) { return home, nil }
-
-	newReaderFn = func() *bufio.Reader {
-		return readerFrom("") // won't be read much since prereqs fail
-	}
-
-	err := Run()
-	if err == nil {
-		t.Fatal("expected error from failed prereq check")
-	}
-}
-
-// --- RunInteractive ---
-
-func TestRunInteractiveHappyPath(t *testing.T) {
-	home := t.TempDir()
-	workspace := filepath.Join(home, ".leo")
-
-	origHome := userHomeDirFn
-	origFindWs := findExistingWorkspacesFn
-	origDaemonStatus := daemonStatusFn
-	origSendMsg := sendMessageFn
-	origPoll := pollChatIDFn
-	origLookPath := lookPathFn
-	origExecCmd := execCommandFn
-	t.Cleanup(func() {
-		userHomeDirFn = origHome
-		findExistingWorkspacesFn = origFindWs
-		daemonStatusFn = origDaemonStatus
-		sendMessageFn = origSendMsg
-		pollChatIDFn = origPoll
-		lookPathFn = origLookPath
-		execCommandFn = origExecCmd
-	})
-
-	mockAllPrereqs(t)
-
-	userHomeDirFn = func() (string, error) { return home, nil }
-	// Prevent real claude lookups and plugin install attempts
-	lookPathFn = func(file string) (string, error) { return "", fmt.Errorf("not found") }
-	execCommandFn = exec.Command
-	findExistingWorkspacesFn = func() []string { return nil }
-	daemonStatusFn = func() (string, error) { return "not installed", nil }
-	sendMessageFn = func(botToken, chatID, text string, topicID int) error { return nil }
-	pollChatIDFn = func(token string, timeout time.Duration) (string, error) {
-		return "auto-chat-id", nil
-	}
-
-	// Input flow:
-	// 1. Workspace directory (default ~/.leo/workspace)
-	// 2. User profile: name, role, about, prefs, timezone
-	// 3. Telegram: token, (poll for chat), group
-	// 4. Confirm summary: "y"
-	// 5. Voice transcription: "n"
-	// 6. Install daemon: "n"
-	// 7. Send test message: "n"
-	input := strings.Join([]string{
-		workspace,     // workspace
-		"TestUser",    // name
-		"Developer",   // role
-		"About me",    // about
-		"Direct",      // prefs
-		"UTC",         // timezone
-		"test-bot-tk", // telegram bot token
-		"",            // group ID (skip)
-		"y",           // confirm summary
-		"n",           // voice transcription
-		"n",           // install daemon
-		"n",           // send test message
-	}, "\n") + "\n"
-
-	reader := readerFrom(input)
-	err := RunInteractive(reader)
-	if err != nil {
-		t.Fatalf("RunInteractive() error: %v", err)
-	}
-
-	// Verify config was written to leoHome (parent of workspace)
-	leoHome := filepath.Dir(workspace)
-	cfgPath := filepath.Join(leoHome, "leo.yaml")
-	if _, err := os.Stat(cfgPath); err != nil {
-		t.Error("leo.yaml not created in leoHome")
-	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("loading config: %v", err)
-	}
-	if cfg.Telegram.BotToken != "test-bot-tk" {
-		t.Errorf("bot token = %q, want %q", cfg.Telegram.BotToken, "test-bot-tk")
-	}
-}
-
-func TestRunInteractiveHomeDirError(t *testing.T) {
-	origHome := userHomeDirFn
-	t.Cleanup(func() { userHomeDirFn = origHome })
-
-	userHomeDirFn = func() (string, error) { return "", fmt.Errorf("no home") }
-
-	reader := readerFrom("")
-	err := RunInteractive(reader)
-	if err == nil {
-		t.Fatal("expected error when home dir fails")
-	}
-	if !strings.Contains(err.Error(), "determining home directory") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestRunInteractivePrereqFails(t *testing.T) {
-	home := t.TempDir()
-	origHome := userHomeDirFn
-	t.Cleanup(func() { userHomeDirFn = origHome })
-
-	userHomeDirFn = func() (string, error) { return home, nil }
-	mockAllPrereqs(t)
-	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: false} }
-
-	reader := readerFrom("")
-	err := RunInteractive(reader)
-	if err == nil {
-		t.Fatal("expected error when prereqs fail")
 	}
 }

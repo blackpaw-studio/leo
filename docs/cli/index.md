@@ -18,8 +18,6 @@ Leo provides commands for setup, process management, task scheduling, template m
 | [`leo validate`](#leo-validate) | Check config, prerequisites, and workspace health |
 | [`leo config show`](#leo-config) | Display effective config with defaults applied |
 | [`leo config edit`](#leo-config) | Edit config interactively |
-| [`leo telegram topics`](#leo-telegram) | Discover forum topic IDs from recent messages |
-| [`leo telegram test`](#leo-telegram) | Send a test message to verify bot connectivity |
 | [`leo session list`](#leo-session) | List stored session mappings |
 | [`leo session clear`](#leo-session) | Clear stored session(s) |
 | [`leo logs`](#leo-logs) | Tail service or process logs |
@@ -51,11 +49,6 @@ Check that the config parses, prerequisites are installed (`claude`, `tmux`), wo
     - `--raw` prints the YAML file verbatim, skipping default resolution.
     - `--json` prints the resolved config as indented JSON (handy for piping into `jq`). Mutually exclusive with `--raw`.
 - `leo config edit` — open `leo.yaml` in `$EDITOR` (or `vi`).
-
-## leo telegram
-
-- `leo telegram topics` — poll recent messages to discover forum topic IDs for your group
-- `leo telegram test` — send a test message to verify bot connectivity
 
 ## leo session
 

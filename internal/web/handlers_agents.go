@@ -215,7 +215,7 @@ func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", rec.Name))
 }
 
-// --- Task API endpoints (JSON, used by Telegram plugin) ---
+// --- Task API endpoints (JSON, used by channel plugins and external clients) ---
 
 // taskInfo is the JSON representation of a task for the API.
 type taskInfo struct {

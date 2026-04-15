@@ -43,8 +43,8 @@ type ConfigReloader interface {
 
 // AgentService owns the ephemeral-agent lifecycle. It is implemented by
 // *agent.Manager; web handlers delegate to it instead of driving the supervisor
-// directly, so the same code path backs the web UI, Telegram, the daemon socket,
-// and the CLI. A nil AgentService disables agent UI features.
+// directly, so the same code path backs the web UI, channel plugins, the
+// daemon socket, and the CLI. A nil AgentService disables agent UI features.
 type AgentService interface {
 	Spawn(ctx context.Context, spec agent.SpawnSpec) (agent.Record, error)
 	Stop(name string) error
@@ -152,13 +152,13 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/agent/spawn", s.handleWebAgentSpawn)
 	mux.HandleFunc("POST /web/agent/{name}/stop", s.handleWebAgentStop)
 
-	// Agent management (JSON API — used by Telegram plugin)
+	// Agent management (JSON API — used by channel plugins and external clients)
 	mux.HandleFunc("POST /api/agent/spawn", s.handleAPIAgentSpawn)
 	mux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
 	mux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
 	mux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
 
-	// Task management (JSON API — used by Telegram plugin)
+	// Task management (JSON API — used by channel plugins and external clients)
 	mux.HandleFunc("GET /api/task/list", s.handleAPITaskList)
 	mux.HandleFunc("POST /api/task/{name}/run", s.handleAPITaskRun)
 	mux.HandleFunc("POST /api/task/{name}/toggle", s.handleAPITaskToggle)

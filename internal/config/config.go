@@ -44,7 +44,6 @@ var validPermissionModes = map[string]bool{
 }
 
 type Config struct {
-	Telegram  TelegramConfig            `yaml:"telegram"`
 	Defaults  DefaultsConfig            `yaml:"defaults"`
 	Web       WebConfig                 `yaml:"web,omitempty"`
 	Client    ClientConfig              `yaml:"client,omitempty"`
@@ -133,12 +132,6 @@ func (c *Config) WebBind() string {
 	return "0.0.0.0"
 }
 
-type TelegramConfig struct {
-	BotToken string `yaml:"bot_token"`
-	ChatID   string `yaml:"chat_id"`
-	GroupID  string `yaml:"group_id,omitempty"`
-}
-
 type DefaultsConfig struct {
 	Model              string   `yaml:"model"`
 	MaxTurns           int      `yaml:"max_turns"`
@@ -175,12 +168,12 @@ type TaskConfig struct {
 	PromptFile         string   `yaml:"prompt_file"`
 	Model              string   `yaml:"model,omitempty"`
 	MaxTurns           int      `yaml:"max_turns,omitempty"`
-	TopicID            int      `yaml:"topic_id,omitempty"`
 	Enabled            bool     `yaml:"enabled"`
 	Silent             bool     `yaml:"silent,omitempty"`
 	Timeout            string   `yaml:"timeout,omitempty"`         // e.g. "30m", "1h" — default 30m
 	Retries            int      `yaml:"retries,omitempty"`         // number of retry attempts on failure, default 0
-	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"`  // send telegram message on failure
+	Channels           []string `yaml:"channels,omitempty"`        // channel plugin IDs used by NotifyOnFail
+	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"`  // spawn a child claude to notify configured channels on failure
 	PermissionMode     string   `yaml:"permission_mode,omitempty"` // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
@@ -356,15 +349,6 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("web.bind %q is not a valid IP address", c.Web.Bind))
 	}
 
-	if c.Telegram.BotToken != "" || c.Telegram.ChatID != "" {
-		if c.Telegram.BotToken == "" {
-			errs = append(errs, "telegram.bot_token is required when telegram is configured")
-		}
-		if c.Telegram.ChatID == "" && c.Telegram.GroupID == "" {
-			errs = append(errs, "telegram.chat_id or telegram.group_id is required when telegram is configured")
-		}
-	}
-
 	for name, proc := range c.Processes {
 		if proc.Model != "" && !validModels[proc.Model] {
 			errs = append(errs, fmt.Sprintf("processes.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, proc.Model))
@@ -434,6 +418,11 @@ func (c *Config) Validate() error {
 		}
 		if task.PermissionMode != "" && !validPermissionModes[task.PermissionMode] {
 			errs = append(errs, fmt.Sprintf("tasks.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, task.PermissionMode))
+		}
+		for i, ch := range task.Channels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("tasks.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
 		}
 	}
 

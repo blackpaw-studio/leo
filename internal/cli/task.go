@@ -110,21 +110,27 @@ func newTaskAddCmd() *cobra.Command {
 			schedule := promptLine(reader, "Cron schedule (e.g. '0 7 * * *'): ")
 			promptFile := promptLine(reader, "Prompt file (relative to workspace): ")
 			model := promptLine(reader, fmt.Sprintf("Model [%s]: ", cfg.Defaults.Model))
-			topicIDStr := promptLine(reader, "Topic ID (optional, run 'leo telegram topics' to discover): ")
+			channelsStr := promptLine(reader, "Channels (comma-separated plugin IDs, optional): ")
+			notifyStr := promptLine(reader, "Notify configured channels on failure? [y/N]: ")
 			silentStr := promptLine(reader, "Silent mode? [y/N]: ")
 
-			var topicID int
-			if topicIDStr != "" {
-				fmt.Sscanf(topicIDStr, "%d", &topicID)
+			var channels []string
+			if channelsStr != "" {
+				for _, ch := range strings.Split(channelsStr, ",") {
+					if c := strings.TrimSpace(ch); c != "" {
+						channels = append(channels, c)
+					}
+				}
 			}
 
 			task := config.TaskConfig{
-				Schedule:   schedule,
-				PromptFile: promptFile,
-				Model:      model,
-				TopicID:    topicID,
-				Enabled:    true,
-				Silent:     strings.ToLower(silentStr) == "y",
+				Schedule:     schedule,
+				PromptFile:   promptFile,
+				Model:        model,
+				Channels:     channels,
+				NotifyOnFail: strings.ToLower(notifyStr) == "y",
+				Enabled:      true,
+				Silent:       strings.ToLower(silentStr) == "y",
 			}
 
 			if cfg.Tasks == nil {
