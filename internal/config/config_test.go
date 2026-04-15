@@ -58,10 +58,6 @@ func TestValidate(t *testing.T) {
 	validConfig := func() *Config {
 		tr := true
 		return &Config{
-			Telegram: TelegramConfig{
-				BotToken: "123:ABC",
-				ChatID:   "456",
-			},
 			Defaults: DefaultsConfig{
 				Model:    "sonnet",
 				MaxTurns: 15,
@@ -77,7 +73,7 @@ func TestValidate(t *testing.T) {
 				"heartbeat": {
 					Schedule:   "0 * * * *",
 					PromptFile: "HEARTBEAT.md",
-					TopicID:    1,
+					Channels:   []string{"plugin:telegram@claude-plugins-official"},
 					Enabled:    true,
 				},
 			},
@@ -116,25 +112,13 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("telegram bot token without chat id", func(t *testing.T) {
+	t.Run("task invalid channel", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.Telegram.ChatID = ""
-		cfg.Telegram.GroupID = ""
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if got := err.Error(); !contains(got, "chat_id or telegram.group_id") {
-			t.Errorf("error = %q, want mention of chat_id", got)
-		}
-	})
-
-	t.Run("telegram group id suffices", func(t *testing.T) {
-		cfg := validConfig()
-		cfg.Telegram.ChatID = ""
-		cfg.Telegram.GroupID = "-100999"
-		if err := cfg.Validate(); err != nil {
-			t.Errorf("expected no error, got %v", err)
+		task := cfg.Tasks["heartbeat"]
+		task.Channels = []string{"plugin:telegram<bad"}
+		cfg.Tasks["heartbeat"] = task
+		if err := cfg.Validate(); err == nil {
+			t.Error("expected error for invalid channel ID")
 		}
 	})
 
@@ -290,14 +274,6 @@ func TestLoadConfig(t *testing.T) {
 
 	if cfg.HomePath != dir {
 		t.Errorf("HomePath = %q, want %q", cfg.HomePath, dir)
-	}
-
-	if cfg.Telegram.BotToken != "123:ABC" {
-		t.Errorf("bot_token = %q, want %q", cfg.Telegram.BotToken, "123:ABC")
-	}
-
-	if cfg.Telegram.ChatID != "456" {
-		t.Errorf("chat_id = %q, want %q", cfg.Telegram.ChatID, "456")
 	}
 
 	if cfg.Defaults.Model != "sonnet" {
@@ -560,10 +536,6 @@ func TestSaveAndLoad(t *testing.T) {
 
 	tr := true
 	cfg := &Config{
-		Telegram: TelegramConfig{
-			BotToken: "token",
-			ChatID:   "123",
-		},
 		Defaults: DefaultsConfig{
 			Model:    "sonnet",
 			MaxTurns: 10,
@@ -603,9 +575,6 @@ func TestSaveAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if loaded.Telegram.BotToken != cfg.Telegram.BotToken {
-		t.Errorf("loaded token = %q, want %q", loaded.Telegram.BotToken, cfg.Telegram.BotToken)
-	}
 	if len(loaded.Tasks) != 1 {
 		t.Errorf("loaded tasks = %d, want 1", len(loaded.Tasks))
 	}

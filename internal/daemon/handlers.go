@@ -49,13 +49,14 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg.Tasks[req.Name] = config.TaskConfig{
-		Schedule:   req.Schedule,
-		PromptFile: req.PromptFile,
-		Model:      req.Model,
-		MaxTurns:   req.MaxTurns,
-		TopicID:    req.TopicID,
-		Silent:     req.Silent,
-		Enabled:    req.Enabled,
+		Schedule:     req.Schedule,
+		PromptFile:   req.PromptFile,
+		Model:        req.Model,
+		MaxTurns:     req.MaxTurns,
+		Channels:     req.Channels,
+		NotifyOnFail: req.NotifyOnFail,
+		Silent:       req.Silent,
+		Enabled:      req.Enabled,
 	}
 
 	if err := config.Save(s.configPath, cfg); err != nil {

@@ -37,16 +37,11 @@ func newRunCmd() *cobra.Command {
 				info.Println("Assembled prompt:")
 				fmt.Println(prompt)
 
-				chatID := cfg.Telegram.ChatID
-				if cfg.Telegram.GroupID != "" {
-					chatID = cfg.Telegram.GroupID
-				}
-				if chatID != "" {
+				if task, ok := cfg.Tasks[taskName]; ok && len(task.Channels) > 0 {
 					fmt.Println()
-					info.Println("Telegram target:")
-					fmt.Printf("  chat_id: %s\n", chatID)
-					if task, ok := cfg.Tasks[taskName]; ok && task.TopicID > 0 {
-						fmt.Printf("  topic_id: %d\n", task.TopicID)
+					info.Println("Channels (exported as LEO_CHANNELS):")
+					for _, ch := range task.Channels {
+						fmt.Printf("  - %s\n", ch)
 					}
 				}
 

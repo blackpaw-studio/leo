@@ -44,7 +44,6 @@ var validPermissionModes = map[string]bool{
 }
 
 type Config struct {
-	Telegram  TelegramConfig            `yaml:"telegram"`
 	Defaults  DefaultsConfig            `yaml:"defaults"`
 	Web       WebConfig                 `yaml:"web,omitempty"`
 	Client    ClientConfig              `yaml:"client,omitempty"`
@@ -133,12 +132,6 @@ func (c *Config) WebBind() string {
 	return "0.0.0.0"
 }
 
-type TelegramConfig struct {
-	BotToken string `yaml:"bot_token"`
-	ChatID   string `yaml:"chat_id"`
-	GroupID  string `yaml:"group_id,omitempty"`
-}
-
 type DefaultsConfig struct {
 	Model              string   `yaml:"model"`
 	MaxTurns           int      `yaml:"max_turns"`
@@ -175,7 +168,6 @@ type TaskConfig struct {
 	PromptFile         string   `yaml:"prompt_file"`
 	Model              string   `yaml:"model,omitempty"`
 	MaxTurns           int      `yaml:"max_turns,omitempty"`
-	TopicID            int      `yaml:"topic_id,omitempty"`
 	Enabled            bool     `yaml:"enabled"`
 	Silent             bool     `yaml:"silent,omitempty"`
 	Timeout            string   `yaml:"timeout,omitempty"`         // e.g. "30m", "1h" — default 30m
@@ -355,15 +347,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Web.Bind != "" && net.ParseIP(c.Web.Bind) == nil {
 		errs = append(errs, fmt.Sprintf("web.bind %q is not a valid IP address", c.Web.Bind))
-	}
-
-	if c.Telegram.BotToken != "" || c.Telegram.ChatID != "" {
-		if c.Telegram.BotToken == "" {
-			errs = append(errs, "telegram.bot_token is required when telegram is configured")
-		}
-		if c.Telegram.ChatID == "" && c.Telegram.GroupID == "" {
-			errs = append(errs, "telegram.chat_id or telegram.group_id is required when telegram is configured")
-		}
 	}
 
 	for name, proc := range c.Processes {
