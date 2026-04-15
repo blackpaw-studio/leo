@@ -180,7 +180,8 @@ type TaskConfig struct {
 	Silent             bool     `yaml:"silent,omitempty"`
 	Timeout            string   `yaml:"timeout,omitempty"`         // e.g. "30m", "1h" — default 30m
 	Retries            int      `yaml:"retries,omitempty"`         // number of retry attempts on failure, default 0
-	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"`  // send telegram message on failure
+	Channels           []string `yaml:"channels,omitempty"`        // channel plugin IDs used by NotifyOnFail
+	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"`  // spawn a child claude to notify configured channels on failure
 	PermissionMode     string   `yaml:"permission_mode,omitempty"` // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
@@ -434,6 +435,11 @@ func (c *Config) Validate() error {
 		}
 		if task.PermissionMode != "" && !validPermissionModes[task.PermissionMode] {
 			errs = append(errs, fmt.Sprintf("tasks.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, task.PermissionMode))
+		}
+		for i, ch := range task.Channels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("tasks.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
 		}
 	}
 

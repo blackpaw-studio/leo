@@ -18,50 +18,29 @@ func TestAssemblePrompt(t *testing.T) {
 	promptFile := filepath.Join(dir, "HEARTBEAT.md")
 	os.WriteFile(promptFile, []byte(promptContent), 0644)
 
-	cfg := &config.Config{
-		HomePath: dir,
-		Telegram: config.TelegramConfig{
-			BotToken: "123:ABC",
-			ChatID:   "456",
-			GroupID:  "-100999",
-		},
-	}
+	cfg := &config.Config{HomePath: dir}
 
 	tests := []struct {
 		name       string
 		task       config.TaskConfig
 		wantSilent bool
-		wantTopic  bool
 	}{
 		{
 			name: "basic task",
 			task: config.TaskConfig{
 				Workspace:  dir,
 				PromptFile: "HEARTBEAT.md",
-				TopicID:    42,
 			},
 			wantSilent: false,
-			wantTopic:  true,
 		},
 		{
 			name: "silent task",
 			task: config.TaskConfig{
 				Workspace:  dir,
 				PromptFile: "HEARTBEAT.md",
-				TopicID:    42,
 				Silent:     true,
 			},
 			wantSilent: true,
-			wantTopic:  true,
-		},
-		{
-			name: "no topic",
-			task: config.TaskConfig{
-				Workspace:  dir,
-				PromptFile: "HEARTBEAT.md",
-			},
-			wantSilent: false,
-			wantTopic:  false,
 		},
 	}
 
@@ -76,16 +55,18 @@ func TestAssemblePrompt(t *testing.T) {
 				t.Error("prompt should contain prompt file content")
 			}
 
-			if strings.Contains(prompt, "123:ABC") {
-				t.Error("prompt should NOT contain bot token (passed via env var)")
+			// v0.3: channel-agnostic — prompt must not embed telegram-specific artifacts.
+			forbidden := []string{
+				"Telegram Notification Protocol",
+				"$TELEGRAM_BOT_TOKEN",
+				"api.telegram.org",
+				"message_thread_id",
+				"curl -s -X POST",
 			}
-			if !strings.Contains(prompt, "$TELEGRAM_BOT_TOKEN") {
-				t.Error("prompt should reference TELEGRAM_BOT_TOKEN env var")
-			}
-
-			// Should use group_id when set
-			if !strings.Contains(prompt, "-100999") {
-				t.Error("prompt should use group_id as chat_id")
+			for _, s := range forbidden {
+				if strings.Contains(prompt, s) {
+					t.Errorf("prompt must not contain channel-specific artifact %q", s)
+				}
 			}
 
 			if tt.wantSilent && !strings.Contains(prompt, "SILENT SCHEDULED RUN") {
@@ -94,13 +75,6 @@ func TestAssemblePrompt(t *testing.T) {
 			if !tt.wantSilent && strings.Contains(prompt, "SILENT SCHEDULED RUN") {
 				t.Error("non-silent task should not contain preamble")
 			}
-
-			if tt.wantTopic && !strings.Contains(prompt, "message_thread_id") {
-				t.Error("task with topic should contain message_thread_id")
-			}
-			if !tt.wantTopic && strings.Contains(prompt, "message_thread_id") {
-				t.Error("task without topic should not contain message_thread_id")
-			}
 		})
 	}
 }
@@ -108,13 +82,7 @@ func TestAssemblePrompt(t *testing.T) {
 func TestAssemblePromptPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 
-	cfg := &config.Config{
-		HomePath: dir,
-		Telegram: config.TelegramConfig{
-			BotToken: "token",
-			ChatID:   "123",
-		},
-	}
+	cfg := &config.Config{HomePath: dir}
 
 	task := config.TaskConfig{Workspace: dir, PromptFile: "../../../etc/passwd"}
 
@@ -130,13 +98,7 @@ func TestAssemblePromptPathTraversal(t *testing.T) {
 func TestAssemblePromptMissingFile(t *testing.T) {
 	dir := t.TempDir()
 
-	cfg := &config.Config{
-		HomePath: dir,
-		Telegram: config.TelegramConfig{
-			BotToken: "token",
-			ChatID:   "123",
-		},
-	}
+	cfg := &config.Config{HomePath: dir}
 
 	task := config.TaskConfig{Workspace: dir, PromptFile: "nonexistent.md"}
 
@@ -360,10 +322,6 @@ func TestPreview(t *testing.T) {
 
 	cfg := &config.Config{
 		HomePath: dir,
-		Telegram: config.TelegramConfig{
-			BotToken: "123:ABC",
-			ChatID:   "456",
-		},
 		Defaults: config.DefaultsConfig{
 			Model:    "sonnet",
 			MaxTurns: 15,
@@ -431,7 +389,6 @@ func TestRunSuccess(t *testing.T) {
 
 	cfg := &config.Config{
 		HomePath: dir,
-		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks: map[string]config.TaskConfig{
 			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
@@ -475,7 +432,6 @@ func TestRunCommandError(t *testing.T) {
 
 	cfg := &config.Config{
 		HomePath: dir,
-		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks: map[string]config.TaskConfig{
 			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
@@ -499,7 +455,6 @@ func TestRunMissingPromptFile(t *testing.T) {
 
 	cfg := &config.Config{
 		HomePath: dir,
-		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks: map[string]config.TaskConfig{
 			"mytask": {PromptFile: "nonexistent.md", Schedule: "0 * * * *"},
@@ -512,6 +467,94 @@ func TestRunMissingPromptFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "assembling prompt") {
 		t.Errorf("error = %q, want to contain 'assembling prompt'", err.Error())
+	}
+}
+
+// TestRunNotifyOnFailInvokesChannelChild verifies that a failing task with
+// NotifyOnFail + Channels triggers a second claude invocation after the main
+// task run, and that the child invocation receives LEO_CHANNELS via the env.
+func TestRunNotifyOnFailInvokesChannelChild(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	var invocations int
+	var sawNotifyArgs bool
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		invocations++
+		// The notify child invocation is short and has --max-turns 3 + acceptEdits.
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "--max-turns 3") && strings.Contains(joined, "--permission-mode acceptEdits") {
+			sawNotifyArgs = true
+			return exec.Command("true") // notify-on-fail child succeeds quickly
+		}
+		return exec.Command("false") // main task fails
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile:   "task.md",
+				Schedule:     "0 * * * *",
+				Enabled:      true,
+				NotifyOnFail: true,
+				Channels:     []string{"plugin:telegram@claude-plugins-official"},
+			},
+		},
+	}
+
+	err := Run(cfg, "mytask", nil)
+	if err == nil {
+		t.Fatal("Run() should return error when main command fails")
+	}
+	if invocations < 2 {
+		t.Errorf("expected at least 2 exec invocations (main + notify), got %d", invocations)
+	}
+	if !sawNotifyArgs {
+		t.Error("expected notify-on-fail child invocation with --max-turns 3 + acceptEdits")
+	}
+}
+
+// TestRunNotifyOnFailSkippedWithoutChannels verifies that NotifyOnFail is a
+// no-op when the task has no channels configured.
+func TestRunNotifyOnFailSkippedWithoutChannels(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	var invocations int
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		invocations++
+		return exec.Command("false")
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile:   "task.md",
+				Schedule:     "0 * * * *",
+				Enabled:      true,
+				NotifyOnFail: true,
+				// No Channels set
+			},
+		},
+	}
+
+	_ = Run(cfg, "mytask", nil)
+	if invocations != 1 {
+		t.Errorf("expected exactly 1 exec invocation (no notify without channels), got %d", invocations)
 	}
 }
 
@@ -617,7 +660,6 @@ func TestRunConcurrencyGuard(t *testing.T) {
 
 	cfg := &config.Config{
 		HomePath: dir,
-		Telegram: config.TelegramConfig{BotToken: "t", ChatID: "c"},
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
 		Tasks: map[string]config.TaskConfig{
 			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},

@@ -16,7 +16,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/session"
-	"github.com/blackpaw-studio/leo/internal/telegram"
 )
 
 var execCommand = exec.Command
@@ -24,27 +23,14 @@ var execCommand = exec.Command
 const silentPreamble = `SILENT SCHEDULED RUN — You are running as a scheduled background task, not responding to a user message.
 Work silently. Do not narrate your process or describe your tool usage.
 When finished:
-- If there is something the user needs to see, send ONLY the final user-facing message via Telegram.
-- If there is nothing to report, output exactly: NO_REPLY
+- If there is something the user needs to see, deliver ONLY the final user-facing message via a configured channel plugin (see $LEO_CHANNELS).
+- If there is nothing to report, or no channel plugin is configured, output exactly: NO_REPLY
 Do not include status updates, tool output, or process descriptions.
 `
 
-const telegramProtocolTemplate = `
-## Telegram Notification Protocol
-If anything needs the user's attention, send a Telegram message using:
-` + "```bash" + `
-curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
-  -H "Content-Type: application/json" \
-  -d '{"chat_id": "%s", %s"parse_mode": "Markdown", "text": "<your message>"}'
-` + "```" + `
-
-IMPORTANT: The message is sent as a JSON payload. Escape any double quotes in your
-message text with a backslash. Do not use shell variables or unescaped special characters
-(except $TELEGRAM_BOT_TOKEN which is provided via the environment).
-
-If nothing needs attention, reply NO_REPLY and exit.
-Do not include process narration, status updates, or tool output. Only emit the final user-facing message or NO_REPLY.
-`
+// notifyFailureTimeout bounds the notify-on-fail child invocation so a
+// failing task doesn't cascade into an unbounded second run.
+const notifyFailureTimeout = 60 * time.Second
 
 // claudeResult is the minimal structure for parsing the final "result" event
 // from claude --output-format stream-json (newline-delimited JSON).
@@ -141,7 +127,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 		// Per-attempt timeout so each retry gets the full timeout
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		output, execErr := executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
+		output, execErr := executeCommand(ctx, taskWorkspace, args, task.Channels)
 		result := parseClaudeOutput(output)
 		timedOut = ctx.Err() == context.DeadlineExceeded
 
@@ -154,7 +140,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 			}
 
 			args = buildArgs(cfg, task, prompt, "")
-			output, execErr = executeCommand(ctx, taskWorkspace, args, cfg.Telegram.BotToken)
+			output, execErr = executeCommand(ctx, taskWorkspace, args, task.Channels)
 			result = parseClaudeOutput(output)
 		}
 
@@ -203,16 +189,9 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
 	}
 
-	// Send failure notification if configured
-	if lastErr != nil && task.NotifyOnFail && cfg.Telegram.BotToken != "" {
-		chatID := cfg.Telegram.ChatID
-		if cfg.Telegram.GroupID != "" {
-			chatID = cfg.Telegram.GroupID
-		}
-		notifyMsg := fmt.Sprintf("⚠️ Task %q failed after %d attempt(s): %v", taskName, maxAttempts, lastErr)
-		if notifyErr := telegram.SendMessage(cfg.Telegram.BotToken, chatID, notifyMsg, task.TopicID); notifyErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to send failure notification: %v\n", notifyErr)
-		}
+	// Send failure notification if configured (via child claude invocation)
+	if lastErr != nil && task.NotifyOnFail && len(task.Channels) > 0 {
+		notifyFailure(taskName, task, taskWorkspace, lastErr, maxAttempts)
 	}
 
 	if lastErr != nil {
@@ -220,6 +199,34 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	}
 
 	return nil
+}
+
+// notifyFailure spawns a short, bounded claude invocation that asks the agent
+// to deliver a failure notification via one of the task's configured channel
+// plugins. All errors are logged and swallowed so notify failures don't cascade
+// back to the parent task.
+func notifyFailure(taskName string, task config.TaskConfig, workspace string, taskErr error, attempts int) {
+	prompt := fmt.Sprintf(
+		"Task %q failed after %d attempt(s): %v.\n"+
+			"Use a messaging tool from one of your configured channel plugins (see $LEO_CHANNELS) "+
+			"to deliver this failure notification to the user. Keep it concise.\n"+
+			"When done, reply NO_REPLY.",
+		taskName, attempts, taskErr,
+	)
+
+	args := []string{
+		"-p", prompt,
+		"--max-turns", "3",
+		"--permission-mode", "acceptEdits",
+		"--output-format", "text",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), notifyFailureTimeout)
+	defer cancel()
+
+	if _, err := executeCommand(ctx, workspace, args, task.Channels); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: notify-on-fail child invocation failed: %v\n", err)
+	}
 }
 
 // isSessionError checks whether a claude failure was caused by an invalid/stale session.
@@ -232,12 +239,12 @@ func isSessionError(result claudeResult, output []byte) bool {
 		(strings.Contains(text, "not found") || strings.Contains(text, "invalid") || strings.Contains(text, "expired"))
 }
 
-func executeCommand(ctx context.Context, workDir string, args []string, botToken string) ([]byte, error) {
+func executeCommand(ctx context.Context, workDir string, args []string, channels []string) ([]byte, error) {
 	cmd := execCommand("claude", args...)
 	cmd.Dir = workDir
 	env := append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
-	if botToken != "" {
-		env = append(env, "TELEGRAM_BOT_TOKEN="+botToken)
+	if len(channels) > 0 {
+		env = append(env, "LEO_CHANNELS="+strings.Join(channels, ","))
 	}
 	cmd.Env = env
 
@@ -313,25 +320,6 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 	}
 
 	parts = append(parts, string(promptData))
-
-	// Append Telegram notification protocol only when Telegram is configured
-	chatID := cfg.Telegram.ChatID
-	if cfg.Telegram.GroupID != "" {
-		chatID = cfg.Telegram.GroupID
-	}
-
-	if chatID != "" && cfg.Telegram.BotToken != "" {
-		topicLine := ""
-		if task.TopicID > 0 {
-			topicLine = fmt.Sprintf(`"message_thread_id": %d, `, task.TopicID)
-		}
-
-		telegramProtocol := fmt.Sprintf(telegramProtocolTemplate,
-			chatID,
-			topicLine,
-		)
-		parts = append(parts, telegramProtocol)
-	}
 
 	return strings.Join(parts, "\n"), nil
 }
