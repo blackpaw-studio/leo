@@ -5,15 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
-	"github.com/blackpaw-studio/leo/internal/telegram"
 	"github.com/blackpaw-studio/leo/internal/templates"
 )
 
@@ -21,11 +18,8 @@ var (
 	userHomeDirFn            = os.UserHomeDir
 	checkClaudeFn            = prereq.CheckClaude
 	checkTmuxFn              = prereq.CheckTmux
-	checkBunFn               = prereq.CheckBun
 	findExistingWorkspacesFn = prereq.FindExistingWorkspaces
 	daemonStatusFn           = service.DaemonStatus
-	sendMessageFn            = telegram.SendMessage
-	pollChatIDFn             = telegram.PollChatID
 	newReaderFn              = prompt.NewReader
 )
 
@@ -67,9 +61,8 @@ func RunInteractive(reader *bufio.Reader) error {
 	}
 
 	userName, role, about, preferences, timezone := promptUserProfileIfNeeded(reader, workspace)
-	botToken, chatID, groupID := promptTelegramConfig(reader, existing)
 
-	cfg := buildConfig(workspace, botToken, chatID, groupID, existing)
+	cfg := buildConfig(workspace, existing)
 	cfg.HomePath = leoHome
 
 	// Summary
@@ -78,11 +71,6 @@ func RunInteractive(reader *bufio.Reader) error {
 	fmt.Printf("  Workspace: %s\n", workspace)
 	if userName != "" {
 		fmt.Printf("  User:      %s\n", userName)
-	}
-	if botToken != "" {
-		fmt.Printf("  Telegram:  configured\n")
-	} else {
-		fmt.Printf("  Telegram:  skipped\n")
 	}
 	fmt.Printf("  Processes: %d\n", len(cfg.Processes))
 	fmt.Printf("  Tasks:     %d\n", len(cfg.Tasks))
@@ -103,14 +91,19 @@ func RunInteractive(reader *bufio.Reader) error {
 		return err
 	}
 
-	configureTelegramPlugin(botToken, chatID, groupID, workspace)
-	PromptVoiceTranscription(reader)
 	cfgPath := filepath.Join(leoHome, "leo.yaml")
-	promptDaemonInstall(reader, leoHome, cfgPath, botToken)
-	sendTestMessage(reader, botToken, chatID, groupID)
+	promptDaemonInstall(reader, leoHome, cfgPath)
 
 	prompt.Bold.Printf("\nSetup complete! Leo home: %s\n", leoHome)
-	fmt.Println("\nNext steps:")
+	fmt.Println()
+	fmt.Println("To surface messages via a Claude Code channel plugin (Telegram, Slack, webhook,")
+	fmt.Println("etc.), install the plugin separately and add its ID to your process's channels:")
+	fmt.Println()
+	fmt.Println("  claude plugin install telegram@claude-plugins-official")
+	fmt.Println("  # then edit leo.yaml → processes.assistant.channels:")
+	fmt.Println("  #   - plugin:telegram@claude-plugins-official")
+	fmt.Println()
+	fmt.Println("Next steps:")
 	fmt.Printf("  leo service              # Start interactive session\n")
 	fmt.Printf("  leo task list            # View configured tasks\n")
 
@@ -193,14 +186,9 @@ func parseUserProfile(path string) templates.UserProfileData {
 	return result
 }
 
-func buildConfig(workspace, botToken, chatID, groupID string, existing *config.Config) *config.Config {
+func buildConfig(workspace string, existing *config.Config) *config.Config {
 	tr := true
 	cfg := &config.Config{
-		Telegram: config.TelegramConfig{
-			BotToken: botToken,
-			ChatID:   chatID,
-			GroupID:  groupID,
-		},
 		Defaults: config.DefaultsConfig{
 			Model:    config.DefaultModel,
 			MaxTurns: config.DefaultMaxTurns,
@@ -208,7 +196,6 @@ func buildConfig(workspace, botToken, chatID, groupID string, existing *config.C
 		Processes: map[string]config.ProcessConfig{
 			"assistant": {
 				Workspace:     workspace,
-				Channels:      []string{"plugin:telegram@claude-plugins-official"},
 				RemoteControl: &tr,
 				Enabled:       true,
 			},
@@ -228,22 +215,7 @@ func buildConfig(workspace, botToken, chatID, groupID string, existing *config.C
 	return cfg
 }
 
-func configureTelegramPlugin(botToken, chatID, groupID, workspace string) {
-	if botToken != "" {
-		prompt.Bold.Println("\nConfiguring Telegram channel plugin...")
-		if err := installTelegramPlugin(botToken, chatID, groupID, workspace); err != nil {
-			prompt.Warn.Printf("  Failed to configure Telegram plugin: %v\n", err)
-		} else {
-			prompt.Success.Println("  Telegram channel plugin configured.")
-		}
-	} else {
-		if err := writeClaudeSettings(workspace); err != nil {
-			prompt.Warn.Printf("  Failed to write Claude settings: %v\n", err)
-		}
-	}
-}
-
-func promptDaemonInstall(reader *bufio.Reader, workspace, cfgPath, botToken string) {
+func promptDaemonInstall(reader *bufio.Reader, workspace, cfgPath string) {
 	fmt.Println()
 	daemonStatus, daemonErr := daemonStatusFn()
 	if daemonErr != nil {
@@ -252,27 +224,13 @@ func promptDaemonInstall(reader *bufio.Reader, workspace, cfgPath, botToken stri
 	if daemonStatus == "not installed" || daemonErr != nil {
 		if prompt.YesNo(reader, "Install chat daemon (runs on login)?", true) {
 			fmt.Println("  Installing chat daemon...")
-			installDaemon(workspace, cfgPath, botToken)
+			installDaemon(workspace, cfgPath)
 		}
 	} else {
 		prompt.Info.Printf("  Chat daemon: %s\n", daemonStatus)
 		if prompt.YesNo(reader, "  Reinstall chat daemon?", false) {
 			fmt.Println("  Installing chat daemon...")
-			installDaemon(workspace, cfgPath, botToken)
-		}
-	}
-}
-
-func sendTestMessage(reader *bufio.Reader, botToken, chatID, groupID string) {
-	if botToken != "" && chatID != "" && prompt.YesNo(reader, "\nSend test Telegram message?", true) {
-		effectiveChatID := chatID
-		if groupID != "" {
-			effectiveChatID = groupID
-		}
-		if err := sendMessageFn(botToken, effectiveChatID, "Hello from Leo! Setup complete.", 0); err != nil {
-			prompt.Warn.Printf("  Test message failed: %v\n", err)
-		} else {
-			prompt.Success.Println("  Test message sent!")
+			installDaemon(workspace, cfgPath)
 		}
 	}
 }
@@ -311,19 +269,6 @@ func checkPrerequisites() error {
 		fmt.Println()
 		fmt.Println("  Then run 'leo setup' again.")
 		return fmt.Errorf("tmux not found")
-	}
-
-	if checkBunFn() {
-		prompt.Success.Println("    bun           ✓ installed")
-	} else {
-		prompt.Err.Println("    bun           ✗ not found")
-		fmt.Println()
-		fmt.Println("  bun is required for the Telegram plugin. Install it:")
-		fmt.Println()
-		fmt.Println("    curl -fsSL https://bun.sh/install | bash")
-		fmt.Println()
-		fmt.Println("  Then run 'leo setup' again.")
-		return fmt.Errorf("bun not found")
 	}
 
 	fmt.Println()
@@ -464,164 +409,5 @@ func promptUserProfile(reader *bufio.Reader, defaults templates.UserProfileData)
 		tzDefault = "America/New_York"
 	}
 	timezone = prompt.Prompt(reader, "Timezone", tzDefault)
-	return
-}
-
-func promptTelegramConfig(reader *bufio.Reader, existing *config.Config) (botToken, chatID, groupID string) {
-	botTokenDefault := ""
-	chatIDDefault := ""
-	groupIDDefault := ""
-	if existing != nil {
-		botTokenDefault = existing.Telegram.BotToken
-		chatIDDefault = existing.Telegram.ChatID
-		groupIDDefault = existing.Telegram.GroupID
-	}
-
-	if botTokenDefault != "" {
-		masked := botTokenDefault
-		if len(botTokenDefault) > 12 {
-			masked = botTokenDefault[:8] + "..." + botTokenDefault[len(botTokenDefault)-4:]
-		}
-		prompt.Info.Printf("  Telegram bot token: %s\n", masked)
-		if chatIDDefault != "" {
-			prompt.Info.Printf("  Chat ID: %s\n", chatIDDefault)
-		}
-		if groupIDDefault != "" {
-			prompt.Info.Printf("  Group ID: %s\n", groupIDDefault)
-		}
-
-		if prompt.YesNo(reader, "  Reconfigure Telegram?", false) {
-			botToken, chatID, groupID = promptTelegram(reader, botTokenDefault, chatIDDefault, groupIDDefault)
-		} else {
-			botToken = botTokenDefault
-			chatID = chatIDDefault
-			groupID = groupIDDefault
-		}
-	} else {
-		botToken, chatID, groupID = promptTelegram(reader, "", "", "")
-	}
-	return
-}
-
-// PromptVoiceTranscription asks the user to configure OpenAI Whisper for voice message transcription.
-func PromptVoiceTranscription(reader *bufio.Reader) {
-	prompt.Bold.Println("\nVoice Transcription")
-	fmt.Println("The Telegram plugin can transcribe voice messages using OpenAI Whisper.")
-	fmt.Println("An OpenAI API key enables the fastest, highest-quality transcription.")
-
-	// Check for existing key
-	existingKey := readTelegramEnv("OPENAI_API_KEY")
-	if existingKey != "" {
-		masked := existingKey
-		if len(existingKey) > 12 {
-			masked = existingKey[:8] + "..." + existingKey[len(existingKey)-4:]
-		}
-		prompt.Info.Printf("  OpenAI API key: %s\n", masked)
-		if !prompt.YesNo(reader, "  Update API key?", false) {
-			return
-		}
-	} else if !prompt.YesNo(reader, "Configure voice transcription?", true) {
-		return
-	}
-
-	apiKey := prompt.Prompt(reader, "OpenAI API key (sk-proj-...)", "")
-	if apiKey != "" {
-		if err := appendTelegramEnv("OPENAI_API_KEY", apiKey); err != nil {
-			prompt.Warn.Printf("  Failed to write API key: %v\n", err)
-		} else {
-			prompt.Success.Println("  OpenAI API key saved for voice transcription.")
-		}
-	} else {
-		fmt.Println("  Skipped. Voice messages will use local whisper if installed, or remain untranscribed.")
-	}
-}
-
-// readTelegramEnv reads a value from the telegram .env file.
-func readTelegramEnv(key string) string {
-	home, err := userHomeDirFn()
-	if err != nil {
-		return ""
-	}
-	envPath := filepath.Join(home, ".claude", "channels", "telegram", ".env")
-	data, err := readFileFn(envPath)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, key+"=") {
-			return strings.TrimPrefix(line, key+"=")
-		}
-	}
-	return ""
-}
-
-func appendTelegramEnv(key, value string) error {
-	home, err := userHomeDirFn()
-	if err != nil {
-		return err
-	}
-
-	channelDir := filepath.Join(home, ".claude", "channels", "telegram")
-	if err := mkdirAllFn(channelDir, 0750); err != nil {
-		return fmt.Errorf("creating channel directory: %w", err)
-	}
-
-	envPath := filepath.Join(channelDir, ".env")
-	existing, _ := readFileFn(envPath)
-
-	// Check if key already exists and replace it
-	lines := strings.Split(string(existing), "\n")
-	found := false
-	for i, line := range lines {
-		if strings.HasPrefix(line, key+"=") {
-			lines[i] = key + "=" + value
-			found = true
-			break
-		}
-	}
-	if !found {
-		// Append, ensuring there's a newline before the new entry
-		content := strings.TrimRight(string(existing), "\n")
-		if content != "" {
-			content += "\n"
-		}
-		content += key + "=" + value + "\n"
-		return writeFileFn(envPath, []byte(content), 0600)
-	}
-
-	return writeFileFn(envPath, []byte(strings.Join(lines, "\n")), 0600)
-}
-
-// botTokenPattern matches the Telegram bot token format: digits:alphanumeric
-var botTokenPattern = regexp.MustCompile(`^\d+:[A-Za-z0-9_-]+$`)
-
-func promptTelegram(reader *bufio.Reader, tokenDefault, chatDefault, groupDefault string) (botToken, chatID, groupID string) {
-	prompt.Bold.Println("\nTelegram Setup")
-	fmt.Println("Create a bot via @BotFather on Telegram, then paste the token.")
-	botToken = prompt.Prompt(reader, "Bot token", tokenDefault)
-
-	if botToken != "" && !botTokenPattern.MatchString(botToken) {
-		prompt.Warn.Println("  Token doesn't match expected format (DIGITS:ALPHANUMERIC). Double-check your token from @BotFather.")
-	}
-
-	if botToken != "" && chatDefault == "" {
-		fmt.Println("\nSend any message to your bot now. Waiting for chat ID...")
-		var err error
-		chatID, err = pollChatIDFn(botToken, 60*time.Second)
-		if err != nil {
-			prompt.Warn.Printf("  Could not detect chat ID: %v\n", err)
-			chatID = prompt.Prompt(reader, "Enter chat ID manually", "")
-		} else {
-			prompt.Success.Printf("  Detected chat ID: %s\n", chatID)
-		}
-	} else {
-		chatID = prompt.Prompt(reader, "Chat ID", chatDefault)
-	}
-
-	groupID = prompt.Prompt(reader, "Forum group ID (optional, press enter to skip)", groupDefault)
-
-	if groupID != "" {
-		fmt.Println("  Topic IDs are discovered automatically. Run 'leo telegram topics' after setup.")
-	}
 	return
 }

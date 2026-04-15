@@ -16,15 +16,12 @@ var (
 
 // installDaemon installs the LaunchAgent/systemd service.
 // daemonStatusFn is declared in setup.go (same package).
-func installDaemon(workspace, cfgPath, botToken string) {
+func installDaemon(workspace, cfgPath string) {
 	leoPath, _ := osExecutableFn()
 	if leoPath == "" {
 		leoPath = "leo"
 	}
 	environ := envCaptureFn()
-	if botToken != "" {
-		environ["TELEGRAM_BOT_TOKEN"] = botToken
-	}
 	sc := service.ServiceConfig{
 		LeoPath:    leoPath,
 		ConfigPath: cfgPath,
