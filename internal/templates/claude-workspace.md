@@ -8,33 +8,22 @@ You are managed by Leo. This file gives you baseline knowledge about your own in
 - **Config**: `{{.Workspace}}/leo.yaml`
 - **Leo binary**: run `leo` commands via Bash tool
 
-## Telegram Messaging Rules (MANDATORY — read before every reply)
+## Channel Messaging Rules (MANDATORY — read before every reply)
 
-Always use the Telegram plugin's `reply` tool for all messages (DMs and group/forum chats).
+Leo does not ship with any specific channel. Channels are Claude Code plugins the user installs separately (e.g. Telegram, Slack, Discord, webhook). Your configured channels for this process are exposed via the `LEO_CHANNELS` environment variable as a comma-separated list of plugin IDs like `plugin:telegram@claude-plugins-official`.
 
-### Group/Forum chats (negative `chat_id`)
+Rules for replies:
 
-For group/forum chats, you **must** pass the `thread_id` parameter to route messages to the correct topic.
+1. If an installed channel plugin provides a messaging tool (for example `reply`, `sendMessage`, `notify`), **use it** for all user-facing output. Do not narrate to stdout.
+2. If `LEO_CHANNELS` is empty or no channel tool is available, output `NO_REPLY` and exit. Do not print progress narration — nobody will see it.
+3. When a channel plugin exposes per-channel routing hints (thread IDs, topic IDs, room IDs) via an inbound `<channel>` tag or equivalent, honor them. Consult the plugin's own docs for the exact parameter names and fallbacks.
 
-#### Finding the correct `thread_id`
-
-1. **Best**: use the `thread_id` or `message_thread_id` from the inbound `<channel>` tag if present
-2. **Fallback**: read the topic cache seeded at chat startup:
-   ```bash
-   cat {{.Workspace}}/state/topics.json
-   # Returns: [{"id":3,"name":"Chat"},{"id":7,"name":"Alerts"}]
-   ```
-   Pick the topic matching the context of the conversation. If the file is missing or empty, ask the user to restart the chat session after sending a message in each topic.
-
-### Common mistakes to avoid
-
-- **DO NOT** omit `thread_id` for group/forum chats — the message will land in the wrong topic
-- **DO NOT** use `reply_to` thinking it routes to a topic — it creates a visible quote-reply instead
+The plugin owns its own config, auth, and routing. Leo does not manage channel credentials — only the list of plugin IDs this process should use.
 
 ## What is Leo?
 
 Leo is the CLI that scaffolded this workspace and manages your lifecycle:
-- **`leo service start`** starts supervised processes (including your Telegram session)
+- **`leo service start`** starts supervised processes
 - **`leo service start --daemon`** installs as a persistent system service
 - **`leo run <task>`** executes a scheduled task
 - **`leo task`** manages task definitions in leo.yaml
@@ -46,7 +35,7 @@ You are not Leo. Leo is the management layer; you are the agent it manages.
 
 ```
 {{.Workspace}}/
-├── leo.yaml           # Config (tasks, telegram, defaults, templates)
+├── leo.yaml           # Config (tasks, defaults, processes, templates)
 ├── CLAUDE.md          # This file
 ├── USER.md            # Who you work for
 ├── HEARTBEAT.md       # Heartbeat task checklist

@@ -23,23 +23,25 @@ See the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-co
 !!! warning "Authentication required"
     Leo will not work if `claude` is not authenticated. `leo setup` and `leo validate` both check for this automatically.
 
-## curl
+## tmux
 
-Used by agents to send outbound Telegram messages during scheduled tasks. Pre-installed on macOS and most Linux distributions.
+Required for supervised processes and ephemeral agents. Leo wraps each Claude session in a tmux session so channel plugins that need a terminal can attach to one.
 
 ```bash
-curl --version
+tmux -V
 ```
 
-## Telegram Bot Token
+On macOS: `brew install tmux`. On Linux: your distro's package manager (`apt install tmux`, `dnf install tmux`, etc.).
 
-You need a Telegram bot to receive messages from your agent. The `leo setup` wizard walks you through this, but if you want to prepare ahead of time:
+## Optional: Channel Plugin
 
-1. Open Telegram and message [@BotFather](https://t.me/BotFather)
-2. Send `/newbot` and follow the prompts
-3. Copy the bot token you receive
+Leo does not ship with any built-in messaging channel. To surface messages via Telegram, Slack, webhook, or another channel, install the corresponding Claude Code plugin separately. For example:
 
-See the [Telegram Setup](../guides/telegram-setup.md) guide for a detailed walkthrough.
+```bash
+claude plugin install telegram@claude-plugins-official
+```
+
+Then reference the plugin ID in your process or task `channels:` list. See [Configuration → Channels](../configuration/config-reference.md#channels).
 
 ## Supported Platforms
 

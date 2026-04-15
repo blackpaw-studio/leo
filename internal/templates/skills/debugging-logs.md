@@ -52,7 +52,7 @@ Common errors in logs:
 Tasks with `silent: true` in config prepend a silent preamble. The agent:
 - Works without narration
 - Outputs `NO_REPLY` if there is nothing to report
-- Sends only a final Telegram message if something needs attention
+- Otherwise delivers the final message via a configured channel plugin
 
 If you see `NO_REPLY` in a task log, the task ran successfully with nothing to report.
 
@@ -73,10 +73,11 @@ leo validate
 leo task list
 ```
 
-## Telegram Delivery Issues
+## Channel Delivery Issues
 
-If task output isn't reaching Telegram:
-1. Check the task log for curl errors
-2. Verify `telegram.bot_token` and `telegram.chat_id` in `leo.yaml`
-3. For topic-routed messages, verify the `topic_id` is a valid forum topic ID (use `leo telegram topics` to list available topics)
-4. Test manually: `leo run <task>` and watch the output
+If task output isn't reaching the configured channel:
+1. Check the task log — the agent may have output `NO_REPLY`, or errored before calling the channel tool.
+2. Confirm the plugin is installed: `claude plugin list`.
+3. Confirm the task's `channels:` list includes the plugin ID you expect.
+4. Inspect the plugin's own logs (location varies per plugin — consult its docs).
+5. Test manually: `leo run <task>` and watch the output.

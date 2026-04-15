@@ -41,7 +41,7 @@ Adds a new process. If no flags are given, prompts interactively. Otherwise uses
 | Flag | Description |
 |------|-------------|
 | `--workspace <path>` | Process workspace directory (blank = default) |
-| `--channels <csv>` | Comma-separated telegram channels |
+| `--channels <csv>` | Comma-separated channel plugin IDs |
 | `--model <model>` | Model override (defaults to global default) |
 | `--agent <id>` | Agent identifier |
 | `--disabled` | Create in a disabled state (default: enabled) |

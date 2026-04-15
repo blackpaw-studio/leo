@@ -37,7 +37,7 @@ Interactively prompts for task details:
 - **Cron schedule** — when to run (e.g., `0 7 * * *`)
 - **Prompt file** — path relative to the task's workspace
 - **Model** — Claude model override (blank = default)
-- **Topic ID** — optional forum topic for Telegram routing (`leo telegram topics` helps discover these)
+- **Channels** — optional list of channel plugin IDs for `notify_on_fail` (see [Channels](../configuration/config-reference.md#channels))
 - **Silent mode** — whether to prepend the silent preamble
 
 The task is saved to `leo.yaml` with `enabled: true`. If the prompt file does not exist yet, Leo prints a warning so you remember to author it before the first scheduled run.

@@ -104,9 +104,9 @@ LEO_HOST=dev leo agent list      # same thing via env
 leo agent list --host localhost  # force the local daemon
 ```
 
-## Web UI and Telegram parity
+## Web UI and channel-plugin parity
 
-The daemon on the server owns agent lifecycle. The CLI, web UI, and Telegram `/agent` command are all clients of the same manager — so an agent spawned from the CLI appears in the web dashboard immediately, and vice versa.
+The daemon on the server owns agent lifecycle. The CLI, web UI, and any channel plugin that invokes the HTTP API are all clients of the same manager — so an agent spawned from the CLI appears in the web dashboard immediately, and vice versa.
 
 ## Troubleshooting
 
@@ -125,4 +125,4 @@ Leo expects `leo` to be on the server's default login PATH. Either install it th
 ## See Also
 
 - [`leo agent`](../cli/agent.md) — subcommand reference
-- [Agents guide](agents.md) — template authoring and Telegram/web parity
+- [Agents guide](agents.md) — template authoring and channel/web parity

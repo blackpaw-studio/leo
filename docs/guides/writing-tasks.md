@@ -6,8 +6,8 @@ Tasks are the core of Leo's scheduling system. Each task is a prompt file that t
 
 A task has two parts:
 
-1. **Configuration** in `leo.yaml` -- schedule, model, routing
-2. **Prompt file** in the task's workspace -- instructions for the assistant
+1. **Configuration** in `leo.yaml` — schedule, model, channels, routing
+2. **Prompt file** in the task's workspace — instructions for the assistant
 
 ### Configuration
 
@@ -19,7 +19,8 @@ tasks:
     prompt_file: reports/daily-briefing.md
     model: opus
     max_turns: 20
-    topic_id: 3
+    channels: [plugin:telegram@claude-plugins-official]
+    notify_on_fail: true
     enabled: true
     silent: true
 ```
@@ -38,30 +39,25 @@ Check the following and compile a morning briefing:
 3. Review any open PRs that need my attention
 4. Check for breaking news in my industry
 
-Format as a concise Telegram message with sections.
+Format as a concise message. Deliver it via the configured channel plugin
+using its MCP messaging tool.
 ```
 
 ## What Leo Adds
 
-When `leo run <task>` executes, it assembles the final prompt from multiple parts. You only write the prompt file -- Leo handles the rest.
+When `leo run <task>` executes, it assembles the final prompt. You write the prompt file; Leo adds a silent preamble if `silent: true` and nothing else.
 
 ### Silent Preamble (if `silent: true`)
 
 Leo prepends instructions telling the assistant to:
 
 - Work without narration or progress updates
-- Only send output if there's something meaningful
+- Only deliver output via a configured channel if there's something meaningful
 - Output `NO_REPLY` if there's nothing to report
 
-### Telegram Notification Protocol
+### Channels
 
-Leo appends a protocol section with:
-
-- A `curl` command template for sending Telegram messages
-- The bot token and chat ID (from config)
-- The `message_thread_id` (from `topic_id`) if topic routing is configured
-
-The agent uses this protocol to send its final output as a Telegram message.
+Leo passes the task's `channels:` list to the spawned Claude process via the `LEO_CHANNELS` environment variable. The agent picks up its configured channels and uses whatever MCP tool the channel plugin exposes (e.g. the Telegram plugin's `reply` tool) to send its final message. Leo does not hardcode any channel-specific protocol.
 
 ## Examples
 
@@ -77,7 +73,7 @@ tasks:
     prompt_file: prompts/checks.md
     model: sonnet
     max_turns: 10
-    topic_id: 1                          # discover IDs via `leo telegram topics`
+    channels: [plugin:telegram@claude-plugins-official]
     enabled: true
     silent: true      # silent: only report if something needs attention
 ```
@@ -94,7 +90,7 @@ Run through this checklist. Only report items that need my attention.
 - [ ] Any alerts or notifications that need action
 
 If everything is clear, output NO_REPLY.
-If something needs attention, send a concise summary.
+If something needs attention, deliver a concise summary via your configured channel.
 ```
 
 ### Weekly Report
@@ -108,7 +104,7 @@ tasks:
     prompt_file: reports/weekly.md
     model: opus                      # use opus for deeper analysis
     max_turns: 30
-    topic_id: 7
+    channels: [plugin:telegram@claude-plugins-official]
     enabled: true
 ```
 
@@ -177,12 +173,12 @@ tasks:
 
 ## Best Practices
 
-- **Keep prompts focused** -- one clear objective per task
+- **Keep prompts focused** — one clear objective per task
 - **Use silent mode** for frequent checks to avoid notification spam
-- **Set appropriate max_turns** -- simple checks need fewer turns than complex analysis
-- **Choose the right model** -- use `sonnet` for routine tasks, `opus` for tasks requiring deeper reasoning
-- **Include output format guidance** -- tell the assistant how to format its Telegram message
-- **Test manually first** -- run `leo run <task>` before relying on the schedule
+- **Set appropriate max_turns** — simple checks need fewer turns than complex analysis
+- **Choose the right model** — use `sonnet` for routine tasks, `opus` for tasks requiring deeper reasoning
+- **Include output format guidance** — tell the assistant how to format its final message for your channel
+- **Test manually first** — run `leo run <task>` before relying on the schedule
 
 ## Creating a New Task
 
@@ -201,7 +197,7 @@ Or edit `leo.yaml` directly and run `leo service reload` to pick up the changes 
 
 ## See Also
 
-- [`leo task`](../cli/task.md) -- managing tasks
-- [`leo run`](../cli/run.md) -- executing tasks
-- [Scheduling](scheduling.md) -- cron expressions and timezone handling
-- [Config Reference](../configuration/config-reference.md#tasks) -- full task field specification
+- [`leo task`](../cli/task.md) — managing tasks
+- [`leo run`](../cli/run.md) — executing tasks
+- [Scheduling](scheduling.md) — cron expressions and timezone handling
+- [Config Reference](../configuration/config-reference.md#tasks) — full task field specification

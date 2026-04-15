@@ -12,5 +12,5 @@ This file defines what you check on every heartbeat run. Customize it.
 ## Output
 
 After running checks:
-- If anything needs attention → send a Telegram message with a concise summary
-- If everything is clear → output NO_REPLY
+- If anything needs attention → send a message via your configured channel plugin (see `$LEO_CHANNELS`) with a concise summary
+- If everything is clear, or no channel plugin is configured → output NO_REPLY

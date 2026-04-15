@@ -1,6 +1,6 @@
 # Agent Management
 
-Leo can spawn and manage ephemeral coding agents two ways: the HTTP API (Telegram plugin, web UI) and the `leo agent` CLI (Bash tool, SSH). Both share one in-memory manager so state is always consistent. Agents run in tmux with `--remote-control` and appear in claude.ai/code.
+Leo can spawn and manage ephemeral coding agents two ways: the HTTP API (used by channel plugins and the web UI) and the `leo agent` CLI (Bash tool, SSH). Both share one in-memory manager so state is always consistent. Agents run in tmux with `--remote-control` and appear in claude.ai/code.
 
 When you need multiple agents working on the same repo in parallel, use `leo agent spawn --worktree <branch>` — it creates an isolated git worktree per branch so nothing fights over `.git/HEAD`. The HTTP API only supports the shared-workspace flow today; reach for the CLI when you need branch isolation.
 
@@ -71,12 +71,9 @@ Rules to remember:
 - `prune` takes the canonical agent name only. Stopped agents aren't in the shorthand resolver, so look them up via `leo agent list` first.
 - Typed error codes surfaced by prune: `worktree_dirty`, `branch_not_merged`, `branch_checked_out`, `agent_still_running`, `not_worktree_agent`. Pass `--force` to override the first two.
 
-## Telegram Commands
+## Channel Plugin Integration
 
-- `/agent` — interactive template + repo selection
-- `/agent coding owner/repo` — shorthand spawn
-- `/agents` — list running agents with stop buttons
-- `/stop` — interrupt the current Claude operation
+If you have a channel plugin installed (e.g. Telegram, Slack) that exposes agent-management commands, those are provided by the plugin itself — not by Leo. Consult the plugin's own docs for the command surface. Leo only exposes the HTTP API above; the plugin translates channel commands into HTTP calls against `${LEO_WEB_PORT}`.
 
 ## Notes
 

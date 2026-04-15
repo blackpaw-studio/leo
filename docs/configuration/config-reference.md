@@ -4,20 +4,6 @@ Complete field-by-field reference for `leo.yaml`.
 
 Config lives at `~/.leo/leo.yaml` (the Leo home directory).
 
-## `telegram`
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `bot_token` | string | Yes | Telegram Bot API token from [@BotFather](https://t.me/BotFather). |
-| `chat_id` | string | Yes | Your personal Telegram chat ID. Auto-detected during setup. |
-| `group_id` | string | No | Forum group chat ID (starts with `-100`). Enables topic routing. |
-
-### Topic Routing
-
-Tasks can route output to specific forum topics in a Telegram group by setting `topic_id` to the numeric thread ID. Use `leo telegram topics` to discover available topic IDs for your group.
-
-If `group_id` is set, messages go to the group. The `topic_id` field adds a `message_thread_id` to route to a specific thread. If no `topic_id` is specified, messages go to the General thread.
-
 ## `defaults`
 
 Settings inherited by all processes, tasks, and templates unless overridden.
@@ -78,6 +64,26 @@ Why `leo_path` exists: SSH runs a non-interactive shell on the remote, which doe
 
 Resolution order for the target host: `--host` flag → `LEO_HOST` env → `default_host` → first entry sorted by key → localhost (only when no hosts are configured). `--host localhost` is a hard override. See the [Remote CLI guide](../guides/remote-cli.md).
 
+## Channels
+
+Leo does not ship with any built-in messaging channel. Channels are Claude Code plugins the user installs separately (e.g. Telegram, Slack, webhook). In `leo.yaml` they are referenced by plugin ID strings like `plugin:telegram@claude-plugins-official` on the `channels:` field of processes and tasks.
+
+Leo passes the resolved list to the spawned Claude process via the `LEO_CHANNELS` environment variable. The plugin owns its own credentials, routing, and inbound-message handling.
+
+To install a channel plugin:
+
+```bash
+claude plugin install telegram@claude-plugins-official
+```
+
+Then reference it:
+
+```yaml
+processes:
+  assistant:
+    channels: [plugin:telegram@claude-plugins-official]
+```
+
 ## `processes`
 
 Each process is a named entry under the `processes` map. Processes define long-running Claude sessions supervised by the daemon.
@@ -93,7 +99,7 @@ processes:
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `workspace` | string | No | `~/.leo/workspace/` | Working directory for this process. |
-| `channels` | list | No | -- | Channel plugins (e.g., `plugin:telegram@claude-plugins-official`). |
+| `channels` | list | No | -- | Channel plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). |
 | `model` | string | No | `defaults.model` | Claude model override. |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
 | `agent` | string | No | -- | Run as a specific agent definition. |
@@ -131,22 +137,22 @@ tasks:
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
 | `timeout` | string | No | `30m` | Max duration before kill (e.g., `30m`, `1h`). |
 | `retries` | int | No | `0` | Retry attempts on failure. |
-| `topic_id` | int | No | -- | Telegram forum topic ID. |
+| `channels` | list | No | -- | Channel plugin IDs used by `notify_on_fail`. |
 | `permission_mode` | string | No | `defaults.permission_mode` | Permission mode override. |
 | `allowed_tools` | list | No | `defaults.allowed_tools` | Tool whitelist. |
 | `disallowed_tools` | list | No | `defaults.disallowed_tools` | Tool blacklist. |
 | `append_system_prompt` | string | No | `defaults.append_system_prompt` | Extra system prompt. |
-| `notify_on_fail` | bool | No | `false` | Send Telegram message on non-zero exit. |
+| `notify_on_fail` | bool | No | `false` | Spawn a short child `claude` invocation on non-zero exit, instructing it to notify the configured channels. Requires `channels:` to be set. |
 | `enabled` | bool | No | `false` | Whether the scheduler should run this task. |
 | `silent` | bool | No | `false` | Prepend silent-mode preamble to prompt. |
 
 ### Silent Mode
 
-When `silent: true`, Leo prepends a preamble instructing the agent to work without narration. The agent should either send a Telegram message with results or output `NO_REPLY` if there's nothing to report.
+When `silent: true`, Leo prepends a preamble instructing the agent to work without narration. The agent should deliver its final message via a configured channel plugin or output `NO_REPLY` if there's nothing to report.
 
 ## `templates`
 
-Templates are reusable blueprints for spawning ephemeral agents. Dispatch them from Telegram (`/agent <template> <repo>`) or the web UI.
+Templates are reusable blueprints for spawning ephemeral agents. Dispatch them via the HTTP API, a channel plugin that exposes agent commands, or the web UI.
 
 ```yaml
 templates:
@@ -160,7 +166,7 @@ templates:
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `workspace` | string | No | `~/.leo/agents/` | Base directory for agent workspaces. Repos are cloned as subdirectories. |
-| `channels` | list | No | -- | Channel plugins for spawned agents. |
+| `channels` | list | No | -- | Channel plugin IDs for spawned agents. |
 | `model` | string | No | `defaults.model` | Claude model. |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns. |
 | `agent` | string | No | -- | Agent definition to use. |
@@ -173,7 +179,7 @@ templates:
 | `disallowed_tools` | list | No | `defaults.disallowed_tools` | Tool blacklist. |
 | `append_system_prompt` | string | No | `defaults.append_system_prompt` | Extra system prompt. |
 
-When dispatching with a repo (`/agent coding owner/repo`), Leo clones the repo into `<workspace>/<repo>` using `gh`. The agent session is named `leo-<template>-<owner>-<repo>`.
+When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, or `leo agent spawn coding --repo owner/repo`), Leo clones the repo into `<workspace>/<repo>` using `gh`. The agent session is named `leo-<template>-<owner>-<repo>`.
 
 ## Override Cascade
 

@@ -25,7 +25,6 @@ Leo uses a home directory at `~/.leo/` that holds config, state, and the default
     ├── sessions.json           # Process session ID mappings
     ├── agents.json             # Ephemeral agent records (for restart recovery)
     ├── task-history.json       # Task execution history
-    ├── topics.json             # Cached Telegram forum topics
     ├── service.log             # Service log output
     ├── service.pid             # Background process PID file
     └── leo.sock                # Daemon Unix socket for CLI IPC
@@ -76,7 +75,6 @@ Runtime files managed by Leo:
 - **`sessions.json`** -- process name to Claude session UUID mappings (for `--resume`)
 - **`agents.json`** -- ephemeral agent records, used to restore agents after daemon restart
 - **`task-history.json`** -- execution history for scheduled tasks
-- **`topics.json`** -- cached Telegram forum topic IDs
 - **`service.log`** -- output from the daemon (all supervised processes)
 - **`service.pid`** -- PID file for the background service
 - **`leo.sock`** -- Unix socket for CLI-to-daemon IPC

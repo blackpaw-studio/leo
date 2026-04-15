@@ -102,4 +102,4 @@ All modes write logs to `~/.leo/state/service.log`.
 ## See Also
 
 - [Background Mode](../guides/background-mode.md) -- detailed comparison of background vs daemon mode
-- [Telegram Setup](../guides/telegram-setup.md) -- creating and configuring your bot
+- [Configuration → Channels](../configuration/config-reference.md#channels) — wiring up a channel plugin

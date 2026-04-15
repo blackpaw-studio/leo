@@ -1,6 +1,6 @@
 # leo template
 
-Inspect and remove agent templates. Templates are reusable blueprints for spawning ephemeral coding agents from Telegram (`/agent <template> <repo>`) or the web UI.
+Inspect and remove agent templates. Templates are reusable blueprints for spawning ephemeral coding agents via the HTTP API, a channel plugin that exposes agent commands, or the web UI.
 
 ## Usage
 

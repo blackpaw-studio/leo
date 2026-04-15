@@ -20,11 +20,12 @@ leo run heartbeat
 
 ## Prompt Assembly
 
-Leo builds the final prompt by combining up to three parts:
+Leo builds the final prompt by combining up to two parts:
 
 1. **Silent preamble** (if `task.silent: true`) — instructs the agent to work without narration and output `NO_REPLY` if there's nothing to report
 2. **Prompt file content** — the task's `prompt_file`, read from the workspace
-3. **Telegram notification protocol** — injected at runtime with `curl` commands the agent uses to send messages, including topic routing if configured
+
+The agent is responsible for delivering its final message via whatever channel plugin(s) are configured (exposed via the `LEO_CHANNELS` env var). Leo does not inject a messaging protocol into the prompt.
 
 ## Claude Arguments
 
@@ -42,8 +43,9 @@ The effective model and max turns are resolved via the [override cascade](../con
 ## Output
 
 - Task output is logged to `<workspace>/state/<task>.log`
-- If the agent outputs `NO_REPLY`, no Telegram message is sent
-- Otherwise, the agent uses the injected `curl` template to POST to the Telegram Bot API
+- If the agent outputs `NO_REPLY`, no external message is sent
+- Otherwise, the agent delivers its final message via a configured channel plugin (e.g. Telegram, Slack) using the plugin's own MCP tool
+- If `task.notify_on_fail: true` and the task exits non-zero, Leo spawns a short child `claude` invocation asking the agent to notify the task's configured channels of the failure
 
 ## See Also
 

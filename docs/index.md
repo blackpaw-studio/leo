@@ -2,7 +2,7 @@
 
 **A process supervisor and task scheduler for Claude Code**
 
-Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions, schedules autonomous tasks, and lets you spawn on-demand coding agents. Telegram gives you mobile access. A built-in web dashboard lets you manage everything from a browser.
+Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions, schedules autonomous tasks, and lets you spawn on-demand coding agents. Leo is channel-agnostic — bring your own messaging channel via any Claude Code plugin (Telegram, Slack, webhook, etc.). A built-in web dashboard lets you manage everything from a browser.
 
 ---
 
@@ -14,13 +14,13 @@ Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-c
 
     Define multiple persistent Claude sessions with different channels, workspaces, and settings. Leo supervises them with auto-restart and exponential backoff.
 
-    [:octicons-arrow-right-24: Start chatting](guides/telegram-setup.md)
+    [:octicons-arrow-right-24: Configuration](configuration/config-reference.md)
 
 -   :material-rocket-launch-outline:{ .lg .middle } **Agent Templates**
 
     ---
 
-    Define reusable blueprints and spawn ephemeral coding agents from Telegram or the web UI. Agents clone repos, run in isolated sessions, and appear in claude.ai.
+    Define reusable blueprints and spawn ephemeral coding agents from the HTTP API, a channel plugin, or the web UI. Agents clone repos, run in isolated sessions, and appear in claude.ai.
 
     [:octicons-arrow-right-24: Agent guide](guides/agents.md)
 
@@ -51,32 +51,32 @@ Leo operates in three modes, all invoking the stock `claude` CLI:
 ### Processes
 
 ```
-User (Telegram) --> Telegram Bot API --> claude (channel plugin) --> Agent
-                                                                      |
-User (Telegram) <-- Telegram Bot API <-- claude (channel plugin) <----+
+User (channel) --> Channel plugin --> claude --> Agent
+                                                   |
+User (channel) <-- Channel plugin <-- claude <----+
 ```
 
-`leo service start` launches all enabled processes in supervised mode. Each process is a long-running Claude session with its own workspace, model, and channels.
+`leo service start` launches all enabled processes in supervised mode. Each process is a long-running Claude session with its own workspace, model, and channel plugin list.
 
 ### Agent Templates
 
 ```
-User (Telegram) --> /agent coding owner/repo --> Leo daemon --> tmux session
-                                                                    |
-User (claude.ai) <-- --remote-control --name leo-coding-... <------+
+HTTP / channel plugin / CLI --> Leo daemon --> tmux session
+                                                    |
+User (claude.ai) <-- --remote-control --name leo-<template>-... <------+
 ```
 
-Templates let you spawn ephemeral agents on demand. Send `/agent coding owner/repo` in Telegram, and Leo clones the repo and starts a new Claude session you can connect to from claude.ai or the Claude app.
+Templates let you spawn ephemeral agents on demand. Post to `/api/agent/spawn` (or use a channel plugin that exposes agent commands) and Leo clones the repo and starts a new Claude session you can connect to from claude.ai or the Claude app.
 
 ### Scheduled Tasks
 
 ```
 cron scheduler --> leo run <task> --> claude -p "<prompt>" --> Agent
                                                                 |
-                   User (Telegram) <-- curl Bot API <----------+
+                      Channel plugin <-- MCP tool call <-------+
 ```
 
-The in-process cron scheduler runs tasks on a schedule. Each task reads a prompt file, assembles arguments, and invokes `claude -p`. Results can be sent via Telegram or run silently.
+The in-process cron scheduler runs tasks on a schedule. Each task reads a prompt file, assembles arguments, and invokes `claude -p`. The agent delivers its final message via whatever channel plugin(s) are configured, or outputs `NO_REPLY` when there is nothing to report.
 
 ---
 

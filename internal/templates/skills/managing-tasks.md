@@ -14,7 +14,7 @@ Shows all configured tasks with schedule, model, enabled status, last run, and n
 ```bash
 leo task add
 ```
-Interactive wizard prompts for: name, cron schedule, prompt file path, model override, Telegram topic, silent mode. Writes the entry to `leo.yaml`.
+Interactive wizard prompts for: name, cron schedule, prompt file path, model override, channels, notify_on_fail, silent mode. Writes the entry to `leo.yaml`.
 
 **⚠ `leo task add` does not notify the running daemon.** After adding a task, run `leo service reload` to register it with the live scheduler. Until you do, the task is in config but will never fire.
 
@@ -41,7 +41,7 @@ The daemon reads `leo.yaml` at startup and holds a live copy. Some mutations aut
 | `leo task enable` / `disable`          | ✅ Yes              | None                             |
 | `leo task add`                         | ❌ No               | `leo service reload`             |
 | Direct edits to `leo.yaml`             | ❌ No               | `leo service reload`             |
-| Changes to `defaults:`, `telegram:`, `processes:` | ❌ No    | `leo service reload`             |
+| Changes to `defaults:` or `processes:`            | ❌ No    | `leo service reload`             |
 
 ### Hot-reload
 ```bash
@@ -98,7 +98,8 @@ prompts/
 The prompt file content is assembled with:
 1. Silent preamble (if `silent: true`)
 2. Your prompt file content
-3. Telegram notification protocol (injected automatically)
+
+The agent is responsible for delivering its final message via a configured channel plugin (see `$LEO_CHANNELS`). If no channel is configured, the agent should output `NO_REPLY`.
 
 ## Running a Task Manually
 
