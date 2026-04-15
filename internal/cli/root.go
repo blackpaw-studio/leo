@@ -10,7 +10,7 @@ func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "leo",
 		Short:         "Manage a persistent Claude Code assistant",
-		Long:          "Leo sets up and manages persistent Claude Code sessions with Telegram, Remote Control, and scheduled tasks.",
+		Long:          "Leo sets up and manages persistent Claude Code sessions and scheduled tasks. Channels (Telegram, Slack, webhook, etc.) are provided by separately-installed Claude Code plugins.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

@@ -8,11 +8,6 @@ import (
 )
 
 const testYAML = `
-telegram:
-  bot_token: "123:ABC"
-  chat_id: "456"
-  group_id: "-100999"
-
 defaults:
   model: sonnet
   max_turns: 15
@@ -193,7 +188,7 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("no telegram section is fine", func(t *testing.T) {
+	t.Run("minimal config with only HomePath is valid", func(t *testing.T) {
 		cfg := &Config{HomePath: "/tmp/leo"}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected no error, got %v", err)
