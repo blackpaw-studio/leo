@@ -105,12 +105,16 @@ func runService(cmd *cobra.Command, args []string) error {
 	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), procEnv)
 }
 
-// processEnviron augments the current environment with LEO_CHANNELS (if any)
-// and per-process env vars. Returned slice is safe to pass to syscall.Exec.
+// processEnviron augments the current environment with LEO_CHANNELS and
+// LEO_DEV_CHANNELS (if any) and per-process env vars. Returned slice is safe
+// to pass to syscall.Exec.
 func processEnviron(proc config.ProcessConfig) []string {
 	env := os.Environ()
 	if len(proc.Channels) > 0 {
 		env = append(env, "LEO_CHANNELS="+strings.Join(proc.Channels, ","))
+	}
+	if len(proc.DevChannels) > 0 {
+		env = append(env, "LEO_DEV_CHANNELS="+strings.Join(proc.DevChannels, ","))
 	}
 	for k, v := range proc.Env {
 		env = append(env, k+"="+v)
@@ -188,15 +192,19 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 }
 
 // mergeChannelsIntoEnv returns a new env map combining the process's declared
-// env vars with an injected LEO_CHANNELS entry (if channels are configured).
-// The supervisor exports these before launching claude in the tmux session.
+// env vars with injected LEO_CHANNELS / LEO_DEV_CHANNELS entries (if any are
+// configured). The supervisor exports these before launching claude in the
+// tmux session.
 func mergeChannelsIntoEnv(proc config.ProcessConfig) map[string]string {
-	merged := make(map[string]string, len(proc.Env)+1)
+	merged := make(map[string]string, len(proc.Env)+2)
 	for k, v := range proc.Env {
 		merged[k] = v
 	}
 	if len(proc.Channels) > 0 {
 		merged["LEO_CHANNELS"] = strings.Join(proc.Channels, ",")
+	}
+	if len(proc.DevChannels) > 0 {
+		merged["LEO_DEV_CHANNELS"] = strings.Join(proc.DevChannels, ",")
 	}
 	return merged
 }
@@ -211,6 +219,9 @@ func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig
 
 	for _, ch := range proc.Channels {
 		claudeArgs = append(claudeArgs, "--channels", ch)
+	}
+	for _, ch := range proc.DevChannels {
+		claudeArgs = append(claudeArgs, "--dangerously-load-development-channels", ch)
 	}
 
 	ws := cfg.ProcessWorkspace(proc)

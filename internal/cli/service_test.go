@@ -48,6 +48,25 @@ func TestMergeChannelsIntoEnv(t *testing.T) {
 			wantVal: "plugin:telegram@claude-plugins-official",
 			wantLen: 2,
 		},
+		{
+			name: "injects LEO_DEV_CHANNELS when dev_channels set",
+			proc: config.ProcessConfig{
+				DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
+			},
+			wantKey: "LEO_DEV_CHANNELS",
+			wantVal: "plugin:blackpaw-telegram@blackpaw-plugins",
+			wantLen: 1,
+		},
+		{
+			name: "both channels and dev_channels coexist",
+			proc: config.ProcessConfig{
+				Channels:    []string{"plugin:telegram@claude-plugins-official"},
+				DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
+			},
+			wantKey: "LEO_DEV_CHANNELS",
+			wantVal: "plugin:blackpaw-telegram@blackpaw-plugins",
+			wantLen: 2,
+		},
 	}
 
 	for _, tt := range tests {
@@ -67,16 +86,20 @@ func TestMergeChannelsIntoEnv(t *testing.T) {
 
 func TestProcessEnviron(t *testing.T) {
 	proc := config.ProcessConfig{
-		Channels: []string{"plugin:telegram@claude-plugins-official"},
-		Env:      map[string]string{"FOO": "bar"},
+		Channels:    []string{"plugin:telegram@claude-plugins-official"},
+		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
+		Env:         map[string]string{"FOO": "bar"},
 	}
 
 	env := processEnviron(proc)
 
-	var sawChannels, sawFoo bool
+	var sawChannels, sawDevChannels, sawFoo bool
 	for _, line := range env {
 		if strings.HasPrefix(line, "LEO_CHANNELS=") {
 			sawChannels = true
+		}
+		if strings.HasPrefix(line, "LEO_DEV_CHANNELS=") {
+			sawDevChannels = true
 		}
 		if line == "FOO=bar" {
 			sawFoo = true
@@ -85,8 +108,37 @@ func TestProcessEnviron(t *testing.T) {
 	if !sawChannels {
 		t.Error("processEnviron should contain LEO_CHANNELS")
 	}
+	if !sawDevChannels {
+		t.Error("processEnviron should contain LEO_DEV_CHANNELS")
+	}
 	if !sawFoo {
 		t.Error("processEnviron should contain FOO=bar")
+	}
+}
+
+func TestBuildProcessArgsIncludesDevChannels(t *testing.T) {
+	cfg := &config.Config{}
+	proc := config.ProcessConfig{
+		Channels:    []string{"plugin:telegram@claude-plugins-official"},
+		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
+	}
+
+	args := buildProcessArgs(cfg, "test", proc)
+
+	var sawChan, sawDev bool
+	for i, a := range args {
+		if a == "--channels" && i+1 < len(args) && args[i+1] == "plugin:telegram@claude-plugins-official" {
+			sawChan = true
+		}
+		if a == "--dangerously-load-development-channels" && i+1 < len(args) && args[i+1] == "plugin:blackpaw-telegram@blackpaw-plugins" {
+			sawDev = true
+		}
+	}
+	if !sawChan {
+		t.Errorf("missing --channels flag, got args: %v", args)
+	}
+	if !sawDev {
+		t.Errorf("missing --dangerously-load-development-channels flag, got args: %v", args)
 	}
 }
 

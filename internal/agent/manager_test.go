@@ -133,6 +133,32 @@ func TestBuildTemplateArgsChannels(t *testing.T) {
 	}
 }
 
+func TestBuildTemplateArgsDevChannels(t *testing.T) {
+	cfg := &config.Config{}
+	tmpl := config.TemplateConfig{
+		Channels:    []string{"plugin:telegram@official"},
+		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
+	}
+
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws")
+
+	var sawChan, sawDev bool
+	for i, a := range args {
+		if a == "--channels" && i+1 < len(args) && args[i+1] == "plugin:telegram@official" {
+			sawChan = true
+		}
+		if a == "--dangerously-load-development-channels" && i+1 < len(args) && args[i+1] == "plugin:blackpaw-telegram@blackpaw-plugins" {
+			sawDev = true
+		}
+	}
+	if !sawChan {
+		t.Errorf("missing --channels flag, args: %v", args)
+	}
+	if !sawDev {
+		t.Errorf("missing --dangerously-load-development-channels flag, args: %v", args)
+	}
+}
+
 func TestBuildTemplateArgsAgent(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{Agent: "my-agent"}

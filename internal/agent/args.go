@@ -25,6 +25,9 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 	for _, ch := range tmpl.Channels {
 		args = append(args, "--channels", ch)
 	}
+	for _, ch := range tmpl.DevChannels {
+		args = append(args, "--dangerously-load-development-channels", ch)
+	}
 
 	args = append(args, "--add-dir", workspace)
 	for _, dir := range tmpl.AddDirs {

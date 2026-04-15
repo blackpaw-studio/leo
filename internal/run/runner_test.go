@@ -218,6 +218,29 @@ func TestBuildArgsWithoutSessionID(t *testing.T) {
 	}
 }
 
+func TestBuildArgsIncludesDevChannels(t *testing.T) {
+	dir := t.TempDir()
+	cfg := makeTestConfig(dir, false)
+	task := config.TaskConfig{
+		DevChannels: []string{
+			"plugin:blackpaw-telegram@blackpaw-plugins",
+			"plugin:experimental@local-dev",
+		},
+	}
+
+	args := buildArgs(cfg, task, "test prompt", "")
+
+	count := 0
+	for i, a := range args {
+		if a == "--dangerously-load-development-channels" && i+1 < len(args) {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Errorf("expected 2 --dangerously-load-development-channels flags, got %d: %v", count, args)
+	}
+}
+
 func TestParseClaudeOutput(t *testing.T) {
 	tests := []struct {
 		name     string
