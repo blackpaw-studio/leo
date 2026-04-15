@@ -657,3 +657,24 @@ func TestStartWritePidError(t *testing.T) {
 		t.Errorf("error = %q, want mention of writing pid file", err.Error())
 	}
 }
+
+func TestHasDevChannelFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"no flags", nil, false},
+		{"only channels", []string{"--channels", "plugin:x@y"}, false},
+		{"dev flag present", []string{"--model", "sonnet", "--dangerously-load-development-channels", "plugin:x@y"}, true},
+		{"dev flag only", []string{"--dangerously-load-development-channels", "plugin:x@y"}, true},
+		{"mixed", []string{"--channels", "plugin:a@b", "--dangerously-load-development-channels", "plugin:x@y"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasDevChannelFlag(tt.args); got != tt.want {
+				t.Errorf("hasDevChannelFlag(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}

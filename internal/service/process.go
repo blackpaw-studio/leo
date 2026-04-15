@@ -488,6 +488,20 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", spec.Name, sessionName)
 
+		// If any --dangerously-load-development-channels flags are present,
+		// claude will show an interactive confirmation prompt. Dismiss it by
+		// sending Enter (the default-highlighted option is "I am using this
+		// for local development"). Runs in a goroutine so the restart loop
+		// isn't blocked if the prompt never appears.
+		if hasDevChannelFlag(currentArgs) {
+			fmt.Fprintf(os.Stdout, "[%s] auto-accepting dev-channel prompt\n", spec.Name)
+			go func() {
+				if err := tmux.AcceptDevChannelPrompt(ctx, tmuxPath, sessionName); err != nil && ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "[%s] warning: dev-channel auto-accept failed: %v\n", spec.Name, err)
+				}
+			}()
+		}
+
 		if waitForSessionEnd(ctx, tmuxPath, sessionName, spec, startTime) {
 			sv.setState(spec.Name, "stopped")
 			return
@@ -606,6 +620,18 @@ func clearProcessSession(homePath, processName string) {
 // shellQuote wraps a string in single quotes with proper escaping.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// hasDevChannelFlag reports whether the claude arg list contains
+// --dangerously-load-development-channels, which triggers an interactive
+// confirmation prompt at launch.
+func hasDevChannelFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--dangerously-load-development-channels" {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultStartProcess(leoPath, configPath, workDir string, logFile *os.File) (int, error) {
