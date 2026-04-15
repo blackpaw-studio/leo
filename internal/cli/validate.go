@@ -53,7 +53,6 @@ func newValidateCmd() *cobra.Command {
 				issues++
 			}
 
-
 			// 3. Check default workspace
 			defaultWS := cfg.DefaultWorkspace()
 			if _, err := os.Stat(defaultWS); err != nil {

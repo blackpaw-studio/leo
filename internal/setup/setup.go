@@ -15,12 +15,11 @@ import (
 )
 
 var (
-	userHomeDirFn            = os.UserHomeDir
-	checkClaudeFn            = prereq.CheckClaude
-	checkTmuxFn              = prereq.CheckTmux
-	findExistingWorkspacesFn = prereq.FindExistingWorkspaces
-	daemonStatusFn           = service.DaemonStatus
-	newReaderFn              = prompt.NewReader
+	userHomeDirFn  = os.UserHomeDir
+	checkClaudeFn  = prereq.CheckClaude
+	checkTmuxFn    = prereq.CheckTmux
+	daemonStatusFn = service.DaemonStatus
+	newReaderFn    = prompt.NewReader
 )
 
 // Run executes the interactive setup wizard with its own banner.

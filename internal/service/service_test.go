@@ -657,4 +657,3 @@ func TestStartWritePidError(t *testing.T) {
 		t.Errorf("error = %q, want mention of writing pid file", err.Error())
 	}
 }
-
