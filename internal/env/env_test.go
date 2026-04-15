@@ -9,15 +9,21 @@ import (
 
 func TestCaptureIncludesSetVars(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key-123")
-	t.Setenv("TELEGRAM_BOT_TOKEN", "bot:token")
 
 	result := Capture()
 
 	if result["ANTHROPIC_API_KEY"] != "test-key-123" {
 		t.Errorf("ANTHROPIC_API_KEY = %q, want %q", result["ANTHROPIC_API_KEY"], "test-key-123")
 	}
-	if result["TELEGRAM_BOT_TOKEN"] != "bot:token" {
-		t.Errorf("TELEGRAM_BOT_TOKEN = %q, want %q", result["TELEGRAM_BOT_TOKEN"], "bot:token")
+}
+
+func TestCaptureExcludesTelegramBotToken(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "bot:token")
+
+	result := Capture()
+
+	if _, ok := result["TELEGRAM_BOT_TOKEN"]; ok {
+		t.Error("TELEGRAM_BOT_TOKEN is channel-plugin-owned; Leo must not capture it")
 	}
 }
 
@@ -38,30 +44,6 @@ func TestCaptureIncludesPath(t *testing.T) {
 
 	if _, ok := result["PATH"]; !ok {
 		t.Error("PATH should be present")
-	}
-}
-
-func TestCaptureBunInPath(t *testing.T) {
-	origHome := userHomeDirFn
-	origStat := statFn
-	defer func() {
-		userHomeDirFn = origHome
-		statFn = origStat
-	}()
-
-	home := t.TempDir()
-	bunDir := filepath.Join(home, ".bun", "bin")
-	os.MkdirAll(bunDir, 0755)
-
-	userHomeDirFn = func() (string, error) { return home, nil }
-	statFn = os.Stat // real stat, temp dirs exist
-
-	t.Setenv("PATH", "/usr/bin")
-	t.Setenv("HOME", home)
-
-	env := Capture()
-	if !strings.Contains(env["PATH"], bunDir) {
-		t.Errorf("PATH should contain bun dir: %s", env["PATH"])
 	}
 }
 
@@ -127,21 +109,20 @@ func TestCaptureNoDuplicatePaths(t *testing.T) {
 	}()
 
 	home := t.TempDir()
-	bunDir := filepath.Join(home, ".bun", "bin")
-	os.MkdirAll(bunDir, 0755)
+	localBinDir := filepath.Join(home, ".local", "bin")
+	os.MkdirAll(localBinDir, 0755)
 
 	userHomeDirFn = func() (string, error) { return home, nil }
 	statFn = os.Stat
 
-	// PATH already contains the bun dir
-	t.Setenv("PATH", bunDir+":/usr/bin")
+	// PATH already contains the local bin dir
+	t.Setenv("PATH", localBinDir+":/usr/bin")
 	t.Setenv("HOME", home)
 
 	env := Capture()
-	// Count occurrences of bunDir in PATH
-	count := strings.Count(env["PATH"], bunDir)
+	count := strings.Count(env["PATH"], localBinDir)
 	if count != 1 {
-		t.Errorf("bunDir should appear once in PATH, appeared %d times: %s", count, env["PATH"])
+		t.Errorf("localBinDir should appear once in PATH, appeared %d times: %s", count, env["PATH"])
 	}
 }
 
@@ -161,7 +142,6 @@ func TestCaptureOnlyKnownKeys(t *testing.T) {
 		"PATH":                   true,
 		"SHELL":                  true,
 		"USER":                   true,
-		"TELEGRAM_BOT_TOKEN":     true,
 	}
 
 	for key := range result {

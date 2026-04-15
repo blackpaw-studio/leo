@@ -105,6 +105,26 @@ func readArgLog(t *testing.T, path string) []string {
 	return args
 }
 
+// readEnvLog reads the JSON env log written by fakeclaude and returns it as a map.
+func readEnvLog(t *testing.T, path string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read env log: %v", err)
+	}
+	var entries []string
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("failed to parse env log: %v", err)
+	}
+	out := make(map[string]string, len(entries))
+	for _, kv := range entries {
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			out[kv[:i]] = kv[i+1:]
+		}
+	}
+	return out
+}
+
 // setupWorkspace creates a temp workspace with leo.yaml and prompt files.
 // Returns the workspace dir and a cleanup function.
 func setupWorkspace(t *testing.T, yamlContent string, files map[string]string) string {
@@ -138,10 +158,7 @@ func argValue(args []string, flag string) string {
 	return ""
 }
 
-const minimalConfig = `telegram:
-  bot_token: "fake-bot-token"
-  chat_id: "12345"
-defaults:
+const minimalConfig = `defaults:
   model: sonnet
   max_turns: 15
   bypass_permissions: true
@@ -152,10 +169,14 @@ tasks:
     prompt_file: prompts/HEARTBEAT.md
     enabled: true
     silent: true
+    channels:
+      - plugin:telegram@claude-plugins-official
+      - plugin:slack@example
 `
 
 func TestRunHappyPath(t *testing.T) {
 	argLog := filepath.Join(t.TempDir(), "args.json")
+	envLog := filepath.Join(t.TempDir(), "env.json")
 
 	ws := setupWorkspace(t,
 		minimalConfig,
@@ -170,6 +191,7 @@ func TestRunHappyPath(t *testing.T) {
 	_, stderr, code := runLeo(t, ws, []string{
 		"FAKECLAUDE_SCENARIO=success",
 		"FAKECLAUDE_ARGLOG=" + argLog,
+		"FAKECLAUDE_ENVLOG=" + envLog,
 	}, "run", "heartbeat", "-c", filepath.Join(ws, "leo.yaml"))
 
 	if code != 0 {
@@ -209,12 +231,19 @@ func TestRunHappyPath(t *testing.T) {
 		t.Error("prompt should contain silent preamble for silent task")
 	}
 
-	// Verify Telegram protocol is injected (uses $TELEGRAM_BOT_TOKEN env var, not literal token)
-	if !strings.Contains(prompt, "TELEGRAM_BOT_TOKEN") {
-		t.Error("prompt should contain Telegram bot token reference")
+	// Channel plugins are surfaced to the child via $LEO_CHANNELS; they must not
+	// leak into the prompt text itself.
+	if strings.Contains(prompt, "TELEGRAM_BOT_TOKEN") ||
+		strings.Contains(prompt, "plugin:telegram") ||
+		strings.Contains(prompt, "api.telegram.org") {
+		t.Errorf("prompt must not embed channel-specific artifacts: %s", prompt)
 	}
-	if !strings.Contains(prompt, "12345") {
-		t.Error("prompt should contain Telegram chat ID")
+
+	// LEO_CHANNELS should be exported to the claude child with the configured list.
+	envMap := readEnvLog(t, envLog)
+	want := "plugin:telegram@claude-plugins-official,plugin:slack@example"
+	if got := envMap["LEO_CHANNELS"]; got != want {
+		t.Errorf("LEO_CHANNELS = %q, want %q", got, want)
 	}
 
 	// Verify log file was written (timestamped in state/logs/)
@@ -325,10 +354,7 @@ func TestRunClaudeError(t *testing.T) {
 func TestRunModelOverride(t *testing.T) {
 	argLog := filepath.Join(t.TempDir(), "args.json")
 
-	configYAML := `telegram:
-  bot_token: "tok"
-  chat_id: "1"
-defaults:
+	configYAML := `defaults:
   model: sonnet
   max_turns: 15
 tasks:
@@ -394,45 +420,6 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-func TestRunGroupIDOverridesChatID(t *testing.T) {
-	argLog := filepath.Join(t.TempDir(), "args.json")
-
-	configYAML := `telegram:
-  bot_token: "tok"
-  chat_id: "111"
-  group_id: "222"
-defaults:
-  model: sonnet
-  max_turns: 10
-tasks:
-  heartbeat:
-    workspace: %s
-    schedule: "0 9 * * *"
-    prompt_file: prompts/HEARTBEAT.md
-    enabled: true
-`
-
-	ws := setupWorkspace(t, configYAML, map[string]string{
-		"prompts/HEARTBEAT.md": "Hello.\n",
-	})
-	fixWorkspaceInConfig(t, ws)
-
-	_, _, code := runLeo(t, ws, []string{
-		"FAKECLAUDE_SCENARIO=success",
-		"FAKECLAUDE_ARGLOG=" + argLog,
-	}, "run", "heartbeat", "-c", filepath.Join(ws, "leo.yaml"))
-
-	if code != 0 {
-		t.Fatalf("expected exit 0, got %d", code)
-	}
-
-	args := readArgLog(t, argLog)
-	prompt := argValue(args, "-p")
-	if !strings.Contains(prompt, "222") {
-		t.Error("prompt should use group_id when present")
-	}
-}
-
 func TestConfigNotFound(t *testing.T) {
 	emptyDir := t.TempDir()
 
@@ -458,10 +445,7 @@ func TestDaemonIPC(t *testing.T) {
 	}
 
 	// Write leo.yaml with the temp dir as workspace.
-	cfgYAML := fmt.Sprintf(`telegram:
-  bot_token: "fake-token"
-  chat_id: "12345"
-defaults:
+	cfgYAML := fmt.Sprintf(`defaults:
   model: sonnet
   max_turns: 15
 tasks:
