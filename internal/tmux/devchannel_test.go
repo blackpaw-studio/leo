@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"testing"
 	"time"
@@ -19,10 +20,10 @@ func requireTmux(t *testing.T) string {
 }
 
 // uniqueSession returns a session name unique enough to avoid collisions with
-// other concurrent tests. tmux treats '.' as a window separator so the
-// nanosecond suffix uses only digits.
+// other concurrent tests. tmux treats '.' as a window separator so the suffix
+// uses only digits.
 func uniqueSession(prefix string) string {
-	return prefix + "-" + time.Now().Format("150405") + "-" + time.Now().Format("000000000")
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
 func TestAcceptDevChannelPromptRejectsEmptyArgs(t *testing.T) {

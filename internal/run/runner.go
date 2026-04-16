@@ -220,9 +220,7 @@ func notifyFailure(taskName string, task config.TaskConfig, workspace string, ta
 		"--permission-mode", "acceptEdits",
 		"--output-format", "text",
 	}
-	for _, ch := range task.DevChannels {
-		args = append(args, "--dangerously-load-development-channels", ch)
-	}
+	args = appendDevChannelFlags(args, task.DevChannels)
 
 	ctx, cancel := context.WithTimeout(context.Background(), notifyFailureTimeout)
 	defer cancel()
@@ -339,9 +337,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 		"--verbose",
 	}
 
-	for _, ch := range task.DevChannels {
-		args = append(args, "--dangerously-load-development-channels", ch)
-	}
+	args = appendDevChannelFlags(args, task.DevChannels)
 
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
@@ -393,6 +389,16 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 		args = append(args, "--append-system-prompt", appendPrompt)
 	}
 
+	return args
+}
+
+// appendDevChannelFlags appends one --dangerously-load-development-channels
+// flag per dev channel. Used by both buildArgs and notifyFailure so the flag
+// wiring lives in one place.
+func appendDevChannelFlags(args []string, devChannels []string) []string {
+	for _, ch := range devChannels {
+		args = append(args, "--dangerously-load-development-channels", ch)
+	}
 	return args
 }
 
