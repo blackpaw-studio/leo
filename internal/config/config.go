@@ -146,6 +146,7 @@ type DefaultsConfig struct {
 type ProcessConfig struct {
 	Workspace          string            `yaml:"workspace,omitempty"`
 	Channels           []string          `yaml:"channels,omitempty"`
+	DevChannels        []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
 	Model              string            `yaml:"model,omitempty"`
 	MaxTurns           int               `yaml:"max_turns,omitempty"`
 	BypassPermissions  *bool             `yaml:"bypass_permissions,omitempty"`
@@ -173,6 +174,7 @@ type TaskConfig struct {
 	Timeout            string   `yaml:"timeout,omitempty"`         // e.g. "30m", "1h" — default 30m
 	Retries            int      `yaml:"retries,omitempty"`         // number of retry attempts on failure, default 0
 	Channels           []string `yaml:"channels,omitempty"`        // channel plugin IDs used by NotifyOnFail
+	DevChannels        []string `yaml:"dev_channels,omitempty"`    // loaded via --dangerously-load-development-channels
 	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"`  // spawn a child claude to notify configured channels on failure
 	PermissionMode     string   `yaml:"permission_mode,omitempty"` // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
@@ -185,6 +187,7 @@ type TaskConfig struct {
 type TemplateConfig struct {
 	Workspace          string            `yaml:"workspace,omitempty"`
 	Channels           []string          `yaml:"channels,omitempty"`
+	DevChannels        []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
 	Model              string            `yaml:"model,omitempty"`
 	MaxTurns           int               `yaml:"max_turns,omitempty"`
 	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
@@ -361,6 +364,11 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("processes.%s.channels[%d] %q contains invalid characters", name, i, ch))
 			}
 		}
+		for i, ch := range proc.DevChannels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("processes.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
 		for k := range proc.Env {
 			if !envKeyPattern.MatchString(k) {
 				errs = append(errs, fmt.Sprintf("processes.%s.env key %q is not a valid environment variable name", name, k))
@@ -381,6 +389,11 @@ func (c *Config) Validate() error {
 		for i, ch := range tmpl.Channels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("templates.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		for i, ch := range tmpl.DevChannels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("templates.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
 			}
 		}
 		for k := range tmpl.Env {
@@ -422,6 +435,11 @@ func (c *Config) Validate() error {
 		for i, ch := range task.Channels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("tasks.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		for i, ch := range task.DevChannels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("tasks.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
 			}
 		}
 	}

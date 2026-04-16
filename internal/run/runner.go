@@ -127,7 +127,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 		// Per-attempt timeout so each retry gets the full timeout
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		output, execErr := executeCommand(ctx, taskWorkspace, args, task.Channels)
+		output, execErr := executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels)
 		result := parseClaudeOutput(output)
 		timedOut = ctx.Err() == context.DeadlineExceeded
 
@@ -140,7 +140,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 			}
 
 			args = buildArgs(cfg, task, prompt, "")
-			output, execErr = executeCommand(ctx, taskWorkspace, args, task.Channels)
+			output, execErr = executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels)
 			result = parseClaudeOutput(output)
 		}
 
@@ -220,11 +220,12 @@ func notifyFailure(taskName string, task config.TaskConfig, workspace string, ta
 		"--permission-mode", "acceptEdits",
 		"--output-format", "text",
 	}
+	args = appendDevChannelFlags(args, task.DevChannels)
 
 	ctx, cancel := context.WithTimeout(context.Background(), notifyFailureTimeout)
 	defer cancel()
 
-	if _, err := executeCommand(ctx, workspace, args, task.Channels); err != nil {
+	if _, err := executeCommand(ctx, workspace, args, task.Channels, task.DevChannels); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: notify-on-fail child invocation failed: %v\n", err)
 	}
 }
@@ -239,12 +240,15 @@ func isSessionError(result claudeResult, output []byte) bool {
 		(strings.Contains(text, "not found") || strings.Contains(text, "invalid") || strings.Contains(text, "expired"))
 }
 
-func executeCommand(ctx context.Context, workDir string, args []string, channels []string) ([]byte, error) {
+func executeCommand(ctx context.Context, workDir string, args []string, channels, devChannels []string) ([]byte, error) {
 	cmd := execCommand("claude", args...)
 	cmd.Dir = workDir
 	env := append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
 	if len(channels) > 0 {
 		env = append(env, "LEO_CHANNELS="+strings.Join(channels, ","))
+	}
+	if len(devChannels) > 0 {
+		env = append(env, "LEO_DEV_CHANNELS="+strings.Join(devChannels, ","))
 	}
 	cmd.Env = env
 
@@ -333,6 +337,8 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 		"--verbose",
 	}
 
+	args = appendDevChannelFlags(args, task.DevChannels)
+
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
 	}
@@ -383,6 +389,16 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 		args = append(args, "--append-system-prompt", appendPrompt)
 	}
 
+	return args
+}
+
+// appendDevChannelFlags appends one --dangerously-load-development-channels
+// flag per dev channel. Used by both buildArgs and notifyFailure so the flag
+// wiring lives in one place.
+func appendDevChannelFlags(args []string, devChannels []string) []string {
+	for _, ch := range devChannels {
+		args = append(args, "--dangerously-load-development-channels", ch)
+	}
 	return args
 }
 

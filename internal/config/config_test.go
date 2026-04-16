@@ -739,6 +739,61 @@ func TestValidateChannelPattern(t *testing.T) {
 	}
 }
 
+func TestValidateDevChannelPattern(t *testing.T) {
+	cases := []struct {
+		name       string
+		cfg        *Config
+		wantInPath string
+	}{
+		{
+			name: "process",
+			cfg: &Config{
+				Processes: map[string]ProcessConfig{
+					"bad": {DevChannels: []string{"$(evil)"}, Enabled: true},
+				},
+			},
+			wantInPath: "processes.bad.dev_channels[0]",
+		},
+		{
+			name: "template",
+			cfg: &Config{
+				Templates: map[string]TemplateConfig{
+					"bad": {DevChannels: []string{"$(evil)"}},
+				},
+			},
+			wantInPath: "templates.bad.dev_channels[0]",
+		},
+		{
+			name: "task",
+			cfg: &Config{
+				Tasks: map[string]TaskConfig{
+					"bad": {
+						Schedule:    "@hourly",
+						PromptFile:  "prompt.md",
+						DevChannels: []string{"$(evil)"},
+					},
+				},
+			},
+			wantInPath: "tasks.bad.dev_channels[0]",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if err == nil {
+				t.Fatal("expected error for invalid dev_channel")
+			}
+			if !contains(err.Error(), tc.wantInPath) {
+				t.Errorf("error = %q, want path %q", err.Error(), tc.wantInPath)
+			}
+			if !contains(err.Error(), "invalid characters") {
+				t.Errorf("error = %q, want mention of invalid characters", err.Error())
+			}
+		})
+	}
+}
+
 func TestHasMCPServers(t *testing.T) {
 	t.Run("valid config", func(t *testing.T) {
 		dir := t.TempDir()
