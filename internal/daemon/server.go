@@ -179,9 +179,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	if !config.IsLoopbackBind(bind) {
 		fmt.Fprintf(os.Stderr,
 			"WARNING: web.bind=%q exposes the Leo web UI beyond localhost. "+
-				"The UI has no built-in auth; anyone who can reach %s:%d can control "+
+				"The UI has no built-in auth; anyone who can reach %q can control "+
 				"supervised processes and edit config. Only do this on a trusted network.\n",
-			bind, bind, cfg.WebPort())
+			bind, addr)
 	}
 	return nil
 }

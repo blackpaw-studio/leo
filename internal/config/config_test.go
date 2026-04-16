@@ -900,6 +900,9 @@ func TestIsLoopbackBind(t *testing.T) {
 		{"10.0.0.1", false},
 		{"not-an-ip", false},
 		{"", false},
+		// "localhost" is rejected by Config.Validate() before this helper is
+		// reached, but pin its behaviour here against future reuse.
+		{"localhost", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.addr, func(t *testing.T) {

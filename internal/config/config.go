@@ -135,9 +135,10 @@ func (c *Config) WebBind() string {
 	return "127.0.0.1"
 }
 
-// IsLoopbackBind reports whether the given bind address is loopback-only
-// ("127.0.0.1" or "::1"). Used to decide whether to emit a security warning
-// at daemon startup.
+// IsLoopbackBind reports whether addr is a loopback IP address (127.0.0.0/8
+// or ::1). Returns false for any non-IP string, including "localhost" — the
+// config schema rejects non-IP bind values at validate time, so the happy
+// path into this helper always carries a parseable IP.
 func IsLoopbackBind(addr string) bool {
 	ip := net.ParseIP(addr)
 	if ip == nil {
