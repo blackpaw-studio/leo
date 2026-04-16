@@ -4,12 +4,16 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -184,36 +188,66 @@ func buildTestArchive(t *testing.T, content []byte) []byte {
 	return buf.Bytes()
 }
 
+// sha256Hex returns the lowercase hex-encoded SHA-256 of b.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// testServer wires up a fake GitHub release CDN that serves the supplied
+// archive under archiveName and a checksums.txt body. It returns the server
+// plus a teardown that restores the package-level URL templates.
+func testServer(t *testing.T, archiveName string, archive []byte, checksumsBody string) (*httptest.Server, func()) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/"+checksumFileName):
+			if checksumsBody == "" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Write([]byte(checksumsBody))
+		case strings.HasSuffix(r.URL.Path, "/"+archiveName):
+			w.Write(archive)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	origDL := downloadURLTemplate
+	origCS := checksumURLTemplate
+	downloadURLTemplate = server.URL + "/%s/%s"
+	checksumURLTemplate = server.URL + "/%s/" + checksumFileName
+
+	return server, func() {
+		server.Close()
+		downloadURLTemplate = origDL
+		checksumURLTemplate = origCS
+	}
+}
+
 func TestDownloadAndReplace(t *testing.T) {
 	binaryContent := []byte("#!/bin/sh\necho updated\n")
 	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(archive)
-	}))
-	defer server.Close()
+	_, teardown := testServer(t, archiveName, archive, checksums)
+	defer teardown()
 
-	// Create a fake binary to replace
 	tmpDir := t.TempDir()
 	fakeBinary := filepath.Join(tmpDir, "leo")
 	os.WriteFile(fakeBinary, []byte("old binary"), 0750)
 
-	// Override os.Executable by replacing the binary path resolution
 	origExec := osExecutable
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return fakeBinary, nil }
-
-	// Override the download URL pattern
-	origURL := downloadURLTemplate
-	defer func() { downloadURLTemplate = origURL }()
-	downloadURLTemplate = server.URL + "/%s/%s"
 
 	path, err := DownloadAndReplace("v0.5.0")
 	if err != nil {
 		t.Fatalf("DownloadAndReplace() error: %v", err)
 	}
 
-	// EvalSymlinks may resolve /var → /private/var on macOS
 	resolvedFake, _ := filepath.EvalSymlinks(fakeBinary)
 	if path != resolvedFake {
 		t.Errorf("replaced path = %q, want %q", path, resolvedFake)
@@ -226,6 +260,8 @@ func TestDownloadAndReplace(t *testing.T) {
 }
 
 func TestDownloadAndReplaceHTTPError(t *testing.T) {
+	// Archive endpoint returns 404 — checksums don't matter here because
+	// download fails first.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -239,9 +275,14 @@ func TestDownloadAndReplaceHTTPError(t *testing.T) {
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return fakeBinary, nil }
 
-	origURL := downloadURLTemplate
-	defer func() { downloadURLTemplate = origURL }()
+	origDL := downloadURLTemplate
+	origCS := checksumURLTemplate
+	defer func() {
+		downloadURLTemplate = origDL
+		checksumURLTemplate = origCS
+	}()
 	downloadURLTemplate = server.URL + "/%s/%s"
+	checksumURLTemplate = server.URL + "/%s/checksums.txt"
 
 	_, err := DownloadAndReplace("v0.5.0")
 	if err == nil {
@@ -260,6 +301,263 @@ func TestDownloadAndReplaceExecError(t *testing.T) {
 	}
 }
 
+func TestDownloadAndReplaceChecksumMismatch(t *testing.T) {
+	binaryContent := []byte("real binary")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+
+	// Publish a checksum that doesn't match the archive we actually serve.
+	checksums := fmt.Sprintf("%s  %s\n", strings.Repeat("0", 64), archiveName)
+
+	_, teardown := testServer(t, archiveName, archive, checksums)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("original"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected checksum mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Errorf("error = %q, want mention of sha256 mismatch", err.Error())
+	}
+
+	// Binary on disk must not have been replaced.
+	data, _ := os.ReadFile(fakeBinary)
+	if string(data) != "original" {
+		t.Errorf("binary was replaced despite checksum mismatch: %q", string(data))
+	}
+}
+
+func TestDownloadAndReplaceMissingChecksumsFile(t *testing.T) {
+	binaryContent := []byte("binary")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+
+	// Empty checksumsBody → handler returns 404 for the checksums path.
+	_, teardown := testServer(t, archiveName, archive, "")
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("original"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected error for missing checksums.txt, got nil")
+	}
+	if !strings.Contains(err.Error(), checksumFileName) {
+		t.Errorf("error = %q, want mention of %s", err.Error(), checksumFileName)
+	}
+
+	data, _ := os.ReadFile(fakeBinary)
+	if string(data) != "original" {
+		t.Errorf("binary was replaced despite missing checksums: %q", string(data))
+	}
+}
+
+func TestDownloadAndReplaceMissingArchiveEntry(t *testing.T) {
+	binaryContent := []byte("binary")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+
+	// checksums.txt exists but doesn't mention our archive.
+	checksums := fmt.Sprintf("%s  some-other-file.tar.gz\n", sha256Hex(archive))
+
+	_, teardown := testServer(t, archiveName, archive, checksums)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("original"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected error for missing archive entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "no entry for") {
+		t.Errorf("error = %q, want mention of missing entry", err.Error())
+	}
+}
+
+func TestDownloadAndReplaceValidChecksumCorruptArchive(t *testing.T) {
+	garbage := []byte("this is not a tar.gz")
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(garbage), archiveName)
+
+	_, teardown := testServer(t, archiveName, garbage, checksums)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("original"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected extraction error for non-tarball payload, got nil")
+	}
+	if !strings.Contains(err.Error(), "extracting binary") {
+		t.Errorf("error = %q, want mention of extraction failure", err.Error())
+	}
+
+	data, _ := os.ReadFile(fakeBinary)
+	if string(data) != "original" {
+		t.Errorf("binary was replaced despite extraction failure: %q", string(data))
+	}
+}
+
+func TestDownloadAndReplaceOversizedArchive(t *testing.T) {
+	// Handler ignores the path and always streams oversize bytes, so we
+	// don't need to compute archiveName for the route.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chunk := make([]byte, 64<<10)
+		remaining := maxArchiveSize + 2
+		for remaining > 0 {
+			n := len(chunk)
+			if n > remaining {
+				n = remaining
+			}
+			if _, err := w.Write(chunk[:n]); err != nil {
+				return
+			}
+			remaining -= n
+		}
+	}))
+	defer server.Close()
+
+	origDL := downloadURLTemplate
+	origCS := checksumURLTemplate
+	defer func() {
+		downloadURLTemplate = origDL
+		checksumURLTemplate = origCS
+	}()
+	downloadURLTemplate = server.URL + "/%s/%s"
+	checksumURLTemplate = server.URL + "/%s/" + checksumFileName
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("original"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected size-limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error = %q, want mention of size limit", err.Error())
+	}
+
+	data, _ := os.ReadFile(fakeBinary)
+	if string(data) != "original" {
+		t.Errorf("binary was replaced despite oversize rejection: %q", string(data))
+	}
+}
+
+func TestParseChecksum(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		archiveName string
+		want        string
+		wantErr     bool
+	}{
+		{
+			name:        "two-space goreleaser format",
+			body:        "abc123  leo_0.5.0_darwin_arm64.tar.gz\n",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			want:        "abc123",
+		},
+		{
+			name:        "tab separator",
+			body:        "abc123\tleo_0.5.0_darwin_arm64.tar.gz\n",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			want:        "abc123",
+		},
+		{
+			name: "multiple entries",
+			body: "" +
+				"111  leo_0.5.0_linux_amd64.tar.gz\n" +
+				"222  leo_0.5.0_darwin_arm64.tar.gz\n" +
+				"333  leo_0.5.0_linux_arm64.tar.gz\n",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			want:        "222",
+		},
+		{
+			name:        "uppercase hex is lowercased",
+			body:        "ABCDEF  leo_0.5.0_darwin_arm64.tar.gz\n",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			want:        "abcdef",
+		},
+		{
+			name:        "skips blank lines and comments",
+			body:        "\n# generated by goreleaser\n\nabc  leo_0.5.0_darwin_arm64.tar.gz\n",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			want:        "abc",
+		},
+		{
+			name:        "missing entry",
+			body:        "abc  other.tar.gz\n",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			wantErr:     true,
+		},
+		{
+			name:        "empty body",
+			body:        "",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			wantErr:     true,
+		},
+		{
+			// A malicious checksums.txt with three fields could have tricked
+			// a "last field wins" parser into treating the second hash as
+			// the filename. parseChecksum rejects non-two-field lines so
+			// this shape is ignored entirely and the archive looks missing.
+			name:        "three-field line is ignored",
+			body:        "aaa  bbb  leo_0.5.0_darwin_arm64.tar.gz\n",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			wantErr:     true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseChecksum(tc.body, tc.archiveName)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtractBinaryFromTarGz(t *testing.T) {
 	binaryContent := []byte("#!/bin/sh\necho hello\n")
 	archive := buildTestArchive(t, binaryContent)
@@ -275,7 +573,6 @@ func TestExtractBinaryFromTarGz(t *testing.T) {
 }
 
 func TestExtractBinaryFromTarGzNestedPath(t *testing.T) {
-	// The archive has leo under a subdirectory (e.g. "leo_0.5.0_darwin_arm64/leo")
 	binaryContent := []byte("nested binary")
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
