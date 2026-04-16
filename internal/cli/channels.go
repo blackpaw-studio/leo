@@ -133,8 +133,8 @@ func getTelegramCommands(client *http.Client, token string, scope map[string]str
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	var result struct {
-		OK     bool               `json:"ok"`
-		Result []telegramCommand  `json:"result"`
+		OK     bool              `json:"ok"`
+		Result []telegramCommand `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err

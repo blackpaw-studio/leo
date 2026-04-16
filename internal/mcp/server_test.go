@@ -14,10 +14,10 @@ import (
 // fakeDaemon stands in for the Leo daemon's TCP listener and records the
 // requests it receives so tests can assert on dispatch.
 type fakeDaemon struct {
-	mu       sync.Mutex
-	calls    []recordedCall
-	srv      *httptest.Server
-	respond  func(method, path string, body []byte) (int, string)
+	mu      sync.Mutex
+	calls   []recordedCall
+	srv     *httptest.Server
+	respond func(method, path string, body []byte) (int, string)
 }
 
 type recordedCall struct {
