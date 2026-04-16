@@ -1,0 +1,149 @@
+# Annotated example leo.yaml
+#
+# This is a complete, commented reference showing every supported section.
+# Copy to ~/.leo/leo.yaml and edit the parts you want; everything under
+# "processes", "tasks", and "templates" is optional — start small and grow.
+#
+# Run `leo validate` after editing to confirm the file parses and passes
+# schema checks.
+
+# ---------------------------------------------------------------------------
+# defaults — values inherited by every process, task, and template unless
+# overridden. Keep these minimal; prefer per-process overrides for anything
+# that only applies to one workload.
+# ---------------------------------------------------------------------------
+defaults:
+  # Model is one of: sonnet, opus, haiku, sonnet[1m], opus[1m].
+  model: sonnet
+
+  # Upper bound on turns per run. 0 means "no limit" (use with care for
+  # long-running supervised processes).
+  max_turns: 0
+
+  # permission_mode controls how Claude handles tool-use prompts. One of:
+  #   acceptEdits, auto, bypassPermissions, default, dontAsk, plan
+  # "default" is the safest starting point — Claude asks before tools.
+  permission_mode: default
+
+  # allowed_tools / disallowed_tools are passed through to claude as-is.
+  # See `claude --help` for the full tool list.
+  # allowed_tools:
+  #   - Bash
+  #   - Edit
+  #   - Read
+
+  # append_system_prompt is concatenated onto Claude's system prompt for
+  # every process and task unless overridden.
+  # append_system_prompt: |
+  #   You operate as part of the "acme" workspace. Prefer concise replies.
+
+# ---------------------------------------------------------------------------
+# web — optional local web UI for watching processes and editing config.
+# ---------------------------------------------------------------------------
+web:
+  enabled: true
+  # port: 8370           # default 8370
+  # bind: 127.0.0.1      # default 127.0.0.1 (loopback). Only open to
+                          # 0.0.0.0 if you understand the security model —
+                          # there is no built-in auth.
+
+# ---------------------------------------------------------------------------
+# client — used on machines that only dispatch `leo agent ...` to a remote
+# leo server over SSH. Leave empty on servers.
+# ---------------------------------------------------------------------------
+# client:
+#   default_host: homelab
+#   hosts:
+#     homelab:
+#       ssh: evan@leo.example.com
+#       # ssh_args: ["-p", "2222"]
+#       # leo_path: /usr/local/bin/leo      # default $HOME/.local/bin/leo
+#       # tmux_path: /opt/homebrew/bin/tmux # default bare "tmux"
+
+# ---------------------------------------------------------------------------
+# processes — long-running Claude sessions supervised by `leo service`.
+# Each process gets its own tmux session ("leo-<name>") and restart loop.
+# ---------------------------------------------------------------------------
+processes:
+
+  # A personal always-on Claude bound to a Telegram channel plugin.
+  home:
+    enabled: true
+    workspace: ~/code            # cwd that Claude starts in
+    model: sonnet                # overrides defaults.model
+
+    # Channel plugins are installed separately via
+    #   `claude plugin install <id>`
+    # Leo only knows them as opaque "plugin:<name>@<marketplace>" strings
+    # and passes the list to Claude via $LEO_CHANNELS. The plugin owns its
+    # own credentials (bot token, API key, etc.).
+    channels:
+      - plugin:telegram@claude-plugins-official
+
+    # Environment variables injected into the Claude process.
+    env:
+      EDITOR: vim
+
+  # A workspace-scoped process with tighter tool restrictions.
+  notes:
+    enabled: false               # won't start until you flip this on
+    workspace: ~/notes
+    permission_mode: acceptEdits # auto-accept edits inside ~/notes
+    allowed_tools:
+      - Read
+      - Edit
+      - Grep
+      - Glob
+    append_system_prompt: |
+      You are the notes assistant. Keep files in Markdown.
+      Don't create new top-level directories without asking.
+
+# ---------------------------------------------------------------------------
+# tasks — cron-scheduled one-shot claude invocations. Each task renders a
+# prompt file through claude and optionally notifies a channel on failure.
+# ---------------------------------------------------------------------------
+tasks:
+
+  # Daily 8am briefing delivered to Telegram.
+  morning-brief:
+    enabled: true
+    schedule: "0 8 * * *"        # standard 5-field cron
+    timezone: America/New_York   # optional; default is the system TZ
+    workspace: ~/code
+    prompt_file: tasks/morning-brief.md  # relative to workspace
+    model: sonnet
+    timeout: 10m                 # Go duration — e.g. "30s", "2h"
+    retries: 1                   # retry once on failure
+    channels:
+      - plugin:telegram@claude-plugins-official
+    notify_on_fail: true         # spawn a child claude to send a failure note
+
+  # Hourly housekeeping that runs silently (no notification on success).
+  cleanup:
+    enabled: false
+    schedule: "0 * * * *"
+    workspace: ~/code
+    prompt_file: tasks/cleanup.md
+    silent: true
+    timeout: 5m
+
+# ---------------------------------------------------------------------------
+# templates — blueprints for ephemeral agents spawned via `leo agent`.
+# The workspace here is a parent dir; each agent gets a fresh subdirectory.
+# ---------------------------------------------------------------------------
+templates:
+
+  # `leo agent spawn --template review <repo>` clones <repo> into a fresh
+  # subdirectory under ~/agents/review/ and starts Claude there.
+  review:
+    workspace: ~/agents/review
+    model: sonnet
+    permission_mode: plan        # plan-only; won't write without approval
+    allowed_tools:
+      - Read
+      - Grep
+      - Glob
+      - Bash
+    append_system_prompt: |
+      You are a code reviewer. Your goal is to produce a concise review,
+      not to edit the code.
