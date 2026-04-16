@@ -102,6 +102,13 @@
                     </div>
                     <div class="form-group">
                         <div class="form-row">
+                            <label>Dev Channels</label>
+                            <input type="text" name="dev_channels" value="{{range $i, $c := $task.DevChannels}}{{if $i}}, {{end}}{{$c}}{{end}}" class="form-input" placeholder="plugin:my-plugin@my-repo, ...">
+                        </div>
+                        <div class="form-help">Unpublished plugins loaded via <code>--dangerously-load-development-channels</code>. Exported as $LEO_DEV_CHANNELS.</div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-row">
                             <label>Permission Mode</label>
                             <select name="permission_mode" class="form-input">
                                 <option value="" {{if not $task.PermissionMode}}selected{{end}}>{{if $.Config.Defaults.PermissionMode}}({{$.Config.Defaults.PermissionMode}} from defaults){{else}}(inherit from defaults){{end}}</option>

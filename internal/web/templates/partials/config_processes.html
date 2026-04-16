@@ -46,6 +46,13 @@
             </div>
             <div class="form-group">
                 <div class="form-row">
+                    <label>Dev Channels</label>
+                    <input type="text" name="dev_channels" value="{{range $i, $ch := $proc.DevChannels}}{{if $i}}, {{end}}{{$ch}}{{end}}" placeholder="plugin:my-plugin@my-repo" class="form-input">
+                </div>
+                <div class="form-help">Unpublished plugins loaded via <code>--dangerously-load-development-channels</code>.</div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
                     <label>Remote Control</label>
                     <select name="remote_control" class="form-input">
                         <option value="" {{if not $proc.RemoteControl}}selected{{end}}>(inherit from defaults)</option>
@@ -185,6 +192,13 @@
                     <label>Channels</label>
                     <input type="text" name="channels" class="form-input" placeholder="plugin:telegram@claude-plugins-official">
                 </div>
+            </div>
+            <div class="form-group">
+                <div class="form-row">
+                    <label>Dev Channels</label>
+                    <input type="text" name="dev_channels" class="form-input" placeholder="plugin:my-plugin@my-repo">
+                </div>
+                <div class="form-help">Unpublished plugins loaded via <code>--dangerously-load-development-channels</code>.</div>
             </div>
             <div class="form-group">
                 <div class="form-row">

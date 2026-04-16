@@ -84,6 +84,21 @@ processes:
     channels: [plugin:telegram@claude-plugins-official]
 ```
 
+## Development Channels
+
+For channel plugins that aren't yet published to a registry (or for local plugin development), processes, tasks, and templates accept a parallel `dev_channels:` field. Leo passes each entry to Claude Code via `--dangerously-load-development-channels <id>` and exports the list in `LEO_DEV_CHANNELS`.
+
+```yaml
+processes:
+  assistant:
+    channels: [plugin:blackpaw-telegram@blackpaw-plugins]
+    dev_channels: [plugin:blackpaw-telegram@blackpaw-plugins]
+```
+
+Validation matches `channels` — each entry must be a valid plugin ID.
+
+Claude Code displays a confirmation prompt before loading development channels. For supervised processes, Leo watches the tmux pane and auto-accepts the prompt so the session starts non-interactively. Silent/nonexistent entries are ignored by Claude Code without warning — verify spellings carefully.
+
 ## `processes`
 
 Each process is a named entry under the `processes` map. Processes define long-running Claude sessions supervised by the daemon.
@@ -100,6 +115,7 @@ processes:
 |-------|------|----------|---------|-------------|
 | `workspace` | string | No | `~/.leo/workspace/` | Working directory for this process. |
 | `channels` | list | No | -- | Channel plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). |
+| `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
 | `model` | string | No | `defaults.model` | Claude model override. |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
 | `agent` | string | No | -- | Run as a specific agent definition. |
@@ -138,6 +154,7 @@ tasks:
 | `timeout` | string | No | `30m` | Max duration before kill (e.g., `30m`, `1h`). |
 | `retries` | int | No | `0` | Retry attempts on failure. |
 | `channels` | list | No | -- | Channel plugin IDs used by `notify_on_fail`. |
+| `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
 | `permission_mode` | string | No | `defaults.permission_mode` | Permission mode override. |
 | `allowed_tools` | list | No | `defaults.allowed_tools` | Tool whitelist. |
 | `disallowed_tools` | list | No | `defaults.disallowed_tools` | Tool blacklist. |
@@ -167,6 +184,7 @@ templates:
 |-------|------|----------|---------|-------------|
 | `workspace` | string | No | `~/.leo/agents/` | Base directory for agent workspaces. Repos are cloned as subdirectories. |
 | `channels` | list | No | -- | Channel plugin IDs for spawned agents. |
+| `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
 | `model` | string | No | `defaults.model` | Claude model. |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns. |
 | `agent` | string | No | -- | Agent definition to use. |

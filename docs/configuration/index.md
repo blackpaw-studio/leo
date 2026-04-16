@@ -56,6 +56,8 @@ Named tasks with cron schedules, prompt files, and optional overrides. Each task
 
 Channels are Claude Code plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). Install the plugin via `claude plugin install <id>` and reference it in a process or task `channels:` list. Leo passes the list to the spawned Claude process via `LEO_CHANNELS`; the plugin owns its own credentials and routing.
 
+For plugins not yet published to a registry, use `dev_channels:` instead. Leo passes them via `--dangerously-load-development-channels` and auto-accepts the in-terminal confirmation prompt for supervised processes. See the [Config Reference](config-reference.md#development-channels) for details.
+
 ---
 
 See [Config Reference](config-reference.md) for the full field-by-field specification.

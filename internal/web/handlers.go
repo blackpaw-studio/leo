@@ -536,6 +536,7 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 	proc.Model = r.FormValue("model")
 	proc.Workspace = r.FormValue("workspace")
 	proc.Channels = parseCommaSeparated(r.FormValue("channels"))
+	proc.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
 	proc.Agent = r.FormValue("agent")
 	proc.PermissionMode = r.FormValue("permission_mode")
 	proc.RemoteControl = parseOptionalBool(r.FormValue("remote_control"))
@@ -612,6 +613,7 @@ func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
 	task.Timezone = r.FormValue("timezone")
 	task.Workspace = r.FormValue("workspace")
 	task.Channels = parseCommaSeparated(r.FormValue("channels"))
+	task.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
 	if ret := r.FormValue("retries"); ret != "" {
 		if v, err := strconv.Atoi(ret); err == nil {
 			task.Retries = v
@@ -1078,11 +1080,12 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg.Processes[name] = config.ProcessConfig{
-		Workspace: r.FormValue("workspace"),
-		Channels:  parseCommaSeparated(r.FormValue("channels")),
-		Model:     r.FormValue("model"),
-		Agent:     r.FormValue("agent"),
-		Enabled:   r.FormValue("enabled") == "true",
+		Workspace:   r.FormValue("workspace"),
+		Channels:    parseCommaSeparated(r.FormValue("channels")),
+		DevChannels: parseCommaSeparated(r.FormValue("dev_channels")),
+		Model:       r.FormValue("model"),
+		Agent:       r.FormValue("agent"),
+		Enabled:     r.FormValue("enabled") == "true",
 	}
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
@@ -1302,6 +1305,7 @@ func (s *Server) handleConfigTemplate(w http.ResponseWriter, r *http.Request) {
 	tmpl.Model = r.FormValue("model")
 	tmpl.Workspace = r.FormValue("workspace")
 	tmpl.Channels = parseCommaSeparated(r.FormValue("channels"))
+	tmpl.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
 	tmpl.Agent = r.FormValue("agent")
 	tmpl.PermissionMode = r.FormValue("permission_mode")
 	tmpl.RemoteControl = parseOptionalBool(r.FormValue("remote_control"))
@@ -1359,6 +1363,7 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 	tmpl := config.TemplateConfig{
 		Workspace:          r.FormValue("workspace"),
 		Channels:           parseCommaSeparated(r.FormValue("channels")),
+		DevChannels:        parseCommaSeparated(r.FormValue("dev_channels")),
 		Model:              r.FormValue("model"),
 		Agent:              r.FormValue("agent"),
 		PermissionMode:     r.FormValue("permission_mode"),
