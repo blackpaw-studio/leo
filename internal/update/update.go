@@ -44,12 +44,16 @@ type releaseResponse struct {
 	Assets  []releaseAsset `json:"assets"`
 }
 
+// checksumFileName is the artifact name goreleaser emits alongside each
+// release archive. It's a const because it never changes at runtime; the URL
+// templates are vars so tests can swap them.
+const checksumFileName = "checksums.txt"
+
 var (
-	httpClient           = &http.Client{Timeout: 30 * time.Second}
-	osExecutable         = os.Executable
-	downloadURLTemplate  = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/%s"
-	checksumURLTemplate  = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/checksums.txt"
-	checksumFileName     = "checksums.txt"
+	httpClient          = &http.Client{Timeout: 30 * time.Second}
+	osExecutable        = os.Executable
+	downloadURLTemplate = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/%s"
+	checksumURLTemplate = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/" + checksumFileName
 )
 
 // CheckLatestVersion returns the latest release tag from GitHub (e.g. "v0.5.2").
@@ -221,7 +225,10 @@ func verifyArchiveChecksum(version, archiveName string, archiveBytes []byte) err
 	sum := sha256.Sum256(archiveBytes)
 	got := hex.EncodeToString(sum[:])
 	if got != expected {
-		return fmt.Errorf("sha256 mismatch: archive hashed to %s, checksums.txt lists %s", got, expected)
+		return fmt.Errorf("sha256 mismatch: archive hashed to %s, %s lists %s "+
+			"(retry the update; if it persists, file a bug at "+
+			"https://github.com/%s/%s/issues)",
+			got, checksumFileName, expected, repoOwner, repoName)
 	}
 	return nil
 }
@@ -262,12 +269,16 @@ func parseChecksum(body, archiveName string) (string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// Accept one or more spaces between hash and filename; goreleaser emits two.
+		// goreleaser emits exactly two fields: "<hash>  <filename>". Reject
+		// lines with other shapes so a malicious checksums.txt with three
+		// fields ("hash hash filename") can't be parsed as valid by picking
+		// the last field as the filename — we want a hard mismatch, not a
+		// silent acceptance of the wrong hash.
 		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		if len(fields) != 2 {
 			continue
 		}
-		if fields[len(fields)-1] == archiveName {
+		if fields[1] == archiveName {
 			return strings.ToLower(fields[0]), nil
 		}
 	}

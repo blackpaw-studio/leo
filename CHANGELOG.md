@@ -8,7 +8,7 @@
 
 ### Security
 
-- **`leo update` now verifies release archive integrity.** Before replacing the running binary, `DownloadAndReplace` fetches the release's `checksums.txt`, parses out the entry for the platform archive, and rejects the update on any mismatch or missing entry. Prevents a compromised CDN or MITM from shipping a tampered binary. Archive size is capped at 100 MB and `checksums.txt` at 1 MB to bound the damage from a hostile server.
+- **`leo update` now verifies release archive integrity.** Before replacing the running binary, `DownloadAndReplace` fetches the release's `checksums.txt`, parses out the entry for the platform archive, and rejects the update on any mismatch or missing entry. Detects accidental corruption (bit rot, truncated transfer) and tarball-only tampering where an attacker cannot also rewrite `checksums.txt`. It does **not** protect against a fully compromised GitHub release CDN — both files are fetched from the same origin with no out-of-band trust anchor. Cosign/minisign signing is a planned follow-up. Archive size is capped at 100 MB and `checksums.txt` at 1 MB to bound the damage from a hostile server.
 
 ## v0.3.0 — Channel-agnostic (BREAKING)
 

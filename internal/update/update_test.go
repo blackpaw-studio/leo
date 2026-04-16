@@ -394,6 +394,86 @@ func TestDownloadAndReplaceMissingArchiveEntry(t *testing.T) {
 	}
 }
 
+func TestDownloadAndReplaceValidChecksumCorruptArchive(t *testing.T) {
+	garbage := []byte("this is not a tar.gz")
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(garbage), archiveName)
+
+	_, teardown := testServer(t, archiveName, garbage, checksums)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("original"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected extraction error for non-tarball payload, got nil")
+	}
+	if !strings.Contains(err.Error(), "extracting binary") {
+		t.Errorf("error = %q, want mention of extraction failure", err.Error())
+	}
+
+	data, _ := os.ReadFile(fakeBinary)
+	if string(data) != "original" {
+		t.Errorf("binary was replaced despite extraction failure: %q", string(data))
+	}
+}
+
+func TestDownloadAndReplaceOversizedArchive(t *testing.T) {
+	// Handler ignores the path and always streams oversize bytes, so we
+	// don't need to compute archiveName for the route.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chunk := make([]byte, 64<<10)
+		remaining := maxArchiveSize + 2
+		for remaining > 0 {
+			n := len(chunk)
+			if n > remaining {
+				n = remaining
+			}
+			if _, err := w.Write(chunk[:n]); err != nil {
+				return
+			}
+			remaining -= n
+		}
+	}))
+	defer server.Close()
+
+	origDL := downloadURLTemplate
+	origCS := checksumURLTemplate
+	defer func() {
+		downloadURLTemplate = origDL
+		checksumURLTemplate = origCS
+	}()
+	downloadURLTemplate = server.URL + "/%s/%s"
+	checksumURLTemplate = server.URL + "/%s/" + checksumFileName
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("original"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected size-limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error = %q, want mention of size limit", err.Error())
+	}
+
+	data, _ := os.ReadFile(fakeBinary)
+	if string(data) != "original" {
+		t.Errorf("binary was replaced despite oversize rejection: %q", string(data))
+	}
+}
+
 func TestParseChecksum(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -444,6 +524,16 @@ func TestParseChecksum(t *testing.T) {
 		{
 			name:        "empty body",
 			body:        "",
+			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
+			wantErr:     true,
+		},
+		{
+			// A malicious checksums.txt with three fields could have tricked
+			// a "last field wins" parser into treating the second hash as
+			// the filename. parseChecksum rejects non-two-field lines so
+			// this shape is ignored entirely and the archive looks missing.
+			name:        "three-field line is ignored",
+			body:        "aaa  bbb  leo_0.5.0_darwin_arm64.tar.gz\n",
 			archiveName: "leo_0.5.0_darwin_arm64.tar.gz",
 			wantErr:     true,
 		},
