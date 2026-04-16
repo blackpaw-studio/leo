@@ -3,6 +3,3 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/blackpaw-studio/leo/security/advisories/new
     about: Report security issues privately — do not open a public issue.
-  - name: Question or discussion
-    url: https://github.com/blackpaw-studio/leo/discussions
-    about: For usage questions or open-ended discussion, prefer Discussions.

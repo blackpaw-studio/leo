@@ -13,7 +13,7 @@ make build
 make test
 ```
 
-Requirements: Go 1.23+, `tmux`, and an authenticated `claude` CLI for
+Requirements: Go 1.25+, `tmux`, and an authenticated `claude` CLI for
 anything that exercises the supervisor.
 
 ## Before opening a PR

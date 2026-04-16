@@ -10,7 +10,8 @@ body:
         the template below as you can. If a field doesn't apply, leave it blank.
 
         For **security vulnerabilities**, please don't use this form — see
-        [SECURITY.md](../blob/main/SECURITY.md) for private reporting.
+        [SECURITY.md](https://github.com/blackpaw-studio/leo/blob/main/SECURITY.md)
+        for private reporting.
 
   - type: input
     id: version
