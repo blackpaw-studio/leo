@@ -120,6 +120,29 @@ Popular channel plugins:
 - `telegram@claude-plugins-official` — Telegram bot with reply/reaction/topic tools
 - (plus any other Claude Code plugin that exposes messaging tools)
 
+### Built-in slash commands (every channel)
+
+Leo ships an MCP server that gives every channel plugin a universal command set — no plugin changes required:
+
+| Command       | Effect                                                    |
+|---------------|-----------------------------------------------------------|
+| `/clear`      | Clear the supervised Claude's conversation context        |
+| `/compact`    | Compact the conversation context                          |
+| `/stop`       | Interrupt the current operation                           |
+| `/tasks`      | List scheduled tasks                                      |
+| `/agent`      | Pick a template and spawn an ephemeral agent              |
+| `/agents`     | List running ephemeral agents                             |
+
+The supervised Claude recognizes these inbound from any channel and dispatches them via the `leo_*` MCP tools. Stock channel plugins (Anthropic's official Telegram, future Slack, etc.) work unmodified.
+
+For Telegram autocomplete, register the commands once with the Bot API:
+
+```
+leo channels register-commands telegram
+```
+
+(Resolves the bot token from `TELEGRAM_BOT_TOKEN` or the plugin's `.env` file.)
+
 ## CLI
 
 | Command | Description |

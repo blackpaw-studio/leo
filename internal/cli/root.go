@@ -36,6 +36,8 @@ func newRootCmd() *cobra.Command {
 		newStatusCmd(),
 		newConfigCmd(),
 		newLogsCmd(),
+		newMCPServerCmd(),
+		newChannelsCmd(),
 	)
 
 	return cmd

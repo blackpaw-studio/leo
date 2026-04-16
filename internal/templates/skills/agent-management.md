@@ -71,9 +71,11 @@ Rules to remember:
 - `prune` takes the canonical agent name only. Stopped agents aren't in the shorthand resolver, so look them up via `leo agent list` first.
 - Typed error codes surfaced by prune: `worktree_dirty`, `branch_not_merged`, `branch_checked_out`, `agent_still_running`, `not_worktree_agent`. Pass `--force` to override the first two.
 
-## Channel Plugin Integration
+## Channel Slash Commands
 
-If you have a channel plugin installed (e.g. Telegram, Slack) that exposes agent-management commands, those are provided by the plugin itself — not by Leo. Consult the plugin's own docs for the command surface. Leo only exposes the HTTP API above; the plugin translates channel commands into HTTP calls against `${LEO_WEB_PORT}`.
+Leo ships a built-in MCP server (registered as `leo` in your `--mcp-config`) that gives every channel plugin a uniform slash-command surface — `/agent`, `/agents`, `/tasks`, `/clear`, `/compact`, `/stop`. Stock channel plugins forward `/`-prefixed messages to you as `<channel>` notifications; the dispatch instructions live in `claude-workspace.md` ("Channel Slash Commands"). The MCP tools (`leo_spawn_agent`, `leo_list_agents`, `leo_stop_agent`, …) wrap the HTTP endpoints documented above.
+
+A plugin author who wants channel-native UX (Telegram inline keyboards, Discord buttons) can still call the HTTP API directly — but it's no longer required for the basic command surface.
 
 ## Notes
 

@@ -13,6 +13,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/spf13/cobra"
@@ -250,6 +251,10 @@ func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig
 	if config.HasMCPServers(mcpConfig) {
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfig)
 	}
+	// Always layer in the Leo-managed MCP server (when the daemon's TCP
+	// listener is enabled) so every supervised Claude gets the universal
+	// channel slash-commands: /clear, /compact, /stop, /tasks, /agent, /agents.
+	claudeArgs = leomcp.AppendArg(claudeArgs, cfg)
 
 	if proc.Agent != "" {
 		claudeArgs = append(claudeArgs, "--agent", proc.Agent)

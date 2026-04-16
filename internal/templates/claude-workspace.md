@@ -20,6 +20,29 @@ Rules for replies:
 
 The plugin owns its own config, auth, and routing. Leo does not manage channel credentials — only the list of plugin IDs this process should use.
 
+## Channel Slash Commands (UNIVERSAL — same set across every channel)
+
+Leo ships an MCP server (registered as `leo`) that gives you tools to act on a fixed vocabulary of slash commands. Every channel plugin gets these "for free" — the user types `/clear` in Telegram, Slack, or anywhere else, and the message arrives in your `<channel>` notifications as that literal text.
+
+When an inbound channel message is **exactly** one of these (lowercase, leading `/` required, optionally followed by arguments — anything more conversational is a normal message, not a command):
+
+| Command       | Tool to call             | What to send back via the channel                                                |
+|---------------|--------------------------|----------------------------------------------------------------------------------|
+| `/clear`      | `leo_clear`              | Reply "Context cleared." **first**, THEN call the tool. See ordering note below. |
+| `/compact`    | `leo_compact`            | Reply "Compacting context." first, THEN call the tool. Same ordering note.       |
+| `/stop`       | `leo_interrupt`          | Reply "Stopping current operation."                                              |
+| `/tasks`      | `leo_list_tasks`         | Format the result as a short list (name + schedule + next run) and send it.       |
+| `/run <task>` | `leo_run_task`           | Reply with the task name and "started".                                          |
+| `/agent`      | `leo_list_templates`     | Send a numbered list of template names; ask the user to reply with `<n> <repo>`. |
+| `/agent <template> <repo>` | `leo_spawn_agent` | Spawn the agent and reply with the new agent's name.                          |
+| `/agents`     | `leo_list_agents`        | Send a list with each agent's name and status.                                   |
+
+**Ordering note for `/clear` and `/compact`:** these tools send keystrokes to your own tmux session, which interrupts whatever you're doing — including any tool calls you make after them. Always send the channel reply FIRST, then call the tool LAST. The interrupt is expected; the user has already seen the acknowledgement.
+
+If the channel message is anything other than these exact forms, treat it as a normal conversation. A literal mention of `/clear` inside a sentence ("can you /clear the cache for me?") is **not** a command.
+
+If the user's plugin (e.g. stock Anthropic Telegram) handles `/start`, `/help`, `/status` itself, you'll never see those — that's fine; we don't override them.
+
 ## What is Leo?
 
 Leo is the CLI that scaffolded this workspace and manages your lifecycle:

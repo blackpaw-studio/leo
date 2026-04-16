@@ -15,6 +15,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -358,6 +359,10 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 	if config.HasMCPServers(mcpConfig) {
 		args = append(args, "--mcp-config", mcpConfig)
 	}
+	// Layer in the Leo-managed MCP server so task-mode runs also have access
+	// to the universal slash-command tools (a long-running task can call
+	// e.g. leo_list_agents to coordinate with the supervisor).
+	args = leomcp.AppendArg(args, cfg)
 
 	taskWorkspace := cfg.TaskWorkspace(task)
 	args = append(args, "--add-dir", taskWorkspace)
