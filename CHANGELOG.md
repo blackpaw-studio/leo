@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- **Web UI default bind changed from `0.0.0.0` to `127.0.0.1`.** The UI has no built-in auth, so the previous default exposed full process control to anyone who could reach the port. Anyone who was relying on LAN access must set `web.bind: 0.0.0.0` explicitly. The daemon now prints a prominent warning at startup when `web.bind` is non-loopback.
+
 ## v0.3.0 — Channel-agnostic (BREAKING)
 
 Leo no longer ships with Telegram built in. Channels are now opaque [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code/plugins) IDs that you install separately and reference by ID on processes and tasks.

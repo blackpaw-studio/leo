@@ -869,8 +869,8 @@ func TestValidateWebConfig(t *testing.T) {
 		if cfg.WebPort() != 8370 {
 			t.Errorf("WebPort() = %d, want 8370", cfg.WebPort())
 		}
-		if cfg.WebBind() != "0.0.0.0" {
-			t.Errorf("WebBind() = %q, want \"0.0.0.0\"", cfg.WebBind())
+		if cfg.WebBind() != "127.0.0.1" {
+			t.Errorf("WebBind() = %q, want \"127.0.0.1\"", cfg.WebBind())
 		}
 	})
 
@@ -885,6 +885,32 @@ func TestValidateWebConfig(t *testing.T) {
 			t.Errorf("WebBind() = %q, want \"127.0.0.1\"", cfg.WebBind())
 		}
 	})
+}
+
+func TestIsLoopbackBind(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"127.0.0.5", true}, // entire 127.0.0.0/8 is loopback
+		{"::1", true},
+		{"0.0.0.0", false},
+		{"192.168.1.10", false},
+		{"10.0.0.1", false},
+		{"not-an-ip", false},
+		{"", false},
+		// "localhost" is rejected by Config.Validate() before this helper is
+		// reached, but pin its behaviour here against future reuse.
+		{"localhost", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.addr, func(t *testing.T) {
+			if got := IsLoopbackBind(tc.addr); got != tc.want {
+				t.Errorf("IsLoopbackBind(%q) = %v, want %v", tc.addr, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestListPromptFiles(t *testing.T) {

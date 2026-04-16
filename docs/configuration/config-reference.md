@@ -25,9 +25,12 @@ Settings inherited by all processes, tasks, and templates unless overridden.
 |-------|------|----------|---------|-------------|
 | `enabled` | bool | No | `false` | Enable the web dashboard. |
 | `port` | int | No | `8370` | TCP port for the web UI. |
-| `bind` | string | No | `0.0.0.0` | Bind address. |
+| `bind` | string | No | `127.0.0.1` | Bind address. Loopback-only by default. |
 
 When enabled, the daemon serves a web dashboard with process monitoring, task management, agent dispatch, config editing, and cron preview.
+
+!!! warning "Web UI has no built-in auth"
+    The dashboard provides full process control (start/stop, config edits, send-keys to tmux). Setting `bind` to a non-loopback address (including `0.0.0.0`) exposes that control to every host that can reach the port. Only do this on a trusted network. The daemon prints a startup warning when `bind` is non-loopback.
 
 ## `client`
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/service"
@@ -49,7 +50,12 @@ func runStatus() error {
 
 	// Web UI
 	if cfg.Web.Enabled {
-		info.Printf("Web UI:  http://%s:%d\n", cfg.WebBind(), cfg.WebPort())
+		bind := cfg.WebBind()
+		if config.IsLoopbackBind(bind) {
+			info.Printf("Web UI:  http://%s:%d\n", bind, cfg.WebPort())
+		} else {
+			warn.Printf("Web UI:  http://%s:%d (non-loopback bind; no built-in auth)\n", bind, cfg.WebPort())
+		}
 	}
 
 	// Processes

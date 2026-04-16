@@ -124,12 +124,27 @@ func (c *Config) WebPort() int {
 	return 8370
 }
 
-// WebBind returns the effective web UI bind address (default "0.0.0.0").
+// WebBind returns the effective web UI bind address (default "127.0.0.1",
+// loopback-only). Operators who need LAN access must opt in explicitly by
+// setting web.bind. The web UI has no built-in auth, so binding beyond
+// loopback exposes full process control to every host that can reach it.
 func (c *Config) WebBind() string {
 	if c.Web.Bind != "" {
 		return c.Web.Bind
 	}
-	return "0.0.0.0"
+	return "127.0.0.1"
+}
+
+// IsLoopbackBind reports whether addr is a loopback IP address (127.0.0.0/8
+// or ::1). Returns false for any non-IP string, including "localhost" — the
+// config schema rejects non-IP bind values at validate time, so the happy
+// path into this helper always carries a parseable IP.
+func IsLoopbackBind(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
 }
 
 type DefaultsConfig struct {

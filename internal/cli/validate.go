@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/service"
@@ -102,7 +103,13 @@ func newValidateCmd() *cobra.Command {
 				}
 			}
 
-			// 7. Check daemon health
+			// 7. Check web bind for non-loopback exposure
+			if cfg.Web.Enabled && !config.IsLoopbackBind(cfg.WebBind()) {
+				warn.Printf("Web UI: bind=%q exposes the dashboard beyond localhost (no built-in auth)\n", cfg.WebBind())
+				issues++
+			}
+
+			// 8. Check daemon health
 			if daemon.IsRunning(cfg.HomePath) {
 				resp, err := daemon.Send(cfg.HomePath, "GET", "/health", nil)
 				switch {
@@ -119,7 +126,7 @@ func newValidateCmd() *cobra.Command {
 				info.Println("Daemon: not running")
 			}
 
-			// 8. Check service status
+			// 9. Check service status
 			svcStatus, _ := service.Status(cfg.HomePath)
 			if svcStatus == "stopped" {
 				info.Println("Service: stopped")
@@ -127,7 +134,7 @@ func newValidateCmd() *cobra.Command {
 				success.Printf("Service: %s\n", svcStatus)
 			}
 
-			// 9. Check service log
+			// 10. Check service log
 			logPath := service.LogPathFor(cfg.HomePath)
 			if fi, err := os.Stat(logPath); err == nil {
 				success.Printf("Service log: %s (%.0f KB)\n", logPath, float64(fi.Size())/1024)
@@ -135,7 +142,7 @@ func newValidateCmd() *cobra.Command {
 				info.Println("Service log: not present (service hasn't run yet)")
 			}
 
-			// 10. Summary
+			// 11. Summary
 			fmt.Println()
 			if issues == 0 {
 				success.Println("All checks passed.")
