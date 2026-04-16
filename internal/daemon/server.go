@@ -170,11 +170,19 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}
 
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc)
-	addr := fmt.Sprintf("%s:%d", cfg.WebBind(), cfg.WebPort())
+	bind := cfg.WebBind()
+	addr := fmt.Sprintf("%s:%d", bind, cfg.WebPort())
 	if err := s.webServer.ListenAndServe(addr); err != nil {
 		return fmt.Errorf("starting web UI: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "web UI listening on http://%s\n", addr)
+	if !config.IsLoopbackBind(bind) {
+		fmt.Fprintf(os.Stderr,
+			"WARNING: web.bind=%q exposes the Leo web UI beyond localhost. "+
+				"The UI has no built-in auth; anyone who can reach %s:%d can control "+
+				"supervised processes and edit config. Only do this on a trusted network.\n",
+			bind, bind, cfg.WebPort())
+	}
 	return nil
 }
 
