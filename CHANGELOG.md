@@ -6,6 +6,10 @@
 
 - **Web UI default bind changed from `0.0.0.0` to `127.0.0.1`.** The UI has no built-in auth, so the previous default exposed full process control to anyone who could reach the port. Anyone who was relying on LAN access must set `web.bind: 0.0.0.0` explicitly. The daemon now prints a prominent warning at startup when `web.bind` is non-loopback.
 
+### Security
+
+- **`leo update` now verifies release archive integrity.** Before replacing the running binary, `DownloadAndReplace` fetches the release's `checksums.txt`, parses out the entry for the platform archive, and rejects the update on any mismatch or missing entry. Prevents a compromised CDN or MITM from shipping a tampered binary. Archive size is capped at 100 MB and `checksums.txt` at 1 MB to bound the damage from a hostile server.
+
 ## v0.3.0 — Channel-agnostic (BREAKING)
 
 Leo no longer ships with Telegram built in. Channels are now opaque [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code/plugins) IDs that you install separately and reference by ID on processes and tasks.
