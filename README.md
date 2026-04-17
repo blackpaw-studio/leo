@@ -35,6 +35,8 @@ Or with Go: `go install github.com/blackpaw-studio/leo@latest`
 
 Before replacing the binary, `leo update` verifies the release's [Sigstore cosign](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/) signature against the release workflow's GitHub OIDC identity, then verifies the SHA-256 of the downloaded tarball. Releases published before signing was introduced can still be installed by passing `--allow-unsigned` (or setting `LEO_ALLOW_UNSIGNED_RELEASE=1`); this falls back to SHA-only verification with a warning and will be removed once every supported release is signed.
 
+Leo verifies the Fulcio keyless signature but does not consult Rekor (the Sigstore transparency log). If a past signing key was ever exposed while its certificate was valid, a replayed signature would still verify here. Manual verification with `cosign verify-blob --rfc3161-timestamp` (or `cosign verify-blob` with an explicit `--rekor-url`) adds that additional check if you want it.
+
 To verify a release manually with the [`cosign` CLI](https://docs.sigstore.dev/cosign/installation/):
 
 ```bash
