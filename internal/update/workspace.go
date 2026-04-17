@@ -79,12 +79,34 @@ func RefreshWorkspace(workspace string) ([]string, error) {
 // writeIfChanged writes data to path only if the existing file's contents
 // differ (or the file doesn't exist / can't be read). Returns true iff a
 // write occurred.
+//
+// Writes are atomic: data is written to a temp file in the same directory
+// and renamed into place. This prevents readers (e.g. a claude subprocess
+// reading CLAUDE.md) from ever seeing a partially-written file when two
+// task runners start simultaneously.
 func writeIfChanged(path string, data []byte, perm os.FileMode) (bool, error) {
 	existing, err := os.ReadFile(path)
 	if err == nil && bytes.Equal(existing, data) {
 		return false, nil
 	}
-	if err := os.WriteFile(path, data, perm); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".leo-tmp-*")
+	if err != nil {
+		return false, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once renamed
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return false, err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -132,16 +133,19 @@ func parseVersion(v string) [3]int {
 // Cellar.
 const PackageManagerHomebrew = "homebrew"
 
+// homebrewCellarPattern matches a Homebrew keg binary path:
+// "<prefix>/Cellar/leo/<version>/bin/leo". Anchored to the suffix so a
+// user directory that happens to contain "/Cellar/leo/" (e.g. a Go
+// workspace, a fork, or test fixtures) doesn't false-positive. The
+// leading prefix is free-form to cover all Homebrew roots — /opt/homebrew
+// (ARM macOS), /usr/local (Intel macOS), /home/linuxbrew/.linuxbrew, and
+// any custom HOMEBREW_CELLAR.
+var homebrewCellarPattern = regexp.MustCompile(`/Cellar/leo/[^/]+/bin/leo$`)
+
 // PackageManagerInstall reports whether the running binary was installed by
 // a system package manager that owns its lifecycle. It returns the manager
 // name (e.g. PackageManagerHomebrew) and the resolved binary path, or
 // ("", "") if no package manager is detected.
-//
-// Detection is path-based: a symlink-resolved executable path containing
-// "/Cellar/leo/" is treated as a Homebrew install. That single marker
-// covers every Homebrew prefix — /opt/homebrew (ARM macOS), /usr/local
-// (Intel macOS), and /home/linuxbrew/.linuxbrew (Linuxbrew) — without
-// shelling out to brew.
 func PackageManagerInstall() (manager, path string) {
 	p, err := osExecutable()
 	if err != nil {
@@ -151,7 +155,7 @@ func PackageManagerInstall() (manager, path string) {
 	if err != nil {
 		return "", ""
 	}
-	if strings.Contains(resolved, "/Cellar/leo/") {
+	if homebrewCellarPattern.MatchString(resolved) {
 		return PackageManagerHomebrew, resolved
 	}
 	return "", ""

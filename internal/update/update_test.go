@@ -673,6 +673,21 @@ func TestPackageManagerInstall(t *testing.T) {
 			wantManager: "",
 		},
 		{
+			// Regression guard: a substring match would false-positive here
+			// because "/Cellar/leo/" appears mid-path. The anchored regex
+			// requires the full /Cellar/leo/<ver>/bin/leo suffix.
+			name:        "path contains Cellar/leo but not keg suffix",
+			binPath:     makeBinary("tmp/Cellar/leo/source/cmd/leo/leo"),
+			wantManager: "",
+		},
+		{
+			// Regression guard: a substring match would false-positive; the
+			// anchored regex requires /bin/leo specifically as the tail.
+			name:        "Cellar metadata path, not a binary",
+			binPath:     makeBinary("opt/homebrew/Cellar/leo/0.1.0/INSTALL_RECEIPT.json"),
+			wantManager: "",
+		},
+		{
 			name:        "osExecutable returns error",
 			execErr:     fmt.Errorf("no executable"),
 			wantManager: "",

@@ -33,6 +33,9 @@ func newUpdateCmd() *cobra.Command {
 			mgr, mgrPath := update.PackageManagerInstall()
 			hasUpdate := update.IsNewer(Version, latest)
 
+			// Cases are ordered by priority: up-to-date short-circuits, then
+			// --check stays a silent probe regardless of install method, then
+			// Homebrew-owned installs delegate to brew, then self-update.
 			switch {
 			case !hasUpdate:
 				if checkOnly {
@@ -42,16 +45,16 @@ func newUpdateCmd() *cobra.Command {
 				success.Printf("Binary up to date (%s)\n", Version)
 				return nil
 
+			case checkOnly:
+				info.Printf("Update available: %s → %s\n", Version, latest)
+				return nil
+
 			case mgr == update.PackageManagerHomebrew:
 				warn.Printf("leo is installed via Homebrew (%s).\n", mgrPath)
 				warn.Printf("Update available: %s → %s\n", Version, latest)
 				warn.Println("Upgrade with:")
 				warn.Println("  brew upgrade blackpaw-studio/tap/leo")
 				warn.Println("  leo service restart    # reload the daemon and sync workspace files")
-				return nil
-
-			case checkOnly:
-				info.Printf("Update available: %s → %s\n", Version, latest)
 				return nil
 
 			default:

@@ -116,8 +116,13 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	// embedded versions. Content-diffed, so it's a no-op when up to date.
 	// Covers cron-invoked `leo run <task>` paths that don't go through the
 	// daemon (the daemon supervisor does its own refresh at startup).
-	if _, err := update.RefreshWorkspace(taskWorkspace); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: workspace refresh failed: %v\n", err)
+	//
+	// Only refresh the default workspace — a task that explicitly overrides
+	// `workspace:` is user-managed; don't stomp on it with template files.
+	if taskWorkspace == cfg.DefaultWorkspace() {
+		if _, err := update.RefreshWorkspace(taskWorkspace); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: workspace refresh failed: %v\n", err)
+		}
 	}
 
 	maxAttempts := task.Retries + 1

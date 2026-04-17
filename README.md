@@ -31,7 +31,7 @@ Or with Go: `go install github.com/blackpaw-studio/leo@latest`
 
 **Prerequisites:** [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (authenticated), `tmux`. Optionally, any Claude Code channel plugin you want Leo to surface messages through (e.g. `claude plugin install telegram@claude-plugins-official`).
 
-**Upgrading:** `leo update` replaces a tarball install in place. If you installed via Homebrew, run `brew upgrade blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands for you. Workspace templates (`CLAUDE.md`, `skills/*.md`) re-sync automatically on every daemon start.
+**Upgrading:** `leo update` replaces a tarball install in place. If you installed via Homebrew, run `brew upgrade blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands for you. Workspace templates (`CLAUDE.md`, `skills/*.md`) re-sync automatically on every daemon start, so the `--workspace-only` flag from v0.1.0 has been removed.
 
 ## Quick Start
 
