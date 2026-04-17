@@ -183,6 +183,14 @@ branch, the CLI prompts to attach or spawn a fresh suffixed agent. The prompt
 is skipped in non-interactive runs (no TTY) — in that case the command errors
 unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 --reuse-owner forces the canonical repo, --attach-existing attaches instead.`,
+		Example: `  # Spawn an agent from the 'mcp-node' template using the template workspace
+  leo agent spawn mcp-node
+
+  # Spawn against a specific repo with a dedicated git worktree
+  leo agent spawn mcp-node owner/fetch --worktree feat/new-endpoint
+
+  # Non-interactive: attach to the existing agent on collision
+  leo agent spawn mcp-node leo --attach-existing`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			template := args[0]
@@ -532,6 +540,11 @@ func newAgentAttachCmd() *cobra.Command {
 current process with tmux so the TUI has full control of the terminal.
 Remotely it runs 'ssh -t <host> tmux attach -t leo-<name>'. Detach with
 the usual tmux prefix + d (default: C-b d).`,
+		Example: `  # Attach to an agent by canonical name
+  leo agent attach leo-mcp-node-owner-fetch
+
+  # Or by a unique shorthand the daemon can resolve
+  leo agent attach fetch`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -626,6 +639,11 @@ func newAgentStopCmd() *cobra.Command {
 		Long: `Stop a running agent's tmux session. Worktree agents preserve their
 on-disk worktree so you can reattach or inspect state; pass --prune to also
 remove the worktree and agentstore record in one step.`,
+		Example: `  # Stop an agent but keep its worktree on disk
+  leo agent stop leo-mcp-node-owner-fetch
+
+  # Stop and clean up worktree + local branch
+  leo agent stop leo-mcp-node-owner-fetch --prune --delete-branch`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -744,7 +762,12 @@ func newAgentLogsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <name>",
 		Short: "Show recent output from an agent's tmux pane",
-		Args:  cobra.ExactArgs(1),
+		Example: `  # Show the last 200 lines (default)
+  leo agent logs leo-mcp-node-owner-fetch
+
+  # Tail a specific count, then follow live output
+  leo agent logs leo-mcp-node-owner-fetch -n 500 --follow`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
