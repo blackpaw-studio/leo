@@ -116,6 +116,112 @@ func TestHostOriginMiddleware_RejectsMissingPort(t *testing.T) {
 	}
 }
 
+// TestHostOriginMiddlewareRejectsBypasses locks in middleware behavior against
+// common header-smuggling / bypass attempts. Each row describes an attacker-
+// supplied Host or Origin value that must be rejected with 403, and exists to
+// keep future refactors from accidentally loosening the check.
+func TestHostOriginMiddlewareRejectsBypasses(t *testing.T) {
+	tests := []struct {
+		name   string
+		host   string
+		origin string
+	}{
+		// --- Host-header bypass attempts ---
+		{
+			name: "suffix-confusion with localhost prefix",
+			host: "localhost.attacker.com:8370",
+		},
+		{
+			name: "double port",
+			host: "127.0.0.1:8370:8370",
+		},
+		{
+			name: "suffix-confusion with IP prefix",
+			host: "127.0.0.1.attacker.com",
+		},
+		// --- Origin-header bypass attempts ---
+		{
+			name:   "userinfo smuggling",
+			origin: "http://127.0.0.1:8370@attacker.com",
+		},
+		{
+			name:   "fragment smuggling",
+			origin: "http://attacker.com#@127.0.0.1:8370",
+		},
+		{
+			name:   "literal null",
+			origin: "null",
+		},
+		{
+			name:   "file scheme",
+			origin: "file:///etc/passwd",
+		},
+		{
+			name:   "javascript scheme",
+			origin: "javascript:alert(1)",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newRawTestServer(t)
+
+			req := httptest.NewRequest(http.MethodGet, "/partials/status", nil)
+			// Always supply a locally-valid Host so that any rejection
+			// must come from the specific header under test.
+			req.Host = testHost
+			if tc.host != "" {
+				req.Host = tc.host
+			}
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+
+			w := httptest.NewRecorder()
+			s.httpServer.Handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 for host=%q origin=%q, got %d; body: %s",
+					tc.host, tc.origin, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestHostOriginMiddleware_AcceptsMixedCase confirms that RFC 3986 §3.2.2
+// case-insensitive hostname matching is honored — LOCALHOST etc. should not
+// be a 403.
+func TestHostOriginMiddleware_AcceptsMixedCase(t *testing.T) {
+	cases := []struct {
+		name   string
+		host   string
+		origin string
+	}{
+		{"uppercase host", "LOCALHOST:8370", ""},
+		{"mixed case host", "LocalHost:8370", ""},
+		{"uppercase origin", testHost, "http://LOCALHOST:8370"},
+		{"mixed case origin", testHost, "http://LocalHost:8370"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newRawTestServer(t)
+
+			req := httptest.NewRequest(http.MethodGet, "/partials/status", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+
+			w := httptest.NewRecorder()
+			s.httpServer.Handler.ServeHTTP(w, req)
+
+			if w.Code == http.StatusForbidden {
+				t.Fatalf("mixed-case host %q / origin %q unexpectedly forbidden; body: %s",
+					tc.host, tc.origin, w.Body.String())
+			}
+		})
+	}
+}
+
 // --- Bearer-auth middleware tests ---
 
 func TestBearerAuth_RejectsMissingToken(t *testing.T) {

@@ -53,6 +53,9 @@ func hostOriginMiddleware(port int, next http.Handler) http.Handler {
 // and verifies the hostname is a known loopback name and the port matches the
 // listener port. A missing port is accepted only when the listener is on the
 // well-known default (port 80) — in practice we always have a port.
+//
+// Hostname comparison is case-insensitive per RFC 3986 §3.2.2, so
+// http://LOCALHOST:8370 is treated the same as http://localhost:8370.
 func checkHost(host string, port int) error {
 	if host == "" {
 		return fmt.Errorf("empty host")
@@ -63,7 +66,7 @@ func checkHost(host string, port int) error {
 		// always serve on a non-default port.
 		return fmt.Errorf("bad host %q: %w", host, err)
 	}
-	if _, ok := allowedLocalHosts[h]; !ok {
+	if _, ok := allowedLocalHosts[strings.ToLower(h)]; !ok {
 		return fmt.Errorf("host %q not allowed", h)
 	}
 	if p != fmt.Sprintf("%d", port) {
@@ -86,7 +89,7 @@ func checkOrigin(origin string, port int) error {
 	if host == "" {
 		return fmt.Errorf("origin %q missing host", origin)
 	}
-	if _, ok := allowedLocalHosts[host]; !ok {
+	if _, ok := allowedLocalHosts[strings.ToLower(host)]; !ok {
 		return fmt.Errorf("origin host %q not allowed", host)
 	}
 	p := u.Port()
