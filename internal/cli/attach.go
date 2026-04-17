@@ -29,6 +29,11 @@ explicit subcommand.
 
 When --host targets a remote, the resolution is delegated to the server so the
 client does not need to know the remote's process list.`,
+		Example: `  # Attach to a configured process or running agent by name
+  leo attach coding-assistant
+
+  # Target a specific remote host from client.hosts
+  leo attach fetch --host prod`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]

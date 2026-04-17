@@ -180,8 +180,17 @@ prompts the user for how to proceed: attach to the existing agent, spawn using
 that agent's canonical owner/repo, or spawn a fresh template workspace. When
 repo is slashed (owner/repo) and an agent already targets the same repo and
 branch, the CLI prompts to attach or spawn a fresh suffixed agent. The prompt
-is skipped in non-interactive runs (no TTY). Flags override the prompt:
+is skipped in non-interactive runs (no TTY) — in that case the command errors
+unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 --reuse-owner forces the canonical repo, --attach-existing attaches instead.`,
+		Example: `  # Spawn an agent from the 'mcp-node' template using the template workspace
+  leo agent spawn mcp-node
+
+  # Spawn against a specific repo with a dedicated git worktree
+  leo agent spawn mcp-node owner/fetch --worktree feat/new-endpoint
+
+  # Non-interactive: attach to the existing agent on collision
+  leo agent spawn mcp-node leo --attach-existing`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			template := args[0]
@@ -256,7 +265,7 @@ is skipped in non-interactive runs (no TTY). Flags override the prompt:
 					for _, m := range matches {
 						labels = append(labels, fmt.Sprintf("%s (%s)", m.Name, m.Repo))
 					}
-					return fmt.Errorf("multiple existing agents match %q: %s — pass the full owner/repo to disambiguate",
+					return fmt.Errorf("multiple existing agents match %q: %s — pass the full owner/repo or run 'leo agent list' to disambiguate",
 						repo, strings.Join(labels, ", "))
 				}
 			} else {
@@ -380,8 +389,9 @@ func filterExactMatches(records []agent.Record, repo, branch string) []agent.Rec
 
 // resolveSpawnCollision decides what to do when a slashless repo query matches
 // exactly one existing agent. Flags force a non-interactive choice; otherwise
-// the user is prompted when a TTY is attached. Non-interactive CLI runs
-// default to "fresh template" to preserve the current scripting behavior.
+// the user is prompted when a TTY is attached. Non-interactive CLI runs with
+// no flags return a typed error so scripts fail loudly instead of silently
+// spawning a duplicate template workspace.
 // (The web UI does not reach this path — it calls the daemon directly.)
 func resolveSpawnCollision(match agent.Record, template string, reuseOwner, attachExisting bool) (spawnChoice, error) {
 	switch {
@@ -393,7 +403,13 @@ func resolveSpawnCollision(match agent.Record, template string, reuseOwner, atta
 		}
 		return spawnUseCanonicalRepo, nil
 	case !agentIsTTY():
-		return spawnFreshTemplate, nil
+		target := match.Repo
+		if target == "" {
+			target = match.Name
+		}
+		return spawnCancel, fmt.Errorf(
+			"agent %s already targets %s and stdin is not a TTY; pass --attach-existing to attach, --reuse-owner to spawn using the existing canonical owner/repo, or pass the full owner/repo to disambiguate",
+			match.Name, target)
 	}
 
 	if match.Repo != "" {
@@ -446,12 +462,20 @@ func resolveSpawnCollision(match agent.Record, template string, reuseOwner, atta
 // owner/repo spawns. The "reuse canonical repo" option is not offered here
 // because the user already supplied the canonical repo — the only meaningful
 // choices are attach, spawn-fresh (with numeric suffix), or cancel.
+// Non-interactive callers must opt in explicitly via --attach-existing;
+// otherwise the command errors rather than silently suffixing a duplicate.
 func resolveExactCollision(match agent.Record, template string, attachExisting bool) (spawnChoice, error) {
 	switch {
 	case attachExisting:
 		return spawnAttachExisting, nil
 	case !agentIsTTY():
-		return spawnFreshTemplate, nil
+		target := match.Repo
+		if match.Branch != "" {
+			target = fmt.Sprintf("%s on branch %s", match.Repo, match.Branch)
+		}
+		return spawnCancel, fmt.Errorf(
+			"agent %s already targets %s and stdin is not a TTY; pass --attach-existing to attach or stop the existing agent first",
+			match.Name, target)
 	}
 
 	fmt.Fprintf(agentStderr, "\nAn agent already targets %s", match.Repo)
@@ -516,7 +540,13 @@ func newAgentAttachCmd() *cobra.Command {
 current process with tmux so the TUI has full control of the terminal.
 Remotely it runs 'ssh -t <host> tmux attach -t leo-<name>'. Detach with
 the usual tmux prefix + d (default: C-b d).`,
-		Args: cobra.ExactArgs(1),
+		Example: `  # Attach to an agent by canonical name
+  leo agent attach leo-mcp-node-owner-fetch
+
+  # Or by a unique shorthand the daemon can resolve
+  leo agent attach fetch`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
@@ -610,7 +640,13 @@ func newAgentStopCmd() *cobra.Command {
 		Long: `Stop a running agent's tmux session. Worktree agents preserve their
 on-disk worktree so you can reattach or inspect state; pass --prune to also
 remove the worktree and agentstore record in one step.`,
-		Args: cobra.ExactArgs(1),
+		Example: `  # Stop an agent but keep its worktree on disk
+  leo agent stop leo-mcp-node-owner-fetch
+
+  # Stop and clean up worktree + local branch
+  leo agent stop leo-mcp-node-owner-fetch --prune --delete-branch`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if (force || deleteBranch) && !prune {
@@ -686,7 +722,8 @@ func newAgentPruneCmd() *cobra.Command {
 that has already been stopped. No-op for shared-workspace agents. Pass
 --force to override the dirty-worktree check, or --delete-branch to also
 delete the local branch after the worktree is gone.`,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
@@ -728,7 +765,13 @@ func newAgentLogsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <name>",
 		Short: "Show recent output from an agent's tmux pane",
-		Args:  cobra.ExactArgs(1),
+		Example: `  # Show the last 200 lines (default)
+  leo agent logs leo-mcp-node-owner-fetch
+
+  # Tail a specific count, then follow live output
+  leo agent logs leo-mcp-node-owner-fetch -n 500 --follow`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
@@ -764,6 +807,32 @@ func newAgentLogsCmd() *cobra.Command {
 	cmd.Flags().IntVarP(&lines, "lines", "n", 200, "number of trailing lines to show")
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "stream output (tail -f)")
 	return cmd
+}
+
+// completeAgentNames supplies shell-completion values for commands that take an
+// agent name. It queries the local daemon's live agent list — the same source
+// `leo agent list` shows — and returns agent names. Daemon unreachable or any
+// other failure returns ShellCompDirectiveNoFileComp with no values so the
+// shell falls back to no completion rather than suggesting filenames.
+func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	records, err := daemon.AgentList(cfg.HomePath)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	names := make([]string, 0, len(records))
+	for _, r := range records {
+		if r.Name != "" {
+			names = append(names, r.Name)
+		}
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
 }
 
 // --- helpers ---
