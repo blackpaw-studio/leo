@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -450,26 +453,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	for {
 		sv.setState(spec.Name, "running")
 
-		// Shell-quote each token to prevent injection via config values
-		quoted := make([]string, 0, len(currentArgs)+1)
-		quoted = append(quoted, shellQuote(claudePath))
-		for _, arg := range currentArgs {
-			quoted = append(quoted, shellQuote(arg))
-		}
-		claudeCmd := strings.Join(quoted, " ")
-
-		// Propagate PATH into the tmux session
-		if p := os.Getenv("PATH"); p != "" {
-			claudeCmd = fmt.Sprintf("export PATH=%s; %s", shellQuote(p), claudeCmd)
-		}
-
-		// Inject Leo env vars for plugin control commands
-		claudeCmd = fmt.Sprintf("export LEO_PROCESS_NAME=%s; export LEO_TMUX_PATH=%s; export LEO_WEB_PORT=%s; %s", shellQuote(spec.Name), shellQuote(tmuxPath), spec.WebPort, claudeCmd)
-
-		// Add per-process env vars
-		for k, v := range spec.Env {
-			claudeCmd = fmt.Sprintf("export %s=%s; %s", k, shellQuote(v), claudeCmd)
-		}
+		claudeCmd := buildClaudeShellCmd(claudePath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
 
 		// Kill any stale tmux session with our name
 		exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
@@ -633,6 +617,72 @@ func clearProcessSession(homePath, processName string) {
 // shellQuote wraps a string in single quotes with proper escaping.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// supervisorEnvKeyPattern restricts env-var names to the POSIX subset.
+// This mirrors config.envKeyPattern and exists as defense-in-depth for the
+// shell-string assembly in buildClaudeShellCmd. Config.Validate() is the
+// primary gate; this rejects anything that slips through.
+var supervisorEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// supervisorWebPortPattern restricts LEO_WEB_PORT to decimal digits so the
+// value can be safely interpolated unquoted. Empty values are handled
+// separately by the caller (export is omitted).
+var supervisorWebPortPattern = regexp.MustCompile(`^[0-9]+$`)
+
+// buildClaudeShellCmd assembles the shell command string that tmux runs
+// to launch claude. Defense-in-depth: every interpolated env key is
+// validated against supervisorEnvKeyPattern, and spec.WebPort is
+// validated against supervisorWebPortPattern, before being embedded in
+// the resulting shell string. Invalid entries are dropped and a warning
+// is written to warnOut.
+//
+// Values are shell-quoted via shellQuote (single-quote safe), so they
+// cannot introduce new shell tokens even if they contain metacharacters.
+func buildClaudeShellCmd(claudePath string, args []string, tmuxPath string, spec ProcessSpec, pathEnv string, warnOut io.Writer) string {
+	quoted := make([]string, 0, len(args)+1)
+	quoted = append(quoted, shellQuote(claudePath))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	cmd := strings.Join(quoted, " ")
+
+	// Propagate PATH into the tmux session
+	if pathEnv != "" {
+		cmd = fmt.Sprintf("export PATH=%s; %s", shellQuote(pathEnv), cmd)
+	}
+
+	// Inject Leo env vars for plugin control commands. Only include
+	// LEO_WEB_PORT when it passes the numeric gate; skip otherwise.
+	leoExports := fmt.Sprintf("export LEO_PROCESS_NAME=%s; export LEO_TMUX_PATH=%s;",
+		shellQuote(spec.Name), shellQuote(tmuxPath))
+	if spec.WebPort != "" {
+		if supervisorWebPortPattern.MatchString(spec.WebPort) {
+			leoExports += fmt.Sprintf(" export LEO_WEB_PORT=%s;", spec.WebPort)
+		} else if warnOut != nil {
+			fmt.Fprintf(warnOut, "[%s] warning: dropping invalid LEO_WEB_PORT %q\n", spec.Name, spec.WebPort)
+		}
+	}
+	cmd = fmt.Sprintf("%s %s", leoExports, cmd)
+
+	// Add per-process env vars, validating each key. Iteration order is
+	// non-deterministic (Go map range); sort for stable output so tests
+	// and logs are predictable.
+	keys := make([]string, 0, len(spec.Env))
+	for k := range spec.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !supervisorEnvKeyPattern.MatchString(k) {
+			if warnOut != nil {
+				fmt.Fprintf(warnOut, "[%s] warning: dropping invalid env key %q\n", spec.Name, k)
+			}
+			continue
+		}
+		cmd = fmt.Sprintf("export %s=%s; %s", k, shellQuote(spec.Env[k]), cmd)
+	}
+	return cmd
 }
 
 // hasDevChannelFlag reports whether the claude arg list contains
