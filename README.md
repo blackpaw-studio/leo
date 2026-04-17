@@ -21,6 +21,16 @@ Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-c
 curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
 ```
 
+Prefer to verify the installer before running it? Each release publishes `install.sh` with a matching `install.sh.sha256`:
+
+```bash
+VER=$(curl -fsSL https://api.github.com/repos/blackpaw-studio/leo/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -fsSLO "https://github.com/blackpaw-studio/leo/releases/download/${VER}/install.sh"
+curl -fsSLO "https://github.com/blackpaw-studio/leo/releases/download/${VER}/install.sh.sha256"
+shasum -a 256 -c install.sh.sha256
+sh install.sh
+```
+
 Or with Homebrew:
 
 ```bash

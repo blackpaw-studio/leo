@@ -30,3 +30,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      # Publish install.sh + its sha256 as release assets so users can
+      # verify the bootstrap script before piping it to a shell.
+      - name: Publish install.sh checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          shasum -a 256 install.sh > install.sh.sha256
+          gh release upload "$TAG" install.sh install.sh.sha256 --clobber
