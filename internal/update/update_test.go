@@ -624,3 +624,98 @@ func TestExtractBinaryFromTarGzMissing(t *testing.T) {
 		t.Error("expected error when binary not found in archive")
 	}
 }
+
+func TestPackageManagerInstall(t *testing.T) {
+	// Build a fake Cellar layout and a few non-Cellar layouts, all rooted in
+	// t.TempDir() so filepath.EvalSymlinks succeeds (it requires real paths).
+	root := t.TempDir()
+
+	makeBinary := func(rel string) string {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return full
+	}
+
+	tests := []struct {
+		name        string
+		binPath     string
+		execErr     error
+		wantManager string
+	}{
+		{
+			name:        "arm homebrew cellar",
+			binPath:     makeBinary("opt/homebrew/Cellar/leo/0.1.0/bin/leo"),
+			wantManager: PackageManagerHomebrew,
+		},
+		{
+			name:        "intel homebrew cellar",
+			binPath:     makeBinary("usr/local/Cellar/leo/0.1.0/bin/leo"),
+			wantManager: PackageManagerHomebrew,
+		},
+		{
+			name:        "linuxbrew cellar",
+			binPath:     makeBinary("home/linuxbrew/.linuxbrew/Cellar/leo/0.1.0/bin/leo"),
+			wantManager: PackageManagerHomebrew,
+		},
+		{
+			name:        "go install path",
+			binPath:     makeBinary("home/user/go/bin/leo"),
+			wantManager: "",
+		},
+		{
+			name:        "system path",
+			binPath:     makeBinary("usr/local/bin/leo"),
+			wantManager: "",
+		},
+		{
+			// Regression guard: a substring match would false-positive here
+			// because "/Cellar/leo/" appears mid-path. The anchored regex
+			// requires the full /Cellar/leo/<ver>/bin/leo suffix.
+			name:        "path contains Cellar/leo but not keg suffix",
+			binPath:     makeBinary("tmp/Cellar/leo/source/cmd/leo/leo"),
+			wantManager: "",
+		},
+		{
+			// Regression guard: a substring match would false-positive; the
+			// anchored regex requires /bin/leo specifically as the tail.
+			name:        "Cellar metadata path, not a binary",
+			binPath:     makeBinary("opt/homebrew/Cellar/leo/0.1.0/INSTALL_RECEIPT.json"),
+			wantManager: "",
+		},
+		{
+			name:        "osExecutable returns error",
+			execErr:     fmt.Errorf("no executable"),
+			wantManager: "",
+		},
+	}
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.execErr != nil {
+				osExecutable = func() (string, error) { return "", tc.execErr }
+			} else {
+				path := tc.binPath
+				osExecutable = func() (string, error) { return path, nil }
+			}
+
+			gotMgr, gotPath := PackageManagerInstall()
+			if gotMgr != tc.wantManager {
+				t.Errorf("manager = %q, want %q", gotMgr, tc.wantManager)
+			}
+			if tc.wantManager == "" && gotPath != "" {
+				t.Errorf("path = %q, want empty", gotPath)
+			}
+			if tc.wantManager != "" && gotPath == "" {
+				t.Error("path is empty, want non-empty resolved path")
+			}
+		})
+	}
+}
