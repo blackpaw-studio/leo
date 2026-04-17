@@ -7,3 +7,4 @@ site/
 *.test
 *.out
 .superpowers/
+.worktrees/
