@@ -33,6 +33,24 @@ Or with Go: `go install github.com/blackpaw-studio/leo@latest`
 
 **Upgrading:** `leo update` replaces a tarball install in place. If you installed via Homebrew, run `brew upgrade blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands for you. Workspace templates (`CLAUDE.md`, `skills/*.md`) re-sync automatically on every daemon start, so the `--workspace-only` flag from v0.1.0 has been removed.
 
+Before replacing the binary, `leo update` verifies the release's [Sigstore cosign](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/) signature against the release workflow's GitHub OIDC identity, then verifies the SHA-256 of the downloaded tarball. Releases published before signing was introduced can still be installed by passing `--allow-unsigned` (or setting `LEO_ALLOW_UNSIGNED_RELEASE=1`); this falls back to SHA-only verification with a warning and will be removed once every supported release is signed.
+
+To verify a release manually with the [`cosign` CLI](https://docs.sigstore.dev/cosign/installation/):
+
+```bash
+VERSION=v0.5.0
+curl -fsSL -O https://github.com/blackpaw-studio/leo/releases/download/$VERSION/checksums.txt
+curl -fsSL -O https://github.com/blackpaw-studio/leo/releases/download/$VERSION/checksums.txt.sig
+curl -fsSL -O https://github.com/blackpaw-studio/leo/releases/download/$VERSION/checksums.txt.pem
+
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-identity "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/$VERSION" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+```
+
 ## Quick Start
 
 ```bash
