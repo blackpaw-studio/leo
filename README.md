@@ -121,6 +121,8 @@ web:
 
 #### Web UI and API authentication
 
+**Breaking change:** `/api/*` previously required no auth. Channel plugins must now send `Authorization: Bearer $(cat ~/.leo/state/api.token)` or they will receive a 401.
+
 The web UI binds to `127.0.0.1` by default. To prevent a malicious webpage from driving the Claude REPL or mutating config via the browser, Leo enforces two controls:
 
 - **Host + Origin pinning on every `/web/...` route.** Requests must have `Host` and (when present) `Origin` pointing at `127.0.0.1`, `localhost`, or `[::1]` on the configured port. Requests with a foreign `Host` or `Origin` header get `403 forbidden host` / `403 forbidden origin`. This blocks DNS-rebinding and drive-by cross-origin POSTs.
