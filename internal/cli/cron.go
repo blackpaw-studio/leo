@@ -12,10 +12,9 @@ import (
 // can drop it entirely in a follow-up once all user docs have been updated.
 func newCronCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:        "cron",
-		Short:      "Deprecated — use 'leo service reload' and 'leo task list'",
-		Hidden:     true,
-		Deprecated: "use 'leo service reload' to refresh the cron schedule and 'leo task list' to inspect tasks.",
+		Use:    "cron",
+		Short:  "Deprecated — use 'leo service reload' and 'leo task list'",
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			info.Println("The 'leo cron' subcommands have been retired.")
 			info.Println("  - To refresh scheduled tasks after config changes: leo service reload")
