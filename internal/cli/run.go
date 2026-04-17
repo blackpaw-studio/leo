@@ -86,14 +86,22 @@ type envPair struct {
 // taskDryRunEnv returns the env vars that would be exported to the child
 // claude process for a dry-run, redacting sensitive values. Sorted by key for
 // deterministic output.
+//
+// TaskConfig does not yet have an Env field. When one is added, iterate it
+// here and route each entry through redactValue so keys matching the
+// redaction tokens (SECRET/TOKEN/KEY/PASSWORD) are masked:
+//
+//	for k, v := range task.Env {
+//	    pairs = append(pairs, envPair{key: k, display: redactValue(k, v)})
+//	}
 func taskDryRunEnv(task config.TaskConfig) []envPair {
 	var pairs []envPair
 
 	if len(task.Channels) > 0 {
-		pairs = append(pairs, envPair{key: "LEO_CHANNELS", display: strings.Join(task.Channels, ",")})
+		pairs = append(pairs, envPair{key: "LEO_CHANNELS", display: redactValue("LEO_CHANNELS", strings.Join(task.Channels, ","))})
 	}
 	if len(task.DevChannels) > 0 {
-		pairs = append(pairs, envPair{key: "LEO_DEV_CHANNELS", display: strings.Join(task.DevChannels, ",")})
+		pairs = append(pairs, envPair{key: "LEO_DEV_CHANNELS", display: redactValue("LEO_DEV_CHANNELS", strings.Join(task.DevChannels, ","))})
 	}
 
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
