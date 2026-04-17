@@ -13,6 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # id-token: write is required so cosign can request an OIDC token
+      # from GitHub and keyless-sign checksums.txt. The signing identity
+      # encoded in the resulting Fulcio cert is this workflow, which is
+      # what `leo update` pins against on the client side.
+      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -22,6 +27,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # Pinned by SHA to prevent a future tag hijack from swapping in a
+      # malicious cosign binary. v3.7.0 — released 2024-11-07.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
 
       - uses: goreleaser/goreleaser-action@v7
         with:
