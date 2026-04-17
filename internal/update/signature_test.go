@@ -353,6 +353,79 @@ func TestVerifySignatureUnknownKeyType(t *testing.T) {
 	}
 }
 
+// TestSignatureVerifier_MalformedSignature exercises the signature
+// decode + crypto path with valid base64 that happens to decode to a
+// non-DER byte sequence. The verifier must reject it, not panic or
+// accept.
+func TestSignatureVerifier_MalformedSignature(t *testing.T) {
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, identity, issuer)
+
+	data := []byte("checksums-body")
+
+	// Valid base64, but decodes to a truncated ECDSA signature (the leading
+	// SEQUENCE tag and a bogus length, then nothing). VerifyASN1 must
+	// reject this. We base64-encode so the decodeSignature path accepts
+	// the bytes and hands them to the crypto layer intact.
+	garbledDER := []byte{0x30, 0x45, 0x02, 0x20, 0xAA}
+	sig := []byte(base64.StdEncoding.EncodeToString(garbledDER) + "\n")
+
+	v := verifierFor(t, fixture,
+		regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/v0\.5\.0$`),
+		issuer,
+	)
+
+	err := v.Verify(data, sig, fixture.leafPEM)
+	if err == nil {
+		t.Fatal("Verify() accepted malformed signature; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("error = %q, want mention of signature failure", err.Error())
+	}
+}
+
+// TestSignatureVerifier_WrongCurveLeaf issues a leaf on a non-Fulcio
+// curve (P-384 vs cosign's typical P-256). The verifier doesn't care
+// which NIST curve is used as long as ecdsa.VerifyASN1 can consume it;
+// what matters is that a *mismatched* key still fails. We swap the
+// signing key between the cert and the crypto step so the public key
+// embedded in the cert does not match the private key that produced
+// the sig — the classic sign-with-different-key attack.
+func TestSignatureVerifier_WrongCurveLeaf(t *testing.T) {
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, identity, issuer)
+
+	// Generate a P-384 key and sign with it, but serve the fixture's
+	// P-256-bound leaf cert. The public key in the cert can't verify a
+	// signature from a different private key — regardless of curve.
+	wrongKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen wrongkey: %v", err)
+	}
+	data := []byte("checksums")
+	digest := sha256.Sum256(data)
+	rawSig, err := ecdsa.SignASN1(rand.Reader, wrongKey, digest[:])
+	if err != nil {
+		t.Fatalf("sign with wrong key: %v", err)
+	}
+	sig := []byte(base64.StdEncoding.EncodeToString(rawSig) + "\n")
+
+	v := verifierFor(t, fixture,
+		regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/v0\.5\.0$`),
+		issuer,
+	)
+
+	err = v.Verify(data, sig, fixture.leafPEM)
+	if err == nil {
+		t.Fatal("Verify() accepted sig from mismatched key; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "signature") && !strings.Contains(err.Error(), "ecdsa") {
+		t.Errorf("error = %q, want mention of signature failure", err.Error())
+	}
+}
+
 func TestSignatureVerifierForVersion_PinsTag(t *testing.T) {
 	v, err := SignatureVerifierForVersion("v0.5.0")
 	if err != nil {
