@@ -26,15 +26,21 @@ var channelPattern = regexp.MustCompile(`^[a-zA-Z0-9:@._-]+$`)
 // envKeyPattern validates environment variable names.
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// addDirRejectedChars lists characters that are forbidden in add_dirs entries
-// because they are shell metacharacters or argument-parser confusables. We use
-// an explicit deny list (rather than an allowlist) so legitimate paths with
-// hyphens, spaces, dots, or unicode keep working.
+// addDirRejectedChars lists characters that are forbidden in add_dirs entries.
+// Entries are passed as argv to claude (`--add-dir <entry>`), so the deny list
+// targets argv-level hazards, not shell metacharacters: NUL truncates argv
+// syscalls, newline corrupts line-oriented logs, and the remaining chars are
+// defense-in-depth against future callers that might concatenate paths into
+// a shell string. The list over-catches slightly on purpose.
 const addDirRejectedChars = ";&|$`\n\x00"
 
-// ValidateAddDir returns a non-nil error if dir is an unsafe --add-dir value:
-// empty after trimming, contains a shell metacharacter or null byte, or
-// starts with "-" (which could be misread as a flag if argv handling changes).
+// ValidateAddDir returns a non-nil error if dir is an unsafe --add-dir value.
+// Entries are passed as argv to claude, so this guards against argv-level
+// hazards rather than shell-injection. Rejects:
+//   - empty after trimming
+//   - leading "-" (could be misread as a flag by a future argv parser)
+//   - NUL (truncates argv syscalls) or newline (breaks line-oriented logs)
+//   - `;&|$` and backtick (defense in depth against shell concatenation)
 func ValidateAddDir(dir string) error {
 	trimmed := strings.TrimSpace(dir)
 	if trimmed == "" {
