@@ -15,7 +15,7 @@ builds:
       - CGO_ENABLED=0
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -28,3 +28,29 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
+
+brews:
+  - name: leo
+    repository:
+      owner: blackpaw-studio
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/blackpaw-studio/leo"
+    description: "Supervise persistent Claude Code agents with scheduling and channel plugins"
+    license: MIT
+    skip_upload: auto
+    commit_author:
+      name: goreleaser-bot
+      email: bot@blackpaw.studio
+    dependencies:
+      - name: tmux
+    caveats: |
+      leo requires the `claude` CLI at runtime. Install it from:
+        https://docs.claude.com/claude-code
+
+      On first run, configure leo with:
+        leo setup
+    test: |
+      assert_match "leo #{version}", shell_output("#{bin}/leo version")
