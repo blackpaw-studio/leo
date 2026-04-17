@@ -786,3 +786,75 @@ func TestDownloadAndReplace_MatchingVersionAccepted(t *testing.T) {
 		t.Errorf("binary not replaced; content = %q", got)
 	}
 }
+
+// TestDownloadAndReplace_VerifierConstructionFailureAllowsUnsigned covers
+// the embedded-PEM-gone-bad degradation path. If the verifier factory
+// itself fails (simulating a future build where fulcio.RootPEM was
+// corrupted), --allow-unsigned callers must still be able to fall back
+// to SHA-only verification instead of hard-failing. Strict callers must
+// still abort so the underlying bug can't hide.
+func TestDownloadAndReplace_VerifierConstructionFailureAllowsUnsigned(t *testing.T) {
+	binaryContent := []byte("#!/bin/sh\necho fallback\n")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := []byte(fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName))
+
+	// Mint a fixture just so we have some realistic-looking sig/cert
+	// bytes to serve — we won't get past verifier construction anyway.
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, identity, issuer)
+	sig := signBlob(t, fixture, checksums)
+
+	// Verifier factory simulates a corrupted embedded PEM.
+	origFactory := newSignatureVerifier
+	defer func() { newSignatureVerifier = origFactory }()
+	newSignatureVerifier = func(string) (*SignatureVerifier, error) {
+		return nil, fmt.Errorf("simulated: embedded Fulcio PEM unreadable")
+	}
+
+	_, teardown := testServer(t, archiveName, archive, string(checksums), sig, fixture.leafPEM)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("orig"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	// Strict mode must still abort — a build-time bug shouldn't silently
+	// erase the signature guarantee.
+	if _, err := DownloadAndReplace("v0.5.0"); err == nil {
+		t.Fatal("strict mode should refuse to update when verifier won't build")
+	}
+
+	// Reset the binary so the second leg doesn't see the already-updated
+	// content from a passing first leg.
+	os.WriteFile(fakeBinary, []byte("orig"), 0750)
+
+	var warned int
+	var warnedMsg string
+	opts := UpdateOptions{
+		AllowUnsigned: true,
+		Warn: func(format string, args ...any) {
+			warned++
+			warnedMsg = fmt.Sprintf(format, args...)
+		},
+	}
+	if _, err := DownloadAndReplaceWithOptions("v0.5.0", opts); err != nil {
+		t.Fatalf("allow-unsigned should degrade to SHA-only, got: %v", err)
+	}
+	if warned != 1 {
+		t.Errorf("Warn fired %d times, want 1", warned)
+	}
+	if !strings.Contains(warnedMsg, "verifier unavailable") {
+		t.Errorf("warning = %q, want mention of unavailable verifier", warnedMsg)
+	}
+
+	got, _ := os.ReadFile(fakeBinary)
+	if !bytes.Equal(got, binaryContent) {
+		t.Errorf("binary not replaced in fallback mode; content = %q", got)
+	}
+}

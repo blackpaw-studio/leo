@@ -377,6 +377,19 @@ func verifyChecksumsSignature(version string, checksumsBody []byte, opts UpdateO
 
 	verifier, err := newSignatureVerifier(version)
 	if err != nil {
+		// If the user explicitly opted into the unsigned escape hatch and
+		// the verifier itself can't be constructed (e.g. an embedded PEM
+		// becomes corrupted in a future build), degrade to SHA-only
+		// instead of hard-failing every update. Without AllowUnsigned, a
+		// build-time bug must still abort — silently falling back would
+		// hide the bug and defeat the whole point of signatures.
+		if opts.AllowUnsigned {
+			if opts.Warn != nil {
+				opts.Warn("WARNING: signature verifier unavailable (%v); "+
+					"falling back to SHA-256 only for %s.", err, version)
+			}
+			return nil
+		}
 		return fmt.Errorf("building verifier: %w", err)
 	}
 
