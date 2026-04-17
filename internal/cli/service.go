@@ -23,9 +23,20 @@ var supervised bool
 
 func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "service [process-name]",
-		Short:             "Start a persistent claude session",
-		Long:              "Start a long-running claude session for a configured process. Defaults to the first enabled process.",
+		Use:   "service [process-name]",
+		Short: "Start a persistent claude session",
+		Long: `Start a long-running Claude session for a configured process. With no
+argument, runs the first enabled process (alphabetically) in the foreground.
+Subcommands (start/stop/restart/logs) manage the background supervisor
+daemon, which runs every enabled process in its own tmux session with
+restart-on-crash semantics.`,
+		Example: `  # Run a specific process in the foreground
+  leo service my-bot
+
+  # Background daemon lifecycle
+  leo service start
+  leo service logs -f
+  leo service stop`,
 		Args:              cobra.MaximumNArgs(1),
 		RunE:              runService,
 		ValidArgsFunction: completeProcessNames,
@@ -296,7 +307,16 @@ func newServiceStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start service in the background",
-		Long:  "Start a background session with auto-restart. Use --daemon to install as an OS service.",
+		Long: `Start the background supervisor, which launches every enabled process
+in its own tmux session with restart-on-crash. The CLI stays foreground-free
+so this is safe to call from shell scripts. Pass --daemon to install the
+supervisor as an OS service (launchd on macOS, systemd on Linux) so it
+survives reboots.`,
+		Example: `  # One-shot background start (this shell session)
+  leo service start
+
+  # Install as a persistent OS service
+  leo service start --daemon`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -348,6 +368,12 @@ func newServiceStopCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop background service",
+		Long: `Stop the background supervisor and tear down every supervised tmux
+session. Per-process session IDs are preserved so a subsequent start will
+resume where each process left off. Pass --daemon to also remove the
+installed OS service (launchd/systemd).`,
+		Example: `  leo service stop
+  leo service stop --daemon`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -416,9 +442,16 @@ func newServiceLogsCmd() *cobra.Command {
 	var follow bool
 
 	cmd := &cobra.Command{
-		Use:               "logs [process-name]",
-		Short:             "Show service or process logs",
-		Long:              "Show the main service log, or filter for a specific process by name.",
+		Use:   "logs [process-name]",
+		Short: "Show service or process logs",
+		Long: `Tail the supervisor's aggregate log, or filter it for a single process.
+The log is written by 'leo service start' to a file under the leo home dir;
+this is the supervisor's own chatter (restart events, config reloads), not
+the Claude process output itself. For per-process Claude output, use
+'leo process logs <name>' which reads the tmux pane directly.`,
+		Example: `  leo service logs -n 200
+  leo service logs -f
+  leo service logs my-bot -f`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeProcessNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
