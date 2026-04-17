@@ -55,8 +55,30 @@ type SignatureVerifier struct {
 
 // DefaultSignatureVerifier builds a verifier trusting the embedded Sigstore
 // public-good Fulcio roots, with SAN regex and issuer tuned for Leo's own
-// GitHub Actions release workflow.
+// GitHub Actions release workflow. It accepts ANY tag matching our tag
+// shape. Callers that know the target version should prefer
+// SignatureVerifierForVersion, which pins the SAN to that exact tag and
+// closes a version-downgrade attack where an attacker serves an old
+// (vulnerable) release's valid signature+cert under a newer release URL.
 func DefaultSignatureVerifier() (*SignatureVerifier, error) {
+	return buildVerifier(`v[0-9A-Za-z.\-_]+`)
+}
+
+// SignatureVerifierForVersion builds a verifier that pins the SAN regex
+// to the exact tag passed in (e.g. "v0.5.0"). The tag is baked into the
+// Fulcio leaf certificate at signing time by GitHub Actions OIDC, so a
+// verifier that demands the caller-supplied version rejects any signature
+// issued for a different release — including stale signatures served via
+// CDN cache/MITM/malicious mirror that would otherwise pass all other
+// checks (chain + issuer + signature) and silently downgrade the user.
+func SignatureVerifierForVersion(version string) (*SignatureVerifier, error) {
+	if version == "" {
+		return nil, errors.New("version is required")
+	}
+	return buildVerifier(regexp.QuoteMeta(version))
+}
+
+func buildVerifier(tagPattern string) (*SignatureVerifier, error) {
 	roots, err := loadCertPool(fulcio.RootPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading Fulcio root: %w", err)
@@ -66,13 +88,14 @@ func DefaultSignatureVerifier() (*SignatureVerifier, error) {
 		return nil, fmt.Errorf("loading Fulcio intermediate: %w", err)
 	}
 
-	// The expected SAN is the release workflow identity. The tag is bound
-	// into the identity, so we accept any tag but hard-pin the rest —
-	// owner, repo, workflow filename. An attacker who can't impersonate the
-	// release workflow can't forge a certificate that matches.
+	// The expected SAN is the release workflow identity. Owner, repo, and
+	// workflow filename are hard-pinned; the tag segment is pinned to
+	// tagPattern so callers with a known version close the downgrade
+	// window. An attacker who can't impersonate the release workflow for
+	// this exact tag can't forge a matching certificate.
 	sanRegex, err := regexp.Compile(
 		`^https://github\.com/` + repoOwner + `/` + repoName +
-			`/\.github/workflows/release\.yml@refs/tags/v[0-9A-Za-z.\-_]+$`,
+			`/\.github/workflows/release\.yml@refs/tags/` + tagPattern + `$`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("compiling SAN regex: %w", err)

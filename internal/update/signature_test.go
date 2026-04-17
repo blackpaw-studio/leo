@@ -353,6 +353,48 @@ func TestVerifySignatureUnknownKeyType(t *testing.T) {
 	}
 }
 
+func TestSignatureVerifierForVersion_PinsTag(t *testing.T) {
+	v, err := SignatureVerifierForVersion("v0.5.0")
+	if err != nil {
+		t.Fatalf("SignatureVerifierForVersion: %v", err)
+	}
+	// Requested tag must match.
+	if !v.SANRegex.MatchString("https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0") {
+		t.Error("expected pinned regex to accept the exact requested tag")
+	}
+	// Any other tag — older, newer, or prefix — must fail. This is the
+	// version-downgrade defence in a nutshell.
+	bad := []string{
+		"https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.2.0",
+		"https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.1",
+		"https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0-rc1",
+		"https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.00",
+	}
+	for _, uri := range bad {
+		if v.SANRegex.MatchString(uri) {
+			t.Errorf("pinned regex should have rejected %q", uri)
+		}
+	}
+}
+
+func TestSignatureVerifierForVersion_EmptyVersion(t *testing.T) {
+	if _, err := SignatureVerifierForVersion(""); err == nil {
+		t.Error("expected error for empty version")
+	}
+}
+
+func TestSignatureVerifierForVersion_EscapesRegexMetachars(t *testing.T) {
+	// A version string is CLI-supplied; regex metacharacters in it must be
+	// escaped, not compiled as regex — otherwise "v.+" would match any tag.
+	v, err := SignatureVerifierForVersion("v.+")
+	if err != nil {
+		t.Fatalf("SignatureVerifierForVersion: %v", err)
+	}
+	if v.SANRegex.MatchString("https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0") {
+		t.Error("regex metachars in version must not leak into the SAN regex")
+	}
+}
+
 func TestDefaultSignatureVerifierLoadsEmbeddedRoots(t *testing.T) {
 	v, err := DefaultSignatureVerifier()
 	if err != nil {
@@ -394,9 +436,9 @@ func TestDownloadAndReplace_SignedHappyPath(t *testing.T) {
 	// root, which didn't issue our fixture.
 	origFactory := newSignatureVerifier
 	defer func() { newSignatureVerifier = origFactory }()
-	newSignatureVerifier = func() (*SignatureVerifier, error) {
+	newSignatureVerifier = func(version string) (*SignatureVerifier, error) {
 		return verifierFor(t, fixture,
-			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`),
+			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/`+regexp.QuoteMeta(version)+`$`),
 			issuer,
 		), nil
 	}
@@ -443,9 +485,9 @@ func TestDownloadAndReplace_TamperedChecksums(t *testing.T) {
 
 	origFactory := newSignatureVerifier
 	defer func() { newSignatureVerifier = origFactory }()
-	newSignatureVerifier = func() (*SignatureVerifier, error) {
+	newSignatureVerifier = func(version string) (*SignatureVerifier, error) {
 		return verifierFor(t, fixture,
-			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`),
+			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/`+regexp.QuoteMeta(version)+`$`),
 			issuer,
 		), nil
 	}
@@ -492,10 +534,10 @@ func TestDownloadAndReplace_AttackerSANIsRejected(t *testing.T) {
 
 	origFactory := newSignatureVerifier
 	defer func() { newSignatureVerifier = origFactory }()
-	newSignatureVerifier = func() (*SignatureVerifier, error) {
+	newSignatureVerifier = func(version string) (*SignatureVerifier, error) {
 		// Verifier insists on the legitimate repo — attacker's cert won't match.
 		return verifierFor(t, fixture,
-			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`),
+			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/`+regexp.QuoteMeta(version)+`$`),
 			issuer,
 		), nil
 	}
@@ -562,5 +604,112 @@ func TestDownloadAndReplace_UnsignedReleaseFallback(t *testing.T) {
 	got, _ := os.ReadFile(fakeBinary)
 	if !bytes.Equal(got, binaryContent) {
 		t.Errorf("binary not replaced in fallback mode")
+	}
+}
+
+// TestDownloadAndReplace_VersionDowngradeRejected is the regression test
+// for the version-downgrade attack:
+//
+//	attacker serves a *valid* sig+cert+checksums bundle from an old
+//	(vulnerable) release behind the URL path of a newer release. Chain,
+//	SAN shape, issuer, signature, and the archive hash all pass — but the
+//	cert's SAN binds the old tag. Without pinning the verifier to the
+//	requested version, the update silently downgrades.
+//
+// We mint a fixture for v0.2.0 and ask the update flow to install v0.5.0.
+// The verifier must reject with a SAN mismatch.
+func TestDownloadAndReplace_VersionDowngradeRejected(t *testing.T) {
+	binaryContent := []byte("#!/bin/sh\necho downgraded\n")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := []byte(fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName))
+
+	// Fixture is issued for the OLD tag. Everything else (issuer, chain,
+	// signature over the served checksums body) is legitimate.
+	oldIdentity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.2.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, oldIdentity, issuer)
+	sig := signBlob(t, fixture, checksums)
+
+	// Emulate the production factory's behaviour: build a verifier that
+	// pins its SAN regex to the version the caller requested. Fixture
+	// uses our self-signed root, not real Fulcio, so we stub the factory
+	// but reproduce its per-version SAN construction.
+	origFactory := newSignatureVerifier
+	defer func() { newSignatureVerifier = origFactory }()
+	newSignatureVerifier = func(version string) (*SignatureVerifier, error) {
+		return verifierFor(t, fixture,
+			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/`+regexp.QuoteMeta(version)+`$`),
+			issuer,
+		), nil
+	}
+
+	_, teardown := testServer(t, archiveName, archive, string(checksums), sig, fixture.leafPEM)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("orig"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	// Caller asks for v0.5.0; attacker serves a v0.2.0-issued bundle.
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected SAN mismatch when bundle was issued for an older tag")
+	}
+	if !strings.Contains(err.Error(), "SAN") {
+		t.Errorf("error = %q, want mention of SAN mismatch", err.Error())
+	}
+
+	// Binary must not have been replaced.
+	got, _ := os.ReadFile(fakeBinary)
+	if string(got) != "orig" {
+		t.Errorf("binary was replaced despite downgrade attempt: %q", got)
+	}
+}
+
+// TestDownloadAndReplace_MatchingVersionAccepted complements the
+// downgrade test: the same pinned verifier accepts a bundle issued for
+// the tag actually being requested.
+func TestDownloadAndReplace_MatchingVersionAccepted(t *testing.T) {
+	binaryContent := []byte("#!/bin/sh\necho ok\n")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := []byte(fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName))
+
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, identity, issuer)
+	sig := signBlob(t, fixture, checksums)
+
+	origFactory := newSignatureVerifier
+	defer func() { newSignatureVerifier = origFactory }()
+	newSignatureVerifier = func(version string) (*SignatureVerifier, error) {
+		return verifierFor(t, fixture,
+			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/`+regexp.QuoteMeta(version)+`$`),
+			issuer,
+		), nil
+	}
+
+	_, teardown := testServer(t, archiveName, archive, string(checksums), sig, fixture.leafPEM)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("orig"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	if _, err := DownloadAndReplace("v0.5.0"); err != nil {
+		t.Fatalf("DownloadAndReplace() should accept matching-version bundle: %v", err)
+	}
+	got, _ := os.ReadFile(fakeBinary)
+	if !bytes.Equal(got, binaryContent) {
+		t.Errorf("binary not replaced; content = %q", got)
 	}
 }

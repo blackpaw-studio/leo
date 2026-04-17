@@ -87,8 +87,10 @@ var (
 	certURLTemplate      = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/" + certFileName
 
 	// newSignatureVerifier is overridden in tests that want to inject a
-	// fixture verifier keyed to a self-signed root.
-	newSignatureVerifier = DefaultSignatureVerifier
+	// fixture verifier keyed to a self-signed root. It takes the target
+	// release version so the returned verifier can pin the SAN regex to
+	// that exact tag (see SignatureVerifierForVersion for rationale).
+	newSignatureVerifier = SignatureVerifierForVersion
 )
 
 // CheckLatestVersion returns the latest release tag from GitHub (e.g. "v0.5.2").
@@ -373,7 +375,7 @@ func verifyChecksumsSignature(version string, checksumsBody []byte, opts UpdateO
 		return nil
 	}
 
-	verifier, err := newSignatureVerifier()
+	verifier, err := newSignatureVerifier(version)
 	if err != nil {
 		return fmt.Errorf("building verifier: %w", err)
 	}
