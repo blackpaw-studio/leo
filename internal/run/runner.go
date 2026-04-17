@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/session"
+	"github.com/blackpaw-studio/leo/internal/update"
 )
 
 var execCommand = exec.Command
@@ -110,6 +111,14 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 	timeout := cfg.TaskTimeout(task)
 	taskWorkspace := cfg.TaskWorkspace(task)
+
+	// Sync workspace templates (CLAUDE.md, skills/*.md) with this binary's
+	// embedded versions. Content-diffed, so it's a no-op when up to date.
+	// Covers cron-invoked `leo run <task>` paths that don't go through the
+	// daemon (the daemon supervisor does its own refresh at startup).
+	if _, err := update.RefreshWorkspace(taskWorkspace); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: workspace refresh failed: %v\n", err)
+	}
 
 	maxAttempts := task.Retries + 1
 	var lastErr error

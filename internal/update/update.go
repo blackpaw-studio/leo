@@ -127,6 +127,36 @@ func parseVersion(v string) [3]int {
 	return parts
 }
 
+// PackageManagerHomebrew is the manager string returned by
+// PackageManagerInstall when the running binary lives inside a Homebrew
+// Cellar.
+const PackageManagerHomebrew = "homebrew"
+
+// PackageManagerInstall reports whether the running binary was installed by
+// a system package manager that owns its lifecycle. It returns the manager
+// name (e.g. PackageManagerHomebrew) and the resolved binary path, or
+// ("", "") if no package manager is detected.
+//
+// Detection is path-based: a symlink-resolved executable path containing
+// "/Cellar/leo/" is treated as a Homebrew install. That single marker
+// covers every Homebrew prefix — /opt/homebrew (ARM macOS), /usr/local
+// (Intel macOS), and /home/linuxbrew/.linuxbrew (Linuxbrew) — without
+// shelling out to brew.
+func PackageManagerInstall() (manager, path string) {
+	p, err := osExecutable()
+	if err != nil {
+		return "", ""
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", ""
+	}
+	if strings.Contains(resolved, "/Cellar/leo/") {
+		return PackageManagerHomebrew, resolved
+	}
+	return "", ""
+}
+
 // DownloadAndReplace downloads the release archive for the current platform,
 // verifies its SHA-256 against the release's checksums.txt, extracts the
 // binary, and atomically replaces the running binary. Returns the path that

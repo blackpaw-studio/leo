@@ -19,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/tmux"
+	"github.com/blackpaw-studio/leo/internal/update"
 )
 
 // Testability seams
@@ -402,6 +403,18 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	restored := RestoreAgents(homePath, tmuxPath, supervisor)
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
+	}
+
+	// Sync workspace templates (CLAUDE.md, skills/*.md) with whatever's
+	// embedded in this binary. Content-diffed, so it's a no-op when files
+	// already match. Called on every daemon start so `brew upgrade` +
+	// `leo service restart` (or `leo update` + restart) re-syncs the
+	// workspace automatically — no manual step.
+	workspacePath := filepath.Join(homePath, "workspace")
+	if written, err := update.RefreshWorkspace(workspacePath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: workspace refresh failed: %v\n", err)
+	} else if len(written) > 0 {
+		fmt.Fprintf(os.Stdout, "refreshed %d workspace file(s)\n", len(written))
 	}
 
 	// Validate process workspaces before starting

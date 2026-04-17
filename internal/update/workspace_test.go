@@ -54,22 +54,89 @@ func TestRefreshWorkspaceOverwrites(t *testing.T) {
 	firstSkill := templates.SkillFiles()[0]
 	os.WriteFile(filepath.Join(dir, "skills", firstSkill), []byte("old skill"), 0644)
 
-	_, err := RefreshWorkspace(dir)
+	written, err := RefreshWorkspace(dir)
 	if err != nil {
 		t.Fatalf("RefreshWorkspace() error: %v", err)
 	}
 
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	skillPath := filepath.Join(dir, "skills", firstSkill)
+	if !contains(written, claudePath) {
+		t.Errorf("written list missing %s: %v", claudePath, written)
+	}
+	if !contains(written, skillPath) {
+		t.Errorf("written list missing %s: %v", skillPath, written)
+	}
+
 	// CLAUDE.md should be overwritten
-	data, _ := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	data, _ := os.ReadFile(claudePath)
 	if string(data) == "old content" {
 		t.Error("CLAUDE.md was not overwritten")
 	}
 
 	// Skill should be overwritten
-	data, _ = os.ReadFile(filepath.Join(dir, "skills", firstSkill))
+	data, _ = os.ReadFile(skillPath)
 	if string(data) == "old skill" {
 		t.Error("skill file was not overwritten")
 	}
+}
+
+func TestRefreshWorkspaceNoopWhenCurrent(t *testing.T) {
+	dir := t.TempDir()
+
+	first, err := RefreshWorkspace(dir)
+	if err != nil {
+		t.Fatalf("first RefreshWorkspace() error: %v", err)
+	}
+	if len(first) == 0 {
+		t.Fatal("first call wrote nothing; expected initial population")
+	}
+
+	// Snapshot mtimes of every managed file.
+	type fileStat struct {
+		path  string
+		mtime int64
+	}
+	statPaths := []string{filepath.Join(dir, "CLAUDE.md")}
+	for _, skill := range templates.SkillFiles() {
+		statPaths = append(statPaths, filepath.Join(dir, "skills", skill))
+	}
+	snapshots := make([]fileStat, 0, len(statPaths))
+	for _, p := range statPaths {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		snapshots = append(snapshots, fileStat{path: p, mtime: info.ModTime().UnixNano()})
+	}
+
+	// Second call: everything is current, nothing should be rewritten.
+	second, err := RefreshWorkspace(dir)
+	if err != nil {
+		t.Fatalf("second RefreshWorkspace() error: %v", err)
+	}
+	if len(second) != 0 {
+		t.Errorf("second call rewrote files unexpectedly: %v", second)
+	}
+
+	for _, snap := range snapshots {
+		info, err := os.Stat(snap.path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", snap.path, err)
+		}
+		if got := info.ModTime().UnixNano(); got != snap.mtime {
+			t.Errorf("%s mtime changed: before=%d after=%d", snap.path, snap.mtime, got)
+		}
+	}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRefreshWorkspaceSkipsExistingHeartbeat(t *testing.T) {

@@ -13,75 +13,62 @@ import (
 )
 
 func newUpdateCmd() *cobra.Command {
-	var workspaceOnly bool
 	var checkOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update leo binary and refresh workspace files",
-		Long:  "Download the latest leo release and update workspace template files (CLAUDE.md, skills/*.md).",
+		Short: "Update the leo binary",
+		Long: "Download the latest leo release and replace the running binary.\n\n" +
+			"Workspace templates (CLAUDE.md, skills/*.md) re-sync automatically\n" +
+			"whenever the service starts — restart the daemon after updating to\n" +
+			"pick up any template changes.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Binary update (unless --workspace-only)
-			if !workspaceOnly {
-				info.Println("Checking for updates...")
+			info.Println("Checking for updates...")
 
-				latest, err := update.CheckLatestVersion()
+			latest, err := update.CheckLatestVersion()
+			if err != nil {
+				return fmt.Errorf("checking for updates: %w", err)
+			}
+
+			mgr, mgrPath := update.PackageManagerInstall()
+			hasUpdate := update.IsNewer(Version, latest)
+
+			switch {
+			case !hasUpdate:
+				if checkOnly {
+					success.Printf("Already up to date (%s)\n", Version)
+					return nil
+				}
+				success.Printf("Binary up to date (%s)\n", Version)
+				return nil
+
+			case mgr == update.PackageManagerHomebrew:
+				warn.Printf("leo is installed via Homebrew (%s).\n", mgrPath)
+				warn.Printf("Update available: %s → %s\n", Version, latest)
+				warn.Println("Upgrade with:")
+				warn.Println("  brew upgrade blackpaw-studio/tap/leo")
+				warn.Println("  leo service restart    # reload the daemon and sync workspace files")
+				return nil
+
+			case checkOnly:
+				info.Printf("Update available: %s → %s\n", Version, latest)
+				return nil
+
+			default:
+				info.Printf("Downloading leo %s...\n", latest)
+				path, err := update.DownloadAndReplace(latest)
 				if err != nil {
-					return fmt.Errorf("checking for updates: %w", err)
+					return fmt.Errorf("updating binary: %w", err)
 				}
-
-				if update.IsNewer(Version, latest) {
-					if checkOnly {
-						info.Printf("Update available: %s → %s\n", Version, latest)
-						return nil
-					}
-
-					info.Printf("Downloading leo %s...\n", latest)
-					path, err := update.DownloadAndReplace(latest)
-					if err != nil {
-						return fmt.Errorf("updating binary: %w", err)
-					}
-					success.Printf("Updated %s to %s\n", path, latest)
-				} else {
-					if checkOnly {
-						success.Printf("Already up to date (%s)\n", Version)
-						return nil
-					}
-					success.Printf("Binary up to date (%s)\n", Version)
-				}
+				success.Printf("Updated %s to %s\n", path, latest)
 			}
 
-			if checkOnly {
-				return nil
-			}
-
-			// Workspace refresh — only when the install has a local workspace.
-			// Pure client installs (client.hosts only) and unconfigured hosts
-			// skip this step; they dispatch to remote leo servers or haven't
-			// run `leo setup` yet.
+			// Offer to restart the daemon so the new binary takes effect —
+			// the restart also re-syncs workspace templates.
 			cfg, err := loadConfig()
-			if err != nil {
-				info.Printf("Skipping workspace refresh (no leo.yaml — client-only install?)\n")
+			if err != nil || cfg.IsClientOnly() {
 				return nil
 			}
-
-			if cfg.IsClientOnly() {
-				info.Println("Client-only install — skipping workspace refresh.")
-				return nil
-			}
-
-			info.Println("Refreshing workspace files...")
-			written, err := update.RefreshWorkspace(cfg.DefaultWorkspace())
-			if err != nil {
-				return fmt.Errorf("refreshing workspace: %w", err)
-			}
-
-			for _, path := range written {
-				info.Printf("  Updated %s\n", path)
-			}
-			success.Printf("Refreshed %d file(s)\n", len(written))
-
-			// Offer to restart daemon if it's running
 			if daemon.IsRunning(cfg.HomePath) {
 				reader := bufio.NewReader(os.Stdin)
 				if prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
@@ -97,8 +84,6 @@ func newUpdateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&workspaceOnly, "workspace-only", false,
-		"skip binary update, only refresh workspace files")
 	cmd.Flags().BoolVar(&checkOnly, "check", false,
 		"check if an update is available without installing")
 
