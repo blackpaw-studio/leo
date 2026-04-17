@@ -17,18 +17,20 @@ Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-c
 
 ## Install
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
-```
-
-Prefer to verify the installer before running it? Each release publishes `install.sh` with a matching `install.sh.sha256`:
+Each release publishes `install.sh` with a matching `install.sh.sha256`. The verified flow:
 
 ```bash
-VER=$(curl -fsSL https://api.github.com/repos/blackpaw-studio/leo/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+VER=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/blackpaw-studio/leo/releases/latest | awk -F/ '{print $NF}')
 curl -fsSLO "https://github.com/blackpaw-studio/leo/releases/download/${VER}/install.sh"
 curl -fsSLO "https://github.com/blackpaw-studio/leo/releases/download/${VER}/install.sh.sha256"
 shasum -a 256 -c install.sh.sha256
 sh install.sh
+```
+
+This is the quick path. For a verified install, see above.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
 ```
 
 Or with Homebrew:
