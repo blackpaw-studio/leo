@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prompt"
@@ -11,6 +12,34 @@ import (
 	"github.com/blackpaw-studio/leo/internal/update"
 	"github.com/spf13/cobra"
 )
+
+// allowUnsignedFromEnv returns true when LEO_ALLOW_UNSIGNED_RELEASE is
+// set to a truthy value (1, true, yes, on, …). Unset, empty, or
+// falsey values (0, false, no, off) all return false. Using ParseBool
+// avoids the previous "any non-empty value enables fallback" footgun
+// where LEO_ALLOW_UNSIGNED_RELEASE=false was interpreted as "enable
+// fallback".
+func allowUnsignedFromEnv() bool {
+	raw := os.Getenv(update.UnsignedReleaseEnv)
+	if raw == "" {
+		return false
+	}
+	// strconv.ParseBool accepts 1/t/T/true/TRUE/True/0/f/F/false/FALSE/False.
+	// Extend to the other common "truthy/falsy" words explicitly so
+	// users typing yes/on/no/off aren't surprised.
+	if v, err := strconv.ParseBool(raw); err == nil {
+		return v
+	}
+	switch raw {
+	case "yes", "YES", "Yes", "on", "ON", "On":
+		return true
+	case "no", "NO", "No", "off", "OFF", "Off":
+		return false
+	}
+	// Unrecognised values fall through to strict-mode default: a typo
+	// should not silently disable signature verification.
+	return false
+}
 
 func newUpdateCmd() *cobra.Command {
 	var checkOnly bool
@@ -62,9 +91,10 @@ func newUpdateCmd() *cobra.Command {
 				info.Printf("Downloading leo %s...\n", latest)
 				opts := update.UpdateOptions{
 					// Allow fallback when the flag is passed explicitly OR when
-					// the env var is set — both are equivalent escape hatches
-					// for the rollout window where old releases have no sig.
-					AllowUnsigned: allowUnsigned || os.Getenv(update.UnsignedReleaseEnv) != "",
+					// the env var is set to a truthy value — both are equivalent
+					// escape hatches for the rollout window where old releases
+					// have no sig.
+					AllowUnsigned: allowUnsigned || allowUnsignedFromEnv(),
 					Warn: func(format string, args ...any) {
 						warn.Printf(format+"\n", args...)
 					},
