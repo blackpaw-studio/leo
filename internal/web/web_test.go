@@ -13,6 +13,29 @@ import (
 	"github.com/blackpaw-studio/leo/internal/cron"
 )
 
+// testPort and testAPIToken are used by the shared test server so requests
+// built with httptest.NewRequest automatically satisfy the Host + bearer
+// middleware.
+const (
+	testPort     = 8370
+	testAPIToken = "test-token"
+)
+
+// testHost is the Host header value that matches testPort in the web
+// middleware's allowlist.
+var testHost = "127.0.0.1:8370"
+
+// authorizeTestRequest attaches a valid Host header (and, for /api/* paths, a
+// valid bearer token) so the Host/Origin and bearer middleware let the
+// request reach the handler under test.
+func authorizeTestRequest(req *http.Request) *http.Request {
+	req.Host = testHost
+	if strings.HasPrefix(req.URL.Path, "/api/") {
+		req.Header.Set("Authorization", "Bearer "+testAPIToken)
+	}
+	return req
+}
+
 const testConfigYAML = `
 defaults:
   model: sonnet
@@ -101,7 +124,37 @@ func newTestServer(t *testing.T) (*Server, string) {
 
 	reloader := &mockReloader{}
 
-	s := New(cfgPath, processes, scheduler, reloader, nil)
+	s := New(cfgPath, processes, scheduler, reloader, nil, Options{Port: testPort, APIToken: testAPIToken})
+
+	// Wrap the real handler so every test request is auto-authenticated for
+	// Host + bearer middleware. Tests that specifically exercise the
+	// middleware use newRawTestServer instead.
+	rawHandler := s.httpServer.Handler
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizeTestRequest(r)
+		rawHandler.ServeHTTP(w, r)
+	})
+	s.httpServer.Handler = wrapped
+	return s, dir
+}
+
+// newRawTestServer returns a server whose httpServer.Handler is the unwrapped
+// middleware chain — use this when testing the middleware itself.
+func newRawTestServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "leo-web-raw-test-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := writeTestConfig(t, dir)
+
+	processes := &mockProcesses{states: map[string]ProcessStateInfo{}}
+	scheduler := &mockScheduler{}
+	reloader := &mockReloader{}
+
+	s := New(cfgPath, processes, scheduler, reloader, nil, Options{Port: testPort, APIToken: testAPIToken})
 	return s, dir
 }
 
@@ -340,9 +393,10 @@ defaults:
 	os.WriteFile(cfgPath, []byte(cfgYAML), 0600)
 	os.MkdirAll(filepath.Join(dir, "state"), 0750)
 
-	s := New(cfgPath, nil, nil, nil, nil)
+	s := New(cfgPath, nil, nil, nil, nil, Options{Port: testPort, APIToken: testAPIToken})
 
 	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = testHost
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 

@@ -164,24 +164,39 @@ type AgentSpawnSpec = agent.SpawnRequest
 // StartWeb starts the web UI on a TCP listener if web is enabled in config.
 // agentSvc is the high-level agent.Manager used by web and daemon handlers; it
 // may be nil to disable agent UI features.
+//
+// Before serving any request the web package mints (or loads) a bearer token
+// at <state>/api.token, used to gate /api/* routes. The file is user-only
+// (0600) and readable by plugins running as the same Unix user.
 func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	if !cfg.Web.Enabled {
 		return nil
 	}
 
-	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc)
+	apiToken, err := web.EnsureAPIToken(cfg.StatePath())
+	if err != nil {
+		return fmt.Errorf("preparing web api token: %w", err)
+	}
+
+	port := cfg.WebPort()
+	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
+		Port:     port,
+		APIToken: apiToken,
+	})
 	bind := cfg.WebBind()
-	addr := fmt.Sprintf("%s:%d", bind, cfg.WebPort())
+	addr := fmt.Sprintf("%s:%d", bind, port)
 	if err := s.webServer.ListenAndServe(addr); err != nil {
 		return fmt.Errorf("starting web UI: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "web UI listening on http://%s\n", addr)
+	fmt.Fprintf(os.Stderr, "api token stored at %s (used for /api/* Bearer auth)\n", web.APITokenPath(cfg.StatePath()))
 	if !config.IsLoopbackBind(bind) {
 		fmt.Fprintf(os.Stderr,
 			"WARNING: web.bind=%q exposes the Leo web UI beyond localhost. "+
-				"The UI has no built-in auth; anyone who can reach %q can control "+
-				"supervised processes and edit config. Only do this on a trusted network.\n",
-			bind, addr)
+				"The UI uses Host/Origin pinning for browser routes and a bearer "+
+				"token for /api/*, but is still intended for single-user use. "+
+				"Only expose on trusted networks.\n",
+			bind)
 	}
 	return nil
 }
