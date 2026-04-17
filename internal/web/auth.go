@@ -8,6 +8,17 @@ import (
 	"path/filepath"
 )
 
+// stateDirMode is the permission the state directory must end up with.
+// We re-chmod on every call so that a loose legacy dir gets tightened
+// even when MkdirAll is a no-op.
+const stateDirMode os.FileMode = 0700
+
+// apiTokenFileMode is the permission the api.token file must have.
+// We deliberately refuse to start if it is looser — silently auto-
+// chmod'ing would mask a state we want the operator to notice
+// (backup restore, sysadmin script, older Leo leaving 0644 around).
+const apiTokenFileMode os.FileMode = 0600
+
 // apiTokenFileName is the basename of the bearer-token file under the state directory.
 const apiTokenFileName = "api.token"
 
@@ -21,19 +32,40 @@ func APITokenPath(stateDir string) string {
 // and returns its contents. If the file is missing it generates a fresh token
 // (32 random bytes, hex-encoded = 64 hex chars) and writes it with mode 0600.
 // If the file exists its contents are returned unchanged — callers should not
-// rotate silently. stateDir is created with mode 0700 if absent.
+// rotate silently. stateDir is created with mode 0700 if absent, and its perm
+// is tightened to 0700 if an existing directory was looser.
+//
+// If the existing token file is not mode 0600, EnsureAPIToken refuses to start
+// rather than silently auto-chmod'ing. The caller should delete the file (or
+// fix its permissions) to unblock startup.
 func EnsureAPIToken(stateDir string) (string, error) {
 	if stateDir == "" {
 		return "", fmt.Errorf("web: empty state dir")
 	}
-	if err := os.MkdirAll(stateDir, 0700); err != nil {
+	if err := os.MkdirAll(stateDir, stateDirMode); err != nil {
 		return "", fmt.Errorf("web: creating state dir %q: %w", stateDir, err)
+	}
+	// MkdirAll is a no-op if the directory already exists with looser perms,
+	// so always chmod. If the admin has mounted or owned the dir in a way
+	// that forbids chmod, log a warning but continue — we still refuse to
+	// serve if the token file itself is loose, which is the real risk.
+	if err := os.Chmod(stateDir, stateDirMode); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: web: chmod state dir %q to %o failed: %v\n", stateDir, stateDirMode, err)
 	}
 
 	path := APITokenPath(stateDir)
 
-	// Fast path: existing token.
+	// Fast path: existing token. os.Stat follows symlinks so an admin can
+	// point api.token at a keyring-managed file; the target itself must
+	// still be 0600.
 	if data, err := os.ReadFile(path); err == nil {
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return "", fmt.Errorf("web: stat api token %q: %w", path, statErr)
+		}
+		if perm := info.Mode().Perm(); perm != apiTokenFileMode {
+			return "", fmt.Errorf("web: api token file %q has perm %o, expected %o; fix or delete", path, perm, apiTokenFileMode)
+		}
 		tok := trimToken(data)
 		if tok == "" {
 			return "", fmt.Errorf("web: api token file %q is empty; delete it to regenerate", path)
@@ -61,7 +93,7 @@ func EnsureAPIToken(stateDir string) (string, error) {
 		_ = os.Remove(tmpName)
 		return "", fmt.Errorf("web: writing temp token: %w", err)
 	}
-	if err := tmp.Chmod(0600); err != nil {
+	if err := tmp.Chmod(apiTokenFileMode); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 		return "", fmt.Errorf("web: chmod temp token: %w", err)

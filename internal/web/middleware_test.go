@@ -304,3 +304,65 @@ func TestEnsureAPIToken_RejectsEmptyFile(t *testing.T) {
 		t.Fatal("expected error for empty token file, got nil")
 	}
 }
+
+func TestEnsureAPIToken_RejectsLoosePerms(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	tokenPath := filepath.Join(stateDir, "api.token")
+	if err := os.WriteFile(tokenPath, []byte("abcdef0123456789\n"), 0644); err != nil {
+		t.Fatalf("write loose token: %v", err)
+	}
+	// Ensure the perm stuck despite any umask.
+	if err := os.Chmod(tokenPath, 0644); err != nil {
+		t.Fatalf("chmod loose token: %v", err)
+	}
+
+	_, err := EnsureAPIToken(stateDir)
+	if err == nil {
+		t.Fatal("expected error for token file with 0644 perms, got nil")
+	}
+	if !strings.Contains(err.Error(), "644") {
+		t.Errorf("error should mention actual perm %o, got: %v", 0644, err)
+	}
+	if !strings.Contains(err.Error(), "fix or delete") {
+		t.Errorf("error should advise fix-or-delete, got: %v", err)
+	}
+}
+
+func TestEnsureAPIToken_TightensLooseStateDir(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "state")
+	// Pre-create the dir loose, with a correctly-permissioned token inside.
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(stateDir, 0750); err != nil {
+		t.Fatalf("chmod initial state dir: %v", err)
+	}
+	tokenPath := filepath.Join(stateDir, "api.token")
+	if err := os.WriteFile(tokenPath, []byte("abcdef0123456789\n"), 0600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	if err := os.Chmod(tokenPath, 0600); err != nil {
+		t.Fatalf("chmod token: %v", err)
+	}
+
+	tok, err := EnsureAPIToken(stateDir)
+	if err != nil {
+		t.Fatalf("EnsureAPIToken on loose dir: %v", err)
+	}
+	if tok != "abcdef0123456789" {
+		t.Errorf("token = %q, want unchanged", tok)
+	}
+
+	info, err := os.Stat(stateDir)
+	if err != nil {
+		t.Fatalf("stat state dir: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0700 {
+		t.Errorf("state dir perm after EnsureAPIToken = %o, want 0700", perm)
+	}
+}
