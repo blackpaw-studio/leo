@@ -545,7 +545,8 @@ the usual tmux prefix + d (default: C-b d).`,
 
   # Or by a unique shorthand the daemon can resolve
   leo agent attach fetch`,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
@@ -644,7 +645,8 @@ remove the worktree and agentstore record in one step.`,
 
   # Stop and clean up worktree + local branch
   leo agent stop leo-mcp-node-owner-fetch --prune --delete-branch`,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if (force || deleteBranch) && !prune {
@@ -720,7 +722,8 @@ func newAgentPruneCmd() *cobra.Command {
 that has already been stopped. No-op for shared-workspace agents. Pass
 --force to override the dirty-worktree check, or --delete-branch to also
 delete the local branch after the worktree is gone.`,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
@@ -767,7 +770,8 @@ func newAgentLogsCmd() *cobra.Command {
 
   # Tail a specific count, then follow live output
   leo agent logs leo-mcp-node-owner-fetch -n 500 --follow`,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
@@ -803,6 +807,32 @@ func newAgentLogsCmd() *cobra.Command {
 	cmd.Flags().IntVarP(&lines, "lines", "n", 200, "number of trailing lines to show")
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "stream output (tail -f)")
 	return cmd
+}
+
+// completeAgentNames supplies shell-completion values for commands that take an
+// agent name. It queries the local daemon's live agent list — the same source
+// `leo agent list` shows — and returns agent names. Daemon unreachable or any
+// other failure returns ShellCompDirectiveNoFileComp with no values so the
+// shell falls back to no completion rather than suggesting filenames.
+func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	records, err := daemon.AgentList(cfg.HomePath)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	names := make([]string, 0, len(records))
+	for _, r := range records {
+		if r.Name != "" {
+			names = append(names, r.Name)
+		}
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
 }
 
 // --- helpers ---

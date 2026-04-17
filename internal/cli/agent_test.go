@@ -9,6 +9,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/spf13/cobra"
 )
 
 // newAgentCLITestConfig writes a config with a single remote host and sets
@@ -743,6 +744,39 @@ func TestAgentStopRemoteForwardsPruneFlags(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ssh call missing %q: %s", want, joined)
 		}
+	}
+}
+
+// TestCompleteAgentNamesGracefulFallback: when the daemon isn't reachable
+// (the common case under `go test`), the completer returns
+// ShellCompDirectiveNoFileComp with no values instead of error-ing, so the
+// shell suppresses filename completion rather than suggesting garbage.
+func TestCompleteAgentNamesGracefulFallback(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	// Point the CLI at the test config so loadConfig() succeeds even though
+	// no daemon is running against that home directory.
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	names, directive := completeAgentNames(nil, nil, "")
+	if len(names) != 0 {
+		t.Errorf("expected no names when daemon unreachable, got %v", names)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestCompleteAgentNamesSkipsAfterFirstArg: agent commands take a single
+// positional, so completion should yield nothing once one is already given.
+func TestCompleteAgentNamesSkipsAfterFirstArg(t *testing.T) {
+	names, directive := completeAgentNames(nil, []string{"already"}, "")
+	if len(names) != 0 {
+		t.Errorf("expected no names after first arg, got %v", names)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
 	}
 }
 
