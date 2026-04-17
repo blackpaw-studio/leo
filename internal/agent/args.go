@@ -31,6 +31,12 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 
 	args = append(args, "--add-dir", workspace)
 	for _, dir := range tmpl.AddDirs {
+		// Defense in depth: Config.Validate() also rejects these, but skip
+		// anything unsafe here in case spawn-time receives an unvalidated
+		// config (e.g. test harness, future callers).
+		if err := config.ValidateAddDir(dir); err != nil {
+			continue
+		}
 		args = append(args, "--add-dir", dir)
 	}
 
