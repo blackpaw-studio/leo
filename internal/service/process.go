@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -671,7 +672,7 @@ func buildClaudeShellCmd(claudePath string, args []string, tmuxPath string, spec
 	for k := range spec.Env {
 		keys = append(keys, k)
 	}
-	sortStrings(keys)
+	sort.Strings(keys)
 	for _, k := range keys {
 		if !supervisorEnvKeyPattern.MatchString(k) {
 			if warnOut != nil {
@@ -682,16 +683,6 @@ func buildClaudeShellCmd(claudePath string, args []string, tmuxPath string, spec
 		cmd = fmt.Sprintf("export %s=%s; %s", k, shellQuote(spec.Env[k]), cmd)
 	}
 	return cmd
-}
-
-// sortStrings is a tiny wrapper so process.go doesn't pull in sort for
-// one call site. Uses insertion sort; env maps are small in practice.
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
 }
 
 // hasDevChannelFlag reports whether the claude arg list contains
