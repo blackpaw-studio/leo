@@ -257,7 +257,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 					for _, m := range matches {
 						labels = append(labels, fmt.Sprintf("%s (%s)", m.Name, m.Repo))
 					}
-					return fmt.Errorf("multiple existing agents match %q: %s — pass the full owner/repo to disambiguate",
+					return fmt.Errorf("multiple existing agents match %q: %s — pass the full owner/repo or run 'leo agent list' to disambiguate",
 						repo, strings.Join(labels, ", "))
 				}
 			} else {
