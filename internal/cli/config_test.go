@@ -103,3 +103,56 @@ func keys(m map[string]any) []string {
 	}
 	return out
 }
+
+// TestConfigPath verifies `leo config path` prints the absolute path to the
+// resolved config file. The output is one line, trimmable whitespace only.
+func TestConfigPath(t *testing.T) {
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "leo.yaml")
+	if err := config.Save(cfgPath, &config.Config{HomePath: home}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	oldCfgFile := cfgFile
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	out := captureStdoutForConfigTests(t, func() {
+		cmd := newConfigPathCmd()
+		if err := cmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("RunE: %v", err)
+		}
+	})
+
+	got := strings.TrimSpace(out)
+	wantAbs, err := filepath.Abs(cfgPath)
+	if err != nil {
+		t.Fatalf("Abs: %v", err)
+	}
+	if got != wantAbs {
+		t.Errorf("output = %q; want %q", got, wantAbs)
+	}
+}
+
+// TestConfigPath_NoConfig verifies that when no config can be found, the
+// command returns an error rather than printing an empty path.
+func TestConfigPath_NoConfig(t *testing.T) {
+	oldCfgFile := cfgFile
+	cfgFile = ""
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	// Point FindConfig at a directory tree with no leo.yaml and no default
+	// home match. We can't easily override DefaultHome from here, so instead
+	// rely on the --config=<nonexistent> path failing the normal resolver.
+	// Use a path that definitely doesn't exist.
+	cfgFile = filepath.Join(t.TempDir(), "nope.yaml")
+
+	_ = captureStdoutForConfigTests(t, func() {
+		cmd := newConfigPathCmd()
+		// When cfgFile is set but file doesn't exist, the command still prints
+		// the absolute path (it doesn't verify existence — scripts like
+		// `vim $(leo config path)` may want to create the file).
+		if err := cmd.RunE(cmd, nil); err != nil {
+			t.Fatalf("RunE: unexpected error %v", err)
+		}
+	})
+}

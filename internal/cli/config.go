@@ -18,9 +18,35 @@ func newConfigCmd() *cobra.Command {
 		Short: "Manage leo configuration",
 	}
 
-	cmd.AddCommand(newConfigShowCmd(), newConfigEditCmd())
+	cmd.AddCommand(newConfigShowCmd(), newConfigEditCmd(), newConfigPathCmd())
 
 	return cmd
+}
+
+// newConfigPathCmd prints the absolute path to the resolved config file.
+// Useful for scripting, e.g. `vim $(leo config path)`.
+func newConfigPathCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "path",
+		Short: "Print the absolute path to the resolved leo.yaml",
+		Long:  "Print the absolute path to the leo.yaml that will be used, respecting --config and the normal resolution rules.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := cfgFile
+			if path == "" {
+				p, err := config.FindConfig("")
+				if err != nil {
+					return fmt.Errorf("no leo.yaml found — run 'leo setup' first: %w", err)
+				}
+				path = p
+			}
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				return fmt.Errorf("resolving config path: %w", err)
+			}
+			fmt.Println(abs)
+			return nil
+		},
+	}
 }
 
 func newConfigShowCmd() *cobra.Command {
