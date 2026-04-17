@@ -2,12 +2,18 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/run"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/spf13/cobra"
 )
+
+// redactedKeyTokens are substrings in env var keys that trigger value
+// redaction. Case-insensitive match.
+var redactedKeyTokens = []string{"SECRET", "TOKEN", "KEY", "PASSWORD"}
 
 func newRunCmd() *cobra.Command {
 	var dryRun bool
@@ -37,11 +43,24 @@ func newRunCmd() *cobra.Command {
 				info.Println("Assembled prompt:")
 				fmt.Println(prompt)
 
-				if task, ok := cfg.Tasks[taskName]; ok && len(task.Channels) > 0 {
-					fmt.Println()
-					info.Println("Channels (exported as LEO_CHANNELS):")
-					for _, ch := range task.Channels {
-						fmt.Printf("  - %s\n", ch)
+				task, ok := cfg.Tasks[taskName]
+				if ok {
+					if len(task.Channels) > 0 {
+						fmt.Println()
+						info.Println("Channels (exported as LEO_CHANNELS):")
+						for _, ch := range task.Channels {
+							fmt.Printf("  - %s\n", ch)
+						}
+					}
+
+					// Show the env vars that would be set on the child claude process.
+					envPairs := taskDryRunEnv(task)
+					if len(envPairs) > 0 {
+						fmt.Println()
+						info.Println("Environment:")
+						for _, p := range envPairs {
+							fmt.Printf("  %s=%s\n", p.key, p.display)
+						}
 					}
 				}
 
@@ -55,6 +74,52 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show assembled prompt and args without executing")
 
 	return cmd
+}
+
+// envPair is an internal key/display-value pair for dry-run output. The
+// display value may be redacted; the raw value is never stored.
+type envPair struct {
+	key     string
+	display string
+}
+
+// taskDryRunEnv returns the env vars that would be exported to the child
+// claude process for a dry-run, redacting sensitive values. Sorted by key for
+// deterministic output.
+func taskDryRunEnv(task config.TaskConfig) []envPair {
+	var pairs []envPair
+
+	if len(task.Channels) > 0 {
+		pairs = append(pairs, envPair{key: "LEO_CHANNELS", display: strings.Join(task.Channels, ",")})
+	}
+	if len(task.DevChannels) > 0 {
+		pairs = append(pairs, envPair{key: "LEO_DEV_CHANNELS", display: strings.Join(task.DevChannels, ",")})
+	}
+
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
+	return pairs
+}
+
+// shouldRedactEnvKey reports whether an env var value should be displayed as
+// <redacted> based on its key. Matches SECRET, TOKEN, KEY, PASSWORD as
+// case-insensitive substrings.
+func shouldRedactEnvKey(key string) bool {
+	upper := strings.ToUpper(key)
+	for _, tok := range redactedKeyTokens {
+		if strings.Contains(upper, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactValue returns the displayable value for an env var: <redacted> if the
+// key matches any redaction token, otherwise the original value.
+func redactValue(key, value string) string {
+	if shouldRedactEnvKey(key) {
+		return "<redacted>"
+	}
+	return value
 }
 
 func completeTaskNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
