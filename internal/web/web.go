@@ -65,13 +65,25 @@ type Server struct {
 	listener      net.Listener
 	agents        []string // cached list of available claude agents
 	restartNeeded bool     // set when process-affecting config changes are saved
+	port          int      // port the listener is expected to bind on; used for Host/Origin checks
+	apiToken      string   // bearer token required on /api/* routes; empty disables API
 
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
 }
 
+// Options bundles the knobs the web server needs that aren't part of the
+// provider interfaces. Zero values disable the corresponding surface:
+//   - Port must match the listener port so Host/Origin checks pass.
+//   - APIToken must be non-empty for /api/* routes to work. If empty, /api/*
+//     responds 500 to avoid accidentally serving the API unauthenticated.
+type Options struct {
+	Port     int
+	APIToken string
+}
+
 // New creates a new web UI server. agentSvc may be nil if agent spawning is not available.
-func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader, agentSvc AgentService) *Server {
+func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader, agentSvc AgentService, opts Options) *Server {
 	leoPath, err := exec.LookPath("leo")
 	if err != nil {
 		leoPath = "leo"
@@ -84,6 +96,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		reloader:    reloader,
 		agentSvc:    agentSvc,
 		leoPath:     leoPath,
+		port:        opts.Port,
+		apiToken:    opts.APIToken,
 		execCommand: exec.Command,
 	}
 
@@ -152,19 +166,36 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/agent/spawn", s.handleWebAgentSpawn)
 	mux.HandleFunc("POST /web/agent/{name}/stop", s.handleWebAgentStop)
 
-	// Agent management (JSON API — used by channel plugins and external clients)
-	mux.HandleFunc("POST /api/agent/spawn", s.handleAPIAgentSpawn)
-	mux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
-	mux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
-	mux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
+	// Agent + task management (JSON API — used by channel plugins and external
+	// clients). Registered on a sub-mux so we can wrap /api/* in bearer auth
+	// without affecting the browser-facing /web/* routes.
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("POST /api/agent/spawn", s.handleAPIAgentSpawn)
+	apiMux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
+	apiMux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
+	apiMux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
+	apiMux.HandleFunc("GET /api/task/list", s.handleAPITaskList)
+	apiMux.HandleFunc("POST /api/task/{name}/run", s.handleAPITaskRun)
+	apiMux.HandleFunc("POST /api/task/{name}/toggle", s.handleAPITaskToggle)
+	protectedAPI := bearerAuthMiddleware(s.apiToken, apiMux)
 
-	// Task management (JSON API — used by channel plugins and external clients)
-	mux.HandleFunc("GET /api/task/list", s.handleAPITaskList)
-	mux.HandleFunc("POST /api/task/{name}/run", s.handleAPITaskRun)
-	mux.HandleFunc("POST /api/task/{name}/toggle", s.handleAPITaskToggle)
+	// Path-prefix dispatcher: /api/* is routed through bearer auth to apiMux;
+	// everything else (browser UI) goes to the main mux. We don't register
+	// "/api/" on the main mux because that conflicts with "GET /" under the
+	// Go 1.22 ServeMux precedence rules.
+	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			protectedAPI.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 
+	// Every request — browser UI and API alike — passes through the Host +
+	// Origin check. Defense in depth for the API: even with a valid token,
+	// requests from a non-localhost browser context are rejected.
 	s.httpServer = &http.Server{
-		Handler:      mux,
+		Handler:      hostOriginMiddleware(s.port, root),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
