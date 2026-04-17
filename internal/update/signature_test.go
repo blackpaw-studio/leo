@@ -1,0 +1,566 @@
+package update
+
+import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+)
+
+// issuedCert bundles everything callers need to build a signed release
+// fixture: the leaf cert PEM, the matching private key, and the root
+// certificate pool to trust it with.
+type issuedCert struct {
+	leafPEM    []byte
+	privateKey *ecdsa.PrivateKey
+	rootPool   *x509.CertPool
+	interPool  *x509.CertPool
+	issuedAt   time.Time
+	expiresAt  time.Time
+	cert       *x509.Certificate
+}
+
+// issueFixture mints a fresh CA + intermediate + leaf chain in memory. The
+// leaf carries cosign-compatible OIDC-issuer and SAN-URI extensions so the
+// verifier will accept it. identityURI is stuffed into the URI SAN;
+// issuer is written to the OIDC-issuer-v2 extension.
+func issueFixture(t *testing.T, identityURI, issuer string) *issuedCert {
+	t.Helper()
+
+	// Root
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("rootkey: %v", err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-fulcio-root", Organization: []string{"leo-test"}},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	rootCert, _ := x509.ParseCertificate(rootDER)
+
+	// Intermediate
+	interKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("interkey: %v", err)
+	}
+	interTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "test-fulcio-intermediate"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(12 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+	}
+	interDER, err := x509.CreateCertificate(rand.Reader, interTmpl, rootCert, &interKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("create inter: %v", err)
+	}
+	interCert, _ := x509.ParseCertificate(interDER)
+
+	// Leaf
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("leafkey: %v", err)
+	}
+
+	// UTF8String-encode the issuer value the way Fulcio does: tag 0x0c
+	// followed by single-byte length and payload. We keep issuer short
+	// enough that the simple length encoding works.
+	issuerExtVal := append([]byte{0x0c, byte(len(issuer))}, []byte(issuer)...)
+
+	sanURI, err := url.Parse(identityURI)
+	if err != nil {
+		t.Fatalf("parse identity: %v", err)
+	}
+
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "test-cosign-ephemeral"},
+		NotBefore:    time.Now().Add(-5 * time.Minute),
+		NotAfter:     time.Now().Add(10 * time.Minute),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+		URIs:         []*url.URL{sanURI},
+		ExtraExtensions: []pkix.Extension{
+			{
+				Id:    asn1.ObjectIdentifier(oidOIDCIssuerV2),
+				Value: issuerExtVal,
+			},
+		},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, interCert, &leafKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatalf("create leaf: %v", err)
+	}
+	leafCert, _ := x509.ParseCertificate(leafDER)
+
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(rootCert)
+	interPool := x509.NewCertPool()
+	interPool.AddCert(interCert)
+
+	return &issuedCert{
+		leafPEM:    leafPEM,
+		privateKey: leafKey,
+		rootPool:   rootPool,
+		interPool:  interPool,
+		cert:       leafCert,
+		issuedAt:   leafTmpl.NotBefore,
+		expiresAt:  leafTmpl.NotAfter,
+	}
+}
+
+// signBlob produces a cosign-style base64 ECDSA-ASN.1 signature over data
+// using the fixture key.
+func signBlob(t *testing.T, fixture *issuedCert, data []byte) []byte {
+	t.Helper()
+	digest := sha256.Sum256(data)
+	sig, err := ecdsa.SignASN1(rand.Reader, fixture.privateKey, digest[:])
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(sig)
+	return []byte(encoded + "\n")
+}
+
+// verifierFor builds a SignatureVerifier rooted at the fixture's test CA
+// and keyed to a specific expected SAN regex and issuer.
+func verifierFor(t *testing.T, fixture *issuedCert, sanRegex *regexp.Regexp, issuer string) *SignatureVerifier {
+	t.Helper()
+	return &SignatureVerifier{
+		Roots:          fixture.rootPool,
+		Intermediates:  fixture.interPool,
+		SANRegex:       sanRegex,
+		ExpectedIssuer: issuer,
+		Now:            func() time.Time { return fixture.issuedAt.Add(time.Minute) },
+	}
+}
+
+func TestSignatureVerifier_HappyPath(t *testing.T) {
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, identity, issuer)
+
+	data := []byte("test-checksums-body")
+	sig := signBlob(t, fixture, data)
+
+	v := verifierFor(t, fixture, regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/v[0-9A-Za-z.\-_]+$`), issuer)
+	if err := v.Verify(data, sig, fixture.leafPEM); err != nil {
+		t.Fatalf("Verify() should accept well-formed sig+cert: %v", err)
+	}
+}
+
+func TestSignatureVerifier_TamperedData(t *testing.T) {
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, identity, issuer)
+
+	original := []byte("original-checksums")
+	sig := signBlob(t, fixture, original)
+
+	v := verifierFor(t, fixture, regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`), issuer)
+	tampered := []byte("tampered-checksums")
+	err := v.Verify(tampered, sig, fixture.leafPEM)
+	if err == nil {
+		t.Fatal("Verify() accepted tampered payload; expected signature mismatch")
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("error = %q, want mention of signature failure", err.Error())
+	}
+}
+
+func TestSignatureVerifier_MismatchedSAN(t *testing.T) {
+	// Issue a cert for an attacker workflow identity, then try to verify
+	// against our legitimate regex. Should fail the identity check before
+	// the crypto check.
+	attackerIdentity := "https://github.com/attacker/evil/.github/workflows/release.yml@refs/tags/v0.0.1"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, attackerIdentity, issuer)
+
+	data := []byte("checksums")
+	sig := signBlob(t, fixture, data)
+
+	v := verifierFor(t, fixture, regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`), issuer)
+	err := v.Verify(data, sig, fixture.leafPEM)
+	if err == nil {
+		t.Fatal("Verify() accepted attacker SAN; expected identity mismatch")
+	}
+	if !strings.Contains(err.Error(), "SAN") {
+		t.Errorf("error = %q, want mention of SAN mismatch", err.Error())
+	}
+}
+
+func TestSignatureVerifier_MismatchedIssuer(t *testing.T) {
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	fixture := issueFixture(t, identity, "https://gitlab.example.com")
+
+	data := []byte("checksums")
+	sig := signBlob(t, fixture, data)
+
+	v := verifierFor(t, fixture,
+		regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`),
+		"https://token.actions.githubusercontent.com",
+	)
+	err := v.Verify(data, sig, fixture.leafPEM)
+	if err == nil {
+		t.Fatal("Verify() accepted mismatched OIDC issuer; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "issuer") {
+		t.Errorf("error = %q, want mention of issuer mismatch", err.Error())
+	}
+}
+
+func TestSignatureVerifier_UntrustedRoot(t *testing.T) {
+	// Issue two separate CA trees. The verifier trusts tree A; the leaf is
+	// signed by tree B. This is the "attacker stands up their own Fulcio"
+	// scenario — they can produce a valid-looking cert/sig pair, but not
+	// one chained to the trusted root we pinned at build time.
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	trusted := issueFixture(t, identity, issuer)
+	attacker := issueFixture(t, identity, issuer)
+
+	data := []byte("checksums")
+	sig := signBlob(t, attacker, data)
+
+	// Verifier trusts the "real" root, but the cert came from attacker's CA.
+	v := &SignatureVerifier{
+		Roots:          trusted.rootPool,
+		Intermediates:  trusted.interPool,
+		SANRegex:       regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`),
+		ExpectedIssuer: issuer,
+		Now:            func() time.Time { return attacker.issuedAt.Add(time.Minute) },
+	}
+	err := v.Verify(data, sig, attacker.leafPEM)
+	if err == nil {
+		t.Fatal("Verify() accepted attacker-rooted cert; expected chain rejection")
+	}
+	if !strings.Contains(err.Error(), "chain") && !strings.Contains(err.Error(), "signed by") && !strings.Contains(err.Error(), "authority") {
+		t.Errorf("error = %q, want mention of chain failure", err.Error())
+	}
+}
+
+func TestDecodeSignatureAcceptsBase64AndRaw(t *testing.T) {
+	raw := []byte{0x30, 0x45, 0x02, 0x20, 0xaa}
+	b64 := []byte(base64.StdEncoding.EncodeToString(raw) + "\n")
+	got, err := decodeSignature(b64)
+	if err != nil {
+		t.Fatalf("decodeSignature(base64) error: %v", err)
+	}
+	if !bytes.Equal(got, raw) {
+		t.Errorf("base64 decode mismatch: got %x want %x", got, raw)
+	}
+
+	// An input that isn't valid base64 should be passed through as-is so
+	// the crypto layer can reject it.
+	garbled := []byte("not-valid-base64-!!!$$$$$$")
+	got, err = decodeSignature(garbled)
+	if err != nil {
+		t.Fatalf("decodeSignature(raw) unexpected error: %v", err)
+	}
+	if !bytes.Equal(got, garbled) {
+		t.Errorf("raw passthrough mismatch")
+	}
+}
+
+func TestDecodeSignatureEmpty(t *testing.T) {
+	if _, err := decodeSignature([]byte("  \n\t ")); err == nil {
+		t.Error("expected error for whitespace-only signature")
+	}
+}
+
+func TestLeafSANURIPreferred(t *testing.T) {
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v1"
+	fixture := issueFixture(t, identity, "https://token.actions.githubusercontent.com")
+	san, err := leafSAN(fixture.cert)
+	if err != nil {
+		t.Fatalf("leafSAN: %v", err)
+	}
+	if san != identity {
+		t.Errorf("leafSAN = %q, want %q", san, identity)
+	}
+}
+
+func TestSignatureVerifierNowDefaultsToTimeNow(t *testing.T) {
+	v := &SignatureVerifier{}
+	before := time.Now()
+	got := v.now()
+	after := time.Now()
+	if got.Before(before) || got.After(after) {
+		t.Errorf("Now() returned %v, not between %v and %v", got, before, after)
+	}
+}
+
+func TestParseLeafCertificateRejectsMalformed(t *testing.T) {
+	cases := map[string][]byte{
+		"not-pem":   []byte("plain text, not a PEM block"),
+		"wrong-typ": []byte("-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n"),
+		"bad-der":   []byte("-----BEGIN CERTIFICATE-----\nZm9vYmFy\n-----END CERTIFICATE-----\n"),
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseLeafCertificate(body); err == nil {
+				t.Errorf("expected error for %s", name)
+			}
+		})
+	}
+}
+
+func TestLoadCertPoolRejectsEmpty(t *testing.T) {
+	if _, err := loadCertPool([]byte("no pem blocks here")); err == nil {
+		t.Error("expected error when PEM parsing yields zero certs")
+	}
+}
+
+func TestVerifySignatureUnknownKeyType(t *testing.T) {
+	// Pass a key type the verifier explicitly doesn't support.
+	type fakeKey struct{}
+	err := verifyECDSAOrRSASignature(&fakeKey{}, []byte("data"), []byte("sig"))
+	if err == nil {
+		t.Fatal("expected unsupported key type error")
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Errorf("error = %q, want mention of unsupported", err.Error())
+	}
+}
+
+func TestDefaultSignatureVerifierLoadsEmbeddedRoots(t *testing.T) {
+	v, err := DefaultSignatureVerifier()
+	if err != nil {
+		t.Fatalf("DefaultSignatureVerifier: %v", err)
+	}
+	if v.Roots == nil || v.Intermediates == nil {
+		t.Fatal("expected populated root/intermediate pools")
+	}
+	if v.ExpectedIssuer != "https://token.actions.githubusercontent.com" {
+		t.Errorf("unexpected default issuer %q", v.ExpectedIssuer)
+	}
+	// A valid tag must match; an arbitrary workflow identity must not.
+	ok := v.SANRegex.MatchString("https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v1.2.3")
+	bad := v.SANRegex.MatchString("https://github.com/attacker/evil/.github/workflows/release.yml@refs/tags/v1.0.0")
+	if !ok {
+		t.Error("expected default SAN regex to accept a legitimate tag URI")
+	}
+	if bad {
+		t.Error("expected default SAN regex to reject a foreign-owner URI")
+	}
+}
+
+// TestDownloadAndReplace_SignedHappyPath wires the signature fixture all
+// the way through the release-download flow. It confirms that when sig+cert
+// are served correctly, the binary is replaced without any opt-out flag.
+func TestDownloadAndReplace_SignedHappyPath(t *testing.T) {
+	binaryContent := []byte("#!/bin/sh\necho updated\n")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := []byte(fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName))
+
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, identity, issuer)
+	sig := signBlob(t, fixture, checksums)
+
+	// Swap the package-level verifier factory to return a verifier tied to
+	// our in-memory CA. Without this the verifier would try the real Fulcio
+	// root, which didn't issue our fixture.
+	origFactory := newSignatureVerifier
+	defer func() { newSignatureVerifier = origFactory }()
+	newSignatureVerifier = func() (*SignatureVerifier, error) {
+		return verifierFor(t, fixture,
+			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`),
+			issuer,
+		), nil
+	}
+
+	_, teardown := testServer(t, archiveName, archive, string(checksums), sig, fixture.leafPEM)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("old binary"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	// Strict mode — no AllowUnsigned opt-out.
+	if _, err := DownloadAndReplace("v0.5.0"); err != nil {
+		t.Fatalf("DownloadAndReplace() error: %v", err)
+	}
+	got, _ := os.ReadFile(fakeBinary)
+	if !bytes.Equal(got, binaryContent) {
+		t.Errorf("binary not replaced; content = %q", got)
+	}
+}
+
+// TestDownloadAndReplace_TamperedChecksums asserts that a mutated
+// checksums.txt (same sig+cert as the real release, but body altered to
+// point to an attacker's archive hash) is rejected before the archive
+// hash check runs.
+func TestDownloadAndReplace_TamperedChecksums(t *testing.T) {
+	binaryContent := []byte("malicious")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+
+	// Attacker replaces the archive and rewrites checksums.txt to match —
+	// but reuses the original sig (which was over the legitimate body).
+	originalBody := []byte("original-checksums-body\n")
+	maliciousChecksums := []byte(fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName))
+
+	identity := "https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v0.5.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, identity, issuer)
+	sig := signBlob(t, fixture, originalBody) // sig binds original, not the mutated file
+
+	origFactory := newSignatureVerifier
+	defer func() { newSignatureVerifier = origFactory }()
+	newSignatureVerifier = func() (*SignatureVerifier, error) {
+		return verifierFor(t, fixture,
+			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`),
+			issuer,
+		), nil
+	}
+
+	_, teardown := testServer(t, archiveName, archive, string(maliciousChecksums), sig, fixture.leafPEM)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("original-install"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected signature failure when checksums.txt differs from signed body")
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("error = %q, want signature failure", err.Error())
+	}
+
+	// Belt-and-suspenders: binary must not have been touched.
+	got, _ := os.ReadFile(fakeBinary)
+	if string(got) != "original-install" {
+		t.Errorf("binary was replaced despite signature failure: %q", got)
+	}
+}
+
+// TestDownloadAndReplace_AttackerSANIsRejected ensures that even a
+// cryptographically valid signature over the checksums file is rejected
+// if the certificate's SAN doesn't belong to our release workflow.
+func TestDownloadAndReplace_AttackerSANIsRejected(t *testing.T) {
+	binaryContent := []byte("evil")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := []byte(fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName))
+
+	attackerIdentity := "https://github.com/attacker/evil/.github/workflows/release.yml@refs/tags/v1.0.0"
+	issuer := "https://token.actions.githubusercontent.com"
+	fixture := issueFixture(t, attackerIdentity, issuer)
+	sig := signBlob(t, fixture, checksums)
+
+	origFactory := newSignatureVerifier
+	defer func() { newSignatureVerifier = origFactory }()
+	newSignatureVerifier = func() (*SignatureVerifier, error) {
+		// Verifier insists on the legitimate repo — attacker's cert won't match.
+		return verifierFor(t, fixture,
+			regexp.MustCompile(`^https://github\.com/blackpaw-studio/leo/\.github/workflows/release\.yml@refs/tags/.+$`),
+			issuer,
+		), nil
+	}
+
+	_, teardown := testServer(t, archiveName, archive, string(checksums), sig, fixture.leafPEM)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("orig"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	_, err := DownloadAndReplace("v0.5.0")
+	if err == nil {
+		t.Fatal("expected SAN mismatch to abort the update")
+	}
+	if !strings.Contains(err.Error(), "SAN") {
+		t.Errorf("error = %q, want SAN mismatch", err.Error())
+	}
+}
+
+// TestDownloadAndReplace_UnsignedReleaseFallback confirms that when sig or
+// cert is absent, callers can opt into SHA-only verification. The warn
+// callback fires exactly once.
+func TestDownloadAndReplace_UnsignedReleaseFallback(t *testing.T) {
+	binaryContent := []byte("#!/bin/sh\necho updated\n")
+	archive := buildTestArchive(t, binaryContent)
+	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName)
+
+	_, teardown := testServer(t, archiveName, archive, checksums, nil, nil)
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "leo")
+	os.WriteFile(fakeBinary, []byte("old"), 0750)
+
+	origExec := osExecutable
+	defer func() { osExecutable = origExec }()
+	osExecutable = func() (string, error) { return fakeBinary, nil }
+
+	// Strict mode must refuse.
+	if _, err := DownloadAndReplace("v0.5.0"); err == nil {
+		t.Fatal("strict DownloadAndReplace should fail when signature is absent")
+	}
+
+	// Fallback mode must succeed and surface a warning.
+	var warned int
+	opts := UpdateOptions{
+		AllowUnsigned: true,
+		Warn: func(format string, args ...any) {
+			warned++
+		},
+	}
+	if _, err := DownloadAndReplaceWithOptions("v0.5.0", opts); err != nil {
+		t.Fatalf("fallback should succeed: %v", err)
+	}
+	if warned != 1 {
+		t.Errorf("Warn fired %d times, want 1", warned)
+	}
+	got, _ := os.ReadFile(fakeBinary)
+	if !bytes.Equal(got, binaryContent) {
+		t.Errorf("binary not replaced in fallback mode")
+	}
+}

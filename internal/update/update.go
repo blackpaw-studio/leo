@@ -31,6 +31,16 @@ const (
 	// maxChecksumsSize caps the checksums.txt file. It should be a few hundred
 	// bytes at most.
 	maxChecksumsSize = 1 << 20
+
+	// maxSignatureSize caps .sig / .pem auxiliary files. These are tiny in
+	// practice — a base64 signature is ~96 bytes and a Fulcio cert is ~1-2 KB.
+	maxSignatureSize = 64 << 10
+
+	// UnsignedReleaseEnv lets callers opt into SHA-only verification for
+	// releases that predate the cosign signing pipeline. When we're
+	// confident every supported release is signed, flip the default and
+	// this variable becomes a no-op.
+	UnsignedReleaseEnv = "LEO_ALLOW_UNSIGNED_RELEASE"
 )
 
 var apiURL = "https://api.github.com/repos/" + repoOwner + "/" + repoName + "/releases/latest"
@@ -48,13 +58,37 @@ type releaseResponse struct {
 // checksumFileName is the artifact name goreleaser emits alongside each
 // release archive. It's a const because it never changes at runtime; the URL
 // templates are vars so tests can swap them.
-const checksumFileName = "checksums.txt"
+const (
+	checksumFileName     = "checksums.txt"
+	signatureFileName    = "checksums.txt.sig"
+	certFileName         = "checksums.txt.pem"
+	artifactBaseTemplate = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/%s"
+)
+
+// UpdateOptions controls optional knobs on DownloadAndReplace. Zero value
+// means "strict": fetch+verify signature, abort if missing.
+type UpdateOptions struct {
+	// AllowUnsigned downgrades signature verification to SHA-only with a
+	// warning. Used during the rollout window where not every release has
+	// a .sig + .pem pair yet. Wire this to a CLI flag or the
+	// LEO_ALLOW_UNSIGNED_RELEASE env var.
+	AllowUnsigned bool
+	// Warn is called when AllowUnsigned causes a fallback. Defaults to a
+	// no-op — the caller CLI supplies a real stderr writer.
+	Warn func(format string, args ...any)
+}
 
 var (
-	httpClient          = &http.Client{Timeout: 30 * time.Second}
-	osExecutable        = os.Executable
-	downloadURLTemplate = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/%s"
-	checksumURLTemplate = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/" + checksumFileName
+	httpClient           = &http.Client{Timeout: 30 * time.Second}
+	osExecutable         = os.Executable
+	downloadURLTemplate  = artifactBaseTemplate
+	checksumURLTemplate  = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/" + checksumFileName
+	signatureURLTemplate = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/" + signatureFileName
+	certURLTemplate      = "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/%s/" + certFileName
+
+	// newSignatureVerifier is overridden in tests that want to inject a
+	// fixture verifier keyed to a self-signed root.
+	newSignatureVerifier = DefaultSignatureVerifier
 )
 
 // CheckLatestVersion returns the latest release tag from GitHub (e.g. "v0.5.2").
@@ -161,12 +195,23 @@ func PackageManagerInstall() (manager, path string) {
 	return "", ""
 }
 
-// DownloadAndReplace downloads the release archive for the current platform,
-// verifies its SHA-256 against the release's checksums.txt, extracts the
-// binary, and atomically replaces the running binary. Returns the path that
-// was replaced. Any checksum mismatch, missing checksums file, or missing
-// entry aborts the update before the binary is replaced.
+// DownloadAndReplace is the strict-verification entrypoint. Signature
+// verification is mandatory; pass DownloadAndReplaceWithOptions to relax.
 func DownloadAndReplace(version string) (string, error) {
+	return DownloadAndReplaceWithOptions(version, UpdateOptions{})
+}
+
+// DownloadAndReplaceWithOptions downloads the release archive for the
+// current platform, verifies its cosign signature, verifies its SHA-256
+// against the release's checksums.txt, extracts the binary, and atomically
+// replaces the running binary. Returns the path that was replaced. Any
+// signature mismatch, checksum mismatch, missing checksums file, or
+// missing entry aborts the update before the binary is replaced.
+//
+// If opts.AllowUnsigned is set, a missing signature file degrades to
+// SHA-only verification with a warning — but a present-and-invalid
+// signature still aborts.
+func DownloadAndReplaceWithOptions(version string, opts UpdateOptions) (string, error) {
 	binaryPath, err := osExecutable()
 	if err != nil {
 		return "", fmt.Errorf("finding current binary: %w", err)
@@ -184,7 +229,20 @@ func DownloadAndReplace(version string) (string, error) {
 		return "", err
 	}
 
-	if err := verifyArchiveChecksum(version, archiveName, archiveBytes); err != nil {
+	checksumsBody, err := fetchChecksumsFile(version)
+	if err != nil {
+		return "", err
+	}
+
+	if err := verifyChecksumsSignature(version, checksumsBody, opts); err != nil {
+		return "", fmt.Errorf("verifying release signature: %w", err)
+	}
+
+	expected, err := parseChecksum(string(checksumsBody), archiveName)
+	if err != nil {
+		return "", err
+	}
+	if err := verifyArchiveChecksumAgainst(archiveName, archiveBytes, expected); err != nil {
 		return "", fmt.Errorf("verifying %s: %w", archiveName, err)
 	}
 
@@ -246,16 +304,11 @@ func downloadArchive(version, archiveName string) ([]byte, error) {
 	return body, nil
 }
 
-// verifyArchiveChecksum fetches checksums.txt for the release and compares
-// its entry for archiveName against the SHA-256 of archiveBytes. Returns an
-// error if the checksums file can't be fetched, the archive isn't listed,
-// or the hash doesn't match.
-func verifyArchiveChecksum(version, archiveName string, archiveBytes []byte) error {
-	expected, err := fetchExpectedChecksum(version, archiveName)
-	if err != nil {
-		return err
-	}
-
+// verifyArchiveChecksumAgainst compares a pre-fetched expected SHA-256 (as
+// lowercase hex) against the SHA-256 of archiveBytes. Split out from the
+// fetch step so DownloadAndReplaceWithOptions can verify the checksums
+// file's own signature before trusting any value inside it.
+func verifyArchiveChecksumAgainst(archiveName string, archiveBytes []byte, expected string) error {
 	sum := sha256.Sum256(archiveBytes)
 	got := hex.EncodeToString(sum[:])
 	if got != expected {
@@ -267,29 +320,93 @@ func verifyArchiveChecksum(version, archiveName string, archiveBytes []byte) err
 	return nil
 }
 
-// fetchExpectedChecksum downloads checksums.txt for the given release and
-// returns the expected SHA-256 (as lowercase hex) for archiveName.
-func fetchExpectedChecksum(version, archiveName string) (string, error) {
+// fetchChecksumsFile downloads the raw checksums.txt body for a release
+// without parsing it. The caller is expected to first verify the body's
+// cosign signature, then parse individual entries.
+func fetchChecksumsFile(version string) ([]byte, error) {
 	url := fmt.Sprintf(checksumURLTemplate, version)
 	resp, err := httpClient.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("downloading %s: %w", checksumFileName, err)
+		return nil, fmt.Errorf("downloading %s: %w", checksumFileName, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("downloading %s returned %d", checksumFileName, resp.StatusCode)
+		return nil, fmt.Errorf("downloading %s returned %d", checksumFileName, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxChecksumsSize+1))
 	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", checksumFileName, err)
+		return nil, fmt.Errorf("reading %s: %w", checksumFileName, err)
 	}
 	if len(body) > maxChecksumsSize {
-		return "", fmt.Errorf("%s exceeds %d byte limit", checksumFileName, maxChecksumsSize)
+		return nil, fmt.Errorf("%s exceeds %d byte limit", checksumFileName, maxChecksumsSize)
+	}
+	return body, nil
+}
+
+// verifyChecksumsSignature fetches checksums.txt.sig + checksums.txt.pem
+// from the same release and runs the embedded Fulcio-root-backed verifier.
+// Returns nil if the signature is valid. If the signature files are absent
+// and opts.AllowUnsigned is true, emits a warning and returns nil; a
+// missing signature without AllowUnsigned is treated as a fatal error.
+func verifyChecksumsSignature(version string, checksumsBody []byte, opts UpdateOptions) error {
+	sig, sigPresent, err := fetchOptionalArtifact(version, signatureFileName, signatureURLTemplate)
+	if err != nil {
+		return err
+	}
+	cert, certPresent, err := fetchOptionalArtifact(version, certFileName, certURLTemplate)
+	if err != nil {
+		return err
 	}
 
-	return parseChecksum(string(body), archiveName)
+	if !sigPresent || !certPresent {
+		if !opts.AllowUnsigned {
+			return fmt.Errorf("release is missing %s or %s — refusing to update; "+
+				"rerun with --allow-unsigned (or set %s=1) to fall back to SHA-only verification",
+				signatureFileName, certFileName, UnsignedReleaseEnv)
+		}
+		if opts.Warn != nil {
+			opts.Warn("WARNING: release %s has no cosign signature; relying on SHA-256 only.\n"+
+				"         Signatures become mandatory in a future release.", version)
+		}
+		return nil
+	}
+
+	verifier, err := newSignatureVerifier()
+	if err != nil {
+		return fmt.Errorf("building verifier: %w", err)
+	}
+
+	return verifier.Verify(checksumsBody, sig, cert)
+}
+
+// fetchOptionalArtifact GETs one of the auxiliary release files. A 404 is
+// not an error — it means "this release isn't signed yet" and the caller
+// decides whether that's fatal. Any other HTTP error is surfaced.
+func fetchOptionalArtifact(version, name, urlTemplate string) (body []byte, present bool, err error) {
+	url := fmt.Sprintf(urlTemplate, version)
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return nil, false, fmt.Errorf("downloading %s: %w", name, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("downloading %s returned %d", name, resp.StatusCode)
+	}
+
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxSignatureSize+1))
+	if err != nil {
+		return nil, false, fmt.Errorf("reading %s: %w", name, err)
+	}
+	if len(body) > maxSignatureSize {
+		return nil, false, fmt.Errorf("%s exceeds %d byte limit", name, maxSignatureSize)
+	}
+	return body, true, nil
 }
 
 // parseChecksum scans a goreleaser-style checksums.txt body for the entry

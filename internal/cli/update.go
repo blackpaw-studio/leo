@@ -14,6 +14,7 @@ import (
 
 func newUpdateCmd() *cobra.Command {
 	var checkOnly bool
+	var allowUnsigned bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -59,7 +60,16 @@ func newUpdateCmd() *cobra.Command {
 
 			default:
 				info.Printf("Downloading leo %s...\n", latest)
-				path, err := update.DownloadAndReplace(latest)
+				opts := update.UpdateOptions{
+					// Allow fallback when the flag is passed explicitly OR when
+					// the env var is set — both are equivalent escape hatches
+					// for the rollout window where old releases have no sig.
+					AllowUnsigned: allowUnsigned || os.Getenv(update.UnsignedReleaseEnv) != "",
+					Warn: func(format string, args ...any) {
+						warn.Printf(format+"\n", args...)
+					},
+				}
+				path, err := update.DownloadAndReplaceWithOptions(latest, opts)
 				if err != nil {
 					return fmt.Errorf("updating binary: %w", err)
 				}
@@ -89,6 +99,10 @@ func newUpdateCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&checkOnly, "check", false,
 		"check if an update is available without installing")
+	cmd.Flags().BoolVar(&allowUnsigned, "allow-unsigned", false,
+		"permit updating from a release without a cosign signature (SHA-256 only)")
+	// Advertise the env-var equivalent without cluttering --help.
+	_ = cmd.Flags().MarkHidden("allow-unsigned")
 
 	return cmd
 }
