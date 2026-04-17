@@ -176,7 +176,7 @@ state. Use --json for machine-readable output.`,
 			}
 
 			if len(cfg.Processes) == 0 {
-				info.Fprintln(processStdout, "No processes configured.")
+				_, _ = info.Fprintln(processStdout, "No processes configured.")
 				return nil
 			}
 
@@ -338,7 +338,7 @@ channels, agent).`,
 
 			success.Fprintf(processStdout, "Process %q added.\n", name)
 			if daemon.IsRunning(cfg.HomePath) {
-				warn.Fprintln(processStdout, "Run `leo service restart` to apply process changes.")
+				_, _ = warn.Fprintln(processStdout, "Run `leo service restart` to apply process changes.")
 			}
 			return nil
 		},
@@ -380,7 +380,7 @@ deleting config.`,
 				}
 				reader := bufio.NewReader(processStdin)
 				if !prompt.YesNo(reader, fmt.Sprintf("Remove process %q?", name), false) {
-					info.Fprintln(processStdout, "Cancelled.")
+					_, _ = info.Fprintln(processStdout, "Cancelled.")
 					return nil
 				}
 			}
@@ -391,7 +391,7 @@ deleting config.`,
 			}
 			success.Fprintf(processStdout, "Process %q removed.\n", name)
 			if daemon.IsRunning(cfg.HomePath) {
-				warn.Fprintln(processStdout, "Run `leo service restart` to apply process changes.")
+				_, _ = warn.Fprintln(processStdout, "Run `leo service restart` to apply process changes.")
 			}
 			return nil
 		},
