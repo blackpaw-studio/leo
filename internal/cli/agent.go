@@ -180,7 +180,8 @@ prompts the user for how to proceed: attach to the existing agent, spawn using
 that agent's canonical owner/repo, or spawn a fresh template workspace. When
 repo is slashed (owner/repo) and an agent already targets the same repo and
 branch, the CLI prompts to attach or spawn a fresh suffixed agent. The prompt
-is skipped in non-interactive runs (no TTY). Flags override the prompt:
+is skipped in non-interactive runs (no TTY) — in that case the command errors
+unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 --reuse-owner forces the canonical repo, --attach-existing attaches instead.`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -380,8 +381,9 @@ func filterExactMatches(records []agent.Record, repo, branch string) []agent.Rec
 
 // resolveSpawnCollision decides what to do when a slashless repo query matches
 // exactly one existing agent. Flags force a non-interactive choice; otherwise
-// the user is prompted when a TTY is attached. Non-interactive CLI runs
-// default to "fresh template" to preserve the current scripting behavior.
+// the user is prompted when a TTY is attached. Non-interactive CLI runs with
+// no flags return a typed error so scripts fail loudly instead of silently
+// spawning a duplicate template workspace.
 // (The web UI does not reach this path — it calls the daemon directly.)
 func resolveSpawnCollision(match agent.Record, template string, reuseOwner, attachExisting bool) (spawnChoice, error) {
 	switch {
@@ -393,7 +395,13 @@ func resolveSpawnCollision(match agent.Record, template string, reuseOwner, atta
 		}
 		return spawnUseCanonicalRepo, nil
 	case !agentIsTTY():
-		return spawnFreshTemplate, nil
+		target := match.Repo
+		if target == "" {
+			target = match.Name
+		}
+		return spawnCancel, fmt.Errorf(
+			"agent %s already targets %s and stdin is not a TTY; pass --attach-existing to attach, --reuse-owner to spawn using the existing canonical owner/repo, or pass the full owner/repo to disambiguate",
+			match.Name, target)
 	}
 
 	if match.Repo != "" {
@@ -446,12 +454,20 @@ func resolveSpawnCollision(match agent.Record, template string, reuseOwner, atta
 // owner/repo spawns. The "reuse canonical repo" option is not offered here
 // because the user already supplied the canonical repo — the only meaningful
 // choices are attach, spawn-fresh (with numeric suffix), or cancel.
+// Non-interactive callers must opt in explicitly via --attach-existing;
+// otherwise the command errors rather than silently suffixing a duplicate.
 func resolveExactCollision(match agent.Record, template string, attachExisting bool) (spawnChoice, error) {
 	switch {
 	case attachExisting:
 		return spawnAttachExisting, nil
 	case !agentIsTTY():
-		return spawnFreshTemplate, nil
+		target := match.Repo
+		if match.Branch != "" {
+			target = fmt.Sprintf("%s on branch %s", match.Repo, match.Branch)
+		}
+		return spawnCancel, fmt.Errorf(
+			"agent %s already targets %s and stdin is not a TTY; pass --attach-existing to attach or stop the existing agent first",
+			match.Name, target)
 	}
 
 	fmt.Fprintf(agentStderr, "\nAn agent already targets %s", match.Repo)

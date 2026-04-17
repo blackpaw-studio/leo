@@ -323,18 +323,74 @@ func TestResolveSpawnCollisionForcedFlags(t *testing.T) {
 }
 
 func TestResolveSpawnCollisionNonInteractive(t *testing.T) {
-	match := agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"}
-
 	oldTTY := agentIsTTY
 	agentIsTTY = func() bool { return false }
 	t.Cleanup(func() { agentIsTTY = oldTTY })
 
-	got, err := resolveSpawnCollision(match, "coding", false, false)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
+	cases := []struct {
+		name           string
+		match          agent.Record
+		reuseOwner     bool
+		attachExisting bool
+		wantChoice     spawnChoice
+		wantErr        bool
+		errContains    []string
+	}{
+		{
+			name:       "no flags errors with hint",
+			match:      agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"},
+			wantChoice: spawnCancel,
+			wantErr:    true,
+			errContains: []string{
+				"leo-coding-acme-widget",
+				"stdin is not a TTY",
+				"--attach-existing",
+				"--reuse-owner",
+				"owner/repo",
+			},
+		},
+		{
+			name:           "attach-existing still wins non-interactively",
+			match:          agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"},
+			attachExisting: true,
+			wantChoice:     spawnAttachExisting,
+		},
+		{
+			name:       "reuse-owner still wins non-interactively",
+			match:      agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"},
+			reuseOwner: true,
+			wantChoice: spawnUseCanonicalRepo,
+		},
+		{
+			name:       "empty repo still named in error",
+			match:      agent.Record{Name: "bare-agent", Template: "coding"},
+			wantChoice: spawnCancel,
+			wantErr:    true,
+			errContains: []string{
+				"bare-agent",
+				"--attach-existing",
+			},
+		},
 	}
-	if got != spawnFreshTemplate {
-		t.Errorf("non-TTY default = %v, want spawnFreshTemplate", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveSpawnCollision(tc.match, "coding", tc.reuseOwner, tc.attachExisting)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (choice=%v)", got)
+				}
+				for _, sub := range tc.errContains {
+					if !strings.Contains(err.Error(), sub) {
+						t.Errorf("error %q missing %q", err.Error(), sub)
+					}
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got != tc.wantChoice {
+				t.Errorf("choice = %v, want %v", got, tc.wantChoice)
+			}
+		})
 	}
 }
 
@@ -394,18 +450,66 @@ func TestResolveExactCollisionForcedFlag(t *testing.T) {
 }
 
 func TestResolveExactCollisionNonInteractive(t *testing.T) {
-	match := agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"}
-
 	oldTTY := agentIsTTY
 	agentIsTTY = func() bool { return false }
 	t.Cleanup(func() { agentIsTTY = oldTTY })
 
-	got, err := resolveExactCollision(match, "coding", false)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
+	cases := []struct {
+		name           string
+		match          agent.Record
+		attachExisting bool
+		wantChoice     spawnChoice
+		wantErr        bool
+		errContains    []string
+	}{
+		{
+			name:       "no flags errors mentioning branch",
+			match:      agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Branch: "feature-x", Template: "coding"},
+			wantChoice: spawnCancel,
+			wantErr:    true,
+			errContains: []string{
+				"leo-coding-acme-widget",
+				"stdin is not a TTY",
+				"--attach-existing",
+				"feature-x",
+			},
+		},
+		{
+			name:       "no flags errors without branch",
+			match:      agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"},
+			wantChoice: spawnCancel,
+			wantErr:    true,
+			errContains: []string{
+				"acme/widget",
+				"--attach-existing",
+			},
+		},
+		{
+			name:           "attach-existing still wins non-interactively",
+			match:          agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"},
+			attachExisting: true,
+			wantChoice:     spawnAttachExisting,
+		},
 	}
-	if got != spawnFreshTemplate {
-		t.Errorf("non-TTY default = %v, want spawnFreshTemplate", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveExactCollision(tc.match, "coding", tc.attachExisting)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (choice=%v)", got)
+				}
+				for _, sub := range tc.errContains {
+					if !strings.Contains(err.Error(), sub) {
+						t.Errorf("error %q missing %q", err.Error(), sub)
+					}
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got != tc.wantChoice {
+				t.Errorf("choice = %v, want %v", got, tc.wantChoice)
+			}
+		})
 	}
 }
 
