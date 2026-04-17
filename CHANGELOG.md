@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Docs
+
+- New **[tmux Config](docs/guides/tmux-config.md)** guide: a recommended `~/.tmux.conf` for users who attach to leo agents and processes, with explanations of clipboard-over-SSH (OSC 52), session pickers, activity monitoring, and why leo users should skip tmux-resurrect/continuum.
+
 ### Breaking
 
 - **Web UI default bind changed from `0.0.0.0` to `127.0.0.1`.** The UI has no built-in auth, so the previous default exposed full process control to anyone who could reach the port. Anyone who was relying on LAN access must set `web.bind: 0.0.0.0` explicitly. The daemon now prints a prominent warning at startup when `web.bind` is non-loopback.

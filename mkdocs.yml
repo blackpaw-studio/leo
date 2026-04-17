@@ -101,6 +101,7 @@ nav:
       - Writing Tasks: guides/writing-tasks.md
       - Agents: guides/agents.md
       - Remote CLI: guides/remote-cli.md
+      - tmux Config: guides/tmux-config.md
   - Development:
       - development/index.md
       - Contributing: development/contributing.md
