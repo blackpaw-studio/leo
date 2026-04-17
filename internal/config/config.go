@@ -26,6 +26,35 @@ var channelPattern = regexp.MustCompile(`^[a-zA-Z0-9:@._-]+$`)
 // envKeyPattern validates environment variable names.
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// addDirRejectedChars lists characters that are forbidden in add_dirs entries.
+// Entries are passed as argv to claude (`--add-dir <entry>`), so the deny list
+// targets argv-level hazards, not shell metacharacters: NUL truncates argv
+// syscalls, newline corrupts line-oriented logs, and the remaining chars are
+// defense-in-depth against future callers that might concatenate paths into
+// a shell string. The list over-catches slightly on purpose.
+const addDirRejectedChars = ";&|$`\n\x00"
+
+// ValidateAddDir returns a non-nil error if dir is an unsafe --add-dir value.
+// Entries are passed as argv to claude, so this guards against argv-level
+// hazards rather than shell-injection. Rejects:
+//   - empty after trimming
+//   - leading "-" (could be misread as a flag by a future argv parser)
+//   - NUL (truncates argv syscalls) or newline (breaks line-oriented logs)
+//   - `;&|$` and backtick (defense in depth against shell concatenation)
+func ValidateAddDir(dir string) error {
+	trimmed := strings.TrimSpace(dir)
+	if trimmed == "" {
+		return fmt.Errorf("add_dirs entry is empty")
+	}
+	if strings.HasPrefix(trimmed, "-") {
+		return fmt.Errorf("add_dirs entry %q must not start with '-'", trimmed)
+	}
+	if i := strings.IndexAny(dir, addDirRejectedChars); i >= 0 {
+		return fmt.Errorf("add_dirs entry %q contains forbidden character %q", trimmed, string(dir[i]))
+	}
+	return nil
+}
+
 var validModels = map[string]bool{
 	"sonnet":     true,
 	"opus":       true,
@@ -389,6 +418,11 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("processes.%s.env key %q is not a valid environment variable name", name, k))
 			}
 		}
+		for i, dir := range proc.AddDirs {
+			if err := ValidateAddDir(dir); err != nil {
+				errs = append(errs, fmt.Sprintf("processes.%s.add_dirs[%d]: %v", name, i, err))
+			}
+		}
 		if proc.PermissionMode != "" && !validPermissionModes[proc.PermissionMode] {
 			errs = append(errs, fmt.Sprintf("processes.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, proc.PermissionMode))
 		}
@@ -414,6 +448,11 @@ func (c *Config) Validate() error {
 		for k := range tmpl.Env {
 			if !envKeyPattern.MatchString(k) {
 				errs = append(errs, fmt.Sprintf("templates.%s.env key %q is not a valid environment variable name", name, k))
+			}
+		}
+		for i, dir := range tmpl.AddDirs {
+			if err := ValidateAddDir(dir); err != nil {
+				errs = append(errs, fmt.Sprintf("templates.%s.add_dirs[%d]: %v", name, i, err))
 			}
 		}
 		if tmpl.PermissionMode != "" && !validPermissionModes[tmpl.PermissionMode] {

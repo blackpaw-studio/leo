@@ -82,8 +82,12 @@ jobs:
         with:
           version: latest
 
+      # Pin gosec to a known-good release. Bump deliberately after reviewing
+      # release notes at https://github.com/securego/gosec/releases.
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        env:
+          GOSEC_VERSION: v2.25.0
+        run: go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
 
       - name: Security scan
         # G704 flags c.baseURL+path in internal/mcp/client.go as SSRF-taint,

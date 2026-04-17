@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"log"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -31,6 +32,14 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 
 	args = append(args, "--add-dir", workspace)
 	for _, dir := range tmpl.AddDirs {
+		// Defense in depth: Config.Validate() also rejects these, but skip
+		// anything unsafe here in case spawn-time receives an unvalidated
+		// config (e.g. test harness, future callers). Log noisily so the
+		// silent drop isn't invisible to whoever bypassed validation.
+		if err := config.ValidateAddDir(dir); err != nil {
+			log.Printf("[agent:%s] skipping unsafe add_dirs entry %q: %v", agentName, dir, err)
+			continue
+		}
 		args = append(args, "--add-dir", dir)
 	}
 
