@@ -195,12 +195,26 @@ func sha256Hex(b []byte) string {
 }
 
 // testServer wires up a fake GitHub release CDN that serves the supplied
-// archive under archiveName and a checksums.txt body. It returns the server
-// plus a teardown that restores the package-level URL templates.
-func testServer(t *testing.T, archiveName string, archive []byte, checksumsBody string) (*httptest.Server, func()) {
+// archive under archiveName and a checksums.txt body. sig and cert are
+// optional — pass nil to return 404 for those paths (simulating an
+// unsigned release). It returns the server plus a teardown that restores
+// the package-level URL templates.
+func testServer(t *testing.T, archiveName string, archive []byte, checksumsBody string, sig, cert []byte) (*httptest.Server, func()) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/"+signatureFileName):
+			if len(sig) == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Write(sig)
+		case strings.HasSuffix(r.URL.Path, "/"+certFileName):
+			if len(cert) == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Write(cert)
 		case strings.HasSuffix(r.URL.Path, "/"+checksumFileName):
 			if checksumsBody == "" {
 				w.WriteHeader(http.StatusNotFound)
@@ -216,14 +230,27 @@ func testServer(t *testing.T, archiveName string, archive []byte, checksumsBody 
 
 	origDL := downloadURLTemplate
 	origCS := checksumURLTemplate
+	origSig := signatureURLTemplate
+	origCert := certURLTemplate
 	downloadURLTemplate = server.URL + "/%s/%s"
 	checksumURLTemplate = server.URL + "/%s/" + checksumFileName
+	signatureURLTemplate = server.URL + "/%s/" + signatureFileName
+	certURLTemplate = server.URL + "/%s/" + certFileName
 
 	return server, func() {
 		server.Close()
 		downloadURLTemplate = origDL
 		checksumURLTemplate = origCS
+		signatureURLTemplate = origSig
+		certURLTemplate = origCert
 	}
+}
+
+// unsignedOpts is the test-only shortcut for exercising pre-signature
+// code paths. Real callers should only toggle AllowUnsigned during the
+// rollout window.
+func unsignedOpts() UpdateOptions {
+	return UpdateOptions{AllowUnsigned: true, Warn: func(string, ...any) {}}
 }
 
 func TestDownloadAndReplace(t *testing.T) {
@@ -232,7 +259,7 @@ func TestDownloadAndReplace(t *testing.T) {
 	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(archive), archiveName)
 
-	_, teardown := testServer(t, archiveName, archive, checksums)
+	_, teardown := testServer(t, archiveName, archive, checksums, nil, nil)
 	defer teardown()
 
 	tmpDir := t.TempDir()
@@ -243,7 +270,7 @@ func TestDownloadAndReplace(t *testing.T) {
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return fakeBinary, nil }
 
-	path, err := DownloadAndReplace("v0.5.0")
+	path, err := DownloadAndReplaceWithOptions("v0.5.0", unsignedOpts())
 	if err != nil {
 		t.Fatalf("DownloadAndReplace() error: %v", err)
 	}
@@ -284,7 +311,7 @@ func TestDownloadAndReplaceHTTPError(t *testing.T) {
 	downloadURLTemplate = server.URL + "/%s/%s"
 	checksumURLTemplate = server.URL + "/%s/checksums.txt"
 
-	_, err := DownloadAndReplace("v0.5.0")
+	_, err := DownloadAndReplaceWithOptions("v0.5.0", unsignedOpts())
 	if err == nil {
 		t.Error("expected error for 404 response")
 	}
@@ -295,7 +322,7 @@ func TestDownloadAndReplaceExecError(t *testing.T) {
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return "", fmt.Errorf("no executable") }
 
-	_, err := DownloadAndReplace("v0.5.0")
+	_, err := DownloadAndReplaceWithOptions("v0.5.0", unsignedOpts())
 	if err == nil {
 		t.Error("expected error when os.Executable fails")
 	}
@@ -309,7 +336,7 @@ func TestDownloadAndReplaceChecksumMismatch(t *testing.T) {
 	// Publish a checksum that doesn't match the archive we actually serve.
 	checksums := fmt.Sprintf("%s  %s\n", strings.Repeat("0", 64), archiveName)
 
-	_, teardown := testServer(t, archiveName, archive, checksums)
+	_, teardown := testServer(t, archiveName, archive, checksums, nil, nil)
 	defer teardown()
 
 	tmpDir := t.TempDir()
@@ -320,7 +347,7 @@ func TestDownloadAndReplaceChecksumMismatch(t *testing.T) {
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return fakeBinary, nil }
 
-	_, err := DownloadAndReplace("v0.5.0")
+	_, err := DownloadAndReplaceWithOptions("v0.5.0", unsignedOpts())
 	if err == nil {
 		t.Fatal("expected checksum mismatch error, got nil")
 	}
@@ -341,7 +368,7 @@ func TestDownloadAndReplaceMissingChecksumsFile(t *testing.T) {
 	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 
 	// Empty checksumsBody → handler returns 404 for the checksums path.
-	_, teardown := testServer(t, archiveName, archive, "")
+	_, teardown := testServer(t, archiveName, archive, "", nil, nil)
 	defer teardown()
 
 	tmpDir := t.TempDir()
@@ -352,7 +379,7 @@ func TestDownloadAndReplaceMissingChecksumsFile(t *testing.T) {
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return fakeBinary, nil }
 
-	_, err := DownloadAndReplace("v0.5.0")
+	_, err := DownloadAndReplaceWithOptions("v0.5.0", unsignedOpts())
 	if err == nil {
 		t.Fatal("expected error for missing checksums.txt, got nil")
 	}
@@ -374,7 +401,7 @@ func TestDownloadAndReplaceMissingArchiveEntry(t *testing.T) {
 	// checksums.txt exists but doesn't mention our archive.
 	checksums := fmt.Sprintf("%s  some-other-file.tar.gz\n", sha256Hex(archive))
 
-	_, teardown := testServer(t, archiveName, archive, checksums)
+	_, teardown := testServer(t, archiveName, archive, checksums, nil, nil)
 	defer teardown()
 
 	tmpDir := t.TempDir()
@@ -385,7 +412,7 @@ func TestDownloadAndReplaceMissingArchiveEntry(t *testing.T) {
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return fakeBinary, nil }
 
-	_, err := DownloadAndReplace("v0.5.0")
+	_, err := DownloadAndReplaceWithOptions("v0.5.0", unsignedOpts())
 	if err == nil {
 		t.Fatal("expected error for missing archive entry, got nil")
 	}
@@ -399,7 +426,7 @@ func TestDownloadAndReplaceValidChecksumCorruptArchive(t *testing.T) {
 	archiveName := fmt.Sprintf("leo_0.5.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(garbage), archiveName)
 
-	_, teardown := testServer(t, archiveName, garbage, checksums)
+	_, teardown := testServer(t, archiveName, garbage, checksums, nil, nil)
 	defer teardown()
 
 	tmpDir := t.TempDir()
@@ -410,7 +437,7 @@ func TestDownloadAndReplaceValidChecksumCorruptArchive(t *testing.T) {
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return fakeBinary, nil }
 
-	_, err := DownloadAndReplace("v0.5.0")
+	_, err := DownloadAndReplaceWithOptions("v0.5.0", unsignedOpts())
 	if err == nil {
 		t.Fatal("expected extraction error for non-tarball payload, got nil")
 	}
@@ -460,7 +487,7 @@ func TestDownloadAndReplaceOversizedArchive(t *testing.T) {
 	defer func() { osExecutable = origExec }()
 	osExecutable = func() (string, error) { return fakeBinary, nil }
 
-	_, err := DownloadAndReplace("v0.5.0")
+	_, err := DownloadAndReplaceWithOptions("v0.5.0", unsignedOpts())
 	if err == nil {
 		t.Fatal("expected size-limit error, got nil")
 	}

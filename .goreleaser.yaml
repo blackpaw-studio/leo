@@ -21,6 +21,23 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# Keyless signing of the checksums file via Sigstore cosign. Identity is
+# bound to the GitHub Actions OIDC token for this workflow — no long-lived
+# keys are stored anywhere. `leo update` verifies both the signature and
+# the issuing identity before trusting checksums.txt.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
 changelog:
   sort: asc
   filters:

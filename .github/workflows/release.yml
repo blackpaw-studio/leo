@@ -13,17 +13,35 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # id-token: write is required so cosign can request an OIDC token
+      # from GitHub and keyless-sign checksums.txt. The signing identity
+      # encoded in the resulting Fulcio cert is this workflow, which is
+      # what `leo update` pins against on the client side.
+      id-token: write
+    # All third-party actions below are pinned by commit SHA. Floating
+    # tags (@v6, @v7, …) let the upstream author or a compromised
+    # maintainer repoint what the tag resolves to, and because each step
+    # here runs before goreleaser builds or signs anything, a hijacked
+    # pre-step could swap the source tree, the Go toolchain, or the
+    # build output before cosign ever sees it. SHA pins turn that class
+    # of swap into a hard build break instead of a silent compromise.
+    # Trailing comments document the resolved release tag so future
+    # dependabot bumps are reviewable at a glance.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: goreleaser/goreleaser-action@v7
+      # v3.7.0 — released 2024-11-07.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+
+      - uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 # v7.0.0
         with:
           version: "~> v2"
           args: release --clean
