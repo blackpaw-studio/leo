@@ -125,7 +125,16 @@ func newTestServerWithAgents(t *testing.T) (*Server, string, *mockAgentService) 
 		},
 	}
 
-	s := New(cfgPath, processes, scheduler, reloader, svc)
+	s := New(cfgPath, processes, scheduler, reloader, svc, Options{Port: testPort, APIToken: testAPIToken})
+
+	// Auto-authorize requests so existing test assertions survive the
+	// addition of Host/Origin and bearer middleware. Callers that need to
+	// exercise the raw middleware can build their own Server.
+	rawHandler := s.httpServer.Handler
+	s.httpServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizeTestRequest(r)
+		rawHandler.ServeHTTP(w, r)
+	})
 	return s, dir, svc
 }
 
@@ -194,9 +203,11 @@ func TestAPIAgentListNoService(t *testing.T) {
 	os.WriteFile(cfgPath, []byte(testConfigWithTemplatesYAML), 0600)
 	os.MkdirAll(filepath.Join(dir, "state"), 0750)
 
-	s := New(cfgPath, nil, nil, nil, nil)
+	s := New(cfgPath, nil, nil, nil, nil, Options{Port: testPort, APIToken: testAPIToken})
 
 	req := httptest.NewRequest("GET", "/api/agent/list", nil)
+	req.Host = testHost
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
@@ -236,10 +247,12 @@ func TestAPIAgentSpawnNoService(t *testing.T) {
 	os.WriteFile(cfgPath, []byte(testConfigWithTemplatesYAML), 0600)
 	os.MkdirAll(filepath.Join(dir, "state"), 0750)
 
-	s := New(cfgPath, nil, nil, nil, nil)
+	s := New(cfgPath, nil, nil, nil, nil, Options{Port: testPort, APIToken: testAPIToken})
 
 	body := `{"template":"coding","repo":"test"}`
 	req := httptest.NewRequest("POST", "/api/agent/spawn", strings.NewReader(body))
+	req.Host = testHost
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
