@@ -5,6 +5,7 @@
 ### Docs
 
 - New **[tmux Config](docs/guides/tmux-config.md)** guide: a recommended `~/.tmux.conf` for users who attach to leo agents and processes, with explanations of clipboard-over-SSH (OSC 52), session pickers, activity monitoring, and why leo users should skip tmux-resurrect/continuum.
+- **tmux Config:** flip `detach-on-destroy` to `on` so exiting the last pane returns you to the shell instead of jumping into another live session, add an explicit `bind d detach-client` so `prefix + d` can't be shadowed by other bindings, and update the explanation section to cover both.
 
 ### Breaking
 
