@@ -36,6 +36,9 @@ bind C-a send-prefix
 # ---- Reload ----
 bind r source-file ~/.tmux.conf \; display "Reloaded"
 
+# ---- Detach (explicit so nothing shadows the default) ----
+bind d detach-client
+
 # ---- Windows/panes start at 1 ----
 set -g base-index 1
 setw -g pane-base-index 1
@@ -92,8 +95,8 @@ set  -g bell-action none
 set -g pane-border-style "fg=colour238"
 set -g pane-active-border-style "fg=colour39"
 
-# ---- Don't exit tmux when the last pane closes ----
-set -g detach-on-destroy off
+# ---- Detach cleanly when the session's last pane closes ----
+set -g detach-on-destroy on
 ```
 
 Reload without restarting tmux:
@@ -131,9 +134,14 @@ Both are required for clipboard-over-SSH to work. Your local terminal also has t
 
 Claude Code and many shells emit escape sequences to set the terminal title. Inside a tmux pane, that turns into a window rename. Leo already named the window `leo-<agent>`; you don't want that overwritten every time Claude updates its status line. `allow-rename off` pins the name so you can tell which agent is which at a glance.
 
-### Why `detach-on-destroy off` matters for leo
+### Why `detach-on-destroy on` and an explicit detach binding
 
-When leo stops an agent, its tmux session disappears. By default tmux kicks you back to your shell. With `detach-on-destroy off` it drops you into another live session instead — usually the next agent you're already using. Much less jarring.
+Two small things that are annoying to get wrong:
+
+- **`set -g detach-on-destroy on`** — when the session's last pane exits (e.g. you `Ctrl-C` out of Claude Code), tmux detaches cleanly and drops you back at your login shell. With `off`, tmux instead switches you to some other running session, which is jarring if you just wanted to end the thing you were in. `on` is also the tmux default; the line is in the config so the intent is explicit and doesn't get confused with the alternatives (`off`, `previous`, `next`).
+- **`bind d detach-client`** — detach-on-prefix-d is tmux's default, but bindings from plugins, shared configs, or muscle-memory tweaks can shadow it. Pinning it explicitly guarantees `prefix + d` always detaches, no matter what else is in your config.
+
+If you'd rather hop between running leo agents when one exits — nice if you routinely have several active at once — swap `on` for `off`.
 
 ### Activity monitoring
 
