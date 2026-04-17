@@ -177,8 +177,10 @@ plain name to reuse the template workspace.
 
 When repo is slashless and matches an existing agent's short name, the CLI
 prompts the user for how to proceed: attach to the existing agent, spawn using
-that agent's canonical owner/repo, or spawn a fresh template workspace. The
-prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
+that agent's canonical owner/repo, or spawn a fresh template workspace. When
+repo is slashed (owner/repo) and an agent already targets the same repo and
+branch, the CLI prompts to attach or spawn a fresh suffixed agent. The prompt
+is skipped in non-interactive runs (no TTY). Flags override the prompt:
 --reuse-owner forces the canonical repo, --attach-existing attaches instead.`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -226,8 +228,8 @@ prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
 				return runRemote(res, extra)
 			}
 
-			// Collision detection only applies to slashless repos. owner/repo
-			// input is explicit and unambiguous by construction.
+			// Collision detection: slashless repos match by repo short-name
+			// (ambiguous owner), slashed repos match exactly on (Repo, Branch).
 			if !strings.Contains(repo, "/") {
 				matches, err := findRepoShortMatches(cfg.HomePath, repo)
 				if err != nil {
@@ -256,6 +258,33 @@ prompt is skipped in non-interactive runs (no TTY). Flags override the prompt:
 					}
 					return fmt.Errorf("multiple existing agents match %q: %s — pass the full owner/repo to disambiguate",
 						repo, strings.Join(labels, ", "))
+				}
+			} else {
+				matches, err := findExactMatches(cfg.HomePath, repo, branch)
+				if err != nil {
+					return fmt.Errorf("checking existing agents: %w", err)
+				}
+				switch {
+				case len(matches) == 0:
+					// No conflict — fall through and spawn.
+				case len(matches) == 1:
+					choice, err := resolveExactCollision(matches[0], template, attachExisting)
+					if err != nil {
+						return err
+					}
+					switch choice {
+					case spawnAttachExisting:
+						return attachLocal(cfg.HomePath, matches[0].Name)
+					case spawnFreshTemplate:
+						// fall through — reserveUniqueName suffixes the name.
+					}
+				default:
+					labels := make([]string, 0, len(matches))
+					for _, m := range matches {
+						labels = append(labels, m.Name)
+					}
+					return fmt.Errorf("multiple existing agents target %s (branch %q): %s — stop one before spawning another",
+						repo, branch, strings.Join(labels, ", "))
 				}
 			}
 
@@ -325,6 +354,30 @@ func findRepoShortMatches(homePath, query string) ([]agent.Record, error) {
 	return out, nil
 }
 
+// findExactMatches returns running agents whose Repo (case-insensitive) and
+// Branch (exact, including both-empty) match the target spawn spec. This is the
+// slashed-repo analogue of findRepoShortMatches: a hit means the caller is
+// asking to re-spawn the same workspace, not merely one that shares a short
+// name.
+func findExactMatches(homePath, repo, branch string) ([]agent.Record, error) {
+	records, err := daemon.AgentList(homePath)
+	if err != nil {
+		return nil, err
+	}
+	return filterExactMatches(records, repo, branch), nil
+}
+
+// filterExactMatches is the pure part of findExactMatches, split out for tests.
+func filterExactMatches(records []agent.Record, repo, branch string) []agent.Record {
+	var out []agent.Record
+	for _, r := range records {
+		if strings.EqualFold(r.Repo, repo) && r.Branch == branch {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // resolveSpawnCollision decides what to do when a slashless repo query matches
 // exactly one existing agent. Flags force a non-interactive choice; otherwise
 // the user is prompted when a TTY is attached. Non-interactive CLI runs
@@ -380,6 +433,53 @@ func resolveSpawnCollision(match agent.Record, template string, reuseOwner, atta
 			return spawnCancel, fmt.Errorf("existing agent %s has no stored repo; cannot reuse owner", match.Name)
 		}
 		return spawnUseCanonicalRepo, nil
+	case "", "c":
+		return spawnFreshTemplate, nil
+	case "q":
+		return spawnCancel, fmt.Errorf("spawn cancelled")
+	default:
+		return spawnCancel, fmt.Errorf("unknown choice %q", choice)
+	}
+}
+
+// resolveExactCollision handles (Repo, Branch) collisions for slashed
+// owner/repo spawns. The "reuse canonical repo" option is not offered here
+// because the user already supplied the canonical repo — the only meaningful
+// choices are attach, spawn-fresh (with numeric suffix), or cancel.
+func resolveExactCollision(match agent.Record, template string, attachExisting bool) (spawnChoice, error) {
+	switch {
+	case attachExisting:
+		return spawnAttachExisting, nil
+	case !agentIsTTY():
+		return spawnFreshTemplate, nil
+	}
+
+	fmt.Fprintf(agentStderr, "\nAn agent already targets %s", match.Repo)
+	if match.Branch != "" {
+		fmt.Fprintf(agentStderr, " on branch %s", match.Branch)
+	}
+	fmt.Fprintln(agentStderr, ":")
+	fmt.Fprintf(agentStderr, "  name:     %s\n", match.Name)
+	fmt.Fprintf(agentStderr, "  template: %s\n\n", dashIfEmpty(match.Template))
+	fmt.Fprintln(agentStderr, "  a) attach to the existing agent")
+	fmt.Fprintf(agentStderr, "  c) spawn a fresh agent under template %q (current behavior)\n", template)
+	fmt.Fprintln(agentStderr, "  q) cancel")
+	if _, err := fmt.Fprint(agentStderr, "\nchoice [c]: "); err != nil {
+		return spawnCancel, fmt.Errorf("writing prompt: %w", err)
+	}
+
+	reader := bufio.NewReader(agentStdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return spawnCancel, fmt.Errorf("reading prompt: %w", err)
+	}
+	choice := strings.TrimSpace(strings.ToLower(line))
+	if errors.Is(err, io.EOF) && choice == "" {
+		return spawnCancel, fmt.Errorf("spawn cancelled (stdin closed)")
+	}
+	switch choice {
+	case "a":
+		return spawnAttachExisting, nil
 	case "", "c":
 		return spawnFreshTemplate, nil
 	case "q":
