@@ -47,10 +47,10 @@ func ValidateAddDir(dir string) error {
 		return fmt.Errorf("add_dirs entry is empty")
 	}
 	if strings.HasPrefix(trimmed, "-") {
-		return fmt.Errorf("add_dirs entry %q must not start with '-'", dir)
+		return fmt.Errorf("add_dirs entry %q must not start with '-'", trimmed)
 	}
 	if i := strings.IndexAny(dir, addDirRejectedChars); i >= 0 {
-		return fmt.Errorf("add_dirs entry %q contains forbidden character %q", dir, string(dir[i]))
+		return fmt.Errorf("add_dirs entry %q contains forbidden character %q", trimmed, string(dir[i]))
 	}
 	return nil
 }
