@@ -13,13 +13,52 @@ import (
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/spf13/cobra"
+)
+
+// Testability seams for task subcommands. Tests override these to simulate
+// interactive / non-interactive stdin and to stub out the YesNo prompt.
+var (
+	taskIsTTY                                                                = defaultIsTTY
+	taskYesNo func(reader *bufio.Reader, label string, defaultYes bool) bool = prompt.YesNo
 )
 
 func newTaskCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "task",
 		Short: "Manage scheduled tasks",
+		Long: `Manage scheduled tasks — persistent cron-style invocations of the claude CLI.
+
+A task couples a cron schedule to a prompt file in a workspace. When the cron
+fires, leo spawns claude with the prompt (plus assembled context) and lets the
+agent drive any configured channel plugins (Telegram, Slack, webhook, etc.)
+to deliver results. Tasks live in leo.yaml under the ` + "`tasks:`" + ` map.
+
+Use the subcommands to add / list / enable / disable / remove tasks, view
+execution history, or tail the most recent run's log.`,
+		Example: `  # List configured tasks (optionally as JSON)
+  leo task list
+  leo task list --json
+
+  # Add a task non-interactively
+  leo task add \
+    --name nightly-digest \
+    --schedule "0 7 * * *" \
+    --prompt-file prompts/nightly.md \
+    --channels plugin:telegram@claude-plugins-official \
+    --notify-on-fail
+
+  # Add a task interactively (prompts for any missing required fields)
+  leo task add
+
+  # Remove a task (prompts for confirmation)
+  leo task remove nightly-digest
+  leo task remove nightly-digest --yes
+
+  # Inspect history and tail the last run's log
+  leo task history nightly-digest
+  leo task logs nightly-digest -n 50`,
 	}
 
 	cmd.AddCommand(
@@ -35,8 +74,20 @@ func newTaskCmd() *cobra.Command {
 	return cmd
 }
 
+// taskListEntry is the JSON shape emitted by `leo task list --json`. Kept
+// stable and minimal so downstream scripts can rely on the field names.
+type taskListEntry struct {
+	Name     string     `json:"name"`
+	Schedule string     `json:"schedule"`
+	Model    string     `json:"model"`
+	Enabled  bool       `json:"enabled"`
+	LastRun  *time.Time `json:"last_run,omitempty"`
+	NextRun  *time.Time `json:"next_run,omitempty"`
+}
+
 func newTaskListCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List configured tasks",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -60,13 +111,38 @@ func newTaskListCmd() *cobra.Command {
 				}
 			}
 
+			hist := history.NewStore(cfg.HomePath)
+
+			if asJSON {
+				out := make([]taskListEntry, 0, len(cfg.Tasks))
+				for name, task := range cfg.Tasks {
+					entry := taskListEntry{
+						Name:     name,
+						Schedule: task.Schedule,
+						Model:    cfg.TaskModel(task),
+						Enabled:  task.Enabled,
+					}
+					if e := hist.Get(name); e != nil {
+						t := e.RunAt
+						entry.LastRun = &t
+					}
+					if t, ok := nextRuns[name]; ok {
+						tt := t
+						entry.NextRun = &tt
+					}
+					out = append(out, entry)
+				}
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
+			}
+
 			if len(cfg.Tasks) == 0 {
 				info.Println("No tasks configured.")
 				return nil
 			}
 
 			fmt.Printf("  %-20s %-18s %-8s %-8s %-20s %s\n", "NAME", "SCHEDULE", "MODEL", "STATUS", "LAST RUN", "NEXT RUN")
-			hist := history.NewStore(cfg.HomePath)
 			for name, task := range cfg.Tasks {
 				status := "disabled"
 				if task.Enabled {
@@ -92,27 +168,95 @@ func newTaskListCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output as JSON")
+	return cmd
 }
 
 func newTaskAddCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		flagName         string
+		flagSchedule     string
+		flagPromptFile   string
+		flagModel        string
+		flagChannels     string
+		flagNotifyOnFail bool
+		flagSilent       bool
+		flagDisabled     bool
+	)
+	cmd := &cobra.Command{
 		Use:   "add",
-		Short: "Add a new scheduled task interactively",
+		Short: "Add a new scheduled task",
+		Long: `Add a scheduled task to leo.yaml.
+
+With all required flags (--name, --schedule, --prompt-file) this runs
+non-interactively. If any required field is missing and stdin is a TTY the
+command falls back to an interactive wizard that prompts only for the
+missing values. When stdin is not a TTY and required fields are missing the
+command exits with a non-zero status and lists which flags are missing.`,
+		Example: `  # Fully non-interactive
+  leo task add \
+    --name nightly-digest \
+    --schedule "0 7 * * *" \
+    --prompt-file prompts/nightly.md \
+    --model sonnet \
+    --channels plugin:telegram@claude-plugins-official,plugin:slack@claude-plugins-official \
+    --notify-on-fail
+
+  # Interactive wizard (prompts for any missing fields)
+  leo task add`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
 
-			reader := bufio.NewReader(os.Stdin)
+			name := strings.TrimSpace(flagName)
+			schedule := strings.TrimSpace(flagSchedule)
+			promptFile := strings.TrimSpace(flagPromptFile)
+			model := strings.TrimSpace(flagModel)
+			channelsStr := flagChannels
+			notifyOnFail := flagNotifyOnFail
+			silent := flagSilent
+			disabled := flagDisabled
 
-			name := promptLine(reader, "Task name: ")
-			schedule := promptLine(reader, "Cron schedule (e.g. '0 7 * * *'): ")
-			promptFile := promptLine(reader, "Prompt file (relative to workspace): ")
-			model := promptLine(reader, fmt.Sprintf("Model [%s]: ", cfg.Defaults.Model))
-			channelsStr := promptLine(reader, "Channels (comma-separated plugin IDs, optional): ")
-			notifyStr := promptLine(reader, "Notify configured channels on failure? [y/N]: ")
-			silentStr := promptLine(reader, "Silent mode? [y/N]: ")
+			hasAllRequired := name != "" && schedule != "" && promptFile != ""
+
+			if !hasAllRequired {
+				if !taskIsTTY() {
+					missing := missingAddFlags(name, schedule, promptFile)
+					return fmt.Errorf("missing required flag(s) for non-interactive add: %s", strings.Join(missing, ", "))
+				}
+
+				reader := bufio.NewReader(os.Stdin)
+				if name == "" {
+					name = promptLine(reader, "Task name: ")
+				}
+				if schedule == "" {
+					schedule = promptLine(reader, "Cron schedule (e.g. '0 7 * * *'): ")
+				}
+				if promptFile == "" {
+					promptFile = promptLine(reader, "Prompt file (relative to workspace): ")
+				}
+				if model == "" && !cmd.Flags().Changed("model") {
+					model = promptLine(reader, fmt.Sprintf("Model [%s]: ", cfg.Defaults.Model))
+				}
+				if channelsStr == "" && !cmd.Flags().Changed("channels") {
+					channelsStr = promptLine(reader, "Channels (comma-separated plugin IDs, optional): ")
+				}
+				if !cmd.Flags().Changed("notify-on-fail") {
+					notifyStr := promptLine(reader, "Notify configured channels on failure? [y/N]: ")
+					notifyOnFail = strings.EqualFold(strings.TrimSpace(notifyStr), "y")
+				}
+				if !cmd.Flags().Changed("silent") {
+					silentStr := promptLine(reader, "Silent mode? [y/N]: ")
+					silent = strings.EqualFold(strings.TrimSpace(silentStr), "y")
+				}
+			}
+
+			if name == "" || schedule == "" || promptFile == "" {
+				missing := missingAddFlags(name, schedule, promptFile)
+				return fmt.Errorf("missing required field(s): %s", strings.Join(missing, ", "))
+			}
 
 			var channels []string
 			if channelsStr != "" {
@@ -128,13 +272,16 @@ func newTaskAddCmd() *cobra.Command {
 				PromptFile:   promptFile,
 				Model:        model,
 				Channels:     channels,
-				NotifyOnFail: strings.ToLower(notifyStr) == "y",
-				Enabled:      true,
-				Silent:       strings.ToLower(silentStr) == "y",
+				NotifyOnFail: notifyOnFail,
+				Enabled:      !disabled,
+				Silent:       silent,
 			}
 
 			if cfg.Tasks == nil {
 				cfg.Tasks = make(map[string]config.TaskConfig)
+			}
+			if _, exists := cfg.Tasks[name]; exists {
+				return fmt.Errorf("task %q already exists — remove it first or pick a different --name", name)
 			}
 			cfg.Tasks[name] = task
 
@@ -160,10 +307,37 @@ func newTaskAddCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&flagName, "name", "", "task name (required for non-interactive add)")
+	cmd.Flags().StringVar(&flagSchedule, "schedule", "", "cron schedule, e.g. '0 7 * * *' (required for non-interactive add)")
+	cmd.Flags().StringVar(&flagPromptFile, "prompt-file", "", "prompt file path relative to the task workspace (required)")
+	cmd.Flags().StringVar(&flagModel, "model", "", "claude model override (defaults.model is used when empty)")
+	cmd.Flags().StringVar(&flagChannels, "channels", "", "comma-separated channel plugin IDs")
+	cmd.Flags().BoolVar(&flagNotifyOnFail, "notify-on-fail", false, "spawn a child claude to notify configured channels on failure")
+	cmd.Flags().BoolVar(&flagSilent, "silent", false, "silent mode — skip chatter on successful runs")
+	cmd.Flags().BoolVar(&flagDisabled, "disabled", false, "create the task in a disabled state")
+
+	return cmd
+}
+
+// missingAddFlags reports which of the required flags are still empty.
+func missingAddFlags(name, schedule, promptFile string) []string {
+	var missing []string
+	if name == "" {
+		missing = append(missing, "--name")
+	}
+	if schedule == "" {
+		missing = append(missing, "--schedule")
+	}
+	if promptFile == "" {
+		missing = append(missing, "--prompt-file")
+	}
+	return missing
 }
 
 func newTaskRemoveCmd() *cobra.Command {
-	return &cobra.Command{
+	var assumeYes bool
+	cmd := &cobra.Command{
 		Use:               "remove <name>",
 		Short:             "Remove a task from the config",
 		Args:              cobra.ExactArgs(1),
@@ -175,6 +349,22 @@ func newTaskRemoveCmd() *cobra.Command {
 			}
 
 			name := args[0]
+
+			if _, ok := cfg.Tasks[name]; !ok && !daemon.IsRunning(cfg.HomePath) {
+				return fmt.Errorf("task %q not found", name)
+			}
+
+			if !assumeYes {
+				if !taskIsTTY() {
+					return fmt.Errorf("refusing to remove task %q without confirmation: pass --yes to skip the prompt when stdin is not a TTY", name)
+				}
+				reader := bufio.NewReader(os.Stdin)
+				label := fmt.Sprintf("Remove task %q? This cannot be undone.", name)
+				if !taskYesNo(reader, label, false) {
+					info.Println("Aborted.")
+					return nil
+				}
+			}
 
 			if daemon.IsRunning(cfg.HomePath) {
 				resp, err := daemon.Send(cfg.HomePath, "POST", "/task/remove",
@@ -208,6 +398,8 @@ func newTaskRemoveCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the confirmation prompt")
+	return cmd
 }
 
 func newTaskEnableCmd() *cobra.Command {
