@@ -119,6 +119,22 @@ web:
   port: 8370
 ```
 
+#### Web UI and API authentication
+
+The web UI binds to `127.0.0.1` by default. To prevent a malicious webpage from driving the Claude REPL or mutating config via the browser, Leo enforces two controls:
+
+- **Host + Origin pinning on every `/web/...` route.** Requests must have `Host` and (when present) `Origin` pointing at `127.0.0.1`, `localhost`, or `[::1]` on the configured port. Requests with a foreign `Host` or `Origin` header get `403 forbidden host` / `403 forbidden origin`. This blocks DNS-rebinding and drive-by cross-origin POSTs.
+- **Bearer-token auth on every `/api/...` route.** On first start, the daemon mints a 32-byte random token and writes it to `~/.leo/state/api.token` (mode `0600`). The same Host pinning also applies to `/api/...`, so a valid token alone is not enough — the request must still look local.
+
+To hit the API from a channel plugin or another local tool:
+
+```bash
+TOKEN=$(cat ~/.leo/state/api.token)
+curl -sH "Authorization: Bearer $TOKEN" http://127.0.0.1:8370/api/task/list
+```
+
+The token file is readable by any process running as the same Unix user, which is intentional — channel plugins that need API access simply read it themselves. Rotate the token by deleting the file and restarting the daemon; a new one is generated automatically.
+
 ### Channel Plugins
 
 Leo itself does not ship a messaging channel. Install any Claude Code channel plugin and reference its ID in a process or task `channels:` list. Leo passes the list to the spawned Claude process via `LEO_CHANNELS`; the plugin owns its own auth and routing.
