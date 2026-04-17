@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
@@ -153,6 +154,14 @@ func (v *SignatureVerifier) now() time.Time {
 // the *cert's* notBefore as the reference time — that's the same
 // behavior cosign uses for historical verification and what Sigstore's
 // transparency log guarantees over time.
+//
+// Limitation: verifying with leaf.NotBefore means the cert vouches for
+// its own validity window — "the cert says it was valid, we trust the
+// cert to vouch for itself". Closing that loop requires consulting
+// Rekor (the Sigstore transparency log) to prove the signature was
+// actually entered during the cert's validity window. That's
+// intentionally out of scope here; users who want it can run
+// `cosign verify-blob --rfc3161-timestamp` manually (see README).
 func (v *SignatureVerifier) verifyChain(leaf *x509.Certificate) error {
 	opts := x509.VerifyOptions{
 		Roots:         v.Roots,
@@ -292,17 +301,22 @@ func leafSAN(cert *x509.Certificate) (string, error) {
 // OID 1.3.6.1.4.1.57264.1.1 (historical) and once as a UTF8String under
 // OID 1.3.6.1.4.1.57264.1.8 (current). We prefer the newer encoding but
 // fall back to the historical one for older signatures.
+//
+// The v2 extension is an ASN.1 UTF8String, so we use encoding/asn1 to
+// decode it. The older hand-rolled parser only handled short-form
+// lengths (<128 bytes); encoding/asn1 handles long-form BER lengths as
+// well. It's not currently exploitable — Fulcio's issuer URL is 43
+// bytes — but brittle parsing around crypto boundaries is worth
+// avoiding on principle.
 func leafIssuerClaim(cert *x509.Certificate) (string, error) {
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(oidOIDCIssuerV2) {
-			// UTF8String with a leading tag byte (0x0c) and length.
-			if len(ext.Value) >= 2 && ext.Value[0] == 0x0c {
-				n := int(ext.Value[1])
-				if 2+n <= len(ext.Value) {
-					return string(ext.Value[2 : 2+n]), nil
-				}
+			var s string
+			if _, err := asn1.Unmarshal(ext.Value, &s); err == nil {
+				return s, nil
 			}
-			// Some encoders skip the ASN.1 wrapping; fall through to raw.
+			// Some encoders write the raw payload without the ASN.1
+			// wrapper. Fall through so we don't break on them.
 			return string(ext.Value), nil
 		}
 	}
