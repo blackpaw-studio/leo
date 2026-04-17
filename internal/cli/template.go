@@ -369,10 +369,11 @@ func resolveTemplate(cfg *config.Config, tmpl config.TemplateConfig) effectiveTe
 	if eff.MaxTurns == 0 {
 		eff.MaxTurns = config.DefaultMaxTurns
 	}
+	// Match internal/agent/args.go: templates default remote-control to true
+	// when unset on the template, independent of cfg.Defaults.RemoteControl.
+	eff.RemoteControl = true
 	if tmpl.RemoteControl != nil {
 		eff.RemoteControl = *tmpl.RemoteControl
-	} else {
-		eff.RemoteControl = cfg.Defaults.RemoteControl
 	}
 	if eff.PermissionMode == "" {
 		eff.PermissionMode = cfg.Defaults.PermissionMode

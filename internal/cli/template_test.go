@@ -261,6 +261,62 @@ func TestTemplateShow_ResolvedAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestTemplateShow_ResolvedRemoteControlMatchesSpawner(t *testing.T) {
+	// Regression test: resolveTemplate must match internal/agent/args.go,
+	// which defaults remote_control to true for templates when unset —
+	// independent of cfg.Defaults.RemoteControl. Previously the resolver
+	// fell back to cfg.Defaults.RemoteControl and reported `false` while
+	// the actual spawn sent `--remote-control`.
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "leo.yaml")
+	falseVal := false
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{
+			Model:          "sonnet",
+			MaxTurns:       25,
+			RemoteControl:  false, // irrelevant for templates
+			PermissionMode: "acceptEdits",
+		},
+		Templates: map[string]config.TemplateConfig{
+			"unset":    {}, // tmpl.RemoteControl == nil → should resolve true
+			"optedout": {RemoteControl: &falseVal},
+		},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	oldCfgFile := cfgFile
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	unset := captureStdout(t, func() {
+		cmd := newTemplateShowCmd()
+		if err := cmd.Flags().Set("resolved", "true"); err != nil {
+			t.Fatalf("set resolved: %v", err)
+		}
+		if err := cmd.RunE(cmd, []string{"unset"}); err != nil {
+			t.Fatalf("RunE: %v", err)
+		}
+	})
+	if !strings.Contains(unset, "Remote control:        true") {
+		t.Errorf("unset template should resolve remote_control=true; got:\n%s", unset)
+	}
+
+	optedout := captureStdout(t, func() {
+		cmd := newTemplateShowCmd()
+		if err := cmd.Flags().Set("resolved", "true"); err != nil {
+			t.Fatalf("set resolved: %v", err)
+		}
+		if err := cmd.RunE(cmd, []string{"optedout"}); err != nil {
+			t.Fatalf("RunE: %v", err)
+		}
+	})
+	if !strings.Contains(optedout, "Remote control:        false") {
+		t.Errorf("opted-out template should resolve remote_control=false; got:\n%s", optedout)
+	}
+}
+
 func TestTemplateShow_ResolvedTemplateOverridesDefaults(t *testing.T) {
 	// Template explicitly sets Model=opus; resolved output should keep it.
 	newTestConfigWithTemplates(t)
