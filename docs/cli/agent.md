@@ -117,10 +117,12 @@ When `--repo` is a bare name (no slash) that matches the short name of a running
 - **c** — spawn a fresh agent under the template workspace (default)
 - **q** — cancel
 
+When `--repo` is `owner/repo` and a running agent already targets the same repo (and branch, if `--worktree` is set), Leo prompts with the same options minus **b** (since the user already supplied the canonical repo). Selecting **c** spawns a new agent with a numeric suffix (e.g. `-2`).
+
 Non-TTY runs skip the prompt and default to fresh-template. Two flags override the prompt:
 
 - `--attach-existing` — always attach if a collision is found
-- `--reuse-owner` — always respawn using the existing canonical repo
+- `--reuse-owner` — always respawn using the existing canonical repo (slashless only)
 
 On success Leo prints the resolved name and workspace, plus the one-liner to attach.
 

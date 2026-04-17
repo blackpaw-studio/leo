@@ -381,6 +381,99 @@ func TestResolveSpawnCollisionPrompt(t *testing.T) {
 	}
 }
 
+func TestResolveExactCollisionForcedFlag(t *testing.T) {
+	match := agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"}
+
+	got, err := resolveExactCollision(match, "coding", true)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != spawnAttachExisting {
+		t.Errorf("choice = %v, want spawnAttachExisting", got)
+	}
+}
+
+func TestResolveExactCollisionNonInteractive(t *testing.T) {
+	match := agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Template: "coding"}
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return false }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+
+	got, err := resolveExactCollision(match, "coding", false)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != spawnFreshTemplate {
+		t.Errorf("non-TTY default = %v, want spawnFreshTemplate", got)
+	}
+}
+
+func TestResolveExactCollisionPrompt(t *testing.T) {
+	match := agent.Record{Name: "leo-coding-acme-widget", Repo: "acme/widget", Branch: "feature-x", Template: "coding"}
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+
+	cases := []struct {
+		name    string
+		input   string
+		want    spawnChoice
+		wantErr bool
+	}{
+		{"answer a attaches", "a\n", spawnAttachExisting, false},
+		{"answer c spawns fresh", "c\n", spawnFreshTemplate, false},
+		{"empty line defaults to c", "\n", spawnFreshTemplate, false},
+		{"answer q cancels", "q\n", spawnCancel, true},
+		{"uppercase also works", "A\n", spawnAttachExisting, false},
+		{"option b rejected", "b\n", spawnCancel, true},
+		{"eof cancels", "", spawnCancel, true},
+		{"unknown choice errors", "x\n", spawnCancel, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldIn := agentStdin
+			agentStdin = strings.NewReader(tc.input)
+			t.Cleanup(func() { agentStdin = oldIn })
+			withStubStdio(t)
+
+			got, err := resolveExactCollision(match, "coding", false)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error, got nil (choice=%v)", got)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("input %q → %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFindExactMatches(t *testing.T) {
+	records := []agent.Record{
+		{Name: "a", Repo: "acme/widget"},
+		{Name: "b", Repo: "ACME/Widget"},
+		{Name: "c", Repo: "acme/widget", Branch: "feature-x"},
+		{Name: "d", Repo: "other/widget"},
+		{Name: "e"},
+	}
+	matches := filterExactMatches(records, "acme/widget", "")
+	if len(matches) != 2 {
+		t.Fatalf("want 2 matches (case-insensitive, empty branch), got %d: %+v", len(matches), matches)
+	}
+	matches = filterExactMatches(records, "acme/widget", "feature-x")
+	if len(matches) != 1 || matches[0].Name != "c" {
+		t.Fatalf("want 1 branch-scoped match, got %+v", matches)
+	}
+	matches = filterExactMatches(records, "nobody/nothing", "")
+	if len(matches) != 0 {
+		t.Fatalf("want 0 matches, got %+v", matches)
+	}
+}
+
 func TestAgentSpawnRemoteForwardsCollisionFlags(t *testing.T) {
 	path := newAgentCLITestConfig(t)
 	stub := withStubExec(t)
