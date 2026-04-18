@@ -1,6 +1,6 @@
 # Agent Templates
 
-Leo can spawn ephemeral coding agents on demand from reusable templates. Each agent runs in its own tmux session with an isolated workspace, and can be accessed via claude.ai/code or the Claude desktop/web app.
+Leo can spawn ephemeral coding agents on demand from reusable templates. Each agent runs in its own tmux session with an isolated workspace, and can be accessed via claude.ai or the Claude desktop/mobile app.
 
 ## Defining Templates
 
@@ -134,7 +134,7 @@ Agents are named based on the template and repo:
 
 Worktree spawns append a sanitized branch slug so two agents on different branches of the same repo don't collide. Long slugs are truncated with a short content hash to stay within filesystem-friendly length bounds.
 
-This name is used as the `--name` flag for Claude, so it appears exactly as shown in claude.ai/code and the Claude app.
+This name is used as the `--name` flag for Claude, so it appears exactly as shown in claude.ai and the Claude app.
 
 If a name collides with an existing agent, Leo appends `-2`, `-3`, etc.
 
