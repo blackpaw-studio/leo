@@ -351,7 +351,7 @@ Then open `http://localhost:8370` for the web dashboard — process status, task
 
 Good places to start:
 
-- **Replace the channel plugin** with whichever messenger you use (Slack, Discord, webhook). Leo is channel-agnostic; only the plugin ID changes.
+- **Replace the channel plugin** with whichever messenger you use — Telegram, iMessage, or Discord are the currently available plugins. Leo is channel-agnostic; only the plugin ID changes.
 - **Keep 2–3 tasks max to start.** A news briefing + an inbox watcher is enough to feel the value without running up cost.
 - **Move fast-running tasks to `silent: true`** immediately — the `NO_REPLY` habit is what makes high-frequency schedules tolerable.
 - **Codify preferences in your workspace's `CLAUDE.md`** rather than inside every prompt. The `agent:` field on processes lets each process pull a different persona / toolset.
