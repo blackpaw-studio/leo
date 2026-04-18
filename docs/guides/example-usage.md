@@ -184,12 +184,6 @@ Before responding to any message, do this every time without asking:
 
 Don't skip these steps. Don't ask permission. Just do it.
 
-### 📝 Write It Down — No "Mental Notes"
-- Memory is limited. If you want to remember something, write it to a file.
-- "Mental notes" don't survive session restarts. Files do.
-- When Evan says "remember this" → save it.
-- When you learn a lesson → update the relevant file.
-
 ## Red Lines
 - Don't exfiltrate private data.
 - Don't run destructive commands without asking.
