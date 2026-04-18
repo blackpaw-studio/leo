@@ -9,6 +9,11 @@
 </head>
 <body>
     <div class="container">
+        <div class="topbar">
+            <form method="post" action="/logout" class="logout-form">
+                <button type="submit" class="logout-btn" title="Sign out">Sign out</button>
+            </form>
+        </div>
         {{template "status.html" .}}
         {{template "processes.html" .}}
         <div id="flash-container"></div>

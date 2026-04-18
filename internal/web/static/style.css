@@ -810,3 +810,9 @@ body.login { display: flex; align-items: center; justify-content: center; min-he
 .login-box input { width: 100%; padding: 8px; background: #0d0d0d; color: #fff; border: 1px solid #333; border-radius: 4px; font-family: monospace; box-sizing: border-box; }
 .login-box button { width: 100%; margin-top: 12px; padding: 8px; background: #4a9eff; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
 .login-box button:hover { background: #2b7dd8; }
+
+/* Topbar / logout */
+.topbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.logout-form { margin: 0; }
+.logout-btn { background: transparent; color: #888; border: 1px solid #333; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.logout-btn:hover { background: #222; color: #ccc; }
