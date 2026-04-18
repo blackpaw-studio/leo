@@ -35,7 +35,7 @@ processes:
     channels:
       - plugin:blackpaw-telegram@blackpaw-plugins
     model: opus[1m]
-    remote_control: false
+    remote_control: false # set to true to make this agent available on claude.ai and the Claude app
     agent: leo           # gives this process its personality — the Claude Code
                          # subagent at .claude/agents/leo.md supplies the system
                          # prompt (voice, identity, preferences) every message
@@ -45,7 +45,7 @@ processes:
 templates:
   coding:
     workspace: ~/projects
-    remote_control: true
+    remote_control: true  # makes this agent available on claude.ai and the Claude app
 
 tasks:
   daily-news-briefing:
@@ -290,7 +290,7 @@ A single template handles on-demand coding work:
 templates:
   coding:
     workspace: ~/projects
-    remote_control: true
+    remote_control: true  # makes this agent available on claude.ai and the Claude app
 ```
 
 Dispatch a new agent from Telegram (or the web UI, or `leo agent spawn`):
