@@ -56,6 +56,17 @@ Non-loopback bind with **no** `allowed_hosts` is an error — pass `--bind` or a
 
 ### Security
 
-The printed URL contains the API token. Do not share it, do not paste it into chat, do not log it. Anyone with the URL can log into the dashboard and take full control of your leo instance.
+The printed URL embeds the **long-lived API bearer token** in its query string. This is the same token stored in `~/.leo/state/api.token` that scripts and channel plugins use for bearer auth — it does not expire and is not rotated after use.
+
+Consequences:
+- **Browser history**: the full URL, including the token, is written to history on every device you open it on.
+- **Referer headers**: if the logged-in dashboard ever links off-site, the token may leak in `Referer`. Leo avoids outbound links, but third-party widgets or user-added content could reintroduce this risk.
+- **Shell history / logs**: if you pipe the command or copy-paste the URL, it lands in shell history, tmux scrollback, screenshots, and any terminal recording.
+
+Treat the URL like the raw token:
+- Generate it on the machine you will open it on.
+- Open it once, immediately, in a trusted browser.
+- Do not share, paste into chat, screenshot, or commit it.
+- To invalidate a leaked token, `rm ~/.leo/state/api.token` and restart the daemon — this forces a fresh token to be minted and logs out all existing bearer callers.
 
 See [Web configuration](../configuration/config-reference.md#web) for the underlying auth model.

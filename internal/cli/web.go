@@ -47,8 +47,14 @@ func newWebLoginURLCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login-url",
 		Short: "Print a one-click login URL with the current API token",
-		Long: "Reads ~/.leo/state/api.token (creating one if missing) and prints a URL you " +
-			"can open in a browser to auto-submit the login form. Do not share the URL — the token is in it.",
+		Long: "Reads ~/.leo/state/api.token (creating one if missing) and prints a URL " +
+			"that auto-submits the login form.\n\n" +
+			"WARNING: The URL contains your long-lived API bearer token in the query string. " +
+			"Anyone who sees it gets full API access until api.token is rotated. The URL " +
+			"will end up in browser history and may leak via Referer headers and shell " +
+			"history. Open it yourself on a trusted device, then discard. Do not paste, " +
+			"share, screenshot, or commit it. To rotate the token, delete " +
+			"~/.leo/state/api.token and restart the daemon.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sd := stateDir
 			p := port
