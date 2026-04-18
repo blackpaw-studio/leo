@@ -27,7 +27,7 @@ brew install blackpaw-studio/tap/leo
 **Shell installer:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
+curl -fsSL leo.blackpaw.studio/install | sh
 ```
 
 **Go:**
