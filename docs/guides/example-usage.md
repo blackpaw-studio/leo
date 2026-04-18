@@ -43,7 +43,7 @@ processes:
 
 templates:
   coding:
-    workspace: ~/agents
+    workspace: ~/projects
     remote_control: true
 
 tasks:
@@ -169,7 +169,7 @@ A single template handles on-demand coding work:
 ```yaml
 templates:
   coding:
-    workspace: ~/agents
+    workspace: ~/projects
     remote_control: true
 ```
 
@@ -179,7 +179,7 @@ Dispatch a new agent from Telegram (or the web UI, or `leo agent spawn`):
 /agent coding blackpaw-studio/leo
 ```
 
-Leo clones the repo into `~/agents/leo/`, starts a Claude session in a dedicated tmux window, and returns the agent name. Because `remote_control: true`, you can attach from claude.ai / the Claude app and drive it like any local session.
+Leo clones the repo into `~/projects/leo/`, starts a Claude session in a dedicated tmux window, and returns the agent name. Because `remote_control: true`, you can attach from claude.ai / the Claude app and drive it like any local session.
 
 For parallel work on the same repo, use the worktree flag:
 
