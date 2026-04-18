@@ -5,7 +5,7 @@ This guide shows a real-world Leo setup — the author's personal assistant — 
 The setup combines:
 
 - **One always-on process** wired to a Telegram channel plugin for conversational chat
-- **A portfolio of scheduled tasks** that handle morning briefings, inbox + calendar triage, market watches, and hyperlocal news
+- **A pair of scheduled tasks** — a morning news briefing and a rolling inbox + calendar watcher
 - **A `coding` agent template** for spawning ephemeral coding agents on demand
 
 Everything here lives in a single `~/.leo/leo.yaml` file plus a `prompts/` directory inside the workspace.
@@ -33,7 +33,7 @@ processes:
     model: opus[1m]
     bypass_permissions: false
     remote_control: false
-    agent: rocket        # a custom agent defined in the workspace's CLAUDE.md / agents
+    agent: leo           # a custom agent defined in the workspace's CLAUDE.md / agents
     enabled: true
 
 templates:
@@ -58,72 +58,6 @@ tasks:
     enabled: true
     silent: true
 
-  trade-desk:
-    workspace: ~/.leo/workspace
-    schedule: "30 8,15 * * 1-5"
-    timezone: America/New_York
-    prompt_file: prompts/trade-desk.md
-    max_turns: 10
-    enabled: true
-    silent: true
-
-  volatility-watch:
-    workspace: ~/.leo/workspace
-    schedule: "0 8,12,17,20 * * *"
-    timezone: America/New_York
-    prompt_file: prompts/volatility-watch.md
-    max_turns: 20
-    enabled: true
-    silent: true
-
-  earnings-iv-watch:
-    workspace: ~/.leo/workspace
-    schedule: "0 7 * * 0-5"
-    timezone: America/New_York
-    prompt_file: prompts/earnings-iv-watch.md
-    max_turns: 20
-    enabled: true
-    silent: true
-
-  fed-macro-watch:
-    workspace: ~/.leo/workspace
-    schedule: "0 18 * * 0-4"
-    timezone: America/New_York
-    prompt_file: prompts/fed-macro-watch.md
-    max_turns: 15
-    enabled: true
-    silent: true
-
-  deal-watch:
-    workspace: ~/.leo/workspace
-    schedule: "0 9 * * 1,4"
-    timezone: America/New_York
-    prompt_file: prompts/deal-watch.md
-    max_turns: 15
-    enabled: true
-    silent: true
-
-  money-ideas:
-    workspace: ~/.leo/workspace
-    schedule: "0 19 * * 0"
-    timezone: America/New_York
-    prompt_file: prompts/money-ideas.md
-    max_turns: 25
-    enabled: true
-
-  williamsburg-wharf-news:
-    workspace: ~/.leo/workspace
-    schedule: "15 10 * * 1-5"
-    timezone: America/New_York
-    prompt_file: prompts/williamsburg-wharf-news.md
-    enabled: true
-
-  construction-cam-snap:
-    workspace: ~/.leo/workspace
-    schedule: "30 10 * * 1-5"
-    timezone: America/New_York
-    prompt_file: prompts/construction-cam-snap.md
-    enabled: true
 ```
 
 Replace the channel plugin ID with whichever one you've installed (`claude plugin list`). The workspace points at `~/.leo/workspace/` — a directory with a `prompts/` subfolder and the usual `CLAUDE.md`, `MEMORY.md`, etc. See [Workspace Structure](../configuration/workspace-structure.md).
@@ -139,7 +73,7 @@ processes:
     channels:
       - plugin:telegram@claude-plugins-official
     model: opus[1m]
-    agent: rocket
+    agent: leo
     enabled: true
 ```
 
@@ -150,26 +84,18 @@ leo service start --daemon     # installs launchd/systemd unit
 leo service status             # verify it's running
 ```
 
-The `agent: rocket` field names a custom subagent defined in the workspace's `CLAUDE.md` / `agents/` directory. This is where you codify tone, preferences, and tool defaults — the assistant reads them on every message.
+The `agent: leo` field names a custom subagent defined in the workspace's `CLAUDE.md` / `agents/` directory. This is where you codify tone, preferences, and tool defaults — the assistant reads them on every message.
 
 > **Tip**: use `bypass_permissions: false` for the interactive chat process so the author can review non-trivial tool calls from Telegram. Scheduled tasks below inherit `bypassPermissions` from `defaults` since there's no human in the loop.
 
 ## Scheduled Tasks
 
-The task portfolio is grouped by purpose:
+Two tasks, each doing one clear job:
 
 | Task                       | Cadence                          | What it does                                                        |
 | -------------------------- | -------------------------------- | ------------------------------------------------------------------- |
 | `daily-news-briefing`      | Every day at 7 AM ET             | Curates a section-based morning briefing from the last 24 hours     |
 | `inbox-calendar-watch`     | Every 30 min, 7 AM – 10 PM       | Acts on email + calendar — drafts replies, adds events, flags convs |
-| `trade-desk`               | Weekdays 8:30 AM, 3:30 PM        | Pre-open and into-close market desk summary                         |
-| `volatility-watch`         | 8 AM, 12 PM, 5 PM, 8 PM daily    | Scans for asymmetric volatility setups; writes to a state file      |
-| `earnings-iv-watch`        | Sun – Fri 7 AM                   | Flags earnings with unusual implied-volatility pricing              |
-| `fed-macro-watch`          | Sun – Thu 6 PM                   | Watches Fed speakers, macro prints, rate-path shifts                |
-| `deal-watch`               | Mon & Thu 9 AM                   | M&A / capital markets signal scan                                   |
-| `money-ideas`              | Sundays 7 PM                     | Weekly investment idea generation                                   |
-| `williamsburg-wharf-news`  | Weekdays 10:15 AM                | Hyperlocal news for a specific NYC neighborhood                     |
-| `construction-cam-snap`    | Weekdays 10:30 AM                | Snapshots a construction webcam and annotates progress              |
 
 A few patterns worth calling out:
 
@@ -188,22 +114,21 @@ inbox-calendar-watch:
 
 ### Producer / aggregator split
 
-`volatility-watch` is a **signal producer** — it never messages the user. It writes structured JSON to `~/.leo/workspace/state/candidates/volatility.json`. The `trade-desk` task is the **aggregator** — it reads all the candidate files, picks the top setups, and actually sends Telegram. This keeps signal generation cheap and frequent while reply cadence stays sane.
+When you outgrow two tasks, the pattern to reach for is **producers** that never message you and **aggregators** that do. A producer task runs frequently and writes structured JSON to disk (e.g. `~/.leo/workspace/state/candidates/foo.json`, written atomically); an aggregator runs less often, reads every candidate file, picks the top items, and sends one consolidated message. This keeps signal generation cheap and frequent while reply cadence stays sane.
 
-A trimmed prompt excerpt:
+A trimmed producer-style prompt:
 
 ```markdown
-<!-- prompts/volatility-watch.md -->
 SILENT SCHEDULED RUN. You are a SIGNAL PRODUCER, not an alerter.
 You never send Telegram messages. Your only output is a state file.
 
-Write `~/.leo/workspace/state/candidates/volatility.json` atomically
-(write to `.tmp` then rename). Replace the `candidates` array on every run.
+Write the state file atomically (write to `.tmp` then rename).
+Replace the `candidates` array on every run.
 ```
 
 ### Per-task `max_turns`
 
-Frequent, narrow tasks use fewer turns (`max_turns: 10–15`) to cap cost. Deeper weekly tasks like `money-ideas` get `max_turns: 25`.
+Frequent, narrow tasks use fewer turns (`max_turns: 10–15`) to cap cost. Deeper analytical tasks that synthesize across many sources can be given `max_turns: 25` or higher when the output justifies it.
 
 ### Cron schedule reminders
 
