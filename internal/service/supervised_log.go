@@ -36,10 +36,12 @@ func installLogRotator(logPath string) (io.Closer, error) {
 		_, _ = io.Copy(w, pr)
 	}()
 
+	// #nosec G115 -- fd values are small positive ints; uintptr→int fits on all supported platforms
 	if err := unix.Dup2(int(pw.Fd()), int(os.Stdout.Fd())); err != nil {
 		pw.Close()
 		return nil, fmt.Errorf("redirecting stdout: %w", err)
 	}
+	// #nosec G115 -- fd values are small positive ints; uintptr→int fits on all supported platforms
 	if err := unix.Dup2(int(pw.Fd()), int(os.Stderr.Fd())); err != nil {
 		pw.Close()
 		return nil, fmt.Errorf("redirecting stderr: %w", err)
