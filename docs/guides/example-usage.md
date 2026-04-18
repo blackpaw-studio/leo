@@ -32,7 +32,7 @@ processes:
   assistant:
     workspace: ~/.leo/workspace
     channels:
-      - plugin:telegram@claude-plugins-official
+      - plugin:blackpaw-telegram@blackpaw-plugins
     model: opus[1m]
     remote_control: false
     agent: leo           # gives this process its personality — the Claude Code
@@ -76,7 +76,7 @@ processes:
   assistant:
     workspace: ~/.leo/workspace
     channels:
-      - plugin:telegram@claude-plugins-official
+      - plugin:blackpaw-telegram@blackpaw-plugins
     model: opus[1m]
     agent: leo
     enabled: true
