@@ -65,7 +65,7 @@ tasks:
 
 ```
 
-Replace the channel plugin ID with whichever one you've installed (`claude plugin list`). The workspace points at `~/.leo/workspace/` — a directory with a `prompts/` subfolder and the usual `CLAUDE.md`, `MEMORY.md`, etc. See [Workspace Structure](../configuration/workspace-structure.md).
+Replace the channel plugin ID with whichever one you've installed (`claude plugin list`). The workspace points at `~/.leo/workspace/` — a directory with a `prompts/` subfolder and the usual `CLAUDE.md`. If you want the assistant to remember things across sessions, install any Claude Code memory plugin (for example [claude-mem](https://github.com/thedotmack/claude-mem)) — Leo doesn't impose a memory format. See [Workspace Structure](../configuration/workspace-structure.md).
 
 ## The Always-On Process
 
