@@ -890,7 +890,7 @@ func TestHasMCPServers(t *testing.T) {
 func TestValidateWebConfig(t *testing.T) {
 	t.Run("valid web config", func(t *testing.T) {
 		cfg := &Config{
-			Web: WebConfig{Enabled: true, Port: 8370, Bind: "0.0.0.0"},
+			Web: WebConfig{Enabled: true, Port: 8370, Bind: "0.0.0.0", AllowedHosts: []string{"10.0.0.1"}},
 		}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected no error, got %v", err)
@@ -1230,4 +1230,33 @@ func TestValidateRejectsBadAddDirs(t *testing.T) {
 			t.Errorf("error = %q, want mention of templates.coding.add_dirs[0]", err.Error())
 		}
 	})
+}
+
+func TestValidate_WebAllowedHosts(t *testing.T) {
+	cases := []struct {
+		name    string
+		bind    string
+		allowed []string
+		wantErr string // substring match; "" means no error
+	}{
+		{"loopback_no_hosts_ok", "127.0.0.1", nil, ""},
+		{"loopback_with_hosts_ok", "127.0.0.1", []string{"leo.local"}, ""},
+		{"nonloopback_requires_hosts", "0.0.0.0", nil, "web.allowed_hosts must be set"},
+		{"nonloopback_with_hosts_ok", "0.0.0.0", []string{"10.0.4.16"}, ""},
+		{"empty_entry_rejected", "127.0.0.1", []string{""}, "web.allowed_hosts[0] must not be empty"},
+		{"whitespace_rejected", "127.0.0.1", []string{"bad host"}, "web.allowed_hosts[0] \"bad host\" is not a valid hostname or IP"},
+		{"port_in_entry_rejected", "127.0.0.1", []string{"leo.local:8370"}, "must not include a port"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{Web: WebConfig{Enabled: true, Port: 8370, Bind: tc.bind, AllowedHosts: tc.allowed}}
+			err := c.Validate()
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
 }

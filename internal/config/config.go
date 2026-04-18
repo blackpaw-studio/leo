@@ -140,9 +140,10 @@ func (h HostConfig) RemoteTmuxPath() string {
 }
 
 type WebConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Port    int    `yaml:"port,omitempty"`
-	Bind    string `yaml:"bind,omitempty"`
+	Enabled      bool     `yaml:"enabled"`
+	Port         int      `yaml:"port,omitempty"`
+	Bind         string   `yaml:"bind,omitempty"`
+	AllowedHosts []string `yaml:"allowed_hosts,omitempty"`
 }
 
 // WebPort returns the effective web UI port (default 8370).
@@ -424,6 +425,22 @@ func (c *Config) Validate() error {
 	}
 	if c.Web.Bind != "" && net.ParseIP(c.Web.Bind) == nil {
 		errs = append(errs, fmt.Sprintf("web.bind %q is not a valid IP address", c.Web.Bind))
+	}
+	for i, h := range c.Web.AllowedHosts {
+		if strings.TrimSpace(h) == "" {
+			errs = append(errs, fmt.Sprintf("web.allowed_hosts[%d] must not be empty", i))
+			continue
+		}
+		if strings.ContainsRune(h, ':') {
+			errs = append(errs, fmt.Sprintf("web.allowed_hosts[%d] %q must not include a port", i, h))
+			continue
+		}
+		if !isValidHostOrIP(h) {
+			errs = append(errs, fmt.Sprintf("web.allowed_hosts[%d] %q is not a valid hostname or IP", i, h))
+		}
+	}
+	if c.Web.Enabled && c.Web.Bind != "" && !IsLoopbackBind(c.Web.Bind) && len(c.Web.AllowedHosts) == 0 {
+		errs = append(errs, "web.allowed_hosts must be set when web.bind is not a loopback address")
 	}
 
 	for name, proc := range c.Processes {
@@ -820,4 +837,32 @@ func WritePromptFile(workspace, promptFile, content string) error {
 		return fmt.Errorf("writing prompt file: %w", err)
 	}
 	return nil
+}
+
+// isValidHostOrIP reports whether h is a valid RFC 1123 hostname or a
+// parseable IP address. The caller must have already verified h contains
+// no colon (port separator).
+func isValidHostOrIP(h string) bool {
+	if net.ParseIP(h) != nil {
+		return true
+	}
+	if len(h) == 0 || len(h) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(h, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'
+			if !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
