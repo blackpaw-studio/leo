@@ -180,8 +180,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 
 	port := cfg.WebPort()
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
-		Port:     port,
-		APIToken: apiToken,
+		Port:         port,
+		APIToken:     apiToken,
+		AllowedHosts: cfg.Web.AllowedHosts,
 	})
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
