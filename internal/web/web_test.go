@@ -25,14 +25,14 @@ const (
 // middleware's allowlist.
 var testHost = "127.0.0.1:8370"
 
-// authorizeTestRequest attaches a valid Host header (and, for /api/* paths, a
-// valid bearer token) so the Host/Origin and bearer middleware let the
-// request reach the handler under test.
+// authorizeTestRequest attaches a valid Host header and a bearer token so the
+// Host/Origin, bearer, and session middleware let the request reach the
+// handler under test. After Task 4 the browser routes also require auth;
+// sessionMiddleware accepts Bearer as an alternative to a session cookie, so
+// setting it on every request keeps all existing tests green.
 func authorizeTestRequest(req *http.Request) *http.Request {
 	req.Host = testHost
-	if strings.HasPrefix(req.URL.Path, "/api/") {
-		req.Header.Set("Authorization", "Bearer "+testAPIToken)
-	}
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	return req
 }
 
@@ -397,6 +397,7 @@ defaults:
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Host = testHost
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 

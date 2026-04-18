@@ -9,18 +9,17 @@ import (
 	"strings"
 )
 
-// allowedLocalHosts is the set of hostnames the web UI accepts in Host/Origin
-// headers. We deliberately do not expose an allowlist knob: the UI has no
-// built-in authn and is designed for single-user localhost access. Relaxing
-// this check is equivalent to turning off auth.
-var allowedLocalHosts = map[string]struct{}{
+// loopbackHosts is the set of hostnames the web UI accepts in Host/Origin
+// headers by default. Additional hosts can be added via extraHosts in
+// hostOriginMiddleware.
+var loopbackHosts = map[string]struct{}{
 	"127.0.0.1": {},
 	"::1":       {},
 	"localhost": {},
 }
 
 // hostOriginMiddleware rejects requests whose Host or Origin headers are not
-// local. It mitigates:
+// in the allowed set. It mitigates:
 //
 //   - DNS rebinding: a malicious domain resolves to 127.0.0.1 mid-flight, so
 //     the browser still sends Host: attacker.example.
@@ -33,14 +32,24 @@ var allowedLocalHosts = map[string]struct{}{
 // tools that never set it (curl, channel plugins making server-to-server
 // requests). Request method is not considered — GETs are blocked too because
 // several endpoints return config JSON.
-func hostOriginMiddleware(port int, next http.Handler) http.Handler {
+//
+// extraHosts lists additional hostnames/IPs (beyond loopback) that are
+// permitted — used when the web UI is bound to a LAN interface.
+func hostOriginMiddleware(port int, extraHosts []string, next http.Handler) http.Handler {
+	allowed := make(map[string]struct{}, len(loopbackHosts)+len(extraHosts))
+	for k := range loopbackHosts {
+		allowed[k] = struct{}{}
+	}
+	for _, h := range extraHosts {
+		allowed[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := checkHost(r.Host, port); err != nil {
+		if err := checkHost(r.Host, port, allowed); err != nil {
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" {
-			if err := checkOrigin(origin, port); err != nil {
+			if err := checkOrigin(origin, port, allowed); err != nil {
 				http.Error(w, "forbidden origin", http.StatusForbidden)
 				return
 			}
@@ -50,13 +59,13 @@ func hostOriginMiddleware(port int, next http.Handler) http.Handler {
 }
 
 // checkHost parses an HTTP Host header ("host:port" or bracketed "[ipv6]:port")
-// and verifies the hostname is a known loopback name and the port matches the
+// and verifies the hostname is in the allowed set and the port matches the
 // listener port. A missing port is accepted only when the listener is on the
 // well-known default (port 80) — in practice we always have a port.
 //
 // Hostname comparison is case-insensitive per RFC 3986 §3.2.2, so
 // http://LOCALHOST:8370 is treated the same as http://localhost:8370.
-func checkHost(host string, port int) error {
+func checkHost(host string, port int, allowed map[string]struct{}) error {
 	if host == "" {
 		return fmt.Errorf("empty host")
 	}
@@ -66,7 +75,7 @@ func checkHost(host string, port int) error {
 		// always serve on a non-default port.
 		return fmt.Errorf("bad host %q: %w", host, err)
 	}
-	if _, ok := allowedLocalHosts[strings.ToLower(h)]; !ok {
+	if _, ok := allowed[strings.ToLower(h)]; !ok {
 		return fmt.Errorf("host %q not allowed", h)
 	}
 	if p != fmt.Sprintf("%d", port) {
@@ -76,8 +85,8 @@ func checkHost(host string, port int) error {
 }
 
 // checkOrigin validates an Origin header. It must parse as http:// or https://
-// with a known loopback hostname and the correct port.
-func checkOrigin(origin string, port int) error {
+// with a hostname in the allowed set and the correct port.
+func checkOrigin(origin string, port int, allowed map[string]struct{}) error {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return fmt.Errorf("bad origin %q: %w", origin, err)
@@ -89,7 +98,7 @@ func checkOrigin(origin string, port int) error {
 	if host == "" {
 		return fmt.Errorf("origin %q missing host", origin)
 	}
-	if _, ok := allowedLocalHosts[strings.ToLower(host)]; !ok {
+	if _, ok := allowed[strings.ToLower(host)]; !ok {
 		return fmt.Errorf("origin host %q not allowed", host)
 	}
 	p := u.Port()

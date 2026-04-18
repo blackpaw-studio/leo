@@ -26,24 +26,50 @@ Settings inherited by all processes, tasks, and templates unless overridden.
 | `enabled` | bool | No | `false` | Enable the web dashboard. |
 | `port` | int | No | `8370` | TCP port for the web UI. |
 | `bind` | string | No | `127.0.0.1` | Bind address. Loopback-only by default. |
+| `allowed_hosts` | list of strings | No | `[]` | Extra hostnames/IPs accepted in the `Host` and `Origin` headers, in addition to loopback. Required when `bind` is non-loopback. Entries must not include a port. |
 
 When enabled, the daemon serves a web dashboard with process monitoring, task management, agent dispatch, config editing, and cron preview.
 
-### API Authentication
+### Authentication
 
-`/api/*` endpoints (the programmatic surface used by curl/scripts and the mobile web UI) are protected by a bearer token. On first start the daemon mints a random token and writes it to `~/.leo/state/api.token` (mode 0600). Reuse it for subsequent requests:
+Both browser and API access require the same token. On first start the daemon mints a random 64-hex-char token and writes it to `~/.leo/state/api.token` (mode 0600).
+
+**Browser login.** Visit the dashboard and you'll be redirected to `/login`. Paste the token there and a 7-day session cookie is set (HttpOnly, SameSite=Strict). For convenience:
+
+```bash
+leo web login-url
+```
+
+prints a one-click URL (`http://<bind>:<port>/login?token=...`) — the login page auto-submits if the token is in the query string. The URL contains the token; don't share it.
+
+Click **Sign out** in the top-right of the dashboard to destroy the session.
+
+**API access.** `/api/*` endpoints take the token in an `Authorization: Bearer` header:
 
 ```bash
 curl -H "Authorization: Bearer $(cat ~/.leo/state/api.token)" \
   http://127.0.0.1:8370/api/status
 ```
 
-Browser routes (HTML pages, htmx fragments, static assets) are not bearer-auth-gated but use Host/Origin pinning: the daemon rejects cross-origin HTML requests whose `Host`/`Origin` don't match the configured `bind`. This prevents DNS-rebinding attacks against a loopback-bound daemon.
+Rotate the token by deleting `api.token` and restarting the daemon. Existing browser sessions remain valid until they expire (7 days).
 
-Rotate the token by deleting `api.token` and restarting the daemon.
+### Non-loopback access
 
-!!! warning "Web UI has no password login"
-    The dashboard provides full process control (start/stop, config edits, send-keys to tmux). HTML routes rely on Host/Origin pinning, not passwords. Setting `bind` to a non-loopback address (including `0.0.0.0`) exposes that control to every host that can reach the port. Only do this on a trusted network. The daemon prints a startup warning when `bind` is non-loopback.
+`bind` defaults to `127.0.0.1`. To expose the web UI on your LAN:
+
+```yaml
+web:
+  enabled: true
+  bind: 0.0.0.0
+  port: 8370
+  allowed_hosts:
+    - 10.0.4.16      # the IP your LAN will use to reach this host
+    - leo.local      # or a hostname
+```
+
+`allowed_hosts` entries are checked against the incoming `Host` and `Origin` headers to defend against DNS-rebinding and drive-by cross-origin POSTs. Entries must be bare hostnames or IPs — no port, no scheme. `allowed_hosts` is required when `bind` is non-loopback; `leo validate` will fail otherwise.
+
+The daemon prints a startup warning when `bind` is non-loopback.
 
 ## `client`
 

@@ -71,6 +71,7 @@ func TestHostOriginMiddleware_AllowsEmptyOriginWithLocalHost(t *testing.T) {
 	form.Set("model", "sonnet")
 	req := httptest.NewRequest(http.MethodPost, "/web/config/defaults", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	req.Host = testHost
 	// No Origin header.
 
@@ -305,7 +306,7 @@ func TestCheckHost(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkHost(tc.host, tc.port)
+			err := checkHost(tc.host, tc.port, loopbackHosts)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("checkHost(%q, %d) err = %v, wantErr %v", tc.host, tc.port, err, tc.wantErr)
 			}
@@ -331,7 +332,7 @@ func TestCheckOrigin(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkOrigin(tc.origin, tc.port)
+			err := checkOrigin(tc.origin, tc.port, loopbackHosts)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("checkOrigin(%q, %d) err = %v, wantErr %v", tc.origin, tc.port, err, tc.wantErr)
 			}
@@ -354,6 +355,45 @@ func TestExtractBearer(t *testing.T) {
 		if got := extractBearer(tc.in); got != tc.want {
 			t.Errorf("extractBearer(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestHostOriginMiddleware_AllowedHosts(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true })
+	h := hostOriginMiddleware(8370, []string{"10.0.4.16", "leo.local"}, next)
+
+	cases := []struct {
+		name   string
+		host   string
+		origin string
+		want   int
+	}{
+		{"loopback_still_ok", "127.0.0.1:8370", "", 200},
+		{"lan_ip_ok", "10.0.4.16:8370", "", 200},
+		{"hostname_ok", "leo.local:8370", "", 200},
+		{"unknown_host_blocked", "evil.example:8370", "", 403},
+		{"lan_ip_with_matching_origin", "10.0.4.16:8370", "http://10.0.4.16:8370", 200},
+		{"lan_ip_with_mismatched_origin", "10.0.4.16:8370", "http://evil.example:8370", 403},
+		{"wrong_port_blocked", "10.0.4.16:9999", "", 403},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called = false
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body=%q)", w.Code, tc.want, w.Body.String())
+			}
+			if tc.want == 200 && !called {
+				t.Fatal("next handler not called")
+			}
+		})
 	}
 }
 
