@@ -366,8 +366,10 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 
 	// Route our own stdout/stderr through a size-based rotating writer.
 	// Fails open — if setup fails, writes keep going to the existing fd.
-	if err := installLogRotator(LogPathFor(homePath)); err != nil {
+	if closer, err := installLogRotator(LogPathFor(homePath)); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: log rotation setup failed: %v\n", err)
+	} else {
+		defer func() { _ = closer.Close() }()
 	}
 
 	// Find tmux early so we can cache it
