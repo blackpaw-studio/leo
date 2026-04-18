@@ -1,55 +1,62 @@
 <h1 align="center">Leo</h1>
 
 <p align="center">
-  <em>A process supervisor and task scheduler for Claude Code</em>
+  <em>A process supervisor and task scheduler for Claude Code.</em>
 </p>
 
 <p align="center">
-  <a href="#install">Install</a> &middot;
-  <a href="#quick-start">Quick Start</a> &middot;
-  <a href="#features">Features</a> &middot;
-  <a href="https://blackpaw-studio.github.io/leo/">Documentation</a>
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#what-leo-does">What it does</a> ·
+  <a href="#cli">CLI</a> ·
+  <a href="https://blackpaw-studio.github.io/leo/">Docs</a>
 </p>
 
 ---
 
-Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions, schedules autonomous tasks, and lets you spawn on-demand coding agents. Bring your own messaging channel — Leo is channel-agnostic and works with any Claude Code channel plugin (Telegram, Slack, webhook, etc.). A built-in web dashboard lets you manage everything from a browser.
+Leo keeps long-running [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions alive, runs cron-driven Claude tasks, and spawns on-demand coding agents from templates. Manage it from the CLI, a browser, or any Claude Code channel plugin (Telegram, Slack, webhook, …).
 
 ## Install
 
-Each release publishes `install.sh` with a matching `install.sh.sha256`. The verified flow:
+**Homebrew** (recommended):
 
 ```bash
-VER=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/blackpaw-studio/leo/releases/latest | awk -F/ '{print $NF}')
+brew install blackpaw-studio/tap/leo
+```
+
+**Shell installer:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/main/install.sh | sh
+```
+
+**Go:**
+
+```bash
+go install github.com/blackpaw-studio/leo@latest
+```
+
+**Prerequisites:** authenticated [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), `tmux`. Channel plugins (e.g. `claude plugin install telegram@claude-plugins-official`) are optional.
+
+**Upgrading:** `leo update` replaces a tarball install in place and verifies the new release before swapping the binary. Homebrew users should run `brew upgrade blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands.
+
+<details>
+<summary><strong>Verified install</strong> (Sigstore cosign)</summary>
+
+Each release publishes `install.sh` with a `install.sh.sha256`:
+
+```bash
+VER=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+  https://github.com/blackpaw-studio/leo/releases/latest | awk -F/ '{print $NF}')
 curl -fsSLO "https://github.com/blackpaw-studio/leo/releases/download/${VER}/install.sh"
 curl -fsSLO "https://github.com/blackpaw-studio/leo/releases/download/${VER}/install.sh.sha256"
 shasum -a 256 -c install.sh.sha256
 sh install.sh
 ```
 
-This is the quick path. For a verified install, see above.
+`leo update` itself verifies the release's [Sigstore cosign](https://docs.sigstore.dev/cosign/) signature against the release workflow's GitHub OIDC identity, then verifies the tarball SHA-256. Pre-signing releases can be installed with `--allow-unsigned` (or `LEO_ALLOW_UNSIGNED_RELEASE=1`); SHA-only verification with a warning. Will be removed once every supported release is signed.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
-```
-
-Or with Homebrew:
-
-```bash
-brew install blackpaw-studio/tap/leo
-```
-
-Or with Go: `go install github.com/blackpaw-studio/leo@latest`
-
-**Prerequisites:** [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (authenticated), `tmux`. Optionally, any Claude Code channel plugin you want Leo to surface messages through (e.g. `claude plugin install telegram@claude-plugins-official`).
-
-**Upgrading:** `leo update` replaces a tarball install in place. If you installed via Homebrew, run `brew upgrade blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands for you. Workspace templates (`CLAUDE.md`, `skills/*.md`) re-sync automatically on every daemon start, so the `--workspace-only` flag from v0.1.0 has been removed.
-
-Before replacing the binary, `leo update` verifies the release's [Sigstore cosign](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/) signature against the release workflow's GitHub OIDC identity, then verifies the SHA-256 of the downloaded tarball. Releases published before signing was introduced can still be installed by passing `--allow-unsigned` (or setting `LEO_ALLOW_UNSIGNED_RELEASE=1`); this falls back to SHA-only verification with a warning and will be removed once every supported release is signed.
-
-Leo verifies the Fulcio keyless signature but does not consult Rekor (the Sigstore transparency log). If a past signing key was ever exposed while its certificate was valid, a replayed signature would still verify here. Manual verification with `cosign verify-blob --rfc3161-timestamp` (or `cosign verify-blob` with an explicit `--rekor-url`) adds that additional check if you want it.
-
-To verify a release manually with the [`cosign` CLI](https://docs.sigstore.dev/cosign/installation/):
+Leo verifies the Fulcio keyless signature but does not consult Rekor. For transparency-log verification, run cosign manually:
 
 ```bash
 VERSION=v0.5.0
@@ -65,22 +72,31 @@ cosign verify-blob \
   checksums.txt
 ```
 
+</details>
+
 ## Quick Start
 
 ```bash
-leo setup          # interactive wizard — profile, workspace, first process
-leo service start  # start supervised processes
+leo setup              # interactive: profile, workspace, first process
+leo service start      # supervise processes in the foreground
+leo service start -d   # install as a launchd/systemd service
 ```
 
-If you want mobile access, install a channel plugin separately (e.g. Telegram) and add its ID to your process `channels:` list.
+Open the dashboard at <http://127.0.0.1:8370>. For mobile or chat access, install a channel plugin and add its ID to the process's `channels:` list.
 
-Run `leo service start --daemon` to install as a system service that persists across reboots.
+## What Leo does
 
-## Features
+Three primitives, one daemon:
+
+| Primitive | What it is |
+|---|---|
+| **Processes** | Long-running supervised Claude sessions. Auto-restart with exponential backoff. Each gets its own workspace, model, channels, and permissions. |
+| **Templates → Agents** | Reusable blueprints for ephemeral agents. Spawn from CLI, web UI, or a channel. Each agent clones a repo into its own tmux session. |
+| **Tasks** | Cron-driven non-interactive Claude runs. Prompt file + schedule. Optional retry, channel notify on failure. |
+
+A web dashboard, a token-authed HTTP API, and a built-in MCP server (so every channel gets `/clear`, `/compact`, `/stop`, `/tasks`, `/agent`, `/agents` for free) all live in the same daemon.
 
 ### Processes
-
-Long-running Claude sessions supervised with auto-restart and exponential backoff. Each process gets its own workspace, model, channel plugin list, and permissions. Enable remote control for claude.ai/code.
 
 ```yaml
 processes:
@@ -90,44 +106,25 @@ processes:
     enabled: true
 ```
 
-### Agent Templates
-
-Define reusable blueprints for spawning ephemeral coding agents. Dispatch them from a channel plugin (if it exposes agent commands) or from the web UI. Agents clone the repo, run in their own tmux session, and show up in claude.ai with a named session.
+### Agent templates
 
 ```yaml
 templates:
   coding:
     model: sonnet
-    remote_control: true
     permission_mode: bypassPermissions
     workspace: ~/agents
-```
-
-### Remote CLI
-
-The `leo` binary is dual-purpose. On a server it supervises processes and runs tasks. On a laptop, with a `client.hosts` section in `leo.yaml`, it becomes a thin remote client that manages and attaches to agents on a leo host over SSH.
-
-```yaml
-client:
-  default_host: prod
-  hosts:
-    prod:
-      ssh: evan@leo.example.com
+    remote_control: true
 ```
 
 ```bash
 leo agent spawn coding --repo blackpaw-studio/leo --name demo
-leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache  # dedicated git worktree
-leo agent attach demo     # full tmux attach to the remote Claude TUI
-leo agent list
-leo agent stop feat-cache --prune --delete-branch                        # stop + clean up worktree
+leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
+leo agent attach demo                                    # full tmux attach
+leo agent stop feat-cache --prune --delete-branch        # stop + clean worktree
 ```
 
-See the [Remote CLI guide](https://blackpaw-studio.github.io/leo/guides/remote-cli/).
-
-### Scheduled Tasks
-
-Cron-driven tasks that invoke Claude in non-interactive mode. Write a prompt file, set a schedule, and Leo handles the rest. Tasks can run silently, retry on failure, and notify a configured channel on failure (via `notify_on_fail`).
+### Scheduled tasks
 
 ```yaml
 tasks:
@@ -141,9 +138,30 @@ tasks:
     enabled: true
 ```
 
-### Web Dashboard
+### Remote CLI
 
-Monitor processes, manage tasks, edit config, spawn agents, and preview cron schedules from a browser on your LAN.
+The same `leo` binary becomes a thin SSH client when `client.hosts` is set — manage agents on a remote leo host without leaving your laptop:
+
+```yaml
+client:
+  default_host: prod
+  hosts:
+    prod: { ssh: evan@leo.example.com }
+```
+
+See the [Remote CLI guide](https://blackpaw-studio.github.io/leo/guides/remote-cli/).
+
+### Channel plugins
+
+Leo doesn't ship a messaging channel. Install any Claude Code channel plugin and reference its ID in `channels:`. The plugin owns its own auth and routing; Leo just hands the resolved list to the spawned Claude process via `LEO_CHANNELS`.
+
+For Telegram slash-command autocomplete:
+
+```bash
+leo channels register-commands telegram
+```
+
+### Web dashboard & API
 
 ```yaml
 web:
@@ -151,89 +169,58 @@ web:
   port: 8370
 ```
 
-#### Web UI and API authentication
+Browser UI for processes, tasks, config, agents, and cron previews. Binds to `127.0.0.1` by default.
 
-**Breaking change:** `/api/*` previously required no auth. Channel plugins must now send `Authorization: Bearer $(cat ~/.leo/state/api.token)` or they will receive a 401.
+<details>
+<summary><strong>Auth model</strong> (read this before exposing the daemon)</summary>
 
-The web UI binds to `127.0.0.1` by default. To prevent a malicious webpage from driving the Claude REPL or mutating config via the browser, Leo enforces two controls:
+Two layered controls protect the daemon:
 
-- **Host + Origin pinning on every `/web/...` route.** Requests must have `Host` and (when present) `Origin` pointing at `127.0.0.1`, `localhost`, or `[::1]` on the configured port. Requests with a foreign `Host` or `Origin` header get `403 forbidden host` / `403 forbidden origin`. This blocks DNS-rebinding and drive-by cross-origin POSTs.
-- **Bearer-token auth on every `/api/...` route.** On first start, the daemon mints a 32-byte random token and writes it to `~/.leo/state/api.token` (mode `0600`). The same Host pinning also applies to `/api/...`, so a valid token alone is not enough — the request must still look local.
+- **Host + Origin pinning** on every `/web/...` and `/api/...` route. Requests must target `127.0.0.1`, `localhost`, or `[::1]` on the configured port. Foreign `Host`/`Origin` → `403`. Blocks DNS rebinding and drive-by cross-origin POSTs.
+- **Bearer-token auth** on every `/api/...` route. The daemon mints a 32-byte token on first start at `~/.leo/state/api.token` (mode `0600`). A valid token alone isn't enough — the request must also pass Host pinning.
 
-To hit the API from a channel plugin or another local tool:
+> **Breaking change:** `/api/*` previously required no auth. Channel plugins must now send `Authorization: Bearer $(cat ~/.leo/state/api.token)` or get `401`.
 
 ```bash
 TOKEN=$(cat ~/.leo/state/api.token)
 curl -sH "Authorization: Bearer $TOKEN" http://127.0.0.1:8370/api/task/list
 ```
 
-The token file is readable by any process running as the same Unix user, which is intentional — channel plugins that need API access simply read it themselves. Rotate the token by deleting the file and restarting the daemon; a new one is generated automatically.
+The token file is readable by any process running as the same Unix user — intentional, so co-tenant plugins can read it directly. Rotate by deleting the file and restarting the daemon.
 
-### Channel Plugins
-
-Leo itself does not ship a messaging channel. Install any Claude Code channel plugin and reference its ID in a process or task `channels:` list. Leo passes the list to the spawned Claude process via `LEO_CHANNELS`; the plugin owns its own auth and routing.
-
-Popular channel plugins:
-
-- `telegram@claude-plugins-official` — Telegram bot with reply/reaction/topic tools
-- (plus any other Claude Code plugin that exposes messaging tools)
-
-### Built-in slash commands (every channel)
-
-Leo ships an MCP server that gives every channel plugin a universal command set — no plugin changes required:
-
-| Command       | Effect                                                    |
-|---------------|-----------------------------------------------------------|
-| `/clear`      | Clear the supervised Claude's conversation context        |
-| `/compact`    | Compact the conversation context                          |
-| `/stop`       | Interrupt the current operation                           |
-| `/tasks`      | List scheduled tasks                                      |
-| `/agent`      | Pick a template and spawn an ephemeral agent              |
-| `/agents`     | List running ephemeral agents                             |
-
-The supervised Claude recognizes these inbound from any channel and dispatches them via the `leo_*` MCP tools. Stock channel plugins (Anthropic's official Telegram, future Slack, etc.) work unmodified.
-
-For Telegram autocomplete, register the commands once with the Bot API:
-
-```
-leo channels register-commands telegram
-```
-
-(Resolves the bot token from `TELEGRAM_BOT_TOKEN` or the plugin's `.env` file.)
+</details>
 
 ## CLI
 
-| Command | Description |
+| Command | What it does |
 |---|---|
 | `leo setup` | Interactive setup wizard |
-| `leo service start` / `stop` / `restart` / `logs` | Manage the supervisor |
-| `leo process list` / `add` / `remove` / `enable` / `disable` | Manage supervised processes |
-| `leo task list` / `add` / `remove` / `enable` / `disable` | Manage scheduled tasks |
-| `leo task history` / `logs` | Inspect task runs and log output |
-| `leo template list` / `show` / `remove` | Inspect and remove agent templates |
-| `leo agent list` / `spawn` / `attach` / `stop` / `logs` | Spawn and control ephemeral agents (local or over SSH) |
-| `leo run <task>` | Run a task once |
-| `leo status` | Overall status (service, processes, tasks, templates, web UI) |
-| `leo validate` | Check config, prerequisites, and workspace health |
-| `leo config show` | Display effective config (supports `--raw`, `--json`) |
-| `leo config edit` | Edit config interactively |
-| `leo update` | Self-update binary |
+| `leo status` | Overall snapshot — service, processes, tasks, templates, web |
+| `leo validate` | Check config, prerequisites, workspace health |
+| `leo service start` / `stop` / `restart` / `logs` | Supervisor lifecycle |
+| `leo process …` | `list`, `add`, `remove`, `enable`, `disable` |
+| `leo task …` | `list`, `add`, `remove`, `enable`, `disable`, `history`, `logs` |
+| `leo template …` | `list`, `show`, `remove` |
+| `leo agent …` | `list`, `spawn`, `attach`, `stop`, `logs` (local or over SSH) |
+| `leo run <task>` | Run a task once on demand |
+| `leo config show` / `edit` | Inspect (`--raw`, `--json`) or edit the effective config |
+| `leo update` | Self-update the binary |
 
-See the [CLI reference](https://blackpaw-studio.github.io/leo/cli/) for full details.
+Full reference: [blackpaw-studio.github.io/leo/cli](https://blackpaw-studio.github.io/leo/cli/).
 
 ## Documentation
 
-- [Getting Started](https://blackpaw-studio.github.io/leo/getting-started/) &mdash; installation, prerequisites, first run
-- [Configuration](https://blackpaw-studio.github.io/leo/configuration/) &mdash; full config reference and workspace structure
-- [CLI Reference](https://blackpaw-studio.github.io/leo/cli/) &mdash; every command and flag
-- [Guides](https://blackpaw-studio.github.io/leo/guides/) &mdash; writing tasks, agents, scheduling, background mode
-- [Development](https://blackpaw-studio.github.io/leo/development/) &mdash; contributing, architecture, releasing
+- [Getting Started](https://blackpaw-studio.github.io/leo/getting-started/) — install, prereqs, first run
+- [Configuration](https://blackpaw-studio.github.io/leo/configuration/) — full reference, workspace layout
+- [CLI Reference](https://blackpaw-studio.github.io/leo/cli/) — every command and flag
+- [Guides](https://blackpaw-studio.github.io/leo/guides/) — tasks, agents, scheduling, remote
+- [Development](https://blackpaw-studio.github.io/leo/development/) — contributing, architecture, releases
 
 ## Development
 
 ```bash
-make build      # Build to bin/leo
-make test       # Run tests with race detector
+make build      # → bin/leo
+make test       # go test -race -cover ./...
 make lint       # go vet + staticcheck
 ```
 
