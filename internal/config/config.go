@@ -423,7 +423,8 @@ func (c *Config) Validate() error {
 	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("web.port %d is out of range (1-65535)", c.Web.Port))
 	}
-	if c.Web.Bind != "" && net.ParseIP(c.Web.Bind) == nil {
+	bindValid := c.Web.Bind == "" || net.ParseIP(c.Web.Bind) != nil
+	if c.Web.Bind != "" && !bindValid {
 		errs = append(errs, fmt.Sprintf("web.bind %q is not a valid IP address", c.Web.Bind))
 	}
 	for i, h := range c.Web.AllowedHosts {
@@ -431,7 +432,7 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("web.allowed_hosts[%d] must not be empty", i))
 			continue
 		}
-		if strings.ContainsRune(h, ':') {
+		if net.ParseIP(h) == nil && strings.ContainsRune(h, ':') {
 			errs = append(errs, fmt.Sprintf("web.allowed_hosts[%d] %q must not include a port", i, h))
 			continue
 		}
@@ -439,7 +440,7 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("web.allowed_hosts[%d] %q is not a valid hostname or IP", i, h))
 		}
 	}
-	if c.Web.Enabled && c.Web.Bind != "" && !IsLoopbackBind(c.Web.Bind) && len(c.Web.AllowedHosts) == 0 {
+	if c.Web.Enabled && c.Web.Bind != "" && bindValid && !IsLoopbackBind(c.Web.Bind) && len(c.Web.AllowedHosts) == 0 {
 		errs = append(errs, "web.allowed_hosts must be set when web.bind is not a loopback address")
 	}
 

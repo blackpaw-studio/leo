@@ -1246,6 +1246,8 @@ func TestValidate_WebAllowedHosts(t *testing.T) {
 		{"empty_entry_rejected", "127.0.0.1", []string{""}, "web.allowed_hosts[0] must not be empty"},
 		{"whitespace_rejected", "127.0.0.1", []string{"bad host"}, "web.allowed_hosts[0] \"bad host\" is not a valid hostname or IP"},
 		{"port_in_entry_rejected", "127.0.0.1", []string{"leo.local:8370"}, "must not include a port"},
+		{"ipv6_loopback_ok", "127.0.0.1", []string{"::1"}, ""},
+		{"ipv6_full_ok", "127.0.0.1", []string{"2001:db8::1"}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1259,4 +1261,22 @@ func TestValidate_WebAllowedHosts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidate_WebBind_InvalidNoDoubleError(t *testing.T) {
+	// An invalid web.bind must produce only the bind error, not also the
+	// "web.allowed_hosts must be set" error.
+	t.Run("invalid_bind_no_double_error", func(t *testing.T) {
+		c := &Config{Web: WebConfig{Enabled: true, Port: 8370, Bind: "not-an-ip"}}
+		err := c.Validate()
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		if strings.Contains(err.Error(), "web.allowed_hosts must be set") {
+			t.Fatalf("expected only bind error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "web.bind") {
+			t.Fatalf("expected bind error, got: %v", err)
+		}
+	})
 }
