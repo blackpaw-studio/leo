@@ -16,7 +16,7 @@ Everything here lives in a single `~/.leo/leo.yaml` file plus a `prompts/` direc
 # ~/.leo/leo.yaml
 defaults:
   model: opus[1m]
-  max_turns: 100
+  max_turns: 25
   permission_mode: auto
 
 web:
