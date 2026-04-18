@@ -33,7 +33,7 @@ func TestNewRotatingLogWriter(t *testing.T) {
 	logPath := filepath.Join(dir, "service.log")
 
 	w := NewRotatingLogWriter(logPath)
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	lj, ok := w.(*lumberjack.Logger)
 	if !ok {
@@ -80,7 +80,7 @@ func TestRotatingLogWriterRotatesOnSize(t *testing.T) {
 		MaxBackups: 2,
 		Compress:   false,
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	payload := make([]byte, 512*1024) // 512 KB
 	for i := 0; i < 4; i++ {
