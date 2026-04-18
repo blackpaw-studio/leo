@@ -22,7 +22,11 @@ defaults:
 web:
   enabled: true
   port: 8370
-  bind: 0.0.0.0
+  # bind: 0.0.0.0   # default is 127.0.0.1 (loopback). Only bind to your LAN
+                    # if you fully trust every device on it — the browser UI
+                    # has no built-in login. If you need LAN/remote access,
+                    # put authentication in front of it (reverse proxy with
+                    # basic auth, tailscale, Cloudflare Access, etc.).
 
 processes:
   assistant:
