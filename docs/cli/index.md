@@ -39,9 +39,13 @@ If `--config` is not specified, Leo walks up from the current working directory 
 
 Display a summary of the service, daemon, web UI, processes (with per-process runtime state from the daemon), scheduled tasks, templates, and the next upcoming task run.
 
+Pass `--json` to emit the structured `StatusReport` document for scripting.
+
 ## leo validate
 
-Check that the config parses, prerequisites are installed (`claude`, `tmux`), workspaces exist, prompt files referenced by tasks resolve, and cron schedules are valid. Critical warnings are also surfaced automatically when the service starts.
+Check that the config parses, prerequisites are installed (`claude`, `tmux`), workspaces exist, prompt files referenced by tasks resolve, and cron schedules are valid. Findings are ranked by severity (ERROR, WARN, INFO) and the tally is printed at the end. Critical warnings are also surfaced automatically when the service starts.
+
+Pass `--json` to emit findings as a structured JSON document (handy for CI checks and scripting).
 
 ## leo config
 
@@ -52,8 +56,8 @@ Check that the config parses, prerequisites are installed (`claude`, `tmux`), wo
 
 ## leo session
 
-- `leo session list` — show stored session ID mappings (process name to session UUID)
-- `leo session clear [name]` — clear a specific session or all sessions
+- `leo session list` — show stored session ID mappings (process name to session UUID). Pass `--json` for a machine-readable array.
+- `leo session clear <name>` — clear a specific session. Pass `--all` to clear every stored session, or `-y / --yes` to skip the confirmation prompt.
 
 ## leo logs
 

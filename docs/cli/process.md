@@ -6,8 +6,9 @@ Manage supervised processes.
 
 ```bash
 leo process list                          # list configured processes and their runtime state
+leo process list --json                   # list as JSON for scripting
 leo process add <name>                    # add a new process (flags or interactive)
-leo process remove <name>                 # remove a process from the config
+leo process remove <name>                 # remove a process from the config (prompts for confirmation)
 leo process enable <name>                 # enable a disabled process
 leo process disable <name>                # disable a process without removing it
 leo process attach <name>                 # attach to the process's tmux session
@@ -57,6 +58,8 @@ If the daemon is running, Leo reminds you to run `leo service restart` for the c
 ### `leo process remove <name>`
 
 Removes the named process from the config. Reminds you to restart the service if the daemon is running so the process is stopped.
+
+Prompts for confirmation by default. Pass `-y / --yes` to skip the prompt (required when stdin is not a TTY).
 
 ### `leo process enable <name>` / `leo process disable <name>`
 

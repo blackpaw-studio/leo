@@ -5,7 +5,8 @@ Execute a scheduled task once.
 ## Usage
 
 ```bash
-leo run <task>
+leo run <task>             # run the task
+leo run <task> --dry-run   # print the assembled prompt and claude args without executing
 ```
 
 ## Description
@@ -17,6 +18,12 @@ You can also run it manually to test a task:
 ```bash
 leo run heartbeat
 ```
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Print the assembled prompt, resolved claude arguments, and the environment that would be passed (sensitive values redacted). Does not invoke `claude`. Useful when debugging prompt assembly or inspecting effective model/max-turns after the override cascade. |
 
 ## Prompt Assembly
 

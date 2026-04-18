@@ -29,8 +29,21 @@ Settings inherited by all processes, tasks, and templates unless overridden.
 
 When enabled, the daemon serves a web dashboard with process monitoring, task management, agent dispatch, config editing, and cron preview.
 
-!!! warning "Web UI has no built-in auth"
-    The dashboard provides full process control (start/stop, config edits, send-keys to tmux). Setting `bind` to a non-loopback address (including `0.0.0.0`) exposes that control to every host that can reach the port. Only do this on a trusted network. The daemon prints a startup warning when `bind` is non-loopback.
+### API Authentication
+
+`/api/*` endpoints (the programmatic surface used by curl/scripts and the mobile web UI) are protected by a bearer token. On first start the daemon mints a random token and writes it to `~/.leo/state/api.token` (mode 0600). Reuse it for subsequent requests:
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.leo/state/api.token)" \
+  http://127.0.0.1:8370/api/status
+```
+
+Browser routes (HTML pages, htmx fragments, static assets) are not bearer-auth-gated but use Host/Origin pinning: the daemon rejects cross-origin HTML requests whose `Host`/`Origin` don't match the configured `bind`. This prevents DNS-rebinding attacks against a loopback-bound daemon.
+
+Rotate the token by deleting `api.token` and restarting the daemon.
+
+!!! warning "Web UI has no password login"
+    The dashboard provides full process control (start/stop, config edits, send-keys to tmux). HTML routes rely on Host/Origin pinning, not passwords. Setting `bind` to a non-loopback address (including `0.0.0.0`) exposes that control to every host that can reach the port. Only do this on a trusted network. The daemon prints a startup warning when `bind` is non-loopback.
 
 ## `client`
 

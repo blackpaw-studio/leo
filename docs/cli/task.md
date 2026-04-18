@@ -6,8 +6,9 @@ Manage scheduled tasks.
 
 ```bash
 leo task list                 # list configured tasks
-leo task add                  # add a new task interactively
-leo task remove <name>        # remove a task from the config
+leo task list --json          # list configured tasks as JSON
+leo task add [flags]          # add a new task — flag-first, falls back to interactive on a TTY
+leo task remove <name>        # remove a task from the config (prompts for confirmation)
 leo task enable <name>        # enable a task
 leo task disable <name>       # disable a task
 leo task history [name]       # show execution history (all tasks or one)
@@ -29,22 +30,49 @@ Displays all configured tasks with schedule, model, enabled status, last run res
   weekly-report        0 9 * * 1          sonnet   disabled                      
 ```
 
+Pass `--json` for a machine-readable array suitable for piping into `jq` or scripting.
+
 ### `leo task add`
 
-Interactively prompts for task details:
+Flag-first: supply all required fields on the command line for a non-interactive add, or run with no flags on a TTY to be prompted for any missing required fields.
 
-- **Task name** — unique identifier for the task
-- **Cron schedule** — when to run (e.g., `0 7 * * *`)
-- **Prompt file** — path relative to the task's workspace
-- **Model** — Claude model override (blank = default)
-- **Channels** — optional list of channel plugin IDs for `notify_on_fail` (see [Channels](../configuration/config-reference.md#channels))
-- **Silent mode** — whether to prepend the silent preamble
+**Flags:**
 
-The task is saved to `leo.yaml` with `enabled: true`. If the prompt file does not exist yet, Leo prints a warning so you remember to author it before the first scheduled run.
+| Flag | Description |
+|------|-------------|
+| `--name <name>` | Task name (required for non-interactive add). |
+| `--schedule <cron>` | 5-field cron schedule, e.g. `'0 7 * * *'` (required for non-interactive add). |
+| `--prompt-file <path>` | Prompt file path relative to the task workspace (required). |
+| `--model <model>` | Claude model override (blank = use `defaults.model`). |
+| `--channels <csv>` | Comma-separated channel plugin IDs used for `notify_on_fail`. |
+| `--notify-on-fail` | Spawn a short child `claude` invocation on non-zero exit to notify configured channels. Requires `--channels`. |
+| `--silent` | Prepend the silent-mode preamble to the prompt. |
+| `--disabled` | Create the task in a disabled state (default: enabled). |
+
+Example — fully non-interactive:
+
+```bash
+leo task add \
+  --name heartbeat \
+  --schedule "0,30 7-22 * * *" \
+  --prompt-file prompts/heartbeat.md \
+  --notify-on-fail \
+  --channels plugin:telegram@claude-plugins-official
+```
+
+Or interactively:
+
+```bash
+leo task add
+```
+
+If the prompt file does not exist yet, Leo prints a warning so you remember to author it before the first scheduled run.
 
 ### `leo task remove <name>`
 
 Removes the task from the config. When the daemon is running, the removal is sent over the daemon socket so the scheduler drops the entry without a restart.
+
+Prompts for confirmation by default. Pass `-y / --yes` to skip the prompt (required when stdin is not a TTY, e.g. scripts).
 
 ### `leo task enable <name>` / `leo task disable <name>`
 

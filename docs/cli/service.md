@@ -92,7 +92,7 @@ claude --channels <channels>               \
 
 ## Logs
 
-All modes write logs to `~/.leo/state/service.log`.
+All modes write logs to `~/.leo/state/service.log`. The supervised child rotates this file automatically on size: when it reaches 10 MB, [lumberjack](https://pkg.go.dev/gopkg.in/natefinch/lumberjack.v2) renames it to a timestamped backup (`service-<timestamp>.log.gz`) and opens a fresh file in place. Up to 3 backups are retained for 30 days, gzipped. No external logrotate setup is required. `leo service logs -f` reopens cleanly across rotations.
 
 ## Service Labels
 
