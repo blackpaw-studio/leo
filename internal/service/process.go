@@ -475,6 +475,12 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	for {
 		sv.setState(spec.Name, "running")
 
+		// Clear any prior exit.code so a shell SIGKILL mid-run doesn't leave
+		// the previous iteration's code on disk to be misattributed here.
+		if spec.StateDir != "" {
+			resetExitCode(spec.StateDir, spec.Name)
+		}
+
 		claudeCmd := buildClaudeShellCmd(claudePath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
 
 		// Kill any stale tmux session with our name
@@ -566,8 +572,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			processExitLogPath(spec.StateDir, spec.Name), len(tail) > 0)
 
 		// Sleep the current backoff, then advance for the NEXT iteration.
-		// Advancing after the sleep keeps the first retry at initialBackoff,
-		// matching the "start at 5s, double per consecutive failure" spec.
+		// `backoff` starts at initialBackoff on cold start; a run that lasts
+		// >= healthyUptimeThreshold resets it, anything shorter doubles it
+		// up to maxBackoff. The <15s quick-exit path above also strips
+		// --resume but doesn't change backoff — it's purely a session fix.
 		select {
 		case <-ctx.Done():
 			sv.setState(spec.Name, "stopped")

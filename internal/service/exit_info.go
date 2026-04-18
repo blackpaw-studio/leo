@@ -29,6 +29,15 @@ func processExitLogPath(stateDir, name string) string {
 	return filepath.Join(stateDir, name+"-exit.log")
 }
 
+// resetExitCode removes any prior exit-code file before a new launch, so a
+// mid-run SIGKILL of the shell wrapper (which prevents the "; ec=$?; echo"
+// tail from running) doesn't leave the previous iteration's code on disk to
+// be misattributed to the current crash. Missing file = "unknown" is the
+// correct post-mortem signal.
+func resetExitCode(stateDir, name string) {
+	_ = os.Remove(processExitCodePath(stateDir, name))
+}
+
 // readExitCode reads the shell-written exit-code file for a process. Returns
 // (code, true) on success, (0, false) if the file is missing or unparseable
 // (e.g. tmux killed the session before the shell could write it).
@@ -113,7 +122,7 @@ func writeExitLog(stateDir, name string, exitCode int, codeOK bool, signal strin
 	if stateDir == "" {
 		return nil
 	}
-	if err := os.MkdirAll(stateDir, 0o750); err != nil {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir state: %w", err)
 	}
 	path := processExitLogPath(stateDir, name)

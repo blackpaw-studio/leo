@@ -36,6 +36,28 @@ func TestReadExitCode(t *testing.T) {
 	}
 }
 
+func TestResetExitCode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "assistant-exit.code")
+
+	// Seed a prior run's code, then reset before the next launch.
+	if err := os.WriteFile(path, []byte("137\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	resetExitCode(dir, "assistant")
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected file removed, got err=%v", err)
+	}
+	// readExitCode must now report "unknown" rather than the stale 137.
+	if code, ok := readExitCode(dir, "assistant"); ok || code != 0 {
+		t.Errorf("after reset: want (0,false), got (%d,%v)", code, ok)
+	}
+
+	// Reset on missing file is a no-op (no panic, no error surfaced).
+	resetExitCode(dir, "assistant")
+}
+
 func TestDecodeSignal(t *testing.T) {
 	tests := []struct {
 		code int
