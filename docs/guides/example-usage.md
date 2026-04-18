@@ -35,7 +35,7 @@ processes:
       - plugin:telegram@claude-plugins-official
     model: opus[1m]
     remote_control: false
-    agent: leo           # a custom agent defined in the workspace's CLAUDE.md / agents
+    agent: leo           # names a Claude Code subagent (.claude/agents/leo.md)
     enabled: true
 
 templates:
@@ -86,7 +86,7 @@ leo service start --daemon     # installs launchd/systemd unit
 leo service status             # verify it's running
 ```
 
-The `agent: leo` field names a custom subagent defined in the workspace's `CLAUDE.md` / `agents/` directory. This is where you codify tone, preferences, and tool defaults — the assistant reads them on every message.
+The `agent: leo` field names a [Claude Code subagent](https://code.claude.com/docs/en/sub-agents) — a markdown file with YAML frontmatter stored at `.claude/agents/leo.md` inside the workspace (or `~/.claude/agents/leo.md` for a user-scoped agent). The frontmatter sets the subagent's `name`, `description`, tool allowlist, model, and permission mode; the markdown body becomes its system prompt. This is where you codify tone, preferences, and tool defaults — the supervised process starts Claude with this subagent selected, so every message routes through it.
 
 > **Tip**: `permission_mode: auto` is the new safety-classifier-backed mode released in Claude Code — it auto-approves tool calls that align with the ongoing request while still blocking genuinely risky ones (mass deletes, data exfiltration, etc.). It's a middle ground between the prompt-on-everything `default` mode and the nothing-is-asked `bypassPermissions` mode. Scheduled tasks inherit it from `defaults` since there's no human in the loop; override per-process with `permission_mode:` if a specific process needs stricter or looser behavior. See [Claude Code docs](https://code.claude.com/docs/en/permissions).
 
