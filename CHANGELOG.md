@@ -1,63 +1,66 @@
 # Changelog
 
-## Unreleased
+All notable user-visible changes to Leo are documented here.
 
-### Docs
+## [Unreleased]
 
-- New **[tmux Config](docs/guides/tmux-config.md)** guide: a recommended `~/.tmux.conf` for users who attach to leo agents and processes, with explanations of clipboard-over-SSH (OSC 52), session pickers, activity monitoring, and why leo users should skip tmux-resurrect/continuum.
-- **tmux Config:** flip `detach-on-destroy` to `on` so exiting the last pane returns you to the shell instead of jumping into another live session, add an explicit `bind d detach-client` so `prefix + d` can't be shadowed by other bindings, and update the explanation section to cover both.
+## [0.2.0] — 2026-04-18
 
-### Breaking
+### Added
 
-- **Web UI default bind changed from `0.0.0.0` to `127.0.0.1`.** The UI has no built-in auth, so the previous default exposed full process control to anyone who could reach the port. Anyone who was relying on LAN access must set `web.bind: 0.0.0.0` explicitly. The daemon now prints a prominent warning at startup when `web.bind` is non-loopback.
+- **Web UI authentication.** The browser UI is now gated by a session cookie
+  (login form) and `/api/*` accepts a bearer token. Binds remain loopback by
+  default; to expose the UI on a LAN address set `web.bind` and populate
+  `web.allowed_hosts`. Host/Origin pinning blocks DNS-rebinding and
+  cross-origin POSTs. (#46, #60)
+- **Cosign-verified updates.** `leo update` now verifies the keyless Sigstore
+  signature on `checksums.txt` before trusting it, pinning the issuing
+  identity to the release workflow's GitHub OIDC token. (#47)
+- **Supervisor crash-loop diagnostics.** When a supervised process exits
+  abnormally, Leo captures the exit signal and the tail of stderr and
+  surfaces it in `leo status` and logs, instead of silently restarting.
+  Backoff now resets after 10 minutes of healthy uptime. (#59)
+- **Size-based log rotation** for `service.log` via lumberjack — no more
+  unbounded growth. (#58)
+- **CLI UX overhaul.** `--version` flag, richer `Long` and `Example`
+  sections on every command, `--json` output on `process`, `task`,
+  `template`, `session`, `config`, `validate`, `run`, and `status`,
+  confirm-on-remove for destructive commands, flag-first `task add`,
+  non-TTY safety for `agent`, and shell completion. (#50–#55)
+- **Homebrew formula auto-publish** on release (blackpaw-studio/homebrew-tap). (#41)
+- **Homebrew-aware `leo update`** — detects brew installs and delegates to
+  `brew upgrade` instead of overwriting the brew-managed binary. Service
+  workspaces also auto-sync on start. (#43)
+- **Agent spawn collision prompt** when a new agent's workspace would clash
+  with an existing owner/repo checkout. (#48)
+- **Recommended tmux config** documentation and an Example Usage guide. (#42, #56)
+
+### Fixed
+
+- Supervisor no longer double-prefixes tmux session names with `leo-`. (#57)
+- Supervisor validates env keys and the web port before shell interpolation,
+  so malformed config can't inject into the launch command. (#44)
 
 ### Security
 
-- **`leo update` now verifies release archive integrity.** Before replacing the running binary, `DownloadAndReplace` fetches the release's `checksums.txt`, parses out the entry for the platform archive, and rejects the update on any mismatch or missing entry. Detects accidental corruption (bit rot, truncated transfer) and tarball-only tampering where an attacker cannot also rewrite `checksums.txt`. It does **not** protect against a fully compromised GitHub release CDN — both files are fetched from the same origin with no out-of-band trust anchor. Cosign/minisign signing is a planned follow-up. Archive size is capped at 100 MB and `checksums.txt` at 1 MB to bound the damage from a hostile server.
+- `add_dirs` paths are validated, gosec is SHA-pinned in CI, and the
+  `install.sh` bootstrap script ships with a published SHA-256 checksum
+  as a release asset. (#45)
+- All third-party GitHub Actions in the release workflow are pinned by
+  commit SHA.
 
-## v0.3.0 — Channel-agnostic (BREAKING)
+### Docs
 
-Leo no longer ships with Telegram built in. Channels are now opaque [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code/plugins) IDs that you install separately and reference by ID on processes and tasks.
+- README revamped for scannability; CLI reference synced with the UX
+  overhaul; stale "no built-in auth" warnings removed now that web auth
+  ships by default.
+- The `go install` path is now `github.com/blackpaw-studio/leo/cmd/leo@latest`
+  (the previous path pointed at the repo root, which has no `main` package).
 
-### Migration
+## [0.1.0] — 2026-04-16
 
-1. **Install a channel plugin** (if you want one):
-   ```bash
-   claude plugin install telegram@claude-plugins-official
-   ```
-2. **Update `leo.yaml`**:
-   - Remove the top-level `telegram:` block entirely.
-   - Add a `channels:` list to each process that needs messaging:
-     ```yaml
-     processes:
-       assistant:
-         channels: [plugin:telegram@claude-plugins-official]
-     ```
-   - Tasks using `notify_on_fail` must now also declare `channels:`:
-     ```yaml
-     tasks:
-       my-task:
-         notify_on_fail: true
-         channels: [plugin:telegram@claude-plugins-official]
-     ```
-   - Remove any `topic_id:` fields from tasks. Topic routing is now owned by the channel plugin (read the plugin's own docs for how it handles threading).
+Initial public release.
 
-### Breaking changes
-
-- `telegram:` config block removed. Any top-level `telegram:` key in `leo.yaml` is silently ignored on load. Bot tokens and chat IDs now live in the channel plugin's own config (e.g. `~/.claude/channels/telegram/.env`).
-- `task.topic_id` field removed.
-- `leo telegram topics` CLI command removed.
-- `leo setup` no longer prompts for a bot token, installs the Telegram plugin, or sends a test message. The wizard is now channel-agnostic — install a channel plugin yourself via `claude plugin install <id>`.
-- `bun` is no longer a prerequisite (was only used by the forked Telegram plugin).
-- Supervisor no longer monitors the Telegram plugin's lock file or restarts the claude session when the plugin dies. Channel plugin lifecycle is Claude's plugin host's responsibility now.
-- `notify_on_fail` is now implemented by spawning a short child `claude` invocation (max-turns 3, 60s timeout) that asks the agent to deliver the failure notification via its configured channel plugin. Requires `channels:` on the task.
-
-### Internals
-
-- Deleted packages: `internal/telegram/`, `internal/pluginsync/`, the embedded `plugins/telegram/` source tree.
-- Supervisor exports `LEO_CHANNELS` into each spawned claude process so agents can enumerate their configured channels.
-- Agent templates reference "configured channel plugins" generically instead of hardcoded Telegram messaging rules.
-
-## v0.1.2 and earlier
-
-See `git log` or the GitHub releases page.
+[Unreleased]: https://github.com/blackpaw-studio/leo/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/blackpaw-studio/leo/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/blackpaw-studio/leo/releases/tag/v0.1.0
