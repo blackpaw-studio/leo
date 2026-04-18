@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -451,6 +452,74 @@ func TestProcessDefaults(t *testing.T) {
 		p := ProcessConfig{}
 		if got := cfg.ProcessRemoteControl(p); got {
 			t.Error("ProcessRemoteControl() = true, want false (from defaults)")
+		}
+	})
+}
+
+func TestProcessStaleResume(t *testing.T) {
+	zero := 0
+	six := 6
+	neg := -1
+
+	t.Run("no config returns 12h default", func(t *testing.T) {
+		cfg := &Config{}
+		if got := cfg.ProcessStaleResume(ProcessConfig{}); got != 12*time.Hour {
+			t.Errorf("ProcessStaleResume() = %s, want 12h", got)
+		}
+	})
+
+	t.Run("defaults override to 24", func(t *testing.T) {
+		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: 24}}
+		if got := cfg.ProcessStaleResume(ProcessConfig{}); got != 24*time.Hour {
+			t.Errorf("ProcessStaleResume() = %s, want 24h", got)
+		}
+	})
+
+	t.Run("per-process override wins", func(t *testing.T) {
+		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: 24}}
+		p := ProcessConfig{StaleResumeHours: &six}
+		if got := cfg.ProcessStaleResume(p); got != 6*time.Hour {
+			t.Errorf("ProcessStaleResume() = %s, want 6h", got)
+		}
+	})
+
+	t.Run("zero on process disables check", func(t *testing.T) {
+		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: 12}}
+		p := ProcessConfig{StaleResumeHours: &zero}
+		if got := cfg.ProcessStaleResume(p); got != 0 {
+			t.Errorf("ProcessStaleResume() = %s, want 0 (disabled)", got)
+		}
+	})
+
+	t.Run("negative process override disables", func(t *testing.T) {
+		cfg := &Config{}
+		p := ProcessConfig{StaleResumeHours: &neg}
+		if got := cfg.ProcessStaleResume(p); got != 0 {
+			t.Errorf("ProcessStaleResume() = %s, want 0 (disabled)", got)
+		}
+	})
+}
+
+func TestValidateStaleResumeHours(t *testing.T) {
+	neg := -1
+
+	t.Run("negative defaults rejected", func(t *testing.T) {
+		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: -1}}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "defaults.stale_resume_hours must not be negative") {
+			t.Errorf("expected validation error, got %v", err)
+		}
+	})
+
+	t.Run("negative process override rejected", func(t *testing.T) {
+		cfg := &Config{
+			Processes: map[string]ProcessConfig{
+				"assistant": {StaleResumeHours: &neg, Enabled: true},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "processes.assistant.stale_resume_hours must not be negative") {
+			t.Errorf("expected validation error, got %v", err)
 		}
 	})
 }

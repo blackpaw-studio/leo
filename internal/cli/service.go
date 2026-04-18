@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
@@ -183,6 +184,21 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 			warn.Printf("  [%s] Could not read session store: %v\n", name, getErr)
 		}
 		if found {
+			// Drop --resume if the session jsonl hasn't been written in a
+			// long time. Claude would silently open a fresh file anyway,
+			// and we skip the wasted parse cost of the stale transcript.
+			if maxAge := cfg.ProcessStaleResume(proc); maxAge > 0 {
+				workspace := cfg.ProcessWorkspace(proc)
+				stale, age, _ := session.IsResumeStale(workspace, sid, maxAge)
+				if stale {
+					warn.Printf("  [%s] resume target stale (last written %s ago) — starting fresh session\n",
+						name, age.Round(time.Minute))
+					_ = store.Delete(sessionKey)
+					found = false
+				}
+			}
+		}
+		if found {
 			args = append(args, "--resume", sid)
 		} else {
 			sid = session.NewID()
@@ -198,6 +214,7 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 			WorkDir:    cfg.ProcessWorkspace(proc),
 			Env:        mergeChannelsIntoEnv(proc),
 			WebPort:    strconv.Itoa(cfg.WebPort()),
+			StateDir:   cfg.StatePath(),
 		})
 	}
 	return specs

@@ -235,6 +235,35 @@ func TestBuildClaudeShellCmd_DeterministicOrder(t *testing.T) {
 	}
 }
 
+func TestBuildClaudeShellCmd_ExitCapture(t *testing.T) {
+	spec := ProcessSpec{
+		Name:     "assistant",
+		StateDir: "/var/leo/state",
+	}
+	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, "/t", spec, "", nil)
+
+	wantSubstrings := []string{
+		"2> '/var/leo/state/assistant-stderr.log'",
+		"ec=$?",
+		"echo \"$ec\" > '/var/leo/state/assistant-exit.code'",
+	}
+	for _, sub := range wantSubstrings {
+		if !strings.Contains(got, sub) {
+			t.Errorf("cmd missing %q\nfull cmd: %s", sub, got)
+		}
+	}
+}
+
+func TestBuildClaudeShellCmd_NoExitCaptureWhenStateDirMissing(t *testing.T) {
+	spec := ProcessSpec{Name: "p"} // StateDir empty
+	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, "/t", spec, "", nil)
+	for _, sub := range []string{"-stderr.log", "-exit.code", "ec=$?"} {
+		if strings.Contains(got, sub) {
+			t.Errorf("cmd should not contain %q when StateDir is empty\nfull cmd: %s", sub, got)
+		}
+	}
+}
+
 func TestBuildClaudeShellCmd_NilWarnOut(t *testing.T) {
 	// warnOut=nil must not panic even when there are invalid entries.
 	spec := ProcessSpec{

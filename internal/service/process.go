@@ -41,6 +41,20 @@ const (
 	maxBackoff     = 60 * time.Second
 	initialBackoff = 5 * time.Second
 	stopTimeout    = 5 * time.Second
+
+	// quickExitThreshold: elapsed < this triggers a "hard reset" on the
+	// assumption the session itself is poison — strip --resume, clear the
+	// stored session so the next spawn generates a fresh session ID.
+	quickExitThreshold = 15 * time.Second
+
+	// healthyUptimeThreshold: elapsed >= this means the process ran long
+	// enough to consider recovered — reset the backoff to initialBackoff.
+	// Anything between quickExitThreshold and this keeps growing the backoff.
+	healthyUptimeThreshold = 10 * time.Minute
+
+	// exitStderrTailLines: how many trailing stderr lines to copy into
+	// <name>-exit.log after a crash.
+	exitStderrTailLines = 50
 )
 
 // ProcessSpec describes a process for the supervisor to manage.
@@ -50,6 +64,9 @@ type ProcessSpec struct {
 	WorkDir    string
 	Env        map[string]string
 	WebPort    string // Leo web UI port for plugin control commands
+	// StateDir is where per-process stderr capture + exit-code files are
+	// written (typically <home>/state). When empty, capture is skipped.
+	StateDir string
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -522,25 +539,42 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		sv.setState(spec.Name, "restarting")
 		sv.incrementRestarts(spec.Name)
 
-		// If claude exited very quickly, strip --resume and clear this process's session.
-		// Keep growing the backoff to avoid tight restart loops.
-		if elapsed < 15*time.Second {
+		// Very-quick exits suggest a poisoned session: strip --resume and
+		// clear the stored session so the next spawn starts fresh.
+		if elapsed < quickExitThreshold {
 			currentArgs = stripResumeArg(currentArgs)
 			clearProcessSession(homePath, spec.Name)
-			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session — retrying in %s\n", spec.Name, elapsed.Seconds(), backoff)
-			backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
-		} else {
-			// Session ran long enough — reset backoff
-			backoff = initialBackoff
-			fmt.Fprintf(os.Stderr, "[%s] claude exited after %s, restarting in %s\n", spec.Name, elapsed.Round(time.Second), backoff)
+			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session\n", spec.Name, elapsed.Seconds())
 		}
 
+		// Read exit info written by the shell wrapper, compose the per-process
+		// post-mortem, and emit the new log line. All of this is best-effort —
+		// when StateDir is empty or the shell didn't finish writing (e.g.
+		// SIGKILL to tmux), we still log what we can.
+		exitCode, codeOK := 0, false
+		signal := "none"
+		var tail []string
+		if spec.StateDir != "" {
+			exitCode, codeOK = readExitCode(spec.StateDir, spec.Name)
+			if codeOK {
+				signal = decodeSignal(exitCode)
+			}
+			tail = tailLines(processStderrPath(spec.StateDir, spec.Name), exitStderrTailLines)
+			_ = writeExitLog(spec.StateDir, spec.Name, exitCode, codeOK, signal, elapsed, tail)
+		}
+		logProcessExit(os.Stderr, spec.Name, elapsed, backoff, exitCode, codeOK, signal,
+			processExitLogPath(spec.StateDir, spec.Name), len(tail) > 0)
+
+		// Sleep the current backoff, then advance for the NEXT iteration.
+		// Advancing after the sleep keeps the first retry at initialBackoff,
+		// matching the "start at 5s, double per consecutive failure" spec.
 		select {
 		case <-ctx.Done():
 			sv.setState(spec.Name, "stopped")
 			return
-		case <-time.After(initialBackoff):
+		case <-time.After(backoff):
 		}
+		backoff = advanceBackoff(backoff, elapsed)
 	}
 }
 
@@ -651,6 +685,17 @@ func buildClaudeShellCmd(claudePath string, args []string, tmuxPath string, spec
 		quoted = append(quoted, shellQuote(arg))
 	}
 	cmd := strings.Join(quoted, " ")
+
+	// Wrap claude with stderr capture + exit-code persistence so the
+	// supervisor can produce a post-mortem after tmux exits. Must happen
+	// before exports are prepended so the exit-code capture references
+	// claude's exit status, not some earlier export.
+	if spec.StateDir != "" && spec.Name != "" {
+		stderrPath := processStderrPath(spec.StateDir, spec.Name)
+		exitPath := processExitCodePath(spec.StateDir, spec.Name)
+		cmd = fmt.Sprintf("%s 2> %s; ec=$?; echo \"$ec\" > %s",
+			cmd, shellQuote(stderrPath), shellQuote(exitPath))
+	}
 
 	// Propagate PATH into the tmux session
 	if pathEnv != "" {
