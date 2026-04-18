@@ -216,7 +216,7 @@ func (s *Supervisor) StopAgent(name string) error {
 	}
 
 	// Kill the tmux session directly
-	sessionName := fmt.Sprintf("leo-%s", name)
+	sessionName := agent.SessionName(name)
 	exec.Command(s.tmuxPath, "kill-session", "-t", sessionName).Run() //nolint:errcheck
 
 	s.mu.Lock()
@@ -446,7 +446,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	sv.initState(spec.Name)
 
 	backoff := initialBackoff
-	sessionName := fmt.Sprintf("leo-%s", spec.Name)
+	sessionName := agent.SessionName(spec.Name)
 	currentArgs := make([]string, len(spec.ClaudeArgs))
 	copy(currentArgs, spec.ClaudeArgs)
 

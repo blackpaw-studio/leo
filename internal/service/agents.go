@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/git"
@@ -71,7 +72,7 @@ func RestoreAgents(homePath, tmuxPath string, sv agentSpawner) int {
 		// shut down cleanly), kill it so SpawnAgent starts a fresh one
 		// that resumes the claude session cleanly.
 		if tmuxPath != "" {
-			sessionName := fmt.Sprintf("leo-%s", name)
+			sessionName := agent.SessionName(name)
 			_ = exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
 		}
 
