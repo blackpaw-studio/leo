@@ -265,12 +265,9 @@ func Start(sc ServiceConfig) error {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
 
-	// Rotate existing log before starting
-	if err := RotateLog(sc.LogPath); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: log rotation failed: %v\n", err)
-	}
-
-	// Open log file
+	// Open log file. Rotation is handled inside the supervised child
+	// via installLogRotator, which replaces this fd with a pipe feeding
+	// a size-based rotating writer.
 	logFile, err := openLogFile(sc.LogPath)
 	if err != nil {
 		return fmt.Errorf("opening log file: %w", err)
@@ -366,6 +363,14 @@ func RunSupervised(claudePath string, processes []ProcessSpec, homePath, configP
 func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath, configPath string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+
+	// Route our own stdout/stderr through a size-based rotating writer.
+	// Fails open — if setup fails, writes keep going to the existing fd.
+	if closer, err := installLogRotator(LogPathFor(homePath)); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: log rotation setup failed: %v\n", err)
+	} else {
+		defer func() { _ = closer.Close() }()
+	}
 
 	// Find tmux early so we can cache it
 	tmuxPath, err := findTmux()
