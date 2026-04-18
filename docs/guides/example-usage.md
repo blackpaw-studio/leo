@@ -332,7 +332,7 @@ leo agent attach demo    # full tmux attach to the remote Claude TUI
 leo agent logs demo -n 100
 ```
 
-No new listener, auth layer, or daemon runs on the client — Leo shells out to `ssh` for every call and reuses whatever SSH config the laptop already has (`~/.ssh/config`, agent forwarding, ProxyJump, MFA). `tmux_path` is there because non-interactive SSH shells don't source `.zshrc`, so homebrew's PATH additions aren't visible — set it explicitly to whichever `tmux` binary the remote uses. Add more hosts under `client.hosts.<name>` and pick between them with `--host`, or set a `default_host`. See the [Remote CLI guide](remote-cli.md) for the full flag set.
+No new listener, auth layer, or daemon runs on the client — Leo shells out to `ssh` for every call and reuses whatever SSH config the laptop already has (`~/.ssh/config`, agent forwarding, ProxyJump, MFA). `tmux_path` is there because non-interactive SSH shells don't source `.zshrc`, so homebrew's PATH additions aren't visible — set it explicitly to whichever `tmux` binary the remote uses. Add more hosts under `client.hosts.<name>` and pick between them with `--host`, or set a `default_host`. See the [Remote CLI guide](remote-cli.md) for the full flag set, and the [tmux Config guide](tmux-config.md) for a recommended `~/.tmux.conf` that plays well with the TUI.
 
 ## Bringing It Up
 
@@ -363,4 +363,6 @@ Good places to start:
 - [Scheduling](scheduling.md) — cron syntax, timezones, reloading
 - [Agents](agents.md) — templates, worktrees, session naming
 - [Background Mode](background-mode.md) — simple vs daemon supervision
+- [Remote CLI](remote-cli.md) — driving `leo agent` from a laptop over SSH
+- [tmux Config](tmux-config.md) — recommended `~/.tmux.conf` for the Claude TUI
 - [Config Reference](../configuration/config-reference.md) — every supported field
