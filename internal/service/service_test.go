@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func TestPidPath(t *testing.T) {
@@ -26,64 +28,77 @@ func TestLogPathFor(t *testing.T) {
 	}
 }
 
-func TestRotateLog(t *testing.T) {
+func TestNewRotatingLogWriter(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "service.log")
 
-	// Create initial log
-	os.WriteFile(logPath, []byte("log1"), 0600)
+	w := NewRotatingLogWriter(logPath)
+	defer w.Close()
 
-	if err := RotateLog(logPath); err != nil {
-		t.Fatalf("RotateLog() error: %v", err)
+	lj, ok := w.(*lumberjack.Logger)
+	if !ok {
+		t.Fatalf("NewRotatingLogWriter returned %T, want *lumberjack.Logger", w)
+	}
+	if lj.Filename != logPath {
+		t.Errorf("Filename = %q, want %q", lj.Filename, logPath)
+	}
+	if lj.MaxSize != logMaxSizeMB {
+		t.Errorf("MaxSize = %d, want %d", lj.MaxSize, logMaxSizeMB)
+	}
+	if lj.MaxBackups != logMaxBackups {
+		t.Errorf("MaxBackups = %d, want %d", lj.MaxBackups, logMaxBackups)
+	}
+	if lj.MaxAge != logMaxAgeDays {
+		t.Errorf("MaxAge = %d, want %d", lj.MaxAge, logMaxAgeDays)
+	}
+	if lj.Compress != logCompress {
+		t.Errorf("Compress = %v, want %v", lj.Compress, logCompress)
 	}
 
-	// Original should be gone
-	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
-		t.Error("original log should be renamed")
+	// Smoke-test: the writer accepts writes.
+	if _, err := w.Write([]byte("hello\n")); err != nil {
+		t.Fatalf("Write error: %v", err)
 	}
-
-	// .1 should exist with original content
-	data, err := os.ReadFile(logPath + ".1")
+	data, err := os.ReadFile(logPath)
 	if err != nil {
-		t.Fatalf("reading .1: %v", err)
+		t.Fatalf("reading log: %v", err)
 	}
-	if string(data) != "log1" {
-		t.Errorf("rotated content = %q, want 'log1'", string(data))
+	if string(data) != "hello\n" {
+		t.Errorf("log content = %q, want %q", string(data), "hello\n")
 	}
 }
 
-func TestRotateLogShifts(t *testing.T) {
+func TestRotatingLogWriterRotatesOnSize(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "service.log")
 
-	// Create existing rotated logs
-	os.WriteFile(logPath+".1", []byte("old1"), 0600)
-	os.WriteFile(logPath, []byte("current"), 0600)
+	// Use lumberjack directly with a tiny MaxSize so the test doesn't
+	// need to write 10 MB to trigger rotation.
+	w := &lumberjack.Logger{
+		Filename:   logPath,
+		MaxSize:    1, // 1 MB
+		MaxBackups: 2,
+		Compress:   false,
+	}
+	defer w.Close()
 
-	if err := RotateLog(logPath); err != nil {
-		t.Fatalf("RotateLog() error: %v", err)
+	payload := make([]byte, 512*1024) // 512 KB
+	for i := 0; i < 4; i++ {
+		if _, err := w.Write(payload); err != nil {
+			t.Fatalf("Write %d: %v", i, err)
+		}
 	}
 
-	// .1 should be current log
-	data, _ := os.ReadFile(logPath + ".1")
-	if string(data) != "current" {
-		t.Errorf(".1 = %q, want 'current'", string(data))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading dir: %v", err)
 	}
-
-	// .2 should be old .1
-	data, _ = os.ReadFile(logPath + ".2")
-	if string(data) != "old1" {
-		t.Errorf(".2 = %q, want 'old1'", string(data))
-	}
-}
-
-func TestRotateLogNoFile(t *testing.T) {
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "nonexistent.log")
-
-	// Should be a no-op
-	if err := RotateLog(logPath); err != nil {
-		t.Fatalf("RotateLog() error on nonexistent: %v", err)
+	if len(entries) < 2 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("expected at least one rotated backup, got %v", names)
 	}
 }
 
