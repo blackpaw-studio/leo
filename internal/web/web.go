@@ -67,6 +67,7 @@ type Server struct {
 	restartNeeded bool     // set when process-affecting config changes are saved
 	port          int      // port the listener is expected to bind on; used for Host/Origin checks
 	apiToken      string   // bearer token required on /api/* routes; empty disables API
+	allowedHosts  []string // extra hosts permitted beyond loopback (e.g. LAN IPs)
 
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
@@ -78,8 +79,9 @@ type Server struct {
 //   - APIToken must be non-empty for /api/* routes to work. If empty, /api/*
 //     responds 500 to avoid accidentally serving the API unauthenticated.
 type Options struct {
-	Port     int
-	APIToken string
+	Port         int
+	APIToken     string
+	AllowedHosts []string
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is not available.
@@ -96,8 +98,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		reloader:    reloader,
 		agentSvc:    agentSvc,
 		leoPath:     leoPath,
-		port:        opts.Port,
-		apiToken:    opts.APIToken,
+		port:         opts.Port,
+		apiToken:     opts.APIToken,
+		allowedHosts: opts.AllowedHosts,
 		execCommand: exec.Command,
 	}
 
@@ -195,7 +198,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Origin check. Defense in depth for the API: even with a valid token,
 	// requests from a non-localhost browser context are rejected.
 	s.httpServer = &http.Server{
-		Handler:      hostOriginMiddleware(s.port, root),
+		Handler:      hostOriginMiddleware(s.port, s.allowedHosts, root),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
