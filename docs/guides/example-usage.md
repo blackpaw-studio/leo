@@ -99,10 +99,6 @@ Here's the actual `~/.claude/agents/leo.md` behind the assistant in this setup. 
 ---
 name: leo
 description: 🐈‍⬛ Personal assistant written from the perspective of Leo, Evan's void.
-model: opus
-memory: user
-permissionMode: auto
-effort: medium
 ---
 
 # SOUL
