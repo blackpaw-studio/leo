@@ -23,6 +23,7 @@ Leo provides commands for setup, process management, task scheduling, template m
 | [`leo logs`](#leo-logs) | Tail service or process logs |
 | [`leo update`](#leo-update) | Self-update binary and refresh workspace files |
 | [`leo completion`](#leo-completion) | Generate shell completion script (bash/zsh/fish) |
+| [`leo web`](web.md) | Web UI utilities (login-url) |
 | [`leo version`](version.md) | Print version |
 
 ## Global Flags
