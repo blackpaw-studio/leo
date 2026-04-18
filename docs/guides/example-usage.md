@@ -17,8 +17,7 @@ Everything here lives in a single `~/.leo/leo.yaml` file plus a `prompts/` direc
 defaults:
   model: opus[1m]
   max_turns: 100
-  bypass_permissions: true
-  permission_mode: bypassPermissions
+  permission_mode: auto
 
 web:
   enabled: true
@@ -31,7 +30,6 @@ processes:
     channels:
       - plugin:telegram@claude-plugins-official
     model: opus[1m]
-    bypass_permissions: false
     remote_control: false
     agent: leo           # a custom agent defined in the workspace's CLAUDE.md / agents
     enabled: true
@@ -86,7 +84,7 @@ leo service status             # verify it's running
 
 The `agent: leo` field names a custom subagent defined in the workspace's `CLAUDE.md` / `agents/` directory. This is where you codify tone, preferences, and tool defaults — the assistant reads them on every message.
 
-> **Tip**: use `bypass_permissions: false` for the interactive chat process so the author can review non-trivial tool calls from Telegram. Scheduled tasks below inherit `bypassPermissions` from `defaults` since there's no human in the loop.
+> **Tip**: `permission_mode: auto` is the new safety-classifier-backed mode released in Claude Code — it auto-approves tool calls that align with the ongoing request while still blocking genuinely risky ones (mass deletes, data exfiltration, etc.). It's a middle ground between the prompt-on-everything `default` mode and the nothing-is-asked `bypassPermissions` mode. Scheduled tasks inherit it from `defaults` since there's no human in the loop; override per-process with `permission_mode:` if a specific process needs stricter or looser behavior. See [Claude Code docs](https://code.claude.com/docs/en/permissions).
 
 ## Scheduled Tasks
 
