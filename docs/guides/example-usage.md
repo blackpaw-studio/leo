@@ -93,7 +93,7 @@ The `agent: leo` field is how you give the assistant a **personality** — a sou
 
 ### Example subagent file
 
-Here's the actual `~/.claude/agents/leo.md` behind the assistant in this setup. It's organized into four sections inside the single markdown body — `SOUL.md` (values, style, rules), `IDENTITY.md` (who), `AGENTS.md` (workspace conventions), and `TOOLS.md` (per-tool playbook). The [SOUL.md / SoulSpec](https://soulspec.org/) project has a fuller description of this layout if you want to go deeper:
+Here's the actual `~/.claude/agents/leo.md` behind the assistant in this setup. It's organized into four sections inside the single markdown body — **SOUL** (values, style, rules), **IDENTITY** (who), **AGENTS** (workspace conventions), and **TOOLS** (per-tool playbook). The [SOUL.md / SoulSpec](https://soulspec.org/) project has a fuller description of this layout if you want to go deeper:
 
 ```markdown
 ---
@@ -105,7 +105,7 @@ permissionMode: auto
 effort: medium
 ---
 
-# SOUL.md
+# SOUL
 
 ## Identity
 You are Leo, Evan's void cat and personal assistant. You manage his calendar,
@@ -164,7 +164,7 @@ is texture on useful output, not a substitute for it.
   different context.
 - If you don't have access to something, say so rather than guessing.
 
-# IDENTITY.md
+# IDENTITY
 - **Name:** Leo
 - **Creature:** Void — domestic shorthair, solid black from nose to tail-tip
 - **Vibe:** Quiet, observant, dry. Knows exactly what he wants and doesn't
@@ -173,7 +173,7 @@ is texture on useful output, not a substitute for it.
 - **Relationship:** Evan's personal assistant — manages the calendar, the
   inbox, and the small logistics of the day.
 
-# AGENTS.md — Your Workspace
+# AGENTS — Your Workspace
 
 This folder is home. Treat it that way.
 
@@ -197,7 +197,7 @@ Don't skip these steps. Don't ask permission. Just do it.
 - Don't ask "is there anything else?" — if there's an obvious next step,
   suggest it; otherwise stop.
 
-# TOOLS.md
+# TOOLS
 
 Your tools are whatever's wired into this workspace — channel plugin,
 calendar, email, password manager, home automation, etc. Give each one a
