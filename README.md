@@ -33,7 +33,7 @@ curl -fsSL leo.blackpaw.studio/install | sh
 **Go:**
 
 ```bash
-go install github.com/blackpaw-studio/leo@latest
+go install github.com/blackpaw-studio/leo/cmd/leo@latest
 ```
 
 **Prerequisites:** authenticated [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), `tmux`. Channel plugins (e.g. `claude plugin install telegram@claude-plugins-official`) are optional.

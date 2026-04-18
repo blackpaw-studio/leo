@@ -29,7 +29,7 @@
     Requires Go 1.25+:
 
     ```bash
-    go install github.com/blackpaw-studio/leo@latest
+    go install github.com/blackpaw-studio/leo/cmd/leo@latest
     ```
 
     The binary is installed to `$GOPATH/bin` (or `$HOME/go/bin` by default). Make sure this directory is in your `PATH`.

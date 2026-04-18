@@ -91,7 +91,7 @@ The in-process cron scheduler runs tasks on a schedule. Each task reads a prompt
 === "Go"
 
     ```bash
-    go install github.com/blackpaw-studio/leo@latest
+    go install github.com/blackpaw-studio/leo/cmd/leo@latest
     ```
 
 === "Source"

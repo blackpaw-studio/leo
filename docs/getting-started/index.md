@@ -13,7 +13,7 @@ Get a personal AI assistant running in under 5 minutes.
 === "Go"
 
     ```bash
-    go install github.com/blackpaw-studio/leo@latest
+    go install github.com/blackpaw-studio/leo/cmd/leo@latest
     ```
 
 See [Installation](installation.md) for all options.
