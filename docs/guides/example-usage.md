@@ -35,7 +35,10 @@ processes:
       - plugin:telegram@claude-plugins-official
     model: opus[1m]
     remote_control: false
-    agent: leo           # names a Claude Code subagent (.claude/agents/leo.md)
+    agent: leo           # gives this process its personality — the Claude Code
+                         # subagent at .claude/agents/leo.md supplies the system
+                         # prompt (voice, identity, preferences) every message
+                         # runs through
     enabled: true
 
 templates:
