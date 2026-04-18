@@ -320,9 +320,13 @@ func TestRemoveDaemonBootoutError(t *testing.T) {
 	userHomeDirFn = func() (string, error) { return home, nil }
 
 	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
-	os.MkdirAll(launchAgentsDir, 0755)
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	plist := filepath.Join(launchAgentsDir, daemonLabel()+".plist")
-	os.WriteFile(plist, []byte("<plist/>"), 0644)
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	var removeCalled bool
 	removeFile = func(path string) error {
@@ -350,6 +354,59 @@ func TestRemoveDaemonBootoutError(t *testing.T) {
 	}
 	if removeCalled {
 		t.Error("plist should not be removed when bootout fails — that caused the original ghost-registration bug")
+	}
+}
+
+// TestRemoveDaemonPlistOnly covers the inverse of ghost registration:
+// plist file exists on disk but launchctl has no record. Only the plist
+// should be removed; bootout must not be attempted.
+func TestRemoveDaemonPlistOnly(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	origRemove := removeFile
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+		removeFile = origRemove
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+
+	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	plist := filepath.Join(launchAgentsDir, daemonLabel()+".plist")
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var bootoutCalled, removeCalled bool
+	removeFile = func(path string) error {
+		removeCalled = true
+		return nil
+	}
+	runCommand = func(name string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "bootout") {
+			bootoutCalled = true
+			return "", nil
+		}
+		if strings.Contains(joined, "print") {
+			return "", fmt.Errorf("could not find service")
+		}
+		return "", nil
+	}
+
+	if err := RemoveDaemon(); err != nil {
+		t.Fatalf("RemoveDaemon() error: %v", err)
+	}
+	if bootoutCalled {
+		t.Error("bootout should not be called when launchctl has no registration")
+	}
+	if !removeCalled {
+		t.Error("expected plist file to be removed")
 	}
 }
 
@@ -473,21 +530,26 @@ func TestDaemonStatusInstalled(t *testing.T) {
 	// Create the plist file
 	label := daemonLabel()
 	launchAgentsDir := filepath.Join(home, "Library", "LaunchAgents")
-	os.MkdirAll(launchAgentsDir, 0755)
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	plist := filepath.Join(launchAgentsDir, label+".plist")
-	os.WriteFile(plist, []byte("<plist/>"), 0644)
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
-	// Mock runCommand: "launchctl print" succeeds but no pid line
+	// Mock runCommand: "launchctl print" succeeds but no pid line —
+	// the service is bootstrapped but not currently running.
 	runCommand = func(name string, args ...string) (string, error) {
-		return "state = running\n", nil
+		return "state = not running\n", nil
 	}
 
 	status, err := DaemonStatus()
 	if err != nil {
 		t.Fatalf("DaemonStatus() error: %v", err)
 	}
-	if status != "installed" {
-		t.Errorf("status = %q, want %q", status, "installed")
+	if status != "installed but not running" {
+		t.Errorf("status = %q, want %q", status, "installed but not running")
 	}
 }
 

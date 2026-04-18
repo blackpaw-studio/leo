@@ -143,10 +143,7 @@ func RemoveDaemon() error {
 	label := daemonLabel()
 	path := plistPath()
 
-	uid := fmt.Sprintf("%d", os.Getuid())
-	target := fmt.Sprintf("gui/%s/%s", uid, label)
-
-	_, printErr := runCommand("launchctl", "print", target)
+	_, printErr := runCommand("launchctl", "print", launchctlTarget(label))
 	loaded := printErr == nil
 
 	_, plistStatErr := os.Stat(path)
@@ -179,10 +176,8 @@ func RemoveDaemon() error {
 // launchctl has no record of the service.
 func DaemonStatus() (string, error) {
 	label := daemonLabel()
-	uid := fmt.Sprintf("%d", os.Getuid())
-	target := fmt.Sprintf("gui/%s/%s", uid, label)
 
-	output, runErr := runCommand("launchctl", "print", target)
+	output, runErr := runCommand("launchctl", "print", launchctlTarget(label))
 	if runErr == nil {
 		for _, line := range strings.Split(output, "\n") {
 			trimmed := strings.TrimSpace(line)
@@ -191,7 +186,7 @@ func DaemonStatus() (string, error) {
 				return fmt.Sprintf("running (pid %s)", pid), nil
 			}
 		}
-		return "installed", nil
+		return "installed but not running", nil
 	}
 
 	if _, err := os.Stat(plistPath()); os.IsNotExist(err) {
@@ -209,10 +204,8 @@ func DaemonStatus() (string, error) {
 // consult the plist to produce a clearer "not installed" error.
 func RestartDaemon() error {
 	label := daemonLabel()
-	uid := fmt.Sprintf("%d", os.Getuid())
-	target := fmt.Sprintf("gui/%s/%s", uid, label)
 
-	if _, err := runCommand("launchctl", "kickstart", "-k", target); err != nil {
+	if _, err := runCommand("launchctl", "kickstart", "-k", launchctlTarget(label)); err != nil {
 		if _, statErr := os.Stat(plistPath()); os.IsNotExist(statErr) {
 			return fmt.Errorf("daemon not installed")
 		}
@@ -223,10 +216,14 @@ func RestartDaemon() error {
 }
 
 func bootout(label, path string) error {
-	uid := fmt.Sprintf("%d", os.Getuid())
-	target := fmt.Sprintf("gui/%s/%s", uid, label)
-	_, err := runCommand("launchctl", "bootout", target)
+	_, err := runCommand("launchctl", "bootout", launchctlTarget(label))
 	return err
+}
+
+// launchctlTarget builds the gui domain specifier used by launchctl
+// bootout/kickstart/print for a given service label.
+func launchctlTarget(label string) string {
+	return fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
 }
 
 func defaultRunCommand(name string, args ...string) (string, error) {
