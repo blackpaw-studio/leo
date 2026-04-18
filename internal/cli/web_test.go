@@ -8,6 +8,44 @@ import (
 	"testing"
 )
 
+func TestResolveURLBind(t *testing.T) {
+	cases := []struct {
+		name     string
+		flag     string
+		cfg      string
+		allowed  []string
+		wantHost string
+		wantNote bool
+		wantErr  bool
+	}{
+		{"flag_wins", "10.1.1.1", "0.0.0.0", nil, "10.1.1.1", false, false},
+		{"loopback_cfg", "", "127.0.0.1", nil, "127.0.0.1", false, false},
+		{"loopback_cfg_with_hosts", "", "127.0.0.1", []string{"leo.local"}, "127.0.0.1", false, false},
+		{"nonloopback_uses_allowed_hosts_0", "", "0.0.0.0", []string{"10.0.4.16", "leo.local"}, "10.0.4.16", true, false},
+		{"nonloopback_no_hosts_errors", "", "0.0.0.0", nil, "", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			host, note, err := resolveURLBind(tc.flag, tc.cfg, tc.allowed)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !tc.wantErr && host != tc.wantHost {
+				t.Fatalf("host = %q, want %q", host, tc.wantHost)
+			}
+			if tc.wantNote && note == "" {
+				t.Fatal("expected a note, got empty string")
+			}
+			if !tc.wantNote && note != "" {
+				t.Fatalf("expected no note, got %q", note)
+			}
+		})
+	}
+}
+
 func TestWebLoginURL(t *testing.T) {
 	dir := t.TempDir()
 	// Tighten perms so EnsureAPIToken is happy.
