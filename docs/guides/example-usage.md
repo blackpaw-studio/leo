@@ -7,8 +7,9 @@ The setup combines:
 - **One always-on process** wired to a Telegram channel plugin for conversational chat
 - **A pair of scheduled tasks** — a morning news briefing and a rolling inbox + calendar watcher
 - **A `coding` agent template** for spawning ephemeral coding agents on demand
+- **A laptop client** that dispatches `leo agent` commands to the home-lab daemon over SSH
 
-Everything here lives in a single `~/.leo/leo.yaml` file plus a `prompts/` directory inside the workspace.
+Everything here lives in a single `~/.leo/leo.yaml` file plus a `prompts/` directory inside the workspace. The laptop keeps its own, smaller `~/.leo/leo.yaml` with just a `client:` block.
 
 ## The Config At A Glance
 
@@ -308,6 +309,30 @@ leo agent spawn coding --repo blackpaw-studio/leo --worktree fix/bug --base main
 ```
 
 Each worktree agent gets its own branch checkout under `<workspace>/.worktrees/<repo>/<branch>/` — no fighting over `.git/HEAD`. Full details in the [Agents guide](agents.md).
+
+## Driving It From A Laptop
+
+In this setup the leo daemon lives on a home-lab box, not on the laptop — the mac mini runs `leo service` and hosts all the long-running sessions. The laptop only needs a `client:` block in its own `~/.leo/leo.yaml` to reach the daemon over SSH:
+
+```yaml
+# ~/.leo/leo.yaml on the laptop
+client:
+  hosts:
+    homelab:
+      ssh: user@homelab.local           # or any ~/.ssh/config Host alias
+      tmux_path: /opt/homebrew/bin/tmux # homebrew arm64 path
+```
+
+With that in place, `leo agent ...` run on the laptop transparently SSHes to `homelab` and operates against the remote daemon:
+
+```bash
+leo agent spawn coding --repo blackpaw-studio/leo --name demo
+leo agent list
+leo agent attach demo    # full tmux attach to the remote Claude TUI
+leo agent logs demo -n 100
+```
+
+No new listener, auth layer, or daemon runs on the client — Leo shells out to `ssh` for every call and reuses whatever SSH config the laptop already has (`~/.ssh/config`, agent forwarding, ProxyJump, MFA). `tmux_path` is there because non-interactive SSH shells don't source `.zshrc`, so homebrew's PATH additions aren't visible — set it explicitly to whichever `tmux` binary the remote uses. Add more hosts under `client.hosts.<name>` and pick between them with `--host`, or set a `default_host`. See the [Remote CLI guide](remote-cli.md) for the full flag set.
 
 ## Bringing It Up
 
