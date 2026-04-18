@@ -106,6 +106,54 @@ func TestLoginFlow(t *testing.T) {
 	}
 }
 
+// TestLoginHandler_DestroysPriorSessionOnReLogin asserts session-fixation
+// hygiene: if a user submits /login while holding a valid session cookie, the
+// prior session is destroyed before the new one is issued. Otherwise the old
+// session would live until its TTL even after the user explicitly re-auth'd.
+func TestLoginHandler_DestroysPriorSessionOnReLogin(t *testing.T) {
+	s, _ := newRawTestServer(t)
+
+	// First login -> session A.
+	form := url.Values{"token": {testAPIToken}}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Host = testHost
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	var sessA string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "leo_session" {
+			sessA = c.Value
+		}
+	}
+	if sessA == "" || !s.sessions.validate(sessA) {
+		t.Fatalf("first login did not establish session A")
+	}
+
+	// Second login with session A's cookie attached -> session B.
+	req = httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Host = testHost
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: "leo_session", Value: sessA})
+	w = httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	var sessB string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "leo_session" {
+			sessB = c.Value
+		}
+	}
+	if sessB == "" || sessB == sessA {
+		t.Fatalf("second login did not mint a new session (a=%q b=%q)", sessA, sessB)
+	}
+	if s.sessions.validate(sessA) {
+		t.Fatal("session A still valid after re-login; prior session was not destroyed")
+	}
+	if !s.sessions.validate(sessB) {
+		t.Fatal("session B not valid after re-login")
+	}
+}
+
 func TestSessionMiddleware_BearerStillWorks(t *testing.T) {
 	s, _ := newRawTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -158,6 +206,13 @@ func TestSafeRedirect(t *testing.T) {
 		{"evil.com", "/"},
 		{"http://evil.com", "/"},
 		{`\evil.com`, "/"},
+		// Reject bouncing back to /login or /logout to avoid auth loops.
+		{"/login", "/"},
+		{"/logout", "/"},
+		{"/login?token=abc", "/"},
+		{"/logout?foo=bar", "/"},
+		{"/login/", "/"},
+		{"/logout/extra", "/"},
 	}
 	for _, tc := range cases {
 		if got := safeRedirect(tc.in); got != tc.want {

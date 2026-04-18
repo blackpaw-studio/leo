@@ -114,24 +114,9 @@ func EnsureAPIToken(stateDir string) (string, error) {
 }
 
 // trimToken strips surrounding whitespace (including trailing newline) from the
-// raw file bytes, but returns a defensive copy so the caller can mutate.
+// raw file bytes.
 func trimToken(data []byte) string {
-	start, end := 0, len(data)
-	for start < end {
-		c := data[start]
-		if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
-			break
-		}
-		start++
-	}
-	for end > start {
-		c := data[end-1]
-		if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
-			break
-		}
-		end--
-	}
-	return string(data[start:end])
+	return strings.TrimSpace(string(data))
 }
 
 // sessionCookieName is the name of the cookie that carries the opaque
@@ -158,6 +143,12 @@ func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 			subtle.ConstantTimeCompare([]byte(submitted), []byte(s.apiToken)) != 1 {
 			s.renderLoginStatus(w, "Invalid token.", "", http.StatusUnauthorized)
 			return
+		}
+		// Destroy any pre-existing session tied to this browser before
+		// minting a new one. Prevents a stale session from outliving a
+		// re-login for its full 7-day TTL (session-fixation hygiene).
+		if c, err := r.Cookie(sessionCookieName); err == nil {
+			s.sessions.destroy(c.Value)
 		}
 		id, err := s.sessions.create()
 		if err != nil {
@@ -234,6 +225,13 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 // tampered with.
 func safeRedirect(p string) string {
 	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\") {
+		return "/"
+	}
+	// Never bounce back to /login or /logout — avoids loops if the param
+	// was crafted or carried over from a prior auth cycle.
+	if p == "/login" || p == "/logout" ||
+		strings.HasPrefix(p, "/login?") || strings.HasPrefix(p, "/logout?") ||
+		strings.HasPrefix(p, "/login/") || strings.HasPrefix(p, "/logout/") {
 		return "/"
 	}
 	return p
