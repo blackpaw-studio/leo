@@ -196,7 +196,10 @@ func (s *Server) renderLoginStatus(w http.ResponseWriter, errMsg, autoToken stri
 }
 
 func issueSessionCookie(w http.ResponseWriter, r *http.Request, id string) {
-	http.SetCookie(w, &http.Cookie{
+	// Secure is set dynamically from r.TLS because Leo serves plain HTTP on
+	// loopback/LAN by design. gosec G124 flags dynamic Secure flags, which is
+	// the intended behavior here.
+	cookie := &http.Cookie{ //nolint:gosec // G124: dynamic Secure flag is intentional for HTTP LAN use
 		Name:     sessionCookieName,
 		Value:    id,
 		Path:     "/",
@@ -204,11 +207,13 @@ func issueSessionCookie(w http.ResponseWriter, r *http.Request, id string) {
 		SameSite: http.SameSiteStrictMode,
 		Secure:   r.TLS != nil,
 		MaxAge:   int(sessionTTL.Seconds()),
-	})
+	}
+	http.SetCookie(w, cookie)
 }
 
 func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
+	// See issueSessionCookie for the rationale on the dynamic Secure flag.
+	cookie := &http.Cookie{ //nolint:gosec // G124: dynamic Secure flag is intentional for HTTP LAN use
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
@@ -216,7 +221,8 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 		Secure:   r.TLS != nil,
 		MaxAge:   -1,
-	})
+	}
+	http.SetCookie(w, cookie)
 }
 
 // safeRedirect limits redirect targets to same-origin absolute paths. Any
