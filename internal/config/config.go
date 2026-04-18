@@ -185,6 +185,9 @@ type DefaultsConfig struct {
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
 	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
+	// StaleResumeHours drops --resume at launch when claude's session jsonl
+	// hasn't been written in this many hours. Default 12; 0 disables.
+	StaleResumeHours int `yaml:"stale_resume_hours,omitempty"`
 }
 
 type ProcessConfig struct {
@@ -203,7 +206,10 @@ type ProcessConfig struct {
 	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
 	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
 	PermissionMode     string            `yaml:"permission_mode,omitempty"`
-	Enabled            bool              `yaml:"enabled"`
+	// StaleResumeHours overrides defaults.stale_resume_hours for this process.
+	// nil = inherit; 0 = disable staleness check for this process.
+	StaleResumeHours *int `yaml:"stale_resume_hours,omitempty"`
+	Enabled          bool `yaml:"enabled"`
 }
 
 type TaskConfig struct {
@@ -315,6 +321,27 @@ func (c *Config) ProcessRemoteControl(p ProcessConfig) bool {
 	return c.Defaults.RemoteControl
 }
 
+// DefaultStaleResumeHours is the fallback staleness threshold when neither
+// Defaults nor per-process override is set.
+const DefaultStaleResumeHours = 12
+
+// ProcessStaleResume returns the effective staleness threshold for a process's
+// --resume session jsonl. A zero duration means the check is disabled.
+// Cascade: process override → defaults → DefaultStaleResumeHours.
+func (c *Config) ProcessStaleResume(p ProcessConfig) time.Duration {
+	hours := DefaultStaleResumeHours
+	if c.Defaults.StaleResumeHours != 0 {
+		hours = c.Defaults.StaleResumeHours
+	}
+	if p.StaleResumeHours != nil {
+		hours = *p.StaleResumeHours
+	}
+	if hours <= 0 {
+		return 0
+	}
+	return time.Duration(hours) * time.Hour
+}
+
 // ProcessMCPConfigPath returns the MCP config path for a process.
 // If the process specifies one, it's resolved relative to its workspace.
 // Otherwise falls back to <workspace>/config/mcp-servers.json.
@@ -388,6 +415,9 @@ func (c *Config) Validate() error {
 	if c.Defaults.PermissionMode != "" && !validPermissionModes[c.Defaults.PermissionMode] {
 		errs = append(errs, fmt.Sprintf("defaults.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", c.Defaults.PermissionMode))
 	}
+	if c.Defaults.StaleResumeHours < 0 {
+		errs = append(errs, "defaults.stale_resume_hours must not be negative")
+	}
 
 	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("web.port %d is out of range (1-65535)", c.Web.Port))
@@ -425,6 +455,9 @@ func (c *Config) Validate() error {
 		}
 		if proc.PermissionMode != "" && !validPermissionModes[proc.PermissionMode] {
 			errs = append(errs, fmt.Sprintf("processes.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, proc.PermissionMode))
+		}
+		if proc.StaleResumeHours != nil && *proc.StaleResumeHours < 0 {
+			errs = append(errs, fmt.Sprintf("processes.%s.stale_resume_hours must not be negative", name))
 		}
 	}
 
