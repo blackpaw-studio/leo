@@ -156,8 +156,9 @@ func (c *Config) WebPort() int {
 
 // WebBind returns the effective web UI bind address (default "127.0.0.1",
 // loopback-only). Operators who need LAN access must opt in explicitly by
-// setting web.bind. The web UI has no built-in auth, so binding beyond
-// loopback exposes full process control to every host that can reach it.
+// setting web.bind. Non-loopback binds are gated by the bearer-token
+// authentication layer (see internal/web/auth.go) and the allowed_hosts
+// allowlist, but still expose the dashboard to anyone with the token.
 func (c *Config) WebBind() string {
 	if c.Web.Bind != "" {
 		return c.Web.Bind

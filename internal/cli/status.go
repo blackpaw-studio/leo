@@ -285,7 +285,7 @@ func runStatus() error {
 		if report.Web.Loopback {
 			info.Printf("Web UI:  %s\n", report.Web.URL)
 		} else {
-			warn.Printf("Web UI:  %s (non-loopback bind; no built-in auth)\n", report.Web.URL)
+			warn.Printf("Web UI:  %s (non-loopback bind; token auth required)\n", report.Web.URL)
 		}
 	}
 

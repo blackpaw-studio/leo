@@ -151,7 +151,7 @@ func collectValidateFindings() ([]Finding, *config.Config) {
 
 	// 7. Web bind exposure
 	if cfg.Web.Enabled && !config.IsLoopbackBind(cfg.WebBind()) {
-		add(SeverityWarn, "web", fmt.Sprintf("bind=%q exposes the dashboard beyond localhost (no built-in auth)", cfg.WebBind()))
+		add(SeverityWarn, "web", fmt.Sprintf("bind=%q exposes the dashboard beyond localhost; clients must authenticate with the api token", cfg.WebBind()))
 	} else if !cfg.Web.Enabled {
 		add(SeverityInfo, "web", "web UI disabled")
 	}
