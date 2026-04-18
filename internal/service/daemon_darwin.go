@@ -133,63 +133,82 @@ func InstallDaemon(sc ServiceConfig) error {
 }
 
 // RemoveDaemon stops and removes the launchd service.
+//
+// Cleans up both halves independently: the launchd registration and the
+// plist file. If either exists we attempt removal, and we only return
+// "not installed" when both are already gone. This handles drift where
+// one side has been cleaned up but not the other — e.g. a prior bootout
+// failure that left a ghost registration, or a manually deleted plist.
 func RemoveDaemon() error {
 	label := daemonLabel()
 	path := plistPath()
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("daemon not installed (no plist found)")
+	_, printErr := runCommand("launchctl", "print", launchctlTarget(label))
+	loaded := printErr == nil
+
+	_, plistStatErr := os.Stat(path)
+	plistExists := plistStatErr == nil
+
+	if !loaded && !plistExists {
+		return fmt.Errorf("daemon not installed")
 	}
 
-	_ = bootout(label, path)
+	if loaded {
+		if err := bootout(label, path); err != nil {
+			return fmt.Errorf("launchctl bootout: %w", err)
+		}
+	}
 
-	if err := removeFile(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing plist: %w", err)
+	if plistExists {
+		if err := removeFile(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing plist: %w", err)
+		}
 	}
 
 	return nil
 }
 
 // DaemonStatus returns the status of the launchd service.
+//
+// launchctl is the source of truth: a service can remain bootstrapped
+// (and running) even after its plist file is deleted from disk, so we
+// query launchctl first and only fall back to the plist check when
+// launchctl has no record of the service.
 func DaemonStatus() (string, error) {
-	path := plistPath()
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return "not installed", nil
-	}
-
 	label := daemonLabel()
-	uid := fmt.Sprintf("%d", os.Getuid())
-	target := fmt.Sprintf("gui/%s/%s", uid, label)
 
-	output, err := runCommand("launchctl", "print", target)
-	if err != nil {
+	output, runErr := runCommand("launchctl", "print", launchctlTarget(label))
+	if runErr == nil {
+		for _, line := range strings.Split(output, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "pid = ") {
+				pid := strings.TrimPrefix(trimmed, "pid = ")
+				return fmt.Sprintf("running (pid %s)", pid), nil
+			}
+		}
 		return "installed but not running", nil
 	}
 
-	// Parse for PID
-	for _, line := range strings.Split(output, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "pid = ") {
-			pid := strings.TrimPrefix(trimmed, "pid = ")
-			return fmt.Sprintf("running (pid %s)", pid), nil
-		}
+	if _, err := os.Stat(plistPath()); os.IsNotExist(err) {
+		return "not installed", nil
 	}
 
-	return "installed", nil
+	return "installed but not running", nil
 }
 
 // RestartDaemon force-restarts the launchd service.
+//
+// Uses launchctl as the source of truth — a service can be running with
+// its plist file missing, so we rely on the kickstart call itself to
+// report whether the target is loaded. Only when kickstart fails do we
+// consult the plist to produce a clearer "not installed" error.
 func RestartDaemon() error {
-	path := plistPath()
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("daemon not installed (no plist found)")
-	}
-
 	label := daemonLabel()
-	uid := fmt.Sprintf("%d", os.Getuid())
-	target := fmt.Sprintf("gui/%s/%s", uid, label)
 
-	if _, err := runCommand("launchctl", "kickstart", "-k", target); err != nil {
+	if _, err := runCommand("launchctl", "kickstart", "-k", launchctlTarget(label)); err != nil {
+		if _, statErr := os.Stat(plistPath()); os.IsNotExist(statErr) {
+			return fmt.Errorf("daemon not installed")
+		}
 		return fmt.Errorf("launchctl kickstart: %w", err)
 	}
 
@@ -197,10 +216,14 @@ func RestartDaemon() error {
 }
 
 func bootout(label, path string) error {
-	uid := fmt.Sprintf("%d", os.Getuid())
-	target := fmt.Sprintf("gui/%s/%s", uid, label)
-	_, err := runCommand("launchctl", "bootout", target)
+	_, err := runCommand("launchctl", "bootout", launchctlTarget(label))
 	return err
+}
+
+// launchctlTarget builds the gui domain specifier used by launchctl
+// bootout/kickstart/print for a given service label.
+func launchctlTarget(label string) string {
+	return fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
 }
 
 func defaultRunCommand(name string, args ...string) (string, error) {
