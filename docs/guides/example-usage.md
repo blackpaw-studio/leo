@@ -56,7 +56,7 @@ tasks:
 
   inbox-calendar-watch:
     workspace: ~/.leo/workspace
-    schedule: "0,30 7-21 * * *"
+    schedule: "0 7-22 * * *"
     timezone: America/New_York
     prompt_file: prompts/inbox-calendar-watch.md
     max_turns: 15
@@ -100,7 +100,7 @@ Two tasks, each doing one clear job:
 | Task                       | Cadence                          | What it does                                                        |
 | -------------------------- | -------------------------------- | ------------------------------------------------------------------- |
 | `daily-news-briefing`      | Every day at 7 AM ET             | Curates a section-based morning briefing from the last 24 hours     |
-| `inbox-calendar-watch`     | Every 30 min, 7 AM – 10 PM       | Acts on email + calendar — drafts replies, adds events, flags convs |
+| `inbox-calendar-watch`     | Hourly, 7 AM – 10 PM             | Acts on email + calendar — drafts replies, adds events, flags convs |
 
 A few patterns worth calling out:
 
@@ -110,7 +110,7 @@ The monitoring tasks run frequently. `silent: true` tells the agent to emit `NO_
 
 ```yaml
 inbox-calendar-watch:
-  schedule: "0,30 7-21 * * *"
+  schedule: "0 7-22 * * *"
   prompt_file: prompts/inbox-calendar-watch.md
   max_turns: 15
   enabled: true
