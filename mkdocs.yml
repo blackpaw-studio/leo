@@ -96,6 +96,7 @@ nav:
       - leo agent: cli/agent.md
       - leo version: cli/version.md
   - Guides:
+      - Example Usage: guides/example-usage.md
       - Scheduling: guides/scheduling.md
       - Background Mode: guides/background-mode.md
       - Writing Tasks: guides/writing-tasks.md
