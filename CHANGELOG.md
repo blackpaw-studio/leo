@@ -4,6 +4,17 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-04-18
+
+### Fixed
+
+- **Daemon state drift on macOS.** `leo status`, `leo service remove`, and
+  `leo service restart` now treat `launchctl` as the source of truth for
+  daemon state rather than the plist file on disk. This fixes contradictory
+  output when a launchd service was still registered after its plist had
+  been removed (previously `leo status` would report "Service: running"
+  alongside "Daemon: not installed"). (#61)
+
 ## [0.2.0] — 2026-04-18
 
 ### Added
