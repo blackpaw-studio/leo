@@ -453,9 +453,20 @@ func (m *Manager) Prune(ctx context.Context, name string, opts PruneOptions) err
 	return nil
 }
 
+// SessionName returns the tmux session name for an agent. Idempotent: if
+// `name` is already a fully-qualified agent name (i.e. begins with "leo-"),
+// it is returned unchanged so callers can pass either an agent.Record.Name
+// or a bare identifier without producing "leo-leo-…" double prefixes.
+func SessionName(name string) string {
+	if strings.HasPrefix(name, "leo-") {
+		return name
+	}
+	return "leo-" + name
+}
+
 // SessionName returns the tmux session name for an agent.
 func (m *Manager) SessionName(name string) string {
-	return "leo-" + name
+	return SessionName(name)
 }
 
 // Logs returns the last `lines` lines of output from the agent's tmux pane.

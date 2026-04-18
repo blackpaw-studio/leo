@@ -63,7 +63,7 @@ func (f *fakeAgentManager) Logs(name string, lines int) (string, error) {
 }
 
 func (f *fakeAgentManager) SessionName(name string) string {
-	return "leo-" + name
+	return agent.SessionName(name)
 }
 
 // Resolve does simple exact-name matching against the fake's records so tests
@@ -294,7 +294,7 @@ func TestAgentResolveHandlerSuccess(t *testing.T) {
 	if err := json.Unmarshal(env.Data, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out.Name != "leo-coding-acme-widget" || out.Session != "leo-leo-coding-acme-widget" || out.Repo != "acme/widget" {
+	if out.Name != "leo-coding-acme-widget" || out.Session != "leo-coding-acme-widget" || out.Repo != "acme/widget" {
 		t.Errorf("resolve = %+v", out)
 	}
 }
