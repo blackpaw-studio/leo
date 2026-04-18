@@ -2,10 +2,14 @@ package web
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // stateDirMode is the permission the state directory must end up with.
@@ -128,4 +132,130 @@ func trimToken(data []byte) string {
 		end--
 	}
 	return string(data[start:end])
+}
+
+// sessionCookieName is the name of the cookie that carries the opaque
+// server-side session ID. HttpOnly + SameSite=Strict; Secure set when TLS.
+const sessionCookieName = "leo_session"
+
+// loginHandler serves the login form (GET) and verifies the submitted token
+// (POST). Success: create a session, set cookie, 303 to safe redirect.
+func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.renderLogin(w, "", r.URL.Query().Get("token"))
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		submitted := r.PostFormValue("token")
+		if submitted == "" {
+			s.renderLoginStatus(w, "Token required.", "", http.StatusUnauthorized)
+			return
+		}
+		if s.apiToken == "" ||
+			subtle.ConstantTimeCompare([]byte(submitted), []byte(s.apiToken)) != 1 {
+			s.renderLoginStatus(w, "Invalid token.", "", http.StatusUnauthorized)
+			return
+		}
+		id, err := s.sessions.create()
+		if err != nil {
+			http.Error(w, "session error", http.StatusInternalServerError)
+			return
+		}
+		issueSessionCookie(w, r, id)
+		http.Redirect(w, r, safeRedirect(r.PostFormValue("redirect")), http.StatusSeeOther)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// logoutHandler destroys the server-side session, clears the cookie, and
+// redirects to the login page.
+func (s *Server) logoutHandler(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookieName); err == nil {
+		s.sessions.destroy(c.Value)
+	}
+	clearSessionCookie(w, r)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func (s *Server) renderLogin(w http.ResponseWriter, errMsg, autoToken string) {
+	s.renderLoginStatus(w, errMsg, autoToken, http.StatusOK)
+}
+
+func (s *Server) renderLoginStatus(w http.ResponseWriter, errMsg, autoToken string, status int) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = s.templates.ExecuteTemplate(w, "login.html", struct {
+		Error     string
+		AutoToken string
+	}{errMsg, autoToken})
+}
+
+func issueSessionCookie(w http.ResponseWriter, r *http.Request, id string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    id,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   r.TLS != nil,
+		MaxAge:   int(sessionTTL.Seconds()),
+	})
+}
+
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   r.TLS != nil,
+		MaxAge:   -1,
+	})
+}
+
+// safeRedirect limits redirect targets to same-origin absolute paths. Any
+// input that is empty, does not start with "/", or starts with "//" (which
+// browsers treat as a protocol-relative cross-origin redirect) falls back to
+// "/". This prevents login-success from bouncing a user to an attacker-
+// controlled URL if the redirect query param is tampered with.
+func safeRedirect(p string) string {
+	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+		return "/"
+	}
+	return p
+}
+
+// sessionMiddleware requires either a valid session cookie OR a valid Bearer
+// token on every request it wraps. Static assets, /login, and /logout must
+// NOT be wrapped in this middleware. On failure:
+//
+//   - HTML GET (Accept contains text/html) -> 303 /login?redirect=<orig>
+//   - everything else -> 401 with WWW-Authenticate: Bearer
+//
+// The Bearer path lets channel plugins and scripts authenticate without a
+// cookie; it compares constant-time against the server's apiToken.
+func sessionMiddleware(store *sessionStore, token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(sessionCookieName); err == nil && store.validate(c.Value) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if bearer := extractBearer(r.Header.Get("Authorization")); bearer != "" && token != "" &&
+			subtle.ConstantTimeCompare([]byte(bearer), []byte(token)) == 1 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html") {
+			http.Redirect(w, r, "/login?redirect="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="leo"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
 }

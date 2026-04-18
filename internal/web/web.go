@@ -63,11 +63,12 @@ type Server struct {
 	templates     *template.Template
 	httpServer    *http.Server
 	listener      net.Listener
-	agents        []string // cached list of available claude agents
-	restartNeeded bool     // set when process-affecting config changes are saved
-	port          int      // port the listener is expected to bind on; used for Host/Origin checks
-	apiToken      string   // bearer token required on /api/* routes; empty disables API
-	allowedHosts  []string // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	agents        []string      // cached list of available claude agents
+	restartNeeded bool          // set when process-affecting config changes are saved
+	port          int           // port the listener is expected to bind on; used for Host/Origin checks
+	apiToken      string        // bearer token required on /api/* routes; empty disables API
+	allowedHosts  []string      // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	sessions      *sessionStore // in-memory browser sessions for cookie-based auth
 
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
@@ -92,18 +93,19 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	}
 
 	s := &Server{
-		configPath:  configPath,
-		processes:   processes,
-		scheduler:   scheduler,
-		reloader:    reloader,
-		agentSvc:    agentSvc,
-		leoPath:     leoPath,
+		configPath:   configPath,
+		processes:    processes,
+		scheduler:    scheduler,
+		reloader:     reloader,
+		agentSvc:     agentSvc,
+		leoPath:      leoPath,
 		port:         opts.Port,
 		apiToken:     opts.APIToken,
 		allowedHosts: opts.AllowedHosts,
-		execCommand: exec.Command,
+		execCommand:  exec.Command,
 	}
 
+	s.sessions = newSessionStore(sessionTTL)
 	s.agents = s.fetchAgentList()
 	s.parseTemplates()
 
@@ -112,6 +114,11 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Static assets
 	staticFS, _ := fs.Sub(content, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+
+	// Login / logout (unprotected by sessionMiddleware; they are what grants the session).
+	mux.HandleFunc("GET /login", s.loginHandler)
+	mux.HandleFunc("POST /login", s.loginHandler)
+	mux.HandleFunc("POST /logout", s.logoutHandler)
 
 	// Full page
 	mux.HandleFunc("GET /", s.handleDashboard)
@@ -183,15 +190,24 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	protectedAPI := bearerAuthMiddleware(s.apiToken, apiMux)
 
 	// Path-prefix dispatcher: /api/* is routed through bearer auth to apiMux;
-	// everything else (browser UI) goes to the main mux. We don't register
-	// "/api/" on the main mux because that conflicts with "GET /" under the
-	// Go 1.22 ServeMux precedence rules.
+	// /login, /logout, and /static/* bypass session auth (otherwise the user
+	// could never log in or load the login page's stylesheet). Everything
+	// else (browser UI) is wrapped in sessionMiddleware, which accepts either
+	// a valid session cookie or a Bearer token. We don't register "/api/" on
+	// the main mux because that conflicts with "GET /" under the Go 1.22
+	// ServeMux precedence rules.
+	protectedBrowser := sessionMiddleware(s.sessions, s.apiToken, mux)
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/static/"):
+			mux.ServeHTTP(w, r)
+		case r.URL.Path == "/login", r.URL.Path == "/logout":
+			mux.ServeHTTP(w, r)
+		case strings.HasPrefix(r.URL.Path, "/api/"):
 			protectedAPI.ServeHTTP(w, r)
-			return
+		default:
+			protectedBrowser.ServeHTTP(w, r)
 		}
-		mux.ServeHTTP(w, r)
 	})
 
 	// Every request — browser UI and API alike — passes through the Host +

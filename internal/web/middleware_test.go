@@ -71,6 +71,7 @@ func TestHostOriginMiddleware_AllowsEmptyOriginWithLocalHost(t *testing.T) {
 	form.Set("model", "sonnet")
 	req := httptest.NewRequest(http.MethodPost, "/web/config/defaults", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	req.Host = testHost
 	// No Origin header.
 
