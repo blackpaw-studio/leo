@@ -220,12 +220,14 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 // safeRedirect limits redirect targets to same-origin absolute paths. Any
-// input that is empty, does not start with "/", or starts with "//" (which
-// browsers treat as a protocol-relative cross-origin redirect) falls back to
-// "/". This prevents login-success from bouncing a user to an attacker-
-// controlled URL if the redirect query param is tampered with.
+// input that is empty, does not start with "/", starts with "//" (which
+// browsers treat as a protocol-relative cross-origin redirect), or contains a
+// backslash (which some browsers normalize to "/" allowing "//evil.com"-style
+// bypass via "/\evil.com") falls back to "/". This prevents login-success from
+// bouncing a user to an attacker-controlled URL if the redirect query param is
+// tampered with.
 func safeRedirect(p string) string {
-	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\") {
 		return "/"
 	}
 	return p

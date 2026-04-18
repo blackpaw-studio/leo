@@ -142,3 +142,26 @@ func TestStaticAndLoginAreUnauthenticated(t *testing.T) {
 		}
 	}
 }
+
+func TestSafeRedirect(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", "/"},
+		{"/", "/"},
+		{"/dashboard", "/dashboard"},
+		{"/partials/tasks", "/partials/tasks"},
+		{"//evil.com", "/"},
+		{"//evil.com/path", "/"},
+		{`/\evil.com`, "/"},
+		{`/\\evil.com`, "/"},
+		{"evil.com", "/"},
+		{"http://evil.com", "/"},
+		{`\evil.com`, "/"},
+	}
+	for _, tc := range cases {
+		if got := safeRedirect(tc.in); got != tc.want {
+			t.Errorf("safeRedirect(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
