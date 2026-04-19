@@ -153,7 +153,7 @@ See the [Remote CLI guide](https://blackpaw-studio.github.io/leo/guides/remote-c
 
 ### Channel plugins
 
-Leo doesn't ship a messaging channel. Install any Claude Code channel plugin and reference its ID in `channels:`. The plugin owns its own auth and routing; Leo just hands the resolved list to the spawned Claude process via `LEO_CHANNELS`.
+Leo doesn't ship a messaging channel. Install any Claude Code channel plugin and reference its ID in `channels:`. The plugin owns its own auth and routing; Leo just hands the resolved list to the spawned Claude process via `--channels` flags.
 
 For Telegram slash-command autocomplete:
 
