@@ -4,6 +4,18 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-04-18
+
+### Fixed
+
+- **`leo setup` re-prompted for user profile when `USER.md` used custom
+  headers.** The setup wizard parsed existing `USER.md` files by matching
+  exact template headers (`## Name`, `## Role`, …); files with any other
+  structure parsed as empty, so setup silently re-prompted for every field
+  and then overwrote the existing file on save. Setup now detects `USER.md`
+  by file existence and preserves custom-format files when the user
+  declines to update.
+
 ## [0.2.1] — 2026-04-18
 
 ### Fixed
