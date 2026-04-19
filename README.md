@@ -1,7 +1,11 @@
-<h1 align="center">Leo</h1>
+<h1 align="center">🐈‍⬛ Leo</h1>
 
 <p align="center">
   <em>A process supervisor and task scheduler for Claude Code.</em>
+</p>
+
+<p align="center">
+  <sub>Named for my void cat Leo. He's a good kitty.</sub>
 </p>
 
 <p align="center">
