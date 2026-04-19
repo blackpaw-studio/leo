@@ -5,10 +5,6 @@
 </p>
 
 <p align="center">
-  <sub>Named for my void cat Leo. He's a good kitty.</sub>
-</p>
-
-<p align="center">
   <a href="#install">Install</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#what-leo-does">What it does</a> ·
@@ -231,3 +227,7 @@ make lint       # go vet + staticcheck
 ## License
 
 MIT
+
+---
+
+<sub>Named for my void cat Leo. He's a good kitty.</sub>
