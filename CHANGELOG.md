@@ -4,6 +4,8 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-18
+
 ### Fixed
 - `leo update` no longer fails with `parsing certificate: no PEM block found` against releases whose `checksums.txt.pem` is base64-wrapped (as emitted by GoReleaser v2). `parseLeafCertificate` now transparently base64-decodes the artifact when it has no PEM header.
 
