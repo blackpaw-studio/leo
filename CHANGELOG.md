@@ -4,6 +4,8 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-18
+
 ### Changed
 
 - **`prompt` package gained `PromptNonEmpty`**, a retry helper that
