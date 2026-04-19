@@ -54,6 +54,18 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 			Model:    "opus",
 			MaxTurns: 99,
 		},
+		Web: config.WebConfig{
+			Enabled:      true,
+			Port:         8370,
+			Bind:         "0.0.0.0",
+			AllowedHosts: []string{"10.0.4.16", "10.0.2.10"},
+		},
+		Client: config.ClientConfig{
+			DefaultHost: "olympus",
+			Hosts: map[string]config.HostConfig{
+				"olympus": {SSH: "evan@olympus.local"},
+			},
+		},
 		Processes: map[string]config.ProcessConfig{
 			"custom": {
 				Workspace: "/custom/ws",
@@ -63,6 +75,9 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 		},
 		Tasks: map[string]config.TaskConfig{
 			"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"},
+		},
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Workspace: "/Users/evan/.leo/agents"},
 		},
 	}
 
@@ -76,6 +91,45 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 	}
 	if _, ok := cfg.Tasks["heartbeat"]; !ok {
 		t.Error("expected existing 'heartbeat' task preserved")
+	}
+	if !cfg.Web.Enabled || cfg.Web.Port != 8370 || cfg.Web.Bind != "0.0.0.0" {
+		t.Errorf("web config dropped: %+v", cfg.Web)
+	}
+	if len(cfg.Web.AllowedHosts) != 2 {
+		t.Errorf("web.allowed_hosts dropped: %v", cfg.Web.AllowedHosts)
+	}
+	if cfg.Client.DefaultHost != "olympus" {
+		t.Errorf("client.default_host dropped: %q", cfg.Client.DefaultHost)
+	}
+	if _, ok := cfg.Client.Hosts["olympus"]; !ok {
+		t.Error("client.hosts dropped")
+	}
+	if _, ok := cfg.Templates["coding"]; !ok {
+		t.Error("templates dropped")
+	}
+}
+
+// buildConfig must not alias maps back into the caller's existing config —
+// later mutations to the returned cfg should not leak into existing.
+func TestBuildConfig_DoesNotMutateExisting(t *testing.T) {
+	existing := &config.Config{
+		Client: config.ClientConfig{
+			Hosts: map[string]config.HostConfig{"olympus": {SSH: "u@olympus"}},
+		},
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Workspace: "/old"},
+		},
+	}
+
+	cfg := buildConfig("/ws", existing)
+	cfg.Client.Hosts["added"] = config.HostConfig{SSH: "u@added"}
+	cfg.Templates["new"] = config.TemplateConfig{Workspace: "/new"}
+
+	if _, ok := existing.Client.Hosts["added"]; ok {
+		t.Error("buildConfig aliased existing.Client.Hosts")
+	}
+	if _, ok := existing.Templates["new"]; ok {
+		t.Error("buildConfig aliased existing.Templates")
 	}
 }
 

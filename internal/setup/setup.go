@@ -222,6 +222,10 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 
 	if existing != nil {
 		cfg.Defaults = existing.Defaults
+		cfg.Web = existing.Web
+		cfg.Client = existing.Client
+		cfg.Client.Hosts = maps.Clone(existing.Client.Hosts)
+		cfg.Templates = maps.Clone(existing.Templates)
 		for k, v := range existing.Processes {
 			cfg.Processes[k] = v
 		}

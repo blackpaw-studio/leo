@@ -4,6 +4,9 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- `leo setup` no longer drops the top-level `web`, `client`, and `templates` sections when re-run against an existing config. `buildConfig` now preserves all config sections alongside `defaults`, `processes`, and `tasks`.
+
 ## [0.3.1] — 2026-04-18
 
 ### Fixed
