@@ -125,11 +125,17 @@ func promptWorkspace(reader *bufio.Reader, existing *config.Config, defaultWorks
 func promptUserProfileIfNeeded(reader *bufio.Reader, workspace string) (userName, role, about, preferences, timezone string) {
 	userPath := filepath.Join(workspace, "USER.md")
 
-	defaults := parseUserProfile(userPath)
-	if defaults.UserName != "" {
-		prompt.Info.Printf("  USER.md exists: %s (%s)\n", userPath, defaults.UserName)
+	var defaults templates.UserProfileData
+	if _, err := os.Stat(userPath); err == nil {
+		defaults = parseUserProfile(userPath)
+		label := defaults.UserName
+		if label == "" {
+			label = "custom format — will be preserved"
+		}
+		prompt.Info.Printf("  USER.md exists: %s (%s)\n", userPath, label)
 		if !prompt.YesNo(reader, "  Update user profile?", false) {
-			return defaults.UserName, defaults.Role, defaults.About, defaults.Preferences, defaults.Timezone
+			// Return empty strings as a sentinel so the existing file is left untouched.
+			return "", "", "", "", ""
 		}
 	}
 
