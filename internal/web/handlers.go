@@ -761,6 +761,20 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
 }
 
+// handleProcessRestart kills the process tmux session so the supervisor's
+// restart loop respawns it with a fresh claude invocation.
+func (s *Server) handleProcessRestart(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionName := "leo-" + name
+
+	tmuxPath := findTmuxPath()
+	if err := s.execCommand(tmuxPath, "kill-session", "-t", sessionName).Run(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to restart %s: %v", name, err))
+		return
+	}
+	s.renderFlash(w, "success", fmt.Sprintf("Restarting %s...", name))
+}
+
 // handleProcessSendKeys sends arbitrary keys/text to a process tmux session.
 // POST /web/process/{name}/send  {"keys": ["/clear", "Enter"]}
 //

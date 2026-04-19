@@ -18,6 +18,7 @@
             {{if eq .Status "running"}}
             <div class="process-actions">
                 <button class="btn btn-sm" hx-post="/web/process/{{.Name}}/interrupt" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Interrupt {{.Name}}?">Interrupt</button>
+                <button class="btn btn-sm" hx-post="/web/process/{{.Name}}/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart {{.Name}}?">Restart</button>
             </div>
             {{end}}
         </div>
