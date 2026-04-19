@@ -4,6 +4,11 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-04-18
+
+### Added
+- Process cards in the web UI now have a **Restart** button next to Interrupt, which kills the tmux session so the supervisor auto-restarts the process.
+
 ### Fixed
 - `leo setup` no longer drops the top-level `web`, `client`, and `templates` sections when re-run against an existing config. `buildConfig` now preserves all config sections alongside `defaults`, `processes`, and `tasks`.
 
