@@ -201,8 +201,10 @@ func (v *SignatureVerifier) verifyIdentity(leaf *x509.Certificate) error {
 // leaf cert to the .pem output, but we tolerate extra intermediates in
 // case a future cosign version bundles them.
 //
-// GoReleaser v2 uploads the certificate artifact base64-wrapped, so we
-// fall back to base64-decoding the input when it has no PEM header.
+// cosign v2+ writes the file produced by --output-certificate base64-
+// wrapped (see sigstore/cosign#2666, resolved in #2671 by documenting
+// the wrap rather than removing it). We fall back to base64-decoding
+// the input when it has no PEM header, matching decodeSignature.
 func parseLeafCertificate(pemBytes []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
