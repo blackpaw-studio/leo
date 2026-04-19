@@ -335,6 +335,22 @@ func TestParseLeafCertificateRejectsMalformed(t *testing.T) {
 	}
 }
 
+// TestParseLeafCertificateAcceptsBase64Wrapped covers the real-world case
+// where GoReleaser v2 uploads the .pem artifact base64-wrapped. The client
+// must transparently decode it so `leo update` keeps working.
+func TestParseLeafCertificateAcceptsBase64Wrapped(t *testing.T) {
+	fixture := issueFixture(t, "https://github.com/example/repo/.github/workflows/release.yml@refs/tags/v1.0.0", "https://token.actions.githubusercontent.com")
+	wrapped := []byte(base64.StdEncoding.EncodeToString(fixture.leafPEM))
+
+	cert, err := parseLeafCertificate(wrapped)
+	if err != nil {
+		t.Fatalf("parseLeafCertificate(base64-wrapped PEM) error = %v, want nil", err)
+	}
+	if cert == nil {
+		t.Fatal("parseLeafCertificate returned nil cert")
+	}
+}
+
 func TestLoadCertPoolRejectsEmpty(t *testing.T) {
 	if _, err := loadCertPool([]byte("no pem blocks here")); err == nil {
 		t.Error("expected error when PEM parsing yields zero certs")

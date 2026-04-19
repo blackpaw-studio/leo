@@ -200,10 +200,20 @@ func (v *SignatureVerifier) verifyIdentity(leaf *x509.Certificate) error {
 // returns the first (leaf) certificate. cosign sign-blob writes a single
 // leaf cert to the .pem output, but we tolerate extra intermediates in
 // case a future cosign version bundles them.
+//
+// GoReleaser v2 uploads the certificate artifact base64-wrapped, so we
+// fall back to base64-decoding the input when it has no PEM header.
 func parseLeafCertificate(pemBytes []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
-		return nil, errors.New("no PEM block found")
+		decoded, err := base64.StdEncoding.DecodeString(string(trimASCIIWhitespace(pemBytes)))
+		if err != nil {
+			return nil, errors.New("no PEM block found")
+		}
+		block, _ = pem.Decode(decoded)
+		if block == nil {
+			return nil, errors.New("no PEM block found")
+		}
 	}
 	if block.Type != "CERTIFICATE" {
 		return nil, fmt.Errorf("unexpected PEM type %q", block.Type)
