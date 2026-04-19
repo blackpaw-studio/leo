@@ -112,7 +112,7 @@ processes:
 templates:
   coding:
     model: sonnet
-    permission_mode: bypassPermissions
+    permission_mode: auto
     workspace: ~/agents
     remote_control: true
 ```

@@ -11,7 +11,7 @@ templates:
   coding:
     model: sonnet
     remote_control: true
-    permission_mode: bypassPermissions
+    permission_mode: auto
     workspace: ~/agents
 ```
 

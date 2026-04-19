@@ -37,7 +37,7 @@ Template: coding
   Workspace:             ~/agents
   Model:                 sonnet
   Agent:                 coding-agent
-  Permission mode:       bypassPermissions
+  Permission mode:       auto
   Remote control:        true
   Max turns:             25
   Channels:              plugin:telegram@claude-plugins-official
