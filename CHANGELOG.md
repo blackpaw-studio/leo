@@ -15,6 +15,21 @@ All notable user-visible changes to Leo are documented here.
   Re-running setup on a client auto-detects client mode from the
   existing config.
 
+### Fixed
+
+- **Client setup no longer aliases map state back into the loaded config.**
+  `buildClientConfig` now deep-copies `Processes`, `Tasks`, `Templates`,
+  and `Client.Hosts` via `maps.Clone` before mutating, so a re-entered
+  setup session cannot silently modify the in-memory config.
+- **Client-mode detection aligned with `Config.IsClientOnly()`**; a config
+  with hosts plus tasks or templates (but no processes) no longer defaults
+  the setup prompt to client.
+- **SSH connectivity test now runs with `BatchMode=yes` and
+  `ConnectTimeout=8`** so the probe fails fast instead of blocking on
+  host-key confirmation, password, or 2FA prompts.
+- **Non-numeric `-p` port values in an existing client config are warned
+  about and ignored** instead of being silently coerced to 0.
+
 ## [0.2.2] — 2026-04-18
 
 ### Fixed

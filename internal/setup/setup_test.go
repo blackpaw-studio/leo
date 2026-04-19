@@ -434,7 +434,13 @@ func TestTestSSHConnectivity_Success(t *testing.T) {
 	if err := testSSHConnectivity(host); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
-	want := []string{"ssh", "-p", "2222", "evan@olympus.local", config.DefaultRemoteLeoPath, "version"}
+	want := []string{
+		"ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=8",
+		"-p", "2222",
+		"evan@olympus.local", config.DefaultRemoteLeoPath, "version",
+	}
 	if !reflect.DeepEqual(capturedArgs, want) {
 		t.Errorf("args = %v, want %v", capturedArgs, want)
 	}
@@ -455,5 +461,135 @@ func TestTestSSHConnectivity_FailureIncludesStderr(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Permission denied") {
 		t.Errorf("error should include stderr, got %q", err.Error())
+	}
+}
+
+// Hybrid config (hosts + processes) must default to server mode so a
+// re-run can't silently clobber a server install with a client-only config.
+func TestPromptSetupMode_DefaultsToServerForHybridConfig(t *testing.T) {
+	existing := &config.Config{
+		Client: config.ClientConfig{
+			DefaultHost: "olympus",
+			Hosts:       map[string]config.HostConfig{"olympus": {SSH: "evan@olympus.local"}},
+		},
+		Processes: map[string]config.ProcessConfig{"assistant": {Workspace: "/ws"}},
+	}
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	if got := promptSetupMode(reader, existing); got != "server" {
+		t.Errorf("hybrid config: got %q, want %q", got, "server")
+	}
+}
+
+// buildClientConfig must not alias maps back into the caller's existing
+// config — a shallow struct copy would share the underlying map, causing
+// silent cross-mutation.
+func TestBuildClientConfig_DoesNotMutateExisting(t *testing.T) {
+	existing := &config.Config{
+		Processes: map[string]config.ProcessConfig{"assistant": {Workspace: "/ws"}},
+		Tasks:     map[string]config.TaskConfig{"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"}},
+		Client: config.ClientConfig{
+			DefaultHost: "olympus",
+			Hosts:       map[string]config.HostConfig{"olympus": {SSH: "evan@olympus.local"}},
+		},
+	}
+	reader := bufio.NewReader(strings.NewReader(""))
+	buildClientConfig(existing, "new-host", config.HostConfig{SSH: "u@new"}, reader)
+
+	if _, ok := existing.Client.Hosts["new-host"]; ok {
+		t.Error("buildClientConfig mutated existing.Client.Hosts (aliasing bug)")
+	}
+	if len(existing.Client.Hosts) != 1 {
+		t.Errorf("existing.Client.Hosts size changed: got %d, want 1", len(existing.Client.Hosts))
+	}
+}
+
+// The existing DefaultHost should be replaced with the new nickname only
+// if the user says yes; declining must keep the prior default.
+func TestBuildClientConfig_DefaultHostReplacement(t *testing.T) {
+	tests := []struct {
+		name        string
+		answer      string
+		wantDefault string
+	}{
+		{"accept replacement", "y\n", "new-host"},
+		{"decline replacement", "n\n", "olympus"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			existing := &config.Config{
+				Client: config.ClientConfig{
+					DefaultHost: "olympus",
+					Hosts:       map[string]config.HostConfig{"olympus": {SSH: "evan@olympus.local"}},
+				},
+			}
+			reader := bufio.NewReader(strings.NewReader(tc.answer))
+			cfg := buildClientConfig(existing, "new-host", config.HostConfig{SSH: "u@new"}, reader)
+			if cfg.Client.DefaultHost != tc.wantDefault {
+				t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, tc.wantDefault)
+			}
+			if _, ok := cfg.Client.Hosts["new-host"]; !ok {
+				t.Error("new host should be added regardless of default-host choice")
+			}
+			if _, ok := cfg.Client.Hosts["olympus"]; !ok {
+				t.Error("existing host should be preserved")
+			}
+		})
+	}
+}
+
+// promptClientHost should round-trip the SSH port stored in an existing
+// config's SSHArgs (["-p", "2222"]) as the default for the port prompt,
+// and re-emit it in the returned HostConfig.SSHArgs.
+func TestPromptClientHost_PortRoundTrip(t *testing.T) {
+	existing := &config.Config{
+		Client: config.ClientConfig{
+			DefaultHost: "olympus",
+			Hosts: map[string]config.HostConfig{
+				"olympus": {
+					SSH:     "evan@olympus.local",
+					SSHArgs: []string{"-p", "2222"},
+					LeoPath: "/opt/leo",
+				},
+			},
+		},
+	}
+	// Blank answers accept all defaults (nickname, ssh, port, leo path).
+	reader := bufio.NewReader(strings.NewReader("\n\n\n\n"))
+	nickname, host := promptClientHost(reader, existing)
+	if nickname != "olympus" {
+		t.Errorf("nickname = %q, want %q", nickname, "olympus")
+	}
+	if host.SSH != "evan@olympus.local" {
+		t.Errorf("SSH = %q, want %q", host.SSH, "evan@olympus.local")
+	}
+	if host.LeoPath != "/opt/leo" {
+		t.Errorf("LeoPath = %q, want %q", host.LeoPath, "/opt/leo")
+	}
+	want := []string{"-p", "2222"}
+	if !reflect.DeepEqual(host.SSHArgs, want) {
+		t.Errorf("SSHArgs = %v, want %v", host.SSHArgs, want)
+	}
+}
+
+// A non-numeric port in existing config must not panic, must not silently
+// become 0 (which would drop a real port the user had set), and must warn.
+func TestPromptClientHost_InvalidExistingPortIgnored(t *testing.T) {
+	existing := &config.Config{
+		Client: config.ClientConfig{
+			DefaultHost: "olympus",
+			Hosts: map[string]config.HostConfig{
+				"olympus": {
+					SSH:     "evan@olympus.local",
+					SSHArgs: []string{"-p", "not-a-port"},
+				},
+			},
+		},
+	}
+	// Blank answers accept all defaults; with invalid port default = 0,
+	// PromptInt returns 0 and no SSHArgs should be emitted.
+	reader := bufio.NewReader(strings.NewReader("\n\n\n\n"))
+	_, host := promptClientHost(reader, existing)
+	if len(host.SSHArgs) != 0 {
+		t.Errorf("SSHArgs = %v, want empty (invalid existing port should be discarded)", host.SSHArgs)
 	}
 }

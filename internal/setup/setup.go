@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -411,10 +413,12 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 
 // promptSetupMode asks whether Leo will run on this machine (server) or
 // drive a remote Leo host over SSH (client). The default is "server" for a
-// fresh install and "client" when the existing config already looks like a
-// client-only install (hosts defined, no processes).
+// fresh install and "client" only when the existing config is strictly
+// client-only (hosts defined, no processes/tasks/templates). Hybrid
+// configs (hosts + any local primitives) default to server so a re-run
+// can't silently clobber a server install.
 func promptSetupMode(reader *bufio.Reader, existing *config.Config) string {
-	defaultClient := existing != nil && len(existing.Client.Hosts) > 0 && len(existing.Processes) == 0
+	defaultClient := existing != nil && existing.IsClientOnly()
 
 	prompt.Bold.Println("Where will Leo run?")
 	fmt.Println("  1) On this machine (server)   — supervise agents locally")
@@ -505,7 +509,11 @@ func promptClientHost(reader *bufio.Reader, existing *config.Config) (string, co
 			leoPathDefault = h.LeoPath
 			for i := 0; i < len(h.SSHArgs)-1; i++ {
 				if h.SSHArgs[i] == "-p" {
-					fmt.Sscanf(h.SSHArgs[i+1], "%d", &portDefault)
+					if p, err := strconv.Atoi(h.SSHArgs[i+1]); err == nil {
+						portDefault = p
+					} else {
+						prompt.Warn.Printf("  Ignoring non-numeric port %q from existing config\n", h.SSHArgs[i+1])
+					}
 					break
 				}
 			}
@@ -530,18 +538,22 @@ func promptClientHost(reader *bufio.Reader, existing *config.Config) (string, co
 
 	host := config.HostConfig{SSH: sshTarget, LeoPath: leoPath}
 	if port > 0 {
-		host.SSHArgs = []string{"-p", fmt.Sprintf("%d", port)}
+		host.SSHArgs = []string{"-p", strconv.Itoa(port)}
 	}
 	return nickname, host
 }
 
 // testSSHConnectivity runs `ssh [ssh_args...] <target> <leo_path> version`
-// with a short timeout and returns a non-nil error describing any failure.
+// with a 10-second context timeout and returns a non-nil error describing
+// any failure. BatchMode=yes and ConnectTimeout=8 are prepended so the
+// probe fails fast instead of blocking on host-key confirmation, password,
+// or 2FA prompts during setup.
 func testSSHConnectivity(host config.HostConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	args := append([]string{}, host.SSHArgs...)
+	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=8"}
+	args = append(args, host.SSHArgs...)
 	args = append(args, host.SSH, host.RemoteLeoPath(), "version")
 	cmd := sshExecFn(ctx, "ssh", args...)
 	out, err := cmd.CombinedOutput()
@@ -556,26 +568,18 @@ func testSSHConnectivity(host config.HostConfig) error {
 }
 
 // buildClientConfig merges the new host/nickname into existing config (if
-// any), preserving processes/tasks/defaults on hybrid machines.
+// any) and returns a fresh *config.Config. Existing map fields
+// (Processes/Tasks/Templates/Client.Hosts) are deep-copied so writes to
+// the returned config never alias back into the caller's existing value.
 func buildClientConfig(existing *config.Config, nickname string, host config.HostConfig, reader *bufio.Reader) *config.Config {
-	var cfg *config.Config
+	cfg := &config.Config{}
 	if existing != nil {
-		clone := *existing
-		cfg = &clone
-		if cfg.Processes == nil {
-			cfg.Processes = map[string]config.ProcessConfig{}
-		}
-		if cfg.Tasks == nil {
-			cfg.Tasks = map[string]config.TaskConfig{}
-		}
-	} else {
-		cfg = &config.Config{
-			Defaults:  config.DefaultsConfig{},
-			Processes: map[string]config.ProcessConfig{},
-			Tasks:     map[string]config.TaskConfig{},
-		}
+		*cfg = *existing
+		cfg.Processes = maps.Clone(existing.Processes)
+		cfg.Tasks = maps.Clone(existing.Tasks)
+		cfg.Templates = maps.Clone(existing.Templates)
+		cfg.Client.Hosts = maps.Clone(existing.Client.Hosts)
 	}
-
 	if cfg.Client.Hosts == nil {
 		cfg.Client.Hosts = map[string]config.HostConfig{}
 	}
