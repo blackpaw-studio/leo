@@ -54,7 +54,7 @@ func RunInteractive(reader *bufio.Reader) error {
 		prompt.Info.Printf("  Found existing config at %s/leo.yaml\n\n", existing.HomePath)
 	}
 
-	if promptSetupMode(reader, existing) == "client" {
+	if promptSetupMode(reader, existing) {
 		return runClientSetup(reader, defaultHome, existing)
 	}
 
@@ -412,12 +412,12 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 }
 
 // promptSetupMode asks whether Leo will run on this machine (server) or
-// drive a remote Leo host over SSH (client). The default is "server" for a
-// fresh install and "client" only when the existing config is strictly
-// client-only (hosts defined, no processes/tasks/templates). Hybrid
-// configs (hosts + any local primitives) default to server so a re-run
-// can't silently clobber a server install.
-func promptSetupMode(reader *bufio.Reader, existing *config.Config) string {
+// drive a remote Leo host over SSH (client). Returns true for client mode.
+// Defaults to server for a fresh install and for hybrid configs (hosts
+// plus any local primitives) so a re-run cannot silently clobber a
+// server install. Only a strictly client-only config (IsClientOnly)
+// defaults the prompt to client.
+func promptSetupMode(reader *bufio.Reader, existing *config.Config) bool {
 	defaultClient := existing != nil && existing.IsClientOnly()
 
 	prompt.Bold.Println("Where will Leo run?")
@@ -431,22 +431,24 @@ func promptSetupMode(reader *bufio.Reader, existing *config.Config) string {
 	}
 	answer := prompt.Prompt(reader, "Choice", defaultLabel)
 	fmt.Println()
-	if strings.TrimSpace(answer) == "2" {
-		return "client"
-	}
-	return "server"
+	return strings.TrimSpace(answer) == "2"
 }
 
-// runClientSetup writes a client-only leo.yaml (a single host in
-// client.hosts + default_host). It does not scaffold a workspace, check
-// server prerequisites, or install the daemon.
+// runClientSetup writes a minimal client-only leo.yaml: a single entry in
+// client.hosts plus default_host. When an existing config already names a
+// different default host, the user is prompted before the new host takes
+// over. The client path does not scaffold a workspace, check server
+// prerequisites, or install the daemon.
 func runClientSetup(reader *bufio.Reader, leoHome string, existing *config.Config) error {
 	prompt.Bold.Println("Client setup")
 	fmt.Println("  Leo will use SSH to run commands on the remote host.")
 	fmt.Println("  The remote host must already have leo installed.")
 	fmt.Println()
 
-	nickname, host := promptClientHost(reader, existing)
+	nickname, host, err := promptClientHost(reader, existing)
+	if err != nil {
+		return err
+	}
 
 	if prompt.YesNo(reader, "Test SSH connectivity now?", true) {
 		if err := testSSHConnectivity(host); err != nil {
@@ -459,10 +461,10 @@ func runClientSetup(reader *bufio.Reader, leoHome string, existing *config.Confi
 		}
 	}
 
-	cfg := buildClientConfig(existing, nickname, host, reader)
+	defaultHost := resolveDefaultHost(reader, existing, nickname)
+	cfg := buildClientConfig(existing, nickname, host, defaultHost)
 	cfg.HomePath = leoHome
 
-	// Summary
 	prompt.Bold.Println("\nConfiguration Summary")
 	fmt.Printf("  Leo home:     %s\n", leoHome)
 	fmt.Printf("  Default host: %s  (%s)\n", cfg.Client.DefaultHost, host.SSH)
@@ -493,9 +495,27 @@ func runClientSetup(reader *bufio.Reader, leoHome string, existing *config.Confi
 	return nil
 }
 
-// promptClientHost gathers the fields needed for a single client.hosts entry.
-// Returns the nickname (map key) and the populated HostConfig.
-func promptClientHost(reader *bufio.Reader, existing *config.Config) (string, config.HostConfig) {
+// resolveDefaultHost decides which client.default_host should be written
+// after adding nickname. It preserves the existing default when the user
+// declines to replace it. With no existing default (or no existing
+// config), the new nickname becomes the default.
+func resolveDefaultHost(reader *bufio.Reader, existing *config.Config, nickname string) string {
+	if existing == nil || existing.Client.DefaultHost == "" || existing.Client.DefaultHost == nickname {
+		return nickname
+	}
+	label := fmt.Sprintf("  Replace default host %q with %q?", existing.Client.DefaultHost, nickname)
+	if prompt.YesNo(reader, label, true) {
+		return nickname
+	}
+	return existing.Client.DefaultHost
+}
+
+// promptClientHost gathers the fields needed for a single client.hosts
+// entry, pre-populating defaults from existing.Client.DefaultHost when
+// present. Returns the nickname (map key), the populated HostConfig, and
+// any error encountered — notably io.EOF when stdin closes during a
+// required field, so retry loops can exit cleanly.
+func promptClientHost(reader *bufio.Reader, existing *config.Config) (string, config.HostConfig, error) {
 	var (
 		nicknameDefault string
 		sshDefault      string
@@ -507,40 +527,48 @@ func promptClientHost(reader *bufio.Reader, existing *config.Config) (string, co
 			nicknameDefault = existing.Client.DefaultHost
 			sshDefault = h.SSH
 			leoPathDefault = h.LeoPath
-			for i := 0; i < len(h.SSHArgs)-1; i++ {
-				if h.SSHArgs[i] == "-p" {
-					if p, err := strconv.Atoi(h.SSHArgs[i+1]); err == nil {
-						portDefault = p
-					} else {
-						prompt.Warn.Printf("  Ignoring non-numeric port %q from existing config\n", h.SSHArgs[i+1])
-					}
-					break
-				}
-			}
+			portDefault = extractPortFromSSHArgs(h.SSHArgs)
 		}
 	}
 
-	nickname := strings.TrimSpace(prompt.Prompt(reader, "Host nickname", nicknameDefault))
-	for nickname == "" {
-		prompt.Warn.Println("  A nickname is required (used as the map key in client.hosts).")
-		nickname = strings.TrimSpace(prompt.Prompt(reader, "Host nickname", nicknameDefault))
+	nickname, err := prompt.PromptNonEmpty(reader, "Host nickname", nicknameDefault,
+		"  A nickname is required (used as the map key in client.hosts).")
+	if err != nil {
+		return "", config.HostConfig{}, fmt.Errorf("reading host nickname: %w", err)
 	}
 
-	sshTarget := strings.TrimSpace(prompt.Prompt(reader, "SSH target (user@host or ssh config alias)", sshDefault))
-	for sshTarget == "" {
-		prompt.Warn.Println("  An SSH target is required (e.g. evan@leo.example.com).")
-		sshTarget = strings.TrimSpace(prompt.Prompt(reader, "SSH target", sshDefault))
+	sshTarget, err := prompt.PromptNonEmpty(reader, "SSH target (user@host or ssh config alias)", sshDefault,
+		"  An SSH target is required (e.g. evan@leo.example.com).")
+	if err != nil {
+		return "", config.HostConfig{}, fmt.Errorf("reading ssh target: %w", err)
 	}
 
 	port := prompt.PromptInt(reader, "SSH port (blank for default)", portDefault)
-
 	leoPath := strings.TrimSpace(prompt.Prompt(reader, "Remote leo binary path", leoPathDefault))
 
 	host := config.HostConfig{SSH: sshTarget, LeoPath: leoPath}
 	if port > 0 {
 		host.SSHArgs = []string{"-p", strconv.Itoa(port)}
 	}
-	return nickname, host
+	return nickname, host, nil
+}
+
+// extractPortFromSSHArgs scans a flag/value slice for `-p <port>` and
+// returns the parsed value, or 0 when missing/unparseable. A warning is
+// printed for non-numeric values so a user doesn't silently lose a port
+// they had set in a corrupted config.
+func extractPortFromSSHArgs(args []string) int {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] != "-p" {
+			continue
+		}
+		if p, err := strconv.Atoi(args[i+1]); err == nil {
+			return p
+		}
+		prompt.Warn.Printf("  Ignoring non-numeric port %q from existing config\n", args[i+1])
+		return 0
+	}
+	return 0
 }
 
 // testSSHConnectivity runs `ssh [ssh_args...] <target> <leo_path> version`
@@ -567,11 +595,15 @@ func testSSHConnectivity(host config.HostConfig) error {
 	return nil
 }
 
-// buildClientConfig merges the new host/nickname into existing config (if
-// any) and returns a fresh *config.Config. Existing map fields
-// (Processes/Tasks/Templates/Client.Hosts) are deep-copied so writes to
-// the returned config never alias back into the caller's existing value.
-func buildClientConfig(existing *config.Config, nickname string, host config.HostConfig, reader *bufio.Reader) *config.Config {
+// buildClientConfig returns a fresh *config.Config with the given
+// host/nickname added to client.hosts and default_host set to the
+// pre-resolved defaultHost (see resolveDefaultHost). It is a pure
+// function: existing map fields (Processes/Tasks/Templates/Client.Hosts)
+// are deep-copied via maps.Clone so mutations cannot alias back into the
+// caller's existing value. Fresh installs (existing == nil) produce a
+// minimal config — nil Processes/Tasks maps stay nil so the emitted YAML
+// does not carry empty `processes: {}` / `tasks: {}` keys.
+func buildClientConfig(existing *config.Config, nickname string, host config.HostConfig, defaultHost string) *config.Config {
 	cfg := &config.Config{}
 	if existing != nil {
 		*cfg = *existing
@@ -584,16 +616,7 @@ func buildClientConfig(existing *config.Config, nickname string, host config.Hos
 		cfg.Client.Hosts = map[string]config.HostConfig{}
 	}
 	cfg.Client.Hosts[nickname] = host
-
-	switch {
-	case cfg.Client.DefaultHost == "":
-		cfg.Client.DefaultHost = nickname
-	case cfg.Client.DefaultHost != nickname:
-		label := fmt.Sprintf("  Replace default host %q with %q?", cfg.Client.DefaultHost, nickname)
-		if prompt.YesNo(reader, label, true) {
-			cfg.Client.DefaultHost = nickname
-		}
-	}
+	cfg.Client.DefaultHost = defaultHost
 	return cfg
 }
 

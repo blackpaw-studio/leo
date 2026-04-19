@@ -2,7 +2,9 @@ package prompt
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,4 +86,31 @@ func ExpandHome(path string) string {
 // NewReader creates a new bufio.Reader from stdin.
 func NewReader() *bufio.Reader {
 	return bufio.NewReader(os.Stdin)
+}
+
+// PromptNonEmpty repeatedly prompts until a non-empty answer is given (or
+// defaultVal is non-empty and accepted via blank input). It returns
+// io.EOF if stdin closes before input is received, so callers cannot
+// accidentally spin on a closed pipe. warnMsg is printed between empty
+// attempts when there is no default to fall back to.
+func PromptNonEmpty(reader *bufio.Reader, label, defaultVal, warnMsg string) (string, error) {
+	for {
+		if defaultVal != "" {
+			fmt.Printf("%s [%s]: ", label, defaultVal)
+		} else {
+			fmt.Printf("%s: ", label)
+		}
+		line, err := reader.ReadString('\n')
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			return trimmed, nil
+		}
+		if defaultVal != "" {
+			return defaultVal, nil
+		}
+		if errors.Is(err, io.EOF) {
+			return "", io.EOF
+		}
+		Warn.Println(warnMsg)
+	}
 }

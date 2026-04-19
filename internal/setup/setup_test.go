@@ -3,13 +3,16 @@ package setup
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/prereq"
@@ -346,9 +349,8 @@ func TestInstallDaemon_NoExecutable(t *testing.T) {
 
 func TestPromptSetupMode_DefaultsToServerForFreshInstall(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("\n"))
-	got := promptSetupMode(reader, nil)
-	if got != "server" {
-		t.Errorf("fresh install: got %q, want %q", got, "server")
+	if got := promptSetupMode(reader, nil); got {
+		t.Errorf("fresh install: got client, want server")
 	}
 }
 
@@ -362,24 +364,21 @@ func TestPromptSetupMode_DefaultsToClientForClientOnlyConfig(t *testing.T) {
 		},
 	}
 	reader := bufio.NewReader(strings.NewReader("\n"))
-	got := promptSetupMode(reader, existing)
-	if got != "client" {
-		t.Errorf("client-only config: got %q, want %q", got, "client")
+	if got := promptSetupMode(reader, existing); !got {
+		t.Errorf("client-only config: got server, want client")
 	}
 }
 
 func TestPromptSetupMode_ExplicitChoiceOverridesDefault(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("2\n"))
-	got := promptSetupMode(reader, nil)
-	if got != "client" {
-		t.Errorf("explicit '2': got %q, want %q", got, "client")
+	if got := promptSetupMode(reader, nil); !got {
+		t.Errorf("explicit '2': got server, want client")
 	}
 }
 
 func TestBuildClientConfig_FreshInstall(t *testing.T) {
-	reader := bufio.NewReader(strings.NewReader(""))
 	host := config.HostConfig{SSH: "evan@olympus.local"}
-	cfg := buildClientConfig(nil, "olympus", host, reader)
+	cfg := buildClientConfig(nil, "olympus", host, "olympus")
 
 	if cfg.Client.DefaultHost != "olympus" {
 		t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, "olympus")
@@ -387,8 +386,11 @@ func TestBuildClientConfig_FreshInstall(t *testing.T) {
 	if got := cfg.Client.Hosts["olympus"].SSH; got != "evan@olympus.local" {
 		t.Errorf("Hosts[olympus].SSH = %q, want %q", got, "evan@olympus.local")
 	}
-	if len(cfg.Processes) != 0 {
-		t.Errorf("fresh client install should have no processes, got %d", len(cfg.Processes))
+	if cfg.Processes != nil {
+		t.Errorf("fresh client install should leave Processes nil, got %v", cfg.Processes)
+	}
+	if cfg.Tasks != nil {
+		t.Errorf("fresh client install should leave Tasks nil, got %v", cfg.Tasks)
 	}
 }
 
@@ -402,9 +404,8 @@ func TestBuildClientConfig_PreservesExistingServerConfig(t *testing.T) {
 			"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"},
 		},
 	}
-	reader := bufio.NewReader(strings.NewReader(""))
 	host := config.HostConfig{SSH: "evan@olympus.local"}
-	cfg := buildClientConfig(existing, "olympus", host, reader)
+	cfg := buildClientConfig(existing, "olympus", host, "olympus")
 
 	if _, ok := cfg.Processes["assistant"]; !ok {
 		t.Error("existing process should be preserved")
@@ -475,8 +476,8 @@ func TestPromptSetupMode_DefaultsToServerForHybridConfig(t *testing.T) {
 		Processes: map[string]config.ProcessConfig{"assistant": {Workspace: "/ws"}},
 	}
 	reader := bufio.NewReader(strings.NewReader("\n"))
-	if got := promptSetupMode(reader, existing); got != "server" {
-		t.Errorf("hybrid config: got %q, want %q", got, "server")
+	if got := promptSetupMode(reader, existing); got {
+		t.Errorf("hybrid config: got client, want server")
 	}
 }
 
@@ -492,8 +493,7 @@ func TestBuildClientConfig_DoesNotMutateExisting(t *testing.T) {
 			Hosts:       map[string]config.HostConfig{"olympus": {SSH: "evan@olympus.local"}},
 		},
 	}
-	reader := bufio.NewReader(strings.NewReader(""))
-	buildClientConfig(existing, "new-host", config.HostConfig{SSH: "u@new"}, reader)
+	buildClientConfig(existing, "new-host", config.HostConfig{SSH: "u@new"}, "new-host")
 
 	if _, ok := existing.Client.Hosts["new-host"]; ok {
 		t.Error("buildClientConfig mutated existing.Client.Hosts (aliasing bug)")
@@ -501,37 +501,61 @@ func TestBuildClientConfig_DoesNotMutateExisting(t *testing.T) {
 	if len(existing.Client.Hosts) != 1 {
 		t.Errorf("existing.Client.Hosts size changed: got %d, want 1", len(existing.Client.Hosts))
 	}
+	if existing.Client.DefaultHost != "olympus" {
+		t.Errorf("existing.Client.DefaultHost mutated: got %q", existing.Client.DefaultHost)
+	}
 }
 
-// The existing DefaultHost should be replaced with the new nickname only
-// if the user says yes; declining must keep the prior default.
-func TestBuildClientConfig_DefaultHostReplacement(t *testing.T) {
+// resolveDefaultHost owns the "replace existing default?" decision. It
+// must preserve the prior default when the user declines and use the new
+// nickname otherwise (including when there is no existing default).
+func TestResolveDefaultHost(t *testing.T) {
 	tests := []struct {
 		name        string
+		existing    *config.Config
 		answer      string
 		wantDefault string
 	}{
-		{"accept replacement", "y\n", "new-host"},
-		{"decline replacement", "n\n", "olympus"},
+		{
+			name:        "no existing config → new nickname",
+			existing:    nil,
+			wantDefault: "new-host",
+		},
+		{
+			name:        "existing with no DefaultHost → new nickname",
+			existing:    &config.Config{},
+			wantDefault: "new-host",
+		},
+		{
+			name: "existing DefaultHost == nickname → nickname (no prompt)",
+			existing: &config.Config{
+				Client: config.ClientConfig{DefaultHost: "new-host"},
+			},
+			wantDefault: "new-host",
+		},
+		{
+			name: "accept replacement",
+			existing: &config.Config{
+				Client: config.ClientConfig{DefaultHost: "olympus"},
+			},
+			answer:      "y\n",
+			wantDefault: "new-host",
+		},
+		{
+			name: "decline replacement",
+			existing: &config.Config{
+				Client: config.ClientConfig{DefaultHost: "olympus"},
+			},
+			answer:      "n\n",
+			wantDefault: "olympus",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			existing := &config.Config{
-				Client: config.ClientConfig{
-					DefaultHost: "olympus",
-					Hosts:       map[string]config.HostConfig{"olympus": {SSH: "evan@olympus.local"}},
-				},
-			}
 			reader := bufio.NewReader(strings.NewReader(tc.answer))
-			cfg := buildClientConfig(existing, "new-host", config.HostConfig{SSH: "u@new"}, reader)
-			if cfg.Client.DefaultHost != tc.wantDefault {
-				t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, tc.wantDefault)
-			}
-			if _, ok := cfg.Client.Hosts["new-host"]; !ok {
-				t.Error("new host should be added regardless of default-host choice")
-			}
-			if _, ok := cfg.Client.Hosts["olympus"]; !ok {
-				t.Error("existing host should be preserved")
+			got := resolveDefaultHost(reader, tc.existing, "new-host")
+			if got != tc.wantDefault {
+				t.Errorf("got %q, want %q", got, tc.wantDefault)
 			}
 		})
 	}
@@ -555,7 +579,10 @@ func TestPromptClientHost_PortRoundTrip(t *testing.T) {
 	}
 	// Blank answers accept all defaults (nickname, ssh, port, leo path).
 	reader := bufio.NewReader(strings.NewReader("\n\n\n\n"))
-	nickname, host := promptClientHost(reader, existing)
+	nickname, host, err := promptClientHost(reader, existing)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if nickname != "olympus" {
 		t.Errorf("nickname = %q, want %q", nickname, "olympus")
 	}
@@ -588,8 +615,34 @@ func TestPromptClientHost_InvalidExistingPortIgnored(t *testing.T) {
 	// Blank answers accept all defaults; with invalid port default = 0,
 	// PromptInt returns 0 and no SSHArgs should be emitted.
 	reader := bufio.NewReader(strings.NewReader("\n\n\n\n"))
-	_, host := promptClientHost(reader, existing)
+	_, host, err := promptClientHost(reader, existing)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(host.SSHArgs) != 0 {
 		t.Errorf("SSHArgs = %v, want empty (invalid existing port should be discarded)", host.SSHArgs)
+	}
+}
+
+// With a closed stdin (empty reader) and no existing config to provide a
+// nickname default, promptClientHost must return io.EOF instead of
+// spinning forever on PromptNonEmpty's retry loop.
+func TestPromptClientHost_EOFStopsRetryLoop(t *testing.T) {
+	done := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(strings.NewReader(""))
+		_, _, err := promptClientHost(reader, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected error on closed stdin, got nil")
+		}
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("error should wrap io.EOF, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("promptClientHost did not return within 2s — retry loop is spinning on EOF")
 	}
 }
