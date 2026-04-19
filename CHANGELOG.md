@@ -4,6 +4,22 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`prompt` package gained `PromptNonEmpty`**, a retry helper that
+  returns `io.EOF` instead of looping forever when stdin closes. The
+  client-setup wizard uses it for required host fields so piped or
+  exhausted input aborts cleanly instead of hanging the process.
+- **`buildClientConfig` is now a pure function.** The "replace default
+  host?" prompt moved to `runClientSetup` via a new `resolveDefaultHost`
+  helper, and the builder takes the resolved default as a plain string —
+  making the builder trivially testable and the call graph obvious.
+- **Fresh client installs no longer emit empty `processes: {}` /
+  `tasks: {}` keys in `leo.yaml`.** Nil maps stay nil so the generated
+  file is truly minimal.
+- `promptSetupMode` returns `bool` (`isClient`) instead of
+  `"client"`/`"server"`. Internal refactor only.
+
 ### Added
 
 - **`leo setup` now supports client-mode installs.** The wizard asks
