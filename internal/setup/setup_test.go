@@ -1,9 +1,13 @@
 package setup
 
 import (
+	"bufio"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -335,5 +339,121 @@ func TestInstallDaemon_NoExecutable(t *testing.T) {
 	installDaemon("/tmp/ws", "/tmp/ws/leo.yaml")
 	if capturedSC.LeoPath != "leo" {
 		t.Errorf("LeoPath = %q, want %q (fallback)", capturedSC.LeoPath, "leo")
+	}
+}
+
+// --- client setup ---
+
+func TestPromptSetupMode_DefaultsToServerForFreshInstall(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	got := promptSetupMode(reader, nil)
+	if got != "server" {
+		t.Errorf("fresh install: got %q, want %q", got, "server")
+	}
+}
+
+func TestPromptSetupMode_DefaultsToClientForClientOnlyConfig(t *testing.T) {
+	existing := &config.Config{
+		Client: config.ClientConfig{
+			DefaultHost: "olympus",
+			Hosts: map[string]config.HostConfig{
+				"olympus": {SSH: "evan@olympus.local"},
+			},
+		},
+	}
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	got := promptSetupMode(reader, existing)
+	if got != "client" {
+		t.Errorf("client-only config: got %q, want %q", got, "client")
+	}
+}
+
+func TestPromptSetupMode_ExplicitChoiceOverridesDefault(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("2\n"))
+	got := promptSetupMode(reader, nil)
+	if got != "client" {
+		t.Errorf("explicit '2': got %q, want %q", got, "client")
+	}
+}
+
+func TestBuildClientConfig_FreshInstall(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader(""))
+	host := config.HostConfig{SSH: "evan@olympus.local"}
+	cfg := buildClientConfig(nil, "olympus", host, reader)
+
+	if cfg.Client.DefaultHost != "olympus" {
+		t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, "olympus")
+	}
+	if got := cfg.Client.Hosts["olympus"].SSH; got != "evan@olympus.local" {
+		t.Errorf("Hosts[olympus].SSH = %q, want %q", got, "evan@olympus.local")
+	}
+	if len(cfg.Processes) != 0 {
+		t.Errorf("fresh client install should have no processes, got %d", len(cfg.Processes))
+	}
+}
+
+func TestBuildClientConfig_PreservesExistingServerConfig(t *testing.T) {
+	existing := &config.Config{
+		Defaults: config.DefaultsConfig{Model: "opus"},
+		Processes: map[string]config.ProcessConfig{
+			"assistant": {Workspace: "/ws"},
+		},
+		Tasks: map[string]config.TaskConfig{
+			"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"},
+		},
+	}
+	reader := bufio.NewReader(strings.NewReader(""))
+	host := config.HostConfig{SSH: "evan@olympus.local"}
+	cfg := buildClientConfig(existing, "olympus", host, reader)
+
+	if _, ok := cfg.Processes["assistant"]; !ok {
+		t.Error("existing process should be preserved")
+	}
+	if _, ok := cfg.Tasks["heartbeat"]; !ok {
+		t.Error("existing task should be preserved")
+	}
+	if cfg.Defaults.Model != "opus" {
+		t.Errorf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "opus")
+	}
+	if cfg.Client.DefaultHost != "olympus" {
+		t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, "olympus")
+	}
+}
+
+func TestTestSSHConnectivity_Success(t *testing.T) {
+	orig := sshExecFn
+	t.Cleanup(func() { sshExecFn = orig })
+
+	var capturedArgs []string
+	sshExecFn = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		return exec.CommandContext(ctx, "true")
+	}
+
+	host := config.HostConfig{SSH: "evan@olympus.local", SSHArgs: []string{"-p", "2222"}}
+	if err := testSSHConnectivity(host); err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	want := []string{"ssh", "-p", "2222", "evan@olympus.local", config.DefaultRemoteLeoPath, "version"}
+	if !reflect.DeepEqual(capturedArgs, want) {
+		t.Errorf("args = %v, want %v", capturedArgs, want)
+	}
+}
+
+func TestTestSSHConnectivity_FailureIncludesStderr(t *testing.T) {
+	orig := sshExecFn
+	t.Cleanup(func() { sshExecFn = orig })
+
+	sshExecFn = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "echo 'Permission denied' >&2; exit 1")
+	}
+
+	host := config.HostConfig{SSH: "evan@olympus.local"}
+	err := testSSHConnectivity(host)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "Permission denied") {
+		t.Errorf("error should include stderr, got %q", err.Error())
 	}
 }

@@ -2,10 +2,13 @@ package setup
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/prereq"
@@ -20,6 +23,9 @@ var (
 	checkTmuxFn    = prereq.CheckTmux
 	daemonStatusFn = service.DaemonStatus
 	newReaderFn    = prompt.NewReader
+	sshExecFn      = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, name, args...)
+	}
 )
 
 // Run executes the interactive setup wizard with its own banner.
@@ -41,13 +47,17 @@ func RunInteractive(reader *bufio.Reader) error {
 		return fmt.Errorf("determining home directory: %w", err)
 	}
 
-	if err := checkPrerequisites(); err != nil {
-		return err
-	}
-
 	existing, defaultHome := findExistingConfig(home)
 	if existing != nil {
 		prompt.Info.Printf("  Found existing config at %s/leo.yaml\n\n", existing.HomePath)
+	}
+
+	if promptSetupMode(reader, existing) == "client" {
+		return runClientSetup(reader, defaultHome, existing)
+	}
+
+	if err := checkPrerequisites(); err != nil {
+		return err
 	}
 
 	workspace := promptWorkspace(reader, existing, filepath.Join(defaultHome, "workspace"))
@@ -397,6 +407,190 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 	}
 
 	return nil
+}
+
+// promptSetupMode asks whether Leo will run on this machine (server) or
+// drive a remote Leo host over SSH (client). The default is "server" for a
+// fresh install and "client" when the existing config already looks like a
+// client-only install (hosts defined, no processes).
+func promptSetupMode(reader *bufio.Reader, existing *config.Config) string {
+	defaultClient := existing != nil && len(existing.Client.Hosts) > 0 && len(existing.Processes) == 0
+
+	prompt.Bold.Println("Where will Leo run?")
+	fmt.Println("  1) On this machine (server)   — supervise agents locally")
+	fmt.Println("  2) On another machine (client) — drive a remote host over SSH")
+	fmt.Println()
+
+	defaultLabel := "1"
+	if defaultClient {
+		defaultLabel = "2"
+	}
+	answer := prompt.Prompt(reader, "Choice", defaultLabel)
+	fmt.Println()
+	if strings.TrimSpace(answer) == "2" {
+		return "client"
+	}
+	return "server"
+}
+
+// runClientSetup writes a client-only leo.yaml (a single host in
+// client.hosts + default_host). It does not scaffold a workspace, check
+// server prerequisites, or install the daemon.
+func runClientSetup(reader *bufio.Reader, leoHome string, existing *config.Config) error {
+	prompt.Bold.Println("Client setup")
+	fmt.Println("  Leo will use SSH to run commands on the remote host.")
+	fmt.Println("  The remote host must already have leo installed.")
+	fmt.Println()
+
+	nickname, host := promptClientHost(reader, existing)
+
+	if prompt.YesNo(reader, "Test SSH connectivity now?", true) {
+		if err := testSSHConnectivity(host); err != nil {
+			prompt.Warn.Printf("  ✗ SSH test failed: %v\n", err)
+			if !prompt.YesNo(reader, "  Continue anyway?", true) {
+				return fmt.Errorf("setup cancelled")
+			}
+		} else {
+			prompt.Success.Printf("  ✓ Reached %s\n", nickname)
+		}
+	}
+
+	cfg := buildClientConfig(existing, nickname, host, reader)
+	cfg.HomePath = leoHome
+
+	// Summary
+	prompt.Bold.Println("\nConfiguration Summary")
+	fmt.Printf("  Leo home:     %s\n", leoHome)
+	fmt.Printf("  Default host: %s  (%s)\n", cfg.Client.DefaultHost, host.SSH)
+	fmt.Println()
+
+	if !prompt.YesNo(reader, "Proceed with setup?", true) {
+		return fmt.Errorf("setup cancelled")
+	}
+
+	for _, dir := range []string{leoHome, filepath.Join(leoHome, "state")} {
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			return fmt.Errorf("creating directory %s: %w", dir, err)
+		}
+	}
+
+	cfgPath := filepath.Join(leoHome, "leo.yaml")
+	if err := config.Save(cfgPath, cfg); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	prompt.Info.Printf("  Wrote %s\n", cfgPath)
+
+	prompt.Bold.Printf("\nSetup complete! Leo home: %s\n", leoHome)
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  leo agent list               # list agents on the remote host")
+	fmt.Println("  leo agent spawn <template>   # spawn remotely")
+	fmt.Println("  leo --host <name> ...        # target a different host for one command")
+	return nil
+}
+
+// promptClientHost gathers the fields needed for a single client.hosts entry.
+// Returns the nickname (map key) and the populated HostConfig.
+func promptClientHost(reader *bufio.Reader, existing *config.Config) (string, config.HostConfig) {
+	var (
+		nicknameDefault string
+		sshDefault      string
+		portDefault     int
+		leoPathDefault  string
+	)
+	if existing != nil && existing.Client.DefaultHost != "" {
+		if h, ok := existing.Client.Hosts[existing.Client.DefaultHost]; ok {
+			nicknameDefault = existing.Client.DefaultHost
+			sshDefault = h.SSH
+			leoPathDefault = h.LeoPath
+			for i := 0; i < len(h.SSHArgs)-1; i++ {
+				if h.SSHArgs[i] == "-p" {
+					fmt.Sscanf(h.SSHArgs[i+1], "%d", &portDefault)
+					break
+				}
+			}
+		}
+	}
+
+	nickname := strings.TrimSpace(prompt.Prompt(reader, "Host nickname", nicknameDefault))
+	for nickname == "" {
+		prompt.Warn.Println("  A nickname is required (used as the map key in client.hosts).")
+		nickname = strings.TrimSpace(prompt.Prompt(reader, "Host nickname", nicknameDefault))
+	}
+
+	sshTarget := strings.TrimSpace(prompt.Prompt(reader, "SSH target (user@host or ssh config alias)", sshDefault))
+	for sshTarget == "" {
+		prompt.Warn.Println("  An SSH target is required (e.g. evan@leo.example.com).")
+		sshTarget = strings.TrimSpace(prompt.Prompt(reader, "SSH target", sshDefault))
+	}
+
+	port := prompt.PromptInt(reader, "SSH port (blank for default)", portDefault)
+
+	leoPath := strings.TrimSpace(prompt.Prompt(reader, "Remote leo binary path", leoPathDefault))
+
+	host := config.HostConfig{SSH: sshTarget, LeoPath: leoPath}
+	if port > 0 {
+		host.SSHArgs = []string{"-p", fmt.Sprintf("%d", port)}
+	}
+	return nickname, host
+}
+
+// testSSHConnectivity runs `ssh [ssh_args...] <target> <leo_path> version`
+// with a short timeout and returns a non-nil error describing any failure.
+func testSSHConnectivity(host config.HostConfig) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	args := append([]string{}, host.SSHArgs...)
+	args = append(args, host.SSH, host.RemoteLeoPath(), "version")
+	cmd := sshExecFn(ctx, "ssh", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		trimmed := strings.TrimSpace(string(out))
+		if trimmed == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, trimmed)
+	}
+	return nil
+}
+
+// buildClientConfig merges the new host/nickname into existing config (if
+// any), preserving processes/tasks/defaults on hybrid machines.
+func buildClientConfig(existing *config.Config, nickname string, host config.HostConfig, reader *bufio.Reader) *config.Config {
+	var cfg *config.Config
+	if existing != nil {
+		clone := *existing
+		cfg = &clone
+		if cfg.Processes == nil {
+			cfg.Processes = map[string]config.ProcessConfig{}
+		}
+		if cfg.Tasks == nil {
+			cfg.Tasks = map[string]config.TaskConfig{}
+		}
+	} else {
+		cfg = &config.Config{
+			Defaults:  config.DefaultsConfig{},
+			Processes: map[string]config.ProcessConfig{},
+			Tasks:     map[string]config.TaskConfig{},
+		}
+	}
+
+	if cfg.Client.Hosts == nil {
+		cfg.Client.Hosts = map[string]config.HostConfig{}
+	}
+	cfg.Client.Hosts[nickname] = host
+
+	switch {
+	case cfg.Client.DefaultHost == "":
+		cfg.Client.DefaultHost = nickname
+	case cfg.Client.DefaultHost != nickname:
+		label := fmt.Sprintf("  Replace default host %q with %q?", cfg.Client.DefaultHost, nickname)
+		if prompt.YesNo(reader, label, true) {
+			cfg.Client.DefaultHost = nickname
+		}
+	}
+	return cfg
 }
 
 func promptUserProfile(reader *bufio.Reader, defaults templates.UserProfileData) (userName, role, about, preferences, timezone string) {

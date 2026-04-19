@@ -4,6 +4,17 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`leo setup` now supports client-mode installs.** The wizard asks
+  whether Leo will run on this machine (server) or drive a remote host
+  over SSH (client). The client path collects a nickname, SSH target,
+  optional port, and optional remote `leo` binary path, optionally tests
+  SSH connectivity, and writes a `client:` section to `~/.leo/leo.yaml`
+  — no workspace, `USER.md`, `CLAUDE.md`, skills, or daemon install.
+  Re-running setup on a client auto-detects client mode from the
+  existing config.
+
 ## [0.2.2] — 2026-04-18
 
 ### Fixed
