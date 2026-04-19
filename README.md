@@ -230,4 +230,4 @@ MIT
 
 ---
 
-<sub>Named for my void cat Leo. He's a good kitty.</sub>
+<sub>Named for my void Leo. He's a good kitty.</sub>
