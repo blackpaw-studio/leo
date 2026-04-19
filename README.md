@@ -59,7 +59,7 @@ sh install.sh
 Leo verifies the Fulcio keyless signature but does not consult Rekor. For transparency-log verification, run cosign manually:
 
 ```bash
-VERSION=v0.5.0
+VERSION=v0.3.2
 curl -fsSL -O https://github.com/blackpaw-studio/leo/releases/download/$VERSION/checksums.txt
 curl -fsSL -O https://github.com/blackpaw-studio/leo/releases/download/$VERSION/checksums.txt.sig
 curl -fsSL -O https://github.com/blackpaw-studio/leo/releases/download/$VERSION/checksums.txt.pem
@@ -176,7 +176,7 @@ Browser UI for processes, tasks, config, agents, and cron previews. Binds to `12
 
 Two layered controls protect the daemon:
 
-- **Host + Origin pinning** on every `/web/...` and `/api/...` route. Requests must target `127.0.0.1`, `localhost`, or `[::1]` on the configured port. Foreign `Host`/`Origin` → `403`. Blocks DNS rebinding and drive-by cross-origin POSTs.
+- **Host + Origin pinning** on every `/web/...` and `/api/...` route. Requests must target `127.0.0.1`, `localhost`, or `[::1]` on the configured port — or any hostname/IP listed in `web.allowed_hosts` (required when `web.bind` is non-loopback). Foreign `Host`/`Origin` → `403`. Blocks DNS rebinding and drive-by cross-origin POSTs.
 - **Bearer-token auth** on every `/api/...` route. The daemon mints a 32-byte token on first start at `~/.leo/state/api.token` (mode `0600`). A valid token alone isn't enough — the request must also pass Host pinning.
 
 > **Breaking change:** `/api/*` previously required no auth. Channel plugins must now send `Authorization: Bearer $(cat ~/.leo/state/api.token)` or get `401`.
