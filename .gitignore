@@ -1,10 +1,26 @@
+# Build artifacts
 bin/
 dist/
 site/
-.claude/*
-!.claude/commands/
 *.exe
 *.test
 *.out
+
+# Coverage
+coverage.out
+coverage.html
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+*.log
+
+# Tooling
+.claude/*
+!.claude/commands/
 .superpowers/
 .worktrees/

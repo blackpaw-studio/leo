@@ -2,27 +2,43 @@
 
 ## Install Methods
 
-=== "Install Script"
+=== "Homebrew (recommended)"
 
-    The quickest way to install on macOS and Linux:
+    macOS and Linux:
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
+    brew install blackpaw-studio/tap/leo
     ```
 
-    This downloads the latest release binary for your platform and installs it to `~/.local/bin`.
+    **Upgrade:**
+
+    ```bash
+    brew upgrade blackpaw-studio/tap/leo && leo service restart
+    ```
+
+    `leo update` detects the Homebrew install and prints these commands instead of trying to replace the Homebrew-managed binary.
+
+=== "Install Script"
+
+    Short-URL installer served from `leo.blackpaw.studio` (redirects to the version-pinned script in the latest release):
+
+    ```bash
+    curl -fsSL leo.blackpaw.studio/install | sh
+    ```
+
+    The installer downloads the release tarball for your platform, fetches the release `checksums.txt`, and verifies the SHA-256 hash before installing. If `cosign` is present on your PATH it also verifies the Sigstore keyless signature on `checksums.txt` against the GitHub OIDC issuer and the release tag.
 
     **Options:**
 
     ```bash
-    # Install to a custom directory
-    INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
+    # Custom install directory
+    INSTALL_DIR=~/.local/bin curl -fsSL leo.blackpaw.studio/install | sh
 
-    # Install a specific version
-    VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
+    # Pin a specific version
+    VERSION=v0.3.2 curl -fsSL leo.blackpaw.studio/install | sh
     ```
 
-    **Update:** Re-run the install script to get the latest version.
+    **Upgrade:** `leo update` replaces the binary in place after the same checksum + cosign verification.
 
 === "Go"
 
@@ -46,7 +62,7 @@
 
 === "Manual Download"
 
-    Download the archive for your platform from the [Releases page](https://github.com/blackpaw-studio/leo/releases/latest), extract it, and move the `leo` binary to a directory in your `PATH`.
+    Download the archive for your platform from the [Releases page](https://github.com/blackpaw-studio/leo/releases/latest), extract it, and move the `leo` binary to a directory in your `PATH`. Verify the archive against `checksums.txt` from the same release before running it.
 
 ## Verify Installation
 
@@ -57,7 +73,7 @@ leo version
 You should see output like:
 
 ```
-leo v0.1.0
+leo v0.3.2
 ```
 
 ## Next Steps

@@ -43,9 +43,9 @@ defaults:
 web:
   enabled: true
   # port: 8370           # default 8370
-  # bind: 127.0.0.1      # default 127.0.0.1 (loopback). Only open to
-                          # 0.0.0.0 if you understand the security model —
-                          # there is no built-in auth.
+  # bind: 127.0.0.1      # default 127.0.0.1 (loopback). If you bind to
+                          # 0.0.0.0, the daemon enforces bearer-token auth
+                          # and an allowed_hosts list (see docs/cli/web.md).
 
 # ---------------------------------------------------------------------------
 # client — used on machines that only dispatch `leo agent ...` to a remote

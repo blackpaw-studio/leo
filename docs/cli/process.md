@@ -67,9 +67,22 @@ Toggles the process `enabled` flag. Disabled processes are skipped by `leo servi
 
 ### `leo process attach <name>`
 
-Attach to the process's tmux session. Locally, Leo replaces the CLI with `tmux attach -t leo-<name>` via `syscall.Exec` so the TUI owns the TTY cleanly. Remotely, Leo runs `ssh -t <host> tmux attach -t leo-<name>` (using the host's configured `tmux_path`).
+Attach to the process's tmux session. Leo keeps all supervised sessions on a
+dedicated tmux socket — every invocation passes `-L leo`, so `leo-<name>`
+sessions never mix with your personal tmux server.
 
-Detach with the normal tmux prefix + `d` (default: `C-b d`). The process keeps running under the supervisor.
+- **From a normal shell:** Leo replaces the CLI with `tmux -L leo attach -t leo-<name>` via `syscall.Exec` so the TUI owns the TTY cleanly.
+- **From inside tmux:** Leo uses `display-popup -E` on your outer tmux server to open the leo session as an overlay, preserving your original tmux session when the popup is dismissed (no nested tmux).
+- **Remotely:** Leo runs `ssh -t <host> tmux -L leo attach -t leo-<name>` (using the host's configured `tmux_path`).
+
+Pass `--cc` to open the session in tmux control mode (`-CC`), which iTerm2
+and WezTerm pick up as a native tab. Control mode is refused cleanly from
+inside tmux or over SSH.
+
+Detach with the normal tmux prefix + `d` (default: `C-b d`). The process
+keeps running under the supervisor. See [tmux config](../guides/tmux-config.md)
+for deeper detail on the dedicated socket and recommended bindings (tmux
+3.2+).
 
 ### `leo process logs <name>`
 

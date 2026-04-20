@@ -12,7 +12,7 @@ install:
 	go install $(GOFLAGS) -ldflags "$(LDFLAGS)" ./cmd/leo
 
 clean:
-	rm -rf bin/ dist/
+	rm -rf bin/ dist/ coverage.out coverage.html
 
 test:
 	go test -race -cover ./...
