@@ -70,7 +70,7 @@ func runRequest(t *testing.T, reg *registry, req map[string]any) map[string]any 
 }
 
 func TestInitializeReturnsServerInfo(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0"), "test-process")
+	reg := newRegistry(newDaemonClient("0", ""), "test-process")
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -91,7 +91,7 @@ func TestInitializeReturnsServerInfo(t *testing.T) {
 }
 
 func TestNotificationProducesNoResponse(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0"), "test-process")
+	reg := newRegistry(newDaemonClient("0", ""), "test-process")
 	in := &bytes.Buffer{}
 	json.NewEncoder(in).Encode(map[string]any{
 		"jsonrpc": "2.0",
@@ -107,7 +107,7 @@ func TestNotificationProducesNoResponse(t *testing.T) {
 }
 
 func TestToolsListContainsCanonicalCommands(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0"), "test-process")
+	reg := newRegistry(newDaemonClient("0", ""), "test-process")
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      2,
@@ -137,7 +137,7 @@ func TestToolCallClearSendsKeystrokes(t *testing.T) {
 		return http.StatusOK, `{"ok":true}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port()), "primary")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary")
 
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
@@ -179,7 +179,7 @@ func TestToolCallSpawnAgentRoundtrips(t *testing.T) {
 		return http.StatusOK, `{"ok":true,"data":{"name":"agent-1","workspace":"/tmp/a"}}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port()), "primary")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary")
 
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
@@ -208,7 +208,7 @@ func TestToolCallReturnsIsErrorOnDaemonFailure(t *testing.T) {
 		return http.StatusOK, `{"ok":false,"error":"task not found"}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port()), "primary")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary")
 
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
@@ -230,7 +230,7 @@ func TestToolCallReturnsIsErrorOnDaemonFailure(t *testing.T) {
 }
 
 func TestToolCallMissingRequiredArgFails(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0"), "primary")
+	reg := newRegistry(newDaemonClient("0", ""), "primary")
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      6,
@@ -247,7 +247,7 @@ func TestToolCallMissingRequiredArgFails(t *testing.T) {
 }
 
 func TestUnknownMethodReturnsMethodNotFound(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0"), "primary")
+	reg := newRegistry(newDaemonClient("0", ""), "primary")
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      7,

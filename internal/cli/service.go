@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
+	"github.com/blackpaw-studio/leo/internal/web"
 	"github.com/spf13/cobra"
 )
 
@@ -74,13 +75,23 @@ func runService(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("resolving config path: %w", err)
 		}
 
+		// Resolve the API bearer token once so every supervised process and
+		// every ephemeral agent gets LEO_API_TOKEN exported uniformly. An
+		// error here is non-fatal for the daemon itself, but the MCP server
+		// refuses to start without it, which is the behaviour we want
+		// rather than silently starting a broken session.
+		webToken, tokErr := web.EnsureAPIToken(cfg.StatePath())
+		if tokErr != nil {
+			warn.Printf("  web api token unavailable: %v — MCP server will refuse to start; slash commands will be unavailable\n", tokErr)
+		}
+
 		// In supervised mode, start ALL enabled processes
-		specs := buildAllProcessSpecs(cfg, claudePath)
+		specs := buildAllProcessSpecs(cfg, claudePath, webToken)
 		if len(specs) == 0 {
 			return fmt.Errorf("no enabled processes in config")
 		}
 		info.Printf("Starting supervised mode (%d processes)...\n", len(specs))
-		return service.RunSupervised(claudePath, specs, cfg.HomePath, cfgPath)
+		return service.RunSupervised(claudePath, specs, cfg.HomePath, cfgPath, webToken)
 	}
 
 	// Foreground mode: run a single process, exec replaces this process
@@ -167,7 +178,10 @@ func resolveProcess(cfg *config.Config, args []string) (string, config.ProcessCo
 }
 
 // buildAllProcessSpecs builds ProcessSpec for all enabled processes.
-func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.ProcessSpec {
+// webToken is the daemon's API bearer token; pass the empty string when it
+// could not be resolved (the supervisor will log a warning and the MCP
+// server inside each process will fail fast on missing LEO_API_TOKEN).
+func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []service.ProcessSpec {
 	var specs []service.ProcessSpec
 	for name, proc := range cfg.Processes {
 		if !proc.Enabled {
@@ -214,6 +228,7 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath string) []service.Proce
 			WorkDir:    cfg.ProcessWorkspace(proc),
 			Env:        mergeChannelsIntoEnv(proc),
 			WebPort:    strconv.Itoa(cfg.WebPort()),
+			WebToken:   webToken,
 			StateDir:   cfg.StatePath(),
 		})
 	}

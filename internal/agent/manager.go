@@ -52,12 +52,18 @@ type Manager struct {
 	cfgLoader ConfigLoader
 	sup       Supervisor
 	tmuxPath  string
+	// webToken is the daemon's API bearer token, propagated into every
+	// SpawnRequest so the supervisor can export LEO_API_TOKEN for the
+	// agent's MCP server.
+	webToken string
 }
 
 // New constructs a Manager. tmuxPath is used for Logs (tmux capture-pane); pass the
-// empty string to have the Manager look up tmux from $PATH on demand.
-func New(cfgLoader ConfigLoader, sup Supervisor, tmuxPath string) *Manager {
-	return &Manager{cfgLoader: cfgLoader, sup: sup, tmuxPath: tmuxPath}
+// empty string to have the Manager look up tmux from $PATH on demand. webToken is
+// the daemon's API bearer token; pass the empty string to leave LEO_API_TOKEN unset
+// (the MCP server will fail fast, matching the "web auth required" invariant).
+func New(cfgLoader ConfigLoader, sup Supervisor, tmuxPath, webToken string) *Manager {
+	return &Manager{cfgLoader: cfgLoader, sup: sup, tmuxPath: tmuxPath, webToken: webToken}
 }
 
 // SpawnSpec describes a spawn request in terms of high-level intent.
@@ -168,6 +174,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		WorkDir:    workspace,
 		Env:        tmpl.Env,
 		WebPort:    webPort,
+		WebToken:   m.webToken,
 	}); err != nil {
 		return Record{}, fmt.Errorf("spawning agent: %w", err)
 	}
@@ -267,6 +274,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		WorkDir:    layout.WorktreePath,
 		Env:        tmpl.Env,
 		WebPort:    webPort,
+		WebToken:   m.webToken,
 	}); err != nil {
 		// Reservation protected the name, so a collision here means the
 		// supervisor state changed unexpectedly (e.g. concurrent restore).
