@@ -7,6 +7,7 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,13 +17,24 @@ import (
 // daemonClient calls the Leo daemon's TCP HTTP API on 127.0.0.1.
 type daemonClient struct {
 	baseURL string
+	token   string // API bearer token; empty disables the Authorization header
 	http    *http.Client
 }
 
-func newDaemonClient(port string) *daemonClient {
+func newDaemonClient(port, token string) *daemonClient {
 	return &daemonClient{
 		baseURL: "http://127.0.0.1:" + port,
+		token:   token,
 		http:    &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// setAuth sets the Authorization: Bearer header when the client has a token.
+// Kept as a helper so every request path (including raw-response callers like
+// interrupt) goes through a single code path.
+func (c *daemonClient) setAuth(req *http.Request) {
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 }
 
@@ -50,6 +62,7 @@ func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	c.setAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("call daemon: %w", err)
@@ -65,11 +78,10 @@ func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error
 		return nil, fmt.Errorf("decode response (status %d): %w", resp.StatusCode, err)
 	}
 	if !env.OK || env.Error != "" {
-		msg := env.Error
-		if msg == "" {
-			msg = fmt.Sprintf("daemon returned status %d", resp.StatusCode)
+		if env.Error != "" {
+			return nil, errors.New(env.Error)
 		}
-		return nil, fmt.Errorf("%s", msg)
+		return nil, fmt.Errorf("daemon returned status %d", resp.StatusCode)
 	}
 	return env.Data, nil
 }
@@ -86,6 +98,7 @@ func (c *daemonClient) interrupt(processName string) error {
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
+	c.setAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("call daemon: %w", err)

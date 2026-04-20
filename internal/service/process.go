@@ -64,6 +64,10 @@ type ProcessSpec struct {
 	WorkDir    string
 	Env        map[string]string
 	WebPort    string // Leo web UI port for plugin control commands
+	// WebToken is the daemon's API bearer token. The supervised Claude
+	// process reads it from LEO_API_TOKEN and the built-in MCP server
+	// uses it to authenticate against /api/* and /web/*.
+	WebToken string
 	// StateDir is where per-process stderr capture + exit-code files are
 	// written (typically <home>/state). When empty, capture is skipped.
 	StateDir string
@@ -208,6 +212,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		WorkDir:    spec.WorkDir,
 		Env:        spec.Env,
 		WebPort:    spec.WebPort,
+		WebToken:   spec.WebToken,
 	}
 	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s)
 	return nil
@@ -373,11 +378,14 @@ func Status(workDir string) (string, error) {
 
 // RunSupervised starts all processes in supervised mode with a restart loop.
 // It also starts the daemon IPC server for cron scheduling and process management.
-func RunSupervised(claudePath string, processes []ProcessSpec, homePath, configPath string) error {
-	return supervisedExecFn(claudePath, processes, homePath, configPath)
+// webToken is the daemon's API bearer token, propagated to the agent.Manager and
+// the RestoreAgents path so the supervised processes and any ephemeral agents can
+// authenticate against the daemon's web API.
+func RunSupervised(claudePath string, processes []ProcessSpec, homePath, configPath, webToken string) error {
+	return supervisedExecFn(claudePath, processes, homePath, configPath, webToken)
 }
 
-func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath, configPath string) error {
+func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath, configPath, webToken string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
@@ -413,7 +421,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 
 		// Build the agent.Manager shared by web, daemon, and CLI handlers.
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
-		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath)
+		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
 		srv.SetAgentManager(agentMgr)
 
 		// Start web UI if enabled
@@ -425,7 +433,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	}
 
 	// Restore ephemeral agents from previous run
-	restored := RestoreAgents(homePath, tmuxPath, supervisor)
+	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor)
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}
@@ -679,6 +687,13 @@ var supervisorEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // separately by the caller (export is omitted).
 var supervisorWebPortPattern = regexp.MustCompile(`^[0-9]+$`)
 
+// supervisorWebTokenPattern matches the exact shape web.EnsureAPIToken writes:
+// 32 random bytes hex-encoded, i.e. 64 hex characters. Defense-in-depth so a
+// malformed token can never introduce shell tokens; shellQuote already makes
+// that impossible, but the pattern also catches accidental corruption
+// upstream.
+var supervisorWebTokenPattern = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
+
 // buildClaudeShellCmd assembles the shell command string that tmux runs
 // to launch claude. Defense-in-depth: every interpolated env key is
 // validated against supervisorEnvKeyPattern, and spec.WebPort is
@@ -721,6 +736,14 @@ func buildClaudeShellCmd(claudePath string, args []string, tmuxPath string, spec
 			leoExports += fmt.Sprintf(" export LEO_WEB_PORT=%s;", spec.WebPort)
 		} else if warnOut != nil {
 			fmt.Fprintf(warnOut, "[%s] warning: dropping invalid LEO_WEB_PORT %q\n", spec.Name, spec.WebPort)
+		}
+	}
+	if spec.WebToken != "" {
+		if supervisorWebTokenPattern.MatchString(spec.WebToken) {
+			leoExports += fmt.Sprintf(" export LEO_API_TOKEN=%s;", shellQuote(spec.WebToken))
+		} else if warnOut != nil {
+			// Do not echo the token itself; it is a secret even when malformed.
+			fmt.Fprintf(warnOut, "[%s] warning: dropping malformed LEO_API_TOKEN\n", spec.Name)
 		}
 	}
 	cmd = fmt.Sprintf("%s %s", leoExports, cmd)

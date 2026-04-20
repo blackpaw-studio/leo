@@ -486,17 +486,20 @@ func TestRunSupervisedDelegates(t *testing.T) {
 	var calledPath string
 	var calledProcesses []ProcessSpec
 	var calledConfigPath string
-	supervisedExecFn = func(claudePath string, processes []ProcessSpec, homePath, configPath string) error {
+	var calledToken string
+	supervisedExecFn = func(claudePath string, processes []ProcessSpec, homePath, configPath, webToken string) error {
 		calledPath = claudePath
 		calledProcesses = processes
 		calledConfigPath = configPath
+		calledToken = webToken
 		return nil
 	}
 
 	specs := []ProcessSpec{
 		{Name: "assistant", ClaudeArgs: []string{"--add-dir", "/workspace"}, WorkDir: "/workspace"},
 	}
-	err := RunSupervised("/usr/bin/claude", specs, "/home/.leo", "/home/.leo/leo.yaml")
+	const wantToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	err := RunSupervised("/usr/bin/claude", specs, "/home/.leo", "/home/.leo/leo.yaml", wantToken)
 	if err != nil {
 		t.Fatalf("RunSupervised() error: %v", err)
 	}
@@ -508,6 +511,9 @@ func TestRunSupervisedDelegates(t *testing.T) {
 	}
 	if calledConfigPath != "/home/.leo/leo.yaml" {
 		t.Errorf("configPath = %q, want /home/.leo/leo.yaml", calledConfigPath)
+	}
+	if calledToken != wantToken {
+		t.Errorf("webToken = %q, want %q", calledToken, wantToken)
 	}
 }
 

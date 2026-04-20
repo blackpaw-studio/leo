@@ -177,7 +177,7 @@ func newWorktreeTestManager(t *testing.T, repoShort string) (*Manager, *capturin
 	}
 	sup := &capturingSupervisor{}
 	loader := func() (*config.Config, error) { return cfg, nil }
-	return New(loader, sup, ""), sup, home
+	return New(loader, sup, "", ""), sup, home
 }
 
 func TestSpawnWorktreeNewBranch(t *testing.T) {

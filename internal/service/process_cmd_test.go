@@ -122,6 +122,49 @@ func TestBuildClaudeShellCmd(t *testing.T) {
 			},
 		},
 		{
+			name: "valid WebToken is exported as LEO_API_TOKEN",
+			args: baseArgs,
+			spec: ProcessSpec{
+				Name:     "alpha",
+				WebPort:  "8370",
+				WebToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
+			pathEnv: "/usr/bin",
+			wantContain: []string{
+				"export LEO_API_TOKEN='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';",
+			},
+		},
+		{
+			name: "malformed WebToken is dropped and warned",
+			args: baseArgs,
+			spec: ProcessSpec{
+				Name:     "alpha",
+				WebPort:  "8370",
+				WebToken: "short-not-hex",
+			},
+			pathEnv: "/usr/bin",
+			wantMissing: []string{
+				"LEO_API_TOKEN",
+				"short-not-hex",
+			},
+			wantWarns: []string{
+				"dropping malformed LEO_API_TOKEN",
+			},
+		},
+		{
+			name: "empty WebToken simply omits the export with no warning",
+			args: baseArgs,
+			spec: ProcessSpec{
+				Name:     "alpha",
+				WebPort:  "8370",
+				WebToken: "",
+			},
+			pathEnv: "/usr/bin",
+			wantMissing: []string{
+				"LEO_API_TOKEN",
+			},
+		},
+		{
 			name: "empty PATH env omits PATH export",
 			args: baseArgs,
 			spec: ProcessSpec{

@@ -34,7 +34,7 @@ func newResolveManager(t *testing.T, live map[string]ProcessState, stored map[st
 	loader := func() (*config.Config, error) {
 		return &config.Config{HomePath: home}, nil
 	}
-	return New(loader, &stubSupervisor{agents: live}, "")
+	return New(loader, &stubSupervisor{agents: live}, "", "")
 }
 
 func TestResolveExactName(t *testing.T) {

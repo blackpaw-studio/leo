@@ -40,7 +40,7 @@ type agentSpawner interface {
 //
 // After all records are processed, `git worktree prune` runs once per unique
 // canonical path so git's administrative state matches the filesystem.
-func RestoreAgents(homePath, tmuxPath string, sv agentSpawner) int {
+func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 	path := agentstore.FilePath(homePath)
 	records, err := agentstore.Load(path)
 	if err != nil || len(records) == 0 {
@@ -88,6 +88,7 @@ func RestoreAgents(homePath, tmuxPath string, sv agentSpawner) int {
 			WorkDir:    rec.Workspace,
 			Env:        rec.Env,
 			WebPort:    rec.WebPort,
+			WebToken:   webToken,
 		}
 		if err := sv.SpawnAgent(spec); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to restore agent %q: %v\n", name, err)

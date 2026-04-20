@@ -38,8 +38,9 @@ const (
 )
 
 // Run starts the MCP server on stdin/stdout. It reads env (LEO_PROCESS_NAME,
-// LEO_WEB_PORT) to bind itself to the supervised process and the daemon.
-// Returns when stdin closes or a fatal error occurs.
+// LEO_WEB_PORT, LEO_API_TOKEN) to bind itself to the supervised process and
+// authenticate against the daemon. Returns when stdin closes or a fatal
+// error occurs.
 func Run() error {
 	processName := os.Getenv("LEO_PROCESS_NAME")
 	if processName == "" {
@@ -49,7 +50,15 @@ func Run() error {
 	if port == "" {
 		return fmt.Errorf("LEO_WEB_PORT not set; the Leo daemon TCP listener must be enabled")
 	}
-	return runWith(os.Stdin, os.Stdout, newRegistry(newDaemonClient(port), processName))
+	// LEO_API_TOKEN is required: the daemon's /api/* and /web/* routes are
+	// bearer-protected, so an unauthenticated MCP client will fail every
+	// request with 401. Refusing to start gives a clearer error than letting
+	// every tool call fail opaquely.
+	token := os.Getenv("LEO_API_TOKEN")
+	if token == "" {
+		return fmt.Errorf("LEO_API_TOKEN not set; Leo web auth is required (check that the daemon created ~/.leo/state/api.token)")
+	}
+	return runWith(os.Stdin, os.Stdout, newRegistry(newDaemonClient(port, token), processName))
 }
 
 func runWith(in io.Reader, out io.Writer, reg *registry) error {

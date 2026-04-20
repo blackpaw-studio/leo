@@ -11,6 +11,10 @@ type SpawnRequest struct {
 	WorkDir    string
 	Env        map[string]string
 	WebPort    string
+	// WebToken is the daemon's API bearer token. The supervisor exports it
+	// as LEO_API_TOKEN so the MCP server inside claude can authenticate
+	// against the daemon's /api/* and /web/* routes.
+	WebToken string
 }
 
 // ProcessState is the live supervisor view of a single agent/process.

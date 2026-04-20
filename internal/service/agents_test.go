@@ -188,7 +188,7 @@ func TestRestoreAgentsDropsWorktreeWithMissingWorkspace(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", spawner)
+	restored := RestoreAgents(home, "", "", spawner)
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -239,7 +239,7 @@ func TestRestoreAgentsSkipsStoppedWorktreeRecord(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", spawner)
+	restored := RestoreAgents(home, "", "", spawner)
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -271,8 +271,9 @@ func TestRestoreAgentsRespawnsSharedWithResume(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
+	const wantToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", spawner)
+	restored := RestoreAgents(home, "", wantToken, spawner)
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -288,6 +289,9 @@ func TestRestoreAgentsRespawnsSharedWithResume(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("args = %v, want %v", got, want)
 		}
+	}
+	if spawner.calls[0].WebToken != wantToken {
+		t.Errorf("WebToken = %q, want %q", spawner.calls[0].WebToken, wantToken)
 	}
 
 	// Shared records that successfully respawn must remain in agents.json so
@@ -314,8 +318,9 @@ func TestRestoreAgentsLegacyRecordRespawnsWithoutResume(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
+	const wantToken = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", spawner)
+	restored := RestoreAgents(home, "", wantToken, spawner)
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -326,6 +331,9 @@ func TestRestoreAgentsLegacyRecordRespawnsWithoutResume(t *testing.T) {
 		if a == "--resume" {
 			t.Fatalf("legacy record should not produce --resume; got %v", spawner.calls[0].ClaudeArgs)
 		}
+	}
+	if spawner.calls[0].WebToken != wantToken {
+		t.Errorf("WebToken = %q, want %q", spawner.calls[0].WebToken, wantToken)
 	}
 }
 
@@ -345,7 +353,7 @@ func TestRestoreAgentsRemovesFailedSharedRecord(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{nextErr: fmt.Errorf("supervisor rejected spawn")}
-	restored := RestoreAgents(home, "", spawner)
+	restored := RestoreAgents(home, "", "", spawner)
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
