@@ -53,6 +53,8 @@ curl -H "Authorization: Bearer $(cat ~/.leo/state/api.token)" \
 
 Rotate the token by deleting `api.token` and restarting the daemon. Existing browser sessions remain valid until they expire (7 days).
 
+**Token scope.** The bearer token grants access to the full daemon API — including `/web/*` routes that can restart the service, mutate config, send keys to supervised processes, and write prompt files. Treat it like a root credential. Supervised Claude processes receive this token via `LEO_API_TOKEN` so the built-in MCP server can call `/api/*`; if you don't trust a channel plugin with full daemon access, don't install it as a supervised process.
+
 ### Non-loopback access
 
 `bind` defaults to `127.0.0.1`. To expose the web UI on your LAN:

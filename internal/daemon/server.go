@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
@@ -99,17 +100,29 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 
 // Start binds the Unix socket and begins serving requests.
 func (s *Server) Start() error {
-	// Remove stale socket if present
+	// Remove stale socket if present. If removal fails, net.Listen below will
+	// return a useful "address in use" error — but surface any non-ENOENT
+	// error here so a permissions problem on the state dir is not masked.
 	if _, err := os.Stat(s.sockPath); err == nil {
-		os.Remove(s.sockPath)
+		if err := os.Remove(s.sockPath); err != nil {
+			return fmt.Errorf("removing stale socket %s: %w", s.sockPath, err)
+		}
 	}
 
+	// Bind the socket under a tight umask so it is created with mode 0600
+	// from the start. Without this, net.Listen creates the socket under the
+	// process umask (typically 0022 → 0644), leaving a brief window where
+	// any local process can connect before the os.Chmod below tightens it.
+	oldMask := syscall.Umask(0o077)
 	ln, err := net.Listen("unix", s.sockPath)
+	syscall.Umask(oldMask)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", s.sockPath, err)
 	}
 
-	// Set socket permissions to owner-only
+	// Belt and suspenders: chmod explicitly in case the filesystem ignored
+	// the umask (some network filesystems do) or a future Go version changes
+	// the socket-creation mode.
 	if err := os.Chmod(s.sockPath, 0600); err != nil {
 		_ = ln.Close()
 		return fmt.Errorf("setting socket permissions: %w", err)

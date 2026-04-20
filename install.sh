@@ -100,6 +100,67 @@ main() {
   echo "Downloading leo ${version} for ${platform}..."
   curl -fsSL "$url" -o "${tmpdir}/${archive}"
 
+  echo "Verifying checksum..."
+  checksums_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
+  if ! curl -fsSL "$checksums_url" -o "${tmpdir}/checksums.txt"; then
+    echo "Error: could not fetch checksums.txt from ${checksums_url}" >&2
+    echo "Refusing to install an unverified binary. Re-run after the release has fully published," >&2
+    echo "or use a tagged release: VERSION=vX.Y.Z sh install.sh" >&2
+    exit 1
+  fi
+
+  # Opportunistic cosign verification. The release signs checksums.txt with
+  # Sigstore's keyless flow; if cosign is on PATH we use it to verify identity
+  # and signature. Without cosign we fall back to HTTPS-only trust in the
+  # checksum file and warn — `leo update` will do the full cosign verification
+  # on subsequent upgrades.
+  if command -v cosign >/dev/null 2>&1; then
+    sig_url="${checksums_url}.sig"
+    cert_url="${checksums_url}.pem"
+    if curl -fsSL "$sig_url" -o "${tmpdir}/checksums.txt.sig" \
+      && curl -fsSL "$cert_url" -o "${tmpdir}/checksums.txt.pem"; then
+      identity_regex="^https://github\.com/${REPO}/\.github/workflows/.+@refs/tags/${version}\$"
+      issuer="https://token.actions.githubusercontent.com"
+      if ! cosign verify-blob \
+          --certificate "${tmpdir}/checksums.txt.pem" \
+          --signature "${tmpdir}/checksums.txt.sig" \
+          --certificate-identity-regexp "${identity_regex}" \
+          --certificate-oidc-issuer "${issuer}" \
+          "${tmpdir}/checksums.txt" >/dev/null 2>&1; then
+        echo "Error: cosign signature verification failed for checksums.txt" >&2
+        exit 1
+      fi
+      echo "  cosign signature verified"
+    else
+      echo "  warning: signature artifacts missing from release, falling back to HTTPS-only trust" >&2
+    fi
+  else
+    echo "  warning: cosign not installed — trusting checksums.txt over HTTPS only" >&2
+    echo "           install cosign for full supply-chain verification" >&2
+  fi
+
+  expected="$(grep -E "[[:space:]]${archive}\$" "${tmpdir}/checksums.txt" | awk '{print $1}')"
+  if [ -z "$expected" ]; then
+    echo "Error: ${archive} not listed in checksums.txt" >&2
+    exit 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "${tmpdir}/${archive}" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "${tmpdir}/${archive}" | awk '{print $1}')"
+  else
+    echo "Error: no sha256 tool available (sha256sum or shasum)" >&2
+    exit 1
+  fi
+
+  if [ "$expected" != "$actual" ]; then
+    echo "Error: checksum mismatch for ${archive}" >&2
+    echo "  expected: $expected" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+  fi
+
   echo "Extracting..."
   tar -xzf "${tmpdir}/${archive}" -C "$tmpdir"
 

@@ -157,3 +157,48 @@ func extractBearer(h string) string {
 	}
 	return strings.TrimSpace(h[len(prefix):])
 }
+
+// maxRequestBodyBytes caps any single request body. The web server handles
+// config writes and prompt-file uploads; nothing legitimate requires more than
+// a few hundred KB. 10 MiB keeps generous headroom for template edits without
+// giving a misbehaving or malicious client an arbitrary disk-write handle.
+const maxRequestBodyBytes int64 = 10 << 20
+
+// bodySizeMiddleware enforces maxRequestBodyBytes on every request body.
+// A read past the limit returns a 413 to the handler via http.MaxBytesReader.
+func bodySizeMiddleware(max int64, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, max)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// securityHeadersMiddleware sets baseline security headers on every response.
+//
+// The CSP permits 'unsafe-inline' for scripts and styles because the current
+// htmx templates embed inline <script> blocks and onclick= attributes. Moving
+// those to nonce-based inline scripts would let us drop 'unsafe-inline' from
+// script-src for strong XSS containment. For now this CSP at least bounds all
+// resource loading to same-origin, which prevents exfiltration to external
+// hosts if an XSS is ever introduced.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	const csp = "default-src 'self'; " +
+		"script-src 'self' 'unsafe-inline'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data:; " +
+		"font-src 'self' data:; " +
+		"connect-src 'self'; " +
+		"base-uri 'self'; " +
+		"form-action 'self'; " +
+		"frame-ancestors 'none'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", csp)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
+}

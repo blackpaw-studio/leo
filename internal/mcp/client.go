@@ -14,6 +14,11 @@ import (
 	"time"
 )
 
+// maxDaemonResponseBytes caps how much response body the MCP client will read
+// from the local daemon. The daemon is trusted, so this is a safety net against
+// a runaway handler rather than an adversarial boundary.
+const maxDaemonResponseBytes = 10 << 20
+
 // daemonClient calls the Leo daemon's TCP HTTP API on 127.0.0.1.
 type daemonClient struct {
 	baseURL string
@@ -69,7 +74,10 @@ func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	// Cap the response body to a generous 10 MiB. The daemon is local and
+	// trusted, so this is belt-and-suspenders against a runaway handler —
+	// list responses scale with the number of agents/tasks.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDaemonResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
