@@ -28,10 +28,10 @@ client:
   default_host: prod
   hosts:
     prod:
-      ssh: evan@leo.example.com
+      ssh: alice@leo.example.com
       ssh_args: ["-p", "2222"]
     dev:
-      ssh: evan@devbox.local
+      ssh: alice@devbox.local
 ```
 
 - `ssh` is passed verbatim as the SSH target. Anything SSH itself resolves (Host aliases, ProxyJump, IdentityFile) works.
@@ -51,12 +51,12 @@ leo config show
 ```bash
 # On the client
 leo agent spawn coding --repo blackpaw-studio/leo --name demo
-# → spawned leo-demo (workspace: /home/evan/agents/demo)
+# → spawned leo-demo (workspace: /home/alice/agents/demo)
 #   attach with: leo agent attach leo-demo
 
 leo agent list
 # NAME      TEMPLATE  WORKSPACE            STATUS   RESTARTS
-# leo-demo  coding    /home/evan/agents/demo  running  0
+# leo-demo  coding    /home/alice/agents/demo  running  0
 
 leo agent attach leo-demo
 # (full tmux attach — same Claude TUI as running locally on the server)

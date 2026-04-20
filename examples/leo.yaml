@@ -55,7 +55,7 @@ web:
 #   default_host: homelab
 #   hosts:
 #     homelab:
-#       ssh: evan@leo.example.com
+#       ssh: alice@leo.example.com
 #       # ssh_args: ["-p", "2222"]
 #       # leo_path: /usr/local/bin/leo      # default $HOME/.local/bin/leo
 #       # tmux_path: /opt/homebrew/bin/tmux # default bare "tmux"

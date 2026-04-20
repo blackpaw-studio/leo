@@ -21,8 +21,8 @@ import (
 var telegramAPIBase = "https://api.telegram.org"
 
 // telegramTokenLookupPaths lists where we'll search for a bot token, in
-// priority order. The first entry is used by the user's own blackpaw fork
-// of the plugin; the second is Anthropic's official plugin location.
+// priority order: first the Blackpaw Telegram plugin's .env, then the
+// Anthropic official Telegram plugin's .env.
 var telegramTokenLookupPaths = []string{
 	"~/.claude/channels/blackpaw-telegram/.env",
 	"~/.claude/channels/telegram/.env",

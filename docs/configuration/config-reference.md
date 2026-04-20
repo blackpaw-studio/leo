@@ -63,7 +63,7 @@ web:
   bind: 0.0.0.0
   port: 8370
   allowed_hosts:
-    - 10.0.4.16      # the IP your LAN will use to reach this host
+    - 192.0.2.10      # the IP your LAN will use to reach this host
     - leo.local      # or a hostname
 ```
 
@@ -94,12 +94,12 @@ client:
   default_host: prod
   hosts:
     prod:
-      ssh: evan@leo.example.com
+      ssh: alice@leo.example.com
       ssh_args: ["-p", "2222"]
       leo_path: /usr/local/bin/leo
       tmux_path: /opt/homebrew/bin/tmux
     dev:
-      ssh: evan@devbox.local
+      ssh: alice@devbox.local
 ```
 
 Why `leo_path` exists: SSH runs a non-interactive shell on the remote, which doesn't source `.zshrc` / `.bashrc`. If `leo` lives in `~/.local/bin` and PATH is only extended in `.zshrc`, bare `leo` won't resolve. The default full path avoids that; set `leo_path` explicitly when the remote installs leo elsewhere (Homebrew, `/usr/local/bin`, etc.).

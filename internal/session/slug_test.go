@@ -13,13 +13,13 @@ func TestProjectSlug(t *testing.T) {
 		cwd  string
 		want string
 	}{
-		{"absolute path with dotfile", "/Users/evan/.leo/workspace", "-Users-evan--leo-workspace"},
-		{"absolute path no dots", "/Users/evan/Developer/everything-claude-code", "-Users-evan-Developer-everything-claude-code"},
-		{"dotted repo", "/Users/evan/.leo/agents/leo", "-Users-evan--leo-agents-leo"},
+		{"absolute path with dotfile", "/Users/alice/.leo/workspace", "-Users-alice--leo-workspace"},
+		{"absolute path no dots", "/Users/alice/Developer/everything-claude-code", "-Users-alice-Developer-everything-claude-code"},
+		{"dotted repo", "/Users/alice/.leo/agents/leo", "-Users-alice--leo-agents-leo"},
 		{"root", "/", "-"},
 		{"private tmp", "/private/tmp", "-private-tmp"},
 		{"empty", "", ""},
-		{"trailing slash", "/Users/evan/", "-Users-evan-"},
+		{"trailing slash", "/Users/alice/", "-Users-alice-"},
 		{"multiple dots", "/a/b.c.d/e", "-a-b-c-d-e"},
 	}
 	for _, tt := range tests {
@@ -36,11 +36,11 @@ func TestJSONLPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UserHomeDir: %v", err)
 	}
-	got, err := JSONLPath("/Users/evan/.leo/workspace", "abc-123")
+	got, err := JSONLPath("/Users/alice/.leo/workspace", "abc-123")
 	if err != nil {
 		t.Fatalf("JSONLPath: %v", err)
 	}
-	want := filepath.Join(home, ".claude", "projects", "-Users-evan--leo-workspace", "abc-123.jsonl")
+	want := filepath.Join(home, ".claude", "projects", "-Users-alice--leo-workspace", "abc-123.jsonl")
 	if got != want {
 		t.Errorf("JSONLPath = %q, want %q", got, want)
 	}

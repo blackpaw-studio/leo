@@ -542,7 +542,7 @@ func promptClientHost(reader *bufio.Reader, existing *config.Config) (string, co
 	}
 
 	sshTarget, err := prompt.PromptNonEmpty(reader, "SSH target (user@host or ssh config alias)", sshDefault,
-		"  An SSH target is required (e.g. evan@leo.example.com).")
+		"  An SSH target is required (e.g. alice@leo.example.com).")
 	if err != nil {
 		return "", config.HostConfig{}, fmt.Errorf("reading ssh target: %w", err)
 	}

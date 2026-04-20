@@ -150,7 +150,7 @@ The same `leo` binary becomes a thin SSH client when `client.hosts` is set — m
 client:
   default_host: prod
   hosts:
-    prod: { ssh: evan@leo.example.com }
+    prod: { ssh: alice@leo.example.com }
 ```
 
 See the [Remote CLI guide](https://blackpaw-studio.github.io/leo/guides/remote-cli/).
