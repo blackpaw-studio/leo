@@ -123,9 +123,12 @@ func localAttachChoices(ctx context.Context, cfg *config.Config) []attachChoice 
 // on the remote server doesn't bleed into the picker. Returns an empty slice
 // (not an error) when tmux reports no sessions.
 func remoteAttachChoices(res config.HostResolution) ([]attachChoice, error) {
+	// ssh joins argv with spaces and pipes the result to the remote `$SHELL -c`,
+	// so `#` in `#{session_name}` would start a shell comment and swallow the
+	// format argument. Single-quote it up front to survive the extra shell layer.
 	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
 	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
-	sshArgs = append(sshArgs, tmux.Args("list-sessions", "-F", "#{session_name}")...)
+	sshArgs = append(sshArgs, tmux.Args("list-sessions", "-F", shellQuoteArg("#{session_name}"))...)
 
 	cmd := agentExecCommand("ssh", sshArgs...)
 	var stderr bytes.Buffer

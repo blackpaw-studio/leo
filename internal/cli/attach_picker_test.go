@@ -135,6 +135,34 @@ func TestRemoteAttachChoicesFiltersLeoPrefix(t *testing.T) {
 	}
 }
 
+// ssh concatenates argv into a single string and pipes it to the remote
+// `$SHELL -c`, so a `#` anywhere in the command starts a comment and eats
+// the rest. The format string `#{session_name}` must be shell-quoted by the
+// time it reaches ssh — otherwise the remote tmux sees `-F` with no argument
+// and errors with "command list-sessions: -F expects an argument".
+func TestRemoteAttachChoicesQuotesFormatString(t *testing.T) {
+	var captured []string
+	old := agentExecCommand
+	agentExecCommand = func(name string, args ...string) *exec.Cmd {
+		captured = append([]string{name}, args...)
+		return exec.Command("sh", "-c", "exit 0")
+	}
+	t.Cleanup(func() { agentExecCommand = old })
+
+	res := config.HostResolution{
+		Name: "prod",
+		Host: config.HostConfig{SSH: "user@prod.example.com"},
+	}
+	if _, err := remoteAttachChoices(res); err != nil {
+		t.Fatalf("remoteAttachChoices: %v", err)
+	}
+
+	joined := strings.Join(captured, " ")
+	if !strings.Contains(joined, "'#{session_name}'") {
+		t.Fatalf("format arg must be single-quoted for remote shell; got: %s", joined)
+	}
+}
+
 // When no tmux server is running on the remote side, tmux exits 1 with a
 // "no server running" stderr message. remoteAttachChoices should treat that as
 // "nothing attachable" rather than surfacing a hard error.
