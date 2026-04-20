@@ -195,7 +195,7 @@ func TestAgentAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 	if !equalStrings(stub.calls[0], wantResolve) {
 		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
 	}
-	wantAttach := []string{"ssh", "-t", "user@prod.example.com", "/opt/homebrew/bin/tmux", "attach", "-t", "leo-scratch"}
+	wantAttach := []string{"ssh", "-t", "user@prod.example.com", "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "leo-scratch"}
 	if !equalStrings(stub.calls[1], wantAttach) {
 		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}
@@ -229,10 +229,10 @@ func TestAgentLogsFollowRemoteUsesTmuxPath(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	joined := strings.Join(stub.calls[0], " ")
-	if !strings.Contains(joined, "/opt/homebrew/bin/tmux capture-pane") {
+	if !strings.Contains(joined, "/opt/homebrew/bin/tmux -L leo capture-pane") {
 		t.Errorf("remote tail cmd missing tmux path: %s", joined)
 	}
-	if !strings.Contains(joined, "/opt/homebrew/bin/tmux pipe-pane") {
+	if !strings.Contains(joined, "/opt/homebrew/bin/tmux -L leo pipe-pane") {
 		t.Errorf("remote tail cmd missing tmux path in pipe-pane: %s", joined)
 	}
 }
@@ -254,7 +254,7 @@ func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
 	if !equalStrings(stub.calls[0], wantResolve) {
 		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
 	}
-	wantAttach := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteTmuxPath, "attach", "-t", "leo-scratch"}
+	wantAttach := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "leo-scratch"}
 	if !equalStrings(stub.calls[1], wantAttach) {
 		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}

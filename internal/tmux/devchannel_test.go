@@ -44,7 +44,7 @@ func TestAcceptDevChannelPromptSuccess(t *testing.T) {
 
 	session := uniqueSession("leo-devchan-test")
 	t.Cleanup(func() {
-		_ = exec.Command(tmuxPath, "kill-session", "-t", session).Run()
+		_ = exec.Command(tmuxPath, Args("kill-session", "-t", session)...).Run()
 	})
 
 	// A tiny shell snippet that prints the marker, then `read`s a line from
@@ -52,10 +52,11 @@ func TestAcceptDevChannelPromptSuccess(t *testing.T) {
 	// read returns and the shell exits cleanly.
 	script := `echo "WARNING: Loading development channels"; echo ""; echo "I am using this for local development"; read dummy; echo "ACCEPTED"; sleep 1`
 
-	createCmd := exec.Command(tmuxPath,
+	createCmd := exec.Command(tmuxPath, Args(
 		"new-session", "-d", "-s", session,
 		"-x", "120", "-y", "30",
 		"sh", "-c", script,
+	)...,
 	)
 	if err := createCmd.Run(); err != nil {
 		t.Fatalf("failed to create tmux session: %v", err)
@@ -74,7 +75,7 @@ func TestAcceptDevChannelPromptSuccess(t *testing.T) {
 	// After Enter is sent, the shell should print ACCEPTED. Poll briefly.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		out, err := exec.Command(tmuxPath, "capture-pane", "-p", "-t", session).Output()
+		out, err := exec.Command(tmuxPath, Args("capture-pane", "-p", "-t", session)...).Output()
 		if err == nil && contains(string(out), "ACCEPTED") {
 			return
 		}
@@ -88,14 +89,15 @@ func TestAcceptDevChannelPromptTimeout(t *testing.T) {
 
 	session := uniqueSession("leo-devchan-timeout")
 	t.Cleanup(func() {
-		_ = exec.Command(tmuxPath, "kill-session", "-t", session).Run()
+		_ = exec.Command(tmuxPath, Args("kill-session", "-t", session)...).Run()
 	})
 
 	// Session with no prompt text — the accepter should time out.
-	createCmd := exec.Command(tmuxPath,
+	createCmd := exec.Command(tmuxPath, Args(
 		"new-session", "-d", "-s", session,
 		"-x", "120", "-y", "30",
 		"sh", "-c", "sleep 10",
+	)...,
 	)
 	if err := createCmd.Run(); err != nil {
 		t.Fatalf("failed to create tmux session: %v", err)

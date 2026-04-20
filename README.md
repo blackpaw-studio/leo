@@ -36,7 +36,9 @@ curl -fsSL leo.blackpaw.studio/install | sh
 go install github.com/blackpaw-studio/leo/cmd/leo@latest
 ```
 
-**Prerequisites:** authenticated [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), `tmux`. Channel plugins (e.g. `claude plugin install telegram@claude-plugins-official`) are optional.
+**Prerequisites:** authenticated [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), `tmux` (3.2+ recommended — Leo uses `display-popup`). Channel plugins (e.g. `claude plugin install telegram@claude-plugins-official`) are optional.
+
+> Leo runs on its own tmux socket (`-L leo`) so your personal `tmux ls` stays clean. Inspect Leo's sessions directly with `tmux -L leo ls`. See [tmux Config](docs/guides/tmux-config.md) for recommended settings.
 
 **Upgrading:** `leo update` replaces a tarball install in place and verifies the new release before swapping the binary. Homebrew users should run `brew upgrade blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands.
 
@@ -121,6 +123,8 @@ templates:
 leo agent spawn coding --repo blackpaw-studio/leo --name demo
 leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
 leo agent attach demo                                    # full tmux attach
+leo attach                                               # no name → interactive picker
+leo attach demo --cc                                     # iTerm2 / WezTerm native tab via tmux control mode
 leo agent stop feat-cache --prune --delete-branch        # stop + clean worktree
 ```
 

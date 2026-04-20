@@ -64,6 +64,7 @@ after editing the set.`,
 
 func newProcessAttachCmd() *cobra.Command {
 	var host string
+	var cc bool
 	cmd := &cobra.Command{
 		Use:   "attach <name>",
 		Short: "Attach to a supervised process's tmux session",
@@ -81,10 +82,11 @@ normal tmux prefix + d (default: C-b d).`,
 			}
 			// Processes use a stable session name — no daemon round-trip needed
 			// for either local or remote dispatch.
-			return attachTmuxSession(res, processSessionName(name))
+			return attachTmuxSession(res, processSessionName(name), attachOptions{cc: cc})
 		},
 	}
 	addHostFlag(cmd, &host)
+	addControlModeFlag(cmd, &cc)
 	return cmd
 }
 

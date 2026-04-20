@@ -11,6 +11,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/git"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // agentSpawner is the minimal supervisor surface RestoreAgents needs.
@@ -73,7 +74,7 @@ func RestoreAgents(homePath, tmuxPath string, sv agentSpawner) int {
 		// that resumes the claude session cleanly.
 		if tmuxPath != "" {
 			sessionName := agent.SessionName(name)
-			_ = exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
+			_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
 		}
 
 		args := argsWithResume(rec.ClaudeArgs, rec.SessionID)
