@@ -33,9 +33,9 @@ func resolveAgentQuery(svc AgentService, query string) (agent.Record, int, error
 
 // apiResponse is the standard JSON envelope for API endpoints.
 type apiResponse struct {
-	OK    bool        `json:"ok"`
-	Data  any `json:"data,omitempty"`
-	Error string      `json:"error,omitempty"`
+	OK    bool   `json:"ok"`
+	Data  any    `json:"data,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, resp apiResponse) {

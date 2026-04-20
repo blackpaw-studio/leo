@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -485,7 +486,7 @@ tasks:
 	}
 
 	// GET /task/list — should include the "heartbeat" task from config.
-	resp, err := daemon.Send(dir, "GET", "/task/list", nil)
+	resp, err := daemon.Send(context.Background(), dir, "GET", "/task/list", nil)
 	if err != nil {
 		t.Fatalf("task/list: %v", err)
 	}
@@ -501,7 +502,7 @@ tasks:
 	}
 
 	// POST /task/add — add a "news" task.
-	addResp, err := daemon.Send(dir, "POST", "/task/add", daemon.TaskAddRequest{
+	addResp, err := daemon.Send(context.Background(), dir, "POST", "/task/add", daemon.TaskAddRequest{
 		Name:       "news",
 		Schedule:   "0 8 * * *",
 		PromptFile: "NEWS.md",
@@ -534,7 +535,7 @@ tasks:
 	}
 
 	// POST /task/disable — disable "news".
-	disResp, err := daemon.Send(dir, "POST", "/task/disable", daemon.TaskNameRequest{Name: "news"})
+	disResp, err := daemon.Send(context.Background(), dir, "POST", "/task/disable", daemon.TaskNameRequest{Name: "news"})
 	if err != nil {
 		t.Fatalf("task/disable: %v", err)
 	}
@@ -552,7 +553,7 @@ tasks:
 	}
 
 	// POST /task/remove — remove "news".
-	rmResp, err := daemon.Send(dir, "POST", "/task/remove", daemon.TaskNameRequest{Name: "news"})
+	rmResp, err := daemon.Send(context.Background(), dir, "POST", "/task/remove", daemon.TaskNameRequest{Name: "news"})
 	if err != nil {
 		t.Fatalf("task/remove: %v", err)
 	}

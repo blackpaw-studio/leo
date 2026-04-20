@@ -35,7 +35,8 @@ func TestSpawnAgentNoContext(t *testing.T) {
 	// Construct with an explicitly-nil ctx to cover the defensive guard path.
 	// The public NewSupervisor(ctx) API makes this hard to hit accidentally,
 	// but we keep the internal check as belt-and-suspenders.
-	sv := NewSupervisor(nil)
+	var nilCtx context.Context
+	sv := NewSupervisor(nilCtx)
 
 	err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "test-agent"})
 	if err == nil {
