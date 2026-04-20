@@ -58,12 +58,12 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 			Enabled:      true,
 			Port:         8370,
 			Bind:         "0.0.0.0",
-			AllowedHosts: []string{"10.0.4.16", "10.0.2.10"},
+			AllowedHosts: []string{"192.0.2.10", "192.0.2.20"},
 		},
 		Client: config.ClientConfig{
-			DefaultHost: "olympus",
+			DefaultHost: "myhost",
 			Hosts: map[string]config.HostConfig{
-				"olympus": {SSH: "evan@olympus.local"},
+				"myhost": {SSH: "alice@myhost.local"},
 			},
 		},
 		Processes: map[string]config.ProcessConfig{
@@ -77,7 +77,7 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 			"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"},
 		},
 		Templates: map[string]config.TemplateConfig{
-			"coding": {Workspace: "/Users/evan/.leo/agents"},
+			"coding": {Workspace: "/home/alice/leo-agents"},
 		},
 	}
 
@@ -98,10 +98,10 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 	if len(cfg.Web.AllowedHosts) != 2 {
 		t.Errorf("web.allowed_hosts dropped: %v", cfg.Web.AllowedHosts)
 	}
-	if cfg.Client.DefaultHost != "olympus" {
+	if cfg.Client.DefaultHost != "myhost" {
 		t.Errorf("client.default_host dropped: %q", cfg.Client.DefaultHost)
 	}
-	if _, ok := cfg.Client.Hosts["olympus"]; !ok {
+	if _, ok := cfg.Client.Hosts["myhost"]; !ok {
 		t.Error("client.hosts dropped")
 	}
 	if _, ok := cfg.Templates["coding"]; !ok {
@@ -114,7 +114,7 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 func TestBuildConfig_DoesNotMutateExisting(t *testing.T) {
 	existing := &config.Config{
 		Client: config.ClientConfig{
-			Hosts: map[string]config.HostConfig{"olympus": {SSH: "u@olympus"}},
+			Hosts: map[string]config.HostConfig{"myhost": {SSH: "u@myhost"}},
 		},
 		Templates: map[string]config.TemplateConfig{
 			"coding": {Workspace: "/old"},
@@ -411,9 +411,9 @@ func TestPromptSetupMode_DefaultsToServerForFreshInstall(t *testing.T) {
 func TestPromptSetupMode_DefaultsToClientForClientOnlyConfig(t *testing.T) {
 	existing := &config.Config{
 		Client: config.ClientConfig{
-			DefaultHost: "olympus",
+			DefaultHost: "myhost",
 			Hosts: map[string]config.HostConfig{
-				"olympus": {SSH: "evan@olympus.local"},
+				"myhost": {SSH: "alice@myhost.local"},
 			},
 		},
 	}
@@ -431,14 +431,14 @@ func TestPromptSetupMode_ExplicitChoiceOverridesDefault(t *testing.T) {
 }
 
 func TestBuildClientConfig_FreshInstall(t *testing.T) {
-	host := config.HostConfig{SSH: "evan@olympus.local"}
-	cfg := buildClientConfig(nil, "olympus", host, "olympus")
+	host := config.HostConfig{SSH: "alice@myhost.local"}
+	cfg := buildClientConfig(nil, "myhost", host, "myhost")
 
-	if cfg.Client.DefaultHost != "olympus" {
-		t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, "olympus")
+	if cfg.Client.DefaultHost != "myhost" {
+		t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, "myhost")
 	}
-	if got := cfg.Client.Hosts["olympus"].SSH; got != "evan@olympus.local" {
-		t.Errorf("Hosts[olympus].SSH = %q, want %q", got, "evan@olympus.local")
+	if got := cfg.Client.Hosts["myhost"].SSH; got != "alice@myhost.local" {
+		t.Errorf("Hosts[myhost].SSH = %q, want %q", got, "alice@myhost.local")
 	}
 	if cfg.Processes != nil {
 		t.Errorf("fresh client install should leave Processes nil, got %v", cfg.Processes)
@@ -458,8 +458,8 @@ func TestBuildClientConfig_PreservesExistingServerConfig(t *testing.T) {
 			"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"},
 		},
 	}
-	host := config.HostConfig{SSH: "evan@olympus.local"}
-	cfg := buildClientConfig(existing, "olympus", host, "olympus")
+	host := config.HostConfig{SSH: "alice@myhost.local"}
+	cfg := buildClientConfig(existing, "myhost", host, "myhost")
 
 	if _, ok := cfg.Processes["assistant"]; !ok {
 		t.Error("existing process should be preserved")
@@ -470,8 +470,8 @@ func TestBuildClientConfig_PreservesExistingServerConfig(t *testing.T) {
 	if cfg.Defaults.Model != "opus" {
 		t.Errorf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "opus")
 	}
-	if cfg.Client.DefaultHost != "olympus" {
-		t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, "olympus")
+	if cfg.Client.DefaultHost != "myhost" {
+		t.Errorf("DefaultHost = %q, want %q", cfg.Client.DefaultHost, "myhost")
 	}
 }
 
@@ -485,7 +485,7 @@ func TestTestSSHConnectivity_Success(t *testing.T) {
 		return exec.CommandContext(ctx, "true")
 	}
 
-	host := config.HostConfig{SSH: "evan@olympus.local", SSHArgs: []string{"-p", "2222"}}
+	host := config.HostConfig{SSH: "alice@myhost.local", SSHArgs: []string{"-p", "2222"}}
 	if err := testSSHConnectivity(host); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
@@ -494,7 +494,7 @@ func TestTestSSHConnectivity_Success(t *testing.T) {
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=8",
 		"-p", "2222",
-		"evan@olympus.local", config.DefaultRemoteLeoPath, "version",
+		"alice@myhost.local", config.DefaultRemoteLeoPath, "version",
 	}
 	if !reflect.DeepEqual(capturedArgs, want) {
 		t.Errorf("args = %v, want %v", capturedArgs, want)
@@ -509,7 +509,7 @@ func TestTestSSHConnectivity_FailureIncludesStderr(t *testing.T) {
 		return exec.CommandContext(ctx, "sh", "-c", "echo 'Permission denied' >&2; exit 1")
 	}
 
-	host := config.HostConfig{SSH: "evan@olympus.local"}
+	host := config.HostConfig{SSH: "alice@myhost.local"}
 	err := testSSHConnectivity(host)
 	if err == nil {
 		t.Fatal("expected error")
@@ -524,8 +524,8 @@ func TestTestSSHConnectivity_FailureIncludesStderr(t *testing.T) {
 func TestPromptSetupMode_DefaultsToServerForHybridConfig(t *testing.T) {
 	existing := &config.Config{
 		Client: config.ClientConfig{
-			DefaultHost: "olympus",
-			Hosts:       map[string]config.HostConfig{"olympus": {SSH: "evan@olympus.local"}},
+			DefaultHost: "myhost",
+			Hosts:       map[string]config.HostConfig{"myhost": {SSH: "alice@myhost.local"}},
 		},
 		Processes: map[string]config.ProcessConfig{"assistant": {Workspace: "/ws"}},
 	}
@@ -543,8 +543,8 @@ func TestBuildClientConfig_DoesNotMutateExisting(t *testing.T) {
 		Processes: map[string]config.ProcessConfig{"assistant": {Workspace: "/ws"}},
 		Tasks:     map[string]config.TaskConfig{"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"}},
 		Client: config.ClientConfig{
-			DefaultHost: "olympus",
-			Hosts:       map[string]config.HostConfig{"olympus": {SSH: "evan@olympus.local"}},
+			DefaultHost: "myhost",
+			Hosts:       map[string]config.HostConfig{"myhost": {SSH: "alice@myhost.local"}},
 		},
 	}
 	buildClientConfig(existing, "new-host", config.HostConfig{SSH: "u@new"}, "new-host")
@@ -555,7 +555,7 @@ func TestBuildClientConfig_DoesNotMutateExisting(t *testing.T) {
 	if len(existing.Client.Hosts) != 1 {
 		t.Errorf("existing.Client.Hosts size changed: got %d, want 1", len(existing.Client.Hosts))
 	}
-	if existing.Client.DefaultHost != "olympus" {
+	if existing.Client.DefaultHost != "myhost" {
 		t.Errorf("existing.Client.DefaultHost mutated: got %q", existing.Client.DefaultHost)
 	}
 }
@@ -590,7 +590,7 @@ func TestResolveDefaultHost(t *testing.T) {
 		{
 			name: "accept replacement",
 			existing: &config.Config{
-				Client: config.ClientConfig{DefaultHost: "olympus"},
+				Client: config.ClientConfig{DefaultHost: "myhost"},
 			},
 			answer:      "y\n",
 			wantDefault: "new-host",
@@ -598,10 +598,10 @@ func TestResolveDefaultHost(t *testing.T) {
 		{
 			name: "decline replacement",
 			existing: &config.Config{
-				Client: config.ClientConfig{DefaultHost: "olympus"},
+				Client: config.ClientConfig{DefaultHost: "myhost"},
 			},
 			answer:      "n\n",
-			wantDefault: "olympus",
+			wantDefault: "myhost",
 		},
 	}
 	for _, tc := range tests {
@@ -621,10 +621,10 @@ func TestResolveDefaultHost(t *testing.T) {
 func TestPromptClientHost_PortRoundTrip(t *testing.T) {
 	existing := &config.Config{
 		Client: config.ClientConfig{
-			DefaultHost: "olympus",
+			DefaultHost: "myhost",
 			Hosts: map[string]config.HostConfig{
-				"olympus": {
-					SSH:     "evan@olympus.local",
+				"myhost": {
+					SSH:     "alice@myhost.local",
 					SSHArgs: []string{"-p", "2222"},
 					LeoPath: "/opt/leo",
 				},
@@ -637,11 +637,11 @@ func TestPromptClientHost_PortRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if nickname != "olympus" {
-		t.Errorf("nickname = %q, want %q", nickname, "olympus")
+	if nickname != "myhost" {
+		t.Errorf("nickname = %q, want %q", nickname, "myhost")
 	}
-	if host.SSH != "evan@olympus.local" {
-		t.Errorf("SSH = %q, want %q", host.SSH, "evan@olympus.local")
+	if host.SSH != "alice@myhost.local" {
+		t.Errorf("SSH = %q, want %q", host.SSH, "alice@myhost.local")
 	}
 	if host.LeoPath != "/opt/leo" {
 		t.Errorf("LeoPath = %q, want %q", host.LeoPath, "/opt/leo")
@@ -657,10 +657,10 @@ func TestPromptClientHost_PortRoundTrip(t *testing.T) {
 func TestPromptClientHost_InvalidExistingPortIgnored(t *testing.T) {
 	existing := &config.Config{
 		Client: config.ClientConfig{
-			DefaultHost: "olympus",
+			DefaultHost: "myhost",
 			Hosts: map[string]config.HostConfig{
-				"olympus": {
-					SSH:     "evan@olympus.local",
+				"myhost": {
+					SSH:     "alice@myhost.local",
 					SSHArgs: []string{"-p", "not-a-port"},
 				},
 			},

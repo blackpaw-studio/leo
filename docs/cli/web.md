@@ -9,7 +9,7 @@ Print a one-click login URL for the web dashboard.
 On first start the daemon mints a 64-hex-char API token at `~/.leo/state/api.token`. The web login page accepts the token in a query parameter and auto-submits, saving you from pasting. `leo web login-url` reads the token file (creating one if missing) and prints a URL like:
 
 ```
-http://10.0.4.16:8370/login?token=<64-hex>
+http://192.0.2.10:8370/login?token=<64-hex>
 ```
 
 ### Flags
@@ -32,8 +32,8 @@ leo web login-url
 LAN host:
 
 ```bash
-leo web login-url --bind 10.0.4.16
-# http://10.0.4.16:8370/login?token=...
+leo web login-url --bind 192.0.2.10
+# http://192.0.2.10:8370/login?token=...
 ```
 
 Non-loopback bind with `allowed_hosts`:
@@ -43,13 +43,13 @@ Non-loopback bind with `allowed_hosts`:
 web:
   enabled: true
   bind: 0.0.0.0
-  allowed_hosts: [10.0.4.16]
+  allowed_hosts: [192.0.2.10]
 ```
 
 ```bash
 leo web login-url
-# note: using allowed_hosts[0] (10.0.4.16) as URL host; bind is 0.0.0.0
-# http://10.0.4.16:8370/login?token=...
+# note: using allowed_hosts[0] (192.0.2.10) as URL host; bind is 0.0.0.0
+# http://192.0.2.10:8370/login?token=...
 ```
 
 Non-loopback bind with **no** `allowed_hosts` is an error — pass `--bind` or add an entry to `web.allowed_hosts`.

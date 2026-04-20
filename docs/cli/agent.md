@@ -40,10 +40,10 @@ client:
   default_host: prod
   hosts:
     prod:
-      ssh: evan@leo.example.com
+      ssh: alice@leo.example.com
       ssh_args: ["-p", "2222"]
     dev:
-      ssh: evan@devbox.local
+      ssh: alice@devbox.local
 ```
 
 `ssh` is passed verbatim as the SSH target. `ssh_args` adds extra flags (port, identity file, jump host) between the target and the remote command. Leo does not parse `~/.ssh/config` — anything SSH itself resolves works transparently.

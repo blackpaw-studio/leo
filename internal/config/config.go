@@ -93,7 +93,7 @@ type ClientConfig struct {
 
 // HostConfig describes a remote leo server reachable over SSH.
 type HostConfig struct {
-	SSH     string   `yaml:"ssh"`                // e.g. "evan@leo.example.com"
+	SSH     string   `yaml:"ssh"`                // e.g. "alice@leo.example.com"
 	SSHArgs []string `yaml:"ssh_args,omitempty"` // extra args passed to ssh (e.g. ["-p", "2222"])
 	// LeoPath overrides the remote leo binary path used when dispatching
 	// `leo agent ...` over SSH. Defaults to DefaultRemoteLeoPath. Useful when

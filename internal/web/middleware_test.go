@@ -361,7 +361,7 @@ func TestExtractBearer(t *testing.T) {
 func TestHostOriginMiddleware_AllowedHosts(t *testing.T) {
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true })
-	h := hostOriginMiddleware(8370, []string{"10.0.4.16", "leo.local"}, next)
+	h := hostOriginMiddleware(8370, []string{"192.0.2.10", "leo.local"}, next)
 
 	cases := []struct {
 		name   string
@@ -370,12 +370,12 @@ func TestHostOriginMiddleware_AllowedHosts(t *testing.T) {
 		want   int
 	}{
 		{"loopback_still_ok", "127.0.0.1:8370", "", 200},
-		{"lan_ip_ok", "10.0.4.16:8370", "", 200},
+		{"lan_ip_ok", "192.0.2.10:8370", "", 200},
 		{"hostname_ok", "leo.local:8370", "", 200},
 		{"unknown_host_blocked", "evil.example:8370", "", 403},
-		{"lan_ip_with_matching_origin", "10.0.4.16:8370", "http://10.0.4.16:8370", 200},
-		{"lan_ip_with_mismatched_origin", "10.0.4.16:8370", "http://evil.example:8370", 403},
-		{"wrong_port_blocked", "10.0.4.16:9999", "", 403},
+		{"lan_ip_with_matching_origin", "192.0.2.10:8370", "http://192.0.2.10:8370", 200},
+		{"lan_ip_with_mismatched_origin", "192.0.2.10:8370", "http://evil.example:8370", 403},
+		{"wrong_port_blocked", "192.0.2.10:9999", "", 403},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

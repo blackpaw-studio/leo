@@ -1242,7 +1242,7 @@ func TestValidate_WebAllowedHosts(t *testing.T) {
 		{"loopback_no_hosts_ok", "127.0.0.1", nil, ""},
 		{"loopback_with_hosts_ok", "127.0.0.1", []string{"leo.local"}, ""},
 		{"nonloopback_requires_hosts", "0.0.0.0", nil, "web.allowed_hosts must be set"},
-		{"nonloopback_with_hosts_ok", "0.0.0.0", []string{"10.0.4.16"}, ""},
+		{"nonloopback_with_hosts_ok", "0.0.0.0", []string{"192.0.2.10"}, ""},
 		{"empty_entry_rejected", "127.0.0.1", []string{""}, "web.allowed_hosts[0] must not be empty"},
 		{"whitespace_rejected", "127.0.0.1", []string{"bad host"}, "web.allowed_hosts[0] \"bad host\" is not a valid hostname or IP"},
 		{"port_in_entry_rejected", "127.0.0.1", []string{"leo.local:8370"}, "must not include a port"},

@@ -21,7 +21,7 @@ func TestResolveURLBind(t *testing.T) {
 		{"flag_wins", "10.1.1.1", "0.0.0.0", nil, "10.1.1.1", false, false},
 		{"loopback_cfg", "", "127.0.0.1", nil, "127.0.0.1", false, false},
 		{"loopback_cfg_with_hosts", "", "127.0.0.1", []string{"leo.local"}, "127.0.0.1", false, false},
-		{"nonloopback_uses_allowed_hosts_0", "", "0.0.0.0", []string{"10.0.4.16", "leo.local"}, "10.0.4.16", true, false},
+		{"nonloopback_uses_allowed_hosts_0", "", "0.0.0.0", []string{"192.0.2.10", "leo.local"}, "192.0.2.10", true, false},
 		{"nonloopback_no_hosts_errors", "", "0.0.0.0", nil, "", false, true},
 	}
 	for _, tc := range cases {
@@ -60,12 +60,12 @@ func TestWebLoginURL(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"--state-dir", dir, "--bind", "10.0.4.16", "--port", "8370"})
+	cmd.SetArgs([]string{"--state-dir", dir, "--bind", "192.0.2.10", "--port", "8370"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	got := strings.TrimSpace(out.String())
-	want := "http://10.0.4.16:8370/login?token=abc123"
+	want := "http://192.0.2.10:8370/login?token=abc123"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
