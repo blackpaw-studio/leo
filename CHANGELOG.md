@@ -4,11 +4,26 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-20
+
 ### Added
 
 - **tmux: dedicated `-L leo` socket, `display-popup` overlay when attaching
   from inside tmux, `--cc` control-mode flag for iTerm2/WezTerm, and
   interactive session picker.** (#64)
+- `CODE_OF_CONDUCT.md` and pre-release docs / release-hygiene polish. (#69)
+
+### Changed
+
+- **Pre-release security hardening across install, daemon, web, and MCP**:
+  `install.sh` verifies cosign signatures opportunistically when `cosign`
+  is available, web and daemon auth paths tightened, MCP surface locked
+  down. (#67)
+- Go correctness pass from pre-release review: `sync/atomic.Bool` for
+  restart state, `context.Context` threaded through `daemon.Send` and the
+  validation pipeline, `errors.Is(err, http.ErrServerClosed)` for clean
+  shutdown detection, and propagated `os.Remove` errors instead of silent
+  failures. (#68)
 
 ### Fixed
 
