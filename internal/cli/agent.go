@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -142,7 +143,7 @@ func newAgentListCmd() *cobra.Command {
 				return runRemote(res, extra)
 			}
 
-			records, err := daemon.AgentList(cfg.HomePath)
+			records, err := daemon.AgentList(cmd.Context(), cfg.HomePath)
 			if err != nil {
 				return fmt.Errorf("listing agents: %w", err)
 			}
@@ -248,7 +249,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 			// Collision detection: slashless repos match by repo short-name
 			// (ambiguous owner), slashed repos match exactly on (Repo, Branch).
 			if !strings.Contains(repo, "/") {
-				matches, err := findRepoShortMatches(cfg.HomePath, repo)
+				matches, err := findRepoShortMatches(cmd.Context(), cfg.HomePath, repo)
 				if err != nil {
 					return fmt.Errorf("checking existing agents: %w", err)
 				}
@@ -262,7 +263,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 					}
 					switch choice {
 					case spawnAttachExisting:
-						return attachLocal(cfg.HomePath, matches[0].Name, attachOptions{})
+						return attachLocal(cmd.Context(), cfg.HomePath, matches[0].Name, attachOptions{})
 					case spawnUseCanonicalRepo:
 						repo = matches[0].Repo
 					case spawnFreshTemplate:
@@ -277,7 +278,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 						repo, strings.Join(labels, ", "))
 				}
 			} else {
-				matches, err := findExactMatches(cfg.HomePath, repo, branch)
+				matches, err := findExactMatches(cmd.Context(), cfg.HomePath, repo, branch)
 				if err != nil {
 					return fmt.Errorf("checking existing agents: %w", err)
 				}
@@ -291,7 +292,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 					}
 					switch choice {
 					case spawnAttachExisting:
-						return attachLocal(cfg.HomePath, matches[0].Name, attachOptions{})
+						return attachLocal(cmd.Context(), cfg.HomePath, matches[0].Name, attachOptions{})
 					case spawnFreshTemplate:
 						// fall through — reserveUniqueName suffixes the name.
 					}
@@ -305,7 +306,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 				}
 			}
 
-			rec, err := daemon.AgentSpawn(cfg.HomePath, daemon.AgentSpawnRequest{
+			rec, err := daemon.AgentSpawn(cmd.Context(), cfg.HomePath, daemon.AgentSpawnRequest{
 				Template: template,
 				Repo:     repo,
 				Name:     name,
@@ -353,8 +354,8 @@ const (
 // immediately free for reuse; the collision prompt exists to prevent two
 // running agents from silently sharing a short-name, not to reserve names
 // across the agent's full history.
-func findRepoShortMatches(homePath, query string) ([]agent.Record, error) {
-	records, err := daemon.AgentList(homePath)
+func findRepoShortMatches(ctx context.Context, homePath, query string) ([]agent.Record, error) {
+	records, err := daemon.AgentList(ctx, homePath)
 	if err != nil {
 		return nil, err
 	}
@@ -376,8 +377,8 @@ func findRepoShortMatches(homePath, query string) ([]agent.Record, error) {
 // slashed-repo analogue of findRepoShortMatches: a hit means the caller is
 // asking to re-spawn the same workspace, not merely one that shares a short
 // name.
-func findExactMatches(homePath, repo, branch string) ([]agent.Record, error) {
-	records, err := daemon.AgentList(homePath)
+func findExactMatches(ctx context.Context, homePath, repo, branch string) ([]agent.Record, error) {
+	records, err := daemon.AgentList(ctx, homePath)
 	if err != nil {
 		return nil, err
 	}
@@ -526,8 +527,8 @@ func resolveExactCollision(match agent.Record, template string, attachExisting b
 // of attach (socket selector, nested-tmux popup, --cc) stays in one place.
 // Shared between `leo agent attach` and the spawn collision prompt's
 // "attach-existing" branch.
-func attachLocal(homePath, query string, opts attachOptions) error {
-	session, err := daemon.AgentSession(homePath, query)
+func attachLocal(ctx context.Context, homePath, query string, opts attachOptions) error {
+	session, err := daemon.AgentSession(ctx, homePath, query)
 	if err != nil {
 		return fmt.Errorf("looking up session: %w", err)
 	}
@@ -577,7 +578,7 @@ as a native tab via tmux control mode.`,
 				return attachTmuxSession(res, session, attachOptions{cc: cc})
 			}
 
-			return attachLocal(cfg.HomePath, name, attachOptions{cc: cc})
+			return attachLocal(cmd.Context(), cfg.HomePath, name, attachOptions{cc: cc})
 		},
 	}
 	addHostFlag(cmd, &host)
@@ -629,7 +630,7 @@ or any unambiguous suffix.`,
 			if !res.Localhost {
 				return runRemote(res, []string{"session-name", query})
 			}
-			resolved, err := daemon.AgentResolve(cfg.HomePath, query)
+			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, query)
 			if err != nil {
 				return fmt.Errorf("resolving agent: %w", err)
 			}
@@ -686,19 +687,19 @@ remove the worktree and agentstore record in one step.`,
 			// canonical name (Prune does not go through Resolve because the
 			// agent is stopped by then and the resolver only matches live
 			// agents).
-			resolved, err := daemon.AgentResolve(cfg.HomePath, name)
+			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
 			if err != nil {
 				return fmt.Errorf("resolving agent: %w", err)
 			}
 			canonical := resolved.Name
 
-			if err := daemon.AgentStop(cfg.HomePath, canonical); err != nil {
+			if err := daemon.AgentStop(cmd.Context(), cfg.HomePath, canonical); err != nil {
 				return fmt.Errorf("stopping agent: %w", err)
 			}
 			fmt.Fprintf(agentStdout, "stopped %s\n", canonical)
 
 			if prune {
-				if err := daemon.AgentPrune(cfg.HomePath, canonical, daemon.AgentPruneRequest{
+				if err := daemon.AgentPrune(cmd.Context(), cfg.HomePath, canonical, daemon.AgentPruneRequest{
 					Force:        force,
 					DeleteBranch: deleteBranch,
 				}); err != nil {
@@ -752,7 +753,7 @@ delete the local branch after the worktree is gone.`,
 				}
 				return runRemote(res, extra)
 			}
-			if err := daemon.AgentPrune(cfg.HomePath, name, daemon.AgentPruneRequest{
+			if err := daemon.AgentPrune(cmd.Context(), cfg.HomePath, name, daemon.AgentPruneRequest{
 				Force:        force,
 				DeleteBranch: deleteBranch,
 			}); err != nil {
@@ -802,7 +803,7 @@ func newAgentLogsCmd() *cobra.Command {
 				return runRemote(res, extra)
 			}
 
-			output, err := daemon.AgentLogs(cfg.HomePath, name, lines)
+			output, err := daemon.AgentLogs(cmd.Context(), cfg.HomePath, name, lines)
 			if err != nil {
 				return fmt.Errorf("fetching logs: %w", err)
 			}
@@ -834,7 +835,11 @@ func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	records, err := daemon.AgentList(cfg.HomePath)
+	ctx := context.Background()
+	if cmd != nil {
+		ctx = cmd.Context()
+	}
+	records, err := daemon.AgentList(ctx, cfg.HomePath)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}

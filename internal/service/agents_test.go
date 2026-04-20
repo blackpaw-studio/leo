@@ -13,7 +13,6 @@ import (
 
 func TestSpawnAgentNameCollision(t *testing.T) {
 	sv := NewSupervisor(context.Background())
-	sv.ctx = context.Background()
 	sv.tmuxPath = "echo" // won't actually run tmux properly, but won't crash
 	sv.claudePath = "echo"
 	sv.homePath = t.TempDir()
@@ -48,8 +47,7 @@ func TestSpawnAgentSetsEphemeralState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sv := NewSupervisor(context.Background())
-	sv.ctx = ctx
+	sv := NewSupervisor(ctx)
 	sv.tmuxPath = "false" // will fail immediately, that's fine
 	sv.claudePath = "false"
 	sv.homePath = t.TempDir()

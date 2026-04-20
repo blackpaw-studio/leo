@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os/exec"
@@ -26,7 +27,7 @@ func stubStdinIsTerminal(t *testing.T, v bool) {
 func TestRunAttachPickerRejectsNonTTY(t *testing.T) {
 	stubStdinIsTerminal(t, false)
 	cfg := &config.Config{HomePath: t.TempDir()}
-	err := runAttachPicker(cfg, config.HostResolution{Localhost: true}, attachOptions{})
+	err := runAttachPicker(context.Background(), cfg, config.HostResolution{Localhost: true}, attachOptions{})
 	if err == nil || !strings.Contains(err.Error(), "not a terminal") {
 		t.Fatalf("want non-TTY error, got %v", err)
 	}
@@ -38,7 +39,7 @@ func TestRunAttachPickerErrorsWhenNoSessions(t *testing.T) {
 	// socket) = zero choices, which should surface as a clean error rather
 	// than dropping into an empty picker.
 	cfg := &config.Config{HomePath: t.TempDir()}
-	err := runAttachPicker(cfg, config.HostResolution{Localhost: true}, attachOptions{})
+	err := runAttachPicker(context.Background(), cfg, config.HostResolution{Localhost: true}, attachOptions{})
 	if err == nil || !strings.Contains(err.Error(), "no attachable sessions") {
 		t.Fatalf("want no-sessions error, got %v", err)
 	}
@@ -66,7 +67,7 @@ func TestRunAttachPickerAutoAttachesSingle(t *testing.T) {
 	}
 	t.Cleanup(func() { agentSyscallExec = old })
 
-	if err := runAttachPicker(cfg, config.HostResolution{Localhost: true}, attachOptions{}); err != nil {
+	if err := runAttachPicker(context.Background(), cfg, config.HostResolution{Localhost: true}, attachOptions{}); err != nil {
 		t.Fatalf("runAttachPicker: %v", err)
 	}
 	if !execed {
@@ -87,7 +88,7 @@ func TestLocalAttachChoicesSortsProcesses(t *testing.T) {
 			"mike":  {Enabled: true, Model: "sonnet"},
 		},
 	}
-	out := localAttachChoices(cfg)
+	out := localAttachChoices(context.Background(), cfg)
 	if len(out) != 3 {
 		t.Fatalf("want 3 choices, got %d", len(out))
 	}
