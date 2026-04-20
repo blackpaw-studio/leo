@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -56,7 +57,7 @@ func TestSendHealthCheck(t *testing.T) {
 	workDir := tmpWorkDir(t)
 	startServerAt(t, workDir)
 
-	resp, err := Send(workDir, http.MethodGet, "/health", nil)
+	resp, err := Send(context.Background(), workDir, http.MethodGet, "/health", nil)
 	if err != nil {
 		t.Fatalf("Send() error: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestSendHealthCheck(t *testing.T) {
 func TestSendNoDaemon(t *testing.T) {
 	workDir := tmpWorkDir(t)
 
-	_, err := Send(workDir, http.MethodGet, "/health", nil)
+	_, err := Send(context.Background(), workDir, http.MethodGet, "/health", nil)
 	if err == nil {
 		t.Error("expected Send to return an error when no daemon is running")
 	}
@@ -104,7 +105,7 @@ tasks:
 	t.Cleanup(func() { s.Shutdown() }) //nolint:errcheck
 
 	body := TaskNameRequest{Name: "heartbeat"}
-	resp, err := Send(workDir, http.MethodPost, "/task/remove", body)
+	resp, err := Send(context.Background(), workDir, http.MethodPost, "/task/remove", body)
 	if err != nil {
 		t.Fatalf("Send() error: %v", err)
 	}

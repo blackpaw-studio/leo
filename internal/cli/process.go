@@ -165,7 +165,7 @@ state. Use --json for machine-readable output.`,
 			// output see the same snapshot.
 			var states map[string]daemon.ProcessStateInfo
 			if daemon.IsRunning(cfg.HomePath) {
-				resp, err := daemon.Send(cfg.HomePath, "GET", "/process/list", nil)
+				resp, err := daemon.Send(cmd.Context(), cfg.HomePath, "GET", "/process/list", nil)
 				if err == nil && resp.OK {
 					if jsonErr := json.Unmarshal(resp.Data, &states); jsonErr != nil {
 						warn.Printf("  Could not parse process state: %v\n", jsonErr)

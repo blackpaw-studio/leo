@@ -464,8 +464,15 @@ func acquireTaskLock(path string) error {
 		return err
 	}
 
-	fmt.Fprintf(f, "%d", os.Getpid())
-	f.Close()
+	if _, err := fmt.Fprintf(f, "%d", os.Getpid()); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return fmt.Errorf("writing pid to lock file %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("closing lock file %s: %w", path, err)
+	}
 	return nil
 }
 

@@ -29,7 +29,7 @@ func TestRestartBanner_HiddenByDefault(t *testing.T) {
 // prominent warning + one-click restart button when restartNeeded=true.
 func TestRestartBanner_ShownWhenRestartNeeded(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.restartNeeded = true
+	s.restartNeeded.Store(true)
 
 	req := httptest.NewRequest(http.MethodGet, "/partials/status", nil)
 	w := httptest.NewRecorder()

@@ -34,7 +34,7 @@ func resolveAgentQuery(svc AgentService, query string) (agent.Record, int, error
 // apiResponse is the standard JSON envelope for API endpoints.
 type apiResponse struct {
 	OK    bool        `json:"ok"`
-	Data  interface{} `json:"data,omitempty"`
+	Data  any `json:"data,omitempty"`
 	Error string      `json:"error,omitempty"`
 }
 

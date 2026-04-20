@@ -54,7 +54,7 @@ render the session as a native tab via tmux control mode.`,
 			opts := attachOptions{cc: cc}
 
 			if len(args) == 0 {
-				return runAttachPicker(cfg, res, opts)
+				return runAttachPicker(cmd.Context(), cfg, res, opts)
 			}
 			name := args[0]
 
@@ -68,7 +68,7 @@ render the session as a native tab via tmux control mode.`,
 			// AgentSession is the authoritative presence check: the daemon only
 			// returns a session for agents the agentstore knows about.
 			var agentSession string
-			if session, err := lookupAgentSession(cfg.HomePath, name); err == nil && session != "" {
+			if session, err := lookupAgentSession(cmd.Context(), cfg.HomePath, name); err == nil && session != "" {
 				agentSession = session
 			}
 

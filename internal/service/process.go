@@ -95,12 +95,17 @@ type Supervisor struct {
 	configPath   string
 }
 
-// NewSupervisor creates a new process supervisor.
-func NewSupervisor() *Supervisor {
+// NewSupervisor creates a new process supervisor. The context parameter is
+// the parent context shared by every supervised process; it must outlive the
+// supervisor and be cancelled at shutdown to drain running processes. Passing
+// it at construction time (rather than setting s.ctx later) keeps the field
+// invariant under s.mu and eliminates a write-after-publish race.
+func NewSupervisor(ctx context.Context) *Supervisor {
 	return &Supervisor{
 		states:       make(map[string]*ProcessState),
 		cancels:      make(map[string]context.CancelFunc),
 		reservations: make(map[string]struct{}),
+		ctx:          ctx,
 	}
 }
 
@@ -403,8 +408,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		return err
 	}
 
-	supervisor := NewSupervisor()
-	supervisor.ctx = ctx
+	supervisor := NewSupervisor(ctx)
 	supervisor.tmuxPath = tmuxPath
 	supervisor.claudePath = claudePath
 	supervisor.homePath = homePath

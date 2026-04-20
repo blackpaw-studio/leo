@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -91,9 +92,9 @@ func newStatusCmd() *cobra.Command {
 		Long:  "Show service status, daemon state, processes, tasks, and next scheduled run.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if asJSON {
-				return runStatusJSON()
+				return runStatusJSON(cmd.Context())
 			}
-			return runStatus()
+			return runStatus(cmd.Context())
 		},
 	}
 
@@ -106,7 +107,7 @@ func newStatusCmd() *cobra.Command {
 // and JSON output. Config-load failure surfaces as ConfigError with
 // ConfigValid=false; the caller can still render the rest of the fields that
 // don't depend on config.
-func buildStatusReport() StatusReport {
+func buildStatusReport(ctx context.Context) StatusReport {
 	report := StatusReport{
 		LeoVersion: Version,
 	}
@@ -146,7 +147,7 @@ func buildStatusReport() StatusReport {
 	}
 
 	if daemon.IsRunning(cfg.HomePath) {
-		if states, err := fetchProcessStates(cfg.HomePath); err == nil {
+		if states, err := fetchProcessStates(ctx, cfg.HomePath); err == nil {
 			names := make([]string, 0, len(states))
 			for name := range states {
 				names = append(names, name)
@@ -182,7 +183,7 @@ func buildStatusReport() StatusReport {
 	report.Templates = len(cfg.Templates)
 
 	if daemon.IsRunning(cfg.HomePath) {
-		if next, name, ok := fetchNextScheduledRun(cfg.HomePath); ok {
+		if next, name, ok := fetchNextScheduledRun(ctx, cfg.HomePath); ok {
 			report.Next = &StatusNextScheduledRun{Name: name, Next: next}
 		}
 	}
@@ -191,8 +192,8 @@ func buildStatusReport() StatusReport {
 }
 
 // fetchProcessStates returns the current process states from the daemon.
-func fetchProcessStates(homePath string) (map[string]daemon.ProcessStateInfo, error) {
-	resp, err := daemon.Send(homePath, "GET", "/process/list", nil)
+func fetchProcessStates(ctx context.Context, homePath string) (map[string]daemon.ProcessStateInfo, error) {
+	resp, err := daemon.Send(ctx, homePath, "GET", "/process/list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -207,8 +208,8 @@ func fetchProcessStates(homePath string) (map[string]daemon.ProcessStateInfo, er
 }
 
 // fetchNextScheduledRun picks the nearest upcoming cron fire time.
-func fetchNextScheduledRun(homePath string) (time.Time, string, bool) {
-	resp, err := daemon.Send(homePath, "GET", "/cron/list", nil)
+func fetchNextScheduledRun(ctx context.Context, homePath string) (time.Time, string, bool) {
+	resp, err := daemon.Send(ctx, homePath, "GET", "/cron/list", nil)
 	if err != nil || !resp.OK {
 		return time.Time{}, "", false
 	}
@@ -248,15 +249,15 @@ func taskProblem(cfg *config.Config, name string, t config.TaskConfig) string {
 }
 
 // runStatusJSON emits the structured StatusReport as JSON to stdout.
-func runStatusJSON() error {
-	report := buildStatusReport()
+func runStatusJSON(ctx context.Context) error {
+	report := buildStatusReport(ctx)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(report)
 }
 
-func runStatus() error {
-	report := buildStatusReport()
+func runStatus(ctx context.Context) error {
+	report := buildStatusReport(ctx)
 
 	info.Printf("leo:     %s\n", report.LeoVersion)
 	if !report.ConfigValid {

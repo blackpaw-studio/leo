@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -139,7 +140,7 @@ func (s *Server) Start() error {
 	s.scheduler.Start()
 
 	go func() {
-		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := s.httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(os.Stderr, "daemon HTTP server error: %v\n", err)
 		}
 	}()

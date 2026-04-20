@@ -37,8 +37,9 @@ func IsRunning(workDir string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// Send sends a request to the daemon and returns the response.
-func Send(workDir, method, path string, body any) (*Response, error) {
+// Send sends a request to the daemon and returns the response. The caller's
+// context is propagated to the HTTP round-trip so Ctrl-C cancels the call.
+func Send(ctx context.Context, workDir, method, path string, body any) (*Response, error) {
 	sockPath := SockPath(workDir)
 	client := newUnixClient(sockPath)
 
@@ -50,13 +51,13 @@ func Send(workDir, method, path string, body any) (*Response, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshaling request: %w", err)
 		}
-		httpReq, err = http.NewRequest(method, "http://daemon"+path, bytes.NewReader(data))
+		httpReq, err = http.NewRequestWithContext(ctx, method, "http://daemon"+path, bytes.NewReader(data))
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 	} else {
-		httpReq, err = http.NewRequest(method, "http://daemon"+path, nil)
+		httpReq, err = http.NewRequestWithContext(ctx, method, "http://daemon"+path, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}

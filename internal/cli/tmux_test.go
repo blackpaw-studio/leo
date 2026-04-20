@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -250,7 +251,9 @@ func stubOutsideTmux(t *testing.T) {
 func stubAgentSession(t *testing.T, fn func(workDir, name string) (string, error)) {
 	t.Helper()
 	old := lookupAgentSession
-	lookupAgentSession = fn
+	lookupAgentSession = func(_ context.Context, workDir, name string) (string, error) {
+		return fn(workDir, name)
+	}
 	t.Cleanup(func() { lookupAgentSession = old })
 }
 

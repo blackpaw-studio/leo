@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -38,8 +39,8 @@ func responseError(resp *Response, query string) error {
 }
 
 // AgentSpawn sends POST /agents/spawn to the daemon and returns the new record.
-func AgentSpawn(workDir string, req AgentSpawnRequest) (agent.Record, error) {
-	resp, err := Send(workDir, "POST", "/agents/spawn", req)
+func AgentSpawn(ctx context.Context, workDir string, req AgentSpawnRequest) (agent.Record, error) {
+	resp, err := Send(ctx, workDir, "POST", "/agents/spawn", req)
 	if err != nil {
 		return agent.Record{}, err
 	}
@@ -56,8 +57,8 @@ func AgentSpawn(workDir string, req AgentSpawnRequest) (agent.Record, error) {
 // AgentPrune sends POST /agents/{name}/prune to the daemon. On typed failures
 // (ErrWorktreeDirty, ErrBranchNotMerged, ErrAgentStillRunning, ...) it returns
 // a wrapped error that callers can match with errors.Is.
-func AgentPrune(workDir, name string, req AgentPruneRequest) error {
-	resp, err := Send(workDir, "POST", "/agents/"+url.PathEscape(name)+"/prune", req)
+func AgentPrune(ctx context.Context, workDir, name string, req AgentPruneRequest) error {
+	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/prune", req)
 	if err != nil {
 		return err
 	}
@@ -68,8 +69,8 @@ func AgentPrune(workDir, name string, req AgentPruneRequest) error {
 }
 
 // AgentList sends GET /agents/list to the daemon.
-func AgentList(workDir string) ([]agent.Record, error) {
-	resp, err := Send(workDir, "GET", "/agents/list", nil)
+func AgentList(ctx context.Context, workDir string) ([]agent.Record, error) {
+	resp, err := Send(ctx, workDir, "GET", "/agents/list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -86,8 +87,8 @@ func AgentList(workDir string) ([]agent.Record, error) {
 // AgentStop sends POST /agents/{name}/stop to the daemon. On resolve failures
 // it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous so callers can
 // branch with errors.As.
-func AgentStop(workDir, name string) error {
-	resp, err := Send(workDir, "POST", "/agents/"+url.PathEscape(name)+"/stop", nil)
+func AgentStop(ctx context.Context, workDir, name string) error {
+	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/stop", nil)
 	if err != nil {
 		return err
 	}
@@ -100,12 +101,12 @@ func AgentStop(workDir, name string) error {
 // AgentLogs sends GET /agents/{name}/logs?lines=N to the daemon.
 // Pass lines<=0 to request the default tail. On resolve failures it returns
 // typed *agent.ErrNotFound or *agent.ErrAmbiguous.
-func AgentLogs(workDir, name string, lines int) (string, error) {
+func AgentLogs(ctx context.Context, workDir, name string, lines int) (string, error) {
 	path := "/agents/" + url.PathEscape(name) + "/logs"
 	if lines > 0 {
 		path += fmt.Sprintf("?lines=%d", lines)
 	}
-	resp, err := Send(workDir, "GET", path, nil)
+	resp, err := Send(ctx, workDir, "GET", path, nil)
 	if err != nil {
 		return "", err
 	}
@@ -122,8 +123,8 @@ func AgentLogs(workDir, name string, lines int) (string, error) {
 // AgentSession sends GET /agents/{name}/session to the daemon, returning the tmux session name.
 // The `name` may be a shorthand query; the server resolves it before responding.
 // On resolve failures it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous.
-func AgentSession(workDir, name string) (string, error) {
-	resp, err := Send(workDir, "GET", "/agents/"+url.PathEscape(name)+"/session", nil)
+func AgentSession(ctx context.Context, workDir, name string) (string, error) {
+	resp, err := Send(ctx, workDir, "GET", "/agents/"+url.PathEscape(name)+"/session", nil)
 	if err != nil {
 		return "", err
 	}
@@ -141,8 +142,8 @@ func AgentSession(workDir, name string) (string, error) {
 // agent and returns the hydrated record (name, session, repo). Used by remote
 // clients that need to confirm an agent exists before acting on it. On resolve
 // failures it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous.
-func AgentResolve(workDir, query string) (AgentResolveResponse, error) {
-	resp, err := Send(workDir, "GET", "/agents/resolve?q="+url.QueryEscape(query), nil)
+func AgentResolve(ctx context.Context, workDir, query string) (AgentResolveResponse, error) {
+	resp, err := Send(ctx, workDir, "GET", "/agents/resolve?q="+url.QueryEscape(query), nil)
 	if err != nil {
 		return AgentResolveResponse{}, err
 	}

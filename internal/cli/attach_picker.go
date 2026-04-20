@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -27,7 +28,7 @@ type attachChoice struct {
 // sessions via `ssh <host> tmux -L leo list-sessions`), shows an arrow-key
 // picker, and attaches to the selection. Errors cleanly when stdin is not a
 // TTY so non-interactive callers don't hang.
-func runAttachPicker(cfg *config.Config, res config.HostResolution, opts attachOptions) error {
+func runAttachPicker(ctx context.Context, cfg *config.Config, res config.HostResolution, opts attachOptions) error {
 	if !stdinIsTerminal() {
 		return fmt.Errorf("no session name given and stdin is not a terminal — pass a name explicitly")
 	}
@@ -37,7 +38,7 @@ func runAttachPicker(cfg *config.Config, res config.HostResolution, opts attachO
 		err     error
 	)
 	if res.Localhost {
-		choices = localAttachChoices(cfg)
+		choices = localAttachChoices(ctx, cfg)
 	} else {
 		choices, err = remoteAttachChoices(res)
 		if err != nil {
@@ -79,7 +80,7 @@ func runAttachPicker(cfg *config.Config, res config.HostResolution, opts attachO
 // supervisor's failure message) with any live ephemeral agents the daemon
 // reports. Names that collide between the two lists get a " (agent)" suffix
 // on the agent entry so the picker is unambiguous.
-func localAttachChoices(cfg *config.Config) []attachChoice {
+func localAttachChoices(ctx context.Context, cfg *config.Config) []attachChoice {
 	seen := make(map[string]struct{})
 	out := make([]attachChoice, 0, len(cfg.Processes))
 
@@ -98,7 +99,7 @@ func localAttachChoices(cfg *config.Config) []attachChoice {
 
 	// Daemon may be down (tests, fresh install) — absence of a daemon is
 	// fine; just skip the agent list.
-	records, err := daemon.AgentList(cfg.HomePath)
+	records, err := daemon.AgentList(ctx, cfg.HomePath)
 	if err == nil {
 		agentRecords := append([]agent.Record(nil), records...)
 		sort.Slice(agentRecords, func(i, j int) bool { return agentRecords[i].Name < agentRecords[j].Name })

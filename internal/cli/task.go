@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,7 +100,7 @@ func newTaskListCmd() *cobra.Command {
 			// Get next run times from daemon if available
 			var nextRuns map[string]time.Time
 			if daemon.IsRunning(cfg.HomePath) {
-				resp, err := daemon.Send(cfg.HomePath, "GET", "/cron/list", nil)
+				resp, err := daemon.Send(cmd.Context(), cfg.HomePath, "GET", "/cron/list", nil)
 				if err == nil && resp.OK {
 					var entries []cron.EntryInfo
 					if json.Unmarshal(resp.Data, &entries) == nil {
@@ -367,7 +368,7 @@ func newTaskRemoveCmd() *cobra.Command {
 			}
 
 			if daemon.IsRunning(cfg.HomePath) {
-				resp, err := daemon.Send(cfg.HomePath, "POST", "/task/remove",
+				resp, err := daemon.Send(cmd.Context(), cfg.HomePath, "POST", "/task/remove",
 					daemon.TaskNameRequest{Name: name})
 				if err != nil {
 					return fmt.Errorf("daemon request failed: %w", err)
@@ -409,7 +410,7 @@ func newTaskEnableCmd() *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return setTaskEnabled(args[0], true)
+			return setTaskEnabled(cmd.Context(), args[0], true)
 		},
 	}
 }
@@ -421,12 +422,12 @@ func newTaskDisableCmd() *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return setTaskEnabled(args[0], false)
+			return setTaskEnabled(cmd.Context(), args[0], false)
 		},
 	}
 }
 
-func setTaskEnabled(name string, enabled bool) error {
+func setTaskEnabled(ctx context.Context, name string, enabled bool) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -437,7 +438,7 @@ func setTaskEnabled(name string, enabled bool) error {
 		if !enabled {
 			path = "/task/disable"
 		}
-		resp, err := daemon.Send(cfg.HomePath, "POST", path,
+		resp, err := daemon.Send(ctx, cfg.HomePath, "POST", path,
 			daemon.TaskNameRequest{Name: name})
 		if err != nil {
 			return fmt.Errorf("daemon request failed: %w", err)

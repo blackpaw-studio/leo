@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ func TestBuildStatusReport_Version(t *testing.T) {
 	cfgFile = cfgPath
 	t.Cleanup(func() { cfgFile = oldCfgFile })
 
-	report := buildStatusReport()
+	report := buildStatusReport(context.Background())
 	if report.LeoVersion != "v0.0.0-test" {
 		t.Errorf("LeoVersion = %q; want %q", report.LeoVersion, "v0.0.0-test")
 	}
@@ -41,7 +42,7 @@ func TestBuildStatusReport_ConfigMissing(t *testing.T) {
 	cfgFile = filepath.Join(t.TempDir(), "does-not-exist.yaml")
 	t.Cleanup(func() { cfgFile = oldCfgFile })
 
-	report := buildStatusReport()
+	report := buildStatusReport(context.Background())
 	if report.ConfigValid {
 		t.Errorf("ConfigValid should be false when config is missing")
 	}
@@ -68,7 +69,7 @@ func TestBuildStatusReport_TaskIssues(t *testing.T) {
 	cfgFile = cfgPath
 	t.Cleanup(func() { cfgFile = oldCfgFile })
 
-	report := buildStatusReport()
+	report := buildStatusReport(context.Background())
 	if !report.ConfigValid {
 		t.Fatalf("ConfigValid = false; err=%q", report.ConfigError)
 	}
@@ -115,7 +116,7 @@ func TestRunStatusJSON_ValidOutput(t *testing.T) {
 	t.Cleanup(func() { cfgFile = oldCfgFile })
 
 	out := captureStdoutForConfigTests(t, func() {
-		if err := runStatusJSON(); err != nil {
+		if err := runStatusJSON(context.Background()); err != nil {
 			t.Fatalf("runStatusJSON: %v", err)
 		}
 	})

@@ -159,7 +159,7 @@ func TestAPITemplateList(t *testing.T) {
 		t.Fatalf("expected ok=true, got error: %s", resp.Error)
 	}
 
-	data, ok := resp.Data.(map[string]interface{})
+	data, ok := resp.Data.(map[string]any)
 	if !ok {
 		t.Fatalf("expected map data, got %T", resp.Data)
 	}
@@ -187,7 +187,7 @@ func TestAPIAgentList(t *testing.T) {
 		t.Fatal("expected ok=true")
 	}
 
-	data, ok := resp.Data.([]interface{})
+	data, ok := resp.Data.([]any)
 	if !ok {
 		t.Fatalf("expected array data, got %T", resp.Data)
 	}

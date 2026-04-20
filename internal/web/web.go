@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
@@ -64,7 +66,7 @@ type Server struct {
 	httpServer    *http.Server
 	listener      net.Listener
 	agents        []string      // cached list of available claude agents
-	restartNeeded bool          // set when process-affecting config changes are saved
+	restartNeeded atomic.Bool   // set when process-affecting config changes are saved; touched from concurrent handlers
 	port          int           // port the listener is expected to bind on; used for Host/Origin checks
 	apiToken      string        // bearer token required on /api/* routes; empty disables API
 	allowedHosts  []string      // extra hosts permitted beyond loopback (e.g. LAN IPs)
@@ -236,7 +238,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	s.listener = ln
 
 	go func() {
-		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := s.httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Printf("web UI server error: %v\n", err)
 		}
 	}()
