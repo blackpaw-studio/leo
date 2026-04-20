@@ -512,3 +512,54 @@ func TestEnsureAPIToken_TightensLooseStateDir(t *testing.T) {
 		t.Errorf("state dir perm after EnsureAPIToken = %o, want 0700", perm)
 	}
 }
+
+// --- Security headers middleware ---
+
+func TestSecurityHeadersMiddleware_SetsBaselineHeaders(t *testing.T) {
+	s, _ := newRawTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/partials/status", nil)
+	req.Host = testHost
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	checks := map[string]string{
+		"Content-Security-Policy": "default-src 'self'",
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+		"Referrer-Policy":         "same-origin",
+	}
+	for h, wantContains := range checks {
+		got := w.Header().Get(h)
+		if got == "" {
+			t.Errorf("header %q missing", h)
+			continue
+		}
+		if !strings.Contains(got, wantContains) {
+			t.Errorf("header %q = %q, want substring %q", h, got, wantContains)
+		}
+	}
+}
+
+// --- Body size middleware ---
+
+func TestBodySizeMiddleware_RejectsOversizedBody(t *testing.T) {
+	s, _ := newRawTestServer(t)
+
+	// Build a body larger than the middleware cap. The login handler reads
+	// the form body, so it will attempt to fully consume the reader and hit
+	// MaxBytesReader's limit.
+	big := strings.Repeat("x", int(maxRequestBodyBytes)+1024)
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("token="+big))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = testHost
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	// MaxBytesReader returns an error to the handler; how the handler renders
+	// that varies. What we care about is that we never reached a 2xx success
+	// (which would imply the body was fully accepted).
+	if w.Code >= 200 && w.Code < 300 {
+		t.Fatalf("expected non-2xx for oversized body, got %d", w.Code)
+	}
+}

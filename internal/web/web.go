@@ -213,9 +213,13 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 
 	// Every request — browser UI and API alike — passes through the Host +
 	// Origin check. Defense in depth for the API: even with a valid token,
-	// requests from a non-localhost browser context are rejected.
+	// requests from a non-localhost browser context are rejected. A body-size
+	// cap and baseline security headers sit above that.
+	handler := hostOriginMiddleware(s.port, s.allowedHosts, root)
+	handler = bodySizeMiddleware(maxRequestBodyBytes, handler)
+	handler = securityHeadersMiddleware(handler)
 	s.httpServer = &http.Server{
-		Handler:      hostOriginMiddleware(s.port, s.allowedHosts, root),
+		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}

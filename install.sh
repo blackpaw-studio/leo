@@ -100,6 +100,37 @@ main() {
   echo "Downloading leo ${version} for ${platform}..."
   curl -fsSL "$url" -o "${tmpdir}/${archive}"
 
+  echo "Verifying checksum..."
+  checksums_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
+  if ! curl -fsSL "$checksums_url" -o "${tmpdir}/checksums.txt"; then
+    echo "Error: could not fetch checksums.txt from ${checksums_url}" >&2
+    echo "Refusing to install an unverified binary. Re-run after the release has fully published," >&2
+    echo "or use a tagged release: VERSION=vX.Y.Z sh install.sh" >&2
+    exit 1
+  fi
+
+  expected="$(grep -E "[[:space:]]${archive}\$" "${tmpdir}/checksums.txt" | awk '{print $1}')"
+  if [ -z "$expected" ]; then
+    echo "Error: ${archive} not listed in checksums.txt" >&2
+    exit 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "${tmpdir}/${archive}" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "${tmpdir}/${archive}" | awk '{print $1}')"
+  else
+    echo "Error: no sha256 tool available (sha256sum or shasum)" >&2
+    exit 1
+  fi
+
+  if [ "$expected" != "$actual" ]; then
+    echo "Error: checksum mismatch for ${archive}" >&2
+    echo "  expected: $expected" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+  fi
+
   echo "Extracting..."
   tar -xzf "${tmpdir}/${archive}" -C "$tmpdir"
 

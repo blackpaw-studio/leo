@@ -256,6 +256,38 @@ func TestValidateRejectsBadSchedule(t *testing.T) {
 	}
 }
 
+func TestValidateTimezone(t *testing.T) {
+	tests := []struct {
+		name    string
+		tz      string
+		wantErr bool
+	}{
+		{"empty is ok", "", false},
+		{"valid iana", "America/New_York", false},
+		{"utc", "UTC", false},
+		{"injection attempt", "UTC 0 0 * * *", true},
+		{"garbage", "not-a-zone", true},
+		{"empty slash", "/", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Tasks: map[string]TaskConfig{
+					"t": {Schedule: "0 * * * *", PromptFile: "x.md", Timezone: tc.tz},
+				},
+			}
+			err := cfg.Validate()
+			if tc.wantErr {
+				if err == nil || !contains(err.Error(), "tasks.t.timezone") {
+					t.Errorf("Validate() = %v, want error mentioning tasks.t.timezone", err)
+				}
+			} else if err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "leo.yaml")

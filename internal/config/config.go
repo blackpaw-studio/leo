@@ -532,6 +532,11 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("tasks.%s.timeout %q is not a valid duration", name, task.Timeout))
 			}
 		}
+		if task.Timezone != "" {
+			if _, err := time.LoadLocation(task.Timezone); err != nil {
+				errs = append(errs, fmt.Sprintf("tasks.%s.timezone %q is not a valid IANA zone: %v", name, task.Timezone, err))
+			}
+		}
 		if task.Retries < 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.retries must not be negative", name))
 		}
