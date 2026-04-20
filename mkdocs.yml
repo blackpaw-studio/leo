@@ -86,15 +86,17 @@ nav:
   - CLI Reference:
       - cli/index.md
       - leo setup: cli/setup.md
-      - leo onboard: cli/onboard.md
       - leo service: cli/service.md
       - leo process: cli/process.md
       - leo run: cli/run.md
-      - leo cron: cli/cron.md
       - leo task: cli/task.md
       - leo template: cli/template.md
       - leo agent: cli/agent.md
+      - leo web: cli/web.md
       - leo version: cli/version.md
+      - Deprecated:
+          - leo onboard: cli/onboard.md
+          - leo cron: cli/cron.md
   - Guides:
       - Example Usage: guides/example-usage.md
       - Scheduling: guides/scheduling.md

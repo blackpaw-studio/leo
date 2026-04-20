@@ -32,14 +32,14 @@ make lint
 Use the `make tag` shortcut:
 
 ```bash
-make tag V=0.1.0
+make tag V=0.3.3
 ```
 
-This creates an annotated tag `v0.1.0` and pushes it to origin. Equivalent to:
+This creates an annotated tag `v0.3.3` and pushes it to origin. Equivalent to:
 
 ```bash
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
+git tag -a v0.3.3 -m "Release v0.3.3"
+git push origin v0.3.3
 ```
 
 ### 3. Monitor the release
@@ -47,7 +47,7 @@ git push origin v0.1.0
 The [Release workflow](https://github.com/blackpaw-studio/leo/actions/workflows/release.yml) runs automatically. When it completes, the [Releases page](https://github.com/blackpaw-studio/leo/releases) will have:
 
 - Release notes auto-generated from commit history
-- Archives for each platform: `leo_0.1.0_darwin_amd64.tar.gz`, etc.
+- Archives for each platform: `leo_0.3.3_darwin_amd64.tar.gz`, etc.
 - A `checksums.txt` file
 
 ## Versioning
@@ -106,10 +106,10 @@ This creates a full build in `dist/` without pushing anything.
 :   Fix the issue on `main`, delete the tag, and re-tag:
 
     ```bash
-    git tag -d v0.1.0
-    git push origin :refs/tags/v0.1.0
+    git tag -d v0.3.3
+    git push origin :refs/tags/v0.3.3
     # fix and push to main
-    make tag V=0.1.0
+    make tag V=0.3.3
     ```
 
 **GoReleaser config errors**

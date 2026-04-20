@@ -4,6 +4,17 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **tmux: dedicated `-L leo` socket, `display-popup` overlay when attaching
+  from inside tmux, `--cc` control-mode flag for iTerm2/WezTerm, and
+  interactive session picker.** (#64)
+
+### Fixed
+
+- **MCP client now sends `Authorization: Bearer` header to the daemon;
+  `leo service` injects `LEO_API_TOKEN` into supervised processes.** (#65)
+
 ## [0.3.2] — 2026-04-18
 
 ### Added
@@ -141,6 +152,11 @@ All notable user-visible changes to Leo are documented here.
 
 Initial public release.
 
-[Unreleased]: https://github.com/blackpaw-studio/leo/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/blackpaw-studio/leo/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/blackpaw-studio/leo/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/blackpaw-studio/leo/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/blackpaw-studio/leo/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/blackpaw-studio/leo/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/blackpaw-studio/leo/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/blackpaw-studio/leo/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/blackpaw-studio/leo/releases/tag/v0.1.0
