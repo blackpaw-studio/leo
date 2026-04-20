@@ -109,6 +109,36 @@ main() {
     exit 1
   fi
 
+  # Opportunistic cosign verification. The release signs checksums.txt with
+  # Sigstore's keyless flow; if cosign is on PATH we use it to verify identity
+  # and signature. Without cosign we fall back to HTTPS-only trust in the
+  # checksum file and warn — `leo update` will do the full cosign verification
+  # on subsequent upgrades.
+  if command -v cosign >/dev/null 2>&1; then
+    sig_url="${checksums_url}.sig"
+    cert_url="${checksums_url}.pem"
+    if curl -fsSL "$sig_url" -o "${tmpdir}/checksums.txt.sig" \
+      && curl -fsSL "$cert_url" -o "${tmpdir}/checksums.txt.pem"; then
+      identity_regex="^https://github\.com/${REPO}/\.github/workflows/.+@refs/tags/${version}\$"
+      issuer="https://token.actions.githubusercontent.com"
+      if ! cosign verify-blob \
+          --certificate "${tmpdir}/checksums.txt.pem" \
+          --signature "${tmpdir}/checksums.txt.sig" \
+          --certificate-identity-regexp "${identity_regex}" \
+          --certificate-oidc-issuer "${issuer}" \
+          "${tmpdir}/checksums.txt" >/dev/null 2>&1; then
+        echo "Error: cosign signature verification failed for checksums.txt" >&2
+        exit 1
+      fi
+      echo "  cosign signature verified"
+    else
+      echo "  warning: signature artifacts missing from release, falling back to HTTPS-only trust" >&2
+    fi
+  else
+    echo "  warning: cosign not installed — trusting checksums.txt over HTTPS only" >&2
+    echo "           install cosign for full supply-chain verification" >&2
+  fi
+
   expected="$(grep -E "[[:space:]]${archive}\$" "${tmpdir}/checksums.txt" | awk '{print $1}')"
   if [ -z "$expected" ]; then
     echo "Error: ${archive} not listed in checksums.txt" >&2
