@@ -58,7 +58,7 @@ func acceptDevChannelPrompt(ctx context.Context, tmuxPath, sessionName string, t
 			return fmt.Errorf("dev-channel prompt never appeared in session %q within %s", sessionName, timeout)
 		}
 
-		pane, err := exec.CommandContext(ctx, tmuxPath, "capture-pane", "-p", "-t", sessionName).Output()
+		pane, err := exec.CommandContext(ctx, tmuxPath, Args("capture-pane", "-p", "-t", sessionName)...).Output()
 		if err != nil {
 			// Session may not exist yet (race with new-session) or was killed;
 			// keep polling until the deadline.
@@ -69,7 +69,7 @@ func acceptDevChannelPrompt(ctx context.Context, tmuxPath, sessionName string, t
 			continue
 		}
 
-		if err := exec.CommandContext(ctx, tmuxPath, "send-keys", "-t", sessionName, "Enter").Run(); err != nil {
+		if err := exec.CommandContext(ctx, tmuxPath, Args("send-keys", "-t", sessionName, "Enter")...).Run(); err != nil {
 			return fmt.Errorf("send-keys Enter to session %q: %w", sessionName, err)
 		}
 		return nil

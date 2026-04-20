@@ -747,15 +747,16 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	sessionName := "leo-" + name
 
 	tmuxPath := findTmuxPath()
+	escArgs := tmux.Args("send-keys", "-t", sessionName, "Escape")
 	// Send Escape immediately, then keep sending to catch state transitions.
-	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
-	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
-	s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
+	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
+	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
 	// Also send delayed Escapes in background to catch tool completions
 	go func() {
 		for i := 0; i < 5; i++ {
 			time.Sleep(500 * time.Millisecond)
-			s.execCommand(tmuxPath, "send-keys", "-t", sessionName, "Escape").Run() //nolint:errcheck
+			s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
 		}
 	}()
 	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
@@ -768,7 +769,7 @@ func (s *Server) handleProcessRestart(w http.ResponseWriter, r *http.Request) {
 	sessionName := "leo-" + name
 
 	tmuxPath := findTmuxPath()
-	if err := s.execCommand(tmuxPath, "kill-session", "-t", sessionName).Run(); err != nil {
+	if err := s.execCommand(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to restart %s: %v", name, err))
 		return
 	}
@@ -802,7 +803,7 @@ func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 	for _, key := range req.Keys {
 		if needsCharSplit(key) {
 			for _, ch := range key {
-				if err := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, string(ch)).Run(); err != nil {
+				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, string(ch))...).Run(); err != nil {
 					writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
 					return
 				}
@@ -810,7 +811,7 @@ func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if err := s.execCommand(tmuxPath, "send-keys", "-t", sessionName, key).Run(); err != nil {
+		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, key)...).Run(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
 			return
 		}

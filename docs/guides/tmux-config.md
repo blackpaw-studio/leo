@@ -1,6 +1,8 @@
 # tmux Config
 
-Leo attaches you to running agents and supervised processes through `tmux`. Every `leo attach`, `leo agent attach`, and `leo process attach` ultimately runs `tmux attach -t leo-<name>` — locally or, for remote hosts, over `ssh -t`. Your `~/.tmux.conf` is the UI you see whenever you're driving an agent interactively.
+Leo attaches you to running agents and supervised processes through `tmux`. Every `leo attach`, `leo agent attach`, and `leo process attach` ultimately runs `tmux -L leo attach -t leo-<name>` — locally or, for remote hosts, over `ssh -t`. Your `~/.tmux.conf` is the UI you see whenever you're driving an agent interactively.
+
+> **Leo uses a dedicated tmux socket.** Every Leo session lives on the `leo` server, so `tmux ls` on your personal tmux is unaffected — no `leo-*` clutter. To inspect Leo's sessions directly run `tmux -L leo ls`. The tmux config below still applies: `~/.tmux.conf` is loaded for every server, including `leo`.
 
 This guide gives you a recommended starting config, explains what each piece does, and lists the handful of features that matter most for leo workflows.
 
@@ -151,7 +153,21 @@ If you'd rather hop between running leo agents when one exits — nice if you ro
 
 ### Session picker
 
-`prefix + A` pops a fuzzy picker of every tmux session — great when leo has multiple agents and processes running side by side. `prefix + W` does the same but lists every window across sessions. Both are faster than `tmux ls && tmux attach -t <name>`.
+`prefix + A` pops a fuzzy picker of every tmux session on the current server. Leo sessions live on the dedicated `leo` socket, so the built-in picker only sees them once you're already attached to a Leo session. For a picker scoped to Leo, run `leo attach` with no arguments — arrow-key navigation over every configured process and live agent, local or remote.
+
+### Attaching from inside tmux
+
+If you're already in a tmux client on your personal socket and run `leo attach`, Leo opens a `display-popup` overlay that runs `tmux -L leo attach` inside your current tmux. Dismiss the popup (press `q` or `Esc`) and you're back in your outer session. No nesting, no surprises.
+
+### Control mode (iTerm2 / WezTerm)
+
+Terminals with native tmux integration can render attached sessions as real tabs. Pass `--cc` to any attach command:
+
+```
+leo attach coding-assistant --cc
+```
+
+Control mode is local-only — it doesn't compose with SSH.
 
 ### Pane zoom
 
@@ -189,7 +205,7 @@ Not for leo. Those plugins snapshot session state to disk and restore it on tmux
 
 ### Do I need this config on my laptop or on the server?
 
-For `leo attach` against a remote host (`ssh -t host tmux attach`), the tmux config that matters is the **server's** `~/.tmux.conf`. The local terminal emulator still handles things like OSC 52 clipboard writes — which is why both sides need to agree.
+For `leo attach` against a remote host (`ssh -t host tmux -L leo attach`), the tmux config that matters is the **server's** `~/.tmux.conf`. The local terminal emulator still handles things like OSC 52 clipboard writes — which is why both sides need to agree.
 
 For a local leo install where you run `leo service start` on the same machine you attach from, it's just your laptop's config.
 

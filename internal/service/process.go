@@ -234,7 +234,7 @@ func (s *Supervisor) StopAgent(name string) error {
 
 	// Kill the tmux session directly
 	sessionName := agent.SessionName(name)
-	exec.Command(s.tmuxPath, "kill-session", "-t", sessionName).Run() //nolint:errcheck
+	exec.Command(s.tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run() //nolint:errcheck
 
 	s.mu.Lock()
 	delete(s.states, name)
@@ -484,14 +484,16 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		claudeCmd := buildClaudeShellCmd(claudePath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
 
 		// Kill any stale tmux session with our name
-		exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
+		exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
 
 		// Create a detached tmux session running claude
 		createCmd := exec.CommandContext(ctx, tmuxPath,
-			"new-session", "-d", "-s", sessionName,
-			"-c", spec.WorkDir,
-			"-x", "200", "-y", "50",
-			claudeCmd,
+			tmux.Args(
+				"new-session", "-d", "-s", sessionName,
+				"-c", spec.WorkDir,
+				"-x", "200", "-y", "50",
+				claudeCmd,
+			)...,
 		)
 		createCmd.Dir = spec.WorkDir
 		createCmd.Env = os.Environ()
@@ -593,13 +595,13 @@ func waitForSessionEnd(ctx context.Context, tmuxPath, sessionName string, spec P
 	for {
 		select {
 		case <-ctx.Done():
-			exec.Command(tmuxPath, "kill-session", "-t", sessionName).Run()
+			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
 			return true
 		case <-time.After(5 * time.Second):
 		}
 
 		// Check if tmux session still exists
-		check := exec.Command(tmuxPath, "has-session", "-t", sessionName)
+		check := exec.Command(tmuxPath, tmux.Args("has-session", "-t", sessionName)...)
 		if check.Run() != nil {
 			return false
 		}
@@ -613,14 +615,14 @@ func waitForSessionEnd(ctx context.Context, tmuxPath, sessionName string, spec P
 // autoResumePrompt captures the tmux pane and sends Enter if claude is stuck
 // at the "Resume from summary" interactive prompt.
 func autoResumePrompt(tmuxPath, sessionName, processName string) {
-	out, err := exec.Command(tmuxPath, "capture-pane", "-t", sessionName, "-p", "-S", "-10").Output()
+	out, err := exec.Command(tmuxPath, tmux.Args("capture-pane", "-t", sessionName, "-p", "-S", "-10")...).Output()
 	if err != nil {
 		return
 	}
 	pane := string(out)
 	if strings.Contains(pane, "Resume from summary") && strings.Contains(pane, "Enter to confirm") {
 		fmt.Fprintf(os.Stderr, "[%s] detected resume prompt, auto-accepting 'Resume from summary'\n", processName)
-		exec.Command(tmuxPath, "send-keys", "-t", sessionName, "Enter").Run()
+		exec.Command(tmuxPath, tmux.Args("send-keys", "-t", sessionName, "Enter")...).Run()
 	}
 }
 

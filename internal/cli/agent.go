@@ -75,6 +75,14 @@ func addHostFlag(cmd *cobra.Command, host *string) {
 	cmd.Flags().StringVar(host, "host", "", `remote host name (from client.hosts), or "localhost"`)
 }
 
+// addControlModeFlag wires a --cc flag that enables tmux control mode on
+// attach. Terminals like iTerm2 and WezTerm render tmux -CC sessions as
+// native tabs. Control mode is local-only — attach helpers reject it when
+// combined with SSH dispatch or when already inside a tmux client.
+func addControlModeFlag(cmd *cobra.Command, cc *bool) {
+	cmd.Flags().BoolVar(cc, "cc", false, "use tmux control mode (-CC) — for iTerm2/WezTerm native tabs; local only")
+}
+
 // dispatch handles the "run this locally vs proxy via ssh" decision. For
 // subcommands that need special handling (attach) callers read hostRes directly.
 func dispatch(flagHost string) (*config.Config, config.HostResolution, error) {
@@ -254,7 +262,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 					}
 					switch choice {
 					case spawnAttachExisting:
-						return attachLocal(cfg.HomePath, matches[0].Name)
+						return attachLocal(cfg.HomePath, matches[0].Name, attachOptions{})
 					case spawnUseCanonicalRepo:
 						repo = matches[0].Repo
 					case spawnFreshTemplate:
@@ -283,7 +291,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 					}
 					switch choice {
 					case spawnAttachExisting:
-						return attachLocal(cfg.HomePath, matches[0].Name)
+						return attachLocal(cfg.HomePath, matches[0].Name, attachOptions{})
 					case spawnFreshTemplate:
 						// fall through — reserveUniqueName suffixes the name.
 					}
@@ -514,32 +522,35 @@ func resolveExactCollision(match agent.Record, template string, attachExisting b
 }
 
 // attachLocal performs the local tmux-attach flow: look up the canonical
-// session via the daemon, then hand off to tmux with syscall.Exec so the TTY
-// owner is tmux itself. Shared between `leo agent attach` and the collision
-// prompt's "attach-existing" branch.
-func attachLocal(homePath, query string) error {
+// session via the daemon, then delegate to attachTmuxSession so every flavor
+// of attach (socket selector, nested-tmux popup, --cc) stays in one place.
+// Shared between `leo agent attach` and the spawn collision prompt's
+// "attach-existing" branch.
+func attachLocal(homePath, query string, opts attachOptions) error {
 	session, err := daemon.AgentSession(homePath, query)
 	if err != nil {
 		return fmt.Errorf("looking up session: %w", err)
 	}
-	tmuxPath, err := tmuxLocate()
-	if err != nil {
-		return err
-	}
-	return agentSyscallExec(tmuxPath, []string{"tmux", "attach", "-t", session}, os.Environ())
+	return attachTmuxSession(config.HostResolution{Localhost: true}, session, opts)
 }
 
 // --- attach ---
 
 func newAgentAttachCmd() *cobra.Command {
 	var host string
+	var cc bool
 	cmd := &cobra.Command{
 		Use:   "attach <name>",
 		Short: "Attach to the agent's tmux session",
 		Long: `Attach to a running agent's tmux session. Locally this replaces the
 current process with tmux so the TUI has full control of the terminal.
-Remotely it runs 'ssh -t <host> tmux attach -t leo-<name>'. Detach with
-the usual tmux prefix + d (default: C-b d).`,
+Remotely it runs 'ssh -t <host> tmux -L leo attach -t leo-<name>'. Detach
+with the usual tmux prefix + d (default: C-b d).
+
+When you're already inside a tmux client, Leo opens a display-popup overlay
+that runs the attach — dismissing the popup returns you to your outer tmux.
+Pass --cc in a tmux-aware terminal (iTerm2, WezTerm) to render the session
+as a native tab via tmux control mode.`,
 		Example: `  # Attach to an agent by canonical name
   leo agent attach leo-mcp-node-owner-fetch
 
@@ -563,13 +574,14 @@ the usual tmux prefix + d (default: C-b d).`,
 				if err != nil {
 					return err
 				}
-				return attachTmuxSession(res, session)
+				return attachTmuxSession(res, session, attachOptions{cc: cc})
 			}
 
-			return attachLocal(cfg.HomePath, name)
+			return attachLocal(cfg.HomePath, name, attachOptions{cc: cc})
 		},
 	}
 	addHostFlag(cmd, &host)
+	addControlModeFlag(cmd, &cc)
 	return cmd
 }
 

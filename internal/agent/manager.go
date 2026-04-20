@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/session"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // gitFetchTimeout bounds the single `git fetch` issued at the start of a
@@ -487,14 +488,14 @@ func (m *Manager) Logs(name string, lines int) (string, error) {
 	}
 
 	session := m.SessionName(name)
-	args := []string{"capture-pane", "-t", session, "-p"}
+	subArgs := []string{"capture-pane", "-t", session, "-p"}
 	if lines > 0 {
-		args = append(args, "-S", fmt.Sprintf("-%d", lines))
+		subArgs = append(subArgs, "-S", fmt.Sprintf("-%d", lines))
 	} else {
-		args = append(args, "-S", "-")
+		subArgs = append(subArgs, "-S", "-")
 	}
 
-	out, err := exec.Command(tmuxPath, args...).CombinedOutput()
+	out, err := exec.Command(tmuxPath, tmux.Args(subArgs...)...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("tmux capture-pane: %s", string(out))
 	}
