@@ -16,7 +16,7 @@
   <a href="https://github.com/blackpaw-studio/leo/actions/workflows/ci.yml"><img src="https://github.com/blackpaw-studio/leo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/blackpaw-studio/leo/releases/latest"><img src="https://img.shields.io/github/v/release/blackpaw-studio/leo" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-  <a href="https://goreportcard.com/report/github.com/blackpaw-studio/leo"><img src="https://goreportcard.com/badge/github.com/blackpaw-studio/leo" alt="Go Report Card"></a>
+  <a href="https://goreportcard.com/report/github.com/blackpaw-studio/leo"><img src="https://goreportcard.com/badge/github.com/blackpaw-studio/leo?style=flat" alt="Go Report Card"></a>
 </p>
 
 ---
