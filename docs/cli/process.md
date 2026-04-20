@@ -96,6 +96,6 @@ Both modes honor `--host` and the host's `tmux_path` override when running again
 ## See Also
 
 - [`leo service`](service.md) — start/stop/restart supervised processes
-- [`leo attach`](index.md#leo-attach) — shortcut that dispatches to `process attach` or `agent attach`
+- [`leo attach`](attach.md) — shortcut that dispatches to `process attach` or `agent attach`
 - [Remote CLI guide](../guides/remote-cli.md) — host setup and SSH walkthrough
 - [Config Reference](../configuration/config-reference.md#processes) — full process field specification

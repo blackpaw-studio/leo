@@ -92,7 +92,17 @@ nav:
       - leo task: cli/task.md
       - leo template: cli/template.md
       - leo agent: cli/agent.md
+      - leo attach: cli/attach.md
+      - leo status: cli/status.md
+      - leo validate: cli/validate.md
+      - leo config: cli/config.md
+      - leo session: cli/session.md
+      - leo logs: cli/logs.md
+      - leo update: cli/update.md
+      - leo completion: cli/completion.md
+      - leo channels: cli/channels.md
       - leo web: cli/web.md
+      - leo mcp-server: cli/mcp-server.md
       - leo version: cli/version.md
       - Deprecated:
           - leo onboard: cli/onboard.md

@@ -37,4 +37,4 @@ Running `leo setup` again will overwrite the configuration. Back up `~/.leo/leo.
 ## See Also
 
 - [Configuration → Channels](../configuration/config-reference.md#channels) -- wiring up a channel plugin
-- [`leo validate`](index.md#leo-validate) -- sanity-check your config after edits
+- [`leo validate`](validate.md) -- sanity-check your config after edits
