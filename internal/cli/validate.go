@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -56,7 +57,7 @@ func newValidateCmd() *cobra.Command {
 		Short: "Check config, prerequisites, and workspace health",
 		Long:  "Run diagnostic checks on config, prerequisites, daemon, and workspace. Like a doctor's checkup for your leo setup.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			findings, cfg := collectValidateFindings()
+			findings, cfg := collectValidateFindings(cmd.Context())
 
 			if asJSON {
 				return emitValidateJSON(findings)
@@ -73,7 +74,7 @@ func newValidateCmd() *cobra.Command {
 
 // collectValidateFindings runs all validation checks and returns findings plus
 // the loaded config (may be nil if loading failed). Sorted by severity.
-func collectValidateFindings() ([]Finding, *config.Config) {
+func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 	var findings []Finding
 	add := func(sev Severity, check, msg string) {
 		findings = append(findings, Finding{Severity: sev, Check: check, Message: msg})
@@ -159,7 +160,7 @@ func collectValidateFindings() ([]Finding, *config.Config) {
 	// 8. Daemon health. If the socket is present but unresponsive, that's ERROR —
 	// someone clearly intended the daemon to be running.
 	if daemon.IsRunning(cfg.HomePath) {
-		resp, err := daemon.Send(cfg.HomePath, "GET", "/health", nil)
+		resp, err := daemon.Send(ctx, cfg.HomePath, "GET", "/health", nil)
 		switch {
 		case err != nil:
 			add(SeverityError, "daemon", "socket exists but daemon not responding")

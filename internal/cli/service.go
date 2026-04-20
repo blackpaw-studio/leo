@@ -464,7 +464,7 @@ func newServiceStatusCmd() *cobra.Command {
 		Short:  "Show service status (alias for 'leo status')",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus()
+			return runStatus(cmd.Context())
 		},
 	}
 }
@@ -535,7 +535,7 @@ func newServiceReloadCmd() *cobra.Command {
 				return fmt.Errorf("daemon is not running")
 			}
 
-			resp, err := daemon.Send(cfg.HomePath, "POST", "/config/reload", nil)
+			resp, err := daemon.Send(cmd.Context(), cfg.HomePath, "POST", "/config/reload", nil)
 			if err != nil {
 				return fmt.Errorf("sending reload: %w", err)
 			}

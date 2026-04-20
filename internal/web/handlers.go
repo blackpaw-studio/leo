@@ -322,7 +322,7 @@ func parseAssistantEvent(raw map[string]json.RawMessage) []logEvent {
 		case "tool_use":
 			inputStr := string(block.Input)
 			// Pretty-print JSON input if possible
-			var pretty map[string]interface{}
+			var pretty map[string]any
 			if json.Unmarshal(block.Input, &pretty) == nil {
 				if formatted, err := json.MarshalIndent(pretty, "", "  "); err == nil {
 					inputStr = string(formatted)
@@ -508,7 +508,7 @@ func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	warn := s.reloadConfigOrWarn()
-	s.restartNeeded = true
+	s.restartNeeded.Store(true)
 	typ, msg := appendReloadWarning("success", "Defaults saved", warn)
 	s.renderFlash(w, typ, msg)
 }
@@ -568,7 +568,7 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	warn := s.reloadConfigOrWarn()
-	s.restartNeeded = true
+	s.restartNeeded.Store(true)
 	typ, msg := appendReloadWarning("success", fmt.Sprintf("Process %q saved", name), warn)
 	s.renderFlash(w, typ, msg)
 }
@@ -850,7 +850,7 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	}
 	go cmd.Wait() //nolint:errcheck
 
-	s.restartNeeded = false
+	s.restartNeeded.Store(false)
 	s.renderFlash(w, "success", "Service restarting...")
 }
 
@@ -1062,7 +1062,7 @@ func (s *Server) buildDashboardData() (*dashboardData, error) {
 		CronMap:       cronMap,
 		Config:        cfg,
 		Agents:        s.agents,
-		RestartNeeded: s.restartNeeded,
+		RestartNeeded: s.restartNeeded.Load(),
 		NextRunName:   nextRunName,
 		NextRunTime:   nextRunTime,
 	}, nil
@@ -1109,7 +1109,7 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	warn := s.reloadConfigOrWarn()
 
-	s.restartNeeded = true
+	s.restartNeeded.Store(true)
 
 	// Re-render the processes config tab
 	data, err := s.buildDashboardData()
@@ -1147,7 +1147,7 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	warn := s.reloadConfigOrWarn()
 
-	s.restartNeeded = true
+	s.restartNeeded.Store(true)
 
 	data, err := s.buildDashboardData()
 	if err != nil {

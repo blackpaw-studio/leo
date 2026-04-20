@@ -12,7 +12,7 @@ import (
 )
 
 func TestSpawnAgentNameCollision(t *testing.T) {
-	sv := NewSupervisor()
+	sv := NewSupervisor(context.Background())
 	sv.ctx = context.Background()
 	sv.tmuxPath = "echo" // won't actually run tmux properly, but won't crash
 	sv.claudePath = "echo"
@@ -33,8 +33,10 @@ func TestSpawnAgentNameCollision(t *testing.T) {
 }
 
 func TestSpawnAgentNoContext(t *testing.T) {
-	sv := NewSupervisor()
-	// ctx is nil
+	// Construct with an explicitly-nil ctx to cover the defensive guard path.
+	// The public NewSupervisor(ctx) API makes this hard to hit accidentally,
+	// but we keep the internal check as belt-and-suspenders.
+	sv := NewSupervisor(nil)
 
 	err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "test-agent"})
 	if err == nil {
@@ -46,7 +48,7 @@ func TestSpawnAgentSetsEphemeralState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sv := NewSupervisor()
+	sv := NewSupervisor(context.Background())
 	sv.ctx = ctx
 	sv.tmuxPath = "false" // will fail immediately, that's fine
 	sv.claudePath = "false"
@@ -78,7 +80,7 @@ func TestSpawnAgentSetsEphemeralState(t *testing.T) {
 }
 
 func TestStopAgentNotFound(t *testing.T) {
-	sv := NewSupervisor()
+	sv := NewSupervisor(context.Background())
 	err := sv.StopAgent("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent agent")
@@ -86,7 +88,7 @@ func TestStopAgentNotFound(t *testing.T) {
 }
 
 func TestStopAgentRejectsNonEphemeral(t *testing.T) {
-	sv := NewSupervisor()
+	sv := NewSupervisor(context.Background())
 	sv.mu.Lock()
 	sv.states["static-proc"] = &ProcessState{Name: "static-proc", Status: "running", Ephemeral: false}
 	sv.mu.Unlock()
@@ -101,7 +103,7 @@ func TestStopAgentRejectsNonEphemeral(t *testing.T) {
 }
 
 func TestStopAgentRemovesState(t *testing.T) {
-	sv := NewSupervisor()
+	sv := NewSupervisor(context.Background())
 	sv.tmuxPath = "echo" // won't find session, that's fine
 
 	called := false
@@ -135,7 +137,7 @@ func TestStopAgentRemovesState(t *testing.T) {
 }
 
 func TestEphemeralAgentsFiltersCorrectly(t *testing.T) {
-	sv := NewSupervisor()
+	sv := NewSupervisor(context.Background())
 	sv.mu.Lock()
 	sv.states["static"] = &ProcessState{Name: "static", Status: "running", Ephemeral: false}
 	sv.states["eph-1"] = &ProcessState{Name: "eph-1", Status: "running", Ephemeral: true}
@@ -158,7 +160,7 @@ func TestEphemeralAgentsFiltersCorrectly(t *testing.T) {
 }
 
 func TestStatesIncludesEphemeralFlag(t *testing.T) {
-	sv := NewSupervisor()
+	sv := NewSupervisor(context.Background())
 	sv.mu.Lock()
 	sv.states["agent"] = &ProcessState{Name: "agent", Status: "running", Ephemeral: true}
 	sv.mu.Unlock()
