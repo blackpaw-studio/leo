@@ -119,4 +119,3 @@ nav:
       - development/index.md
       - Contributing: development/contributing.md
       - Releasing: development/releasing.md
-      - Agent Workflow: development/agent-workflow.md
