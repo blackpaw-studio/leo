@@ -59,26 +59,3 @@ func FindOpenClaw() string {
 
 	return ""
 }
-
-// FindExistingWorkspaces scans common locations for existing leo.yaml files.
-func FindExistingWorkspaces() []string {
-	home, _ := userHomeDir()
-	var found []string
-
-	entries, err := os.ReadDir(home)
-	if err != nil {
-		return nil
-	}
-
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		candidate := filepath.Join(home, e.Name(), "leo.yaml")
-		if _, err := os.Stat(candidate); err == nil {
-			found = append(found, filepath.Join(home, e.Name()))
-		}
-	}
-
-	return found
-}
