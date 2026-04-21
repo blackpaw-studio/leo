@@ -4,6 +4,15 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-04-20
+
+### Removed
+
+- Unused `prereq.FindExistingWorkspaces` helper and its tests. The
+  function stat'd every subdirectory of `$HOME` looking for `leo.yaml`,
+  which would have triggered macOS TCC prompts for `~/Documents`,
+  `~/Downloads`, `~/Music`, and `~/Photos` if it had ever been wired up.
+
 ## [0.4.0] — 2026-04-20
 
 ### Added
@@ -167,7 +176,9 @@ All notable user-visible changes to Leo are documented here.
 
 Initial public release.
 
-[Unreleased]: https://github.com/blackpaw-studio/leo/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/blackpaw-studio/leo/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/blackpaw-studio/leo/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/blackpaw-studio/leo/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/blackpaw-studio/leo/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/blackpaw-studio/leo/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/blackpaw-studio/leo/compare/v0.2.2...v0.3.0
