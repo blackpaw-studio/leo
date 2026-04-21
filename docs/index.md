@@ -82,10 +82,16 @@ The in-process cron scheduler runs tasks on a schedule. Each task reads a prompt
 
 ## Quick Install
 
+=== "Homebrew"
+
+    ```bash
+    brew install blackpaw-studio/tap/leo
+    ```
+
 === "Install Script"
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/blackpaw-studio/leo/refs/heads/main/install.sh | sh
+    curl -fsSL leo.blackpaw.studio/install | sh
     ```
 
 === "Go"
