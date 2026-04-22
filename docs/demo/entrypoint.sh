@@ -13,8 +13,8 @@
 set -euo pipefail
 
 OUT_DIR=${OUT_DIR:-/home/demo/out}
-WINDOW_SIZE=${WINDOW_SIZE:-130x36}
-FONT_SIZE=${FONT_SIZE:-13}
+WINDOW_SIZE=${WINDOW_SIZE:-110x30}
+FONT_SIZE=${FONT_SIZE:-16}
 
 log() { printf '[demo] %s\n' "$*" >&2; }
 

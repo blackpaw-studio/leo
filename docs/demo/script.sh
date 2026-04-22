@@ -62,7 +62,7 @@ pause 1.4
 
 # Leo spawns tmux sessions at a hard-coded 200x50. Resize the demo session
 # down to our recording width so the Claude REPL fills the GIF cleanly.
-tmux -L leo resize-window -t leo-coding-demo-showcase -x 130 -y 30 2>/dev/null || true
+tmux -L leo resize-window -t leo-coding-demo-showcase -x 110 -y 24 2>/dev/null || true
 sleep 5
 
 type_cmd "leo agent attach leo-coding-demo-showcase"
