@@ -259,39 +259,41 @@ func runStatusJSON(ctx context.Context) error {
 func runStatus(ctx context.Context) error {
 	report := buildStatusReport(ctx)
 
-	info.Printf("leo:     %s\n", report.LeoVersion)
+	info.Printf("leo:        %s\n", report.LeoVersion)
 	if !report.ConfigValid {
 		warn.Printf("Config: %s\n", report.ConfigError)
 		return nil
 	}
-	success.Println("Config:  valid")
-	info.Printf("Home:    %s\n", report.HomePath)
+	success.Println("Config:     valid")
+	info.Printf("Home:       %s\n", report.HomePath)
 
-	// Service status
+	// Supervisor: is the leo process currently running (detected via pid
+	// file or daemon IPC socket)?
 	if report.Service == "running" {
-		success.Printf("Service: %s\n", report.Service)
+		success.Printf("Supervisor: %s\n", report.Service)
 	} else {
-		warn.Printf("Service: %s\n", report.Service)
+		warn.Printf("Supervisor: %s\n", report.Service)
 	}
 
-	// Daemon status
+	// Autostart: is an OS-level service unit installed (systemd/launchd) to
+	// start the supervisor automatically on boot?
 	if report.Daemon == "running" {
-		success.Printf("Daemon:  %s\n", report.Daemon)
+		success.Printf("Autostart:  %s\n", report.Daemon)
 	} else {
-		info.Printf("Daemon:  %s\n", report.Daemon)
+		info.Printf("Autostart:  %s\n", report.Daemon)
 	}
 
 	// Web UI
 	if report.Web != nil {
 		if report.Web.Loopback {
-			info.Printf("Web UI:  %s\n", report.Web.URL)
+			info.Printf("Web UI:     %s\n", report.Web.URL)
 		} else {
-			warn.Printf("Web UI:  %s (non-loopback bind; token auth required)\n", report.Web.URL)
+			warn.Printf("Web UI:     %s (non-loopback bind; token auth required)\n", report.Web.URL)
 		}
 	}
 
 	// Processes
-	info.Printf("Processes: %d/%d enabled\n", report.Processes.Enabled, report.Processes.Total)
+	info.Printf("Processes:  %d/%d enabled\n", report.Processes.Enabled, report.Processes.Total)
 	for _, state := range report.ProcessStates {
 		uptime := ""
 		if !state.StartedAt.IsZero() {
@@ -317,7 +319,7 @@ func runStatus(ctx context.Context) error {
 	}
 
 	// Tasks
-	info.Printf("Tasks:   %d/%d enabled\n", report.Tasks.Enabled, report.Tasks.Total)
+	info.Printf("Tasks:      %d/%d enabled\n", report.Tasks.Enabled, report.Tasks.Total)
 	if len(report.TaskIssues) > 0 {
 		warn.Printf("%d task(s) with issues:\n", len(report.TaskIssues))
 		for _, issue := range report.TaskIssues {
@@ -326,11 +328,11 @@ func runStatus(ctx context.Context) error {
 	}
 
 	if report.Templates > 0 {
-		info.Printf("Templates: %d\n", report.Templates)
+		info.Printf("Templates:  %d\n", report.Templates)
 	}
 
 	if report.Next != nil {
-		info.Printf("Next:    %s (%s)\n", report.Next.Name, report.Next.Next.Format(time.Kitchen))
+		info.Printf("Next:       %s (%s)\n", report.Next.Name, report.Next.Next.Format(time.Kitchen))
 	}
 
 	return nil
