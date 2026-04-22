@@ -1,0 +1,64 @@
+# Demo leo.yaml — used by docs/demo/record.sh to produce a reproducible demo
+# recording. All names are fictional; no real channel plugins are contacted
+# because nothing is installed inside the demo container.
+
+defaults:
+  model: sonnet
+  max_turns: 0
+  permission_mode: default
+
+web:
+  enabled: false
+
+processes:
+  # Unauthenticated `claude` lands on a first-run theme picker and sits
+  # idle, which is fine for the demo — supervisor sees it as running.
+  assistant:
+    enabled: true
+    workspace: /home/demo/workspace/assistant
+    model: sonnet
+    channels:
+      - plugin:telegram@claude-plugins-official
+
+  watchdog:
+    enabled: true
+    workspace: /home/demo/workspace/watchdog
+    model: haiku
+
+templates:
+  coding:
+    model: sonnet
+    workspace: /home/demo/agents
+
+tasks:
+  daily-briefing:
+    enabled: true
+    schedule: "0 7 * * *"
+    workspace: /home/demo/workspace/assistant
+    prompt_file: /home/demo/.leo/prompts/daily-briefing.md
+    model: sonnet
+    timeout: 10m
+
+  inbox-sweep:
+    enabled: true
+    schedule: "0,30 9-17 * * *"
+    workspace: /home/demo/workspace/assistant
+    prompt_file: /home/demo/.leo/prompts/inbox-sweep.md
+    model: haiku
+    timeout: 5m
+
+  earnings-watch:
+    enabled: true
+    schedule: "0 7 * * 1-5"
+    workspace: /home/demo/workspace/assistant
+    prompt_file: /home/demo/.leo/prompts/earnings-watch.md
+    model: opus
+    timeout: 15m
+
+  trade-desk:
+    enabled: true
+    schedule: "30 8,15 * * 1-5"
+    workspace: /home/demo/workspace/assistant
+    prompt_file: /home/demo/.leo/prompts/trade-desk.md
+    model: opus
+    timeout: 15m

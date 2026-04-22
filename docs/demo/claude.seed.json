@@ -1,0 +1,17 @@
+{
+  "numStartups": 5,
+  "installMethod": "native",
+  "autoUpdates": false,
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.116",
+  "theme": "dark-daltonized",
+  "bypassPermissionsModeAccepted": true,
+  "remoteDialogSeen": true,
+  "projects": {
+    "/home/demo": { "hasTrustDialogAccepted": true, "projectOnboardingSeenCount": 5 },
+    "/home/demo/workspace/assistant": { "hasTrustDialogAccepted": true, "projectOnboardingSeenCount": 5 },
+    "/home/demo/workspace/watchdog": { "hasTrustDialogAccepted": true, "projectOnboardingSeenCount": 5 },
+    "/home/demo/agents": { "hasTrustDialogAccepted": true, "projectOnboardingSeenCount": 5 },
+    "/home/demo/agents/demo-showcase": { "hasTrustDialogAccepted": true, "projectOnboardingSeenCount": 5 }
+  }
+}
