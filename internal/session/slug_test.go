@@ -125,3 +125,93 @@ func TestIsResumeStale(t *testing.T) {
 		t.Errorf("expected empty sid to return not stale")
 	}
 }
+
+// TestLatestSession covers the newest-jsonl lookup used by supervisor and
+// agent restore to avoid resuming stale sessions after a /clear.
+func TestLatestSession(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	cwd := filepath.Join(t.TempDir(), "leotest-latest")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatalf("mkdir cwd: %v", err)
+	}
+
+	slug := ProjectSlug(cwd)
+	projDir := filepath.Join(home, ".claude", "projects", slug)
+	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+
+	// 1. Project dir does not exist yet → empty result, no error.
+	sid, mt, err := LatestSession(cwd, 0)
+	if err != nil {
+		t.Fatalf("LatestSession (missing dir): %v", err)
+	}
+	if sid != "" || !mt.IsZero() {
+		t.Errorf("expected empty result for missing dir, got sid=%q mt=%v", sid, mt)
+	}
+
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+
+	// 2. Empty dir → empty result.
+	sid, _, err = LatestSession(cwd, 0)
+	if err != nil {
+		t.Fatalf("LatestSession (empty dir): %v", err)
+	}
+	if sid != "" {
+		t.Errorf("expected empty result for empty dir, got %q", sid)
+	}
+
+	// 3. Two jsonls with different mtimes — newest wins. Also drop a
+	//    non-jsonl file that should be ignored.
+	older := filepath.Join(projDir, "older-session.jsonl")
+	newer := filepath.Join(projDir, "newer-session.jsonl")
+	noise := filepath.Join(projDir, "not-a-session.txt")
+	for _, p := range []string{older, newer, noise} {
+		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(older, past, past); err != nil {
+		t.Fatalf("Chtimes older: %v", err)
+	}
+
+	sid, mt, err = LatestSession(cwd, 0)
+	if err != nil {
+		t.Fatalf("LatestSession (two files): %v", err)
+	}
+	if sid != "newer-session" {
+		t.Errorf("expected newer-session, got %q", sid)
+	}
+	if time.Since(mt) > time.Minute {
+		t.Errorf("unexpected mtime %v", mt)
+	}
+
+	// 4. Staleness threshold trips — everything older than maxAge is ignored.
+	tooOld := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(older, tooOld, tooOld); err != nil {
+		t.Fatalf("Chtimes older: %v", err)
+	}
+	if err := os.Chtimes(newer, tooOld, tooOld); err != nil {
+		t.Fatalf("Chtimes newer: %v", err)
+	}
+	sid, _, err = LatestSession(cwd, 12*time.Hour)
+	if err != nil {
+		t.Fatalf("LatestSession (all stale): %v", err)
+	}
+	if sid != "" {
+		t.Errorf("expected empty result when newest is stale, got %q", sid)
+	}
+
+	// 5. maxAge=0 disables the staleness check — same stale files still return.
+	sid, _, err = LatestSession(cwd, 0)
+	if err != nil {
+		t.Fatalf("LatestSession (maxAge=0 stale): %v", err)
+	}
+	if sid == "" {
+		t.Errorf("expected a result with maxAge=0 even when files are old")
+	}
+}

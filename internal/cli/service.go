@@ -105,19 +105,9 @@ func runService(cmd *cobra.Command, args []string) error {
 	// Add session persistence
 	store := session.NewStore(cfg.HomePath)
 	sessionKey := "process:" + procName
-	sid, found, getErr := store.Get(sessionKey)
-	if getErr != nil {
-		warn.Printf("  Could not read session store: %v\n", getErr)
-	}
-	if found {
-		claudeArgs = append(claudeArgs, "--resume", sid)
-	} else {
-		sid = session.NewID()
-		if err := store.Set(sessionKey, sid); err != nil {
-			warn.Printf("  Could not store session ID: %v\n", err)
-		}
-		claudeArgs = append(claudeArgs, "--session-id", sid)
-	}
+	claudeArgs = append(claudeArgs,
+		resolveSessionArgs(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "")...,
+	)
 
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
@@ -193,34 +183,9 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 		// Add session persistence
 		store := session.NewStore(cfg.HomePath)
 		sessionKey := "process:" + name
-		sid, found, getErr := store.Get(sessionKey)
-		if getErr != nil {
-			warn.Printf("  [%s] Could not read session store: %v\n", name, getErr)
-		}
-		if found {
-			// Drop --resume if the session jsonl hasn't been written in a
-			// long time. Claude would silently open a fresh file anyway,
-			// and we skip the wasted parse cost of the stale transcript.
-			if maxAge := cfg.ProcessStaleResume(proc); maxAge > 0 {
-				workspace := cfg.ProcessWorkspace(proc)
-				stale, age, _ := session.IsResumeStale(workspace, sid, maxAge)
-				if stale {
-					warn.Printf("  [%s] resume target stale (last written %s ago) — starting fresh session\n",
-						name, age.Round(time.Minute))
-					_ = store.Delete(sessionKey)
-					found = false
-				}
-			}
-		}
-		if found {
-			args = append(args, "--resume", sid)
-		} else {
-			sid = session.NewID()
-			if setErr := store.Set(sessionKey, sid); setErr != nil {
-				warn.Printf("  [%s] Could not store session ID: %v\n", name, setErr)
-			}
-			args = append(args, "--session-id", sid)
-		}
+		args = append(args,
+			resolveSessionArgs(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] ")...,
+		)
 
 		specs = append(specs, service.ProcessSpec{
 			Name:       name,
@@ -233,6 +198,53 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 		})
 	}
 	return specs
+}
+
+// resolveSessionArgs returns the session-related args (--resume / --session-id)
+// to append for a claude invocation. Preference order:
+//
+//  1. Newest *.jsonl in claude's project directory for this workspace. This
+//     matches what /resume inside claude would show at the top of its list
+//     and correctly handles sessions created via /clear that Leo's own store
+//     never saw.
+//  2. Stored session ID from Leo's state — honored as-is so claude can reuse
+//     the pre-issued ID when no jsonl has been written yet.
+//  3. Fresh session ID minted by Leo and pinned via --session-id.
+//
+// On a successful step-1 pick that disagrees with the stored ID, the store is
+// updated so subsequent restarts, web UI, and `leo agent list` stay in sync
+// with what claude is actually running.
+//
+// logPrefix is prepended to warnings (e.g. "[myproc] " for supervised mode,
+// empty for the single-process foreground path).
+func resolveSessionArgs(store *session.Store, sessionKey, workspace string, maxAge time.Duration, logPrefix string) []string {
+	storedID, _, getErr := store.Get(sessionKey)
+	if getErr != nil {
+		warn.Printf("  %sCould not read session store: %v\n", logPrefix, getErr)
+	}
+
+	latestID, _, latestErr := session.LatestSession(workspace, maxAge)
+	if latestErr != nil {
+		warn.Printf("  %sCould not inspect claude project directory: %v\n", logPrefix, latestErr)
+	}
+
+	switch {
+	case latestID != "":
+		if latestID != storedID {
+			if err := store.Set(sessionKey, latestID); err != nil {
+				warn.Printf("  %sCould not update session ID: %v\n", logPrefix, err)
+			}
+		}
+		return []string{"--resume", latestID}
+	case storedID != "":
+		return []string{"--resume", storedID}
+	default:
+		sid := session.NewID()
+		if err := store.Set(sessionKey, sid); err != nil {
+			warn.Printf("  %sCould not store session ID: %v\n", logPrefix, err)
+		}
+		return []string{"--session-id", sid}
+	}
 }
 
 // mergeChannelsIntoEnv returns a new env map combining the process's declared
