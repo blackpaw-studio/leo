@@ -11,6 +11,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/git"
+	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -77,8 +78,25 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
 		}
 
-		args := argsWithResume(rec.ClaudeArgs, rec.SessionID)
-		if rec.SessionID == "" {
+		// Prefer the newest jsonl in claude's project directory for this
+		// workspace over the stored SessionID — catches sessions created
+		// via /clear that agentstore never saw. maxAge=0 disables the
+		// staleness drop; agents are short-lived and the newest jsonl is
+		// virtually always the one we want.
+		resumeID := rec.SessionID
+		if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
+			if latestID != rec.SessionID {
+				updated := rec
+				updated.SessionID = latestID
+				if err := agentstore.Save(homePath, updated); err != nil {
+					fmt.Fprintf(os.Stderr, "restore: agent %q could not persist latest session id: %v\n", name, err)
+				}
+			}
+			resumeID = latestID
+		}
+
+		args := argsWithResume(rec.ClaudeArgs, resumeID)
+		if resumeID == "" {
 			fmt.Fprintf(os.Stderr, "restore: agent %q has no session_id (legacy record) — respawning with a fresh claude session\n", name)
 		}
 

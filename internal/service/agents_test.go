@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 func TestSpawnAgentNameCollision(t *testing.T) {
@@ -408,5 +410,75 @@ func TestArgsWithResumeStripsExistingSessionFlags(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// If the user ran /clear inside an agent's claude session, a newer jsonl
+// lives under ~/.claude/projects/<slug>/ than the SessionID agentstore knows
+// about. RestoreAgents should resume the newest one and re-sync agentstore.
+func TestRestoreAgentsPrefersLatestJSONLAfterClear(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "agent-ws")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
+	projDir := filepath.Join(userHome, ".claude", "projects", session.ProjectSlug(workspace))
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+
+	// Two jsonls: the one agentstore knows about (older) and a newer one
+	// created by a post-/clear session that Leo never saw.
+	oldJSONL := filepath.Join(projDir, "sid-old.jsonl")
+	newJSONL := filepath.Join(projDir, "sid-new.jsonl")
+	for _, p := range []string{oldJSONL, newJSONL} {
+		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(oldJSONL, past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	rec := agentstore.Record{
+		Name:       "leo-coding-post-clear",
+		Template:   "coding",
+		Workspace:  workspace,
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-old"},
+		SessionID:  "sid-old",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+	got := spawner.calls[0].ClaudeArgs
+	want := []string{"--model", "sonnet", "--resume", "sid-new"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args = %v, want %v", got, want)
+		}
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if stored[rec.Name].SessionID != "sid-new" {
+		t.Errorf("agentstore not re-synced: got %q, want sid-new", stored[rec.Name].SessionID)
 	}
 }
