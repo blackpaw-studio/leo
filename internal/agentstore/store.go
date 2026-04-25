@@ -43,6 +43,15 @@ type Record struct {
 	WebPort       string            `json:"web_port"`
 	SpawnedAt     time.Time         `json:"spawned_at"`
 	Stopped       bool              `json:"stopped,omitempty"`
+
+	// NoResume marks the next spawn as "do not pass --resume". Set by the
+	// supervisor when a previous spawn quick-exited while resuming, to break
+	// the crash loop across daemon restarts (the in-process strip is not
+	// enough — restart-time RestoreAgents would otherwise pick the same
+	// poisoned jsonl back up via LatestSession). Cleared by RestoreAgents
+	// after it consumes the flag, so a subsequent healthy session is
+	// resume-able again.
+	NoResume bool `json:"no_resume,omitempty"`
 }
 
 // FilePath returns the path to agents.json in the state directory.

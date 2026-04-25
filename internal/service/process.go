@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -562,8 +563,16 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// Very-quick exits suggest a poisoned session: strip --resume and
 		// clear the stored session so the next spawn starts fresh.
 		if elapsed < quickExitThreshold {
+			hadResume := hasResumeArg(currentArgs)
 			currentArgs = stripResumeArg(currentArgs)
 			clearProcessSession(homePath, spec.Name)
+			if hadResume {
+				// Persist the "no-resume" decision on the agent record so a
+				// daemon restart mid-crash-loop doesn't reintroduce
+				// --resume via RestoreAgents. No-op for non-agent specs
+				// (no matching agentstore record).
+				markAgentNoResume(homePath, spec.Name)
+			}
 			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session\n", spec.Name, elapsed.Seconds())
 		}
 
@@ -653,6 +662,41 @@ func stripResumeArg(args []string) []string {
 		result = append(result, args[i])
 	}
 	return result
+}
+
+// hasResumeArg reports whether a `--resume <id>` pair is present in args.
+func hasResumeArg(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--resume" && i+1 < len(args) {
+			return true
+		}
+	}
+	return false
+}
+
+// markAgentNoResume sets NoResume=true and clears SessionID on the agentstore
+// record matching name. The flag tells RestoreAgents to skip --resume on the
+// next daemon restart so a poisoned session jsonl isn't re-rehydrated. It's a
+// no-op when no agent record exists for this name (i.e. the spec is a regular
+// supervised process, not an ephemeral agent).
+func markAgentNoResume(homePath, name string) {
+	path := agentstore.FilePath(homePath)
+	records, err := agentstore.Load(path)
+	if err != nil || len(records) == 0 {
+		return
+	}
+	rec, ok := records[name]
+	if !ok {
+		return
+	}
+	if rec.NoResume && rec.SessionID == "" {
+		return
+	}
+	rec.NoResume = true
+	rec.SessionID = ""
+	if err := agentstore.Save(homePath, rec); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] warning: could not mark agent no-resume: %v\n", name, err)
+	}
 }
 
 // clearProcessSession removes a single process's stored session so the next launch starts fresh.
