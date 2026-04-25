@@ -78,25 +78,43 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
 		}
 
-		// Prefer the newest jsonl in claude's project directory for this
-		// workspace over the stored SessionID — catches sessions created
-		// via /clear that agentstore never saw. maxAge=0 disables the
-		// staleness drop; agents are short-lived and the newest jsonl is
-		// virtually always the one we want.
-		resumeID := rec.SessionID
-		if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
-			if latestID != rec.SessionID {
-				updated := rec
-				updated.SessionID = latestID
-				if err := agentstore.Save(homePath, updated); err != nil {
-					fmt.Fprintf(os.Stderr, "restore: agent %q could not persist latest session id: %v\n", name, err)
-				}
+		// NoResume short-circuits the resume lookup entirely. It is set by
+		// the supervisor when the previous spawn quick-exited while resuming
+		// — the jsonl on disk is poisoned (e.g. claude TUI bug rehydrating
+		// scheduled-tasks state), so passing --resume here would just
+		// reproduce the crash. Spawn fresh and clear the flag so the next
+		// healthy session can be resumed normally.
+		var resumeID string
+		switch {
+		case rec.NoResume:
+			fmt.Fprintf(os.Stderr, "restore: agent %q skipping --resume (NoResume flag set after prior quick-exit) — respawning fresh\n", name)
+			updated := rec
+			updated.NoResume = false
+			updated.SessionID = ""
+			if err := agentstore.Save(homePath, updated); err != nil {
+				fmt.Fprintf(os.Stderr, "restore: agent %q could not clear NoResume flag: %v\n", name, err)
 			}
-			resumeID = latestID
+		default:
+			// Prefer the newest jsonl in claude's project directory for this
+			// workspace over the stored SessionID — catches sessions created
+			// via /clear that agentstore never saw. maxAge=0 disables the
+			// staleness drop; agents are short-lived and the newest jsonl is
+			// virtually always the one we want.
+			resumeID = rec.SessionID
+			if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
+				if latestID != rec.SessionID {
+					updated := rec
+					updated.SessionID = latestID
+					if err := agentstore.Save(homePath, updated); err != nil {
+						fmt.Fprintf(os.Stderr, "restore: agent %q could not persist latest session id: %v\n", name, err)
+					}
+				}
+				resumeID = latestID
+			}
 		}
 
 		args := argsWithResume(rec.ClaudeArgs, resumeID)
-		if resumeID == "" {
+		if resumeID == "" && !rec.NoResume {
 			fmt.Fprintf(os.Stderr, "restore: agent %q has no session_id (legacy record) — respawning with a fresh claude session\n", name)
 		}
 

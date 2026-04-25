@@ -482,3 +482,68 @@ func TestRestoreAgentsPrefersLatestJSONLAfterClear(t *testing.T) {
 		t.Errorf("agentstore not re-synced: got %q, want sid-new", stored[rec.Name].SessionID)
 	}
 }
+
+// TestRestoreAgentsHonorsNoResume covers the poison-recovery path: the prior
+// supervisor run quick-exited while resuming, marked NoResume=true, and
+// RestoreAgents must spawn fresh (no --resume) and clear the flag — even when
+// a jsonl exists in the project directory that LatestSession would otherwise
+// pick.
+func TestRestoreAgentsHonorsNoResume(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "agent-ws")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
+	// Plant a jsonl that LatestSession would otherwise pick — proving
+	// NoResume genuinely short-circuits the lookup.
+	projDir := filepath.Join(userHome, ".claude", "projects", session.ProjectSlug(workspace))
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+	if err := os.WriteFile(filepath.Join(projDir, "sid-poison.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	rec := agentstore.Record{
+		Name:       "leo-coding-poisoned",
+		Template:   "coding",
+		Workspace:  workspace,
+		ClaudeArgs: []string{"--model", "sonnet", "--resume", "sid-poison"},
+		SessionID:  "sid-poison",
+		NoResume:   true,
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+
+	got := spawner.calls[0].ClaudeArgs
+	for _, a := range got {
+		if a == "--resume" {
+			t.Fatalf("NoResume agent should not get --resume; got %v", got)
+		}
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	after := stored[rec.Name]
+	if after.NoResume {
+		t.Errorf("NoResume should be cleared after consumption")
+	}
+	if after.SessionID != "" {
+		t.Errorf("SessionID should be cleared alongside NoResume; got %q", after.SessionID)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -587,6 +588,65 @@ func TestClearProcessSession(t *testing.T) {
 	// Should only remove process:assistant, keeping process:researcher
 	if string(writtenData) != `{"process:researcher":"sid2"}` {
 		t.Errorf("data = %q, want researcher session preserved", string(writtenData))
+	}
+}
+
+func TestHasResumeArg(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"present", []string{"--model", "sonnet", "--resume", "abc"}, true},
+		{"absent", []string{"--model", "sonnet", "--session-id", "abc"}, false},
+		{"trailing without value", []string{"--model", "sonnet", "--resume"}, false},
+		{"empty", []string{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasResumeArg(tt.args); got != tt.want {
+				t.Errorf("hasResumeArg(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMarkAgentNoResume(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:       "leo-coding-poison",
+		Workspace:  filepath.Join(t.TempDir(), "ws"),
+		ClaudeArgs: []string{"--model", "sonnet", "--resume", "sid-bad"},
+		SessionID:  "sid-bad",
+		WebPort:    "8370",
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	markAgentNoResume(home, rec.Name)
+
+	stored, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := stored[rec.Name]
+	if !got.NoResume {
+		t.Errorf("NoResume not set")
+	}
+	if got.SessionID != "" {
+		t.Errorf("SessionID not cleared: %q", got.SessionID)
+	}
+}
+
+func TestMarkAgentNoResumeNoMatch(t *testing.T) {
+	// Non-agent process names must be a no-op (no panic, no record creation).
+	home := t.TempDir()
+	markAgentNoResume(home, "supervised-process")
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := stored["supervised-process"]; ok {
+		t.Errorf("markAgentNoResume should not create records for unknown names")
 	}
 }
 
