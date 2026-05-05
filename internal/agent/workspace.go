@@ -90,14 +90,15 @@ func ResolveWorkspace(tmpl config.TemplateConfig, templateName, repo, nameOverri
 		return canonical, name, nil
 	}
 
-	if err := os.MkdirAll(base, 0750); err != nil {
+	wsPath := filepath.Join(base, repo)
+	if err := os.MkdirAll(wsPath, 0750); err != nil {
 		return "", "", fmt.Errorf("creating workspace dir: %w", err)
 	}
 	name := fmt.Sprintf("%s-%s-%s", baseAgentName, templateName, repo)
 	if nameOverride != "" {
 		name = nameOverride
 	}
-	return base, name, nil
+	return wsPath, name, nil
 }
 
 // EnsureCanonical ensures a canonical clone of owner/repo exists under

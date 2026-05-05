@@ -18,8 +18,12 @@ func TestResolveWorkspacePlainName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if workspace != dir {
-		t.Errorf("workspace = %q, want %q", workspace, dir)
+	expected := filepath.Join(dir, "myproject")
+	if workspace != expected {
+		t.Errorf("workspace = %q, want %q", workspace, expected)
+	}
+	if _, err := os.Stat(expected); err != nil {
+		t.Errorf("expected workspace dir to be created: %v", err)
 	}
 	if name != "leo-coding-myproject" {
 		t.Errorf("name = %q, want leo-coding-myproject", name)
