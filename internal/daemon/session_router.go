@@ -35,16 +35,19 @@ type PendingInvocation struct {
 }
 
 type sessionQueue struct {
-	mu       sync.Mutex
-	fifo     []*PendingInvocation
-	inFlight *PendingInvocation
-	notify   chan struct{} // buffered(1); pump signal (used in Task 6)
+	mu          sync.Mutex
+	fifo        []*PendingInvocation
+	inFlight    *PendingInvocation // non-nil while one invocation is executing; nil otherwise
+	notify      chan struct{}      // buffered(1); pump signal (used in Task 6)
+	pumpStarted bool
 }
 
 type sessionRouter struct {
 	mu     sync.Mutex
 	queues map[string]*sessionQueue
 	byID   map[string]*PendingInvocation
+	inject injectFn
+	abort  abortFn
 }
 
 func newSessionRouter() *sessionRouter {
@@ -117,4 +120,122 @@ func (r *sessionRouter) queueFor(session string) *sessionQueue {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.queues[session]
+}
+
+type injectFn func(session, prompt string) error
+type abortFn func(session string) error
+
+// SetInjector / SetAborter wire the tmux primitives (or test fakes).
+// Must be called before StartPump for any session.
+func (r *sessionRouter) SetInjector(fn injectFn) { r.inject = fn }
+func (r *sessionRouter) SetAborter(fn abortFn)   { r.abort = fn }
+
+// StartPump launches the per-session pump goroutine. Idempotent: a session
+// only ever gets one pump in its lifetime (subsequent calls are no-ops).
+func (r *sessionRouter) StartPump(session string) {
+	r.mu.Lock()
+	q, ok := r.queues[session]
+	if !ok {
+		q = &sessionQueue{notify: make(chan struct{}, 1)}
+		r.queues[session] = q
+	}
+	if q.pumpStarted {
+		r.mu.Unlock()
+		return
+	}
+	q.pumpStarted = true
+	r.mu.Unlock()
+	go r.pump(session, q)
+}
+
+// Report signals the matching pending invocation. If id is unknown or doesn't
+// match the session's current inFlight, the report is discarded silently
+// (defensive against late hook callbacks).
+func (r *sessionRouter) Report(id string, result InvocationResult) {
+	inv, ok := r.Lookup(id)
+	if !ok {
+		return
+	}
+	q := r.queueFor(inv.Session)
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	matches := q.inFlight != nil && q.inFlight.ID == id
+	if matches {
+		q.inFlight = nil
+	}
+	q.mu.Unlock()
+	if !matches {
+		return // late / duplicate report
+	}
+	select {
+	case inv.Result <- result:
+	default:
+	}
+	r.mu.Lock()
+	delete(r.byID, id)
+	r.mu.Unlock()
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (r *sessionRouter) pump(session string, q *sessionQueue) {
+	for {
+		<-q.notify
+		for {
+			q.mu.Lock()
+			if q.inFlight != nil || len(q.fifo) == 0 {
+				q.mu.Unlock()
+				break
+			}
+			next := q.fifo[0]
+			q.fifo = q.fifo[1:]
+			q.inFlight = next
+			q.mu.Unlock()
+
+			if err := r.inject(session, next.Prompt); err != nil {
+				q.mu.Lock()
+				q.inFlight = nil
+				q.mu.Unlock()
+				r.mu.Lock()
+				delete(r.byID, next.ID)
+				r.mu.Unlock()
+				select {
+				case next.Result <- InvocationResult{OK: false, Err: "inject: " + err.Error()}:
+				default:
+				}
+				continue
+			}
+
+			timer := time.NewTimer(next.Timeout)
+			select {
+			case <-timer.C:
+				_ = r.abort(session)
+				q.mu.Lock()
+				still := q.inFlight != nil && q.inFlight.ID == next.ID
+				if still {
+					q.inFlight = nil
+				}
+				q.mu.Unlock()
+				if still {
+					r.mu.Lock()
+					delete(r.byID, next.ID)
+					r.mu.Unlock()
+					select {
+					case next.Result <- InvocationResult{OK: false, Err: "timeout"}:
+					default:
+					}
+				}
+			case <-q.notify:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				// notify came from Report path — inFlight already cleared and
+				// result delivered. Loop to pick up the next item.
+			}
+		}
+	}
 }
