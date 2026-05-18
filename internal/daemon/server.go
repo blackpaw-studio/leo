@@ -305,7 +305,7 @@ func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	timeout := time.Duration(req.TimeoutSeconds) * time.Second
-	if timeout == 0 {
+	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
 	inv, ok := s.router.Enqueue(EnqueueParams{
@@ -334,6 +334,10 @@ func (s *Server) handleTaskAwait(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown invocation_id")
 		return
+	}
+	// Long-poll handler; disable the server's WriteTimeout for this connection.
+	if rc := http.NewResponseController(w); rc != nil {
+		_ = rc.SetWriteDeadline(time.Time{})
 	}
 	select {
 	case res := <-inv.Result:

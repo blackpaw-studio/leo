@@ -53,8 +53,7 @@ func TestEnqueueRouteAccepts(t *testing.T) {
 }
 
 func TestAwaitGetsReport(t *testing.T) {
-	s, _, ts := newServerWithRouter(t)
-	_ = s
+	_, _, ts := newServerWithRouter(t)
 	enqBody, _ := json.Marshal(map[string]any{
 		"session":         "leo-session-foo",
 		"task":            "t",
