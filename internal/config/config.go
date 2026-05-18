@@ -215,6 +215,10 @@ type ProcessConfig struct {
 	Enabled          bool `yaml:"enabled"`
 }
 
+// SessionConfig defines a named persistent claude session supervised by the
+// daemon. Tasks with runtime: persistent reference a session by name (or
+// implicitly create a dedicated one). Fields mirror ProcessConfig; see
+// docs/superpowers/specs/2026-05-17-persistent-task-sessions-design.md.
 type SessionConfig struct {
 	Workspace          string            `yaml:"workspace,omitempty"`
 	Model              string            `yaml:"model,omitempty"`
@@ -247,10 +251,10 @@ type TaskConfig struct {
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
 	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
-	Runtime            string   `yaml:"runtime,omitempty"`
+	Runtime            string   `yaml:"runtime,omitempty"` // "oneshot" (default) | "persistent"
 	Session            string   `yaml:"session,omitempty"`
 	Lazy               bool     `yaml:"lazy,omitempty"`
-	QueueMax           int      `yaml:"queue_max,omitempty"`
+	QueueMax           int      `yaml:"queue_max,omitempty"` // 0 → use default (5)
 }
 
 // TemplateConfig defines a reusable blueprint for spawning ephemeral agents.
@@ -280,7 +284,8 @@ func (c *Config) IsClientOnly() bool {
 	return len(c.Client.Hosts) > 0 &&
 		len(c.Processes) == 0 &&
 		len(c.Tasks) == 0 &&
-		len(c.Templates) == 0
+		len(c.Templates) == 0 &&
+		len(c.Sessions) == 0
 }
 
 // DefaultWorkspace returns the default workspace path (HomePath/workspace).
