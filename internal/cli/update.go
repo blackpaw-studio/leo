@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -44,6 +45,8 @@ func allowUnsignedFromEnv() bool {
 func newUpdateCmd() *cobra.Command {
 	var checkOnly bool
 	var allowUnsigned bool
+	var prNumber int
+	var pinnedVersion string
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -51,8 +54,26 @@ func newUpdateCmd() *cobra.Command {
 		Long: "Download the latest leo release and replace the running binary.\n\n" +
 			"Workspace templates (CLAUDE.md, skills/*.md) re-sync automatically\n" +
 			"whenever the service starts — restart the daemon after updating to\n" +
-			"pick up any template changes.",
+			"pick up any template changes.\n\n" +
+			"Pass --pr <n> to install the most recent successful PR build\n" +
+			"(uploaded by the prerelease workflow), or --version pr-<n>-<sha>\n" +
+			"to pin to an exact PR build. Both forms need a GitHub token; the\n" +
+			"command tries the gh CLI first, then $GH_TOKEN / $GITHUB_TOKEN /\n" +
+			"$LEO_GITHUB_TOKEN.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if prNumber > 0 && pinnedVersion != "" {
+				return fmt.Errorf("--pr and --version are mutually exclusive")
+			}
+			if prNumber > 0 {
+				return runPrereleaseUpdateByPR(prNumber, allowUnsigned)
+			}
+			if update.IsPrereleaseVersion(pinnedVersion) {
+				return runPrereleaseUpdateByVersion(pinnedVersion, allowUnsigned)
+			}
+			if pinnedVersion != "" {
+				return fmt.Errorf("--version currently supports prerelease tags only (pr-<n>-<sha>); to install a tagged release, omit --version and let leo find the latest")
+			}
+
 			info.Println("Checking for updates...")
 
 			latest, err := update.CheckLatestVersion()
@@ -108,22 +129,7 @@ func newUpdateCmd() *cobra.Command {
 
 			// Offer to restart the daemon so the new binary takes effect —
 			// the restart also re-syncs workspace templates.
-			cfg, err := loadConfig()
-			if err != nil || cfg.IsClientOnly() {
-				return nil
-			}
-			if daemon.IsRunning(cfg.HomePath) {
-				reader := bufio.NewReader(os.Stdin)
-				if prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
-					info.Println("Restarting daemon...")
-					if err := service.RestartDaemon(); err != nil {
-						return fmt.Errorf("restarting daemon: %w", err)
-					}
-					success.Println("Daemon restarted")
-				}
-			}
-
-			return nil
+			return maybeRestartDaemon()
 		},
 	}
 
@@ -131,8 +137,70 @@ func newUpdateCmd() *cobra.Command {
 		"check if an update is available without installing")
 	cmd.Flags().BoolVar(&allowUnsigned, "allow-unsigned", false,
 		"permit updating from a release without a cosign signature (SHA-256 only)")
+	cmd.Flags().IntVar(&prNumber, "pr", 0,
+		"install the most recent successful PR build (requires a GitHub token)")
+	cmd.Flags().StringVar(&pinnedVersion, "version", "",
+		"pin to a specific version, e.g. --version pr-42-a1b2c3d (PR builds only)")
 	// Advertise the env-var equivalent without cluttering --help.
 	_ = cmd.Flags().MarkHidden("allow-unsigned")
 
 	return cmd
+}
+
+// runPrereleaseUpdateByPR resolves the latest passing prerelease run on
+// the given PR, then verifies + installs its artifact. Shared restart
+// prompt at the end mirrors the stable path.
+func runPrereleaseUpdateByPR(prNumber int, allowUnsigned bool) error {
+	opts := prereleaseOptions(allowUnsigned)
+	info.Printf("Installing latest prerelease build for PR #%d...\n", prNumber)
+	path, version, err := update.DownloadAndReplacePR(context.Background(), prNumber, opts)
+	if err != nil {
+		return fmt.Errorf("installing PR #%d build: %w", prNumber, err)
+	}
+	success.Printf("Updated %s to %s\n", path, version)
+	return maybeRestartDaemon()
+}
+
+// runPrereleaseUpdateByVersion installs a specific pr-<n>-<sha> build.
+func runPrereleaseUpdateByVersion(version string, allowUnsigned bool) error {
+	opts := prereleaseOptions(allowUnsigned)
+	info.Printf("Installing prerelease build %s...\n", version)
+	path, installedVersion, err := update.DownloadAndReplacePRVersion(context.Background(), version, opts)
+	if err != nil {
+		return fmt.Errorf("installing %s: %w", version, err)
+	}
+	success.Printf("Updated %s to %s\n", path, installedVersion)
+	return maybeRestartDaemon()
+}
+
+func prereleaseOptions(allowUnsigned bool) update.PrereleaseOptions {
+	return update.PrereleaseOptions{
+		AllowUnsigned: allowUnsigned || allowUnsignedFromEnv(),
+		Warn: func(format string, args ...any) {
+			warn.Printf(format+"\n", args...)
+		},
+	}
+}
+
+// maybeRestartDaemon offers to bounce the daemon after a binary swap so
+// the new binary actually serves new requests. Same prompt the stable
+// update path uses — factored out so both paths stay in sync.
+func maybeRestartDaemon() error {
+	cfg, err := loadConfig()
+	if err != nil || cfg.IsClientOnly() {
+		return nil
+	}
+	if !daemon.IsRunning(cfg.HomePath) {
+		return nil
+	}
+	reader := bufio.NewReader(os.Stdin)
+	if !prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
+		return nil
+	}
+	info.Println("Restarting daemon...")
+	if err := service.RestartDaemon(); err != nil {
+		return fmt.Errorf("restarting daemon: %w", err)
+	}
+	success.Println("Daemon restarted")
+	return nil
 }

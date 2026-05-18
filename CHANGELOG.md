@@ -4,6 +4,15 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **PR prerelease builds.** Every PR from this repo now produces a
+  cosign-signed installable binary as a workflow artifact. Install with
+  `leo update --pr <n>` for the latest passing run on a PR, or
+  `leo update --version pr-<n>-<sha>` to pin to a specific build. A
+  sticky PR comment shows both forms plus a `gh run download` fallback.
+  Artifacts are retained for 14 days; releases page is untouched.
+
 ## [0.4.1] — 2026-04-20
 
 ### Removed

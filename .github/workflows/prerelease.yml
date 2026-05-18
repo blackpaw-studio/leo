@@ -1,0 +1,187 @@
+name: Prerelease
+
+# PR-triggered builds: goreleaser snapshot → cosign sign → workflow
+# artifact upload → sticky PR comment with install instructions.
+#
+# This workflow never publishes to GitHub Releases; that's deliberate so
+# the Releases page stays a user-facing surface for tagged stable
+# releases only. Reviewers install PR builds via `leo update --pr <n>`
+# or the `gh run download` fallback shown in the PR comment.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prerelease-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    # Gate the build on the same checks PRs already have to pass.
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build prerelease artifact
+    needs: ci
+    # Same-repo PRs only. Fork PRs cannot safely be granted id-token: write
+    # (a malicious PR could mint a leo-flavored Fulcio identity); skipping
+    # is more honest than a half-trusted unsigned build.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # cosign keyless signing
+      pull-requests: write  # sticky PR comment
+      actions: read         # read artifacts/runs API
+    # SHA-pinned third-party actions (same posture as release.yml).
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+
+      - name: Compute build identifiers
+        id: ids
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          short_sha="${HEAD_SHA:0:7}"
+          version="pr-${PR_NUMBER}-${short_sha}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build with goreleaser
+        uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 # v7.0.0
+        env:
+          PR_NUMBER: ${{ steps.ids.outputs.pr_number }}
+          # Pass through so goreleaser's git-detection doesn't complain.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --config .goreleaser.prerelease.yaml
+
+      - name: Sign checksums with cosign
+        # Snapshot mode skips goreleaser's `signs:` block, so we sign
+        # explicitly here. The OIDC token cosign requests carries
+        # `prerelease.yml@refs/pull/<n>/merge` as its identity — that's
+        # what `leo update --pr <n>` pins against.
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -eu
+          cd dist
+          cosign sign-blob \
+            --yes \
+            --output-signature=checksums.txt.sig \
+            --output-certificate=checksums.txt.pem \
+            checksums.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: leo-prerelease
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/checksums.txt.sig
+            dist/checksums.txt.pem
+            dist/metadata.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Comment on PR with install instructions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.ids.outputs.version }}
+          SHORT_SHA: ${{ steps.ids.outputs.short_sha }}
+          HEAD_SHA: ${{ steps.ids.outputs.head_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -eu
+          marker='<!-- leo-prerelease -->'
+          run_url="https://github.com/${REPO}/actions/runs/${RUN_ID}"
+          body=$(cat <<EOF
+          ${marker}
+          ### Prerelease build ready: \`${VERSION}\`
+
+          Built from commit [\`${SHORT_SHA}\`](https://github.com/${REPO}/commit/${HEAD_SHA}) by [run #${RUN_ID}](${run_url}). Artifacts retained for 14 days.
+
+          **Install with leo** (if you already have it):
+          \`\`\`bash
+          leo update --pr ${PR}
+          # or pin to this exact build:
+          leo update --version ${VERSION}
+          \`\`\`
+
+          **Install without leo** (needs the [\`gh\` CLI](https://cli.github.com/) authenticated):
+          \`\`\`bash
+          gh run download ${RUN_ID} --repo ${REPO} --name leo-prerelease --dir /tmp/leo-${VERSION}
+          tar -xzf /tmp/leo-${VERSION}/leo_${VERSION}_\$(uname -s | tr A-Z a-z)_\$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz -C /tmp/leo-${VERSION}
+          chmod +x /tmp/leo-${VERSION}/leo
+          mv /tmp/leo-${VERSION}/leo ~/.local/bin/leo
+          \`\`\`
+
+          The cosign signing identity for this build is \`prerelease.yml@refs/pull/${PR}/merge\` — \`leo update\` verifies that automatically. This is a PR build, not a release; do not use in production.
+          EOF
+          )
+
+          existing=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"${marker}\")) | .id" \
+            | head -n 1 || true)
+
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" \
+              -f body="$body" >/dev/null
+          else
+            gh pr comment "${PR}" --repo "${REPO}" --body "$body" >/dev/null
+          fi
+
+  skipped-fork:
+    # Visibility: when a fork PR triggers the workflow, post a one-time
+    # comment explaining the build was skipped so contributors aren't
+    # left wondering. The `if:` keeps this off same-repo PRs.
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment on fork PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          marker='<!-- leo-prerelease-fork-skip -->'
+          body=$(cat <<EOF
+          ${marker}
+          ### Prerelease build skipped
+
+          This PR is from a fork, and the prerelease workflow requires \`id-token: write\` to cosign-sign the build. Granting that to a fork would let any PR mint a leo-flavored Sigstore identity, so we skip the build instead. A maintainer can produce a build manually if needed.
+          EOF
+          )
+
+          existing=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"${marker}\")) | .id" \
+            | head -n 1 || true)
+          if [ -z "$existing" ]; then
+            gh pr comment "${PR}" --repo "${REPO}" --body "$body" >/dev/null
+          fi
