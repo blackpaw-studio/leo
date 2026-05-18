@@ -103,13 +103,18 @@ func newUnixClientNoTimeout(sockPath string) *http.Client {
 }
 
 // EnqueueRequest is the payload for EnqueueTask / EnqueueTaskHTTP.
+//
+// InvocationID is optional: when non-empty the daemon will track the
+// invocation under that id (matching a marker the caller has already baked
+// into Prompt). When empty the daemon auto-generates an id.
 type EnqueueRequest struct {
-	Session  string
-	Task     string
-	Prompt   string
-	Channels []string
-	QueueMax int
-	Timeout  time.Duration
+	InvocationID string
+	Session      string
+	Task         string
+	Prompt       string
+	Channels     []string
+	QueueMax     int
+	Timeout      time.Duration
 }
 
 // EnqueueResponse is the daemon's reply to /task/enqueue.
@@ -142,6 +147,7 @@ func EnqueueTaskHTTP(ctx context.Context, baseURL string, req EnqueueRequest) (E
 
 func enqueueTask(ctx context.Context, cli *http.Client, baseURL string, req EnqueueRequest) (EnqueueResponse, error) {
 	body := map[string]any{
+		"invocation_id":   req.InvocationID,
 		"session":         req.Session,
 		"task":            req.Task,
 		"prompt":          req.Prompt,

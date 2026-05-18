@@ -67,6 +67,14 @@ func newInvocationID() string {
 // success, or ok=false if the session is at QueueMax (counting queued items
 // plus any in-flight invocation). Does NOT block on the pump.
 func (r *sessionRouter) Enqueue(p EnqueueParams) (*PendingInvocation, bool) {
+	return r.EnqueueWithID("", p)
+}
+
+// EnqueueWithID is like Enqueue but uses the supplied id (when non-empty)
+// instead of generating one. Returns ok=false if the queue is at QueueMax.
+// This is what lets a runner pre-bake an invocation id into its prompt marker
+// and have the daemon track the same id server-side.
+func (r *sessionRouter) EnqueueWithID(id string, p EnqueueParams) (*PendingInvocation, bool) {
 	r.mu.Lock()
 	q, ok := r.queues[p.Session]
 	if !ok {
@@ -91,8 +99,11 @@ func (r *sessionRouter) Enqueue(p EnqueueParams) (*PendingInvocation, bool) {
 	if depth >= capacity {
 		return nil, false
 	}
+	if id == "" {
+		id = newInvocationID()
+	}
 	inv := &PendingInvocation{
-		ID:       newInvocationID(),
+		ID:       id,
 		Session:  p.Session,
 		Task:     p.Task,
 		Prompt:   p.Prompt,

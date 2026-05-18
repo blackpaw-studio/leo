@@ -290,6 +290,7 @@ func (s *Server) handleProcessList(w http.ResponseWriter, r *http.Request) {
 }
 
 type taskEnqueueReq struct {
+	InvocationID   string   `json:"invocation_id,omitempty"`
 	Session        string   `json:"session"`
 	Task           string   `json:"task"`
 	Prompt         string   `json:"prompt"`
@@ -318,7 +319,7 @@ func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	inv, ok := s.router.Enqueue(EnqueueParams{
+	inv, ok := s.router.EnqueueWithID(req.InvocationID, EnqueueParams{
 		Session:  req.Session,
 		Task:     req.Task,
 		Prompt:   req.Prompt,
