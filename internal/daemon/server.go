@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
 
@@ -68,6 +69,15 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 		processes:  processes,
 		router:     newSessionRouter(),
 	}
+
+	// Wire the session router to real tmux primitives. Tests that need
+	// fakes can call SetInjector/SetAborter after construction.
+	s.router.SetInjector(func(session, prompt string) error {
+		return tmux.InjectPrompt(context.Background(), tmuxPath(), session, prompt)
+	})
+	s.router.SetAborter(func(session string) error {
+		return tmux.AbortPrompt(context.Background(), tmuxPath(), session)
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
@@ -385,4 +395,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, Response{OK: false, Error: msg})
+}
+
+// tmuxPath resolves the tmux binary path, falling back to "tmux" on the PATH
+// when LookPath fails. Resolved lazily on each call so PATH changes in tests
+// are observable.
+func tmuxPath() string {
+	p, err := exec.LookPath("tmux")
+	if err != nil {
+		return "tmux"
+	}
+	return p
 }
