@@ -127,8 +127,28 @@ type abortFn func(session string) error
 
 // SetInjector / SetAborter wire the tmux primitives (or test fakes).
 // Must be called before StartPump for any session.
-func (r *sessionRouter) SetInjector(fn injectFn) { r.inject = fn }
-func (r *sessionRouter) SetAborter(fn abortFn)   { r.abort = fn }
+func (r *sessionRouter) SetInjector(fn injectFn) {
+	r.mu.Lock()
+	r.inject = fn
+	r.mu.Unlock()
+}
+func (r *sessionRouter) SetAborter(fn abortFn) {
+	r.mu.Lock()
+	r.abort = fn
+	r.mu.Unlock()
+}
+
+func (r *sessionRouter) currentInjector() injectFn {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inject
+}
+
+func (r *sessionRouter) currentAborter() abortFn {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.abort
+}
 
 // StartPump launches the per-session pump goroutine. Idempotent: a session
 // only ever gets one pump in its lifetime (subsequent calls are no-ops).
@@ -196,7 +216,7 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			q.inFlight = next
 			q.mu.Unlock()
 
-			if err := r.inject(session, next.Prompt); err != nil {
+			if err := r.currentInjector()(session, next.Prompt); err != nil {
 				q.mu.Lock()
 				q.inFlight = nil
 				q.mu.Unlock()
@@ -213,7 +233,7 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			timer := time.NewTimer(next.Timeout)
 			select {
 			case <-timer.C:
-				_ = r.abort(session)
+				_ = r.currentAborter()(session)
 				q.mu.Lock()
 				still := q.inFlight != nil && q.inFlight.ID == next.ID
 				if still {
