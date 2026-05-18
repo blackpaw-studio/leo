@@ -83,6 +83,7 @@ nav:
       - configuration/index.md
       - Config Reference: configuration/config-reference.md
       - Workspace Structure: configuration/workspace-structure.md
+      - Persistent Tasks: configuration/persistent-tasks.md
   - CLI Reference:
       - cli/index.md
       - leo setup: cli/setup.md

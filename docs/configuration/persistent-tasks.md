@@ -1,0 +1,140 @@
+# Persistent Task Sessions
+
+Tasks default to `runtime: oneshot`, which runs `claude -p <prompt>` as a fresh subprocess for each cron firing. Setting `runtime: persistent` reuses a warm `claude` session living in a leo-supervised tmux session.
+
+## Why
+
+- Skip claude startup cost on every firing.
+- Carry conversational context across firings without juggling `--resume` ids.
+- `tmux attach` to watch a scheduled task run live.
+
+## Quickstart — dedicated session per task
+
+```yaml
+tasks:
+  morning:
+    runtime: persistent
+    schedule: "0 7 * * *"
+    prompt_file: prompts/morning.md
+    workspace: ~/work/morning
+    channels: [plugin:slack@official]
+```
+
+That config implicitly creates a dedicated session named `leo-session-morning`. Leo:
+
+- Starts a long-running `claude` inside the tmux session at `leo service` boot.
+- Resumes (`--resume <id>`) on crash using the persisted session id.
+- Writes a leo-managed Stop hook into `~/work/morning/.claude/settings.local.json`.
+- On each cron firing, pastes the prompt into the live session and waits for the hook to report completion.
+
+## Sharing a session across multiple tasks
+
+Declare a session explicitly under `sessions:` and reference it from tasks:
+
+```yaml
+sessions:
+  daily:
+    workspace: ~/work/daily
+    model: sonnet
+    channels: [plugin:slack@official, plugin:telegram@official]
+
+tasks:
+  standup:
+    runtime: persistent
+    session: daily
+    schedule: "0 7 * * *"
+    prompt_file: prompts/standup.md
+    channels: [plugin:slack@official]      # must be subset of session.channels
+  summary:
+    runtime: persistent
+    session: daily
+    schedule: "0 18 * * *"
+    prompt_file: prompts/summary.md
+    channels: [plugin:telegram@official]
+```
+
+Tasks share the same `claude` process and channel plugins. Each firing's prompt is queued per-session (FIFO), so they execute in arrival order.
+
+## Sharing with a supervised process
+
+```yaml
+processes:
+  bot:
+    workspace: ~/work/bot
+    channels: [plugin:telegram@official]
+
+tasks:
+  midday-poke:
+    runtime: persistent
+    session: process:bot
+    schedule: "0 12 * * *"
+    prompt_file: prompts/midday.md
+    channels: [plugin:telegram@official]
+```
+
+The same tmux session hosts both your interactive process and the scheduled prompt. Sentinel correlation in the injected prompt distinguishes leo's turns from human ones.
+
+## Channel delivery
+
+Persistent tasks reuse the channel plugins loaded by the session at boot (via `LEO_CHANNELS`). The injected prompt ends with a footer instructing the model to deliver its reply via the task's channel list. No `claude -p` is invoked for delivery.
+
+If a task has `notify_on_fail: true` and fails (timeout, queue full, etc.), leo enqueues a follow-up failure-notice prompt into the same session — again, no `claude -p`.
+
+## Configuration reference
+
+### `sessions:` (top-level map)
+
+| Field                  | Type            | Notes                                                          |
+| ---------------------- | --------------- | -------------------------------------------------------------- |
+| `workspace`            | path            | Required. Where the session's `.claude/` lives.                |
+| `model`                | string          | `sonnet` / `opus` / `haiku`.                                   |
+| `agent`                | string          | Optional agent template.                                       |
+| `permission_mode`      | string          | One of the standard claude permission modes.                   |
+| `allowed_tools`        | list            | Restrict tool surface.                                         |
+| `disallowed_tools`     | list            | Block specific tools.                                          |
+| `append_system_prompt` | string          | Appended to the system prompt.                                 |
+| `add_dirs`             | list            | Extra `--add-dir` paths.                                       |
+| `channels`             | list            | Channel plugins loaded for the session.                        |
+| `env`                  | map[str]str     | Extra env vars passed to claude.                               |
+| `idle_timeout`         | duration string | Reserved for future lazy-session support.                      |
+
+### New `tasks.<name>` fields
+
+| Field      | Type   | Notes                                                                                  |
+| ---------- | ------ | -------------------------------------------------------------------------------------- |
+| `runtime`  | enum   | `oneshot` (default) or `persistent`.                                                   |
+| `session`  | string | `<name>` references `sessions:`; `process:<name>` references `processes:`. Optional — omit for an implicit dedicated session. |
+| `lazy`     | bool   | Parsed but not yet honored; always-on for now.                                         |
+| `queue_max`| int    | Max queued firings per session (default 5; overflow rejected with "queue full").       |
+
+Task `channels:` must be a subset of the resolved session's `channels:`. Validation enforces this at config load.
+
+## Operator commands
+
+```
+leo session list                  # configured sessions with workspace/model/channels
+leo session status <name>         # stored session id + tmux liveness
+leo session attach <name>         # tmux attach (interactive)
+leo session logs <name>           # capture last 200 lines of pane scrollback
+leo session reset <name>          # kill tmux + clear stored id (use when context fills)
+leo session drain <name>          # placeholder; not yet implemented
+```
+
+## How it works
+
+1. `leo service` boots a goroutine per `sessions:` entry (and per implicit dedicated session) that runs `claude` inside `leo-session-<name>` tmux, with restart-on-crash and `--resume` of the persisted session id.
+2. Each session's workspace gets a leo-managed Stop hook merged into `.claude/settings.local.json`. The hook runs `leo internal task-report` when a turn ends.
+3. `leo run <task>` for a `runtime: persistent` task POSTs to the daemon (`/task/enqueue`) with a prompt wrapped in:
+    - a sentinel marker: `<!-- leo:invocation=<uuid> -->`
+    - a delivery footer naming the task's `channels:`
+4. The daemon's per-session pump goroutine pastes the prompt via `tmux paste-buffer` then `send-keys Enter`.
+5. When the turn ends, the Stop hook fires `leo internal task-report`, which reads the transcript JSONL, finds the marker, extracts the assistant reply, and POSTs to `/task/report`.
+6. The pump correlates the report to the in-flight invocation, signals the result channel, and the `leo run` subprocess returns. History is recorded; the session id is persisted for next-boot resume.
+
+## Known limitations (v1)
+
+- `lazy` sessions are parsed but always-on; `idle_timeout` is reserved.
+- `leo session drain` is a stub.
+- Context-fill recovery is manual via `leo session reset <name>` (no auto-compaction).
+- No remote-daemon (`client.hosts`) dispatch for `leo session` subcommands yet.
+- End-to-end integration tests are not yet in place; the unit tests cover the daemon router, runner branch, hook installer, tmux primitives, config validation, and the hidden CLI exhaustively.
