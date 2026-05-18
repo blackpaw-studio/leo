@@ -536,6 +536,38 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	for name, sess := range c.Sessions {
+		if sess.Workspace == "" {
+			errs = append(errs, fmt.Sprintf("sessions.%s.workspace is required", name))
+		}
+		if sess.Model != "" && !validModels[sess.Model] {
+			errs = append(errs, fmt.Sprintf("sessions.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, sess.Model))
+		}
+		if sess.PermissionMode != "" && !validPermissionModes[sess.PermissionMode] {
+			errs = append(errs, fmt.Sprintf("sessions.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, sess.PermissionMode))
+		}
+		for i, ch := range sess.Channels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("sessions.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		for k := range sess.Env {
+			if !envKeyPattern.MatchString(k) {
+				errs = append(errs, fmt.Sprintf("sessions.%s.env key %q is not a valid environment variable name", name, k))
+			}
+		}
+		for i, dir := range sess.AddDirs {
+			if err := ValidateAddDir(dir); err != nil {
+				errs = append(errs, fmt.Sprintf("sessions.%s.add_dirs[%d]: %v", name, i, err))
+			}
+		}
+		if sess.IdleTimeout != "" {
+			if _, err := time.ParseDuration(sess.IdleTimeout); err != nil {
+				errs = append(errs, fmt.Sprintf("sessions.%s.idle_timeout %q is not a valid duration: %v", name, sess.IdleTimeout, err))
+			}
+		}
+	}
+
 	for name, task := range c.Tasks {
 		if task.Schedule == "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.schedule is required", name))
@@ -575,6 +607,27 @@ func (c *Config) Validate() error {
 		for i, ch := range task.DevChannels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("tasks.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		if task.Runtime != "" && task.Runtime != "oneshot" && task.Runtime != "persistent" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.runtime %q is not valid (use \"oneshot\" or \"persistent\")", name, task.Runtime))
+		}
+		if task.Runtime != "persistent" && task.Session != "" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.session is only valid when runtime: persistent", name))
+		}
+		if task.Runtime == "persistent" {
+			sessName, sess, err := c.ResolveSession(name)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("tasks.%s: %v", name, err))
+			} else {
+				if task.Session == "" {
+					if _, clash := c.Sessions[sessName]; clash {
+						errs = append(errs, fmt.Sprintf("tasks.%s: implicit session name %q collides with sessions.%s — give the task a `session:` reference or rename one", name, sessName, sessName))
+					}
+				}
+				if missing, ok := channelSubset(task.Channels, sess.Channels); !ok {
+					errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in sessions.%s.channels (task.channels must be a subset)", name, missing, sessName))
+				}
 			}
 		}
 	}
