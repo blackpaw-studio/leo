@@ -49,7 +49,12 @@ func TestAbortPromptCalls(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(got))
 	}
-	if got[0][len(got[0])-1] != "Escape" || got[1][len(got[1])-1] != "C-c" {
-		t.Fatalf("expected Escape then C-c, got %#v / %#v", got[0], got[1])
+	expectEscape := []string{"tmux", "-L", "leo", "send-keys", "-t", "leo-session-foo", "Escape"}
+	expectCtrlC := []string{"tmux", "-L", "leo", "send-keys", "-t", "leo-session-foo", "C-c"}
+	if !reflect.DeepEqual(got[0], expectEscape) {
+		t.Fatalf("Escape call wrong:\n got %#v\nwant %#v", got[0], expectEscape)
+	}
+	if !reflect.DeepEqual(got[1], expectCtrlC) {
+		t.Fatalf("C-c call wrong:\n got %#v\nwant %#v", got[1], expectCtrlC)
 	}
 }
