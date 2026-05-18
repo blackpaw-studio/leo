@@ -66,21 +66,21 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		Timeout:      timeout,
 	})
 	if err != nil {
-		recordPersistentFailure(cfg, taskName, fmt.Sprintf("enqueue: %v", err))
+		handlePersistentFailure(cfg, taskName, fmt.Sprintf("enqueue: %v", err))
 		return fmt.Errorf("enqueue: %w", err)
 	}
 	if !enq.Accepted {
-		recordPersistentFailure(cfg, taskName, "rejected: "+enq.Reason)
+		handlePersistentFailure(cfg, taskName, "rejected: "+enq.Reason)
 		return fmt.Errorf("enqueue rejected: %s", enq.Reason)
 	}
 
 	aw, err := daemon.AwaitTask(ctx, cfg.HomePath, enq.InvocationID)
 	if err != nil {
-		recordPersistentFailure(cfg, taskName, fmt.Sprintf("await: %v", err))
+		handlePersistentFailure(cfg, taskName, fmt.Sprintf("await: %v", err))
 		return fmt.Errorf("await: %w", err)
 	}
 	if !aw.OK {
-		recordPersistentFailure(cfg, taskName, "task: "+aw.Err)
+		handlePersistentFailure(cfg, taskName, "task: "+aw.Err)
 		return fmt.Errorf("task failed: %s", aw.Err)
 	}
 
@@ -97,6 +97,52 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		fmt.Printf("warning: failed to record history: %v\n", err)
 	}
 	return nil
+}
+
+// enqueueFollowUp is a seam for tests. In production it fires a follow-up
+// failure-notice prompt back into the same session (no claude -p).
+var enqueueFollowUp = func(ctx context.Context, homePath string, req daemon.EnqueueRequest) {
+	_, _ = daemon.EnqueueTask(ctx, homePath, req)
+}
+
+// handlePersistentFailure records a failed history entry and, when the task
+// has notify_on_fail set with non-empty channels, enqueues a brief follow-up
+// failure notice into the same persistent session.
+func handlePersistentFailure(cfg *config.Config, taskName, reason string) {
+	recordPersistentFailure(cfg, taskName, reason)
+
+	task, ok := cfg.Tasks[taskName]
+	if !ok {
+		return
+	}
+	if !task.NotifyOnFail || len(task.Channels) == 0 {
+		return
+	}
+	sessName, _, err := cfg.ResolveSession(taskName)
+	if err != nil {
+		return
+	}
+	body := fmt.Sprintf(
+		"The previous task %q failed: %s. Send a brief failure notice to the user via channels: %s.",
+		taskName, reason, strings.Join(task.Channels, ", "),
+	)
+	invID := newInvocationID16()
+	wrapped := wrapPromptForPersistent(invID, body, task.Channels)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	enqueueFollowUp(ctx, cfg.HomePath, daemon.EnqueueRequest{
+		InvocationID: invID,
+		Session:      sessName,
+		Task:         taskName + ":notify",
+		Prompt:       wrapped,
+		Channels:     task.Channels,
+		QueueMax:     0, // default = 5; failure notice should not be rejected
+		Timeout:      60 * time.Second,
+	})
+	// Fire-and-forget: we do NOT await the result. The persistent session will
+	// process the notice when its queue advances; the original task's `leo run`
+	// subprocess exits without blocking on the notice.
 }
 
 // recordPersistentFailure writes a failed entry to the history store. Errors

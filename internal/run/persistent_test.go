@@ -1,10 +1,12 @@
 package run
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
 func TestWrapPromptWithMarkerAndFooter(t *testing.T) {
@@ -46,6 +48,89 @@ func TestRunPersistentDispatchSelected(t *testing.T) {
 	_ = Run(cfg, "t1", nil)
 	if !called {
 		t.Fatalf("expected runPersistent dispatch")
+	}
+}
+
+func TestPersistentFailureEnqueuesFollowUpWhenNotifyOnFail(t *testing.T) {
+	// Capture follow-up enqueues via the seam.
+	var followUpPrompts []string
+	var followUpChannels [][]string
+	orig := enqueueFollowUp
+	defer func() { enqueueFollowUp = orig }()
+	enqueueFollowUp = func(ctx context.Context, homePath string, req daemon.EnqueueRequest) {
+		followUpPrompts = append(followUpPrompts, req.Prompt)
+		followUpChannels = append(followUpChannels, req.Channels)
+	}
+
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Tasks: map[string]config.TaskConfig{
+			"t1": {
+				Runtime:      "persistent",
+				Channels:     []string{"plugin:slack@official"},
+				NotifyOnFail: true,
+			},
+		},
+	}
+	handlePersistentFailure(cfg, "t1", "test-failure-reason")
+
+	if len(followUpPrompts) != 1 {
+		t.Fatalf("expected 1 follow-up enqueue, got %d", len(followUpPrompts))
+	}
+	if !strings.Contains(followUpPrompts[0], "test-failure-reason") {
+		t.Fatalf("follow-up prompt missing reason:\n%s", followUpPrompts[0])
+	}
+	if !strings.Contains(followUpPrompts[0], "plugin:slack@official") {
+		t.Fatalf("follow-up prompt missing channels footer:\n%s", followUpPrompts[0])
+	}
+	if len(followUpChannels[0]) != 1 || followUpChannels[0][0] != "plugin:slack@official" {
+		t.Fatalf("follow-up channels wrong: %v", followUpChannels[0])
+	}
+}
+
+func TestPersistentFailureDoesNotNotifyWithoutFlag(t *testing.T) {
+	var called bool
+	orig := enqueueFollowUp
+	defer func() { enqueueFollowUp = orig }()
+	enqueueFollowUp = func(ctx context.Context, homePath string, req daemon.EnqueueRequest) {
+		called = true
+	}
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Tasks: map[string]config.TaskConfig{
+			"t1": {
+				Runtime:      "persistent",
+				Channels:     []string{"plugin:slack@official"},
+				NotifyOnFail: false,
+			},
+		},
+	}
+	handlePersistentFailure(cfg, "t1", "reason")
+	if called {
+		t.Fatalf("expected no follow-up when NotifyOnFail is false")
+	}
+}
+
+func TestPersistentFailureDoesNotNotifyWithoutChannels(t *testing.T) {
+	var called bool
+	orig := enqueueFollowUp
+	defer func() { enqueueFollowUp = orig }()
+	enqueueFollowUp = func(ctx context.Context, homePath string, req daemon.EnqueueRequest) {
+		called = true
+	}
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Tasks: map[string]config.TaskConfig{
+			"t1": {
+				Runtime:      "persistent",
+				NotifyOnFail: true,
+				// no channels
+			},
+		},
+	}
+	handlePersistentFailure(cfg, "t1", "reason")
+	if called {
+		t.Fatalf("expected no follow-up when channels are empty")
 	}
 }
 
