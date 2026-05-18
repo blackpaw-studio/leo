@@ -261,6 +261,18 @@ func (s *Server) Shutdown() error {
 }
 
 // SockPath returns the path to the Unix socket.
+// SetInjector overrides the session router's prompt-injection function.
+// Intended for tests that need to substitute a fake for the real tmux call.
+func (s *Server) SetInjector(fn func(session, prompt string) error) {
+	s.router.SetInjector(fn)
+}
+
+// SetAborter overrides the session router's abort function. Tests pair this
+// with SetInjector to fully bypass tmux.
+func (s *Server) SetAborter(fn func(session string) error) {
+	s.router.SetAborter(fn)
+}
+
 func (s *Server) SockPath() string {
 	return s.sockPath
 }
