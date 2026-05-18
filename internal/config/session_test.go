@@ -96,3 +96,50 @@ func TestValidatePersistentDedicatedNameConflict(t *testing.T) {
 		t.Fatalf("expected implicit-name conflict error, got %v", err)
 	}
 }
+
+func TestResolveSessionProcess(t *testing.T) {
+	cfg := &Config{
+		Processes: map[string]ProcessConfig{
+			"bot": {
+				Workspace: "/tmp/bot",
+				Model:     "sonnet",
+				Channels:  []string{"plugin:slack@official"},
+				Agent:     "orchestrator",
+			},
+		},
+		Tasks: map[string]TaskConfig{
+			"poke": {
+				Runtime:  "persistent",
+				Session:  "process:bot",
+				Channels: []string{"plugin:slack@official"},
+			},
+		},
+	}
+	name, sess, err := cfg.ResolveSession("poke")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if name != "bot" {
+		t.Fatalf("expected name 'bot', got %q", name)
+	}
+	if sess.Workspace != "/tmp/bot" {
+		t.Fatalf("workspace not threaded from process: %+v", sess)
+	}
+	if sess.Agent != "orchestrator" {
+		t.Fatalf("agent not threaded from process: %+v", sess)
+	}
+	if len(sess.Channels) != 1 || sess.Channels[0] != "plugin:slack@official" {
+		t.Fatalf("channels not threaded from process: %+v", sess.Channels)
+	}
+}
+
+func TestResolveSessionProcessMissing(t *testing.T) {
+	cfg := &Config{
+		Tasks: map[string]TaskConfig{
+			"poke": {Runtime: "persistent", Session: "process:nope"},
+		},
+	}
+	if _, _, err := cfg.ResolveSession("poke"); err == nil {
+		t.Fatalf("expected error for missing process reference")
+	}
+}

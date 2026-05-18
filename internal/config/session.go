@@ -16,16 +16,17 @@ func (c *Config) ResolveSession(taskName string) (string, SessionConfig, error) 
 	if !ok {
 		return "", SessionConfig{}, fmt.Errorf("task %q not found", taskName)
 	}
-	if !strings.EqualFold(task.Runtime, "persistent") {
+	if task.Runtime != "persistent" {
 		return "", SessionConfig{}, fmt.Errorf("task %q is not runtime: persistent", taskName)
 	}
 
 	switch {
 	case task.Session == "":
-		// Topology A — dedicated, inherit from task. TaskConfig has no
-		// Agent/Env/AddDirs fields, so those stay zero in the synthesized
-		// session; callers needing them must use a shared session or a
-		// process: reference.
+		// Topology A — dedicated, inherit from task. Lazy and QueueMax remain
+		// task-scoped fields; they are not threaded into SessionConfig.
+		// TaskConfig has no Agent/Env/AddDirs fields, so those stay zero in
+		// the synthesized session; callers needing them must use a shared
+		// session or a process: reference.
 		return taskName, SessionConfig{
 			Workspace:          task.Workspace,
 			Model:              task.Model,
@@ -67,7 +68,8 @@ func (c *Config) ResolveSession(taskName string) (string, SessionConfig, error) 
 }
 
 // channelSubset reports whether every element of want appears in have.
-// Returns the first missing element and false when want is not a subset.
+// Returns (missing, false) when an element of want is absent from have.
+// Returns ("", true) when want is empty or fully covered.
 func channelSubset(want, have []string) (string, bool) {
 	set := make(map[string]struct{}, len(have))
 	for _, c := range have {
