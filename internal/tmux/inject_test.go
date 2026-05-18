@@ -21,8 +21,8 @@ func TestInjectPromptCalls(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("expected 3 tmux calls, got %d: %#v", len(got), got)
 	}
-	expectSet := []string{"tmux", "-L", "leo", "set-buffer", "-b", "leo", "--", "hello\nworld"}
-	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo", "-t", "leo-session-foo", "-d"}
+	expectSet := []string{"tmux", "-L", "leo", "set-buffer", "-b", "leo-leo-session-foo", "--", "hello\nworld"}
+	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo-leo-session-foo", "-t", "leo-session-foo", "-d"}
 	expectEnter := []string{"tmux", "-L", "leo", "send-keys", "-t", "leo-session-foo", "Enter"}
 	if !reflect.DeepEqual(got[0], expectSet) {
 		t.Fatalf("set-buffer call wrong:\n got %#v\nwant %#v", got[0], expectSet)

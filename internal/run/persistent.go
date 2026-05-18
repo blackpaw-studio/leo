@@ -140,9 +140,10 @@ func handlePersistentFailure(cfg *config.Config, taskName, reason string) {
 		QueueMax:     0, // default = 5; failure notice should not be rejected
 		Timeout:      60 * time.Second,
 	})
-	// Fire-and-forget: we do NOT await the result. The persistent session will
-	// process the notice when its queue advances; the original task's `leo run`
-	// subprocess exits without blocking on the notice.
+	// Fire-and-forget: we do NOT await the result. The pump processes the
+	// notice once the original task's slot clears (Report or timeout); if
+	// the queue is at QueueMax the notice is silently dropped. The `leo run`
+	// subprocess exits without blocking on the notice either way.
 }
 
 // recordPersistentFailure writes a failed entry to the history store. Errors

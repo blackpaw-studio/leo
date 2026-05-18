@@ -72,10 +72,20 @@ func EnsureLeoStopHook(workspace string) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
+	// Preserve existing file permissions when present; otherwise default to
+	// user-only (0o600). settings.local.json can contain bearer tokens and
+	// other sensitive material, so don't silently widen permissions.
+	mode := os.FileMode(0o600)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+	if err := os.WriteFile(tmp, out, mode); err != nil {
 		return fmt.Errorf("write tmp: %w", err)
 	}
+	// Best-effort cleanup if Rename fails (e.g., cross-device link on some
+	// filesystems). No-op on success since Rename removes the source.
+	defer os.Remove(tmp)
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("rename: %w", err)
 	}

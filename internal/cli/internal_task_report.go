@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
@@ -137,7 +138,11 @@ func newInternalTaskReportCmd() *cobra.Command {
 				return nil // human turn, ignore
 			}
 			workDir := config.DefaultHome()
-			if err := daemon.ReportTask(context.Background(), workDir, invID, env.SessionID, final, os.Getenv("LEO_SESSION_NAME")); err != nil {
+			// Bound the call: a wedged daemon socket must not freeze the
+			// claude Stop hook (which gates claude's process exit).
+			rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := daemon.ReportTask(rctx, workDir, invID, env.SessionID, final, os.Getenv("LEO_SESSION_NAME")); err != nil {
 				fmt.Fprintf(os.Stderr, "leo task-report: report: %v\n", err)
 			}
 			return nil

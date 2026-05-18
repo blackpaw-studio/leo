@@ -182,7 +182,7 @@ func TestClientReportTask(t *testing.T) {
 	if err := ReportTaskHTTP(context.Background(), ts.URL, "id-xyz", "csid", "all done", "leo-session-foo"); err != nil {
 		t.Fatalf("report: %v", err)
 	}
-	if received.InvocationID != "id-xyz" || received.SessionID != "csid" || received.FinalMessage != "all done" || received.SessionName != "leo-session-foo" {
+	if received.InvocationID != "id-xyz" || received.SessionID != "csid" || received.FinalMessage != "all done" {
 		t.Fatalf("server received: %+v", received)
 	}
 }

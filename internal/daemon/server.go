@@ -96,6 +96,8 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("POST /task/enqueue", s.handleTaskEnqueue)
 	mux.HandleFunc("GET /task/await", s.handleTaskAwait)
 	mux.HandleFunc("POST /task/report", s.handleTaskReport)
+	mux.HandleFunc("POST /session/reset", s.handleSessionReset)
+	mux.HandleFunc("GET /session/depth", s.handleSessionDepth)
 
 	// Agent lifecycle — served only when an AgentManager has been attached via
 	// SetAgentManager(). Handlers short-circuit with 503 when s.agentMgr is nil.
@@ -251,6 +253,11 @@ func (s *Server) Shutdown() error {
 		s.webServer.Shutdown() //nolint:errcheck
 	}
 
+	// Stop the router so its pump and janitor goroutines exit.
+	if s.router != nil {
+		s.router.Stop()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -379,7 +386,6 @@ type taskReportReq struct {
 	InvocationID string `json:"invocation_id"`
 	SessionID    string `json:"session_id"`
 	FinalMessage string `json:"final_message"`
-	SessionName  string `json:"session_name"`
 }
 
 func (s *Server) handleTaskReport(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +404,38 @@ func (s *Server) handleTaskReport(w http.ResponseWriter, r *http.Request) {
 		FinalMessage: req.FinalMessage,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+type sessionResetReq struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+}
+
+func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request) {
+	var req sessionResetReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if req.Session == "" {
+		writeError(w, http.StatusBadRequest, "session required")
+		return
+	}
+	reason := req.Reason
+	if reason == "" {
+		reason = "session reset"
+	}
+	cleared := s.router.ResetSession(req.Session, reason)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": cleared})
+}
+
+func (s *Server) handleSessionDepth(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		writeError(w, http.StatusBadRequest, "session required")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "depth": s.router.QueueDepth(session)})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

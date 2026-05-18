@@ -116,10 +116,6 @@ func installAutoResponder(t *testing.T, srv *daemon.Server, ws string, cap *prom
 		sessionID := "csid-" + session
 		finalMsg := "FAKE-REPLY: " + truncate80(strings.TrimSpace(stripMarker(prompt)))
 		go func(invID, sessionID, finalMsg, sessionName string) {
-			// Small lead-in so the runner's AwaitTask long-poll has
-			// time to Lookup the invocation before Report deletes
-			// it. In production, real claude latency dwarfs this.
-			time.Sleep(50 * time.Millisecond)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := daemon.ReportTask(ctx, ws, invID, sessionID, finalMsg, sessionName); err != nil {

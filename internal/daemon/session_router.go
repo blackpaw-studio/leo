@@ -32,29 +32,50 @@ type PendingInvocation struct {
 	Timeout  time.Duration
 	Enqueued time.Time
 	Result   chan InvocationResult // buffered(1); never close from inside the queue
+
+	// completed is set under sessionRouter.mu once a terminal Result has been
+	// posted to Result. The janitor reaps byID entries TTL after this stamp.
+	completed time.Time
 }
 
 type sessionQueue struct {
 	mu          sync.Mutex
 	fifo        []*PendingInvocation
 	inFlight    *PendingInvocation // non-nil while one invocation is executing; nil otherwise
-	notify      chan struct{}      // buffered(1); pump signal (used in Task 6)
+	enqueueSig  chan struct{}      // buffered(1); fired by Enqueue
+	reportSig   chan struct{}      // buffered(1); fired by Report / pump failure / ResetSession
 	pumpStarted bool
 }
 
+func newSessionQueue() *sessionQueue {
+	return &sessionQueue{
+		enqueueSig: make(chan struct{}, 1),
+		reportSig:  make(chan struct{}, 1),
+	}
+}
+
 type sessionRouter struct {
-	mu     sync.Mutex
-	queues map[string]*sessionQueue
-	byID   map[string]*PendingInvocation
-	inject injectFn
-	abort  abortFn
+	mu           sync.Mutex
+	queues       map[string]*sessionQueue
+	byID         map[string]*PendingInvocation
+	inject       injectFn
+	abort        abortFn
+	done         chan struct{}
+	stopOnce     sync.Once
+	gcInterval   time.Duration
+	completedTTL time.Duration
 }
 
 func newSessionRouter() *sessionRouter {
-	return &sessionRouter{
-		queues: map[string]*sessionQueue{},
-		byID:   map[string]*PendingInvocation{},
+	r := &sessionRouter{
+		queues:       map[string]*sessionQueue{},
+		byID:         map[string]*PendingInvocation{},
+		done:         make(chan struct{}),
+		gcInterval:   30 * time.Second,
+		completedTTL: 5 * time.Minute,
 	}
+	go r.janitor()
+	return r
 }
 
 func newInvocationID() string {
@@ -62,6 +83,16 @@ func newInvocationID() string {
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
+
+// Stop signals all running pump and janitor goroutines to exit. Idempotent.
+func (r *sessionRouter) Stop() {
+	r.stopOnce.Do(func() { close(r.done) })
+}
+
+// defaultTimeout is the fallback for non-positive enqueue timeouts. The HTTP
+// handler enforces the same bound; this is belt-and-suspenders for in-process
+// callers of EnqueueWithID.
+const defaultEnqueueTimeout = 5 * time.Minute
 
 // Enqueue appends to the session's FIFO. Returns the invocation and ok=true on
 // success, or ok=false if the session is at QueueMax (counting queued items
@@ -75,10 +106,13 @@ func (r *sessionRouter) Enqueue(p EnqueueParams) (*PendingInvocation, bool) {
 // This is what lets a runner pre-bake an invocation id into its prompt marker
 // and have the daemon track the same id server-side.
 func (r *sessionRouter) EnqueueWithID(id string, p EnqueueParams) (*PendingInvocation, bool) {
+	if p.Timeout <= 0 {
+		p.Timeout = defaultEnqueueTimeout
+	}
 	r.mu.Lock()
 	q, ok := r.queues[p.Session]
 	if !ok {
-		q = &sessionQueue{notify: make(chan struct{}, 1)}
+		q = newSessionQueue()
 		r.queues[p.Session] = q
 	}
 	r.mu.Unlock()
@@ -119,7 +153,7 @@ func (r *sessionRouter) EnqueueWithID(id string, p EnqueueParams) (*PendingInvoc
 	r.mu.Unlock()
 
 	select {
-	case q.notify <- struct{}{}:
+	case q.enqueueSig <- struct{}{}:
 	default:
 	}
 	return inv, true
@@ -138,6 +172,22 @@ func (r *sessionRouter) queueFor(session string) *sessionQueue {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.queues[session]
+}
+
+// QueueDepth returns the number of queued plus in-flight invocations for a
+// session, or 0 if no queue has ever been created for it.
+func (r *sessionRouter) QueueDepth(session string) int {
+	q := r.queueFor(session)
+	if q == nil {
+		return 0
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	depth := len(q.fifo)
+	if q.inFlight != nil {
+		depth++
+	}
+	return depth
 }
 
 type injectFn func(session, prompt string) error
@@ -174,7 +224,7 @@ func (r *sessionRouter) StartPump(session string) {
 	r.mu.Lock()
 	q, ok := r.queues[session]
 	if !ok {
-		q = &sessionQueue{notify: make(chan struct{}, 1)}
+		q = newSessionQueue()
 		r.queues[session] = q
 	}
 	if q.pumpStarted {
@@ -207,22 +257,92 @@ func (r *sessionRouter) Report(id string, result InvocationResult) {
 	if !matches {
 		return // late / duplicate report
 	}
+	r.markCompleted(inv, result)
+	// Wake the pump so it can pick up the next item or exit the inner select.
+	select {
+	case q.reportSig <- struct{}{}:
+	default:
+	}
+}
+
+// ResetSession drains all in-flight and queued invocations for the given
+// session, delivering an error result to each. Intended for `leo session
+// reset` to recover when the underlying claude is killed/restarted outside
+// the pump's awareness. Does NOT call the aborter (tmux is presumed already
+// killed). After this call the queue is empty and the pump is ready to
+// accept new work.
+func (r *sessionRouter) ResetSession(session, reason string) int {
+	q := r.queueFor(session)
+	if q == nil {
+		return 0
+	}
+	q.mu.Lock()
+	inv := q.inFlight
+	pending := q.fifo
+	q.inFlight = nil
+	q.fifo = nil
+	q.mu.Unlock()
+
+	cleared := 0
+	if inv != nil {
+		r.markCompleted(inv, InvocationResult{OK: false, Err: "reset: " + reason})
+		cleared++
+	}
+	for _, p := range pending {
+		r.markCompleted(p, InvocationResult{OK: false, Err: "reset: " + reason})
+		cleared++
+	}
+	// Wake the pump so any inner-select wait observes the cleared inFlight.
+	select {
+	case q.reportSig <- struct{}{}:
+	default:
+	}
+	return cleared
+}
+
+// markCompleted stamps completion time and delivers a buffered result. The
+// byID entry is left in place so a slow AwaitTask caller can still observe
+// the result; the janitor reaps it after completedTTL.
+func (r *sessionRouter) markCompleted(inv *PendingInvocation, result InvocationResult) {
+	r.mu.Lock()
+	inv.completed = time.Now()
+	r.mu.Unlock()
 	select {
 	case inv.Result <- result:
 	default:
 	}
-	r.mu.Lock()
-	delete(r.byID, id)
-	r.mu.Unlock()
-	select {
-	case q.notify <- struct{}{}:
-	default:
+}
+
+// janitor periodically reaps byID entries whose completion stamp is older
+// than completedTTL. Stops when r.done is closed.
+func (r *sessionRouter) janitor() {
+	t := time.NewTicker(r.gcInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-t.C:
+		}
+		now := time.Now()
+		r.mu.Lock()
+		for id, inv := range r.byID {
+			if !inv.completed.IsZero() && now.Sub(inv.completed) > r.completedTTL {
+				delete(r.byID, id)
+			}
+		}
+		r.mu.Unlock()
 	}
 }
 
 func (r *sessionRouter) pump(session string, q *sessionQueue) {
 	for {
-		<-q.notify
+		select {
+		case <-r.done:
+			return
+		case <-q.enqueueSig:
+		case <-q.reportSig:
+		}
 		for {
 			q.mu.Lock()
 			if q.inFlight != nil || len(q.fifo) == 0 {
@@ -236,20 +356,21 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 
 			if err := r.currentInjector()(session, next.Prompt); err != nil {
 				q.mu.Lock()
-				q.inFlight = nil
-				q.mu.Unlock()
-				r.mu.Lock()
-				delete(r.byID, next.ID)
-				r.mu.Unlock()
-				select {
-				case next.Result <- InvocationResult{OK: false, Err: "inject: " + err.Error()}:
-				default:
+				if q.inFlight != nil && q.inFlight.ID == next.ID {
+					q.inFlight = nil
 				}
+				q.mu.Unlock()
+				r.markCompleted(next, InvocationResult{OK: false, Err: "inject: " + err.Error()})
 				continue
 			}
 
 			timer := time.NewTimer(next.Timeout)
 			select {
+			case <-r.done:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
 			case <-timer.C:
 				_ = r.currentAborter()(session)
 				q.mu.Lock()
@@ -259,20 +380,14 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 				}
 				q.mu.Unlock()
 				if still {
-					r.mu.Lock()
-					delete(r.byID, next.ID)
-					r.mu.Unlock()
-					select {
-					case next.Result <- InvocationResult{OK: false, Err: "timeout"}:
-					default:
-					}
+					r.markCompleted(next, InvocationResult{OK: false, Err: "timeout"})
 				}
-			case <-q.notify:
+			case <-q.reportSig:
 				if !timer.Stop() {
 					<-timer.C
 				}
-				// notify came from Report path — inFlight already cleared and
-				// result delivered. Loop to pick up the next item.
+				// Report / Reset path: inFlight already cleared and result
+				// delivered. Loop to pick up the next item.
 			}
 		}
 	}

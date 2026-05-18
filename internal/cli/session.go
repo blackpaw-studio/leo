@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"sort"
 	"syscall"
+	"time"
 
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
@@ -127,37 +130,79 @@ func newSessionLogsCmd() *cobra.Command {
 func newSessionResetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reset <name>",
-		Short: "Kill tmux session and clear stored session id — next supervisor pass starts a fresh claude",
+		Short: "Kill tmux session, clear stored session id, and drop queued invocations",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target := sessionTmuxTarget(args[0])
-			if tmuxBin, err := exec.LookPath("tmux"); err == nil {
-				_ = exec.Command(tmuxBin, tmux.Args("kill-session", "-t", target)...).Run()
-			}
+			name := args[0]
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
+			// Notify the router FIRST so any in-flight waiter gets a clean
+			// "reset" error instead of hanging until its task timeout. Skip
+			// silently if the daemon isn't running.
+			if daemon.IsRunning(cfg.HomePath) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				resp, derr := daemon.ResetSession(ctx, cfg.HomePath, name, "cli reset")
+				cancel()
+				if derr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: daemon reset failed: %v\n", derr)
+				} else if resp.Cleared > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "reset %s: cleared %d in-flight/queued invocation(s)\n", name, resp.Cleared)
+				}
+			}
+			target := sessionTmuxTarget(name)
+			if tmuxBin, err := exec.LookPath("tmux"); err == nil {
+				_ = exec.Command(tmuxBin, tmux.Args("kill-session", "-t", target)...).Run()
+			}
 			store := session.NewStore(cfg.HomePath)
-			if err := store.Delete("session:" + args[0]); err != nil {
+			if err := store.Delete("session:" + name); err != nil {
 				return fmt.Errorf("clear session id: %w", err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "reset %s: tmux killed (if it existed) and stored session id cleared\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "reset %s: tmux killed (if it existed) and stored session id cleared\n", name)
 			return nil
 		},
 	}
 }
 
 func newSessionDrainCmd() *cobra.Command {
-	return &cobra.Command{
+	var timeout time.Duration
+	c := &cobra.Command{
 		Use:   "drain <name>",
-		Short: "Block until the session's queue is empty (not yet implemented)",
+		Short: "Block until the session's queue is empty (queued + in-flight == 0)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), "drain: not yet implemented — use 'leo session status' to check live state")
-			return nil
+			name := args[0]
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if !daemon.IsRunning(cfg.HomePath) {
+				return fmt.Errorf("daemon not running — nothing to drain")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				resp, err := daemon.SessionDepth(ctx, cfg.HomePath, name)
+				if err != nil {
+					return fmt.Errorf("polling depth: %w", err)
+				}
+				if resp.Depth == 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "drain %s: queue empty\n", name)
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("drain timeout after %s (depth=%d)", timeout, resp.Depth)
+				case <-ticker.C:
+				}
+			}
 		},
 	}
+	c.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "maximum time to wait for queue to drain")
+	return c
 }
 
 // sessionTmuxTarget returns the tmux session name leo uses for a persistent

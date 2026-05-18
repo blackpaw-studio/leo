@@ -9,19 +9,23 @@ import (
 // execCommand is the seam tests replace.
 var execCommand = exec.CommandContext
 
-// bufferName is the tmux named buffer used to stage prompt bodies before
-// pasting them into a session. A single shared name is safe because the
-// daemon serializes injection calls per-session via the pump goroutine;
-// no two callers ever inject into the same session concurrently.
-const bufferName = SocketName
+// sessionBufferName derives a tmux buffer name unique to the target session
+// so concurrent injection calls into different sessions never share the same
+// staging buffer. Two pump goroutines (one per session) can therefore run
+// set-buffer / paste-buffer in any interleaving without clobbering each
+// other.
+func sessionBufferName(session string) string {
+	return "leo-" + session
+}
 
 // InjectPrompt sends body to the claude running in `session` as a single
 // submission. Uses set-buffer + paste-buffer (-d deletes after paste) to
 // avoid character-by-character races; multi-line bodies preserved; Enter
 // submits.
 func InjectPrompt(ctx context.Context, tmuxPath, session, body string) error {
-	setArgs := Args("set-buffer", "-b", bufferName, "--", body)
-	pasteArgs := Args("paste-buffer", "-b", bufferName, "-t", session, "-d")
+	buf := sessionBufferName(session)
+	setArgs := Args("set-buffer", "-b", buf, "--", body)
+	pasteArgs := Args("paste-buffer", "-b", buf, "-t", session, "-d")
 	enterArgs := Args("send-keys", "-t", session, "Enter")
 	for _, args := range [][]string{setArgs, pasteArgs, enterArgs} {
 		cmd := execCommand(ctx, tmuxPath, args...)

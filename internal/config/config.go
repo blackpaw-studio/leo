@@ -625,8 +625,20 @@ func (c *Config) Validate() error {
 						errs = append(errs, fmt.Sprintf("tasks.%s: implicit session name %q collides with sessions.%s — give the task a `session:` reference or rename one", name, sessName, sessName))
 					}
 				}
-				if missing, ok := channelSubset(task.Channels, sess.Channels); !ok {
-					errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in sessions.%s.channels (task.channels must be a subset)", name, missing, sessName))
+				// Topology A's session is synthesized from task.Channels, so
+				// the subset check is trivially true and we skip it. For B
+				// and C the channels live under different config blocks —
+				// point the error at the correct one.
+				if task.Session != "" {
+					var src string
+					if strings.HasPrefix(task.Session, "process:") {
+						src = fmt.Sprintf("processes.%s.channels", sessName)
+					} else {
+						src = fmt.Sprintf("sessions.%s.channels", sessName)
+					}
+					if missing, ok := channelSubset(task.Channels, sess.Channels); !ok {
+						errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in %s (task.channels must be a subset)", name, missing, src))
+					}
 				}
 			}
 		}
