@@ -64,8 +64,8 @@ func newInvocationID() string {
 }
 
 // Enqueue appends to the session's FIFO. Returns the invocation and ok=true on
-// success, or ok=false if the queue is at QueueMax. Does NOT block on the pump
-// (which is not yet implemented in this task).
+// success, or ok=false if the session is at QueueMax (counting queued items
+// plus any in-flight invocation). Does NOT block on the pump.
 func (r *sessionRouter) Enqueue(p EnqueueParams) (*PendingInvocation, bool) {
 	r.mu.Lock()
 	q, ok := r.queues[p.Session]
@@ -81,7 +81,14 @@ func (r *sessionRouter) Enqueue(p EnqueueParams) (*PendingInvocation, bool) {
 	if capacity <= 0 {
 		capacity = 5
 	}
-	if len(q.fifo) >= capacity {
+	// Capacity bounds active depth: queued items plus the one currently
+	// executing (inFlight). Otherwise a fast pump drains the FIFO between
+	// successive enqueues and queue_max never pushes back on the caller.
+	depth := len(q.fifo)
+	if q.inFlight != nil {
+		depth++
+	}
+	if depth >= capacity {
 		return nil, false
 	}
 	inv := &PendingInvocation{

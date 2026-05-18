@@ -51,6 +51,7 @@ type Server struct {
 	processes  ProcessStateProvider
 	webServer  *web.Server
 	agentMgr   AgentManager
+	router     *sessionRouter
 }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
@@ -65,6 +66,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 		configPath: configPath,
 		scheduler:  cron.New(leoPath, configPath),
 		processes:  processes,
+		router:     newSessionRouter(),
 	}
 
 	mux := http.NewServeMux()
@@ -79,6 +81,11 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
 	mux.HandleFunc("GET /process/list", s.handleProcessList)
 	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
+
+	// Session-routed task delivery (persistent task sessions).
+	mux.HandleFunc("POST /task/enqueue", s.handleTaskEnqueue)
+	mux.HandleFunc("GET /task/await", s.handleTaskAwait)
+	mux.HandleFunc("POST /task/report", s.handleTaskReport)
 
 	// Agent lifecycle — served only when an AgentManager has been attached via
 	// SetAgentManager(). Handlers short-circuit with 503 when s.agentMgr is nil.
@@ -270,6 +277,100 @@ func (s *Server) handleProcessList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
+type taskEnqueueReq struct {
+	Session        string   `json:"session"`
+	Task           string   `json:"task"`
+	Prompt         string   `json:"prompt"`
+	Channels       []string `json:"channels"`
+	QueueMax       int      `json:"queue_max"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+}
+
+type taskEnqueueResp struct {
+	Accepted     bool   `json:"accepted"`
+	InvocationID string `json:"invocation_id,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
+	var req taskEnqueueReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if req.Session == "" || req.Task == "" || req.Prompt == "" {
+		writeError(w, http.StatusBadRequest, "session, task, prompt are required")
+		return
+	}
+	timeout := time.Duration(req.TimeoutSeconds) * time.Second
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	inv, ok := s.router.Enqueue(EnqueueParams{
+		Session:  req.Session,
+		Task:     req.Task,
+		Prompt:   req.Prompt,
+		Channels: req.Channels,
+		QueueMax: req.QueueMax,
+		Timeout:  timeout,
+	})
+	if !ok {
+		writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: false, Reason: "queue full"})
+		return
+	}
+	s.router.StartPump(req.Session)
+	writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: true, InvocationID: inv.ID})
+}
+
+func (s *Server) handleTaskAwait(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("invocation_id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invocation_id required")
+		return
+	}
+	inv, ok := s.router.Lookup(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown invocation_id")
+		return
+	}
+	select {
+	case res := <-inv.Result:
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":            res.OK,
+			"session_id":    res.SessionID,
+			"final_message": res.FinalMessage,
+			"error":         res.Err,
+		})
+	case <-r.Context().Done():
+		writeError(w, http.StatusGatewayTimeout, "request cancelled")
+	}
+}
+
+type taskReportReq struct {
+	InvocationID string `json:"invocation_id"`
+	SessionID    string `json:"session_id"`
+	FinalMessage string `json:"final_message"`
+	SessionName  string `json:"session_name"`
+}
+
+func (s *Server) handleTaskReport(w http.ResponseWriter, r *http.Request) {
+	var req taskReportReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if req.InvocationID == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true}) // human turn — ignore
+		return
+	}
+	s.router.Report(req.InvocationID, InvocationResult{
+		OK:           true,
+		SessionID:    req.SessionID,
+		FinalMessage: req.FinalMessage,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
