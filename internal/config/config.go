@@ -79,6 +79,7 @@ type Config struct {
 	Processes map[string]ProcessConfig  `yaml:"processes"`
 	Tasks     map[string]TaskConfig     `yaml:"tasks"`
 	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
+	Sessions  map[string]SessionConfig  `yaml:"sessions,omitempty"`
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
@@ -214,6 +215,20 @@ type ProcessConfig struct {
 	Enabled          bool `yaml:"enabled"`
 }
 
+type SessionConfig struct {
+	Workspace          string            `yaml:"workspace,omitempty"`
+	Model              string            `yaml:"model,omitempty"`
+	Agent              string            `yaml:"agent,omitempty"`
+	PermissionMode     string            `yaml:"permission_mode,omitempty"`
+	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
+	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
+	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
+	AddDirs            []string          `yaml:"add_dirs,omitempty"`
+	Channels           []string          `yaml:"channels,omitempty"`
+	Env                map[string]string `yaml:"env,omitempty"`
+	IdleTimeout        string            `yaml:"idle_timeout,omitempty"`
+}
+
 type TaskConfig struct {
 	Workspace          string   `yaml:"workspace,omitempty"`
 	Schedule           string   `yaml:"schedule"`
@@ -232,6 +247,10 @@ type TaskConfig struct {
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
 	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
+	Runtime            string   `yaml:"runtime,omitempty"`
+	Session            string   `yaml:"session,omitempty"`
+	Lazy               bool     `yaml:"lazy,omitempty"`
+	QueueMax           int      `yaml:"queue_max,omitempty"`
 }
 
 // TemplateConfig defines a reusable blueprint for spawning ephemeral agents.
