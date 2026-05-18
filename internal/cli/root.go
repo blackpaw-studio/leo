@@ -64,6 +64,7 @@ func newRootCmd() *cobra.Command {
 		newMCPServerCmd(),
 		newChannelsCmd(),
 		newWebCmd(),
+		newInternalCmd(),
 	)
 
 	return cmd
