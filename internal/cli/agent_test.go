@@ -59,6 +59,12 @@ func withStubExec(t *testing.T) *stubExec {
 	old := agentExecCommand
 	agentExecCommand = stub.fn
 	t.Cleanup(func() { agentExecCommand = old })
+	// Disable the terminfo bootstrap pass so its ssh+tic call doesn't show up
+	// in the stub call log alongside the ssh attach we actually want to
+	// assert against. Dedicated tests in terminfo_test.go cover that flow.
+	oldTI := ensureRemoteTerminfoFn
+	ensureRemoteTerminfoFn = func(config.HostResolution) string { return "" }
+	t.Cleanup(func() { ensureRemoteTerminfoFn = oldTI })
 	return stub
 }
 
