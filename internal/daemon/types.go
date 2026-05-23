@@ -57,6 +57,12 @@ type AgentSpawnRequest struct {
 	// Ignored when Branch already exists locally or on origin. Defaults to the
 	// repository's default branch.
 	Base string `json:"base,omitempty"`
+	// Prompt, when set, is delivered to the spawned agent as the opening turn
+	// of its interactive session. Optional — omit for the prior behavior.
+	Prompt string `json:"prompt,omitempty"`
+	// Env is merged over the template's env for this spawn only; per-spawn keys
+	// win on collision. Optional — omit for the prior behavior.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // AgentPruneRequest is the body for POST /agents/{name}/prune. Prune is a

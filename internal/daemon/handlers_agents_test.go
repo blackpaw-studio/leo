@@ -110,6 +110,32 @@ func TestAgentSpawnHandler(t *testing.T) {
 	}
 }
 
+func TestAgentSpawnHandlerForwardsPromptAndEnv(t *testing.T) {
+	mgr := &fakeAgentManager{}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{
+		Template: "coding",
+		Repo:     "leo",
+		Prompt:   "investigate alert X",
+		Env:      map[string]string{"SLACK_THREAD_TS": "123.456"},
+	})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastSpawn.Prompt != "investigate alert X" {
+		t.Errorf("prompt not forwarded: spec = %+v", mgr.lastSpawn)
+	}
+	if mgr.lastSpawn.Env["SLACK_THREAD_TS"] != "123.456" {
+		t.Errorf("env not forwarded: spec = %+v", mgr.lastSpawn)
+	}
+}
+
 func TestAgentSpawnMissingFields(t *testing.T) {
 	mgr := &fakeAgentManager{}
 	_, client := startTestServerWithAgent(t, mgr)
