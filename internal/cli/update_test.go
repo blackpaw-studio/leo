@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/update"
@@ -52,5 +54,37 @@ func TestAllowUnsignedFromEnv(t *testing.T) {
 				t.Errorf("allowUnsignedFromEnv() with %q = %v, want %v", tt.value, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestUpdateCmd_RejectsPRAndVersionTogether(t *testing.T) {
+	cmd := newUpdateCmd()
+	cmd.SetArgs([]string{"--pr", "42", "--version", "pr-99-a1b2c3d"})
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --pr and --version are both set")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should explain conflict; got %q", err)
+	}
+}
+
+func TestUpdateCmd_RejectsNonPrereleaseVersion(t *testing.T) {
+	cmd := newUpdateCmd()
+	cmd.SetArgs([]string{"--version", "v0.5.0"})
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --version is a stable tag")
+	}
+	if !strings.Contains(err.Error(), "prerelease tags only") {
+		t.Errorf("error should explain --version limitation; got %q", err)
 	}
 }

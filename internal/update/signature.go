@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/update/fulcio"
@@ -80,6 +81,27 @@ func SignatureVerifierForVersion(version string) (*SignatureVerifier, error) {
 }
 
 func buildVerifier(tagPattern string) (*SignatureVerifier, error) {
+	return buildVerifierWithIdentity("release.yml", `refs/tags/`+tagPattern)
+}
+
+// SignatureVerifierForPullRequest builds a verifier pinned to the
+// prerelease workflow's OIDC identity for a specific PR. PR build
+// signatures are issued by `prerelease.yml@refs/pull/<n>/merge`; this
+// closes the downgrade window the same way SignatureVerifierForVersion
+// does for tagged releases — a signature minted for a different PR (or
+// for the release workflow) won't satisfy this verifier.
+func SignatureVerifierForPullRequest(prNumber int) (*SignatureVerifier, error) {
+	if prNumber <= 0 {
+		return nil, errors.New("pr number is required")
+	}
+	return buildVerifierWithIdentity("prerelease.yml", `refs/pull/`+strconv.Itoa(prNumber)+`/merge`)
+}
+
+// buildVerifierWithIdentity is the shared constructor: it pins owner,
+// repo, and the issuer to Leo's expected values and lets the caller
+// supply the workflow filename plus the ref pattern (refs/tags/X for
+// stable releases, refs/pull/N/merge for PR builds).
+func buildVerifierWithIdentity(workflow, refPattern string) (*SignatureVerifier, error) {
 	roots, err := loadCertPool(fulcio.RootPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading Fulcio root: %w", err)
@@ -89,14 +111,9 @@ func buildVerifier(tagPattern string) (*SignatureVerifier, error) {
 		return nil, fmt.Errorf("loading Fulcio intermediate: %w", err)
 	}
 
-	// The expected SAN is the release workflow identity. Owner, repo, and
-	// workflow filename are hard-pinned; the tag segment is pinned to
-	// tagPattern so callers with a known version close the downgrade
-	// window. An attacker who can't impersonate the release workflow for
-	// this exact tag can't forge a matching certificate.
 	sanRegex, err := regexp.Compile(
 		`^https://github\.com/` + repoOwner + `/` + repoName +
-			`/\.github/workflows/release\.yml@refs/tags/` + tagPattern + `$`,
+			`/\.github/workflows/` + regexp.QuoteMeta(workflow) + `@` + refPattern + `$`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("compiling SAN regex: %w", err)

@@ -37,6 +37,40 @@ Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`,
 `chore:`, `perf:`, `ci:`). The PR title becomes the squash-merge commit
 message, so keep it in this format.
 
+## Trying a PR build
+
+Every PR from this repo automatically builds installable binaries for
+all supported platforms via [`.github/workflows/prerelease.yml`]. The
+workflow uploads a `leo-prerelease` artifact and posts an install
+snippet as a sticky comment on the PR.
+
+Two ways to install a PR build:
+
+```bash
+# If you already have leo installed:
+leo update --pr 42
+
+# Or pin to a specific build:
+leo update --version pr-42-a1b2c3d
+```
+
+```bash
+# Without leo, using the gh CLI:
+gh run download <run-id> --repo blackpaw-studio/leo --name leo-prerelease --dir /tmp/leo-pr
+# then extract leo_pr-<n>-<sha>_<os>_<arch>.tar.gz from /tmp/leo-pr
+```
+
+Both forms need a GitHub token. `leo update` reads from `gh auth token`
+or `$GH_TOKEN` / `$GITHUB_TOKEN` / `$LEO_GITHUB_TOKEN` (in that order).
+The build is cosign-signed; the signing identity is
+`prerelease.yml@refs/pull/<n>/merge`, and `leo update` verifies it
+automatically.
+
+PR builds from forks are not produced — the workflow needs
+`id-token: write` to cosign-sign artifacts, which is unsafe to grant
+from forks. Push your branch to a fork-of-fork in this repo, or ask a
+maintainer to produce a build, if you need one.
+
 ## Testing
 
 We enforce 45% minimum coverage on the `test` job and run the `-race`
