@@ -2,7 +2,7 @@ package cli
 
 import (
 	"bytes"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -87,7 +87,7 @@ func ensureRemoteTerminfo(res config.HostResolution) string {
 		fmt.Fprintf(terminfoStderr(), "leo: could not install terminfo %q on %s (%v); falling back to TERM=%s\n", term, res.Host.SSH, err, terminfoFallback)
 		return terminfoFallback
 	}
-	if err := os.MkdirAll(cacheDir, 0o755); err == nil {
+	if err := os.MkdirAll(cacheDir, 0o750); err == nil {
 		_ = os.WriteFile(sentinel, []byte(term+"\n"), 0o644)
 	}
 	return ""
@@ -136,7 +136,7 @@ func installRemoteTerminfo(res config.HostResolution, term string) error {
 // the SSH target so an entry like "user@host:2222" stays a flat filename,
 // and append the literal TERM for readability and debuggability.
 func terminfoSentinelPath(cacheDir, host, term string) string {
-	sum := sha1.Sum([]byte(host))
+	sum := sha256.Sum256([]byte(host))
 	return filepath.Join(cacheDir, hex.EncodeToString(sum[:6])+"-"+term)
 }
 
