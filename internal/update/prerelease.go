@@ -317,13 +317,13 @@ func resolveGitHubToken() (token, source string, err error) {
 // workflowRun is the trimmed payload we read from
 // /actions/workflows/<id>/runs.
 type workflowRun struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Path   string `json:"path"`
-	HeadSHA string `json:"head_sha"`
-	Event  string `json:"event"`
-	Status string `json:"status"`
-	Conclusion string `json:"conclusion"`
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	HeadSHA      string `json:"head_sha"`
+	Event        string `json:"event"`
+	Status       string `json:"status"`
+	Conclusion   string `json:"conclusion"`
 	PullRequests []struct {
 		Number int `json:"number"`
 	} `json:"pull_requests"`
@@ -591,4 +591,3 @@ func githubAPIGet(ctx context.Context, token, u string) ([]byte, error) {
 	}
 	return body, nil
 }
-
