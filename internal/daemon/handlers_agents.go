@@ -56,6 +56,8 @@ func (s *Server) handleAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		Name:     req.Name,
 		Branch:   req.Branch,
 		Base:     req.Base,
+		Prompt:   req.Prompt,
+		Env:      req.Env,
 	})
 	if err != nil {
 		writeAgentError(w, err)

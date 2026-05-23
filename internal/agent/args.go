@@ -11,7 +11,13 @@ import (
 
 // BuildTemplateArgs assembles the claude CLI arguments for an agent spawned from a template.
 // The override cascade is template → defaults → built-in default.
-func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace string) []string {
+//
+// When prompt is non-empty it is appended as the trailing positional argument.
+// Claude Code treats a bare positional (with no -p/--print) as the opening turn
+// of an interactive session, so the agent processes the prompt and then stays
+// alive in its tmux REPL — the same behavior an empty prompt has, plus a first
+// turn. An empty prompt appends nothing, preserving the prior arg list exactly.
+func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt string) []string {
 	var args []string
 
 	model := tmpl.Model
@@ -107,6 +113,12 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 		maxTurns = config.DefaultMaxTurns
 	}
 	args = append(args, "--max-turns", strconv.Itoa(maxTurns))
+
+	// Opening prompt is the trailing positional so it lands after every flag.
+	// Empty prompt => no positional, identical to the pre-prompt behavior.
+	if prompt != "" {
+		args = append(args, prompt)
+	}
 
 	return args
 }

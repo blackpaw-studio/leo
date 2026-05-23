@@ -175,7 +175,8 @@ func newAgentListCmd() *cobra.Command {
 // --- spawn ---
 
 func newAgentSpawnCmd() *cobra.Command {
-	var host, repo, name, branch, base string
+	var host, repo, name, branch, base, prompt string
+	var envPairs []string
 	var reuseOwner, attachExisting bool
 	cmd := &cobra.Command{
 		Use:   "spawn <template> [repo]",
@@ -222,6 +223,11 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 				return fmt.Errorf("--base only applies with --worktree")
 			}
 
+			env, err := parseEnvPairs(envPairs)
+			if err != nil {
+				return err
+			}
+
 			cfg, res, err := dispatch(host)
 			if err != nil {
 				return err
@@ -242,6 +248,12 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 				}
 				if base != "" {
 					extra = append(extra, "--base", base)
+				}
+				if prompt != "" {
+					extra = append(extra, "--prompt", prompt)
+				}
+				for _, p := range envPairs {
+					extra = append(extra, "--env", p)
 				}
 				return runRemote(res, extra)
 			}
@@ -312,6 +324,8 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 				Name:     name,
 				Branch:   branch,
 				Base:     base,
+				Prompt:   prompt,
+				Env:      env,
 			})
 			if err != nil {
 				return fmt.Errorf("spawning agent: %w", err)
@@ -330,9 +344,29 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 	cmd.Flags().StringVar(&name, "name", "", "override the derived agent name")
 	cmd.Flags().StringVar(&branch, "worktree", "", "create a dedicated git worktree on this branch (requires owner/repo)")
 	cmd.Flags().StringVar(&base, "base", "", "base ref for new branches (defaults to origin HEAD)")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "opening prompt delivered as the agent's first interactive turn")
+	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "extra env var as KEY=VALUE (repeatable); overrides template env on collision")
 	cmd.Flags().BoolVar(&reuseOwner, "reuse-owner", false, "on collision, spawn using the existing agent's canonical owner/repo")
 	cmd.Flags().BoolVar(&attachExisting, "attach-existing", false, "on collision, attach to the existing agent instead of spawning")
 	return cmd
+}
+
+// parseEnvPairs converts repeated KEY=VALUE flag values into a map. Returns nil
+// for an empty input so the "no env" case stays unset on the wire. The key must
+// be non-empty; VALUE may contain '=' (only the first '=' splits).
+func parseEnvPairs(pairs []string) (map[string]string, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	env := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		key, val, ok := strings.Cut(p, "=")
+		if !ok || key == "" {
+			return nil, fmt.Errorf("invalid --env %q: expected KEY=VALUE", p)
+		}
+		env[key] = val
+	}
+	return env, nil
 }
 
 // spawnChoice is the result of the collision prompt.

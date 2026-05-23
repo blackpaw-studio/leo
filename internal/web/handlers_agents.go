@@ -53,16 +53,28 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Template string `json:"template"`
-		Repo     string `json:"repo"`
-		Name     string `json:"name,omitempty"`
+		Template string            `json:"template"`
+		Repo     string            `json:"repo"`
+		Name     string            `json:"name,omitempty"`
+		Branch   string            `json:"branch,omitempty"`
+		Base     string            `json:"base,omitempty"`
+		Prompt   string            `json:"prompt,omitempty"`
+		Env      map[string]string `json:"env,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
 		return
 	}
 
-	rec, err := s.agentSvc.Spawn(r.Context(), agent.SpawnSpec{Template: req.Template, Repo: req.Repo, Name: req.Name})
+	rec, err := s.agentSvc.Spawn(r.Context(), agent.SpawnSpec{
+		Template: req.Template,
+		Repo:     req.Repo,
+		Name:     req.Name,
+		Branch:   req.Branch,
+		Base:     req.Base,
+		Prompt:   req.Prompt,
+		Env:      req.Env,
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return

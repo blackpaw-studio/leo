@@ -73,6 +73,29 @@ type SpawnSpec struct {
 	Name     string // optional — overrides the derived agent name
 	Branch   string // optional — when non-empty, spawn in a dedicated worktree on this branch
 	Base     string // optional — base ref for new branches (defaults to origin HEAD)
+	// Prompt, when non-empty, is delivered to the agent as the opening turn of
+	// its interactive session (appended as the trailing positional claude arg).
+	Prompt string
+	// Env is merged over the template's env for this spawn only. Per-spawn keys
+	// win on collision. Lets a caller hand the agent context like SLACK_THREAD_TS.
+	Env map[string]string
+}
+
+// mergeEnv returns a new map combining base and overlay, with overlay winning
+// on key collision. Neither input is mutated. Returns nil when both are empty
+// so callers preserve the "no env" representation exactly.
+func mergeEnv(base, overlay map[string]string) map[string]string {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(base)+len(overlay))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range overlay {
+		merged[k] = v
+	}
+	return merged
 }
 
 // Record is the public view of an agent, merging persisted metadata with live state.
@@ -164,15 +187,16 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}
 
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace)
+	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt)
 	claudeArgs = append(claudeArgs, "--session-id", sessionID)
 	webPort := strconv.Itoa(cfg.WebPort())
+	env := mergeEnv(tmpl.Env, spec.Env)
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       agentName,
 		ClaudeArgs: claudeArgs,
 		WorkDir:    workspace,
-		Env:        tmpl.Env,
+		Env:        env,
 		WebPort:    webPort,
 		WebToken:   m.webToken,
 	}); err != nil {
@@ -188,7 +212,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		Workspace:  workspace,
 		ClaudeArgs: claudeArgs,
 		SessionID:  sessionID,
-		Env:        tmpl.Env,
+		Env:        env,
 		WebPort:    webPort,
 		SpawnedAt:  time.Now(),
 	}); err != nil {
@@ -202,7 +226,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		Workspace: workspace,
 		Status:    "starting",
 		StartedAt: time.Now(),
-		Env:       tmpl.Env,
+		Env:       env,
 	}, nil
 }
 
@@ -264,15 +288,16 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	worktreeCreated := true
 
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath)
+	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt)
 	claudeArgs = append(claudeArgs, "--session-id", sessionID)
 	webPort := strconv.Itoa(cfg.WebPort())
+	env := mergeEnv(tmpl.Env, spec.Env)
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       layout.AgentName,
 		ClaudeArgs: claudeArgs,
 		WorkDir:    layout.WorktreePath,
-		Env:        tmpl.Env,
+		Env:        env,
 		WebPort:    webPort,
 		WebToken:   m.webToken,
 	}); err != nil {
@@ -300,7 +325,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		CanonicalPath: canonical,
 		ClaudeArgs:    claudeArgs,
 		SessionID:     sessionID,
-		Env:           tmpl.Env,
+		Env:           env,
 		WebPort:       webPort,
 		SpawnedAt:     time.Now(),
 	}); err != nil {
@@ -316,7 +341,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		CanonicalPath: canonical,
 		Status:        "starting",
 		StartedAt:     time.Now(),
-		Env:           tmpl.Env,
+		Env:           env,
 	}, nil
 }
 

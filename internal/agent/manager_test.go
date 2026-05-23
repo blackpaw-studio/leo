@@ -88,7 +88,7 @@ func TestBuildTemplateArgsBasic(t *testing.T) {
 		MaxTurns: 200,
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test-agent", "/tmp/workspace")
+	args := BuildTemplateArgs(cfg, tmpl, "test-agent", "/tmp/workspace", "")
 
 	assertContainsFlag(t, args, "--model", "opus")
 	assertContainsFlag(t, args, "--max-turns", "200")
@@ -109,7 +109,7 @@ func TestBuildTemplateArgsInheritsDefaults(t *testing.T) {
 	}
 	tmpl := config.TemplateConfig{}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 
 	assertContainsFlag(t, args, "--model", "haiku")
 	assertContainsFlag(t, args, "--max-turns", "50")
@@ -124,7 +124,7 @@ func TestBuildTemplateArgsChannels(t *testing.T) {
 		Channels: []string{"plugin:telegram@official", "plugin:slack@custom"},
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 
 	count := 0
 	for _, a := range args {
@@ -144,7 +144,7 @@ func TestBuildTemplateArgsDevChannels(t *testing.T) {
 		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 
 	var sawChan, sawDev bool
 	for i, a := range args {
@@ -167,7 +167,7 @@ func TestBuildTemplateArgsAgent(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{Agent: "my-agent"}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 	assertContainsFlag(t, args, "--agent", "my-agent")
 }
 
@@ -176,11 +176,84 @@ func TestBuildTemplateArgsRemoteControlDisabled(t *testing.T) {
 	rc := false
 	tmpl := config.TemplateConfig{RemoteControl: &rc}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 	for _, a := range args {
 		if a == "--remote-control" {
 			t.Error("--remote-control should not be present when disabled")
 		}
+	}
+}
+
+func TestBuildTemplateArgsPromptIsTrailingPositional(t *testing.T) {
+	cfg := &config.Config{}
+	tmpl := config.TemplateConfig{Model: "opus"}
+
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "investigate alert X")
+
+	if len(args) == 0 {
+		t.Fatal("expected non-empty args")
+	}
+	// The prompt must be the final element, after every flag, so claude
+	// treats it as the opening interactive turn.
+	if last := args[len(args)-1]; last != "investigate alert X" {
+		t.Errorf("expected trailing positional %q, got %q (full: %v)", "investigate alert X", last, args)
+	}
+	// It must not be introduced via -p/--print, which would make the
+	// session one-shot instead of interactive.
+	for _, a := range args {
+		if a == "-p" || a == "--print" {
+			t.Errorf("prompt must not be passed via %q — agents must stay interactive (args: %v)", a, args)
+		}
+	}
+}
+
+func TestBuildTemplateArgsNoPromptOmitsPositional(t *testing.T) {
+	cfg := &config.Config{}
+	tmpl := config.TemplateConfig{Model: "opus"}
+
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
+
+	// Backward compat: with no prompt, the final arg is still a flag value
+	// (--max-turns N), never a bare positional.
+	if last := args[len(args)-1]; last == "" {
+		t.Errorf("empty prompt must not append a trailing positional, got %v", args)
+	}
+	if args[len(args)-2] != "--max-turns" {
+		t.Errorf("expected args to end with the --max-turns flag pair when no prompt is given, got %v", args)
+	}
+}
+
+func TestMergeEnvOverridesTemplateOnCollision(t *testing.T) {
+	base := map[string]string{"FOO": "1", "BAR": "template"}
+	overlay := map[string]string{"BAR": "spawn", "SLACK_THREAD_TS": "123.456"}
+
+	got := mergeEnv(base, overlay)
+
+	want := map[string]string{"FOO": "1", "BAR": "spawn", "SLACK_THREAD_TS": "123.456"}
+	if len(got) != len(want) {
+		t.Fatalf("merged env has %d keys, want %d: %v", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("merged[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+	// Inputs must not be mutated (immutability).
+	if base["BAR"] != "template" {
+		t.Errorf("mergeEnv mutated the base map: BAR = %q", base["BAR"])
+	}
+}
+
+func TestMergeEnvNilInputs(t *testing.T) {
+	if got := mergeEnv(nil, nil); got != nil {
+		t.Errorf("mergeEnv(nil, nil) = %v, want nil", got)
+	}
+	only := map[string]string{"A": "1"}
+	if got := mergeEnv(only, nil); len(got) != 1 || got["A"] != "1" {
+		t.Errorf("mergeEnv(only, nil) = %v, want {A:1}", got)
+	}
+	if got := mergeEnv(nil, only); len(got) != 1 || got["A"] != "1" {
+		t.Errorf("mergeEnv(nil, only) = %v, want {A:1}", got)
 	}
 }
 
