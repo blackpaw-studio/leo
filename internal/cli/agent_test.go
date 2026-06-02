@@ -59,6 +59,12 @@ func withStubExec(t *testing.T) *stubExec {
 	old := agentExecCommand
 	agentExecCommand = stub.fn
 	t.Cleanup(func() { agentExecCommand = old })
+	// Disable the terminfo bootstrap pass so its ssh+tic call doesn't show up
+	// in the stub call log alongside the ssh attach we actually want to
+	// assert against. Dedicated tests in terminfo_test.go cover that flow.
+	oldTI := ensureRemoteTerminfoFn
+	ensureRemoteTerminfoFn = func(config.HostResolution) string { return "" }
+	t.Cleanup(func() { ensureRemoteTerminfoFn = oldTI })
 	return stub
 }
 
@@ -744,6 +750,40 @@ func TestAgentStopRemoteForwardsPruneFlags(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ssh call missing %q: %s", want, joined)
 		}
+	}
+}
+
+func TestAgentRenameRemoteDispatches(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "rename", "leo-old-name", "new-name"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	for _, want := range []string{"agent", "rename", "leo-old-name", "new-name"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ssh call missing %q: %s", want, joined)
+		}
+	}
+}
+
+func TestAgentRenameRequiresTwoArgs(t *testing.T) {
+	cmd := newAgentRenameCmd()
+	if cmd.Use != "rename <name> <new-name>" {
+		t.Errorf("unexpected Use: %q", cmd.Use)
+	}
+	if err := cmd.Args(cmd, []string{"only-one"}); err == nil {
+		t.Error("expected error for 1 arg, got nil")
+	}
+	if err := cmd.Args(cmd, []string{"a", "b"}); err != nil {
+		t.Errorf("expected no error for 2 args, got %v", err)
 	}
 }
 

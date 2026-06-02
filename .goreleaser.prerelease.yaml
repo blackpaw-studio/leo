@@ -1,0 +1,43 @@
+version: 2
+
+project_name: leo
+
+# Prerelease config for PR builds. Differences from .goreleaser.yaml:
+#   - No `brews:` (we don't update the Homebrew tap for PR builds).
+#   - `release.disable: true` — artifacts are uploaded as workflow
+#     artifacts, not GitHub Releases.
+#   - `snapshot.version_template` produces a `pr-<n>-<short-sha>` version
+#     so the embedded ldflag and archive name carry the PR's identity.
+#   - No `signs:` block — goreleaser skips signing in snapshot mode anyway,
+#     so the workflow signs `checksums.txt` explicitly via cosign sign-blob
+#     against the prerelease workflow's OIDC identity.
+
+builds:
+  - main: ./cmd/leo
+    binary: leo
+    ldflags:
+      - -s -w -X github.com/blackpaw-studio/leo/internal/cli.Version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "pr-{{ .Env.PR_NUMBER }}-{{ .ShortCommit }}"
+
+changelog:
+  disable: true
+
+release:
+  disable: true

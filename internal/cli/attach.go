@@ -92,8 +92,14 @@ render the session as a native tab via tmux control mode.`,
 // runRemoteAttach shells `ssh -t <host> <leo_path> attach <name>`. We keep the
 // TTY flag so the remote tmux attach inherits it cleanly.
 func runRemoteAttach(res config.HostResolution, name string) error {
+	// The remote leo will re-resolve to a local tmux attach, which inherits
+	// $TERM from this SSH session. Make sure the remote knows that terminal
+	// type — or fall back to xterm-256color on the remote command.
+	termOverride := ensureRemoteTerminfoFn(res)
 	sshArgs := append([]string{"-t", res.Host.SSH}, res.Host.SSHArgs...)
+	prefixLen := len(sshArgs)
 	sshArgs = append(sshArgs, res.Host.RemoteLeoPath(), "attach", name)
+	sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 	c := agentExecCommand("ssh", sshArgs...)
 	c.Stdin = os.Stdin
 	c.Stdout = agentStdout

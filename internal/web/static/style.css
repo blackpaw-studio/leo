@@ -174,7 +174,36 @@ body {
     font-family: var(--mono);
 }
 
-.process-actions { margin-top: 8px; }
+.process-actions {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent-rename {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+}
+
+.agent-rename input[type="text"] {
+    width: 130px;
+    padding: 5px 8px;
+    font-size: 13px;
+    font-family: var(--mono);
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.agent-rename input[type="text"]:focus {
+    outline: none;
+    border-color: var(--border-focus);
+}
 
 /* Tabs */
 .tabs {

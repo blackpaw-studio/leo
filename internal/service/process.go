@@ -39,6 +39,10 @@ var (
 	supervisedExecFn = defaultSupervisedExec
 )
 
+// sessionPollInterval is how often waitForSessionEnd checks the tmux session.
+// A package var (not a const) so tests can shorten it.
+var sessionPollInterval = 5 * time.Second
+
 const (
 	maxBackoff     = 60 * time.Second
 	initialBackoff = 5 * time.Second
@@ -90,6 +94,7 @@ type Supervisor struct {
 	states       map[string]*ProcessState
 	cancels      map[string]context.CancelFunc // per-process cancel functions for ephemeral agents
 	reservations map[string]struct{}           // names atomically claimed by ReserveAgent before SpawnAgent
+	identities   map[string]*procIdentity      // live identity handle per ephemeral agent, re-keyed on rename
 	ctx          context.Context               // parent context from RunSupervised
 	tmuxPath     string
 	claudePath   string
@@ -107,6 +112,7 @@ func NewSupervisor(ctx context.Context) *Supervisor {
 		states:       make(map[string]*ProcessState),
 		cancels:      make(map[string]context.CancelFunc),
 		reservations: make(map[string]struct{}),
+		identities:   make(map[string]*procIdentity),
 		ctx:          ctx,
 	}
 }
@@ -211,6 +217,8 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		StartedAt: time.Now(),
 		Ephemeral: true,
 	}
+	id := newProcIdentity(spec.Name, spec.ClaudeArgs)
+	s.identities[spec.Name] = id
 	s.mu.Unlock()
 
 	procSpec := ProcessSpec{
@@ -221,7 +229,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		WebPort:    spec.WebPort,
 		WebToken:   spec.WebToken,
 	}
-	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s)
+	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
 	return nil
 }
 
@@ -251,8 +259,60 @@ func (s *Supervisor) StopAgent(name string) error {
 	s.mu.Lock()
 	delete(s.states, name)
 	delete(s.cancels, name)
+	delete(s.identities, name)
 	s.mu.Unlock()
 
+	return nil
+}
+
+// RenameAgent renames a running ephemeral agent with zero process restart. It
+// renames the tmux session, swaps the live identity handle (so the supervise
+// goroutine follows the new name), and re-keys the states/cancels/identities
+// maps. A non-running agent (mid-restart) returns a retryable error so callers
+// do not race the goroutine's create window.
+func (s *Supervisor) RenameAgent(oldName, newName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st, ok := s.states[oldName]
+	if !ok {
+		return fmt.Errorf("agent %q not found", oldName)
+	}
+	if !st.Ephemeral {
+		return fmt.Errorf("%q is not an ephemeral agent", oldName)
+	}
+	if st.Status != "running" {
+		return fmt.Errorf("agent %q is %s, not running; retry once it settles", oldName, st.Status)
+	}
+	if _, exists := s.states[newName]; exists {
+		return fmt.Errorf("agent %q already exists", newName)
+	}
+	if _, reserved := s.reservations[newName]; reserved {
+		return fmt.Errorf("agent %q is reserved", newName)
+	}
+	id, ok := s.identities[oldName]
+	if !ok {
+		return fmt.Errorf("agent %q has no identity handle", oldName)
+	}
+
+	// Hold the identity write-lock across the tmux rename + name swap so the
+	// watcher's RLock observes either (old,old) or (new,new), never a crossed
+	// state. tmux rename-session keeps the running pane alive.
+	id.mu.Lock()
+	if err := tmuxRenameSession(s.tmuxPath, agent.SessionName(oldName), agent.SessionName(newName)); err != nil {
+		id.mu.Unlock()
+		return fmt.Errorf("renaming tmux session: %w", err)
+	}
+	id.renameLocked(newName)
+	id.mu.Unlock()
+
+	st.Name = newName
+	s.states[newName] = st
+	s.cancels[newName] = s.cancels[oldName]
+	s.identities[newName] = id
+	delete(s.states, oldName)
+	delete(s.cancels, oldName)
+	delete(s.identities, oldName)
 	return nil
 }
 
@@ -468,7 +528,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		wg.Add(1)
 		go func(spec ProcessSpec) {
 			defer wg.Done()
-			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor)
+			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor, newProcIdentity(spec.Name, spec.ClaudeArgs))
 		}(proc)
 	}
 
@@ -511,21 +571,26 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 }
 
 // superviseProcess runs a single process in a tmux session with restart loop.
-func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor) {
+func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity) {
 	sv.initState(spec.Name)
 
 	backoff := initialBackoff
-	sessionName := agent.SessionName(spec.Name)
-	currentArgs := make([]string, len(spec.ClaudeArgs))
-	copy(currentArgs, spec.ClaudeArgs)
 
 	for {
-		sv.setState(spec.Name, "running")
+		// Snapshot identity for this iteration. The tmux session name is also
+		// re-read live by waitForSessionEnd (via id) so a rename mid-wait is
+		// absorbed; the snapshot here governs this iteration's kill/new-session
+		// and name-keyed state files.
+		name := id.Name()
+		sessionName := id.SessionName()
+		currentArgs := id.Args()
+
+		sv.setState(name, "running")
 
 		// Clear any prior exit.code so a shell SIGKILL mid-run doesn't leave
 		// the previous iteration's code on disk to be misattributed here.
 		if spec.StateDir != "" {
-			resetExitCode(spec.StateDir, spec.Name)
+			resetExitCode(spec.StateDir, name)
 		}
 
 		claudeCmd := buildClaudeShellCmd(claudePath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
@@ -548,11 +613,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		startTime := time.Now()
 
 		if err := createCmd.Run(); err != nil {
-			sv.setState(spec.Name, "restarting")
-			fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", spec.Name, err, backoff)
+			sv.setState(name, "restarting")
+			fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", name, err, backoff)
 			select {
 			case <-ctx.Done():
-				sv.setState(spec.Name, "stopped")
+				sv.setState(name, "stopped")
 				return
 			case <-time.After(backoff):
 			}
@@ -560,7 +625,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			continue
 		}
 
-		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", spec.Name, sessionName)
+		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
 
 		// If any --dangerously-load-development-channels flags are present,
 		// claude will show an interactive confirmation prompt. Dismiss it by
@@ -568,16 +633,16 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// for local development"). Runs in a goroutine so the restart loop
 		// isn't blocked if the prompt never appears.
 		if hasDevChannelFlag(currentArgs) {
-			fmt.Fprintf(os.Stdout, "[%s] auto-accepting dev-channel prompt\n", spec.Name)
-			go func() {
-				if err := tmux.AcceptDevChannelPrompt(ctx, tmuxPath, sessionName); err != nil && ctx.Err() == nil {
-					fmt.Fprintf(os.Stderr, "[%s] warning: dev-channel auto-accept failed: %v\n", spec.Name, err)
+			fmt.Fprintf(os.Stdout, "[%s] auto-accepting dev-channel prompt\n", name)
+			go func(sess string) {
+				if err := tmux.AcceptDevChannelPrompt(ctx, tmuxPath, sess); err != nil && ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "[%s] warning: dev-channel auto-accept failed: %v\n", name, err)
 				}
-			}()
+			}(sessionName)
 		}
 
-		if waitForSessionEnd(ctx, tmuxPath, sessionName, spec, startTime) {
-			sv.setState(spec.Name, "stopped")
+		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime) {
+			sv.setState(name, "stopped")
 			return
 		}
 
@@ -586,28 +651,29 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// Check if we were signaled to stop
 		select {
 		case <-ctx.Done():
-			sv.setState(spec.Name, "stopped")
+			sv.setState(name, "stopped")
 			return
 		default:
 		}
 
-		sv.setState(spec.Name, "restarting")
-		sv.incrementRestarts(spec.Name)
+		sv.setState(name, "restarting")
+		sv.incrementRestarts(name)
 
 		// Very-quick exits suggest a poisoned session: strip --resume and
 		// clear the stored session so the next spawn starts fresh.
 		if elapsed < quickExitThreshold {
 			hadResume := hasResumeArg(currentArgs)
 			currentArgs = stripResumeArg(currentArgs)
-			clearProcessSession(homePath, spec.Name)
+			id.setArgs(currentArgs)
+			clearProcessSession(homePath, name)
 			if hadResume {
 				// Persist the "no-resume" decision on the agent record so a
 				// daemon restart mid-crash-loop doesn't reintroduce
 				// --resume via RestoreAgents. No-op for non-agent specs
 				// (no matching agentstore record).
-				markAgentNoResume(homePath, spec.Name)
+				markAgentNoResume(homePath, name)
 			}
-			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session\n", spec.Name, elapsed.Seconds())
+			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session\n", name, elapsed.Seconds())
 		}
 
 		// Read exit info written by the shell wrapper, compose the per-process
@@ -618,15 +684,15 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		signal := "none"
 		var tail []string
 		if spec.StateDir != "" {
-			exitCode, codeOK = readExitCode(spec.StateDir, spec.Name)
+			exitCode, codeOK = readExitCode(spec.StateDir, name)
 			if codeOK {
 				signal = decodeSignal(exitCode)
 			}
-			tail = tailLines(processStderrPath(spec.StateDir, spec.Name), exitStderrTailLines)
-			_ = writeExitLog(spec.StateDir, spec.Name, exitCode, codeOK, signal, elapsed, tail)
+			tail = tailLines(processStderrPath(spec.StateDir, name), exitStderrTailLines)
+			_ = writeExitLog(spec.StateDir, name, exitCode, codeOK, signal, elapsed, tail)
 		}
-		logProcessExit(os.Stderr, spec.Name, elapsed, backoff, exitCode, codeOK, signal,
-			processExitLogPath(spec.StateDir, spec.Name), len(tail) > 0)
+		logProcessExit(os.Stderr, name, elapsed, backoff, exitCode, codeOK, signal,
+			processExitLogPath(spec.StateDir, name), len(tail) > 0)
 
 		// Sleep the current backoff, then advance for the NEXT iteration.
 		// `backoff` starts at initialBackoff on cold start; a run that lasts
@@ -635,7 +701,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// --resume but doesn't change backoff — it's purely a session fix.
 		select {
 		case <-ctx.Done():
-			sv.setState(spec.Name, "stopped")
+			sv.setState(name, "stopped")
 			return
 		case <-time.After(backoff):
 		}
@@ -645,25 +711,27 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 // waitForSessionEnd blocks until the tmux session ends or the context is cancelled.
 // Returns true if the context was cancelled (should stop).
-func waitForSessionEnd(ctx context.Context, tmuxPath, sessionName string, spec ProcessSpec, startTime time.Time) bool {
+func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time) bool {
+	_ = spec      // kept in signature for future lifecycle hooks
 	_ = startTime // kept in signature for future lifecycle hooks
 	for {
 		select {
 		case <-ctx.Done():
-			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
+			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", id.SessionName())...).Run()
 			return true
-		case <-time.After(5 * time.Second):
+		case <-time.After(sessionPollInterval):
 		}
 
-		// Check if tmux session still exists
-		check := exec.Command(tmuxPath, tmux.Args("has-session", "-t", sessionName)...)
-		if check.Run() != nil {
+		// Re-read the session name each poll so a live rename is followed
+		// rather than reported as a vanished session.
+		sessionName := id.SessionName()
+		if !tmuxHasSession(tmuxPath, sessionName) {
 			return false
 		}
 
 		// Auto-dismiss the "Resume from summary" prompt that blocks
 		// unattended sessions when they exceed the context threshold.
-		autoResumePrompt(tmuxPath, sessionName, spec.Name)
+		autoResumePrompt(tmuxPath, sessionName, id.Name())
 	}
 }
 

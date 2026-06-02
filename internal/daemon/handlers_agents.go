@@ -56,6 +56,8 @@ func (s *Server) handleAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		Name:     req.Name,
 		Branch:   req.Branch,
 		Base:     req.Base,
+		Prompt:   req.Prompt,
+		Env:      req.Env,
 	})
 	if err != nil {
 		writeAgentError(w, err)
@@ -240,6 +242,54 @@ func (s *Server) handleAgentPrune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true})
+}
+
+// handleAgentRename renames an agent. The {name} path segment may be a
+// shorthand query; it is resolved to the canonical agent, then Rename applies
+// the new name across supervisor state and the persisted record.
+func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	query := r.PathValue("name")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	var req AgentRenameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+	if req.NewName == "" {
+		writeError(w, http.StatusBadRequest, "new_name is required")
+		return
+	}
+	updated, err := s.agentMgr.Rename(query, req.NewName)
+	if err != nil {
+		var nf *agent.ErrNotFound
+		var amb *agent.ErrAmbiguous
+		switch {
+		case errors.As(err, &nf):
+			writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeNotFound})
+		case errors.As(err, &amb):
+			writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAmbiguous, Matches: amb.Matches})
+		case errors.Is(err, agent.ErrAgentNameTaken):
+			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, agent.ErrAgentNameUnchanged), errors.Is(err, agent.ErrInvalidAgentName):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	data, err := json.Marshal(updated)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling record: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
 // writeAgentError translates agent-package typed errors into HTTP responses

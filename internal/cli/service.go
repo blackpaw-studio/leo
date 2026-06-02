@@ -338,6 +338,7 @@ func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig
 	if appendPrompt == "" {
 		appendPrompt = cfg.Defaults.AppendSystemPrompt
 	}
+	appendPrompt = leomcp.MergeSystemPrompt(cfg, appendPrompt)
 	if appendPrompt != "" {
 		claudeArgs = append(claudeArgs, "--append-system-prompt", appendPrompt)
 	}

@@ -411,6 +411,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 	if appendPrompt == "" {
 		appendPrompt = cfg.Defaults.AppendSystemPrompt
 	}
+	appendPrompt = leomcp.MergeSystemPrompt(cfg, appendPrompt)
 	if appendPrompt != "" {
 		args = append(args, "--append-system-prompt", appendPrompt)
 	}

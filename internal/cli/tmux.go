@@ -48,9 +48,16 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		if opts.cc {
 			return fmt.Errorf("--cc (tmux control mode) is local-only; it is not supported over SSH")
 		}
+		// Bootstrap terminfo for the local $TERM on the remote so tmux there
+		// doesn't bail with "missing or unsuitable terminal" (Ghostty, Kitty,
+		// Alacritty, etc.). If install fails, we downgrade TERM on the remote
+		// command so the attach still works.
+		termOverride := ensureRemoteTerminfoFn(res)
 		sshArgs := append([]string{"-t", res.Host.SSH}, res.Host.SSHArgs...)
+		prefixLen := len(sshArgs)
 		sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
 		sshArgs = append(sshArgs, tmux.Args("attach", "-t", session)...)
+		sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 		c := agentExecCommand("ssh", sshArgs...)
 		c.Stdin = os.Stdin
 		c.Stdout = agentStdout

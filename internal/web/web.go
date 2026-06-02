@@ -52,6 +52,7 @@ type AgentService interface {
 	Stop(name string) error
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)
+	Rename(query, newName string) (agent.Record, error)
 }
 
 // Server serves the Leo web UI over HTTP.
@@ -173,11 +174,13 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)
 	mux.HandleFunc("POST /web/process/{name}/restart", s.handleProcessRestart)
 	mux.HandleFunc("POST /web/process/{name}/send", s.handleProcessSendKeys)
+	mux.HandleFunc("POST /web/process/{name}/message", s.handleProcessMessage)
 
 	// Agent management (web UI)
 	mux.HandleFunc("GET /partials/agents", s.handlePartialAgents)
 	mux.HandleFunc("POST /web/agent/spawn", s.handleWebAgentSpawn)
 	mux.HandleFunc("POST /web/agent/{name}/stop", s.handleWebAgentStop)
+	mux.HandleFunc("POST /web/agent/{name}/rename", s.handleWebAgentRename)
 
 	// Agent + task management (JSON API — used by channel plugins and external
 	// clients). Registered on a sub-mux so we can wrap /api/* in bearer auth
@@ -185,6 +188,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("POST /api/agent/spawn", s.handleAPIAgentSpawn)
 	apiMux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
+	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
 	apiMux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
 	apiMux.HandleFunc("GET /api/task/list", s.handleAPITaskList)

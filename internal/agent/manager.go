@@ -6,7 +6,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os/exec"
 	"strconv"
@@ -40,6 +42,7 @@ type Supervisor interface {
 	ReleaseAgent(name string)
 	SpawnAgent(spec SpawnRequest) error
 	StopAgent(name string) error
+	RenameAgent(old, new string) error
 	EphemeralAgents() map[string]ProcessState
 }
 
@@ -73,6 +76,29 @@ type SpawnSpec struct {
 	Name     string // optional — overrides the derived agent name
 	Branch   string // optional — when non-empty, spawn in a dedicated worktree on this branch
 	Base     string // optional — base ref for new branches (defaults to origin HEAD)
+	// Prompt, when non-empty, is delivered to the agent as the opening turn of
+	// its interactive session (appended as the trailing positional claude arg).
+	Prompt string
+	// Env is merged over the template's env for this spawn only. Per-spawn keys
+	// win on collision. Lets a caller hand the agent context like SLACK_THREAD_TS.
+	Env map[string]string
+}
+
+// mergeEnv returns a new map combining base and overlay, with overlay winning
+// on key collision. Neither input is mutated. Returns nil when both are empty
+// so callers preserve the "no env" representation exactly.
+func mergeEnv(base, overlay map[string]string) map[string]string {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(base)+len(overlay))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range overlay {
+		merged[k] = v
+	}
+	return merged
 }
 
 // Record is the public view of an agent, merging persisted metadata with live state.
@@ -164,15 +190,16 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}
 
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace)
+	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt)
 	claudeArgs = append(claudeArgs, "--session-id", sessionID)
 	webPort := strconv.Itoa(cfg.WebPort())
+	env := mergeEnv(tmpl.Env, spec.Env)
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       agentName,
 		ClaudeArgs: claudeArgs,
 		WorkDir:    workspace,
-		Env:        tmpl.Env,
+		Env:        env,
 		WebPort:    webPort,
 		WebToken:   m.webToken,
 	}); err != nil {
@@ -188,7 +215,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		Workspace:  workspace,
 		ClaudeArgs: claudeArgs,
 		SessionID:  sessionID,
-		Env:        tmpl.Env,
+		Env:        env,
 		WebPort:    webPort,
 		SpawnedAt:  time.Now(),
 	}); err != nil {
@@ -202,7 +229,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		Workspace: workspace,
 		Status:    "starting",
 		StartedAt: time.Now(),
-		Env:       tmpl.Env,
+		Env:       env,
 	}, nil
 }
 
@@ -264,15 +291,16 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	worktreeCreated := true
 
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath)
+	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt)
 	claudeArgs = append(claudeArgs, "--session-id", sessionID)
 	webPort := strconv.Itoa(cfg.WebPort())
+	env := mergeEnv(tmpl.Env, spec.Env)
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       layout.AgentName,
 		ClaudeArgs: claudeArgs,
 		WorkDir:    layout.WorktreePath,
-		Env:        tmpl.Env,
+		Env:        env,
 		WebPort:    webPort,
 		WebToken:   m.webToken,
 	}); err != nil {
@@ -300,7 +328,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		CanonicalPath: canonical,
 		ClaudeArgs:    claudeArgs,
 		SessionID:     sessionID,
-		Env:           tmpl.Env,
+		Env:           env,
 		WebPort:       webPort,
 		SpawnedAt:     time.Now(),
 	}); err != nil {
@@ -316,7 +344,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		CanonicalPath: canonical,
 		Status:        "starting",
 		StartedAt:     time.Now(),
-		Env:           tmpl.Env,
+		Env:           env,
 	}, nil
 }
 
@@ -508,4 +536,117 @@ func (m *Manager) Logs(name string, lines int) (string, error) {
 		return "", fmt.Errorf("tmux capture-pane: %s", string(out))
 	}
 	return string(out), nil
+}
+
+// Rename changes an agent's identity. The agent is fuzzy-resolved from query,
+// the new name is normalized and checked for collisions, the live supervisor
+// state is renamed in place (zero restart) when the agent is running, and the
+// persisted record is re-keyed with its --name flag rewritten. Stopped worktree
+// agents skip the supervisor and only re-key the store.
+func (m *Manager) Rename(query, rawNewName string) (Record, error) {
+	rec, err := m.Resolve(query)
+	if err != nil {
+		// Resolve only matches live agents. A stopped worktree agent is kept
+		// in the store with Stopped=true, so fall back to an exact agentstore
+		// lookup (raw and normalized) before surfacing the resolve error.
+		fallback, ok := m.resolveStored(query)
+		if !ok {
+			return Record{}, err
+		}
+		rec = fallback
+	}
+	oldName := rec.Name
+
+	newName, err := NormalizeAgentName(rawNewName)
+	if err != nil {
+		return Record{}, err
+	}
+	if newName == oldName {
+		return Record{}, fmt.Errorf("%w: %q", ErrAgentNameUnchanged, oldName)
+	}
+
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return Record{}, fmt.Errorf("loading config: %w", err)
+	}
+
+	// Pre-check the store for a newName collision BEFORE touching the live
+	// supervisor. RenameAgent only checks live state/reservations, so without
+	// this a live agent could be renamed into a STOPPED record's name —
+	// tmux/maps would re-key but agentstore.Rename would then error on the
+	// collision, leaving supervisor and store inconsistent. A missing store
+	// file (no agents persisted yet) yields a non-nil empty map alongside an
+	// ErrNotExist, so it correctly reports "no collision"; any other load
+	// error is surfaced.
+	records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Record{}, fmt.Errorf("loading agent records: %w", err)
+	}
+	if _, exists := records[newName]; exists {
+		return Record{}, fmt.Errorf("%w: %q", ErrAgentNameTaken, newName)
+	}
+
+	if _, live := m.sup.EphemeralAgents()[oldName]; live {
+		if err := m.sup.RenameAgent(oldName, newName); err != nil {
+			return Record{}, fmt.Errorf("renaming running agent: %w", err)
+		}
+	}
+
+	if err := agentstore.Rename(cfg.HomePath, oldName, newName, func(r agentstore.Record) agentstore.Record {
+		r.Name = newName
+		r.ClaudeArgs = rewriteNameArg(r.ClaudeArgs, newName)
+		return r
+	}); err != nil {
+		return Record{}, fmt.Errorf("persisting rename: %w", err)
+	}
+
+	rec.Name = newName
+	return rec, nil
+}
+
+// resolveStored finds a persisted (possibly stopped) agent by exact name when
+// the live resolver cannot. It tries the raw query first, then the normalized
+// form, so both "leo-foo" and "foo" locate the same record. Returns false when
+// the store is unreadable or no exact match exists.
+func (m *Manager) resolveStored(query string) (Record, bool) {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return Record{}, false
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	// A missing store file means nothing is persisted yet — treat as no match,
+	// not a hard failure. A real load error (parse, permission) is also treated
+	// as "not found" here so Rename surfaces the original resolve error rather
+	// than an opaque store error; loadLocked returns a non-nil empty map on
+	// error so the lookup below simply finds nothing.
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Record{}, false
+	}
+
+	candidates := []string{strings.TrimSpace(query)}
+	if norm, err := NormalizeAgentName(query); err == nil {
+		candidates = append(candidates, norm)
+	}
+	for _, name := range candidates {
+		if _, ok := stored[name]; ok {
+			r := Record{Name: name}
+			mergeStored(&r, stored)
+			return r, true
+		}
+	}
+	return Record{}, false
+}
+
+// rewriteNameArg returns a copy of args with the value following --name replaced
+// by newName. If --name is absent the args are returned unchanged.
+func rewriteNameArg(args []string, newName string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "--name" {
+			out[i+1] = newName
+			break
+		}
+	}
+	return out
 }

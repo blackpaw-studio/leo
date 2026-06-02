@@ -14,12 +14,13 @@ import (
 
 // fakeAgentManager is a minimal AgentManager for daemon endpoint tests.
 type fakeAgentManager struct {
-	records  []agent.Record
-	spawnErr error
-	stopErr  error
-	pruneErr error
-	logsErr  error
-	logsOut  string
+	records   []agent.Record
+	spawnErr  error
+	stopErr   error
+	pruneErr  error
+	logsErr   error
+	logsOut   string
+	renameErr error
 
 	lastSpawn agent.SpawnSpec
 	lastStop  string
@@ -30,6 +31,10 @@ type fakeAgentManager struct {
 	lastLogs struct {
 		name  string
 		lines int
+	}
+	lastRename struct {
+		query   string
+		newName string
 	}
 }
 
@@ -78,6 +83,15 @@ func (f *fakeAgentManager) Resolve(query string) (agent.Record, error) {
 	return agent.Record{}, &agent.ErrNotFound{Query: query}
 }
 
+func (f *fakeAgentManager) Rename(query, newName string) (agent.Record, error) {
+	f.lastRename.query = query
+	f.lastRename.newName = newName
+	if f.renameErr != nil {
+		return agent.Record{}, f.renameErr
+	}
+	return agent.Record{Name: newName}, nil
+}
+
 func startTestServerWithAgent(t *testing.T, mgr AgentManager) (*Server, *http.Client) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "leo-agent-daemon-*")
@@ -107,6 +121,32 @@ func TestAgentSpawnHandler(t *testing.T) {
 	}
 	if mgr.lastSpawn.Template != "coding" || mgr.lastSpawn.Repo != "leo" {
 		t.Errorf("spawn spec = %+v", mgr.lastSpawn)
+	}
+}
+
+func TestAgentSpawnHandlerForwardsPromptAndEnv(t *testing.T) {
+	mgr := &fakeAgentManager{}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{
+		Template: "coding",
+		Repo:     "leo",
+		Prompt:   "investigate alert X",
+		Env:      map[string]string{"SLACK_THREAD_TS": "123.456"},
+	})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastSpawn.Prompt != "investigate alert X" {
+		t.Errorf("prompt not forwarded: spec = %+v", mgr.lastSpawn)
+	}
+	if mgr.lastSpawn.Env["SLACK_THREAD_TS"] != "123.456" {
+		t.Errorf("env not forwarded: spec = %+v", mgr.lastSpawn)
 	}
 }
 
