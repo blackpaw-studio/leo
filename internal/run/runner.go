@@ -88,6 +88,13 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		return err
 	}
 
+	// Persistent tasks are dispatched through the daemon's session router
+	// instead of spawning a fresh claude process. The seam keeps the legacy
+	// one-shot path completely unaffected.
+	if task.Runtime == "persistent" {
+		return persistentImpl(cfg, taskName)
+	}
+
 	// Acquire task lock to prevent concurrent execution
 	lockPath := filepath.Join(cfg.StatePath(), taskName+".lock")
 	if err := acquireTaskLock(lockPath); err != nil {

@@ -79,6 +79,7 @@ type Config struct {
 	Processes map[string]ProcessConfig  `yaml:"processes"`
 	Tasks     map[string]TaskConfig     `yaml:"tasks"`
 	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
+	Sessions  map[string]SessionConfig  `yaml:"sessions,omitempty"`
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
@@ -214,6 +215,24 @@ type ProcessConfig struct {
 	Enabled          bool `yaml:"enabled"`
 }
 
+// SessionConfig defines a named persistent claude session supervised by the
+// daemon. Tasks with runtime: persistent reference a session by name (or
+// implicitly create a dedicated one). Fields mirror ProcessConfig; see
+// docs/superpowers/specs/2026-05-17-persistent-task-sessions-design.md.
+type SessionConfig struct {
+	Workspace          string            `yaml:"workspace,omitempty"`
+	Model              string            `yaml:"model,omitempty"`
+	Agent              string            `yaml:"agent,omitempty"`
+	PermissionMode     string            `yaml:"permission_mode,omitempty"`
+	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
+	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
+	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
+	AddDirs            []string          `yaml:"add_dirs,omitempty"`
+	Channels           []string          `yaml:"channels,omitempty"`
+	Env                map[string]string `yaml:"env,omitempty"`
+	IdleTimeout        string            `yaml:"idle_timeout,omitempty"`
+}
+
 type TaskConfig struct {
 	Workspace          string   `yaml:"workspace,omitempty"`
 	Schedule           string   `yaml:"schedule"`
@@ -232,6 +251,10 @@ type TaskConfig struct {
 	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
 	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
+	Runtime            string   `yaml:"runtime,omitempty"` // "oneshot" (default) | "persistent"
+	Session            string   `yaml:"session,omitempty"`
+	Lazy               bool     `yaml:"lazy,omitempty"`
+	QueueMax           int      `yaml:"queue_max,omitempty"` // 0 → use default (5)
 }
 
 // TemplateConfig defines a reusable blueprint for spawning ephemeral agents.
@@ -261,7 +284,8 @@ func (c *Config) IsClientOnly() bool {
 	return len(c.Client.Hosts) > 0 &&
 		len(c.Processes) == 0 &&
 		len(c.Tasks) == 0 &&
-		len(c.Templates) == 0
+		len(c.Templates) == 0 &&
+		len(c.Sessions) == 0
 }
 
 // DefaultWorkspace returns the default workspace path (HomePath/workspace).
@@ -512,6 +536,38 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	for name, sess := range c.Sessions {
+		if sess.Workspace == "" {
+			errs = append(errs, fmt.Sprintf("sessions.%s.workspace is required", name))
+		}
+		if sess.Model != "" && !validModels[sess.Model] {
+			errs = append(errs, fmt.Sprintf("sessions.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, sess.Model))
+		}
+		if sess.PermissionMode != "" && !validPermissionModes[sess.PermissionMode] {
+			errs = append(errs, fmt.Sprintf("sessions.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, sess.PermissionMode))
+		}
+		for i, ch := range sess.Channels {
+			if !channelPattern.MatchString(ch) {
+				errs = append(errs, fmt.Sprintf("sessions.%s.channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		for k := range sess.Env {
+			if !envKeyPattern.MatchString(k) {
+				errs = append(errs, fmt.Sprintf("sessions.%s.env key %q is not a valid environment variable name", name, k))
+			}
+		}
+		for i, dir := range sess.AddDirs {
+			if err := ValidateAddDir(dir); err != nil {
+				errs = append(errs, fmt.Sprintf("sessions.%s.add_dirs[%d]: %v", name, i, err))
+			}
+		}
+		if sess.IdleTimeout != "" {
+			if _, err := time.ParseDuration(sess.IdleTimeout); err != nil {
+				errs = append(errs, fmt.Sprintf("sessions.%s.idle_timeout %q is not a valid duration: %v", name, sess.IdleTimeout, err))
+			}
+		}
+	}
+
 	for name, task := range c.Tasks {
 		if task.Schedule == "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.schedule is required", name))
@@ -551,6 +607,39 @@ func (c *Config) Validate() error {
 		for i, ch := range task.DevChannels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("tasks.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		if task.Runtime != "" && task.Runtime != "oneshot" && task.Runtime != "persistent" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.runtime %q is not valid (use \"oneshot\" or \"persistent\")", name, task.Runtime))
+		}
+		if task.Runtime != "persistent" && task.Session != "" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.session is only valid when runtime: persistent", name))
+		}
+		if task.Runtime == "persistent" {
+			sessName, _, sess, err := c.ResolveSession(name)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("tasks.%s: %v", name, err))
+			} else {
+				if task.Session == "" {
+					if _, clash := c.Sessions[sessName]; clash {
+						errs = append(errs, fmt.Sprintf("tasks.%s: implicit session name %q collides with sessions.%s — give the task a `session:` reference or rename one", name, sessName, sessName))
+					}
+				}
+				// Topology A's session is synthesized from task.Channels, so
+				// the subset check is trivially true and we skip it. For B
+				// and C the channels live under different config blocks —
+				// point the error at the correct one.
+				if task.Session != "" {
+					var src string
+					if strings.HasPrefix(task.Session, "process:") {
+						src = fmt.Sprintf("processes.%s.channels", sessName)
+					} else {
+						src = fmt.Sprintf("sessions.%s.channels", sessName)
+					}
+					if missing, ok := channelSubset(task.Channels, sess.Channels); !ok {
+						errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in %s (task.channels must be a subset)", name, missing, src))
+					}
+				}
 			}
 		}
 	}

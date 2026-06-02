@@ -11,6 +11,8 @@ Three core primitives:
 - **Task Scheduler** (`leo run <task>`): cron invokes claude with an assembled prompt; the agent handles outbound messaging via whatever channel plugin(s) are configured
 - **Ephemeral Agents** (`leo agent`): spawn/list/attach/stop/logs for on-demand agents created from templates. Dual-purpose — runs locally against the daemon, or acts as a thin SSH client against a remote leo host when `client.hosts` is configured.
 
+**Persistent Task Sessions** (`runtime: persistent` on a task): instead of spawning a fresh `claude -p` per firing, the task's prompt is injected into a long-running supervised claude inside `leo-session-<name>` tmux. Channel plugins load at session boot; delivery happens in-session. See `docs/configuration/persistent-tasks.md`.
+
 ## Build & Test Commands
 
 ```bash

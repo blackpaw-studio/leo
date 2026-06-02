@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const testYAML = `
@@ -1311,4 +1313,43 @@ func TestValidate_WebBind_InvalidNoDoubleError(t *testing.T) {
 			t.Fatalf("expected bind error, got: %v", err)
 		}
 	})
+}
+
+func TestSessionConfigParses(t *testing.T) {
+	yamlBlob := []byte(`
+sessions:
+  daily:
+    workspace: /tmp/daily
+    model: sonnet
+    channels:
+      - plugin:slack@official
+tasks:
+  standup:
+    runtime: persistent
+    session: daily
+    schedule: "0 7 * * *"
+    prompt_file: prompts/standup.md
+    channels:
+      - plugin:slack@official
+    queue_max: 3
+    lazy: false
+`)
+	var cfg Config
+	if err := yaml.Unmarshal(yamlBlob, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	sess, ok := cfg.Sessions["daily"]
+	if !ok {
+		t.Fatalf("expected sessions.daily")
+	}
+	if sess.Workspace != "/tmp/daily" || sess.Model != "sonnet" {
+		t.Fatalf("session fields wrong: %+v", sess)
+	}
+	if got := sess.Channels; len(got) != 1 || got[0] != "plugin:slack@official" {
+		t.Fatalf("channels wrong: %+v", got)
+	}
+	task := cfg.Tasks["standup"]
+	if task.Runtime != "persistent" || task.Session != "daily" || task.QueueMax != 3 || task.Lazy {
+		t.Fatalf("task fields wrong: %+v", task)
+	}
 }

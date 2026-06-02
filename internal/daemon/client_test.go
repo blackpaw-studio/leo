@@ -2,10 +2,14 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // tmpWorkDir creates a short temp workspace dir under /tmp with the state/
@@ -119,5 +123,66 @@ func TestSockPath(t *testing.T) {
 	want := filepath.Join("/home/user/.leo", "state", "leo.sock")
 	if got != want {
 		t.Errorf("SockPath() = %q, want %q", got, want)
+	}
+}
+
+func TestClientEnqueueTask(t *testing.T) {
+	h := http.NewServeMux()
+	h.HandleFunc("POST /task/enqueue", func(w http.ResponseWriter, r *http.Request) {
+		var got taskEnqueueReq
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		if got.Task != "t1" || got.Prompt != "p" || got.QueueMax != 4 {
+			t.Errorf("body wrong: %+v", got)
+		}
+		writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: true, InvocationID: "id-1"})
+	})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+	inv, err := EnqueueTaskHTTP(context.Background(), ts.URL, EnqueueRequest{
+		Session: "s", Task: "t1", Prompt: "p", QueueMax: 4, Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	if !inv.Accepted || inv.InvocationID != "id-1" {
+		t.Fatalf("response wrong: %+v", inv)
+	}
+}
+
+func TestClientAwaitTask(t *testing.T) {
+	h := http.NewServeMux()
+	h.HandleFunc("GET /task/await", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.RawQuery, "invocation_id=id-1") {
+			t.Errorf("query missing id: %s", r.URL.RawQuery)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "session_id": "cs1", "final_message": "done",
+		})
+	})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+	res, err := AwaitTaskHTTP(context.Background(), ts.URL, "id-1")
+	if err != nil {
+		t.Fatalf("await: %v", err)
+	}
+	if !res.OK || res.SessionID != "cs1" || res.FinalMessage != "done" {
+		t.Fatalf("result: %+v", res)
+	}
+}
+
+func TestClientReportTask(t *testing.T) {
+	var received taskReportReq
+	h := http.NewServeMux()
+	h.HandleFunc("POST /task/report", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&received)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+	if err := ReportTaskHTTP(context.Background(), ts.URL, "id-xyz", "csid", "all done", "leo-session-foo"); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if received.InvocationID != "id-xyz" || received.SessionID != "csid" || received.FinalMessage != "all done" {
+		t.Fatalf("server received: %+v", received)
 	}
 }

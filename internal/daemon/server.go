@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
 
@@ -52,6 +53,7 @@ type Server struct {
 	processes  ProcessStateProvider
 	webServer  *web.Server
 	agentMgr   AgentManager
+	router     *sessionRouter
 }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
@@ -66,7 +68,17 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 		configPath: configPath,
 		scheduler:  cron.New(leoPath, configPath),
 		processes:  processes,
+		router:     newSessionRouter(),
 	}
+
+	// Wire the session router to real tmux primitives. Tests that need
+	// fakes can call SetInjector/SetAborter after construction.
+	s.router.SetInjector(func(tmuxSession, prompt string) error {
+		return tmux.InjectPrompt(context.Background(), tmuxPath(), tmuxSession, prompt)
+	})
+	s.router.SetAborter(func(tmuxSession string) error {
+		return tmux.AbortPrompt(context.Background(), tmuxPath(), tmuxSession)
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
@@ -80,6 +92,13 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
 	mux.HandleFunc("GET /process/list", s.handleProcessList)
 	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
+
+	// Session-routed task delivery (persistent task sessions).
+	mux.HandleFunc("POST /task/enqueue", s.handleTaskEnqueue)
+	mux.HandleFunc("GET /task/await", s.handleTaskAwait)
+	mux.HandleFunc("POST /task/report", s.handleTaskReport)
+	mux.HandleFunc("POST /session/reset", s.handleSessionReset)
+	mux.HandleFunc("GET /session/depth", s.handleSessionDepth)
 
 	// Agent lifecycle — served only when an AgentManager has been attached via
 	// SetAgentManager(). Handlers short-circuit with 503 when s.agentMgr is nil.
@@ -236,6 +255,11 @@ func (s *Server) Shutdown() error {
 		s.webServer.Shutdown() //nolint:errcheck
 	}
 
+	// Stop the router so its pump and janitor goroutines exit.
+	if s.router != nil {
+		s.router.Stop()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -246,6 +270,18 @@ func (s *Server) Shutdown() error {
 }
 
 // SockPath returns the path to the Unix socket.
+// SetInjector overrides the session router's prompt-injection function.
+// Intended for tests that need to substitute a fake for the real tmux call.
+func (s *Server) SetInjector(fn func(session, prompt string) error) {
+	s.router.SetInjector(fn)
+}
+
+// SetAborter overrides the session router's abort function. Tests pair this
+// with SetInjector to fully bypass tmux.
+func (s *Server) SetAborter(fn func(session string) error) {
+	s.router.SetAborter(fn)
+}
+
 func (s *Server) SockPath() string {
 	return s.sockPath
 }
@@ -274,6 +310,144 @@ func (s *Server) handleProcessList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
+type taskEnqueueReq struct {
+	InvocationID   string   `json:"invocation_id,omitempty"`
+	Session        string   `json:"session"`
+	TmuxSession    string   `json:"tmux_session,omitempty"`
+	Task           string   `json:"task"`
+	Prompt         string   `json:"prompt"`
+	Channels       []string `json:"channels"`
+	QueueMax       int      `json:"queue_max"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+}
+
+type taskEnqueueResp struct {
+	Accepted     bool   `json:"accepted"`
+	InvocationID string `json:"invocation_id,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
+	var req taskEnqueueReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if req.Session == "" || req.Task == "" || req.Prompt == "" {
+		writeError(w, http.StatusBadRequest, "session, task, prompt are required")
+		return
+	}
+	timeout := time.Duration(req.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	// Default the tmux target to the logical session name for older clients
+	// that don't send tmux_session, preserving prior behavior for them.
+	tmuxSession := req.TmuxSession
+	if tmuxSession == "" {
+		tmuxSession = req.Session
+	}
+	inv, ok := s.router.EnqueueWithID(req.InvocationID, EnqueueParams{
+		Session:     req.Session,
+		TmuxSession: tmuxSession,
+		Task:        req.Task,
+		Prompt:      req.Prompt,
+		Channels:    req.Channels,
+		QueueMax:    req.QueueMax,
+		Timeout:     timeout,
+	})
+	if !ok {
+		writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: false, Reason: "queue full"})
+		return
+	}
+	s.router.StartPump(req.Session)
+	writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: true, InvocationID: inv.ID})
+}
+
+func (s *Server) handleTaskAwait(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("invocation_id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invocation_id required")
+		return
+	}
+	inv, ok := s.router.Lookup(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown invocation_id")
+		return
+	}
+	// Long-poll handler; disable the server's WriteTimeout for this connection.
+	if rc := http.NewResponseController(w); rc != nil {
+		_ = rc.SetWriteDeadline(time.Time{})
+	}
+	select {
+	case res := <-inv.Result:
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":            res.OK,
+			"session_id":    res.SessionID,
+			"final_message": res.FinalMessage,
+			"error":         res.Err,
+		})
+	case <-r.Context().Done():
+		writeError(w, http.StatusGatewayTimeout, "request cancelled")
+	}
+}
+
+type taskReportReq struct {
+	InvocationID string `json:"invocation_id"`
+	SessionID    string `json:"session_id"`
+	FinalMessage string `json:"final_message"`
+}
+
+func (s *Server) handleTaskReport(w http.ResponseWriter, r *http.Request) {
+	var req taskReportReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if req.InvocationID == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true}) // human turn — ignore
+		return
+	}
+	s.router.Report(req.InvocationID, InvocationResult{
+		OK:           true,
+		SessionID:    req.SessionID,
+		FinalMessage: req.FinalMessage,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+type sessionResetReq struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+}
+
+func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request) {
+	var req sessionResetReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if req.Session == "" {
+		writeError(w, http.StatusBadRequest, "session required")
+		return
+	}
+	reason := req.Reason
+	if reason == "" {
+		reason = "session reset"
+	}
+	cleared := s.router.ResetSession(req.Session, reason)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": cleared})
+}
+
+func (s *Server) handleSessionDepth(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		writeError(w, http.StatusBadRequest, "session required")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "depth": s.router.QueueDepth(session)})
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -282,4 +456,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, Response{OK: false, Error: msg})
+}
+
+// tmuxPath resolves the tmux binary path, falling back to "tmux" on the PATH
+// when LookPath fails. Resolved lazily on each call so PATH changes in tests
+// are observable.
+func tmuxPath() string {
+	p, err := exec.LookPath("tmux")
+	if err != nil {
+		return "tmux"
+	}
+	return p
 }

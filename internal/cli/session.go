@@ -2,193 +2,238 @@ package cli
 
 import (
 	"bufio"
-	"encoding/json"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
+	"syscall"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/session"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
 )
 
-// Testability seams — replaced in tests.
-var (
-	sessionIsTTY  = defaultIsTTY
-	sessionStdin  *bufio.Reader // if set, used instead of os.Stdin by confirm prompt
-	sessionStdout = os.Stdout
-)
-
-func sessionReader() *bufio.Reader {
-	if sessionStdin != nil {
-		return sessionStdin
-	}
-	return bufio.NewReader(os.Stdin)
-}
-
 func newSessionCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	parent := &cobra.Command{
 		Use:   "session",
-		Short: "Manage stored session mappings",
-		Long: `List and clear stored Claude session IDs used for session persistence.
-Leo records a session ID per task and supervised process so subsequent runs
-resume the same Claude conversation. Clearing a session forces the next run
-to start a fresh conversation.`,
+		Short: "Manage persistent task sessions",
+		Long: `Inspect and manage persistent Claude sessions configured under
+` + "`sessions:`" + ` in leo.yaml. Each persistent session is supervised by leo as
+a long-lived claude process inside its own tmux session.`,
 		Example: `  leo session list
-  leo session list --json
-  leo session clear task:heartbeat
-  leo session clear --all`,
+  leo session status daily
+  leo session attach daily
+  leo session logs daily
+  leo session reset daily`,
 	}
-
-	cmd.AddCommand(
+	parent.AddCommand(
 		newSessionListCmd(),
-		newSessionClearCmd(),
+		newSessionStatusCmd(),
+		newSessionAttachCmd(),
+		newSessionLogsCmd(),
+		newSessionResetCmd(),
+		newSessionDrainCmd(),
 	)
-
-	return cmd
-}
-
-// sessionListEntry is the shape emitted by `leo session list --json`.
-type sessionListEntry struct {
-	Key       string    `json:"key"`
-	SessionID string    `json:"session_id"`
-	UpdatedAt time.Time `json:"updated_at"`
+	return parent
 }
 
 func newSessionListCmd() *cobra.Command {
-	var asJSON bool
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "list",
-		Short: "List stored sessions",
-		Long: `List every stored session mapping. Each entry pairs a supervised process
-or task key (for example 'task:heartbeat', 'service:dm') with a Claude
-session ID and the timestamp of the last update. Pass --json for
-machine-readable output.`,
-		Example: `  leo session list
-  leo session list --json`,
+		Short: "List configured persistent sessions",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
-
-			store := session.NewStore(cfg.HomePath)
-			entries, err := store.List()
-			if err != nil {
-				return fmt.Errorf("listing sessions: %w", err)
-			}
-
-			// Sort keys for stable output.
-			keys := make([]string, 0, len(entries))
-			for k := range entries {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-
-			if asJSON {
-				out := make([]sessionListEntry, 0, len(keys))
-				for _, k := range keys {
-					e := entries[k]
-					out = append(out, sessionListEntry{
-						Key:       k,
-						SessionID: e.SessionID,
-						UpdatedAt: e.UpdatedAt,
-					})
-				}
-				enc := json.NewEncoder(sessionStdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(out)
-			}
-
-			if len(entries) == 0 {
-				fmt.Println("No stored sessions.")
+			if len(cfg.Sessions) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "(no sessions configured)")
 				return nil
 			}
-
-			for _, k := range keys {
-				e := entries[k]
-				fmt.Printf("%-30s  %s  (updated %s)\n", k, e.SessionID, e.UpdatedAt.Local().Format("2006-01-02 15:04"))
+			names := make([]string, 0, len(cfg.Sessions))
+			for name := range cfg.Sessions {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				s := cfg.Sessions[name]
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\tworkspace=%s\tmodel=%s\tchannels=%v\n",
+					name, s.Workspace, s.Model, s.Channels)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&asJSON, "json", false, "output as JSON")
-	return cmd
 }
 
-func newSessionClearCmd() *cobra.Command {
-	var all, yes bool
-
-	cmd := &cobra.Command{
-		Use:   "clear [key]",
-		Short: "Clear stored session(s)",
-		Long: `Clear a specific session by key (for example 'task:heartbeat',
-'service:dm') or clear every session with --all. By default the command
-prompts for confirmation when a TTY is attached; pass --yes/-y to skip
-the prompt (required for non-interactive use).`,
-		Example: `  leo session clear task:heartbeat
-  leo session clear task:heartbeat --yes
-  leo session clear --all
-  leo session clear --all --yes`,
+func newSessionStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status <name>",
+		Short: "Show session runtime status (stored session id + tmux presence)",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
-
 			store := session.NewStore(cfg.HomePath)
+			id, _, _ := store.Get("session:" + args[0])
+			running := "no"
+			if isTmuxSessionLive(sessionTmuxTarget(args[0])) {
+				running = "yes"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "session=%s\nsession_id=%s\ntmux_running=%s\n", args[0], id, running)
+			return nil
+		},
+	}
+}
 
-			if all {
-				if !yes {
-					if !sessionIsTTY() {
-						return fmt.Errorf("refusing to clear all sessions without --yes in non-interactive mode")
-					}
-					if !prompt.YesNo(sessionReader(), "Clear all stored sessions?", false) {
-						info.Println("Aborted.")
-						return nil
-					}
+func newSessionAttachCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "attach <name>",
+		Short: "tmux attach to the session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tmuxBin, err := exec.LookPath("tmux")
+			if err != nil {
+				return fmt.Errorf("tmux not found: %w", err)
+			}
+			target := sessionTmuxTarget(args[0])
+			argv := append([]string{"tmux"}, tmux.Args("attach", "-t", target)...)
+			return syscall.Exec(tmuxBin, argv, os.Environ())
+		},
+	}
+}
+
+func newSessionLogsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "logs <name>",
+		Short: "Capture recent pane scrollback to stdout",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tmuxBin, err := exec.LookPath("tmux")
+			if err != nil {
+				return fmt.Errorf("tmux not found: %w", err)
+			}
+			target := sessionTmuxTarget(args[0])
+			out, err := exec.Command(tmuxBin, tmux.Args("capture-pane", "-p", "-t", target, "-S", "-200")...).Output()
+			if err != nil {
+				return fmt.Errorf("capture-pane: %w", err)
+			}
+			_, _ = cmd.OutOrStdout().Write(out)
+			return nil
+		},
+	}
+}
+
+func newSessionResetCmd() *cobra.Command {
+	var assumeYes bool
+	c := &cobra.Command{
+		Use:   "reset <name>",
+		Short: "Kill tmux session, clear stored session id, and drop queued invocations",
+		Long: `Reset destroys a session's live state: it kills the tmux session, clears
+the stored session id, and drops any in-flight/queued invocations. Prompts
+for confirmation by default when stdin is a TTY; in non-interactive runs
+(pipes, cron, CI) pass --yes to confirm up front, otherwise it refuses.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if !assumeYes {
+				if !processIsTTY() {
+					return fmt.Errorf("refusing to reset %q without confirmation: pass --yes to skip the prompt", name)
 				}
-				if err := store.DeleteAll(); err != nil {
-					return fmt.Errorf("clearing sessions: %w", err)
-				}
-				success.Println("All sessions cleared.")
-				return nil
-			}
-
-			if len(args) == 0 {
-				return fmt.Errorf("specify a session key to clear, or use --all")
-			}
-
-			key := args[0]
-			_, found, getErr := store.Get(key)
-			if getErr != nil {
-				return fmt.Errorf("reading session store: %w", getErr)
-			}
-			if !found {
-				return fmt.Errorf("session %q not found", key)
-			}
-
-			if !yes {
-				if !sessionIsTTY() {
-					return fmt.Errorf("refusing to clear session %q without --yes in non-interactive mode", key)
-				}
-				if !prompt.YesNo(sessionReader(), fmt.Sprintf("Clear session %q?", key), false) {
-					info.Println("Aborted.")
+				reader := bufio.NewReader(processStdin)
+				if !prompt.YesNo(reader, fmt.Sprintf("Reset session %q? This kills its tmux session and drops queued work.", name), false) {
+					fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
 					return nil
 				}
 			}
-
-			if err := store.Delete(key); err != nil {
-				return fmt.Errorf("clearing session: %w", err)
+			// Notify the router FIRST so any in-flight waiter gets a clean
+			// "reset" error instead of hanging until its task timeout. Skip
+			// silently if the daemon isn't running.
+			if daemon.IsRunning(cfg.HomePath) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				resp, derr := daemon.ResetSession(ctx, cfg.HomePath, name, "cli reset")
+				cancel()
+				if derr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: daemon reset failed: %v\n", derr)
+				} else if resp.Cleared > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "reset %s: cleared %d in-flight/queued invocation(s)\n", name, resp.Cleared)
+				}
 			}
-			success.Printf("Session %q cleared.\n", key)
+			target := sessionTmuxTarget(name)
+			if tmuxBin, err := exec.LookPath("tmux"); err == nil {
+				_ = exec.Command(tmuxBin, tmux.Args("kill-session", "-t", target)...).Run()
+			}
+			store := session.NewStore(cfg.HomePath)
+			if err := store.Delete("session:" + name); err != nil {
+				return fmt.Errorf("clear session id: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "reset %s: tmux killed (if it existed) and stored session id cleared\n", name)
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&assumeYes, "yes", false, "skip the confirmation prompt")
+	return c
+}
 
-	cmd.Flags().BoolVar(&all, "all", false, "clear all stored sessions")
-	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompt")
+func newSessionDrainCmd() *cobra.Command {
+	var timeout time.Duration
+	c := &cobra.Command{
+		Use:   "drain <name>",
+		Short: "Block until the session's queue is empty (queued + in-flight == 0)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if !daemon.IsRunning(cfg.HomePath) {
+				return fmt.Errorf("daemon not running — nothing to drain")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				resp, err := daemon.SessionDepth(ctx, cfg.HomePath, name)
+				if err != nil {
+					return fmt.Errorf("polling depth: %w", err)
+				}
+				if resp.Depth == 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "drain %s: queue empty\n", name)
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("drain timeout after %s (depth=%d)", timeout, resp.Depth)
+				case <-ticker.C:
+				}
+			}
+		},
+	}
+	c.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "maximum time to wait for queue to drain")
+	return c
+}
 
-	return cmd
+// sessionTmuxTarget returns the tmux session name leo uses for a persistent
+// session, matching the convention in internal/service/session.go.
+func sessionTmuxTarget(name string) string { return "leo-session-" + name }
+
+// isTmuxSessionLive returns true when tmux reports the target session exists
+// on the leo socket. Degrades to false when tmux is unavailable.
+func isTmuxSessionLive(target string) bool {
+	tmuxBin, err := exec.LookPath("tmux")
+	if err != nil {
+		return false
+	}
+	return exec.Command(tmuxBin, tmux.Args("has-session", "-t", target)...).Run() == nil
 }

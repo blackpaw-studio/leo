@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/update"
 )
@@ -529,6 +530,39 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 			defer wg.Done()
 			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor, newProcIdentity(spec.Name, spec.ClaudeArgs))
 		}(proc)
+	}
+
+	// Boot persistent task session supervisors. Each SessionSpec gets its
+	// own tmux-backed restart loop. Stored session IDs are resumed via
+	// --resume so claude rejoins the same conversation across daemon
+	// restarts. Session boot failures are non-fatal for the daemon as a
+	// whole — log and continue so process supervision still runs.
+	if cfg, cfgErr := config.Load(configPath); cfgErr == nil && cfg != nil {
+		sessionSpecs, sErr := SessionSpecsFromConfig(cfg)
+		if sErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: session specs: %v\n", sErr)
+		} else if len(sessionSpecs) > 0 {
+			sessions := session.NewStore(homePath)
+			booted := 0
+			for _, sp := range sessionSpecs {
+				if id, _, _ := sessions.Get("session:" + sp.Name); id != "" {
+					sp.ResumeID = id
+				}
+				spLocal := sp
+				if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, func(_ int) {
+					supervisor.incrementRestarts(spLocal.Name)
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: supervise session %q: %v\n", spLocal.Name, err)
+					continue
+				}
+				booted++
+			}
+			if booted > 0 {
+				fmt.Fprintf(os.Stdout, "supervising %d session(s)\n", booted)
+			}
+		}
+	} else if cfgErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: load config for session boot: %v\n", cfgErr)
 	}
 
 	fmt.Fprintf(os.Stdout, "supervising %d process(es)\n", len(processes))
