@@ -40,6 +40,7 @@ type Supervisor interface {
 	ReleaseAgent(name string)
 	SpawnAgent(spec SpawnRequest) error
 	StopAgent(name string) error
+	RenameAgent(old, new string) error
 	EphemeralAgents() map[string]ProcessState
 }
 
@@ -533,4 +534,102 @@ func (m *Manager) Logs(name string, lines int) (string, error) {
 		return "", fmt.Errorf("tmux capture-pane: %s", string(out))
 	}
 	return string(out), nil
+}
+
+// Rename changes an agent's identity. The agent is fuzzy-resolved from query,
+// the new name is normalized and checked for collisions, the live supervisor
+// state is renamed in place (zero restart) when the agent is running, and the
+// persisted record is re-keyed with its --name flag rewritten. Stopped worktree
+// agents skip the supervisor and only re-key the store.
+func (m *Manager) Rename(query, rawNewName string) (Record, error) {
+	rec, err := m.Resolve(query)
+	if err != nil {
+		// Resolve only matches live agents. A stopped worktree agent is kept
+		// in the store with Stopped=true, so fall back to an exact agentstore
+		// lookup (raw and normalized) before surfacing the resolve error.
+		fallback, ok := m.resolveStored(query)
+		if !ok {
+			return Record{}, err
+		}
+		rec = fallback
+	}
+	oldName := rec.Name
+
+	newName, err := NormalizeAgentName(rawNewName)
+	if err != nil {
+		return Record{}, err
+	}
+	if newName == oldName {
+		return Record{}, fmt.Errorf("agent is already named %q", oldName)
+	}
+
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return Record{}, fmt.Errorf("loading config: %w", err)
+	}
+
+	if _, live := m.sup.EphemeralAgents()[oldName]; live {
+		if err := m.sup.RenameAgent(oldName, newName); err != nil {
+			return Record{}, fmt.Errorf("renaming running agent: %w", err)
+		}
+	}
+
+	if err := agentstore.Rename(cfg.HomePath, oldName, newName, func(r agentstore.Record) agentstore.Record {
+		r.Name = newName
+		r.ClaudeArgs = rewriteNameArg(r.ClaudeArgs, newName)
+		return r
+	}); err != nil {
+		return Record{}, fmt.Errorf("persisting rename: %w", err)
+	}
+
+	rec.Name = newName
+	return rec, nil
+}
+
+// resolveStored finds a persisted (possibly stopped) agent by exact name when
+// the live resolver cannot. It tries the raw query first, then the normalized
+// form, so both "leo-foo" and "foo" locate the same record. Returns false when
+// the store is unreadable or no exact match exists.
+func (m *Manager) resolveStored(query string) (Record, bool) {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return Record{}, false
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return Record{}, false
+	}
+
+	candidates := []string{strings.TrimSpace(query)}
+	if norm, err := NormalizeAgentName(query); err == nil {
+		candidates = append(candidates, norm)
+	}
+	for _, name := range candidates {
+		if s, ok := stored[name]; ok {
+			return Record{
+				Name:          s.Name,
+				Template:      s.Template,
+				Repo:          s.Repo,
+				Workspace:     s.Workspace,
+				Branch:        s.Branch,
+				CanonicalPath: s.CanonicalPath,
+				Env:           s.Env,
+			}, true
+		}
+	}
+	return Record{}, false
+}
+
+// rewriteNameArg returns a copy of args with the value following --name replaced
+// by newName. If --name is absent the args are returned unchanged.
+func rewriteNameArg(args []string, newName string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "--name" {
+			out[i+1] = newName
+			break
+		}
+	}
+	return out
 }
