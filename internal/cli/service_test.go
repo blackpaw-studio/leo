@@ -277,3 +277,19 @@ func TestResolveSessionArgs_BrandNewMintsID(t *testing.T) {
 		t.Errorf("store out of sync: got %q, want %q", got, args[1])
 	}
 }
+
+func TestBuildProcessArgsInjectsMessagingAwareness(t *testing.T) {
+	// HomePath set so AppendArg's EnsureConfig writes under a temp dir.
+	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
+	args := buildProcessArgs(cfg, "assistant", config.ProcessConfig{})
+
+	found := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--append-system-prompt" && strings.Contains(args[i+1], "leo_send_message") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected messaging awareness in process args; got %v", args)
+	}
+}

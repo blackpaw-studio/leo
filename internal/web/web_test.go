@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -748,5 +749,67 @@ func TestTaskPromptSave_NoFileSelected(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "No prompt file selected") {
 		t.Errorf("response should contain 'No prompt file selected', got: %s", body)
+	}
+}
+
+func TestProcessMessageSendsLiteralThenEnter(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	var calls [][]string
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		return exec.Command("true") // harmless no-op
+	}
+
+	body := strings.NewReader(`{"text":"Enter the build status please"}`)
+	req := httptest.NewRequest("POST", "/web/process/assistant/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 tmux calls, got %d: %v", len(calls), calls)
+	}
+	first := strings.Join(calls[0], " ")
+	if !strings.Contains(first, "send-keys") || !strings.Contains(first, "-l") ||
+		!strings.Contains(first, "leo-assistant") || !strings.Contains(first, "Enter the build status please") {
+		t.Errorf("first call should be literal send to leo-assistant; got %v", calls[0])
+	}
+	last := calls[1]
+	if last[len(last)-1] != "Enter" {
+		t.Errorf("second call should submit with Enter; got %v", last)
+	}
+}
+
+func TestProcessMessageUnknownTargetListsRecipients(t *testing.T) {
+	s, _ := newTestServer(t) // mock has process "assistant"
+
+	body := strings.NewReader(`{"text":"hi"}`)
+	req := httptest.NewRequest("POST", "/web/process/ghost/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != 404 {
+		t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "assistant") {
+		t.Errorf("not-found error should list recipients; got %s", w.Body.String())
+	}
+}
+
+func TestProcessMessageRejectsEmptyText(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := strings.NewReader(`{"text":""}`)
+	req := httptest.NewRequest("POST", "/web/process/assistant/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
 	}
 }

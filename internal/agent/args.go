@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 // BuildTemplateArgs assembles the claude CLI arguments for an agent spawned from a template.
@@ -101,9 +102,15 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 	if appendPrompt == "" {
 		appendPrompt = cfg.Defaults.AppendSystemPrompt
 	}
+	appendPrompt = leomcp.MergeSystemPrompt(cfg, appendPrompt)
 	if appendPrompt != "" {
 		args = append(args, "--append-system-prompt", appendPrompt)
 	}
+
+	// Layer in the Leo-managed MCP server (when the daemon's TCP listener is
+	// enabled) so ephemeral agents get the universal leo_* tools — including
+	// leo_send_message for agent-to-agent messaging.
+	args = leomcp.AppendArg(args, cfg)
 
 	maxTurns := tmpl.MaxTurns
 	if maxTurns == 0 {

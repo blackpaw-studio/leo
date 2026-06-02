@@ -820,6 +820,58 @@ func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
 
+// handleProcessMessage delivers a free-text message into a process/agent's
+// live Claude prompt and submits it. Unlike handleProcessSendKeys (which types
+// char-by-char to drive slash-command menus), this sends the body verbatim
+// with `send-keys -l` so arbitrary text — including tmux key names like
+// "Enter" or "C-c" — is typed literally, then submits with a separate Enter.
+//
+// POST /web/process/{name}/message  {"text": "hello"}
+func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if req.Text == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "text is required"})
+		return
+	}
+
+	// Validate the target against running sessions (processes + agents).
+	states := s.processes.States()
+	if _, ok := states[name]; !ok {
+		names := make([]string, 0, len(states))
+		for n := range states {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		writeJSON(w, http.StatusNotFound, apiResponse{
+			Error: fmt.Sprintf("no such agent or process %q; running: %s", name, strings.Join(names, ", ")),
+		})
+		return
+	}
+
+	sessionName := "leo-" + name
+	tmuxPath := findTmuxPath()
+
+	// Literal paste of the message body, then a separate Enter to submit.
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, "-l", req.Text)...).Run(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send message failed: %v", err)})
+		return
+	}
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, "Enter")...).Run(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("submit message failed: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
 // needsCharSplit reports whether a send-keys arg is a multi-char literal
 // string that should be typed one character at a time. Single chars and
 // tmux key names (Enter, Escape, BSpace, F1, C-u, M-a, …) are sent as one

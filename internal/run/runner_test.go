@@ -706,3 +706,18 @@ func TestRunConcurrencyGuard(t *testing.T) {
 	// Clean up lock
 	os.Remove(lockPath)
 }
+
+func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
+	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
+	args := buildArgs(cfg, config.TaskConfig{}, "do the thing", "sess-1")
+
+	found := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--append-system-prompt" && strings.Contains(args[i+1], "leo_send_message") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected messaging awareness in task args; got %v", args)
+	}
+}

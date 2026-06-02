@@ -146,6 +146,11 @@ func (c *daemonClient) listAgents() (json.RawMessage, error) {
 	return c.do(http.MethodGet, "/api/agent/list", nil)
 }
 
+func (c *daemonClient) sendMessage(target, text string) error {
+	_, err := c.do(http.MethodPost, "/web/process/"+target+"/message", map[string]any{"text": text})
+	return err
+}
+
 func (c *daemonClient) stopAgent(name string) (json.RawMessage, error) {
 	return c.do(http.MethodPost, "/api/agent/stop", map[string]string{"name": name})
 }

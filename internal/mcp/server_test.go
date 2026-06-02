@@ -120,6 +120,7 @@ func TestToolsListContainsCanonicalCommands(t *testing.T) {
 		"leo_clear", "leo_compact", "leo_interrupt",
 		"leo_list_tasks", "leo_run_task", "leo_toggle_task",
 		"leo_list_templates", "leo_spawn_agent", "leo_list_agents", "leo_stop_agent",
+		"leo_send_message",
 	}
 	got := map[string]bool{}
 	for _, t := range tools {
@@ -259,5 +260,57 @@ func TestUnknownMethodReturnsMethodNotFound(t *testing.T) {
 	}
 	if int(errObj["code"].(float64)) != codeMethodNotFound {
 		t.Errorf("expected codeMethodNotFound, got %v", errObj["code"])
+	}
+}
+
+func TestSendMessageDeliversWithSenderPrefix(t *testing.T) {
+	daemon := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		return http.StatusOK, `{"ok":true,"data":{}}`
+	})
+	defer daemon.close()
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "sender-proc")
+
+	out, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1","message":"ping"}`))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+
+	if len(daemon.calls) != 1 {
+		t.Fatalf("expected 1 daemon call, got %d", len(daemon.calls))
+	}
+	c := daemon.calls[0]
+	if c.Method != http.MethodPost {
+		t.Errorf("expected POST, got %s", c.Method)
+	}
+	if c.Path != "/web/process/worker-1/message" {
+		t.Errorf("expected path /web/process/worker-1/message, got %s", c.Path)
+	}
+	if !strings.Contains(c.Body, "sender-proc") || !strings.Contains(c.Body, "ping") {
+		t.Errorf("delivered body should carry sender + message; got %q", c.Body)
+	}
+	if !strings.Contains(out, "worker-1") {
+		t.Errorf("result should confirm target; got %q", out)
+	}
+}
+
+func TestSendMessageRejectsSelf(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "self-proc")
+	_, err := reg.call("leo_send_message", json.RawMessage(`{"to":"self-proc","message":"hi"}`))
+	if err == nil {
+		t.Fatal("expected error when messaging self")
+	}
+	if !strings.Contains(err.Error(), "self-proc") {
+		t.Errorf("error should mention the self name; got %v", err)
+	}
+}
+
+func TestSendMessageRequiresMessage(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "self-proc")
+	_, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1"}`))
+	if err == nil {
+		t.Fatal("expected error when message missing")
+	}
+	if !strings.Contains(err.Error(), "message") {
+		t.Errorf("error should mention the missing field; got %v", err)
 	}
 }

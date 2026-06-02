@@ -5,6 +5,10 @@ import (
 	"fmt"
 )
 
+// msgPrefixFormat is the wire format prepended to a delivered message so the
+// recipient can identify the sender. Keep in sync with any consumer that parses it.
+const msgPrefixFormat = "[message from %s] %s"
+
 // toolDef is the MCP wire shape for a tool.
 type toolDef struct {
 	Name        string         `json:"name"`
@@ -182,6 +186,32 @@ func newRegistry(client *daemonClient, processName string) *registry {
 			return "", err
 		}
 		return "Stopped agent " + name, nil
+	})
+
+	r.add(toolDef{
+		Name:        "leo_send_message",
+		Description: "Send a text message to another Leo agent or process. It arrives in the recipient's Claude prompt as a new turn, prefixed with your name. Use leo_list_agents to discover running agents. 'to' is the target's name; 'message' is the text.",
+		InputSchema: objectSchema(map[string]any{
+			"to":      map[string]any{"type": "string", "description": "Target agent/process name (as shown by leo_list_agents or leo status)."},
+			"message": map[string]any{"type": "string", "description": "The message body to deliver."},
+		}, "to", "message"),
+	}, func(args map[string]any) (string, error) {
+		to, err := stringArg(args, "to")
+		if err != nil {
+			return "", err
+		}
+		message, err := stringArg(args, "message")
+		if err != nil {
+			return "", err
+		}
+		if to == processName {
+			return "", fmt.Errorf("cannot send a message to yourself (%q)", processName)
+		}
+		body := fmt.Sprintf(msgPrefixFormat, processName, message)
+		if err := client.sendMessage(to, body); err != nil {
+			return "", err
+		}
+		return "Sent message to " + to, nil
 	})
 
 	return r
