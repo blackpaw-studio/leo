@@ -6,7 +6,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os/exec"
 	"strconv"
@@ -568,6 +570,22 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		return Record{}, fmt.Errorf("loading config: %w", err)
 	}
 
+	// Pre-check the store for a newName collision BEFORE touching the live
+	// supervisor. RenameAgent only checks live state/reservations, so without
+	// this a live agent could be renamed into a STOPPED record's name —
+	// tmux/maps would re-key but agentstore.Rename would then error on the
+	// collision, leaving supervisor and store inconsistent. A missing store
+	// file (no agents persisted yet) yields a non-nil empty map alongside an
+	// ErrNotExist, so it correctly reports "no collision"; any other load
+	// error is surfaced.
+	records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Record{}, fmt.Errorf("loading agent records: %w", err)
+	}
+	if _, exists := records[newName]; exists {
+		return Record{}, fmt.Errorf("agent %q already exists", newName)
+	}
+
 	if _, live := m.sup.EphemeralAgents()[oldName]; live {
 		if err := m.sup.RenameAgent(oldName, newName); err != nil {
 			return Record{}, fmt.Errorf("renaming running agent: %w", err)
@@ -596,7 +614,12 @@ func (m *Manager) resolveStored(query string) (Record, bool) {
 		return Record{}, false
 	}
 	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
-	if err != nil {
+	// A missing store file means nothing is persisted yet — treat as no match,
+	// not a hard failure. A real load error (parse, permission) is also treated
+	// as "not found" here so Rename surfaces the original resolve error rather
+	// than an opaque store error; loadLocked returns a non-nil empty map on
+	// error so the lookup below simply finds nothing.
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return Record{}, false
 	}
 
@@ -605,16 +628,10 @@ func (m *Manager) resolveStored(query string) (Record, bool) {
 		candidates = append(candidates, norm)
 	}
 	for _, name := range candidates {
-		if s, ok := stored[name]; ok {
-			return Record{
-				Name:          s.Name,
-				Template:      s.Template,
-				Repo:          s.Repo,
-				Workspace:     s.Workspace,
-				Branch:        s.Branch,
-				CanonicalPath: s.CanonicalPath,
-				Env:           s.Env,
-			}, true
+		if _, ok := stored[name]; ok {
+			r := Record{Name: name}
+			mergeStored(&r, stored)
+			return r, true
 		}
 	}
 	return Record{}, false

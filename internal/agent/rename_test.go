@@ -105,3 +105,25 @@ func TestManagerRename_Errors(t *testing.T) {
 		t.Fatal("expected invalid-name error")
 	}
 }
+
+func TestManagerRename_LiveIntoStoppedNameCollision(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-a", ClaudeArgs: []string{"--name", "leo-a"}})
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-b", Stopped: true, ClaudeArgs: []string{"--name", "leo-b"}})
+	// leo-a is LIVE, leo-b is a stopped store record (not live).
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{"leo-a": {Name: "leo-a", Status: "running"}}}
+	m := newTestManager(t, home, sup)
+
+	if _, err := m.Rename("leo-a", "leo-b"); err == nil {
+		t.Fatal("expected collision error renaming live agent into a stopped agent's name")
+	}
+	// The supervisor must NOT have been renamed (pre-check rejects before the call).
+	if sup.renamedNew != "" {
+		t.Fatalf("supervisor was renamed despite store collision: %q", sup.renamedNew)
+	}
+	// Store unchanged: leo-a still present, leo-b still present.
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := recs["leo-a"]; !ok {
+		t.Fatal("leo-a record lost")
+	}
+}
