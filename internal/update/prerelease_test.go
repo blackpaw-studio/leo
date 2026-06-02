@@ -269,7 +269,7 @@ func TestFindPrereleaseArtifact_RejectsExpired(t *testing.T) {
 		})
 	})
 
-	_, err := findPrereleaseArtifact(context.Background(), "test-token", 5)
+	_, err := findRunArtifact(context.Background(), "test-token", 5, prereleaseArtifactName)
 	if err == nil {
 		t.Fatal("expected error for expired artifact")
 	}
