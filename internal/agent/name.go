@@ -1,10 +1,15 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 )
+
+// ErrInvalidAgentName is returned (wrapped) by NormalizeAgentName for
+// malformed input. Callers may map it to HTTP 400.
+var ErrInvalidAgentName = errors.New("invalid agent name")
 
 const (
 	agentNamePrefix    = "leo-"
@@ -24,10 +29,10 @@ func NormalizeAgentName(raw string) (string, error) {
 	body := strings.ToLower(strings.TrimSpace(raw))
 	body = strings.TrimPrefix(body, agentNamePrefix)
 	if body == "" {
-		return "", fmt.Errorf("agent name is empty")
+		return "", fmt.Errorf("%w: empty", ErrInvalidAgentName)
 	}
 	if !charsetRe.MatchString(body) {
-		return "", fmt.Errorf("agent name %q has invalid characters (allowed: a-z, 0-9, dash)", raw)
+		return "", fmt.Errorf("%w: %q has invalid characters (allowed: a-z, 0-9, dash)", ErrInvalidAgentName, raw)
 	}
 	// Collapse runs of dashes and trim leading/trailing dashes.
 	for strings.Contains(body, "--") {
@@ -35,7 +40,7 @@ func NormalizeAgentName(raw string) (string, error) {
 	}
 	body = strings.Trim(body, "-")
 	if body == "" {
-		return "", fmt.Errorf("agent name %q reduces to empty after normalization", raw)
+		return "", fmt.Errorf("%w: %q reduces to empty after normalization", ErrInvalidAgentName, raw)
 	}
 	name := agentNamePrefix + body
 	if len(name) > maxAgentNameLength {

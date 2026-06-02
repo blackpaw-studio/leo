@@ -562,7 +562,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		return Record{}, err
 	}
 	if newName == oldName {
-		return Record{}, fmt.Errorf("agent is already named %q", oldName)
+		return Record{}, fmt.Errorf("%w: %q", ErrAgentNameUnchanged, oldName)
 	}
 
 	cfg, err := m.cfgLoader()
@@ -583,7 +583,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		return Record{}, fmt.Errorf("loading agent records: %w", err)
 	}
 	if _, exists := records[newName]; exists {
-		return Record{}, fmt.Errorf("agent %q already exists", newName)
+		return Record{}, fmt.Errorf("%w: %q", ErrAgentNameTaken, newName)
 	}
 
 	if _, live := m.sup.EphemeralAgents()[oldName]; live {

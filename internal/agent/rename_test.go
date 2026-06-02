@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -97,12 +98,18 @@ func TestManagerRename_Errors(t *testing.T) {
 
 	if _, err := m.Rename("leo-a", "leo-b"); err == nil {
 		t.Fatal("expected collision error")
+	} else if !errors.Is(err, ErrAgentNameTaken) {
+		t.Fatalf("collision error should wrap ErrAgentNameTaken, got: %v", err)
 	}
 	if _, err := m.Rename("leo-a", "leo-a"); err == nil {
 		t.Fatal("expected unchanged-name error")
+	} else if !errors.Is(err, ErrAgentNameUnchanged) {
+		t.Fatalf("unchanged error should wrap ErrAgentNameUnchanged, got: %v", err)
 	}
 	if _, err := m.Rename("leo-a", "bad name!"); err == nil {
 		t.Fatal("expected invalid-name error")
+	} else if !errors.Is(err, ErrInvalidAgentName) {
+		t.Fatalf("invalid-name error should wrap ErrInvalidAgentName, got: %v", err)
 	}
 }
 
@@ -116,6 +123,8 @@ func TestManagerRename_LiveIntoStoppedNameCollision(t *testing.T) {
 
 	if _, err := m.Rename("leo-a", "leo-b"); err == nil {
 		t.Fatal("expected collision error renaming live agent into a stopped agent's name")
+	} else if !errors.Is(err, ErrAgentNameTaken) {
+		t.Fatalf("live-into-stopped collision should wrap ErrAgentNameTaken, got: %v", err)
 	}
 	// The supervisor must NOT have been renamed (pre-check rejects before the call).
 	if sup.renamedNew != "" {

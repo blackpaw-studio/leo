@@ -272,7 +272,14 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := s.agentMgr.Rename(rec.Name, req.NewName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		switch {
+		case errors.Is(err, agent.ErrAgentNameTaken):
+			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, agent.ErrAgentNameUnchanged), errors.Is(err, agent.ErrInvalidAgentName):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	data, err := json.Marshal(updated)

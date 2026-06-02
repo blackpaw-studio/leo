@@ -87,3 +87,53 @@ func TestHandleAgentRename_NoManager(t *testing.T) {
 		t.Fatalf("status = %d, want 503", resp.StatusCode)
 	}
 }
+
+func TestHandleAgentRename_NameTaken(t *testing.T) {
+	mgr := &fakeAgentManager{
+		records:   []agent.Record{{Name: "leo-old"}},
+		renameErr: agent.ErrAgentNameTaken,
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(map[string]string{"new_name": "leo-existing"})
+	resp, err := client.Post("http://localhost/agents/leo-old/rename", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+}
+
+func TestHandleAgentRename_NameUnchanged(t *testing.T) {
+	mgr := &fakeAgentManager{
+		records:   []agent.Record{{Name: "leo-old"}},
+		renameErr: agent.ErrAgentNameUnchanged,
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(map[string]string{"new_name": "leo-old"})
+	resp, err := client.Post("http://localhost/agents/leo-old/rename", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestHandleAgentRename_UndecodableBody(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "leo-old"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Post("http://localhost/agents/leo-old/rename", "application/json", bytes.NewReader([]byte("not json")))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}

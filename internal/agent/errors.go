@@ -24,6 +24,14 @@ var (
 	// shared and must not be deleted.
 	ErrNotWorktreeAgent = errors.New("agent has no worktree to prune")
 
+	// ErrAgentNameTaken is returned by Manager.Rename when the target name
+	// already exists (live or persisted). Callers may map it to HTTP 409.
+	ErrAgentNameTaken = errors.New("agent name already exists")
+
+	// ErrAgentNameUnchanged is returned by Manager.Rename when the new name
+	// equals the current name. Callers may map it to HTTP 400.
+	ErrAgentNameUnchanged = errors.New("agent name unchanged")
+
 	ErrBranchCheckedOut = git.ErrBranchCheckedOut
 	ErrWorktreeDirty    = git.ErrWorktreeDirty
 	ErrBranchNotMerged  = git.ErrBranchNotMerged
