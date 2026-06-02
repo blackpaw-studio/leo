@@ -105,3 +105,26 @@ func TestSessionSpecsFromConfigSkipsOneshot(t *testing.T) {
 		t.Fatalf("expected 0 specs for oneshot task, got %d", len(specs))
 	}
 }
+
+// TestSessionSpecsFromConfigDefaultsWorkspace verifies that a Topology-A
+// persistent task with no explicit workspace falls back to the default
+// workspace rather than booting tmux with an empty -c (which would land the
+// session in an unintended directory).
+func TestSessionSpecsFromConfigDefaultsWorkspace(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: "/home/leo",
+		Tasks: map[string]config.TaskConfig{
+			"daily": {Runtime: "persistent"}, // no workspace
+		},
+	}
+	specs, err := SessionSpecsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	if want := cfg.DefaultWorkspace(); specs[0].Workdir != want {
+		t.Fatalf("workdir = %q, want default %q", specs[0].Workdir, want)
+	}
+}

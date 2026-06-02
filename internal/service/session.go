@@ -7,6 +7,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/hooks"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 // SessionSpec is the runtime descriptor for one supervised persistent claude
@@ -69,26 +70,38 @@ func buildSessionClaudeArgs(spec SessionSpec) []string {
 
 // SuperviseSession launches the restart-loop for one session in its own
 // goroutine. Caller is responsible for ctx lifecycle.
-func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec SessionSpec, onSessionEnd func(int)) error {
+func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec SessionSpec, homePath string, onSessionEnd func(int)) error {
 	if err := hooks.EnsureLeoStopHook(spec.Workdir); err != nil {
 		return fmt.Errorf("ensure stop hook: %w", err)
 	}
-	args := buildSessionClaudeArgs(spec)
-	shellCmd := shellQuote(claudePath)
-	for _, a := range args {
-		shellCmd += " " + shellQuote(a)
+	// buildShell assembles the env exports + claude command. resume=false drops
+	// --resume for poisoned-session recovery. LEO_HOME tells the in-session
+	// Stop hook which daemon to report completion to.
+	buildShell := func(resume bool) string {
+		s := spec
+		if !resume {
+			s.ResumeID = ""
+		}
+		shellCmd := shellQuote(claudePath)
+		for _, a := range buildSessionClaudeArgs(s) {
+			shellCmd += " " + shellQuote(a)
+		}
+		envExports := fmt.Sprintf("export LEO_SESSION_NAME=%s; export LEO_CHANNELS=%s; export LEO_HOME=%s;",
+			shellQuote(spec.Name), shellQuote(strings.Join(spec.Channels, ",")), shellQuote(homePath))
+		for k, v := range spec.Env {
+			envExports += fmt.Sprintf(" export %s=%s;", k, shellQuote(v))
+		}
+		return envExports + " exec " + shellCmd
 	}
-	envExports := fmt.Sprintf("export LEO_SESSION_NAME=%s; export LEO_CHANNELS=%s;",
-		shellQuote(spec.Name), shellQuote(strings.Join(spec.Channels, ",")))
-	for k, v := range spec.Env {
-		envExports += fmt.Sprintf(" export %s=%s;", k, shellQuote(v))
-	}
-	fullShell := envExports + " exec " + shellCmd
 	loop := LoopSpec{
-		Name:         spec.Name,
-		SessionName:  SessionTmuxName(spec.Name),
-		Workdir:      spec.Workdir,
-		ShellCmd:     fullShell,
+		Name:        spec.Name,
+		SessionName: SessionTmuxName(spec.Name),
+		Workdir:     spec.Workdir,
+		ShellCmd:    buildShell,
+		OnQuickExit: func() {
+			// Stale --resume: clear the stored id so the next boot starts fresh.
+			_ = session.NewStore(homePath).Delete("session:" + spec.Name)
+		},
 		OnSessionEnd: onSessionEnd,
 	}
 	go runSuperviseLoop(ctx, tmuxPath, loop)
@@ -101,11 +114,19 @@ func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec Ses
 // Excludes `session: process:<name>` tasks (Topology C — supervised by process loop).
 func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 	out := []SessionSpec{}
+	// workspaceOr falls back to the default workspace so a session never
+	// boots tmux with an empty `-c` (which would land in an unintended dir).
+	workspaceOr := func(ws string) string {
+		if ws != "" {
+			return ws
+		}
+		return cfg.DefaultWorkspace()
+	}
 	// explicit sessions
 	for name, sc := range cfg.Sessions {
 		out = append(out, SessionSpec{
 			Name:            name,
-			Workdir:         sc.Workspace,
+			Workdir:         workspaceOr(sc.Workspace),
 			Model:           sc.Model,
 			Agent:           sc.Agent,
 			PermissionMode:  sc.PermissionMode,
@@ -135,7 +156,7 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 		}
 		out = append(out, SessionSpec{
 			Name:            name,
-			Workdir:         task.Workspace,
+			Workdir:         workspaceOr(task.Workspace),
 			Model:           task.Model,
 			PermissionMode:  task.PermissionMode,
 			AllowedTools:    task.AllowedTools,

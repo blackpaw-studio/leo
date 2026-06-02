@@ -549,7 +549,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 					sp.ResumeID = id
 				}
 				spLocal := sp
-				if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, func(_ int) {
+				if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, func(_ int) {
 					supervisor.incrementRestarts(spLocal.Name)
 				}); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: supervise session %q: %v\n", spLocal.Name, err)

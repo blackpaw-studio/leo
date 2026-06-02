@@ -36,7 +36,8 @@ func TestRunSuperviseLoopExitsOnCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		runSuperviseLoop(ctx, "tmux", LoopSpec{
-			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp", ShellCmd: "echo hi",
+			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp",
+			ShellCmd: func(bool) string { return "echo hi" },
 		})
 		close(done)
 	}()
@@ -76,7 +77,7 @@ func TestRunSuperviseLoopRestartsAndCallsOnSessionEnd(t *testing.T) {
 	go func() {
 		runSuperviseLoop(ctx, "tmux", LoopSpec{
 			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp",
-			ShellCmd: "echo hi", OnSessionEnd: onEnd,
+			ShellCmd: func(bool) string { return "echo hi" }, OnSessionEnd: onEnd,
 		})
 		close(done)
 	}()
@@ -93,5 +94,63 @@ func TestRunSuperviseLoopRestartsAndCallsOnSessionEnd(t *testing.T) {
 	mu.Unlock()
 	if n == 0 {
 		t.Fatalf("expected at least one OnSessionEnd callback")
+	}
+}
+
+// TestRunSuperviseLoopStripsResumeOnQuickExit verifies poisoned-session
+// recovery: when claude exits almost immediately (suggesting a stale --resume
+// id), the loop must respawn WITHOUT resume and clear the stored session,
+// rather than crash-looping on the same poisoned id forever.
+func TestRunSuperviseLoopStripsResumeOnQuickExit(t *testing.T) {
+	var mu sync.Mutex
+	var resumeArgs []bool
+	var quickExits int
+
+	orig := loopExecCommand
+	defer func() { loopExecCommand = orig }()
+	loopExecCommand = func(name string, args ...string) *exec.Cmd {
+		if hasArg(args, "has-session") {
+			return exec.Command("false") // session "gone" immediately → quick exit
+		}
+		return exec.Command("true")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runSuperviseLoop(ctx, "tmux", LoopSpec{
+			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp",
+			ShellCmd: func(resume bool) string {
+				mu.Lock()
+				resumeArgs = append(resumeArgs, resume)
+				mu.Unlock()
+				return "echo hi"
+			},
+			OnQuickExit: func() { mu.Lock(); quickExits++; mu.Unlock() },
+		})
+		close(done)
+	}()
+	// Backoff between restarts is 1s; wait long enough to see the respawn.
+	time.Sleep(1400 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("loop did not exit on cancel")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(resumeArgs) < 2 {
+		t.Fatalf("expected at least 2 spawns, got %d (%v)", len(resumeArgs), resumeArgs)
+	}
+	if resumeArgs[0] != true {
+		t.Fatalf("first spawn should attempt resume=true, got %v", resumeArgs[0])
+	}
+	if resumeArgs[1] != false {
+		t.Fatalf("after a quick exit the respawn must drop resume (want false), got %v", resumeArgs[1])
+	}
+	if quickExits < 1 {
+		t.Fatalf("expected OnQuickExit to fire at least once, got %d", quickExits)
 	}
 }
