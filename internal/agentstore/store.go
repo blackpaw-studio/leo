@@ -104,20 +104,20 @@ func loadLocked(path string) (map[string]Record, error) {
 // the record before it is stored under the new key. It errors if old is absent
 // or new already exists. The whole load-modify-write happens under storeMu so it
 // is consistent with concurrent Save/Remove/Load.
-func Rename(homePath, old, new string, mutate func(Record) Record) error {
+func Rename(homePath, oldName, newName string, mutate func(Record) Record) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 	path := FilePath(homePath)
 	records, _ := loadLocked(path)
-	rec, ok := records[old]
+	rec, ok := records[oldName]
 	if !ok {
-		return fmt.Errorf("agent %q not found", old)
+		return fmt.Errorf("agent %q not found", oldName)
 	}
-	if _, exists := records[new]; exists {
-		return fmt.Errorf("agent %q already exists", new)
+	if _, exists := records[newName]; exists {
+		return fmt.Errorf("agent %q already exists", newName)
 	}
-	records[new] = mutate(rec)
-	delete(records, old)
+	records[newName] = mutate(rec)
+	delete(records, oldName)
 	return write(path, records)
 }
 
