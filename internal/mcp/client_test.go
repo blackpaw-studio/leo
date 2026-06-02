@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,5 +72,29 @@ func TestDaemonClientOmitsBearerWhenTokenEmpty(t *testing.T) {
 		if got != "" {
 			t.Errorf("request %d Authorization = %q, want empty", i, got)
 		}
+	}
+}
+
+func TestDaemonClientSendMessage(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"data":{}}`))
+	}))
+	defer srv.Close()
+	port := strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
+
+	c := newDaemonClient(port, "")
+	if err := c.sendMessage("worker-1", "build is green"); err != nil {
+		t.Fatalf("sendMessage: %v", err)
+	}
+	if gotPath != "/web/process/worker-1/message" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if !strings.Contains(gotBody, "build is green") {
+		t.Errorf("body = %q", gotBody)
 	}
 }
