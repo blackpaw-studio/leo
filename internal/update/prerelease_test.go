@@ -551,7 +551,7 @@ var _ = url.Parse
 func TestIsMainVersion(t *testing.T) {
 	cases := map[string]bool{
 		"main-a1b2c3d": true,
-		"main-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9": true, // 40-char full sha
+		"main-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0": true, // 40-char full sha
 		"main-a1b2c3":   false, // <7 hex
 		"main-A1B2C3D":  false, // uppercase
 		"main-":         false,
