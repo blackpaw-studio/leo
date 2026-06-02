@@ -24,7 +24,8 @@ func EnsureLeoStopHook(workspace string) error {
 		return errors.New("hooks.EnsureLeoStopHook: empty workspace")
 	}
 	dir := filepath.Join(workspace, ".claude")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 0o700: this dir holds settings.local.json, which can carry bearer tokens.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, "settings.local.json")
