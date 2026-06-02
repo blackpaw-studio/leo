@@ -244,6 +244,45 @@ func (s *Server) handleAgentPrune(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
+// handleAgentRename renames an agent. The {name} path segment may be a
+// shorthand query; it is resolved to the canonical agent, then Rename applies
+// the new name across supervisor state and the persisted record.
+func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	query := r.PathValue("name")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	var req AgentRenameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+	if req.NewName == "" {
+		writeError(w, http.StatusBadRequest, "new_name is required")
+		return
+	}
+	rec, ok := s.resolveAgentOrError(w, query)
+	if !ok {
+		return
+	}
+	updated, err := s.agentMgr.Rename(rec.Name, req.NewName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	data, err := json.Marshal(updated)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling record: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
 // writeAgentError translates agent-package typed errors into HTTP responses
 // with stable machine-readable Code fields so the CLI client can reconstruct
 // errors.Is matches on the other side of the socket.

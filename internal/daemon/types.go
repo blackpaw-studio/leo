@@ -95,3 +95,8 @@ type AgentResolveResponse struct {
 	Session string `json:"session"`
 	Repo    string `json:"repo,omitempty"`
 }
+
+// AgentRenameRequest is the body for POST /agents/{name}/rename.
+type AgentRenameRequest struct {
+	NewName string `json:"new_name"`
+}

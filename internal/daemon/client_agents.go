@@ -156,3 +156,21 @@ func AgentResolve(ctx context.Context, workDir, query string) (AgentResolveRespo
 	}
 	return out, nil
 }
+
+// AgentRename renames the agent matching query to newName via the daemon and
+// returns the updated record. On resolve failures it returns typed
+// *agent.ErrNotFound or *agent.ErrAmbiguous.
+func AgentRename(ctx context.Context, workDir, query, newName string) (agent.Record, error) {
+	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(query)+"/rename", AgentRenameRequest{NewName: newName})
+	if err != nil {
+		return agent.Record{}, err
+	}
+	if !resp.OK {
+		return agent.Record{}, responseError(resp, query)
+	}
+	var rec agent.Record
+	if err := json.Unmarshal(resp.Data, &rec); err != nil {
+		return agent.Record{}, fmt.Errorf("decoding rename response: %w", err)
+	}
+	return rec, nil
+}
