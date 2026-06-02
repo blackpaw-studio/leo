@@ -67,6 +67,19 @@ func TestRenameAgent_Rejections(t *testing.T) {
 	if err := s4.RenameAgent("leo-missing", "leo-q"); err == nil {
 		t.Fatal("expected missing-source rejection")
 	}
+
+	s5 := newTestSupervisor(t, "leo-r")
+	s5.reservations["leo-taken2"] = struct{}{}
+	if err := s5.RenameAgent("leo-r", "leo-taken2"); err == nil {
+		t.Fatal("expected reserved-name rejection")
+	}
+
+	s6 := NewSupervisor(context.Background())
+	s6.states["leo-noid"] = &ProcessState{Name: "leo-noid", Status: "running", Ephemeral: true}
+	// no entry in s6.identities
+	if err := s6.RenameAgent("leo-noid", "leo-ok"); err == nil {
+		t.Fatal("expected missing-identity rejection")
+	}
 }
 
 func TestRenameAgent_TmuxFailureLeavesStateUntouched(t *testing.T) {

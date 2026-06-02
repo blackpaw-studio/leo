@@ -298,13 +298,7 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 		id.mu.Unlock()
 		return fmt.Errorf("renaming tmux session: %w", err)
 	}
-	id.name = newName
-	for i := 0; i+1 < len(id.args); i++ {
-		if id.args[i] == "--name" {
-			id.args[i+1] = newName
-			break
-		}
-	}
+	id.renameLocked(newName)
 	id.mu.Unlock()
 
 	st.Name = newName

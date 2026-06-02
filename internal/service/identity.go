@@ -54,12 +54,18 @@ func (p *procIdentity) setArgs(args []string) {
 	p.args = cp
 }
 
-// rename swaps the name and rewrites the value following --name in args. The
-// caller (RenameAgent) holds this under the supervisor lock so the tmux session
-// rename and this swap are observed atomically by the watcher's RLock.
+// rename swaps the name and rewrites the value following --name in args, taking
+// the write lock. Use renameLocked when already holding p.mu.
 func (p *procIdentity) rename(newName string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.renameLocked(newName)
+}
+
+// renameLocked performs the name + --name-arg swap. The caller MUST hold p.mu.
+// RenameAgent uses this so the swap stays inside the lock it already holds
+// across the tmux rename.
+func (p *procIdentity) renameLocked(newName string) {
 	p.name = newName
 	for i := 0; i+1 < len(p.args); i++ {
 		if p.args[i] == "--name" {
