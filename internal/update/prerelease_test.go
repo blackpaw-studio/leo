@@ -547,3 +547,34 @@ func archiveKeys(m map[string][]byte) []string {
 // not always need io / net/url, but keeping them imported is harmless.
 var _ = io.Discard
 var _ = url.Parse
+
+func TestIsMainVersion(t *testing.T) {
+	cases := map[string]bool{
+		"main-a1b2c3d": true,
+		"main-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9": true, // 40-char full sha
+		"main-a1b2c3":   false, // <7 hex
+		"main-A1B2C3D":  false, // uppercase
+		"main-":         false,
+		"pr-42-a1b2c3d": false,
+		"v1.2.3":        false,
+		"":              false,
+	}
+	for in, want := range cases {
+		if got := IsMainVersion(in); got != want {
+			t.Errorf("IsMainVersion(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestParseMainVersion(t *testing.T) {
+	sha, err := ParseMainVersion("main-a1b2c3d")
+	if err != nil {
+		t.Fatalf("ParseMainVersion: %v", err)
+	}
+	if sha != "a1b2c3d" {
+		t.Errorf("sha = %q, want a1b2c3d", sha)
+	}
+	if _, err := ParseMainVersion("pr-1-a1b2c3d"); err == nil {
+		t.Error("expected error for non-main version")
+	}
+}

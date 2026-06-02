@@ -109,7 +109,7 @@ func SignatureVerifierForMain() (*SignatureVerifier, error) {
 // buildVerifierWithIdentity is the shared constructor: it pins owner,
 // repo, and the issuer to Leo's expected values and lets the caller
 // supply the workflow filename plus the ref pattern (refs/tags/X for
-// stable releases, refs/pull/N/merge for PR builds).
+// stable releases, refs/pull/N/merge for PR builds, refs/heads/X for branch builds).
 func buildVerifierWithIdentity(workflow, refPattern string) (*SignatureVerifier, error) {
 	roots, err := loadCertPool(fulcio.RootPEM)
 	if err != nil {

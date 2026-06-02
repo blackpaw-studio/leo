@@ -68,6 +68,29 @@ var prereleaseVerifierForPR = SignatureVerifierForPullRequest
 // the PR flow or the stable flow.
 var prereleaseVersionPattern = regexp.MustCompile(`^pr-([0-9]+)-([0-9a-f]{7,40})$`)
 
+// mainVersionPattern matches version strings produced by the unstable
+// workflow's goreleaser snapshot template:
+//
+//	main-<7+ hex chars>
+//
+// Used by the CLI to route a --version flag through the main flow.
+var mainVersionPattern = regexp.MustCompile(`^main-([0-9a-f]{7,40})$`)
+
+// IsMainVersion reports whether a version string targets a main build.
+func IsMainVersion(version string) bool {
+	return mainVersionPattern.MatchString(version)
+}
+
+// ParseMainVersion extracts the short SHA from a "main-<sha>" version
+// string. Returns an error if the shape doesn't match.
+func ParseMainVersion(version string) (shortSHA string, err error) {
+	m := mainVersionPattern.FindStringSubmatch(version)
+	if m == nil {
+		return "", fmt.Errorf("version %q is not a main build tag (want main-<sha>)", version)
+	}
+	return m[1], nil
+}
+
 // IsPrereleaseVersion reports whether a version string targets a PR
 // build rather than a tagged release.
 func IsPrereleaseVersion(version string) bool {
