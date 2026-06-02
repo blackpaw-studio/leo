@@ -148,3 +148,32 @@ func TestNewInvocationID16IsHex32(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionTmuxTargetTopologies verifies the bare logical session name is
+// mapped to the correct concrete tmux session for each topology. This is the
+// seam that was wrong: the router was injecting into the bare name.
+func TestSessionTmuxTargetTopologies(t *testing.T) {
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"dedicated": {Runtime: "persistent", Workspace: "/w"},
+			"shared":    {Runtime: "persistent", Session: "team"},
+			"attached":  {Runtime: "persistent", Session: "process:web"},
+		},
+		Sessions:  map[string]config.SessionConfig{"team": {Workspace: "/w"}},
+		Processes: map[string]config.ProcessConfig{"web": {Workspace: "/w"}},
+	}
+	cases := map[string]string{
+		"dedicated": "leo-session-dedicated", // Topology A — implicit dedicated
+		"shared":    "leo-session-team",      // Topology B — shared session
+		"attached":  "leo-web",               // Topology C — process-attached
+	}
+	for task, want := range cases {
+		got, err := sessionTmuxTarget(cfg, task)
+		if err != nil {
+			t.Fatalf("%s: %v", task, err)
+		}
+		if got != want {
+			t.Fatalf("%s: tmux target = %q, want %q", task, got, want)
+		}
+	}
+}

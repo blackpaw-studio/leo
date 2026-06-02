@@ -616,7 +616,7 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("tasks.%s.session is only valid when runtime: persistent", name))
 		}
 		if task.Runtime == "persistent" {
-			sessName, sess, err := c.ResolveSession(name)
+			sessName, _, sess, err := c.ResolveSession(name)
 			if err != nil {
 				errs = append(errs, fmt.Sprintf("tasks.%s: %v", name, err))
 			} else {

@@ -5,19 +5,36 @@ import (
 	"strings"
 )
 
-// ResolveSession returns the session name and SessionConfig that hosts the
-// named persistent task. For tasks without `session:` it synthesizes an
-// implicit SessionConfig from the task itself and returns the task name as
-// the session name. For `session: process:<name>` it returns the process
-// name with a SessionConfig derived from the ProcessConfig. Returns an error
-// for oneshot tasks or unresolved references.
-func (c *Config) ResolveSession(taskName string) (string, SessionConfig, error) {
+// SessionTopology classifies how a persistent task maps to a supervised
+// session. The tmux session naming differs per topology, so this is resolved
+// once (here) rather than re-derived by each consumer.
+type SessionTopology int
+
+const (
+	// TopologyDedicated — task with no `session:`; an implicit session named
+	// after the task (Topology A). Supervised as a persistent session.
+	TopologyDedicated SessionTopology = iota
+	// TopologyShared — task references a `sessions:` entry (Topology B).
+	// Supervised as a persistent session.
+	TopologyShared
+	// TopologyProcess — task references `session: process:<name>` (Topology
+	// C). Routed into an already-supervised process.
+	TopologyProcess
+)
+
+// ResolveSession returns the session name, its topology, and the SessionConfig
+// that hosts the named persistent task. For tasks without `session:` it
+// synthesizes an implicit SessionConfig from the task itself and returns the
+// task name as the session name. For `session: process:<name>` it returns the
+// process name with a SessionConfig derived from the ProcessConfig. Returns an
+// error for oneshot tasks or unresolved references.
+func (c *Config) ResolveSession(taskName string) (string, SessionTopology, SessionConfig, error) {
 	task, ok := c.Tasks[taskName]
 	if !ok {
-		return "", SessionConfig{}, fmt.Errorf("task %q not found", taskName)
+		return "", TopologyDedicated, SessionConfig{}, fmt.Errorf("task %q not found", taskName)
 	}
 	if task.Runtime != "persistent" {
-		return "", SessionConfig{}, fmt.Errorf("task %q is not runtime: persistent", taskName)
+		return "", TopologyDedicated, SessionConfig{}, fmt.Errorf("task %q is not runtime: persistent", taskName)
 	}
 
 	switch {
@@ -27,7 +44,7 @@ func (c *Config) ResolveSession(taskName string) (string, SessionConfig, error) 
 		// TaskConfig has no Agent/Env/AddDirs fields, so those stay zero in
 		// the synthesized session; callers needing them must use a shared
 		// session or a process: reference.
-		return taskName, SessionConfig{
+		return taskName, TopologyDedicated, SessionConfig{
 			Workspace:          task.Workspace,
 			Model:              task.Model,
 			PermissionMode:     task.PermissionMode,
@@ -42,9 +59,9 @@ func (c *Config) ResolveSession(taskName string) (string, SessionConfig, error) 
 		procName := strings.TrimPrefix(task.Session, "process:")
 		proc, ok := c.Processes[procName]
 		if !ok {
-			return "", SessionConfig{}, fmt.Errorf("task %q references process:%s which is not defined", taskName, procName)
+			return "", TopologyProcess, SessionConfig{}, fmt.Errorf("task %q references process:%s which is not defined", taskName, procName)
 		}
-		return procName, SessionConfig{
+		return procName, TopologyProcess, SessionConfig{
 			Workspace:          proc.Workspace,
 			Model:              proc.Model,
 			Agent:              proc.Agent,
@@ -61,9 +78,9 @@ func (c *Config) ResolveSession(taskName string) (string, SessionConfig, error) 
 		// Topology B — shared session from sessions: map.
 		sess, ok := c.Sessions[task.Session]
 		if !ok {
-			return "", SessionConfig{}, fmt.Errorf("task %q references sessions.%s which is not defined", taskName, task.Session)
+			return "", TopologyShared, SessionConfig{}, fmt.Errorf("task %q references sessions.%s which is not defined", taskName, task.Session)
 		}
-		return task.Session, sess, nil
+		return task.Session, TopologyShared, sess, nil
 	}
 }
 

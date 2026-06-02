@@ -8,11 +8,29 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
+
+// sessionTmuxTarget resolves a persistent task's logical session name to the
+// concrete tmux session it is supervised under. Topology A/B sessions are
+// hosted as "leo-session-<name>"; Topology C routes into an existing process
+// hosted as "leo-<name>". This is the mapping the daemon's prompt injector
+// must target — the bare logical name is only the router's FIFO key.
+func sessionTmuxTarget(cfg *config.Config, taskName string) (string, error) {
+	name, topo, _, err := cfg.ResolveSession(taskName)
+	if err != nil {
+		return "", err
+	}
+	if topo == config.TopologyProcess {
+		return agent.SessionName(name), nil
+	}
+	return service.SessionTmuxName(name), nil
+}
 
 // persistentImpl is a seam for tests to override the runPersistent dispatch.
 var persistentImpl = runPersistent
@@ -38,9 +56,13 @@ func runPersistent(cfg *config.Config, taskName string) error {
 	if err != nil {
 		return err
 	}
-	sessName, _, err := cfg.ResolveSession(taskName)
+	sessName, _, _, err := cfg.ResolveSession(taskName)
 	if err != nil {
 		return fmt.Errorf("resolving session for task %q: %w", taskName, err)
+	}
+	tmuxTarget, err := sessionTmuxTarget(cfg, taskName)
+	if err != nil {
+		return fmt.Errorf("resolving tmux session for task %q: %w", taskName, err)
 	}
 	body, err := assemblePrompt(cfg, task)
 	if err != nil {
@@ -59,6 +81,7 @@ func runPersistent(cfg *config.Config, taskName string) error {
 	enq, err := daemon.EnqueueTask(ctx, cfg.HomePath, daemon.EnqueueRequest{
 		InvocationID: invID,
 		Session:      sessName,
+		TmuxSession:  tmuxTarget,
 		Task:         taskName,
 		Prompt:       wrapped,
 		Channels:     task.Channels,
@@ -118,7 +141,11 @@ func handlePersistentFailure(cfg *config.Config, taskName, reason string) {
 	if !task.NotifyOnFail || len(task.Channels) == 0 {
 		return
 	}
-	sessName, _, err := cfg.ResolveSession(taskName)
+	sessName, _, _, err := cfg.ResolveSession(taskName)
+	if err != nil {
+		return
+	}
+	tmuxTarget, err := sessionTmuxTarget(cfg, taskName)
 	if err != nil {
 		return
 	}
@@ -134,6 +161,7 @@ func handlePersistentFailure(cfg *config.Config, taskName, reason string) {
 	enqueueFollowUp(ctx, cfg.HomePath, daemon.EnqueueRequest{
 		InvocationID: invID,
 		Session:      sessName,
+		TmuxSession:  tmuxTarget,
 		Task:         taskName + ":notify",
 		Prompt:       wrapped,
 		Channels:     task.Channels,

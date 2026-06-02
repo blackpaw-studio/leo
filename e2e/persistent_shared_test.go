@@ -95,8 +95,11 @@ tasks:
 		t.Fatalf("expected 2 injections (one per task), got %d", len(rows))
 	}
 	for i, row := range rows {
-		if row.Session != "homebase" {
-			t.Errorf("row[%d] session = %q, want %q", i, row.Session, "homebase")
+		// The injector must receive the concrete tmux session name
+		// ("leo-session-<name>" for a shared session), NOT the bare logical
+		// name — injecting into the bare name targets a nonexistent session.
+		if row.Session != "leo-session-homebase" {
+			t.Errorf("row[%d] injected session = %q, want %q", i, row.Session, "leo-session-homebase")
 		}
 		if row.InvID == "" {
 			t.Errorf("row[%d] missing invocation marker", i)
@@ -121,10 +124,11 @@ tasks:
 	}
 
 	// Both tasks share a session; the second run should overwrite the
-	// first's stored session id (still "csid-homebase" from the
-	// auto-responder), demonstrating shared resume state.
+	// first's stored session id (the auto-responder derives it from the
+	// injected tmux session name), demonstrating shared resume state. The
+	// id is keyed under the bare logical session name ("homebase").
 	got := pollStoredSessionID(t, dir, "homebase", 3*time.Second)
-	if want := "csid-homebase"; got != want {
+	if want := "csid-leo-session-homebase"; got != want {
 		t.Errorf("stored session id = %q, want %q", got, want)
 	}
 }

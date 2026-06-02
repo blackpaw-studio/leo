@@ -73,11 +73,11 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 
 	// Wire the session router to real tmux primitives. Tests that need
 	// fakes can call SetInjector/SetAborter after construction.
-	s.router.SetInjector(func(session, prompt string) error {
-		return tmux.InjectPrompt(context.Background(), tmuxPath(), session, prompt)
+	s.router.SetInjector(func(tmuxSession, prompt string) error {
+		return tmux.InjectPrompt(context.Background(), tmuxPath(), tmuxSession, prompt)
 	})
-	s.router.SetAborter(func(session string) error {
-		return tmux.AbortPrompt(context.Background(), tmuxPath(), session)
+	s.router.SetAborter(func(tmuxSession string) error {
+		return tmux.AbortPrompt(context.Background(), tmuxPath(), tmuxSession)
 	})
 
 	mux := http.NewServeMux()
@@ -313,6 +313,7 @@ func (s *Server) handleProcessList(w http.ResponseWriter, r *http.Request) {
 type taskEnqueueReq struct {
 	InvocationID   string   `json:"invocation_id,omitempty"`
 	Session        string   `json:"session"`
+	TmuxSession    string   `json:"tmux_session,omitempty"`
 	Task           string   `json:"task"`
 	Prompt         string   `json:"prompt"`
 	Channels       []string `json:"channels"`
@@ -340,13 +341,20 @@ func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
+	// Default the tmux target to the logical session name for older clients
+	// that don't send tmux_session, preserving prior behavior for them.
+	tmuxSession := req.TmuxSession
+	if tmuxSession == "" {
+		tmuxSession = req.Session
+	}
 	inv, ok := s.router.EnqueueWithID(req.InvocationID, EnqueueParams{
-		Session:  req.Session,
-		Task:     req.Task,
-		Prompt:   req.Prompt,
-		Channels: req.Channels,
-		QueueMax: req.QueueMax,
-		Timeout:  timeout,
+		Session:     req.Session,
+		TmuxSession: tmuxSession,
+		Task:        req.Task,
+		Prompt:      req.Prompt,
+		Channels:    req.Channels,
+		QueueMax:    req.QueueMax,
+		Timeout:     timeout,
 	})
 	if !ok {
 		writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: false, Reason: "queue full"})

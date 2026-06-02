@@ -8,12 +8,13 @@ import (
 )
 
 type EnqueueParams struct {
-	Session  string
-	Task     string
-	Prompt   string   // already includes marker + delivery footer (caller's job)
-	Channels []string // for record-keeping only; delivery happens in-session
-	QueueMax int
-	Timeout  time.Duration
+	Session     string // logical session name; the FIFO key
+	TmuxSession string // concrete tmux session to inject/abort against
+	Task        string
+	Prompt      string   // already includes marker + delivery footer (caller's job)
+	Channels    []string // for record-keeping only; delivery happens in-session
+	QueueMax    int
+	Timeout     time.Duration
 }
 
 type InvocationResult struct {
@@ -42,6 +43,7 @@ type sessionQueue struct {
 	mu          sync.Mutex
 	fifo        []*PendingInvocation
 	inFlight    *PendingInvocation // non-nil while one invocation is executing; nil otherwise
+	tmuxSession string             // concrete tmux session this queue injects into
 	enqueueSig  chan struct{}      // buffered(1); fired by Enqueue
 	reportSig   chan struct{}      // buffered(1); fired by Report / pump failure / ResetSession
 	pumpStarted bool
@@ -119,6 +121,13 @@ func (r *sessionRouter) EnqueueWithID(id string, p EnqueueParams) (*PendingInvoc
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	// Record the tmux target for this session (all invocations share it).
+	// Falls back to the logical key if the caller didn't resolve one.
+	if p.TmuxSession != "" {
+		q.tmuxSession = p.TmuxSession
+	} else if q.tmuxSession == "" {
+		q.tmuxSession = p.Session
+	}
 	capacity := p.QueueMax
 	if capacity <= 0 {
 		capacity = 5
@@ -190,8 +199,8 @@ func (r *sessionRouter) QueueDepth(session string) int {
 	return depth
 }
 
-type injectFn func(session, prompt string) error
-type abortFn func(session string) error
+type injectFn func(tmuxSession, prompt string) error
+type abortFn func(tmuxSession string) error
 
 // SetInjector / SetAborter wire the tmux primitives (or test fakes).
 // Must be called before StartPump for any session.
@@ -352,9 +361,10 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			next := q.fifo[0]
 			q.fifo = q.fifo[1:]
 			q.inFlight = next
+			target := q.tmuxSession
 			q.mu.Unlock()
 
-			if err := r.currentInjector()(session, next.Prompt); err != nil {
+			if err := r.currentInjector()(target, next.Prompt); err != nil {
 				q.mu.Lock()
 				if q.inFlight != nil && q.inFlight.ID == next.ID {
 					q.inFlight = nil
@@ -372,7 +382,7 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 				}
 				return
 			case <-timer.C:
-				_ = r.currentAborter()(session)
+				_ = r.currentAborter()(target)
 				q.mu.Lock()
 				still := q.inFlight != nil && q.inFlight.ID == next.ID
 				if still {

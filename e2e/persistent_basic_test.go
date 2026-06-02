@@ -60,8 +60,10 @@ tasks:
 		t.Fatalf("expected exactly 1 injected prompt, got %d", len(rows))
 	}
 	row := rows[0]
-	if row.Session != "daily" {
-		t.Errorf("session = %q, want %q (implicit Topology A)", row.Session, "daily")
+	// Topology A's implicit session is supervised as "leo-session-<task>";
+	// the injector must target that, not the bare task name.
+	if row.Session != "leo-session-daily" {
+		t.Errorf("injected session = %q, want %q (implicit Topology A)", row.Session, "leo-session-daily")
 	}
 	if row.InvID == "" {
 		t.Error("injected prompt missing leo:invocation marker")
@@ -76,7 +78,7 @@ tasks:
 	}
 
 	got := pollStoredSessionID(t, dir, "daily", 3*time.Second)
-	if want := "csid-daily"; got != want {
+	if want := "csid-leo-session-daily"; got != want {
 		t.Errorf("stored session id = %q, want %q", got, want)
 	}
 }
@@ -152,8 +154,8 @@ tasks:
 	if !strings.Contains(strings.ToLower(notice.Prompt), "failed") {
 		t.Errorf("follow-up notice should mention failure: %q", notice.Prompt)
 	}
-	if notice.Session != "flaky" {
-		t.Errorf("follow-up should target original session %q, got %q", "flaky", notice.Session)
+	if notice.Session != "leo-session-flaky" {
+		t.Errorf("follow-up should target original session %q, got %q", "leo-session-flaky", notice.Session)
 	}
 	if notice.InvID == "" {
 		t.Error("follow-up notice should carry its own invocation marker")

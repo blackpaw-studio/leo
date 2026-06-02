@@ -25,7 +25,7 @@ func TestSessionSpecBuildArgs(t *testing.T) {
 }
 
 func TestSessionTmuxName(t *testing.T) {
-	if got := sessionTmuxName("daily"); got != "leo-session-daily" {
+	if got := SessionTmuxName("daily"); got != "leo-session-daily" {
 		t.Fatalf("unexpected tmux name: %s", got)
 	}
 }

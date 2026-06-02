@@ -27,7 +27,10 @@ type SessionSpec struct {
 	ResumeID        string
 }
 
-func sessionTmuxName(name string) string { return "leo-session-" + name }
+// SessionTmuxName is the tmux session name for a persistent session
+// (Topology A/B). The single source of truth for this convention; the daemon's
+// prompt injector resolves logical session names to this via the runner.
+func SessionTmuxName(name string) string { return "leo-session-" + name }
 
 // buildSessionClaudeArgs assembles the claude CLI args for a persistent
 // session. Mirrors buildProcessArgs but for SessionSpec.
@@ -83,7 +86,7 @@ func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec Ses
 	fullShell := envExports + " exec " + shellCmd
 	loop := LoopSpec{
 		Name:         spec.Name,
-		SessionName:  sessionTmuxName(spec.Name),
+		SessionName:  SessionTmuxName(spec.Name),
 		Workdir:      spec.Workdir,
 		ShellCmd:     fullShell,
 		OnSessionEnd: onSessionEnd,

@@ -67,8 +67,11 @@ tasks:
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 injection, got %d", len(rows))
 	}
-	if got, want := rows[0].Session, "assistant"; got != want {
-		t.Errorf("injected session = %q, want %q (must use the process name, not the task name)", got, want)
+	// Topology C routes into a supervised process, whose tmux session is
+	// "leo-<process>" (agent.SessionName) — not "leo-session-*" and not the
+	// bare process name.
+	if got, want := rows[0].Session, "leo-assistant"; got != want {
+		t.Errorf("injected session = %q, want %q (process tmux name, not the task name)", got, want)
 	}
 	if !strings.Contains(rows[0].Prompt, "Send a friendly nudge.") {
 		t.Errorf("prompt missing body: %q", rows[0].Prompt)
@@ -76,7 +79,7 @@ tasks:
 
 	// Session id should be persisted under the process's session name.
 	got := pollStoredSessionID(t, dir, "assistant", 3*time.Second)
-	if want := "csid-assistant"; got != want {
+	if want := "csid-leo-assistant"; got != want {
 		t.Errorf("stored session id = %q, want %q", got, want)
 	}
 }

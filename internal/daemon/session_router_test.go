@@ -256,3 +256,77 @@ func TestSessionRouterPumpTimeoutAborts(t *testing.T) {
 		t.Fatalf("expected aborter to be called")
 	}
 }
+
+// TestSessionRouterInjectsTmuxTarget verifies the pump injects into (and
+// aborts) the concrete tmux session target carried on the invocation, NOT the
+// bare logical session key used for FIFO routing. A persistent session keyed
+// "daily" actually lives in tmux as "leo-session-daily"; injecting into the
+// bare key targets a nonexistent session.
+func TestSessionRouterInjectsTmuxTarget(t *testing.T) {
+	r := newSessionRouter()
+	defer r.Stop()
+	var mu sync.Mutex
+	var injectedInto string
+	r.SetInjector(func(target, _ string) error {
+		mu.Lock()
+		injectedInto = target
+		mu.Unlock()
+		return nil
+	})
+	r.SetAborter(func(string) error { return nil })
+
+	inv, ok := r.Enqueue(EnqueueParams{
+		Session:     "daily",             // FIFO key (bare logical name)
+		TmuxSession: "leo-session-daily", // concrete tmux target
+		Task:        "t",
+		Prompt:      "p",
+		QueueMax:    5,
+		Timeout:     time.Second,
+	})
+	if !ok {
+		t.Fatal("enqueue rejected")
+	}
+	r.StartPump("daily")
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		r.Report(inv.ID, InvocationResult{OK: true})
+	}()
+	<-inv.Result
+
+	mu.Lock()
+	defer mu.Unlock()
+	if injectedInto != "leo-session-daily" {
+		t.Fatalf("injector targeted %q, want tmux session %q", injectedInto, "leo-session-daily")
+	}
+}
+
+// TestSessionRouterAbortsTmuxTargetOnTimeout verifies the timeout path aborts
+// the concrete tmux target, not the bare key.
+func TestSessionRouterAbortsTmuxTargetOnTimeout(t *testing.T) {
+	r := newSessionRouter()
+	defer r.Stop()
+	var mu sync.Mutex
+	var abortedTarget string
+	r.SetInjector(func(string, string) error { return nil })
+	r.SetAborter(func(target string) error {
+		mu.Lock()
+		abortedTarget = target
+		mu.Unlock()
+		return nil
+	})
+	inv, _ := r.Enqueue(EnqueueParams{
+		Session:     "web",
+		TmuxSession: "leo-web",
+		Task:        "t",
+		Prompt:      "p",
+		QueueMax:    5,
+		Timeout:     30 * time.Millisecond,
+	})
+	r.StartPump("web")
+	<-inv.Result // resolves via timeout
+	mu.Lock()
+	defer mu.Unlock()
+	if abortedTarget != "leo-web" {
+		t.Fatalf("aborter targeted %q, want %q", abortedTarget, "leo-web")
+	}
+}

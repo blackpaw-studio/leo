@@ -16,9 +16,12 @@ func TestResolveSessionDedicated(t *testing.T) {
 			},
 		},
 	}
-	name, sess, err := cfg.ResolveSession("t1")
+	name, topo, sess, err := cfg.ResolveSession("t1")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
+	}
+	if topo != TopologyDedicated {
+		t.Fatalf("expected TopologyDedicated, got %v", topo)
 	}
 	if name != "t1" {
 		t.Fatalf("expected implicit name 't1', got %q", name)
@@ -40,9 +43,12 @@ func TestResolveSessionShared(t *testing.T) {
 			"t1": {Runtime: "persistent", Session: "daily", Channels: []string{"plugin:slack@official"}},
 		},
 	}
-	name, sess, err := cfg.ResolveSession("t1")
+	name, topo, sess, err := cfg.ResolveSession("t1")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
+	}
+	if topo != TopologyShared {
+		t.Fatalf("expected TopologyShared, got %v", topo)
 	}
 	if name != "daily" || sess.Workspace != "/tmp/d" {
 		t.Fatalf("shared resolution wrong: name=%q sess=%+v", name, sess)
@@ -55,7 +61,7 @@ func TestResolveSessionMissing(t *testing.T) {
 			"t1": {Runtime: "persistent", Session: "nope"},
 		},
 	}
-	if _, _, err := cfg.ResolveSession("t1"); err == nil {
+	if _, _, _, err := cfg.ResolveSession("t1"); err == nil {
 		t.Fatalf("expected error for missing session reference")
 	}
 }
@@ -115,9 +121,12 @@ func TestResolveSessionProcess(t *testing.T) {
 			},
 		},
 	}
-	name, sess, err := cfg.ResolveSession("poke")
+	name, topo, sess, err := cfg.ResolveSession("poke")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
+	}
+	if topo != TopologyProcess {
+		t.Fatalf("expected TopologyProcess, got %v", topo)
 	}
 	if name != "bot" {
 		t.Fatalf("expected name 'bot', got %q", name)
@@ -139,7 +148,7 @@ func TestResolveSessionProcessMissing(t *testing.T) {
 			"poke": {Runtime: "persistent", Session: "process:nope"},
 		},
 	}
-	if _, _, err := cfg.ResolveSession("poke"); err == nil {
+	if _, _, _, err := cfg.ResolveSession("poke"); err == nil {
 		t.Fatalf("expected error for missing process reference")
 	}
 }

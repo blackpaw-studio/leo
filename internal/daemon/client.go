@@ -109,7 +109,8 @@ func newUnixClientNoTimeout(sockPath string) *http.Client {
 // into Prompt). When empty the daemon auto-generates an id.
 type EnqueueRequest struct {
 	InvocationID string
-	Session      string
+	Session      string // logical session name; the router's FIFO key
+	TmuxSession  string // concrete tmux session to inject into
 	Task         string
 	Prompt       string
 	Channels     []string
@@ -149,6 +150,7 @@ func enqueueTask(ctx context.Context, cli *http.Client, baseURL string, req Enqu
 	body := map[string]any{
 		"invocation_id":   req.InvocationID,
 		"session":         req.Session,
+		"tmux_session":    req.TmuxSession,
 		"task":            req.Task,
 		"prompt":          req.Prompt,
 		"channels":        req.Channels,
