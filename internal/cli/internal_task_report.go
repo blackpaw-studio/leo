@@ -119,6 +119,17 @@ func concatText(ev transcriptEvent) string {
 	return b.String()
 }
 
+// reportHomeDir resolves which leo home the Stop hook should report to. The
+// session supervisor exports LEO_HOME for the supervised claude, so the hook
+// targets the daemon that actually spawned it rather than assuming the default
+// home (which breaks under a non-default LEO_HOME / project-local config).
+func reportHomeDir() string {
+	if h := os.Getenv("LEO_HOME"); h != "" {
+		return h
+	}
+	return config.DefaultHome()
+}
+
 type hookEnvelope struct {
 	SessionID      string `json:"session_id"`
 	TranscriptPath string `json:"transcript_path"`
@@ -158,7 +169,7 @@ func newInternalTaskReportCmd() *cobra.Command {
 			if invID == "" {
 				return nil // human turn, ignore
 			}
-			workDir := config.DefaultHome()
+			workDir := reportHomeDir()
 			// Bound the call: a wedged daemon socket must not freeze the
 			// claude Stop hook (which gates claude's process exit).
 			rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

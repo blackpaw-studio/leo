@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/config"
 )
 
 func TestExtractInvocationMarker(t *testing.T) {
@@ -121,5 +123,23 @@ func TestReadLastTurnHandlesStringAssistantContent(t *testing.T) {
 	}
 	if final != "plain string reply" {
 		t.Fatalf("final: %q", final)
+	}
+}
+
+// TestReportHomeDirPrefersEnv verifies the Stop-hook reporter targets the
+// daemon home from LEO_HOME (exported by the session supervisor) rather than
+// always assuming the default home — otherwise a daemon on a non-default home
+// never receives the report and the invocation times out.
+func TestReportHomeDirPrefersEnv(t *testing.T) {
+	t.Setenv("LEO_HOME", "/custom/leo/home")
+	if got := reportHomeDir(); got != "/custom/leo/home" {
+		t.Fatalf("got %q, want /custom/leo/home", got)
+	}
+}
+
+func TestReportHomeDirFallsBackToDefault(t *testing.T) {
+	t.Setenv("LEO_HOME", "")
+	if got, want := reportHomeDir(), config.DefaultHome(); got != want {
+		t.Fatalf("got %q, want default %q", got, want)
 	}
 }
