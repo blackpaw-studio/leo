@@ -38,6 +38,10 @@ var (
 	supervisedExecFn = defaultSupervisedExec
 )
 
+// sessionPollInterval is how often waitForSessionEnd checks the tmux session.
+// A package var (not a const) so tests can shorten it.
+var sessionPollInterval = 5 * time.Second
+
 const (
 	maxBackoff     = 60 * time.Second
 	initialBackoff = 5 * time.Second
@@ -681,7 +685,7 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 		case <-ctx.Done():
 			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", id.SessionName())...).Run()
 			return true
-		case <-time.After(5 * time.Second):
+		case <-time.After(sessionPollInterval):
 		}
 
 		// Re-read the session name each poll so a live rename is followed
