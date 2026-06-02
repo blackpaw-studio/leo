@@ -173,6 +173,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)
 	mux.HandleFunc("POST /web/process/{name}/restart", s.handleProcessRestart)
 	mux.HandleFunc("POST /web/process/{name}/send", s.handleProcessSendKeys)
+	mux.HandleFunc("POST /web/process/{name}/message", s.handleProcessMessage)
 
 	// Agent management (web UI)
 	mux.HandleFunc("GET /partials/agents", s.handlePartialAgents)
