@@ -62,9 +62,19 @@ func EnsureLeoStopHook(workspace string) error {
 		}
 		pruned = append(pruned, item)
 	}
+	// Claude Code Stop hooks are matcher groups, each with a nested `hooks`
+	// array of {type:"command", command:...} objects. A flat {command:...}
+	// entry is silently ignored by Claude and the hook never fires. The
+	// _leo_managed sentinel (an unknown key Claude ignores) lets us prune our
+	// own entry idempotently above.
 	pruned = append(pruned, map[string]any{
 		leoManagedKey: leoStopHookLabel,
-		"command":     leoStopCommand,
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": leoStopCommand,
+			},
+		},
 	})
 	hooks["Stop"] = pruned
 	root["hooks"] = hooks
