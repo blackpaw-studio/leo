@@ -484,6 +484,70 @@ func TestDownloadAndReplacePR_RejectsMismatchedMetadataPR(t *testing.T) {
 	}
 }
 
+func TestDownloadAndReplaceMain_EndToEnd(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := filepath.Join(tmpDir, "leo")
+	if err := os.WriteFile(binaryPath, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedBinaryPath, err := filepath.EvalSymlinks(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prevExec := osExecutable
+	osExecutable = func() (string, error) { return binaryPath, nil }
+	t.Cleanup(func() { osExecutable = prevExec })
+
+	// Omit sig/cert and ride AllowUnsigned, exactly like the PR end-to-end
+	// test — identity matching is covered by TestSignatureVerifierForMain_PinsIdentity.
+	newBinary := []byte("NEW-LEO-MAIN-BUILD")
+	archive := tarGzWithLeo(t, newBinary)
+	archiveName := fmt.Sprintf("leo_main-a1b2c3d_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	sum := sha256.Sum256(archive)
+	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	zipBytes := buildArtifactZip(t, map[string][]byte{
+		archiveName:     archive,
+		"checksums.txt": []byte(checksums),
+		"metadata.json": []byte(`{"version":"main-a1b2c3d"}`),
+	})
+
+	api := newFakeGitHubAPI(t)
+	api.handle("/actions/workflows/unstable.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(workflowRunsResponse{
+			WorkflowRuns: []workflowRun{{ID: 900, Conclusion: "success"}},
+		})
+	})
+	api.handle("/actions/runs/900/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(artifactsResponse{
+			Artifacts: []artifact{{ID: 901, Name: "leo-unstable"}},
+		})
+	})
+	api.handle("/actions/artifacts/901/zip", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(zipBytes)
+	})
+
+	gotPath, gotVersion, err := DownloadAndReplaceMain(context.Background(), PrereleaseOptions{Token: "test-token", AllowUnsigned: true})
+	if err != nil {
+		t.Fatalf("DownloadAndReplaceMain: %v", err)
+	}
+	if gotPath != resolvedBinaryPath {
+		t.Errorf("path = %q, want %q", gotPath, resolvedBinaryPath)
+	}
+	if gotVersion != "main-a1b2c3d" {
+		t.Errorf("version = %q, want main-a1b2c3d", gotVersion)
+	}
+	body, err := os.ReadFile(resolvedBinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, newBinary) {
+		t.Errorf("binary contents = %q, want %q", body, newBinary)
+	}
+}
+
 // --- helpers ---
 
 func buildArtifactZip(t *testing.T, files map[string][]byte) []byte {

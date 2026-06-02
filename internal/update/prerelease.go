@@ -59,6 +59,11 @@ var prereleaseTokenSource = resolveGitHubToken
 // so tests can stub it the same way update.go stubs newSignatureVerifier.
 var prereleaseVerifierForPR = SignatureVerifierForPullRequest
 
+// mainVerifier is the cosign identity factory for main builds, injected
+// here so tests can stub it the same way prereleaseVerifierForPR is
+// stubbed for the PR flow.
+var mainVerifier = SignatureVerifierForMain
+
 // prereleaseVersionPattern matches version strings produced by the
 // prerelease workflow's goreleaser snapshot template:
 //
@@ -195,6 +200,70 @@ func prBuildSource(prNumber int) buildSource {
 			}
 			if n != prNumber {
 				return fmt.Errorf("artifact metadata reports PR #%d but we requested PR #%d", n, prNumber)
+			}
+			return nil
+		},
+	}
+}
+
+// DownloadAndReplaceMain installs the newest passing main build.
+func DownloadAndReplaceMain(ctx context.Context, opts PrereleaseOptions) (string, string, error) {
+	token, source, err := resolveToken(opts)
+	if err != nil {
+		return "", "", err
+	}
+	if opts.Warn != nil {
+		opts.Warn("Authenticating to GitHub via %s.", source)
+	}
+
+	run, err := findLatestPassingMainRun(ctx, token, "")
+	if err != nil {
+		return "", "", err
+	}
+	return downloadAndReplaceFromRun(ctx, token, run, mainBuildSource(""), opts)
+}
+
+// DownloadAndReplaceMainVersion installs a specific main-<sha> build.
+func DownloadAndReplaceMainVersion(ctx context.Context, version string, opts PrereleaseOptions) (string, string, error) {
+	shortSHA, err := ParseMainVersion(version)
+	if err != nil {
+		return "", "", err
+	}
+
+	token, source, err := resolveToken(opts)
+	if err != nil {
+		return "", "", err
+	}
+	if opts.Warn != nil {
+		opts.Warn("Authenticating to GitHub via %s.", source)
+	}
+
+	fullSHA, err := resolveCommitSHA(ctx, token, shortSHA)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving commit %s: %w", shortSHA, err)
+	}
+
+	run, err := findLatestPassingMainRun(ctx, token, fullSHA)
+	if err != nil {
+		return "", "", err
+	}
+	return downloadAndReplaceFromRun(ctx, token, run, mainBuildSource(version), opts)
+}
+
+// mainBuildSource describes the unstable artifact + verifier + metadata
+// check. When wantVersion is non-empty (pinned path) the bundle's version
+// must match exactly; otherwise any well-formed main-<sha> is accepted.
+func mainBuildSource(wantVersion string) buildSource {
+	return buildSource{
+		artifactName: unstableArtifactName,
+		label:        "main build",
+		verifier:     mainVerifier,
+		validate: func(version string) error {
+			if !IsMainVersion(version) {
+				return fmt.Errorf("artifact metadata version %q is not a main build", version)
+			}
+			if wantVersion != "" && version != wantVersion {
+				return fmt.Errorf("artifact metadata reports %s but we requested %s", version, wantVersion)
 			}
 			return nil
 		},
