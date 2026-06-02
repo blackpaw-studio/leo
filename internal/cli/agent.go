@@ -64,6 +64,7 @@ so remote calls use your existing SSH setup.`,
 		newAgentSpawnCmd(),
 		newAgentAttachCmd(),
 		newAgentStopCmd(),
+		newAgentRenameCmd(),
 		newAgentPruneCmd(),
 		newAgentLogsCmd(),
 		newAgentSessionNameCmd(),
@@ -754,6 +755,40 @@ remove the worktree and agentstore record in one step.`,
 	cmd.Flags().BoolVar(&prune, "prune", false, "also remove the worktree and agentstore record (worktree agents only)")
 	cmd.Flags().BoolVar(&force, "force", false, "with --prune: remove even when the worktree is dirty")
 	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "with --prune: delete the local branch after removing the worktree")
+	return cmd
+}
+
+// --- rename ---
+
+func newAgentRenameCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:   "rename <name> <new-name>",
+		Short: "Rename an agent",
+		Long: `Rename an agent's identity. A running agent is renamed in place with no
+process restart; its claude session keeps running. The new name is normalized to
+a leo- prefixed slug (lowercase, a-z 0-9 and dashes only).`,
+		Example:           `  leo agent rename leo-mcp-node-owner-fetch auth-refactor`,
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeAgentNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, newName := args[0], args[1]
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				return runRemote(res, []string{"rename", name, newName})
+			}
+			updated, err := daemon.AgentRename(cmd.Context(), cfg.HomePath, name, newName)
+			if err != nil {
+				return fmt.Errorf("renaming agent: %w", err)
+			}
+			fmt.Fprintf(agentStdout, "renamed %s -> %s\n", name, updated.Name)
+			return nil
+		},
+	}
+	addHostFlag(cmd, &host)
 	return cmd
 }
 
