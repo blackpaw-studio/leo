@@ -227,6 +227,80 @@ func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", rec.Name))
 }
 
+// renameErrorStatus classifies a Manager.Rename error into an HTTP status,
+// mirroring how the daemon maps the same sentinels: collisions/unchanged/invalid
+// names are client errors (4xx), everything else is a server error.
+func renameErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, agent.ErrAgentNameTaken):
+		return http.StatusConflict
+	case errors.Is(err, agent.ErrAgentNameUnchanged), errors.Is(err, agent.ErrInvalidAgentName):
+		return http.StatusBadRequest
+	default:
+		// Resolve failures (not found / ambiguous) surface here too; treat an
+		// unresolvable agent as a bad request from the caller's perspective.
+		return http.StatusBadRequest
+	}
+}
+
+// handleAPIAgentRename renames an agent via JSON.
+// POST /api/agent/{name}/rename  {new_name: "renamed-agent"}
+func (s *Server) handleAPIAgentRename(w http.ResponseWriter, r *http.Request) {
+	if s.agentSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
+		return
+	}
+
+	name := r.PathValue("name")
+
+	var req struct {
+		NewName string `json:"new_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if req.NewName == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "new_name is required"})
+		return
+	}
+
+	updated, err := s.agentSvc.Rename(name, req.NewName)
+	if err != nil {
+		writeJSON(w, renameErrorStatus(err), apiResponse{Error: err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{
+		"name":      updated.Name,
+		"workspace": updated.Workspace,
+	}})
+}
+
+// handleWebAgentRename renames an agent via the web UI (form post), then
+// re-renders the agents partial so the new name shows immediately.
+func (s *Server) handleWebAgentRename(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if s.agentSvc == nil {
+		s.renderFlash(w, "error", "Agent service not available")
+		return
+	}
+
+	newName := r.FormValue("new_name")
+	if newName == "" {
+		s.renderFlash(w, "error", "New name is required")
+		return
+	}
+
+	if _, err := s.agentSvc.Rename(name, newName); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to rename agent: %v", err))
+		return
+	}
+
+	// Re-render the agents partial so the renamed agent appears in place.
+	s.handlePartialAgents(w, r)
+}
+
 // --- Task API endpoints (JSON, used by channel plugins and external clients) ---
 
 // taskInfo is the JSON representation of a task for the API.

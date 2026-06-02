@@ -53,6 +53,12 @@ type mockAgentService struct {
 	stopName   string
 	stopErr    error
 
+	renameCalled  bool
+	renameQuery   string
+	renameNewName string
+	renameResult  agent.Record
+	renameErr     error
+
 	records []agent.Record
 }
 
@@ -84,6 +90,19 @@ func (m *mockAgentService) Stop(name string) error {
 
 func (m *mockAgentService) List() []agent.Record {
 	return m.records
+}
+
+func (m *mockAgentService) Rename(query, newName string) (agent.Record, error) {
+	m.renameCalled = true
+	m.renameQuery = query
+	m.renameNewName = newName
+	if m.renameErr != nil {
+		return agent.Record{}, m.renameErr
+	}
+	if m.renameResult.Name != "" {
+		return m.renameResult, nil
+	}
+	return agent.Record{Name: "leo-" + newName, Status: "running"}, nil
 }
 
 // Resolve does exact-name matching against the fake's records so tests that
@@ -294,5 +313,73 @@ func TestAPIAgentStopMissingName(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAPIAgentRename(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.renameResult = agent.Record{Name: "leo-renamed", Status: "running"}
+
+	body := `{"new_name":"renamed"}`
+	req := httptest.NewRequest("POST", "/api/agent/leo-coding-leo/rename", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !svc.renameCalled {
+		t.Fatal("expected Rename to be called")
+	}
+	if svc.renameQuery != "leo-coding-leo" {
+		t.Errorf("expected rename query 'leo-coding-leo', got %q", svc.renameQuery)
+	}
+	if svc.renameNewName != "renamed" {
+		t.Errorf("expected new name 'renamed', got %q", svc.renameNewName)
+	}
+
+	var resp apiResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !resp.OK {
+		t.Errorf("expected ok=true, got %+v", resp)
+	}
+	data, ok := resp.Data.(map[string]any)
+	if !ok || data["name"] != "leo-renamed" {
+		t.Errorf("expected data.name 'leo-renamed', got %v", resp.Data)
+	}
+}
+
+func TestAPIAgentRenameMissingNewName(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	body := `{}`
+	req := httptest.NewRequest("POST", "/api/agent/leo-coding-leo/rename", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if svc.renameCalled {
+		t.Error("expected Rename not to be called when new_name is missing")
+	}
+}
+
+func TestAPIAgentRenameCollision(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.renameErr = agent.ErrAgentNameTaken
+
+	body := `{"new_name":"taken"}`
+	req := httptest.NewRequest("POST", "/api/agent/leo-coding-leo/rename", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409 for name collision, got %d", w.Code)
 	}
 }
