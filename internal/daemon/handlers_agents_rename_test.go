@@ -60,7 +60,10 @@ func TestHandleAgentRename_MissingNewName(t *testing.T) {
 }
 
 func TestHandleAgentRename_NotFound(t *testing.T) {
-	mgr := &fakeAgentManager{records: []agent.Record{}}
+	mgr := &fakeAgentManager{
+		records:   []agent.Record{},
+		renameErr: &agent.ErrNotFound{Query: "missing"},
+	}
 	_, client := startTestServerWithAgent(t, mgr)
 
 	body, _ := json.Marshal(map[string]string{"new_name": "leo-new"})
@@ -71,6 +74,41 @@ func TestHandleAgentRename_NotFound(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Code != ErrorCodeNotFound {
+		t.Errorf("Code = %q, want %q", env.Code, ErrorCodeNotFound)
+	}
+}
+
+func TestHandleAgentRename_Ambiguous(t *testing.T) {
+	mgr := &fakeAgentManager{
+		records:   []agent.Record{},
+		renameErr: &agent.ErrAmbiguous{Query: "leo", Matches: []string{"leo-a", "leo-b"}},
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(map[string]string{"new_name": "leo-new"})
+	resp, err := client.Post("http://localhost/agents/leo/rename", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Code != ErrorCodeAmbiguous {
+		t.Errorf("Code = %q, want %q", env.Code, ErrorCodeAmbiguous)
+	}
+	if len(env.Matches) != 2 || env.Matches[0] != "leo-a" || env.Matches[1] != "leo-b" {
+		t.Errorf("Matches = %v, want [leo-a leo-b]", env.Matches)
 	}
 }
 

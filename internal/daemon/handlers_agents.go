@@ -266,13 +266,15 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "new_name is required")
 		return
 	}
-	rec, ok := s.resolveAgentOrError(w, query)
-	if !ok {
-		return
-	}
-	updated, err := s.agentMgr.Rename(rec.Name, req.NewName)
+	updated, err := s.agentMgr.Rename(query, req.NewName)
 	if err != nil {
+		var nf *agent.ErrNotFound
+		var amb *agent.ErrAmbiguous
 		switch {
+		case errors.As(err, &nf):
+			writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeNotFound})
+		case errors.As(err, &amb):
+			writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAmbiguous, Matches: amb.Matches})
 		case errors.Is(err, agent.ErrAgentNameTaken):
 			writeError(w, http.StatusConflict, err.Error())
 		case errors.Is(err, agent.ErrAgentNameUnchanged), errors.Is(err, agent.ErrInvalidAgentName):
