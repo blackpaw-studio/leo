@@ -72,8 +72,8 @@ func (p *procIdentity) rename(newName string) {
 // tmuxRenameSession and tmuxHasSession are package-level seams so RenameAgent
 // and waitForSessionEnd can be unit-tested without a real tmux. They default to
 // real exec, mirroring supervisedExecFn.
-var tmuxRenameSession = func(tmuxPath, old, new string) error {
-	return exec.Command(tmuxPath, tmux.Args("rename-session", "-t", old, new)...).Run()
+var tmuxRenameSession = func(tmuxPath, oldName, newName string) error {
+	return exec.Command(tmuxPath, tmux.Args("rename-session", "-t", oldName, newName)...).Run()
 }
 
 var tmuxHasSession = func(tmuxPath, session string) bool {

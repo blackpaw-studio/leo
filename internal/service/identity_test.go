@@ -40,3 +40,24 @@ func TestProcIdentity_ConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestProcIdentity_RenameWithoutNameArg(t *testing.T) {
+	id := newProcIdentity("leo-x", []string{"--model", "opus"})
+	id.rename("leo-y")
+	if id.Name() != "leo-y" {
+		t.Fatalf("Name = %q", id.Name())
+	}
+	if got := id.Args(); got[0] != "--model" || got[1] != "opus" {
+		t.Fatalf("args unexpectedly altered: %v", got)
+	}
+}
+
+func TestProcIdentity_SetArgsCopies(t *testing.T) {
+	id := newProcIdentity("leo-x", []string{"--name", "leo-x"})
+	src := []string{"--name", "leo-x", "--resume", "abc"}
+	id.setArgs(src)
+	src[3] = "tampered"
+	if id.Args()[3] != "abc" {
+		t.Fatal("setArgs did not store a copy")
+	}
+}
