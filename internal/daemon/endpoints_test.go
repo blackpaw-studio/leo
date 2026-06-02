@@ -64,6 +64,7 @@ func TestAwaitGetsReport(t *testing.T) {
 	enq, _ := http.Post(ts.URL+"/task/enqueue", "application/json", bytes.NewReader(enqBody))
 	var enqOut map[string]any
 	_ = json.NewDecoder(enq.Body).Decode(&enqOut)
+	enq.Body.Close()
 	id := enqOut["invocation_id"].(string)
 
 	go func() {
@@ -72,12 +73,19 @@ func TestAwaitGetsReport(t *testing.T) {
 			"invocation_id": id,
 			"session_id":    "csid-1",
 			"final_message": "result!",
-			"session_name":  "leo-session-foo",
 		})
-		http.Post(ts.URL+"/task/report", "application/json", bytes.NewReader(rep))
+		repResp, err := http.Post(ts.URL+"/task/report", "application/json", bytes.NewReader(rep))
+		if err != nil {
+			return
+		}
+		repResp.Body.Close()
 	}()
 
-	aw, _ := http.Get(ts.URL + "/task/await?invocation_id=" + id)
+	aw, err := http.Get(ts.URL + "/task/await?invocation_id=" + id)
+	if err != nil {
+		t.Fatalf("await get: %v", err)
+	}
+	defer aw.Body.Close()
 	if aw.StatusCode != http.StatusOK {
 		t.Fatalf("await status: %d", aw.StatusCode)
 	}

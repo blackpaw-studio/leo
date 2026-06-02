@@ -141,7 +141,8 @@ func TestNewInvocationID16IsHex32(t *testing.T) {
 			t.Fatalf("expected 32 hex chars, got %d (%q)", len(id), id)
 		}
 		for _, ch := range id {
-			if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+			isHex := (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')
+			if !isHex {
 				t.Fatalf("non-hex char in id: %q", id)
 			}
 		}
