@@ -102,3 +102,41 @@ func TestAppendArgIncludedWhenWebEnabled(t *testing.T) {
 		t.Errorf("expected --mcp-config <leo-mcp.json> in args; got %v", args)
 	}
 }
+
+func TestMergeSystemPrompt(t *testing.T) {
+	enabled := &config.Config{Web: config.WebConfig{Enabled: true}}
+	disabled := &config.Config{Web: config.WebConfig{Enabled: false}}
+
+	tests := []struct {
+		name      string
+		cfg       *config.Config
+		user      string
+		wantHas   []string // substrings that must appear
+		wantEmpty bool
+	}{
+		{"disabled+no user", disabled, "", nil, true},
+		{"disabled keeps user only", disabled, "be terse", []string{"be terse"}, false},
+		{"enabled adds awareness", enabled, "", []string{"leo_send_message"}, false},
+		{"enabled merges both", enabled, "be terse", []string{"leo_send_message", "be terse"}, false},
+		{"nil cfg keeps user", nil, "be terse", []string{"be terse"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MergeSystemPrompt(tt.cfg, tt.user)
+			if tt.wantEmpty && got != "" {
+				t.Fatalf("want empty, got %q", got)
+			}
+			for _, sub := range tt.wantHas {
+				if !strings.Contains(got, sub) {
+					t.Errorf("result missing %q; got %q", sub, got)
+				}
+			}
+			// When enabled, the awareness text precedes the user text.
+			if tt.cfg != nil && tt.cfg.Web.Enabled && tt.user != "" {
+				if strings.Index(got, "leo_send_message") > strings.Index(got, tt.user) {
+					t.Errorf("awareness text should come before user text; got %q", got)
+				}
+			}
+		})
+	}
+}

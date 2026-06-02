@@ -60,6 +60,32 @@ func AppendArg(args []string, cfg *config.Config) []string {
 	return append(args, "--mcp-config", path)
 }
 
+// messagingAwareness is the built-in system-prompt line that tells a Claude
+// process it can message other Leo agents. Injected only when the leo MCP
+// server is wired in (see MergeSystemPrompt).
+const messagingAwareness = "You can send a message to another Leo agent or process with the `leo_send_message` tool — set `to` to its name and `message` to the text. Use `leo_list_agents` to see which agents are running. The message arrives in the recipient's prompt as a new turn."
+
+// MergeSystemPrompt combines Leo's built-in append-system-prompt additions
+// with any user-configured prompt into a single value. The built-in
+// messaging-awareness line is included only when the leo MCP server is wired
+// in (cfg.Web.Enabled) — the same gate AppendArg uses — so an agent is told
+// it can message others exactly when it actually can. Returns "" when there
+// is nothing to append.
+func MergeSystemPrompt(cfg *config.Config, userPrompt string) string {
+	var builtin string
+	if cfg != nil && cfg.Web.Enabled {
+		builtin = messagingAwareness
+	}
+	switch {
+	case builtin == "":
+		return userPrompt
+	case userPrompt == "":
+		return builtin
+	default:
+		return builtin + "\n\n" + userPrompt
+	}
+}
+
 func buildConfig() []byte {
 	v := map[string]any{
 		"mcpServers": map[string]any{
