@@ -38,6 +38,11 @@
                 {{if gt .Restarts 0}}&middot; {{.Restarts}} restart{{if gt .Restarts 1}}s{{end}}{{end}}
             </div>
             <div class="process-actions">
+                <form class="agent-rename" hx-post="/web/agent/{{.Name}}/rename" hx-target="#agents-content" hx-swap="outerHTML"
+                      onsubmit="return this.new_name.value.trim() !== '';">
+                    <input type="text" name="new_name" placeholder="new name" aria-label="Rename {{.Name}}" autocomplete="off">
+                    <button type="submit" class="btn btn-sm">Rename</button>
+                </form>
                 <button class="btn btn-sm btn-danger" hx-post="/web/agent/{{.Name}}/stop" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Stop agent {{.Name}}?">Stop</button>
             </div>
         </div>

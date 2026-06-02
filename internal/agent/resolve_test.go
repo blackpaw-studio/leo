@@ -19,6 +19,7 @@ func (s *stubSupervisor) ReserveAgent(string) error                { return nil 
 func (s *stubSupervisor) ReleaseAgent(string)                      {}
 func (s *stubSupervisor) SpawnAgent(SpawnRequest) error            { return nil }
 func (s *stubSupervisor) StopAgent(string) error                   { return nil }
+func (s *stubSupervisor) RenameAgent(string, string) error         { return nil }
 func (s *stubSupervisor) EphemeralAgents() map[string]ProcessState { return s.agents }
 
 func newResolveManager(t *testing.T, live map[string]ProcessState, stored map[string]agentstore.Record) *Manager {

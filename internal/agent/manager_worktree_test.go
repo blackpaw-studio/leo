@@ -63,6 +63,8 @@ func (s *capturingSupervisor) StopAgent(name string) error {
 	return nil
 }
 
+func (s *capturingSupervisor) RenameAgent(old, new string) error { return nil }
+
 func (s *capturingSupervisor) EphemeralAgents() map[string]ProcessState {
 	if s.agents == nil {
 		return map[string]ProcessState{}

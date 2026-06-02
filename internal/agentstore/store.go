@@ -100,6 +100,27 @@ func loadLocked(path string) (map[string]Record, error) {
 	return records, nil
 }
 
+// Rename atomically re-keys an agent record from old to new, applying mutate to
+// the record before it is stored under the new key. It errors if old is absent
+// or new already exists. The whole load-modify-write happens under storeMu so it
+// is consistent with concurrent Save/Remove/Load.
+func Rename(homePath, oldName, newName string, mutate func(Record) Record) error {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	path := FilePath(homePath)
+	records, _ := loadLocked(path)
+	rec, ok := records[oldName]
+	if !ok {
+		return fmt.Errorf("agent %q not found", oldName)
+	}
+	if _, exists := records[newName]; exists {
+		return fmt.Errorf("agent %q already exists", newName)
+	}
+	records[newName] = mutate(rec)
+	delete(records, oldName)
+	return write(path, records)
+}
+
 func write(path string, records map[string]Record) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating state dir: %w", err)

@@ -14,12 +14,13 @@ import (
 
 // fakeAgentManager is a minimal AgentManager for daemon endpoint tests.
 type fakeAgentManager struct {
-	records  []agent.Record
-	spawnErr error
-	stopErr  error
-	pruneErr error
-	logsErr  error
-	logsOut  string
+	records   []agent.Record
+	spawnErr  error
+	stopErr   error
+	pruneErr  error
+	logsErr   error
+	logsOut   string
+	renameErr error
 
 	lastSpawn agent.SpawnSpec
 	lastStop  string
@@ -30,6 +31,10 @@ type fakeAgentManager struct {
 	lastLogs struct {
 		name  string
 		lines int
+	}
+	lastRename struct {
+		query   string
+		newName string
 	}
 }
 
@@ -76,6 +81,15 @@ func (f *fakeAgentManager) Resolve(query string) (agent.Record, error) {
 		}
 	}
 	return agent.Record{}, &agent.ErrNotFound{Query: query}
+}
+
+func (f *fakeAgentManager) Rename(query, newName string) (agent.Record, error) {
+	f.lastRename.query = query
+	f.lastRename.newName = newName
+	if f.renameErr != nil {
+		return agent.Record{}, f.renameErr
+	}
+	return agent.Record{Name: newName}, nil
 }
 
 func startTestServerWithAgent(t *testing.T, mgr AgentManager) (*Server, *http.Client) {

@@ -39,6 +39,7 @@ type AgentManager interface {
 	Logs(name string, lines int) (string, error)
 	SessionName(name string) string
 	Resolve(query string) (agent.Record, error)
+	Rename(query, newName string) (agent.Record, error)
 }
 
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
@@ -87,6 +88,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /agents/resolve", s.handleAgentResolve)
 	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
 	mux.HandleFunc("POST /agents/{name}/prune", s.handleAgentPrune)
+	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
 
