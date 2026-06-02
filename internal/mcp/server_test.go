@@ -264,23 +264,29 @@ func TestUnknownMethodReturnsMethodNotFound(t *testing.T) {
 }
 
 func TestSendMessageDeliversWithSenderPrefix(t *testing.T) {
-	var gotBody string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"data":{}}`))
-	}))
-	defer srv.Close()
-	port := strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
+	daemon := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		return http.StatusOK, `{"ok":true,"data":{}}`
+	})
+	defer daemon.close()
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "sender-proc")
 
-	reg := newRegistry(newDaemonClient(port, ""), "sender-proc")
 	out, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1","message":"ping"}`))
 	if err != nil {
 		t.Fatalf("call: %v", err)
 	}
-	if !strings.Contains(gotBody, "sender-proc") || !strings.Contains(gotBody, "ping") {
-		t.Errorf("delivered body should carry sender + message; got %q", gotBody)
+
+	if len(daemon.calls) != 1 {
+		t.Fatalf("expected 1 daemon call, got %d", len(daemon.calls))
+	}
+	c := daemon.calls[0]
+	if c.Method != http.MethodPost {
+		t.Errorf("expected POST, got %s", c.Method)
+	}
+	if c.Path != "/web/process/worker-1/message" {
+		t.Errorf("expected path /web/process/worker-1/message, got %s", c.Path)
+	}
+	if !strings.Contains(c.Body, "sender-proc") || !strings.Contains(c.Body, "ping") {
+		t.Errorf("delivered body should carry sender + message; got %q", c.Body)
 	}
 	if !strings.Contains(out, "worker-1") {
 		t.Errorf("result should confirm target; got %q", out)
@@ -303,5 +309,8 @@ func TestSendMessageRequiresMessage(t *testing.T) {
 	_, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1"}`))
 	if err == nil {
 		t.Fatal("expected error when message missing")
+	}
+	if !strings.Contains(err.Error(), "message") {
+		t.Errorf("error should mention the missing field; got %v", err)
 	}
 }

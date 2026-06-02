@@ -5,6 +5,10 @@ import (
 	"fmt"
 )
 
+// msgPrefixFormat is the wire format prepended to a delivered message so the
+// recipient can identify the sender. Keep in sync with any consumer that parses it.
+const msgPrefixFormat = "[message from %s] %s"
+
 // toolDef is the MCP wire shape for a tool.
 type toolDef struct {
 	Name        string         `json:"name"`
@@ -203,7 +207,7 @@ func newRegistry(client *daemonClient, processName string) *registry {
 		if to == processName {
 			return "", fmt.Errorf("cannot send a message to yourself (%q)", processName)
 		}
-		body := fmt.Sprintf("[message from %s] %s", processName, message)
+		body := fmt.Sprintf(msgPrefixFormat, processName, message)
 		if err := client.sendMessage(to, body); err != nil {
 			return "", err
 		}
