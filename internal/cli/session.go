@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
@@ -128,15 +130,30 @@ func newSessionLogsCmd() *cobra.Command {
 }
 
 func newSessionResetCmd() *cobra.Command {
-	return &cobra.Command{
+	var assumeYes bool
+	c := &cobra.Command{
 		Use:   "reset <name>",
 		Short: "Kill tmux session, clear stored session id, and drop queued invocations",
-		Args:  cobra.ExactArgs(1),
+		Long: `Reset destroys a session's live state: it kills the tmux session, clears
+the stored session id, and drops any in-flight/queued invocations. Prompts
+for confirmation by default when stdin is a TTY; in non-interactive runs
+(pipes, cron, CI) pass --yes to confirm up front, otherwise it refuses.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
+			}
+			if !assumeYes {
+				if !processIsTTY() {
+					return fmt.Errorf("refusing to reset %q without confirmation: pass --yes to skip the prompt", name)
+				}
+				reader := bufio.NewReader(processStdin)
+				if !prompt.YesNo(reader, fmt.Sprintf("Reset session %q? This kills its tmux session and drops queued work.", name), false) {
+					fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
+					return nil
+				}
 			}
 			// Notify the router FIRST so any in-flight waiter gets a clean
 			// "reset" error instead of hanging until its task timeout. Skip
@@ -163,6 +180,8 @@ func newSessionResetCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&assumeYes, "yes", false, "skip the confirmation prompt")
+	return c
 }
 
 func newSessionDrainCmd() *cobra.Command {
