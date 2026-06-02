@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -381,5 +382,89 @@ func TestAPIAgentRenameCollision(t *testing.T) {
 
 	if w.Code != http.StatusConflict {
 		t.Errorf("expected 409 for name collision, got %d", w.Code)
+	}
+}
+
+// --- Web form rename tests ---
+
+// TestWebAgentRenameError drives the FORM handler (not the API one) with a
+// failing Rename and asserts the error flash is retargeted to the shared
+// #flash-container rather than outerHTML-swapping (and destroying) the agents
+// tab. The retarget headers are the invariant that proves the agents tab
+// survives the error.
+func TestWebAgentRenameError(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.renameErr = agent.ErrAgentNameTaken
+
+	form := url.Values{"new_name": {"taken"}}
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/rename", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.renameCalled {
+		t.Fatal("expected Rename to be called")
+	}
+
+	// The error flash must NOT outerHTML-swap #agents-content. The handler
+	// redirects the swap to the shared flash container via htmx headers.
+	if got := w.Header().Get("HX-Retarget"); got != "#flash-container" {
+		t.Errorf("expected HX-Retarget '#flash-container', got %q", got)
+	}
+	if got := w.Header().Get("HX-Reswap"); got != "innerHTML" {
+		t.Errorf("expected HX-Reswap 'innerHTML', got %q", got)
+	}
+
+	// Stock htmx only swaps 2xx responses; the flash conveys the failure.
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 so htmx swaps the flash body, got %d", w.Code)
+	}
+
+	// The user must see why it failed, and the agents tab must not be
+	// re-rendered (no #agents-content / spawn form in the body).
+	body := w.Body.String()
+	if !strings.Contains(body, agent.ErrAgentNameTaken.Error()) {
+		t.Errorf("expected error message in flash body, got %q", body)
+	}
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("expected flash markup in body, got %q", body)
+	}
+	if strings.Contains(body, `id="agents-content"`) {
+		t.Errorf("error response must not re-render the agents tab, got %q", body)
+	}
+}
+
+// TestWebAgentRenameSuccess drives the FORM handler with a valid new name and
+// asserts the agents partial is re-rendered in place (so the new name shows),
+// and that the success response does NOT retarget the flash container.
+func TestWebAgentRenameSuccess(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.renameResult = agent.Record{Name: "leo-renamed", Status: "running"}
+	svc.records = []agent.Record{{Name: "leo-renamed", Status: "running", StartedAt: time.Now()}}
+
+	form := url.Values{"new_name": {"renamed"}}
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/rename", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.renameCalled {
+		t.Fatal("expected Rename to be called")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Success re-renders the agents partial in place — no retarget.
+	if got := w.Header().Get("HX-Retarget"); got != "" {
+		t.Errorf("success path must not set HX-Retarget, got %q", got)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, `id="agents-content"`) {
+		t.Errorf("expected agents partial re-render, got %q", body)
+	}
+	if !strings.Contains(body, "leo-renamed") {
+		t.Errorf("expected renamed agent in re-rendered list, got %q", body)
 	}
 }

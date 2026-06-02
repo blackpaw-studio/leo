@@ -279,26 +279,46 @@ func (s *Server) handleAPIAgentRename(w http.ResponseWriter, r *http.Request) {
 
 // handleWebAgentRename renames an agent via the web UI (form post), then
 // re-renders the agents partial so the new name shows immediately.
+//
+// The rename form targets #agents-content with an outerHTML swap so the SUCCESS
+// path can re-render the list in place. On the ERROR path that target is wrong:
+// outerHTML-swapping a flash fragment into #agents-content would destroy the
+// agents tab (spawn form + list) and remove the swap target itself. To stay
+// consistent with every other flash-emitting action in this UI, the error path
+// retargets the response to the shared #flash-container (innerHTML) via htmx
+// response headers, then renders the flash exactly like stop/spawn do. Stock
+// htmx only swaps 2xx responses and there is no global error-swap hook, so the
+// flash is returned with a 200 status (the message conveys the failure).
 func (s *Server) handleWebAgentRename(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if s.agentSvc == nil {
-		s.renderFlash(w, "error", "Agent service not available")
+		s.renderFlashToContainer(w, "error", "Agent service not available")
 		return
 	}
 
 	newName := r.FormValue("new_name")
 	if newName == "" {
-		s.renderFlash(w, "error", "New name is required")
+		s.renderFlashToContainer(w, "error", "New name is required")
 		return
 	}
 
 	if _, err := s.agentSvc.Rename(name, newName); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to rename agent: %v", err))
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to rename agent: %v", err))
 		return
 	}
 
 	// Re-render the agents partial so the renamed agent appears in place.
 	s.handlePartialAgents(w, r)
+}
+
+// renderFlashToContainer renders a flash for an action whose form targets a
+// non-#flash-container element, redirecting the swap to the shared flash
+// container so the tab/list it would otherwise replace stays intact. It mirrors
+// the rest of the UI's convention (#flash-container / innerHTML, 200 status).
+func (s *Server) renderFlashToContainer(w http.ResponseWriter, typ, msg string) {
+	w.Header().Set("HX-Retarget", "#flash-container")
+	w.Header().Set("HX-Reswap", "innerHTML")
+	s.renderFlash(w, typ, msg)
 }
 
 // --- Task API endpoints (JSON, used by channel plugins and external clients) ---
