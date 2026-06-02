@@ -97,6 +97,15 @@ func SignatureVerifierForPullRequest(prNumber int) (*SignatureVerifier, error) {
 	return buildVerifierWithIdentity("prerelease.yml", `refs/pull/`+strconv.Itoa(prNumber)+`/merge`)
 }
 
+// SignatureVerifierForMain builds a verifier pinned to the unstable
+// workflow's OIDC identity for main-branch builds. Those signatures are
+// issued by `unstable.yml@refs/heads/main`; pinning the ref to the exact
+// `main` branch (not an arbitrary head) closes the same downgrade window
+// SignatureVerifierForVersion closes for tagged releases.
+func SignatureVerifierForMain() (*SignatureVerifier, error) {
+	return buildVerifierWithIdentity(unstableWorkflowFile, `refs/heads/main`)
+}
+
 // buildVerifierWithIdentity is the shared constructor: it pins owner,
 // repo, and the issuer to Leo's expected values and lets the caller
 // supply the workflow filename plus the ref pattern (refs/tags/X for

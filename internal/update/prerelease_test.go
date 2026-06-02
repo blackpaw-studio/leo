@@ -94,6 +94,27 @@ func TestSignatureVerifierForPullRequest_RejectsNonPositive(t *testing.T) {
 	}
 }
 
+func TestSignatureVerifierForMain_PinsIdentity(t *testing.T) {
+	v, err := SignatureVerifierForMain()
+	if err != nil {
+		t.Fatalf("SignatureVerifierForMain: %v", err)
+	}
+	want := "https://github.com/blackpaw-studio/leo/.github/workflows/unstable.yml@refs/heads/main"
+	if !v.SANRegex.MatchString(want) {
+		t.Errorf("SAN regex %q did not match expected identity %q", v.SANRegex.String(), want)
+	}
+	// Must NOT match a PR identity or the release identity.
+	for _, bad := range []string{
+		"https://github.com/blackpaw-studio/leo/.github/workflows/prerelease.yml@refs/pull/7/merge",
+		"https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v1.0.0",
+		"https://github.com/blackpaw-studio/leo/.github/workflows/unstable.yml@refs/heads/feature",
+	} {
+		if v.SANRegex.MatchString(bad) {
+			t.Errorf("SAN regex must not match %q", bad)
+		}
+	}
+}
+
 func TestResolveGitHubToken_PrefersLeoEnv(t *testing.T) {
 	t.Setenv("LEO_GITHUB_TOKEN", "leo-token")
 	t.Setenv("GH_TOKEN", "gh-token")
