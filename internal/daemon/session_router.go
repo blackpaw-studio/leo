@@ -374,6 +374,18 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 				continue
 			}
 
+			// A ResetSession (or Report) may have cleared inFlight while we
+			// were inside the injector. If so, the result was already
+			// delivered; abort the turn we just started so the orphaned
+			// prompt doesn't keep running, then move on.
+			q.mu.Lock()
+			stillMine := q.inFlight != nil && q.inFlight.ID == next.ID
+			q.mu.Unlock()
+			if !stillMine {
+				_ = r.currentAborter()(target)
+				continue
+			}
+
 			timer := time.NewTimer(next.Timeout)
 			select {
 			case <-r.done:
@@ -382,7 +394,10 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 				}
 				return
 			case <-timer.C:
-				_ = r.currentAborter()(target)
+				// Re-check inFlight BEFORE aborting: a Report that landed just
+				// as the timer fired already delivered the result and moved the
+				// session on to its next turn, so aborting here would Ctrl-C a
+				// turn that legitimately completed.
 				q.mu.Lock()
 				still := q.inFlight != nil && q.inFlight.ID == next.ID
 				if still {
@@ -390,6 +405,7 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 				}
 				q.mu.Unlock()
 				if still {
+					_ = r.currentAborter()(target)
 					r.markCompleted(next, InvocationResult{OK: false, Err: "timeout"})
 				}
 			case <-q.reportSig:

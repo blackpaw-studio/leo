@@ -330,3 +330,55 @@ func TestSessionRouterAbortsTmuxTargetOnTimeout(t *testing.T) {
 		t.Fatalf("aborter targeted %q, want %q", abortedTarget, "leo-web")
 	}
 }
+
+// TestSessionRouterResetDuringInjectAbortsZombie reproduces the race where
+// ResetSession clears inFlight while the pump is still inside the injector.
+// Without the post-inject re-check, the pump would start a timer on an
+// already-cleared invocation and the freshly-injected (now orphaned) turn
+// would keep running in tmux. The pump must instead abort the zombie turn
+// and move on; the reset result must be delivered exactly once.
+func TestSessionRouterResetDuringInjectAbortsZombie(t *testing.T) {
+	r := newSessionRouter()
+	defer r.Stop()
+	injectStarted := make(chan struct{})
+	releaseInject := make(chan struct{})
+	var aborted int32
+	r.SetInjector(func(string, string) error {
+		close(injectStarted)
+		<-releaseInject
+		return nil
+	})
+	r.SetAborter(func(string) error {
+		atomic.AddInt32(&aborted, 1)
+		return nil
+	})
+	inv, _ := r.Enqueue(EnqueueParams{
+		Session:     "s",
+		TmuxSession: "leo-session-s",
+		Task:        "t",
+		Prompt:      "p",
+		QueueMax:    5,
+		Timeout:     time.Hour, // long; the test never wants a timeout
+	})
+	r.StartPump("s")
+
+	<-injectStarted // pump is inside the injector, inFlight=inv
+	cleared := r.ResetSession("s", "killed")
+	close(releaseInject) // injector returns; pump re-checks inFlight
+
+	res := <-inv.Result
+	if res.OK {
+		t.Fatalf("expected reset error result, got OK")
+	}
+	if cleared != 1 {
+		t.Fatalf("reset cleared %d, want 1", cleared)
+	}
+	// The pump must abort the orphaned turn it just injected.
+	deadline := time.Now().Add(time.Second)
+	for atomic.LoadInt32(&aborted) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if atomic.LoadInt32(&aborted) != 1 {
+		t.Fatalf("expected zombie turn aborted exactly once, got %d", atomic.LoadInt32(&aborted))
+	}
+}
