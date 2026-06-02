@@ -230,7 +230,7 @@ func downloadAndReplaceFromRun(ctx context.Context, token string, run workflowRu
 		return "", "", errors.New("artifact bundle is missing metadata.json with a version field")
 	}
 	if err := src.validate(bundle.version); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("validating artifact version: %w", err)
 	}
 
 	if err := verifyBundleSignature(src.label, src.verifier, bundle, opts); err != nil {
