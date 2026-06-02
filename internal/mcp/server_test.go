@@ -120,6 +120,7 @@ func TestToolsListContainsCanonicalCommands(t *testing.T) {
 		"leo_clear", "leo_compact", "leo_interrupt",
 		"leo_list_tasks", "leo_run_task", "leo_toggle_task",
 		"leo_list_templates", "leo_spawn_agent", "leo_list_agents", "leo_stop_agent",
+		"leo_send_message",
 	}
 	got := map[string]bool{}
 	for _, t := range tools {
@@ -259,5 +260,48 @@ func TestUnknownMethodReturnsMethodNotFound(t *testing.T) {
 	}
 	if int(errObj["code"].(float64)) != codeMethodNotFound {
 		t.Errorf("expected codeMethodNotFound, got %v", errObj["code"])
+	}
+}
+
+func TestSendMessageDeliversWithSenderPrefix(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"data":{}}`))
+	}))
+	defer srv.Close()
+	port := strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
+
+	reg := newRegistry(newDaemonClient(port, ""), "sender-proc")
+	out, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1","message":"ping"}`))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !strings.Contains(gotBody, "sender-proc") || !strings.Contains(gotBody, "ping") {
+		t.Errorf("delivered body should carry sender + message; got %q", gotBody)
+	}
+	if !strings.Contains(out, "worker-1") {
+		t.Errorf("result should confirm target; got %q", out)
+	}
+}
+
+func TestSendMessageRejectsSelf(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "self-proc")
+	_, err := reg.call("leo_send_message", json.RawMessage(`{"to":"self-proc","message":"hi"}`))
+	if err == nil {
+		t.Fatal("expected error when messaging self")
+	}
+	if !strings.Contains(err.Error(), "self-proc") {
+		t.Errorf("error should mention the self name; got %v", err)
+	}
+}
+
+func TestSendMessageRequiresMessage(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "self-proc")
+	_, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1"}`))
+	if err == nil {
+		t.Fatal("expected error when message missing")
 	}
 }
