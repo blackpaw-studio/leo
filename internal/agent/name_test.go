@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeAgentName(t *testing.T) {
 	cases := []struct {
@@ -20,6 +23,7 @@ func TestNormalizeAgentName(t *testing.T) {
 		{"leo-", "", true}, // empty after prefix
 		{"--leading", "leo-leading", false},
 		{"trailing--", "leo-trailing", false},
+		{"leo-leo-x", "leo-leo-x", false}, // only a single leo- prefix is stripped
 	}
 	for _, c := range cases {
 		got, err := NormalizeAgentName(c.in)
@@ -50,5 +54,12 @@ func TestNormalizeAgentName_LengthCap(t *testing.T) {
 	}
 	if len(got) > 64 {
 		t.Fatalf("name not capped: len=%d", len(got))
+	}
+	want := "leo-" + strings.Repeat("a", 60)
+	if got != want {
+		t.Fatalf("capped name = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(got, "leo-") {
+		t.Fatalf("capped name %q does not start with \"leo-\"", got)
 	}
 }
