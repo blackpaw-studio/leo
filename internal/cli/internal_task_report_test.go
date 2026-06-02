@@ -78,3 +78,48 @@ func TestReadLastTurnSkipsMalformedLines(t *testing.T) {
 		t.Fatalf("uid=%q final=%q", uid, final)
 	}
 }
+
+// TestReadLastTurnHandlesStringContent reproduces the real Claude Code
+// transcript shape: plain user prompts encode message.content as a bare
+// string, not an array of typed blocks. The marker must still be found.
+func TestReadLastTurnHandlesStringContent(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"content":"<!-- leo:invocation=00000000000000000000000000000ccc -->\nrun it"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"done via string"}]}}`,
+	}
+	_ = os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	uid, final, err := readLastTurn(p)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if uid != "00000000000000000000000000000ccc" {
+		t.Fatalf("uid: %q (string-encoded user content not parsed)", uid)
+	}
+	if final != "done via string" {
+		t.Fatalf("final: %q", final)
+	}
+}
+
+// TestReadLastTurnHandlesStringAssistantContent covers an assistant turn whose
+// content is also a bare string.
+func TestReadLastTurnHandlesStringAssistantContent(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"content":"<!-- leo:invocation=00000000000000000000000000000ddd -->\nq"}}`,
+		`{"type":"assistant","message":{"content":"plain string reply"}}`,
+	}
+	_ = os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	uid, final, err := readLastTurn(p)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if uid != "00000000000000000000000000000ddd" {
+		t.Fatalf("uid: %q", uid)
+	}
+	if final != "plain string reply" {
+		t.Fatalf("final: %q", final)
+	}
+}

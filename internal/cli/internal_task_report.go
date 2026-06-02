@@ -29,10 +29,11 @@ func extractInvocationMarker(s string) string {
 type transcriptEvent struct {
 	Type    string `json:"type"`
 	Message struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
+		// Content is either a bare string (plain text turns, the common
+		// case for leo-injected prompts) or an array of typed blocks
+		// (tool_use / tool_result / typed text). Decoded lazily by
+		// concatText so a string-shaped turn isn't dropped on unmarshal.
+		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
 
@@ -89,8 +90,28 @@ func readLastTurn(path string) (string, string, error) {
 }
 
 func concatText(ev transcriptEvent) string {
+	raw := ev.Message.Content
+	if len(raw) == 0 {
+		return ""
+	}
+	// String form: {"content":"...text..."}
+	if raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return s
+		}
+		return ""
+	}
+	// Array form: {"content":[{"type":"text","text":"..."}, ...]}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
 	var b strings.Builder
-	for _, part := range ev.Message.Content {
+	for _, part := range parts {
 		if part.Type == "text" {
 			b.WriteString(part.Text)
 		}
