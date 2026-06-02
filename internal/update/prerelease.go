@@ -435,6 +435,42 @@ func findLatestPassingPRRun(ctx context.Context, token string, prNumber int, hea
 	return workflowRun{}, fmt.Errorf("no successful prerelease run found for PR #%d (has the prerelease workflow run yet?)", prNumber)
 }
 
+// findLatestPassingMainRun returns the newest successful run of the
+// unstable workflow on main. GitHub returns runs newest-first; we take
+// the first success. When headSHA is non-empty (pinned --version path)
+// the query is narrowed to that commit.
+func findLatestPassingMainRun(ctx context.Context, token, headSHA string) (workflowRun, error) {
+	u := fmt.Sprintf("%s/actions/workflows/%s/runs?event=push&status=success&per_page=50",
+		prereleaseAPIBase, unstableWorkflowFile)
+	if headSHA != "" {
+		u += "&head_sha=" + url.QueryEscape(headSHA)
+	}
+
+	body, err := githubAPIGet(ctx, token, u)
+	if err != nil {
+		return workflowRun{}, fmt.Errorf("listing workflow runs: %w", err)
+	}
+	var resp workflowRunsResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return workflowRun{}, fmt.Errorf("decoding workflow runs: %w", err)
+	}
+
+	for _, run := range resp.WorkflowRuns {
+		if run.Conclusion == "success" {
+			return run, nil
+		}
+	}
+
+	if headSHA != "" {
+		short := headSHA
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		return workflowRun{}, fmt.Errorf("no successful main build at commit %s (the build may have failed or expired)", short)
+	}
+	return workflowRun{}, fmt.Errorf("no successful main build found (has the unstable workflow run yet?)")
+}
+
 type artifact struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`

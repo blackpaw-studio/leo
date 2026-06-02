@@ -578,3 +578,36 @@ func TestParseMainVersion(t *testing.T) {
 		t.Error("expected error for non-main version")
 	}
 }
+
+func TestFindLatestPassingMainRun_PicksNewestSuccess(t *testing.T) {
+	api := newFakeGitHubAPI(t)
+	api.handle("/actions/workflows/unstable.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("event"); got != "push" {
+			t.Errorf("event query = %q, want push", got)
+		}
+		_ = json.NewEncoder(w).Encode(workflowRunsResponse{
+			WorkflowRuns: []workflowRun{
+				{ID: 222, Conclusion: "success"},
+				{ID: 111, Conclusion: "success"},
+			},
+		})
+	})
+
+	run, err := findLatestPassingMainRun(context.Background(), "test-token", "")
+	if err != nil {
+		t.Fatalf("findLatestPassingMainRun: %v", err)
+	}
+	if run.ID != 222 {
+		t.Errorf("run.ID = %d, want 222 (newest)", run.ID)
+	}
+}
+
+func TestFindLatestPassingMainRun_NoRunsReturnsError(t *testing.T) {
+	api := newFakeGitHubAPI(t)
+	api.handle("/actions/workflows/unstable.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(workflowRunsResponse{})
+	})
+	if _, err := findLatestPassingMainRun(context.Background(), "test-token", ""); err == nil {
+		t.Error("expected error when no successful main run exists")
+	}
+}
