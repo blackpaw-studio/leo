@@ -484,6 +484,67 @@ func TestDownloadAndReplacePR_RejectsMismatchedMetadataPR(t *testing.T) {
 	}
 }
 
+func TestDownloadAndReplaceMainVersion_RejectsMismatchedMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := filepath.Join(tmpDir, "leo")
+	if err := os.WriteFile(binaryPath, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prevExec := osExecutable
+	osExecutable = func() (string, error) { return binaryPath, nil }
+	t.Cleanup(func() { osExecutable = prevExec })
+
+	// Build a zip whose metadata.json reports "main-deadbeef" — but the
+	// caller will ask for "main-a1b2c3d". The mismatch guard must fire
+	// before the binary is overwritten.
+	archiveName := fmt.Sprintf("leo_main-deadbeef_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	archive := tarGzWithLeo(t, []byte("evil"))
+	sum := sha256.Sum256(archive)
+	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+	zipBytes := buildArtifactZip(t, map[string][]byte{
+		archiveName:     archive,
+		"checksums.txt": []byte(checksums),
+		"metadata.json": []byte(`{"version":"main-deadbeef"}`),
+	})
+
+	api := newFakeGitHubAPI(t)
+
+	// resolveCommitSHA hits /commits/<shortSHA> to expand to a full SHA.
+	api.handle("/commits/a1b2c3d", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(commitResponse{SHA: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"})
+	})
+	api.handle("/actions/workflows/unstable.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(workflowRunsResponse{
+			WorkflowRuns: []workflowRun{{ID: 950, Conclusion: "success", HeadSHA: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"}},
+		})
+	})
+	api.handle("/actions/runs/950/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(artifactsResponse{
+			Artifacts: []artifact{{ID: 951, Name: "leo-unstable"}},
+		})
+	})
+	api.handle("/actions/artifacts/951/zip", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(zipBytes)
+	})
+
+	_, _, err := DownloadAndReplaceMainVersion(context.Background(), "main-a1b2c3d", PrereleaseOptions{Token: "test-token", AllowUnsigned: true})
+	if err == nil {
+		t.Fatal("expected error for version metadata mismatch")
+	}
+	if !strings.Contains(err.Error(), "main-a1b2c3d") || !strings.Contains(err.Error(), "main-deadbeef") {
+		t.Errorf("error should mention both versions; got %q", err)
+	}
+	// Binary must not have been replaced.
+	body, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, []byte("OLD")) {
+		t.Errorf("binary was modified but should not have been; got %q", body)
+	}
+}
+
 func TestDownloadAndReplaceMain_EndToEnd(t *testing.T) {
 	tmpDir := t.TempDir()
 	binaryPath := filepath.Join(tmpDir, "leo")

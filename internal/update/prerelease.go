@@ -59,9 +59,9 @@ var prereleaseTokenSource = resolveGitHubToken
 // so tests can stub it the same way update.go stubs newSignatureVerifier.
 var prereleaseVerifierForPR = SignatureVerifierForPullRequest
 
-// mainVerifier is the cosign identity factory for main builds, injected
-// here so tests can stub it the same way prereleaseVerifierForPR is
-// stubbed for the PR flow.
+// mainVerifier is the cosign identity factory for main builds. It is a
+// package-level var so tests can replace it with a stub, following the
+// same seam pattern as prereleaseVerifierForPR.
 var mainVerifier = SignatureVerifierForMain
 
 // prereleaseVersionPattern matches version strings produced by the
@@ -206,7 +206,10 @@ func prBuildSource(prNumber int) buildSource {
 	}
 }
 
-// DownloadAndReplaceMain installs the newest passing main build.
+// DownloadAndReplaceMain fetches the most-recent successful main-branch
+// build from the unstable workflow, verifies its checksum + cosign
+// signature, and atomically replaces the running binary. Returns the
+// path that was replaced and the version string (e.g. "main-a1b2c3d").
 func DownloadAndReplaceMain(ctx context.Context, opts PrereleaseOptions) (string, string, error) {
 	token, source, err := resolveToken(opts)
 	if err != nil {
@@ -263,7 +266,7 @@ func mainBuildSource(wantVersion string) buildSource {
 				return fmt.Errorf("artifact metadata version %q is not a main build", version)
 			}
 			if wantVersion != "" && version != wantVersion {
-				return fmt.Errorf("artifact metadata reports %s but we requested %s", version, wantVersion)
+				return fmt.Errorf("artifact metadata reports version %q but we requested %q", version, wantVersion)
 			}
 			return nil
 		},
