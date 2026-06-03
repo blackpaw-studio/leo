@@ -813,3 +813,44 @@ func TestProcessMessageRejectsEmptyText(t *testing.T) {
 		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
 	}
 }
+
+// TestProcessMessageLeoPrefixedTargetUsesSingleLeoPrefix guards against the
+// double-prefix bug: agents whose canonical name already starts with "leo-"
+// (e.g. renamed agents and auto-named leo-coding-* agents) have a tmux session
+// named exactly after their canonical name, not "leo-"+name. The handler must
+// resolve the session via agent.SessionName, which keeps a single prefix.
+func TestProcessMessageLeoPrefixedTargetUsesSingleLeoPrefix(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.processes.(*mockProcesses).states["leo-coding-foo"] = ProcessStateInfo{
+		Name:   "leo-coding-foo",
+		Status: "running",
+	}
+
+	var calls [][]string
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		return exec.Command("true")
+	}
+
+	body := strings.NewReader(`{"text":"hello"}`)
+	req := httptest.NewRequest("POST", "/web/process/leo-coding-foo/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if len(calls) == 0 {
+		t.Fatal("expected at least one tmux call")
+	}
+	for i, call := range calls {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "leo-leo-coding-foo") {
+			t.Errorf("call %d targets double-prefixed session: %v", i, call)
+		}
+		if !strings.Contains(joined, "leo-coding-foo") {
+			t.Errorf("call %d should target leo-coding-foo: %v", i, call)
+		}
+	}
+}
