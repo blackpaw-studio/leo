@@ -65,14 +65,10 @@ func newUpdateCmd() *cobra.Command {
 			"$LEO_GITHUB_TOKEN.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			selected := 0
-			if prNumber > 0 {
-				selected++
-			}
-			if unstable {
-				selected++
-			}
-			if pinnedVersion != "" {
-				selected++
+			for _, name := range []string{"pr", "unstable", "version"} {
+				if cmd.Flags().Changed(name) {
+					selected++
+				}
 			}
 			if selected > 1 {
 				return fmt.Errorf("--pr, --unstable, and --version are mutually exclusive")
@@ -158,10 +154,10 @@ func newUpdateCmd() *cobra.Command {
 		"permit updating from a release without a cosign signature (SHA-256 only)")
 	cmd.Flags().IntVar(&prNumber, "pr", 0,
 		"install the most recent successful PR build (requires a GitHub token)")
-	cmd.Flags().StringVar(&pinnedVersion, "version", "",
-		"pin to a specific version, e.g. --version pr-42-a1b2c3d or --version main-a1b2c3d")
 	cmd.Flags().BoolVar(&unstable, "unstable", false,
 		"install the most recent passing main build (requires a GitHub token)")
+	cmd.Flags().StringVar(&pinnedVersion, "version", "",
+		"pin to a specific version, e.g. --version pr-42-a1b2c3d or --version main-a1b2c3d")
 	// Advertise the env-var equivalent without cluttering --help.
 	_ = cmd.Flags().MarkHidden("allow-unsigned")
 
