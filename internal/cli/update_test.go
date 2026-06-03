@@ -88,3 +88,35 @@ func TestUpdateCmd_RejectsNonPrereleaseVersion(t *testing.T) {
 		t.Errorf("error should explain --version limitation; got %q", err)
 	}
 }
+
+func TestUpdateCmd_UnstableAndPRMutuallyExclusive(t *testing.T) {
+	cmd := newUpdateCmd()
+	cmd.SetArgs([]string{"--unstable", "--pr", "5"})
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected mutual-exclusion error when --unstable and --pr are both set")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should explain conflict; got %q", err)
+	}
+}
+
+func TestUpdateCmd_UnstableAndVersionMutuallyExclusive(t *testing.T) {
+	cmd := newUpdateCmd()
+	cmd.SetArgs([]string{"--unstable", "--version", "main-a1b2c3d"})
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected mutual-exclusion error when --unstable and --version are both set")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should explain conflict; got %q", err)
+	}
+}
