@@ -17,6 +17,7 @@ import (
 
 	robfigcron "github.com/robfig/cron/v3"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -744,7 +745,7 @@ func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	sessionName := "leo-" + name
+	sessionName := agent.SessionName(name)
 
 	tmuxPath := findTmuxPath()
 	escArgs := tmux.Args("send-keys", "-t", sessionName, "Escape")
@@ -766,7 +767,7 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 // restart loop respawns it with a fresh claude invocation.
 func (s *Server) handleProcessRestart(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	sessionName := "leo-" + name
+	sessionName := agent.SessionName(name)
 
 	tmuxPath := findTmuxPath()
 	if err := s.execCommand(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run(); err != nil {
@@ -785,7 +786,7 @@ func (s *Server) handleProcessRestart(w http.ResponseWriter, r *http.Request) {
 // menus; per-char sends make each key register as a real keypress.
 func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	sessionName := "leo-" + name
+	sessionName := agent.SessionName(name)
 
 	var req struct {
 		Keys []string `json:"keys"`
@@ -856,7 +857,7 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionName := "leo-" + name
+	sessionName := agent.SessionName(name)
 	tmuxPath := findTmuxPath()
 
 	// Literal paste of the message body, then a separate Enter to submit.
