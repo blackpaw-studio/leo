@@ -61,8 +61,8 @@ func newUpdateCmd() *cobra.Command {
 			"to pin to an exact PR build. Pass --unstable to install the most\n" +
 			"recent passing build of main, or --version main-<sha> to pin to an\n" +
 			"exact main build. All of these need a GitHub token; the command\n" +
-			"tries the gh CLI first, then $GH_TOKEN / $GITHUB_TOKEN /\n" +
-			"$LEO_GITHUB_TOKEN.",
+			"checks $LEO_GITHUB_TOKEN, then $GH_TOKEN, then $GITHUB_TOKEN,\n" +
+			"and finally falls back to the gh CLI (`gh auth token`).",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			selected := 0
 			for _, name := range []string{"pr", "unstable", "version"} {

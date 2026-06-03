@@ -50,10 +50,10 @@ Use this when a fix has merged to `main` but hasn't appeared in a tagged release
 
 Authentication: `leo update --unstable` tries the following in order, and errors with a helpful message if none works.
 
-1. `gh auth token` shell-out if `gh` is on `PATH`
+1. `$LEO_GITHUB_TOKEN` (leo-specific override)
 2. `$GH_TOKEN` (gh CLI standard)
 3. `$GITHUB_TOKEN` (Actions / generic)
-4. `$LEO_GITHUB_TOKEN` (leo-specific override)
+4. `gh auth token` shell-out if `gh` is on `PATH`
 
 Installed unstable builds report a `main-<sha>` version string. Running `leo update` (no flags) to a tagged release always supersedes a main build, so `--unstable` is never a dead end.
 
