@@ -94,6 +94,27 @@ func TestSignatureVerifierForPullRequest_RejectsNonPositive(t *testing.T) {
 	}
 }
 
+func TestSignatureVerifierForMain_PinsIdentity(t *testing.T) {
+	v, err := SignatureVerifierForMain()
+	if err != nil {
+		t.Fatalf("SignatureVerifierForMain: %v", err)
+	}
+	want := "https://github.com/blackpaw-studio/leo/.github/workflows/unstable.yml@refs/heads/main"
+	if !v.SANRegex.MatchString(want) {
+		t.Errorf("SAN regex %q did not match expected identity %q", v.SANRegex.String(), want)
+	}
+	// Must NOT match a PR identity or the release identity.
+	for _, bad := range []string{
+		"https://github.com/blackpaw-studio/leo/.github/workflows/prerelease.yml@refs/pull/7/merge",
+		"https://github.com/blackpaw-studio/leo/.github/workflows/release.yml@refs/tags/v1.0.0",
+		"https://github.com/blackpaw-studio/leo/.github/workflows/unstable.yml@refs/heads/feature",
+	} {
+		if v.SANRegex.MatchString(bad) {
+			t.Errorf("SAN regex must not match %q", bad)
+		}
+	}
+}
+
 func TestResolveGitHubToken_PrefersLeoEnv(t *testing.T) {
 	t.Setenv("LEO_GITHUB_TOKEN", "leo-token")
 	t.Setenv("GH_TOKEN", "gh-token")
@@ -269,7 +290,7 @@ func TestFindPrereleaseArtifact_RejectsExpired(t *testing.T) {
 		})
 	})
 
-	_, err := findPrereleaseArtifact(context.Background(), "test-token", 5)
+	_, err := findRunArtifact(context.Background(), "test-token", 5, prereleaseArtifactName)
 	if err == nil {
 		t.Fatal("expected error for expired artifact")
 	}
@@ -463,6 +484,131 @@ func TestDownloadAndReplacePR_RejectsMismatchedMetadataPR(t *testing.T) {
 	}
 }
 
+func TestDownloadAndReplaceMainVersion_RejectsMismatchedMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := filepath.Join(tmpDir, "leo")
+	if err := os.WriteFile(binaryPath, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prevExec := osExecutable
+	osExecutable = func() (string, error) { return binaryPath, nil }
+	t.Cleanup(func() { osExecutable = prevExec })
+
+	// Build a zip whose metadata.json reports "main-deadbeef" — but the
+	// caller will ask for "main-a1b2c3d". The mismatch guard must fire
+	// before the binary is overwritten.
+	archiveName := fmt.Sprintf("leo_main-deadbeef_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	archive := tarGzWithLeo(t, []byte("evil"))
+	sum := sha256.Sum256(archive)
+	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+	zipBytes := buildArtifactZip(t, map[string][]byte{
+		archiveName:     archive,
+		"checksums.txt": []byte(checksums),
+		"metadata.json": []byte(`{"version":"main-deadbeef"}`),
+	})
+
+	api := newFakeGitHubAPI(t)
+
+	// resolveCommitSHA hits /commits/<shortSHA> to expand to a full SHA.
+	api.handle("/commits/a1b2c3d", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(commitResponse{SHA: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"})
+	})
+	api.handle("/actions/workflows/unstable.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(workflowRunsResponse{
+			WorkflowRuns: []workflowRun{{ID: 950, Conclusion: "success", HeadSHA: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"}},
+		})
+	})
+	api.handle("/actions/runs/950/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(artifactsResponse{
+			Artifacts: []artifact{{ID: 951, Name: "leo-unstable"}},
+		})
+	})
+	api.handle("/actions/artifacts/951/zip", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(zipBytes)
+	})
+
+	_, _, err := DownloadAndReplaceMainVersion(context.Background(), "main-a1b2c3d", PrereleaseOptions{Token: "test-token", AllowUnsigned: true})
+	if err == nil {
+		t.Fatal("expected error for version metadata mismatch")
+	}
+	if !strings.Contains(err.Error(), "main-a1b2c3d") || !strings.Contains(err.Error(), "main-deadbeef") {
+		t.Errorf("error should mention both versions; got %q", err)
+	}
+	// Binary must not have been replaced.
+	body, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, []byte("OLD")) {
+		t.Errorf("binary was modified but should not have been; got %q", body)
+	}
+}
+
+func TestDownloadAndReplaceMain_EndToEnd(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := filepath.Join(tmpDir, "leo")
+	if err := os.WriteFile(binaryPath, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedBinaryPath, err := filepath.EvalSymlinks(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prevExec := osExecutable
+	osExecutable = func() (string, error) { return binaryPath, nil }
+	t.Cleanup(func() { osExecutable = prevExec })
+
+	// Omit sig/cert and ride AllowUnsigned, exactly like the PR end-to-end
+	// test — identity matching is covered by TestSignatureVerifierForMain_PinsIdentity.
+	newBinary := []byte("NEW-LEO-MAIN-BUILD")
+	archive := tarGzWithLeo(t, newBinary)
+	archiveName := fmt.Sprintf("leo_main-a1b2c3d_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	sum := sha256.Sum256(archive)
+	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	zipBytes := buildArtifactZip(t, map[string][]byte{
+		archiveName:     archive,
+		"checksums.txt": []byte(checksums),
+		"metadata.json": []byte(`{"version":"main-a1b2c3d"}`),
+	})
+
+	api := newFakeGitHubAPI(t)
+	api.handle("/actions/workflows/unstable.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(workflowRunsResponse{
+			WorkflowRuns: []workflowRun{{ID: 900, Conclusion: "success"}},
+		})
+	})
+	api.handle("/actions/runs/900/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(artifactsResponse{
+			Artifacts: []artifact{{ID: 901, Name: "leo-unstable"}},
+		})
+	})
+	api.handle("/actions/artifacts/901/zip", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(zipBytes)
+	})
+
+	gotPath, gotVersion, err := DownloadAndReplaceMain(context.Background(), PrereleaseOptions{Token: "test-token", AllowUnsigned: true})
+	if err != nil {
+		t.Fatalf("DownloadAndReplaceMain: %v", err)
+	}
+	if gotPath != resolvedBinaryPath {
+		t.Errorf("path = %q, want %q", gotPath, resolvedBinaryPath)
+	}
+	if gotVersion != "main-a1b2c3d" {
+		t.Errorf("version = %q, want main-a1b2c3d", gotVersion)
+	}
+	body, err := os.ReadFile(resolvedBinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, newBinary) {
+		t.Errorf("binary contents = %q, want %q", body, newBinary)
+	}
+}
+
 // --- helpers ---
 
 func buildArtifactZip(t *testing.T, files map[string][]byte) []byte {
@@ -526,3 +672,67 @@ func archiveKeys(m map[string][]byte) []string {
 // not always need io / net/url, but keeping them imported is harmless.
 var _ = io.Discard
 var _ = url.Parse
+
+func TestIsMainVersion(t *testing.T) {
+	cases := map[string]bool{
+		"main-a1b2c3d": true,
+		"main-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0": true, // 40-char full sha
+		"main-a1b2c3":   false, // <7 hex
+		"main-A1B2C3D":  false, // uppercase
+		"main-":         false,
+		"pr-42-a1b2c3d": false,
+		"v1.2.3":        false,
+		"":              false,
+	}
+	for in, want := range cases {
+		if got := IsMainVersion(in); got != want {
+			t.Errorf("IsMainVersion(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestParseMainVersion(t *testing.T) {
+	sha, err := ParseMainVersion("main-a1b2c3d")
+	if err != nil {
+		t.Fatalf("ParseMainVersion: %v", err)
+	}
+	if sha != "a1b2c3d" {
+		t.Errorf("sha = %q, want a1b2c3d", sha)
+	}
+	if _, err := ParseMainVersion("pr-1-a1b2c3d"); err == nil {
+		t.Error("expected error for non-main version")
+	}
+}
+
+func TestFindLatestPassingMainRun_PicksNewestSuccess(t *testing.T) {
+	api := newFakeGitHubAPI(t)
+	api.handle("/actions/workflows/unstable.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("event"); got != "push" {
+			t.Errorf("event query = %q, want push", got)
+		}
+		_ = json.NewEncoder(w).Encode(workflowRunsResponse{
+			WorkflowRuns: []workflowRun{
+				{ID: 222, Conclusion: "success"},
+				{ID: 111, Conclusion: "success"},
+			},
+		})
+	})
+
+	run, err := findLatestPassingMainRun(context.Background(), "test-token", "")
+	if err != nil {
+		t.Fatalf("findLatestPassingMainRun: %v", err)
+	}
+	if run.ID != 222 {
+		t.Errorf("run.ID = %d, want 222 (newest)", run.ID)
+	}
+}
+
+func TestFindLatestPassingMainRun_NoRunsReturnsError(t *testing.T) {
+	api := newFakeGitHubAPI(t)
+	api.handle("/actions/workflows/unstable.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(workflowRunsResponse{})
+	})
+	if _, err := findLatestPassingMainRun(context.Background(), "test-token", ""); err == nil {
+		t.Error("expected error when no successful main run exists")
+	}
+}

@@ -37,6 +37,14 @@ const (
 	// lives in. Used both to filter workflow runs and to construct the
 	// cosign SAN regex.
 	prereleaseWorkflowFile = "prerelease.yml"
+
+	// unstableArtifactName is the well-known artifact the unstable workflow
+	// uploads for main-branch builds, mirroring prereleaseArtifactName.
+	unstableArtifactName = "leo-unstable"
+
+	// unstableWorkflowFile is the workflow filename that produces main builds.
+	// Used to filter workflow runs and to construct the cosign SAN identity.
+	unstableWorkflowFile = "unstable.yml"
 )
 
 // prereleaseAPIBase is the GitHub REST API root for the Leo repo. It's
@@ -51,6 +59,11 @@ var prereleaseTokenSource = resolveGitHubToken
 // so tests can stub it the same way update.go stubs newSignatureVerifier.
 var prereleaseVerifierForPR = SignatureVerifierForPullRequest
 
+// mainVerifier is the cosign identity factory for main builds. It is a
+// package-level var so tests can replace it with a stub, following the
+// same seam pattern as prereleaseVerifierForPR.
+var mainVerifier = SignatureVerifierForMain
+
 // prereleaseVersionPattern matches version strings produced by the
 // prerelease workflow's goreleaser snapshot template:
 //
@@ -59,6 +72,29 @@ var prereleaseVerifierForPR = SignatureVerifierForPullRequest
 // Used by the CLI to decide whether to route a --version flag through
 // the PR flow or the stable flow.
 var prereleaseVersionPattern = regexp.MustCompile(`^pr-([0-9]+)-([0-9a-f]{7,40})$`)
+
+// mainVersionPattern matches version strings produced by the unstable
+// workflow's goreleaser snapshot template:
+//
+//	main-<7+ hex chars>
+//
+// Used by the CLI to route a --version flag through the main flow.
+var mainVersionPattern = regexp.MustCompile(`^main-([0-9a-f]{7,40})$`)
+
+// IsMainVersion reports whether a version string targets a main build.
+func IsMainVersion(version string) bool {
+	return mainVersionPattern.MatchString(version)
+}
+
+// ParseMainVersion extracts the short SHA from a "main-<sha>" version
+// string. Returns an error if the shape doesn't match.
+func ParseMainVersion(version string) (shortSHA string, err error) {
+	m := mainVersionPattern.FindStringSubmatch(version)
+	if m == nil {
+		return "", fmt.Errorf("version %q is not a main build tag (want main-<sha>)", version)
+	}
+	return m[1], nil
+}
 
 // IsPrereleaseVersion reports whether a version string targets a PR
 // build rather than a tagged release.
@@ -118,7 +154,7 @@ func DownloadAndReplacePR(ctx context.Context, prNumber int, opts PrereleaseOpti
 	if err != nil {
 		return "", "", err
 	}
-	return downloadAndReplaceFromRun(ctx, token, prNumber, run, opts)
+	return downloadAndReplaceFromRun(ctx, token, run, prBuildSource(prNumber), opts)
 }
 
 // DownloadAndReplacePRVersion resolves a pinned `pr-<n>-<sha>` version
@@ -147,7 +183,94 @@ func DownloadAndReplacePRVersion(ctx context.Context, version string, opts Prere
 	if err != nil {
 		return "", "", err
 	}
-	return downloadAndReplaceFromRun(ctx, token, prNumber, run, opts)
+	return downloadAndReplaceFromRun(ctx, token, run, prBuildSource(prNumber), opts)
+}
+
+// prBuildSource describes the PR-prerelease artifact + verifier + metadata
+// check for downloadAndReplaceFromRun.
+func prBuildSource(prNumber int) buildSource {
+	return buildSource{
+		artifactName: prereleaseArtifactName,
+		label:        fmt.Sprintf("PR #%d", prNumber),
+		verifier:     func() (*SignatureVerifier, error) { return prereleaseVerifierForPR(prNumber) },
+		validate: func(version string) error {
+			n, _, err := ParsePrereleaseVersion(version)
+			if err != nil {
+				return fmt.Errorf("artifact metadata: %w", err)
+			}
+			if n != prNumber {
+				return fmt.Errorf("artifact metadata reports PR #%d but we requested PR #%d", n, prNumber)
+			}
+			return nil
+		},
+	}
+}
+
+// DownloadAndReplaceMain fetches the most-recent successful main-branch
+// build from the unstable workflow, verifies its checksum + cosign
+// signature, and atomically replaces the running binary. Returns the
+// path that was replaced and the version string (e.g. "main-a1b2c3d").
+func DownloadAndReplaceMain(ctx context.Context, opts PrereleaseOptions) (string, string, error) {
+	token, source, err := resolveToken(opts)
+	if err != nil {
+		return "", "", err
+	}
+	if opts.Warn != nil {
+		opts.Warn("Authenticating to GitHub via %s.", source)
+	}
+
+	run, err := findLatestPassingMainRun(ctx, token, "")
+	if err != nil {
+		return "", "", err
+	}
+	return downloadAndReplaceFromRun(ctx, token, run, mainBuildSource(""), opts)
+}
+
+// DownloadAndReplaceMainVersion installs a specific main-<sha> build.
+func DownloadAndReplaceMainVersion(ctx context.Context, version string, opts PrereleaseOptions) (string, string, error) {
+	shortSHA, err := ParseMainVersion(version)
+	if err != nil {
+		return "", "", err
+	}
+
+	token, source, err := resolveToken(opts)
+	if err != nil {
+		return "", "", err
+	}
+	if opts.Warn != nil {
+		opts.Warn("Authenticating to GitHub via %s.", source)
+	}
+
+	fullSHA, err := resolveCommitSHA(ctx, token, shortSHA)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving commit %s: %w", shortSHA, err)
+	}
+
+	run, err := findLatestPassingMainRun(ctx, token, fullSHA)
+	if err != nil {
+		return "", "", err
+	}
+	return downloadAndReplaceFromRun(ctx, token, run, mainBuildSource(version), opts)
+}
+
+// mainBuildSource describes the unstable artifact + verifier + metadata
+// check. When wantVersion is non-empty (pinned path) the bundle's version
+// must match exactly; otherwise any well-formed main-<sha> is accepted.
+func mainBuildSource(wantVersion string) buildSource {
+	return buildSource{
+		artifactName: unstableArtifactName,
+		label:        "main build",
+		verifier:     mainVerifier,
+		validate: func(version string) error {
+			if !IsMainVersion(version) {
+				return fmt.Errorf("artifact metadata version %q is not a main build", version)
+			}
+			if wantVersion != "" && version != wantVersion {
+				return fmt.Errorf("artifact metadata reports version %q but we requested %q", version, wantVersion)
+			}
+			return nil
+		},
+	}
 }
 
 func resolveToken(opts PrereleaseOptions) (token, source string, err error) {
@@ -157,11 +280,23 @@ func resolveToken(opts PrereleaseOptions) (token, source string, err error) {
 	return prereleaseTokenSource()
 }
 
+// buildSource captures everything that differs between the PR-prerelease
+// flow and the main-branch "unstable" flow: which artifact to pull, a
+// human-readable label for messages, the cosign verifier to demand, and
+// a hook to validate the artifact's embedded version against what the
+// caller requested. The download/verify/install core is otherwise shared.
+type buildSource struct {
+	artifactName string
+	label        string
+	verifier     func() (*SignatureVerifier, error)
+	validate     func(bundleVersion string) error
+}
+
 // downloadAndReplaceFromRun is shared by the --pr and --version paths.
 // It downloads the artifact zip from `run`, verifies everything inside,
 // extracts the platform binary, and atomically replaces the running
 // binary.
-func downloadAndReplaceFromRun(ctx context.Context, token string, prNumber int, run workflowRun, opts PrereleaseOptions) (string, string, error) {
+func downloadAndReplaceFromRun(ctx context.Context, token string, run workflowRun, src buildSource, opts PrereleaseOptions) (string, string, error) {
 	binaryPath, err := osExecutable()
 	if err != nil {
 		return "", "", fmt.Errorf("finding current binary: %w", err)
@@ -171,7 +306,7 @@ func downloadAndReplaceFromRun(ctx context.Context, token string, prNumber int, 
 		return "", "", fmt.Errorf("resolving binary path: %w", err)
 	}
 
-	artifactID, err := findPrereleaseArtifact(ctx, token, run.ID)
+	artifactID, err := findRunArtifact(ctx, token, run.ID, src.artifactName)
 	if err != nil {
 		return "", "", err
 	}
@@ -189,16 +324,12 @@ func downloadAndReplaceFromRun(ctx context.Context, token string, prNumber int, 
 	if bundle.version == "" {
 		return "", "", errors.New("artifact bundle is missing metadata.json with a version field")
 	}
-	expectedPRN, _, err := ParsePrereleaseVersion(bundle.version)
-	if err != nil {
-		return "", "", fmt.Errorf("artifact metadata: %w", err)
-	}
-	if expectedPRN != prNumber {
-		return "", "", fmt.Errorf("artifact metadata reports PR #%d but we requested PR #%d", expectedPRN, prNumber)
+	if err := src.validate(bundle.version); err != nil {
+		return "", "", fmt.Errorf("validating artifact version: %w", err)
 	}
 
-	if err := verifyPrereleaseSignature(prNumber, bundle, opts); err != nil {
-		return "", "", fmt.Errorf("verifying prerelease signature: %w", err)
+	if err := verifyBundleSignature(src.label, src.verifier, bundle, opts); err != nil {
+		return "", "", fmt.Errorf("verifying %s signature: %w", src.label, err)
 	}
 
 	archiveName := fmt.Sprintf("leo_%s_%s_%s.tar.gz", bundle.version, runtime.GOOS, runtime.GOARCH)
@@ -221,10 +352,10 @@ func downloadAndReplaceFromRun(ctx context.Context, token string, prNumber int, 
 	return binaryPath, bundle.version, nil
 }
 
-// verifyPrereleaseSignature is the prerelease counterpart of
-// verifyChecksumsSignature. It uses the PR-specific verifier (cosign
-// identity = prerelease.yml@refs/pull/<n>/merge).
-func verifyPrereleaseSignature(prNumber int, bundle artifactBundle, opts PrereleaseOptions) error {
+// verifyBundleSignature is the shared cosign gate for both the PR and the
+// main-branch flows. label is used in warnings; makeVerifier pins the
+// expected OIDC identity for the relevant workflow + ref.
+func verifyBundleSignature(label string, makeVerifier func() (*SignatureVerifier, error), bundle artifactBundle, opts PrereleaseOptions) error {
 	if len(bundle.signature) == 0 || len(bundle.certificate) == 0 {
 		if !opts.AllowUnsigned {
 			return fmt.Errorf("artifact is missing %s or %s — refusing to update; "+
@@ -232,12 +363,12 @@ func verifyPrereleaseSignature(prNumber int, bundle artifactBundle, opts Prerele
 				signatureFileName, certFileName)
 		}
 		if opts.Warn != nil {
-			opts.Warn("WARNING: prerelease build has no cosign signature; relying on SHA-256 only.")
+			opts.Warn("WARNING: %s has no cosign signature; relying on SHA-256 only.", label)
 		}
 		return nil
 	}
 
-	verifier, err := prereleaseVerifierForPR(prNumber)
+	verifier, err := makeVerifier()
 	if err != nil {
 		if opts.AllowUnsigned {
 			if opts.Warn != nil {
@@ -376,6 +507,42 @@ func findLatestPassingPRRun(ctx context.Context, token string, prNumber int, hea
 	return workflowRun{}, fmt.Errorf("no successful prerelease run found for PR #%d (has the prerelease workflow run yet?)", prNumber)
 }
 
+// findLatestPassingMainRun returns the newest successful run of the
+// unstable workflow on main. GitHub returns runs newest-first; we take
+// the first success. When headSHA is non-empty (pinned --version path)
+// the query is narrowed to that commit.
+func findLatestPassingMainRun(ctx context.Context, token, headSHA string) (workflowRun, error) {
+	u := fmt.Sprintf("%s/actions/workflows/%s/runs?event=push&status=success&per_page=50",
+		prereleaseAPIBase, unstableWorkflowFile)
+	if headSHA != "" {
+		u += "&head_sha=" + url.QueryEscape(headSHA)
+	}
+
+	body, err := githubAPIGet(ctx, token, u)
+	if err != nil {
+		return workflowRun{}, fmt.Errorf("listing workflow runs: %w", err)
+	}
+	var resp workflowRunsResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return workflowRun{}, fmt.Errorf("decoding workflow runs: %w", err)
+	}
+
+	for _, run := range resp.WorkflowRuns {
+		if run.Conclusion == "success" {
+			return run, nil
+		}
+	}
+
+	if headSHA != "" {
+		short := headSHA
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		return workflowRun{}, fmt.Errorf("no successful main build at commit %s (the build may have failed or expired)", short)
+	}
+	return workflowRun{}, fmt.Errorf("no successful main build found (has the unstable workflow run yet?)")
+}
+
 type artifact struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
@@ -387,7 +554,7 @@ type artifactsResponse struct {
 	Artifacts []artifact `json:"artifacts"`
 }
 
-func findPrereleaseArtifact(ctx context.Context, token string, runID int64) (int64, error) {
+func findRunArtifact(ctx context.Context, token string, runID int64, artifactName string) (int64, error) {
 	u := fmt.Sprintf("%s/actions/runs/%d/artifacts?per_page=100", prereleaseAPIBase, runID)
 	body, err := githubAPIGet(ctx, token, u)
 	if err != nil {
@@ -398,7 +565,7 @@ func findPrereleaseArtifact(ctx context.Context, token string, runID int64) (int
 		return 0, fmt.Errorf("decoding artifacts: %w", err)
 	}
 	for _, a := range resp.Artifacts {
-		if a.Name != prereleaseArtifactName {
+		if a.Name != artifactName {
 			continue
 		}
 		if a.Expired {
@@ -406,7 +573,7 @@ func findPrereleaseArtifact(ctx context.Context, token string, runID int64) (int
 		}
 		return a.ID, nil
 	}
-	return 0, fmt.Errorf("no %q artifact found on run %d", prereleaseArtifactName, runID)
+	return 0, fmt.Errorf("no %q artifact found on run %d", artifactName, runID)
 }
 
 func downloadArtifactZip(ctx context.Context, token string, artifactID int64) ([]byte, error) {

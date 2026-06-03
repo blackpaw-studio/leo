@@ -47,6 +47,7 @@ func newUpdateCmd() *cobra.Command {
 	var allowUnsigned bool
 	var prNumber int
 	var pinnedVersion string
+	var unstable bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -57,21 +58,35 @@ func newUpdateCmd() *cobra.Command {
 			"pick up any template changes.\n\n" +
 			"Pass --pr <n> to install the most recent successful PR build\n" +
 			"(uploaded by the prerelease workflow), or --version pr-<n>-<sha>\n" +
-			"to pin to an exact PR build. Both forms need a GitHub token; the\n" +
-			"command tries the gh CLI first, then $GH_TOKEN / $GITHUB_TOKEN /\n" +
-			"$LEO_GITHUB_TOKEN.",
+			"to pin to an exact PR build. Pass --unstable to install the most\n" +
+			"recent passing build of main, or --version main-<sha> to pin to an\n" +
+			"exact main build. All of these need a GitHub token; the command\n" +
+			"checks $LEO_GITHUB_TOKEN, then $GH_TOKEN, then $GITHUB_TOKEN,\n" +
+			"and finally falls back to the gh CLI (`gh auth token`).",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if prNumber > 0 && pinnedVersion != "" {
-				return fmt.Errorf("--pr and --version are mutually exclusive")
+			selected := 0
+			for _, name := range []string{"pr", "unstable", "version"} {
+				if cmd.Flags().Changed(name) {
+					selected++
+				}
+			}
+			if selected > 1 {
+				return fmt.Errorf("--pr, --unstable, and --version are mutually exclusive")
 			}
 			if prNumber > 0 {
 				return runPrereleaseUpdateByPR(prNumber, allowUnsigned)
 			}
+			if unstable {
+				return runUnstableUpdate(allowUnsigned)
+			}
 			if update.IsPrereleaseVersion(pinnedVersion) {
 				return runPrereleaseUpdateByVersion(pinnedVersion, allowUnsigned)
 			}
+			if update.IsMainVersion(pinnedVersion) {
+				return runUnstableUpdateByVersion(pinnedVersion, allowUnsigned)
+			}
 			if pinnedVersion != "" {
-				return fmt.Errorf("--version currently supports prerelease tags only (pr-<n>-<sha>); to install a tagged release, omit --version and let leo find the latest")
+				return fmt.Errorf("--version currently supports prerelease tags only (pr-<n>-<sha> or main-<sha>); to install a tagged release, omit --version and let leo find the latest")
 			}
 
 			info.Println("Checking for updates...")
@@ -139,8 +154,10 @@ func newUpdateCmd() *cobra.Command {
 		"permit updating from a release without a cosign signature (SHA-256 only)")
 	cmd.Flags().IntVar(&prNumber, "pr", 0,
 		"install the most recent successful PR build (requires a GitHub token)")
+	cmd.Flags().BoolVar(&unstable, "unstable", false,
+		"install the most recent passing main build (requires a GitHub token)")
 	cmd.Flags().StringVar(&pinnedVersion, "version", "",
-		"pin to a specific version, e.g. --version pr-42-a1b2c3d (PR builds only)")
+		"pin to a specific version, e.g. --version pr-42-a1b2c3d or --version main-a1b2c3d")
 	// Advertise the env-var equivalent without cluttering --help.
 	_ = cmd.Flags().MarkHidden("allow-unsigned")
 
@@ -166,6 +183,30 @@ func runPrereleaseUpdateByVersion(version string, allowUnsigned bool) error {
 	opts := prereleaseOptions(allowUnsigned)
 	info.Printf("Installing prerelease build %s...\n", version)
 	path, installedVersion, err := update.DownloadAndReplacePRVersion(context.Background(), version, opts)
+	if err != nil {
+		return fmt.Errorf("installing %s: %w", version, err)
+	}
+	success.Printf("Updated %s to %s\n", path, installedVersion)
+	return maybeRestartDaemon()
+}
+
+// runUnstableUpdate installs the latest passing main build.
+func runUnstableUpdate(allowUnsigned bool) error {
+	opts := prereleaseOptions(allowUnsigned)
+	info.Println("Installing latest main build...")
+	path, version, err := update.DownloadAndReplaceMain(context.Background(), opts)
+	if err != nil {
+		return fmt.Errorf("installing main build: %w", err)
+	}
+	success.Printf("Updated %s to %s\n", path, version)
+	return maybeRestartDaemon()
+}
+
+// runUnstableUpdateByVersion installs a specific main-<sha> build.
+func runUnstableUpdateByVersion(version string, allowUnsigned bool) error {
+	opts := prereleaseOptions(allowUnsigned)
+	info.Printf("Installing main build %s...\n", version)
+	path, installedVersion, err := update.DownloadAndReplaceMainVersion(context.Background(), version, opts)
 	if err != nil {
 		return fmt.Errorf("installing %s: %w", version, err)
 	}

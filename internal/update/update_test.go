@@ -67,6 +67,17 @@ func TestIsNewer(t *testing.T) {
 	}
 }
 
+func TestIsNewer_MainBuildIsOlderThanRelease(t *testing.T) {
+	// An installed unstable build must still see a real release as newer,
+	// so `leo update` from a main build is never a dead end.
+	if !IsNewer("main-a1b2c3d", "1.4.0") {
+		t.Error("IsNewer(main-<sha>, 1.4.0) = false, want true")
+	}
+	if !IsNewer("main-a1b2c3d", "0.0.1") {
+		t.Error("IsNewer(main-<sha>, 0.0.1) = false, want true")
+	}
+}
+
 func TestParseVersion(t *testing.T) {
 	tests := []struct {
 		input string

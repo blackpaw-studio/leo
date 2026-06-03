@@ -1,0 +1,40 @@
+version: 2
+
+project_name: leo
+
+# Unstable config for main-branch builds. Identical to
+# .goreleaser.prerelease.yaml except snapshot.version_template produces a
+# `main-<short-sha>` version so the embedded ldflag and archive name carry
+# the commit identity. Artifacts are uploaded as workflow artifacts (not a
+# GitHub Release); the workflow signs checksums.txt explicitly via cosign
+# sign-blob against the unstable workflow's OIDC identity.
+
+builds:
+  - main: ./cmd/leo
+    binary: leo
+    ldflags:
+      - -s -w -X github.com/blackpaw-studio/leo/internal/cli.Version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "main-{{ .ShortCommit }}"
+
+changelog:
+  disable: true
+
+release:
+  disable: true
