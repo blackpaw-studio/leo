@@ -566,6 +566,14 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	}
 
 	fmt.Fprintf(os.Stdout, "supervising %d process(es)\n", len(processes))
+
+	// Block until shutdown is signalled. Both process and session supervisor
+	// goroutines run until ctx is cancelled; process goroutines additionally
+	// register in wg for clean reaping. Waiting on ctx first (rather than only
+	// wg) keeps the daemon alive for session-only homes — those register no
+	// process goroutines, so a bare wg.Wait() would return immediately and tear
+	// the daemon down while persistent task sessions are still supervised.
+	<-ctx.Done()
 	wg.Wait()
 	return nil
 }

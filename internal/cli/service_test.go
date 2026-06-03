@@ -293,3 +293,29 @@ func TestBuildProcessArgsInjectsMessagingAwareness(t *testing.T) {
 		t.Errorf("expected messaging awareness in process args; got %v", args)
 	}
 }
+
+// TestSupervisableUnits verifies the supervisor's "is there anything to run"
+// accounting counts persistent-task sessions, not just processes — so a home
+// with only persistent tasks (no enabled processes) is still startable.
+func TestSupervisableUnits(t *testing.T) {
+	t.Run("session-only home reports a session", func(t *testing.T) {
+		cfg := &config.Config{
+			HomePath: t.TempDir(),
+			Tasks: map[string]config.TaskConfig{
+				"pinger": {Runtime: "persistent", Enabled: true, Workspace: "/tmp/p"},
+			},
+		}
+		procs, sessions := supervisableUnits(cfg, "claude", "tok")
+		if procs != 0 || sessions != 1 {
+			t.Fatalf("procs=%d sessions=%d, want 0,1", procs, sessions)
+		}
+	})
+
+	t.Run("empty home reports nothing", func(t *testing.T) {
+		cfg := &config.Config{HomePath: t.TempDir()}
+		procs, sessions := supervisableUnits(cfg, "claude", "tok")
+		if procs != 0 || sessions != 0 {
+			t.Fatalf("procs=%d sessions=%d, want 0,0", procs, sessions)
+		}
+	})
+}
