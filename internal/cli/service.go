@@ -85,12 +85,15 @@ func runService(cmd *cobra.Command, args []string) error {
 			warn.Printf("  web api token unavailable: %v — MCP server will refuse to start; slash commands will be unavailable\n", tokErr)
 		}
 
-		// In supervised mode, start ALL enabled processes
+		// In supervised mode, start ALL enabled processes AND boot persistent
+		// task sessions. The guard counts both: a home with only persistent
+		// tasks (no enabled processes) is still something to supervise.
 		specs := buildAllProcessSpecs(cfg, claudePath, webToken)
-		if len(specs) == 0 {
-			return fmt.Errorf("no enabled processes in config")
+		procCount, sessionCount := supervisableUnits(cfg, claudePath, webToken)
+		if procCount == 0 && sessionCount == 0 {
+			return fmt.Errorf("no enabled processes or persistent task sessions in config")
 		}
-		info.Printf("Starting supervised mode (%d processes)...\n", len(specs))
+		info.Printf("Starting supervised mode (%d process(es), %d session(s))...\n", procCount, sessionCount)
 		return service.RunSupervised(claudePath, specs, cfg.HomePath, cfgPath, webToken)
 	}
 
@@ -198,6 +201,21 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 		})
 	}
 	return specs
+}
+
+// supervisableUnits reports how many processes and persistent-task sessions the
+// supervisor would actually run for cfg. It exists so the startup guard counts
+// sessions as well as processes — a home with only persistent tasks (no enabled
+// processes) is still something to supervise. Mirrors RunSupervised's own boot
+// accounting (processes via buildAllProcessSpecs, sessions via
+// service.SessionSpecsFromConfig).
+func supervisableUnits(cfg *config.Config, claudePath, webToken string) (procs int, sessions int) {
+	procs = len(buildAllProcessSpecs(cfg, claudePath, webToken))
+	sessionSpecs, err := service.SessionSpecsFromConfig(cfg)
+	if err == nil {
+		sessions = len(sessionSpecs)
+	}
+	return procs, sessions
 }
 
 // resolveSessionArgs returns the session-related args (--resume / --session-id)
