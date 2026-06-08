@@ -755,9 +755,16 @@ func TestTaskPromptSave_NoFileSelected(t *testing.T) {
 func TestProcessMessageSendsLiteralThenEnter(t *testing.T) {
 	s, _ := newTestServer(t)
 
+	oldPoll := messageInputPoll
+	messageInputPoll = time.Millisecond
+	defer func() { messageInputPoll = oldPoll }()
+
 	var calls [][]string
 	s.execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, args)
+		if argsContain(args, "capture-pane") {
+			return exec.Command("echo", "❯ Enter the build status please")
+		}
 		return exec.Command("true") // harmless no-op
 	}
 
@@ -770,17 +777,120 @@ func TestProcessMessageSendsLiteralThenEnter(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
-	if len(calls) != 2 {
-		t.Fatalf("expected 2 tmux calls, got %d: %v", len(calls), calls)
-	}
 	first := strings.Join(calls[0], " ")
 	if !strings.Contains(first, "send-keys") || !strings.Contains(first, "-l") ||
 		!strings.Contains(first, "leo-assistant") || !strings.Contains(first, "Enter the build status please") {
 		t.Errorf("first call should be literal send to leo-assistant; got %v", calls[0])
 	}
-	last := calls[1]
+	last := calls[len(calls)-1]
 	if last[len(last)-1] != "Enter" {
-		t.Errorf("second call should submit with Enter; got %v", last)
+		t.Errorf("last call should submit with Enter; got %v", last)
+	}
+}
+
+// argsContain reports whether a tmux arg slice includes sub (e.g. "capture-pane").
+func argsContain(args []string, sub string) bool {
+	for _, a := range args {
+		if a == sub {
+			return true
+		}
+	}
+	return false
+}
+
+// TestProcessMessageConfirmsInputBeforeEnter guards the fix for the
+// intermittent "Enter not registered" bug: an Enter fired in the same input
+// burst as the literal text is treated by claude's Ink REPL as a newline, not
+// a submit, leaving the message unsent. The handler must capture-pane and
+// confirm the typed text landed in the input box before sending Enter.
+func TestProcessMessageConfirmsInputBeforeEnter(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	oldPoll := messageInputPoll
+	messageInputPoll = time.Millisecond
+	defer func() { messageInputPoll = oldPoll }()
+
+	var calls [][]string
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		if argsContain(args, "capture-pane") {
+			return exec.Command("echo", "❯ hello there") // text landed
+		}
+		return exec.Command("true")
+	}
+
+	body := strings.NewReader(`{"text":"hello there"}`)
+	req := httptest.NewRequest("POST", "/web/process/assistant/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// First call: literal text send.
+	if !argsContain(calls[0], "-l") || !argsContain(calls[0], "hello there") {
+		t.Errorf("first call should be literal text send; got %v", calls[0])
+	}
+	// Last call: Enter submit.
+	last := calls[len(calls)-1]
+	if last[len(last)-1] != "Enter" {
+		t.Errorf("last call should submit with Enter; got %v", last)
+	}
+	// A capture-pane must occur between the literal send and the Enter — the
+	// confirmation that breaks the paste/submit race.
+	enterIdx := len(calls) - 1
+	sawCaptureBeforeEnter := false
+	for i := 1; i < enterIdx; i++ {
+		if argsContain(calls[i], "capture-pane") {
+			sawCaptureBeforeEnter = true
+		}
+	}
+	if !sawCaptureBeforeEnter {
+		t.Errorf("handler must capture-pane to confirm input before Enter; calls=%v", calls)
+	}
+}
+
+// TestProcessMessageFallsOpenWhenInputNeverConfirms ensures a message is never
+// silently dropped: if the input box never reflects the typed text within the
+// bounded poll window (busy/mid-turn or unreadable pane), the handler still
+// submits with Enter rather than hanging or skipping the send.
+func TestProcessMessageFallsOpenWhenInputNeverConfirms(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	oldPoll, oldAttempts := messageInputPoll, messageInputAttempts
+	messageInputPoll, messageInputAttempts = time.Millisecond, 3
+	defer func() { messageInputPoll, messageInputAttempts = oldPoll, oldAttempts }()
+
+	var calls [][]string
+	captureCount := 0
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		if argsContain(args, "capture-pane") {
+			captureCount++
+			return exec.Command("echo", "❯ ") // empty input box — never confirms
+		}
+		return exec.Command("true")
+	}
+
+	body := strings.NewReader(`{"text":"hi"}`)
+	req := httptest.NewRequest("POST", "/web/process/assistant/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	// Polling is bounded — must not exceed the attempt budget.
+	if captureCount > messageInputAttempts {
+		t.Errorf("capture-pane polled %d times, want <= %d", captureCount, messageInputAttempts)
+	}
+	// Falls open: Enter is still sent so the message is delivered.
+	last := calls[len(calls)-1]
+	if last[len(last)-1] != "Enter" {
+		t.Errorf("handler should fall open and still submit with Enter; got %v", last)
 	}
 }
 
@@ -821,6 +931,11 @@ func TestProcessMessageRejectsEmptyText(t *testing.T) {
 // resolve the session via agent.SessionName, which keeps a single prefix.
 func TestProcessMessageLeoPrefixedTargetUsesSingleLeoPrefix(t *testing.T) {
 	s, _ := newTestServer(t)
+
+	oldPoll, oldAttempts := messageInputPoll, messageInputAttempts
+	messageInputPoll, messageInputAttempts = time.Millisecond, 2
+	defer func() { messageInputPoll, messageInputAttempts = oldPoll, oldAttempts }()
+
 	s.processes.(*mockProcesses).states["leo-coding-foo"] = ProcessStateInfo{
 		Name:   "leo-coding-foo",
 		Status: "running",

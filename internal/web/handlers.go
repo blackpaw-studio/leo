@@ -860,17 +860,50 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 	sessionName := agent.SessionName(name)
 	tmuxPath := findTmuxPath()
 
-	// Literal paste of the message body, then a separate Enter to submit.
+	// Literal paste of the message body.
 	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, "-l", req.Text)...).Run(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send message failed: %v", err)})
 		return
 	}
+
+	// Wait until the input box reflects the typed text before submitting.
+	// Claude's Ink REPL batches stdin; an Enter that lands in the same input
+	// burst as the literal text is treated as a newline, not a submit, leaving
+	// the message unsent (the intermittent "Enter not registered" bug).
+	// Confirming the text rendered forces Enter to arrive as a discrete
+	// keypress. Bounded, and falls open if the pane never confirms (busy
+	// mid-turn or unreadable) so a message is never silently dropped.
+	s.waitForInputContent(tmuxPath, sessionName)
+
+	// Separate Enter to submit.
 	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, "Enter")...).Run(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("submit message failed: %v", err)})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// messageInputAttempts / messageInputPoll bound how long handleProcessMessage
+// waits for typed text to surface in claude's input box before submitting.
+// ~messageInputAttempts*messageInputPoll (≈2s) is ample for an already-running
+// session to echo input; package vars so tests can shrink them.
+var (
+	messageInputAttempts = 40
+	messageInputPoll     = 50 * time.Millisecond
+)
+
+// waitForInputContent polls the session pane until the input box carries the
+// just-typed text, then returns. Falls open after the attempt budget so a busy
+// or unreadable pane never blocks (or drops) the submit.
+func (s *Server) waitForInputContent(tmuxPath, sessionName string) {
+	for i := 0; i < messageInputAttempts; i++ {
+		out, err := s.execCommand(tmuxPath, tmux.Args("capture-pane", "-p", "-t", sessionName)...).Output()
+		if err == nil && tmux.InputHasContent(string(out)) {
+			return
+		}
+		time.Sleep(messageInputPoll)
+	}
 }
 
 // needsCharSplit reports whether a send-keys arg is a multi-char literal

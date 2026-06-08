@@ -129,6 +129,15 @@ func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttemp
 	return nil
 }
 
+// InputHasContent reports whether a captured claude pane shows text waiting in
+// its input box (the prompt-glyph line carries non-whitespace). Callers use it
+// to confirm typed text landed before submitting with Enter — an Enter that
+// arrives in the same input burst as the text is treated as a literal newline
+// by claude's Ink REPL, not a submit, leaving the message unsent.
+func InputHasContent(pane string) bool {
+	return classifyInput(pane) == inputHasContent
+}
+
 // paneInputState captures the session's visible pane and classifies its input
 // box. Read failures classify as inputUnknown so the caller falls open.
 func paneInputState(ctx context.Context, tmuxPath, session string) inputState {
