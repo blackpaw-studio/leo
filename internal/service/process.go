@@ -667,21 +667,39 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		sv.setState(name, "restarting")
 		sv.incrementRestarts(name)
 
-		// Very-quick exits suggest a poisoned session: strip --resume and
-		// clear the stored session so the next spawn starts fresh.
+		// A very-quick exit means this iteration's session-selection flag is
+		// unusable. Degrade in two steps so we recover the conversation when
+		// we can and only fall back to a fresh session when resuming itself
+		// fails:
+		//
+		//   1. --session-id <id> → --resume <id>
+		//      claude refuses `--session-id` when that id's jsonl already
+		//      exists ("Session ID ... is already in use") — which happens
+		//      whenever we re-spawn a session whose transcript was already
+		//      written (e.g. the tmux session was killed out from under us).
+		//      Resuming rehydrates the existing conversation instead of
+		//      crash-looping on a taken id.
+		//   2. --resume <id> → fresh
+		//      Resume itself quick-exited, so treat the jsonl as poisoned:
+		//      strip it, clear the stored session, and mark the agent
+		//      NoResume so a daemon restart won't reintroduce --resume via
+		//      RestoreAgents. No-op for non-agent specs (no matching record).
 		if elapsed < quickExitThreshold {
-			hadResume := hasResumeArg(currentArgs)
-			currentArgs = stripResumeArg(currentArgs)
-			id.setArgs(currentArgs)
-			clearProcessSession(homePath, name)
-			if hadResume {
-				// Persist the "no-resume" decision on the agent record so a
-				// daemon restart mid-crash-loop doesn't reintroduce
-				// --resume via RestoreAgents. No-op for non-agent specs
-				// (no matching agentstore record).
+			switch {
+			case hasSessionIDArg(currentArgs):
+				currentArgs = convertSessionIDToResume(currentArgs)
+				id.setArgs(currentArgs)
+				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), retrying with --resume\n", name, elapsed.Seconds())
+			case hasResumeArg(currentArgs):
+				currentArgs = stripResumeArg(currentArgs)
+				id.setArgs(currentArgs)
+				clearProcessSession(homePath, name)
 				markAgentNoResume(homePath, name)
+				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session\n", name, elapsed.Seconds())
+			default:
+				clearProcessSession(homePath, name)
+				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs)\n", name, elapsed.Seconds())
 			}
-			fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session\n", name, elapsed.Seconds())
 		}
 
 		// Read exit info written by the shell wrapper, compose the per-process
@@ -782,6 +800,35 @@ func hasResumeArg(args []string) bool {
 		}
 	}
 	return false
+}
+
+// hasSessionIDArg reports whether a `--session-id <id>` pair is present in args.
+func hasSessionIDArg(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--session-id" && i+1 < len(args) {
+			return true
+		}
+	}
+	return false
+}
+
+// convertSessionIDToResume rewrites every `--session-id <id>` pair into
+// `--resume <id>`, leaving all other args untouched. Used by the quick-exit
+// recovery: a freshly minted `--session-id` is rejected once its jsonl exists
+// on disk, so the supervisor retries by resuming that same session. A
+// `--session-id` flag with no following value, or args with none at all, are
+// returned unchanged.
+func convertSessionIDToResume(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--session-id" && i+1 < len(args) {
+			out = append(out, "--resume", args[i+1])
+			i++ // consumed the value
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 // markAgentNoResume sets NoResume=true and clears SessionID on the agentstore
