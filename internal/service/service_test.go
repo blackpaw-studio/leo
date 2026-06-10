@@ -611,6 +611,74 @@ func TestHasResumeArg(t *testing.T) {
 	}
 }
 
+func TestHasSessionIDArg(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"present", []string{"--model", "sonnet", "--session-id", "abc"}, true},
+		{"absent", []string{"--model", "sonnet", "--resume", "abc"}, false},
+		{"trailing without value", []string{"--model", "sonnet", "--session-id"}, false},
+		{"empty", []string{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasSessionIDArg(tt.args); got != tt.want {
+				t.Errorf("hasSessionIDArg(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConvertSessionIDToResume(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "rewrites session-id to resume",
+			args: []string{"--add-dir", "/ws", "--session-id", "abc-123", "--model", "sonnet"},
+			want: []string{"--add-dir", "/ws", "--resume", "abc-123", "--model", "sonnet"},
+		},
+		{
+			name: "leaves existing resume untouched",
+			args: []string{"--resume", "abc-123", "--model", "sonnet"},
+			want: []string{"--resume", "abc-123", "--model", "sonnet"},
+		},
+		{
+			name: "no session selection flag",
+			args: []string{"--add-dir", "/ws", "--model", "sonnet"},
+			want: []string{"--add-dir", "/ws", "--model", "sonnet"},
+		},
+		{
+			name: "session-id at end without value is left as-is",
+			args: []string{"--add-dir", "/ws", "--session-id"},
+			want: []string{"--add-dir", "/ws", "--session-id"},
+		},
+		{
+			name: "empty args",
+			args: []string{},
+			want: []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertSessionIDToResume(tt.args)
+			if len(got) != len(tt.want) {
+				t.Errorf("convertSessionIDToResume(%v) = %v, want %v", tt.args, got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("convertSessionIDToResume(%v)[%d] = %q, want %q", tt.args, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestMarkAgentNoResume(t *testing.T) {
 	home := t.TempDir()
 	rec := agentstore.Record{
