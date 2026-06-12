@@ -77,6 +77,21 @@ func withStubStdio(t *testing.T) (*bytes.Buffer, *bytes.Buffer) {
 	return &out, &errBuf
 }
 
+// ctlOpts returns the shared SSH ControlMaster options the CLI splices into
+// every host-targeted ssh call, for the "prod" test host rooted at home. These
+// let attach --cc, the forward, and agent dispatches multiplex over one
+// connection.
+func ctlOpts(home string) []string {
+	cfg := &config.Config{HomePath: home}
+	return []string{"-o", "ControlMaster=auto", "-o", "ControlPath=" + cfg.HostControlPath("prod")}
+}
+
+// homeFromConfigPath recovers the leo home from a "<home>/leo.yaml" path so
+// tests built via the shared config helpers can derive the control socket path.
+func homeFromConfigPath(path string) string {
+	return strings.TrimSuffix(path, "/leo.yaml")
+}
+
 func TestAgentListRemoteDispatches(t *testing.T) {
 	path := newAgentCLITestConfig(t)
 	stub := withStubExec(t)
@@ -91,7 +106,8 @@ func TestAgentListRemoteDispatches(t *testing.T) {
 	if len(stub.calls) != 1 {
 		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
 	}
-	want := []string{"ssh", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "list"}
+	want := append([]string{"ssh", "user@prod.example.com", "-p", "2222"}, ctlOpts(homeFromConfigPath(path))...)
+	want = append(want, config.DefaultRemoteLeoPath, "agent", "list")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
@@ -161,7 +177,8 @@ func TestAgentRemoteHonorsLeoPathOverride(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	want := []string{"ssh", "user@prod.example.com", "/opt/leo/bin/leo", "agent", "list"}
+	want := append([]string{"ssh", "user@prod.example.com"}, ctlOpts(home)...)
+	want = append(want, "/opt/leo/bin/leo", "agent", "list")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
@@ -197,11 +214,13 @@ func TestAgentAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 	if len(stub.calls) != 2 {
 		t.Fatalf("expected 2 ssh calls (resolve + attach), got %d: %v", len(stub.calls), stub.calls)
 	}
-	wantResolve := []string{"ssh", "user@prod.example.com", config.DefaultRemoteLeoPath, "agent", "session-name", "scratch"}
+	wantResolve := append([]string{"ssh", "user@prod.example.com"}, ctlOpts(home)...)
+	wantResolve = append(wantResolve, config.DefaultRemoteLeoPath, "agent", "session-name", "scratch")
 	if !equalStrings(stub.calls[0], wantResolve) {
 		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
 	}
-	wantAttach := []string{"ssh", "-t", "user@prod.example.com", "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "leo-scratch"}
+	wantAttach := append([]string{"ssh", "-t", "user@prod.example.com"}, ctlOpts(home)...)
+	wantAttach = append(wantAttach, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "leo-scratch")
 	if !equalStrings(stub.calls[1], wantAttach) {
 		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}
@@ -256,11 +275,14 @@ func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
 	if len(stub.calls) != 2 {
 		t.Fatalf("expected 2 ssh calls (resolve + attach), got %d: %v", len(stub.calls), stub.calls)
 	}
-	wantResolve := []string{"ssh", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "session-name", "scratch"}
+	home := homeFromConfigPath(path)
+	wantResolve := append([]string{"ssh", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
+	wantResolve = append(wantResolve, config.DefaultRemoteLeoPath, "agent", "session-name", "scratch")
 	if !equalStrings(stub.calls[0], wantResolve) {
 		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
 	}
-	wantAttach := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "leo-scratch"}
+	wantAttach := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
+	wantAttach = append(wantAttach, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "leo-scratch")
 	if !equalStrings(stub.calls[1], wantAttach) {
 		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}
@@ -642,7 +664,8 @@ func TestAgentSessionNameRemoteDispatches(t *testing.T) {
 	if len(stub.calls) != 1 {
 		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
 	}
-	want := []string{"ssh", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "session-name", "leo"}
+	want := append([]string{"ssh", "user@prod.example.com", "-p", "2222"}, ctlOpts(homeFromConfigPath(path))...)
+	want = append(want, config.DefaultRemoteLeoPath, "agent", "session-name", "leo")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}

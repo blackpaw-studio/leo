@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -48,7 +49,8 @@ func TestProcessAttachRemoteUsesTmuxDirectly(t *testing.T) {
 	if len(stub.calls) != 1 {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
-	want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "leo-primary"}
+	want := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, ctlOpts(homeFromConfigPath(path))...)
+	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "leo-primary")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh attach args = %v, want %v", stub.calls[0], want)
 	}
@@ -84,7 +86,8 @@ func TestProcessAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	want := []string{"ssh", "-t", "user@prod.example.com", "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "leo-primary"}
+	want := append([]string{"ssh", "-t", "user@prod.example.com"}, ctlOpts(home)...)
+	want = append(want, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "leo-primary")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
@@ -145,7 +148,8 @@ func TestProcessLogsRemoteCapturesPane(t *testing.T) {
 	if len(stub.calls) != 1 {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
-	want := []string{"ssh", "user@prod.example.com", "-p", "2222", config.DefaultRemoteTmuxPath, "-L", "leo", "capture-pane", "-t", "leo-primary", "-p", "-S", "-50"}
+	want := append([]string{"ssh", "user@prod.example.com", "-p", "2222"}, ctlOpts(homeFromConfigPath(path))...)
+	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "capture-pane", "-t", "leo-primary", "-p", "-S", "-50")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh capture args = %v, want %v", stub.calls[0], want)
 	}
@@ -370,17 +374,33 @@ func TestShellQuoteArg(t *testing.T) {
 	}
 }
 
-// The --cc (tmux control mode) flag must refuse to run over SSH — the remote
-// attach path doesn't route through a local tmux client and would end up
-// garbling the user's terminal.
-func TestAttachTmuxSessionCCRefusesRemote(t *testing.T) {
+// Over SSH, --cc (tmux control mode) forces a remote PTY (-tt, since tmux -CC
+// calls tcgetattr and aborts without a terminal) and disables the ssh escape
+// char (-e none) so the control-mode framing survives, plus the shared
+// ControlMaster so it rides the forward connection. It runs remote
+// `tmux -CC attach` directly.
+func TestAttachTmuxSessionCCRemoteStreamsControlMode(t *testing.T) {
+	stub := withStubExec(t)
+	withStubStdio(t)
+	ctl := filepath.Join(t.TempDir(), "prod.ctl")
 	res := config.HostResolution{
-		Name: "prod",
-		Host: config.HostConfig{SSH: "user@prod.example.com"},
+		Name:        "prod",
+		Host:        config.HostConfig{SSH: "user@prod.example.com", SSHArgs: []string{"-p", "2222"}},
+		ControlPath: ctl,
 	}
-	err := attachTmuxSession(res, "leo-primary", attachOptions{cc: true})
-	if err == nil || !strings.Contains(err.Error(), "local-only") {
-		t.Fatalf("want local-only refusal, got %v", err)
+	if err := attachTmuxSession(res, "leo-primary", attachOptions{cc: true}); err != nil {
+		t.Fatalf("attach --cc over ssh: %v", err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
+	}
+	want := []string{
+		"ssh", "-tt", "-e", "none", "user@prod.example.com", "-p", "2222",
+		"-o", "ControlMaster=auto", "-o", "ControlPath=" + ctl,
+		config.DefaultRemoteTmuxPath, "-L", "leo", "-CC", "attach", "-t", "leo-primary",
+	}
+	if !equalStrings(stub.calls[0], want) {
+		t.Errorf("cc ssh args = %v, want %v", stub.calls[0], want)
 	}
 }
 
