@@ -19,10 +19,18 @@ func SockPath(workDir string) string {
 
 // IsRunning checks if a daemon is listening on the workspace socket.
 func IsRunning(workDir string) bool {
-	sockPath := SockPath(workDir)
+	return SocketHealthy(context.Background(), SockPath(workDir))
+}
+
+// SocketHealthy reports whether a leo daemon answers GET /health on the given
+// unix socket path. Unlike IsRunning it takes the socket path directly, so it
+// works against a forwarded remote daemon socket (e.g. the local end of a
+// `leo host forward` StreamLocalForward). The probe is bounded to one second
+// and honors ctx cancellation.
+func SocketHealthy(ctx context.Context, sockPath string) bool {
 	client := newUnixClient(sockPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://daemon/health", nil)

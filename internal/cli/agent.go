@@ -102,9 +102,11 @@ func dispatch(flagHost string) (*config.Config, config.HostResolution, error) {
 // buildSSHArgs returns a fresh slice of SSH argv so appends at the call site
 // cannot alias the config-loaded SSHArgs backing array.
 func buildSSHArgs(res config.HostResolution, tail ...string) []string {
-	args := make([]string, 0, 1+len(res.Host.SSHArgs)+len(tail))
+	control := sshControlOpts(res)
+	args := make([]string, 0, 1+len(res.Host.SSHArgs)+len(control)+len(tail))
 	args = append(args, res.Host.SSH)
 	args = append(args, res.Host.SSHArgs...)
+	args = append(args, control...)
 	args = append(args, tail...)
 	return args
 }
@@ -178,7 +180,7 @@ func newAgentListCmd() *cobra.Command {
 func newAgentSpawnCmd() *cobra.Command {
 	var host, repo, name, branch, base, prompt string
 	var envPairs []string
-	var reuseOwner, attachExisting bool
+	var reuseOwner, attachExisting, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "spawn <template> [repo]",
 		Short: "Spawn a new agent from a template",
@@ -235,6 +237,9 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 			}
 			if !res.Localhost {
 				extra := []string{"spawn", template, "--repo", repo}
+				if asJSON {
+					extra = append(extra, "--json")
+				}
 				if name != "" {
 					extra = append(extra, "--name", name)
 				}
@@ -331,6 +336,11 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 			if err != nil {
 				return fmt.Errorf("spawning agent: %w", err)
 			}
+			if asJSON {
+				enc := json.NewEncoder(agentStdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(rec)
+			}
 			if rec.Branch != "" {
 				fmt.Fprintf(agentStdout, "spawned %s (branch: %s, worktree: %s)\n", rec.Name, rec.Branch, rec.Workspace)
 			} else {
@@ -341,6 +351,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 		},
 	}
 	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output the spawned agent record as JSON")
 	cmd.Flags().StringVar(&repo, "repo", "", "owner/repo to clone, or plain name for template workspace")
 	cmd.Flags().StringVar(&name, "name", "", "override the derived agent name")
 	cmd.Flags().StringVar(&branch, "worktree", "", "create a dedicated git worktree on this branch (requires owner/repo)")
@@ -681,7 +692,7 @@ or any unambiguous suffix.`,
 
 func newAgentStopCmd() *cobra.Command {
 	var host string
-	var prune, force, deleteBranch bool
+	var prune, force, deleteBranch, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "stop <name>",
 		Short: "Stop a running agent",
@@ -715,6 +726,9 @@ remove the worktree and agentstore record in one step.`,
 				if deleteBranch {
 					extra = append(extra, "--delete-branch")
 				}
+				if asJSON {
+					extra = append(extra, "--json")
+				}
 				return runRemote(res, extra)
 			}
 
@@ -731,27 +745,44 @@ remove the worktree and agentstore record in one step.`,
 			if err := daemon.AgentStop(cmd.Context(), cfg.HomePath, canonical); err != nil {
 				return fmt.Errorf("stopping agent: %w", err)
 			}
-			fmt.Fprintf(agentStdout, "stopped %s\n", canonical)
+			result := agentStopResult{Name: canonical, Stopped: true}
+
+			// Confirm the stop before attempting prune so a later prune error
+			// (which returns below) doesn't swallow the fact that the agent was
+			// stopped. JSON callers get the combined object instead.
+			if !asJSON {
+				fmt.Fprintf(agentStdout, "stopped %s\n", canonical)
+			}
 
 			if prune {
 				if err := daemon.AgentPrune(cmd.Context(), cfg.HomePath, canonical, daemon.AgentPruneRequest{
 					Force:        force,
 					DeleteBranch: deleteBranch,
 				}); err != nil {
-					if errors.Is(err, agent.ErrNotWorktreeAgent) {
-						// Stop already cleared a shared-workspace record;
-						// nothing to prune. Treat as a no-op rather than an
-						// error so --prune is safe to default-on in scripts.
-						return nil
+					if !errors.Is(err, agent.ErrNotWorktreeAgent) {
+						return fmt.Errorf("pruning worktree: %w", err)
 					}
-					return fmt.Errorf("pruning worktree: %w", err)
+					// Stop already cleared a shared-workspace record; nothing to
+					// prune. Treat as a no-op rather than an error so --prune is
+					// safe to default-on in scripts.
+				} else {
+					result.Pruned = true
 				}
+			}
+
+			if asJSON {
+				enc := json.NewEncoder(agentStdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
+			}
+			if result.Pruned {
 				fmt.Fprintf(agentStdout, "pruned worktree for %s\n", canonical)
 			}
 			return nil
 		},
 	}
 	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output the stop result as JSON")
 	cmd.Flags().BoolVar(&prune, "prune", false, "also remove the worktree and agentstore record (worktree agents only)")
 	cmd.Flags().BoolVar(&force, "force", false, "with --prune: remove even when the worktree is dirty")
 	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "with --prune: delete the local branch after removing the worktree")
@@ -794,9 +825,22 @@ a leo- prefixed slug (lowercase, a-z 0-9 and dashes only).`,
 
 // --- prune ---
 
+// agentStopResult is the JSON shape for `leo agent stop --json`.
+type agentStopResult struct {
+	Name    string `json:"name"`
+	Stopped bool   `json:"stopped"`
+	Pruned  bool   `json:"pruned"`
+}
+
+// agentPruneResult is the JSON shape for `leo agent prune --json`.
+type agentPruneResult struct {
+	Name   string `json:"name"`
+	Pruned bool   `json:"pruned"`
+}
+
 func newAgentPruneCmd() *cobra.Command {
 	var host string
-	var force, deleteBranch bool
+	var force, deleteBranch, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "prune <name>",
 		Short: "Remove a stopped worktree agent's worktree and record",
@@ -820,6 +864,9 @@ delete the local branch after the worktree is gone.`,
 				if deleteBranch {
 					extra = append(extra, "--delete-branch")
 				}
+				if asJSON {
+					extra = append(extra, "--json")
+				}
 				return runRemote(res, extra)
 			}
 			if err := daemon.AgentPrune(cmd.Context(), cfg.HomePath, name, daemon.AgentPruneRequest{
@@ -828,11 +875,17 @@ delete the local branch after the worktree is gone.`,
 			}); err != nil {
 				return fmt.Errorf("pruning agent: %w", err)
 			}
+			if asJSON {
+				enc := json.NewEncoder(agentStdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(agentPruneResult{Name: name, Pruned: true})
+			}
 			fmt.Fprintf(agentStdout, "pruned %s\n", name)
 			return nil
 		},
 	}
 	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output the prune result as JSON")
 	cmd.Flags().BoolVar(&force, "force", false, "remove even when the worktree is dirty or the branch is unmerged")
 	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "delete the local branch after the worktree is removed")
 	return cmd

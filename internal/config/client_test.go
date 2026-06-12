@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -95,5 +96,43 @@ func TestResolveHost(t *testing.T) {
 				t.Errorf("Name = %q, want %q", got.Name, tc.wantName)
 			}
 		})
+	}
+}
+
+func TestResolveHostSetsControlPath(t *testing.T) {
+	cfg := Config{
+		HomePath: "/home/u/.leo",
+		Client:   ClientConfig{Hosts: map[string]HostConfig{"prod": {SSH: "u@prod"}}},
+	}
+
+	t.Run("remote resolution carries the deterministic control path", func(t *testing.T) {
+		got, err := cfg.ResolveHost("prod")
+		if err != nil {
+			t.Fatalf("ResolveHost: %v", err)
+		}
+		want := filepath.Join("/home/u/.leo", "state", "remotes", "prod.ctl")
+		if got.ControlPath != want {
+			t.Errorf("ControlPath = %q, want %q", got.ControlPath, want)
+		}
+	})
+
+	t.Run("localhost resolution has no control path", func(t *testing.T) {
+		got, err := cfg.ResolveHost("localhost")
+		if err != nil {
+			t.Fatalf("ResolveHost: %v", err)
+		}
+		if got.ControlPath != "" {
+			t.Errorf("ControlPath = %q, want empty for localhost", got.ControlPath)
+		}
+	})
+}
+
+func TestHostPathHelpers(t *testing.T) {
+	cfg := Config{HomePath: "/home/u/.leo"}
+	if got, want := cfg.HostControlPath("prod"), filepath.Join("/home/u/.leo", "state", "remotes", "prod.ctl"); got != want {
+		t.Errorf("HostControlPath = %q, want %q", got, want)
+	}
+	if got, want := cfg.HostForwardSocket("prod"), filepath.Join("/home/u/.leo", "state", "remotes", "prod.sock"); got != want {
+		t.Errorf("HostForwardSocket = %q, want %q", got, want)
 	}
 }

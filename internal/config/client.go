@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 )
 
@@ -12,6 +13,12 @@ type HostResolution struct {
 	Name      string
 	Host      HostConfig
 	Localhost bool
+	// ControlPath is the deterministic SSH ControlMaster socket path for this
+	// host (empty for localhost). All host-targeted SSH calls reuse it so they
+	// multiplex over a single connection — the `leo host forward` master, every
+	// `agent` dispatch, and the `--cc` cell stream share one TCP session. Lives
+	// under <state>/remotes/<name>.ctl alongside the forwarded daemon socket.
+	ControlPath string
 }
 
 // LocalhostSentinel is the literal flag value that forces localhost even when
@@ -46,7 +53,7 @@ func (c *Config) ResolveHost(flagValue string) (HostResolution, error) {
 		if !ok {
 			return HostResolution{}, fmt.Errorf("host %q not defined in client.hosts", name)
 		}
-		return HostResolution{Name: name, Host: host}, nil
+		return c.remoteResolution(name, host), nil
 	}
 
 	// No explicit selection — fall through to the first configured host if any.
@@ -57,8 +64,33 @@ func (c *Config) ResolveHost(flagValue string) (HostResolution, error) {
 		}
 		sort.Strings(names)
 		first := names[0]
-		return HostResolution{Name: first, Host: c.Client.Hosts[first]}, nil
+		return c.remoteResolution(first, c.Client.Hosts[first]), nil
 	}
 
 	return HostResolution{Localhost: true}, nil
+}
+
+// remoteResolution builds a HostResolution for a named remote host, attaching
+// the deterministic per-host ControlMaster socket path so every SSH call to the
+// host can multiplex over one connection.
+func (c *Config) remoteResolution(name string, host HostConfig) HostResolution {
+	return HostResolution{
+		Name:        name,
+		Host:        host,
+		ControlPath: c.HostControlPath(name),
+	}
+}
+
+// HostControlPath returns the SSH ControlMaster socket path for a named host:
+// <state>/remotes/<name>.ctl. Deterministic so independently-invoked CLI
+// commands converge on the same master.
+func (c *Config) HostControlPath(name string) string {
+	return filepath.Join(c.StatePath(), "remotes", name+".ctl")
+}
+
+// HostForwardSocket returns the local path where the host's remote daemon
+// socket is forwarded: <state>/remotes/<name>.sock. A local socket client can
+// speak the normal leo HTTP/socket API to the remote daemon through it.
+func (c *Config) HostForwardSocket(name string) string {
+	return filepath.Join(c.StatePath(), "remotes", name+".sock")
 }

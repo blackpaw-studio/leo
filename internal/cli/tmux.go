@@ -27,9 +27,9 @@ var tmuxEnv = func() string { return os.Getenv("TMUX") }
 // bool args through callers as new flags land.
 type attachOptions struct {
 	// cc enables tmux control mode (`-CC`) so terminals like iTerm2 and
-	// WezTerm render the attached session as native tabs. Local-only —
-	// the ssh + -tty route out of control-mode territory is messy enough
-	// that we reject it up front.
+	// WezTerm render the attached session as native tabs. Local attaches exec
+	// `tmux -CC`; remote attaches stream it over SSH (see
+	// attachRemoteControlMode).
 	cc bool
 }
 
@@ -46,7 +46,7 @@ type attachOptions struct {
 func attachTmuxSession(res config.HostResolution, session string, opts attachOptions) error {
 	if !res.Localhost {
 		if opts.cc {
-			return fmt.Errorf("--cc (tmux control mode) is local-only; it is not supported over SSH")
+			return attachRemoteControlMode(res, session)
 		}
 		// Bootstrap terminfo for the local $TERM on the remote so tmux there
 		// doesn't bail with "missing or unsuitable terminal" (Ghostty, Kitty,
@@ -54,6 +54,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		// command so the attach still works.
 		termOverride := ensureRemoteTerminfoFn(res)
 		sshArgs := append([]string{"-t", res.Host.SSH}, res.Host.SSHArgs...)
+		sshArgs = append(sshArgs, sshControlOpts(res)...)
 		prefixLen := len(sshArgs)
 		sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
 		sshArgs = append(sshArgs, tmux.Args("attach", "-t", session)...)
@@ -98,6 +99,38 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 	return agentSyscallExec(tmuxPath, argv, os.Environ())
 }
 
+// attachRemoteControlMode streams a remote agent's terminal over SSH using
+// tmux control mode (`-CC`). The data plane needs three things the interactive
+// remote-attach path does not:
+//
+//   - -tt : force a remote PTY. `tmux -CC attach` calls tcgetattr on its stdin
+//     and aborts with "tcgetattr failed: Inappropriate ioctl for device" when
+//     there is no terminal (verified empirically). -CC is *not* a no-TTY
+//     protocol — iTerm2/WezTerm run it on a PTY too. tmux puts the remote PTY
+//     into raw mode on attach, so the control-mode framing passes through
+//     cleanly. -tt forces the PTY even when leo's own stdin is a pipe.
+//   - -e none : disable SSH's own `~` escape character. Control-mode payloads
+//     can begin a line with `~`, which ssh would otherwise intercept.
+//   - shared ControlMaster : ride the `leo host forward` connection when it is
+//     up (instant attach, no second auth); open our own otherwise.
+//
+// stdio is wired straight through so the caller owns the protocol stream. The
+// caller (leoterm) is expected to drive this like a local `tmux -CC`: hand it a
+// PTY (or pipe) and put its end in raw mode. We do not exec/replace the process
+// — leoterm manages it as a child and tears it down by killing it.
+func attachRemoteControlMode(res config.HostResolution, session string) error {
+	sshArgs := []string{"-tt", "-e", "none", res.Host.SSH}
+	sshArgs = append(sshArgs, res.Host.SSHArgs...)
+	sshArgs = append(sshArgs, sshControlOpts(res)...)
+	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
+	sshArgs = append(sshArgs, tmux.Args("-CC", "attach", "-t", session)...)
+	c := agentExecCommand("ssh", sshArgs...)
+	c.Stdin = os.Stdin
+	c.Stdout = agentStdout
+	c.Stderr = agentStderr
+	return c.Run()
+}
+
 // shellQuoteArg wraps a value in single quotes, escaping any embedded single
 // quotes, so it can be safely embedded in a tmux display-popup command string.
 // Paths and session names pass through `tmux display-popup -E "<cmd>"`, which
@@ -120,6 +153,7 @@ func captureTmuxPane(res config.HostResolution, session string, lines int) error
 		return runShellCmd(tmuxPath, subArgs)
 	}
 	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
+	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
 	sshArgs = append(sshArgs, subArgs...)
 	return runShellCmd("ssh", sshArgs)
@@ -145,6 +179,7 @@ func followTmuxSession(res config.HostResolution, session string, lines int) err
 		return runShellCmd("sh", []string{"-c", buildTailCmd(tmuxPath)})
 	}
 	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
+	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	sshArgs = append(sshArgs, buildTailCmd(res.Host.RemoteTmuxPath()))
 	return runShellCmd("ssh", sshArgs)
 }

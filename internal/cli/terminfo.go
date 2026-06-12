@@ -117,6 +117,7 @@ func installRemoteTerminfo(res config.HostResolution, term string) error {
 	}
 
 	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
+	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	sshArgs = append(sshArgs, "tic", "-x", "-")
 	tic := agentExecCommand("ssh", sshArgs...)
 	tic.Stdin = &sourceBuf
