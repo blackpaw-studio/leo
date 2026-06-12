@@ -79,6 +79,13 @@ func (f *hostForwarder) run(parent context.Context) error {
 	announced := false
 	for {
 		healthy, runErr := f.runOnce(ctx, remoteSock, func(pid int) {
+			// Announce exactly once, on the first healthy connect. Reconnects
+			// re-observe health but must not re-emit the socket path — the
+			// contract is a single path line, and a consumer that has stopped
+			// draining stdout would otherwise eventually block this loop.
+			if announced {
+				return
+			}
 			f.printResult(pid)
 			announced = true
 		})
@@ -157,12 +164,20 @@ func (f *hostForwarder) runOnce(ctx context.Context, remoteSock string, announce
 	}
 }
 
-// sshForwardCmd builds the ssh StreamLocalForward command. It holds a
-// ControlMaster (with ControlPersist) so attach --cc and agent dispatches
-// multiplex over this connection; ServerAlive probes surface dead links
-// quickly so the reconnect loop can kick in; StreamLocalBindUnlink clears a
-// stale local socket before binding; ExitOnForwardFailure makes a failed
-// forward exit non-zero instead of silently sitting connected.
+// sshForwardCmd builds the ssh StreamLocalForward command. It holds the
+// ControlMaster so attach --cc and agent dispatches multiplex over this
+// connection; ServerAlive probes surface dead links quickly so the reconnect
+// loop can kick in; StreamLocalBindUnlink clears a stale local socket before
+// binding; ExitOnForwardFailure makes a failed forward exit non-zero instead
+// of silently sitting connected.
+//
+// No ControlPersist: this `-N` process *is* the master and keeps the
+// connection alive for its whole lifetime, so persistence buys nothing — and
+// it is actively harmful here. With ControlPersist, killing this process on a
+// drop/reconnect forks a lingering background master holding the dead link;
+// the respawn's ControlMaster=auto then re-attaches to that stale master and
+// the forward never recovers. Without it, the kill cleanly ends the master and
+// each reconnect establishes a fresh connection.
 func (f *hostForwarder) sshForwardCmd(remoteSock string) *exec.Cmd {
 	args := []string{
 		"-N", "-T",
@@ -170,7 +185,6 @@ func (f *hostForwarder) sshForwardCmd(remoteSock string) *exec.Cmd {
 		"-o", "StreamLocalBindUnlink=yes",
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPath=" + f.res.ControlPath,
-		"-o", "ControlPersist=yes",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 	}

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -152,7 +153,6 @@ func TestSSHForwardCmdArgs(t *testing.T) {
 		"-o", "StreamLocalBindUnlink=yes",
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPath=/s/remotes/prod.ctl",
-		"-o", "ControlPersist=yes",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-p", "2222",
@@ -262,6 +262,63 @@ func TestForwardRunFailsBeforeHealthy(t *testing.T) {
 	err := f.run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "before the socket came up") {
 		t.Fatalf("err = %v, want first-connect failure", err)
+	}
+}
+
+// Each ssh forward stays up briefly then exits, forcing the reconnect loop to
+// run several times. The socket path must be announced exactly once across all
+// those reconnects — re-emitting it would violate the single-path contract and
+// could block a consumer that has stopped draining stdout.
+func TestForwardRunAnnouncesOnceAcrossReconnects(t *testing.T) {
+	out, _ := withStubStdio(t)
+
+	// False on the first call so the idempotency short-circuit in run() doesn't
+	// fire (no pre-existing forward); healthy on every poll thereafter.
+	var healthChecks int32
+	oldHealthy := forwardHealthy
+	forwardHealthy = func(context.Context, string) bool { return atomic.AddInt32(&healthChecks, 1) > 1 }
+	t.Cleanup(func() { forwardHealthy = oldHealthy })
+
+	oldAgent := agentExecCommand
+	agentExecCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("printf", "%s", "/remote/.leo/state/leo.sock")
+	}
+	t.Cleanup(func() { agentExecCommand = oldAgent })
+
+	// Tighten the timers so the test exercises real reconnects quickly.
+	oldPoll, oldBackoff := forwardHealthPoll, forwardBackoffMin
+	forwardHealthPoll = 5 * time.Millisecond
+	forwardBackoffMin = 5 * time.Millisecond
+	t.Cleanup(func() { forwardHealthPoll, forwardBackoffMin = oldPoll, oldBackoff })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	var spawns int32
+	oldExec := forwardExecCommand
+	forwardExecCommand = func(string, ...string) *exec.Cmd {
+		// Stay up long enough for the health poll to fire, then exit so the
+		// loop treats it as a drop and reconnects. Cancel once we've proven a
+		// few reconnects each had a chance to re-announce.
+		if atomic.AddInt32(&spawns, 1) >= 3 {
+			cancel()
+		}
+		return exec.Command("sleep", "0.03")
+	}
+	t.Cleanup(func() { forwardExecCommand = oldExec })
+
+	f := &hostForwarder{
+		res:       config.HostResolution{Name: "prod", Host: config.HostConfig{SSH: "u@prod"}},
+		localSock: filepath.Join(t.TempDir(), "prod.sock"),
+	}
+	if err := f.run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := strings.Count(out.String(), "prod.sock"); got != 1 {
+		t.Errorf("announced %d times, want exactly 1; stdout = %q", got, out.String())
+	}
+	if atomic.LoadInt32(&spawns) < 2 {
+		t.Fatalf("expected multiple reconnects, got %d spawns", spawns)
 	}
 }
 

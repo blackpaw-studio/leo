@@ -747,6 +747,13 @@ remove the worktree and agentstore record in one step.`,
 			}
 			result := agentStopResult{Name: canonical, Stopped: true}
 
+			// Confirm the stop before attempting prune so a later prune error
+			// (which returns below) doesn't swallow the fact that the agent was
+			// stopped. JSON callers get the combined object instead.
+			if !asJSON {
+				fmt.Fprintf(agentStdout, "stopped %s\n", canonical)
+			}
+
 			if prune {
 				if err := daemon.AgentPrune(cmd.Context(), cfg.HomePath, canonical, daemon.AgentPruneRequest{
 					Force:        force,
@@ -768,7 +775,6 @@ remove the worktree and agentstore record in one step.`,
 				enc.SetIndent("", "  ")
 				return enc.Encode(result)
 			}
-			fmt.Fprintf(agentStdout, "stopped %s\n", canonical)
 			if result.Pruned {
 				fmt.Fprintf(agentStdout, "pruned worktree for %s\n", canonical)
 			}
