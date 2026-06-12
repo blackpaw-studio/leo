@@ -366,6 +366,75 @@ func TestRestoreAgentsRemovesFailedSharedRecord(t *testing.T) {
 	}
 }
 
+// When an agent's tmux session survived the daemon bounce (the common case for
+// `leo update` / `leo service restart`, which SIGKILL the daemon but leave the
+// independent tmux server running), RestoreAgents must re-adopt that live
+// session rather than killing+respawning it — so a daemon restart no longer
+// disrupts every running agent.
+func TestRestoreAgentsAdoptsLiveSession(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:       "leoterm",
+		Workspace:  t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet"},
+		SessionID:  "sid-live",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	origHas := tmuxHasSession
+	tmuxHasSession = func(_, _ string) bool { return true }
+	defer func() { tmuxHasSession = origHas }()
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "tmux", "", spawner)
+	if restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call, got %d", len(spawner.calls))
+	}
+	if !spawner.calls[0].Adopt {
+		t.Errorf("expected Adopt=true for a surviving live session, got false")
+	}
+}
+
+// When no live session exists (a clean shutdown killed it), RestoreAgents must
+// spawn fresh — Adopt=false — so the supervise loop creates a new session.
+func TestRestoreAgentsFreshSpawnWhenSessionGone(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:       "leoterm",
+		Workspace:  t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet"},
+		SessionID:  "sid-gone",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	origHas := tmuxHasSession
+	tmuxHasSession = func(_, _ string) bool { return false }
+	defer func() { tmuxHasSession = origHas }()
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "tmux", "", spawner)
+	if restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call, got %d", len(spawner.calls))
+	}
+	if spawner.calls[0].Adopt {
+		t.Errorf("expected Adopt=false when no live session exists, got true")
+	}
+}
+
 func TestArgsWithResumeStripsExistingSessionFlags(t *testing.T) {
 	cases := []struct {
 		name string

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
@@ -12,7 +11,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/session"
-	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // agentSpawner is the minimal supervisor surface RestoreAgents needs.
@@ -70,13 +68,15 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			continue
 		}
 
-		// If a tmux session somehow survived (daemon crashed rather than
-		// shut down cleanly), kill it so SpawnAgent starts a fresh one
-		// that resumes the claude session cleanly.
-		if tmuxPath != "" {
-			sessionName := agent.SessionName(name)
-			_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
-		}
+		// A tmux session that outlived the previous daemon (launchctl
+		// kickstart -k / a crash SIGKILLs the daemon but leaves the
+		// independent tmux server and its sessions running) is healthy and
+		// detached from the old process. Re-adopt it instead of killing and
+		// respawning, so `leo update` / `leo service restart` no longer
+		// disrupt every running agent. When no live session exists there is
+		// nothing to kill — SpawnAgent creates a fresh one that resumes the
+		// prior conversation via --resume.
+		adopt := tmuxPath != "" && tmuxHasSession(tmuxPath, agent.SessionName(name))
 
 		// NoResume short-circuits the resume lookup entirely. It is set by
 		// the supervisor when the previous spawn quick-exited while resuming
@@ -125,6 +125,7 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			Env:        rec.Env,
 			WebPort:    rec.WebPort,
 			WebToken:   webToken,
+			Adopt:      adopt,
 		}
 		if err := sv.SpawnAgent(spec); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to restore agent %q: %v\n", name, err)
