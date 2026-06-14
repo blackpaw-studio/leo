@@ -15,6 +15,14 @@ type SpawnRequest struct {
 	// as LEO_API_TOKEN so the MCP server inside claude can authenticate
 	// against the daemon's /api/* and /web/* routes.
 	WebToken string
+	// Adopt requests that the supervisor re-attach to an already-running tmux
+	// session for this agent instead of killing and recreating it. Set by
+	// RestoreAgents when an agent's session survived a daemon bounce (e.g.
+	// `leo update` / `leo service restart` SIGKILL the daemon but leave the
+	// independent tmux sessions running) so restarting the daemon no longer
+	// disrupts in-flight agents. Only honored for the first supervise
+	// iteration; a later in-loop restart spawns a fresh session as usual.
+	Adopt bool
 }
 
 // ProcessState is the live supervisor view of a single agent/process.

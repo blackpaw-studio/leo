@@ -77,6 +77,10 @@ type ProcessSpec struct {
 	// StateDir is where per-process stderr capture + exit-code files are
 	// written (typically <home>/state). When empty, capture is skipped.
 	StateDir string
+	// Adopt asks the supervise loop to re-attach to an already-running tmux
+	// session on its first iteration instead of killing and recreating it.
+	// See agent.SpawnRequest.Adopt for the rationale.
+	Adopt bool
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -228,6 +232,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		Env:        spec.Env,
 		WebPort:    spec.WebPort,
 		WebToken:   spec.WebToken,
+		Adopt:      spec.Adopt,
 	}
 	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
 	return nil
@@ -583,6 +588,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	sv.initState(spec.Name)
 
 	backoff := initialBackoff
+	// adopt is a one-shot: honored only on the first iteration, and only when
+	// the session actually survived the daemon bounce. Any in-loop restart
+	// below always spawns a fresh session.
+	adopt := spec.Adopt
 
 	for {
 		// Snapshot identity for this iteration. The tmux session name is also
@@ -601,52 +610,67 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			resetExitCode(spec.StateDir, name)
 		}
 
-		claudeCmd := buildClaudeShellCmd(claudePath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
-
-		// Kill any stale tmux session with our name
-		exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
-
-		// Create a detached tmux session running claude
-		createCmd := exec.CommandContext(ctx, tmuxPath,
-			tmux.Args(
-				"new-session", "-d", "-s", sessionName,
-				"-c", spec.WorkDir,
-				"-x", "200", "-y", "50",
-				claudeCmd,
-			)...,
-		)
-		createCmd.Dir = spec.WorkDir
-		createCmd.Env = os.Environ()
+		doAdopt := adopt && tmuxHasSession(tmuxPath, sessionName)
+		adopt = false
 
 		startTime := time.Now()
 
-		if err := createCmd.Run(); err != nil {
-			sv.setState(name, "restarting")
-			fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", name, err, backoff)
-			select {
-			case <-ctx.Done():
-				sv.setState(name, "stopped")
-				return
-			case <-time.After(backoff):
-			}
-			backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
-			continue
-		}
+		if doAdopt {
+			// Re-attach to the session that outlived the previous daemon
+			// instead of recreating it. The running claude keeps its
+			// conversation and in-flight work untouched — a daemon restart
+			// (`leo update`, `leo service restart`) becomes a no-op for the
+			// agent. If this session later ends, the loop falls through to a
+			// normal fresh spawn (adopt is already cleared).
+			fmt.Fprintf(os.Stdout, "[%s] adopted existing tmux session '%s', claude already running\n", name, sessionName)
+		} else {
+			claudeCmd := buildClaudeShellCmd(claudePath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
 
-		fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
+			// Kill any stale tmux session with our name
+			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run()
 
-		// If any --dangerously-load-development-channels flags are present,
-		// claude will show an interactive confirmation prompt. Dismiss it by
-		// sending Enter (the default-highlighted option is "I am using this
-		// for local development"). Runs in a goroutine so the restart loop
-		// isn't blocked if the prompt never appears.
-		if hasDevChannelFlag(currentArgs) {
-			fmt.Fprintf(os.Stdout, "[%s] auto-accepting dev-channel prompt\n", name)
-			go func(sess string) {
-				if err := tmux.AcceptDevChannelPrompt(ctx, tmuxPath, sess); err != nil && ctx.Err() == nil {
-					fmt.Fprintf(os.Stderr, "[%s] warning: dev-channel auto-accept failed: %v\n", name, err)
+			// Create a detached tmux session running claude
+			createCmd := exec.CommandContext(ctx, tmuxPath,
+				tmux.Args(
+					"new-session", "-d", "-s", sessionName,
+					"-c", spec.WorkDir,
+					"-x", "200", "-y", "50",
+					claudeCmd,
+				)...,
+			)
+			createCmd.Dir = spec.WorkDir
+			createCmd.Env = os.Environ()
+
+			if err := createCmd.Run(); err != nil {
+				sv.setState(name, "restarting")
+				fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", name, err, backoff)
+				select {
+				case <-ctx.Done():
+					sv.setState(name, "stopped")
+					return
+				case <-time.After(backoff):
 				}
-			}(sessionName)
+				backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
+				continue
+			}
+
+			fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
+
+			// If any --dangerously-load-development-channels flags are present,
+			// claude will show an interactive confirmation prompt on a fresh
+			// start. Dismiss it by sending Enter (the default-highlighted
+			// option is "I am using this for local development"). Runs in a
+			// goroutine so the restart loop isn't blocked if the prompt never
+			// appears. Skipped for an adopted session — that claude is already
+			// running past the prompt.
+			if hasDevChannelFlag(currentArgs) {
+				fmt.Fprintf(os.Stdout, "[%s] auto-accepting dev-channel prompt\n", name)
+				go func(sess string) {
+					if err := tmux.AcceptDevChannelPrompt(ctx, tmuxPath, sess); err != nil && ctx.Err() == nil {
+						fmt.Fprintf(os.Stderr, "[%s] warning: dev-channel auto-accept failed: %v\n", name, err)
+					}
+				}(sessionName)
+			}
 		}
 
 		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime) {
