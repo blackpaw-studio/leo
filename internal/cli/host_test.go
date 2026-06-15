@@ -302,6 +302,57 @@ func TestForwardRunFailsBeforeHealthy(t *testing.T) {
 	}
 }
 
+// A SIGTERM/cancel teardown of the foreground forward (leoterm's actual path:
+// it owns the process and kills it) must clean up BOTH the local socket and the
+// ControlMaster socket file. The `-N` forward process is the master, so once
+// cancelled its ControlPath file is stale; leaving it behind is the tidiness
+// gap leoterm flagged.
+func TestForwardRunCleansSocketsOnCancel(t *testing.T) {
+	withStubStdio(t)
+
+	oldHealthy := forwardHealthy
+	forwardHealthy = func(context.Context, string) bool { return false }
+	t.Cleanup(func() { forwardHealthy = oldHealthy })
+
+	// remoteSockPath round-trip succeeds...
+	oldAgent := agentExecCommand
+	agentExecCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("printf", "%s", "/remote/.leo/state/leo.sock")
+	}
+	t.Cleanup(func() { agentExecCommand = oldAgent })
+
+	// ...and the ssh forward blocks until killed by the cancel.
+	oldExec := forwardExecCommand
+	forwardExecCommand = func(string, ...string) *exec.Cmd { return exec.Command("sleep", "30") }
+	t.Cleanup(func() { forwardExecCommand = oldExec })
+
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "prod.sock")
+	ctl := filepath.Join(dir, "prod.ctl")
+	for _, p := range []string{sock, ctl} {
+		if err := os.WriteFile(p, []byte{}, 0o600); err != nil {
+			t.Fatalf("seed %s: %v", p, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate SIGTERM before the forward ever becomes healthy
+
+	f := &hostForwarder{
+		res:       config.HostResolution{Name: "prod", Host: config.HostConfig{SSH: "u@prod"}, ControlPath: ctl},
+		localSock: sock,
+	}
+	if err := f.run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Errorf("local socket should be removed on cancel, stat err = %v", err)
+	}
+	if _, err := os.Stat(ctl); !os.IsNotExist(err) {
+		t.Errorf("ControlPath file should be removed on cancel, stat err = %v", err)
+	}
+}
+
 // Each ssh forward stays up briefly then exits, forcing the reconnect loop to
 // run several times. The socket path must be announced exactly once across all
 // those reconnects — re-emitting it would violate the single-path contract and

@@ -94,23 +94,24 @@ func (f *hostForwarder) run(parent context.Context) error {
 		}
 
 		if ctx.Err() != nil {
-			// Asked to stop. The local socket is the remote daemon's, removed
-			// by StreamLocalBindUnlink on the next bind; clean it up anyway.
-			_ = os.Remove(f.localSock)
+			// Asked to stop (SIGINT/SIGTERM). The local socket is the remote
+			// daemon's, removed by StreamLocalBindUnlink on the next bind; clean
+			// it up anyway, along with the now-dead master's ControlPath file.
+			f.removeForwardSockets()
 			return nil
 		}
 
 		if !announced {
 			// Never reached a healthy state — surface the failure so the
 			// caller knows setup failed and no socket path was emitted.
-			_ = os.Remove(f.localSock)
+			f.removeForwardSockets()
 			return fmt.Errorf("ssh forward to %s failed before the socket came up: %w", f.res.Name, runErr)
 		}
 
 		fmt.Fprintf(agentStderr, "leo host forward %s: connection dropped (%v); reconnecting in %s\n",
 			f.res.Name, runErrText(runErr), backoff)
 		if !sleepCtx(ctx, backoff) {
-			_ = os.Remove(f.localSock)
+			f.removeForwardSockets()
 			return nil
 		}
 		backoff *= 2
@@ -237,18 +238,24 @@ func (f *hostForwarder) stop() error {
 	cmd.Stderr = &errb
 	_ = cmd.Run() // no live master is fine
 
-	// `-O exit` ends the master but leaves its ControlPath socket file on disk;
-	// unlink it so teardown doesn't leave a stale <home>/state/remotes/<h>.ctl
-	// behind. Best-effort: a missing file is fine.
+	f.removeForwardSockets()
+	fmt.Fprintf(agentStdout, "tore down forward for %s\n", f.res.Name)
+	return nil
+}
+
+// removeForwardSockets unlinks both the forwarded local socket and the
+// ControlMaster socket file. The `-N` forward process IS the master (no
+// ControlPersist), so once it's gone — whether via `ssh -O exit` (unforward) or
+// a SIGTERM that kills this process and its ssh child — the ControlPath file is
+// stale and should be cleaned up. Without this, a plain SIGTERM teardown leaves
+// a dangling <home>/state/remotes/<host>.ctl. Best-effort: missing files are
+// fine, and StreamLocalBindUnlink would clear the local socket on a re-bind
+// anyway.
+func (f *hostForwarder) removeForwardSockets() {
+	_ = os.Remove(f.localSock)
 	if f.res.ControlPath != "" {
 		_ = os.Remove(f.res.ControlPath)
 	}
-
-	if err := os.Remove(f.localSock); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing local socket: %w", err)
-	}
-	fmt.Fprintf(agentStdout, "tore down forward for %s\n", f.res.Name)
-	return nil
 }
 
 // printResult emits the local socket path (plain or JSON). The plain form is a
