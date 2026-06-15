@@ -204,6 +204,43 @@ func TestRemoteSockPath(t *testing.T) {
 	}
 }
 
+// TestRemoteSockPathFlattening guards the regression where `sh -c <expr>` was
+// passed as three separate argv tokens. Real ssh space-joins every
+// post-destination token into one string before handing it to the remote login
+// shell, so the unquoted form arrived as `sh -c printf %s "..."` and `sh -c`
+// took only `printf` as its command — a printf usage error, exit 2.
+//
+// The fake ssh below reproduces that flattening faithfully: it space-joins the
+// post-destination argv and runs the result through a real local `sh -c`,
+// exactly as the remote shell would. With the expr correctly single-quoted the
+// whole `${LEO_HOME:-$HOME/.leo}` expression survives and resolves; the previous
+// unquoted call fails this test.
+func TestRemoteSockPathFlattening(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LEO_HOME", home)
+	want := home + "/state/leo.sock"
+
+	old := agentExecCommand
+	agentExecCommand = func(name string, args ...string) *exec.Cmd {
+		// args[0] is the destination; ssh joins everything after it with
+		// single spaces and evaluates that string in the remote login shell.
+		remote := strings.Join(args[1:], " ")
+		return exec.Command("sh", "-c", remote)
+	}
+	t.Cleanup(func() { agentExecCommand = old })
+
+	// No ControlPath, so buildSSHArgs emits exactly [host, "sh", "-c", <expr>]
+	// and the simulation above sees only the remote command, as real ssh would.
+	f := &hostForwarder{res: config.HostResolution{Name: "prod", Host: config.HostConfig{SSH: "u@prod"}}}
+	got, err := f.remoteSockPath()
+	if err != nil {
+		t.Fatalf("remoteSockPath: %v", err)
+	}
+	if got != want {
+		t.Errorf("path = %q, want %q", got, want)
+	}
+}
+
 // --- run(): idempotency and first-connect failure ---
 
 func TestForwardRunIdempotentWhenHealthy(t *testing.T) {

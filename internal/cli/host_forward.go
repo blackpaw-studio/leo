@@ -194,8 +194,16 @@ func (f *hostForwarder) sshForwardCmd(remoteSock string) *exec.Cmd {
 }
 
 // remoteSockPath asks the remote shell for the absolute daemon socket path.
+//
+// ssh space-joins every post-destination argv token into a single string and
+// hands that to the remote login shell — it does not preserve our argv
+// boundaries. So `sh -c <expr>` as three tokens arrives as `sh -c printf %s
+// "..."`, where `sh -c` takes only the first word (`printf`) as the command and
+// the rest become unused positional args, yielding a printf usage error. We
+// single-quote the expr into one token so the flattened string is `sh -c
+// '<expr>'` and the whole expr reaches `sh -c` intact.
 func (f *hostForwarder) remoteSockPath() (string, error) {
-	args := buildSSHArgs(f.res, "sh", "-c", remoteSockExpr)
+	args := buildSSHArgs(f.res, "sh", "-c", shellQuoteArg(remoteSockExpr))
 	cmd := agentExecCommand("ssh", args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
