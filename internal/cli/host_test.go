@@ -204,6 +204,43 @@ func TestRemoteSockPath(t *testing.T) {
 	}
 }
 
+// TestRemoteSockPathFlattening guards the regression where `sh -c <expr>` was
+// passed as three separate argv tokens. Real ssh space-joins every
+// post-destination token into one string before handing it to the remote login
+// shell, so the unquoted form arrived as `sh -c printf %s "..."` and `sh -c`
+// took only `printf` as its command — a printf usage error, exit 2.
+//
+// The fake ssh below reproduces that flattening faithfully: it space-joins the
+// post-destination argv and runs the result through a real local `sh -c`,
+// exactly as the remote shell would. With the expr correctly single-quoted the
+// whole `${LEO_HOME:-$HOME/.leo}` expression survives and resolves; the previous
+// unquoted call fails this test.
+func TestRemoteSockPathFlattening(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LEO_HOME", home)
+	want := home + "/state/leo.sock"
+
+	old := agentExecCommand
+	agentExecCommand = func(name string, args ...string) *exec.Cmd {
+		// args[0] is the destination; ssh joins everything after it with
+		// single spaces and evaluates that string in the remote login shell.
+		remote := strings.Join(args[1:], " ")
+		return exec.Command("sh", "-c", remote)
+	}
+	t.Cleanup(func() { agentExecCommand = old })
+
+	// No ControlPath, so buildSSHArgs emits exactly [host, "sh", "-c", <expr>]
+	// and the simulation above sees only the remote command, as real ssh would.
+	f := &hostForwarder{res: config.HostResolution{Name: "prod", Host: config.HostConfig{SSH: "u@prod"}}}
+	got, err := f.remoteSockPath()
+	if err != nil {
+		t.Fatalf("remoteSockPath: %v", err)
+	}
+	if got != want {
+		t.Errorf("path = %q, want %q", got, want)
+	}
+}
+
 // --- run(): idempotency and first-connect failure ---
 
 func TestForwardRunIdempotentWhenHealthy(t *testing.T) {
@@ -262,6 +299,57 @@ func TestForwardRunFailsBeforeHealthy(t *testing.T) {
 	err := f.run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "before the socket came up") {
 		t.Fatalf("err = %v, want first-connect failure", err)
+	}
+}
+
+// A SIGTERM/cancel teardown of the foreground forward (leoterm's actual path:
+// it owns the process and kills it) must clean up BOTH the local socket and the
+// ControlMaster socket file. The `-N` forward process is the master, so once
+// cancelled its ControlPath file is stale; leaving it behind is the tidiness
+// gap leoterm flagged.
+func TestForwardRunCleansSocketsOnCancel(t *testing.T) {
+	withStubStdio(t)
+
+	oldHealthy := forwardHealthy
+	forwardHealthy = func(context.Context, string) bool { return false }
+	t.Cleanup(func() { forwardHealthy = oldHealthy })
+
+	// remoteSockPath round-trip succeeds...
+	oldAgent := agentExecCommand
+	agentExecCommand = func(string, ...string) *exec.Cmd {
+		return exec.Command("printf", "%s", "/remote/.leo/state/leo.sock")
+	}
+	t.Cleanup(func() { agentExecCommand = oldAgent })
+
+	// ...and the ssh forward blocks until killed by the cancel.
+	oldExec := forwardExecCommand
+	forwardExecCommand = func(string, ...string) *exec.Cmd { return exec.Command("sleep", "30") }
+	t.Cleanup(func() { forwardExecCommand = oldExec })
+
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "prod.sock")
+	ctl := filepath.Join(dir, "prod.ctl")
+	for _, p := range []string{sock, ctl} {
+		if err := os.WriteFile(p, []byte{}, 0o600); err != nil {
+			t.Fatalf("seed %s: %v", p, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate SIGTERM before the forward ever becomes healthy
+
+	f := &hostForwarder{
+		res:       config.HostResolution{Name: "prod", Host: config.HostConfig{SSH: "u@prod"}, ControlPath: ctl},
+		localSock: sock,
+	}
+	if err := f.run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Errorf("local socket should be removed on cancel, stat err = %v", err)
+	}
+	if _, err := os.Stat(ctl); !os.IsNotExist(err) {
+		t.Errorf("ControlPath file should be removed on cancel, stat err = %v", err)
 	}
 }
 
@@ -331,6 +419,10 @@ func TestForwardStopExitsMasterAndRemovesSocket(t *testing.T) {
 	if err := os.WriteFile(sock, []byte{}, 0o600); err != nil {
 		t.Fatalf("seed socket: %v", err)
 	}
+	ctl := filepath.Join(dir, "prod.ctl")
+	if err := os.WriteFile(ctl, []byte{}, 0o600); err != nil {
+		t.Fatalf("seed ctl: %v", err)
+	}
 
 	var got []string
 	old := agentExecCommand
@@ -344,18 +436,21 @@ func TestForwardStopExitsMasterAndRemovesSocket(t *testing.T) {
 		res: config.HostResolution{
 			Name:        "prod",
 			Host:        config.HostConfig{SSH: "u@prod", SSHArgs: []string{"-p", "2222"}},
-			ControlPath: filepath.Join(dir, "prod.ctl"),
+			ControlPath: ctl,
 		},
 		localSock: sock,
 	}
 	if err := f.stop(); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	want := []string{"ssh", "-o", "ControlPath=" + filepath.Join(dir, "prod.ctl"), "-O", "exit", "-p", "2222", "u@prod"}
+	want := []string{"ssh", "-o", "ControlPath=" + ctl, "-O", "exit", "-p", "2222", "u@prod"}
 	if !equalStrings(got, want) {
 		t.Errorf("stop ssh args = %v, want %v", got, want)
 	}
 	if _, err := os.Stat(sock); !os.IsNotExist(err) {
 		t.Errorf("expected local socket removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(ctl); !os.IsNotExist(err) {
+		t.Errorf("expected ControlPath socket file removed, stat err = %v", err)
 	}
 }

@@ -78,11 +78,12 @@ func addHostFlag(cmd *cobra.Command, host *string) {
 }
 
 // addControlModeFlag wires a --cc flag that enables tmux control mode on
-// attach. Terminals like iTerm2 and WezTerm render tmux -CC sessions as
-// native tabs. Control mode is local-only — attach helpers reject it when
-// combined with SSH dispatch or when already inside a tmux client.
+// attach. Terminals like iTerm2 and WezTerm render tmux -CC sessions as native
+// tabs. Works locally and over SSH (remote -CC streams through ssh -tt; see
+// attachRemoteControlMode); the only place it's rejected is from inside an
+// existing tmux client, where -CC would fight the outer server for the terminal.
 func addControlModeFlag(cmd *cobra.Command, cc *bool) {
-	cmd.Flags().BoolVar(cc, "cc", false, "use tmux control mode (-CC) — for iTerm2/WezTerm native tabs; local only")
+	cmd.Flags().BoolVar(cc, "cc", false, "use tmux control mode (-CC) for iTerm2/WezTerm native tabs (local or over SSH)")
 }
 
 // dispatch handles the "run this locally vs proxy via ssh" decision. For

@@ -1,13 +1,37 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
+
+// hintRemoteTmuxMissing enriches a remote tmux failure with actionable
+// guidance. ssh relays the remote command's exit status, so a remote `tmux`
+// that isn't on the non-interactive SSH PATH surfaces as exit 127 ("command
+// not found"). This is the common case on Homebrew macOS, where tmux lives in
+// /opt/homebrew/bin — added to PATH by a login profile that `ssh host cmd`
+// does not source. The fix is the per-host `tmux_path` setting, but the bare
+// exit-127 gives the user no clue; point them at it. Non-127 errors and
+// localhost paths pass through untouched.
+func hintRemoteTmuxMissing(res config.HostResolution, err error) error {
+	if err == nil || res.Localhost {
+		return err
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 127 {
+		return err
+	}
+	return fmt.Errorf("%w\n\nremote tmux (%q) was not found on %s's non-interactive SSH PATH. "+
+		"Set tmux_path for this host in leo.yaml to its absolute path, e.g.:\n"+
+		"  client.hosts.%s.tmux_path: /opt/homebrew/bin/tmux",
+		err, res.Host.RemoteTmuxPath(), res.Name, res.Name)
+}
 
 // tmuxLocate is a testability seam for locating the tmux binary. Tests
 // override it so the local-attach path doesn't require tmux on the runner
@@ -57,13 +81,13 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		sshArgs = append(sshArgs, sshControlOpts(res)...)
 		prefixLen := len(sshArgs)
 		sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
-		sshArgs = append(sshArgs, tmux.Args("attach", "-t", tmux.Target(session))...)
+		sshArgs = append(sshArgs, tmux.Args("attach", "-t", remoteShellTarget(tmux.Target(session)))...)
 		sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 		c := agentExecCommand("ssh", sshArgs...)
 		c.Stdin = os.Stdin
 		c.Stdout = agentStdout
 		c.Stderr = agentStderr
-		return c.Run()
+		return hintRemoteTmuxMissing(res, c.Run())
 	}
 
 	tmuxPath, err := tmuxLocate()
@@ -123,12 +147,12 @@ func attachRemoteControlMode(res config.HostResolution, session string) error {
 	sshArgs = append(sshArgs, res.Host.SSHArgs...)
 	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
-	sshArgs = append(sshArgs, tmux.Args("-CC", "attach", "-t", tmux.Target(session))...)
+	sshArgs = append(sshArgs, tmux.Args("-CC", "attach", "-t", remoteShellTarget(tmux.Target(session)))...)
 	c := agentExecCommand("ssh", sshArgs...)
 	c.Stdin = os.Stdin
 	c.Stdout = agentStdout
 	c.Stderr = agentStderr
-	return c.Run()
+	return hintRemoteTmuxMissing(res, c.Run())
 }
 
 // shellQuoteArg wraps a value in single quotes, escaping any embedded single
@@ -139,24 +163,41 @@ func shellQuoteArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// remoteShellTarget quotes a tmux `-t` target for transit through a remote
+// login shell. ssh re-parses the whole command on the remote, so an exact-match
+// target like "=leo-foo" (tmux.Target/PaneTarget, added for #87) is eaten by
+// zsh's `=` filename expansion (the EQUALS option, on by default): zsh rewrites
+// "=leo-foo" to the path of a command named "leo-foo" and aborts with
+// "leo-foo not found" before tmux ever runs. Single-quoting passes the literal
+// "=leo-foo" through untouched. Use this ONLY on ssh paths — local attaches hand
+// argv straight to tmux with no shell in between, so a quoted target would reach
+// tmux with the quotes still attached and fail to resolve.
+func remoteShellTarget(target string) string { return shellQuoteArg(target) }
+
 // captureTmuxPane runs a one-shot `tmux capture-pane -p -S -<lines>` against
 // the given session and writes output to the shared agentStdout. Local and
 // remote paths share identical shape — remote just wraps through ssh with the
 // host's configured tmux path.
 func captureTmuxPane(res config.HostResolution, session string, lines int) error {
-	subArgs := tmux.Args("capture-pane", "-t", tmux.PaneTarget(session), "-p", "-S", fmt.Sprintf("-%d", lines))
+	tail := []string{"-p", "-S", fmt.Sprintf("-%d", lines)}
 	if res.Localhost {
 		tmuxPath, err := tmuxLocate()
 		if err != nil {
 			return err
 		}
+		// Local: argv goes straight to tmux, no shell, so the raw "=name:" target
+		// resolves as-is.
+		subArgs := tmux.Args(append([]string{"capture-pane", "-t", tmux.PaneTarget(session)}, tail...)...)
 		return runShellCmd(tmuxPath, subArgs)
 	}
+	// Remote: the target crosses the remote login shell, so quote the exact-match
+	// pane target to survive zsh `=` expansion (see remoteShellTarget).
+	subArgs := tmux.Args(append([]string{"capture-pane", "-t", remoteShellTarget(tmux.PaneTarget(session))}, tail...)...)
 	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
 	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
 	sshArgs = append(sshArgs, subArgs...)
-	return runShellCmd("ssh", sshArgs)
+	return hintRemoteTmuxMissing(res, runShellCmd("ssh", sshArgs))
 }
 
 // followTmuxSession streams tmux pane output via `tail -f` on a pipe-pane log.

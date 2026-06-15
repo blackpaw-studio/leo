@@ -2,6 +2,11 @@ BINARY := leo
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/blackpaw-studio/leo/internal/cli.Version=$(VERSION)
 GOFLAGS := -trimpath
+# Canonical install location — matches install.sh and config.DefaultRemoteLeoPath
+# ($HOME/.local/bin/leo). `go install` would land in GOBIN/~/go/bin, which the
+# running daemon and remote dispatch do NOT look at, so a `make install` fix
+# would silently not go live. Override with `make install INSTALL_DIR=...`.
+INSTALL_DIR ?= $(HOME)/.local/bin
 
 .PHONY: build install clean test e2e lint fmt coverage docs docs-serve tag demo
 
@@ -9,7 +14,9 @@ build:
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/leo
 
 install:
-	go install $(GOFLAGS) -ldflags "$(LDFLAGS)" ./cmd/leo
+	@mkdir -p "$(INSTALL_DIR)"
+	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o "$(INSTALL_DIR)/$(BINARY)" ./cmd/leo
+	@echo "leo $(VERSION) installed to $(INSTALL_DIR)/$(BINARY)"
 
 clean:
 	rm -rf bin/ dist/ coverage.out coverage.html
