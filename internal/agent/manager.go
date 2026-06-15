@@ -524,7 +524,7 @@ func (m *Manager) Logs(name string, lines int) (string, error) {
 	}
 
 	session := m.SessionName(name)
-	subArgs := []string{"capture-pane", "-t", session, "-p"}
+	subArgs := []string{"capture-pane", "-t", tmux.PaneTarget(session), "-p"}
 	if lines > 0 {
 		subArgs = append(subArgs, "-S", fmt.Sprintf("-%d", lines))
 	} else {

@@ -73,7 +73,7 @@ func TestRunAttachPickerAutoAttachesSingle(t *testing.T) {
 	if !execed {
 		t.Fatalf("single-session path should bypass picker and exec tmux directly")
 	}
-	want := []string{"tmux", "-L", "leo", "attach", "-t", "leo-only"}
+	want := []string{"tmux", "-L", "leo", "attach", "-t", "=leo-only"}
 	if !equalStrings(execedArgv, want) {
 		t.Errorf("argv = %v, want %v", execedArgv, want)
 	}

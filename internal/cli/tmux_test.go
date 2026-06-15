@@ -50,7 +50,7 @@ func TestProcessAttachRemoteUsesTmuxDirectly(t *testing.T) {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
 	want := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, ctlOpts(homeFromConfigPath(path))...)
-	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "leo-primary")
+	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "=leo-primary")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh attach args = %v, want %v", stub.calls[0], want)
 	}
@@ -87,7 +87,7 @@ func TestProcessAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	want := append([]string{"ssh", "-t", "user@prod.example.com"}, ctlOpts(home)...)
-	want = append(want, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "leo-primary")
+	want = append(want, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "=leo-primary")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
@@ -149,7 +149,7 @@ func TestProcessLogsRemoteCapturesPane(t *testing.T) {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
 	want := append([]string{"ssh", "user@prod.example.com", "-p", "2222"}, ctlOpts(homeFromConfigPath(path))...)
-	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "capture-pane", "-t", "leo-primary", "-p", "-S", "-50")
+	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "capture-pane", "-t", "=leo-primary:", "-p", "-S", "-50")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh capture args = %v, want %v", stub.calls[0], want)
 	}
@@ -296,8 +296,8 @@ func TestAttachAliasResolvesToAgent(t *testing.T) {
 	if !execed {
 		t.Fatalf("expected syscall.Exec for agent attach; ssh calls = %v", stub.calls)
 	}
-	// argv is ["tmux", "-L", "leo", "attach", "-t", "leo-scratch"]
-	if len(execedArgv) != 6 || execedArgv[5] != "leo-scratch" {
+	// argv is ["tmux", "-L", "leo", "attach", "-t", "=leo-scratch"]
+	if len(execedArgv) != 6 || execedArgv[5] != "=leo-scratch" {
 		t.Errorf("unexpected tmux argv: %v", execedArgv)
 	}
 }
@@ -397,7 +397,7 @@ func TestAttachTmuxSessionCCRemoteStreamsControlMode(t *testing.T) {
 	want := []string{
 		"ssh", "-tt", "-e", "none", "user@prod.example.com", "-p", "2222",
 		"-o", "ControlMaster=auto", "-o", "ControlPath=" + ctl,
-		config.DefaultRemoteTmuxPath, "-L", "leo", "-CC", "attach", "-t", "leo-primary",
+		config.DefaultRemoteTmuxPath, "-L", "leo", "-CC", "attach", "-t", "=leo-primary",
 	}
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("cc ssh args = %v, want %v", stub.calls[0], want)
@@ -451,7 +451,7 @@ func TestAttachTmuxSessionUsesDisplayPopupInsideTmux(t *testing.T) {
 	// The inner command should shell-quote the session name and reference the
 	// leo socket explicitly.
 	last := argv[len(argv)-1]
-	if !strings.Contains(last, "-L leo") || !strings.Contains(last, "'leo-primary'") {
+	if !strings.Contains(last, "-L leo") || !strings.Contains(last, "'=leo-primary'") {
 		t.Errorf("inner popup command missing -L leo / quoted session: %q", last)
 	}
 }

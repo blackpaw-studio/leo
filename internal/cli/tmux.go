@@ -57,7 +57,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		sshArgs = append(sshArgs, sshControlOpts(res)...)
 		prefixLen := len(sshArgs)
 		sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
-		sshArgs = append(sshArgs, tmux.Args("attach", "-t", session)...)
+		sshArgs = append(sshArgs, tmux.Args("attach", "-t", tmux.Target(session))...)
 		sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 		c := agentExecCommand("ssh", sshArgs...)
 		c.Stdin = os.Stdin
@@ -81,11 +81,11 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		if tmuxEnv() != "" {
 			return fmt.Errorf("--cc requires a non-tmux terminal; detach first (prefix+d) and retry")
 		}
-		argv := append([]string{"tmux"}, tmux.Args("-CC", "attach", "-t", session)...)
+		argv := append([]string{"tmux"}, tmux.Args("-CC", "attach", "-t", tmux.Target(session))...)
 		return agentSyscallExec(tmuxPath, argv, os.Environ())
 	}
 	if tmuxEnv() != "" {
-		inner := fmt.Sprintf("%s -L %s attach -t %s", shellQuoteArg(tmuxPath), tmux.SocketName, shellQuoteArg(session))
+		inner := fmt.Sprintf("%s -L %s attach -t %s", shellQuoteArg(tmuxPath), tmux.SocketName, shellQuoteArg(tmux.Target(session)))
 		popupArgs := []string{"display-popup", "-E", "-w", "95%", "-h", "95%", inner}
 		c := agentExecCommand(tmuxPath, popupArgs...)
 		c.Stdin = os.Stdin
@@ -95,7 +95,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 	}
 	// Replace the CLI process so tmux owns the TTY cleanly. Returns an error
 	// only if exec itself fails; on success this call does not return.
-	argv := append([]string{"tmux"}, tmux.Args("attach", "-t", session)...)
+	argv := append([]string{"tmux"}, tmux.Args("attach", "-t", tmux.Target(session))...)
 	return agentSyscallExec(tmuxPath, argv, os.Environ())
 }
 
@@ -123,7 +123,7 @@ func attachRemoteControlMode(res config.HostResolution, session string) error {
 	sshArgs = append(sshArgs, res.Host.SSHArgs...)
 	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
-	sshArgs = append(sshArgs, tmux.Args("-CC", "attach", "-t", session)...)
+	sshArgs = append(sshArgs, tmux.Args("-CC", "attach", "-t", tmux.Target(session))...)
 	c := agentExecCommand("ssh", sshArgs...)
 	c.Stdin = os.Stdin
 	c.Stdout = agentStdout
@@ -144,7 +144,7 @@ func shellQuoteArg(s string) string {
 // remote paths share identical shape — remote just wraps through ssh with the
 // host's configured tmux path.
 func captureTmuxPane(res config.HostResolution, session string, lines int) error {
-	subArgs := tmux.Args("capture-pane", "-t", session, "-p", "-S", fmt.Sprintf("-%d", lines))
+	subArgs := tmux.Args("capture-pane", "-t", tmux.PaneTarget(session), "-p", "-S", fmt.Sprintf("-%d", lines))
 	if res.Localhost {
 		tmuxPath, err := tmuxLocate()
 		if err != nil {

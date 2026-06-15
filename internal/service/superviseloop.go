@@ -4,6 +4,8 @@ import (
 	"context"
 	"os/exec"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // LoopSpec describes one tmux-hosted claude that should be kept alive.
@@ -47,7 +49,7 @@ func runSuperviseLoop(ctx context.Context, tmuxPath string, spec LoopSpec) {
 			return
 		}
 		// kill any stale session
-		_ = loopExecCommand(tmuxPath, "-L", "leo", "kill-session", "-t", spec.SessionName).Run()
+		_ = loopExecCommand(tmuxPath, "-L", "leo", "kill-session", "-t", tmux.Target(spec.SessionName)).Run()
 
 		// new-session
 		start := time.Now()
@@ -69,7 +71,7 @@ func runSuperviseLoop(ctx context.Context, tmuxPath string, spec LoopSpec) {
 
 		// wait for session to end
 		for ctx.Err() == nil {
-			check := loopExecCommand(tmuxPath, "-L", "leo", "has-session", "-t", spec.SessionName)
+			check := loopExecCommand(tmuxPath, "-L", "leo", "has-session", "-t", tmux.Target(spec.SessionName))
 			if err := check.Run(); err != nil {
 				break // session ended
 			}

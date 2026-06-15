@@ -220,7 +220,7 @@ func TestAgentAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
 	}
 	wantAttach := append([]string{"ssh", "-t", "user@prod.example.com"}, ctlOpts(home)...)
-	wantAttach = append(wantAttach, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "leo-scratch")
+	wantAttach = append(wantAttach, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "=leo-scratch")
 	if !equalStrings(stub.calls[1], wantAttach) {
 		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}
@@ -282,7 +282,7 @@ func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
 		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
 	}
 	wantAttach := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
-	wantAttach = append(wantAttach, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "leo-scratch")
+	wantAttach = append(wantAttach, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "=leo-scratch")
 	if !equalStrings(stub.calls[1], wantAttach) {
 		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}

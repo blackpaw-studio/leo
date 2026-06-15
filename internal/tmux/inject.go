@@ -67,7 +67,7 @@ func InjectPrompt(ctx context.Context, tmuxPath, session, body string) error {
 // injectPrompt is the testable inner form with injectable probe bounds.
 func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttempts int, poll time.Duration) error {
 	runKey := func(keys ...string) error {
-		args := append([]string{"send-keys", "-t", session}, keys...)
+		args := append([]string{"send-keys", "-t", PaneTarget(session)}, keys...)
 		cmd := execCommand(ctx, tmuxPath, Args(args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("tmux send-keys %v: %w: %s", keys, err, string(out))
@@ -118,8 +118,8 @@ func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttemp
 	buf := sessionBufferName(session)
 	for _, args := range [][]string{
 		Args("set-buffer", "-b", buf, "--", body),
-		Args("paste-buffer", "-b", buf, "-t", session, "-d"),
-		Args("send-keys", "-t", session, "Enter"),
+		Args("paste-buffer", "-b", buf, "-t", PaneTarget(session), "-d"),
+		Args("send-keys", "-t", PaneTarget(session), "Enter"),
 	} {
 		cmd := execCommand(ctx, tmuxPath, args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -141,7 +141,7 @@ func InputHasContent(pane string) bool {
 // paneInputState captures the session's visible pane and classifies its input
 // box. Read failures classify as inputUnknown so the caller falls open.
 func paneInputState(ctx context.Context, tmuxPath, session string) inputState {
-	out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", session)...).Output()
+	out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", PaneTarget(session))...).Output()
 	if err != nil {
 		return inputUnknown
 	}
@@ -171,7 +171,7 @@ func AbortPrompt(ctx context.Context, tmuxPath, session string) error {
 	keys := []string{"Escape", "C-c"}
 	var firstErr error
 	for _, k := range keys {
-		cmd := execCommand(ctx, tmuxPath, Args("send-keys", "-t", session, k)...)
+		cmd := execCommand(ctx, tmuxPath, Args("send-keys", "-t", PaneTarget(session), k)...)
 		if out, err := cmd.CombinedOutput(); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("tmux send-keys %s: %w: %s", k, err, string(out))
 		}
