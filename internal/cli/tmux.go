@@ -1,13 +1,37 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
+
+// hintRemoteTmuxMissing enriches a remote tmux failure with actionable
+// guidance. ssh relays the remote command's exit status, so a remote `tmux`
+// that isn't on the non-interactive SSH PATH surfaces as exit 127 ("command
+// not found"). This is the common case on Homebrew macOS, where tmux lives in
+// /opt/homebrew/bin — added to PATH by a login profile that `ssh host cmd`
+// does not source. The fix is the per-host `tmux_path` setting, but the bare
+// exit-127 gives the user no clue; point them at it. Non-127 errors and
+// localhost paths pass through untouched.
+func hintRemoteTmuxMissing(res config.HostResolution, err error) error {
+	if err == nil || res.Localhost {
+		return err
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 127 {
+		return err
+	}
+	return fmt.Errorf("%w\n\nremote tmux (%q) was not found on %s's non-interactive SSH PATH. "+
+		"Set tmux_path for this host in leo.yaml to its absolute path, e.g.:\n"+
+		"  client.hosts.%s.tmux_path: /opt/homebrew/bin/tmux",
+		err, res.Host.RemoteTmuxPath(), res.Name, res.Name)
+}
 
 // tmuxLocate is a testability seam for locating the tmux binary. Tests
 // override it so the local-attach path doesn't require tmux on the runner
@@ -63,7 +87,7 @@ func attachTmuxSession(res config.HostResolution, session string, opts attachOpt
 		c.Stdin = os.Stdin
 		c.Stdout = agentStdout
 		c.Stderr = agentStderr
-		return c.Run()
+		return hintRemoteTmuxMissing(res, c.Run())
 	}
 
 	tmuxPath, err := tmuxLocate()
@@ -128,7 +152,7 @@ func attachRemoteControlMode(res config.HostResolution, session string) error {
 	c.Stdin = os.Stdin
 	c.Stdout = agentStdout
 	c.Stderr = agentStderr
-	return c.Run()
+	return hintRemoteTmuxMissing(res, c.Run())
 }
 
 // shellQuoteArg wraps a value in single quotes, escaping any embedded single
@@ -156,7 +180,7 @@ func captureTmuxPane(res config.HostResolution, session string, lines int) error
 	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
 	sshArgs = append(sshArgs, subArgs...)
-	return runShellCmd("ssh", sshArgs)
+	return hintRemoteTmuxMissing(res, runShellCmd("ssh", sshArgs))
 }
 
 // followTmuxSession streams tmux pane output via `tail -f` on a pipe-pane log.

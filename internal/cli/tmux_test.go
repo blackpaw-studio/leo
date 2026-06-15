@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -453,6 +454,38 @@ func TestAttachTmuxSessionUsesDisplayPopupInsideTmux(t *testing.T) {
 	last := argv[len(argv)-1]
 	if !strings.Contains(last, "-L leo") || !strings.Contains(last, "'=leo-primary'") {
 		t.Errorf("inner popup command missing -L leo / quoted session: %q", last)
+	}
+}
+
+// A remote tmux that isn't on the non-interactive SSH PATH exits 127; the hint
+// helper must turn that bare status into actionable tmux_path guidance, while
+// leaving non-127 errors, nil, and localhost untouched.
+func TestHintRemoteTmuxMissing(t *testing.T) {
+	remote := config.HostResolution{Name: "prod", Host: config.HostConfig{SSH: "u@prod"}}
+	local := config.HostResolution{Localhost: true}
+
+	// Synthesize a real *exec.ExitError with the wanted code by running a
+	// command that exits with it — cheaper and truer than faking the type.
+	exit := func(code int) error {
+		return exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+	}
+
+	got := hintRemoteTmuxMissing(remote, exit(127))
+	if got == nil || !strings.Contains(got.Error(), "tmux_path") {
+		t.Errorf("127 on remote should hint tmux_path, got %v", got)
+	}
+	if !strings.Contains(got.Error(), "client.hosts.prod.tmux_path") {
+		t.Errorf("hint should name the host's tmux_path key, got %v", got)
+	}
+
+	if err := hintRemoteTmuxMissing(remote, exit(1)); err == nil || strings.Contains(err.Error(), "tmux_path") {
+		t.Errorf("non-127 error must pass through unhinted, got %v", err)
+	}
+	if err := hintRemoteTmuxMissing(local, exit(127)); err == nil || strings.Contains(err.Error(), "tmux_path") {
+		t.Errorf("localhost must not be hinted, got %v", err)
+	}
+	if err := hintRemoteTmuxMissing(remote, nil); err != nil {
+		t.Errorf("nil must pass through, got %v", err)
 	}
 }
 
