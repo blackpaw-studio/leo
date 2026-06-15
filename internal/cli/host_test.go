@@ -368,6 +368,10 @@ func TestForwardStopExitsMasterAndRemovesSocket(t *testing.T) {
 	if err := os.WriteFile(sock, []byte{}, 0o600); err != nil {
 		t.Fatalf("seed socket: %v", err)
 	}
+	ctl := filepath.Join(dir, "prod.ctl")
+	if err := os.WriteFile(ctl, []byte{}, 0o600); err != nil {
+		t.Fatalf("seed ctl: %v", err)
+	}
 
 	var got []string
 	old := agentExecCommand
@@ -381,18 +385,21 @@ func TestForwardStopExitsMasterAndRemovesSocket(t *testing.T) {
 		res: config.HostResolution{
 			Name:        "prod",
 			Host:        config.HostConfig{SSH: "u@prod", SSHArgs: []string{"-p", "2222"}},
-			ControlPath: filepath.Join(dir, "prod.ctl"),
+			ControlPath: ctl,
 		},
 		localSock: sock,
 	}
 	if err := f.stop(); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	want := []string{"ssh", "-o", "ControlPath=" + filepath.Join(dir, "prod.ctl"), "-O", "exit", "-p", "2222", "u@prod"}
+	want := []string{"ssh", "-o", "ControlPath=" + ctl, "-O", "exit", "-p", "2222", "u@prod"}
 	if !equalStrings(got, want) {
 		t.Errorf("stop ssh args = %v, want %v", got, want)
 	}
 	if _, err := os.Stat(sock); !os.IsNotExist(err) {
 		t.Errorf("expected local socket removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(ctl); !os.IsNotExist(err) {
+		t.Errorf("expected ControlPath socket file removed, stat err = %v", err)
 	}
 }

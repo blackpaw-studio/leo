@@ -237,6 +237,13 @@ func (f *hostForwarder) stop() error {
 	cmd.Stderr = &errb
 	_ = cmd.Run() // no live master is fine
 
+	// `-O exit` ends the master but leaves its ControlPath socket file on disk;
+	// unlink it so teardown doesn't leave a stale <home>/state/remotes/<h>.ctl
+	// behind. Best-effort: a missing file is fine.
+	if f.res.ControlPath != "" {
+		_ = os.Remove(f.res.ControlPath)
+	}
+
 	if err := os.Remove(f.localSock); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing local socket: %w", err)
 	}
