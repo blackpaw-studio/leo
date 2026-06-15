@@ -51,7 +51,7 @@ func TestProcessAttachRemoteUsesTmuxDirectly(t *testing.T) {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
 	want := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, ctlOpts(homeFromConfigPath(path))...)
-	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "=leo-primary")
+	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "'=leo-primary'")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh attach args = %v, want %v", stub.calls[0], want)
 	}
@@ -88,7 +88,7 @@ func TestProcessAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	want := append([]string{"ssh", "-t", "user@prod.example.com"}, ctlOpts(home)...)
-	want = append(want, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "=leo-primary")
+	want = append(want, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "'=leo-primary'")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
@@ -150,7 +150,7 @@ func TestProcessLogsRemoteCapturesPane(t *testing.T) {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
 	want := append([]string{"ssh", "user@prod.example.com", "-p", "2222"}, ctlOpts(homeFromConfigPath(path))...)
-	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "capture-pane", "-t", "=leo-primary:", "-p", "-S", "-50")
+	want = append(want, config.DefaultRemoteTmuxPath, "-L", "leo", "capture-pane", "-t", "'=leo-primary:'", "-p", "-S", "-50")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh capture args = %v, want %v", stub.calls[0], want)
 	}
@@ -398,7 +398,7 @@ func TestAttachTmuxSessionCCRemoteStreamsControlMode(t *testing.T) {
 	want := []string{
 		"ssh", "-tt", "-e", "none", "user@prod.example.com", "-p", "2222",
 		"-o", "ControlMaster=auto", "-o", "ControlPath=" + ctl,
-		config.DefaultRemoteTmuxPath, "-L", "leo", "-CC", "attach", "-t", "=leo-primary",
+		config.DefaultRemoteTmuxPath, "-L", "leo", "-CC", "attach", "-t", "'=leo-primary'",
 	}
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("cc ssh args = %v, want %v", stub.calls[0], want)

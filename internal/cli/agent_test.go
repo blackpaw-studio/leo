@@ -220,9 +220,43 @@ func TestAgentAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
 	}
 	wantAttach := append([]string{"ssh", "-t", "user@prod.example.com"}, ctlOpts(home)...)
-	wantAttach = append(wantAttach, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "=leo-scratch")
+	wantAttach = append(wantAttach, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "'=leo-scratch'")
 	if !equalStrings(stub.calls[1], wantAttach) {
 		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
+	}
+}
+
+// TestAgentAttachRemoteCCQuotesTarget drives the full CLI for the remote
+// control-mode path that leoterm's remote feature depends on: `leo --host X
+// agent attach --cc <name>`. It must (1) resolve the shorthand via the remote
+// daemon, then (2) stream `tmux -CC attach` over `ssh -tt -e none`, with the
+// exact-match target SINGLE-QUOTED so the remote login shell (zsh) does not eat
+// the leading "=" via filename expansion. Before the quote fix the remote ran
+// `=leo-scratch` bare and zsh aborted with "leo-scratch not found".
+func TestAgentAttachRemoteCCQuotesTarget(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "attach", "--cc", "scratch"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(stub.calls) != 2 {
+		t.Fatalf("expected 2 ssh calls (resolve + cc attach), got %d: %v", len(stub.calls), stub.calls)
+	}
+	home := homeFromConfigPath(path)
+	wantResolve := append([]string{"ssh", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
+	wantResolve = append(wantResolve, config.DefaultRemoteLeoPath, "agent", "session-name", "scratch")
+	if !equalStrings(stub.calls[0], wantResolve) {
+		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
+	}
+	// -tt + -e none precede the host; the quoted exact-match target trails.
+	wantAttach := append([]string{"ssh", "-tt", "-e", "none", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
+	wantAttach = append(wantAttach, config.DefaultRemoteTmuxPath, "-L", "leo", "-CC", "attach", "-t", "'=leo-scratch'")
+	if !equalStrings(stub.calls[1], wantAttach) {
+		t.Errorf("cc attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}
 }
 
@@ -282,7 +316,7 @@ func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
 		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
 	}
 	wantAttach := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
-	wantAttach = append(wantAttach, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "=leo-scratch")
+	wantAttach = append(wantAttach, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "'=leo-scratch'")
 	if !equalStrings(stub.calls[1], wantAttach) {
 		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
 	}
