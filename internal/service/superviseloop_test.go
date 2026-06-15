@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // hasArg reports whether args contains target.
@@ -51,6 +53,61 @@ func TestRunSuperviseLoopExitsOnCancel(t *testing.T) {
 	}
 	if calls.Load() == 0 {
 		t.Fatalf("expected at least one loopExecCommand call")
+	}
+}
+
+// TestRunSuperviseLoopUsesExactMatchTarget locks the fix for the "vanishing
+// agent" bug: the loop's has-session and kill-session calls MUST target the
+// exact-match form (=leo-session-x), not the bare name. With a bare name tmux
+// prefix-matches a longer session (e.g. "leo-session-xyz" or "leo-leoterm"),
+// so the liveness probe never reports the real session as gone and the
+// supervisor stops restarting it.
+func TestRunSuperviseLoopUsesExactMatchTarget(t *testing.T) {
+	want := tmux.Target("leo-session-x") // "=leo-session-x"
+	var mu sync.Mutex
+	var hasExact, killExact bool
+
+	orig := loopExecCommand
+	defer func() { loopExecCommand = orig }()
+	loopExecCommand = func(name string, args ...string) *exec.Cmd {
+		mu.Lock()
+		if hasArg(args, "has-session") && hasArg(args, want) {
+			hasExact = true
+		}
+		if hasArg(args, "kill-session") && hasArg(args, want) {
+			killExact = true
+		}
+		mu.Unlock()
+		if hasArg(args, "has-session") {
+			return exec.Command("false") // session "gone" → cycle quickly
+		}
+		return exec.Command("true")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runSuperviseLoop(ctx, "tmux", LoopSpec{
+			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp",
+			ShellCmd: func(bool) string { return "echo hi" },
+		})
+		close(done)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("loop did not exit on cancel")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !hasExact {
+		t.Fatalf("has-session must use exact-match target %q", want)
+	}
+	if !killExact {
+		t.Fatalf("kill-session must use exact-match target %q", want)
 	}
 }
 

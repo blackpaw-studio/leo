@@ -748,7 +748,7 @@ func (s *Server) handleProcessInterrupt(w http.ResponseWriter, r *http.Request) 
 	sessionName := agent.SessionName(name)
 
 	tmuxPath := findTmuxPath()
-	escArgs := tmux.Args("send-keys", "-t", sessionName, "Escape")
+	escArgs := tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "Escape")
 	// Send Escape immediately, then keep sending to catch state transitions.
 	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
 	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
@@ -770,7 +770,7 @@ func (s *Server) handleProcessRestart(w http.ResponseWriter, r *http.Request) {
 	sessionName := agent.SessionName(name)
 
 	tmuxPath := findTmuxPath()
-	if err := s.execCommand(tmuxPath, tmux.Args("kill-session", "-t", sessionName)...).Run(); err != nil {
+	if err := s.execCommand(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to restart %s: %v", name, err))
 		return
 	}
@@ -804,7 +804,7 @@ func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 	for _, key := range req.Keys {
 		if needsCharSplit(key) {
 			for _, ch := range key {
-				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, string(ch))...).Run(); err != nil {
+				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), string(ch))...).Run(); err != nil {
 					writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
 					return
 				}
@@ -812,7 +812,7 @@ func (s *Server) handleProcessSendKeys(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, key)...).Run(); err != nil {
+		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), key)...).Run(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
 			return
 		}
@@ -861,7 +861,7 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 	tmuxPath := findTmuxPath()
 
 	// Literal paste of the message body.
-	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, "-l", req.Text)...).Run(); err != nil {
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "-l", req.Text)...).Run(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send message failed: %v", err)})
 		return
 	}
@@ -876,7 +876,7 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 	s.waitForInputContent(tmuxPath, sessionName)
 
 	// Separate Enter to submit.
-	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", sessionName, "Enter")...).Run(); err != nil {
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "Enter")...).Run(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("submit message failed: %v", err)})
 		return
 	}
@@ -898,7 +898,7 @@ var (
 // or unreadable pane never blocks (or drops) the submit.
 func (s *Server) waitForInputContent(tmuxPath, sessionName string) {
 	for i := 0; i < messageInputAttempts; i++ {
-		out, err := s.execCommand(tmuxPath, tmux.Args("capture-pane", "-p", "-t", sessionName)...).Output()
+		out, err := s.execCommand(tmuxPath, tmux.Args("capture-pane", "-p", "-t", tmux.PaneTarget(sessionName))...).Output()
 		if err == nil && tmux.InputHasContent(string(out)) {
 			return
 		}

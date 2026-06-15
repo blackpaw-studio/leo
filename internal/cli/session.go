@@ -102,7 +102,7 @@ func newSessionAttachCmd() *cobra.Command {
 				return fmt.Errorf("tmux not found: %w", err)
 			}
 			target := sessionTmuxTarget(args[0])
-			argv := append([]string{"tmux"}, tmux.Args("attach", "-t", target)...)
+			argv := append([]string{"tmux"}, tmux.Args("attach", "-t", tmux.Target(target))...)
 			return syscall.Exec(tmuxBin, argv, os.Environ())
 		},
 	}
@@ -119,7 +119,7 @@ func newSessionLogsCmd() *cobra.Command {
 				return fmt.Errorf("tmux not found: %w", err)
 			}
 			target := sessionTmuxTarget(args[0])
-			out, err := exec.Command(tmuxBin, tmux.Args("capture-pane", "-p", "-t", target, "-S", "-200")...).Output()
+			out, err := exec.Command(tmuxBin, tmux.Args("capture-pane", "-p", "-t", tmux.PaneTarget(target), "-S", "-200")...).Output()
 			if err != nil {
 				return fmt.Errorf("capture-pane: %w", err)
 			}
@@ -170,7 +170,7 @@ for confirmation by default when stdin is a TTY; in non-interactive runs
 			}
 			target := sessionTmuxTarget(name)
 			if tmuxBin, err := exec.LookPath("tmux"); err == nil {
-				_ = exec.Command(tmuxBin, tmux.Args("kill-session", "-t", target)...).Run()
+				_ = exec.Command(tmuxBin, tmux.Args("kill-session", "-t", tmux.Target(target))...).Run()
 			}
 			store := session.NewStore(cfg.HomePath)
 			if err := store.Delete("session:" + name); err != nil {
@@ -235,5 +235,5 @@ func isTmuxSessionLive(target string) bool {
 	if err != nil {
 		return false
 	}
-	return exec.Command(tmuxBin, tmux.Args("has-session", "-t", target)...).Run() == nil
+	return exec.Command(tmuxBin, tmux.Args("has-session", "-t", tmux.Target(target))...).Run() == nil
 }

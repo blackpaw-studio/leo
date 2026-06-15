@@ -59,7 +59,7 @@ func TestInjectPromptCalls(t *testing.T) {
 		t.Fatalf("expected exactly 1 paste-buffer, got %d: %#v", n, got)
 	}
 	expectSet := []string{"tmux", "-L", "leo", "set-buffer", "-b", "leo-leo-session-foo", "--", "hello\nworld"}
-	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo-leo-session-foo", "-t", "leo-session-foo", "-d"}
+	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo-leo-session-foo", "-t", "=leo-session-foo:", "-d"}
 	if c := firstSub(got, "set-buffer"); !reflect.DeepEqual(c, expectSet) {
 		t.Fatalf("set-buffer call wrong:\n got %#v\nwant %#v", c, expectSet)
 	}
@@ -68,7 +68,7 @@ func TestInjectPromptCalls(t *testing.T) {
 	}
 	// The submit Enter must be the final call.
 	last := got[len(got)-1]
-	expectEnter := []string{"tmux", "-L", "leo", "send-keys", "-t", "leo-session-foo", "Enter"}
+	expectEnter := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-session-foo:", "Enter"}
 	if !reflect.DeepEqual(last, expectEnter) {
 		t.Fatalf("last call must be submit Enter:\n got %#v\nwant %#v", last, expectEnter)
 	}
@@ -211,8 +211,8 @@ func TestAbortPromptCalls(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(got))
 	}
-	expectEscape := []string{"tmux", "-L", "leo", "send-keys", "-t", "leo-session-foo", "Escape"}
-	expectCtrlC := []string{"tmux", "-L", "leo", "send-keys", "-t", "leo-session-foo", "C-c"}
+	expectEscape := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-session-foo:", "Escape"}
+	expectCtrlC := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-session-foo:", "C-c"}
 	if !reflect.DeepEqual(got[0], expectEscape) {
 		t.Fatalf("Escape call wrong:\n got %#v\nwant %#v", got[0], expectEscape)
 	}
