@@ -68,6 +68,12 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			continue
 		}
 
+		if rec.Suspended {
+			// Daemon idle-suspended this agent. Keep the record; auto-wake on
+			// the next incoming message resumes it. Do not resurrect at boot.
+			continue
+		}
+
 		// A tmux session that outlived the previous daemon (launchctl
 		// kickstart -k / a crash SIGKILLs the daemon but leaves the
 		// independent tmux server and its sessions running) is healthy and

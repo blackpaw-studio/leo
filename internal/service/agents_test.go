@@ -553,6 +553,43 @@ func TestRestoreAgentsPrefersLatestJSONLAfterClear(t *testing.T) {
 	}
 }
 
+func TestRestoreAgentsSkipsSuspended(t *testing.T) {
+	home := t.TempDir()
+	liveRec := agentstore.Record{
+		Name:      "leo-live",
+		Workspace: home,
+		SessionID: "a",
+		SpawnedAt: time.Now(),
+	}
+	suspRec := agentstore.Record{
+		Name:      "leo-susp",
+		Workspace: home,
+		SessionID: "b",
+		Suspended: true,
+		SpawnedAt: time.Now(),
+	}
+	if err := agentstore.Save(home, liveRec); err != nil {
+		t.Fatalf("seed live: %v", err)
+	}
+	if err := agentstore.Save(home, suspRec); err != nil {
+		t.Fatalf("seed susp: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	RestoreAgents(home, "", "tok", spawner)
+
+	spawned := map[string]bool{}
+	for _, c := range spawner.calls {
+		spawned[c.Name] = true
+	}
+	if spawned["leo-susp"] {
+		t.Fatal("suspended agent must not be respawned at boot")
+	}
+	if !spawned["leo-live"] {
+		t.Fatal("non-suspended agent should be restored")
+	}
+}
+
 // TestRestoreAgentsHonorsNoResume covers the poison-recovery path: the prior
 // supervisor run quick-exited while resuming, marked NoResume=true, and
 // RestoreAgents must spawn fresh (no --resume) and clear the flag — even when
