@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,6 +60,11 @@ type mockAgentService struct {
 	renameNewName string
 	renameResult  agent.Record
 	renameErr     error
+
+	resumeCalled bool
+	resumeName   string
+	resumeResult agent.Record
+	resumeErr    error
 
 	records []agent.Record
 }
@@ -116,6 +122,18 @@ func (m *mockAgentService) Resolve(query string) (agent.Record, error) {
 		}
 	}
 	return agent.Record{}, &agent.ErrNotFound{Query: query}
+}
+
+func (m *mockAgentService) Resume(name string) (agent.Record, error) {
+	m.resumeCalled = true
+	m.resumeName = name
+	if m.resumeErr != nil {
+		return agent.Record{}, m.resumeErr
+	}
+	if m.resumeResult.Name != "" {
+		return m.resumeResult, nil
+	}
+	return agent.Record{Name: name, Status: "starting"}, nil
 }
 
 func newTestServerWithAgents(t *testing.T) (*Server, string, *mockAgentService) {
@@ -431,6 +449,82 @@ func TestWebAgentRenameError(t *testing.T) {
 	}
 	if strings.Contains(body, `id="agents-content"`) {
 		t.Errorf("error response must not re-render the agents tab, got %q", body)
+	}
+}
+
+// TestProcessMessageAutoWakesSuspendedAgent verifies that when a message is
+// targeted at a name that is NOT in the live process states but IS a suspended
+// agent, handleProcessMessage calls Resume and then delivers via the live
+// send-keys path (200 OK, Resume was called, tmux send-keys executed).
+func TestProcessMessageAutoWakesSuspendedAgent(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	oldPoll, oldAttempts := messageInputPoll, messageInputAttempts
+	messageInputPoll, messageInputAttempts = time.Millisecond, 2
+	defer func() { messageInputPoll, messageInputAttempts = oldPoll, oldAttempts }()
+
+	// "suspended-worker" is NOT in live states — it should be resumed then
+	// messaged via the live send-keys path.
+	svc.resumeResult = agent.Record{Name: "suspended-worker", Status: "starting"}
+
+	var calls [][]string
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		return exec.Command("true")
+	}
+
+	body := strings.NewReader(`{"text":"wake up and do the thing"}`)
+	req := httptest.NewRequest("POST", "/web/process/suspended-worker/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !svc.resumeCalled {
+		t.Fatal("expected Resume to be called for suspended agent")
+	}
+	if svc.resumeName != "suspended-worker" {
+		t.Errorf("expected Resume called with 'suspended-worker', got %q", svc.resumeName)
+	}
+	// The live delivery path must also have fired (send-keys).
+	found := false
+	for _, call := range calls {
+		if argsContain(call, "send-keys") && argsContain(call, "-l") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected send-keys literal call for message delivery; got calls=%v", calls)
+	}
+}
+
+// TestProcessMessageUnknownTargetWithAgentServiceStill404 verifies that a name
+// that is neither live NOR a suspended agent returns 404, even when agentSvc is
+// set (Resume returns an error for truly unknown names).
+func TestProcessMessageUnknownTargetWithAgentServiceStill404(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	// Make Resume fail — name is not suspended, so it's unknown.
+	svc.resumeErr = fmt.Errorf("agent %q is not suspended", "ghost")
+
+	body := strings.NewReader(`{"text":"hello"}`)
+	req := httptest.NewRequest("POST", "/web/process/ghost/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
+	}
+	if !svc.resumeCalled {
+		t.Fatal("expected Resume to be attempted for unknown target")
+	}
+	body2 := w.Body.String()
+	if !strings.Contains(body2, "ghost") {
+		t.Errorf("404 body should mention the unknown name; got %s", body2)
 	}
 }
 

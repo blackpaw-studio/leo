@@ -844,17 +844,38 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate the target against running sessions (processes + agents).
+	// If the agent is not live but is a suspended agent, resume it first so
+	// the message is delivered into a freshly-woken session.
 	states := s.processes.States()
 	if _, ok := states[name]; !ok {
-		names := make([]string, 0, len(states))
-		for n := range states {
-			names = append(names, n)
+		if s.agentSvc != nil {
+			if _, err := s.agentSvc.Resume(name); err == nil {
+				// Resumed successfully — fall through to the live delivery path below.
+				// The session is now starting; send-keys will queue behind claude's
+				// startup just as it would for any live session.
+			} else {
+				// Not a suspended agent — unknown target.
+				names := make([]string, 0, len(states))
+				for n := range states {
+					names = append(names, n)
+				}
+				sort.Strings(names)
+				writeJSON(w, http.StatusNotFound, apiResponse{
+					Error: fmt.Sprintf("no such agent or process %q; running: %s", name, strings.Join(names, ", ")),
+				})
+				return
+			}
+		} else {
+			names := make([]string, 0, len(states))
+			for n := range states {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			writeJSON(w, http.StatusNotFound, apiResponse{
+				Error: fmt.Sprintf("no such agent or process %q; running: %s", name, strings.Join(names, ", ")),
+			})
+			return
 		}
-		sort.Strings(names)
-		writeJSON(w, http.StatusNotFound, apiResponse{
-			Error: fmt.Sprintf("no such agent or process %q; running: %s", name, strings.Join(names, ", ")),
-		})
-		return
 	}
 
 	sessionName := agent.SessionName(name)

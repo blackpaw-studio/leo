@@ -53,6 +53,7 @@ type AgentService interface {
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)
 	Rename(query, newName string) (agent.Record, error)
+	Resume(name string) (agent.Record, error)
 }
 
 // Server serves the Leo web UI over HTTP.
