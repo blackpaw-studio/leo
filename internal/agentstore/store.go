@@ -42,7 +42,7 @@ type Record struct {
 	Env           map[string]string `json:"env,omitempty"`
 	WebPort       string            `json:"web_port"`
 	SpawnedAt     time.Time         `json:"spawned_at"`
-	Stopped bool `json:"stopped,omitempty"`
+	Stopped       bool              `json:"stopped,omitempty"`
 
 	// Suspended marks an agent that the daemon idle-suspended: its process and
 	// tmux session were killed to free resources, but the record (and

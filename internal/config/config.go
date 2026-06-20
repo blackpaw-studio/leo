@@ -475,8 +475,8 @@ func (c *Config) Validate() error {
 		errs = append(errs, "defaults.stale_resume_hours must not be negative")
 	}
 	if c.Defaults.IdleSuspendAfter != "" {
-		if _, err := time.ParseDuration(c.Defaults.IdleSuspendAfter); err != nil {
-			errs = append(errs, fmt.Sprintf("defaults.idle_suspend_after %q is not a valid duration: %v", c.Defaults.IdleSuspendAfter, err))
+		if d, err := time.ParseDuration(c.Defaults.IdleSuspendAfter); err != nil || d <= 0 {
+			errs = append(errs, fmt.Sprintf("defaults.idle_suspend_after %q must be a positive duration", c.Defaults.IdleSuspendAfter))
 		}
 	}
 
@@ -570,8 +570,8 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("templates.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, tmpl.PermissionMode))
 		}
 		if tmpl.IdleSuspendAfter != "" {
-			if _, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil {
-				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q is not a valid duration: %v", name, tmpl.IdleSuspendAfter, err))
+			if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
+				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
 			}
 		}
 	}
