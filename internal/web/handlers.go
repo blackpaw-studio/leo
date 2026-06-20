@@ -844,16 +844,18 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate the target against running sessions (processes + agents).
-	// If the agent is not live but is a suspended agent, resume it first so
-	// the message is delivered into a freshly-woken session.
+	// If the agent is not live but is a suspended agent, resume it first and
+	// deliver via the readiness-probing path (InjectPrompt) — a just-resumed
+	// claude takes tens of seconds to boot before its input box accepts input,
+	// so the 2s fast-path below would silently drop the message.
+	//
+	// NOTE: a concurrent sweep suspend can race here and make the live send-keys
+	// path 500; the sender retries and auto-wakes again.
 	states := s.processes.States()
 	if _, ok := states[name]; !ok {
 		if s.agentSvc != nil {
-			if _, err := s.agentSvc.Resume(name); err == nil {
-				// Resumed successfully — fall through to the live delivery path below.
-				// The session is now starting; send-keys will queue behind claude's
-				// startup just as it would for any live session.
-			} else {
+			rec, err := s.agentSvc.Resume(name)
+			if err != nil {
 				// Not a suspended agent — unknown target.
 				names := make([]string, 0, len(states))
 				for n := range states {
@@ -865,19 +867,30 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-		} else {
-			names := make([]string, 0, len(states))
-			for n := range states {
-				names = append(names, n)
+			// Resumed successfully — deliver via readiness-probing injector so
+			// the message is not sent until claude's input box is accepting input.
+			sessionName := agent.SessionName(rec.Name)
+			if err := s.injectPrompt(r.Context(), sessionName, req.Text); err != nil {
+				writeJSON(w, http.StatusInternalServerError, apiResponse{
+					Error: fmt.Sprintf("message delivery after resume failed: %v", err),
+				})
+				return
 			}
-			sort.Strings(names)
-			writeJSON(w, http.StatusNotFound, apiResponse{
-				Error: fmt.Sprintf("no such agent or process %q; running: %s", name, strings.Join(names, ", ")),
-			})
+			writeJSON(w, http.StatusOK, apiResponse{OK: true})
 			return
 		}
+		names := make([]string, 0, len(states))
+		for n := range states {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		writeJSON(w, http.StatusNotFound, apiResponse{
+			Error: fmt.Sprintf("no such agent or process %q; running: %s", name, strings.Join(names, ", ")),
+		})
+		return
 	}
 
+	// Live (already-running) fast path: literal paste + readiness confirmation + Enter.
 	sessionName := agent.SessionName(name)
 	tmuxPath := findTmuxPath()
 

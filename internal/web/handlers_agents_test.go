@@ -454,27 +454,36 @@ func TestWebAgentRenameError(t *testing.T) {
 
 // TestProcessMessageAutoWakesSuspendedAgent verifies that when a message is
 // targeted at a name that is NOT in the live process states but IS a suspended
-// agent, handleProcessMessage calls Resume and then delivers via the live
-// send-keys path (200 OK, Resume was called, tmux send-keys executed).
+// agent, handleProcessMessage calls Resume and then delivers via the
+// readiness-probing InjectPrompt path — NOT the 2s fast-path send-keys.
+//
+// A just-resumed claude takes tens of seconds to boot before its input box
+// accepts input. Falling through to send-keys (which only waits ~2s) would
+// silently drop the first post-wake message.
 func TestProcessMessageAutoWakesSuspendedAgent(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
 
-	oldPoll, oldAttempts := messageInputPoll, messageInputAttempts
-	messageInputPoll, messageInputAttempts = time.Millisecond, 2
-	defer func() { messageInputPoll, messageInputAttempts = oldPoll, oldAttempts }()
-
-	// "suspended-worker" is NOT in live states — it should be resumed then
-	// messaged via the live send-keys path.
+	// "suspended-worker" is NOT in live states — it must be resumed then
+	// delivered via injectPrompt (readiness-probing), not the fast-path.
 	svc.resumeResult = agent.Record{Name: "suspended-worker", Status: "starting"}
 
-	var calls [][]string
+	// Capture what injectPrompt was called with.
+	var injectSession, injectBody string
+	s.injectPrompt = func(ctx context.Context, session, body string) error {
+		injectSession = session
+		injectBody = body
+		return nil
+	}
+
+	// Track execCommand calls to assert the fast send-keys path was NOT used.
+	var execCalls [][]string
 	s.execCommand = func(name string, args ...string) *exec.Cmd {
-		calls = append(calls, args)
+		execCalls = append(execCalls, args)
 		return exec.Command("true")
 	}
 
-	body := strings.NewReader(`{"text":"wake up and do the thing"}`)
-	req := httptest.NewRequest("POST", "/web/process/suspended-worker/message", body)
+	reqBody := strings.NewReader(`{"text":"wake up and do the thing"}`)
+	req := httptest.NewRequest("POST", "/web/process/suspended-worker/message", reqBody)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
@@ -482,22 +491,31 @@ func TestProcessMessageAutoWakesSuspendedAgent(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
+
+	// Resume must have been called for the suspended agent.
 	if !svc.resumeCalled {
 		t.Fatal("expected Resume to be called for suspended agent")
 	}
 	if svc.resumeName != "suspended-worker" {
 		t.Errorf("expected Resume called with 'suspended-worker', got %q", svc.resumeName)
 	}
-	// The live delivery path must also have fired (send-keys).
-	found := false
-	for _, call := range calls {
-		if argsContain(call, "send-keys") && argsContain(call, "-l") {
-			found = true
-			break
-		}
+
+	// The readiness-probing injector must have been called with the correct
+	// session name and message body.
+	wantSession := agent.SessionName("suspended-worker")
+	if injectSession != wantSession {
+		t.Errorf("injectPrompt session = %q, want %q", injectSession, wantSession)
 	}
-	if !found {
-		t.Errorf("expected send-keys literal call for message delivery; got calls=%v", calls)
+	if injectBody != "wake up and do the thing" {
+		t.Errorf("injectPrompt body = %q, want %q", injectBody, "wake up and do the thing")
+	}
+
+	// The fast send-keys path must NOT have been used for the resumed case —
+	// it would silently drop the message before claude finishes booting.
+	for _, call := range execCalls {
+		if argsContain(call, "send-keys") && argsContain(call, "-l") {
+			t.Errorf("fast-path send-keys must not fire for a just-resumed agent; got call=%v", call)
+		}
 	}
 }
 
