@@ -113,7 +113,7 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			}
 		}
 
-		args := argsWithResume(rec.ClaudeArgs, resumeID)
+		args := agent.ResumeArgs(rec.ClaudeArgs, resumeID)
 		if resumeID == "" && !rec.NoResume {
 			fmt.Fprintf(os.Stderr, "restore: agent %q has no session_id (legacy record) — respawning with a fresh claude session\n", name)
 		}
@@ -139,27 +139,6 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 
 	pruneCanonicalWorktrees(canonicals)
 	return restored
-}
-
-// argsWithResume rewrites stored claude args so the restored agent resumes the
-// prior session. Any existing `--session-id` or `--resume` pair is stripped
-// (defensive: we don't want to accidentally pass two session-selection flags)
-// before appending `--resume <sessionID>`. An empty sessionID returns the args
-// with session flags stripped — the caller has already decided to do a fresh
-// spawn.
-func argsWithResume(args []string, sessionID string) []string {
-	cleaned := make([]string, 0, len(args)+2)
-	for i := 0; i < len(args); i++ {
-		if (args[i] == "--session-id" || args[i] == "--resume") && i+1 < len(args) {
-			i++ // skip the value too
-			continue
-		}
-		cleaned = append(cleaned, args[i])
-	}
-	if sessionID == "" {
-		return cleaned
-	}
-	return append(cleaned, "--resume", sessionID)
 }
 
 // pruneCanonicalWorktrees runs `git worktree prune` against each unique
