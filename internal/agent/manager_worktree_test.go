@@ -21,6 +21,7 @@ type capturingSupervisor struct {
 	spawnCall    *SpawnRequest
 	spawnErr     error
 	stopCalls    []string
+	stopErr      error // when non-nil, StopAgent returns this error
 	releaseCalls []string
 }
 
@@ -59,6 +60,9 @@ func (s *capturingSupervisor) SpawnAgent(req SpawnRequest) error {
 
 func (s *capturingSupervisor) StopAgent(name string) error {
 	s.stopCalls = append(s.stopCalls, name)
+	if s.stopErr != nil {
+		return s.stopErr
+	}
 	delete(s.agents, name)
 	return nil
 }

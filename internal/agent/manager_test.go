@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -334,6 +335,27 @@ func TestSuspendMarksRecordAndStops(t *testing.T) {
 	// not-running => error
 	if err := m.Suspend("ghost"); err == nil {
 		t.Fatal("suspending a non-running agent should error")
+	}
+}
+
+func TestSuspendRollsBackFlagOnStopFailure(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents:  map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+		stopErr: errors.New("tmux kill failed"),
+	}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Workspace: "/w", SessionID: "sid"})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Suspend("leo-x"); err == nil {
+		t.Fatal("expected error when StopAgent fails")
+	}
+
+	// Record must NOT be left in Suspended=true state after a failed stop.
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if recs["leo-x"].Suspended {
+		t.Fatal("Suspended flag must be rolled back when StopAgent fails")
 	}
 }
 
