@@ -495,6 +495,11 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
 		srv.SetAgentManager(agentMgr)
 
+		// Idle-suspend sweep: suspends ephemeral agents that have gone idle
+		// past their configured interval (see Manager.Suspend). Runs for the
+		// daemon's lifetime; ctx cancellation stops it.
+		go runIdleSweep(ctx, supervisor, agentMgr, tmuxPath, homePath)
+
 		// Start web UI if enabled
 		if cfg, err := config.Load(configPath); err == nil {
 			if err := srv.StartWeb(cfg, agentMgr); err != nil {
