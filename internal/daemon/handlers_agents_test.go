@@ -14,17 +14,22 @@ import (
 
 // fakeAgentManager is a minimal AgentManager for daemon endpoint tests.
 type fakeAgentManager struct {
-	records   []agent.Record
-	spawnErr  error
-	stopErr   error
-	pruneErr  error
-	logsErr   error
-	logsOut   string
-	renameErr error
+	records    []agent.Record
+	spawnErr   error
+	stopErr    error
+	suspendErr error
+	resumeErr  error
+	resumeRec  agent.Record
+	pruneErr   error
+	logsErr    error
+	logsOut    string
+	renameErr  error
 
-	lastSpawn agent.SpawnSpec
-	lastStop  string
-	lastPrune struct {
+	lastSpawn   agent.SpawnSpec
+	lastStop    string
+	lastSuspend string
+	lastResume  string
+	lastPrune   struct {
 		name string
 		opts agent.PruneOptions
 	}
@@ -49,6 +54,22 @@ func (f *fakeAgentManager) Spawn(_ context.Context, spec agent.SpawnSpec) (agent
 func (f *fakeAgentManager) Stop(name string) error {
 	f.lastStop = name
 	return f.stopErr
+}
+
+func (f *fakeAgentManager) Suspend(name string) error {
+	f.lastSuspend = name
+	return f.suspendErr
+}
+
+func (f *fakeAgentManager) Resume(name string) (agent.Record, error) {
+	f.lastResume = name
+	if f.resumeErr != nil {
+		return agent.Record{}, f.resumeErr
+	}
+	if f.resumeRec.Name != "" {
+		return f.resumeRec, nil
+	}
+	return agent.Record{Name: name}, nil
 }
 
 func (f *fakeAgentManager) Prune(_ context.Context, name string, opts agent.PruneOptions) error {
@@ -539,6 +560,153 @@ func TestAgentPruneHandlerNoManager(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+// --- suspend/resume handler coverage ---
+
+func TestAgentSuspendHandler(t *testing.T) {
+	mgr := &fakeAgentManager{}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/suspend", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastSuspend != "foo" {
+		t.Errorf("lastSuspend = %q, want foo", mgr.lastSuspend)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !env.OK {
+		t.Errorf("env.OK = false, want true")
+	}
+}
+
+func TestAgentSuspendHandlerError(t *testing.T) {
+	mgr := &fakeAgentManager{suspendErr: errors.New("agent not running")}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/suspend", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentSuspendHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/suspend", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentResumeHandler(t *testing.T) {
+	mgr := &fakeAgentManager{resumeRec: agent.Record{Name: "foo", Template: "coding"}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/resume", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastResume != "foo" {
+		t.Errorf("lastResume = %q, want foo", mgr.lastResume)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !env.OK {
+		t.Errorf("env.OK = false, want true")
+	}
+	var rec agent.Record
+	if err := json.Unmarshal(env.Data, &rec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if rec.Name != "foo" || rec.Template != "coding" {
+		t.Errorf("record = %+v, want Name=foo Template=coding", rec)
+	}
+}
+
+func TestAgentResumeHandlerError(t *testing.T) {
+	mgr := &fakeAgentManager{resumeErr: errors.New("agent not suspended")}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/resume", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentResumeHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/resume", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+// TestAgentSpawnForwardsIdleSuspend verifies that idle_suspend is threaded
+// through the spawn request into the SpawnSpec.
+func TestAgentSpawnForwardsIdleSuspend(t *testing.T) {
+	mgr := &fakeAgentManager{}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{
+		Template:    "coding",
+		Repo:        "leo",
+		IdleSuspend: "4h",
+	})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastSpawn.IdleSuspend != "4h" {
+		t.Errorf("lastSpawn.IdleSuspend = %q, want 4h", mgr.lastSpawn.IdleSuspend)
 	}
 }
 

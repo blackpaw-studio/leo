@@ -51,13 +51,14 @@ func (s *Server) handleAgentSpawn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rec, err := s.agentMgr.Spawn(r.Context(), agent.SpawnSpec{
-		Template: req.Template,
-		Repo:     req.Repo,
-		Name:     req.Name,
-		Branch:   req.Branch,
-		Base:     req.Base,
-		Prompt:   req.Prompt,
-		Env:      req.Env,
+		Template:    req.Template,
+		Repo:        req.Repo,
+		Name:        req.Name,
+		Branch:      req.Branch,
+		Base:        req.Base,
+		Prompt:      req.Prompt,
+		Env:         req.Env,
+		IdleSuspend: req.IdleSuspend,
 	})
 	if err != nil {
 		writeAgentError(w, err)
@@ -108,6 +109,52 @@ func (s *Server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true})
+}
+
+// handleAgentSuspend suspends an agent by name via POST /agents/{name}/suspend.
+// The agent process and tmux session are killed; the record is preserved so
+// the conversation can be auto-resumed on the next incoming message.
+func (s *Server) handleAgentSuspend(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	if err := s.agentMgr.Suspend(name); err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true})
+}
+
+// handleAgentResume resumes a suspended agent by name via POST /agents/{name}/resume.
+// The agent is re-spawned with --resume so the prior conversation continues.
+// Returns the agent record on success.
+func (s *Server) handleAgentResume(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	rec, err := s.agentMgr.Resume(name)
+	if err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling record: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
 // handleAgentLogs returns the most recent `lines` lines of the agent's tmux

@@ -35,6 +35,8 @@ type ProcessStateInfo = agent.ProcessState
 type AgentManager interface {
 	Spawn(ctx context.Context, spec agent.SpawnSpec) (agent.Record, error)
 	Stop(name string) error
+	Suspend(name string) error
+	Resume(name string) (agent.Record, error)
 	Prune(ctx context.Context, name string, opts agent.PruneOptions) error
 	List() []agent.Record
 	Logs(name string, lines int) (string, error)
@@ -106,6 +108,8 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /agents/list", s.handleAgentList)
 	mux.HandleFunc("GET /agents/resolve", s.handleAgentResolve)
 	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
+	mux.HandleFunc("POST /agents/{name}/suspend", s.handleAgentSuspend)
+	mux.HandleFunc("POST /agents/{name}/resume", s.handleAgentResume)
 	mux.HandleFunc("POST /agents/{name}/prune", s.handleAgentPrune)
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
