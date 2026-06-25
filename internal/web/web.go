@@ -112,7 +112,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		port:         opts.Port,
 		apiToken:     opts.APIToken,
 		allowedHosts: opts.AllowedHosts,
-		execCommand: exec.Command,
+		execCommand:  exec.Command,
 	}
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {

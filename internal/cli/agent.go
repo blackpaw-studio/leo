@@ -808,7 +808,7 @@ func newAgentSuspendCmd() *cobra.Command {
 preserving the agentstore record and SessionID. The agent can be restarted
 with 'leo agent resume' or auto-woken on the next incoming message (if
 idle-suspend is enabled via --idle-suspend or idle_suspend_after config).`,
-		Example: `  leo agent suspend leo-coding-owner-fetch`,
+		Example:           `  leo agent suspend leo-coding-owner-fetch`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -848,7 +848,7 @@ rejoining the prior conversation session. The name must match the stored
 agentstore record exactly (suspended agents are not live, so shorthand
 resolution is not available).`,
 		Example: `  leo agent resume leo-coding-owner-fetch`,
-		Args: cobra.ExactArgs(1),
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			cfg, res, err := dispatch(host)
