@@ -1353,3 +1353,44 @@ tasks:
 		t.Fatalf("task fields wrong: %+v", task)
 	}
 }
+
+func TestResolveIdleSuspendCascade(t *testing.T) {
+	cfg := &Config{Defaults: DefaultsConfig{IdleSuspendAfter: "24h"}}
+	tmpl := TemplateConfig{}
+
+	// defaults only
+	if got := cfg.ResolveIdleSuspend(tmpl, ""); got != 24*time.Hour {
+		t.Fatalf("defaults: got %v, want 24h", got)
+	}
+	// template overrides defaults
+	tmpl.IdleSuspendAfter = "30m"
+	if got := cfg.ResolveIdleSuspend(tmpl, ""); got != 30*time.Minute {
+		t.Fatalf("template: got %v, want 30m", got)
+	}
+	// per-spawn override wins
+	if got := cfg.ResolveIdleSuspend(tmpl, "2h"); got != 2*time.Hour {
+		t.Fatalf("override: got %v, want 2h", got)
+	}
+	// unset everywhere => disabled (0)
+	if got := (&Config{}).ResolveIdleSuspend(TemplateConfig{}, ""); got != 0 {
+		t.Fatalf("unset: got %v, want 0", got)
+	}
+	// unparseable => disabled (0), not a panic
+	if got := (&Config{Defaults: DefaultsConfig{IdleSuspendAfter: "garbage"}}).ResolveIdleSuspend(TemplateConfig{}, ""); got != 0 {
+		t.Fatalf("garbage: got %v, want 0", got)
+	}
+}
+
+func TestValidateRejectsBadIdleSuspend(t *testing.T) {
+	cfg := &Config{
+		Defaults:  DefaultsConfig{Model: "sonnet", IdleSuspendAfter: "nope"},
+		Templates: map[string]TemplateConfig{"t": {IdleSuspendAfter: "5x"}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for bad durations")
+	}
+	if !strings.Contains(err.Error(), "idle_suspend_after") {
+		t.Fatalf("error should mention idle_suspend_after: %v", err)
+	}
+}

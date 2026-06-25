@@ -149,6 +149,49 @@ func TestInjectPromptFailsWhenNeverReady(t *testing.T) {
 	}
 }
 
+// TestInjectPromptWaitsForLateSession proves the readiness probe tolerates a
+// session that does not exist yet — a just-resumed idle-suspended agent whose
+// tmux new-session lags the spawn call (which registers state + starts the
+// supervise goroutine asynchronously). The probe send-keys fails until the
+// session appears, then InjectPrompt proceeds to paste once and submit, rather
+// than aborting on the first failure (the live auto-wake "can't find session"
+// bug).
+func TestInjectPromptWaitsForLateSession(t *testing.T) {
+	var got [][]string
+	probeSendKeys := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		// Probe send-keys is "-L leo send-keys -t <pane> -l .".
+		if len(args) >= 7 && args[2] == "send-keys" && args[5] == "-l" && args[6] == inputProbe {
+			probeSendKeys++
+			if probeSendKeys < 3 {
+				return exec.Command("false") // session not created yet
+			}
+			return exec.Command("true")
+		}
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			return exec.Command("printf", "%s", paneWithInput(inputProbe)) // ready once the session exists
+		}
+		return exec.Command("true")
+	}
+
+	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "body", 10, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt should tolerate a late-appearing session: %v", err)
+	}
+	if probeSendKeys < 3 {
+		t.Fatalf("expected the probe to retry past the missing-session window, got %d probe send-keys", probeSendKeys)
+	}
+	if n := countSub(got, "paste-buffer"); n != 1 {
+		t.Fatalf("body must be pasted exactly once, got %d paste-buffer calls: %#v", n, got)
+	}
+	last := got[len(got)-1]
+	if last[3] != "send-keys" || last[len(last)-1] != "Enter" {
+		t.Fatalf("last call must be submit Enter, got %#v", last)
+	}
+}
+
 // TestInjectPromptFallsOpenWhenInputBoxUnrecognized verifies that when the pane
 // never shows a recognizable claude input box (unexpected TUI format, not a
 // boot delay), InjectPrompt pastes and submits anyway rather than failing — so

@@ -63,6 +63,9 @@ type AgentSpawnRequest struct {
 	// Env is merged over the template's env for this spawn only; per-spawn keys
 	// win on collision. Optional — omit for the prior behavior.
 	Env map[string]string `json:"env,omitempty"`
+	// IdleSuspend, when non-empty, overrides the template/defaults
+	// idle_suspend_after for this spawn (e.g. "24h", "30m"). Empty inherits.
+	IdleSuspend string `json:"idle_suspend,omitempty"`
 }
 
 // AgentPruneRequest is the body for POST /agents/{name}/prune. Prune is a

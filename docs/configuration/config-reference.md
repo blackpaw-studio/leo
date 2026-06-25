@@ -15,6 +15,7 @@ Settings inherited by all processes, tasks, and templates unless overridden.
 | `permission_mode` | string | No | Default permission mode (`default`, `acceptEdits`, `auto`, `bypassPermissions`, `dontAsk`, `plan`). |
 | `bypass_permissions` | bool | No | Legacy: pass `--dangerously-skip-permissions`. Prefer `permission_mode`. Default `false`. |
 | `remote_control` | bool | No | Enable `--remote-control` for web/mobile access. Default `false`. |
+| `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is suspended. Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
 | `allowed_tools` | list | No | Default tool whitelist (passed via `--allowed-tools`). |
 | `disallowed_tools` | list | No | Default tool blacklist (passed via `--disallowed-tools`). |
 | `append_system_prompt` | string | No | Extra system prompt appended to all processes/tasks. |
@@ -240,8 +241,46 @@ templates:
 | `allowed_tools` | list | No | `defaults.allowed_tools` | Tool whitelist. |
 | `disallowed_tools` | list | No | `defaults.disallowed_tools` | Tool blacklist. |
 | `append_system_prompt` | string | No | `defaults.append_system_prompt` | Extra system prompt. |
+| `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are suspended. Empty inherits the default. |
 
 When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, or `leo agent spawn coding --repo owner/repo`), Leo clones the repo into `<workspace>/<repo>` using `gh`. The agent session is named `leo-<template>-<owner>-<repo>`.
+
+## Idle-suspend
+
+Ephemeral agents can be **suspended** after a period of inactivity to free local
+resources (the claude process and tmux session are killed) while preserving the
+workspace and conversation. Off by default — enable it by setting an interval:
+
+```yaml
+defaults:
+  idle_suspend_after: "24h"      # global default
+
+templates:
+  reviewer:
+    idle_suspend_after: "30m"    # per-template override
+```
+
+Or per spawn: `leo agent spawn reviewer owner/repo --idle-suspend 24h`.
+
+The cascade is **spawn flag → template → defaults**; the resolved interval is
+stamped onto the agent at spawn time. Behavior:
+
+- **Activity** is measured by the agent's tmux `session_activity` — injected
+  prompts, interactive typing in an attached pane, and the agent's own output
+  all count.
+- An agent with a **client attached** is never suspended, even past the
+  interval (so reading scrollback won't yank the session out from under you).
+- A suspended agent shows as `suspended` in `leo agent list`. It **auto-resumes**
+  on the next incoming message (e.g. `leo_send_message`), rejoining its prior
+  conversation via `--resume`. You can also resume or suspend manually:
+
+  ```bash
+  leo agent suspend <name>
+  leo agent resume <name>
+  ```
+
+- Suspended agents stay suspended across daemon restarts (they are not
+  resurrected at boot), and their worktrees are never pruned.
 
 ## Override Cascade
 

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,6 +60,11 @@ type mockAgentService struct {
 	renameNewName string
 	renameResult  agent.Record
 	renameErr     error
+
+	resumeCalled bool
+	resumeName   string
+	resumeResult agent.Record
+	resumeErr    error
 
 	records []agent.Record
 }
@@ -116,6 +122,18 @@ func (m *mockAgentService) Resolve(query string) (agent.Record, error) {
 		}
 	}
 	return agent.Record{}, &agent.ErrNotFound{Query: query}
+}
+
+func (m *mockAgentService) Resume(name string) (agent.Record, error) {
+	m.resumeCalled = true
+	m.resumeName = name
+	if m.resumeErr != nil {
+		return agent.Record{}, m.resumeErr
+	}
+	if m.resumeResult.Name != "" {
+		return m.resumeResult, nil
+	}
+	return agent.Record{Name: name, Status: "starting"}, nil
 }
 
 func newTestServerWithAgents(t *testing.T) (*Server, string, *mockAgentService) {
@@ -431,6 +449,110 @@ func TestWebAgentRenameError(t *testing.T) {
 	}
 	if strings.Contains(body, `id="agents-content"`) {
 		t.Errorf("error response must not re-render the agents tab, got %q", body)
+	}
+}
+
+// TestProcessMessageAutoWakesSuspendedAgent verifies that when a message is
+// targeted at a name that is NOT in the live process states but IS a suspended
+// agent, handleProcessMessage calls Resume and then delivers via the
+// readiness-probing InjectPrompt path — NOT the 2s fast-path send-keys.
+//
+// A just-resumed claude takes tens of seconds to boot before its input box
+// accepts input. Falling through to send-keys (which only waits ~2s) would
+// silently drop the first post-wake message.
+func TestProcessMessageAutoWakesSuspendedAgent(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	// "suspended-worker" is NOT in live states — it must be resumed then
+	// delivered via injectPrompt (readiness-probing), not the fast-path.
+	svc.resumeResult = agent.Record{Name: "suspended-worker", Status: "starting"}
+
+	// Capture what injectPrompt was called with. Delivery is asynchronous (the
+	// handler resumes, then injects in a goroutine so a ~60s cold boot doesn't
+	// exceed the HTTP write timeout), so hand the values back over a channel and
+	// wait for them rather than reading shared vars (which would race).
+	type injectArgs struct{ session, body string }
+	injected := make(chan injectArgs, 1)
+	s.injectPrompt = func(ctx context.Context, session, body string) error {
+		injected <- injectArgs{session, body}
+		return nil
+	}
+
+	// Track execCommand calls to assert the fast send-keys path was NOT used.
+	var execCalls [][]string
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalls = append(execCalls, args)
+		return exec.Command("true")
+	}
+
+	reqBody := strings.NewReader(`{"text":"wake up and do the thing"}`)
+	req := httptest.NewRequest("POST", "/web/process/suspended-worker/message", reqBody)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	// Async delivery returns promptly with 202 Accepted (not held for the boot).
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// Resume must have been called for the suspended agent (synchronous).
+	if !svc.resumeCalled {
+		t.Fatal("expected Resume to be called for suspended agent")
+	}
+	if svc.resumeName != "suspended-worker" {
+		t.Errorf("expected Resume called with 'suspended-worker', got %q", svc.resumeName)
+	}
+
+	// The readiness-probing injector must be called (asynchronously) with the
+	// correct session name and message body.
+	var got injectArgs
+	select {
+	case got = <-injected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("injectPrompt was not called within timeout (async delivery)")
+	}
+	wantSession := agent.SessionName("suspended-worker")
+	if got.session != wantSession {
+		t.Errorf("injectPrompt session = %q, want %q", got.session, wantSession)
+	}
+	if got.body != "wake up and do the thing" {
+		t.Errorf("injectPrompt body = %q, want %q", got.body, "wake up and do the thing")
+	}
+
+	// The fast send-keys path must NOT have been used for the resumed case —
+	// it would silently drop the message before claude finishes booting.
+	for _, call := range execCalls {
+		if argsContain(call, "send-keys") && argsContain(call, "-l") {
+			t.Errorf("fast-path send-keys must not fire for a just-resumed agent; got call=%v", call)
+		}
+	}
+}
+
+// TestProcessMessageUnknownTargetWithAgentServiceStill404 verifies that a name
+// that is neither live NOR a suspended agent returns 404, even when agentSvc is
+// set (Resume returns an error for truly unknown names).
+func TestProcessMessageUnknownTargetWithAgentServiceStill404(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	// Make Resume fail — name is not suspended, so it's unknown.
+	svc.resumeErr = fmt.Errorf("agent %q is not suspended", "ghost")
+
+	body := strings.NewReader(`{"text":"hello"}`)
+	req := httptest.NewRequest("POST", "/web/process/ghost/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
+	}
+	if !svc.resumeCalled {
+		t.Fatal("expected Resume to be attempted for unknown target")
+	}
+	body2 := w.Body.String()
+	if !strings.Contains(body2, "ghost") {
+		t.Errorf("404 body should mention the unknown name; got %s", body2)
 	}
 }
 

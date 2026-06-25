@@ -64,6 +64,8 @@ so remote calls use your existing SSH setup.`,
 		newAgentSpawnCmd(),
 		newAgentAttachCmd(),
 		newAgentStopCmd(),
+		newAgentSuspendCmd(),
+		newAgentResumeCmd(),
 		newAgentRenameCmd(),
 		newAgentPruneCmd(),
 		newAgentLogsCmd(),
@@ -179,7 +181,7 @@ func newAgentListCmd() *cobra.Command {
 // --- spawn ---
 
 func newAgentSpawnCmd() *cobra.Command {
-	var host, repo, name, branch, base, prompt string
+	var host, repo, name, branch, base, prompt, idleSuspend string
 	var envPairs []string
 	var reuseOwner, attachExisting, asJSON bool
 	cmd := &cobra.Command{
@@ -262,6 +264,9 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 				for _, p := range envPairs {
 					extra = append(extra, "--env", p)
 				}
+				if idleSuspend != "" {
+					extra = append(extra, "--idle-suspend", idleSuspend)
+				}
 				return runRemote(res, extra)
 			}
 
@@ -326,13 +331,14 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 			}
 
 			rec, err := daemon.AgentSpawn(cmd.Context(), cfg.HomePath, daemon.AgentSpawnRequest{
-				Template: template,
-				Repo:     repo,
-				Name:     name,
-				Branch:   branch,
-				Base:     base,
-				Prompt:   prompt,
-				Env:      env,
+				Template:    template,
+				Repo:        repo,
+				Name:        name,
+				Branch:      branch,
+				Base:        base,
+				Prompt:      prompt,
+				Env:         env,
+				IdleSuspend: idleSuspend,
 			})
 			if err != nil {
 				return fmt.Errorf("spawning agent: %w", err)
@@ -361,6 +367,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "extra env var as KEY=VALUE (repeatable); overrides template env on collision")
 	cmd.Flags().BoolVar(&reuseOwner, "reuse-owner", false, "on collision, spawn using the existing agent's canonical owner/repo")
 	cmd.Flags().BoolVar(&attachExisting, "attach-existing", false, "on collision, attach to the existing agent instead of spawning")
+	cmd.Flags().StringVar(&idleSuspend, "idle-suspend", "", "suspend agent after this idle interval (e.g. \"24h\", \"30m\"); overrides template/defaults idle_suspend_after")
 	return cmd
 }
 
@@ -787,6 +794,82 @@ remove the worktree and agentstore record in one step.`,
 	cmd.Flags().BoolVar(&prune, "prune", false, "also remove the worktree and agentstore record (worktree agents only)")
 	cmd.Flags().BoolVar(&force, "force", false, "with --prune: remove even when the worktree is dirty")
 	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "with --prune: delete the local branch after removing the worktree")
+	return cmd
+}
+
+// --- suspend ---
+
+func newAgentSuspendCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:   "suspend <name>",
+		Short: "Suspend a running agent (preserves session for auto-resume)",
+		Long: `Suspend a running agent by killing its process and tmux session while
+preserving the agentstore record and SessionID. The agent can be restarted
+with 'leo agent resume' or auto-woken on the next incoming message (if
+idle-suspend is enabled via --idle-suspend or idle_suspend_after config).`,
+		Example:           `  leo agent suspend leo-coding-owner-fetch`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				return runRemote(res, []string{"suspend", name})
+			}
+			// Resolve shorthand to canonical name (suspend operates on a live agent).
+			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
+			if err != nil {
+				return fmt.Errorf("resolving agent: %w", err)
+			}
+			if err := daemon.AgentSuspend(cmd.Context(), cfg.HomePath, resolved.Name); err != nil {
+				return fmt.Errorf("suspending agent: %w", err)
+			}
+			fmt.Fprintf(agentStdout, "suspended %s\n", resolved.Name)
+			return nil
+		},
+	}
+	addHostFlag(cmd, &host)
+	return cmd
+}
+
+// --- resume ---
+
+func newAgentResumeCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:   "resume <name>",
+		Short: "Resume a suspended agent",
+		Long: `Resume a suspended agent by respawning its claude process with --resume,
+rejoining the prior conversation session. The name must match the stored
+agentstore record exactly (suspended agents are not live, so shorthand
+resolution is not available).`,
+		Example: `  leo agent resume leo-coding-owner-fetch`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				return runRemote(res, []string{"resume", name})
+			}
+			// Do NOT call AgentResolve here: suspended agents are not live and
+			// the resolver only matches live agents. Pass the raw name directly.
+			rec, err := daemon.AgentResume(cmd.Context(), cfg.HomePath, name)
+			if err != nil {
+				return fmt.Errorf("resuming agent: %w", err)
+			}
+			fmt.Fprintf(agentStdout, "resumed %s (status: %s)\n", rec.Name, rec.Status)
+			fmt.Fprintf(agentStdout, "attach with: leo agent attach %s\n", rec.Name)
+			return nil
+		},
+	}
+	addHostFlag(cmd, &host)
 	return cmd
 }
 

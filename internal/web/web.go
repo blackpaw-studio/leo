@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // ProcessStateInfo mirrors daemon.ProcessStateInfo to avoid import cycle.
@@ -53,6 +54,7 @@ type AgentService interface {
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)
 	Rename(query, newName string) (agent.Record, error)
+	Resume(name string) (agent.Record, error)
 }
 
 // Server serves the Leo web UI over HTTP.
@@ -75,6 +77,11 @@ type Server struct {
 
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
+
+	// injectPrompt delivers a message into a tmux session via the readiness-
+	// probing path (tmux.InjectPrompt). Tests replace this to verify the
+	// resumed-agent message delivery path without requiring a real tmux session.
+	injectPrompt func(ctx context.Context, session, body string) error
 }
 
 // Options bundles the knobs the web server needs that aren't part of the
@@ -106,6 +113,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		apiToken:     opts.APIToken,
 		allowedHosts: opts.AllowedHosts,
 		execCommand:  exec.Command,
+	}
+
+	s.injectPrompt = func(ctx context.Context, session, body string) error {
+		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)
 	}
 
 	s.sessions = newSessionStore(sessionTTL)

@@ -877,6 +877,35 @@ func TestCompleteAgentNamesSkipsAfterFirstArg(t *testing.T) {
 	}
 }
 
+// TestAgentCmdRegistersSuspendResume verifies that 'suspend' and 'resume' are
+// registered as subcommands of 'agent'.
+func TestAgentCmdRegistersSuspendResume(t *testing.T) {
+	cmd := newAgentCmd()
+	names := make(map[string]bool)
+	for _, sub := range cmd.Commands() {
+		names[sub.Name()] = true
+	}
+	if !names["suspend"] {
+		t.Error("expected 'suspend' subcommand to be registered under agent")
+	}
+	if !names["resume"] {
+		t.Error("expected 'resume' subcommand to be registered under agent")
+	}
+}
+
+// TestAgentSpawnHasIdleSuspendFlag verifies that the spawn subcommand exposes
+// the --idle-suspend flag.
+func TestAgentSpawnHasIdleSuspendFlag(t *testing.T) {
+	cmd := newAgentSpawnCmd()
+	f := cmd.Flags().Lookup("idle-suspend")
+	if f == nil {
+		t.Fatal("expected --idle-suspend flag on spawn subcommand, not found")
+	}
+	if f.DefValue != "" {
+		t.Errorf("--idle-suspend default should be empty string, got %q", f.DefValue)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

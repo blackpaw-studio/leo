@@ -162,3 +162,19 @@ func TestSaveCreatesStateDir(t *testing.T) {
 		t.Error("expected state directory to be created")
 	}
 }
+
+func TestRecordRoundTripPreservesSuspendFields(t *testing.T) {
+	home := t.TempDir()
+	in := Record{Name: "leo-x", Workspace: "/w", Suspended: true, IdleSuspendAfter: "24h0m0s"}
+	if err := Save(home, in); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(FilePath(home))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	rec := got["leo-x"]
+	if !rec.Suspended || rec.IdleSuspendAfter != "24h0m0s" {
+		t.Fatalf("round-trip lost fields: %+v", rec)
+	}
+}

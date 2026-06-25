@@ -44,6 +44,20 @@ type Record struct {
 	SpawnedAt     time.Time         `json:"spawned_at"`
 	Stopped       bool              `json:"stopped,omitempty"`
 
+	// Suspended marks an agent that the daemon idle-suspended: its process and
+	// tmux session were killed to free resources, but the record (and
+	// SessionID) is preserved so the conversation auto-resumes on the next
+	// incoming message. Distinct from Stopped (user-initiated, terminal):
+	// RestoreAgents skips Suspended records (no boot-time respawn) and Prune
+	// keys off Stopped, so suspended worktrees are never pruned.
+	Suspended bool `json:"suspended,omitempty"`
+
+	// IdleSuspendAfter is the resolved idle interval (a Go duration string)
+	// stamped at spawn time from the config cascade. The idle sweep reads this
+	// off the record rather than re-resolving config, so behavior is stable
+	// across config edits and daemon restarts. Empty means idle-suspend is off.
+	IdleSuspendAfter string `json:"idle_suspend_after,omitempty"`
+
 	// NoResume marks the next spawn as "do not pass --resume". Set by the
 	// supervisor when a previous spawn quick-exited while resuming, to break
 	// the crash loop across daemon restarts (the in-process strip is not

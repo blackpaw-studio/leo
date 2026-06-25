@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -844,8 +845,49 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate the target against running sessions (processes + agents).
+	// If the agent is not live but is a suspended agent, resume it first and
+	// deliver via the readiness-probing path (InjectPrompt) — a just-resumed
+	// claude takes tens of seconds to boot before its input box accepts input,
+	// so the 2s fast-path below would silently drop the message.
+	//
+	// NOTE: a concurrent sweep suspend can race here and make the live send-keys
+	// path 500; the sender retries and auto-wakes again.
 	states := s.processes.States()
 	if _, ok := states[name]; !ok {
+		if s.agentSvc != nil {
+			rec, err := s.agentSvc.Resume(name)
+			if err != nil {
+				// Not a suspended agent — unknown target.
+				names := make([]string, 0, len(states))
+				for n := range states {
+					names = append(names, n)
+				}
+				sort.Strings(names)
+				writeJSON(w, http.StatusNotFound, apiResponse{
+					Error: fmt.Sprintf("no such agent or process %q; running: %s", name, strings.Join(names, ", ")),
+				})
+				return
+			}
+			// Resumed successfully. A cold-booting claude can take ~60s to load
+			// plugins/MCP before its input box accepts input — longer than the
+			// server's WriteTimeout — and the readiness-probing injector blocks
+			// for that whole window. Deliver asynchronously on a detached context
+			// (r.Context() is cancelled once this handler returns) and respond
+			// now, so the caller isn't held on the connection and won't
+			// false-timeout and retry into a duplicate message.
+			const wakeDeliverTimeout = 3 * time.Minute
+			sessionName := agent.SessionName(rec.Name)
+			body := req.Text
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), wakeDeliverTimeout)
+				defer cancel()
+				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
+					log.Printf("web: async message delivery after resume of %q failed: %v", sessionName, err)
+				}
+			}()
+			writeJSON(w, http.StatusAccepted, apiResponse{OK: true})
+			return
+		}
 		names := make([]string, 0, len(states))
 		for n := range states {
 			names = append(names, n)
@@ -857,6 +899,7 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Live (already-running) fast path: literal paste + readiness confirmation + Enter.
 	sessionName := agent.SessionName(name)
 	tmuxPath := findTmuxPath()
 

@@ -82,6 +82,9 @@ type SpawnSpec struct {
 	// Env is merged over the template's env for this spawn only. Per-spawn keys
 	// win on collision. Lets a caller hand the agent context like SLACK_THREAD_TS.
 	Env map[string]string
+	// IdleSuspend, when non-empty, overrides the template/defaults
+	// idle_suspend_after for this spawn only (a Go duration like "24h").
+	IdleSuspend string
 }
 
 // mergeEnv returns a new map combining base and overlay, with overlay winning
@@ -195,6 +198,11 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	webPort := strconv.Itoa(cfg.WebPort())
 	env := mergeEnv(tmpl.Env, spec.Env)
 
+	idleStr := ""
+	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
+		idleStr = d.String()
+	}
+
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       agentName,
 		ClaudeArgs: claudeArgs,
@@ -209,15 +217,16 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	released = true
 
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
-		Name:       agentName,
-		Template:   spec.Template,
-		Repo:       spec.Repo,
-		Workspace:  workspace,
-		ClaudeArgs: claudeArgs,
-		SessionID:  sessionID,
-		Env:        env,
-		WebPort:    webPort,
-		SpawnedAt:  time.Now(),
+		Name:             agentName,
+		Template:         spec.Template,
+		Repo:             spec.Repo,
+		Workspace:        workspace,
+		ClaudeArgs:       claudeArgs,
+		SessionID:        sessionID,
+		Env:              env,
+		WebPort:          webPort,
+		SpawnedAt:        time.Now(),
+		IdleSuspendAfter: idleStr,
 	}); err != nil {
 		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", agentName, err)
 	}
@@ -296,6 +305,11 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	webPort := strconv.Itoa(cfg.WebPort())
 	env := mergeEnv(tmpl.Env, spec.Env)
 
+	idleStr := ""
+	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
+		idleStr = d.String()
+	}
+
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       layout.AgentName,
 		ClaudeArgs: claudeArgs,
@@ -320,17 +334,18 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	released = true
 
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
-		Name:          layout.AgentName,
-		Template:      spec.Template,
-		Repo:          spec.Repo,
-		Workspace:     layout.WorktreePath,
-		Branch:        layout.Branch,
-		CanonicalPath: canonical,
-		ClaudeArgs:    claudeArgs,
-		SessionID:     sessionID,
-		Env:           env,
-		WebPort:       webPort,
-		SpawnedAt:     time.Now(),
+		Name:             layout.AgentName,
+		Template:         spec.Template,
+		Repo:             spec.Repo,
+		Workspace:        layout.WorktreePath,
+		Branch:           layout.Branch,
+		CanonicalPath:    canonical,
+		ClaudeArgs:       claudeArgs,
+		SessionID:        sessionID,
+		Env:              env,
+		WebPort:          webPort,
+		SpawnedAt:        time.Now(),
+		IdleSuspendAfter: idleStr,
 	}); err != nil {
 		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", layout.AgentName, err)
 	}
@@ -398,6 +413,20 @@ func (m *Manager) List() []Record {
 		if _, alive := seen[name]; alive {
 			continue
 		}
+		if rec.Suspended {
+			out = append(out, Record{
+				Name:          name,
+				Template:      rec.Template,
+				Repo:          rec.Repo,
+				Workspace:     rec.Workspace,
+				Branch:        rec.Branch,
+				CanonicalPath: rec.CanonicalPath,
+				Status:        "suspended",
+				StartedAt:     rec.SpawnedAt,
+				Env:           rec.Env,
+			})
+			continue
+		}
 		if rec.Branch == "" {
 			continue
 		}
@@ -445,6 +474,114 @@ func (m *Manager) Stop(name string) error {
 	}
 	agentstore.Remove(cfg.HomePath, name)
 	return nil
+}
+
+// Suspend stops a running ephemeral agent's process and tmux session while
+// preserving its agentstore record (Suspended=true) and SessionID, so the
+// conversation auto-resumes on the next incoming message. The record is marked
+// before the process is stopped; a failed stop rolls the flag back so the
+// record never claims "suspended" while the process is still running. Returns
+// an error when the agent is not currently running or has no persisted record.
+func (m *Manager) Suspend(name string) error {
+	if _, ok := m.sup.EphemeralAgents()[name]; !ok {
+		return fmt.Errorf("agent %q is not running", name)
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return fmt.Errorf("loading agentstore: %w", err)
+	}
+	rec, ok := stored[name]
+	if !ok {
+		return fmt.Errorf("no agentstore record for %q (cannot suspend an unpersisted agent)", name)
+	}
+
+	rec.Suspended = true
+	rec.NoResume = false
+	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
+		return fmt.Errorf("marking agent suspended: %w", err)
+	}
+
+	if err := m.sup.StopAgent(name); err != nil {
+		rec.Suspended = false
+		if rbErr := agentstore.Save(cfg.HomePath, rec); rbErr != nil {
+			log.Printf("agent %q: stop failed (%v) AND suspend-flag rollback failed (%v)", name, err, rbErr)
+		}
+		return fmt.Errorf("stopping agent for suspend: %w", err)
+	}
+	return nil
+}
+
+// Resume restarts a suspended ephemeral agent, rejoining its prior claude
+// session via --resume. If the agent is already running it is a no-op that
+// returns the live record. Errors when name has no suspended record.
+//
+// Mirrors RestoreAgents' resume logic: prefer the newest jsonl in the
+// workspace over the stored SessionID (catches /clear sessions the store never
+// saw), then spawn with ResumeArgs and clear the Suspended flag. The stored
+// ClaudeArgs are left untouched (still carrying --session-id); a future restore
+// rebuilds resume args from them + the SessionID, matching existing behavior.
+func (m *Manager) Resume(name string) (Record, error) {
+	if st, ok := m.sup.EphemeralAgents()[name]; ok {
+		r := Record{Name: name, Status: st.Status, StartedAt: st.StartedAt, Restarts: st.Restarts}
+		if cfg, err := m.cfgLoader(); err == nil {
+			if stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath)); err == nil {
+				mergeStored(&r, stored)
+			}
+		}
+		return r, nil
+	}
+
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return Record{}, fmt.Errorf("loading config: %w", err)
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return Record{}, fmt.Errorf("loading agentstore: %w", err)
+	}
+	rec, ok := stored[name]
+	if !ok || !rec.Suspended {
+		return Record{}, fmt.Errorf("agent %q is not suspended", name)
+	}
+
+	resumeID := rec.SessionID
+	if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
+		resumeID = latestID
+	}
+	args := ResumeArgs(rec.ClaudeArgs, resumeID)
+
+	if err := m.sup.SpawnAgent(SpawnRequest{
+		Name:       rec.Name,
+		ClaudeArgs: args,
+		WorkDir:    rec.Workspace,
+		Env:        rec.Env,
+		WebPort:    rec.WebPort,
+		WebToken:   m.webToken,
+	}); err != nil {
+		return Record{}, fmt.Errorf("respawning suspended agent: %w", err)
+	}
+
+	rec.Suspended = false
+	rec.SessionID = resumeID
+	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
+		log.Printf("agent %q resumed but agentstore.Save failed: %v — flag may persist until next save", rec.Name, err)
+	}
+
+	return Record{
+		Name:          rec.Name,
+		Template:      rec.Template,
+		Repo:          rec.Repo,
+		Workspace:     rec.Workspace,
+		Branch:        rec.Branch,
+		CanonicalPath: rec.CanonicalPath,
+		Status:        "starting",
+		StartedAt:     time.Now(),
+		Env:           rec.Env,
+	}, nil
 }
 
 // Prune removes the on-disk worktree and agentstore record for a stopped

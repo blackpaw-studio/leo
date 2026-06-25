@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/session"
@@ -469,7 +470,7 @@ func TestArgsWithResumeStripsExistingSessionFlags(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := argsWithResume(tc.args, tc.sid)
+			got := agent.ResumeArgs(tc.args, tc.sid)
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
@@ -549,6 +550,43 @@ func TestRestoreAgentsPrefersLatestJSONLAfterClear(t *testing.T) {
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
 	if stored[rec.Name].SessionID != "sid-new" {
 		t.Errorf("agentstore not re-synced: got %q, want sid-new", stored[rec.Name].SessionID)
+	}
+}
+
+func TestRestoreAgentsSkipsSuspended(t *testing.T) {
+	home := t.TempDir()
+	liveRec := agentstore.Record{
+		Name:      "leo-live",
+		Workspace: home,
+		SessionID: "a",
+		SpawnedAt: time.Now(),
+	}
+	suspRec := agentstore.Record{
+		Name:      "leo-susp",
+		Workspace: home,
+		SessionID: "b",
+		Suspended: true,
+		SpawnedAt: time.Now(),
+	}
+	if err := agentstore.Save(home, liveRec); err != nil {
+		t.Fatalf("seed live: %v", err)
+	}
+	if err := agentstore.Save(home, suspRec); err != nil {
+		t.Fatalf("seed susp: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	RestoreAgents(home, "", "tok", spawner)
+
+	spawned := map[string]bool{}
+	for _, c := range spawner.calls {
+		spawned[c.Name] = true
+	}
+	if spawned["leo-susp"] {
+		t.Fatal("suspended agent must not be respawned at boot")
+	}
+	if !spawned["leo-live"] {
+		t.Fatal("non-suspended agent should be restored")
 	}
 }
 

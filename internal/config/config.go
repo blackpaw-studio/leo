@@ -191,6 +191,11 @@ type DefaultsConfig struct {
 	// StaleResumeHours drops --resume at launch when claude's session jsonl
 	// hasn't been written in this many hours. Default 12; 0 disables.
 	StaleResumeHours int `yaml:"stale_resume_hours,omitempty"`
+	// IdleSuspendAfter, when set to a Go duration (e.g. "24h", "30m"), is the
+	// global default idle interval after which an ephemeral agent is suspended
+	// (process + tmux killed, conversation preserved for auto-resume). Empty
+	// disables idle-suspend. Overridable per template and per spawn.
+	IdleSuspendAfter string `yaml:"idle_suspend_after,omitempty"`
 }
 
 type ProcessConfig struct {
@@ -274,6 +279,9 @@ type TemplateConfig struct {
 	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
 	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
 	PermissionMode     string            `yaml:"permission_mode,omitempty"`
+	// IdleSuspendAfter overrides defaults.idle_suspend_after for agents spawned
+	// from this template. A Go duration ("24h"); empty inherits the default.
+	IdleSuspendAfter string `yaml:"idle_suspend_after,omitempty"`
 }
 
 // IsClientOnly reports whether the config is a client-only install: one
@@ -368,6 +376,28 @@ func (c *Config) ProcessStaleResume(p ProcessConfig) time.Duration {
 	return time.Duration(hours) * time.Hour
 }
 
+// ResolveIdleSuspend returns the effective idle-suspend interval for an agent
+// spawned from tmpl, with an optional per-spawn override. Cascade:
+// override → template → defaults. An empty, unparseable, or non-positive value
+// at the winning level means idle-suspend is disabled (returns 0).
+func (c *Config) ResolveIdleSuspend(tmpl TemplateConfig, override string) time.Duration {
+	raw := c.Defaults.IdleSuspendAfter
+	if tmpl.IdleSuspendAfter != "" {
+		raw = tmpl.IdleSuspendAfter
+	}
+	if override != "" {
+		raw = override
+	}
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
 // ProcessMCPConfigPath returns the MCP config path for a process.
 // If the process specifies one, it's resolved relative to its workspace.
 // Otherwise falls back to <workspace>/config/mcp-servers.json.
@@ -443,6 +473,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Defaults.StaleResumeHours < 0 {
 		errs = append(errs, "defaults.stale_resume_hours must not be negative")
+	}
+	if c.Defaults.IdleSuspendAfter != "" {
+		if d, err := time.ParseDuration(c.Defaults.IdleSuspendAfter); err != nil || d <= 0 {
+			errs = append(errs, fmt.Sprintf("defaults.idle_suspend_after %q must be a positive duration", c.Defaults.IdleSuspendAfter))
+		}
 	}
 
 	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
@@ -533,6 +568,11 @@ func (c *Config) Validate() error {
 		}
 		if tmpl.PermissionMode != "" && !validPermissionModes[tmpl.PermissionMode] {
 			errs = append(errs, fmt.Sprintf("templates.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, tmpl.PermissionMode))
+		}
+		if tmpl.IdleSuspendAfter != "" {
+			if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
+				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
+			}
 		}
 	}
 

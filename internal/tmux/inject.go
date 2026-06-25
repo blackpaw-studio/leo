@@ -82,7 +82,19 @@ func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttemp
 	sawInputBox := false
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := runKey("-l", inputProbe); err != nil {
-			return err
+			// The session may not exist yet — a just-resumed (idle-suspended)
+			// agent's tmux new-session lags the spawn call, which registers
+			// state and starts the supervise goroutine asynchronously — or this
+			// is a transient tmux error. Treat it as "not ready", wait, and
+			// retry within the readiness budget rather than aborting. A session
+			// that never appears falls through to Phase 2 below, which surfaces
+			// a real error.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(poll):
+			}
+			continue
 		}
 		select {
 		case <-ctx.Done():
