@@ -467,11 +467,14 @@ func TestProcessMessageAutoWakesSuspendedAgent(t *testing.T) {
 	// delivered via injectPrompt (readiness-probing), not the fast-path.
 	svc.resumeResult = agent.Record{Name: "suspended-worker", Status: "starting"}
 
-	// Capture what injectPrompt was called with.
-	var injectSession, injectBody string
+	// Capture what injectPrompt was called with. Delivery is asynchronous (the
+	// handler resumes, then injects in a goroutine so a ~60s cold boot doesn't
+	// exceed the HTTP write timeout), so hand the values back over a channel and
+	// wait for them rather than reading shared vars (which would race).
+	type injectArgs struct{ session, body string }
+	injected := make(chan injectArgs, 1)
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
-		injectSession = session
-		injectBody = body
+		injected <- injectArgs{session, body}
 		return nil
 	}
 
@@ -488,11 +491,12 @@ func TestProcessMessageAutoWakesSuspendedAgent(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
+	// Async delivery returns promptly with 202 Accepted (not held for the boot).
+	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 
-	// Resume must have been called for the suspended agent.
+	// Resume must have been called for the suspended agent (synchronous).
 	if !svc.resumeCalled {
 		t.Fatal("expected Resume to be called for suspended agent")
 	}
@@ -500,14 +504,20 @@ func TestProcessMessageAutoWakesSuspendedAgent(t *testing.T) {
 		t.Errorf("expected Resume called with 'suspended-worker', got %q", svc.resumeName)
 	}
 
-	// The readiness-probing injector must have been called with the correct
-	// session name and message body.
-	wantSession := agent.SessionName("suspended-worker")
-	if injectSession != wantSession {
-		t.Errorf("injectPrompt session = %q, want %q", injectSession, wantSession)
+	// The readiness-probing injector must be called (asynchronously) with the
+	// correct session name and message body.
+	var got injectArgs
+	select {
+	case got = <-injected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("injectPrompt was not called within timeout (async delivery)")
 	}
-	if injectBody != "wake up and do the thing" {
-		t.Errorf("injectPrompt body = %q, want %q", injectBody, "wake up and do the thing")
+	wantSession := agent.SessionName("suspended-worker")
+	if got.session != wantSession {
+		t.Errorf("injectPrompt session = %q, want %q", got.session, wantSession)
+	}
+	if got.body != "wake up and do the thing" {
+		t.Errorf("injectPrompt body = %q, want %q", got.body, "wake up and do the thing")
 	}
 
 	// The fast send-keys path must NOT have been used for the resumed case —

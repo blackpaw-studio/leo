@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -867,16 +868,24 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			// Resumed successfully — deliver via readiness-probing injector so
-			// the message is not sent until claude's input box is accepting input.
+			// Resumed successfully. A cold-booting claude can take ~60s to load
+			// plugins/MCP before its input box accepts input — longer than the
+			// server's WriteTimeout — and the readiness-probing injector blocks
+			// for that whole window. Deliver asynchronously on a detached context
+			// (r.Context() is cancelled once this handler returns) and respond
+			// now, so the caller isn't held on the connection and won't
+			// false-timeout and retry into a duplicate message.
+			const wakeDeliverTimeout = 3 * time.Minute
 			sessionName := agent.SessionName(rec.Name)
-			if err := s.injectPrompt(r.Context(), sessionName, req.Text); err != nil {
-				writeJSON(w, http.StatusInternalServerError, apiResponse{
-					Error: fmt.Sprintf("message delivery after resume failed: %v", err),
-				})
-				return
-			}
-			writeJSON(w, http.StatusOK, apiResponse{OK: true})
+			body := req.Text
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), wakeDeliverTimeout)
+				defer cancel()
+				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
+					log.Printf("web: async message delivery after resume of %q failed: %v", sessionName, err)
+				}
+			}()
+			writeJSON(w, http.StatusAccepted, apiResponse{OK: true})
 			return
 		}
 		names := make([]string, 0, len(states))
