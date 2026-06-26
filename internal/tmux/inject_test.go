@@ -263,3 +263,38 @@ func TestAbortPromptCalls(t *testing.T) {
 		t.Fatalf("C-c call wrong:\n got %#v\nwant %#v", got[1], expectCtrlC)
 	}
 }
+
+func TestClassifyInputDistinguishesMenusFromInputBox(t *testing.T) {
+	cases := []struct {
+		name string
+		pane string
+		want inputState
+	}{
+		{"empty input box", paneWithInput(""), inputEmpty},
+		{"probe char in box", paneWithInput("."), inputHasContent},
+		{"real typed prompt", paneWithInput("hello world"), inputHasContent},
+		{
+			"numbered menu option after glyph",
+			"  Try the new fullscreen renderer?\n  ❯ 1. Yes, try it\n    2. Not now\n",
+			inputUnknown,
+		},
+		{
+			"confirm/cancel dialog chrome",
+			"  Some dialog\n  ❯ Proceed\n  Enter to confirm · Esc to cancel\n",
+			inputUnknown,
+		},
+		{
+			"paren-style numbered option",
+			"  ❯ 1) Option A\n    2) Option B\n",
+			inputUnknown,
+		},
+		{"no glyph at all", "just some output\nno prompt here\n", inputUnknown},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := classifyInput(c.pane); got != c.want {
+				t.Fatalf("classifyInput = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
