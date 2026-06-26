@@ -785,23 +785,59 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 		}
 
 		// Auto-dismiss the "Resume from summary" prompt that blocks
-		// unattended sessions when they exceed the context threshold.
-		autoResumePrompt(tmuxPath, sessionName, id.Name())
+		// unattended sessions when they exceed the context threshold, plus any
+		// other blocking claude startup/announcement dialog.
+		dismissStartupDialog(tmuxPath, sessionName, id.Name())
 	}
 }
 
-// autoResumePrompt captures the tmux pane and sends Enter if claude is stuck
-// at the "Resume from summary" interactive prompt.
-func autoResumePrompt(tmuxPath, sessionName, processName string) {
+// dialogDenyPattern marks dialogs that make a consequential decision — never
+// auto-answered, always left for a human. Word-boundaried, case-insensitive.
+var dialogDenyPattern = regexp.MustCompile(`(?i)\b(trust|permission|delete|overwrite)\b`)
+
+// menuLinePattern matches a numbered selection-menu option anywhere in the pane,
+// optionally preceded by the selection glyph (e.g. "❯ 1. Yes" or "  2) No").
+var menuLinePattern = regexp.MustCompile(`(?m)^\s*❯?\s*\d+[.)]\s`)
+
+// startupDialogKey decides how to clear a blocking claude startup/announcement
+// dialog visible in pane. It returns the tmux key to send ("Enter" or "Escape"),
+// or "" to leave the pane untouched. Pure (no I/O) so it is unit-tested directly.
+//
+// Order matters:
+//  1. "Resume from summary" is a known prompt we ACCEPT (Enter).
+//  2. A dialog mentioning a consequential decision (trust/permission/delete/
+//     overwrite) is left for a human — never auto-answered.
+//  3. Any other blocking dialog (a numbered-option menu, or a confirm/cancel
+//     footer) is an announcement/opt-in we DECLINE with Escape so the agent's
+//     behavior stays stable.
+func startupDialogKey(pane string) string {
+	if strings.Contains(pane, "Resume from summary") && strings.Contains(pane, "Enter to confirm") {
+		return "Enter"
+	}
+	if dialogDenyPattern.MatchString(pane) {
+		return ""
+	}
+	if strings.Contains(pane, "Esc to cancel") || menuLinePattern.MatchString(pane) {
+		return "Escape"
+	}
+	return ""
+}
+
+// dismissStartupDialog captures the session's recent pane and clears a blocking
+// claude startup/announcement dialog so message injection isn't stuck behind it.
+// See startupDialogKey for the policy. Best-effort: capture/send failures are
+// ignored and retried on the next poll.
+func dismissStartupDialog(tmuxPath, sessionName, processName string) {
 	out, err := exec.Command(tmuxPath, tmux.Args("capture-pane", "-t", tmux.PaneTarget(sessionName), "-p", "-S", "-10")...).Output()
 	if err != nil {
 		return
 	}
-	pane := string(out)
-	if strings.Contains(pane, "Resume from summary") && strings.Contains(pane, "Enter to confirm") {
-		fmt.Fprintf(os.Stderr, "[%s] detected resume prompt, auto-accepting 'Resume from summary'\n", processName)
-		exec.Command(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "Enter")...).Run()
+	key := startupDialogKey(string(out))
+	if key == "" {
+		return
 	}
+	fmt.Fprintf(os.Stderr, "[%s] dismissing startup dialog with %s\n", processName, key)
+	exec.Command(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), key)...).Run() //nolint:errcheck
 }
 
 func findTmux() (string, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -160,17 +161,38 @@ func paneInputState(ctx context.Context, tmuxPath, session string) inputState {
 	return classifyInput(string(out))
 }
 
+// menuOptionPattern matches a numbered selection-menu option like "1. Yes" or
+// "2) No" — the shape of claude's interactive dialog options. Such a line is not
+// a content-bearing input box even though it follows the prompt glyph.
+var menuOptionPattern = regexp.MustCompile(`^\d+[.)]\s`)
+
+// hasDialogChrome reports whether a captured pane shows an interactive dialog's
+// confirm/cancel footer rather than a plain input box.
+func hasDialogChrome(pane string) bool {
+	return strings.Contains(pane, "Enter to confirm") && strings.Contains(pane, "Esc to cancel")
+}
+
 // classifyInput inspects a captured pane for claude's input line (the last line
-// beginning with the prompt glyph) and reports whether it carries text.
+// beginning with the prompt glyph) and reports whether it carries text. A
+// selection menu or a confirm/cancel dialog is reported as inputUnknown — the
+// glyph there is a menu selector, not a ready input box, so callers keep waiting
+// instead of pasting into the dialog.
 func classifyInput(pane string) inputState {
+	if hasDialogChrome(pane) {
+		return inputUnknown
+	}
 	lines := strings.Split(pane, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimLeft(lines[i], " \t")
 		if !strings.HasPrefix(line, claudePromptGlyph) {
 			continue
 		}
-		if strings.TrimSpace(line[len(claudePromptGlyph):]) == "" {
+		content := strings.TrimSpace(line[len(claudePromptGlyph):])
+		if content == "" {
 			return inputEmpty
+		}
+		if menuOptionPattern.MatchString(content) {
+			return inputUnknown
 		}
 		return inputHasContent
 	}

@@ -263,3 +263,76 @@ func TestAbortPromptCalls(t *testing.T) {
 		t.Fatalf("C-c call wrong:\n got %#v\nwant %#v", got[1], expectCtrlC)
 	}
 }
+
+func TestClassifyInputDistinguishesMenusFromInputBox(t *testing.T) {
+	cases := []struct {
+		name string
+		pane string
+		want inputState
+	}{
+		{"empty input box", paneWithInput(""), inputEmpty},
+		{"probe char in box", paneWithInput("."), inputHasContent},
+		{"real typed prompt", paneWithInput("hello world"), inputHasContent},
+		{
+			"numbered menu option after glyph",
+			"  Try the new fullscreen renderer?\n  ❯ 1. Yes, try it\n    2. Not now\n",
+			inputUnknown,
+		},
+		{
+			"confirm/cancel dialog chrome",
+			"  Some dialog\n  ❯ Proceed\n  Enter to confirm · Esc to cancel\n",
+			inputUnknown,
+		},
+		{
+			"paren-style numbered option",
+			"  ❯ 1) Option A\n    2) Option B\n",
+			inputUnknown,
+		},
+		{"no glyph at all", "just some output\nno prompt here\n", inputUnknown},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := classifyInput(c.pane); got != c.want {
+				t.Fatalf("classifyInput = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestInjectPromptWaitsThroughMenu proves the injector does not paste while a
+// startup-dialog menu is showing (classifyInput reports it as not-ready), and
+// delivers exactly once after the dialog clears to a real input box — the
+// scenario behind the dropped auto-wake message.
+func TestInjectPromptWaitsThroughMenu(t *testing.T) {
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			// First two captures show a blocking menu; then the real input box.
+			if captureCalls < 3 {
+				return exec.Command("printf", "%s", "  Try the new fullscreen renderer?\n  ❯ 1. Yes, try it\n    2. Not now\n  Enter to confirm · Esc to cancel\n")
+			}
+			return exec.Command("printf", "%s", paneWithInput(inputProbe))
+		}
+		return exec.Command("true")
+	}
+
+	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "body", 10, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+
+	if n := countSub(got, "paste-buffer"); n != 1 {
+		t.Fatalf("body must be pasted exactly once, got %d paste-buffer calls: %#v", n, got)
+	}
+	if captureCalls < 3 {
+		t.Fatalf("expected to probe through the menu (>=3 captures), got %d", captureCalls)
+	}
+	last := got[len(got)-1]
+	if last[3] != "send-keys" || last[len(last)-1] != "Enter" {
+		t.Fatalf("last call must be submit Enter, got %#v", last)
+	}
+}
