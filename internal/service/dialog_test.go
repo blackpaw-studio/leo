@@ -19,9 +19,20 @@ func TestStartupDialogKey(t *testing.T) {
 			"Escape",
 		},
 		{
-			"numbered menu without chrome still declined",
+			// A numbered menu with NO confirm/cancel footer is visually
+			// indistinguishable from ordinary numbered output, so it must be
+			// left untouched — never auto-escaped into live work.
+			"numbered menu without chrome is left alone",
 			"  Pick a theme\n  ❯ 1. Dark\n    2. Light\n",
-			"Escape",
+			"",
+		},
+		{
+			// Regression for the release that fired Escape into every session
+			// every poll: a plain numbered list in normal agent output must
+			// never be treated as a dialog.
+			"ordinary numbered-list output does nothing",
+			"Here's my plan:\n  1. Read the file\n  2. Edit it\n  3. Run tests\n❯ \n",
+			"",
 		},
 		{
 			"trust prompt left for a human",
