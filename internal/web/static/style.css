@@ -68,6 +68,10 @@ h1.page-title, h2.section-title {
 }
 .section-block { margin-top: var(--sp-5); }
 .table-wrap { overflow-x: auto; }
+.logtail {
+  max-height: 400px; overflow: auto; font-size: var(--fs-xs); padding: var(--sp-3);
+  margin: 0; white-space: pre-wrap;
+}
 table, .task-table, .history-table, .config-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th, .task-table th, .history-table th {
   text-align: left; font-size: var(--fs-xs); letter-spacing: 0.14em;

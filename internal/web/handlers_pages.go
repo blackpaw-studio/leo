@@ -473,6 +473,27 @@ func (s *Server) handleProcessEditPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// serviceData feeds page_service: a name-sorted snapshot of every supervised
+// process/agent's live status for the Supervisor table.
+type serviceData struct {
+	States []ProcessStateInfo
+}
+
+// buildServiceData assembles the Service page's supervisor table: every
+// entry from the process/agent state provider, sorted by name for
+// deterministic rendering (mirrors buildTemplatesData/buildTasksData).
+func (s *Server) buildServiceData(r *http.Request) (any, error) {
+	var states []ProcessStateInfo
+	if s.processes != nil {
+		for _, st := range s.processes.States() {
+			states = append(states, st)
+		}
+	}
+	sort.Slice(states, func(i, j int) bool { return states[i].Name < states[j].Name })
+
+	return serviceData{States: states}, nil
+}
+
 // templateEditData feeds page_template_edit: the schema-driven form over the
 // template's config.
 type templateEditData struct {

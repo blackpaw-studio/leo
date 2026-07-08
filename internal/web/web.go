@@ -192,7 +192,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /config/templates/{name}", s.handleTemplateEditPage)
 	mux.HandleFunc("GET /config/providers", s.handlePage("config_providers", "Providers", s.buildProvidersData))
 	mux.HandleFunc("GET /config/settings", s.handlePage("config_settings", "Settings", s.buildSettingsData))
-	mux.HandleFunc("GET /service", s.handlePage("service", "Service", nil))
+	mux.HandleFunc("GET /service", s.handlePage("service", "Service", s.buildServiceData))
 
 	// Partials (htmx polling targets)
 	mux.HandleFunc("GET /partials/status", s.handlePartialStatus)
@@ -255,6 +255,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
+	mux.HandleFunc("GET /web/service/logtail", s.handleServiceLogTail)
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)
 	mux.HandleFunc("POST /web/process/{name}/restart", s.handleProcessRestart)
 	mux.HandleFunc("POST /web/process/{name}/send", s.handleProcessSendKeys)
