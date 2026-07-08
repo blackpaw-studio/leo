@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -719,5 +720,38 @@ func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected messaging awareness in task args; got %v", args)
+	}
+}
+
+func TestExecuteCommandInjectsExtraEnv(t *testing.T) {
+	orig := execCommand
+	t.Cleanup(func() { execCommand = orig })
+	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("env") }
+
+	out, err := executeCommand(context.Background(), t.TempDir(), nil, nil, nil,
+		map[string]string{"ANTHROPIC_BASE_URL": "https://x.example", "ANTHROPIC_AUTH_TOKEN": "sk-t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "ANTHROPIC_BASE_URL=https://x.example") ||
+		!strings.Contains(string(out), "ANTHROPIC_AUTH_TOKEN=sk-t") {
+		t.Fatalf("provider env missing from spawned env:\n%s", out)
+	}
+}
+
+func TestExecuteCommandNoExtraEnv(t *testing.T) {
+	orig := execCommand
+	t.Cleanup(func() { execCommand = orig })
+	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("env") }
+
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	os.Unsetenv("ANTHROPIC_BASE_URL")
+
+	out, err := executeCommand(context.Background(), t.TempDir(), nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "ANTHROPIC_BASE_URL=") {
+		t.Fatalf("unexpected provider env:\n%s", out)
 	}
 }
