@@ -12,22 +12,14 @@ import (
 	"github.com/blackpaw-studio/leo/internal/cron"
 )
 
-// testServiceLogPath mirrors service.LogPathFor(homePath) without importing
-// internal/service, which imports internal/daemon, which imports
-// internal/web — an import from this test package would create a cycle. See
-// the doc comment on serviceLogPath in handlers_service.go.
-func testServiceLogPath(homePath string) string {
-	return filepath.Join(homePath, "state", "service.log")
-}
-
 // TestServiceLogTail exercises GET /web/service/logtail: last-N-lines
 // behavior, the missing-file friendly fallback, HTML escaping, and the
 // server-side line cap.
 func TestServiceLogTail(t *testing.T) {
 	t.Run("returns last N lines", func(t *testing.T) {
-		s, dir := newTestServer(t)
+		s, _ := newTestServer(t)
 
-		logPath := testServiceLogPath(dir)
+		logPath := s.serviceLogPath
 		if err := os.MkdirAll(filepath.Dir(logPath), 0750); err != nil {
 			t.Fatalf("mkdir state dir: %v", err)
 		}
@@ -68,9 +60,9 @@ func TestServiceLogTail(t *testing.T) {
 	})
 
 	t.Run("HTML-escapes log content", func(t *testing.T) {
-		s, dir := newTestServer(t)
+		s, _ := newTestServer(t)
 
-		logPath := testServiceLogPath(dir)
+		logPath := s.serviceLogPath
 		os.MkdirAll(filepath.Dir(logPath), 0750)
 		payload := "before <script>alert(1)</script> after\n"
 		if err := os.WriteFile(logPath, []byte(payload), 0644); err != nil {
@@ -91,9 +83,9 @@ func TestServiceLogTail(t *testing.T) {
 	})
 
 	t.Run("n is capped at 1000", func(t *testing.T) {
-		s, dir := newTestServer(t)
+		s, _ := newTestServer(t)
 
-		logPath := testServiceLogPath(dir)
+		logPath := s.serviceLogPath
 		os.MkdirAll(filepath.Dir(logPath), 0750)
 
 		var sb strings.Builder

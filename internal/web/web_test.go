@@ -129,7 +129,13 @@ func newTestServer(t *testing.T) (*Server, string) {
 
 	reloader := &mockReloader{}
 
-	s := New(cfgPath, processes, scheduler, reloader, nil, Options{Port: testPort, APIToken: testAPIToken})
+	// logPath mirrors what service.LogPathFor(dir) would compute, without
+	// this package importing internal/service (see the Options.LogPath and
+	// Server.serviceLogPath doc comments in web.go) — tests write directly
+	// to this path when they need to exercise the log tail handler.
+	logPath := filepath.Join(dir, "state", "service.log")
+
+	s := New(cfgPath, processes, scheduler, reloader, nil, Options{Port: testPort, APIToken: testAPIToken, LogPath: logPath})
 
 	// Wrap the real handler so every test request is auto-authenticated for
 	// Host + bearer middleware. Tests that specifically exercise the

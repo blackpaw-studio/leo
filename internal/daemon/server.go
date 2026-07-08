@@ -56,6 +56,7 @@ type Server struct {
 	webServer  *web.Server
 	agentMgr   AgentManager
 	router     *sessionRouter
+	logPath    string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
 }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
@@ -240,6 +241,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		APIToken:       apiToken,
 		AllowedHosts:   cfg.Web.AllowedHosts,
 		SessionRuntime: webSessionRuntime{s: s},
+		LogPath:        s.logPath,
 	})
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
@@ -312,6 +314,16 @@ func (s *Server) SockPath() string {
 // request is served; otherwise those endpoints return 503.
 func (s *Server) SetAgentManager(m AgentManager) {
 	s.agentMgr = m
+}
+
+// SetLogPath records the service log path for the web UI's log tail. Must be
+// called before StartWeb for the Service page's log viewer to work.
+// internal/daemon cannot compute this itself (service.LogPathFor lives in
+// internal/service, which imports internal/daemon — importing it back here
+// would cycle), so the caller that owns homePath (internal/service/process.go)
+// passes the already-computed path through.
+func (s *Server) SetLogPath(path string) {
+	s.logPath = path
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

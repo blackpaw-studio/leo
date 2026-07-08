@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -39,16 +38,6 @@ var logTailTemplate = template.Must(template.New("logtail").Parse(`<pre class="l
 // interpolation here.
 var logTailDimTemplate = template.Must(template.New("logtail-dim").Parse(`<pre class="logtail dim">{{.}}</pre>`))
 
-// serviceLogPath returns the path to the service log for a given leo home
-// directory. This mirrors service.LogPathFor(homePath) exactly
-// (filepath.Join(homePath, "state", "service.log")); it is duplicated here
-// rather than imported because internal/service imports internal/daemon,
-// which imports internal/web to embed this UI — importing internal/service
-// from internal/web would create an import cycle.
-func serviceLogPath(homePath string) string {
-	return filepath.Join(homePath, "state", "service.log")
-}
-
 // handleServiceLogTail serves the last N lines of the service log as an
 // HTML fragment for the Service page's log viewer (initial load + manual
 // refresh button).
@@ -65,20 +54,19 @@ func (s *Server) handleServiceLogTail(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	cfg, err := s.loadConfig()
-	if err != nil {
-		logTailDimTemplate.Execute(w, fmt.Sprintf("failed to load config: %v", err)) //nolint:errcheck
+	if s.serviceLogPath == "" {
+		logTailDimTemplate.Execute(w, "log path not configured") //nolint:errcheck
 		return
 	}
 
-	logPath := serviceLogPath(cfg.HomePath)
-	tail, err := readLogTail(logPath, n)
+	tail, err := readLogTail(s.serviceLogPath, n)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			logTailDimTemplate.Execute(w, "no log file yet") //nolint:errcheck
 			return
 		}
-		logTailDimTemplate.Execute(w, fmt.Sprintf("failed to read log: %v", err)) //nolint:errcheck
+		fmt.Fprintf(os.Stderr, "web: reading service log tail: %v\n", err)
+		logTailDimTemplate.Execute(w, "failed to read log") //nolint:errcheck
 		return
 	}
 

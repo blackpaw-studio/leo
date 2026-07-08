@@ -70,7 +70,7 @@ h1.page-title, h2.section-title {
 .table-wrap { overflow-x: auto; }
 .logtail {
   max-height: 400px; overflow: auto; font-size: var(--fs-xs); padding: var(--sp-3);
-  margin: 0; white-space: pre-wrap;
+  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 table, .task-table, .history-table, .config-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th, .task-table th, .history-table th {

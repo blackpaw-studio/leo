@@ -100,6 +100,15 @@ type Server struct {
 	allowedHosts  []string      // extra hosts permitted beyond loopback (e.g. LAN IPs)
 	sessions      *sessionStore // in-memory browser sessions for cookie-based auth
 
+	// serviceLogPath is the absolute path to the service log tailed by the
+	// Service page's log viewer. Computed by service.LogPathFor(homePath) —
+	// the only place that formula lives — and threaded in via Options.LogPath
+	// since internal/web cannot import internal/service (import cycle:
+	// service -> daemon -> web). Empty when not wired by the caller (e.g. in
+	// tests that don't need it), in which case the log tail handler renders
+	// a "not configured" message instead of guessing a path.
+	serviceLogPath string
+
 	// agentMu guards the on-demand, 60s-TTL cache of claude sub-agent names
 	// used to populate dropdowns without shelling out on every render.
 	agentMu       sync.Mutex
@@ -130,6 +139,12 @@ type Options struct {
 	APIToken       string
 	AllowedHosts   []string
 	SessionRuntime SessionRuntimeProvider // optional; nil degrades Sessions page to tmux-only status
+	// LogPath is the absolute path to the service log, computed by
+	// service.LogPathFor(homePath) at the layer that can import
+	// internal/service (see internal/daemon/server.go's StartWeb). Optional;
+	// empty disables the Service page's log tail (renders a "not
+	// configured" message instead of guessing a path).
+	LogPath string
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is not available.
@@ -140,17 +155,18 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	}
 
 	s := &Server{
-		configPath:   configPath,
-		processes:    processes,
-		scheduler:    scheduler,
-		reloader:     reloader,
-		agentSvc:     agentSvc,
-		sessionRT:    opts.SessionRuntime,
-		leoPath:      leoPath,
-		port:         opts.Port,
-		apiToken:     opts.APIToken,
-		allowedHosts: opts.AllowedHosts,
-		execCommand:  exec.Command,
+		configPath:     configPath,
+		processes:      processes,
+		scheduler:      scheduler,
+		reloader:       reloader,
+		agentSvc:       agentSvc,
+		sessionRT:      opts.SessionRuntime,
+		leoPath:        leoPath,
+		port:           opts.Port,
+		apiToken:       opts.APIToken,
+		allowedHosts:   opts.AllowedHosts,
+		serviceLogPath: opts.LogPath,
+		execCommand:    exec.Command,
 	}
 	s.fetchAgentListFn = s.fetchAgentList
 
