@@ -1,0 +1,582 @@
+<title>Leo Web UI — Visual Directions</title>
+<style>
+  :root {
+    --pg-bg: #f4f5f7;
+    --pg-surface: #ffffff;
+    --pg-ink: #22262c;
+    --pg-muted: #6b7280;
+    --pg-line: #dfe2e7;
+    --pg-accent: #3d5a80;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --pg-bg: #16181d;
+      --pg-surface: #1e2128;
+      --pg-ink: #e3e6ea;
+      --pg-muted: #9aa2ad;
+      --pg-line: #32363e;
+      --pg-accent: #8fb3d9;
+    }
+  }
+  :root[data-theme="dark"] {
+    --pg-bg: #16181d; --pg-surface: #1e2128; --pg-ink: #e3e6ea;
+    --pg-muted: #9aa2ad; --pg-line: #32363e; --pg-accent: #8fb3d9;
+  }
+  :root[data-theme="light"] {
+    --pg-bg: #f4f5f7; --pg-surface: #ffffff; --pg-ink: #22262c;
+    --pg-muted: #6b7280; --pg-line: #dfe2e7; --pg-accent: #3d5a80;
+  }
+
+  body {
+    background: var(--pg-bg);
+    color: var(--pg-ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.55;
+    margin: 0;
+    padding: 2.5rem 1.5rem 5rem;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  header.intro { margin-bottom: 3rem; }
+  .eyebrow {
+    text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.72rem;
+    font-weight: 600; color: var(--pg-muted); margin: 0 0 0.5rem;
+  }
+  h1 { font-size: 1.9rem; margin: 0 0 0.6rem; text-wrap: balance; font-weight: 700; }
+  .intro p { max-width: 62ch; color: var(--pg-muted); margin: 0.3rem 0; }
+
+  section.direction { margin: 0 0 4.5rem; }
+  .dir-head { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+  .dir-tag {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--pg-accent); border: 1px solid var(--pg-accent);
+    padding: 0.15rem 0.5rem; border-radius: 3px;
+  }
+  h2 { font-size: 1.35rem; margin: 0; font-weight: 700; }
+  .dir-blurb { max-width: 68ch; color: var(--pg-muted); margin: 0.4rem 0 1.2rem; }
+  .dir-blurb strong { color: var(--pg-ink); }
+
+  .frame {
+    border: 1px solid var(--pg-line); border-radius: 10px; overflow: hidden;
+    background: var(--pg-surface);
+    box-shadow: 0 2px 14px rgb(0 0 0 / 0.08);
+  }
+  .frame-bar {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.5rem 0.9rem; border-bottom: 1px solid var(--pg-line);
+    background: var(--pg-surface);
+  }
+  .frame-bar span { width: 10px; height: 10px; border-radius: 50%; background: var(--pg-line); }
+  .frame-scroll { overflow-x: auto; }
+  .shot { min-width: 880px; }
+
+  /* ============ DIRECTION A — OPS TERMINAL ============ */
+  .dirA {
+    --a-bg: #0b0e14; --a-panel: #10141d; --a-panel2: #151a25;
+    --a-line: #232a38; --a-text: #d7dee8; --a-dim: #77839a;
+    --a-accent: #ffb454; --a-good: #3fdc97; --a-bad: #ff6b6b; --a-link: #82aaff;
+    background: var(--a-bg); color: var(--a-text);
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    font-size: 13px;
+    display: grid; grid-template-columns: 200px 1fr;
+  }
+  .dirA .side {
+    background: var(--a-panel); border-right: 1px solid var(--a-line);
+    padding: 1rem 0; display: flex; flex-direction: column; gap: 0.1rem;
+  }
+  .dirA .brand {
+    padding: 0.2rem 1.1rem 1rem; font-weight: 700; font-size: 15px; letter-spacing: 0.04em;
+  }
+  .dirA .brand em { color: var(--a-accent); font-style: normal; }
+  .dirA .nav-item {
+    padding: 0.45rem 1.1rem; color: var(--a-dim); cursor: pointer; border-left: 2px solid transparent;
+  }
+  .dirA .nav-item.on {
+    color: var(--a-text); background: var(--a-panel2); border-left-color: var(--a-accent);
+  }
+  .dirA .nav-sect {
+    padding: 1rem 1.1rem 0.3rem; font-size: 10px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--a-dim);
+  }
+  .dirA .main { padding: 1.1rem 1.4rem 1.6rem; }
+  .dirA .statusline {
+    display: flex; gap: 1.5rem; padding: 0.55rem 0.9rem; margin-bottom: 1.1rem;
+    background: var(--a-panel2); border: 1px solid var(--a-line); border-radius: 4px;
+    color: var(--a-dim); font-size: 12px;
+  }
+  .dirA .statusline b { color: var(--a-text); font-weight: 600; }
+  .dirA .statusline .ok { color: var(--a-good); }
+  .dirA h3 {
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--a-dim); margin: 0 0 0.6rem; font-weight: 600;
+  }
+  .dirA table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .dirA th {
+    text-align: left; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--a-dim); font-weight: 600; padding: 0.4rem 0.75rem;
+    border-bottom: 1px solid var(--a-line);
+  }
+  .dirA td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--a-line); }
+  .dirA tr:hover td { background: var(--a-panel2); }
+  .dirA .tname { color: var(--a-link); }
+  .dirA .cron { color: var(--a-dim); font-size: 11px; }
+  .dirA .pill {
+    display: inline-block; padding: 0.05rem 0.5rem; border-radius: 3px; font-size: 11px;
+  }
+  .dirA .pill.ok { color: var(--a-good); background: rgb(63 220 151 / 0.12); }
+  .dirA .pill.err { color: var(--a-bad); background: rgb(255 107 107 / 0.12); }
+  .dirA .pill.off { color: var(--a-dim); background: rgb(119 131 154 / 0.14); }
+  .dirA .btn {
+    display: inline-block; padding: 0.18rem 0.6rem; border: 1px solid var(--a-line);
+    border-radius: 3px; color: var(--a-dim); font-size: 11px; cursor: pointer;
+  }
+  .dirA .btn.hot { border-color: var(--a-accent); color: var(--a-accent); }
+  .dirA .formcard {
+    margin-top: 1.4rem; border: 1px solid var(--a-line); border-radius: 4px;
+    background: var(--a-panel);
+  }
+  .dirA .formcard .fc-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--a-line);
+  }
+  .dirA .formcard .fc-head b { color: var(--a-link); }
+  .dirA .frow {
+    display: grid; grid-template-columns: 180px 1fr; gap: 0.8rem; align-items: center;
+    padding: 0.45rem 0.9rem;
+  }
+  .dirA .frow label { color: var(--a-dim); font-size: 12px; }
+  .dirA .frow .hint { grid-column: 2; color: var(--a-dim); font-size: 10.5px; margin-top: -0.3rem; padding-bottom: 0.2rem; opacity: 0.8; }
+  .dirA input, .dirA select {
+    background: var(--a-bg); border: 1px solid var(--a-line); color: var(--a-text);
+    font: inherit; font-size: 12px; padding: 0.3rem 0.55rem; border-radius: 3px; width: 100%;
+    box-sizing: border-box;
+  }
+  .dirA input:focus, .dirA select:focus { outline: 1px solid var(--a-accent); border-color: var(--a-accent); }
+
+  /* ============ DIRECTION B — CONTROL PANEL ============ */
+  .dirB {
+    --b-bg: #f7f6f3; --b-panel: #ffffff; --b-ink: #1c1e21; --b-dim: #6d7178;
+    --b-line: #e5e3dd; --b-accent: #8a5a00; --b-accent-bg: #f4e8d0;
+    --b-good: #1a7f4e; --b-bad: #b3261e;
+    background: var(--b-bg); color: var(--b-ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13.5px;
+    display: grid; grid-template-columns: 210px 1fr;
+  }
+  .dirB.dark {
+    --b-bg: #191a1c; --b-panel: #212226; --b-ink: #e8e6e1; --b-dim: #97999e;
+    --b-line: #33343a; --b-accent: #e0a83e; --b-accent-bg: #3a2f17;
+    --b-good: #4cc38a; --b-bad: #ff8a80;
+  }
+  .dirB .side {
+    background: var(--b-panel); border-right: 1px solid var(--b-line);
+    padding: 1.1rem 0.7rem; display: flex; flex-direction: column; gap: 2px;
+  }
+  .dirB .brand { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.6rem 1rem; font-weight: 700; font-size: 15px; }
+  .dirB .brand .mark {
+    width: 22px; height: 22px; border-radius: 6px; background: var(--b-accent);
+    color: var(--b-panel); display: grid; place-items: center; font-size: 12px; font-weight: 800;
+  }
+  .dirB .nav-item {
+    padding: 0.42rem 0.65rem; border-radius: 6px; color: var(--b-dim); cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .dirB .nav-item.on { background: var(--b-accent-bg); color: var(--b-accent); font-weight: 600; }
+  .dirB .nav-item .count {
+    font-size: 11px; background: var(--b-line); border-radius: 99px; padding: 0 0.45rem;
+    color: var(--b-dim); font-variant-numeric: tabular-nums;
+  }
+  .dirB .nav-sect { padding: 0.9rem 0.65rem 0.25rem; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--b-dim); font-weight: 600; }
+  .dirB .main { padding: 1.2rem 1.5rem 1.6rem; }
+  .dirB .pagehead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+  .dirB .pagehead h3 { margin: 0; font-size: 17px; font-weight: 700; }
+  .dirB .pagehead .sub { color: var(--b-dim); font-size: 12.5px; margin-top: 2px; }
+  .dirB .btn {
+    padding: 0.35rem 0.8rem; border-radius: 6px; border: 1px solid var(--b-line);
+    background: var(--b-panel); color: var(--b-ink); font-size: 12.5px; cursor: pointer; font-weight: 500;
+  }
+  .dirB .btn.primary { background: var(--b-accent); border-color: var(--b-accent); color: #fff; }
+  .dirB.dark .btn.primary { color: #1c1405; }
+  .dirB .card {
+    background: var(--b-panel); border: 1px solid var(--b-line); border-radius: 10px;
+    overflow: hidden; margin-bottom: 1rem;
+  }
+  .dirB .row {
+    display: grid; grid-template-columns: 1.4fr 1.2fr 0.7fr auto; gap: 0.8rem;
+    align-items: center; padding: 0.65rem 1rem; border-bottom: 1px solid var(--b-line);
+  }
+  .dirB .row:last-child { border-bottom: 0; }
+  .dirB .row:hover { background: color-mix(in oklab, var(--b-panel) 92%, var(--b-accent)); }
+  .dirB .rname { font-weight: 600; }
+  .dirB .rname small { display: block; color: var(--b-dim); font-weight: 400; font-size: 11.5px; }
+  .dirB .sched { color: var(--b-dim); font-size: 12.5px; }
+  .dirB .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dirB .st-ok { color: var(--b-good); font-size: 12.5px; font-weight: 500; }
+  .dirB .st-ok .dot { background: var(--b-good); }
+  .dirB .st-err { color: var(--b-bad); font-size: 12.5px; font-weight: 500; }
+  .dirB .st-err .dot { background: var(--b-bad); }
+  .dirB .st-off { color: var(--b-dim); font-size: 12.5px; }
+  .dirB .st-off .dot { background: var(--b-dim); }
+  .dirB .switch {
+    width: 34px; height: 20px; border-radius: 99px; background: var(--b-line); position: relative; cursor: pointer;
+  }
+  .dirB .switch.on { background: var(--b-accent); }
+  .dirB .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: #fff; transition: left 0.15s;
+  }
+  .dirB .switch.on::after { left: 16px; }
+  .dirB .formhead {
+    padding: 0.75rem 1rem; border-bottom: 1px solid var(--b-line);
+    font-weight: 600; display: flex; justify-content: space-between; align-items: center;
+  }
+  .dirB .formhead .crumb { color: var(--b-dim); font-weight: 400; font-size: 12px; }
+  .dirB .fgroup { padding: 0.9rem 1rem; border-bottom: 1px solid var(--b-line); }
+  .dirB .fgroup:last-child { border-bottom: 0; }
+  .dirB .fgroup .glabel { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--b-dim); font-weight: 600; margin-bottom: 0.6rem; }
+  .dirB .field { display: grid; grid-template-columns: 170px 1fr; gap: 1rem; align-items: start; padding: 0.35rem 0; }
+  .dirB .field label { font-weight: 500; padding-top: 0.3rem; }
+  .dirB .field label small { display: block; color: var(--b-dim); font-weight: 400; font-size: 11.5px; line-height: 1.4; }
+  .dirB input, .dirB select {
+    font: inherit; font-size: 13px; padding: 0.4rem 0.6rem; border-radius: 6px;
+    border: 1px solid var(--b-line); background: var(--b-bg); color: var(--b-ink);
+    width: 100%; max-width: 340px; box-sizing: border-box;
+  }
+  .dirB input:focus, .dirB select:focus { outline: 2px solid var(--b-accent); outline-offset: -1px; }
+
+  /* ============ DIRECTION C — INSTRUMENT PANEL ============ */
+  .dirC {
+    --c-bg: #ececе7;
+    --c-bg: #ecece7; --c-panel: #f6f6f2; --c-ink: #17181a; --c-dim: #5c5e63;
+    --c-line: #17181a; --c-hair: #c9c9c2; --c-accent: #e8551a;
+    --c-good: #17181a; --c-bad: #e8551a;
+    background: var(--c-bg); color: var(--c-ink);
+    font-family: system-ui, "Helvetica Neue", Arial, sans-serif; font-size: 13px;
+  }
+  .dirC .topbar {
+    display: flex; align-items: stretch; border-bottom: 2px solid var(--c-line);
+    background: var(--c-panel);
+  }
+  .dirC .brand {
+    padding: 0.8rem 1.2rem; font-weight: 800; font-size: 16px; letter-spacing: 0.02em;
+    border-right: 1px solid var(--c-hair); display: flex; align-items: center; gap: 0.6rem;
+  }
+  .dirC .brand .sq { width: 12px; height: 12px; background: var(--c-accent); }
+  .dirC .tabs { display: flex; }
+  .dirC .tab {
+    padding: 0 1.1rem; display: flex; align-items: center; color: var(--c-dim);
+    border-right: 1px solid var(--c-hair); cursor: pointer; font-size: 12px;
+    letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600;
+  }
+  .dirC .tab.on { color: var(--c-ink); box-shadow: inset 0 -3px 0 var(--c-accent); }
+  .dirC .meta {
+    margin-left: auto; display: flex; align-items: center; gap: 1.2rem; padding: 0 1.2rem;
+    font-variant-numeric: tabular-nums; font-size: 12px; color: var(--c-dim);
+  }
+  .dirC .meta b { color: var(--c-ink); }
+  .dirC .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 0; }
+  .dirC .colL { border-right: 1px solid var(--c-hair); }
+  .dirC h3 {
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700;
+    margin: 0; padding: 0.9rem 1.2rem 0.5rem; display: flex; justify-content: space-between;
+  }
+  .dirC h3 .n { color: var(--c-dim); font-weight: 600; }
+  .dirC table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .dirC th {
+    text-align: left; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--c-dim); padding: 0.35rem 1.2rem; border-bottom: 2px solid var(--c-line); font-weight: 700;
+  }
+  .dirC td { padding: 0.55rem 1.2rem; border-bottom: 1px solid var(--c-hair); }
+  .dirC tr:hover td { background: var(--c-panel); }
+  .dirC .tname { font-weight: 700; }
+  .dirC .sched { color: var(--c-dim); font-size: 12px; }
+  .dirC .state { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .dirC .state.err { color: var(--c-accent); }
+  .dirC .state.off { color: var(--c-dim); font-weight: 600; }
+  .dirC .runbtn {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    border: 1.5px solid var(--c-line); padding: 0.22rem 0.65rem; cursor: pointer;
+    background: transparent; color: var(--c-ink);
+  }
+  .dirC .runbtn:hover { background: var(--c-ink); color: var(--c-bg); }
+  .dirC .formside { padding-bottom: 1.2rem; }
+  .dirC .frow { display: grid; grid-template-columns: 130px 1fr; gap: 0.7rem; align-items: center; padding: 0.4rem 1.2rem; }
+  .dirC .frow label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-dim); font-weight: 700; }
+  .dirC input, .dirC select {
+    font: inherit; font-size: 12.5px; padding: 0.35rem 0.55rem; border: 1.5px solid var(--c-hair);
+    background: var(--c-panel); color: var(--c-ink); width: 100%; box-sizing: border-box; border-radius: 0;
+  }
+  .dirC input:focus, .dirC select:focus { outline: none; border-color: var(--c-accent); }
+  .dirC .fhint { grid-column: 2; font-size: 11px; color: var(--c-dim); padding: 0 1.2rem 0 0; margin-top: -2px; }
+  .dirC .savebar { display: flex; gap: 0.6rem; padding: 0.8rem 1.2rem 0; }
+  .dirC .savebtn {
+    background: var(--c-accent); color: #fff; border: none; font-weight: 700; font-size: 11px;
+    letter-spacing: 0.1em; text-transform: uppercase; padding: 0.5rem 1.1rem; cursor: pointer;
+  }
+
+  .theme-note { font-size: 0.8rem; color: var(--pg-muted); margin-top: 0.6rem; }
+  footer { color: var(--pg-muted); font-size: 0.85rem; max-width: 68ch; }
+  footer strong { color: var(--pg-ink); }
+</style>
+
+<div class="wrap">
+  <header class="intro">
+    <p class="eyebrow">Leo · Web UI redesign</p>
+    <h1>Three visual directions</h1>
+    <p>Same content in each mockup: sidebar/nav, a slice of the task list, and a piece of a config form — the surfaces you use most. Fonts are system approximations; the real build ships proper embedded faces.</p>
+    <p>All three assume the structural changes we agreed on: sidebar navigation replacing the tab row, config-editing as the first-class surface, schema-driven forms.</p>
+  </header>
+
+  <!-- ============ A ============ -->
+  <section class="direction">
+    <div class="dir-head"><span class="dir-tag">A</span><h2>Ops Terminal</h2></div>
+    <p class="dir-blurb">The current UI's heritage, done properly. Committed dark, all-mono type, amber as the single interactive accent (green/red reserved purely for status). Dense, keyboard-feeling, reads like a well-configured tmux status line. <strong>Best if Leo should feel like part of the terminal.</strong></p>
+    <div class="frame">
+      <div class="frame-bar"><span></span><span></span><span></span></div>
+      <div class="frame-scroll">
+      <div class="shot dirA">
+        <div class="side">
+          <div class="brand">leo<em>_</em></div>
+          <div class="nav-item on">Tasks</div>
+          <div class="nav-item">Agents</div>
+          <div class="nav-item">Processes</div>
+          <div class="nav-item">Sessions</div>
+          <div class="nav-sect">Configure</div>
+          <div class="nav-item">Defaults</div>
+          <div class="nav-item">Templates</div>
+          <div class="nav-item">Providers</div>
+          <div class="nav-item">Service</div>
+        </div>
+        <div class="main">
+          <div class="statusline">
+            <span><b class="ok">●</b> assistant <b>18h</b> up</span>
+            <span>tasks <b>24</b></span>
+            <span>agents <b>3</b></span>
+            <span>next <b>inbox-calendar-watch</b> in 20m</span>
+          </div>
+          <h3>Tasks</h3>
+          <table>
+            <tr><th>name</th><th>schedule</th><th>next</th><th>last</th><th></th></tr>
+            <tr>
+              <td class="tname">daily-news-briefing</td>
+              <td>Daily at 7:00 AM <span class="cron">0 7 * * *</span></td>
+              <td>in 17h 50m</td>
+              <td><span class="pill ok">ok</span></td>
+              <td><span class="btn hot">run</span> <span class="btn">edit</span></td>
+            </tr>
+            <tr>
+              <td class="tname">trade-desk</td>
+              <td>Weekdays :30, 8AM, 3PM <span class="cron">30 8,15 * * 1-5</span></td>
+              <td>in 2h 20m</td>
+              <td><span class="pill err">exit 1</span></td>
+              <td><span class="btn hot">run</span> <span class="btn">edit</span></td>
+            </tr>
+            <tr>
+              <td class="tname">deal-watch</td>
+              <td>Mon, Thu 9:00 AM <span class="cron">0 9 * * 1,4</span></td>
+              <td>—</td>
+              <td><span class="pill off">disabled</span></td>
+              <td><span class="btn">enable</span> <span class="btn">edit</span></td>
+            </tr>
+          </table>
+          <div class="formcard">
+            <div class="fc-head"><b>trade-desk</b> <span class="btn hot">save</span></div>
+            <div class="frow"><label>schedule</label><input value="30 8,15 * * 1-5"></div>
+            <div class="frow"><span></span></div>
+            <div class="frow"><label>model</label><select><option>sonnet</option></select></div>
+            <div class="frow"><label>provider</label><select><option>(default — anthropic)</option></select></div>
+            <div class="frow"><label>runtime</label><select><option>persistent</option></select></div>
+            <div class="frow hint" style="display:block; padding-left: 190px;">injects into a supervised session instead of spawning claude -p</div>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+    <p class="theme-note">Single committed theme — dark only, like a terminal.</p>
+  </section>
+
+  <!-- ============ B ============ -->
+  <section class="direction">
+    <div class="dir-head"><span class="dir-tag">B</span><h2>Control Panel</h2></div>
+    <p class="dir-blurb">A quiet settings-app idiom — the Tailscale-admin school. Humanist sans, generous grouped forms with inline help, toggles for booleans, warm lion-gold accent on warm-biased neutrals. Light and dark both first-class. <strong>Best for config-editing ergonomics; friendliest on a phone.</strong></p>
+    <div class="frame">
+      <div class="frame-bar"><span></span><span></span><span></span></div>
+      <div class="frame-scroll">
+      <div class="shot dirB">
+        <div class="side">
+          <div class="brand"><span class="mark">L</span> Leo</div>
+          <div class="nav-item">Overview</div>
+          <div class="nav-item on">Tasks <span class="count">24</span></div>
+          <div class="nav-item">Agents <span class="count">3</span></div>
+          <div class="nav-item">Processes <span class="count">1</span></div>
+          <div class="nav-item">Sessions</div>
+          <div class="nav-sect">Configuration</div>
+          <div class="nav-item">Defaults</div>
+          <div class="nav-item">Templates</div>
+          <div class="nav-item">Providers</div>
+          <div class="nav-item">Service</div>
+        </div>
+        <div class="main">
+          <div class="pagehead">
+            <div>
+              <h3>Tasks</h3>
+              <div class="sub">24 scheduled · next: inbox-calendar-watch in 20 min</div>
+            </div>
+            <button class="btn primary">New task</button>
+          </div>
+          <div class="card">
+            <div class="row">
+              <div class="rname">daily-news-briefing<small>Daily at 7:00 AM</small></div>
+              <div class="sched">next in 17h 50m</div>
+              <div class="st-ok"><span class="dot"></span>Passing</div>
+              <div style="display:flex;gap:0.5rem;align-items:center"><button class="btn">Run</button><div class="switch on"></div></div>
+            </div>
+            <div class="row">
+              <div class="rname">trade-desk<small>Weekdays at :30, 8 AM and 3 PM</small></div>
+              <div class="sched">next in 2h 20m</div>
+              <div class="st-err"><span class="dot"></span>Failed (exit 1)</div>
+              <div style="display:flex;gap:0.5rem;align-items:center"><button class="btn">Run</button><div class="switch on"></div></div>
+            </div>
+            <div class="row">
+              <div class="rname">deal-watch<small>Mon and Thu at 9:00 AM</small></div>
+              <div class="sched">—</div>
+              <div class="st-off"><span class="dot"></span>Disabled</div>
+              <div style="display:flex;gap:0.5rem;align-items:center"><button class="btn">Run</button><div class="switch"></div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="formhead">trade-desk <span class="crumb">Tasks / trade-desk</span></div>
+            <div class="fgroup">
+              <div class="glabel">Schedule</div>
+              <div class="field">
+                <label>Cron expression<small>Runs weekdays at 8:30 AM and 3:30 PM</small></label>
+                <input value="30 8,15 * * 1-5">
+              </div>
+            </div>
+            <div class="fgroup">
+              <div class="glabel">Runtime</div>
+              <div class="field">
+                <label>Model</label>
+                <select><option>sonnet</option></select>
+              </div>
+              <div class="field">
+                <label>Provider<small>Third-party endpoint; leave default for Anthropic</small></label>
+                <select><option>Default (Anthropic)</option></select>
+              </div>
+              <div class="field">
+                <label>Session mode<small>Persistent injects into a supervised session instead of spawning claude&nbsp;-p</small></label>
+                <select><option>Persistent</option></select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+    <p class="theme-note">Ships in light and dark — dark variant below.</p>
+    <div class="frame" style="margin-top: 0.8rem;">
+      <div class="frame-bar"><span></span><span></span><span></span></div>
+      <div class="frame-scroll">
+      <div class="shot dirB dark">
+        <div class="side">
+          <div class="brand"><span class="mark">L</span> Leo</div>
+          <div class="nav-item">Overview</div>
+          <div class="nav-item on">Tasks <span class="count">24</span></div>
+          <div class="nav-item">Agents <span class="count">3</span></div>
+          <div class="nav-sect">Configuration</div>
+          <div class="nav-item">Defaults</div>
+          <div class="nav-item">Providers</div>
+        </div>
+        <div class="main">
+          <div class="pagehead">
+            <div>
+              <h3>Tasks</h3>
+              <div class="sub">24 scheduled · next: inbox-calendar-watch in 20 min</div>
+            </div>
+            <button class="btn primary">New task</button>
+          </div>
+          <div class="card">
+            <div class="row">
+              <div class="rname">daily-news-briefing<small>Daily at 7:00 AM</small></div>
+              <div class="sched">next in 17h 50m</div>
+              <div class="st-ok"><span class="dot"></span>Passing</div>
+              <div style="display:flex;gap:0.5rem;align-items:center"><button class="btn">Run</button><div class="switch on"></div></div>
+            </div>
+            <div class="row">
+              <div class="rname">trade-desk<small>Weekdays at :30, 8 AM and 3 PM</small></div>
+              <div class="sched">next in 2h 20m</div>
+              <div class="st-err"><span class="dot"></span>Failed (exit 1)</div>
+              <div style="display:flex;gap:0.5rem;align-items:center"><button class="btn">Run</button><div class="switch on"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ C ============ -->
+  <section class="direction">
+    <div class="dir-head"><span class="dir-tag">C</span><h2>Instrument Panel</h2></div>
+    <p class="dir-blurb">Swiss/International style: hard grid, hairline + heavy rules, uppercase letterspaced labels, tabular numerals, square corners, near-monochrome with safety-orange reserved for failures and primary actions. Feels like lab equipment. <strong>Most distinctive; densest information display.</strong></p>
+    <div class="frame">
+      <div class="frame-bar"><span></span><span></span><span></span></div>
+      <div class="frame-scroll">
+      <div class="shot dirC">
+        <div class="topbar">
+          <div class="brand"><span class="sq"></span>LEO</div>
+          <div class="tabs">
+            <div class="tab on">Tasks</div>
+            <div class="tab">Agents</div>
+            <div class="tab">Processes</div>
+            <div class="tab">Sessions</div>
+            <div class="tab">Config</div>
+          </div>
+          <div class="meta"><span>PROC <b>1/1</b></span><span>TASKS <b>24</b></span><span>NEXT <b>00:20:00</b></span></div>
+        </div>
+        <div class="grid">
+          <div class="colL">
+            <h3>Scheduled tasks <span class="n">24 · 19 enabled</span></h3>
+            <table>
+              <tr><th>Name</th><th>Schedule</th><th>Next</th><th>State</th><th></th></tr>
+              <tr>
+                <td class="tname">daily-news-briefing</td>
+                <td class="sched">Daily 07:00</td>
+                <td>17:50:00</td>
+                <td><span class="state">OK</span></td>
+                <td><button class="runbtn">Run</button></td>
+              </tr>
+              <tr>
+                <td class="tname">trade-desk</td>
+                <td class="sched">Wk 08:30 / 15:30</td>
+                <td>02:20:00</td>
+                <td><span class="state err">FAIL 1</span></td>
+                <td><button class="runbtn">Run</button></td>
+              </tr>
+              <tr>
+                <td class="tname">deal-watch</td>
+                <td class="sched">Mo, Th 09:00</td>
+                <td>—</td>
+                <td><span class="state off">OFF</span></td>
+                <td><button class="runbtn">Run</button></td>
+              </tr>
+            </table>
+          </div>
+          <div class="formside">
+            <h3>trade-desk</h3>
+            <div class="frow"><label>Schedule</label><input value="30 8,15 * * 1-5"></div>
+            <div class="frow"><label>Model</label><select><option>sonnet</option></select></div>
+            <div class="frow"><label>Provider</label><select><option>Anthropic</option></select></div>
+            <div class="frow"><label>Runtime</label><select><option>Persistent</option></select></div>
+            <div class="frow"><span></span><span class="fhint">Injects into a supervised session instead of spawning claude&nbsp;-p</span></div>
+            <div class="savebar"><button class="savebtn">Save</button><button class="runbtn">Discard</button></div>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+    <p class="theme-note">Shown light; a graphite dark variant is straightforward if this direction wins.</p>
+  </section>
+
+  <footer>
+    <p><strong>My lean: B (Control Panel), with A's status line grafted on top.</strong> You said config editing is the primary job and the phone matters sometimes — B's grouped forms, inline help, and toggles are built for exactly that, and it collapses to mobile most gracefully. A is the best pure monitoring look but its density works against form-heavy screens; C is the most striking but the all-caps grid gets loud across 24 tasks' worth of editing.</p>
+  </footer>
+</div>
