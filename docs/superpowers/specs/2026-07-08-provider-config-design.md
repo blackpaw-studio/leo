@@ -73,12 +73,21 @@ When a resolved provider is set, Leo injects into the spawned claude process:
 
 - `ANTHROPIC_BASE_URL` = provider `base_url`
 - `ANTHROPIC_AUTH_TOKEN` = resolved key (`api_key_env` lookup or `api_key_cmd` output)
-- `ANTHROPIC_MODEL` = resolved model, when it is not a claude alias
-  (`sonnet`/`opus`/`haiku` variants)
 
-Key resolution happens at spawn time, once per spawn. `api_key_cmd` failure
-(non-zero exit or empty output) fails the spawn with a clear error — no silent
-fallback to Anthropic.
+`ANTHROPIC_MODEL` is not needed: the resolved model always flows through the
+existing `--model` flag, because `default_model` slots into the model cascade
+(scope `model` → provider `default_model` → `defaults.model` → `sonnet`;
+sessions keep their "empty means no `--model` flag" behavior, falling only to
+the provider default).
+
+Key resolution happens at spawn time, once per spawn, and the resolved key
+lives only in memory and the launched process's environment. Failure policy
+(no silent fallback to Anthropic in either case):
+
+- Interactive paths (foreground `leo service <name>`, `leo run <task>`, agent
+  spawn/resume) fail with a clear error.
+- Daemon boot paths (supervised processes, persistent sessions, agent
+  restore) log a warning and skip that unit so the rest of the daemon boots.
 
 Injection points (the three spawn paths; arg-builders are untouched):
 
@@ -89,8 +98,15 @@ Injection points (the three spawn paths; arg-builders are untouched):
    ephemeral agents)
 3. **Persistent task sessions** — `internal/service/session.go` env exports
 
-The provider must be persisted alongside the process/agent spec so restarts
-and `RestoreAgents` re-inject the same env.
+The provider **name** (never the resolved key) is persisted alongside the
+agent spec (`agentstore.Record.Provider`) so restarts, `RestoreAgents`, and
+resume re-resolve and re-inject the same env.
+
+Daemon environment caveat: launchd/systemd-managed daemons only see the
+environment captured at `leo service start --daemon` time, so
+`internal/env.Capture` gains variadic extra keys and captures every
+provider's `api_key_env` name. `api_key_cmd` avoids the issue entirely by
+resolving fresh on each spawn.
 
 ## Validation (`Config.Validate()`)
 
