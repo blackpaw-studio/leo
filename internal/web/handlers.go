@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -472,73 +473,43 @@ func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, typ, msg)
 }
 
-func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	task, ok := cfg.Tasks[name]
-	if !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Task %q not found", name))
-		return
-	}
-
-	task.Enabled = r.FormValue("enabled") == "true"
-	if sched := r.FormValue("schedule"); sched != "" {
-		task.Schedule = sched
-	}
-	if pf := r.FormValue("prompt_file"); pf != "" {
-		task.PromptFile = pf
-	}
-	task.Model = r.FormValue("model")
-	if mt := r.FormValue("max_turns"); mt != "" {
-		if v, err := strconv.Atoi(mt); err == nil {
-			task.MaxTurns = v
-		}
-	}
-	if to := r.FormValue("timeout"); to != "" {
-		task.Timeout = to
-	}
-	task.Silent = r.FormValue("silent") == "true"
-	task.NotifyOnFail = r.FormValue("notify_on_fail") == "true"
-	task.Timezone = r.FormValue("timezone")
-	task.Workspace = r.FormValue("workspace")
-	task.Channels = parseCommaSeparated(r.FormValue("channels"))
-	task.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
-	if ret := r.FormValue("retries"); ret != "" {
-		if v, err := strconv.Atoi(ret); err == nil {
-			task.Retries = v
-		}
-	}
-	task.PermissionMode = r.FormValue("permission_mode")
-	task.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
-	task.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
-	task.AppendSystemPrompt = r.FormValue("append_system_prompt")
-	cfg.Tasks[name] = task
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	typ, msg := appendReloadWarning("success", fmt.Sprintf("Task %q saved", name), warn)
-	s.renderFlash(w, typ, msg)
-}
-
 type promptEditorData struct {
 	TaskName    string
 	PromptFile  string
 	Files       []string
 	Content     string
 	NewFileName string // populated when creating a new file
+}
+
+// buildPromptEditorData assembles components/prompt_editor.html's data for a
+// task: the list of files in its workspace and the selected file's content.
+// selected overrides task.PromptFile (e.g. the prompt-file dropdown's change
+// event); pass "" to show the task's configured file, or "__new__" for the
+// blank new-file state. Shared by the standalone prompt-editor endpoint
+// (handleTaskPromptGet) and the task edit page so the file-reading logic
+// exists in exactly one place.
+func (s *Server) buildPromptEditorData(cfg *config.Config, name string, task config.TaskConfig, selected string) (promptEditorData, error) {
+	workspace := cfg.TaskWorkspace(task)
+	files, _ := config.ListPromptFiles(workspace)
+
+	if selected == "__new__" {
+		return promptEditorData{TaskName: name, PromptFile: "__new__", Files: files}, nil
+	}
+
+	file := task.PromptFile
+	if selected != "" {
+		file = selected
+	}
+
+	data := promptEditorData{TaskName: name, PromptFile: file, Files: files}
+	if file != "" {
+		content, err := config.ReadPromptFile(workspace, file)
+		if err != nil {
+			return promptEditorData{}, err
+		}
+		data.Content = content
+	}
+	return data, nil
 }
 
 func (s *Server) handleTaskPromptGet(w http.ResponseWriter, r *http.Request) {
@@ -556,31 +527,10 @@ func (s *Server) handleTaskPromptGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workspace := cfg.TaskWorkspace(task)
-	files, _ := config.ListPromptFiles(workspace)
-
-	// If a specific file was requested (e.g. from dropdown change), use that
-	selectedFile := task.PromptFile
-	if qf := r.URL.Query().Get("prompt_file"); qf != "" && qf != "__new__" {
-		selectedFile = qf
-	}
-
-	data := promptEditorData{
-		TaskName:   name,
-		PromptFile: selectedFile,
-		Files:      files,
-	}
-
-	if r.URL.Query().Get("prompt_file") == "__new__" {
-		data.PromptFile = "__new__"
-		data.NewFileName = ""
-	} else if selectedFile != "" {
-		content, err := config.ReadPromptFile(workspace, selectedFile)
-		if err != nil {
-			s.renderFlash(w, "error", fmt.Sprintf("Failed to read prompt: %v", err))
-			return
-		}
-		data.Content = content
+	data, err := s.buildPromptEditorData(cfg, name, task, r.URL.Query().Get("prompt_file"))
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to read prompt: %v", err))
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1183,6 +1133,13 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
 }
 
+// handleTaskAdd creates a bare-minimum task (name + schedule) and redirects
+// straight to its edit page, where every other TaskConfig field can be set
+// through the schema-driven form. The prompt file is auto-named and starts
+// out non-existent — authored from the edit page's prompt editor — and the
+// task starts disabled so an incomplete config never fires on a cron tick.
+// The add form is a plain (non-htmx-boosted) POST, so a 303 here is a normal
+// browser redirect rather than an htmx swap.
 func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -1197,11 +1154,6 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 	schedule := r.FormValue("schedule")
 	if schedule == "" {
 		s.renderFlash(w, "error", "Schedule is required")
-		return
-	}
-	promptFile := r.FormValue("prompt_file")
-	if promptFile == "" {
-		s.renderFlash(w, "error", "Prompt file is required")
 		return
 	}
 
@@ -1219,59 +1171,24 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task := config.TaskConfig{
+	cfg.Tasks[name] = config.TaskConfig{
 		Schedule:   schedule,
-		PromptFile: promptFile,
-		Model:      r.FormValue("model"),
-		Enabled:    r.FormValue("enabled") == "true",
+		PromptFile: "prompts/" + name + ".md",
+		Enabled:    false,
 	}
-	cfg.Tasks[name] = task
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	reloadWarn := s.reloadConfigOrWarn()
+	s.reloadConfigOrWarn() // reload failures are logged server-side; nothing to attach a flash to across a redirect
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-
-	// Warn (don't block) if the prompt file doesn't exist yet — users often
-	// create the task before authoring the prompt.
-	flashType := "success"
-	message := fmt.Sprintf("Task %q added", name)
-	if missing := promptFileMissing(cfg, task); missing != "" {
-		flashType = "warning"
-		message = fmt.Sprintf("Task %q added, but prompt file %s does not exist yet", name, missing)
-	}
-	flashType, message = appendReloadWarning(flashType, message, reloadWarn)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: message}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
+	http.Redirect(w, r, "/tasks/"+url.PathEscape(name), http.StatusSeeOther)
 }
 
-// promptFileMissing returns the absolute prompt path when a task's prompt
-// file does not exist on disk. Returns "" when the file exists or the path
-// cannot be resolved (the caller treats resolution failures as "not missing"
-// because validateAndSave already rejected invalid paths).
-func promptFileMissing(cfg *config.Config, task config.TaskConfig) string {
-	ws := cfg.TaskWorkspace(task)
-	abs, err := config.ResolvePromptPath(ws, task.PromptFile)
-	if err != nil {
-		return ""
-	}
-	if _, err := os.Stat(abs); err != nil {
-		return abs
-	}
-	return ""
-}
-
+// handleTaskDelete removes a task and sends htmx an HX-Redirect back to the
+// task list — the edit page the delete button lives on no longer has
+// anything to show once the task is gone.
 func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -1292,19 +1209,10 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
+	s.reloadConfigOrWarn()
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Task %q deleted", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
+	w.Header().Set("HX-Redirect", "/tasks")
+	w.WriteHeader(http.StatusOK)
 }
 
 // --- Template config management ---

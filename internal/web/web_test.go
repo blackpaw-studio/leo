@@ -57,6 +57,10 @@ tasks:
     schedule: "0 3 * * 0"
     prompt_file: cleanup.md
     enabled: false
+  demo:
+    schedule: "0 8 * * *"
+    prompt_file: demo.md
+    enabled: true
 `
 
 func writeTestConfig(t *testing.T, dir string) string {
@@ -316,8 +320,8 @@ func TestPageTasksShowsTaskTable(t *testing.T) {
 	if !strings.Contains(body, "cleanup") {
 		t.Error("expected task 'cleanup'")
 	}
-	if !strings.Contains(body, "Add Task") {
-		t.Error("expected manage-tasks add form")
+	if !strings.Contains(body, "New task") {
+		t.Error("expected add-task form")
 	}
 }
 

@@ -155,6 +155,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		http.Redirect(w, r, "/tasks", http.StatusSeeOther)
 	})
 	mux.HandleFunc("GET /tasks", s.handlePage("tasks", "Tasks", s.buildTasksData))
+	mux.HandleFunc("GET /tasks/{name}", s.handleTaskEditPage)
 	mux.HandleFunc("GET /agents", s.handlePage("agents", "Agents", s.buildAgentsData))
 	mux.HandleFunc("GET /processes", s.handlePage("processes", "Processes", s.buildProcessesData))
 	mux.HandleFunc("GET /sessions", s.handlePage("sessions", "Sessions", nil))
@@ -181,7 +182,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/config/reload", s.handleConfigReload)
 	mux.HandleFunc("POST /web/config/defaults", s.handleConfigDefaultsSave)
 	mux.HandleFunc("POST /web/config/process/{name}", s.handleConfigProcess)
-	mux.HandleFunc("POST /web/config/task/{name}", s.handleConfigTask)
+	mux.HandleFunc("POST /web/config/task/{name}", s.handleConfigTaskSave)
 
 	// Process CRUD
 	mux.HandleFunc("POST /web/process/add", s.handleProcessAdd)

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -96,6 +97,20 @@ func (s *Server) handleConfigDefaultsSave(w http.ResponseWriter, r *http.Request
 		func(cfg *config.Config) (any, bool) { return &cfg.Defaults, true },
 		func(cfg *config.Config, v any) {}, // &cfg.Defaults is already the live field — nothing to write back
 		"Defaults saved", true)
+}
+
+// handleConfigTaskSave is the schema-driven replacement for the old
+// hand-rolled handleConfigTask. Tasks don't affect running processes, so no
+// restart flag is set.
+func (s *Server) handleConfigTaskSave(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.applySection(w, r, schema.SectionTask,
+		func(cfg *config.Config) (any, bool) {
+			t, ok := cfg.Tasks[name]
+			return &t, ok
+		},
+		func(cfg *config.Config, v any) { cfg.Tasks[name] = *(v.(*config.TaskConfig)) },
+		fmt.Sprintf("Task %q saved", name), false)
 }
 
 // kindName maps a resolved schema.Kind to the string components/form.html

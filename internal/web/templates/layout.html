@@ -31,6 +31,7 @@
             {{template "status.html" .}}
             <div id="flash-container"></div>
             {{if eq .Page "tasks"}}{{template "page_tasks" .}}
+            {{else if eq .Page "task_edit"}}{{template "page_task_edit" .}}
             {{else if eq .Page "agents"}}{{template "page_agents" .}}
             {{else if eq .Page "processes"}}{{template "page_processes" .}}
             {{else if eq .Page "sessions"}}{{template "page_sessions" .}}

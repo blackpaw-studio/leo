@@ -3,8 +3,10 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
@@ -109,16 +111,12 @@ func (s *Server) handlePage(page, title string, build func(*http.Request) (any, 
 	}
 }
 
-// buildTasksData, buildProcessesData, and buildTemplatesData all reuse
-// buildDashboardData: the underlying partials they transclude (tasks.html,
-// config_tasks.html, processes.html, config_processes.html,
-// config_templates.html) already expect that struct's shape (.Tasks,
-// .Processes, .Config, .Agents), so this keeps the page cutover a pure
-// wiring change rather than a data-model rewrite.
-
-func (s *Server) buildTasksData(r *http.Request) (any, error) {
-	return s.buildDashboardData()
-}
+// buildProcessesData and buildTemplatesData reuse buildDashboardData: the
+// underlying partials they transclude (processes.html, config_processes.html,
+// config_templates.html) already expect that struct's shape (.Processes,
+// .Config, .Agents), so this keeps the page cutover a pure wiring change
+// rather than a data-model rewrite. buildTasksData (below) was cut over to
+// its own lightweight shape for the Task 7 schema-driven tasks page.
 
 func (s *Server) buildProcessesData(r *http.Request) (any, error) {
 	return s.buildDashboardData()
@@ -189,4 +187,110 @@ func (s *Server) buildAgentsData(r *http.Request) (any, error) {
 	}
 
 	return agentsData{Agents: agents, Templates: cfg.Templates}, nil
+}
+
+// taskRow is one row of the tasks list table (pages/tasks.html).
+type taskRow struct {
+	Name     string
+	Schedule string
+	NextRun  time.Time
+	HasRun   bool
+	LastExit int
+	Enabled  bool
+}
+
+// tasksPageData feeds page_tasks.
+type tasksPageData struct {
+	Tasks []taskRow
+}
+
+// buildTasksData assembles the tasks list: cron next-run times from the
+// scheduler and last-exit status from history, keyed by task name.
+func (s *Server) buildTasksData(r *http.Request) (any, error) {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+
+	cronMap := make(map[string]cron.EntryInfo)
+	if s.scheduler != nil {
+		for _, e := range s.scheduler.List() {
+			cronMap[e.Name] = e
+		}
+	}
+	store := s.loadHistory(cfg)
+
+	rows := make([]taskRow, 0, len(cfg.Tasks))
+	for name, task := range cfg.Tasks {
+		row := taskRow{Name: name, Schedule: task.Schedule, Enabled: task.Enabled}
+		if entry, ok := cronMap[name]; ok {
+			row.NextRun = entry.Next
+		}
+		if last := store.Get(name); last != nil {
+			row.HasRun = true
+			row.LastExit = last.ExitCode
+		}
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+
+	return tasksPageData{Tasks: rows}, nil
+}
+
+// taskEditData feeds page_task_edit: the schema-driven form over the task's
+// config, plus its prompt editor and (via history-{{.Name}}, loaded
+// separately by hx-trigger="load") recent runs.
+type taskEditData struct {
+	Name       string
+	PromptFile string
+	Form       formData
+	Prompt     promptEditorData
+}
+
+// handleTaskEditPage renders a single task's edit page: every TaskConfig
+// field through the schema-driven form, the prompt editor, and a lazily
+// loaded recent-runs panel. Not wired through handlePage because the page
+// title is per-task and an unknown name must 404 rather than 500.
+func (s *Server) handleTaskEditPage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	task, ok := cfg.Tasks[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	form := s.buildForm(schema.SectionTask, &task, cfg, "/web/config/task/"+name)
+	form.DeleteURL = "/web/task/" + name + "/delete"
+
+	// Best-effort: a task whose configured prompt file path is invalid
+	// (e.g. escapes the workspace) still gets an edit page — it just opens
+	// with an empty prompt editor rather than a broken page. The dedicated
+	// /web/task/{name}/prompt endpoint surfaces the real error via flash.
+	prompt, _ := s.buildPromptEditorData(cfg, name, task, "")
+
+	pd := pageData{
+		Page:  "task_edit",
+		Title: "Task: " + name,
+		Data: taskEditData{
+			Name:       name,
+			PromptFile: task.PromptFile,
+			Form:       form,
+			Prompt:     prompt,
+		},
+	}
+	if err := s.fillStatus(&pd); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "layout.html", pd); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

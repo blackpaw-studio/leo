@@ -118,6 +118,9 @@ select.form-input {
   padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line);
 }
 .card-head b { color: var(--link); }
+.row-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; white-space: nowrap; }
+.frow-inline { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; padding: var(--sp-3) var(--sp-4); }
+.frow-inline input { width: auto; flex: 1; min-width: 120px; }
 
 /* flash + banner (keep existing class names used by flash.html) */
 .flash { padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); margin-bottom: var(--sp-3); font-size: var(--fs-sm); }
