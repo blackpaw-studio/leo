@@ -371,18 +371,14 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 		action = "disabled"
 	}
 
-	// Return updated task table
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
+	// The toggle button's hx-swap="none" means htmx ignores the main
+	// response body — only out-of-band swaps are processed. Wrap the flash
+	// in an OOB div so the notification still reaches #flash-container.
 	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Task %q %s", name, action), warn)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
 	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
 	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "tasks.html", data) //nolint:errcheck
 }
 
 func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
@@ -1226,7 +1222,9 @@ func (s *Server) handleProviderAdd(w http.ResponseWriter, r *http.Request) {
 	s.restartNeeded.Store(true)
 
 	w.Header().Set("HX-Refresh", "true")
-	s.renderFlash(w, "success", fmt.Sprintf("Provider %q created — set its base URL and API key source below", name))
+	s.renderFlash(w, "success", fmt.Sprintf(
+		"Provider %q created with placeholder values (base_url=https://changeme.example.com, api_key_env=CHANGE_ME) — replace them below before use",
+		name))
 }
 
 // handleProviderDelete removes a provider and reports back on the providers

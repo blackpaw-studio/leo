@@ -384,12 +384,6 @@ func (s *Server) parseTemplates() {
 	funcMap := template.FuncMap{
 		"statusColor": statusColor,
 		"cronDesc":    describeCron,
-		"derefBool": func(b *bool) bool {
-			if b == nil {
-				return false
-			}
-			return *b
-		},
 		"relativeTime": func(t time.Time) string {
 			if t.IsZero() {
 				return "—"

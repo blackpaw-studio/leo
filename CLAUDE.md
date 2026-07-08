@@ -57,7 +57,7 @@ internal/env/             → Shared environment capture for daemon/cron process
 Key design patterns:
 - **Multi-process supervisor**: `RunSupervised()` spawns a goroutine per enabled process, each managing its own tmux session (`leo-<name>`) with restart loop and backoff
 - **Dual listener daemon**: Unix socket for CLI IPC, optional TCP listener for web UI. Both served from the same daemon process.
-- **Web UI**: htmx + Go `html/template`, embedded via `embed.FS`. Dark terminal theme. Auto-refreshing dashboard with process status, task table, config editing, and cron preview.
+- **Web UI**: htmx + Go `html/template`, embedded via `embed.FS`. Dark terminal theme (JetBrains Mono) with a sidebar nav — each section (Tasks, Agents, Processes, Sessions, Defaults, Templates, Providers, Settings, Service) is its own routed page, not a tab within one dashboard — and config editing goes through a schema-driven form component (`internal/web/schema`) instead of hand-rolled per-field markup.
 - **Testability seams**: `run.execCommand`, `service.supervisedExecFn` etc. are package-level vars replaced in tests
 - **Config resolution**: `FindConfig()` walks up from cwd, falls back to `~/.leo/leo.yaml`; settings cascade from `defaults` to per-process/task overrides
 - **Templates**: embedded via `//go:embed *.md` in `internal/templates/`, rendered with `text/template`
