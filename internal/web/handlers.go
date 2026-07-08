@@ -412,41 +412,6 @@ func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q triggered", name))
 }
 
-func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	if model := r.FormValue("model"); model != "" {
-		cfg.Defaults.Model = model
-	}
-	if mt := r.FormValue("max_turns"); mt != "" {
-		if v, err := strconv.Atoi(mt); err == nil && v > 0 {
-			cfg.Defaults.MaxTurns = v
-		}
-	}
-	cfg.Defaults.PermissionMode = r.FormValue("permission_mode")
-	cfg.Defaults.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
-	cfg.Defaults.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
-	cfg.Defaults.AppendSystemPrompt = r.FormValue("append_system_prompt")
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	s.restartNeeded.Store(true)
-	typ, msg := appendReloadWarning("success", "Defaults saved", warn)
-	s.renderFlash(w, typ, msg)
-}
-
 func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := r.ParseForm(); err != nil {

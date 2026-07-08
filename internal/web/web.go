@@ -179,7 +179,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 
 	// Config mutations
 	mux.HandleFunc("POST /web/config/reload", s.handleConfigReload)
-	mux.HandleFunc("POST /web/config/defaults", s.handleConfigDefaults)
+	mux.HandleFunc("POST /web/config/defaults", s.handleConfigDefaultsSave)
 	mux.HandleFunc("POST /web/config/process/{name}", s.handleConfigProcess)
 	mux.HandleFunc("POST /web/config/task/{name}", s.handleConfigTask)
 
@@ -349,6 +349,7 @@ func (s *Server) parseTemplates() {
 			}
 			return formatDuration(time.Since(t))
 		},
+		"kindName": kindName,
 		"truncate": func(s string, maxLen int) string {
 			runes := []rune(s)
 			if len(runes) <= maxLen {

@@ -255,6 +255,18 @@ textarea.prompt-editor-textarea { min-height: 200px; width: 100%; font-family: v
 .config-section-add h3 { color: var(--dim); }
 .config-key { color: var(--dim); width: 180px; font-size: var(--fs-sm); }
 
+/* schema-driven config form (components/form.html) */
+.config-form { padding: var(--sp-3) var(--sp-4); }
+.form-group-label {
+  padding: var(--sp-3) 0 var(--sp-1); font-size: var(--fs-xs);
+  letter-spacing: var(--ls-label); text-transform: uppercase; color: var(--dim);
+}
+.form-group-label:first-child { padding-top: 0; }
+.frow { display: grid; grid-template-columns: 180px 1fr; gap: var(--sp-3); padding: var(--sp-2) 0; align-items: start; }
+.frow + .frow { border-top: 1px solid var(--line); }
+.frow label { color: var(--dim); font-size: var(--fs-sm); padding-top: var(--sp-1); }
+.fwarn { color: var(--accent); font-size: var(--fs-xs); margin-top: 2px; }
+
 /* advanced details */
 .advanced-details { margin-top: var(--sp-2); border-top: 1px solid var(--line); padding-top: 4px; }
 .advanced-summary { font-size: var(--fs-sm); color: var(--dim); cursor: pointer; padding: var(--sp-2) 0; user-select: none; list-style: none; }

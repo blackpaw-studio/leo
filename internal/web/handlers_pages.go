@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
 // pageData is the payload every full-page render receives. Pages add their
@@ -126,14 +128,15 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 	return s.buildDashboardData()
 }
 
-// buildDefaultsData feeds page_config_defaults, which only needs
-// .Defaults.* from the loaded config.
+// buildDefaultsData feeds page_config_defaults with a schema-driven form
+// over cfg.Defaults. Defaults is the top of the inheritance chain, so it
+// gets no "inherit" placeholders of its own (see buildForm).
 func (s *Server) buildDefaultsData(r *http.Request) (any, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
-	return cfg, nil
+	return s.buildForm(schema.SectionDefaults, &cfg.Defaults, cfg, "/web/config/defaults"), nil
 }
 
 // buildSettingsData feeds page_config_settings, which only needs .Web.*
