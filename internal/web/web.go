@@ -81,6 +81,11 @@ type Server struct {
 	agentCache    []string
 	agentsFetched time.Time
 
+	// fetchAgentListFn is invoked outside agentMu to refresh agentCache.
+	// Defaults to s.fetchAgentList; tests replace it to control timing
+	// without shelling out to a real `claude` binary.
+	fetchAgentListFn func() []string
+
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
 
@@ -120,6 +125,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		allowedHosts: opts.AllowedHosts,
 		execCommand:  exec.Command,
 	}
+	s.fetchAgentListFn = s.fetchAgentList
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)
@@ -346,15 +352,31 @@ func (s *Server) parseTemplates() {
 }
 
 // agentList returns the claude sub-agent names, refreshing at most once per
-// minute. fetchAgentList shells out to `claude agents` (~100ms).
+// minute. fetchAgentList shells out to `claude agents`, which can take up to
+// 10s, so the shell-out itself must never run while agentMu is held.
+//
+// The caller that finds the cache stale claims the refresh by stamping
+// agentsFetched immediately and releasing the lock before shelling out.
+// Any concurrent caller that arrives during that window sees a fresh
+// timestamp, so it returns the previous (stale) cache right away instead of
+// blocking on the in-flight fetch or starting a second one.
 func (s *Server) agentList() []string {
 	s.agentMu.Lock()
-	defer s.agentMu.Unlock()
-	if time.Since(s.agentsFetched) > time.Minute {
-		s.agentCache = s.fetchAgentList()
-		s.agentsFetched = time.Now()
+	if time.Since(s.agentsFetched) <= time.Minute {
+		cache := s.agentCache
+		s.agentMu.Unlock()
+		return cache
 	}
-	return s.agentCache
+	s.agentsFetched = time.Now()
+	s.agentMu.Unlock()
+
+	fresh := s.fetchAgentListFn()
+
+	s.agentMu.Lock()
+	s.agentCache = fresh
+	s.agentMu.Unlock()
+
+	return fresh
 }
 
 // fetchAgentList runs `claude agents` and parses the agent names.

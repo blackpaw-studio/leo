@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +63,20 @@ var validModels = map[string]bool{
 	"haiku":      true,
 	"sonnet[1m]": true,
 	"opus[1m]":   true,
+}
+
+// ValidModels returns the model names Config.Validate() accepts, sorted.
+// It exists so callers that need to mirror this list (e.g. the web UI's
+// model dropdown in internal/web/schema/options.go) — or tests that guard
+// against the two drifting apart — have a source of truth without
+// exporting the validModels map itself.
+func ValidModels() []string {
+	names := make([]string, 0, len(validModels))
+	for name := range validModels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 var validPermissionModes = map[string]bool{
