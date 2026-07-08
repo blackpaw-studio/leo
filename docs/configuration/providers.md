@@ -57,8 +57,10 @@ warning and everything else starts normally.
 
 `api_key_env` caveat: the daemon captures its environment when you run
 `leo service start --daemon`. After exporting a new key var, run that command
-again — or use `api_key_cmd` (e.g. `op read …`), which resolves fresh on
-every spawn.
+again. Captured values are written into the daemon launch file on disk
+(launchd plist / systemd unit), like `ANTHROPIC_API_KEY` today — prefer
+`api_key_cmd` (e.g. `op read …`) when that matters; it resolves fresh on
+every spawn and never touches disk.
 
 ## What to expect from third-party models
 
