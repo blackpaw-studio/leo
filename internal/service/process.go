@@ -453,11 +453,16 @@ func Status(workDir string) (string, error) {
 // webToken is the daemon's API bearer token, propagated to the agent.Manager and
 // the RestoreAgents path so the supervised processes and any ephemeral agents can
 // authenticate against the daemon's web API.
-func RunSupervised(claudePath string, processes []ProcessSpec, homePath, configPath, webToken string) error {
-	return supervisedExecFn(claudePath, processes, homePath, configPath, webToken)
+//
+// sessionSpecs is computed once by the caller via SessionSpecsFromConfig (which
+// may shell out to resolve provider env) and threaded through here rather than
+// re-derived, so a daemon boot never resolves provider env for the same session
+// twice.
+func RunSupervised(claudePath string, processes []ProcessSpec, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
+	return supervisedExecFn(claudePath, processes, sessionSpecs, homePath, configPath, webToken)
 }
 
-func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath, configPath, webToken string) error {
+func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
@@ -547,32 +552,28 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, homePath,
 	// --resume so claude rejoins the same conversation across daemon
 	// restarts. Session boot failures are non-fatal for the daemon as a
 	// whole — log and continue so process supervision still runs.
-	if cfg, cfgErr := config.Load(configPath); cfgErr == nil && cfg != nil {
-		sessionSpecs, sErr := SessionSpecsFromConfig(cfg)
-		if sErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: session specs: %v\n", sErr)
-		} else if len(sessionSpecs) > 0 {
-			sessions := session.NewStore(homePath)
-			booted := 0
-			for _, sp := range sessionSpecs {
-				if id, _, _ := sessions.Get("session:" + sp.Name); id != "" {
-					sp.ResumeID = id
-				}
-				spLocal := sp
-				if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, func(_ int) {
-					supervisor.incrementRestarts(spLocal.Name)
-				}); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: supervise session %q: %v\n", spLocal.Name, err)
-					continue
-				}
-				booted++
+	//
+	// sessionSpecs is supplied by the caller (already resolved once via
+	// SessionSpecsFromConfig) rather than re-derived from configPath here.
+	if len(sessionSpecs) > 0 {
+		sessions := session.NewStore(homePath)
+		booted := 0
+		for _, sp := range sessionSpecs {
+			if id, _, _ := sessions.Get("session:" + sp.Name); id != "" {
+				sp.ResumeID = id
 			}
-			if booted > 0 {
-				fmt.Fprintf(os.Stdout, "supervising %d session(s)\n", booted)
+			spLocal := sp
+			if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, func(_ int) {
+				supervisor.incrementRestarts(spLocal.Name)
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: supervise session %q: %v\n", spLocal.Name, err)
+				continue
 			}
+			booted++
 		}
-	} else if cfgErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: load config for session boot: %v\n", cfgErr)
+		if booted > 0 {
+			fmt.Fprintf(os.Stdout, "supervising %d session(s)\n", booted)
+		}
 	}
 
 	fmt.Fprintf(os.Stdout, "supervising %d process(es)\n", len(processes))

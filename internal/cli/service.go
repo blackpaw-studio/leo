@@ -90,21 +90,25 @@ func runService(cmd *cobra.Command, args []string) error {
 		// task sessions. The guard counts both: a home with only persistent
 		// tasks (no enabled processes) is still something to supervise.
 		//
-		// buildAllProcessSpecs is called exactly once here: it resolves each
-		// process's provider env (which may shell out via api_key_cmd, up to
-		// 30s per process) and warns on failures. Calling it twice would
-		// duplicate both the external commands and the warnings on every boot.
+		// buildAllProcessSpecs and SessionSpecsFromConfig are each called
+		// exactly once here: both may resolve provider env (which can shell
+		// out via api_key_cmd, up to 30s per process/session) and warn on
+		// failures. Calling either twice would duplicate both the external
+		// commands and the warnings on every boot, so the resulting specs
+		// are threaded straight into RunSupervised rather than re-derived.
 		specs := buildAllProcessSpecs(cfg, claudePath, webToken)
 		procCount := len(specs)
-		sessionCount := 0
-		if sessionSpecs, err := service.SessionSpecsFromConfig(cfg); err == nil {
-			sessionCount = len(sessionSpecs)
+		sessionSpecs, sErr := service.SessionSpecsFromConfig(cfg)
+		if sErr != nil {
+			warn.Printf("  session specs: %v\n", sErr)
+			sessionSpecs = nil
 		}
+		sessionCount := len(sessionSpecs)
 		if procCount == 0 && sessionCount == 0 {
 			return fmt.Errorf("no enabled processes or persistent task sessions in config")
 		}
 		info.Printf("Starting supervised mode (%d process(es), %d session(s))...\n", procCount, sessionCount)
-		return service.RunSupervised(claudePath, specs, cfg.HomePath, cfgPath, webToken)
+		return service.RunSupervised(claudePath, specs, sessionSpecs, cfg.HomePath, cfgPath, webToken)
 	}
 
 	// Foreground mode: run a single process, exec replaces this process

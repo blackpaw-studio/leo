@@ -486,11 +486,13 @@ func TestRunSupervisedDelegates(t *testing.T) {
 
 	var calledPath string
 	var calledProcesses []ProcessSpec
+	var calledSessions []SessionSpec
 	var calledConfigPath string
 	var calledToken string
-	supervisedExecFn = func(claudePath string, processes []ProcessSpec, homePath, configPath, webToken string) error {
+	supervisedExecFn = func(claudePath string, processes []ProcessSpec, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
 		calledPath = claudePath
 		calledProcesses = processes
+		calledSessions = sessionSpecs
 		calledConfigPath = configPath
 		calledToken = webToken
 		return nil
@@ -499,8 +501,11 @@ func TestRunSupervisedDelegates(t *testing.T) {
 	specs := []ProcessSpec{
 		{Name: "assistant", ClaudeArgs: []string{"--add-dir", "/workspace"}, WorkDir: "/workspace"},
 	}
+	sessionSpecs := []SessionSpec{
+		{Name: "research", Workdir: "/workspace"},
+	}
 	const wantToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err := RunSupervised("/usr/bin/claude", specs, "/home/.leo", "/home/.leo/leo.yaml", wantToken)
+	err := RunSupervised("/usr/bin/claude", specs, sessionSpecs, "/home/.leo", "/home/.leo/leo.yaml", wantToken)
 	if err != nil {
 		t.Fatalf("RunSupervised() error: %v", err)
 	}
@@ -509,6 +514,9 @@ func TestRunSupervisedDelegates(t *testing.T) {
 	}
 	if len(calledProcesses) != 1 || calledProcesses[0].Name != "assistant" {
 		t.Errorf("processes = %v, want 1 process named assistant", calledProcesses)
+	}
+	if len(calledSessions) != 1 || calledSessions[0].Name != "research" {
+		t.Errorf("sessionSpecs = %v, want 1 session named research", calledSessions)
 	}
 	if calledConfigPath != "/home/.leo/leo.yaml" {
 		t.Errorf("configPath = %q, want /home/.leo/leo.yaml", calledConfigPath)
