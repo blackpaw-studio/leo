@@ -325,9 +325,13 @@ func (c *Config) ProcessWorkspace(p ProcessConfig) string {
 }
 
 // ProcessModel returns the effective model for a process.
+// Cascade: process → provider default_model → defaults → DefaultModel.
 func (c *Config) ProcessModel(p ProcessConfig) string {
 	if p.Model != "" {
 		return p.Model
+	}
+	if m := c.ProviderDefaultModel(c.ProcessProvider(p)); m != "" {
+		return m
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model
@@ -428,9 +432,13 @@ func (c *Config) TaskWorkspace(t TaskConfig) string {
 }
 
 // TaskModel returns the effective model for a task.
+// Cascade: task → provider default_model → defaults → DefaultModel.
 func (c *Config) TaskModel(t TaskConfig) string {
 	if t.Model != "" {
 		return t.Model
+	}
+	if m := c.ProviderDefaultModel(c.TaskProvider(t)); m != "" {
+		return m
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model

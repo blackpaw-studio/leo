@@ -127,7 +127,7 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 		out = append(out, SessionSpec{
 			Name:            name,
 			Workdir:         workspaceOr(sc.Workspace),
-			Model:           sc.Model,
+			Model:           cfg.SessionModel(sc),
 			Agent:           sc.Agent,
 			PermissionMode:  sc.PermissionMode,
 			AllowedTools:    sc.AllowedTools,
@@ -154,10 +154,14 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 		if seen[name] {
 			return nil, fmt.Errorf("session name conflict: implicit %q collides with sessions.%s", name, name)
 		}
+		model := task.Model
+		if model == "" {
+			model = cfg.ProviderDefaultModel(cfg.TaskProvider(task))
+		}
 		out = append(out, SessionSpec{
 			Name:            name,
 			Workdir:         workspaceOr(task.Workspace),
-			Model:           task.Model,
+			Model:           model,
 			PermissionMode:  task.PermissionMode,
 			AllowedTools:    task.AllowedTools,
 			DisallowedTools: task.DisallowedTools,

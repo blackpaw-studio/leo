@@ -21,14 +21,7 @@ import (
 func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt string) []string {
 	var args []string
 
-	model := tmpl.Model
-	if model == "" {
-		model = cfg.Defaults.Model
-	}
-	if model == "" {
-		model = config.DefaultModel
-	}
-	args = append(args, "--model", model)
+	args = append(args, "--model", cfg.TemplateModel(tmpl))
 
 	for _, ch := range tmpl.Channels {
 		args = append(args, "--channels", ch)

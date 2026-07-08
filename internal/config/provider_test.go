@@ -134,6 +134,49 @@ func TestProviderCascade(t *testing.T) {
 	}
 }
 
+func TestModelResolutionWithProvider(t *testing.T) {
+	cfg := validProviderCfg() // glm has DefaultModel "glm-5.2"
+	cfg.Defaults.Model = "opus"
+
+	t.Run("scope model wins", func(t *testing.T) {
+		if got := cfg.ProcessModel(ProcessConfig{Provider: "glm", Model: "glm-5-turbo"}); got != "glm-5-turbo" {
+			t.Errorf("got %q", got)
+		}
+	})
+	t.Run("provider default beats global default", func(t *testing.T) {
+		if got := cfg.ProcessModel(ProcessConfig{Provider: "glm"}); got != "glm-5.2" {
+			t.Errorf("got %q, want glm-5.2", got)
+		}
+		if got := cfg.TaskModel(TaskConfig{Provider: "glm"}); got != "glm-5.2" {
+			t.Errorf("got %q, want glm-5.2", got)
+		}
+		if got := cfg.TemplateModel(TemplateConfig{Provider: "glm"}); got != "glm-5.2" {
+			t.Errorf("got %q, want glm-5.2", got)
+		}
+	})
+	t.Run("no provider keeps existing cascade", func(t *testing.T) {
+		if got := cfg.ProcessModel(ProcessConfig{}); got != "opus" {
+			t.Errorf("got %q, want opus", got)
+		}
+	})
+	t.Run("provider without default_model falls to defaults", func(t *testing.T) {
+		cfg2 := validProviderCfg()
+		cfg2.Providers["glm"] = ProviderConfig{BaseURL: "https://x.example", APIKeyEnv: "K"}
+		cfg2.Defaults.Model = "opus"
+		if got := cfg2.ProcessModel(ProcessConfig{Provider: "glm"}); got != "opus" {
+			t.Errorf("got %q, want opus", got)
+		}
+	})
+	t.Run("session model stays empty without provider default", func(t *testing.T) {
+		if got := cfg.SessionModel(SessionConfig{}); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+		if got := cfg.SessionModel(SessionConfig{Provider: "glm"}); got != "glm-5.2" {
+			t.Errorf("got %q, want glm-5.2", got)
+		}
+	})
+}
+
 func TestProviderKeyEnvNames(t *testing.T) {
 	cfg := &Config{Providers: map[string]ProviderConfig{
 		"b": {BaseURL: "https://b.example", APIKeyEnv: "B_KEY"},

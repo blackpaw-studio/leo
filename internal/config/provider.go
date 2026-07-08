@@ -44,6 +44,32 @@ func (c *Config) ProviderDefaultModel(name string) string {
 	return ""
 }
 
+// TemplateModel returns the effective model for a template.
+// Cascade: template → provider default_model → defaults → DefaultModel.
+func (c *Config) TemplateModel(t TemplateConfig) string {
+	if t.Model != "" {
+		return t.Model
+	}
+	if m := c.ProviderDefaultModel(c.TemplateProvider(t)); m != "" {
+		return m
+	}
+	if c.Defaults.Model != "" {
+		return c.Defaults.Model
+	}
+	return DefaultModel
+}
+
+// SessionModel returns the effective model for a persistent session.
+// Cascade: session → provider default_model → "" (an empty result means the
+// launcher omits --model and claude uses its own default, matching the
+// pre-provider behavior).
+func (c *Config) SessionModel(s SessionConfig) string {
+	if s.Model != "" {
+		return s.Model
+	}
+	return c.ProviderDefaultModel(c.SessionProvider(s))
+}
+
 // ProviderKeyEnvNames returns the sorted api_key_env names across all
 // providers. Used to extend the daemon's environment capture so keys set in
 // the operator's shell survive into launchd/systemd-managed processes.
