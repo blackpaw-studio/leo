@@ -111,13 +111,43 @@ func (s *Server) handlePage(page, title string, build func(*http.Request) (any, 
 	}
 }
 
-// buildTemplatesData reuses buildDashboardData: config_templates.html already
-// expects that struct's shape (.Config, .Agents). buildProcessesData (below)
-// was cut over to its own lightweight shape for the Task 8 schema-driven
-// processes page; buildTasksData was cut over the same way in Task 7.
+// templateRow is one row of the configured-templates table (pages/config_templates.html).
+type templateRow struct {
+	Name      string
+	Workspace string
+	Model     string
+	Agent     string
+}
 
+// templatesPageData feeds page_config_templates.
+type templatesPageData struct {
+	Rows []templateRow
+}
+
+// buildTemplatesData assembles the templates list: a name-sorted table of
+// every configured template. Templates are blueprints for future ephemeral
+// agent spawns, not live processes, so unlike buildProcessesData/
+// buildTasksData there's no status/history to join in — just the config.
+// Cut over to this lightweight shape in Task 9, mirroring buildProcessesData
+// (Task 8) and buildTasksData (Task 7).
 func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
-	return s.buildDashboardData()
+	cfg, err := s.loadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+
+	rows := make([]templateRow, 0, len(cfg.Templates))
+	for name, tmpl := range cfg.Templates {
+		rows = append(rows, templateRow{
+			Name:      name,
+			Workspace: tmpl.Workspace,
+			Model:     tmpl.Model,
+			Agent:     tmpl.Agent,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+
+	return templatesPageData{Rows: rows}, nil
 }
 
 // processRow is one row of the configured-processes table (pages/processes.html).
@@ -363,6 +393,53 @@ func (s *Server) handleProcessEditPage(w http.ResponseWriter, r *http.Request) {
 		Page:  "process_edit",
 		Title: "Process: " + name,
 		Data: processEditData{
+			Name: name,
+			Form: form,
+		},
+	}
+	if err := s.fillStatus(&pd); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "layout.html", pd); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// templateEditData feeds page_template_edit: the schema-driven form over the
+// template's config.
+type templateEditData struct {
+	Name string
+	Form formData
+}
+
+// handleTemplateEditPage renders a single template's edit page: every
+// TemplateConfig field through the schema-driven form. Not wired through
+// handlePage because the page title is per-template and an unknown name must
+// 404 rather than 500. Mirrors handleProcessEditPage.
+func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, ok := cfg.Templates[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	form := s.buildForm(schema.SectionTemplate, &tmpl, cfg, "/web/config/template/"+name)
+	form.DeleteURL = "/web/template/" + name
+
+	pd := pageData{
+		Page:  "template_edit",
+		Title: "Template: " + name,
+		Data: templateEditData{
 			Name: name,
 			Form: form,
 		},

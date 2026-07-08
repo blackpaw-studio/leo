@@ -130,6 +130,23 @@ func (s *Server) handleConfigProcessSave(w http.ResponseWriter, r *http.Request)
 		fmt.Sprintf("Process %q saved", name), true)
 }
 
+// handleConfigTemplateSave is the schema-driven replacement for the old
+// hand-rolled handleConfigTemplate. It also fixes that handler's silent
+// omission of provider and idle_suspend_after (added to TemplateConfig since
+// the old handler was written, but never wired into its field-by-field
+// parsing). Templates only affect future agent spawns, not running
+// processes, so no restart flag is set.
+func (s *Server) handleConfigTemplateSave(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.applySection(w, r, schema.SectionTemplate,
+		func(cfg *config.Config) (any, bool) {
+			t, ok := cfg.Templates[name]
+			return &t, ok
+		},
+		func(cfg *config.Config, v any) { cfg.Templates[name] = *(v.(*config.TemplateConfig)) },
+		fmt.Sprintf("Template %q saved", name), false)
+}
+
 // kindName maps a resolved schema.Kind to the string components/form.html
 // switches on, so templates compare readable names instead of brittle raw
 // integers.

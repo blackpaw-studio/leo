@@ -162,6 +162,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /sessions", s.handlePage("sessions", "Sessions", nil))
 	mux.HandleFunc("GET /config/defaults", s.handlePage("config_defaults", "Defaults", s.buildDefaultsData))
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
+	mux.HandleFunc("GET /config/templates/{name}", s.handleTemplateEditPage)
 	mux.HandleFunc("GET /config/providers", s.handlePage("config_providers", "Providers", s.buildProvidersData))
 	mux.HandleFunc("GET /config/settings", s.handlePage("config_settings", "Settings", s.buildSettingsData))
 	mux.HandleFunc("GET /service", s.handlePage("service", "Service", nil))
@@ -198,7 +199,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/task/{name}/prompt", s.handleTaskPromptSave)
 
 	// Template config management
-	mux.HandleFunc("POST /web/config/template/{name}", s.handleConfigTemplate)
+	mux.HandleFunc("POST /web/config/template/{name}", s.handleConfigTemplateSave)
 	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
 	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
 

@@ -172,6 +172,35 @@ func processFormBase(t *testing.T, s *Server, name string) url.Values {
 	return form
 }
 
+// templateFormBase renders the named template's current config into a base
+// url.Values set, using the same Kind-driven encoding as taskFormBase/
+// processFormBase above. Lets a test override only the field(s) it cares
+// about instead of hand-listing all 16 SectionTemplate fields.
+func templateFormBase(t *testing.T, s *Server, name string) url.Values {
+	t.Helper()
+	cfg, err := s.loadConfig()
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	tmpl, ok := cfg.Templates[name]
+	if !ok {
+		t.Fatalf("seed template %q not found", name)
+	}
+	form := url.Values{}
+	for _, fv := range schema.Values(&tmpl, schema.SectionTemplate, nil) {
+		switch fv.Kind {
+		case schema.KindBool:
+			form.Add(fv.Key, "false")
+			if fv.Checked {
+				form.Add(fv.Key, "true")
+			}
+		default:
+			form.Set(fv.Key, fv.Value)
+		}
+	}
+	return form
+}
+
 // TestProcessBypassTriState pins the headline fix of this task: before, the
 // old hand-rolled handleConfigProcess always cleared bypass_permissions to a
 // concrete false/true derived from a single checkbox whenever permission_mode
@@ -388,6 +417,69 @@ func TestProcessDeleteRedirectsToList(t *testing.T) {
 	cfg := reloadTestConfig(t, dir)
 	if _, ok := cfg.Processes["assistant"]; ok {
 		t.Error("process should have been deleted")
+	}
+}
+
+// TestTemplateSaveNewFields guards handleConfigTemplateSave against the same
+// registry-drift risk Task 6/8 covered for defaults/processes: idle_suspend_after
+// and provider are fields that were entirely missing from the old hand-rolled
+// handleConfigTemplate, and must round-trip through the schema-driven save path.
+func TestTemplateSaveNewFields(t *testing.T) {
+	s, dir, _ := newTestServerWithAgents(t) // seed config's "coding" template (handlers_agents_test.go)
+	form := templateFormBase(t, s, "coding")
+	form.Set("idle_suspend_after", "2h")
+	form.Set("provider", "")
+
+	w := postForm(t, s, "/web/config/template/coding", form)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
+	}
+	cfg := reloadTestConfig(t, dir)
+	tmpl := cfg.Templates["coding"]
+	if tmpl.IdleSuspendAfter != "2h" {
+		t.Errorf("idle_suspend_after not saved: %+v", tmpl)
+	}
+	if tmpl.Provider != "" {
+		t.Errorf("provider not saved: %+v", tmpl)
+	}
+}
+
+// TestTemplateEditPageShowsAllFields is the "16 fields" self-review check:
+// every TemplateConfig field must render on /config/templates/{name}, either
+// in the primary form or inside the Advanced <details>.
+func TestTemplateEditPageShowsAllFields(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/config/templates/coding", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+
+	for _, key := range []string{
+		"workspace", "agent", "model", "provider", "max_turns",
+		"channels", "dev_channels", "permission_mode", "allowed_tools",
+		"disallowed_tools", "mcp_config", "add_dirs", "env",
+		"append_system_prompt", "remote_control", "idle_suspend_after",
+	} {
+		if !strings.Contains(body, `name="`+key+`"`) {
+			t.Errorf("template edit page missing field %q", key)
+		}
+	}
+}
+
+// TestTemplateEditPageNotFound guards the 404 branch of handleTemplateEditPage:
+// an unknown template name must not fall through to a 200 empty-form page.
+func TestTemplateEditPageNotFound(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/config/templates/does-not-exist", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -856,57 +855,6 @@ func (s *Server) handleCronPreview(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `</span>`)
 }
 
-func parseCommaSeparated(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
-}
-
-// parseOptionalBool parses a three-state form value into *bool.
-// "true" → &true, "false" → &false, "" → nil (inherit from defaults).
-func parseOptionalBool(s string) *bool {
-	switch s {
-	case "true":
-		v := true
-		return &v
-	case "false":
-		v := false
-		return &v
-	default:
-		return nil
-	}
-}
-
-func parseEnvMap(s string) map[string]string {
-	if s == "" {
-		return nil
-	}
-	result := make(map[string]string)
-	for _, line := range strings.Split(s, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		}
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
-}
-
 func (s *Server) buildDashboardData() (*dashboardData, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -1142,57 +1090,11 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 
 // --- Template config management ---
 
-func (s *Server) handleConfigTemplate(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	tmpl, ok := cfg.Templates[name]
-	if !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Template %q not found", name))
-		return
-	}
-
-	tmpl.Model = r.FormValue("model")
-	tmpl.Workspace = r.FormValue("workspace")
-	tmpl.Channels = parseCommaSeparated(r.FormValue("channels"))
-	tmpl.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
-	tmpl.Agent = r.FormValue("agent")
-	tmpl.PermissionMode = r.FormValue("permission_mode")
-	tmpl.RemoteControl = parseOptionalBool(r.FormValue("remote_control"))
-	tmpl.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
-	tmpl.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
-	tmpl.AppendSystemPrompt = r.FormValue("append_system_prompt")
-	tmpl.MCPConfig = r.FormValue("mcp_config")
-	tmpl.AddDirs = parseCommaSeparated(r.FormValue("add_dirs"))
-	tmpl.Env = parseEnvMap(r.FormValue("env"))
-	if mt := r.FormValue("max_turns"); mt != "" {
-		v, err := strconv.Atoi(mt)
-		if err != nil {
-			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
-			return
-		}
-		tmpl.MaxTurns = v
-	}
-	cfg.Templates[name] = tmpl
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	typ, msg := appendReloadWarning("success", fmt.Sprintf("Template %q saved", name), warn)
-	s.renderFlash(w, typ, msg)
-}
-
+// handleTemplateAdd creates a bare-minimum template (name only) and redirects
+// straight to its edit page, where every other TemplateConfig field can be
+// set through the schema-driven form. Workspace is left empty ("") to
+// inherit the default workspace, matching the empty-means-inherit convention
+// handleProcessAdd already established. Mirrors handleProcessAdd.
 func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -1219,50 +1121,20 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl := config.TemplateConfig{
-		Workspace:          r.FormValue("workspace"),
-		Channels:           parseCommaSeparated(r.FormValue("channels")),
-		DevChannels:        parseCommaSeparated(r.FormValue("dev_channels")),
-		Model:              r.FormValue("model"),
-		Agent:              r.FormValue("agent"),
-		PermissionMode:     r.FormValue("permission_mode"),
-		RemoteControl:      parseOptionalBool(r.FormValue("remote_control")),
-		AllowedTools:       parseCommaSeparated(r.FormValue("allowed_tools")),
-		DisallowedTools:    parseCommaSeparated(r.FormValue("disallowed_tools")),
-		AppendSystemPrompt: r.FormValue("append_system_prompt"),
-		MCPConfig:          r.FormValue("mcp_config"),
-		AddDirs:            parseCommaSeparated(r.FormValue("add_dirs")),
-		Env:                parseEnvMap(r.FormValue("env")),
-	}
-	if mt := r.FormValue("max_turns"); mt != "" {
-		v, err := strconv.Atoi(mt)
-		if err != nil {
-			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
-			return
-		}
-		tmpl.MaxTurns = v
-	}
-	cfg.Templates[name] = tmpl
+	cfg.Templates[name] = config.TemplateConfig{}
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
+	s.reloadConfigOrWarn() // reload failures are logged server-side; nothing to attach a flash to across a redirect
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Template %q added", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
+	http.Redirect(w, r, "/config/templates/"+url.PathEscape(name), http.StatusSeeOther)
 }
 
+// handleTemplateDelete removes a template and sends htmx an HX-Redirect back
+// to the template list — the edit page the delete button lives on no longer
+// has anything to show once the template is gone. Mirrors handleProcessDelete.
 func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -1283,17 +1155,8 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
+	s.reloadConfigOrWarn()
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Template %q deleted", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
+	w.Header().Set("HX-Redirect", "/config/templates")
+	w.WriteHeader(http.StatusOK)
 }
