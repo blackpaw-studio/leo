@@ -89,8 +89,17 @@ func runService(cmd *cobra.Command, args []string) error {
 		// In supervised mode, start ALL enabled processes AND boot persistent
 		// task sessions. The guard counts both: a home with only persistent
 		// tasks (no enabled processes) is still something to supervise.
+		//
+		// buildAllProcessSpecs is called exactly once here: it resolves each
+		// process's provider env (which may shell out via api_key_cmd, up to
+		// 30s per process) and warns on failures. Calling it twice would
+		// duplicate both the external commands and the warnings on every boot.
 		specs := buildAllProcessSpecs(cfg, claudePath, webToken)
-		procCount, sessionCount := supervisableUnits(cfg, claudePath, webToken)
+		procCount := len(specs)
+		sessionCount := 0
+		if sessionSpecs, err := service.SessionSpecsFromConfig(cfg); err == nil {
+			sessionCount = len(sessionSpecs)
+		}
 		if procCount == 0 && sessionCount == 0 {
 			return fmt.Errorf("no enabled processes or persistent task sessions in config")
 		}
@@ -221,21 +230,6 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 		})
 	}
 	return specs
-}
-
-// supervisableUnits reports how many processes and persistent-task sessions the
-// supervisor would actually run for cfg. It exists so the startup guard counts
-// sessions as well as processes — a home with only persistent tasks (no enabled
-// processes) is still something to supervise. Mirrors RunSupervised's own boot
-// accounting (processes via buildAllProcessSpecs, sessions via
-// service.SessionSpecsFromConfig).
-func supervisableUnits(cfg *config.Config, claudePath, webToken string) (procs int, sessions int) {
-	procs = len(buildAllProcessSpecs(cfg, claudePath, webToken))
-	sessionSpecs, err := service.SessionSpecsFromConfig(cfg)
-	if err == nil {
-		sessions = len(sessionSpecs)
-	}
-	return procs, sessions
 }
 
 // resolveSessionArgs returns the session-related args (--resume / --session-id)

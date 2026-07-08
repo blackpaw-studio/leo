@@ -297,7 +297,9 @@ func TestBuildProcessArgsInjectsMessagingAwareness(t *testing.T) {
 
 // TestSupervisableUnits verifies the supervisor's "is there anything to run"
 // accounting counts persistent-task sessions, not just processes — so a home
-// with only persistent tasks (no enabled processes) is still startable.
+// with only persistent tasks (no enabled processes) is still startable. This
+// mirrors the accounting done inline in runService's supervised branch:
+// procs via buildAllProcessSpecs, sessions via service.SessionSpecsFromConfig.
 func TestSupervisableUnits(t *testing.T) {
 	t.Run("session-only home reports a session", func(t *testing.T) {
 		cfg := &config.Config{
@@ -306,7 +308,12 @@ func TestSupervisableUnits(t *testing.T) {
 				"pinger": {Runtime: "persistent", Enabled: true, Workspace: "/tmp/p"},
 			},
 		}
-		procs, sessions := supervisableUnits(cfg, "claude", "tok")
+		procs := len(buildAllProcessSpecs(cfg, "claude", "tok"))
+		sessionSpecs, err := service.SessionSpecsFromConfig(cfg)
+		if err != nil {
+			t.Fatalf("SessionSpecsFromConfig: %v", err)
+		}
+		sessions := len(sessionSpecs)
 		if procs != 0 || sessions != 1 {
 			t.Fatalf("procs=%d sessions=%d, want 0,1", procs, sessions)
 		}
@@ -314,7 +321,12 @@ func TestSupervisableUnits(t *testing.T) {
 
 	t.Run("empty home reports nothing", func(t *testing.T) {
 		cfg := &config.Config{HomePath: t.TempDir()}
-		procs, sessions := supervisableUnits(cfg, "claude", "tok")
+		procs := len(buildAllProcessSpecs(cfg, "claude", "tok"))
+		sessionSpecs, err := service.SessionSpecsFromConfig(cfg)
+		if err != nil {
+			t.Fatalf("SessionSpecsFromConfig: %v", err)
+		}
+		sessions := len(sessionSpecs)
 		if procs != 0 || sessions != 0 {
 			t.Fatalf("procs=%d sessions=%d, want 0,0", procs, sessions)
 		}
