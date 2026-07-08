@@ -1263,3 +1263,87 @@ func (s *Server) handleProviderDelete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("HX-Refresh", "true")
 	s.renderFlash(w, "success", fmt.Sprintf("Provider %q deleted", name))
 }
+
+// --- Remote host config management ---
+//
+// Hosts live on the Settings page (config_settings.html) as a card list
+// plus name-only add form, the same providers-page pattern as above.
+
+// handleHostAdd creates a new remote-host entry and reports back on the
+// settings page itself (HX-Refresh, mirroring handleProviderAdd). Unlike
+// providers, HostConfig has no fields Config.Validate() requires to be
+// non-empty (no ssh-non-empty check exists), so — unlike the provider add's
+// forced placeholder base_url/api_key_env — a genuinely empty HostConfig{}
+// round-trips through validateAndSave as-is, same as handleProcessAdd/
+// handleTemplateAdd. The flash message still tells the operator to fill in
+// ssh via the card's inline form before the host is usable.
+func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
+		return
+	}
+
+	name := r.FormValue("name")
+	if name == "" {
+		s.renderFlash(w, "error", "Name is required")
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if cfg.Client.Hosts == nil {
+		cfg.Client.Hosts = make(map[string]config.HostConfig)
+	}
+	if _, exists := cfg.Client.Hosts[name]; exists {
+		s.renderFlash(w, "error", fmt.Sprintf("Host %q already exists", name))
+		return
+	}
+
+	cfg.Client.Hosts[name] = config.HostConfig{}
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	s.reloadConfigOrWarn()
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlash(w, "success", fmt.Sprintf("Host %q created — set its ssh target below", name))
+}
+
+// handleHostDelete removes a remote host and reports back on the settings
+// page (HX-Refresh, mirroring handleProviderDelete). Per the task brief, no
+// reference-check scan runs here: unlike providers (which processes/tasks/
+// templates/sessions reference by name and Config.Validate() sweeps via
+// checkProviderRef), nothing in the config schema references a host by
+// name — client.default_host is a free-text hint for `leo agent` CLI
+// dispatch, not a validated foreign key — so an optimistic delete is safe.
+func (s *Server) handleHostDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if _, ok := cfg.Client.Hosts[name]; !ok {
+		s.renderFlash(w, "error", fmt.Sprintf("Host %q not found", name))
+		return
+	}
+
+	delete(cfg.Client.Hosts, name)
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	s.reloadConfigOrWarn()
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlash(w, "success", fmt.Sprintf("Host %q deleted", name))
+}

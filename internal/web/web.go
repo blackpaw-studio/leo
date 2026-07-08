@@ -209,6 +209,14 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/provider/add", s.handleProviderAdd)
 	mux.HandleFunc("DELETE /web/provider/{name}", s.handleProviderDelete)
 
+	// Settings page: Web UI + Remote client config, and remote-host CRUD —
+	// same one-page-no-separate-edit-page pattern as providers above.
+	mux.HandleFunc("POST /web/config/web", s.handleConfigWebSave)
+	mux.HandleFunc("POST /web/config/client", s.handleConfigClientSave)
+	mux.HandleFunc("POST /web/config/host/{name}", s.handleConfigHostSave)
+	mux.HandleFunc("POST /web/host/add", s.handleHostAdd)
+	mux.HandleFunc("DELETE /web/host/{name}", s.handleHostDelete)
+
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)

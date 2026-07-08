@@ -203,14 +203,51 @@ func (s *Server) buildDefaultsData(r *http.Request) (any, error) {
 	return s.buildForm(schema.SectionDefaults, &cfg.Defaults, cfg, "/web/config/defaults"), nil
 }
 
-// buildSettingsData feeds page_config_settings, which only needs .Web.*
-// from the loaded config.
+// hostCard is one entry of settingsPageData.Hosts: a remote-host name paired
+// with the schema-driven inline form for its card. Mirrors providerCard.
+type hostCard struct {
+	Name string
+	Form formData
+}
+
+// settingsPageData feeds page_config_settings: the Web UI form, the Remote
+// client (default_host) form, and the per-host card list plus its add form.
+type settingsPageData struct {
+	WebForm    formData
+	ClientForm formData
+	Hosts      []hostCard
+}
+
+// buildSettingsData assembles the schema-driven Settings page: Web UI config
+// (&cfg.Web), Remote client config (&cfg.Client, default_host only — hosts
+// is excluded from SectionClient's registry and rendered separately below),
+// and cfg.Client.Hosts as a name-sorted card list, one inline config_form
+// per host — same shape as buildProvidersData.
 func (s *Server) buildSettingsData(r *http.Request) (any, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
-	return cfg, nil
+
+	names := make([]string, 0, len(cfg.Client.Hosts))
+	for name := range cfg.Client.Hosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	hosts := make([]hostCard, 0, len(names))
+	for _, name := range names {
+		h := cfg.Client.Hosts[name]
+		form := s.buildForm(schema.SectionClientHost, &h, cfg, "/web/config/host/"+url.PathEscape(name))
+		form.DeleteURL = "/web/host/" + url.PathEscape(name)
+		hosts = append(hosts, hostCard{Name: name, Form: form})
+	}
+
+	return settingsPageData{
+		WebForm:    s.buildForm(schema.SectionWeb, &cfg.Web, cfg, "/web/config/web"),
+		ClientForm: s.buildForm(schema.SectionClient, &cfg.Client, cfg, "/web/config/client"),
+		Hosts:      hosts,
+	}, nil
 }
 
 // providerCard is one entry of providersPageData.Providers: a provider name

@@ -1,15 +1,40 @@
 {{define "page_config_settings"}}
 <h1 class="page-title">Settings</h1>
-<div class="config-actions">
-    <button class="btn btn-accent" hx-post="/web/config/reload" hx-target="#flash-container" hx-swap="innerHTML">Reload Config from Disk</button>
+
+<div class="card">
+  <div class="card-head"><b>Web UI</b></div>
+  <p class="dim">Changing port, bind, or allowed hosts can affect how this dashboard is reachable — see the warnings below.</p>
+  {{template "config_form" .Data.WebForm}}
 </div>
 
-<div class="config-section">
-    <h3>Web UI</h3>
-    <table class="config-table">
-        <tr><td class="config-key">Enabled</td><td>{{.Data.Web.Enabled}}</td></tr>
-        <tr><td class="config-key">Port</td><td>{{if .Data.Web.Port}}{{.Data.Web.Port}}{{else}}8370{{end}}</td></tr>
-        <tr><td class="config-key">Bind</td><td>{{if .Data.Web.Bind}}{{.Data.Web.Bind}}{{else}}0.0.0.0{{end}}</td></tr>
-    </table>
+<div class="card">
+  <div class="card-head"><b>Remote client</b></div>
+  <p class="dim">Default remote host used by <code>leo agent</code> commands when none is given explicitly.</p>
+  {{template "config_form" .Data.ClientForm}}
+</div>
+
+<h2 class="section-title">Remote hosts</h2>
+<p class="dim">Remote leo servers reachable over SSH, referenced by name from the default host above or <code>leo agent --host</code>.</p>
+{{range .Data.Hosts}}
+<div class="card">
+  <div class="card-head"><b>{{.Name}}</b></div>
+  {{template "config_form" .Form}}
+</div>
+{{else}}
+<p class="dim">No remote hosts configured.</p>
+{{end}}
+<div class="card">
+  <div class="card-head"><b>New host</b></div>
+  <form hx-post="/web/host/add" hx-target="#flash-container" class="frow-inline">
+    <input type="text" name="name" placeholder="host-name" required>
+    <button type="submit" class="btn hot">Create</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-head"><b>Config reload</b></div>
+  <div class="config-actions">
+    <button class="btn btn-accent" hx-post="/web/config/reload" hx-target="#flash-container" hx-swap="innerHTML">Reload Config from Disk</button>
+  </div>
 </div>
 {{end}}

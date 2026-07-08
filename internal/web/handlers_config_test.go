@@ -691,3 +691,238 @@ func TestConfigFormRendersEverySection(t *testing.T) {
 		}
 	}
 }
+
+// TestWebConfigSave is this task's TDD anchor (adapted from the brief's
+// sketch to this codebase's actual helpers — postForm/reloadTestConfig
+// instead of postFormWithCookie, and newTestServer's dir return instead of
+// a separate reload call). It exercises the KindBool hidden-false +
+// optional-true encoding, KindNumber, and KindCSV round trip together.
+func TestWebConfigSave(t *testing.T) {
+	s, dir := newTestServer(t)
+	form := url.Values{"port": {"8371"}, "bind": {"0.0.0.0"}, "allowed_hosts": {"10.0.4.16, 10.0.2.10"}}
+	form.Add("enabled", "false")
+	form.Add("enabled", "true")
+	w := postForm(t, s, "/web/config/web", form)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
+	}
+	cfg := reloadTestConfig(t, dir)
+	if cfg.Web.Port != 8371 || cfg.Web.Bind != "0.0.0.0" || !cfg.Web.Enabled ||
+		len(cfg.Web.AllowedHosts) != 2 {
+		t.Errorf("web config not saved: %+v", cfg.Web)
+	}
+}
+
+// TestWebConfigSaveRejectsBadPort pins the validation-refusal path through
+// applySection: an out-of-range port must not be written to disk.
+func TestWebConfigSaveRejectsBadPort(t *testing.T) {
+	s, dir := newTestServer(t)
+	form := url.Values{"port": {"70000"}, "bind": {""}, "allowed_hosts": {""}}
+	form.Add("enabled", "false")
+	w := postForm(t, s, "/web/config/web", form)
+	body := readBody(t, w)
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("want validation flash for out-of-range port, got: %s", body)
+	}
+	cfg := reloadTestConfig(t, dir)
+	if cfg.Web.Port == 70000 {
+		t.Error("invalid port was persisted")
+	}
+}
+
+// TestClientDefaultHostSave covers the Remote client card, which registers
+// only default_host — hosts is excluded from SectionClient (see
+// schema.Excluded) and gets its own map-CRUD handlers below.
+func TestClientDefaultHostSave(t *testing.T) {
+	s, dir := newTestServer(t)
+	w := postForm(t, s, "/web/config/client", url.Values{"default_host": {"prod"}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
+	}
+	cfg := reloadTestConfig(t, dir)
+	if cfg.Client.DefaultHost != "prod" {
+		t.Errorf("default_host not saved: %+v", cfg.Client)
+	}
+}
+
+// TestHostCRUD mirrors TestProviderCRUD's add/edit/delete shape for
+// cfg.Client.Hosts. Unlike providers, HostConfig has no fields
+// Config.Validate() requires non-empty, so add creates a genuinely empty
+// entry (see handleHostAdd's doc comment) rather than a forced placeholder.
+func TestHostCRUD(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	// add
+	w := postForm(t, s, "/web/host/add", url.Values{"name": {"prod"}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("add: %d, body=%s", w.Code, readBody(t, w))
+	}
+	if w.Header().Get("HX-Refresh") != "true" {
+		t.Errorf("add: HX-Refresh header = %q, want \"true\"", w.Header().Get("HX-Refresh"))
+	}
+	cfg := reloadTestConfig(t, dir)
+	if _, ok := cfg.Client.Hosts["prod"]; !ok {
+		t.Fatal("host not created")
+	}
+
+	// edit
+	form := url.Values{
+		"ssh":       {"alice@leo.example.com"},
+		"ssh_args":  {"-p, 2222"},
+		"leo_path":  {"/opt/leo/bin/leo"},
+		"tmux_path": {"/opt/homebrew/bin/tmux"},
+	}
+	w = postForm(t, s, "/web/config/host/prod", form)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
+	}
+	cfg = reloadTestConfig(t, dir)
+	got := cfg.Client.Hosts["prod"]
+	if got.SSH != "alice@leo.example.com" || got.LeoPath != "/opt/leo/bin/leo" ||
+		got.TmuxPath != "/opt/homebrew/bin/tmux" || len(got.SSHArgs) != 2 {
+		t.Errorf("host not saved: %+v", got)
+	}
+
+	// delete
+	w = deleteRequest(t, s, "/web/host/prod")
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete: %d, body=%s", w.Code, readBody(t, w))
+	}
+	if w.Header().Get("HX-Refresh") != "true" {
+		t.Errorf("delete: HX-Refresh header = %q, want \"true\"", w.Header().Get("HX-Refresh"))
+	}
+	cfg = reloadTestConfig(t, dir)
+	if _, ok := cfg.Client.Hosts["prod"]; ok {
+		t.Error("host not deleted")
+	}
+}
+
+// TestHostAddRejectsDuplicate guards handleHostAdd's existence check.
+func TestHostAddRejectsDuplicate(t *testing.T) {
+	s, dir := newTestServer(t)
+	postForm(t, s, "/web/host/add", url.Values{"name": {"prod"}})
+
+	w := postForm(t, s, "/web/host/add", url.Values{"name": {"prod"}})
+	body := readBody(t, w)
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("want validation flash for duplicate name, got: %s", body)
+	}
+	cfg := reloadTestConfig(t, dir)
+	if len(cfg.Client.Hosts) != 1 {
+		t.Errorf("duplicate add should not have touched config: %+v", cfg.Client.Hosts)
+	}
+}
+
+// TestHostAddRejectsEmptyName guards handleHostAdd's required-field check.
+func TestHostAddRejectsEmptyName(t *testing.T) {
+	s, dir := newTestServer(t)
+	w := postForm(t, s, "/web/host/add", url.Values{"name": {""}})
+	body := readBody(t, w)
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("want validation flash for empty name, got: %s", body)
+	}
+	cfg := reloadTestConfig(t, dir)
+	if len(cfg.Client.Hosts) != 0 {
+		t.Errorf("empty-name add should not have created a host: %+v", cfg.Client.Hosts)
+	}
+}
+
+// TestHostDeleteNotFound guards the not-found branch of handleHostDelete.
+func TestHostDeleteNotFound(t *testing.T) {
+	s, _ := newTestServer(t)
+	w := deleteRequest(t, s, "/web/host/does-not-exist")
+	body := readBody(t, w)
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("want not-found flash, got: %s", body)
+	}
+}
+
+// TestHostDeleteNoReferenceCheck pins the brief's explicit "no
+// reference-check on delete" decision: unlike providers, deleting a host
+// that's named by client.default_host must still succeed — nothing in
+// Config.Validate() treats default_host as a foreign key into hosts.
+func TestHostDeleteNoReferenceCheck(t *testing.T) {
+	s, dir := newTestServer(t)
+	postForm(t, s, "/web/host/add", url.Values{"name": {"prod"}})
+	postForm(t, s, "/web/config/client", url.Values{"default_host": {"prod"}})
+
+	w := deleteRequest(t, s, "/web/host/prod")
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete: %d, body=%s", w.Code, readBody(t, w))
+	}
+	cfg := reloadTestConfig(t, dir)
+	if _, ok := cfg.Client.Hosts["prod"]; ok {
+		t.Error("host should have been deleted despite being default_host")
+	}
+	if cfg.Client.DefaultHost != "prod" {
+		t.Errorf("default_host should be left untouched: %+v", cfg.Client)
+	}
+}
+
+// TestPageConfigSettingsShowsWebFormAndWarnings guards the Web UI card: the
+// port/bind/allowed_hosts lockout Warning strings from the schema registry
+// must render on the page (config_field's fwarn), and this is the fix for
+// the old read-only table's wrong 0.0.0.0-looks-live bind display — the
+// real default now only ever shows via the Help placeholder/inherited text.
+func TestPageConfigSettingsShowsWebFormAndWarnings(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/config/settings", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+
+	for _, key := range []string{"enabled", "port", "bind", "allowed_hosts", "default_host"} {
+		if !strings.Contains(body, `name="`+key+`"`) {
+			t.Errorf("settings page missing field %q", key)
+		}
+	}
+	if !strings.Contains(body, "Changing port or bind can lock you out of this UI") {
+		t.Error("settings page missing port/bind lockout warning")
+	}
+	if !strings.Contains(body, "Removing your own address here will block your browser") {
+		t.Error("settings page missing allowed_hosts lockout warning")
+	}
+	if !strings.Contains(body, "No remote hosts configured.") {
+		t.Errorf("empty hosts state copy missing: %s", body)
+	}
+	if !strings.Contains(body, `hx-post="/web/host/add"`) {
+		t.Error("settings page missing add-host form")
+	}
+	if !strings.Contains(body, `hx-post="/web/config/reload"`) {
+		t.Error("settings page missing reload-config button")
+	}
+}
+
+// TestPageConfigSettingsListsHostCards guards the populated-state host card
+// list: each host gets its own inline config_form (Action
+// /web/config/host/{name}, DeleteURL /web/host/{name}).
+func TestPageConfigSettingsListsHostCards(t *testing.T) {
+	s, _ := newTestServer(t)
+	postForm(t, s, "/web/host/add", url.Values{"name": {"prod"}})
+
+	req := httptest.NewRequest(http.MethodGet, "/config/settings", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, ">prod<") {
+		t.Errorf("host name not rendered: %s", body)
+	}
+	if !strings.Contains(body, `hx-post="/web/config/host/prod"`) {
+		t.Errorf("host card missing inline save form: %s", body)
+	}
+	if !strings.Contains(body, `hx-delete="/web/host/prod"`) {
+		t.Errorf("host card missing delete action: %s", body)
+	}
+	for _, key := range []string{"ssh", "ssh_args", "leo_path", "tmux_path"} {
+		if !strings.Contains(body, `name="`+key+`"`) {
+			t.Errorf("host card missing field %q", key)
+		}
+	}
+}

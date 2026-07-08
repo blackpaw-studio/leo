@@ -163,6 +163,48 @@ func (s *Server) handleConfigProviderSave(w http.ResponseWriter, r *http.Request
 		fmt.Sprintf("Provider %q saved", name), true)
 }
 
+// handleConfigWebSave is the schema-driven save path for the Web UI card on
+// /config/settings. cfg.Web is directly addressable (like cfg.Defaults), so
+// this follows handleConfigDefaultsSave's no-op-put pattern rather than the
+// map-entry copy-then-write-back pattern providers/hosts use. Port/bind/
+// allowed_hosts changes can affect how the running web server is reachable,
+// so a restart is always flagged (matches the schema.SectionWeb Warning
+// strings on those fields).
+func (s *Server) handleConfigWebSave(w http.ResponseWriter, r *http.Request) {
+	s.applySection(w, r, schema.SectionWeb,
+		func(cfg *config.Config) (any, bool) { return &cfg.Web, true },
+		func(cfg *config.Config, v any) {}, // &cfg.Web is already the live field — nothing to write back
+		"Web UI settings saved", true)
+}
+
+// handleConfigClientSave is the schema-driven save path for the Remote
+// client card (default_host only — SectionClient's registry excludes
+// "hosts", which gets its own map-CRUD UI below). default_host only affects
+// future `leo agent` client dispatch, not the running service, so no
+// restart is flagged.
+func (s *Server) handleConfigClientSave(w http.ResponseWriter, r *http.Request) {
+	s.applySection(w, r, schema.SectionClient,
+		func(cfg *config.Config) (any, bool) { return &cfg.Client, true },
+		func(cfg *config.Config, v any) {}, // &cfg.Client is already the live field — nothing to write back
+		"Remote client settings saved", false)
+}
+
+// handleConfigHostSave is the schema-driven save path for a single remote
+// host's inline card form. Mirrors handleConfigProviderSave's map-entry
+// copy-then-write-back shape. Host connection details (ssh, ssh_args,
+// leo_path, tmux_path) only affect future `leo agent` dispatch to that host,
+// not the running service, so no restart is flagged.
+func (s *Server) handleConfigHostSave(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.applySection(w, r, schema.SectionClientHost,
+		func(cfg *config.Config) (any, bool) {
+			h, ok := cfg.Client.Hosts[name]
+			return &h, ok
+		},
+		func(cfg *config.Config, v any) { cfg.Client.Hosts[name] = *(v.(*config.HostConfig)) },
+		fmt.Sprintf("Host %q saved", name), false)
+}
+
 // kindName maps a resolved schema.Kind to the string components/form.html
 // switches on, so templates compare readable names instead of brittle raw
 // integers.
