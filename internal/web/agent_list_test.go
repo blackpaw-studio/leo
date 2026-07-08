@@ -105,3 +105,37 @@ func TestAgentList_FreshCacheSkipsFetch(t *testing.T) {
 		t.Fatalf("agentList() = %v, want [cached-agent]", got)
 	}
 }
+
+// TestAgentList_FailedRefreshKeepsOldCache verifies that a transient
+// fetchAgentListFn failure (nil/empty result — e.g. `claude agents` timed
+// out or errored) does not clobber a previously good cache. The TTL clock
+// still resets (agentsFetched is stamped before the shell-out) so a
+// persistently failing command doesn't get retried on every single call.
+func TestAgentList_FailedRefreshKeepsOldCache(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	s.agentMu.Lock()
+	s.agentCache = []string{"good-agent"}
+	s.agentsFetched = time.Now().Add(-2 * time.Minute)
+	s.agentMu.Unlock()
+
+	s.fetchAgentListFn = func() []string {
+		return nil
+	}
+
+	got := s.agentList()
+	if len(got) != 1 || got[0] != "good-agent" {
+		t.Fatalf("agentList() = %v, want stale [good-agent] preserved on failed refresh", got)
+	}
+
+	s.agentMu.Lock()
+	cache := s.agentCache
+	fetched := s.agentsFetched
+	s.agentMu.Unlock()
+	if len(cache) != 1 || cache[0] != "good-agent" {
+		t.Fatalf("s.agentCache = %v after failed refresh, want [good-agent] preserved", cache)
+	}
+	if time.Since(fetched) > time.Second {
+		t.Error("agentsFetched should have been stamped at refresh time even though the fetch failed, to avoid hammering the failing command")
+	}
+}

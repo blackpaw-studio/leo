@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -371,14 +372,14 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 		action = "disabled"
 	}
 
-	// The toggle button's hx-swap="none" means htmx ignores the main
-	// response body — only out-of-band swaps are processed. Wrap the flash
-	// in an OOB div so the notification still reaches #flash-container.
+	// HX-Refresh triggers a full page reload, so the list's button
+	// label/next-run/state all pick up the new value — the same convention
+	// handleProviderAdd/handleHostAdd/handleSessionAdd use. That makes the
+	// response body itself moot (the page reloads before it's swapped in),
+	// but render the flash normally anyway for tests/non-htmx callers.
+	w.Header().Set("HX-Refresh", "true")
 	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Task %q %s", name, action), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
+	s.renderFlash(w, flashType, flashMsg)
 }
 
 func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
@@ -812,6 +813,31 @@ func (s *Server) renderFlash(w http.ResponseWriter, typ, msg string) {
 	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: typ, Message: msg}) //nolint:errcheck
 }
 
+// entityNamePattern restricts config entity names (tasks, processes,
+// templates, providers, hosts, sessions) to a safe, URL- and filesystem-path
+// friendly character set. Without this, a name containing "/", "#", "?", or
+// similar creates entries no route can address (e.g. /web/task/{name}/delete
+// splits on an embedded "/") and, worse, task names flow straight into a
+// prompt file path (prompts/<name>.md in handleTaskAdd) where "../x" would
+// escape the workspace.
+var entityNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validEntityName reports whether name is safe to use as a config map key
+// that also gets embedded in URLs and filesystem paths. It must be non-empty,
+// match entityNamePattern, and not be the literal "." or ".." (both match
+// the pattern above but are directory-traversal special cases).
+func validEntityName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return entityNamePattern.MatchString(name)
+}
+
+// entityNameError is the flash message shown when validEntityName rejects a
+// submitted name, shared by every add handler so the guidance stays
+// consistent.
+const entityNameError = "Name may contain only letters, digits, dot, underscore, dash"
+
 // validateAndSave validates the config and saves it. Returns an error message for the user, or empty on success.
 func (s *Server) validateAndSave(cfg *config.Config) string {
 	if err := cfg.Validate(); err != nil {
@@ -936,8 +962,8 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 
@@ -1016,8 +1042,8 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 	schedule := r.FormValue("schedule")
@@ -1098,8 +1124,8 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 
@@ -1186,8 +1212,8 @@ func (s *Server) handleProviderAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 
@@ -1282,8 +1308,8 @@ func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 

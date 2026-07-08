@@ -100,7 +100,7 @@ func TestTemplateAddEmptyName(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "Name is required") {
+	if !strings.Contains(w.Body.String(), "flash-error") {
 		t.Error("expected error about empty name")
 	}
 }

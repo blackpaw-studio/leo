@@ -18,10 +18,8 @@
   <div class="form-actions">
     <button type="submit" class="btn hot">{{.SubmitLabel}}</button>
     {{if .DeleteURL}}
-    <form hx-delete="{{.DeleteURL}}" hx-target="#flash-container" hx-trigger="confirmed"
-          onsubmit="event.preventDefault(); confirmDelete(this)">
-      <button type="submit" class="btn danger">Delete</button>
-    </form>
+    <button type="button" class="btn danger" hx-delete="{{.DeleteURL}}" hx-confirm="Delete this?"
+            hx-target="#flash-container" hx-swap="innerHTML">Delete</button>
     {{end}}
   </div>
 </form>

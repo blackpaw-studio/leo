@@ -448,10 +448,17 @@ func (s *Server) agentList() []string {
 	fresh := s.fetchAgentListFn()
 
 	s.agentMu.Lock()
-	s.agentCache = fresh
+	if len(fresh) > 0 {
+		s.agentCache = fresh
+	}
+	// agentsFetched was already stamped before the shell-out (above), so a
+	// nil/empty result from a transient failure still resets the TTL clock
+	// — it just keeps the previous (still-valid) cache instead of clobbering
+	// it with nothing, and won't hammer the failing command every call.
+	cache := s.agentCache
 	s.agentMu.Unlock()
 
-	return fresh
+	return cache
 }
 
 // fetchAgentList runs `claude agents` and parses the agent names.

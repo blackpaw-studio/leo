@@ -273,6 +273,77 @@ func TestTaskAddRedirectsToEdit(t *testing.T) {
 	}
 }
 
+// TestValidEntityName is a table test for the shared entity-name guard used
+// by every add handler (task/process/template/provider/host/session). A
+// name flowing unchecked into a URL path segment or (for tasks) a
+// prompts/<name>.md file path lets "/", "#", "?", or ".." create an
+// unroutable config entry or escape the workspace.
+func TestValidEntityName(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"demo", true},
+		{"demo-task", true},
+		{"demo_task", true},
+		{"demo.task", true},
+		{"Demo123", true},
+		{"", false},
+		{".", false},
+		{"..", false},
+		{"a/b", false},
+		{"../escape", false},
+		{"a#b", false},
+		{"a?b", false},
+		{"a b", false},
+		{"a\tb", false},
+		{"a\\b", false},
+	}
+	for _, tt := range tests {
+		if got := validEntityName(tt.name); got != tt.want {
+			t.Errorf("validEntityName(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestTaskAddRejectsInvalidName covers the redirect-shaped add handlers
+// (task/process/template all redirect to an edit page on success): a name
+// containing "/" must be rejected with a flash error before it ever reaches
+// PromptFile: "prompts/" + name + ".md" in handleTaskAdd, which would
+// otherwise let "a/../../etc" style names escape the workspace.
+func TestTaskAddRejectsInvalidName(t *testing.T) {
+	s, dir := newTestServer(t)
+	form := url.Values{"name": {"a/b"}, "schedule": {"0 9 * * *"}}
+	w := postForm(t, s, "/web/task/add", form)
+	body := readBody(t, w)
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("want validation flash for invalid name, got status=%d body=%s", w.Code, body)
+	}
+	cfg := reloadTestConfig(t, dir)
+	if _, ok := cfg.Tasks["a/b"]; ok {
+		t.Error("invalid task name should not have been persisted")
+	}
+	if len(cfg.Tasks) != 3 { // heartbeat, cleanup, demo from testConfigYAML — unchanged
+		t.Errorf("invalid add should not have touched config, got %d tasks: %+v", len(cfg.Tasks), cfg.Tasks)
+	}
+}
+
+// TestProviderAddRejectsInvalidName covers the HX-Refresh-shaped add
+// handlers (provider/host/session all stay on the same page on success):
+// mirrors TestTaskAddRejectsInvalidName for that shape.
+func TestProviderAddRejectsInvalidName(t *testing.T) {
+	s, dir := newTestServer(t)
+	w := postForm(t, s, "/web/provider/add", url.Values{"name": {"a/b"}})
+	body := readBody(t, w)
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("want validation flash for invalid name, got status=%d body=%s", w.Code, body)
+	}
+	cfg := reloadTestConfig(t, dir)
+	if len(cfg.Providers) != 0 {
+		t.Errorf("invalid add should not have created a provider: %+v", cfg.Providers)
+	}
+}
+
 // TestTaskEditPageShowsAllFields is the "22 fields" self-review check: every
 // TaskConfig field must render on /tasks/{name}, either in the primary form
 // or inside the Advanced <details>.
@@ -480,6 +551,59 @@ func TestTemplateEditPageNotFound(t *testing.T) {
 	s.httpServer.Handler.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+// TestTaskEditPageDeleteButtonNotNestedForm is a regression test for the
+// nested-<form> bug: config_form used to render the Delete control as a
+// second <form hx-delete=...> nested inside the outer <form class=
+// "config-form" hx-post=...>. HTML5 parsing ignores a form start tag while
+// another form is already open, so the browser silently reassigned Delete's
+// button to the OUTER form — clicking Delete actually fired the Save POST.
+// Assert at the string level (cheapest way to pin real browser-parsing
+// behavior without a headless browser in this test suite) that the outer
+// form's body contains no nested "<form" and that hx-delete now lives on a
+// <button>, not a <form>.
+func TestTaskEditPageDeleteButtonNotNestedForm(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks/demo", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+
+	start := strings.Index(body, `<form class="config-form"`)
+	if start == -1 {
+		t.Fatal("outer config-form not found in task edit page")
+	}
+	end := strings.Index(body[start:], "</form>")
+	if end == -1 {
+		t.Fatal("outer config-form has no closing </form> tag")
+	}
+	outerForm := body[start : start+end]
+
+	if strings.Contains(outerForm, "<form") == false {
+		t.Fatal("sanity check failed: outer form body should contain its own opening tag substring")
+	}
+	// The outer opening tag itself contains "<form"; anything past its first
+	// occurrence must not contain another one.
+	afterOpenTag := outerForm[strings.Index(outerForm, ">")+1:]
+	if strings.Contains(afterOpenTag, "<form") {
+		t.Errorf("outer config-form still contains a nested <form>, want the Delete control to be a plain <button>:\n%s", outerForm)
+	}
+	if !strings.Contains(outerForm, "hx-delete=") {
+		t.Fatal("expected hx-delete on the Delete control inside the outer form")
+	}
+
+	deleteIdx := strings.Index(outerForm, "hx-delete=")
+	tagStart := strings.LastIndex(outerForm[:deleteIdx], "<")
+	tag := outerForm[tagStart:]
+	tagName := strings.TrimPrefix(tag[:strings.IndexAny(tag, " \t\n>")], "<")
+	if tagName != "button" {
+		t.Errorf("hx-delete is on a <%s>, want <button>", tagName)
 	}
 }
 

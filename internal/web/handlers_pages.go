@@ -397,8 +397,8 @@ func (s *Server) handleTaskEditPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	form := s.buildForm(schema.SectionTask, &task, cfg, "/web/config/task/"+name)
-	form.DeleteURL = "/web/task/" + name + "/delete"
+	form := s.buildForm(schema.SectionTask, &task, cfg, "/web/config/task/"+url.PathEscape(name))
+	form.DeleteURL = "/web/task/" + url.PathEscape(name) + "/delete"
 
 	// Best-effort: a task whose configured prompt file path is invalid
 	// (e.g. escapes the workspace) still gets an edit page — it just opens
@@ -452,8 +452,8 @@ func (s *Server) handleProcessEditPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	form := s.buildForm(schema.SectionProcess, &proc, cfg, "/web/config/process/"+name)
-	form.DeleteURL = "/web/process/" + name
+	form := s.buildForm(schema.SectionProcess, &proc, cfg, "/web/config/process/"+url.PathEscape(name))
+	form.DeleteURL = "/web/process/" + url.PathEscape(name)
 
 	pd := pageData{
 		Page:  "process_edit",
@@ -520,8 +520,8 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	form := s.buildForm(schema.SectionTemplate, &tmpl, cfg, "/web/config/template/"+name)
-	form.DeleteURL = "/web/template/" + name
+	form := s.buildForm(schema.SectionTemplate, &tmpl, cfg, "/web/config/template/"+url.PathEscape(name))
+	form.DeleteURL = "/web/template/" + url.PathEscape(name)
 
 	pd := pageData{
 		Page:  "template_edit",

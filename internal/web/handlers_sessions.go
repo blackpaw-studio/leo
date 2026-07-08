@@ -95,8 +95,8 @@ func (s *Server) handleSessionAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 
