@@ -118,7 +118,7 @@ func isTextKind(k Kind) bool {
 }
 
 func renderNumber(val reflect.Value) string {
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		// Pointer semantics: nil means "unset/inherit", a non-nil pointer to
 		// 0 means "explicitly set to zero". Always render the digits when
 		// non-nil so an explicit 0 doesn't collapse into the unset "" state.
@@ -137,7 +137,7 @@ func renderNumber(val reflect.Value) string {
 
 func applyNumber(val reflect.Value, sf reflect.StructField, key, raw string) error {
 	raw = strings.TrimSpace(raw)
-	isPtr := sf.Type.Kind() == reflect.Ptr
+	isPtr := sf.Type.Kind() == reflect.Pointer
 	if raw == "" {
 		if isPtr {
 			val.Set(reflect.Zero(sf.Type))

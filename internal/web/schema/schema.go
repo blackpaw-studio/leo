@@ -98,7 +98,7 @@ func DeriveKind(t reflect.Type) Kind {
 		return KindNumber
 	case t.Kind() == reflect.Bool:
 		return KindBool
-	case t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Bool:
+	case t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Bool:
 		return KindTriBool
 	case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.String:
 		return KindCSV

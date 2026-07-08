@@ -123,6 +123,17 @@ type Server struct {
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
 
+	// lookTmux is the testability seam for locating the tmux binary used by
+	// the Sessions page's liveness check and reset action (see
+	// handlers_sessions.go). Defaults to exec.LookPath("tmux"). Unlike
+	// findTmuxPath (used elsewhere in this package), a failure here means
+	// "tmux truly isn't available" rather than falling back to a bare
+	// "tmux" string — tmuxSessionLive/handleSessionReset use the error to
+	// skip the tmux call entirely. Tests stub this so the execCommand seam
+	// is always reached regardless of whether the test runner has tmux
+	// installed.
+	lookTmux func() (string, error)
+
 	// injectPrompt delivers a message into a tmux session via the readiness-
 	// probing path (tmux.InjectPrompt). Tests replace this to verify the
 	// resumed-agent message delivery path without requiring a real tmux session.
@@ -167,6 +178,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		allowedHosts:   opts.AllowedHosts,
 		serviceLogPath: opts.LogPath,
 		execCommand:    exec.Command,
+		lookTmux:       func() (string, error) { return exec.LookPath("tmux") },
 	}
 	s.fetchAgentListFn = s.fetchAgentList
 

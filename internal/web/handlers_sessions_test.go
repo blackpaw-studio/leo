@@ -137,6 +137,11 @@ func TestSessionReset(t *testing.T) {
 		t.Fatalf("seeding stored session id: %v", err)
 	}
 
+	// Stub tmux lookup so the execCommand seam below is reached even on a
+	// runner (e.g. macOS CI) that has no tmux installed — mirrors the real
+	// binary's presence without shelling out to one.
+	s.lookTmux = func() (string, error) { return "/usr/bin/tmux", nil }
+
 	var killed []string
 	s.execCommand = func(name string, args ...string) *exec.Cmd {
 		killed = append(killed, name+" "+strings.Join(args, " "))

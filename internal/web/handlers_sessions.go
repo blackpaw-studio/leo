@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -70,10 +69,10 @@ func sessionTmuxTarget(name string) string { return "leo-session-" + name }
 
 // tmuxSessionLive reports whether tmux has a live session for target,
 // mirroring internal/cli/session.go's isTmuxSessionLive but routed through
-// the execCommand seam so tests can stub it without shelling out to a real
-// tmux binary.
+// the lookTmux and execCommand seams so tests can stub it without shelling
+// out to a real tmux binary.
 func (s *Server) tmuxSessionLive(target string) bool {
-	tmuxBin, err := exec.LookPath("tmux")
+	tmuxBin, err := s.lookTmux()
 	if err != nil {
 		return false
 	}
@@ -197,7 +196,7 @@ func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request) {
 		cleared = s.sessionRT.ResetSession(name, "web reset")
 	}
 
-	if tmuxBin, lerr := exec.LookPath("tmux"); lerr == nil {
+	if tmuxBin, lerr := s.lookTmux(); lerr == nil {
 		_ = s.execCommand(tmuxBin, tmux.Args("kill-session", "-t", tmux.Target(sessionTmuxTarget(name)))...).Run()
 	}
 
