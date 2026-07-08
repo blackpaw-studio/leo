@@ -31,6 +31,23 @@ type statusData struct {
 	NextRunTime  time.Time
 }
 
+// nextScheduledRun returns the name and time of the earliest upcoming cron
+// run across all scheduled entries. It returns ("", zero time) if there is
+// no scheduler or no entries. Shared by fillStatus and buildDashboardData so
+// the "earliest next run" logic exists in exactly one place.
+func (s *Server) nextScheduledRun() (name string, at time.Time) {
+	if s.scheduler == nil {
+		return "", time.Time{}
+	}
+	for _, e := range s.scheduler.List() {
+		if at.IsZero() || e.Next.Before(at) {
+			at = e.Next
+			name = e.Name
+		}
+	}
+	return name, at
+}
+
 // fillStatus populates pd.Status and pd.RestartNeeded. It's the refactor of
 // the status portion of buildDashboardData: process/task counts and the
 // earliest next cron run, without the heavier per-process/per-task detail
@@ -41,16 +58,7 @@ func (s *Server) fillStatus(pd *pageData) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	var nextRunName string
-	var nextRunTime time.Time
-	if s.scheduler != nil {
-		for _, e := range s.scheduler.List() {
-			if nextRunTime.IsZero() || e.Next.Before(nextRunTime) {
-				nextRunTime = e.Next
-				nextRunName = e.Name
-			}
-		}
-	}
+	nextRunName, nextRunTime := s.nextScheduledRun()
 
 	pd.Status = statusData{
 		ProcessCount: len(cfg.Processes),

@@ -134,15 +134,7 @@ select.form-input {
 .empty-state, .dim { color: var(--dim); font-size: var(--fs-sm); }
 .empty-state { padding: var(--sp-4) 0; text-align: center; }
 
-/* status banner + restart banner (partials/status.html — not rewritten this task) */
-.status-banner {
-  background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-3);
-}
-.status-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--sp-2); }
-.logo { font-weight: 700; font-size: var(--fs-lg); }
-.status-meta { font-size: var(--fs-sm); color: var(--dim); }
-.status-meta strong { color: var(--accent); }
+/* restart banner (partials/status.html) */
 .restart-banner {
   background: var(--accent-bg); border: 1px solid var(--accent);
   border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-3);
@@ -180,7 +172,7 @@ select.form-input {
 /* task table (partials/tasks.html) */
 .task-row:hover td { background: var(--panel-2); }
 .task-disabled { opacity: 0.45; }
-.task-name { font-weight: 600; color: var(--accent); cursor: pointer; }
+.task-name { font-weight: 600; color: var(--link); cursor: pointer; }
 .task-name:hover { text-decoration: underline; }
 .task-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; }
 .cron-desc { display: block; font-size: var(--fs-sm); }
@@ -236,8 +228,8 @@ select.form-input {
 .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
 .toggle-slider { position: absolute; top: 0; left: 0; width: 40px; height: 22px; background: var(--dim-bg); border: 1px solid var(--line); border-radius: 12px; transition: background 0.15s, border-color 0.15s; }
 .toggle-slider::before { content: ""; position: absolute; height: 16px; width: 16px; left: 2px; top: 2px; background: var(--dim); border-radius: 50%; transition: transform 0.15s, background 0.15s; }
-.toggle input:checked + .toggle-slider { background: var(--good-bg); border-color: var(--good); }
-.toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--good); }
+.toggle input:checked + .toggle-slider { background: var(--accent-bg); border-color: var(--accent); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--accent); }
 .toggle input:focus-visible + .toggle-slider { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* forms and inputs (config_*.html, prompt_editor.html) */

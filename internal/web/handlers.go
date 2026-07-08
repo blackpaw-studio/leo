@@ -1086,17 +1086,12 @@ func (s *Server) buildDashboardData() (*dashboardData, error) {
 
 	// Cron entries + find earliest next run
 	cronMap := make(map[string]cron.EntryInfo)
-	var nextRunName string
-	var nextRunTime time.Time
 	if s.scheduler != nil {
 		for _, e := range s.scheduler.List() {
 			cronMap[e.Name] = e
-			if nextRunTime.IsZero() || e.Next.Before(nextRunTime) {
-				nextRunTime = e.Next
-				nextRunName = e.Name
-			}
 		}
 	}
+	nextRunName, nextRunTime := s.nextScheduledRun()
 
 	// Tasks with history
 	store := s.loadHistory(cfg)
