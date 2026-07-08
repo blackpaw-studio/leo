@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -68,12 +69,17 @@ type Server struct {
 	templates     *template.Template
 	httpServer    *http.Server
 	listener      net.Listener
-	agents        []string      // cached list of available claude agents
 	restartNeeded atomic.Bool   // set when process-affecting config changes are saved; touched from concurrent handlers
 	port          int           // port the listener is expected to bind on; used for Host/Origin checks
 	apiToken      string        // bearer token required on /api/* routes; empty disables API
 	allowedHosts  []string      // extra hosts permitted beyond loopback (e.g. LAN IPs)
 	sessions      *sessionStore // in-memory browser sessions for cookie-based auth
+
+	// agentMu guards the on-demand, 60s-TTL cache of claude sub-agent names
+	// used to populate dropdowns without shelling out on every render.
+	agentMu       sync.Mutex
+	agentCache    []string
+	agentsFetched time.Time
 
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
@@ -120,7 +126,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	}
 
 	s.sessions = newSessionStore(sessionTTL)
-	s.agents = s.fetchAgentList()
 	s.parseTemplates()
 
 	mux := http.NewServeMux()
@@ -338,6 +343,18 @@ func (s *Server) parseTemplates() {
 	}
 
 	s.templates = template.Must(template.New("").Funcs(funcMap).ParseFS(content, "templates/*.html", "templates/**/*.html"))
+}
+
+// agentList returns the claude sub-agent names, refreshing at most once per
+// minute. fetchAgentList shells out to `claude agents` (~100ms).
+func (s *Server) agentList() []string {
+	s.agentMu.Lock()
+	defer s.agentMu.Unlock()
+	if time.Since(s.agentsFetched) > time.Minute {
+		s.agentCache = s.fetchAgentList()
+		s.agentsFetched = time.Now()
+	}
+	return s.agentCache
 }
 
 // fetchAgentList runs `claude agents` and parses the agent names.

@@ -1190,7 +1190,7 @@ func (s *Server) buildDashboardData() (*dashboardData, error) {
 		Tasks:         tasks,
 		CronMap:       cronMap,
 		Config:        cfg,
-		Agents:        s.agents,
+		Agents:        s.agentList(),
 		RestartNeeded: s.restartNeeded.Load(),
 		NextRunName:   nextRunName,
 		NextRunTime:   nextRunTime,
