@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/web"
@@ -117,15 +118,20 @@ func runService(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("claude not found: %w", err)
 	}
 
+	provEnv, err := provider.Env(cfg, cfg.ProcessProvider(proc))
+	if err != nil {
+		return fmt.Errorf("resolving provider env: %w", err)
+	}
+
 	info.Printf("Starting session (%s)...\n", procName)
-	procEnv := processEnviron(proc)
+	procEnv := processEnviron(proc, provEnv)
 	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), procEnv)
 }
 
 // processEnviron augments the current environment with LEO_CHANNELS and
-// LEO_DEV_CHANNELS (if any) and per-process env vars. Returned slice is safe
-// to pass to syscall.Exec.
-func processEnviron(proc config.ProcessConfig) []string {
+// LEO_DEV_CHANNELS (if any), per-process env vars, and any provider env.
+// Returned slice is safe to pass to syscall.Exec.
+func processEnviron(proc config.ProcessConfig, extraEnv map[string]string) []string {
 	env := os.Environ()
 	if len(proc.Channels) > 0 {
 		env = append(env, "LEO_CHANNELS="+strings.Join(proc.Channels, ","))
@@ -134,6 +140,9 @@ func processEnviron(proc config.ProcessConfig) []string {
 		env = append(env, "LEO_DEV_CHANNELS="+strings.Join(proc.DevChannels, ","))
 	}
 	for k, v := range proc.Env {
+		env = append(env, k+"="+v)
+	}
+	for k, v := range extraEnv {
 		env = append(env, k+"="+v)
 	}
 	return env
@@ -181,6 +190,12 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 			continue
 		}
 
+		provEnv, provErr := provider.Env(cfg, cfg.ProcessProvider(proc))
+		if provErr != nil {
+			warn.Printf("  [%s] provider env unavailable: %v — skipping process\n", name, provErr)
+			continue
+		}
+
 		args := buildProcessArgs(cfg, name, proc)
 
 		// Add session persistence
@@ -190,11 +205,16 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 			resolveSessionArgs(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] ")...,
 		)
 
+		procEnv := mergeChannelsIntoEnv(proc)
+		for k, v := range provEnv {
+			procEnv[k] = v
+		}
+
 		specs = append(specs, service.ProcessSpec{
 			Name:       name,
 			ClaudeArgs: args,
 			WorkDir:    cfg.ProcessWorkspace(proc),
-			Env:        mergeChannelsIntoEnv(proc),
+			Env:        procEnv,
 			WebPort:    strconv.Itoa(cfg.WebPort()),
 			WebToken:   webToken,
 			StateDir:   cfg.StatePath(),
