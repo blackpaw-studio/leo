@@ -22,7 +22,7 @@ const apiKeyCmdTimeout = 30 * time.Second
 
 // Test seams.
 var (
-	lookupEnv  = os.LookupEnv
+	lookupEnv = os.LookupEnv
 	// runCommand executes api_key_cmd via sh -c. This is trusted operator-authored
 	// config (from leo.yaml), not sanitized external input, so sh -c is appropriate.
 	runCommand = func(ctx context.Context, command string) ([]byte, error) {
