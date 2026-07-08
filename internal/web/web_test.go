@@ -159,10 +159,61 @@ func newRawTestServer(t *testing.T) (*Server, string) {
 	return s, dir
 }
 
-func TestDashboardReturns200(t *testing.T) {
+func TestDashboardRedirectsToTasks(t *testing.T) {
 	s, _ := newTestServer(t)
 
 	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "/tasks" {
+		t.Errorf("expected redirect to /tasks, got %q", loc)
+	}
+}
+
+// TestPageRoutes drives every sidebar section's URL and asserts it renders
+// inside the new shell (200 + sidebar nav markup), and that / redirects to
+// the default section. newTestServer's handler auto-attaches a bearer token
+// to every request (see authorizeTestRequest), which sessionMiddleware
+// accepts as an alternative to a session cookie — the same auth path every
+// other test in this file already relies on.
+func TestPageRoutes(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	pages := []string{
+		"/tasks", "/agents", "/processes", "/sessions",
+		"/config/defaults", "/config/templates", "/config/providers",
+		"/config/settings", "/service",
+	}
+	for _, p := range pages {
+		req := httptest.NewRequest("GET", p, nil)
+		w := httptest.NewRecorder()
+		s.httpServer.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", p, w.Code)
+			continue
+		}
+		if !strings.Contains(w.Body.String(), `class="sidebar"`) {
+			t.Errorf("GET %s: response missing sidebar shell markup", p)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusSeeOther && w.Code != http.StatusFound {
+		t.Errorf("GET / = %d, want redirect to /tasks", w.Code)
+	}
+}
+
+func TestPageTasksReturns200(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/tasks", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
@@ -176,11 +227,24 @@ func TestDashboardReturns200(t *testing.T) {
 	if !strings.Contains(body, "Leo") {
 		t.Error("expected page to contain 'Leo'")
 	}
-	if !strings.Contains(body, "assistant") {
-		t.Error("expected page to contain process name 'assistant'")
-	}
 	if !strings.Contains(body, "heartbeat") {
 		t.Error("expected page to contain task name 'heartbeat'")
+	}
+}
+
+func TestPageProcessesReturns200(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/processes", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "assistant") {
+		t.Error("expected page to contain process name 'assistant'")
 	}
 }
 
@@ -194,8 +258,8 @@ func TestStaticServing(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "--bg-page") {
-		t.Error("expected CSS to contain --bg-page variable")
+	if !strings.Contains(w.Body.String(), "--bg:") {
+		t.Error("expected CSS to contain --bg token")
 	}
 }
 
@@ -235,10 +299,10 @@ func TestPartialProcessesReturnsFragment(t *testing.T) {
 	}
 }
 
-func TestPartialTasksReturnsFragment(t *testing.T) {
+func TestPageTasksShowsTaskTable(t *testing.T) {
 	s, _ := newTestServer(t)
 
-	req := httptest.NewRequest("GET", "/partials/tasks", nil)
+	req := httptest.NewRequest("GET", "/tasks", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
@@ -252,12 +316,31 @@ func TestPartialTasksReturnsFragment(t *testing.T) {
 	if !strings.Contains(body, "cleanup") {
 		t.Error("expected task 'cleanup'")
 	}
+	if !strings.Contains(body, "Add Task") {
+		t.Error("expected manage-tasks add form")
+	}
 }
 
-func TestPartialConfigSettingsReturnsFragment(t *testing.T) {
+func TestPageConfigSettingsShowsWebUIInfo(t *testing.T) {
 	s, _ := newTestServer(t)
 
-	req := httptest.NewRequest("GET", "/partials/config/settings", nil)
+	req := httptest.NewRequest("GET", "/config/settings", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Web UI") {
+		t.Error("expected settings page to show Web UI section")
+	}
+}
+
+func TestPageConfigDefaultsShowsModel(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/config/defaults", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
@@ -266,14 +349,14 @@ func TestPartialConfigSettingsReturnsFragment(t *testing.T) {
 	}
 	body := w.Body.String()
 	if !strings.Contains(body, "sonnet") {
-		t.Error("expected settings to show model 'sonnet'")
+		t.Error("expected defaults page to show model 'sonnet'")
 	}
 }
 
-func TestPartialConfigProcessesReturnsFragment(t *testing.T) {
+func TestPageProcessesShowsManageForm(t *testing.T) {
 	s, _ := newTestServer(t)
 
-	req := httptest.NewRequest("GET", "/partials/config/processes", nil)
+	req := httptest.NewRequest("GET", "/processes", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
@@ -282,29 +365,10 @@ func TestPartialConfigProcessesReturnsFragment(t *testing.T) {
 	}
 	body := w.Body.String()
 	if !strings.Contains(body, "assistant") {
-		t.Error("expected processes tab to show 'assistant'")
+		t.Error("expected processes page to show 'assistant'")
 	}
 	if !strings.Contains(body, "Add Process") {
-		t.Error("expected processes tab to show add form")
-	}
-}
-
-func TestPartialConfigTasksReturnsFragment(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	req := httptest.NewRequest("GET", "/partials/config/tasks", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "heartbeat") {
-		t.Error("expected tasks tab to show 'heartbeat'")
-	}
-	if !strings.Contains(body, "Add Task") {
-		t.Error("expected tasks tab to show add form")
+		t.Error("expected processes page to show add form")
 	}
 }
 
@@ -396,7 +460,7 @@ defaults:
 
 	s := New(cfgPath, nil, nil, nil, nil, Options{Port: testPort, APIToken: testAPIToken})
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/processes", nil)
 	req.Host = testHost
 	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	w := httptest.NewRecorder()
@@ -409,6 +473,17 @@ defaults:
 	if !strings.Contains(body, "No processes configured") {
 		t.Error("expected empty state message for processes")
 	}
+
+	req = httptest.NewRequest("GET", "/tasks", nil)
+	req.Host = testHost
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+	w = httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	body = w.Body.String()
 	if !strings.Contains(body, "No tasks configured") {
 		t.Error("expected empty state message for tasks")
 	}

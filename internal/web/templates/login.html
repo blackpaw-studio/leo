@@ -8,12 +8,12 @@
 </head>
 <body class="login">
 <main class="login-box">
-  <h1>Leo</h1>
+  <h1>leo<em>_</em></h1>
   <p class="muted">Paste the token from <code>~/.leo/state/api.token</code></p>
   {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
   <form method="post" action="/login" id="login-form">
     <input type="password" name="token" autocomplete="current-password" autofocus required>
-    <button type="submit">Sign in</button>
+    <button type="submit" class="btn btn-accent">Sign in</button>
   </form>
   {{if .AutoToken}}
   <script>

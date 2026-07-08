@@ -1,0 +1,8 @@
+{{define "page_tasks"}}
+<h1 class="page-title">Tasks</h1>
+{{template "tasks.html" .Data}}
+<div class="section-block">
+    <h1 class="page-title">Manage Tasks</h1>
+    {{template "config_tasks.html" .Data}}
+</div>
+{{end}}

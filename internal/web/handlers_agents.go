@@ -141,33 +141,18 @@ func (s *Server) handleAPITemplateList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: cfg.Templates})
 }
 
-// handlePartialAgents renders the agents tab partial.
+// handlePartialAgents renders the agents.html fragment. It's no longer a
+// standalone route (the /agents page renders it via handlePage), but
+// handleWebAgentRename still calls it directly to re-render the list in
+// place after a rename.
 func (s *Server) handlePartialAgents(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadConfig()
+	data, err := s.buildAgentsData(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	var agents []agentData
-	if s.agentSvc != nil {
-		for _, a := range s.agentSvc.List() {
-			agents = append(agents, agentData{
-				Name:      a.Name,
-				Status:    a.Status,
-				StartedAt: a.StartedAt,
-				Restarts:  a.Restarts,
-				Branch:    a.Branch,
-			})
-		}
-	}
-
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// Re-fetch templates from config for the spawn form.
-	s.templates.ExecuteTemplate(w, "agents.html", struct { //nolint:errcheck
-		Agents    []agentData
-		Templates any
-	}{Agents: agents, Templates: cfg.Templates})
+	s.templates.ExecuteTemplate(w, "agents.html", data) //nolint:errcheck
 }
 
 type agentData struct {

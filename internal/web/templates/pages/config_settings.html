@@ -1,0 +1,15 @@
+{{define "page_config_settings"}}
+<h1 class="page-title">Settings</h1>
+<div class="config-actions">
+    <button class="btn btn-accent" hx-post="/web/config/reload" hx-target="#flash-container" hx-swap="innerHTML">Reload Config from Disk</button>
+</div>
+
+<div class="config-section">
+    <h3>Web UI</h3>
+    <table class="config-table">
+        <tr><td class="config-key">Enabled</td><td>{{.Data.Web.Enabled}}</td></tr>
+        <tr><td class="config-key">Port</td><td>{{if .Data.Web.Port}}{{.Data.Web.Port}}{{else}}8370{{end}}</td></tr>
+        <tr><td class="config-key">Bind</td><td>{{if .Data.Web.Bind}}{{.Data.Web.Bind}}{{else}}0.0.0.0{{end}}</td></tr>
+    </table>
+</div>
+{{end}}

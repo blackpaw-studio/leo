@@ -3,7 +3,7 @@
     <div class="status-banner">
         <div class="status-header">
             <span class="logo">Leo</span>
-            <span class="status-meta">{{len .Processes}} processes &middot; {{len .Tasks}} tasks{{if .NextRunName}} &middot; next: <strong>{{.NextRunName}}</strong> {{relativeTime .NextRunTime}}{{end}}</span>
+            <span class="status-meta">{{.Status.ProcessCount}} processes &middot; {{.Status.TaskCount}} tasks{{if .Status.NextRunName}} &middot; next: <strong>{{.Status.NextRunName}}</strong> {{relativeTime .Status.NextRunTime}}{{end}}</span>
         </div>
     </div>
     {{if .RestartNeeded}}

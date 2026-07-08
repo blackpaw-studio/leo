@@ -6,7 +6,7 @@
     <div class="config-section">
         <div class="config-section-header">
             <h3>{{$name}}</h3>
-            <button class="btn btn-sm btn-danger" hx-delete="/web/template/{{$name}}" hx-target="#tab-content" hx-swap="innerHTML" hx-confirm="Delete template '{{$name}}'?">Delete</button>
+            <button class="btn btn-sm btn-danger" hx-delete="/web/template/{{$name}}" hx-target="#config-templates" hx-swap="outerHTML" hx-confirm="Delete template '{{$name}}'?">Delete</button>
         </div>
         <form hx-post="/web/config/template/{{$name}}" hx-target="#flash-container" hx-swap="innerHTML">
             <div class="form-group">
@@ -142,7 +142,7 @@
 
     <div class="config-section config-section-add">
         <h3>Add Template</h3>
-        <form hx-post="/web/template/add" hx-target="#tab-content" hx-swap="innerHTML">
+        <form hx-post="/web/template/add" hx-target="#config-templates" hx-swap="outerHTML">
             <div class="form-group">
                 <div class="form-row">
                     <label>Name</label>

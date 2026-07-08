@@ -55,34 +55,6 @@ type taskData struct {
 	CronExpr string
 }
 
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, "layout.html", data); err != nil {
-		fmt.Fprintf(w, "template error: %v", err)
-	}
-}
-
-func (s *Server) handlePartialStatus(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "status.html", data) //nolint:errcheck
-}
-
 func (s *Server) handlePartialProcesses(w http.ResponseWriter, r *http.Request) {
 	data, err := s.buildDashboardData()
 	if err != nil {
@@ -91,46 +63,6 @@ func (s *Server) handlePartialProcesses(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	s.templates.ExecuteTemplate(w, "processes.html", data) //nolint:errcheck
-}
-
-func (s *Server) handlePartialTasks(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "tasks.html", data) //nolint:errcheck
-}
-
-func (s *Server) handlePartialConfigProcesses(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
-}
-
-func (s *Server) handlePartialConfigTasks(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
-}
-
-func (s *Server) handlePartialConfigSettings(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "config_settings.html", cfg) //nolint:errcheck
 }
 
 func (s *Server) handlePartialTaskHistory(w http.ResponseWriter, r *http.Request) {
@@ -1416,16 +1348,6 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Template config management ---
-
-func (s *Server) handlePartialConfigTemplates(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
-}
 
 func (s *Server) handleConfigTemplate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

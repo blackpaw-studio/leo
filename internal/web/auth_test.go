@@ -62,14 +62,24 @@ func TestLoginFlow(t *testing.T) {
 		t.Error("cookie SameSite != Strict")
 	}
 
-	// GET / with cookie -> 200.
+	// GET / with cookie -> 303 (redirects to /tasks).
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = testHost
 	req.AddCookie(&http.Cookie{Name: "leo_session", Value: sess.Value})
 	w = httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
-	if w.Code != 200 {
+	if w.Code != http.StatusSeeOther {
 		t.Fatalf("GET / with cookie status = %d", w.Code)
+	}
+
+	// GET /tasks with cookie -> 200 (the page the redirect points to).
+	req = httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	req.Host = testHost
+	req.AddCookie(&http.Cookie{Name: "leo_session", Value: sess.Value})
+	w = httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GET /tasks with cookie status = %d", w.Code)
 	}
 
 	// GET / without cookie and without Bearer -> 303 /login.
@@ -156,13 +166,13 @@ func TestLoginHandler_DestroysPriorSessionOnReLogin(t *testing.T) {
 
 func TestSessionMiddleware_BearerStillWorks(t *testing.T) {
 	s, _ := newRawTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
 	req.Host = testHost
 	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 	if w.Code != 200 {
-		t.Fatalf("bearer-only GET / status = %d", w.Code)
+		t.Fatalf("bearer-only GET /tasks status = %d", w.Code)
 	}
 }
 

@@ -6,7 +6,7 @@
     <div class="config-section">
         <div class="config-section-header">
             <h3>{{$name}}</h3>
-            <button class="btn btn-sm btn-danger" hx-delete="/web/task/{{$name}}/delete" hx-target="#tab-content" hx-swap="innerHTML" hx-confirm="Delete task '{{$name}}'?">Delete</button>
+            <button class="btn btn-sm btn-danger" hx-delete="/web/task/{{$name}}/delete" hx-target="#config-tasks" hx-swap="outerHTML" hx-confirm="Delete task '{{$name}}'?">Delete</button>
         </div>
         <form hx-post="/web/config/task/{{$name}}" hx-target="#flash-container" hx-swap="innerHTML">
             <div class="form-group">
@@ -172,7 +172,7 @@
 
     <div class="config-section config-section-add">
         <h3>Add Task</h3>
-        <form hx-post="/web/task/add" hx-target="#tab-content" hx-swap="innerHTML">
+        <form hx-post="/web/task/add" hx-target="#config-tasks" hx-swap="outerHTML">
             <div class="form-group">
                 <div class="form-row">
                     <label>Name</label>

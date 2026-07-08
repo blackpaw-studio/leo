@@ -28,7 +28,7 @@
                     {{end}}
                 </td>
                 <td class="task-actions">
-                    <button class="btn btn-sm" hx-post="/web/task/{{.Name}}/toggle" hx-target="#tab-content" hx-swap="innerHTML">{{if .Config.Enabled}}disable{{else}}enable{{end}}</button>
+                    <button class="btn btn-sm" hx-post="/web/task/{{.Name}}/toggle" hx-target="#tasks-table" hx-swap="outerHTML">{{if .Config.Enabled}}disable{{else}}enable{{end}}</button>
                     {{if .Config.Enabled}}
                     <button class="btn btn-sm btn-accent" hx-post="/web/task/{{.Name}}/run" hx-target="#flash-container" hx-swap="innerHTML">run now</button>
                     {{end}}

@@ -14,10 +14,10 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
-func TestPartialConfigTemplatesReturnsFragment(t *testing.T) {
+func TestPageConfigTemplatesShowsTemplates(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 
-	req := httptest.NewRequest("GET", "/partials/config/templates", nil)
+	req := httptest.NewRequest("GET", "/config/templates", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 

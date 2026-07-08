@@ -1,0 +1,24 @@
+{{define "page_config_providers"}}
+<h1 class="page-title">Providers</h1>
+{{if .Data.Providers}}
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr><th>Name</th><th>Base URL</th><th>Auth</th><th>Default Model</th></tr>
+        </thead>
+        <tbody>
+            {{range $name, $p := .Data.Providers}}
+            <tr>
+                <td>{{$name}}</td>
+                <td>{{$p.BaseURL}}</td>
+                <td>{{if $p.APIKeyEnv}}env: {{$p.APIKeyEnv}}{{else if $p.APIKeyCmd}}cmd{{else}}&mdash;{{end}}</td>
+                <td>{{if $p.DefaultModel}}{{$p.DefaultModel}}{{else}}&mdash;{{end}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<p class="dim">No providers configured. Add entries under <code>providers:</code> in leo.yaml.</p>
+{{end}}
+{{end}}

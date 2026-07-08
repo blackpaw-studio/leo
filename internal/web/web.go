@@ -145,20 +145,30 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /login", s.loginHandler)
 	mux.HandleFunc("POST /logout", s.logoutHandler)
 
-	// Full page
-	mux.HandleFunc("GET /", s.handleDashboard)
+	// Full page — / redirects to the default section; every other section
+	// has its own route rendered through handlePage (handlers_pages.go).
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/tasks", http.StatusSeeOther)
+	})
+	mux.HandleFunc("GET /tasks", s.handlePage("tasks", "Tasks", s.buildTasksData))
+	mux.HandleFunc("GET /agents", s.handlePage("agents", "Agents", s.buildAgentsData))
+	mux.HandleFunc("GET /processes", s.handlePage("processes", "Processes", s.buildProcessesData))
+	mux.HandleFunc("GET /sessions", s.handlePage("sessions", "Sessions", nil))
+	mux.HandleFunc("GET /config/defaults", s.handlePage("config_defaults", "Defaults", s.buildDefaultsData))
+	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
+	mux.HandleFunc("GET /config/providers", s.handlePage("config_providers", "Providers", s.buildProvidersData))
+	mux.HandleFunc("GET /config/settings", s.handlePage("config_settings", "Settings", s.buildSettingsData))
+	mux.HandleFunc("GET /service", s.handlePage("service", "Service", nil))
 
 	// Partials (htmx polling targets)
 	mux.HandleFunc("GET /partials/status", s.handlePartialStatus)
 	mux.HandleFunc("GET /partials/processes", s.handlePartialProcesses)
-	mux.HandleFunc("GET /partials/tasks", s.handlePartialTasks)
 	mux.HandleFunc("GET /partials/task/{name}/history", s.handlePartialTaskHistory)
 	mux.HandleFunc("GET /partials/task/{name}/log", s.handleTaskRunLog)
-
-	// Config sub-tab partials
-	mux.HandleFunc("GET /partials/config/processes", s.handlePartialConfigProcesses)
-	mux.HandleFunc("GET /partials/config/tasks", s.handlePartialConfigTasks)
-	mux.HandleFunc("GET /partials/config/settings", s.handlePartialConfigSettings)
 
 	// Utilities
 	mux.HandleFunc("GET /web/cron/preview", s.handleCronPreview)
@@ -186,7 +196,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/task/{name}/prompt", s.handleTaskPromptSave)
 
 	// Template config management
-	mux.HandleFunc("GET /partials/config/templates", s.handlePartialConfigTemplates)
 	mux.HandleFunc("POST /web/config/template/{name}", s.handleConfigTemplate)
 	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
 	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
@@ -198,8 +207,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/process/{name}/send", s.handleProcessSendKeys)
 	mux.HandleFunc("POST /web/process/{name}/message", s.handleProcessMessage)
 
-	// Agent management (web UI)
-	mux.HandleFunc("GET /partials/agents", s.handlePartialAgents)
+	// Agent management (web UI). handlePartialAgents (agents.html re-render
+	// after a rename) is invoked directly by handleWebAgentRename, not
+	// routed — see handlers_agents.go.
 	mux.HandleFunc("POST /web/agent/spawn", s.handleWebAgentSpawn)
 	mux.HandleFunc("POST /web/agent/{name}/stop", s.handleWebAgentStop)
 	mux.HandleFunc("POST /web/agent/{name}/rename", s.handleWebAgentRename)
