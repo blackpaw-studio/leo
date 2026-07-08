@@ -21,7 +21,7 @@ providers:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `base_url` | yes | Anthropic-compatible endpoint; injected as `ANTHROPIC_BASE_URL` |
+| `base_url` | yes | Anthropic-compatible endpoint (must be an http or https URL); injected as `ANTHROPIC_BASE_URL` |
 | `api_key_env` | one of | Env var holding the API key |
 | `api_key_cmd` | one of | Shell command whose trimmed stdout is the key |
 | `default_model` | no | Model used when the scope doesn't set `model:` |
@@ -44,6 +44,7 @@ processes:
 
 Model cascade with a provider: `model:` on the scope → the provider's
 `default_model` → `defaults.model` → `sonnet`.
+Sessions are the exception: the cascade stops at the provider's `default_model` — there is no fallback to `defaults.model` or `sonnet`; if neither is set, `--model` is omitted and claude uses its own default.
 
 ## Switching and failure behavior
 

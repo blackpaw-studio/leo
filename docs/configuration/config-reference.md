@@ -35,7 +35,7 @@ providers:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `base_url` | string | Yes | Anthropic-compatible endpoint. Injected as `ANTHROPIC_BASE_URL`. |
+| `base_url` | string | Yes | Anthropic-compatible endpoint (must be an http or https URL). Injected as `ANTHROPIC_BASE_URL`. |
 | `api_key_env` | string | One of | Name of an environment variable holding the API key. Injected (trimmed) as `ANTHROPIC_AUTH_TOKEN`. |
 | `api_key_cmd` | string | One of | Shell command whose trimmed stdout is the API key. Resolved fresh on every spawn. |
 | `default_model` | string | No | Model used when the resolving scope doesn't set `model:`. |

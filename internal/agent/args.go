@@ -11,7 +11,7 @@ import (
 )
 
 // BuildTemplateArgs assembles the claude CLI arguments for an agent spawned from a template.
-// The override cascade is template → defaults → built-in default.
+// The override cascade is template → provider default_model → defaults → built-in default.
 //
 // When prompt is non-empty it is appended as the trailing positional argument.
 // Claude Code treats a bare positional (with no -p/--print) as the opening turn

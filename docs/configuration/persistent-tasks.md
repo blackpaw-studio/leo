@@ -88,6 +88,7 @@ If a task has `notify_on_fail: true` and fails (timeout, queue full, etc.), leo 
 | ---------------------- | --------------- | -------------------------------------------------------------- |
 | `workspace`            | path            | Required. Where the session's `.claude/` lives.                |
 | `model`                | string          | `sonnet` / `opus` / `haiku`.                                   |
+| `provider`             | string          | Optional; named entry from `providers` to run this session against a third-party Anthropic-compatible endpoint; see [providers.md](providers.md). |
 | `agent`                | string          | Optional agent template.                                       |
 | `permission_mode`      | string          | One of the standard claude permission modes.                   |
 | `allowed_tools`        | list            | Restrict tool surface.                                         |
