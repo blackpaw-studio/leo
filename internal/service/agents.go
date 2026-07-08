@@ -39,7 +39,7 @@ type agentSpawner interface {
 //
 // After all records are processed, `git worktree prune` runs once per unique
 // canonical path so git's administrative state matches the filesystem.
-func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
+func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, resolveEnv func(string) (map[string]string, error)) int {
 	path := agentstore.FilePath(homePath)
 	records, err := agentstore.Load(path)
 	if err != nil || len(records) == 0 {
@@ -124,11 +124,28 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			fmt.Fprintf(os.Stderr, "restore: agent %q has no session_id (legacy record) — respawning with a fresh claude session\n", name)
 		}
 
+		specEnv := rec.Env
+		if rec.Provider != "" && resolveEnv != nil {
+			provEnv, provErr := resolveEnv(rec.Provider)
+			if provErr != nil {
+				fmt.Fprintf(os.Stderr, "restore: agent %q provider env unavailable: %v — skipping (record kept)\n", name, provErr)
+				continue
+			}
+			merged := make(map[string]string, len(rec.Env)+len(provEnv))
+			for k, v := range rec.Env {
+				merged[k] = v
+			}
+			for k, v := range provEnv {
+				merged[k] = v
+			}
+			specEnv = merged
+		}
+
 		spec := daemon.AgentSpawnSpec{
 			Name:       rec.Name,
 			ClaudeArgs: args,
 			WorkDir:    rec.Workspace,
-			Env:        rec.Env,
+			Env:        specEnv,
 			WebPort:    rec.WebPort,
 			WebToken:   webToken,
 			Adopt:      adopt,

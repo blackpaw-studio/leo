@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/update"
@@ -514,7 +515,14 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	}
 
 	// Restore ephemeral agents from previous run
-	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor)
+	resolveEnv := func(name string) (map[string]string, error) {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("loading config: %w", err)
+		}
+		return provider.Env(cfg, name)
+	}
+	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, resolveEnv)
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}
