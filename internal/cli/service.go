@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/web"
@@ -88,13 +89,26 @@ func runService(cmd *cobra.Command, args []string) error {
 		// In supervised mode, start ALL enabled processes AND boot persistent
 		// task sessions. The guard counts both: a home with only persistent
 		// tasks (no enabled processes) is still something to supervise.
+		//
+		// buildAllProcessSpecs and SessionSpecsFromConfig are each called
+		// exactly once here: both may resolve provider env (which can shell
+		// out via api_key_cmd, up to 30s per process/session) and warn on
+		// failures. Calling either twice would duplicate both the external
+		// commands and the warnings on every boot, so the resulting specs
+		// are threaded straight into RunSupervised rather than re-derived.
 		specs := buildAllProcessSpecs(cfg, claudePath, webToken)
-		procCount, sessionCount := supervisableUnits(cfg, claudePath, webToken)
+		procCount := len(specs)
+		sessionSpecs, sErr := service.SessionSpecsFromConfig(cfg)
+		if sErr != nil {
+			warn.Printf("  session specs: %v\n", sErr)
+			sessionSpecs = nil
+		}
+		sessionCount := len(sessionSpecs)
 		if procCount == 0 && sessionCount == 0 {
 			return fmt.Errorf("no enabled processes or persistent task sessions in config")
 		}
 		info.Printf("Starting supervised mode (%d process(es), %d session(s))...\n", procCount, sessionCount)
-		return service.RunSupervised(claudePath, specs, cfg.HomePath, cfgPath, webToken)
+		return service.RunSupervised(claudePath, specs, sessionSpecs, cfg.HomePath, cfgPath, webToken)
 	}
 
 	// Foreground mode: run a single process, exec replaces this process
@@ -117,15 +131,20 @@ func runService(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("claude not found: %w", err)
 	}
 
+	provEnv, err := provider.Env(cfg, cfg.ProcessProvider(proc))
+	if err != nil {
+		return fmt.Errorf("resolving provider env: %w", err)
+	}
+
 	info.Printf("Starting session (%s)...\n", procName)
-	procEnv := processEnviron(proc)
+	procEnv := processEnviron(proc, provEnv)
 	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), procEnv)
 }
 
 // processEnviron augments the current environment with LEO_CHANNELS and
-// LEO_DEV_CHANNELS (if any) and per-process env vars. Returned slice is safe
-// to pass to syscall.Exec.
-func processEnviron(proc config.ProcessConfig) []string {
+// LEO_DEV_CHANNELS (if any), per-process env vars, and any provider env.
+// Returned slice is safe to pass to syscall.Exec.
+func processEnviron(proc config.ProcessConfig, extraEnv map[string]string) []string {
 	env := os.Environ()
 	if len(proc.Channels) > 0 {
 		env = append(env, "LEO_CHANNELS="+strings.Join(proc.Channels, ","))
@@ -134,6 +153,9 @@ func processEnviron(proc config.ProcessConfig) []string {
 		env = append(env, "LEO_DEV_CHANNELS="+strings.Join(proc.DevChannels, ","))
 	}
 	for k, v := range proc.Env {
+		env = append(env, k+"="+v)
+	}
+	for k, v := range extraEnv {
 		env = append(env, k+"="+v)
 	}
 	return env
@@ -181,6 +203,12 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 			continue
 		}
 
+		provEnv, provErr := provider.Env(cfg, cfg.ProcessProvider(proc))
+		if provErr != nil {
+			warn.Printf("  [%s] provider env unavailable: %v — skipping process\n", name, provErr)
+			continue
+		}
+
 		args := buildProcessArgs(cfg, name, proc)
 
 		// Add session persistence
@@ -190,32 +218,22 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 			resolveSessionArgs(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] ")...,
 		)
 
+		procEnv := mergeChannelsIntoEnv(proc)
+		for k, v := range provEnv {
+			procEnv[k] = v
+		}
+
 		specs = append(specs, service.ProcessSpec{
 			Name:       name,
 			ClaudeArgs: args,
 			WorkDir:    cfg.ProcessWorkspace(proc),
-			Env:        mergeChannelsIntoEnv(proc),
+			Env:        procEnv,
 			WebPort:    strconv.Itoa(cfg.WebPort()),
 			WebToken:   webToken,
 			StateDir:   cfg.StatePath(),
 		})
 	}
 	return specs
-}
-
-// supervisableUnits reports how many processes and persistent-task sessions the
-// supervisor would actually run for cfg. It exists so the startup guard counts
-// sessions as well as processes — a home with only persistent tasks (no enabled
-// processes) is still something to supervise. Mirrors RunSupervised's own boot
-// accounting (processes via buildAllProcessSpecs, sessions via
-// service.SessionSpecsFromConfig).
-func supervisableUnits(cfg *config.Config, claudePath, webToken string) (procs int, sessions int) {
-	procs = len(buildAllProcessSpecs(cfg, claudePath, webToken))
-	sessionSpecs, err := service.SessionSpecsFromConfig(cfg)
-	if err == nil {
-		sessions = len(sessionSpecs)
-	}
-	return procs, sessions
 }
 
 // resolveSessionArgs returns the session-related args (--resume / --session-id)
@@ -594,7 +612,7 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 	logPath := service.LogPathFor(cfg.HomePath)
 
 	// Capture relevant environment variables for daemon mode
-	environ := env.Capture()
+	environ := env.Capture(cfg.ProviderKeyEnvNames()...)
 
 	return service.ServiceConfig{
 		LeoPath:    leoPath,

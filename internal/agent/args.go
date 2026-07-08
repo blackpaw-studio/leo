@@ -11,7 +11,7 @@ import (
 )
 
 // BuildTemplateArgs assembles the claude CLI arguments for an agent spawned from a template.
-// The override cascade is template → defaults → built-in default.
+// The override cascade is template → provider default_model → defaults → built-in default.
 //
 // When prompt is non-empty it is appended as the trailing positional argument.
 // Claude Code treats a bare positional (with no -p/--print) as the opening turn
@@ -21,14 +21,7 @@ import (
 func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt string) []string {
 	var args []string
 
-	model := tmpl.Model
-	if model == "" {
-		model = cfg.Defaults.Model
-	}
-	if model == "" {
-		model = config.DefaultModel
-	}
-	args = append(args, "--model", model)
+	args = append(args, "--model", cfg.TemplateModel(tmpl))
 
 	for _, ch := range tmpl.Channels {
 		args = append(args, "--channels", ch)

@@ -66,14 +66,17 @@ Key design patterns:
 
 Config lives at `~/.leo/leo.yaml` (the "leo home"). Key sections:
 
-- `defaults` (model, max_turns, bypass_permissions, remote_control, permission_mode, allowed_tools, disallowed_tools, append_system_prompt, idle_suspend_after)
+- `defaults` (model, provider, max_turns, bypass_permissions, remote_control, permission_mode, allowed_tools, disallowed_tools, append_system_prompt, idle_suspend_after)
 - `web` (enabled, port, bind — web UI configuration)
 - `client` (default_host, hosts — remote-host definitions for `leo agent` CLI dispatch; empty on servers)
-- `processes` (map of named process configs — workspace, channels, model, agent, permission_mode, allowed_tools, disallowed_tools, append_system_prompt, env, etc.)
+- `providers` (map of named third-party Anthropic-Messages-compatible endpoints — base_url, api_key_env/api_key_cmd, default_model)
+- `processes` (map of named process configs — workspace, channels, model, provider, agent, permission_mode, allowed_tools, disallowed_tools, append_system_prompt, env, etc.)
 - `templates` (map of agent template configs — blueprints for ephemeral agents; same fields as processes, plus `idle_suspend_after` for auto-suspending idle agents)
-- `tasks` (map of named task configs — schedule, prompt_file, model, timeout, retries, channels, notify_on_fail, permission_mode, allowed_tools, disallowed_tools, append_system_prompt, etc.)
+- `tasks` (map of named task configs — schedule, prompt_file, model, provider, timeout, retries, channels, notify_on_fail, permission_mode, allowed_tools, disallowed_tools, append_system_prompt, etc.)
 
 Channels are strings like `plugin:telegram@claude-plugins-official`. Leo passes the resolved list to the spawned Claude process via the `LEO_CHANNELS` environment variable; the plugin owns its own credentials and routing.
+
+`provider` (on `defaults`, `processes.*`, `templates.*`, `sessions.*`, `tasks.*`) cascades from `defaults` and, when set, injects `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` into the spawned claude's environment at launch. See `docs/configuration/providers.md`.
 
 Each process and task can specify its own `workspace`. Default workspace is `~/.leo/workspace/`.
 

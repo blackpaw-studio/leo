@@ -347,7 +347,7 @@ func TestInstallDaemon_Success(t *testing.T) {
 	})
 
 	osExecutableFn = func() (string, error) { return "/usr/local/bin/leo", nil }
-	envCaptureFn = func() map[string]string { return map[string]string{"PATH": "/usr/bin"} }
+	envCaptureFn = func(extraKeys ...string) map[string]string { return map[string]string{"PATH": "/usr/bin"} }
 	installDaemonFn = func(sc service.ServiceConfig) error { return nil }
 	daemonStatusFn = func() (string, error) { return "running", nil }
 
@@ -365,7 +365,7 @@ func TestInstallDaemon_Failure(t *testing.T) {
 	})
 
 	osExecutableFn = func() (string, error) { return "/usr/local/bin/leo", nil }
-	envCaptureFn = func() map[string]string { return map[string]string{} }
+	envCaptureFn = func(extraKeys ...string) map[string]string { return map[string]string{} }
 	installDaemonFn = func(sc service.ServiceConfig) error { return fmt.Errorf("install failed") }
 
 	installDaemon("/tmp/workspace", "/tmp/workspace/leo.yaml")
@@ -384,7 +384,7 @@ func TestInstallDaemon_NoExecutable(t *testing.T) {
 	})
 
 	osExecutableFn = func() (string, error) { return "", fmt.Errorf("no executable") }
-	envCaptureFn = func() map[string]string { return map[string]string{} }
+	envCaptureFn = func(extraKeys ...string) map[string]string { return map[string]string{} }
 
 	var capturedSC service.ServiceConfig
 	installDaemonFn = func(sc service.ServiceConfig) error {

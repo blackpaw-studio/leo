@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,6 +81,7 @@ type Config struct {
 	Tasks     map[string]TaskConfig     `yaml:"tasks"`
 	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
 	Sessions  map[string]SessionConfig  `yaml:"sessions,omitempty"`
+	Providers map[string]ProviderConfig `yaml:"providers,omitempty"`
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
@@ -181,6 +183,7 @@ func IsLoopbackBind(addr string) bool {
 
 type DefaultsConfig struct {
 	Model              string   `yaml:"model"`
+	Provider           string   `yaml:"provider,omitempty"`
 	MaxTurns           int      `yaml:"max_turns"`
 	BypassPermissions  bool     `yaml:"bypass_permissions,omitempty"`
 	RemoteControl      bool     `yaml:"remote_control,omitempty"`
@@ -203,6 +206,7 @@ type ProcessConfig struct {
 	Channels           []string          `yaml:"channels,omitempty"`
 	DevChannels        []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
 	Model              string            `yaml:"model,omitempty"`
+	Provider           string            `yaml:"provider,omitempty"`
 	MaxTurns           int               `yaml:"max_turns,omitempty"`
 	BypassPermissions  *bool             `yaml:"bypass_permissions,omitempty"`
 	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
@@ -227,6 +231,7 @@ type ProcessConfig struct {
 type SessionConfig struct {
 	Workspace          string            `yaml:"workspace,omitempty"`
 	Model              string            `yaml:"model,omitempty"`
+	Provider           string            `yaml:"provider,omitempty"`
 	Agent              string            `yaml:"agent,omitempty"`
 	PermissionMode     string            `yaml:"permission_mode,omitempty"`
 	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
@@ -244,6 +249,7 @@ type TaskConfig struct {
 	Timezone           string   `yaml:"timezone,omitempty"`
 	PromptFile         string   `yaml:"prompt_file"`
 	Model              string   `yaml:"model,omitempty"`
+	Provider           string   `yaml:"provider,omitempty"`
 	MaxTurns           int      `yaml:"max_turns,omitempty"`
 	Enabled            bool     `yaml:"enabled"`
 	Silent             bool     `yaml:"silent,omitempty"`
@@ -269,6 +275,7 @@ type TemplateConfig struct {
 	Channels           []string          `yaml:"channels,omitempty"`
 	DevChannels        []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
 	Model              string            `yaml:"model,omitempty"`
+	Provider           string            `yaml:"provider,omitempty"`
 	MaxTurns           int               `yaml:"max_turns,omitempty"`
 	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
 	MCPConfig          string            `yaml:"mcp_config,omitempty"`
@@ -318,9 +325,13 @@ func (c *Config) ProcessWorkspace(p ProcessConfig) string {
 }
 
 // ProcessModel returns the effective model for a process.
+// Cascade: process → provider default_model → defaults → DefaultModel.
 func (c *Config) ProcessModel(p ProcessConfig) string {
 	if p.Model != "" {
 		return p.Model
+	}
+	if m := c.ProviderDefaultModel(c.ProcessProvider(p)); m != "" {
+		return m
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model
@@ -421,9 +432,13 @@ func (c *Config) TaskWorkspace(t TaskConfig) string {
 }
 
 // TaskModel returns the effective model for a task.
+// Cascade: task → provider default_model → defaults → DefaultModel.
 func (c *Config) TaskModel(t TaskConfig) string {
 	if t.Model != "" {
 		return t.Model
+	}
+	if m := c.ProviderDefaultModel(c.TaskProvider(t)); m != "" {
+		return m
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model
@@ -462,7 +477,7 @@ func (c *Config) TaskTimeout(t TaskConfig) time.Duration {
 func (c *Config) Validate() error {
 	var errs []string
 
-	if c.Defaults.Model != "" && !validModels[c.Defaults.Model] {
+	if c.Defaults.Model != "" && c.Defaults.Provider == "" && !validModels[c.Defaults.Model] {
 		errs = append(errs, fmt.Sprintf("defaults.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", c.Defaults.Model))
 	}
 	if c.Defaults.MaxTurns < 0 {
@@ -479,6 +494,31 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("defaults.idle_suspend_after %q must be a positive duration", c.Defaults.IdleSuspendAfter))
 		}
 	}
+
+	for name, p := range c.Providers {
+		if p.BaseURL == "" {
+			errs = append(errs, fmt.Sprintf("providers.%s.base_url is required", name))
+		} else if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, fmt.Sprintf("providers.%s.base_url %q must be an http(s) URL", name, p.BaseURL))
+		}
+		hasEnv := p.APIKeyEnv != ""
+		hasCmd := strings.TrimSpace(p.APIKeyCmd) != ""
+		if hasEnv == hasCmd {
+			errs = append(errs, fmt.Sprintf("providers.%s must set exactly one of api_key_env or api_key_cmd", name))
+		}
+		if hasEnv && !envKeyPattern.MatchString(p.APIKeyEnv) {
+			errs = append(errs, fmt.Sprintf("providers.%s.api_key_env %q is not a valid environment variable name", name, p.APIKeyEnv))
+		}
+	}
+	checkProviderRef := func(scope, ref string) {
+		if ref == "" {
+			return
+		}
+		if _, ok := c.Providers[ref]; !ok {
+			errs = append(errs, fmt.Sprintf("%s.provider %q is not defined in providers", scope, ref))
+		}
+	}
+	checkProviderRef("defaults", c.Defaults.Provider)
 
 	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("web.port %d is out of range (1-65535)", c.Web.Port))
@@ -505,7 +545,8 @@ func (c *Config) Validate() error {
 	}
 
 	for name, proc := range c.Processes {
-		if proc.Model != "" && !validModels[proc.Model] {
+		checkProviderRef("processes."+name, proc.Provider)
+		if proc.Model != "" && c.ProcessProvider(proc) == "" && !validModels[proc.Model] {
 			errs = append(errs, fmt.Sprintf("processes.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, proc.Model))
 		}
 		if proc.MaxTurns < 0 {
@@ -540,7 +581,8 @@ func (c *Config) Validate() error {
 	}
 
 	for name, tmpl := range c.Templates {
-		if tmpl.Model != "" && !validModels[tmpl.Model] {
+		checkProviderRef("templates."+name, tmpl.Provider)
+		if tmpl.Model != "" && c.TemplateProvider(tmpl) == "" && !validModels[tmpl.Model] {
 			errs = append(errs, fmt.Sprintf("templates.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, tmpl.Model))
 		}
 		if tmpl.MaxTurns < 0 {
@@ -580,7 +622,8 @@ func (c *Config) Validate() error {
 		if sess.Workspace == "" {
 			errs = append(errs, fmt.Sprintf("sessions.%s.workspace is required", name))
 		}
-		if sess.Model != "" && !validModels[sess.Model] {
+		checkProviderRef("sessions."+name, sess.Provider)
+		if sess.Model != "" && c.SessionProvider(sess) == "" && !validModels[sess.Model] {
 			errs = append(errs, fmt.Sprintf("sessions.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, sess.Model))
 		}
 		if sess.PermissionMode != "" && !validPermissionModes[sess.PermissionMode] {
@@ -617,7 +660,8 @@ func (c *Config) Validate() error {
 		if task.PromptFile == "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.prompt_file is required", name))
 		}
-		if task.Model != "" && !validModels[task.Model] {
+		checkProviderRef("tasks."+name, task.Provider)
+		if task.Model != "" && c.TaskProvider(task) == "" && !validModels[task.Model] {
 			errs = append(errs, fmt.Sprintf("tasks.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, task.Model))
 		}
 		if task.MaxTurns < 0 {

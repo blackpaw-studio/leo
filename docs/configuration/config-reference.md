@@ -19,6 +19,28 @@ Settings inherited by all processes, tasks, and templates unless overridden.
 | `allowed_tools` | list | No | Default tool whitelist (passed via `--allowed-tools`). |
 | `disallowed_tools` | list | No | Default tool blacklist (passed via `--disallowed-tools`). |
 | `append_system_prompt` | string | No | Extra system prompt appended to all processes/tasks. |
+| `provider` | string | No | Default third-party provider name (key into `providers`). Empty means Anthropic. See [Providers](providers.md). |
+
+## `providers`
+
+Named third-party Anthropic-Messages-compatible endpoints (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …). Referenced by name from the `provider` field on `defaults`, `processes.*`, `templates.*`, `sessions.*`, and `tasks.*`. See [Providers](providers.md) for the full guide.
+
+```yaml
+providers:
+  glm:
+    base_url: https://api.z.ai/api/coding/paas/v4
+    api_key_env: GLM_API_KEY
+    default_model: glm-5.2
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `base_url` | string | Yes | Anthropic-compatible endpoint (must be an http or https URL). Injected as `ANTHROPIC_BASE_URL`. |
+| `api_key_env` | string | One of | Name of an environment variable holding the API key. Injected (trimmed) as `ANTHROPIC_AUTH_TOKEN`. |
+| `api_key_cmd` | string | One of | Shell command whose trimmed stdout is the API key. Resolved fresh on every spawn. |
+| `default_model` | string | No | Model used when the resolving scope doesn't set `model:`. |
+
+Exactly one of `api_key_env` / `api_key_cmd` is required per provider. Keys are never written to `leo.yaml` or Leo's state files. If the key can't be resolved at spawn time, interactive commands fail with an error; at daemon boot the affected process/session/agent is skipped with a warning while everything else starts normally.
 
 ## `web`
 
@@ -162,6 +184,7 @@ processes:
 | `channels` | list | No | -- | Channel plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). |
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
 | `model` | string | No | `defaults.model` | Claude model override. |
+| `provider` | string | No | `defaults.provider` | Third-party provider name (key into `providers`). Cascade: `model` → provider's `default_model` → `defaults.model` → `sonnet`. |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
 | `agent` | string | No | -- | Run as a specific agent definition. |
 | `permission_mode` | string | No | `defaults.permission_mode` | Permission mode override. |
@@ -195,6 +218,7 @@ tasks:
 | `timezone` | string | No | System default | IANA timezone (e.g., `America/New_York`). |
 | `prompt_file` | string | Yes | -- | Path to prompt file, relative to workspace. |
 | `model` | string | No | `defaults.model` | Claude model override. |
+| `provider` | string | No | `defaults.provider` | Third-party provider name (key into `providers`). Cascade: `model` → provider's `default_model` → `defaults.model` → `sonnet`. |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
 | `timeout` | string | No | `30m` | Max duration before kill (e.g., `30m`, `1h`). |
 | `retries` | int | No | `0` | Retry attempts on failure. |
@@ -231,6 +255,7 @@ templates:
 | `channels` | list | No | -- | Channel plugin IDs for spawned agents. |
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
 | `model` | string | No | `defaults.model` | Claude model. |
+| `provider` | string | No | `defaults.provider` | Third-party provider name (key into `providers`). Cascade: `model` → provider's `default_model` → `defaults.model` → `sonnet`. |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns. |
 | `agent` | string | No | -- | Agent definition to use. |
 | `remote_control` | bool | No | `true` | Enable remote control (defaults to on for templates). |

@@ -150,3 +150,14 @@ func TestCaptureOnlyKnownKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestCaptureExtraKeys(t *testing.T) {
+	t.Setenv("LEO_TEST_PROVIDER_KEY", "sk-test")
+	env := Capture("LEO_TEST_PROVIDER_KEY", "LEO_TEST_UNSET_KEY")
+	if env["LEO_TEST_PROVIDER_KEY"] != "sk-test" {
+		t.Errorf("extra key not captured: %v", env)
+	}
+	if _, ok := env["LEO_TEST_UNSET_KEY"]; ok {
+		t.Error("unset extra key should be omitted")
+	}
+}

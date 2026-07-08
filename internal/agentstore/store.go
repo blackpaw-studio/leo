@@ -66,6 +66,12 @@ type Record struct {
 	// after it consumes the flag, so a subsequent healthy session is
 	// resume-able again.
 	NoResume bool `json:"no_resume,omitempty"`
+
+	// Provider is the leo.yaml provider name resolved from the template at
+	// spawn time. Persisted so restore/resume re-resolves the same endpoint.
+	// The resolved API key is intentionally NOT persisted — it is re-resolved
+	// on every spawn and lives only in the launched process's environment.
+	Provider string `json:"provider,omitempty"`
 }
 
 // FilePath returns the path to agents.json in the state directory.

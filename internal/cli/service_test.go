@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -93,7 +94,7 @@ func TestProcessEnviron(t *testing.T) {
 		Env:         map[string]string{"FOO": "bar"},
 	}
 
-	env := processEnviron(proc)
+	env := processEnviron(proc, nil)
 
 	var sawChannels, sawDevChannels, sawFoo bool
 	for _, line := range env {
@@ -296,7 +297,9 @@ func TestBuildProcessArgsInjectsMessagingAwareness(t *testing.T) {
 
 // TestSupervisableUnits verifies the supervisor's "is there anything to run"
 // accounting counts persistent-task sessions, not just processes — so a home
-// with only persistent tasks (no enabled processes) is still startable.
+// with only persistent tasks (no enabled processes) is still startable. This
+// mirrors the accounting done inline in runService's supervised branch:
+// procs via buildAllProcessSpecs, sessions via service.SessionSpecsFromConfig.
 func TestSupervisableUnits(t *testing.T) {
 	t.Run("session-only home reports a session", func(t *testing.T) {
 		cfg := &config.Config{
@@ -305,7 +308,12 @@ func TestSupervisableUnits(t *testing.T) {
 				"pinger": {Runtime: "persistent", Enabled: true, Workspace: "/tmp/p"},
 			},
 		}
-		procs, sessions := supervisableUnits(cfg, "claude", "tok")
+		procs := len(buildAllProcessSpecs(cfg, "claude", "tok"))
+		sessionSpecs, err := service.SessionSpecsFromConfig(cfg)
+		if err != nil {
+			t.Fatalf("SessionSpecsFromConfig: %v", err)
+		}
+		sessions := len(sessionSpecs)
 		if procs != 0 || sessions != 1 {
 			t.Fatalf("procs=%d sessions=%d, want 0,1", procs, sessions)
 		}
@@ -313,9 +321,59 @@ func TestSupervisableUnits(t *testing.T) {
 
 	t.Run("empty home reports nothing", func(t *testing.T) {
 		cfg := &config.Config{HomePath: t.TempDir()}
-		procs, sessions := supervisableUnits(cfg, "claude", "tok")
+		procs := len(buildAllProcessSpecs(cfg, "claude", "tok"))
+		sessionSpecs, err := service.SessionSpecsFromConfig(cfg)
+		if err != nil {
+			t.Fatalf("SessionSpecsFromConfig: %v", err)
+		}
+		sessions := len(sessionSpecs)
 		if procs != 0 || sessions != 0 {
 			t.Fatalf("procs=%d sessions=%d, want 0,0", procs, sessions)
 		}
 	})
+}
+
+func TestBuildAllProcessSpecsProviderEnv(t *testing.T) {
+	t.Setenv("LEO_TEST_GLM_KEY", "sk-glm")
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"glm": {BaseURL: "https://x.example", APIKeyEnv: "LEO_TEST_GLM_KEY"},
+		},
+		Processes: map[string]config.ProcessConfig{
+			"bot":   {Enabled: true, Provider: "glm"},
+			"plain": {Enabled: true},
+		},
+		HomePath: t.TempDir(),
+	}
+	specs := buildAllProcessSpecs(cfg, "/usr/bin/claude", "")
+	byName := map[string]service.ProcessSpec{}
+	for _, s := range specs {
+		byName[s.Name] = s
+	}
+	if got := byName["bot"].Env["ANTHROPIC_BASE_URL"]; got != "https://x.example" {
+		t.Errorf("bot ANTHROPIC_BASE_URL = %q", got)
+	}
+	if got := byName["bot"].Env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-glm" {
+		t.Errorf("bot ANTHROPIC_AUTH_TOKEN = %q", got)
+	}
+	if _, ok := byName["plain"].Env["ANTHROPIC_BASE_URL"]; ok {
+		t.Error("plain process must not get provider env")
+	}
+}
+
+func TestBuildAllProcessSpecsSkipsUnresolvableProvider(t *testing.T) {
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"glm": {BaseURL: "https://x.example", APIKeyEnv: "LEO_TEST_DEFINITELY_UNSET_KEY"},
+		},
+		Processes: map[string]config.ProcessConfig{
+			"bot":   {Enabled: true, Provider: "glm"},
+			"plain": {Enabled: true},
+		},
+		HomePath: t.TempDir(),
+	}
+	specs := buildAllProcessSpecs(cfg, "/usr/bin/claude", "")
+	if len(specs) != 1 || specs[0].Name != "plain" {
+		t.Fatalf("expected only plain to survive, got %+v", specs)
+	}
 }
