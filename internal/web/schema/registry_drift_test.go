@@ -12,11 +12,6 @@ func TestRegistryCoversConfig(t *testing.T) {
 	for _, section := range AllSections() {
 		section := section
 		t.Run(string(section), func(t *testing.T) {
-			// Skip empty sections for now; Task 2 will fill them
-			if len(FieldsFor(section)) == 0 && section != SectionDefaults {
-				t.Skip("registry pending (Task 2)")
-			}
-
 			st := StructFor(section)
 			fields := map[string]bool{}
 			for _, f := range FieldsFor(section) {
