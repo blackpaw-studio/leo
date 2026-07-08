@@ -1160,3 +1160,106 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("HX-Redirect", "/config/templates")
 	w.WriteHeader(http.StatusOK)
 }
+
+// --- Provider config management ---
+//
+// Providers differ from processes/tasks/templates: there are only ever a
+// handful of them, so the whole CRUD surface lives on one page
+// (config_providers.html) instead of a list page + separate edit page. Add
+// stays on that page too — success re-renders it in place via HX-Refresh
+// rather than a redirect.
+
+// handleProviderAdd creates a new provider entry and reports back on the
+// providers page itself (HX-Refresh, not a redirect to a separate edit page
+// — providers have none). Design decision, worth calling out: unlike
+// handleProcessAdd/handleTemplateAdd (which can create a genuinely empty
+// {}-valued entry because ProcessConfig/TemplateConfig have no required
+// fields), Config.Validate() requires every provider to have a non-empty
+// http(s) base_url AND exactly one of api_key_env/api_key_cmd set — an
+// empty ProviderConfig{} fails both checks. Rather than special-case
+// validateAndSave to skip provider validation on add (which would let an
+// invalid provider hit disk and break the "every save goes through
+// validateAndSave" invariant), the new entry is seeded with an obviously-
+// fake placeholder base_url and api_key_env so it passes Validate() as-is;
+// the flash message tells the operator to fill in the real values via the
+// card's inline form before the provider actually works.
+func (s *Server) handleProviderAdd(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
+		return
+	}
+
+	name := r.FormValue("name")
+	if name == "" {
+		s.renderFlash(w, "error", "Name is required")
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]config.ProviderConfig)
+	}
+	if _, exists := cfg.Providers[name]; exists {
+		s.renderFlash(w, "error", fmt.Sprintf("Provider %q already exists", name))
+		return
+	}
+
+	// Placeholder values chosen only to satisfy Validate(); see doc comment
+	// above. https://changeme.example.com parses as a valid http(s) URL and
+	// CHANGE_ME is a valid env var name, but neither resolves to anything —
+	// the provider won't actually work until the form below is filled in.
+	cfg.Providers[name] = config.ProviderConfig{
+		BaseURL:   "https://changeme.example.com",
+		APIKeyEnv: "CHANGE_ME",
+	}
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	s.reloadConfigOrWarn()
+	s.restartNeeded.Store(true)
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlash(w, "success", fmt.Sprintf("Provider %q created — set its base URL and API key source below", name))
+}
+
+// handleProviderDelete removes a provider and reports back on the providers
+// page (HX-Refresh, mirroring handleProviderAdd). Design decision, worth
+// calling out: Config.Validate() already sweeps defaults/processes/tasks/
+// templates/sessions for dangling provider references (checkProviderRef in
+// internal/config/config.go), so this handler does no reference scan of its
+// own — it deletes optimistically and lets validateAndSave's Validate()
+// call carry the refusal. Validate() runs before Save() writes anything to
+// disk, so a refused delete leaves the on-disk config untouched.
+func (s *Server) handleProviderDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if _, ok := cfg.Providers[name]; !ok {
+		s.renderFlash(w, "error", fmt.Sprintf("Provider %q not found", name))
+		return
+	}
+
+	delete(cfg.Providers, name)
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	s.reloadConfigOrWarn()
+	s.restartNeeded.Store(true)
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlash(w, "success", fmt.Sprintf("Provider %q deleted", name))
+}

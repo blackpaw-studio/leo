@@ -1,24 +1,19 @@
 {{define "page_config_providers"}}
 <h1 class="page-title">Providers</h1>
-{{if .Data.Providers}}
-<div class="table-wrap">
-    <table>
-        <thead>
-            <tr><th>Name</th><th>Base URL</th><th>Auth</th><th>Default Model</th></tr>
-        </thead>
-        <tbody>
-            {{range $name, $p := .Data.Providers}}
-            <tr>
-                <td>{{$name}}</td>
-                <td>{{$p.BaseURL}}</td>
-                <td>{{if $p.APIKeyEnv}}env: {{$p.APIKeyEnv}}{{else if $p.APIKeyCmd}}cmd{{else}}&mdash;{{end}}</td>
-                <td>{{if $p.DefaultModel}}{{$p.DefaultModel}}{{else}}&mdash;{{end}}</td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
+<p class="dim">Third-party Anthropic-Messages-compatible endpoints. Processes, tasks, templates, and sessions opt in via their provider field.</p>
+{{range .Data.Providers}}
+<div class="card">
+  <div class="card-head"><b>{{.Name}}</b></div>
+  {{template "config_form" .Form}}
 </div>
 {{else}}
-<p class="dim">No providers configured. Add entries under <code>providers:</code> in leo.yaml.</p>
+<p class="dim">No providers configured.</p>
 {{end}}
+<div class="card">
+  <div class="card-head"><b>New provider</b></div>
+  <form hx-post="/web/provider/add" hx-target="#flash-container" class="frow-inline">
+    <input type="text" name="name" placeholder="provider-name" required>
+    <button type="submit" class="btn hot">Create</button>
+  </form>
+</div>
 {{end}}

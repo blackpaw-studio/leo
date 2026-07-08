@@ -147,6 +147,22 @@ func (s *Server) handleConfigTemplateSave(w http.ResponseWriter, r *http.Request
 		fmt.Sprintf("Template %q saved", name), false)
 }
 
+// handleConfigProviderSave is the schema-driven save path for a single
+// provider's inline card form. Mirrors handleConfigTemplateSave. Providers
+// inject ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN into every process/task/
+// template/session that opts into them at launch, so a restart is always
+// flagged.
+func (s *Server) handleConfigProviderSave(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.applySection(w, r, schema.SectionProvider,
+		func(cfg *config.Config) (any, bool) {
+			p, ok := cfg.Providers[name]
+			return &p, ok
+		},
+		func(cfg *config.Config, v any) { cfg.Providers[name] = *(v.(*config.ProviderConfig)) },
+		fmt.Sprintf("Provider %q saved", name), true)
+}
+
 // kindName maps a resolved schema.Kind to the string components/form.html
 // switches on, so templates compare readable names instead of brittle raw
 // integers.

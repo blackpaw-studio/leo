@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 
@@ -212,15 +213,43 @@ func (s *Server) buildSettingsData(r *http.Request) (any, error) {
 	return cfg, nil
 }
 
-// buildProvidersData feeds page_config_providers, which lists .Providers
-// from the loaded config. Read-only in this task — provider CRUD has no
-// backend mutation routes yet.
+// providerCard is one entry of providersPageData.Providers: a provider name
+// paired with the schema-driven inline form for its card.
+type providerCard struct {
+	Name string
+	Form formData
+}
+
+// providersPageData feeds page_config_providers.
+type providersPageData struct {
+	Providers []providerCard
+}
+
+// buildProvidersData assembles a name-sorted card list, one inline
+// config_form per provider — unlike processes/tasks/templates, providers
+// are few enough that there's no separate list-page-plus-edit-page split;
+// every provider's full CRUD form lives right here on /config/providers.
 func (s *Server) buildProvidersData(r *http.Request) (any, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
-	return cfg, nil
+
+	names := make([]string, 0, len(cfg.Providers))
+	for name := range cfg.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	cards := make([]providerCard, 0, len(names))
+	for _, name := range names {
+		p := cfg.Providers[name]
+		form := s.buildForm(schema.SectionProvider, &p, cfg, "/web/config/provider/"+url.PathEscape(name))
+		form.DeleteURL = "/web/provider/" + url.PathEscape(name)
+		cards = append(cards, providerCard{Name: name, Form: form})
+	}
+
+	return providersPageData{Providers: cards}, nil
 }
 
 // agentsData feeds page_agents and the /partials/agents rename fragment.

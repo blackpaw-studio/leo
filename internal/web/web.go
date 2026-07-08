@@ -203,6 +203,12 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
 	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
 
+	// Provider config management — full CRUD lives on one page (no separate
+	// edit page); see handlers.go's "Provider config management" section.
+	mux.HandleFunc("POST /web/config/provider/{name}", s.handleConfigProviderSave)
+	mux.HandleFunc("POST /web/provider/add", s.handleProviderAdd)
+	mux.HandleFunc("DELETE /web/provider/{name}", s.handleProviderDelete)
+
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)
