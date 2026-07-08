@@ -594,7 +594,7 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 	logPath := service.LogPathFor(cfg.HomePath)
 
 	// Capture relevant environment variables for daemon mode
-	environ := env.Capture()
+	environ := env.Capture(cfg.ProviderKeyEnvNames()...)
 
 	return service.ServiceConfig{
 		LeoPath:    leoPath,
