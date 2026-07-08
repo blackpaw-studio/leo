@@ -108,16 +108,23 @@ func DeriveKind(t reflect.Type) Kind {
 	panic("schema: no derivable kind for type " + t.String())
 }
 
-// EffectiveKind resolves a field's KindAuto against its struct type.
-func EffectiveKind(section Section, f Field) Kind {
+// effectiveKind resolves a field's KindAuto against its already-located
+// struct field. Shared by EffectiveKind and the values.go render/apply path
+// so there is exactly one place that decides a field's effective kind.
+func effectiveKind(f Field, sf reflect.StructField) Kind {
 	if f.Kind != KindAuto {
 		return f.Kind
 	}
+	return DeriveKind(sf.Type)
+}
+
+// EffectiveKind resolves a field's KindAuto against its struct type.
+func EffectiveKind(section Section, f Field) Kind {
 	sf, ok := fieldByYAMLKey(StructFor(section), f.Key)
 	if !ok {
 		panic("schema: field " + f.Key + " not on struct for section " + string(section))
 	}
-	return DeriveKind(sf.Type)
+	return effectiveKind(f, sf)
 }
 
 // yamlKey extracts the yaml tag name for a struct field ("" if untagged).

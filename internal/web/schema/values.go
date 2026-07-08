@@ -26,8 +26,8 @@ func Values(target any, section Section, defaults any) []FieldValue {
 	v := reflect.ValueOf(target).Elem()
 	var out []FieldValue
 	for _, f := range FieldsFor(section) {
-		sf, _ := fieldByYAMLKey(v.Type(), f.Key)
-		fv := FieldValue{Field: f, Kind: effectiveKindFor(section, f, sf.Type)}
+		sf := mustFieldByYAMLKey(v.Type(), section, f.Key)
+		fv := FieldValue{Field: f, Kind: effectiveKind(f, sf)}
 		val := v.FieldByIndex(sf.Index)
 		switch fv.Kind {
 		case KindBool:
@@ -60,10 +60,10 @@ func Values(target any, section Section, defaults any) []FieldValue {
 func Apply(target any, section Section, form url.Values) error {
 	v := reflect.ValueOf(target).Elem()
 	for _, f := range FieldsFor(section) {
-		sf, _ := fieldByYAMLKey(v.Type(), f.Key)
+		sf := mustFieldByYAMLKey(v.Type(), section, f.Key)
 		val := v.FieldByIndex(sf.Index)
 		raw := form.Get(f.Key)
-		switch effectiveKindFor(section, f, sf.Type) {
+		switch effectiveKind(f, sf) {
 		case KindBool:
 			vals := form[f.Key]
 			val.SetBool(len(vals) > 0 && vals[len(vals)-1] == "true")
@@ -94,13 +94,21 @@ func Apply(target any, section Section, form url.Values) error {
 	return nil
 }
 
-func effectiveKindFor(section Section, f Field, t reflect.Type) Kind {
-	if f.Kind != KindAuto {
-		return f.Kind
+// mustFieldByYAMLKey locates the struct field for a registered field's yaml
+// key, panicking with a descriptive message if the registry and struct have
+// drifted apart (registry_drift_test.go should normally catch this first).
+func mustFieldByYAMLKey(t reflect.Type, section Section, key string) reflect.StructField {
+	sf, ok := fieldByYAMLKey(t, key)
+	if !ok {
+		panic("schema: field " + key + " not on struct " + t.String() + " for section " + string(section))
 	}
-	return DeriveKind(t)
+	return sf
 }
 
+// isTextKind reports whether a kind's value is a plain string that should
+// fall back to an "Inherited" placeholder when empty. Deliberately broader
+// than just KindText/KindSelect: every string-backed kind (cron, duration,
+// textarea) shares the same placeholder behavior.
 func isTextKind(k Kind) bool {
 	switch k {
 	case KindText, KindSelect, KindCron, KindDuration, KindTextarea:
@@ -111,11 +119,16 @@ func isTextKind(k Kind) bool {
 
 func renderNumber(val reflect.Value) string {
 	if val.Kind() == reflect.Ptr {
+		// Pointer semantics: nil means "unset/inherit", a non-nil pointer to
+		// 0 means "explicitly set to zero". Always render the digits when
+		// non-nil so an explicit 0 doesn't collapse into the unset "" state.
 		if val.IsNil() {
 			return ""
 		}
-		val = val.Elem()
+		return strconv.FormatInt(val.Elem().Int(), 10)
 	}
+	// Plain int has no way to represent "unset" separately from 0, so 0
+	// renders as "" (unset) by convention.
 	if val.Int() == 0 {
 		return ""
 	}
@@ -135,7 +148,7 @@ func applyNumber(val reflect.Value, sf reflect.StructField, key, raw string) err
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil {
-		return fmt.Errorf("%s: %q is not a number", key, raw)
+		return fmt.Errorf("%s: %q is not a number: %w", key, raw, err)
 	}
 	if isPtr {
 		val.Set(reflect.ValueOf(&n))

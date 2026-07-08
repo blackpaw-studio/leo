@@ -119,6 +119,22 @@ func TestApplyRejectsBadEnvLine(t *testing.T) {
 	}
 }
 
+func TestPtrIntExplicitZeroSurvives(t *testing.T) {
+	zero := 0
+	proc := config.ProcessConfig{StaleResumeHours: &zero}
+	form := renderToForm(Values(&proc, SectionProcess, nil))
+	var got config.ProcessConfig
+	if err := Apply(&got, SectionProcess, form); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got.StaleResumeHours == nil {
+		t.Fatal("StaleResumeHours = nil, want non-nil pointer to 0 (explicit disable)")
+	}
+	if *got.StaleResumeHours != 0 {
+		t.Errorf("StaleResumeHours = %d, want 0", *got.StaleResumeHours)
+	}
+}
+
 func TestInheritedPlaceholder(t *testing.T) {
 	defaults := config.DefaultsConfig{Model: "sonnet"}
 	var task config.TaskConfig
