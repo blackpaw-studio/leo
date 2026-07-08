@@ -58,6 +58,30 @@ type AgentService interface {
 	Resume(name string) (agent.Record, error)
 }
 
+// SessionRuntimeProvider exposes the daemon's in-process session router
+// operations the Sessions page needs: queue depth and reset. internal/daemon
+// supplies the only real implementation (wired in via Options.SessionRuntime
+// from StartWeb) and calls straight through to its sessionRouter — unlike
+// the CLI, which runs as a separate process and must reach the router over
+// the daemon's Unix-socket HTTP API (see internal/cli/session.go), the web
+// UI is always served embedded inside the daemon process itself, so no
+// socket round-trip is needed. This also means package web cannot import
+// internal/daemon directly to call daemon.ResetSession/SessionDepth as a
+// free function: internal/daemon/server.go already imports internal/web to
+// embed this UI, and the reverse import would cycle. A nil
+// SessionRuntimeProvider (e.g. in tests, or if the daemon integration is
+// ever omitted) degrades the Sessions page to tmux-only status: queue depth
+// stays unknown (-1) and reset only kills tmux + clears the stored session
+// id, skipping the router notification — the same degrade path the CLI
+// takes when daemon.IsRunning is false.
+type SessionRuntimeProvider interface {
+	// ResetSession drops any queued/in-flight invocations for session and
+	// returns how many were cleared.
+	ResetSession(session, reason string) int
+	// SessionDepth returns the current queued + in-flight count.
+	SessionDepth(session string) int
+}
+
 // Server serves the Leo web UI over HTTP.
 type Server struct {
 	configPath    string
@@ -65,6 +89,7 @@ type Server struct {
 	scheduler     SchedulerProvider
 	reloader      ConfigReloader
 	agentSvc      AgentService
+	sessionRT     SessionRuntimeProvider // nil degrades Sessions page to tmux-only status; see SessionRuntimeProvider doc
 	leoPath       string
 	templates     *template.Template
 	httpServer    *http.Server
@@ -101,9 +126,10 @@ type Server struct {
 //   - APIToken must be non-empty for /api/* routes to work. If empty, /api/*
 //     responds 500 to avoid accidentally serving the API unauthenticated.
 type Options struct {
-	Port         int
-	APIToken     string
-	AllowedHosts []string
+	Port           int
+	APIToken       string
+	AllowedHosts   []string
+	SessionRuntime SessionRuntimeProvider // optional; nil degrades Sessions page to tmux-only status
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is not available.
@@ -119,6 +145,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		scheduler:    scheduler,
 		reloader:     reloader,
 		agentSvc:     agentSvc,
+		sessionRT:    opts.SessionRuntime,
 		leoPath:      leoPath,
 		port:         opts.Port,
 		apiToken:     opts.APIToken,
@@ -159,7 +186,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /agents", s.handlePage("agents", "Agents", s.buildAgentsData))
 	mux.HandleFunc("GET /processes", s.handlePage("processes", "Processes", s.buildProcessesData))
 	mux.HandleFunc("GET /processes/{name}", s.handleProcessEditPage)
-	mux.HandleFunc("GET /sessions", s.handlePage("sessions", "Sessions", nil))
+	mux.HandleFunc("GET /sessions", s.handlePage("sessions", "Sessions", s.buildSessionsData))
 	mux.HandleFunc("GET /config/defaults", s.handlePage("config_defaults", "Defaults", s.buildDefaultsData))
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
 	mux.HandleFunc("GET /config/templates/{name}", s.handleTemplateEditPage)
@@ -216,6 +243,15 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/config/host/{name}", s.handleConfigHostSave)
 	mux.HandleFunc("POST /web/host/add", s.handleHostAdd)
 	mux.HandleFunc("DELETE /web/host/{name}", s.handleHostDelete)
+
+	// Session config management — full CRUD lives on one page, same
+	// one-page-no-separate-edit-page pattern as providers above, plus a
+	// runtime reset action (kills tmux, drops queued work, clears the
+	// stored --resume session id).
+	mux.HandleFunc("POST /web/config/session/{name}", s.handleConfigSessionSave)
+	mux.HandleFunc("POST /web/session/add", s.handleSessionAdd)
+	mux.HandleFunc("DELETE /web/session/{name}", s.handleSessionDelete)
+	mux.HandleFunc("POST /web/session/{name}/reset", s.handleSessionReset)
 
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)

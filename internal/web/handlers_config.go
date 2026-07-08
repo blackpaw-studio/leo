@@ -205,6 +205,22 @@ func (s *Server) handleConfigHostSave(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("Host %q saved", name), false)
 }
 
+// handleConfigSessionSave is the schema-driven save path for a single
+// persistent session's inline card form. Mirrors handleConfigProviderSave's
+// map-entry copy-then-write-back shape. Sessions boot lazily on first use —
+// there is no long-running process for a config change to invalidate — so
+// unlike processes this never flags a restart.
+func (s *Server) handleConfigSessionSave(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.applySection(w, r, schema.SectionSession,
+		func(cfg *config.Config) (any, bool) {
+			sc, ok := cfg.Sessions[name]
+			return &sc, ok
+		},
+		func(cfg *config.Config, v any) { cfg.Sessions[name] = *(v.(*config.SessionConfig)) },
+		fmt.Sprintf("Session %q saved", name), false)
+}
+
 // kindName maps a resolved schema.Kind to the string components/form.html
 // switches on, so templates compare readable names instead of brittle raw
 // integers.

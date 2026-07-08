@@ -196,6 +196,23 @@ func (a *processAdapter) States() map[string]web.ProcessStateInfo {
 	return result
 }
 
+// webSessionRuntime adapts this Server's in-process sessionRouter to
+// web.SessionRuntimeProvider. The web UI is always served embedded inside
+// this same daemon process (see StartWeb below), so — unlike the CLI, a
+// separate process that must reach the router over the daemon's Unix-socket
+// HTTP API at /session/reset and /session/depth (see
+// internal/cli/session.go and handleSessionReset/handleSessionDepth above)
+// — this calls straight through to s.router with no socket round-trip.
+type webSessionRuntime struct{ s *Server }
+
+func (w webSessionRuntime) ResetSession(session, reason string) int {
+	return w.s.router.ResetSession(session, reason)
+}
+
+func (w webSessionRuntime) SessionDepth(session string) int {
+	return w.s.router.QueueDepth(session)
+}
+
 // AgentSpawnSpec is retained as an alias to agent.SpawnRequest for backwards
 // compatibility with call sites; new code should use agent.SpawnRequest directly.
 type AgentSpawnSpec = agent.SpawnRequest
@@ -219,9 +236,10 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 
 	port := cfg.WebPort()
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
-		Port:         port,
-		APIToken:     apiToken,
-		AllowedHosts: cfg.Web.AllowedHosts,
+		Port:           port,
+		APIToken:       apiToken,
+		AllowedHosts:   cfg.Web.AllowedHosts,
+		SessionRuntime: webSessionRuntime{s: s},
 	})
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
