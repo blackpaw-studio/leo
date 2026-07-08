@@ -158,6 +158,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /tasks/{name}", s.handleTaskEditPage)
 	mux.HandleFunc("GET /agents", s.handlePage("agents", "Agents", s.buildAgentsData))
 	mux.HandleFunc("GET /processes", s.handlePage("processes", "Processes", s.buildProcessesData))
+	mux.HandleFunc("GET /processes/{name}", s.handleProcessEditPage)
 	mux.HandleFunc("GET /sessions", s.handlePage("sessions", "Sessions", nil))
 	mux.HandleFunc("GET /config/defaults", s.handlePage("config_defaults", "Defaults", s.buildDefaultsData))
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
@@ -181,7 +182,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Config mutations
 	mux.HandleFunc("POST /web/config/reload", s.handleConfigReload)
 	mux.HandleFunc("POST /web/config/defaults", s.handleConfigDefaultsSave)
-	mux.HandleFunc("POST /web/config/process/{name}", s.handleConfigProcess)
+	mux.HandleFunc("POST /web/config/process/{name}", s.handleConfigProcessSave)
 	mux.HandleFunc("POST /web/config/task/{name}", s.handleConfigTaskSave)
 
 	// Process CRUD

@@ -150,7 +150,7 @@ select.form-input {
 .restart-banner .btn { color: var(--accent); border-color: var(--accent); white-space: nowrap; }
 .restart-banner .btn:hover { background: var(--accent-bg); }
 
-/* process cards (partials/processes.html — not rewritten this task) */
+/* process cards (partials/processes.html — status-strip poll target) */
 .process-grid { margin-bottom: var(--sp-5); }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--sp-3); }
 .process-card {
@@ -246,7 +246,7 @@ textarea.form-textarea { min-height: 60px; resize: vertical; line-height: 1.5; }
 textarea.prompt-editor-textarea { min-height: 200px; width: 100%; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6; white-space: pre-wrap; tab-size: 4; }
 .form-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--line); }
 
-/* config sections (config_processes/tasks/templates.html) */
+/* config sections (config_templates.html) */
 .config-actions { margin-bottom: var(--sp-4); display: flex; gap: var(--sp-2); }
 .config-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-3); }
 .config-section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2); }

@@ -111,19 +111,54 @@ func (s *Server) handlePage(page, title string, build func(*http.Request) (any, 
 	}
 }
 
-// buildProcessesData and buildTemplatesData reuse buildDashboardData: the
-// underlying partials they transclude (processes.html, config_processes.html,
-// config_templates.html) already expect that struct's shape (.Processes,
-// .Config, .Agents), so this keeps the page cutover a pure wiring change
-// rather than a data-model rewrite. buildTasksData (below) was cut over to
-// its own lightweight shape for the Task 7 schema-driven tasks page.
-
-func (s *Server) buildProcessesData(r *http.Request) (any, error) {
-	return s.buildDashboardData()
-}
+// buildTemplatesData reuses buildDashboardData: config_templates.html already
+// expects that struct's shape (.Config, .Agents). buildProcessesData (below)
+// was cut over to its own lightweight shape for the Task 8 schema-driven
+// processes page; buildTasksData was cut over the same way in Task 7.
 
 func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 	return s.buildDashboardData()
+}
+
+// processRow is one row of the configured-processes table (pages/processes.html).
+type processRow struct {
+	Name      string
+	Workspace string
+	Model     string
+	Enabled   bool
+}
+
+// processesPageData feeds page_processes. Cards is exactly the shape
+// partials/processes.html expects — it's reused unmodified by both the
+// initial page render and the 5s poll target (/partials/processes) so the
+// card fragment never drifts between the two. Rows backs the table of
+// configured processes below the cards.
+type processesPageData struct {
+	Cards *dashboardData
+	Rows  []processRow
+}
+
+// buildProcessesData assembles the processes page: the live-status cards
+// (via buildDashboardData, which already computes per-process state) plus a
+// name-sorted table of every configured process.
+func (s *Server) buildProcessesData(r *http.Request) (any, error) {
+	dd, err := s.buildDashboardData()
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]processRow, 0, len(dd.Config.Processes))
+	for name, proc := range dd.Config.Processes {
+		rows = append(rows, processRow{
+			Name:      name,
+			Workspace: proc.Workspace,
+			Model:     proc.Model,
+			Enabled:   proc.Enabled,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+
+	return processesPageData{Cards: dd, Rows: rows}, nil
 }
 
 // buildDefaultsData feeds page_config_defaults with a schema-driven form
@@ -283,6 +318,53 @@ func (s *Server) handleTaskEditPage(w http.ResponseWriter, r *http.Request) {
 			PromptFile: task.PromptFile,
 			Form:       form,
 			Prompt:     prompt,
+		},
+	}
+	if err := s.fillStatus(&pd); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "layout.html", pd); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// processEditData feeds page_process_edit: the schema-driven form over the
+// process's config.
+type processEditData struct {
+	Name string
+	Form formData
+}
+
+// handleProcessEditPage renders a single process's edit page: every
+// ProcessConfig field through the schema-driven form. Not wired through
+// handlePage because the page title is per-process and an unknown name must
+// 404 rather than 500. Mirrors handleTaskEditPage.
+func (s *Server) handleProcessEditPage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	proc, ok := cfg.Processes[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	form := s.buildForm(schema.SectionProcess, &proc, cfg, "/web/config/process/"+name)
+	form.DeleteURL = "/web/process/" + name
+
+	pd := pageData{
+		Page:  "process_edit",
+		Title: "Process: " + name,
+		Data: processEditData{
+			Name: name,
+			Form: form,
 		},
 	}
 	if err := s.fillStatus(&pd); err != nil {

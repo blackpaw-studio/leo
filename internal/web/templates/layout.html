@@ -12,9 +12,9 @@
         <nav class="sidebar" id="sidebar" aria-label="Main navigation">
             <div class="brand">leo<em>_</em></div>
             <div class="nav-sect">Operate</div>
-            <a class="nav-item {{if eq .Page "tasks"}}on{{end}}" href="/tasks">Tasks</a>
+            <a class="nav-item {{if or (eq .Page "tasks") (eq .Page "task_edit")}}on{{end}}" href="/tasks">Tasks</a>
             <a class="nav-item {{if eq .Page "agents"}}on{{end}}" href="/agents">Agents</a>
-            <a class="nav-item {{if eq .Page "processes"}}on{{end}}" href="/processes">Processes</a>
+            <a class="nav-item {{if or (eq .Page "processes") (eq .Page "process_edit")}}on{{end}}" href="/processes">Processes</a>
             <a class="nav-item {{if eq .Page "sessions"}}on{{end}}" href="/sessions">Sessions</a>
             <div class="nav-sect">Configure</div>
             <a class="nav-item {{if eq .Page "config_defaults"}}on{{end}}" href="/config/defaults">Defaults</a>
@@ -34,6 +34,7 @@
             {{else if eq .Page "task_edit"}}{{template "page_task_edit" .}}
             {{else if eq .Page "agents"}}{{template "page_agents" .}}
             {{else if eq .Page "processes"}}{{template "page_processes" .}}
+            {{else if eq .Page "process_edit"}}{{template "page_process_edit" .}}
             {{else if eq .Page "sessions"}}{{template "page_sessions" .}}
             {{else if eq .Page "config_defaults"}}{{template "page_config_defaults" .}}
             {{else if eq .Page "config_templates"}}{{template "page_config_templates" .}}

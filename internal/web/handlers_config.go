@@ -113,6 +113,23 @@ func (s *Server) handleConfigTaskSave(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("Task %q saved", name), false)
 }
 
+// handleConfigProcessSave is the schema-driven replacement for the old
+// hand-rolled handleConfigProcess. It also replaces that handler's
+// bypass_permissions special-case (which cleared the field to a concrete
+// false whenever permission_mode was empty, and never let the web UI submit
+// true) with the tri-state inherit/true/false the schema form now renders.
+// Processes affect running sessions, so a restart is always flagged.
+func (s *Server) handleConfigProcessSave(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.applySection(w, r, schema.SectionProcess,
+		func(cfg *config.Config) (any, bool) {
+			p, ok := cfg.Processes[name]
+			return &p, ok
+		},
+		func(cfg *config.Config, v any) { cfg.Processes[name] = *(v.(*config.ProcessConfig)) },
+		fmt.Sprintf("Process %q saved", name), true)
+}
+
 // kindName maps a resolved schema.Kind to the string components/form.html
 // switches on, so templates compare readable names instead of brittle raw
 // integers.

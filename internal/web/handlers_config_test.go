@@ -143,6 +143,66 @@ func taskFormBase(t *testing.T, s *Server, name string) url.Values {
 	return form
 }
 
+// processFormBase renders the named process's current config into a base
+// url.Values set, using the same Kind-driven encoding as taskFormBase above.
+// Lets a test override only the field(s) it cares about instead of
+// hand-listing all 18 SectionProcess fields.
+func processFormBase(t *testing.T, s *Server, name string) url.Values {
+	t.Helper()
+	cfg, err := s.loadConfig()
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	proc, ok := cfg.Processes[name]
+	if !ok {
+		t.Fatalf("seed process %q not found", name)
+	}
+	form := url.Values{}
+	for _, fv := range schema.Values(&proc, schema.SectionProcess, nil) {
+		switch fv.Kind {
+		case schema.KindBool:
+			form.Add(fv.Key, "false")
+			if fv.Checked {
+				form.Add(fv.Key, "true")
+			}
+		default:
+			form.Set(fv.Key, fv.Value)
+		}
+	}
+	return form
+}
+
+// TestProcessBypassTriState pins the headline fix of this task: before, the
+// old hand-rolled handleConfigProcess always cleared bypass_permissions to a
+// concrete false/true derived from a single checkbox whenever permission_mode
+// was empty, and there was no way to submit bypass_permissions=true from the
+// web UI at all (the form never rendered a true option). The schema-driven
+// tri-state (inherit / true / false) fixes both: true is now savable, and
+// clearing the field back to "" round-trips to nil (inherit), not false.
+func TestProcessBypassTriState(t *testing.T) {
+	s, dir := newTestServer(t) // seed config's "assistant" process (web_test.go)
+	form := processFormBase(t, s, "assistant")
+	form.Set("bypass_permissions", "true")
+	form.Set("permission_mode", "")
+	w := postForm(t, s, "/web/config/process/assistant", form)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
+	}
+	cfg := reloadTestConfig(t, dir)
+	bp := cfg.Processes["assistant"].BypassPermissions
+	if bp == nil || !*bp {
+		t.Errorf("bypass_permissions = %v, want &true (was impossible to set true from web before)", bp)
+	}
+
+	// inherit round-trips to nil
+	form.Set("bypass_permissions", "")
+	postForm(t, s, "/web/config/process/assistant", form)
+	cfg = reloadTestConfig(t, dir)
+	if cfg.Processes["assistant"].BypassPermissions != nil {
+		t.Error("inherit did not clear bypass_permissions")
+	}
+}
+
 // TestTaskSaveCoversNewFields guards handleConfigTaskSave against the same
 // registry-drift risk Task 6 covered for defaults: runtime/session/lazy/
 // queue_max are the fields added since the old hand-rolled handleConfigTask,
@@ -245,6 +305,89 @@ func TestTaskDeleteRedirectsToList(t *testing.T) {
 	cfg := reloadTestConfig(t, dir)
 	if _, ok := cfg.Tasks["demo"]; ok {
 		t.Error("task should have been deleted")
+	}
+}
+
+// TestProcessEditPageShowsAllFields is the "18 fields" self-review check:
+// every ProcessConfig field must render on /processes/{name}, either in the
+// primary form or inside the Advanced <details>.
+func TestProcessEditPageShowsAllFields(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/processes/assistant", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+
+	for _, key := range []string{
+		"enabled", "workspace", "agent", "model", "provider", "max_turns",
+		"channels", "dev_channels", "permission_mode", "allowed_tools",
+		"disallowed_tools", "mcp_config", "add_dirs", "env",
+		"append_system_prompt", "remote_control", "bypass_permissions",
+		"stale_resume_hours",
+	} {
+		if !strings.Contains(body, `name="`+key+`"`) {
+			t.Errorf("process edit page missing field %q", key)
+		}
+	}
+}
+
+// TestProcessEditPageNotFound guards the 404 branch of handleProcessEditPage:
+// an unknown process name must not fall through to a 200 empty-form page.
+func TestProcessEditPageNotFound(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/processes/does-not-exist", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+// TestProcessAddRedirectsToEdit exercises the add-then-edit flow: adding a
+// process creates a bare (disabled, name-only) entry and 303s straight to its
+// edit page, mirroring TestTaskAddRedirectsToEdit.
+func TestProcessAddRedirectsToEdit(t *testing.T) {
+	s, dir := newTestServer(t)
+	form := url.Values{"name": {"fresh-process"}}
+	w := postForm(t, s, "/web/process/add", form)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/processes/fresh-process" {
+		t.Errorf("add: status=%d loc=%q", w.Code, w.Header().Get("Location"))
+	}
+	cfg := reloadTestConfig(t, dir)
+	proc, ok := cfg.Processes["fresh-process"]
+	if !ok {
+		t.Fatal("process not created")
+	}
+	if proc.Enabled {
+		t.Error("new process should start disabled")
+	}
+}
+
+// TestProcessDeleteRedirectsToList guards the edit page's delete button: on
+// success the handler must send HX-Redirect: /processes so htmx navigates
+// the browser back to the list.
+func TestProcessDeleteRedirectsToList(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodDelete, "/web/process/assistant", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, readBody(t, w))
+	}
+	if loc := w.Header().Get("HX-Redirect"); loc != "/processes" {
+		t.Errorf("HX-Redirect = %q, want /processes", loc)
+	}
+
+	cfg := reloadTestConfig(t, dir)
+	if _, ok := cfg.Processes["assistant"]; ok {
+		t.Error("process should have been deleted")
 	}
 }
 

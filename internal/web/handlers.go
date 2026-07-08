@@ -413,66 +413,6 @@ func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q triggered", name))
 }
 
-func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	proc, ok := cfg.Processes[name]
-	if !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Process %q not found", name))
-		return
-	}
-
-	proc.Enabled = r.FormValue("enabled") == "true"
-	proc.Model = r.FormValue("model")
-	proc.Workspace = r.FormValue("workspace")
-	proc.Channels = parseCommaSeparated(r.FormValue("channels"))
-	proc.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
-	proc.Agent = r.FormValue("agent")
-	proc.PermissionMode = r.FormValue("permission_mode")
-	proc.RemoteControl = parseOptionalBool(r.FormValue("remote_control"))
-	proc.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
-	proc.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
-	proc.AppendSystemPrompt = r.FormValue("append_system_prompt")
-	proc.MCPConfig = r.FormValue("mcp_config")
-	proc.AddDirs = parseCommaSeparated(r.FormValue("add_dirs"))
-	proc.Env = parseEnvMap(r.FormValue("env"))
-	if mt := r.FormValue("max_turns"); mt != "" {
-		v, err := strconv.Atoi(mt)
-		if err != nil {
-			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
-			return
-		}
-		proc.MaxTurns = v
-	}
-	// Clear bypass_permissions if permission_mode is set (permission_mode takes precedence)
-	if proc.PermissionMode != "" {
-		proc.BypassPermissions = nil
-	} else {
-		bp := r.FormValue("bypass_permissions") == "true"
-		proc.BypassPermissions = &bp
-	}
-	cfg.Processes[name] = proc
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	s.restartNeeded.Store(true)
-	typ, msg := appendReloadWarning("success", fmt.Sprintf("Process %q saved", name), warn)
-	s.renderFlash(w, typ, msg)
-}
-
 type promptEditorData struct {
 	TaskName    string
 	PromptFile  string
@@ -1039,6 +979,12 @@ func (s *Server) buildDashboardData() (*dashboardData, error) {
 	}, nil
 }
 
+// handleProcessAdd creates a bare-minimum process (name only, disabled,
+// workspace left empty to inherit the default) and redirects straight to its
+// edit page, where every other ProcessConfig field can be set through the
+// schema-driven form. The add form is a plain (non-htmx-boosted) POST, so a
+// 303 here is a normal browser redirect rather than an htmx swap. Mirrors
+// handleTaskAdd.
 func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -1065,37 +1011,26 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Workspace left empty ("") deliberately — ProcessWorkspace/callers
+	// already treat that as "inherit the default workspace", matching every
+	// other schema-driven section's empty-means-inherit convention.
 	cfg.Processes[name] = config.ProcessConfig{
-		Workspace:   r.FormValue("workspace"),
-		Channels:    parseCommaSeparated(r.FormValue("channels")),
-		DevChannels: parseCommaSeparated(r.FormValue("dev_channels")),
-		Model:       r.FormValue("model"),
-		Agent:       r.FormValue("agent"),
-		Enabled:     r.FormValue("enabled") == "true",
+		Enabled: false,
 	}
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
-
+	s.reloadConfigOrWarn() // reload failures are logged server-side; nothing to attach a flash to across a redirect
 	s.restartNeeded.Store(true)
 
-	// Re-render the processes config tab
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Process %q added", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
+	http.Redirect(w, r, "/processes/"+url.PathEscape(name), http.StatusSeeOther)
 }
 
+// handleProcessDelete removes a process and sends htmx an HX-Redirect back to
+// the process list — the edit page the delete button lives on no longer has
+// anything to show once the process is gone. Mirrors handleTaskDelete.
 func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -1116,21 +1051,11 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
-
+	s.reloadConfigOrWarn()
 	s.restartNeeded.Store(true)
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Process %q deleted", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
+	w.Header().Set("HX-Redirect", "/processes")
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleTaskAdd creates a bare-minimum task (name + schedule) and redirects

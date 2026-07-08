@@ -371,7 +371,7 @@ func TestPageProcessesShowsManageForm(t *testing.T) {
 	if !strings.Contains(body, "assistant") {
 		t.Error("expected processes page to show 'assistant'")
 	}
-	if !strings.Contains(body, "Add Process") {
+	if !strings.Contains(body, "New process") {
 		t.Error("expected processes page to show add form")
 	}
 }
