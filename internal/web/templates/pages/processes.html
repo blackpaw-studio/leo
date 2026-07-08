@@ -1,8 +1,6 @@
 {{define "page_processes"}}
 <h1 class="page-title">Processes</h1>
-<div id="process-cards" hx-get="/partials/processes" hx-trigger="every 5s" hx-swap="innerHTML">
-  {{template "processes.html" .Data.Cards}}
-</div>
+{{template "processes.html" .Data.Cards}}
 <div class="card">
   <div class="table-wrap"><table>
     <thead><tr><th>name</th><th>workspace</th><th>model</th><th>enabled</th><th></th></tr></thead>
