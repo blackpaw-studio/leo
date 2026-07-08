@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/hooks"
+	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -124,6 +126,18 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 	}
 	// explicit sessions
 	for name, sc := range cfg.Sessions {
+		provEnv, provErr := provider.Env(cfg, cfg.SessionProvider(sc))
+		if provErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: session %q provider env unavailable: %v — skipping session\n", name, provErr)
+			continue
+		}
+		env := make(map[string]string, len(sc.Env)+len(provEnv))
+		for k, v := range sc.Env {
+			env[k] = v
+		}
+		for k, v := range provEnv {
+			env[k] = v
+		}
 		out = append(out, SessionSpec{
 			Name:            name,
 			Workdir:         workspaceOr(sc.Workspace),
@@ -135,7 +149,7 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 			AppendPrompt:    sc.AppendSystemPrompt,
 			AddDirs:         sc.AddDirs,
 			Channels:        sc.Channels,
-			Env:             sc.Env,
+			Env:             env,
 		})
 	}
 	// implicit sessions from persistent tasks without `session:`
@@ -154,6 +168,11 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 		if seen[name] {
 			return nil, fmt.Errorf("session name conflict: implicit %q collides with sessions.%s", name, name)
 		}
+		provEnv, provErr := provider.Env(cfg, cfg.TaskProvider(task))
+		if provErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: task %q provider env unavailable: %v — skipping session\n", name, provErr)
+			continue
+		}
 		model := task.Model
 		if model == "" {
 			model = cfg.ProviderDefaultModel(cfg.TaskProvider(task))
@@ -167,7 +186,8 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 			DisallowedTools: task.DisallowedTools,
 			AppendPrompt:    task.AppendSystemPrompt,
 			Channels:        task.Channels,
-			// Note: TaskConfig has no Agent or Env fields; those stay zero.
+			// Note: TaskConfig has no Agent field; stays zero.
+			Env: provEnv,
 		})
 	}
 	return out, nil
