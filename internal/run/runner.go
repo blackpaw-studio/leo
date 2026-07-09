@@ -1,15 +1,19 @@
 package run
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,6 +38,26 @@ Do not include status updates, tool output, or process descriptions.
 // notifyFailureTimeout bounds the notify-on-fail child invocation so a
 // failing task doesn't cascade into an unbounded second run.
 const notifyFailureTimeout = 60 * time.Second
+
+// maxChannelInitAttempts caps the number of extra attempts granted when a
+// configured channel plugin's MCP server fails to initialize. These retries
+// are infra-flake recovery, not part of the task's own retry budget.
+const maxChannelInitAttempts = 2
+
+// channelInitBackoff is the pause between channel-init-failure retries. A
+// package-level var (not const) so tests can shrink it to speed up the
+// retry-exhaustion path.
+var channelInitBackoff = 2 * time.Second
+
+// notifyOutputSeparator prefixes the notify-on-fail child's captured output
+// when it is appended to the task's log file.
+const notifyOutputSeparator = "\n--- notify-on-fail output ---\n"
+
+// errChannelMCPInit signals that a configured channel plugin's MCP server
+// failed to initialize during a claude invocation (reported in the
+// stream-json system/init event). The runner treats this as a distinguishable,
+// retryable infra flake rather than a genuine task failure.
+var errChannelMCPInit = errors.New("channel plugin MCP failed to initialize")
 
 // claudeResult is the minimal structure for parsing the final "result" event
 // from claude --output-format stream-json (newline-delimited JSON).
@@ -144,55 +168,57 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	var lastOutput []byte
 	var lastLogContent string
 
+	// channelPrefixes are the MCP server-name prefixes ("plugin:<name>:")
+	// claude reports for this task's configured channel plugins. When one of
+	// these fails to initialize, the attempt is aborted so it doesn't burn
+	// max_turns talking to a channel that will never deliver.
+	channelPrefixes := channelMCPPrefixes(task.Channels, task.DevChannels)
+	channelInitAttempts := 0
+	isChannelInitRetry := false
+
 	var timedOut bool
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if attempt > 1 {
+	for attempt := 1; attempt <= maxAttempts; {
+		if attempt > 1 && !isChannelInitRetry {
 			fmt.Fprintf(os.Stderr, "retrying task %q (attempt %d/%d)\n", taskName, attempt, maxAttempts)
 			// Clear session for retry attempts
 			sessionID = ""
 		}
+		isChannelInitRetry = false
 
-		args := buildArgs(cfg, task, prompt, sessionID)
-
-		// Per-attempt timeout so each retry gets the full timeout
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		output, execErr := executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv)
-		result := parseClaudeOutput(output)
-		timedOut = ctx.Err() == context.DeadlineExceeded
-
-		// If --resume failed with a stale session, retry without it.
-		if execErr != nil && sessionID != "" && isSessionError(result, output) {
-			if sessions != nil {
-				if delErr := sessions.Delete("task:" + taskName); delErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to clear stale session: %v\n", delErr)
-				}
-			}
-
-			args = buildArgs(cfg, task, prompt, "")
-			output, execErr = executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv)
-			result = parseClaudeOutput(output)
-		}
+		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, provEnv, channelPrefixes, sessions)
+		timedOut = ar.timedOut
+		lastLogContent = string(ar.output)
 
 		// Store session ID for next run
-		if sessions != nil && result.SessionID != "" {
-			if setErr := sessions.Set("task:"+taskName, result.SessionID); setErr != nil {
+		if sessions != nil && ar.result.SessionID != "" {
+			if setErr := sessions.Set("task:"+taskName, ar.result.SessionID); setErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to store session ID: %v\n", setErr)
 			}
 		}
 
-		// Capture full stream output for logging (includes all conversation events)
-		lastLogContent = string(output)
-
-		cancel()
-
-		if execErr == nil {
+		if ar.execErr == nil {
 			lastErr = nil
 			lastOutput = nil
 			break
 		}
 
-		lastErr = execErr
-		lastOutput = output
+		lastErr = ar.execErr
+		lastOutput = ar.output
+
+		// A channel plugin's MCP server failing to initialize is an infra
+		// flake, not a genuine task failure — retry up to
+		// maxChannelInitAttempts times without consuming the task's own
+		// retry budget or clearing its session.
+		if errors.Is(ar.execErr, errChannelMCPInit) && channelInitAttempts < maxChannelInitAttempts {
+			channelInitAttempts++
+			isChannelInitRetry = true
+			fmt.Fprintf(os.Stderr, "warning: task %q channel plugin MCP init failed (%v); retrying (%d/%d) without consuming retry budget\n",
+				taskName, ar.execErr, channelInitAttempts, maxChannelInitAttempts)
+			time.Sleep(channelInitBackoff)
+			continue
+		}
+
+		attempt++
 	}
 
 	// Write log for the final attempt only (avoids orphaned files on retries)
@@ -207,9 +233,12 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	reason := history.ReasonSuccess
 	if lastErr != nil {
 		exitCode = 1
-		if timedOut {
+		switch {
+		case timedOut:
 			reason = history.ReasonTimeout
-		} else {
+		case errors.Is(lastErr, errChannelMCPInit):
+			reason = history.ReasonChannelInit
+		default:
 			reason = history.ReasonFailure
 		}
 	}
@@ -220,7 +249,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 	// Send failure notification if configured (via child claude invocation)
 	if lastErr != nil && task.NotifyOnFail && len(task.Channels) > 0 {
-		notifyFailure(taskName, task, taskWorkspace, lastErr, maxAttempts, provEnv)
+		notifyFailure(cfg, taskName, task, taskWorkspace, lastErr, maxAttempts, provEnv, logFile)
 	}
 
 	if lastErr != nil {
@@ -230,11 +259,53 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	return nil
 }
 
+// attemptResult captures the outcome of one main-loop task attempt,
+// including any in-place stale-session retry (see runTaskAttempt).
+type attemptResult struct {
+	output   []byte
+	execErr  error
+	result   claudeResult
+	timedOut bool
+}
+
+// runTaskAttempt spawns claude for one attempt of the task, retrying
+// in-place (same attempt, no session clear) without --resume if the initial
+// spawn used a session that turns out to be stale.
+func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, provEnv map[string]string, channelPrefixes []string, sessions *session.Store) attemptResult {
+	args := buildArgs(cfg, task, prompt, sessionID)
+
+	// Per-attempt timeout so each retry gets the full timeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	output, execErr := executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv, channelPrefixes)
+	result := parseClaudeOutput(output)
+	timedOut := ctx.Err() == context.DeadlineExceeded
+
+	// If --resume failed with a stale session, retry without it.
+	if execErr != nil && sessionID != "" && isSessionError(result, output) {
+		if sessions != nil {
+			if delErr := sessions.Delete("task:" + taskName); delErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to clear stale session: %v\n", delErr)
+			}
+		}
+
+		args = buildArgs(cfg, task, prompt, "")
+		output, execErr = executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv, channelPrefixes)
+		result = parseClaudeOutput(output)
+	}
+
+	return attemptResult{output: output, execErr: execErr, result: result, timedOut: timedOut}
+}
+
 // notifyFailure spawns a short, bounded claude invocation that asks the agent
 // to deliver a failure notification via one of the task's configured channel
 // plugins. All errors are logged and swallowed so notify failures don't cascade
-// back to the parent task.
-func notifyFailure(taskName string, task config.TaskConfig, workspace string, taskErr error, attempts int, extraEnv map[string]string) {
+// back to the parent task. Its output is appended to the task's log file
+// (when logFile is non-empty) so operators can see what the notify child
+// actually did. A single fresh-spawn retry is attempted on failure before
+// giving up.
+func notifyFailure(cfg *config.Config, taskName string, task config.TaskConfig, workspace string, taskErr error, attempts int, extraEnv map[string]string, logFile string) {
 	prompt := fmt.Sprintf(
 		"Task %q failed after %d attempt(s): %v.\n"+
 			"Use a messaging tool from one of your configured channel plugins (see $LEO_CHANNELS) "+
@@ -251,11 +322,52 @@ func notifyFailure(taskName string, task config.TaskConfig, workspace string, ta
 	}
 	args = appendDevChannelFlags(args, task.DevChannels)
 
-	ctx, cancel := context.WithTimeout(context.Background(), notifyFailureTimeout)
-	defer cancel()
+	spawn := func() ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), notifyFailureTimeout)
+		defer cancel()
+		// No channel-init monitoring for the notify child: it's a short,
+		// low-stakes invocation and killing it early would only reduce the
+		// chance of the failure notice actually reaching the user.
+		return executeCommand(ctx, workspace, args, task.Channels, task.DevChannels, extraEnv, nil)
+	}
 
-	if _, err := executeCommand(ctx, workspace, args, task.Channels, task.DevChannels, extraEnv); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: notify-on-fail child invocation failed: %v\n", err)
+	output, err := spawn()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: notify-on-fail child invocation failed: %v; retrying once\n", err)
+		var retryOutput []byte
+		retryOutput, err = spawn()
+		if len(retryOutput) > 0 {
+			output = retryOutput
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: notify-on-fail child invocation failed after retry: %v\n", err)
+		}
+	}
+
+	if logFile != "" && len(output) > 0 {
+		appendNotifyOutputToLog(cfg, logFile, output)
+	}
+}
+
+// appendNotifyOutputToLog appends the notify-on-fail child's captured output
+// to the task's log file, separated by a marker line. Errors are logged and
+// swallowed — the notify child already ran; failing to log it shouldn't
+// surface as a task failure.
+func appendNotifyOutputToLog(cfg *config.Config, logFile string, output []byte) {
+	logPath := filepath.Join(cfg.StatePath(), "logs", logFile)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to append notify-on-fail output to log: %v\n", err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(notifyOutputSeparator); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to append notify-on-fail output to log: %v\n", err)
+		return
+	}
+	if _, err := f.Write(output); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to append notify-on-fail output to log: %v\n", err)
 	}
 }
 
@@ -291,7 +403,38 @@ func sessionErrorText(text string) bool {
 		(strings.Contains(text, "not found") || strings.Contains(text, "invalid") || strings.Contains(text, "expired"))
 }
 
-func executeCommand(ctx context.Context, workDir string, args []string, channels, devChannels []string, extraEnv map[string]string) ([]byte, error) {
+// syncBuffer is a mutex-guarded bytes.Buffer safe for concurrent writes from
+// the stdout- and stderr-copying goroutines os/exec spawns internally.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Copy out to avoid returning a slice aliasing the internal buffer,
+	// which could still be mutated concurrently by a slow-to-exit copier.
+	out := make([]byte, s.buf.Len())
+	copy(out, s.buf.Bytes())
+	return out
+}
+
+// executeCommand spawns claude and returns its combined stdout+stderr output.
+// When channelInitPrefixes is non-empty, the child's stdout is additionally
+// scanned incrementally (line by line) for the stream-json system/init event;
+// if a configured channel plugin's MCP server reports status "failed" there,
+// the process is killed immediately and the returned error wraps
+// errChannelMCPInit — the caller doesn't have to wait out the full timeout
+// for a channel that will never come up. Pass nil to skip monitoring (e.g.
+// for the notify-on-fail child, where it isn't worth the complexity).
+func executeCommand(ctx context.Context, workDir string, args []string, channels, devChannels []string, extraEnv map[string]string, channelInitPrefixes []string) ([]byte, error) {
 	cmd := execCommand("claude", args...)
 	cmd.Dir = workDir
 	env := append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
@@ -308,12 +451,45 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 
 	// Use a done channel to coordinate context cancellation with process lifecycle.
 	// Start the process explicitly so we can kill it on timeout.
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stdout
+	//
+	// stdout is wrapped in a mutex because when channel-init monitoring is
+	// active, cmd.Stdout becomes an io.MultiWriter (a distinct Writer value
+	// from cmd.Stderr) — os/exec only serializes concurrent writes to a
+	// shared output when Stdout and Stderr are the *same* Writer value, so
+	// without the lock the stdout- and stderr-copying goroutines it spawns
+	// internally would race on the underlying buffer.
+	stdout := &syncBuffer{}
+	cmd.Stderr = stdout
+
+	var pw *io.PipeWriter
+	var pr *io.PipeReader
+	if len(channelInitPrefixes) > 0 {
+		pr, pw = io.Pipe()
+		cmd.Stdout = io.MultiWriter(stdout, pw)
+		// Run in its own process group so a kill (from the monitor detecting
+		// a failed channel MCP server, or from the context deadline below)
+		// also reaches any children claude spawned that inherited its
+		// stdout — otherwise an orphaned grandchild can keep the pipe open
+		// and cmd.Wait() would hang waiting for EOF that never comes.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	} else {
+		cmd.Stdout = stdout
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, err
+	}
+
+	kill := func() {
+		if cmd.Process == nil {
+			return
+		}
+		if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
+			if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err == nil {
+				return
+			}
+		}
+		cmd.Process.Kill()
 	}
 
 	// Monitor context in background; kill process if deadline expires
@@ -321,18 +497,129 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 	go func() {
 		select {
 		case <-ctx.Done():
-			cmd.Process.Kill()
+			kill()
 		case <-done:
 		}
 	}()
 
+	var monitorErr error
+	var monitorDone chan struct{}
+	if pw != nil {
+		monitorDone = make(chan struct{})
+		go func() {
+			defer close(monitorDone)
+			scanner := bufio.NewScanner(pr)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for scanner.Scan() {
+				if monitorErr != nil {
+					continue // already found a failure; keep draining so writes don't block
+				}
+				if name, failed := failedChannelMCPServer(scanner.Bytes(), channelInitPrefixes); failed {
+					monitorErr = fmt.Errorf("%w: %s", errChannelMCPInit, name)
+					kill()
+				}
+			}
+		}()
+	}
+
 	err := cmd.Wait()
 	close(done) // stop the monitor goroutine
 
+	if pw != nil {
+		pw.Close() // unblocks the scanner goroutine (EOF) once the child has exited
+		<-monitorDone
+	}
+
+	if monitorErr != nil {
+		return stdout.Bytes(), monitorErr
+	}
 	if ctx.Err() != nil {
 		return stdout.Bytes(), ctx.Err()
 	}
 	return stdout.Bytes(), err
+}
+
+// mcpServerStatus mirrors one entry in stream-json's system/init event
+// "mcp_servers" array.
+type mcpServerStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+// initSystemEvent is the minimal shape of stream-json's first event (type
+// "system", subtype "init"), which reports each MCP server's startup status.
+type initSystemEvent struct {
+	Type       string            `json:"type"`
+	Subtype    string            `json:"subtype"`
+	MCPServers []mcpServerStatus `json:"mcp_servers"`
+}
+
+// failedChannelMCPServer inspects a single stream-json output line; if it is
+// the system/init event and one of its mcp_servers matches a configured
+// channel prefix ("plugin:<name>:") with status "failed", it returns that
+// server's full name.
+func failedChannelMCPServer(line []byte, channelInitPrefixes []string) (string, bool) {
+	if len(channelInitPrefixes) == 0 {
+		return "", false
+	}
+	var evt initSystemEvent
+	if json.Unmarshal(line, &evt) != nil {
+		return "", false
+	}
+	if evt.Type != "system" || evt.Subtype != "init" {
+		return "", false
+	}
+	for _, srv := range evt.MCPServers {
+		if srv.Status != "failed" {
+			continue
+		}
+		for _, prefix := range channelInitPrefixes {
+			if strings.HasPrefix(srv.Name, prefix) {
+				return srv.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
+// channelMCPPrefixes converts configured channel plugin ids
+// ("plugin:<name>@<marketplace>") into the MCP server-name prefixes claude
+// reports them under ("plugin:<name>:<server-name>"). Duplicate prefixes are
+// collapsed; channel ids that don't parse as "plugin:<name>@..." (e.g. any
+// future non-plugin channel kind) are skipped since they have no MCP server
+// counterpart to watch.
+func channelMCPPrefixes(channelSets ...[]string) []string {
+	seen := make(map[string]bool)
+	var prefixes []string
+	for _, channels := range channelSets {
+		for _, ch := range channels {
+			name, ok := channelPluginName(ch)
+			if !ok {
+				continue
+			}
+			prefix := "plugin:" + name + ":"
+			if seen[prefix] {
+				continue
+			}
+			seen[prefix] = true
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return prefixes
+}
+
+// channelPluginName extracts <name> from a channel id of the form
+// "plugin:<name>@<marketplace>". Returns ok=false for anything else.
+func channelPluginName(channel string) (string, bool) {
+	rest, ok := strings.CutPrefix(channel, "plugin:")
+	if !ok {
+		return "", false
+	}
+	name, _, ok := strings.Cut(rest, "@")
+	if !ok || name == "" {
+		return "", false
+	}
+	return name, true
 }
 
 // parseClaudeOutput extracts the final result from stream-json (NDJSON) output.

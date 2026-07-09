@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -798,7 +800,7 @@ func TestExecuteCommandInjectsExtraEnv(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("env") }
 
 	out, err := executeCommand(context.Background(), t.TempDir(), nil, nil, nil,
-		map[string]string{"ANTHROPIC_BASE_URL": "https://x.example", "ANTHROPIC_AUTH_TOKEN": "sk-t"})
+		map[string]string{"ANTHROPIC_BASE_URL": "https://x.example", "ANTHROPIC_AUTH_TOKEN": "sk-t"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -816,11 +818,169 @@ func TestExecuteCommandNoExtraEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", "")
 	os.Unsetenv("ANTHROPIC_BASE_URL")
 
-	out, err := executeCommand(context.Background(), t.TempDir(), nil, nil, nil, nil)
+	out, err := executeCommand(context.Background(), t.TempDir(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(out), "ANTHROPIC_BASE_URL=") {
 		t.Fatalf("unexpected provider env:\n%s", out)
+	}
+}
+
+// TestChannelMCPPrefixes covers the channel-id -> MCP-server-prefix mapping:
+// "plugin:<name>@<marketplace>" configured channels correspond to MCP servers
+// reported as "plugin:<name>:<server-name>".
+func TestChannelMCPPrefixes(t *testing.T) {
+	tests := []struct {
+		name     string
+		channels []string
+		dev      []string
+		want     []string
+	}{
+		{
+			name:     "single channel",
+			channels: []string{"plugin:blackpaw-telegram@blackpaw-studio/claude-plugins"},
+			want:     []string{"plugin:blackpaw-telegram:"},
+		},
+		{
+			name:     "channels and dev channels combined, dedup",
+			channels: []string{"plugin:blackpaw-telegram@marketplace-a"},
+			dev:      []string{"plugin:blackpaw-telegram@marketplace-b", "plugin:experimental@local-dev"},
+			want:     []string{"plugin:blackpaw-telegram:", "plugin:experimental:"},
+		},
+		{
+			name:     "empty",
+			channels: nil,
+			want:     nil,
+		},
+		{
+			name:     "malformed channel id skipped",
+			channels: []string{"not-a-plugin-id", "plugin:no-at-sign", "plugin:@nothing"},
+			want:     nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := channelMCPPrefixes(tt.channels, tt.dev)
+			if len(got) != len(tt.want) {
+				t.Fatalf("channelMCPPrefixes() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("channelMCPPrefixes()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestRunChannelMCPInitFailureRetriesAndRecordsHistory verifies that a
+// channel plugin's MCP server reporting status "failed" in the init event
+// causes the runner to kill the process, retry up to maxChannelInitAttempts
+// times without clearing the session or consuming the task's own retry
+// budget, and ultimately record history with ReasonChannelInit when every
+// attempt (including the extra channel-init retries) fails the same way.
+func TestRunChannelMCPInitFailureRetriesAndRecordsHistory(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	// Speed the test up: skip the real 2s backoff between channel-init retries.
+	origBackoff := channelInitBackoff
+	channelInitBackoff = 0
+	defer func() { channelInitBackoff = origBackoff }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	initFailedLine := `{"type":"system","subtype":"init","mcp_servers":[{"name":"plugin:blackpaw-telegram:blackpaw-telegram","status":"failed"}]}`
+
+	var invocations int
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		invocations++
+		// Emit the failed-init event then sleep; the monitor should kill us
+		// before the sleep completes.
+		return exec.Command("sh", "-c", "echo '"+initFailedLine+"'; sleep 5")
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile: "task.md",
+				Schedule:   "0 * * * *",
+				Enabled:    true,
+				Channels:   []string{"plugin:blackpaw-telegram@blackpaw-studio/claude-plugins"},
+			},
+		},
+	}
+
+	err := Run(cfg, "mytask", nil)
+	if err == nil {
+		t.Fatal("Run() should return error when channel MCP init keeps failing")
+	}
+	if !errors.Is(err, errChannelMCPInit) {
+		t.Errorf("expected error to wrap errChannelMCPInit, got: %v", err)
+	}
+	// 1 initial attempt + maxChannelInitAttempts (2) extra retries = 3.
+	wantInvocations := 1 + maxChannelInitAttempts
+	if invocations != wantInvocations {
+		t.Errorf("invocations = %d, want %d", invocations, wantInvocations)
+	}
+
+	hist := history.NewStore(cfg.HomePath)
+	entry := hist.Get("mytask")
+	if entry == nil {
+		t.Fatal("expected a history entry")
+	}
+	if entry.Reason != history.ReasonChannelInit {
+		t.Errorf("history reason = %q, want %q", entry.Reason, history.ReasonChannelInit)
+	}
+}
+
+// TestRunChannelMCPInitNonMatchingServerNoAbort verifies that an init event
+// reporting a failed MCP server that does NOT correspond to any configured
+// channel plugin does not trigger the channel-init abort/retry path.
+func TestRunChannelMCPInitNonMatchingServerNoAbort(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	// A failed MCP server that isn't one of the task's configured channels.
+	initLine := `{"type":"system","subtype":"init","mcp_servers":[{"name":"plugin:some-other-plugin:some-other-plugin","status":"failed"}]}`
+	resultLine := `{"type":"result","session_id":"sess-ok","result":"done","is_error":false}`
+
+	var invocations int
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		invocations++
+		return exec.Command("sh", "-c", "echo '"+initLine+"'; echo '"+resultLine+"'")
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile: "task.md",
+				Schedule:   "0 * * * *",
+				Enabled:    true,
+				Channels:   []string{"plugin:blackpaw-telegram@blackpaw-studio/claude-plugins"},
+			},
+		},
+	}
+
+	err := Run(cfg, "mytask", nil)
+	if err != nil {
+		t.Fatalf("Run() should succeed when the failed MCP server doesn't match a configured channel: %v", err)
+	}
+	if invocations != 1 {
+		t.Errorf("invocations = %d, want 1 (no channel-init abort/retry)", invocations)
 	}
 }
