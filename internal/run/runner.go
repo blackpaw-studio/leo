@@ -23,6 +23,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/update"
+	"github.com/blackpaw-studio/leo/internal/web"
 )
 
 var execCommand = exec.Command
@@ -103,7 +104,7 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store) (stri
 		sessionID = sid
 	}
 
-	args := buildArgs(cfg, task, prompt, sessionID)
+	args := buildArgs(cfg, task, taskName, prompt, sessionID)
 	return prompt, args, nil
 }
 
@@ -132,6 +133,11 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	if err != nil {
 		return fmt.Errorf("resolving provider env: %w", err)
 	}
+	// leoEnv rides along on every claude invocation for this task (main
+	// attempts and the notify-on-fail child alike) whenever the leo MCP
+	// server was actually wired into the args by buildArgs; see leoMCPEnv.
+	leoEnv, _ := leoMCPEnv(cfg, taskName)
+	spawnEnv := mergeEnvMaps(provEnv, leoEnv)
 
 	prompt, err := assemblePrompt(cfg, task)
 	if err != nil {
@@ -185,7 +191,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		}
 		isChannelInitRetry = false
 
-		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, provEnv, channelPrefixes, sessions)
+		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, spawnEnv, channelPrefixes, sessions)
 		timedOut = ar.timedOut
 		lastLogContent = string(ar.output)
 
@@ -249,7 +255,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 	// Send failure notification if configured (via child claude invocation)
 	if lastErr != nil && task.NotifyOnFail && len(task.Channels) > 0 {
-		notifyFailure(cfg, taskName, task, taskWorkspace, lastErr, maxAttempts, provEnv, logFile)
+		notifyFailure(cfg, taskName, task, taskWorkspace, lastErr, maxAttempts, spawnEnv, logFile)
 	}
 
 	if lastErr != nil {
@@ -272,7 +278,7 @@ type attemptResult struct {
 // in-place (same attempt, no session clear) without --resume if the initial
 // spawn used a session that turns out to be stale.
 func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, provEnv map[string]string, channelPrefixes []string, sessions *session.Store) attemptResult {
-	args := buildArgs(cfg, task, prompt, sessionID)
+	args := buildArgs(cfg, task, taskName, prompt, sessionID)
 
 	// Per-attempt timeout so each retry gets the full timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -290,7 +296,7 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 			}
 		}
 
-		args = buildArgs(cfg, task, prompt, "")
+		args = buildArgs(cfg, task, taskName, prompt, "")
 		output, execErr = executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv, channelPrefixes)
 		result = parseClaudeOutput(output)
 	}
@@ -669,7 +675,52 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 	return strings.Join(parts, "\n"), nil
 }
 
-func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessionID string) []string {
+// leoMCPEnv builds the LEO_PROCESS_NAME / LEO_WEB_PORT / LEO_API_TOKEN
+// environment that `leo mcp-server` (internal/mcp/server.go) requires to
+// bind itself to this task and authenticate against the daemon's web API
+// (see internal/service/process.go, which exports the same three vars for
+// supervised processes). Returns ok=false when the leo MCP server would be
+// doomed to fail — web UI/API disabled, or no readable, non-empty API token
+// file — so callers can skip wiring it in entirely rather than let it fail
+// at spawn time.
+func leoMCPEnv(cfg *config.Config, taskName string) (map[string]string, bool) {
+	if cfg == nil || !cfg.Web.Enabled {
+		return nil, false
+	}
+	// api.token lives at <state>/api.token; see web.APITokenPath, which
+	// owns the canonical path (and file-creation logic) for this file.
+	data, err := os.ReadFile(web.APITokenPath(cfg.StatePath()))
+	if err != nil {
+		return nil, false
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" {
+		return nil, false
+	}
+	return map[string]string{
+		"LEO_PROCESS_NAME": "task:" + taskName,
+		"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
+		"LEO_API_TOKEN":    token,
+	}, true
+}
+
+// mergeEnvMaps combines any number of env maps into one, later maps taking
+// precedence on key collision. Returns nil (not an empty map) when the
+// result would be empty, so callers checking len(extraEnv) == 0 still work.
+func mergeEnvMaps(maps ...map[string]string) map[string]string {
+	out := make(map[string]string)
+	for _, m := range maps {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string) []string {
 	args := []string{
 		"-p", prompt,
 		"--model", cfg.TaskModel(task),
@@ -701,8 +752,15 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, prompt string, sessio
 	}
 	// Layer in the Leo-managed MCP server so task-mode runs also have access
 	// to the universal slash-command tools (a long-running task can call
-	// e.g. leo_list_agents to coordinate with the supervisor).
-	args = leomcp.AppendArg(args, cfg)
+	// e.g. leo_list_agents to coordinate with the supervisor). Skip it
+	// entirely when leoMCPEnv's gate fails (web disabled, or no readable
+	// API token) — otherwise claude would spawn `leo mcp-server` with no way
+	// to authenticate, and every tool call through it would fail.
+	if _, ok := leoMCPEnv(cfg, taskName); ok {
+		args = leomcp.AppendArg(args, cfg)
+	} else if cfg != nil && cfg.Web.Enabled {
+		fmt.Fprintf(os.Stderr, "leo: warning: skipping leo MCP server for task %q: no readable API token\n", taskName)
+	}
 
 	taskWorkspace := cfg.TaskWorkspace(task)
 	args = append(args, "--add-dir", taskWorkspace)

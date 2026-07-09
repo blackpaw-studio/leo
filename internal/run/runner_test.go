@@ -133,7 +133,7 @@ func TestBuildArgs(t *testing.T) {
 
 	cfg := makeTestConfig(dir, true)
 	task := config.TaskConfig{Model: "opus", MaxTurns: 20}
-	args := buildArgs(cfg, task, "test prompt", "")
+	args := buildArgs(cfg, task, "mytask", "test prompt", "")
 
 	argsStr := strings.Join(args, " ")
 
@@ -167,7 +167,7 @@ func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "test prompt", "")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "")
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--dangerously-skip-permissions") {
@@ -181,7 +181,7 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "test prompt", "")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "")
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--mcp-config") {
@@ -199,7 +199,7 @@ func TestBuildArgsWithSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "test prompt", "session-abc-123")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "session-abc-123")
 	argsStr := strings.Join(args, " ")
 
 	if !strings.Contains(argsStr, "--resume session-abc-123") {
@@ -211,7 +211,7 @@ func TestBuildArgsWithoutSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "test prompt", "")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "")
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--resume") {
@@ -232,7 +232,7 @@ func TestBuildArgsIncludesDevChannels(t *testing.T) {
 		},
 	}
 
-	args := buildArgs(cfg, task, "test prompt", "")
+	args := buildArgs(cfg, task, "mytask", "test prompt", "")
 
 	count := 0
 	for i, a := range args {
@@ -781,7 +781,7 @@ func TestRunConcurrencyGuard(t *testing.T) {
 
 func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
-	args := buildArgs(cfg, config.TaskConfig{}, "do the thing", "sess-1")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "sess-1")
 
 	found := false
 	for i := 0; i < len(args)-1; i++ {
@@ -791,6 +791,155 @@ func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected messaging awareness in task args; got %v", args)
+	}
+}
+
+// TestLeoMCPEnv covers the three-way gate: web disabled, web enabled but no
+// token file, and web enabled with a readable non-empty token file.
+func TestLeoMCPEnv(t *testing.T) {
+	t.Run("web disabled", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: false}}
+		os.MkdirAll(cfg.StatePath(), 0750)
+		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123"), 0600)
+
+		env, ok := leoMCPEnv(cfg, "mytask")
+		if ok {
+			t.Errorf("expected ok=false when web disabled, got env=%v", env)
+		}
+	})
+
+	t.Run("web enabled, no token file", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
+
+		env, ok := leoMCPEnv(cfg, "mytask")
+		if ok {
+			t.Errorf("expected ok=false when token file missing, got env=%v", env)
+		}
+	})
+
+	t.Run("web enabled, empty token file", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
+		os.MkdirAll(cfg.StatePath(), 0750)
+		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("   \n"), 0600)
+
+		env, ok := leoMCPEnv(cfg, "mytask")
+		if ok {
+			t.Errorf("expected ok=false when token file is blank, got env=%v", env)
+		}
+	})
+
+	t.Run("web enabled, token present", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true, Port: 9999}}
+		os.MkdirAll(cfg.StatePath(), 0750)
+		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123\n"), 0600)
+
+		env, ok := leoMCPEnv(cfg, "mytask")
+		if !ok {
+			t.Fatal("expected ok=true when web enabled and token present")
+		}
+		if env["LEO_PROCESS_NAME"] != "task:mytask" {
+			t.Errorf("LEO_PROCESS_NAME = %q, want %q", env["LEO_PROCESS_NAME"], "task:mytask")
+		}
+		if env["LEO_WEB_PORT"] != "9999" {
+			t.Errorf("LEO_WEB_PORT = %q, want %q", env["LEO_WEB_PORT"], "9999")
+		}
+		if env["LEO_API_TOKEN"] != "tok123" {
+			t.Errorf("LEO_API_TOKEN = %q, want %q (whitespace-trimmed)", env["LEO_API_TOKEN"], "tok123")
+		}
+	})
+}
+
+// TestBuildArgsSkipsLeoMCPWithoutToken verifies buildArgs (and by extension
+// Preview, which shares this code path) doesn't wire in the leo MCP server
+// when the token gate fails, even though cfg.Web.Enabled is true.
+func TestBuildArgsSkipsLeoMCPWithoutToken(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
+	// No api.token file written.
+
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "")
+	for i, a := range args {
+		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
+			t.Errorf("did not expect leo MCP config wired in without a readable token; args=%v", args)
+		}
+	}
+}
+
+// TestBuildArgsIncludesLeoMCPWithToken verifies buildArgs wires in the leo
+// MCP server when the gate passes (web enabled + readable non-empty token).
+func TestBuildArgsIncludesLeoMCPWithToken(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
+	os.MkdirAll(cfg.StatePath(), 0750)
+	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123"), 0600)
+
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "")
+	found := false
+	for i, a := range args {
+		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected leo MCP config wired in when token is readable; args=%v", args)
+	}
+}
+
+// TestRunPassesLeoMCPEnvToExecuteCommand verifies Run() injects
+// LEO_PROCESS_NAME/LEO_WEB_PORT/LEO_API_TOKEN into the spawned claude's
+// environment when the leo MCP gate passes.
+func TestRunPassesLeoMCPEnvToExecuteCommand(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Web:      config.WebConfig{Enabled: true, Port: 8888},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+	os.MkdirAll(cfg.StatePath(), 0750)
+	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok-xyz"), 0600)
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		// executeCommand sets cmd.Env after the seam returns the *exec.Cmd;
+		// printing the actual process env (via `env`) is how we observe it.
+		return exec.Command("sh", "-c", "env")
+	}
+
+	err := Run(cfg, "mytask", nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	logFiles, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
+	if len(logFiles) == 0 {
+		t.Fatal("no log files found")
+	}
+	logData, err := os.ReadFile(logFiles[0])
+	if err != nil {
+		t.Fatalf("reading log: %v", err)
+	}
+	got := string(logData)
+	if !strings.Contains(got, "LEO_PROCESS_NAME=task:mytask") {
+		t.Errorf("log missing LEO_PROCESS_NAME:\n%s", got)
+	}
+	if !strings.Contains(got, "LEO_WEB_PORT=8888") {
+		t.Errorf("log missing LEO_WEB_PORT:\n%s", got)
+	}
+	if !strings.Contains(got, "LEO_API_TOKEN=tok-xyz") {
+		t.Errorf("log missing LEO_API_TOKEN:\n%s", got)
 	}
 }
 
