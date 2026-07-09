@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -60,6 +61,20 @@ const notifyOutputSeparator = "\n--- notify-on-fail output ---\n"
 // stream-json system/init event). The runner treats this as a distinguishable,
 // retryable infra flake rather than a genuine task failure.
 var errChannelMCPInit = errors.New("channel plugin MCP failed to initialize")
+
+// errInterrupted signals that executeCommand's forwarder delivered a
+// SIGINT/SIGTERM the parent itself received (e.g. Ctrl-C on `leo run`) to the
+// child, rather than the child failing, timing out, or a channel MCP server
+// failing to init. Run treats this as "the user asked us to stop" — it must
+// not be retried, must not clear the task's session, and must not fire a
+// notify-on-fail child.
+var errInterrupted = errors.New("interrupted by signal")
+
+// signalNotifyFn is signal.Notify, indirected through a package var so tests
+// can inject a fake that captures the channel executeCommand registers and
+// push a synthetic signal into it — without ever signaling the test process
+// itself (which would risk killing `go test`).
+var signalNotifyFn = signal.Notify
 
 // claudeResult is the minimal structure for parsing the final "result" event
 // from claude --output-format stream-json (newline-delimited JSON).
@@ -208,8 +223,13 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, spawnEnv, channelPrefixes, sessions, leoMCPOK)
 		lastLogContent = string(ar.output)
 
+		// An interrupted attempt (Ctrl-C forwarded to the child) reflects the
+		// user asking the task to stop, not a real result — don't persist a
+		// session ID out of an aborted attempt's output.
+		interrupted := errors.Is(ar.execErr, errInterrupted)
+
 		// Store session ID for next run
-		if sessions != nil && ar.result.SessionID != "" {
+		if !interrupted && sessions != nil && ar.result.SessionID != "" {
 			if setErr := sessions.Set("task:"+taskName, ar.result.SessionID); setErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to store session ID: %v\n", setErr)
 			}
@@ -223,6 +243,13 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 		lastErr = ar.execErr
 		lastOutput = ar.output
+
+		// Interrupted: stop immediately. No retry, no session clear (handled
+		// above and by never re-entering the loop top), no notify-on-fail —
+		// see the checks guarding those below.
+		if interrupted {
+			break
+		}
 
 		// A channel plugin's MCP server failing to initialize is an infra
 		// flake, not a genuine task failure — retry up to
@@ -259,6 +286,8 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		// generic failure — executeCommand's contract is to return ctx.Err()
 		// (context.DeadlineExceeded) whenever the deadline fired, on either
 		// the initial spawn or the retry.
+		case errors.Is(lastErr, errInterrupted):
+			reason = history.ReasonInterrupted
 		case errors.Is(lastErr, context.DeadlineExceeded):
 			reason = history.ReasonTimeout
 		case errors.Is(lastErr, errChannelMCPInit):
@@ -272,12 +301,18 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
 	}
 
-	// Send failure notification if configured (via child claude invocation)
-	if lastErr != nil && task.NotifyOnFail && len(task.Channels) > 0 {
+	// Send failure notification if configured (via child claude invocation).
+	// Skipped when interrupted: the user asked the task to stop, so firing a
+	// notify-on-fail child (itself a claude invocation) would be surprising
+	// and unwanted, not helpful.
+	if lastErr != nil && !errors.Is(lastErr, errInterrupted) && task.NotifyOnFail && len(task.Channels) > 0 {
 		notifyFailure(cfg, taskName, task, taskWorkspace, lastErr, maxAttempts, spawnEnv, logFile)
 	}
 
 	if lastErr != nil {
+		if errors.Is(lastErr, errInterrupted) {
+			return fmt.Errorf("task %q was interrupted: %w", taskName, lastErr)
+		}
 		return fmt.Errorf("claude exited with error: %w\nOutput: %s", lastErr, string(lastOutput))
 	}
 
@@ -533,6 +568,19 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 	done := make(chan struct{})
 
 	signalGroup := func(sig syscall.Signal) {
+		// Residual TOCTOU: the done-check above and the syscall.Kill below
+		// are not atomic with each other. A race remains in principle — done
+		// could close (the child gets reaped and its PID/pgid released back
+		// to the OS) in the gap between this check and the Kill call below,
+		// and if the OS reissues that exact PID/pgid to a new, unrelated
+		// process in that same narrow window, the signal would be delivered
+		// to the wrong process group. This is not fixable portably: POSIX
+		// kill(2) has no "signal this pid only if it's still the process I
+		// think it is" primitive (Linux's pidfd_send_signal closes the
+		// window but isn't portable, and isn't worth the platform-specific
+		// complexity here). The done-check still shrinks the window from
+		// "any time after the child exits" down to a handful of
+		// instructions, making the race negligible in practice.
 		select {
 		case <-done:
 			return
@@ -591,14 +639,23 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 	// child's process group. Setpgid above detaches the child from the
 	// terminal's foreground process group, so without this it would never
 	// see the signal and would be left running after the parent exits.
+	//
+	// interrupted is set before forwarding so that once cmd.Wait() returns
+	// (necessarily after the forwarded signal reached and killed the child —
+	// real wall-clock ordering, backed by atomic Store/Load for cross-
+	// goroutine visibility), the caller below can distinguish "we forwarded a
+	// signal that killed this child" from an ordinary child failure and
+	// return errInterrupted instead.
+	var interrupted atomic.Bool
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signalNotifyFn(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		defer signal.Stop(sigCh)
 		for {
 			select {
 			case sig := <-sigCh:
 				if s, ok := sig.(syscall.Signal); ok {
+					interrupted.Store(true)
 					signalGroup(s)
 				}
 			case <-done:
@@ -655,6 +712,9 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 	}
 	if ctx.Err() != nil {
 		return stdout.Bytes(), ctx.Err()
+	}
+	if err != nil && interrupted.Load() {
+		return stdout.Bytes(), fmt.Errorf("%w: %v", errInterrupted, err)
 	}
 	return stdout.Bytes(), err
 }

@@ -16,6 +16,7 @@ const (
 	ReasonFailure     = "failure"
 	ReasonTimeout     = "timeout"
 	ReasonChannelInit = "channel-init"
+	ReasonInterrupted = "interrupted"
 )
 
 // Entry records the result of a single task execution.

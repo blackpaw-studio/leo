@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -328,6 +329,29 @@ func TestIsSessionError(t *testing.T) {
 			name:   "empty",
 			result: claudeResult{},
 			want:   false,
+		},
+		// Pinning the raw-scan gating (finding: MINOR #3): the raw-output
+		// fallback scan must only run when the parsed result carried no text
+		// of its own. A result that did produce text ("did some work") must
+		// not be second-guessed by a raw-output substring match, even when
+		// that raw output happens to contain a stale-session phrase — e.g.
+		// conversational text describing what happened, or a later unrelated
+		// log line.
+		{
+			name:   "non-empty result text suppresses raw-scan fallback",
+			result: claudeResult{Result: "did some work"},
+			output: "did some work; by the way, no conversation found in an unrelated log line",
+			want:   false,
+		},
+		// Inverse: when the parsed result carries no text at all (empty
+		// Result and no Errors — e.g. claude crashed before emitting a result
+		// event), the raw-scan fallback is the only signal available and
+		// must still catch a stale-session phrase in the combined output.
+		{
+			name:   "empty result fields fall back to raw-scan match",
+			result: claudeResult{},
+			output: "fatal: no conversation found for session abc123",
+			want:   true,
 		},
 	}
 
@@ -1210,6 +1234,16 @@ func TestExecuteCommandDrainsPipeAfterScannerOverflow(t *testing.T) {
 // reached the direct child (not its process group), the orphaned grandchild
 // would keep the stdout pipe's write end open and cmd.Wait() would hang
 // waiting for EOF that never comes.
+//
+// Both the direct child's and the backgrounded grandchild's sleeps are long
+// (30s) relative to the elapsed-time assertion below (~5s): a prior version
+// of this test used sleep 5, which happened to expire *under* the 8s hang
+// bound, so a reverted pgid-kill (an unkilled grandchild just running to
+// completion on its own) still made the test pass — the hang bound alone
+// didn't actually exercise the regression. With 30s sleeps, a leaked
+// grandchild blows well past both the hang bound and the elapsed-time
+// assertion, so the test fails on either a hang or on being slow, not only
+// on a hang.
 func TestExecuteCommandKillsGrandchildOnChannelInitFailure(t *testing.T) {
 	orig := execCommand
 	t.Cleanup(func() { execCommand = orig })
@@ -1217,16 +1251,25 @@ func TestExecuteCommandKillsGrandchildOnChannelInitFailure(t *testing.T) {
 	initFailedLine := `{"type":"system","subtype":"init","mcp_servers":[{"name":"plugin:blackpaw-telegram:blackpaw-telegram","status":"failed"}]}`
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		script := "(sleep 5 >&2 &); echo '" + initFailedLine + "'; sleep 5"
+		script := "(sleep 30 >&2 &); echo '" + initFailedLine + "'; sleep 30"
 		return exec.Command("sh", "-c", script)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
+	start := time.Now()
 	_, err := runExecuteCommandWithDeadline(t, 8*time.Second, ctx, t.TempDir(), nil, []string{"plugin:blackpaw-telegram:"})
+	elapsed := time.Since(start)
+
 	if !errors.Is(err, errChannelMCPInit) {
 		t.Errorf("expected errChannelMCPInit, got %v", err)
+	}
+	// The kill should complete in well under a second; 5s is a generous
+	// ceiling that still fails fast if the grandchild leaks and its 30s
+	// sleep is what actually let the process (and cmd.Wait) finish.
+	if elapsed >= 5*time.Second {
+		t.Errorf("executeCommand took %s to return, want < 5s — grandchild likely leaked and ran to completion instead of being killed", elapsed)
 	}
 }
 
@@ -1358,5 +1401,115 @@ func TestRunChannelInitExhaustionDoesNotClearSession(t *testing.T) {
 	last := strings.Join(allArgs[len(allArgs)-1], " ")
 	if !strings.Contains(last, "--resume "+seededSessionID) {
 		t.Errorf("final attempt should still --resume the original session (channel-init failure isn't a session problem); args=%v", last)
+	}
+}
+
+// TestRunInterruptStopsImmediatelyWithoutRetryOrNotify is the regression test
+// for finding 1 (IMPORTANT): before this fix, a forwarded Ctrl-C
+// (SIGINT/SIGTERM) killed the child, but Run's retry loop couldn't tell that
+// apart from an ordinary failure — it cleared the session, respawned claude
+// for any remaining retries, recorded history.ReasonFailure, and fired a
+// notify-on-fail child, all *after* the user had already asked the task to
+// stop.
+//
+// This drives Run() end-to-end (not just executeCommand) with a fake child
+// that sleeps and traps nothing, so the only thing that can end it is the
+// forwarded signal. The real test process is never signaled — signalNotifyFn
+// is faked to hand back the channel executeCommand registers, and the test
+// pushes a synthetic os.Signal into that channel directly.
+func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
+	origExec := execCommand
+	defer func() { execCommand = origExec }()
+
+	origNotify := signalNotifyFn
+	defer func() { signalNotifyFn = origNotify }()
+
+	// Captures the channel executeCommand registers via signalNotifyFn, so
+	// the test can push a fake signal into it once Run() is underway.
+	registered := make(chan chan<- os.Signal, 1)
+	signalNotifyFn = func(c chan<- os.Signal, sig ...os.Signal) {
+		registered <- c
+	}
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	var invocations int
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		invocations++
+		// Traps nothing; the only thing that can end this is a forwarded
+		// signal killing the process group.
+		return exec.Command("sh", "-c", "sleep 30")
+	}
+
+	seededSessionID := "seeded-session-interrupt"
+	sessions := session.NewStore(dir)
+	if err := sessions.Set("task:mytask", seededSessionID); err != nil {
+		t.Fatalf("seeding session: %v", err)
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile:   "task.md",
+				Schedule:     "0 * * * *",
+				Enabled:      true,
+				Retries:      2, // plenty of retry budget the interrupt must preempt
+				NotifyOnFail: true,
+				Channels:     []string{"plugin:blackpaw-telegram@blackpaw-studio/claude-plugins"},
+			},
+		},
+	}
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- Run(cfg, "mytask", sessions)
+	}()
+
+	var sigCh chan<- os.Signal
+	select {
+	case sigCh = <-registered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("signalNotifyFn was never invoked — executeCommand did not register a signal handler")
+	}
+	sigCh <- syscall.SIGINT
+
+	var runErr error
+	select {
+	case runErr = <-runErrCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run() did not return after the interrupt — retry loop likely did not break immediately")
+	}
+
+	if runErr == nil {
+		t.Fatal("expected Run() to return an error after an interrupt")
+	}
+	if !strings.Contains(runErr.Error(), "interrupted") {
+		t.Errorf("expected error to mention interruption, got: %v", runErr)
+	}
+
+	if invocations != 1 {
+		t.Errorf("invocations = %d, want 1 (no retry after interrupt)", invocations)
+	}
+
+	hist := history.NewStore(cfg.HomePath)
+	entry := hist.Get("mytask")
+	if entry == nil {
+		t.Fatal("expected a history entry")
+	}
+	if entry.Reason != history.ReasonInterrupted {
+		t.Errorf("history reason = %q, want %q", entry.Reason, history.ReasonInterrupted)
+	}
+
+	sid, _, err := sessions.Get("task:mytask")
+	if err != nil {
+		t.Fatalf("reading session store: %v", err)
+	}
+	if sid != seededSessionID {
+		t.Errorf("session store should be untouched by an interrupt; got %q, want %q", sid, seededSessionID)
 	}
 }
