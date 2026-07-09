@@ -331,6 +331,35 @@ func TestPageTasksShowsTaskTable(t *testing.T) {
 	}
 }
 
+func TestPageTasksSeparatesEnabledAndDisabled(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/tasks", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+
+	disabledHeading := strings.Index(body, "Disabled")
+	if disabledHeading == -1 {
+		t.Fatal("expected a 'Disabled' section heading")
+	}
+	enabledIdx := strings.Index(body, "heartbeat") // enabled in testConfigYAML
+	disabledIdx := strings.Index(body, "cleanup")  // disabled in testConfigYAML
+	if enabledIdx == -1 || disabledIdx == -1 {
+		t.Fatal("expected both 'heartbeat' and 'cleanup' task names in body")
+	}
+	if enabledIdx > disabledHeading {
+		t.Error("expected enabled task 'heartbeat' to appear before the 'Disabled' heading")
+	}
+	if disabledIdx < disabledHeading {
+		t.Error("expected disabled task 'cleanup' to appear after the 'Disabled' heading")
+	}
+}
+
 func TestPageConfigSettingsShowsWebUIInfo(t *testing.T) {
 	s, _ := newTestServer(t)
 
@@ -494,7 +523,7 @@ defaults:
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 	body = w.Body.String()
-	if !strings.Contains(body, "No tasks configured") {
+	if !strings.Contains(body, "No enabled tasks") {
 		t.Error("expected empty state message for tasks")
 	}
 }
