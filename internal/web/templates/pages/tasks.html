@@ -2,17 +2,17 @@
 <h1 class="page-title">Tasks</h1>
 <div class="card">
   <div class="table-wrap">
-  {{if .Data.Tasks}}
+  {{if .Data.Enabled}}
   <table>
     <thead><tr><th>name</th><th>schedule</th><th>next</th><th>last</th><th></th></tr></thead>
     <tbody>
-    {{range .Data.Tasks}}
+    {{range .Data.Enabled}}
     <tr>
       <td><a href="/tasks/{{.Name}}">{{.Name}}</a></td>
       <td>{{cronDesc .Schedule}} <span class="dim">{{.Schedule}}</span></td>
       <td>{{if .Enabled}}{{relativeTime .NextRun}}{{else}}<span class="dim">&mdash;</span>{{end}}</td>
       <td>{{if .HasRun}}<span class="pill {{if eq .LastExit 0}}ok{{else}}err{{end}}">{{if eq .LastExit 0}}ok{{else}}exit {{.LastExit}}{{end}}</span>{{else}}<span class="dim">&mdash;</span>{{end}}</td>
-      <td class="row-actions">
+      <td class="row-actions row-actions--fixed">
         <button class="btn hot" hx-post="/web/task/{{.Name}}/run" hx-target="#flash-container" hx-swap="innerHTML">run</button>
         <button class="btn" hx-post="/web/task/{{.Name}}/toggle" hx-target="#flash-container" hx-swap="none">{{if .Enabled}}disable{{else}}enable{{end}}</button>
       </td>
@@ -21,7 +21,7 @@
     </tbody>
   </table>
   {{else}}
-  <div class="empty-state">No tasks configured</div>
+  <div class="empty-state">No enabled tasks</div>
   {{end}}
   </div>
 </div>
@@ -33,4 +33,28 @@
     <button type="submit" class="btn hot">Create</button>
   </form>
 </div>
+{{if .Data.Disabled}}
+<div class="card dim">
+  <div class="card-head"><b>Disabled</b></div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>name</th><th>schedule</th><th>next</th><th>last</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Disabled}}
+    <tr>
+      <td><a href="/tasks/{{.Name}}">{{.Name}}</a></td>
+      <td>{{cronDesc .Schedule}} <span class="dim">{{.Schedule}}</span></td>
+      <td><span class="dim">&mdash;</span></td>
+      <td>{{if .HasRun}}<span class="pill {{if eq .LastExit 0}}ok{{else}}err{{end}}">{{if eq .LastExit 0}}ok{{else}}exit {{.LastExit}}{{end}}</span>{{else}}<span class="dim">&mdash;</span>{{end}}</td>
+      <td class="row-actions row-actions--fixed">
+        <button class="btn hot" hx-post="/web/task/{{.Name}}/run" hx-target="#flash-container" hx-swap="innerHTML">run</button>
+        <button class="btn" hx-post="/web/task/{{.Name}}/toggle" hx-target="#flash-container" hx-swap="none">enable</button>
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+</div>
+{{end}}
 {{end}}

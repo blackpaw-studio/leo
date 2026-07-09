@@ -332,7 +332,8 @@ type taskRow struct {
 
 // tasksPageData feeds page_tasks.
 type tasksPageData struct {
-	Tasks []taskRow
+	Enabled  []taskRow
+	Disabled []taskRow
 }
 
 // buildTasksData assembles the tasks list: cron next-run times from the
@@ -365,7 +366,17 @@ func (s *Server) buildTasksData(r *http.Request) (any, error) {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 
-	return tasksPageData{Tasks: rows}, nil
+	enabled := make([]taskRow, 0, len(rows))
+	disabled := make([]taskRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Enabled {
+			enabled = append(enabled, row)
+		} else {
+			disabled = append(disabled, row)
+		}
+	}
+
+	return tasksPageData{Enabled: enabled, Disabled: disabled}, nil
 }
 
 // taskEditData feeds page_task_edit: the schema-driven form over the task's

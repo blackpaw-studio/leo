@@ -122,7 +122,13 @@ select.form-input {
   padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line);
 }
 .card-head b { color: var(--link); }
+.card.dim { opacity: 0.6; }
 .row-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; white-space: nowrap; }
+.row-actions--fixed {
+  display: grid; grid-template-columns: 56px 88px; gap: var(--sp-2);
+  justify-content: end; white-space: nowrap;
+}
+.row-actions--fixed .btn { width: 100%; text-align: center; }
 .frow-inline { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; padding: var(--sp-3) var(--sp-4); }
 .frow-inline input { width: auto; flex: 1; min-width: 120px; }
 
