@@ -703,7 +703,7 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 	close(done) // stop the ctx-watcher and signal-forwarding goroutines
 
 	if pw != nil {
-		pw.Close() // unblocks the drain/scanner goroutine (EOF) once the child has exited
+		_ = pw.Close() // error is always nil for io.PipeWriter; unblocks the drain/scanner goroutine (EOF) once the child has exited
 		<-monitorDone
 	}
 
