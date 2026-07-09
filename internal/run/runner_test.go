@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -133,7 +134,7 @@ func TestBuildArgs(t *testing.T) {
 
 	cfg := makeTestConfig(dir, true)
 	task := config.TaskConfig{Model: "opus", MaxTurns: 20}
-	args := buildArgs(cfg, task, "mytask", "test prompt", "")
+	args := buildArgs(cfg, task, "mytask", "test prompt", "", false)
 
 	argsStr := strings.Join(args, " ")
 
@@ -167,7 +168,7 @@ func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", false)
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--dangerously-skip-permissions") {
@@ -181,7 +182,7 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", false)
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--mcp-config") {
@@ -199,7 +200,7 @@ func TestBuildArgsWithSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "session-abc-123")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "session-abc-123", false)
 	argsStr := strings.Join(args, " ")
 
 	if !strings.Contains(argsStr, "--resume session-abc-123") {
@@ -211,7 +212,7 @@ func TestBuildArgsWithoutSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", false)
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--resume") {
@@ -232,7 +233,7 @@ func TestBuildArgsIncludesDevChannels(t *testing.T) {
 		},
 	}
 
-	args := buildArgs(cfg, task, "mytask", "test prompt", "")
+	args := buildArgs(cfg, task, "mytask", "test prompt", "", false)
 
 	count := 0
 	for i, a := range args {
@@ -781,7 +782,7 @@ func TestRunConcurrencyGuard(t *testing.T) {
 
 func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "sess-1")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "sess-1", false)
 
 	found := false
 	for i := 0; i < len(args)-1; i++ {
@@ -861,7 +862,8 @@ func TestBuildArgsSkipsLeoMCPWithoutToken(t *testing.T) {
 	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 	// No api.token file written.
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "")
+	_, leoMCPOK := leoMCPEnv(cfg, "mytask")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoMCPOK)
 	for i, a := range args {
 		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
 			t.Errorf("did not expect leo MCP config wired in without a readable token; args=%v", args)
@@ -877,7 +879,8 @@ func TestBuildArgsIncludesLeoMCPWithToken(t *testing.T) {
 	os.MkdirAll(cfg.StatePath(), 0750)
 	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123"), 0600)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "")
+	_, leoMCPOK := leoMCPEnv(cfg, "mytask")
+	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoMCPOK)
 	found := false
 	for i, a := range args {
 		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
@@ -1131,5 +1134,229 @@ func TestRunChannelMCPInitNonMatchingServerNoAbort(t *testing.T) {
 	}
 	if invocations != 1 {
 		t.Errorf("invocations = %d, want 1 (no channel-init abort/retry)", invocations)
+	}
+}
+
+// runExecuteCommandWithDeadline runs executeCommand in a goroutine and fails
+// the test if it doesn't return within bound — used by the hang-regression
+// tests below so assertions never depend on exact kill timing, only on
+// executeCommand returning promptly relative to a generous ceiling.
+func runExecuteCommandWithDeadline(t *testing.T, bound time.Duration, ctx context.Context, workDir string, args []string, channelInitPrefixes []string) ([]byte, error) {
+	t.Helper()
+	type result struct {
+		out []byte
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		out, err := executeCommand(ctx, workDir, args, nil, nil, nil, channelInitPrefixes)
+		resCh <- result{out, err}
+	}()
+
+	select {
+	case r := <-resCh:
+		return r.out, r.err
+	case <-time.After(bound):
+		t.Fatalf("executeCommand did not return within %s — likely hung", bound)
+		return nil, nil
+	}
+}
+
+// TestExecuteCommandDrainsPipeAfterScannerOverflow is the regression test for
+// finding 1 (CRITICAL): a single stream-json line exceeding the channel-init
+// monitor's scanner buffer cap used to make `for scanner.Scan()` exit on
+// bufio.ErrTooLong while nothing else read the io.Pipe, blocking the
+// MultiWriter's write into it forever and hanging cmd.Wait() (and therefore
+// executeCommand) even though the child had already finished writing and
+// exited. executeCommand must now drain the pipe after the scan loop ends so
+// the child is never blocked, and the full output (oversized line included)
+// must still be captured via the independent syncBuffer.
+func TestExecuteCommandDrainsPipeAfterScannerOverflow(t *testing.T) {
+	orig := execCommand
+	t.Cleanup(func() { execCommand = orig })
+
+	// Shrink the cap so the test doesn't need a multi-megabyte fixture to
+	// exceed it.
+	origMax := maxScannerBufferSize
+	maxScannerBufferSize = 1024
+	t.Cleanup(func() { maxScannerBufferSize = origMax })
+
+	oversized := strings.Repeat("x", 4096)
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		script := fmt.Sprintf("echo '%s'; echo done-marker; exit 0", oversized)
+		return exec.Command("sh", "-c", script)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	out, err := runExecuteCommandWithDeadline(t, 8*time.Second, ctx, t.TempDir(), nil, []string{"plugin:doesnotmatter:"})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(out), oversized) {
+		t.Error("expected the oversized line to be captured in output")
+	}
+	if !strings.Contains(string(out), "done-marker") {
+		t.Error("expected output written after the oversized line to be captured too")
+	}
+}
+
+// TestExecuteCommandKillsGrandchildOnChannelInitFailure is the regression
+// test for finding 8, pinning both the pgid-based kill (finding 2/4's
+// always-Setpgid child) and the no-hang property together: the fake child
+// backgrounds a grandchild that inherits (and holds open) the stdout pipe,
+// then reports a failed channel MCP init and sleeps. If the kill only
+// reached the direct child (not its process group), the orphaned grandchild
+// would keep the stdout pipe's write end open and cmd.Wait() would hang
+// waiting for EOF that never comes.
+func TestExecuteCommandKillsGrandchildOnChannelInitFailure(t *testing.T) {
+	orig := execCommand
+	t.Cleanup(func() { execCommand = orig })
+
+	initFailedLine := `{"type":"system","subtype":"init","mcp_servers":[{"name":"plugin:blackpaw-telegram:blackpaw-telegram","status":"failed"}]}`
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		script := "(sleep 5 >&2 &); echo '" + initFailedLine + "'; sleep 5"
+		return exec.Command("sh", "-c", script)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	_, err := runExecuteCommandWithDeadline(t, 8*time.Second, ctx, t.TempDir(), nil, []string{"plugin:blackpaw-telegram:"})
+	if !errors.Is(err, errChannelMCPInit) {
+		t.Errorf("expected errChannelMCPInit, got %v", err)
+	}
+}
+
+// TestRunStaleSessionInAttemptRetryTimeoutReason is the regression test for
+// finding 3: the in-attempt stale-session retry (runTaskAttempt) shares the
+// same per-attempt context/deadline as the initial --resume spawn. If the
+// *retry* (not the initial spawn) is what hits the deadline, the recorded
+// history reason must still be "timeout", not a generic "failure" — which
+// requires deriving the reason from the final error (errors.Is against
+// context.DeadlineExceeded) rather than a flag captured right after the
+// initial spawn.
+func TestRunStaleSessionInAttemptRetryTimeoutReason(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	staleSessionID := "aaaa-bbbb-cccc"
+	staleOutput := "No conversation found with session ID: " + staleSessionID + "\n" +
+		`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"` +
+		staleSessionID + `","errors":["No conversation found with session ID: ` + staleSessionID + `"]}` + "\n"
+	staleFile := filepath.Join(dir, "stale.out")
+	os.WriteFile(staleFile, []byte(staleOutput), 0644)
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "--resume") {
+			// Initial spawn: fails fast with a stale-session error, well
+			// within the task's short timeout.
+			return exec.Command("sh", "-c", "cat "+staleFile+"; exit 1")
+		}
+		// In-attempt retry (no --resume): sleeps well past the timeout so
+		// the shared per-attempt context deadline fires during the retry,
+		// not the initial spawn.
+		return exec.Command("sh", "-c", "sleep 2")
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true, Timeout: "200ms"},
+		},
+	}
+
+	sessions := session.NewStore(dir)
+	if err := sessions.Set("task:mytask", staleSessionID); err != nil {
+		t.Fatalf("seeding stale session: %v", err)
+	}
+
+	err := Run(cfg, "mytask", sessions)
+	if err == nil {
+		t.Fatal("Run() should return an error when the in-attempt retry times out")
+	}
+
+	hist := history.NewStore(cfg.HomePath)
+	entry := hist.Get("mytask")
+	if entry == nil {
+		t.Fatal("expected a history entry")
+	}
+	if entry.Reason != history.ReasonTimeout {
+		t.Errorf("history reason = %q, want %q (in-attempt retry hit the deadline)", entry.Reason, history.ReasonTimeout)
+	}
+}
+
+// TestRunChannelInitExhaustionDoesNotClearSession is the regression test for
+// finding 7: once the free channel-init retries (maxChannelInitAttempts) are
+// exhausted and a further channel-init failure starts consuming the task's
+// own retry budget, the next attempt must NOT clear a perfectly valid
+// session — the failure says nothing about whether the session itself is
+// stale. Verified by checking that the final attempt's args still carry
+// --resume with the originally seeded session ID.
+func TestRunChannelInitExhaustionDoesNotClearSession(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	origBackoff := channelInitBackoff
+	channelInitBackoff = 0
+	defer func() { channelInitBackoff = origBackoff }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	seededSessionID := "seeded-session-123"
+	initFailedLine := `{"type":"system","subtype":"init","mcp_servers":[{"name":"plugin:blackpaw-telegram:blackpaw-telegram","status":"failed"}]}`
+
+	var allArgs [][]string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		allArgs = append(allArgs, append([]string(nil), args...))
+		return exec.Command("sh", "-c", "echo '"+initFailedLine+"'; sleep 5")
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile: "task.md",
+				Schedule:   "0 * * * *",
+				Enabled:    true,
+				Retries:    1, // maxAttempts = 2, so a real (non-channel-init) retry occurs
+				Channels:   []string{"plugin:blackpaw-telegram@blackpaw-studio/claude-plugins"},
+			},
+		},
+	}
+
+	sessions := session.NewStore(dir)
+	if err := sessions.Set("task:mytask", seededSessionID); err != nil {
+		t.Fatalf("seeding session: %v", err)
+	}
+
+	err := Run(cfg, "mytask", sessions)
+	if err == nil {
+		t.Fatal("Run() should return an error when channel MCP init keeps failing")
+	}
+
+	// 1 initial + maxChannelInitAttempts channel-init retries (all attempt 1)
+	// + 1 more attempt (attempt 2, consuming the task's own retry budget).
+	wantInvocations := 1 + maxChannelInitAttempts + 1
+	if len(allArgs) != wantInvocations {
+		t.Fatalf("invocations = %d, want %d", len(allArgs), wantInvocations)
+	}
+
+	last := strings.Join(allArgs[len(allArgs)-1], " ")
+	if !strings.Contains(last, "--resume "+seededSessionID) {
+		t.Errorf("final attempt should still --resume the original session (channel-init failure isn't a session problem); args=%v", last)
 	}
 }

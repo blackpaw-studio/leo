@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -104,7 +105,10 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store) (stri
 		sessionID = sid
 	}
 
-	args := buildArgs(cfg, task, taskName, prompt, sessionID)
+	_, leoMCPOK := leoMCPEnv(cfg, taskName)
+	warnLeoMCPSkipped(cfg, taskName, leoMCPOK)
+
+	args := buildArgs(cfg, task, taskName, prompt, sessionID, leoMCPOK)
 	return prompt, args, nil
 }
 
@@ -136,7 +140,11 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	// leoEnv rides along on every claude invocation for this task (main
 	// attempts and the notify-on-fail child alike) whenever the leo MCP
 	// server was actually wired into the args by buildArgs; see leoMCPEnv.
-	leoEnv, _ := leoMCPEnv(cfg, taskName)
+	// The gate is evaluated once here (not once per buildArgs call) so a
+	// missing/unreadable token only produces one warning per run, not one
+	// per attempt.
+	leoEnv, leoMCPOK := leoMCPEnv(cfg, taskName)
+	warnLeoMCPSkipped(cfg, taskName, leoMCPOK)
 	spawnEnv := mergeEnvMaps(provEnv, leoEnv)
 
 	prompt, err := assemblePrompt(cfg, task)
@@ -182,17 +190,22 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	channelInitAttempts := 0
 	isChannelInitRetry := false
 
-	var timedOut bool
 	for attempt := 1; attempt <= maxAttempts; {
 		if attempt > 1 && !isChannelInitRetry {
 			fmt.Fprintf(os.Stderr, "retrying task %q (attempt %d/%d)\n", taskName, attempt, maxAttempts)
-			// Clear session for retry attempts
-			sessionID = ""
+			// Clear session for retry attempts — but not when the previous
+			// failure was a channel-init flake (errChannelMCPInit): that
+			// failure says nothing about the session's validity, so
+			// clearing it here would throw away a perfectly good session
+			// once the free channel-init retries are exhausted and the
+			// failure starts consuming the task's own retry budget.
+			if !errors.Is(lastErr, errChannelMCPInit) {
+				sessionID = ""
+			}
 		}
 		isChannelInitRetry = false
 
-		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, spawnEnv, channelPrefixes, sessions)
-		timedOut = ar.timedOut
+		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, spawnEnv, channelPrefixes, sessions, leoMCPOK)
 		lastLogContent = string(ar.output)
 
 		// Store session ID for next run
@@ -240,7 +253,13 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	if lastErr != nil {
 		exitCode = 1
 		switch {
-		case timedOut:
+		// Derived from lastErr (not a flag captured mid-attempt) so an
+		// in-attempt stale-session retry (runTaskAttempt) that itself hits
+		// the deadline is correctly reported as a timeout rather than a
+		// generic failure — executeCommand's contract is to return ctx.Err()
+		// (context.DeadlineExceeded) whenever the deadline fired, on either
+		// the initial spawn or the retry.
+		case errors.Is(lastErr, context.DeadlineExceeded):
 			reason = history.ReasonTimeout
 		case errors.Is(lastErr, errChannelMCPInit):
 			reason = history.ReasonChannelInit
@@ -266,19 +285,23 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 }
 
 // attemptResult captures the outcome of one main-loop task attempt,
-// including any in-place stale-session retry (see runTaskAttempt).
+// including any in-place stale-session retry (see runTaskAttempt). Whether
+// the attempt timed out is derived by the caller from execErr via
+// errors.Is(execErr, context.DeadlineExceeded) — see executeCommand's
+// contract — rather than captured as a separate flag here, since a flag
+// snapshotted before the in-place stale-session retry would miss a deadline
+// that fires during that retry instead of the initial spawn.
 type attemptResult struct {
-	output   []byte
-	execErr  error
-	result   claudeResult
-	timedOut bool
+	output  []byte
+	execErr error
+	result  claudeResult
 }
 
 // runTaskAttempt spawns claude for one attempt of the task, retrying
 // in-place (same attempt, no session clear) without --resume if the initial
 // spawn used a session that turns out to be stale.
-func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, provEnv map[string]string, channelPrefixes []string, sessions *session.Store) attemptResult {
-	args := buildArgs(cfg, task, taskName, prompt, sessionID)
+func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, provEnv map[string]string, channelPrefixes []string, sessions *session.Store, leoMCPOK bool) attemptResult {
+	args := buildArgs(cfg, task, taskName, prompt, sessionID, leoMCPOK)
 
 	// Per-attempt timeout so each retry gets the full timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -286,7 +309,6 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 
 	output, execErr := executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv, channelPrefixes)
 	result := parseClaudeOutput(output)
-	timedOut := ctx.Err() == context.DeadlineExceeded
 
 	// If --resume failed with a stale session, retry without it.
 	if execErr != nil && sessionID != "" && isSessionError(result, output) {
@@ -296,12 +318,12 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 			}
 		}
 
-		args = buildArgs(cfg, task, taskName, prompt, "")
+		args = buildArgs(cfg, task, taskName, prompt, "", leoMCPOK)
 		output, execErr = executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv, channelPrefixes)
 		result = parseClaudeOutput(output)
 	}
 
-	return attemptResult{output: output, execErr: execErr, result: result, timedOut: timedOut}
+	return attemptResult{output: output, execErr: execErr, result: result}
 }
 
 // notifyFailure spawns a short, bounded claude invocation that asks the agent
@@ -382,15 +404,25 @@ func appendNotifyOutputToLog(cfg *config.Config, logFile string, output []byte) 
 // array (populated on subtype "error_during_execution" results, which carry
 // no "result" field), and finally the raw combined output as a last resort.
 func isSessionError(result claudeResult, output []byte) bool {
-	candidates := make([]string, 0, len(result.Errors)+2)
+	candidates := make([]string, 0, len(result.Errors)+1)
 	candidates = append(candidates, result.Result)
 	candidates = append(candidates, result.Errors...)
-	candidates = append(candidates, string(output))
 
 	for _, c := range candidates {
 		if sessionErrorText(c) {
 			return true
 		}
+	}
+
+	// Last resort: scan the raw combined output, but only when the parsed
+	// result carried no text of its own (claude never emitted a usable
+	// result/errors field — e.g. it crashed before producing a result
+	// event). Otherwise ordinary conversation text that happens to mention
+	// "session" alongside "expired"/"invalid"/"not found" could
+	// false-trigger a stale-session clear even though the parsed result
+	// says nothing of the kind.
+	if result.Result == "" && len(result.Errors) == 0 && sessionErrorText(string(output)) {
+		return true
 	}
 	return false
 }
@@ -432,6 +464,15 @@ func (s *syncBuffer) Bytes() []byte {
 	return out
 }
 
+// maxScannerBufferSize bounds the channel-init monitor's per-line scan
+// buffer. claude stream-json lines carrying large tool results are normal
+// and can comfortably exceed a small cap, so this is generous; lines beyond
+// it simply stop being scanned for channel-init events (see the drain in
+// executeCommand, which covers that case so the child is never blocked
+// writing). A package-level var (not const) so tests can shrink it to
+// exercise the overflow path without generating multi-megabyte fixtures.
+var maxScannerBufferSize = 10 * 1024 * 1024
+
 // executeCommand spawns claude and returns its combined stdout+stderr output.
 // When channelInitPrefixes is non-empty, the child's stdout is additionally
 // scanned incrementally (line by line) for the stream-json system/init event;
@@ -455,9 +496,6 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 	}
 	cmd.Env = env
 
-	// Use a done channel to coordinate context cancellation with process lifecycle.
-	// Start the process explicitly so we can kill it on timeout.
-	//
 	// stdout is wrapped in a mutex because when channel-init monitoring is
 	// active, cmd.Stdout becomes an io.MultiWriter (a distinct Writer value
 	// from cmd.Stderr) — os/exec only serializes concurrent writes to a
@@ -472,39 +510,100 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 	if len(channelInitPrefixes) > 0 {
 		pr, pw = io.Pipe()
 		cmd.Stdout = io.MultiWriter(stdout, pw)
-		// Run in its own process group so a kill (from the monitor detecting
-		// a failed channel MCP server, or from the context deadline below)
-		// also reaches any children claude spawned that inherited its
-		// stdout — otherwise an orphaned grandchild can keep the pipe open
-		// and cmd.Wait() would hang waiting for EOF that never comes.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	} else {
 		cmd.Stdout = stdout
 	}
+	// Always run in its own process group. A kill (context deadline, a
+	// monitor-detected failed channel MCP server) or a forwarded interactive
+	// SIGINT/SIGTERM needs to reach any children claude spawned that
+	// inherited its stdout/stdin — otherwise an orphaned grandchild can keep
+	// the pipe open (cmd.Wait() would hang waiting for EOF that never comes)
+	// or outlive the parent's own signal handling.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 
-	kill := func() {
+	// done is closed once cmd.Wait() returns below, i.e. once the child has
+	// been reaped. Every goroutine that might signal the child checks done
+	// immediately before doing so: without that guard, a kill/signal racing
+	// with natural process exit could — after PID reuse by the OS — hit an
+	// unrelated process group instead of the (already-gone) child.
+	done := make(chan struct{})
+
+	signalGroup := func(sig syscall.Signal) {
+		select {
+		case <-done:
+			return
+		default:
+		}
 		if cmd.Process == nil {
 			return
 		}
-		if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
-			if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err == nil {
-				return
-			}
+		if err := syscall.Kill(-cmd.Process.Pid, sig); err == nil {
+			return
 		}
-		cmd.Process.Kill()
+		// -pgid delivery failed; fall back to signaling just the direct
+		// child rather than delivering nothing at all.
+		_ = cmd.Process.Signal(sig)
+	}
+	// kill delivers SIGKILL to the whole process group and keeps re-sending
+	// it briefly in the background. A single SIGKILL only reaches processes
+	// that already exist in the group at that instant — if claude (or, in
+	// tests, a shell script) forks a child a few microseconds after we
+	// signal, that straggler never receives it and can run to completion
+	// holding the stdout pipe open, which would otherwise hang cmd.Wait()
+	// indefinitely despite the "kill" having "succeeded". Re-sending at a
+	// short interval until done closes (i.e. until Wait() actually returns,
+	// which by construction requires every pipe holder to be gone) closes
+	// that window; the resend loop is itself bounded so it can never leak
+	// past a couple of seconds even in some unforeseen pathological case.
+	kill := func() {
+		signalGroup(syscall.SIGKILL)
+		go func() {
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			giveUp := time.After(2 * time.Second)
+			for {
+				select {
+				case <-done:
+					return
+				case <-giveUp:
+					return
+				case <-ticker.C:
+					signalGroup(syscall.SIGKILL)
+				}
+			}
+		}()
 	}
 
-	// Monitor context in background; kill process if deadline expires
-	done := make(chan struct{})
+	// Monitor context in background; kill process if deadline expires.
 	go func() {
 		select {
 		case <-ctx.Done():
 			kill()
 		case <-done:
+		}
+	}()
+
+	// Forward interactive SIGINT/SIGTERM (e.g. Ctrl-C on `leo run`) to the
+	// child's process group. Setpgid above detaches the child from the
+	// terminal's foreground process group, so without this it would never
+	// see the signal and would be left running after the parent exits.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		defer signal.Stop(sigCh)
+		for {
+			select {
+			case sig := <-sigCh:
+				if s, ok := sig.(syscall.Signal); ok {
+					signalGroup(s)
+				}
+			case <-done:
+				return
+			}
 		}
 	}()
 
@@ -514,8 +613,12 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 		monitorDone = make(chan struct{})
 		go func() {
 			defer close(monitorDone)
+			initialBufSize := 64 * 1024
+			if initialBufSize > maxScannerBufferSize {
+				initialBufSize = maxScannerBufferSize
+			}
 			scanner := bufio.NewScanner(pr)
-			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			scanner.Buffer(make([]byte, 0, initialBufSize), maxScannerBufferSize)
 			for scanner.Scan() {
 				if monitorErr != nil {
 					continue // already found a failure; keep draining so writes don't block
@@ -525,14 +628,25 @@ func executeCommand(ctx context.Context, workDir string, args []string, channels
 					kill()
 				}
 			}
+			// The scan loop can end early — e.g. bufio.ErrTooLong on a
+			// single line bigger than maxScannerBufferSize — while the
+			// child is still writing. Nothing else reads pr in that case,
+			// so the MultiWriter's write into pw would block forever, the
+			// os/exec-internal stdout copier would never finish, and
+			// cmd.Wait() below would hang even after kill(). Draining until
+			// pw.Close() (called after Wait returns) guarantees that never
+			// happens, at the cost of no longer scanning for channel-init
+			// events past the oversized line — an acceptable trade since
+			// that's already a pathological case.
+			io.Copy(io.Discard, pr) //nolint:errcheck // draining only; errors are expected once pw closes
 		}()
 	}
 
 	err := cmd.Wait()
-	close(done) // stop the monitor goroutine
+	close(done) // stop the ctx-watcher and signal-forwarding goroutines
 
 	if pw != nil {
-		pw.Close() // unblocks the scanner goroutine (EOF) once the child has exited
+		pw.Close() // unblocks the drain/scanner goroutine (EOF) once the child has exited
 		<-monitorDone
 	}
 
@@ -704,6 +818,19 @@ func leoMCPEnv(cfg *config.Config, taskName string) (map[string]string, bool) {
 	}, true
 }
 
+// warnLeoMCPSkipped prints the "leo MCP server skipped" warning at most once
+// per Run/Preview call, when the leoMCPEnv gate failed despite the web UI
+// being enabled (the only case worth flagging — otherwise it's simply not
+// configured). Callers evaluate the gate once and thread the result through
+// buildArgs, rather than each buildArgs call re-evaluating (and
+// re-warning) independently.
+func warnLeoMCPSkipped(cfg *config.Config, taskName string, leoMCPOK bool) {
+	if leoMCPOK || cfg == nil || !cfg.Web.Enabled {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "leo: warning: skipping leo MCP server for task %q: no readable API token\n", taskName)
+}
+
 // mergeEnvMaps combines any number of env maps into one, later maps taking
 // precedence on key collision. Returns nil (not an empty map) when the
 // result would be empty, so callers checking len(extraEnv) == 0 still work.
@@ -720,7 +847,7 @@ func mergeEnvMaps(maps ...map[string]string) map[string]string {
 	return out
 }
 
-func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string) []string {
+func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoMCPOK bool) []string {
 	args := []string{
 		"-p", prompt,
 		"--model", cfg.TaskModel(task),
@@ -752,14 +879,14 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 	}
 	// Layer in the Leo-managed MCP server so task-mode runs also have access
 	// to the universal slash-command tools (a long-running task can call
-	// e.g. leo_list_agents to coordinate with the supervisor). Skip it
-	// entirely when leoMCPEnv's gate fails (web disabled, or no readable
-	// API token) — otherwise claude would spawn `leo mcp-server` with no way
-	// to authenticate, and every tool call through it would fail.
-	if _, ok := leoMCPEnv(cfg, taskName); ok {
+	// e.g. leo_list_agents to coordinate with the supervisor). leoMCPOK is
+	// the leoMCPEnv gate (web disabled, or no readable API token), evaluated
+	// once by the caller (Run/Preview) rather than here — otherwise claude
+	// would spawn `leo mcp-server` with no way to authenticate, every tool
+	// call through it would fail, and each buildArgs call in a multi-attempt
+	// run would re-evaluate the gate and re-print the warning.
+	if leoMCPOK {
 		args = leomcp.AppendArg(args, cfg)
-	} else if cfg != nil && cfg.Web.Enabled {
-		fmt.Fprintf(os.Stderr, "leo: warning: skipping leo MCP server for task %q: no readable API token\n", taskName)
 	}
 
 	taskWorkspace := cfg.TaskWorkspace(task)
