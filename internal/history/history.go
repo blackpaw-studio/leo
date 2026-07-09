@@ -12,9 +12,11 @@ const maxHistoryPerTask = 10
 
 // Exit reasons for task execution.
 const (
-	ReasonSuccess = "success"
-	ReasonFailure = "failure"
-	ReasonTimeout = "timeout"
+	ReasonSuccess     = "success"
+	ReasonFailure     = "failure"
+	ReasonTimeout     = "timeout"
+	ReasonChannelInit = "channel-init"
+	ReasonInterrupted = "interrupted"
 )
 
 // Entry records the result of a single task execution.
