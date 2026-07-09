@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 func TestAssemblePrompt(t *testing.T) {
@@ -579,6 +580,74 @@ func TestRunNotifyOnFailSkippedWithoutChannels(t *testing.T) {
 	_ = Run(cfg, "mytask", nil)
 	if invocations != 1 {
 		t.Errorf("expected exactly 1 exec invocation (no notify without channels), got %d", invocations)
+	}
+}
+
+// TestRunStaleSessionFallbackRealWorldOutput reproduces the exact real-world
+// claude output when a resumed session's transcript has been cleaned up: a
+// stderr line "No conversation found with session ID: ..." followed by a
+// stream-json result event of subtype "error_during_execution" that carries
+// the message in the "errors" array (no "result" field). isSessionError must
+// recognize this shape, the runner must clear the stale session and retry
+// without --resume in the same attempt, and store the new session id from
+// the successful fresh run.
+func TestRunStaleSessionFallbackRealWorldOutput(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	staleSessionID := "a3813644-1111-2222-3333-444455556666"
+	staleOutput := "No conversation found with session ID: " + staleSessionID + "\n" +
+		`{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"session_id":"` +
+		staleSessionID + `","errors":["No conversation found with session ID: ` + staleSessionID + `"]}` + "\n"
+	freshOutput := `{"type":"result","subtype":"success","is_error":false,"num_turns":1,"session_id":"fresh-session-999","result":"done"}` + "\n"
+
+	staleFile := filepath.Join(dir, "stale.out")
+	freshFile := filepath.Join(dir, "fresh.out")
+	os.WriteFile(staleFile, []byte(staleOutput), 0644)
+	os.WriteFile(freshFile, []byte(freshOutput), 0644)
+
+	var invocations int
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		invocations++
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "--resume") {
+			return exec.Command("sh", "-c", "cat "+staleFile+"; exit 1")
+		}
+		return exec.Command("sh", "-c", "cat "+freshFile)
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+
+	sessions := session.NewStore(dir)
+	if err := sessions.Set("task:mytask", staleSessionID); err != nil {
+		t.Fatalf("seeding stale session: %v", err)
+	}
+
+	err := Run(cfg, "mytask", sessions)
+	if err != nil {
+		t.Fatalf("Run() should succeed after stale-session fallback, got: %v", err)
+	}
+	if invocations != 2 {
+		t.Fatalf("expected 2 exec invocations (resume + fresh retry), got %d", invocations)
+	}
+
+	newSID, _, getErr := sessions.Get("task:mytask")
+	if getErr != nil {
+		t.Fatalf("reading session after run: %v", getErr)
+	}
+	if newSID != "fresh-session-999" {
+		t.Errorf("stored session id = %q, want %q", newSID, "fresh-session-999")
 	}
 }
 

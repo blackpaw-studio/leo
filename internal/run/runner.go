@@ -38,9 +38,10 @@ const notifyFailureTimeout = 60 * time.Second
 // claudeResult is the minimal structure for parsing the final "result" event
 // from claude --output-format stream-json (newline-delimited JSON).
 type claudeResult struct {
-	SessionID string `json:"session_id"`
-	Result    string `json:"result"`
-	IsError   bool   `json:"is_error"`
+	SessionID string   `json:"session_id"`
+	Result    string   `json:"result"`
+	IsError   bool     `json:"is_error"`
+	Errors    []string `json:"errors"`
 }
 
 // streamEvent represents a single event line from stream-json output.
@@ -258,11 +259,33 @@ func notifyFailure(taskName string, task config.TaskConfig, workspace string, ta
 	}
 }
 
-// isSessionError checks whether a claude failure was caused by an invalid/stale session.
+// isSessionError checks whether a claude failure was caused by an invalid/stale
+// session. It inspects the parsed result text, each entry of the "errors"
+// array (populated on subtype "error_during_execution" results, which carry
+// no "result" field), and finally the raw combined output as a last resort.
 func isSessionError(result claudeResult, output []byte) bool {
-	text := strings.ToLower(result.Result)
+	candidates := make([]string, 0, len(result.Errors)+2)
+	candidates = append(candidates, result.Result)
+	candidates = append(candidates, result.Errors...)
+	candidates = append(candidates, string(output))
+
+	for _, c := range candidates {
+		if sessionErrorText(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionErrorText reports whether text (case-insensitively) matches a known
+// stale/invalid-session error pattern.
+func sessionErrorText(text string) bool {
+	text = strings.ToLower(text)
 	if text == "" {
-		text = strings.ToLower(string(output))
+		return false
+	}
+	if strings.Contains(text, "no conversation found") {
+		return true
 	}
 	return strings.Contains(text, "session") &&
 		(strings.Contains(text, "not found") || strings.Contains(text, "invalid") || strings.Contains(text, "expired"))
@@ -327,7 +350,7 @@ func parseClaudeOutput(output []byte) claudeResult {
 			best = evt.claudeResult
 		}
 	}
-	if best.SessionID != "" || best.Result != "" {
+	if best.SessionID != "" || best.Result != "" || len(best.Errors) > 0 {
 		return best
 	}
 	// Fallback: try parsing as a single JSON object (old --output-format json).
