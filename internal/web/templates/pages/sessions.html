@@ -1,0 +1,30 @@
+{{define "page_sessions"}}
+<h1 class="page-title">Sessions</h1>
+<p class="dim">Persistent Claude sessions used by runtime: persistent tasks. Reset kills the tmux session, drops queued work, and clears the stored session id.</p>
+{{range .Data.Sessions}}
+<div class="card">
+  <div class="card-head">
+    <b>{{.Name}}</b>
+    <span class="row-actions">
+      {{if .TmuxLive}}<span class="pill ok">running</span>{{else}}<span class="pill off">down</span>{{end}}
+      {{if ge .Depth 0}}<span class="dim">queue {{.Depth}}</span>{{end}}
+      <form hx-post="/web/session/{{.Name}}/reset" hx-target="#flash-container" hx-trigger="confirmed"
+            onsubmit="event.preventDefault(); confirmDelete(this)">
+        <button type="submit" class="btn danger btn-sm">reset</button>
+      </form>
+    </span>
+  </div>
+  {{if .StoredID}}<div class="frow"><label>session id</label><span class="dim">{{.StoredID}}</span></div>{{end}}
+  {{template "config_form" .Form}}
+</div>
+{{else}}
+<p class="dim">No persistent sessions configured.</p>
+{{end}}
+<div class="card">
+  <div class="card-head"><b>New session</b></div>
+  <form hx-post="/web/session/add" hx-target="#flash-container" class="frow-inline">
+    <input type="text" name="name" placeholder="session-name" required>
+    <button type="submit" class="btn hot">Create</button>
+  </form>
+</div>
+{{end}}

@@ -1,0 +1,68 @@
+{{define "config_form"}}
+<form class="config-form" hx-post="{{.Action}}" hx-target="#flash-container" hx-swap="innerHTML">
+  {{$group := ""}}
+  {{range .Fields}}{{if not .Advanced}}
+    {{if ne .Group $group}}{{$group = .Group}}<div class="form-group-label">{{.Group}}</div>{{end}}
+    {{template "config_field" .}}
+  {{end}}{{end}}
+  {{$hasAdvanced := false}}
+  {{range .Fields}}{{if .Advanced}}{{$hasAdvanced = true}}{{end}}{{end}}
+  {{if $hasAdvanced}}
+  <details class="advanced-details">
+    <summary class="advanced-summary">Advanced</summary>
+    <div class="advanced-content">
+      {{range .Fields}}{{if .Advanced}}{{template "config_field" .}}{{end}}{{end}}
+    </div>
+  </details>
+  {{end}}
+  <div class="form-actions">
+    <button type="submit" class="btn hot">{{.SubmitLabel}}</button>
+    {{if .DeleteURL}}
+    <button type="button" class="btn danger" hx-delete="{{.DeleteURL}}" hx-confirm="Delete this?"
+            hx-target="#flash-container" hx-swap="innerHTML">Delete</button>
+    {{end}}
+  </div>
+</form>
+{{end}}
+
+{{define "config_field"}}
+<div class="frow">
+  <label for="f-{{.Key}}">{{.Label}}</label>
+  <div class="fctl">
+    {{if eq (kindName .Kind) "bool"}}
+      <input type="hidden" name="{{.Key}}" value="false">
+      <label class="toggle">
+        <input type="checkbox" id="f-{{.Key}}" name="{{.Key}}" value="true" {{if .Checked}}checked{{end}}>
+        <span class="toggle-slider"></span>
+      </label>
+    {{else if eq (kindName .Kind) "tribool"}}
+      <select id="f-{{.Key}}" name="{{.Key}}">
+        <option value="" {{if eq .Value ""}}selected{{end}}>inherit</option>
+        <option value="true" {{if eq .Value "true"}}selected{{end}}>on</option>
+        <option value="false" {{if eq .Value "false"}}selected{{end}}>off</option>
+      </select>
+    {{else if eq (kindName .Kind) "select"}}
+      <select id="f-{{.Key}}" name="{{.Key}}">
+        {{$v := .Value}}{{range .Opts}}<option value="{{.Value}}" {{if eq .Value $v}}selected{{end}}>{{.Label}}</option>{{end}}
+      </select>
+    {{else if eq (kindName .Kind) "envmap"}}
+      <textarea id="f-{{.Key}}" name="{{.Key}}" rows="3" placeholder="KEY=VALUE, one per line">{{.Value}}</textarea>
+    {{else if eq (kindName .Kind) "textarea"}}
+      <textarea id="f-{{.Key}}" name="{{.Key}}" rows="3">{{.Value}}</textarea>
+    {{else if eq (kindName .Kind) "cron"}}
+      <input type="text" id="f-{{.Key}}" name="{{.Key}}" value="{{.Value}}"
+             hx-get="/web/cron/preview" hx-trigger="input changed delay:400ms"
+             hx-target="next .cron-preview" hx-swap="innerHTML" hx-params="none"
+             hx-vals='js:{"expr": event.target.value}'>
+      <div class="cron-preview"><span class="cron-preview-desc">{{cronDesc .Value}}</span></div>
+    {{else if eq (kindName .Kind) "number"}}
+      <input type="number" id="f-{{.Key}}" name="{{.Key}}" value="{{.Value}}">
+    {{else}}
+      <input type="text" id="f-{{.Key}}" name="{{.Key}}" value="{{.Value}}"
+             {{if .Inherited}}placeholder="inherit: {{.Inherited}}"{{end}}>
+    {{end}}
+    {{if .Help}}<div class="form-help">{{.Help}}</div>{{end}}
+    {{if .Warning}}<div class="fwarn">⚠ {{.Warning}}</div>{{end}}
+  </div>
+</div>
+{{end}}

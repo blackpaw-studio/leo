@@ -1,29 +1,37 @@
 {{define "agents.html"}}
 <div id="agents-content">
-    <h2 class="section-title">Spawn Agent</h2>
-    {{if .Templates}}
-    <form hx-post="/web/agent/spawn" hx-target="#flash-container" hx-swap="innerHTML">
-        <div class="form-row">
-            <label for="spawn-template">Template</label>
-            <select name="template" id="spawn-template" required>
-                <option value="">Select template...</option>
-                {{range $name, $tmpl := .Templates}}
-                <option value="{{$name}}">{{$name}}</option>
-                {{end}}
-            </select>
-        </div>
-        <div class="form-row">
-            <label for="spawn-repo">Name or Repo</label>
-            <input type="text" name="repo" id="spawn-repo" placeholder="owner/repo or project-name" required>
-            <span class="form-hint">Use owner/repo to clone from GitHub, or a plain name for the template workspace</span>
-        </div>
-        <button type="submit" class="btn">Spawn Agent</button>
-    </form>
-    {{else}}
-    <div class="empty-state">No templates configured. Add templates to your leo.yaml config.</div>
-    {{end}}
+    <div class="card">
+        <div class="card-head"><b>Spawn Agent</b></div>
+        {{if .Templates}}
+        <form class="config-form" hx-post="/web/agent/spawn" hx-target="#flash-container" hx-swap="innerHTML">
+            <div class="frow">
+                <label for="spawn-template">Template</label>
+                <div class="fctl">
+                    <select name="template" id="spawn-template" required>
+                        <option value="">Select template...</option>
+                        {{range $name, $tmpl := .Templates}}
+                        <option value="{{$name}}">{{$name}}</option>
+                        {{end}}
+                    </select>
+                </div>
+            </div>
+            <div class="frow">
+                <label for="spawn-repo">Name or Repo</label>
+                <div class="fctl">
+                    <input type="text" name="repo" id="spawn-repo" placeholder="owner/repo or project-name" required>
+                    <div class="form-help">Use owner/repo to clone from GitHub, or a plain name for the template workspace</div>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn hot">Spawn Agent</button>
+            </div>
+        </form>
+        {{else}}
+        <div class="config-form"><div class="empty-state">No templates configured. Add templates to your leo.yaml config.</div></div>
+        {{end}}
+    </div>
 
-    <h2 class="section-title" style="margin-top: 2rem;">Running Agents</h2>
+    <h2 class="section-title section-block">Running Agents</h2>
     <div id="agent-cards" class="cards">
         {{range .Agents}}
         <div class="process-card {{statusColor .Status}}">

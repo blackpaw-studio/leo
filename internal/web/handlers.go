@@ -9,10 +9,11 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -55,34 +56,6 @@ type taskData struct {
 	CronExpr string
 }
 
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, "layout.html", data); err != nil {
-		fmt.Fprintf(w, "template error: %v", err)
-	}
-}
-
-func (s *Server) handlePartialStatus(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "status.html", data) //nolint:errcheck
-}
-
 func (s *Server) handlePartialProcesses(w http.ResponseWriter, r *http.Request) {
 	data, err := s.buildDashboardData()
 	if err != nil {
@@ -91,46 +64,6 @@ func (s *Server) handlePartialProcesses(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	s.templates.ExecuteTemplate(w, "processes.html", data) //nolint:errcheck
-}
-
-func (s *Server) handlePartialTasks(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "tasks.html", data) //nolint:errcheck
-}
-
-func (s *Server) handlePartialConfigProcesses(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
-}
-
-func (s *Server) handlePartialConfigTasks(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
-}
-
-func (s *Server) handlePartialConfigSettings(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "config_settings.html", cfg) //nolint:errcheck
 }
 
 func (s *Server) handlePartialTaskHistory(w http.ResponseWriter, r *http.Request) {
@@ -439,18 +372,14 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 		action = "disabled"
 	}
 
-	// Return updated task table
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
+	// HX-Refresh triggers a full page reload, so the list's button
+	// label/next-run/state all pick up the new value — the same convention
+	// handleProviderAdd/handleHostAdd/handleSessionAdd use. That makes the
+	// response body itself moot (the page reloads before it's swapped in),
+	// but render the flash normally anyway for tests/non-htmx callers.
+	w.Header().Set("HX-Refresh", "true")
 	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Task %q %s", name, action), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "tasks.html", data) //nolint:errcheck
+	s.renderFlash(w, flashType, flashMsg)
 }
 
 func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
@@ -480,168 +409,43 @@ func (s *Server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Task %q triggered", name))
 }
 
-func (s *Server) handleConfigDefaults(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	if model := r.FormValue("model"); model != "" {
-		cfg.Defaults.Model = model
-	}
-	if mt := r.FormValue("max_turns"); mt != "" {
-		if v, err := strconv.Atoi(mt); err == nil && v > 0 {
-			cfg.Defaults.MaxTurns = v
-		}
-	}
-	cfg.Defaults.PermissionMode = r.FormValue("permission_mode")
-	cfg.Defaults.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
-	cfg.Defaults.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
-	cfg.Defaults.AppendSystemPrompt = r.FormValue("append_system_prompt")
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	s.restartNeeded.Store(true)
-	typ, msg := appendReloadWarning("success", "Defaults saved", warn)
-	s.renderFlash(w, typ, msg)
-}
-
-func (s *Server) handleConfigProcess(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	proc, ok := cfg.Processes[name]
-	if !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Process %q not found", name))
-		return
-	}
-
-	proc.Enabled = r.FormValue("enabled") == "true"
-	proc.Model = r.FormValue("model")
-	proc.Workspace = r.FormValue("workspace")
-	proc.Channels = parseCommaSeparated(r.FormValue("channels"))
-	proc.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
-	proc.Agent = r.FormValue("agent")
-	proc.PermissionMode = r.FormValue("permission_mode")
-	proc.RemoteControl = parseOptionalBool(r.FormValue("remote_control"))
-	proc.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
-	proc.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
-	proc.AppendSystemPrompt = r.FormValue("append_system_prompt")
-	proc.MCPConfig = r.FormValue("mcp_config")
-	proc.AddDirs = parseCommaSeparated(r.FormValue("add_dirs"))
-	proc.Env = parseEnvMap(r.FormValue("env"))
-	if mt := r.FormValue("max_turns"); mt != "" {
-		v, err := strconv.Atoi(mt)
-		if err != nil {
-			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
-			return
-		}
-		proc.MaxTurns = v
-	}
-	// Clear bypass_permissions if permission_mode is set (permission_mode takes precedence)
-	if proc.PermissionMode != "" {
-		proc.BypassPermissions = nil
-	} else {
-		bp := r.FormValue("bypass_permissions") == "true"
-		proc.BypassPermissions = &bp
-	}
-	cfg.Processes[name] = proc
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	s.restartNeeded.Store(true)
-	typ, msg := appendReloadWarning("success", fmt.Sprintf("Process %q saved", name), warn)
-	s.renderFlash(w, typ, msg)
-}
-
-func (s *Server) handleConfigTask(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	task, ok := cfg.Tasks[name]
-	if !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Task %q not found", name))
-		return
-	}
-
-	task.Enabled = r.FormValue("enabled") == "true"
-	if sched := r.FormValue("schedule"); sched != "" {
-		task.Schedule = sched
-	}
-	if pf := r.FormValue("prompt_file"); pf != "" {
-		task.PromptFile = pf
-	}
-	task.Model = r.FormValue("model")
-	if mt := r.FormValue("max_turns"); mt != "" {
-		if v, err := strconv.Atoi(mt); err == nil {
-			task.MaxTurns = v
-		}
-	}
-	if to := r.FormValue("timeout"); to != "" {
-		task.Timeout = to
-	}
-	task.Silent = r.FormValue("silent") == "true"
-	task.NotifyOnFail = r.FormValue("notify_on_fail") == "true"
-	task.Timezone = r.FormValue("timezone")
-	task.Workspace = r.FormValue("workspace")
-	task.Channels = parseCommaSeparated(r.FormValue("channels"))
-	task.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
-	if ret := r.FormValue("retries"); ret != "" {
-		if v, err := strconv.Atoi(ret); err == nil {
-			task.Retries = v
-		}
-	}
-	task.PermissionMode = r.FormValue("permission_mode")
-	task.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
-	task.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
-	task.AppendSystemPrompt = r.FormValue("append_system_prompt")
-	cfg.Tasks[name] = task
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	typ, msg := appendReloadWarning("success", fmt.Sprintf("Task %q saved", name), warn)
-	s.renderFlash(w, typ, msg)
-}
-
 type promptEditorData struct {
 	TaskName    string
 	PromptFile  string
 	Files       []string
 	Content     string
 	NewFileName string // populated when creating a new file
+}
+
+// buildPromptEditorData assembles components/prompt_editor.html's data for a
+// task: the list of files in its workspace and the selected file's content.
+// selected overrides task.PromptFile (e.g. the prompt-file dropdown's change
+// event); pass "" to show the task's configured file, or "__new__" for the
+// blank new-file state. Shared by the standalone prompt-editor endpoint
+// (handleTaskPromptGet) and the task edit page so the file-reading logic
+// exists in exactly one place.
+func (s *Server) buildPromptEditorData(cfg *config.Config, name string, task config.TaskConfig, selected string) (promptEditorData, error) {
+	workspace := cfg.TaskWorkspace(task)
+	files, _ := config.ListPromptFiles(workspace)
+
+	if selected == "__new__" {
+		return promptEditorData{TaskName: name, PromptFile: "__new__", Files: files}, nil
+	}
+
+	file := task.PromptFile
+	if selected != "" {
+		file = selected
+	}
+
+	data := promptEditorData{TaskName: name, PromptFile: file, Files: files}
+	if file != "" {
+		content, err := config.ReadPromptFile(workspace, file)
+		if err != nil {
+			return promptEditorData{}, err
+		}
+		data.Content = content
+	}
+	return data, nil
 }
 
 func (s *Server) handleTaskPromptGet(w http.ResponseWriter, r *http.Request) {
@@ -659,31 +463,10 @@ func (s *Server) handleTaskPromptGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workspace := cfg.TaskWorkspace(task)
-	files, _ := config.ListPromptFiles(workspace)
-
-	// If a specific file was requested (e.g. from dropdown change), use that
-	selectedFile := task.PromptFile
-	if qf := r.URL.Query().Get("prompt_file"); qf != "" && qf != "__new__" {
-		selectedFile = qf
-	}
-
-	data := promptEditorData{
-		TaskName:   name,
-		PromptFile: selectedFile,
-		Files:      files,
-	}
-
-	if r.URL.Query().Get("prompt_file") == "__new__" {
-		data.PromptFile = "__new__"
-		data.NewFileName = ""
-	} else if selectedFile != "" {
-		content, err := config.ReadPromptFile(workspace, selectedFile)
-		if err != nil {
-			s.renderFlash(w, "error", fmt.Sprintf("Failed to read prompt: %v", err))
-			return
-		}
-		data.Content = content
+	data, err := s.buildPromptEditorData(cfg, name, task, r.URL.Query().Get("prompt_file"))
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to read prompt: %v", err))
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1030,6 +813,31 @@ func (s *Server) renderFlash(w http.ResponseWriter, typ, msg string) {
 	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: typ, Message: msg}) //nolint:errcheck
 }
 
+// entityNamePattern restricts config entity names (tasks, processes,
+// templates, providers, hosts, sessions) to a safe, URL- and filesystem-path
+// friendly character set. Without this, a name containing "/", "#", "?", or
+// similar creates entries no route can address (e.g. /web/task/{name}/delete
+// splits on an embedded "/") and, worse, task names flow straight into a
+// prompt file path (prompts/<name>.md in handleTaskAdd) where "../x" would
+// escape the workspace.
+var entityNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validEntityName reports whether name is safe to use as a config map key
+// that also gets embedded in URLs and filesystem paths. It must be non-empty,
+// match entityNamePattern, and not be the literal "." or ".." (both match
+// the pattern above but are directory-traversal special cases).
+func validEntityName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return entityNamePattern.MatchString(name)
+}
+
+// entityNameError is the flash message shown when validEntityName rejects a
+// submitted name, shared by every add handler so the guidance stays
+// consistent.
+const entityNameError = "Name may contain only letters, digits, dot, underscore, dash"
+
 // validateAndSave validates the config and saves it. Returns an error message for the user, or empty on success.
 func (s *Server) validateAndSave(cfg *config.Config) string {
 	if err := cfg.Validate(); err != nil {
@@ -1069,57 +877,6 @@ func (s *Server) handleCronPreview(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `</span>`)
 }
 
-func parseCommaSeparated(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
-}
-
-// parseOptionalBool parses a three-state form value into *bool.
-// "true" → &true, "false" → &false, "" → nil (inherit from defaults).
-func parseOptionalBool(s string) *bool {
-	switch s {
-	case "true":
-		v := true
-		return &v
-	case "false":
-		v := false
-		return &v
-	default:
-		return nil
-	}
-}
-
-func parseEnvMap(s string) map[string]string {
-	if s == "" {
-		return nil
-	}
-	result := make(map[string]string)
-	for _, line := range strings.Split(s, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		}
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
-}
-
 func (s *Server) buildDashboardData() (*dashboardData, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -1154,17 +911,12 @@ func (s *Server) buildDashboardData() (*dashboardData, error) {
 
 	// Cron entries + find earliest next run
 	cronMap := make(map[string]cron.EntryInfo)
-	var nextRunName string
-	var nextRunTime time.Time
 	if s.scheduler != nil {
 		for _, e := range s.scheduler.List() {
 			cronMap[e.Name] = e
-			if nextRunTime.IsZero() || e.Next.Before(nextRunTime) {
-				nextRunTime = e.Next
-				nextRunName = e.Name
-			}
 		}
 	}
+	nextRunName, nextRunTime := s.nextScheduledRun()
 
 	// Tasks with history
 	store := s.loadHistory(cfg)
@@ -1190,13 +942,19 @@ func (s *Server) buildDashboardData() (*dashboardData, error) {
 		Tasks:         tasks,
 		CronMap:       cronMap,
 		Config:        cfg,
-		Agents:        s.agents,
+		Agents:        s.agentList(),
 		RestartNeeded: s.restartNeeded.Load(),
 		NextRunName:   nextRunName,
 		NextRunTime:   nextRunTime,
 	}, nil
 }
 
+// handleProcessAdd creates a bare-minimum process (name only, disabled,
+// workspace left empty to inherit the default) and redirects straight to its
+// edit page, where every other ProcessConfig field can be set through the
+// schema-driven form. The add form is a plain (non-htmx-boosted) POST, so a
+// 303 here is a normal browser redirect rather than an htmx swap. Mirrors
+// handleTaskAdd.
 func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -1204,8 +962,8 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 
@@ -1223,37 +981,26 @@ func (s *Server) handleProcessAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Workspace left empty ("") deliberately — ProcessWorkspace/callers
+	// already treat that as "inherit the default workspace", matching every
+	// other schema-driven section's empty-means-inherit convention.
 	cfg.Processes[name] = config.ProcessConfig{
-		Workspace:   r.FormValue("workspace"),
-		Channels:    parseCommaSeparated(r.FormValue("channels")),
-		DevChannels: parseCommaSeparated(r.FormValue("dev_channels")),
-		Model:       r.FormValue("model"),
-		Agent:       r.FormValue("agent"),
-		Enabled:     r.FormValue("enabled") == "true",
+		Enabled: false,
 	}
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
-
+	s.reloadConfigOrWarn() // reload failures are logged server-side; nothing to attach a flash to across a redirect
 	s.restartNeeded.Store(true)
 
-	// Re-render the processes config tab
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Process %q added", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
+	http.Redirect(w, r, "/processes/"+url.PathEscape(name), http.StatusSeeOther)
 }
 
+// handleProcessDelete removes a process and sends htmx an HX-Redirect back to
+// the process list — the edit page the delete button lives on no longer has
+// anything to show once the process is gone. Mirrors handleTaskDelete.
 func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -1274,23 +1021,20 @@ func (s *Server) handleProcessDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
-
+	s.reloadConfigOrWarn()
 	s.restartNeeded.Store(true)
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Process %q deleted", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_processes.html", data) //nolint:errcheck
+	w.Header().Set("HX-Redirect", "/processes")
+	w.WriteHeader(http.StatusOK)
 }
 
+// handleTaskAdd creates a bare-minimum task (name + schedule) and redirects
+// straight to its edit page, where every other TaskConfig field can be set
+// through the schema-driven form. The prompt file is auto-named and starts
+// out non-existent — authored from the edit page's prompt editor — and the
+// task starts disabled so an incomplete config never fires on a cron tick.
+// The add form is a plain (non-htmx-boosted) POST, so a 303 here is a normal
+// browser redirect rather than an htmx swap.
 func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -1298,18 +1042,13 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 	schedule := r.FormValue("schedule")
 	if schedule == "" {
 		s.renderFlash(w, "error", "Schedule is required")
-		return
-	}
-	promptFile := r.FormValue("prompt_file")
-	if promptFile == "" {
-		s.renderFlash(w, "error", "Prompt file is required")
 		return
 	}
 
@@ -1327,59 +1066,24 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task := config.TaskConfig{
+	cfg.Tasks[name] = config.TaskConfig{
 		Schedule:   schedule,
-		PromptFile: promptFile,
-		Model:      r.FormValue("model"),
-		Enabled:    r.FormValue("enabled") == "true",
+		PromptFile: "prompts/" + name + ".md",
+		Enabled:    false,
 	}
-	cfg.Tasks[name] = task
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	reloadWarn := s.reloadConfigOrWarn()
+	s.reloadConfigOrWarn() // reload failures are logged server-side; nothing to attach a flash to across a redirect
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-
-	// Warn (don't block) if the prompt file doesn't exist yet — users often
-	// create the task before authoring the prompt.
-	flashType := "success"
-	message := fmt.Sprintf("Task %q added", name)
-	if missing := promptFileMissing(cfg, task); missing != "" {
-		flashType = "warning"
-		message = fmt.Sprintf("Task %q added, but prompt file %s does not exist yet", name, missing)
-	}
-	flashType, message = appendReloadWarning(flashType, message, reloadWarn)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: message}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
+	http.Redirect(w, r, "/tasks/"+url.PathEscape(name), http.StatusSeeOther)
 }
 
-// promptFileMissing returns the absolute prompt path when a task's prompt
-// file does not exist on disk. Returns "" when the file exists or the path
-// cannot be resolved (the caller treats resolution failures as "not missing"
-// because validateAndSave already rejected invalid paths).
-func promptFileMissing(cfg *config.Config, task config.TaskConfig) string {
-	ws := cfg.TaskWorkspace(task)
-	abs, err := config.ResolvePromptPath(ws, task.PromptFile)
-	if err != nil {
-		return ""
-	}
-	if _, err := os.Stat(abs); err != nil {
-		return abs
-	}
-	return ""
-}
-
+// handleTaskDelete removes a task and sends htmx an HX-Redirect back to the
+// task list — the edit page the delete button lives on no longer has
+// anything to show once the task is gone.
 func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -1400,84 +1104,19 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
+	s.reloadConfigOrWarn()
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Task %q deleted", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_tasks.html", data) //nolint:errcheck
+	w.Header().Set("HX-Redirect", "/tasks")
+	w.WriteHeader(http.StatusOK)
 }
 
 // --- Template config management ---
 
-func (s *Server) handlePartialConfigTemplates(w http.ResponseWriter, r *http.Request) {
-	data, err := s.buildDashboardData()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
-}
-
-func (s *Server) handleConfigTemplate(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	tmpl, ok := cfg.Templates[name]
-	if !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Template %q not found", name))
-		return
-	}
-
-	tmpl.Model = r.FormValue("model")
-	tmpl.Workspace = r.FormValue("workspace")
-	tmpl.Channels = parseCommaSeparated(r.FormValue("channels"))
-	tmpl.DevChannels = parseCommaSeparated(r.FormValue("dev_channels"))
-	tmpl.Agent = r.FormValue("agent")
-	tmpl.PermissionMode = r.FormValue("permission_mode")
-	tmpl.RemoteControl = parseOptionalBool(r.FormValue("remote_control"))
-	tmpl.AllowedTools = parseCommaSeparated(r.FormValue("allowed_tools"))
-	tmpl.DisallowedTools = parseCommaSeparated(r.FormValue("disallowed_tools"))
-	tmpl.AppendSystemPrompt = r.FormValue("append_system_prompt")
-	tmpl.MCPConfig = r.FormValue("mcp_config")
-	tmpl.AddDirs = parseCommaSeparated(r.FormValue("add_dirs"))
-	tmpl.Env = parseEnvMap(r.FormValue("env"))
-	if mt := r.FormValue("max_turns"); mt != "" {
-		v, err := strconv.Atoi(mt)
-		if err != nil {
-			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
-			return
-		}
-		tmpl.MaxTurns = v
-	}
-	cfg.Templates[name] = tmpl
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	warn := s.reloadConfigOrWarn()
-	typ, msg := appendReloadWarning("success", fmt.Sprintf("Template %q saved", name), warn)
-	s.renderFlash(w, typ, msg)
-}
-
+// handleTemplateAdd creates a bare-minimum template (name only) and redirects
+// straight to its edit page, where every other TemplateConfig field can be
+// set through the schema-driven form. Workspace is left empty ("") to
+// inherit the default workspace, matching the empty-means-inherit convention
+// handleProcessAdd already established. Mirrors handleProcessAdd.
 func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -1485,8 +1124,8 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	if name == "" {
-		s.renderFlash(w, "error", "Name is required")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
 		return
 	}
 
@@ -1504,50 +1143,20 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl := config.TemplateConfig{
-		Workspace:          r.FormValue("workspace"),
-		Channels:           parseCommaSeparated(r.FormValue("channels")),
-		DevChannels:        parseCommaSeparated(r.FormValue("dev_channels")),
-		Model:              r.FormValue("model"),
-		Agent:              r.FormValue("agent"),
-		PermissionMode:     r.FormValue("permission_mode"),
-		RemoteControl:      parseOptionalBool(r.FormValue("remote_control")),
-		AllowedTools:       parseCommaSeparated(r.FormValue("allowed_tools")),
-		DisallowedTools:    parseCommaSeparated(r.FormValue("disallowed_tools")),
-		AppendSystemPrompt: r.FormValue("append_system_prompt"),
-		MCPConfig:          r.FormValue("mcp_config"),
-		AddDirs:            parseCommaSeparated(r.FormValue("add_dirs")),
-		Env:                parseEnvMap(r.FormValue("env")),
-	}
-	if mt := r.FormValue("max_turns"); mt != "" {
-		v, err := strconv.Atoi(mt)
-		if err != nil {
-			s.renderFlash(w, "error", fmt.Sprintf("Invalid max turns: %q is not a number", mt))
-			return
-		}
-		tmpl.MaxTurns = v
-	}
-	cfg.Templates[name] = tmpl
+	cfg.Templates[name] = config.TemplateConfig{}
 
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
+	s.reloadConfigOrWarn() // reload failures are logged server-side; nothing to attach a flash to across a redirect
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
-		return
-	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Template %q added", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
+	http.Redirect(w, r, "/config/templates/"+url.PathEscape(name), http.StatusSeeOther)
 }
 
+// handleTemplateDelete removes a template and sends htmx an HX-Redirect back
+// to the template list — the edit page the delete button lives on no longer
+// has anything to show once the template is gone. Mirrors handleProcessDelete.
 func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -1568,17 +1177,197 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", errMsg)
 		return
 	}
-	warn := s.reloadConfigOrWarn()
+	s.reloadConfigOrWarn()
 
-	data, err := s.buildDashboardData()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to reload: %v", err))
+	w.Header().Set("HX-Redirect", "/config/templates")
+	w.WriteHeader(http.StatusOK)
+}
+
+// --- Provider config management ---
+//
+// Providers differ from processes/tasks/templates: there are only ever a
+// handful of them, so the whole CRUD surface lives on one page
+// (config_providers.html) instead of a list page + separate edit page. Add
+// stays on that page too — success re-renders it in place via HX-Refresh
+// rather than a redirect.
+
+// handleProviderAdd creates a new provider entry and reports back on the
+// providers page itself (HX-Refresh, not a redirect to a separate edit page
+// — providers have none). Design decision, worth calling out: unlike
+// handleProcessAdd/handleTemplateAdd (which can create a genuinely empty
+// {}-valued entry because ProcessConfig/TemplateConfig have no required
+// fields), Config.Validate() requires every provider to have a non-empty
+// http(s) base_url AND exactly one of api_key_env/api_key_cmd set — an
+// empty ProviderConfig{} fails both checks. Rather than special-case
+// validateAndSave to skip provider validation on add (which would let an
+// invalid provider hit disk and break the "every save goes through
+// validateAndSave" invariant), the new entry is seeded with an obviously-
+// fake placeholder base_url and api_key_env so it passes Validate() as-is;
+// the flash message tells the operator to fill in the real values via the
+// card's inline form before the provider actually works.
+func (s *Server) handleProviderAdd(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
 		return
 	}
-	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Template %q deleted", name), warn)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div id="flash-container" hx-swap-oob="innerHTML:#flash-container">`)
-	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: flashType, Message: flashMsg}) //nolint:errcheck
-	fmt.Fprintf(w, `</div>`)
-	s.templates.ExecuteTemplate(w, "config_templates.html", data) //nolint:errcheck
+
+	name := r.FormValue("name")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]config.ProviderConfig)
+	}
+	if _, exists := cfg.Providers[name]; exists {
+		s.renderFlash(w, "error", fmt.Sprintf("Provider %q already exists", name))
+		return
+	}
+
+	// Placeholder values chosen only to satisfy Validate(); see doc comment
+	// above. https://changeme.example.com parses as a valid http(s) URL and
+	// CHANGE_ME is a valid env var name, but neither resolves to anything —
+	// the provider won't actually work until the form below is filled in.
+	cfg.Providers[name] = config.ProviderConfig{
+		BaseURL:   "https://changeme.example.com",
+		APIKeyEnv: "CHANGE_ME",
+	}
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	s.reloadConfigOrWarn()
+	s.restartNeeded.Store(true)
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlash(w, "success", fmt.Sprintf(
+		"Provider %q created with placeholder values (base_url=https://changeme.example.com, api_key_env=CHANGE_ME) — replace them below before use",
+		name))
+}
+
+// handleProviderDelete removes a provider and reports back on the providers
+// page (HX-Refresh, mirroring handleProviderAdd). Design decision, worth
+// calling out: Config.Validate() already sweeps defaults/processes/tasks/
+// templates/sessions for dangling provider references (checkProviderRef in
+// internal/config/config.go), so this handler does no reference scan of its
+// own — it deletes optimistically and lets validateAndSave's Validate()
+// call carry the refusal. Validate() runs before Save() writes anything to
+// disk, so a refused delete leaves the on-disk config untouched.
+func (s *Server) handleProviderDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if _, ok := cfg.Providers[name]; !ok {
+		s.renderFlash(w, "error", fmt.Sprintf("Provider %q not found", name))
+		return
+	}
+
+	delete(cfg.Providers, name)
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	s.reloadConfigOrWarn()
+	s.restartNeeded.Store(true)
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlash(w, "success", fmt.Sprintf("Provider %q deleted", name))
+}
+
+// --- Remote host config management ---
+//
+// Hosts live on the Settings page (config_settings.html) as a card list
+// plus name-only add form, the same providers-page pattern as above.
+
+// handleHostAdd creates a new remote-host entry and reports back on the
+// settings page itself (HX-Refresh, mirroring handleProviderAdd). Unlike
+// providers, HostConfig has no fields Config.Validate() requires to be
+// non-empty (no ssh-non-empty check exists), so — unlike the provider add's
+// forced placeholder base_url/api_key_env — a genuinely empty HostConfig{}
+// round-trips through validateAndSave as-is, same as handleProcessAdd/
+// handleTemplateAdd. The flash message still tells the operator to fill in
+// ssh via the card's inline form before the host is usable.
+func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
+		return
+	}
+
+	name := r.FormValue("name")
+	if !validEntityName(name) {
+		s.renderFlash(w, "error", entityNameError)
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if cfg.Client.Hosts == nil {
+		cfg.Client.Hosts = make(map[string]config.HostConfig)
+	}
+	if _, exists := cfg.Client.Hosts[name]; exists {
+		s.renderFlash(w, "error", fmt.Sprintf("Host %q already exists", name))
+		return
+	}
+
+	cfg.Client.Hosts[name] = config.HostConfig{}
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	s.reloadConfigOrWarn()
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlash(w, "success", fmt.Sprintf("Host %q created — set its ssh target below", name))
+}
+
+// handleHostDelete removes a remote host and reports back on the settings
+// page (HX-Refresh, mirroring handleProviderDelete). Per the task brief, no
+// reference-check scan runs here: unlike providers (which processes/tasks/
+// templates/sessions reference by name and Config.Validate() sweeps via
+// checkProviderRef), nothing in the config schema references a host by
+// name — client.default_host is a free-text hint for `leo agent` CLI
+// dispatch, not a validated foreign key — so an optimistic delete is safe.
+func (s *Server) handleHostDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if _, ok := cfg.Client.Hosts[name]; !ok {
+		s.renderFlash(w, "error", fmt.Sprintf("Host %q not found", name))
+		return
+	}
+
+	delete(cfg.Client.Hosts, name)
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlash(w, "error", errMsg)
+		return
+	}
+	s.reloadConfigOrWarn()
+
+	w.Header().Set("HX-Refresh", "true")
+	s.renderFlash(w, "success", fmt.Sprintf("Host %q deleted", name))
 }

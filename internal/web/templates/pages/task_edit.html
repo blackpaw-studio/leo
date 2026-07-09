@@ -1,0 +1,12 @@
+{{define "page_task_edit"}}
+<h1 class="page-title"><a href="/tasks">Tasks</a> / {{.Data.Name}}</h1>
+<div class="card">{{template "config_form" .Data.Form}}</div>
+<div class="card">
+  <div class="card-head"><b>Prompt</b> <span class="dim">{{.Data.PromptFile}}</span></div>
+  <div id="prompt-editor-{{.Data.Name}}">{{template "prompt_editor.html" .Data.Prompt}}</div>
+</div>
+<div class="card">
+  <div class="card-head"><b>Recent runs</b></div>
+  <div id="history-{{.Data.Name}}" hx-get="/partials/task/{{.Data.Name}}/history" hx-trigger="load" hx-swap="innerHTML"></div>
+</div>
+{{end}}

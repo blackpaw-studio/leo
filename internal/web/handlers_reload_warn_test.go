@@ -57,7 +57,7 @@ func TestConfigDefaultsSave_ReloadFailureSurfacesWarning(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/web/config/defaults", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
-	s.handleConfigDefaults(w, req)
+	s.handleConfigDefaultsSave(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -85,7 +85,7 @@ func TestConfigDefaultsSave_ReloadSuccessNoWarning(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/web/config/defaults", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
-	s.handleConfigDefaults(w, req)
+	s.handleConfigDefaultsSave(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)

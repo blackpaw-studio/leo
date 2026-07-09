@@ -1,0 +1,28 @@
+{{define "page_config_templates"}}
+<h1 class="page-title">Templates</h1>
+<div class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>name</th><th>workspace</th><th>model</th><th>agent</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Rows}}
+    <tr>
+      <td><a href="/config/templates/{{.Name}}">{{.Name}}</a></td>
+      <td class="dim">{{.Workspace}}</td>
+      <td>{{if .Model}}{{.Model}}{{else}}<span class="dim">inherit</span>{{end}}</td>
+      <td>{{if .Agent}}{{.Agent}}{{else}}<span class="dim">none</span>{{end}}</td>
+      <td><a class="btn" href="/config/templates/{{.Name}}">edit</a></td>
+    </tr>
+    {{else}}
+    <tr><td colspan="5" class="empty-state">No templates configured</td></tr>
+    {{end}}
+    </tbody>
+  </table></div>
+</div>
+<div class="card">
+  <div class="card-head"><b>New template</b></div>
+  <form method="post" action="/web/template/add" hx-boost="false" class="frow-inline">
+    <input type="text" name="name" placeholder="template-name" required>
+    <button type="submit" class="btn hot">Create</button>
+  </form>
+</div>
+{{end}}

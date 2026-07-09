@@ -1,0 +1,32 @@
+{{define "page_service"}}
+<h1 class="page-title">Service</h1>
+<div class="card">
+  <div class="card-head"><b>Supervisor</b>
+    <span>
+      <button class="btn" hx-post="/web/config/reload" hx-target="#flash-container">Reload config</button>
+      <button class="btn danger" hx-post="/web/service/restart" hx-target="#flash-container"
+              hx-confirm="Restart the leo service? All supervised processes and running agents restart.">Restart service</button>
+    </span>
+  </div>
+  {{if .Data.States}}
+  <div class="table-wrap"><table>
+    <thead><tr><th>process</th><th>status</th><th>uptime</th><th>restarts</th></tr></thead>
+    <tbody>
+    {{range .Data.States}}
+    <tr><td>{{.Name}}{{if .Ephemeral}} <span class="dim">(agent)</span>{{end}}</td>
+        <td><span class="pill {{if eq .Status "running"}}ok{{else}}off{{end}}">{{.Status}}</span></td>
+        <td>{{uptime .StartedAt}}</td><td>{{.Restarts}}</td></tr>
+    {{end}}
+    </tbody>
+  </table></div>
+  {{else}}
+  <p class="empty-state">No processes or agents running.</p>
+  {{end}}
+</div>
+<div class="card">
+  <div class="card-head"><b>Service log</b>
+    <button class="btn" hx-get="/web/service/logtail?n=200" hx-target="#service-log" hx-swap="innerHTML">refresh</button>
+  </div>
+  <div id="service-log" hx-get="/web/service/logtail?n=200" hx-trigger="load" hx-swap="innerHTML"></div>
+</div>
+{{end}}

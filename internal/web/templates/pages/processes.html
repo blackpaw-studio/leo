@@ -1,0 +1,29 @@
+{{define "page_processes"}}
+<h1 class="page-title">Processes</h1>
+{{template "processes.html" .Data.Cards}}
+<div class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>name</th><th>workspace</th><th>model</th><th>enabled</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Rows}}
+    <tr>
+      <td><a href="/processes/{{.Name}}">{{.Name}}</a></td>
+      <td class="dim">{{.Workspace}}</td>
+      <td>{{if .Model}}{{.Model}}{{else}}<span class="dim">inherit</span>{{end}}</td>
+      <td>{{if .Enabled}}<span class="pill ok">on</span>{{else}}<span class="pill off">off</span>{{end}}</td>
+      <td><a class="btn" href="/processes/{{.Name}}">edit</a></td>
+    </tr>
+    {{else}}
+    <tr><td colspan="5" class="empty-state">No processes configured</td></tr>
+    {{end}}
+    </tbody>
+  </table></div>
+</div>
+<div class="card">
+  <div class="card-head"><b>New process</b></div>
+  <form method="post" action="/web/process/add" hx-boost="false" class="frow-inline">
+    <input type="text" name="name" placeholder="process-name" required>
+    <button type="submit" class="btn hot">Create</button>
+  </form>
+</div>
+{{end}}

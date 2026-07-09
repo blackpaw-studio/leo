@@ -1,0 +1,19 @@
+{{define "page_config_providers"}}
+<h1 class="page-title">Providers</h1>
+<p class="dim">Third-party Anthropic-Messages-compatible endpoints. Processes, tasks, templates, and sessions opt in via their provider field.</p>
+{{range .Data.Providers}}
+<div class="card">
+  <div class="card-head"><b>{{.Name}}</b></div>
+  {{template "config_form" .Form}}
+</div>
+{{else}}
+<p class="dim">No providers configured.</p>
+{{end}}
+<div class="card">
+  <div class="card-head"><b>New provider</b></div>
+  <form hx-post="/web/provider/add" hx-target="#flash-container" class="frow-inline">
+    <input type="text" name="name" placeholder="provider-name" required>
+    <button type="submit" class="btn hot">Create</button>
+  </form>
+</div>
+{{end}}

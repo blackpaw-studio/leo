@@ -490,6 +490,10 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath, supervisor)
+	// SetLogPath before Start/StartWeb so the Service page's log tail knows
+	// where to read from — service is the only package that can compute
+	// this path (LogPathFor) without an import cycle through daemon -> web.
+	srv.SetLogPath(LogPathFor(homePath))
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {

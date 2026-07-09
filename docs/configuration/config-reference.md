@@ -65,7 +65,7 @@ leo web login-url
 
 prints a one-click URL (`http://<bind>:<port>/login?token=...`) — the login page auto-submits if the token is in the query string. The URL contains the token; don't share it.
 
-Click **Sign out** in the top-right of the dashboard to destroy the session.
+Click **Sign out** at the bottom of the sidebar to destroy the session.
 
 **API access.** `/api/*` endpoints take the token in an `Authorization: Bearer` header:
 

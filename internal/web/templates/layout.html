@@ -3,37 +3,48 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Leo</title>
+    <title>Leo — {{.Title}}</title>
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/htmx.min.js"></script>
 </head>
-<body>
-    <div class="container">
-        <div class="topbar">
-            <form method="post" action="/logout" class="logout-form">
-                <button type="submit" class="logout-btn" title="Sign out">Sign out</button>
+<body hx-boost="true">
+    <div class="shell">
+        <nav class="sidebar" id="sidebar" aria-label="Main navigation">
+            <div class="brand">leo<em>_</em></div>
+            <div class="nav-sect">Operate</div>
+            <a class="nav-item {{if or (eq .Page "tasks") (eq .Page "task_edit")}}on{{end}}" href="/tasks">Tasks</a>
+            <a class="nav-item {{if eq .Page "agents"}}on{{end}}" href="/agents">Agents</a>
+            <a class="nav-item {{if or (eq .Page "processes") (eq .Page "process_edit")}}on{{end}}" href="/processes">Processes</a>
+            <a class="nav-item {{if eq .Page "sessions"}}on{{end}}" href="/sessions">Sessions</a>
+            <div class="nav-sect">Configure</div>
+            <a class="nav-item {{if eq .Page "config_defaults"}}on{{end}}" href="/config/defaults">Defaults</a>
+            <a class="nav-item {{if or (eq .Page "config_templates") (eq .Page "template_edit")}}on{{end}}" href="/config/templates">Templates</a>
+            <a class="nav-item {{if eq .Page "config_providers"}}on{{end}}" href="/config/providers">Providers</a>
+            <a class="nav-item {{if eq .Page "config_settings"}}on{{end}}" href="/config/settings">Settings</a>
+            <a class="nav-item {{if eq .Page "service"}}on{{end}}" href="/service">Service</a>
+            <form method="post" action="/logout" class="logout-form" hx-boost="false">
+                <button type="submit" class="btn">Sign out</button>
             </form>
-        </div>
-        {{template "status.html" .}}
-        {{template "processes.html" .}}
-        <div id="flash-container"></div>
-        <div class="tabs">
-            <button class="tab active" hx-get="/partials/tasks" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Tasks</button>
-            <button class="tab" hx-get="/partials/agents" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Agents</button>
-            <button class="tab" hx-get="/partials/config/processes" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Manage Processes</button>
-            <button class="tab" hx-get="/partials/config/tasks" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Manage Tasks</button>
-            <button class="tab" hx-get="/partials/config/templates" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Manage Templates</button>
-            <button class="tab" hx-get="/partials/config/settings" hx-target="#tab-content" hx-swap="innerHTML" onclick="setActiveTab(this)">Settings</button>
-        </div>
-        <div id="tab-content">
-            {{template "tasks.html" .}}
-        </div>
+        </nav>
+        <main class="main">
+            <button class="menu-btn btn" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="Toggle navigation">☰</button>
+            {{template "status.html" .}}
+            <div id="flash-container"></div>
+            {{if eq .Page "tasks"}}{{template "page_tasks" .}}
+            {{else if eq .Page "task_edit"}}{{template "page_task_edit" .}}
+            {{else if eq .Page "agents"}}{{template "page_agents" .}}
+            {{else if eq .Page "processes"}}{{template "page_processes" .}}
+            {{else if eq .Page "process_edit"}}{{template "page_process_edit" .}}
+            {{else if eq .Page "sessions"}}{{template "page_sessions" .}}
+            {{else if eq .Page "config_defaults"}}{{template "page_config_defaults" .}}
+            {{else if eq .Page "config_templates"}}{{template "page_config_templates" .}}
+            {{else if eq .Page "template_edit"}}{{template "page_template_edit" .}}
+            {{else if eq .Page "config_providers"}}{{template "page_config_providers" .}}
+            {{else if eq .Page "config_settings"}}{{template "page_config_settings" .}}
+            {{else if eq .Page "service"}}{{template "page_service" .}}{{end}}
+        </main>
     </div>
     <script>
-    function setActiveTab(el) {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        el.classList.add('active');
-    }
     function toggleHistory(el, name) {
         var target = document.getElementById('history-' + name);
         if (target.innerHTML.trim()) {

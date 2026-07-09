@@ -14,10 +14,10 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
-func TestPartialConfigTemplatesReturnsFragment(t *testing.T) {
+func TestPageConfigTemplatesShowsTemplates(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 
-	req := httptest.NewRequest("GET", "/partials/config/templates", nil)
+	req := httptest.NewRequest("GET", "/config/templates", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
@@ -32,40 +32,37 @@ func TestPartialConfigTemplatesReturnsFragment(t *testing.T) {
 	if !strings.Contains(body, "research") {
 		t.Error("expected body to contain template name 'research'")
 	}
-	if !strings.Contains(body, "Add Template") {
-		t.Error("expected body to contain 'Add Template' form")
+	if !strings.Contains(body, "New template") {
+		t.Error("expected body to contain 'New template' form")
 	}
 }
 
-func TestTemplateAdd(t *testing.T) {
+// TestTemplateAddRedirectsToEdit exercises the add-then-edit flow: adding a
+// template creates a bare (name-only) entry and 303s straight to its edit
+// page, mirroring TestProcessAddRedirectsToEdit/TestTaskAddRedirectsToEdit.
+// Rewritten in Task 9 from the old TestTemplateAdd, which pinned the
+// hand-rolled handleTemplateAdd's per-field contract (workspace/model
+// persisted on add, 200 response with a rendered fragment) — add is now
+// name-only, matching every other schema-driven section.
+func TestTemplateAddRedirectsToEdit(t *testing.T) {
 	s, dir, _ := newTestServerWithAgents(t)
 
 	form := url.Values{}
 	form.Set("name", "deploy")
-	form.Set("workspace", "/tmp/deploy")
-	form.Set("model", "haiku")
 
 	req := httptest.NewRequest("POST", "/web/template/add", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	body := w.Body.String()
-	if !strings.Contains(body, "deploy") {
-		t.Error("expected response to contain new template name")
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/config/templates/deploy" {
+		t.Errorf("add: status=%d loc=%q", w.Code, w.Header().Get("Location"))
 	}
 
 	// Verify config was persisted
 	cfg := loadConfigFromDisk(t, dir)
 	if _, ok := cfg.Templates["deploy"]; !ok {
 		t.Fatal("expected 'deploy' template in saved config")
-	}
-	if cfg.Templates["deploy"].Model != "haiku" {
-		t.Errorf("expected model 'haiku', got %q", cfg.Templates["deploy"].Model)
 	}
 }
 
@@ -103,7 +100,7 @@ func TestTemplateAddEmptyName(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "Name is required") {
+	if !strings.Contains(w.Body.String(), "flash-error") {
 		t.Error("expected error about empty name")
 	}
 }
@@ -152,6 +149,10 @@ func TestTemplateEdit(t *testing.T) {
 	}
 }
 
+// TestTemplateEditNotFound is updated in Task 9 for the schema-driven save
+// path: applySection's generic not-found branch renders "Not found" (no
+// template name, capitalized), replacing the old hand-rolled
+// handleConfigTemplate's "Template %q not found".
 func TestTemplateEditNotFound(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 
@@ -166,12 +167,18 @@ func TestTemplateEditNotFound(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "not found") {
+	if !strings.Contains(w.Body.String(), "Not found") {
 		t.Error("expected error about template not found")
 	}
 }
 
-func TestTemplateDelete(t *testing.T) {
+// TestTemplateDeleteRedirectsToList guards the edit page's delete button: on
+// success the handler must send HX-Redirect: /config/templates so htmx
+// navigates the browser back to the list, mirroring
+// TestProcessDeleteRedirectsToList/TestTaskDeleteRedirectsToList. Rewritten
+// in Task 9 from the old TestTemplateDelete, which pinned the hand-rolled
+// handleTemplateDelete's rendered-fragment response instead of a redirect.
+func TestTemplateDeleteRedirectsToList(t *testing.T) {
 	s, dir, _ := newTestServerWithAgents(t)
 
 	req := httptest.NewRequest("DELETE", "/web/template/coding", nil)
@@ -181,10 +188,8 @@ func TestTemplateDelete(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	body := w.Body.String()
-	if !strings.Contains(body, "deleted") {
-		t.Error("expected success flash with 'deleted'")
+	if loc := w.Header().Get("HX-Redirect"); loc != "/config/templates" {
+		t.Errorf("HX-Redirect = %q, want /config/templates", loc)
 	}
 
 	// Verify config was persisted without the deleted template

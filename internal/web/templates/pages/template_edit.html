@@ -1,0 +1,4 @@
+{{define "page_template_edit"}}
+<h1 class="page-title"><a href="/config/templates">Templates</a> / {{.Data.Name}}</h1>
+<div class="card">{{template "config_form" .Data.Form}}</div>
+{{end}}
