@@ -12,7 +12,7 @@
       <td>{{cronDesc .Schedule}} <span class="dim">{{.Schedule}}</span></td>
       <td>{{if .Enabled}}{{relativeTime .NextRun}}{{else}}<span class="dim">&mdash;</span>{{end}}</td>
       <td>{{if .HasRun}}<span class="pill {{if eq .LastExit 0}}ok{{else}}err{{end}}">{{if eq .LastExit 0}}ok{{else}}exit {{.LastExit}}{{end}}</span>{{else}}<span class="dim">&mdash;</span>{{end}}</td>
-      <td class="row-actions">
+      <td class="row-actions row-actions--fixed">
         <button class="btn hot" hx-post="/web/task/{{.Name}}/run" hx-target="#flash-container" hx-swap="innerHTML">run</button>
         <button class="btn" hx-post="/web/task/{{.Name}}/toggle" hx-target="#flash-container" hx-swap="none">{{if .Enabled}}disable{{else}}enable{{end}}</button>
       </td>
@@ -46,7 +46,7 @@
       <td>{{cronDesc .Schedule}} <span class="dim">{{.Schedule}}</span></td>
       <td><span class="dim">&mdash;</span></td>
       <td>{{if .HasRun}}<span class="pill {{if eq .LastExit 0}}ok{{else}}err{{end}}">{{if eq .LastExit 0}}ok{{else}}exit {{.LastExit}}{{end}}</span>{{else}}<span class="dim">&mdash;</span>{{end}}</td>
-      <td class="row-actions">
+      <td class="row-actions row-actions--fixed">
         <button class="btn hot" hx-post="/web/task/{{.Name}}/run" hx-target="#flash-container" hx-swap="innerHTML">run</button>
         <button class="btn" hx-post="/web/task/{{.Name}}/toggle" hx-target="#flash-container" hx-swap="none">enable</button>
       </td>
