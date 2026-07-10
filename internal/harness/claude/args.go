@@ -72,6 +72,28 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 	return args
 }
 
+// taskArgs reproduces internal/run.buildArgs flag order exactly.
 func taskArgs(spec harness.LaunchSpec, o Options) []string {
-	panic("claude: taskArgs not yet implemented (plan task 5)")
+	args := []string{
+		"-p", spec.Prompt,
+		"--model", spec.Model,
+		"--max-turns", strconv.Itoa(spec.MaxTurns),
+		"--output-format", "stream-json",
+		"--verbose",
+	}
+	for _, ch := range spec.DevChannels {
+		args = append(args, "--dangerously-load-development-channels", ch)
+	}
+	args = append(args, Claude{}.SessionArgs(spec.Session)...)
+	args = appendPermissionFlags(args, o)
+	if o.MCPConfigPath != "" {
+		args = append(args, "--mcp-config", o.MCPConfigPath)
+	}
+	args = append(args, o.LeoMCPArgs...)
+	args = append(args, "--add-dir", spec.Workspace)
+	args = appendToolFlags(args, o)
+	if o.AppendSystemPrompt != "" {
+		args = append(args, "--append-system-prompt", o.AppendSystemPrompt)
+	}
+	return args
 }

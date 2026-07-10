@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,6 +21,8 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/provider"
@@ -908,78 +911,45 @@ func mergeEnvMaps(maps ...map[string]string) map[string]string {
 }
 
 func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoMCPOK bool) []string {
-	args := []string{
-		"-p", prompt,
-		"--model", cfg.TaskModel(task),
-		"--max-turns", strconv.Itoa(cfg.TaskMaxTurns(task)),
-		"--output-format", "stream-json",
-		"--verbose",
+	mcpConfig := ""
+	if p := cfg.TaskMCPConfigPath(task); config.HasMCPServers(p) {
+		mcpConfig = p
 	}
-
-	args = appendDevChannelFlags(args, task.DevChannels)
-
-	if sessionID != "" {
-		args = append(args, "--resume", sessionID)
-	}
-
-	// Permission mode: task > defaults > bypass_permissions legacy
-	permMode := task.PermissionMode
-	if permMode == "" {
-		permMode = cfg.Defaults.PermissionMode
-	}
-	if permMode != "" {
-		args = append(args, "--permission-mode", permMode)
-	} else if cfg.Defaults.BypassPermissions {
-		args = append(args, "--dangerously-skip-permissions")
-	}
-
-	mcpConfig := cfg.TaskMCPConfigPath(task)
-	if config.HasMCPServers(mcpConfig) {
-		args = append(args, "--mcp-config", mcpConfig)
-	}
-	// Layer in the Leo-managed MCP server so task-mode runs also have access
-	// to the universal slash-command tools (a long-running task can call
-	// e.g. leo_list_agents to coordinate with the supervisor). leoMCPOK is
-	// the leoMCPEnv gate (web disabled, or no readable API token), evaluated
-	// once by the caller (Run/Preview) rather than here — otherwise claude
-	// would spawn `leo mcp-server` with no way to authenticate, every tool
-	// call through it would fail, and each buildArgs call in a multi-attempt
-	// run would re-evaluate the gate and re-print the warning.
+	// leoMCPOK is the leoMCPEnv gate (web disabled, or no readable API
+	// token), evaluated once by the caller (Run/Preview) rather than here —
+	// see the pre-refactor comment history for why.
+	var leoMCPArgs []string
 	if leoMCPOK {
-		args = leomcp.AppendArg(args, cfg)
+		leoMCPArgs = leomcp.AppendArg(nil, cfg)
 	}
-
-	taskWorkspace := cfg.TaskWorkspace(task)
-	args = append(args, "--add-dir", taskWorkspace)
-
-	// Allowed tools: task overrides defaults
-	allowedTools := task.AllowedTools
-	if len(allowedTools) == 0 {
-		allowedTools = cfg.Defaults.AllowedTools
+	session := harness.SessionState{}
+	if sessionID != "" {
+		session = harness.SessionState{Mode: harness.SessionResume, ID: sessionID}
 	}
-	if len(allowedTools) > 0 {
-		args = append(args, "--allowed-tools", strings.Join(allowedTools, ","))
+	spec := harness.LaunchSpec{
+		Kind:        harness.KindTask,
+		Name:        taskName,
+		Model:       cfg.TaskModel(task),
+		MaxTurns:    cfg.TaskMaxTurns(task),
+		Workspace:   cfg.TaskWorkspace(task),
+		DevChannels: task.DevChannels,
+		Prompt:      prompt,
+		Session:     session,
+		Options: claudeharness.Options{
+			PermissionMode:     harness.FallbackString(task.PermissionMode, cfg.Defaults.PermissionMode),
+			BypassPermissions:  cfg.Defaults.BypassPermissions,
+			AllowedTools:       harness.FallbackSlice(task.AllowedTools, cfg.Defaults.AllowedTools),
+			DisallowedTools:    harness.FallbackSlice(task.DisallowedTools, cfg.Defaults.DisallowedTools),
+			AppendSystemPrompt: leomcp.MergeSystemPrompt(cfg, harness.FallbackString(task.AppendSystemPrompt, cfg.Defaults.AppendSystemPrompt)),
+			MCPConfigPath:      mcpConfig,
+			LeoMCPArgs:         leoMCPArgs,
+		},
 	}
-
-	// Disallowed tools: task overrides defaults
-	disallowedTools := task.DisallowedTools
-	if len(disallowedTools) == 0 {
-		disallowedTools = cfg.Defaults.DisallowedTools
+	args, err := claudeharness.Claude{}.Args(spec)
+	if err != nil {
+		log.Printf("[task:%s] building claude args: %v", taskName, err)
+		return nil
 	}
-	if len(disallowedTools) > 0 {
-		args = append(args, "--disallowed-tools", strings.Join(disallowedTools, ","))
-	}
-
-	// System prompt: task overrides defaults
-	appendPrompt := task.AppendSystemPrompt
-	if appendPrompt == "" {
-		appendPrompt = cfg.Defaults.AppendSystemPrompt
-	}
-	appendPrompt = leomcp.MergeSystemPrompt(cfg, appendPrompt)
-	if appendPrompt != "" {
-		args = append(args, "--append-system-prompt", appendPrompt)
-	}
-
 	return args
 }
 
