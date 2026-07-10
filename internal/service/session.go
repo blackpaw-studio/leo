@@ -3,9 +3,12 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/hooks"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
@@ -34,38 +37,48 @@ type SessionSpec struct {
 func SessionTmuxName(name string) string { return "leo-session-" + name }
 
 // buildSessionClaudeArgs assembles the claude CLI args for a persistent
-// session. Mirrors buildProcessArgs but for SessionSpec.
+// session via the claude adapter's KindSession handling.
 func buildSessionClaudeArgs(spec SessionSpec) []string {
-	var a []string
-	if spec.Model != "" {
-		a = append(a, "--model", spec.Model)
+	ls := harness.LaunchSpec{
+		Kind:      harness.KindSession,
+		Name:      spec.Name,
+		Model:     spec.Model,
+		Workspace: spec.Workdir,
+		AddDirs:   spec.AddDirs,
+		Channels:  spec.Channels,
+		Options: claudeharness.Options{
+			PermissionMode:     spec.PermissionMode,
+			AgentFile:          spec.Agent,
+			AllowedTools:       spec.AllowedTools,
+			DisallowedTools:    spec.DisallowedTools,
+			AppendSystemPrompt: spec.AppendPrompt,
+		},
 	}
 	if spec.ResumeID != "" {
-		a = append(a, "--resume", spec.ResumeID)
+		ls.Session = harness.SessionState{Mode: harness.SessionResume, ID: spec.ResumeID}
 	}
-	if spec.PermissionMode != "" {
-		a = append(a, "--permission-mode", spec.PermissionMode)
+	args, err := claudeharness.Claude{}.Args(ls)
+	if err != nil {
+		// Unreachable with a well-formed spec; never launch flagless silently.
+		fmt.Fprintf(os.Stderr, "warning: session %q: building claude args: %v\n", spec.Name, err)
+		return nil
 	}
-	for _, ch := range spec.Channels {
-		a = append(a, "--channels", ch)
+	return args
+}
+
+// claudeSessionOptions decodes a session-scoped harness_options map. A
+// config that passed Validate() cannot fail here; on the defensive path we
+// warn and skip the session rather than boot claude with dropped flags.
+func claudeSessionOptions(opts map[string]any) (claudeharness.Options, error) {
+	decoded, err := claudeharness.Claude{}.DecodeOptions(opts)
+	if err != nil {
+		return claudeharness.Options{}, err
 	}
-	if spec.Agent != "" {
-		a = append(a, "--agent", spec.Agent)
+	o, ok := decoded.(claudeharness.Options)
+	if !ok {
+		return claudeharness.Options{}, fmt.Errorf("unexpected options type %T", decoded)
 	}
-	a = append(a, "--add-dir", spec.Workdir)
-	for _, d := range spec.AddDirs {
-		a = append(a, "--add-dir", d)
-	}
-	if len(spec.AllowedTools) > 0 {
-		a = append(a, "--allowed-tools", strings.Join(spec.AllowedTools, ","))
-	}
-	if len(spec.DisallowedTools) > 0 {
-		a = append(a, "--disallowed-tools", strings.Join(spec.DisallowedTools, ","))
-	}
-	if spec.AppendPrompt != "" {
-		a = append(a, "--append-system-prompt", spec.AppendPrompt)
-	}
-	return a
+	return o, nil
 }
 
 // SuperviseSession launches the restart-loop for one session in its own
@@ -128,15 +141,20 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 		for k, v := range sc.Env {
 			env[k] = v
 		}
+		o, err := claudeSessionOptions(cfg.SessionHarnessOptions(sc))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: session %q: decoding harness options: %v (skipping)\n", name, err)
+			continue
+		}
 		out = append(out, SessionSpec{
 			Name:            name,
 			Workdir:         workspaceOr(sc.Workspace),
 			Model:           cfg.SessionModel(sc),
-			Agent:           sc.Agent,
-			PermissionMode:  sc.PermissionMode,
-			AllowedTools:    sc.AllowedTools,
-			DisallowedTools: sc.DisallowedTools,
-			AppendPrompt:    sc.AppendSystemPrompt,
+			Agent:           o.AgentFile,
+			PermissionMode:  o.PermissionMode,
+			AllowedTools:    o.AllowedTools,
+			DisallowedTools: o.DisallowedTools,
+			AppendPrompt:    o.AppendSystemPrompt,
 			AddDirs:         sc.AddDirs,
 			Channels:        sc.Channels,
 			Env:             env,
@@ -158,15 +176,22 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 		if seen[name] {
 			return nil, fmt.Errorf("session name conflict: implicit %q collides with sessions.%s", name, name)
 		}
-		model := task.Model
+		// Implicit sessions read the task's OWN harness_options without the
+		// defaults cascade (preserved quirk): decode the raw map rather than
+		// cfg.TaskHarnessOptions, which merges in defaults.harness_options.
+		o, err := claudeSessionOptions(task.HarnessOptions)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: implicit session %q: decoding harness options: %v (skipping)\n", name, err)
+			continue
+		}
 		out = append(out, SessionSpec{
 			Name:            name,
 			Workdir:         workspaceOr(task.Workspace),
-			Model:           model,
-			PermissionMode:  task.PermissionMode,
-			AllowedTools:    task.AllowedTools,
-			DisallowedTools: task.DisallowedTools,
-			AppendPrompt:    task.AppendSystemPrompt,
+			Model:           task.Model,
+			PermissionMode:  o.PermissionMode,
+			AllowedTools:    o.AllowedTools,
+			DisallowedTools: o.DisallowedTools,
+			AppendPrompt:    o.AppendSystemPrompt,
 			Channels:        task.Channels,
 			// Note: TaskConfig has no Agent field; stays zero.
 			Env: nil,

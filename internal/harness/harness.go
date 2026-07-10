@@ -16,6 +16,7 @@ const (
 	KindProcess Kind = "process"
 	KindAgent   Kind = "agent"
 	KindTask    Kind = "task"
+	KindSession Kind = "session"
 )
 
 // SessionMode says how a launch relates to an existing session.

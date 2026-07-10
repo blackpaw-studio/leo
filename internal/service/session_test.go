@@ -33,7 +33,13 @@ func TestSessionTmuxName(t *testing.T) {
 func TestSessionSpecsFromConfigExplicit(t *testing.T) {
 	cfg := &config.Config{
 		Sessions: map[string]config.SessionConfig{
-			"explicit": {Workspace: "/tmp/explicit", Model: "sonnet"},
+			"explicit": {
+				Workspace: "/tmp/explicit",
+				Model:     "sonnet",
+				HarnessOptions: map[string]any{
+					"permission_mode": "acceptEdits",
+				},
+			},
 		},
 	}
 	specs, err := SessionSpecsFromConfig(cfg)
@@ -45,6 +51,35 @@ func TestSessionSpecsFromConfigExplicit(t *testing.T) {
 	}
 	if specs[0].Name != "explicit" || specs[0].Workdir != "/tmp/explicit" {
 		t.Fatalf("explicit spec wrong: %+v", specs[0])
+	}
+	if specs[0].PermissionMode != "acceptEdits" {
+		t.Fatalf("expected permission mode decoded from harness_options, got %+v", specs[0])
+	}
+}
+
+// TestSessionSpecsFromConfigExplicitDefaultsDoNotLeak verifies that
+// defaults.harness_options do NOT cascade into explicit sessions —
+// SessionHarnessOptions intentionally does not inherit defaults.
+func TestSessionSpecsFromConfigExplicitDefaultsDoNotLeak(t *testing.T) {
+	cfg := &config.Config{
+		Defaults: config.DefaultsConfig{
+			HarnessOptions: map[string]any{
+				"permission_mode": "acceptEdits",
+			},
+		},
+		Sessions: map[string]config.SessionConfig{
+			"explicit": {Workspace: "/tmp/explicit", Model: "sonnet"},
+		},
+	}
+	specs, err := SessionSpecsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	if specs[0].PermissionMode != "" {
+		t.Fatalf("expected defaults.harness_options NOT to leak into explicit session, got PermissionMode=%q", specs[0].PermissionMode)
 	}
 }
 
@@ -67,6 +102,53 @@ func TestSessionSpecsFromConfigImplicit(t *testing.T) {
 	}
 	if specs[0].Name != "morning" || specs[0].Workdir != "/tmp/morning" {
 		t.Fatalf("implicit spec wrong: %+v", specs[0])
+	}
+}
+
+// TestSessionSpecsFromConfigImplicitTaskOptionsReachSpecButDefaultsDoNot
+// verifies preserved quirk #2: an implicit session reads the task's OWN
+// harness_options (no defaults cascade), matching SessionHarnessOptions'
+// own-map semantics for explicit sessions.
+func TestSessionSpecsFromConfigImplicitTaskOptionsReachSpecButDefaultsDoNot(t *testing.T) {
+	cfg := &config.Config{
+		Defaults: config.DefaultsConfig{
+			HarnessOptions: map[string]any{
+				"permission_mode": "acceptEdits",
+			},
+		},
+		Tasks: map[string]config.TaskConfig{
+			"morning": {
+				Runtime:   "persistent",
+				Workspace: "/tmp/morning",
+				Model:     "sonnet",
+				HarnessOptions: map[string]any{
+					"permission_mode": "bypassPermissions",
+				},
+			},
+			"evening": {
+				Runtime:   "persistent",
+				Workspace: "/tmp/evening",
+				Model:     "sonnet",
+				// no task-level harness_options — must NOT inherit defaults'.
+			},
+		},
+	}
+	specs, err := SessionSpecsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 implicit specs, got %d: %+v", len(specs), specs)
+	}
+	byName := map[string]SessionSpec{}
+	for _, s := range specs {
+		byName[s.Name] = s
+	}
+	if got := byName["morning"].PermissionMode; got != "bypassPermissions" {
+		t.Fatalf("expected task-level harness_options to reach implicit session, got PermissionMode=%q", got)
+	}
+	if got := byName["evening"].PermissionMode; got != "" {
+		t.Fatalf("expected defaults.harness_options NOT to leak into implicit session with no own options, got PermissionMode=%q", got)
 	}
 }
 
