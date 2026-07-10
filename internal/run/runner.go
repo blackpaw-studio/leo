@@ -924,9 +924,9 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 	if leoMCPOK {
 		leoMCPArgs = leomcp.AppendArg(nil, cfg)
 	}
-	session := harness.SessionState{}
+	sess := harness.SessionState{}
 	if sessionID != "" {
-		session = harness.SessionState{Mode: harness.SessionResume, ID: sessionID}
+		sess = harness.SessionState{Mode: harness.SessionResume, ID: sessionID}
 	}
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindTask,
@@ -936,7 +936,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		Workspace:   cfg.TaskWorkspace(task),
 		DevChannels: task.DevChannels,
 		Prompt:      prompt,
-		Session:     session,
+		Session:     sess,
 		Options: claudeharness.Options{
 			PermissionMode:     harness.FallbackString(task.PermissionMode, cfg.Defaults.PermissionMode),
 			BypassPermissions:  cfg.Defaults.BypassPermissions,
