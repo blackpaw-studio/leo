@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -74,7 +73,10 @@ type Config struct {
 	Tasks     map[string]TaskConfig     `yaml:"tasks"`
 	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
 	Sessions  map[string]SessionConfig  `yaml:"sessions,omitempty"`
-	Providers map[string]ProviderConfig `yaml:"providers,omitempty"`
+	// Providers was removed with the harness abstraction. The field survives
+	// only so Validate() can emit a precise removal error (yaml.v3 silently
+	// ignores unknown keys).
+	Providers map[string]any `yaml:"providers,omitempty"`
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
@@ -176,7 +178,7 @@ func IsLoopbackBind(addr string) bool {
 
 type DefaultsConfig struct {
 	Model              string   `yaml:"model"`
-	Provider           string   `yaml:"provider,omitempty"`
+	DeprecatedProvider string   `yaml:"provider,omitempty"`
 	MaxTurns           int      `yaml:"max_turns"`
 	BypassPermissions  bool     `yaml:"bypass_permissions,omitempty"`
 	RemoteControl      bool     `yaml:"remote_control,omitempty"`
@@ -203,7 +205,7 @@ type ProcessConfig struct {
 	Channels           []string          `yaml:"channels,omitempty"`
 	DevChannels        []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
 	Model              string            `yaml:"model,omitempty"`
-	Provider           string            `yaml:"provider,omitempty"`
+	DeprecatedProvider string            `yaml:"provider,omitempty"`
 	MaxTurns           int               `yaml:"max_turns,omitempty"`
 	BypassPermissions  *bool             `yaml:"bypass_permissions,omitempty"`
 	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
@@ -230,7 +232,7 @@ type ProcessConfig struct {
 type SessionConfig struct {
 	Workspace          string            `yaml:"workspace,omitempty"`
 	Model              string            `yaml:"model,omitempty"`
-	Provider           string            `yaml:"provider,omitempty"`
+	DeprecatedProvider string            `yaml:"provider,omitempty"`
 	Agent              string            `yaml:"agent,omitempty"`
 	PermissionMode     string            `yaml:"permission_mode,omitempty"`
 	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
@@ -250,7 +252,7 @@ type TaskConfig struct {
 	Timezone           string         `yaml:"timezone,omitempty"`
 	PromptFile         string         `yaml:"prompt_file"`
 	Model              string         `yaml:"model,omitempty"`
-	Provider           string         `yaml:"provider,omitempty"`
+	DeprecatedProvider string         `yaml:"provider,omitempty"`
 	MaxTurns           int            `yaml:"max_turns,omitempty"`
 	Enabled            bool           `yaml:"enabled"`
 	Silent             bool           `yaml:"silent,omitempty"`
@@ -278,7 +280,7 @@ type TemplateConfig struct {
 	Channels           []string          `yaml:"channels,omitempty"`
 	DevChannels        []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
 	Model              string            `yaml:"model,omitempty"`
-	Provider           string            `yaml:"provider,omitempty"`
+	DeprecatedProvider string            `yaml:"provider,omitempty"`
 	MaxTurns           int               `yaml:"max_turns,omitempty"`
 	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
 	MCPConfig          string            `yaml:"mcp_config,omitempty"`
@@ -330,13 +332,10 @@ func (c *Config) ProcessWorkspace(p ProcessConfig) string {
 }
 
 // ProcessModel returns the effective model for a process.
-// Cascade: process → provider default_model → defaults → DefaultModel.
+// Cascade: process → defaults → DefaultModel.
 func (c *Config) ProcessModel(p ProcessConfig) string {
 	if p.Model != "" {
 		return p.Model
-	}
-	if m := c.ProviderDefaultModel(c.ProcessProvider(p)); m != "" {
-		return m
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model
@@ -437,19 +436,31 @@ func (c *Config) TaskWorkspace(t TaskConfig) string {
 }
 
 // TaskModel returns the effective model for a task.
-// Cascade: task → provider default_model → defaults → DefaultModel.
+// Cascade: task → defaults → DefaultModel.
 func (c *Config) TaskModel(t TaskConfig) string {
 	if t.Model != "" {
 		return t.Model
-	}
-	if m := c.ProviderDefaultModel(c.TaskProvider(t)); m != "" {
-		return m
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model
 	}
 	return DefaultModel
 }
+
+// TemplateModel resolves the model for a template: template → defaults → built-in.
+func (c *Config) TemplateModel(t TemplateConfig) string {
+	if t.Model != "" {
+		return t.Model
+	}
+	if c.Defaults.Model != "" {
+		return c.Defaults.Model
+	}
+	return DefaultModel
+}
+
+// SessionModel resolves the model for a persistent session. Empty means
+// claude picks its own default.
+func (c *Config) SessionModel(s SessionConfig) string { return s.Model }
 
 // TaskMaxTurns returns the effective max turns for a task.
 func (c *Config) TaskMaxTurns(t TaskConfig) int {
@@ -503,7 +514,7 @@ func (c *Config) Validate() error {
 	}
 
 	if defaultsHarness != nil {
-		if c.Defaults.Model != "" && c.Defaults.Provider == "" {
+		if c.Defaults.Model != "" {
 			if err := defaultsHarness.ValidateModel(c.Defaults.Model); err != nil {
 				errs = append(errs, fmt.Sprintf("defaults.model %v", err))
 			}
@@ -527,30 +538,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	for name, p := range c.Providers {
-		if p.BaseURL == "" {
-			errs = append(errs, fmt.Sprintf("providers.%s.base_url is required", name))
-		} else if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			errs = append(errs, fmt.Sprintf("providers.%s.base_url %q must be an http(s) URL", name, p.BaseURL))
-		}
-		hasEnv := p.APIKeyEnv != ""
-		hasCmd := strings.TrimSpace(p.APIKeyCmd) != ""
-		if hasEnv == hasCmd {
-			errs = append(errs, fmt.Sprintf("providers.%s must set exactly one of api_key_env or api_key_cmd", name))
-		}
-		if hasEnv && !envKeyPattern.MatchString(p.APIKeyEnv) {
-			errs = append(errs, fmt.Sprintf("providers.%s.api_key_env %q is not a valid environment variable name", name, p.APIKeyEnv))
-		}
+	if len(c.Providers) > 0 {
+		errs = append(errs, "providers: this section has been removed — see docs/configuration/harnesses.md")
 	}
-	checkProviderRef := func(scope, ref string) {
-		if ref == "" {
-			return
-		}
-		if _, ok := c.Providers[ref]; !ok {
-			errs = append(errs, fmt.Sprintf("%s.provider %q is not defined in providers", scope, ref))
-		}
+	if c.Defaults.DeprecatedProvider != "" {
+		errs = append(errs, "defaults.provider has been removed along with providers — see docs/configuration/harnesses.md")
 	}
-	checkProviderRef("defaults", c.Defaults.Provider)
 
 	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("web.port %d is out of range (1-65535)", c.Web.Port))
@@ -577,9 +570,11 @@ func (c *Config) Validate() error {
 	}
 
 	for name, proc := range c.Processes {
-		checkProviderRef("processes."+name, proc.Provider)
+		if proc.DeprecatedProvider != "" {
+			errs = append(errs, fmt.Sprintf("processes.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
+		}
 		if h, ok := resolveHarness("processes."+name, proc.Harness); ok {
-			if proc.Model != "" && c.ProcessProvider(proc) == "" {
+			if proc.Model != "" {
 				if err := h.ValidateModel(proc.Model); err != nil {
 					errs = append(errs, fmt.Sprintf("processes.%s.model %v", name, err))
 				}
@@ -623,9 +618,11 @@ func (c *Config) Validate() error {
 	}
 
 	for name, tmpl := range c.Templates {
-		checkProviderRef("templates."+name, tmpl.Provider)
+		if tmpl.DeprecatedProvider != "" {
+			errs = append(errs, fmt.Sprintf("templates.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
+		}
 		if h, ok := resolveHarness("templates."+name, tmpl.Harness); ok {
-			if tmpl.Model != "" && c.TemplateProvider(tmpl) == "" {
+			if tmpl.Model != "" {
 				if err := h.ValidateModel(tmpl.Model); err != nil {
 					errs = append(errs, fmt.Sprintf("templates.%s.model %v", name, err))
 				}
@@ -674,9 +671,11 @@ func (c *Config) Validate() error {
 		if sess.Workspace == "" {
 			errs = append(errs, fmt.Sprintf("sessions.%s.workspace is required", name))
 		}
-		checkProviderRef("sessions."+name, sess.Provider)
+		if sess.DeprecatedProvider != "" {
+			errs = append(errs, fmt.Sprintf("sessions.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
+		}
 		if h, ok := resolveHarness("sessions."+name, sess.Harness); ok {
-			if sess.Model != "" && c.SessionProvider(sess) == "" {
+			if sess.Model != "" {
 				if err := h.ValidateModel(sess.Model); err != nil {
 					errs = append(errs, fmt.Sprintf("sessions.%s.model %v", name, err))
 				}
@@ -722,9 +721,11 @@ func (c *Config) Validate() error {
 		if task.PromptFile == "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.prompt_file is required", name))
 		}
-		checkProviderRef("tasks."+name, task.Provider)
+		if task.DeprecatedProvider != "" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
+		}
 		if h, ok := resolveHarness("tasks."+name, task.Harness); ok {
-			if task.Model != "" && c.TaskProvider(task) == "" {
+			if task.Model != "" {
 				if err := h.ValidateModel(task.Model); err != nil {
 					errs = append(errs, fmt.Sprintf("tasks.%s.model %v", name, err))
 				}

@@ -527,23 +527,3 @@ func TestValidateModelDelegation(t *testing.T) {
 		})
 	}
 }
-
-// TestValidateModelDelegationRelaxedWithProvider preserves the existing
-// Provider != "" model-relaxation guard: a non-standard model name is
-// accepted when a provider is set, because the model is presumed to be
-// meaningful to that third-party provider rather than Claude Code.
-func TestValidateModelDelegationRelaxedWithProvider(t *testing.T) {
-	cfg := &Config{
-		Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-		Providers: map[string]ProviderConfig{
-			"zai": {BaseURL: "https://api.z.ai/v1", APIKeyEnv: "ZAI_KEY"},
-		},
-		Processes: map[string]ProcessConfig{
-			"foo": {Model: "glm-4.6", Provider: "zai", Enabled: true},
-		},
-		HomePath: "/tmp/leo",
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error with provider set, got %v", err)
-	}
-}

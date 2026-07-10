@@ -25,7 +25,6 @@ import (
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
-	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/update"
 	"github.com/blackpaw-studio/leo/internal/web"
@@ -153,10 +152,6 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	}
 	defer releaseTaskLock(lockPath)
 
-	provEnv, err := provider.Env(cfg, cfg.TaskProvider(task))
-	if err != nil {
-		return fmt.Errorf("resolving provider env: %w", err)
-	}
 	// leoEnv rides along on every claude invocation for this task (main
 	// attempts and the notify-on-fail child alike) whenever the leo MCP
 	// server was actually wired into the args by buildArgs; see leoMCPEnv.
@@ -165,7 +160,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	// per attempt.
 	leoEnv, leoMCPOK := leoMCPEnv(cfg, taskName)
 	warnLeoMCPSkipped(cfg, taskName, leoMCPOK)
-	spawnEnv := mergeEnvMaps(provEnv, leoEnv)
+	spawnEnv := leoEnv
 
 	prompt, err := assemblePrompt(cfg, task)
 	if err != nil {
@@ -894,22 +889,6 @@ func warnLeoMCPSkipped(cfg *config.Config, taskName string, leoMCPOK bool) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "leo: warning: skipping leo MCP server for task %q: no readable API token\n", taskName)
-}
-
-// mergeEnvMaps combines any number of env maps into one, later maps taking
-// precedence on key collision. Returns nil (not an empty map) when the
-// result would be empty, so callers checking len(extraEnv) == 0 still work.
-func mergeEnvMaps(maps ...map[string]string) map[string]string {
-	out := make(map[string]string)
-	for _, m := range maps {
-		for k, v := range m {
-			out[k] = v
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoMCPOK bool) []string {

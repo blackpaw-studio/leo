@@ -18,7 +18,6 @@ import (
 	harness "github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
-	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/web"
@@ -94,11 +93,8 @@ func runService(cmd *cobra.Command, args []string) error {
 		// tasks (no enabled processes) is still something to supervise.
 		//
 		// buildAllProcessSpecs and SessionSpecsFromConfig are each called
-		// exactly once here: both may resolve provider env (which can shell
-		// out via api_key_cmd, up to 30s per process/session) and warn on
-		// failures. Calling either twice would duplicate both the external
-		// commands and the warnings on every boot, so the resulting specs
-		// are threaded straight into RunSupervised rather than re-derived.
+		// exactly once here so the resulting specs are threaded straight
+		// into RunSupervised rather than re-derived.
 		specs := buildAllProcessSpecs(cfg, claudePath, webToken)
 		procCount := len(specs)
 		sessionSpecs, sErr := service.SessionSpecsFromConfig(cfg)
@@ -136,20 +132,15 @@ func runService(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("claude not found: %w", err)
 	}
 
-	provEnv, err := provider.Env(cfg, cfg.ProcessProvider(proc))
-	if err != nil {
-		return fmt.Errorf("resolving provider env: %w", err)
-	}
-
 	info.Printf("Starting session (%s)...\n", procName)
-	procEnv := processEnviron(proc, provEnv)
+	procEnv := processEnviron(proc)
 	return syscall.Exec(claudePath, append([]string{claudeharness.Claude{}.Binary()}, claudeArgs...), procEnv)
 }
 
 // processEnviron augments the current environment with LEO_CHANNELS and
-// LEO_DEV_CHANNELS (if any), per-process env vars, and any provider env.
-// Returned slice is safe to pass to syscall.Exec.
-func processEnviron(proc config.ProcessConfig, extraEnv map[string]string) []string {
+// LEO_DEV_CHANNELS (if any) and per-process env vars. Returned slice is safe
+// to pass to syscall.Exec.
+func processEnviron(proc config.ProcessConfig) []string {
 	env := os.Environ()
 	if len(proc.Channels) > 0 {
 		env = append(env, "LEO_CHANNELS="+strings.Join(proc.Channels, ","))
@@ -158,9 +149,6 @@ func processEnviron(proc config.ProcessConfig, extraEnv map[string]string) []str
 		env = append(env, "LEO_DEV_CHANNELS="+strings.Join(proc.DevChannels, ","))
 	}
 	for k, v := range proc.Env {
-		env = append(env, k+"="+v)
-	}
-	for k, v := range extraEnv {
 		env = append(env, k+"="+v)
 	}
 	return env
@@ -208,12 +196,6 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 			continue
 		}
 
-		provEnv, provErr := provider.Env(cfg, cfg.ProcessProvider(proc))
-		if provErr != nil {
-			warn.Printf("  [%s] provider env unavailable: %v — skipping process\n", name, provErr)
-			continue
-		}
-
 		args := buildProcessArgs(cfg, name, proc)
 
 		// Add session persistence
@@ -226,9 +208,6 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 		)
 
 		procEnv := mergeChannelsIntoEnv(proc)
-		for k, v := range provEnv {
-			procEnv[k] = v
-		}
 
 		specs = append(specs, service.ProcessSpec{
 			Name:       name,
@@ -576,7 +555,7 @@ func buildServiceConfig(cfg *config.Config) (service.ServiceConfig, error) {
 	logPath := service.LogPathFor(cfg.HomePath)
 
 	// Capture relevant environment variables for daemon mode
-	environ := env.Capture(cfg.ProviderKeyEnvNames()...)
+	environ := env.Capture()
 
 	return service.ServiceConfig{
 		LeoPath:    leoPath,

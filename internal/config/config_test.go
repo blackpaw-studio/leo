@@ -199,6 +199,75 @@ func TestValidate(t *testing.T) {
 	})
 }
 
+func TestValidateRejectsRemovedProviders(t *testing.T) {
+	validConfig := func() *Config {
+		return &Config{
+			Defaults: DefaultsConfig{
+				Model:    "sonnet",
+				MaxTurns: 15,
+			},
+			Processes: map[string]ProcessConfig{
+				"p": {Enabled: true},
+			},
+			Tasks: map[string]TaskConfig{
+				"t": {Schedule: "0 * * * *", PromptFile: "HEARTBEAT.md", Enabled: true},
+			},
+			Templates: map[string]TemplateConfig{
+				"x": {},
+			},
+			Sessions: map[string]SessionConfig{
+				"s": {Workspace: "/tmp/leo/workspace"},
+			},
+			HomePath: "/tmp/leo",
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"providers section", func(c *Config) { c.Providers = map[string]any{"corp": map[string]any{}} },
+			"providers: this section has been removed — see docs/configuration/harnesses.md"},
+		{"defaults.provider", func(c *Config) { c.Defaults.DeprecatedProvider = "corp" },
+			"defaults.provider has been removed along with providers — see docs/configuration/harnesses.md"},
+		{"processes.p.provider", func(c *Config) {
+			p := c.Processes["p"]
+			p.DeprecatedProvider = "corp"
+			c.Processes["p"] = p
+		}, "processes.p.provider has been removed along with providers — see docs/configuration/harnesses.md"},
+		{"tasks.t.provider", func(c *Config) {
+			task := c.Tasks["t"]
+			task.DeprecatedProvider = "corp"
+			c.Tasks["t"] = task
+		}, "tasks.t.provider has been removed along with providers — see docs/configuration/harnesses.md"},
+		{"templates.x.provider", func(c *Config) {
+			tmpl := c.Templates["x"]
+			tmpl.DeprecatedProvider = "corp"
+			c.Templates["x"] = tmpl
+		}, "templates.x.provider has been removed along with providers — see docs/configuration/harnesses.md"},
+		{"sessions.s.provider", func(c *Config) {
+			sess := c.Sessions["s"]
+			sess.DeprecatedProvider = "corp"
+			c.Sessions["s"] = sess
+		}, "sessions.s.provider has been removed along with providers — see docs/configuration/harnesses.md"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			tt.mutate(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if got := err.Error(); !contains(got, tt.wantErr) {
+				t.Errorf("error = %q, want to contain %q", got, tt.wantErr)
+			}
+		})
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
 }

@@ -18,7 +18,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
-	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -199,13 +198,6 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	webPort := strconv.Itoa(cfg.WebPort())
 	env := mergeEnv(tmpl.Env, spec.Env)
 
-	provName := cfg.TemplateProvider(tmpl)
-	provEnv, err := provider.Env(cfg, provName)
-	if err != nil {
-		return Record{}, fmt.Errorf("resolving provider env: %w", err)
-	}
-	runEnv := mergeEnv(env, provEnv)
-
 	idleStr := ""
 	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
 		idleStr = d.String()
@@ -215,7 +207,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		Name:       agentName,
 		ClaudeArgs: claudeArgs,
 		WorkDir:    workspace,
-		Env:        runEnv,
+		Env:        env,
 		WebPort:    webPort,
 		WebToken:   m.webToken,
 	}); err != nil {
@@ -232,7 +224,6 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		ClaudeArgs:       claudeArgs,
 		SessionID:        sessionID,
 		Env:              env,
-		Provider:         provName,
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
@@ -328,14 +319,6 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		rmCancel()
 	}
 
-	provName := cfg.TemplateProvider(tmpl)
-	provEnv, err := provider.Env(cfg, provName)
-	if err != nil {
-		rollbackWorktree()
-		return Record{}, fmt.Errorf("resolving provider env: %w", err)
-	}
-	runEnv := mergeEnv(env, provEnv)
-
 	idleStr := ""
 	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
 		idleStr = d.String()
@@ -345,7 +328,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		Name:       layout.AgentName,
 		ClaudeArgs: claudeArgs,
 		WorkDir:    layout.WorktreePath,
-		Env:        runEnv,
+		Env:        env,
 		WebPort:    webPort,
 		WebToken:   m.webToken,
 	}); err != nil {
@@ -368,7 +351,6 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		ClaudeArgs:       claudeArgs,
 		SessionID:        sessionID,
 		Env:              env,
-		Provider:         provName,
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
@@ -580,16 +562,11 @@ func (m *Manager) Resume(name string) (Record, error) {
 	}
 	args := ResumeArgs(rec.ClaudeArgs, resumeID)
 
-	provEnv, err := provider.Env(cfg, rec.Provider)
-	if err != nil {
-		return Record{}, fmt.Errorf("resolving provider env: %w", err)
-	}
-
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       rec.Name,
 		ClaudeArgs: args,
 		WorkDir:    rec.Workspace,
-		Env:        mergeEnv(rec.Env, provEnv),
+		Env:        rec.Env,
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
 	}); err != nil {
