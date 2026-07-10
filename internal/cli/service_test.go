@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
@@ -219,7 +220,7 @@ func TestResolveSessionArgs_LatestBeatsStored(t *testing.T) {
 		t.Fatalf("store.Set: %v", err)
 	}
 
-	args := resolveSessionArgs(store, "process:test", workspace, 0, "")
+	args := claudeharness.Claude{}.SessionArgs(resolveSessionState(store, "process:test", workspace, 0, ""))
 	if len(args) != 2 || args[0] != "--resume" || args[1] != "sess-new" {
 		t.Errorf("expected [--resume sess-new], got %v", args)
 	}
@@ -248,7 +249,7 @@ func TestResolveSessionArgs_NoJSONLUsesStored(t *testing.T) {
 		t.Fatalf("store.Set: %v", err)
 	}
 
-	args := resolveSessionArgs(store, "process:test", workspace, 0, "")
+	args := claudeharness.Claude{}.SessionArgs(resolveSessionState(store, "process:test", workspace, 0, ""))
 	if len(args) != 2 || args[0] != "--resume" || args[1] != "sess-preissued" {
 		t.Errorf("expected [--resume sess-preissued], got %v", args)
 	}
@@ -265,7 +266,7 @@ func TestResolveSessionArgs_BrandNewMintsID(t *testing.T) {
 	storeHome := t.TempDir()
 	store := session.NewStore(storeHome)
 
-	args := resolveSessionArgs(store, "process:test", workspace, 0, "")
+	args := claudeharness.Claude{}.SessionArgs(resolveSessionState(store, "process:test", workspace, 0, ""))
 	if len(args) != 2 || args[0] != "--session-id" || args[1] == "" {
 		t.Errorf("expected [--session-id <id>], got %v", args)
 	}

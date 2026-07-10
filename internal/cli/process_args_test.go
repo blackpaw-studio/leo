@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	harness "github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 // Characterization tests: lock buildProcessArgs's argv byte-for-byte across
@@ -84,5 +87,36 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 				t.Fatalf("buildProcessArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveSessionStateFreshPinsNewID(t *testing.T) {
+	// Empty store + no claude project dir for the workspace → a fresh
+	// pinned session ID is minted and persisted.
+	home := t.TempDir()
+	store := session.NewStore(home)
+
+	st := resolveSessionState(store, "process:x", filepath.Join(home, "no-such-ws"), 0, "")
+	if st.Mode != harness.SessionPinned {
+		t.Fatalf("Mode = %q, want pinned", st.Mode)
+	}
+	if st.ID == "" {
+		t.Fatal("expected a minted session ID")
+	}
+	storedID, _, err := store.Get("process:x")
+	if err != nil || storedID != st.ID {
+		t.Fatalf("store.Get = %q, %v; want %q", storedID, err, st.ID)
+	}
+}
+
+func TestResolveSessionStateStoredIDResumes(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	if err := store.Set("process:x", "stored-id"); err != nil {
+		t.Fatal(err)
+	}
+	st := resolveSessionState(store, "process:x", filepath.Join(home, "no-such-ws"), 0, "")
+	if st.Mode != harness.SessionResume || st.ID != "stored-id" {
+		t.Fatalf("state = %+v, want resume/stored-id", st)
 	}
 }

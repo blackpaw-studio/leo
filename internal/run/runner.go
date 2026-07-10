@@ -33,6 +33,8 @@ import (
 
 var execCommand = exec.Command
 
+var claudeBinary = claudeharness.Claude{}.Binary()
+
 const silentPreamble = `SILENT SCHEDULED RUN — You are running as a scheduled background task, not responding to a user message.
 Work silently. Do not narrate your process or describe your tool usage.
 When finished:
@@ -520,7 +522,7 @@ var maxScannerBufferSize = 10 * 1024 * 1024
 // for a channel that will never come up. Pass nil to skip monitoring (e.g.
 // for the notify-on-fail child, where it isn't worth the complexity).
 func executeCommand(ctx context.Context, workDir string, args []string, channels, devChannels []string, extraEnv map[string]string, channelInitPrefixes []string) ([]byte, error) {
-	cmd := execCommand("claude", args...)
+	cmd := execCommand(claudeBinary, args...)
 	cmd.Dir = workDir
 	env := append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
 	if len(channels) > 0 {

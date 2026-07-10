@@ -70,7 +70,7 @@ func runService(cmd *cobra.Command, args []string) error {
 	}
 
 	if supervised {
-		claudePath, err := exec.LookPath("claude")
+		claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
 		if err != nil {
 			return fmt.Errorf("claude not found: %w", err)
 		}
@@ -126,10 +126,12 @@ func runService(cmd *cobra.Command, args []string) error {
 	store := session.NewStore(cfg.HomePath)
 	sessionKey := "process:" + procName
 	claudeArgs = append(claudeArgs,
-		resolveSessionArgs(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "")...,
+		claudeharness.Claude{}.SessionArgs(
+			resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), ""),
+		)...,
 	)
 
-	claudePath, err := exec.LookPath("claude")
+	claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
 	if err != nil {
 		return fmt.Errorf("claude not found: %w", err)
 	}
@@ -141,7 +143,7 @@ func runService(cmd *cobra.Command, args []string) error {
 
 	info.Printf("Starting session (%s)...\n", procName)
 	procEnv := processEnviron(proc, provEnv)
-	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), procEnv)
+	return syscall.Exec(claudePath, append([]string{claudeharness.Claude{}.Binary()}, claudeArgs...), procEnv)
 }
 
 // processEnviron augments the current environment with LEO_CHANNELS and
@@ -218,7 +220,9 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 		store := session.NewStore(cfg.HomePath)
 		sessionKey := "process:" + name
 		args = append(args,
-			resolveSessionArgs(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] ")...,
+			claudeharness.Claude{}.SessionArgs(
+				resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] "),
+			)...,
 		)
 
 		procEnv := mergeChannelsIntoEnv(proc)
@@ -239,8 +243,8 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 	return specs
 }
 
-// resolveSessionArgs returns the session-related args (--resume / --session-id)
-// to append for a claude invocation. Preference order:
+// resolveSessionState resolves the session decision (resume / pinned fresh)
+// for a claude invocation. Preference order:
 //
 //  1. Newest *.jsonl in claude's project directory for this workspace. This
 //     matches what /resume inside claude would show at the top of its list
@@ -256,7 +260,7 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 //
 // logPrefix is prepended to warnings (e.g. "[myproc] " for supervised mode,
 // empty for the single-process foreground path).
-func resolveSessionArgs(store *session.Store, sessionKey, workspace string, maxAge time.Duration, logPrefix string) []string {
+func resolveSessionState(store *session.Store, sessionKey, workspace string, maxAge time.Duration, logPrefix string) harness.SessionState {
 	storedID, _, getErr := store.Get(sessionKey)
 	if getErr != nil {
 		warn.Printf("  %sCould not read session store: %v\n", logPrefix, getErr)
@@ -274,15 +278,15 @@ func resolveSessionArgs(store *session.Store, sessionKey, workspace string, maxA
 				warn.Printf("  %sCould not update session ID: %v\n", logPrefix, err)
 			}
 		}
-		return []string{"--resume", latestID}
+		return harness.SessionState{Mode: harness.SessionResume, ID: latestID}
 	case storedID != "":
-		return []string{"--resume", storedID}
+		return harness.SessionState{Mode: harness.SessionResume, ID: storedID}
 	default:
 		sid := session.NewID()
 		if err := store.Set(sessionKey, sid); err != nil {
 			warn.Printf("  %sCould not store session ID: %v\n", logPrefix, err)
 		}
-		return []string{"--session-id", sid}
+		return harness.SessionState{Mode: harness.SessionPinned, ID: sid}
 	}
 }
 
