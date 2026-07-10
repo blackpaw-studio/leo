@@ -7,10 +7,13 @@ import (
 
 type fakeHarness struct{ name string }
 
-func (f fakeHarness) Name() string                      { return f.name }
-func (f fakeHarness) Binary() string                    { return f.name }
-func (f fakeHarness) Args(LaunchSpec) ([]string, error) { return nil, nil }
-func (f fakeHarness) SessionArgs(SessionState) []string { return nil }
+func (f fakeHarness) Name() string                              { return f.name }
+func (f fakeHarness) Binary() string                            { return f.name }
+func (f fakeHarness) Args(LaunchSpec) ([]string, error)         { return nil, nil }
+func (f fakeHarness) SessionArgs(SessionState) []string         { return nil }
+func (f fakeHarness) ValidateModel(string) error                { return nil }
+func (f fakeHarness) DecodeOptions(map[string]any) (any, error) { return struct{}{}, nil }
+func (f fakeHarness) SupportsChannels() bool                    { return false }
 
 func TestRegistryGetAndNames(t *testing.T) {
 	reset := snapshotRegistry(t)
@@ -19,16 +22,28 @@ func TestRegistryGetAndNames(t *testing.T) {
 	Register(fakeHarness{name: "zeta"})
 	Register(fakeHarness{name: "alpha"})
 
-	h, err := Get("alpha")
-	if err != nil {
-		t.Fatalf("Get(alpha): %v", err)
+	tests := []struct {
+		name    string
+		get     string
+		wantErr bool
+		want    string
+	}{
+		{"known name", "alpha", false, "alpha"},
+		{"unknown name", "missing", true, ""},
 	}
-	if h.Name() != "alpha" {
-		t.Fatalf("Get(alpha).Name() = %q", h.Name())
-	}
-
-	if _, err := Get("missing"); err == nil {
-		t.Fatal("Get(missing): expected error, got nil")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, err := Get(tt.get)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Get(%q) err = %v, wantErr %v", tt.get, err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if h.Name() != tt.want {
+				t.Fatalf("Get(%q).Name() = %q, want %q", tt.get, h.Name(), tt.want)
+			}
+		})
 	}
 
 	// Names() is sorted regardless of registration order.
@@ -53,17 +68,36 @@ func TestRegisterDuplicatePanics(t *testing.T) {
 }
 
 func TestFallbackHelpers(t *testing.T) {
-	if got := FallbackString("a", "b"); got != "a" {
-		t.Fatalf("FallbackString(a,b) = %q", got)
+	stringTests := []struct {
+		name              string
+		primary, fallback string
+		want              string
+	}{
+		{"non-empty primary", "a", "b", "a"},
+		{"empty primary", "", "b", "b"},
 	}
-	if got := FallbackString("", "b"); got != "b" {
-		t.Fatalf("FallbackString('',b) = %q", got)
+	for _, tt := range stringTests {
+		t.Run("FallbackString/"+tt.name, func(t *testing.T) {
+			if got := FallbackString(tt.primary, tt.fallback); got != tt.want {
+				t.Fatalf("FallbackString(%q,%q) = %q, want %q", tt.primary, tt.fallback, got, tt.want)
+			}
+		})
 	}
-	if got := FallbackSlice([]string{"x"}, []string{"y"}); !reflect.DeepEqual(got, []string{"x"}) {
-		t.Fatalf("FallbackSlice non-empty primary = %v", got)
+
+	sliceTests := []struct {
+		name              string
+		primary, fallback []string
+		want              []string
+	}{
+		{"non-empty primary", []string{"x"}, []string{"y"}, []string{"x"}},
+		{"empty primary", nil, []string{"y"}, []string{"y"}},
 	}
-	if got := FallbackSlice(nil, []string{"y"}); !reflect.DeepEqual(got, []string{"y"}) {
-		t.Fatalf("FallbackSlice empty primary = %v", got)
+	for _, tt := range sliceTests {
+		t.Run("FallbackSlice/"+tt.name, func(t *testing.T) {
+			if got := FallbackSlice(tt.primary, tt.fallback); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("FallbackSlice(%v,%v) = %v, want %v", tt.primary, tt.fallback, got, tt.want)
+			}
+		})
 	}
 }
 

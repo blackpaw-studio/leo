@@ -5,6 +5,7 @@ package claude
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -30,8 +31,37 @@ type Claude struct{}
 
 func init() { harness.Register(Claude{}) }
 
+// validModels is the hardcoded Claude Code model list, moved here from
+// internal/config so model policy lives with the adapter.
+var validModels = map[string]bool{
+	"sonnet": true, "opus": true, "haiku": true,
+	"sonnet[1m]": true, "opus[1m]": true,
+}
+
+// ValidModels returns the accepted model names, sorted.
+func ValidModels() []string {
+	names := make([]string, 0, len(validModels))
+	for name := range validModels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (Claude) Name() string   { return "claude" }
 func (Claude) Binary() string { return "claude" }
+
+// ValidateModel reports whether model is acceptable for Claude Code. Empty
+// string is always valid (harness default).
+func (Claude) ValidateModel(model string) error {
+	if model == "" || validModels[model] {
+		return nil
+	}
+	return fmt.Errorf("%q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", model)
+}
+
+// SupportsChannels reports that Claude Code hosts channel plugins.
+func (Claude) SupportsChannels() bool { return true }
 
 func (Claude) SessionArgs(s harness.SessionState) []string {
 	switch s.Mode {
