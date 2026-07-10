@@ -1,0 +1,80 @@
+package config
+
+import (
+	// Adapters self-register in init; config validation must be able to
+	// resolve them. Plan 3 adds codex/opencode imports here.
+	_ "github.com/blackpaw-studio/leo/internal/harness/claude"
+)
+
+// DefaultHarnessName is the harness assumed when config specifies none.
+const DefaultHarnessName = "claude"
+
+func harnessOrDefault(scope, def string) string {
+	if scope != "" {
+		return scope
+	}
+	if def != "" {
+		return def
+	}
+	return DefaultHarnessName
+}
+
+func (c *Config) DefaultsHarness() string { return harnessOrDefault(c.Defaults.Harness, "") }
+
+func (c *Config) ProcessHarness(p ProcessConfig) string {
+	return harnessOrDefault(p.Harness, c.Defaults.Harness)
+}
+
+func (c *Config) TaskHarness(t TaskConfig) string {
+	return harnessOrDefault(t.Harness, c.Defaults.Harness)
+}
+
+func (c *Config) TemplateHarness(t TemplateConfig) string {
+	return harnessOrDefault(t.Harness, c.Defaults.Harness)
+}
+
+func (c *Config) SessionHarness(s SessionConfig) string {
+	return harnessOrDefault(s.Harness, c.Defaults.Harness)
+}
+
+// mergeHarnessOptions returns a new map with override entries layered over
+// base. Neither input is mutated; the result is never nil.
+func mergeHarnessOptions(base, override map[string]any) map[string]any {
+	merged := make(map[string]any, len(base)+len(override))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range override {
+		merged[k] = v
+	}
+	return merged
+}
+
+// scopeHarnessOptions layers defaults.harness_options under the scope's own
+// options — but only when the scope runs the same harness as defaults;
+// options for one harness must not leak into another.
+func (c *Config) scopeHarnessOptions(scopeHarness string, opts map[string]any) map[string]any {
+	if scopeHarness != c.DefaultsHarness() {
+		return mergeHarnessOptions(nil, opts)
+	}
+	return mergeHarnessOptions(c.Defaults.HarnessOptions, opts)
+}
+
+func (c *Config) ProcessHarnessOptions(p ProcessConfig) map[string]any {
+	return c.scopeHarnessOptions(c.ProcessHarness(p), p.HarnessOptions)
+}
+
+func (c *Config) TaskHarnessOptions(t TaskConfig) map[string]any {
+	return c.scopeHarnessOptions(c.TaskHarness(t), t.HarnessOptions)
+}
+
+func (c *Config) TemplateHarnessOptions(t TemplateConfig) map[string]any {
+	return c.scopeHarnessOptions(c.TemplateHarness(t), t.HarnessOptions)
+}
+
+// SessionHarnessOptions intentionally does NOT inherit defaults: persistent
+// sessions never cascaded the claude flat fields from defaults, and the
+// migration preserves that behavior exactly.
+func (c *Config) SessionHarnessOptions(s SessionConfig) map[string]any {
+	return mergeHarnessOptions(nil, s.HarnessOptions)
+}

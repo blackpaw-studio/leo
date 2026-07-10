@@ -8,11 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,28 +55,6 @@ func ValidateAddDir(dir string) error {
 		return fmt.Errorf("add_dirs entry %q contains forbidden character %q", trimmed, string(dir[i]))
 	}
 	return nil
-}
-
-var validModels = map[string]bool{
-	"sonnet":     true,
-	"opus":       true,
-	"haiku":      true,
-	"sonnet[1m]": true,
-	"opus[1m]":   true,
-}
-
-// ValidModels returns the model names Config.Validate() accepts, sorted.
-// It exists so callers that need to mirror this list (e.g. the web UI's
-// model dropdown in internal/web/schema/options.go) — or tests that guard
-// against the two drifting apart — have a source of truth without
-// exporting the validModels map itself.
-func ValidModels() []string {
-	names := make([]string, 0, len(validModels))
-	for name := range validModels {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 var validPermissionModes = map[string]bool{
@@ -214,6 +192,10 @@ type DefaultsConfig struct {
 	// (process + tmux killed, conversation preserved for auto-resume). Empty
 	// disables idle-suspend. Overridable per template and per spawn.
 	IdleSuspendAfter string `yaml:"idle_suspend_after,omitempty"`
+	// Harness selects the coding-agent adapter (e.g. "claude"). Empty means
+	// DefaultHarnessName.
+	Harness        string         `yaml:"harness,omitempty"`
+	HarnessOptions map[string]any `yaml:"harness_options,omitempty"`
 }
 
 type ProcessConfig struct {
@@ -235,8 +217,10 @@ type ProcessConfig struct {
 	PermissionMode     string            `yaml:"permission_mode,omitempty"`
 	// StaleResumeHours overrides defaults.stale_resume_hours for this process.
 	// nil = inherit; 0 = disable staleness check for this process.
-	StaleResumeHours *int `yaml:"stale_resume_hours,omitempty"`
-	Enabled          bool `yaml:"enabled"`
+	StaleResumeHours *int           `yaml:"stale_resume_hours,omitempty"`
+	Enabled          bool           `yaml:"enabled"`
+	Harness          string         `yaml:"harness,omitempty"`
+	HarnessOptions   map[string]any `yaml:"harness_options,omitempty"`
 }
 
 // SessionConfig defines a named persistent claude session supervised by the
@@ -256,31 +240,35 @@ type SessionConfig struct {
 	Channels           []string          `yaml:"channels,omitempty"`
 	Env                map[string]string `yaml:"env,omitempty"`
 	IdleTimeout        string            `yaml:"idle_timeout,omitempty"`
+	Harness            string            `yaml:"harness,omitempty"`
+	HarnessOptions     map[string]any    `yaml:"harness_options,omitempty"`
 }
 
 type TaskConfig struct {
-	Workspace          string   `yaml:"workspace,omitempty"`
-	Schedule           string   `yaml:"schedule"`
-	Timezone           string   `yaml:"timezone,omitempty"`
-	PromptFile         string   `yaml:"prompt_file"`
-	Model              string   `yaml:"model,omitempty"`
-	Provider           string   `yaml:"provider,omitempty"`
-	MaxTurns           int      `yaml:"max_turns,omitempty"`
-	Enabled            bool     `yaml:"enabled"`
-	Silent             bool     `yaml:"silent,omitempty"`
-	Timeout            string   `yaml:"timeout,omitempty"`         // e.g. "30m", "1h" — default 30m
-	Retries            int      `yaml:"retries,omitempty"`         // number of retry attempts on failure, default 0
-	Channels           []string `yaml:"channels,omitempty"`        // channel plugin IDs used by NotifyOnFail
-	DevChannels        []string `yaml:"dev_channels,omitempty"`    // loaded via --dangerously-load-development-channels
-	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"`  // spawn a child claude to notify configured channels on failure
-	PermissionMode     string   `yaml:"permission_mode,omitempty"` // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
-	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
-	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
-	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
-	Runtime            string   `yaml:"runtime,omitempty"` // "oneshot" (default) | "persistent"
-	Session            string   `yaml:"session,omitempty"`
-	Lazy               bool     `yaml:"lazy,omitempty"`
-	QueueMax           int      `yaml:"queue_max,omitempty"` // 0 → use default (5)
+	Workspace          string         `yaml:"workspace,omitempty"`
+	Schedule           string         `yaml:"schedule"`
+	Timezone           string         `yaml:"timezone,omitempty"`
+	PromptFile         string         `yaml:"prompt_file"`
+	Model              string         `yaml:"model,omitempty"`
+	Provider           string         `yaml:"provider,omitempty"`
+	MaxTurns           int            `yaml:"max_turns,omitempty"`
+	Enabled            bool           `yaml:"enabled"`
+	Silent             bool           `yaml:"silent,omitempty"`
+	Timeout            string         `yaml:"timeout,omitempty"`         // e.g. "30m", "1h" — default 30m
+	Retries            int            `yaml:"retries,omitempty"`         // number of retry attempts on failure, default 0
+	Channels           []string       `yaml:"channels,omitempty"`        // channel plugin IDs used by NotifyOnFail
+	DevChannels        []string       `yaml:"dev_channels,omitempty"`    // loaded via --dangerously-load-development-channels
+	NotifyOnFail       bool           `yaml:"notify_on_fail,omitempty"`  // spawn a child claude to notify configured channels on failure
+	PermissionMode     string         `yaml:"permission_mode,omitempty"` // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
+	AllowedTools       []string       `yaml:"allowed_tools,omitempty"`
+	DisallowedTools    []string       `yaml:"disallowed_tools,omitempty"`
+	AppendSystemPrompt string         `yaml:"append_system_prompt,omitempty"`
+	Runtime            string         `yaml:"runtime,omitempty"` // "oneshot" (default) | "persistent"
+	Session            string         `yaml:"session,omitempty"`
+	Lazy               bool           `yaml:"lazy,omitempty"`
+	QueueMax           int            `yaml:"queue_max,omitempty"` // 0 → use default (5)
+	Harness            string         `yaml:"harness,omitempty"`
+	HarnessOptions     map[string]any `yaml:"harness_options,omitempty"`
 }
 
 // TemplateConfig defines a reusable blueprint for spawning ephemeral agents.
@@ -303,7 +291,9 @@ type TemplateConfig struct {
 	PermissionMode     string            `yaml:"permission_mode,omitempty"`
 	// IdleSuspendAfter overrides defaults.idle_suspend_after for agents spawned
 	// from this template. A Go duration ("24h"); empty inherits the default.
-	IdleSuspendAfter string `yaml:"idle_suspend_after,omitempty"`
+	IdleSuspendAfter string         `yaml:"idle_suspend_after,omitempty"`
+	Harness          string         `yaml:"harness,omitempty"`
+	HarnessOptions   map[string]any `yaml:"harness_options,omitempty"`
 }
 
 // IsClientOnly reports whether the config is a client-only install: one
@@ -492,8 +482,35 @@ func (c *Config) TaskTimeout(t TaskConfig) time.Duration {
 func (c *Config) Validate() error {
 	var errs []string
 
-	if c.Defaults.Model != "" && c.Defaults.Provider == "" && !validModels[c.Defaults.Model] {
-		errs = append(errs, fmt.Sprintf("defaults.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", c.Defaults.Model))
+	// resolveHarness returns the adapter for a scope, emitting at most one
+	// error per bad name: defaults errors at defaults.harness; a scope only
+	// errors when it *explicitly* names an unregistered harness.
+	available := strings.Join(harness.Names(), ", ")
+	defaultsHarness, defaultsHarnessErr := harness.Get(c.DefaultsHarness())
+	if defaultsHarnessErr != nil {
+		errs = append(errs, fmt.Sprintf("defaults.harness %q is not a registered harness (available: %s)", c.DefaultsHarness(), available))
+	}
+	resolveHarness := func(scope, explicit string) (harness.Harness, bool) {
+		if explicit == "" {
+			return defaultsHarness, defaultsHarnessErr == nil
+		}
+		h, err := harness.Get(explicit)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s.harness %q is not a registered harness (available: %s)", scope, explicit, available))
+			return nil, false
+		}
+		return h, true
+	}
+
+	if defaultsHarness != nil {
+		if c.Defaults.Model != "" && c.Defaults.Provider == "" {
+			if err := defaultsHarness.ValidateModel(c.Defaults.Model); err != nil {
+				errs = append(errs, fmt.Sprintf("defaults.model %v", err))
+			}
+		}
+		if _, err := defaultsHarness.DecodeOptions(c.Defaults.HarnessOptions); err != nil {
+			errs = append(errs, fmt.Sprintf("defaults.harness_options: %v", err))
+		}
 	}
 	if c.Defaults.MaxTurns < 0 {
 		errs = append(errs, "defaults.max_turns must not be negative")
@@ -561,8 +578,18 @@ func (c *Config) Validate() error {
 
 	for name, proc := range c.Processes {
 		checkProviderRef("processes."+name, proc.Provider)
-		if proc.Model != "" && c.ProcessProvider(proc) == "" && !validModels[proc.Model] {
-			errs = append(errs, fmt.Sprintf("processes.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, proc.Model))
+		if h, ok := resolveHarness("processes."+name, proc.Harness); ok {
+			if proc.Model != "" && c.ProcessProvider(proc) == "" {
+				if err := h.ValidateModel(proc.Model); err != nil {
+					errs = append(errs, fmt.Sprintf("processes.%s.model %v", name, err))
+				}
+			}
+			if _, err := h.DecodeOptions(c.ProcessHarnessOptions(proc)); err != nil {
+				errs = append(errs, fmt.Sprintf("processes.%s.harness_options: %v", name, err))
+			}
+			if !h.SupportsChannels() && (len(proc.Channels) > 0 || len(proc.DevChannels) > 0) {
+				errs = append(errs, fmt.Sprintf("processes.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
 		}
 		if proc.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("processes.%s.max_turns must not be negative", name))
@@ -597,8 +624,18 @@ func (c *Config) Validate() error {
 
 	for name, tmpl := range c.Templates {
 		checkProviderRef("templates."+name, tmpl.Provider)
-		if tmpl.Model != "" && c.TemplateProvider(tmpl) == "" && !validModels[tmpl.Model] {
-			errs = append(errs, fmt.Sprintf("templates.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, tmpl.Model))
+		if h, ok := resolveHarness("templates."+name, tmpl.Harness); ok {
+			if tmpl.Model != "" && c.TemplateProvider(tmpl) == "" {
+				if err := h.ValidateModel(tmpl.Model); err != nil {
+					errs = append(errs, fmt.Sprintf("templates.%s.model %v", name, err))
+				}
+			}
+			if _, err := h.DecodeOptions(c.TemplateHarnessOptions(tmpl)); err != nil {
+				errs = append(errs, fmt.Sprintf("templates.%s.harness_options: %v", name, err))
+			}
+			if !h.SupportsChannels() && (len(tmpl.Channels) > 0 || len(tmpl.DevChannels) > 0) {
+				errs = append(errs, fmt.Sprintf("templates.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
 		}
 		if tmpl.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("templates.%s.max_turns must not be negative", name))
@@ -638,8 +675,18 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("sessions.%s.workspace is required", name))
 		}
 		checkProviderRef("sessions."+name, sess.Provider)
-		if sess.Model != "" && c.SessionProvider(sess) == "" && !validModels[sess.Model] {
-			errs = append(errs, fmt.Sprintf("sessions.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, sess.Model))
+		if h, ok := resolveHarness("sessions."+name, sess.Harness); ok {
+			if sess.Model != "" && c.SessionProvider(sess) == "" {
+				if err := h.ValidateModel(sess.Model); err != nil {
+					errs = append(errs, fmt.Sprintf("sessions.%s.model %v", name, err))
+				}
+			}
+			if _, err := h.DecodeOptions(c.SessionHarnessOptions(sess)); err != nil {
+				errs = append(errs, fmt.Sprintf("sessions.%s.harness_options: %v", name, err))
+			}
+			if !h.SupportsChannels() && len(sess.Channels) > 0 {
+				errs = append(errs, fmt.Sprintf("sessions.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
 		}
 		if sess.PermissionMode != "" && !validPermissionModes[sess.PermissionMode] {
 			errs = append(errs, fmt.Sprintf("sessions.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, sess.PermissionMode))
@@ -676,8 +723,18 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("tasks.%s.prompt_file is required", name))
 		}
 		checkProviderRef("tasks."+name, task.Provider)
-		if task.Model != "" && c.TaskProvider(task) == "" && !validModels[task.Model] {
-			errs = append(errs, fmt.Sprintf("tasks.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, task.Model))
+		if h, ok := resolveHarness("tasks."+name, task.Harness); ok {
+			if task.Model != "" && c.TaskProvider(task) == "" {
+				if err := h.ValidateModel(task.Model); err != nil {
+					errs = append(errs, fmt.Sprintf("tasks.%s.model %v", name, err))
+				}
+			}
+			if _, err := h.DecodeOptions(c.TaskHarnessOptions(task)); err != nil {
+				errs = append(errs, fmt.Sprintf("tasks.%s.harness_options: %v", name, err))
+			}
+			if !h.SupportsChannels() && (len(task.Channels) > 0 || len(task.DevChannels) > 0) {
+				errs = append(errs, fmt.Sprintf("tasks.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
 		}
 		if task.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.max_turns must not be negative", name))

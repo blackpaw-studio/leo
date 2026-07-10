@@ -11,6 +11,14 @@ func FieldsFor(s Section) []Field {
 var Excluded = map[Section][]string{
 	// hosts is rendered as its own add/remove entries UI, not a flat field.
 	SectionClient: {"hosts"},
+	// harness/harness_options land in the web UI once the harness picker and
+	// a per-adapter options editor ship (later plan); config/validation
+	// support them today (see internal/config/harness.go).
+	SectionDefaults: {"harness", "harness_options"},
+	SectionProcess:  {"harness", "harness_options"},
+	SectionTask:     {"harness", "harness_options"},
+	SectionTemplate: {"harness", "harness_options"},
+	SectionSession:  {"harness", "harness_options"},
 }
 
 // --- Shared field builders -------------------------------------------------
