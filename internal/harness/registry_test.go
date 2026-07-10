@@ -7,10 +7,10 @@ import (
 
 type fakeHarness struct{ name string }
 
-func (f fakeHarness) Name() string                          { return f.name }
-func (f fakeHarness) Binary() string                        { return f.name }
-func (f fakeHarness) Args(LaunchSpec) ([]string, error)     { return nil, nil }
-func (f fakeHarness) SessionArgs(SessionState) []string     { return nil }
+func (f fakeHarness) Name() string                      { return f.name }
+func (f fakeHarness) Binary() string                    { return f.name }
+func (f fakeHarness) Args(LaunchSpec) ([]string, error) { return nil, nil }
+func (f fakeHarness) SessionArgs(SessionState) []string { return nil }
 
 func TestRegistryGetAndNames(t *testing.T) {
 	reset := snapshotRegistry(t)
