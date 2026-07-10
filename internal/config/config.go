@@ -354,22 +354,6 @@ func (c *Config) ProcessMaxTurns(p ProcessConfig) int {
 	return DefaultMaxTurns
 }
 
-// ProcessBypassPermissions returns the effective bypass_permissions for a process.
-func (c *Config) ProcessBypassPermissions(p ProcessConfig) bool {
-	if p.BypassPermissions != nil {
-		return *p.BypassPermissions
-	}
-	return c.Defaults.BypassPermissions
-}
-
-// ProcessRemoteControl returns the effective remote_control for a process.
-func (c *Config) ProcessRemoteControl(p ProcessConfig) bool {
-	if p.RemoteControl != nil {
-		return *p.RemoteControl
-	}
-	return c.Defaults.RemoteControl
-}
-
 // DefaultStaleResumeHours is the fallback staleness threshold when neither
 // Defaults nor per-process override is set.
 const DefaultStaleResumeHours = 12

@@ -14,8 +14,6 @@ import (
 // the harness refactor. Web is disabled in every case so leomcp.AppendArg
 // is a no-op and MergeSystemPrompt passes through (no state-dir writes).
 func TestBuildProcessArgsCharacterization(t *testing.T) {
-	boolPtr := func(b bool) *bool { return &b }
-
 	tests := []struct {
 		name string
 		cfg  *config.Config
@@ -36,20 +34,24 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 			cfg: &config.Config{
 				HomePath: "/tmp/leo-home",
 				Defaults: config.DefaultsConfig{
-					Model:           "opus",
-					AllowedTools:    []string{"Read", "Bash"},
-					DisallowedTools: []string{"WebFetch"},
+					Model: "opus",
+					HarnessOptions: map[string]any{
+						"allowed_tools":    []any{"Read", "Bash"},
+						"disallowed_tools": []any{"WebFetch"},
+					},
 				},
 			},
 			proc: config.ProcessConfig{
-				Workspace:          "/tmp/ws",
-				Channels:           []string{"plugin:telegram@claude-plugins-official"},
-				DevChannels:        []string{"plugin:dev@local"},
-				AddDirs:            []string{"/tmp/extra"},
-				RemoteControl:      boolPtr(true),
-				PermissionMode:     "acceptEdits",
-				Agent:              "rocket",
-				AppendSystemPrompt: "be terse",
+				Workspace:   "/tmp/ws",
+				Channels:    []string{"plugin:telegram@claude-plugins-official"},
+				DevChannels: []string{"plugin:dev@local"},
+				AddDirs:     []string{"/tmp/extra"},
+				HarnessOptions: map[string]any{
+					"remote_control":       true,
+					"permission_mode":      "acceptEdits",
+					"agent":                "rocket",
+					"append_system_prompt": "be terse",
+				},
 			},
 			want: []string{
 				"--model", "opus",
@@ -69,13 +71,51 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 			name: "bypass permissions legacy fallback",
 			cfg: &config.Config{
 				HomePath: "/tmp/leo-home",
-				Defaults: config.DefaultsConfig{Model: "sonnet", BypassPermissions: true},
+				Defaults: config.DefaultsConfig{
+					Model:          "sonnet",
+					HarnessOptions: map[string]any{"bypass_permissions": true},
+				},
 			},
 			proc: config.ProcessConfig{Workspace: "/tmp/ws"},
 			want: []string{
 				"--model", "sonnet",
 				"--add-dir", "/tmp/ws",
 				"--dangerously-skip-permissions",
+			},
+		},
+		{
+			name: "defaults-level option inherited by scope",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"permission_mode": "plan"},
+				},
+			},
+			proc: config.ProcessConfig{Workspace: "/tmp/ws"},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
+				"--permission-mode", "plan",
+			},
+		},
+		{
+			name: "scope override wins over defaults",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"permission_mode": "plan"},
+				},
+			},
+			proc: config.ProcessConfig{
+				Workspace:      "/tmp/ws",
+				HarnessOptions: map[string]any{"permission_mode": "acceptEdits"},
+			},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
+				"--permission-mode", "acceptEdits",
 			},
 		},
 	}

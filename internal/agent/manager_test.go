@@ -104,11 +104,13 @@ func TestBuildTemplateArgsBasic(t *testing.T) {
 func TestBuildTemplateArgsInheritsDefaults(t *testing.T) {
 	cfg := &config.Config{
 		Defaults: config.DefaultsConfig{
-			Model:              "haiku",
-			MaxTurns:           50,
-			PermissionMode:     "auto",
-			AllowedTools:       []string{"Read", "Write"},
-			AppendSystemPrompt: "be helpful",
+			Model:    "haiku",
+			MaxTurns: 50,
+			HarnessOptions: map[string]any{
+				"permission_mode":      "auto",
+				"allowed_tools":        []any{"Read", "Write"},
+				"append_system_prompt": "be helpful",
+			},
 		},
 	}
 	tmpl := config.TemplateConfig{}
@@ -169,7 +171,7 @@ func TestBuildTemplateArgsDevChannels(t *testing.T) {
 
 func TestBuildTemplateArgsAgent(t *testing.T) {
 	cfg := &config.Config{}
-	tmpl := config.TemplateConfig{Agent: "my-agent"}
+	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"agent": "my-agent"}}
 
 	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 	assertContainsFlag(t, args, "--agent", "my-agent")
@@ -177,8 +179,7 @@ func TestBuildTemplateArgsAgent(t *testing.T) {
 
 func TestBuildTemplateArgsRemoteControlDisabled(t *testing.T) {
 	cfg := &config.Config{}
-	rc := false
-	tmpl := config.TemplateConfig{RemoteControl: &rc}
+	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"remote_control": false}}
 
 	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 	for _, a := range args {

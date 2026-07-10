@@ -892,6 +892,23 @@ func warnLeoMCPSkipped(cfg *config.Config, taskName string, leoMCPOK bool) {
 }
 
 func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoMCPOK bool) []string {
+	h, err := harness.Get(cfg.TaskHarness(task))
+	if err != nil {
+		log.Printf("[task:%s] resolving harness: %v", taskName, err)
+		return nil
+	}
+	decoded, err := h.DecodeOptions(cfg.TaskHarnessOptions(task))
+	if err != nil {
+		log.Printf("[task:%s] decoding harness options: %v", taskName, err)
+		return nil
+	}
+	opts, ok := decoded.(claudeharness.Options)
+	if !ok {
+		// Non-claude tasks arrive with Plan 4 (session drivers).
+		log.Printf("[task:%s] harness %q cannot run tasks yet", taskName, h.Name())
+		return nil
+	}
+
 	mcpConfig := ""
 	if p := cfg.TaskMCPConfigPath(task); config.HasMCPServers(p) {
 		mcpConfig = p
@@ -907,6 +924,11 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 	if sessionID != "" {
 		sess = harness.SessionState{Mode: harness.SessionResume, ID: sessionID}
 	}
+
+	opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
+	opts.MCPConfigPath = mcpConfig
+	opts.LeoMCPArgs = leoMCPArgs
+
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindTask,
 		Name:        taskName,
@@ -916,19 +938,11 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		DevChannels: task.DevChannels,
 		Prompt:      prompt,
 		Session:     sess,
-		Options: claudeharness.Options{
-			PermissionMode:     harness.FallbackString(task.PermissionMode, cfg.Defaults.PermissionMode),
-			BypassPermissions:  cfg.Defaults.BypassPermissions,
-			AllowedTools:       harness.FallbackSlice(task.AllowedTools, cfg.Defaults.AllowedTools),
-			DisallowedTools:    harness.FallbackSlice(task.DisallowedTools, cfg.Defaults.DisallowedTools),
-			AppendSystemPrompt: leomcp.MergeSystemPrompt(cfg, harness.FallbackString(task.AppendSystemPrompt, cfg.Defaults.AppendSystemPrompt)),
-			MCPConfigPath:      mcpConfig,
-			LeoMCPArgs:         leoMCPArgs,
-		},
+		Options:     opts,
 	}
-	args, err := claudeharness.Claude{}.Args(spec)
+	args, err := h.Args(spec)
 	if err != nil {
-		log.Printf("[task:%s] building claude args: %v", taskName, err)
+		log.Printf("[task:%s] building %s args: %v", taskName, h.Name(), err)
 		return nil
 	}
 	return args

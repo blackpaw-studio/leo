@@ -45,8 +45,6 @@ func TestBuildTemplateArgsNoLeoMCPWhenWebDisabled(t *testing.T) {
 }
 
 func TestBuildTemplateArgsCharacterization(t *testing.T) {
-	boolPtr := func(b bool) *bool { return &b }
-
 	tests := []struct {
 		name   string
 		cfg    *config.Config
@@ -73,18 +71,23 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 			name: "full template with opening prompt",
 			cfg: &config.Config{
 				HomePath: "/tmp/leo-home",
-				Defaults: config.DefaultsConfig{Model: "opus", PermissionMode: "acceptEdits"},
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"permission_mode": "acceptEdits"},
+				},
 			},
 			tmpl: config.TemplateConfig{
-				Model:              "sonnet",
-				Channels:           []string{"plugin:telegram@claude-plugins-official"},
-				AddDirs:            []string{"/tmp/extra"},
-				RemoteControl:      boolPtr(false),
-				Agent:              "rocket",
-				AllowedTools:       []string{"Read"},
-				DisallowedTools:    []string{"WebFetch"},
-				AppendSystemPrompt: "be terse",
-				MaxTurns:           50,
+				Model:    "sonnet",
+				Channels: []string{"plugin:telegram@claude-plugins-official"},
+				AddDirs:  []string{"/tmp/extra"},
+				MaxTurns: 50,
+				HarnessOptions: map[string]any{
+					"remote_control":       false,
+					"agent":                "rocket",
+					"allowed_tools":        []any{"Read"},
+					"disallowed_tools":     []any{"WebFetch"},
+					"append_system_prompt": "be terse",
+				},
 			},
 			prompt: "hello world",
 			want: []string{
@@ -116,6 +119,44 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 				"--add-dir", "/tmp/ws",
 				"--add-dir", "/ok/dir",
 				"--remote-control",
+				"--name", "myagent",
+				"--max-turns", "15",
+			},
+		},
+		{
+			name: "defaults-level option inherited by template",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"agent": "shared-agent"},
+				},
+			},
+			tmpl: config.TemplateConfig{},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
+				"--remote-control",
+				"--name", "myagent",
+				"--agent", "shared-agent",
+				"--max-turns", "15",
+			},
+		},
+		{
+			name: "template's own remote_control:false suppresses flag even when defaults.harness_options.remote_control:true",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"remote_control": true},
+				},
+			},
+			tmpl: config.TemplateConfig{
+				HarnessOptions: map[string]any{"remote_control": false},
+			},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
 				"--name", "myagent",
 				"--max-turns", "15",
 			},

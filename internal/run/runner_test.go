@@ -115,14 +115,17 @@ func TestAssemblePromptMissingFile(t *testing.T) {
 }
 
 func makeTestConfig(dir string, bypassPermissions bool) *config.Config {
-	return &config.Config{
+	cfg := &config.Config{
 		HomePath: dir,
 		Defaults: config.DefaultsConfig{
-			Model:             "sonnet",
-			MaxTurns:          15,
-			BypassPermissions: bypassPermissions,
+			Model:    "sonnet",
+			MaxTurns: 15,
 		},
 	}
+	if bypassPermissions {
+		cfg.Defaults.HarnessOptions = map[string]any{"bypass_permissions": true}
+	}
+	return cfg
 }
 
 func TestBuildArgs(t *testing.T) {

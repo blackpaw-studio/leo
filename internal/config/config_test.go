@@ -483,15 +483,10 @@ func TestProcessWorkspace(t *testing.T) {
 }
 
 func TestProcessDefaults(t *testing.T) {
-	tr := true
-	fa := false
-
 	cfg := &Config{
 		Defaults: DefaultsConfig{
-			Model:             "sonnet",
-			MaxTurns:          15,
-			BypassPermissions: true,
-			RemoteControl:     false,
+			Model:    "sonnet",
+			MaxTurns: 15,
 		},
 	}
 
@@ -523,40 +518,6 @@ func TestProcessDefaults(t *testing.T) {
 		}
 	})
 
-	t.Run("process bypass override true", func(t *testing.T) {
-		p := ProcessConfig{BypassPermissions: &tr}
-		if got := cfg.ProcessBypassPermissions(p); !got {
-			t.Error("ProcessBypassPermissions() = false, want true")
-		}
-	})
-
-	t.Run("process bypass override false", func(t *testing.T) {
-		p := ProcessConfig{BypassPermissions: &fa}
-		if got := cfg.ProcessBypassPermissions(p); got {
-			t.Error("ProcessBypassPermissions() = true, want false")
-		}
-	})
-
-	t.Run("process bypass default", func(t *testing.T) {
-		p := ProcessConfig{}
-		if got := cfg.ProcessBypassPermissions(p); !got {
-			t.Error("ProcessBypassPermissions() = false, want true (from defaults)")
-		}
-	})
-
-	t.Run("process remote_control override true", func(t *testing.T) {
-		p := ProcessConfig{RemoteControl: &tr}
-		if got := cfg.ProcessRemoteControl(p); !got {
-			t.Error("ProcessRemoteControl() = false, want true")
-		}
-	})
-
-	t.Run("process remote_control default", func(t *testing.T) {
-		p := ProcessConfig{}
-		if got := cfg.ProcessRemoteControl(p); got {
-			t.Error("ProcessRemoteControl() = true, want false (from defaults)")
-		}
-	})
 }
 
 func TestProcessStaleResume(t *testing.T) {

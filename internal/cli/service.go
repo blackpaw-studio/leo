@@ -290,10 +290,31 @@ func mergeChannelsIntoEnv(proc config.ProcessConfig) map[string]string {
 // buildProcessArgs builds claude CLI args for a named process by resolving
 // the config cascade into a harness.LaunchSpec.
 func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig) []string {
+	h, err := harness.Get(cfg.ProcessHarness(proc))
+	if err != nil {
+		log.Printf("[%s] resolving harness: %v", name, err)
+		return nil
+	}
+	decoded, err := h.DecodeOptions(cfg.ProcessHarnessOptions(proc))
+	if err != nil {
+		log.Printf("[%s] decoding harness options: %v", name, err)
+		return nil
+	}
+	opts, ok := decoded.(claudeharness.Options)
+	if !ok {
+		// Non-claude processes arrive with Plan 4 (session drivers).
+		log.Printf("[%s] harness %q cannot run supervised processes yet", name, h.Name())
+		return nil
+	}
 	mcpConfig := ""
 	if p := cfg.ProcessMCPConfigPath(proc); config.HasMCPServers(p) {
 		mcpConfig = p
 	}
+	opts.RemoteControlPrefix = name
+	opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
+	opts.MCPConfigPath = mcpConfig
+	opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindProcess,
 		Name:        name,
@@ -302,24 +323,11 @@ func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig
 		AddDirs:     proc.AddDirs,
 		Channels:    proc.Channels,
 		DevChannels: proc.DevChannels,
-		Options: claudeharness.Options{
-			PermissionMode:      harness.FallbackString(proc.PermissionMode, cfg.Defaults.PermissionMode),
-			BypassPermissions:   cfg.ProcessBypassPermissions(proc),
-			RemoteControl:       cfg.ProcessRemoteControl(proc),
-			RemoteControlPrefix: name,
-			AgentFile:           proc.Agent,
-			AllowedTools:        harness.FallbackSlice(proc.AllowedTools, cfg.Defaults.AllowedTools),
-			DisallowedTools:     harness.FallbackSlice(proc.DisallowedTools, cfg.Defaults.DisallowedTools),
-			AppendSystemPrompt:  leomcp.MergeSystemPrompt(cfg, harness.FallbackString(proc.AppendSystemPrompt, cfg.Defaults.AppendSystemPrompt)),
-			MCPConfigPath:       mcpConfig,
-			LeoMCPArgs:          leomcp.AppendArg(nil, cfg),
-		},
+		Options:     opts,
 	}
-	args, err := claudeharness.Claude{}.Args(spec)
+	args, err := h.Args(spec)
 	if err != nil {
-		// Unreachable with a well-formed spec; log loudly rather than
-		// silently launching claude with no args.
-		log.Printf("[%s] building claude args: %v", name, err)
+		log.Printf("[%s] building %s args: %v", name, h.Name(), err)
 		return nil
 	}
 	return args
