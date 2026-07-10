@@ -9,9 +9,24 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/spf13/cobra"
 )
+
+// templateOwnOptions decodes a template's OWN (unmerged) harness_options into
+// claude Options for display purposes — i.e. what the template itself
+// declares, not the effective/cascaded view. Decode errors are swallowed and
+// yield zero Options: display code must never fail on a possibly-invalid
+// literal view, Validate() is the sole authority on correctness.
+func templateOwnOptions(tmpl config.TemplateConfig) claudeharness.Options {
+	decoded, err := claudeharness.Claude{}.DecodeOptions(tmpl.HarnessOptions)
+	if err != nil {
+		return claudeharness.Options{}
+	}
+	opts, _ := decoded.(claudeharness.Options)
+	return opts
+}
 
 // Testability seams — replaced in tests.
 var (
@@ -91,7 +106,7 @@ Pass --json for machine-readable output suitable for scripting.`,
 					entries = append(entries, templateListEntry{
 						Name:      name,
 						Model:     tmpl.Model,
-						Agent:     tmpl.Agent,
+						Agent:     templateOwnOptions(tmpl).AgentFile,
 						Workspace: tmpl.Workspace,
 					})
 				}
@@ -112,7 +127,7 @@ Pass --json for machine-readable output suitable for scripting.`,
 				if model == "" {
 					model = "(default)"
 				}
-				agent := tmpl.Agent
+				agent := templateOwnOptions(tmpl).AgentFile
 				if agent == "" {
 					agent = "-"
 				}
@@ -158,7 +173,10 @@ machine-readable effective config.`,
 			}
 
 			if resolved {
-				eff := resolveTemplate(cfg, tmpl)
+				eff, err := resolveTemplate(cfg, tmpl)
+				if err != nil {
+					return fmt.Errorf("template %q: %w", name, err)
+				}
 				if asJSON {
 					enc := json.NewEncoder(templateStdout)
 					enc.SetIndent("", "  ")
@@ -241,11 +259,22 @@ spawned with 'leo agent spawn <template>'.`,
 			}
 
 			tmpl := config.TemplateConfig{
-				Workspace:      strings.TrimSpace(workspace),
-				Channels:       splitAndTrim(channels),
-				Model:          strings.TrimSpace(model),
-				Agent:          strings.TrimSpace(agent),
-				PermissionMode: strings.TrimSpace(permissionMode),
+				Workspace: strings.TrimSpace(workspace),
+				Channels:  splitAndTrim(channels),
+				Model:     strings.TrimSpace(model),
+			}
+			// agent/permission-mode are claude harness options now — only set
+			// the key when the value is non-empty; Validate() (via
+			// DecodeOptions) catches bad permission_mode values.
+			harnessOpts := map[string]any{}
+			if a := strings.TrimSpace(agent); a != "" {
+				harnessOpts["agent"] = a
+			}
+			if pm := strings.TrimSpace(permissionMode); pm != "" {
+				harnessOpts["permission_mode"] = pm
+			}
+			if len(harnessOpts) > 0 {
+				tmpl.HarnessOptions = harnessOpts
 			}
 			cfg.Templates[name] = tmpl
 
@@ -335,27 +364,36 @@ type effectiveTemplate struct {
 // cfg.Defaults cascaded in for any unset field. The template's own values
 // always win; defaults only fill gaps.
 //
-// Note: TemplateConfig does not have a BypassPermissions field today, so that
-// flag is sourced from defaults alone. AllowedTools / DisallowedTools fall
-// through to defaults only when the template leaves them empty — we do not
-// merge, matching the intent of "template shadows defaults entirely for that
-// field" used elsewhere in the codebase.
-func resolveTemplate(cfg *config.Config, tmpl config.TemplateConfig) effectiveTemplate {
+// Claude options (permission_mode, allowed_tools, disallowed_tools,
+// append_system_prompt, agent, bypass_permissions) are sourced by decoding
+// the MERGED harness_options map (cfg.TemplateHarnessOptions), which
+// reproduces the old per-field fallback-to-defaults cascade — see
+// internal/config/harness.go's scopeHarnessOptions. remote_control keeps the
+// pre-migration quirk exactly as internal/agent/args.go's BuildTemplateArgs
+// does it: the defaults layer never applies to it, only the template's own
+// options can turn it off (default true).
+func resolveTemplate(cfg *config.Config, tmpl config.TemplateConfig) (effectiveTemplate, error) {
+	decoded, err := claudeharness.Claude{}.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
+	if err != nil {
+		return effectiveTemplate{}, fmt.Errorf("decoding harness_options: %w", err)
+	}
+	opts, _ := decoded.(claudeharness.Options)
+
 	eff := effectiveTemplate{
 		Workspace:          tmpl.Workspace,
 		Channels:           tmpl.Channels,
 		DevChannels:        tmpl.DevChannels,
 		Model:              tmpl.Model,
 		MaxTurns:           tmpl.MaxTurns,
-		BypassPermissions:  cfg.Defaults.BypassPermissions,
+		BypassPermissions:  opts.BypassPermissions,
 		MCPConfig:          tmpl.MCPConfig,
 		AddDirs:            tmpl.AddDirs,
 		Env:                tmpl.Env,
-		Agent:              tmpl.Agent,
-		AllowedTools:       tmpl.AllowedTools,
-		DisallowedTools:    tmpl.DisallowedTools,
-		AppendSystemPrompt: tmpl.AppendSystemPrompt,
-		PermissionMode:     tmpl.PermissionMode,
+		Agent:              opts.AgentFile,
+		AllowedTools:       opts.AllowedTools,
+		DisallowedTools:    opts.DisallowedTools,
+		AppendSystemPrompt: opts.AppendSystemPrompt,
+		PermissionMode:     opts.PermissionMode,
 	}
 	if eff.Model == "" {
 		eff.Model = cfg.Defaults.Model
@@ -369,64 +407,44 @@ func resolveTemplate(cfg *config.Config, tmpl config.TemplateConfig) effectiveTe
 	if eff.MaxTurns == 0 {
 		eff.MaxTurns = config.DefaultMaxTurns
 	}
-	// Match internal/agent/args.go: templates default remote-control to true
-	// when unset on the template, independent of cfg.Defaults.RemoteControl.
 	eff.RemoteControl = true
-	if tmpl.RemoteControl != nil {
-		eff.RemoteControl = *tmpl.RemoteControl
+	if v, ok := tmpl.HarnessOptions["remote_control"].(bool); ok {
+		eff.RemoteControl = v
 	}
-	if eff.PermissionMode == "" {
-		eff.PermissionMode = cfg.Defaults.PermissionMode
-	}
-	if len(eff.AllowedTools) == 0 {
-		eff.AllowedTools = cfg.Defaults.AllowedTools
-	}
-	if len(eff.DisallowedTools) == 0 {
-		eff.DisallowedTools = cfg.Defaults.DisallowedTools
-	}
-	if eff.AppendSystemPrompt == "" {
-		eff.AppendSystemPrompt = cfg.Defaults.AppendSystemPrompt
-	}
-	return eff
+	return eff, nil
 }
 
 // literalTemplateJSON reshapes a TemplateConfig into a JSON-friendly struct
-// that mirrors `show` output without the effective-config cascade.
+// that mirrors `show` output without the effective-config cascade. Claude
+// options are no longer broken into individual fields — HarnessOptions
+// carries the template's own (unmerged) harness_options map verbatim. This
+// breaks the prior JSON shape; acceptable for a solo-user project (see
+// docs/configuration/harnesses.md).
 type literalTemplatePayload struct {
-	Name               string            `json:"name"`
-	Workspace          string            `json:"workspace,omitempty"`
-	Channels           []string          `json:"channels,omitempty"`
-	DevChannels        []string          `json:"dev_channels,omitempty"`
-	Model              string            `json:"model,omitempty"`
-	MaxTurns           int               `json:"max_turns,omitempty"`
-	RemoteControl      *bool             `json:"remote_control,omitempty"`
-	MCPConfig          string            `json:"mcp_config,omitempty"`
-	AddDirs            []string          `json:"add_dirs,omitempty"`
-	Env                map[string]string `json:"env,omitempty"`
-	Agent              string            `json:"agent,omitempty"`
-	AllowedTools       []string          `json:"allowed_tools,omitempty"`
-	DisallowedTools    []string          `json:"disallowed_tools,omitempty"`
-	AppendSystemPrompt string            `json:"append_system_prompt,omitempty"`
-	PermissionMode     string            `json:"permission_mode,omitempty"`
+	Name           string            `json:"name"`
+	Workspace      string            `json:"workspace,omitempty"`
+	Channels       []string          `json:"channels,omitempty"`
+	DevChannels    []string          `json:"dev_channels,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	MaxTurns       int               `json:"max_turns,omitempty"`
+	MCPConfig      string            `json:"mcp_config,omitempty"`
+	AddDirs        []string          `json:"add_dirs,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	HarnessOptions map[string]any    `json:"harness_options,omitempty"`
 }
 
 func literalTemplateJSON(name string, tmpl config.TemplateConfig) literalTemplatePayload {
 	return literalTemplatePayload{
-		Name:               name,
-		Workspace:          tmpl.Workspace,
-		Channels:           tmpl.Channels,
-		DevChannels:        tmpl.DevChannels,
-		Model:              tmpl.Model,
-		MaxTurns:           tmpl.MaxTurns,
-		RemoteControl:      tmpl.RemoteControl,
-		MCPConfig:          tmpl.MCPConfig,
-		AddDirs:            tmpl.AddDirs,
-		Env:                tmpl.Env,
-		Agent:              tmpl.Agent,
-		AllowedTools:       tmpl.AllowedTools,
-		DisallowedTools:    tmpl.DisallowedTools,
-		AppendSystemPrompt: tmpl.AppendSystemPrompt,
-		PermissionMode:     tmpl.PermissionMode,
+		Name:           name,
+		Workspace:      tmpl.Workspace,
+		Channels:       tmpl.Channels,
+		DevChannels:    tmpl.DevChannels,
+		Model:          tmpl.Model,
+		MaxTurns:       tmpl.MaxTurns,
+		MCPConfig:      tmpl.MCPConfig,
+		AddDirs:        tmpl.AddDirs,
+		Env:            tmpl.Env,
+		HarnessOptions: tmpl.HarnessOptions,
 	}
 }
 
@@ -444,10 +462,13 @@ func printTemplate(name string, tmpl config.TemplateConfig) {
 	fmt.Printf("Template: %s\n", name)
 	printField("Workspace", tmpl.Workspace)
 	printField("Model", tmpl.Model)
-	printField("Agent", tmpl.Agent)
-	printField("Permission mode", tmpl.PermissionMode)
-	if tmpl.RemoteControl != nil {
-		printField("Remote control", fmt.Sprintf("%t", *tmpl.RemoteControl))
+	// Claude options are the template's OWN (unmerged) harness_options —
+	// what this template itself declares, not the effective/cascaded view.
+	opts := templateOwnOptions(tmpl)
+	printField("Agent", opts.AgentFile)
+	printField("Permission mode", opts.PermissionMode)
+	if v, ok := tmpl.HarnessOptions["remote_control"].(bool); ok {
+		printField("Remote control", fmt.Sprintf("%t", v))
 	}
 	if tmpl.MaxTurns > 0 {
 		printField("Max turns", fmt.Sprintf("%d", tmpl.MaxTurns))
@@ -455,17 +476,17 @@ func printTemplate(name string, tmpl config.TemplateConfig) {
 	if len(tmpl.Channels) > 0 {
 		printField("Channels", strings.Join(tmpl.Channels, ", "))
 	}
-	if len(tmpl.AllowedTools) > 0 {
-		printField("Allowed tools", strings.Join(tmpl.AllowedTools, ", "))
+	if len(opts.AllowedTools) > 0 {
+		printField("Allowed tools", strings.Join(opts.AllowedTools, ", "))
 	}
-	if len(tmpl.DisallowedTools) > 0 {
-		printField("Disallowed tools", strings.Join(tmpl.DisallowedTools, ", "))
+	if len(opts.DisallowedTools) > 0 {
+		printField("Disallowed tools", strings.Join(opts.DisallowedTools, ", "))
 	}
 	if len(tmpl.AddDirs) > 0 {
 		printField("Additional dirs", strings.Join(tmpl.AddDirs, ", "))
 	}
-	if tmpl.AppendSystemPrompt != "" {
-		printField("Append system prompt", tmpl.AppendSystemPrompt)
+	if opts.AppendSystemPrompt != "" {
+		printField("Append system prompt", opts.AppendSystemPrompt)
 	}
 	if tmpl.MCPConfig != "" {
 		printField("MCP config", tmpl.MCPConfig)

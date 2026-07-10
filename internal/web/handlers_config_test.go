@@ -52,11 +52,7 @@ func TestDefaultsSaveRoundTrip(t *testing.T) {
 	form := url.Values{}
 	form.Set("model", "opus")
 	form.Set("max_turns", "50")
-	form.Set("permission_mode", "acceptEdits")
 	form.Set("stale_resume_hours", "12")
-	// KindBool pattern: hidden false + optional true.
-	form.Add("bypass_permissions", "false")
-	form.Add("remote_control", "false")
 	w := postForm(t, s, "/web/config/defaults", form)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save: %d", w.Code)
@@ -98,9 +94,7 @@ func TestPageConfigDefaultsShowsAllFields(t *testing.T) {
 	body := w.Body.String()
 
 	for _, key := range []string{
-		"model", "max_turns", "permission_mode",
-		"bypass_permissions", "allowed_tools", "disallowed_tools",
-		"remote_control", "append_system_prompt", "stale_resume_hours",
+		"model", "max_turns", "stale_resume_hours",
 		"idle_suspend_after",
 	} {
 		if !strings.Contains(body, `name="`+key+`"`) {
@@ -200,36 +194,11 @@ func templateFormBase(t *testing.T, s *Server, name string) url.Values {
 	return form
 }
 
-// TestProcessBypassTriState pins the headline fix of this task: before, the
-// old hand-rolled handleConfigProcess always cleared bypass_permissions to a
-// concrete false/true derived from a single checkbox whenever permission_mode
-// was empty, and there was no way to submit bypass_permissions=true from the
-// web UI at all (the form never rendered a true option). The schema-driven
-// tri-state (inherit / true / false) fixes both: true is now savable, and
-// clearing the field back to "" round-trips to nil (inherit), not false.
-func TestProcessBypassTriState(t *testing.T) {
-	s, dir := newTestServer(t) // seed config's "assistant" process (web_test.go)
-	form := processFormBase(t, s, "assistant")
-	form.Set("bypass_permissions", "true")
-	form.Set("permission_mode", "")
-	w := postForm(t, s, "/web/config/process/assistant", form)
-	if w.Code != http.StatusOK {
-		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
-	}
-	cfg := reloadTestConfig(t, dir)
-	bp := cfg.Processes["assistant"].BypassPermissions
-	if bp == nil || !*bp {
-		t.Errorf("bypass_permissions = %v, want &true (was impossible to set true from web before)", bp)
-	}
-
-	// inherit round-trips to nil
-	form.Set("bypass_permissions", "")
-	postForm(t, s, "/web/config/process/assistant", form)
-	cfg = reloadTestConfig(t, dir)
-	if cfg.Processes["assistant"].BypassPermissions != nil {
-		t.Error("inherit did not clear bypass_permissions")
-	}
-}
+// bypass_permissions/permission_mode's tri-state web-form coverage
+// (TestProcessBypassTriState) was removed along with the field's web-form
+// registration — see internal/web/schema/registry.go's Excluded map (Task 7:
+// claude flat fields moved to harness_options). The claude options editor
+// arrives with harness_options forms in a later plan.
 
 // TestTaskSaveCoversNewFields guards handleConfigTaskSave against the same
 // registry-drift risk Task 6 covered for defaults: runtime/session/lazy/
@@ -345,8 +314,7 @@ func TestTaskEditPageShowsAllFields(t *testing.T) {
 		"schedule", "timezone", "enabled", "prompt_file", "model",
 		"max_turns", "timeout", "retries", "silent", "runtime", "session",
 		"lazy", "queue_max", "channels", "dev_channels", "notify_on_fail",
-		"permission_mode", "allowed_tools", "disallowed_tools",
-		"append_system_prompt", "workspace",
+		"workspace",
 	} {
 		if !strings.Contains(body, `name="`+key+`"`) {
 			t.Errorf("task edit page missing field %q", key)
@@ -406,10 +374,8 @@ func TestProcessEditPageShowsAllFields(t *testing.T) {
 	body := w.Body.String()
 
 	for _, key := range []string{
-		"enabled", "workspace", "agent", "model", "max_turns",
-		"channels", "dev_channels", "permission_mode", "allowed_tools",
-		"disallowed_tools", "mcp_config", "add_dirs", "env",
-		"append_system_prompt", "remote_control", "bypass_permissions",
+		"enabled", "workspace", "model", "max_turns",
+		"channels", "dev_channels", "mcp_config", "add_dirs", "env",
 		"stale_resume_hours",
 	} {
 		if !strings.Contains(body, `name="`+key+`"`) {
@@ -509,10 +475,9 @@ func TestTemplateEditPageShowsAllFields(t *testing.T) {
 	body := w.Body.String()
 
 	for _, key := range []string{
-		"workspace", "agent", "model", "max_turns",
-		"channels", "dev_channels", "permission_mode", "allowed_tools",
-		"disallowed_tools", "mcp_config", "add_dirs", "env",
-		"append_system_prompt", "remote_control", "idle_suspend_after",
+		"workspace", "model", "max_turns",
+		"channels", "dev_channels", "mcp_config", "add_dirs", "env",
+		"idle_suspend_after",
 	} {
 		if !strings.Contains(body, `name="`+key+`"`) {
 			t.Errorf("template edit page missing field %q", key)

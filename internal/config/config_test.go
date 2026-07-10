@@ -54,7 +54,6 @@ tasks:
 
 func TestValidate(t *testing.T) {
 	validConfig := func() *Config {
-		tr := true
 		return &Config{
 			Defaults: DefaultsConfig{
 				Model:    "sonnet",
@@ -62,9 +61,9 @@ func TestValidate(t *testing.T) {
 			},
 			Processes: map[string]ProcessConfig{
 				"assistant": {
-					Channels:      []string{"plugin:telegram@claude-plugins-official"},
-					RemoteControl: &tr,
-					Enabled:       true,
+					Channels:       []string{"plugin:telegram@claude-plugins-official"},
+					HarnessOptions: map[string]any{"remote_control": true},
+					Enabled:        true,
 				},
 			},
 			Tasks: map[string]TaskConfig{
@@ -662,7 +661,6 @@ func TestSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "leo.yaml")
 
-	tr := true
 	cfg := &Config{
 		Defaults: DefaultsConfig{
 			Model:    "sonnet",
@@ -670,9 +668,9 @@ func TestSaveAndLoad(t *testing.T) {
 		},
 		Processes: map[string]ProcessConfig{
 			"main": {
-				Channels:      []string{"plugin:telegram@claude-plugins-official"},
-				RemoteControl: &tr,
-				Enabled:       true,
+				Channels:       []string{"plugin:telegram@claude-plugins-official"},
+				HarnessOptions: map[string]any{"remote_control": true},
+				Enabled:        true,
 			},
 		},
 		Tasks: map[string]TaskConfig{

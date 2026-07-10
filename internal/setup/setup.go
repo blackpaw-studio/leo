@@ -204,7 +204,6 @@ func parseUserProfile(path string) templates.UserProfileData {
 }
 
 func buildConfig(workspace string, existing *config.Config) *config.Config {
-	tr := true
 	cfg := &config.Config{
 		Defaults: config.DefaultsConfig{
 			Model:    config.DefaultModel,
@@ -212,9 +211,9 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 		},
 		Processes: map[string]config.ProcessConfig{
 			"assistant": {
-				Workspace:     workspace,
-				RemoteControl: &tr,
-				Enabled:       true,
+				Workspace:      workspace,
+				HarnessOptions: map[string]any{"remote_control": true},
+				Enabled:        true,
 			},
 		},
 		Tasks: make(map[string]config.TaskConfig),

@@ -325,8 +325,12 @@ channels, agent).`,
 				Workspace: workspace,
 				Channels:  splitAndTrim(channels),
 				Model:     model,
-				Agent:     agent,
 				Enabled:   !disabled,
+			}
+			// agent is a claude harness option now — only set the key when
+			// non-empty.
+			if a := strings.TrimSpace(agent); a != "" {
+				proc.HarnessOptions = map[string]any{"agent": a}
 			}
 
 			if cfg.Processes == nil {

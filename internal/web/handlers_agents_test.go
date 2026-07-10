@@ -38,7 +38,8 @@ templates:
   coding:
     model: sonnet
     max_turns: 200
-    permission_mode: bypassPermissions
+    harness_options:
+      permission_mode: bypassPermissions
   research:
     model: opus
     max_turns: 50

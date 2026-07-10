@@ -40,7 +40,7 @@ func TestBuildConfig_FreshWorkspace(t *testing.T) {
 	if !proc.Enabled {
 		t.Error("default process should be enabled")
 	}
-	if proc.RemoteControl == nil || !*proc.RemoteControl {
+	if v, ok := proc.HarnessOptions["remote_control"].(bool); !ok || !v {
 		t.Error("default process should have remote_control enabled")
 	}
 	if len(proc.Channels) != 0 {

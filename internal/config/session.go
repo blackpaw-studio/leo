@@ -43,35 +43,30 @@ func (c *Config) ResolveSession(taskName string) (string, SessionTopology, Sessi
 		// task-scoped fields; they are not threaded into SessionConfig.
 		// TaskConfig has no Agent/Env/AddDirs fields, so those stay zero in
 		// the synthesized session; callers needing them must use a shared
-		// session or a process: reference.
+		// session or a process: reference. Claude options (permission_mode,
+		// allowed_tools, etc.) live in harness_options now and are decoded by
+		// the consumer (internal/service/session.go via
+		// claudeSessionOptions), not copied into this synthesized config.
 		return taskName, TopologyDedicated, SessionConfig{
-			Workspace:          task.Workspace,
-			Model:              task.Model,
-			PermissionMode:     task.PermissionMode,
-			AllowedTools:       task.AllowedTools,
-			DisallowedTools:    task.DisallowedTools,
-			AppendSystemPrompt: task.AppendSystemPrompt,
-			Channels:           task.Channels,
+			Workspace: task.Workspace,
+			Model:     task.Model,
+			Channels:  task.Channels,
 		}, nil
 
 	case strings.HasPrefix(task.Session, "process:"):
-		// Topology C — reuse a supervised process.
+		// Topology C — reuse a supervised process. Claude options live in
+		// harness_options now; see the comment above.
 		procName := strings.TrimPrefix(task.Session, "process:")
 		proc, ok := c.Processes[procName]
 		if !ok {
 			return "", TopologyProcess, SessionConfig{}, fmt.Errorf("task %q references process:%s which is not defined", taskName, procName)
 		}
 		return procName, TopologyProcess, SessionConfig{
-			Workspace:          proc.Workspace,
-			Model:              proc.Model,
-			Agent:              proc.Agent,
-			PermissionMode:     proc.PermissionMode,
-			AllowedTools:       proc.AllowedTools,
-			DisallowedTools:    proc.DisallowedTools,
-			AppendSystemPrompt: proc.AppendSystemPrompt,
-			AddDirs:            proc.AddDirs,
-			Channels:           proc.Channels,
-			Env:                proc.Env,
+			Workspace: proc.Workspace,
+			Model:     proc.Model,
+			AddDirs:   proc.AddDirs,
+			Channels:  proc.Channels,
+			Env:       proc.Env,
 		}, nil
 
 	default:

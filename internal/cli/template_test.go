@@ -23,7 +23,7 @@ func newTestConfigWithTemplates(t *testing.T) string {
 		HomePath: home,
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
 		Templates: map[string]config.TemplateConfig{
-			"coding":   {Model: "opus", Agent: "dev", Workspace: "/tmp/coding"},
+			"coding":   {Model: "opus", HarnessOptions: map[string]any{"agent": "dev"}, Workspace: "/tmp/coding"},
 			"research": {Model: "sonnet"},
 		},
 	}
@@ -213,16 +213,17 @@ func TestTemplateShow_ResolvedAppliesDefaults(t *testing.T) {
 	// inherit MaxTurns from defaults.
 	home := t.TempDir()
 	cfgPath := filepath.Join(home, "leo.yaml")
-	trueVal := true
 	cfg := &config.Config{
 		HomePath: home,
 		Defaults: config.DefaultsConfig{
-			Model:              "sonnet",
-			MaxTurns:           25,
-			BypassPermissions:  trueVal,
-			PermissionMode:     "acceptEdits",
-			AllowedTools:       []string{"Read"},
-			AppendSystemPrompt: "be concise",
+			Model:    "sonnet",
+			MaxTurns: 25,
+			HarnessOptions: map[string]any{
+				"bypass_permissions":   true,
+				"permission_mode":      "acceptEdits",
+				"allowed_tools":        []any{"Read"},
+				"append_system_prompt": "be concise",
+			},
 		},
 		Templates: map[string]config.TemplateConfig{
 			"research": {}, // all unset — should inherit
@@ -269,18 +270,18 @@ func TestTemplateShow_ResolvedRemoteControlMatchesSpawner(t *testing.T) {
 	// the actual spawn sent `--remote-control`.
 	home := t.TempDir()
 	cfgPath := filepath.Join(home, "leo.yaml")
-	falseVal := false
 	cfg := &config.Config{
 		HomePath: home,
 		Defaults: config.DefaultsConfig{
-			Model:          "sonnet",
-			MaxTurns:       25,
-			RemoteControl:  false, // irrelevant for templates
-			PermissionMode: "acceptEdits",
+			Model:    "sonnet",
+			MaxTurns: 25,
+			// remote_control here is irrelevant for templates even if set —
+			// the defaults layer never cascades it (see resolveTemplate).
+			HarnessOptions: map[string]any{"permission_mode": "acceptEdits"},
 		},
 		Templates: map[string]config.TemplateConfig{
-			"unset":    {}, // tmpl.RemoteControl == nil → should resolve true
-			"optedout": {RemoteControl: &falseVal},
+			"unset":    {}, // tmpl.HarnessOptions["remote_control"] unset → should resolve true
+			"optedout": {HarnessOptions: map[string]any{"remote_control": false}},
 		},
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {
@@ -509,7 +510,8 @@ func TestTemplateAdd_FlagDriven(t *testing.T) {
 	if !ok {
 		t.Fatal("template 'ops' not created")
 	}
-	if got.Model != "haiku" || got.Agent != "ops-agent" || got.Workspace != "/tmp/ops" {
+	gotAgent, _ := got.HarnessOptions["agent"].(string)
+	if got.Model != "haiku" || gotAgent != "ops-agent" || got.Workspace != "/tmp/ops" {
 		t.Errorf("unexpected template config: %+v", got)
 	}
 }
@@ -561,7 +563,8 @@ func TestTemplateAdd_InteractivePromptsForMissing(t *testing.T) {
 	if !ok {
 		t.Fatal("template 'ops' not created")
 	}
-	if got.Model != "haiku" || got.Agent != "ops-agent" {
+	gotAgent, _ := got.HarnessOptions["agent"].(string)
+	if got.Model != "haiku" || gotAgent != "ops-agent" {
 		t.Errorf("unexpected template config: %+v", got)
 	}
 }

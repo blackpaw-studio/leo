@@ -8,8 +8,23 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/cron"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
+
+// templateOwnAgent decodes a template's OWN (unmerged) harness_options for
+// display purposes — what the template itself declares, not the effective/
+// cascaded view. Decode errors are swallowed and yield an empty agent:
+// display code must never fail on a possibly-invalid literal view,
+// Validate() is the sole authority on correctness.
+func templateOwnAgent(opts map[string]any) string {
+	decoded, err := claudeharness.Claude{}.DecodeOptions(opts)
+	if err != nil {
+		return ""
+	}
+	o, _ := decoded.(claudeharness.Options)
+	return o.AgentFile
+}
 
 // pageData is the payload every full-page render receives. Pages add their
 // own data via the Data field. Status carries what partials/status.html
@@ -143,7 +158,7 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 			Name:      name,
 			Workspace: tmpl.Workspace,
 			Model:     tmpl.Model,
-			Agent:     tmpl.Agent,
+			Agent:     templateOwnAgent(tmpl.HarnessOptions),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })

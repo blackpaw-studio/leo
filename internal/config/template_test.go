@@ -81,15 +81,15 @@ func TestValidateTemplateEnvKeys(t *testing.T) {
 func TestValidateTemplatePermissionMode(t *testing.T) {
 	cfg := &Config{
 		Templates: map[string]TemplateConfig{
-			"test": {PermissionMode: "invalid"},
+			"test": {HarnessOptions: map[string]any{"permission_mode": "invalid"}},
 		},
 	}
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("expected error for invalid permission mode")
 	}
-	if !strings.Contains(err.Error(), "templates.test.permission_mode") {
-		t.Errorf("error should reference permission_mode, got: %v", err)
+	if !strings.Contains(err.Error(), "templates.test.harness_options") || !strings.Contains(err.Error(), "permission_mode") {
+		t.Errorf("error should reference templates.test.harness_options permission_mode, got: %v", err)
 	}
 }
 
@@ -97,7 +97,7 @@ func TestValidateTemplateValidPermissionMode(t *testing.T) {
 	for _, mode := range []string{"acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"} {
 		cfg := &Config{
 			Templates: map[string]TemplateConfig{
-				"test": {PermissionMode: mode},
+				"test": {HarnessOptions: map[string]any{"permission_mode": mode}},
 			},
 		}
 		if err := cfg.Validate(); err != nil {
@@ -148,8 +148,9 @@ templates:
   coding:
     model: sonnet
     max_turns: 200
-    permission_mode: bypassPermissions
-    remote_control: true
+    harness_options:
+      permission_mode: bypassPermissions
+      remote_control: true
     channels:
       - "plugin:telegram@claude-plugins-official"
     env:
@@ -175,11 +176,11 @@ templates:
 	if coding.MaxTurns != 200 {
 		t.Errorf("coding.MaxTurns = %d, want 200", coding.MaxTurns)
 	}
-	if coding.PermissionMode != "bypassPermissions" {
-		t.Errorf("coding.PermissionMode = %q", coding.PermissionMode)
+	if got, _ := coding.HarnessOptions["permission_mode"].(string); got != "bypassPermissions" {
+		t.Errorf("coding.HarnessOptions[permission_mode] = %v, want bypassPermissions", coding.HarnessOptions["permission_mode"])
 	}
-	if coding.RemoteControl == nil || !*coding.RemoteControl {
-		t.Error("coding.RemoteControl should be true")
+	if got, ok := coding.HarnessOptions["remote_control"].(bool); !ok || !got {
+		t.Error("coding.HarnessOptions[remote_control] should be true")
 	}
 	if len(coding.Channels) != 1 {
 		t.Errorf("coding.Channels = %v", coding.Channels)
@@ -198,7 +199,7 @@ func TestValidateMultipleTemplateErrors(t *testing.T) {
 	cfg := &Config{
 		Templates: map[string]TemplateConfig{
 			"bad1": {Model: "invalid"},
-			"bad2": {PermissionMode: "wrong"},
+			"bad2": {HarnessOptions: map[string]any{"permission_mode": "wrong"}},
 		},
 	}
 	err := cfg.Validate()
