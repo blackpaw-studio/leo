@@ -37,8 +37,10 @@ func processArgs(spec harness.LaunchSpec, o Options) []string {
 }
 
 // agentArgs reproduces internal/agent.BuildTemplateArgs flag order exactly.
-// Note: templates have no bypass-permissions fallback — callers must leave
-// Options.BypassPermissions false for KindAgent.
+// Note: templates have no bypass-permissions fallback — this is enforced
+// structurally: agentArgs ignores Options.BypassPermissions by design (unlike
+// appendPermissionFlags, used by the other two kinds) rather than relying on
+// callers to leave it false.
 func agentArgs(spec harness.LaunchSpec, o Options) []string {
 	var args []string
 	args = append(args, "--model", spec.Model)
@@ -51,7 +53,9 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 		args = append(args, "--remote-control")
 	}
 	args = append(args, "--name", spec.Name)
-	args = appendPermissionFlags(args, o)
+	if o.PermissionMode != "" {
+		args = append(args, "--permission-mode", o.PermissionMode)
+	}
 	if o.MCPConfigPath != "" {
 		args = append(args, "--mcp-config", o.MCPConfigPath)
 	}
