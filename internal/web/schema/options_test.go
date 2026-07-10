@@ -9,7 +9,6 @@ import (
 
 func TestOptionSources(t *testing.T) {
 	cfg := &config.Config{
-		Providers: map[string]config.ProviderConfig{"zai": {BaseURL: "https://api.z.ai/v1"}},
 		Sessions:  map[string]config.SessionConfig{"daily": {}},
 		Templates: map[string]config.TemplateConfig{"dev": {}},
 	}
@@ -20,10 +19,6 @@ func TestOptionSources(t *testing.T) {
 	}
 	if opts := src.For("models"); opts[0].Value != "" {
 		t.Errorf("models: want leading inherit option, got %v", opts)
-	}
-	provs := src.For("providers")
-	if len(provs) != 2 || provs[0].Value != "" || provs[1].Value != "zai" {
-		t.Errorf("providers: want [inherit, zai], got %v", provs)
 	}
 	if opts := src.For("sessions"); len(opts) != 2 || opts[1].Value != "daily" {
 		t.Errorf("sessions: got %v", opts)

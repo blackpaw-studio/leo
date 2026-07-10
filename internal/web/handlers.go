@@ -374,9 +374,9 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 
 	// HX-Refresh triggers a full page reload, so the list's button
 	// label/next-run/state all pick up the new value — the same convention
-	// handleProviderAdd/handleHostAdd/handleSessionAdd use. That makes the
-	// response body itself moot (the page reloads before it's swapped in),
-	// but render the flash normally anyway for tests/non-htmx callers.
+	// handleHostAdd/handleSessionAdd use. That makes the response body
+	// itself moot (the page reloads before it's swapped in), but render the
+	// flash normally anyway for tests/non-htmx callers.
 	w.Header().Set("HX-Refresh", "true")
 	flashType, flashMsg := appendReloadWarning("success", fmt.Sprintf("Task %q %s", name, action), warn)
 	s.renderFlash(w, flashType, flashMsg)
@@ -1183,124 +1183,18 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// --- Provider config management ---
-//
-// Providers differ from processes/tasks/templates: there are only ever a
-// handful of them, so the whole CRUD surface lives on one page
-// (config_providers.html) instead of a list page + separate edit page. Add
-// stays on that page too — success re-renders it in place via HX-Refresh
-// rather than a redirect.
-
-// handleProviderAdd creates a new provider entry and reports back on the
-// providers page itself (HX-Refresh, not a redirect to a separate edit page
-// — providers have none). Design decision, worth calling out: unlike
-// handleProcessAdd/handleTemplateAdd (which can create a genuinely empty
-// {}-valued entry because ProcessConfig/TemplateConfig have no required
-// fields), Config.Validate() requires every provider to have a non-empty
-// http(s) base_url AND exactly one of api_key_env/api_key_cmd set — an
-// empty ProviderConfig{} fails both checks. Rather than special-case
-// validateAndSave to skip provider validation on add (which would let an
-// invalid provider hit disk and break the "every save goes through
-// validateAndSave" invariant), the new entry is seeded with an obviously-
-// fake placeholder base_url and api_key_env so it passes Validate() as-is;
-// the flash message tells the operator to fill in the real values via the
-// card's inline form before the provider actually works.
-func (s *Server) handleProviderAdd(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
-		return
-	}
-
-	name := r.FormValue("name")
-	if !validEntityName(name) {
-		s.renderFlash(w, "error", entityNameError)
-		return
-	}
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	if cfg.Providers == nil {
-		cfg.Providers = make(map[string]config.ProviderConfig)
-	}
-	if _, exists := cfg.Providers[name]; exists {
-		s.renderFlash(w, "error", fmt.Sprintf("Provider %q already exists", name))
-		return
-	}
-
-	// Placeholder values chosen only to satisfy Validate(); see doc comment
-	// above. https://changeme.example.com parses as a valid http(s) URL and
-	// CHANGE_ME is a valid env var name, but neither resolves to anything —
-	// the provider won't actually work until the form below is filled in.
-	cfg.Providers[name] = config.ProviderConfig{
-		BaseURL:   "https://changeme.example.com",
-		APIKeyEnv: "CHANGE_ME",
-	}
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn()
-	s.restartNeeded.Store(true)
-
-	w.Header().Set("HX-Refresh", "true")
-	s.renderFlash(w, "success", fmt.Sprintf(
-		"Provider %q created with placeholder values (base_url=https://changeme.example.com, api_key_env=CHANGE_ME) — replace them below before use",
-		name))
-}
-
-// handleProviderDelete removes a provider and reports back on the providers
-// page (HX-Refresh, mirroring handleProviderAdd). Design decision, worth
-// calling out: Config.Validate() already sweeps defaults/processes/tasks/
-// templates/sessions for dangling provider references (checkProviderRef in
-// internal/config/config.go), so this handler does no reference scan of its
-// own — it deletes optimistically and lets validateAndSave's Validate()
-// call carry the refusal. Validate() runs before Save() writes anything to
-// disk, so a refused delete leaves the on-disk config untouched.
-func (s *Server) handleProviderDelete(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to load config: %v", err))
-		return
-	}
-
-	if _, ok := cfg.Providers[name]; !ok {
-		s.renderFlash(w, "error", fmt.Sprintf("Provider %q not found", name))
-		return
-	}
-
-	delete(cfg.Providers, name)
-
-	if errMsg := s.validateAndSave(cfg); errMsg != "" {
-		s.renderFlash(w, "error", errMsg)
-		return
-	}
-	s.reloadConfigOrWarn()
-	s.restartNeeded.Store(true)
-
-	w.Header().Set("HX-Refresh", "true")
-	s.renderFlash(w, "success", fmt.Sprintf("Provider %q deleted", name))
-}
-
 // --- Remote host config management ---
 //
 // Hosts live on the Settings page (config_settings.html) as a card list
-// plus name-only add form, the same providers-page pattern as above.
+// plus name-only add form (mirrors the retired providers page's shape).
 
 // handleHostAdd creates a new remote-host entry and reports back on the
-// settings page itself (HX-Refresh, mirroring handleProviderAdd). Unlike
-// providers, HostConfig has no fields Config.Validate() requires to be
-// non-empty (no ssh-non-empty check exists), so — unlike the provider add's
-// forced placeholder base_url/api_key_env — a genuinely empty HostConfig{}
-// round-trips through validateAndSave as-is, same as handleProcessAdd/
-// handleTemplateAdd. The flash message still tells the operator to fill in
-// ssh via the card's inline form before the host is usable.
+// settings page itself (HX-Refresh, not a redirect to a separate edit page).
+// HostConfig has no fields Config.Validate() requires to be non-empty (no
+// ssh-non-empty check exists), so a genuinely empty HostConfig{} round-trips
+// through validateAndSave as-is, same as handleProcessAdd/handleTemplateAdd.
+// The flash message still tells the operator to fill in ssh via the card's
+// inline form before the host is usable.
 func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -1340,12 +1234,11 @@ func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHostDelete removes a remote host and reports back on the settings
-// page (HX-Refresh, mirroring handleProviderDelete). Per the task brief, no
-// reference-check scan runs here: unlike providers (which processes/tasks/
-// templates/sessions reference by name and Config.Validate() sweeps via
-// checkProviderRef), nothing in the config schema references a host by
-// name — client.default_host is a free-text hint for `leo agent` CLI
-// dispatch, not a validated foreign key — so an optimistic delete is safe.
+// page (HX-Refresh, not a redirect to a separate edit page). No
+// reference-check scan runs here: nothing in the config schema references a
+// host by name — client.default_host is a free-text hint for `leo agent`
+// CLI dispatch, not a validated foreign key — so an optimistic delete is
+// safe.
 func (s *Server) handleHostDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 

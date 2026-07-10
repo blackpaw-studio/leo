@@ -204,7 +204,7 @@ func (s *Server) buildDefaultsData(r *http.Request) (any, error) {
 }
 
 // hostCard is one entry of settingsPageData.Hosts: a remote-host name paired
-// with the schema-driven inline form for its card. Mirrors providerCard.
+// with the schema-driven inline form for its card.
 type hostCard struct {
 	Name string
 	Form formData
@@ -222,7 +222,7 @@ type settingsPageData struct {
 // (&cfg.Web), Remote client config (&cfg.Client, default_host only — hosts
 // is excluded from SectionClient's registry and rendered separately below),
 // and cfg.Client.Hosts as a name-sorted card list, one inline config_form
-// per host — same shape as buildProvidersData.
+// per host.
 func (s *Server) buildSettingsData(r *http.Request) (any, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -248,45 +248,6 @@ func (s *Server) buildSettingsData(r *http.Request) (any, error) {
 		ClientForm: s.buildForm(schema.SectionClient, &cfg.Client, cfg, "/web/config/client"),
 		Hosts:      hosts,
 	}, nil
-}
-
-// providerCard is one entry of providersPageData.Providers: a provider name
-// paired with the schema-driven inline form for its card.
-type providerCard struct {
-	Name string
-	Form formData
-}
-
-// providersPageData feeds page_config_providers.
-type providersPageData struct {
-	Providers []providerCard
-}
-
-// buildProvidersData assembles a name-sorted card list, one inline
-// config_form per provider — unlike processes/tasks/templates, providers
-// are few enough that there's no separate list-page-plus-edit-page split;
-// every provider's full CRUD form lives right here on /config/providers.
-func (s *Server) buildProvidersData(r *http.Request) (any, error) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
-	}
-
-	names := make([]string, 0, len(cfg.Providers))
-	for name := range cfg.Providers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	cards := make([]providerCard, 0, len(names))
-	for _, name := range names {
-		p := cfg.Providers[name]
-		form := s.buildForm(schema.SectionProvider, &p, cfg, "/web/config/provider/"+url.PathEscape(name))
-		form.DeleteURL = "/web/provider/" + url.PathEscape(name)
-		cards = append(cards, providerCard{Name: name, Form: form})
-	}
-
-	return providersPageData{Providers: cards}, nil
 }
 
 // agentsData feeds page_agents and the /partials/agents rename fragment.

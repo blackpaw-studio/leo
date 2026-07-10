@@ -53,7 +53,6 @@ func TestDefaultsSaveRoundTrip(t *testing.T) {
 	form.Set("model", "opus")
 	form.Set("max_turns", "50")
 	form.Set("permission_mode", "acceptEdits")
-	form.Set("provider", "")
 	form.Set("stale_resume_hours", "12")
 	// KindBool pattern: hidden false + optional true.
 	form.Add("bypass_permissions", "false")
@@ -84,7 +83,7 @@ func TestDefaultsSaveRejectsBadModel(t *testing.T) {
 	}
 }
 
-// TestPageConfigDefaultsShowsAllFields is the "11 fields" self-review check:
+// TestPageConfigDefaultsShowsAllFields is the "10 fields" self-review check:
 // every DefaultsConfig field must render on /config/defaults, either in the
 // primary form or inside the Advanced <details>.
 func TestPageConfigDefaultsShowsAllFields(t *testing.T) {
@@ -99,7 +98,7 @@ func TestPageConfigDefaultsShowsAllFields(t *testing.T) {
 	body := w.Body.String()
 
 	for _, key := range []string{
-		"model", "provider", "max_turns", "permission_mode",
+		"model", "max_turns", "permission_mode",
 		"bypass_permissions", "allowed_tools", "disallowed_tools",
 		"remote_control", "append_system_prompt", "stale_resume_hours",
 		"idle_suspend_after",
@@ -274,7 +273,7 @@ func TestTaskAddRedirectsToEdit(t *testing.T) {
 }
 
 // TestValidEntityName is a table test for the shared entity-name guard used
-// by every add handler (task/process/template/provider/host/session). A
+// by every add handler (task/process/template/host/session). A
 // name flowing unchecked into a URL path segment or (for tasks) a
 // prompts/<name>.md file path lets "/", "#", "?", or ".." create an
 // unroutable config entry or escape the workspace.
@@ -328,23 +327,7 @@ func TestTaskAddRejectsInvalidName(t *testing.T) {
 	}
 }
 
-// TestProviderAddRejectsInvalidName covers the HX-Refresh-shaped add
-// handlers (provider/host/session all stay on the same page on success):
-// mirrors TestTaskAddRejectsInvalidName for that shape.
-func TestProviderAddRejectsInvalidName(t *testing.T) {
-	s, dir := newTestServer(t)
-	w := postForm(t, s, "/web/provider/add", url.Values{"name": {"a/b"}})
-	body := readBody(t, w)
-	if !strings.Contains(body, "flash-error") {
-		t.Errorf("want validation flash for invalid name, got status=%d body=%s", w.Code, body)
-	}
-	cfg := reloadTestConfig(t, dir)
-	if len(cfg.Providers) != 0 {
-		t.Errorf("invalid add should not have created a provider: %+v", cfg.Providers)
-	}
-}
-
-// TestTaskEditPageShowsAllFields is the "22 fields" self-review check: every
+// TestTaskEditPageShowsAllFields is the "21 fields" self-review check: every
 // TaskConfig field must render on /tasks/{name}, either in the primary form
 // or inside the Advanced <details>.
 func TestTaskEditPageShowsAllFields(t *testing.T) {
@@ -359,7 +342,7 @@ func TestTaskEditPageShowsAllFields(t *testing.T) {
 	body := w.Body.String()
 
 	for _, key := range []string{
-		"schedule", "timezone", "enabled", "prompt_file", "model", "provider",
+		"schedule", "timezone", "enabled", "prompt_file", "model",
 		"max_turns", "timeout", "retries", "silent", "runtime", "session",
 		"lazy", "queue_max", "channels", "dev_channels", "notify_on_fail",
 		"permission_mode", "allowed_tools", "disallowed_tools",
@@ -408,7 +391,7 @@ func TestTaskDeleteRedirectsToList(t *testing.T) {
 	}
 }
 
-// TestProcessEditPageShowsAllFields is the "18 fields" self-review check:
+// TestProcessEditPageShowsAllFields is the "17 fields" self-review check:
 // every ProcessConfig field must render on /processes/{name}, either in the
 // primary form or inside the Advanced <details>.
 func TestProcessEditPageShowsAllFields(t *testing.T) {
@@ -423,7 +406,7 @@ func TestProcessEditPageShowsAllFields(t *testing.T) {
 	body := w.Body.String()
 
 	for _, key := range []string{
-		"enabled", "workspace", "agent", "model", "provider", "max_turns",
+		"enabled", "workspace", "agent", "model", "max_turns",
 		"channels", "dev_channels", "permission_mode", "allowed_tools",
 		"disallowed_tools", "mcp_config", "add_dirs", "env",
 		"append_system_prompt", "remote_control", "bypass_permissions",
@@ -493,13 +476,12 @@ func TestProcessDeleteRedirectsToList(t *testing.T) {
 
 // TestTemplateSaveNewFields guards handleConfigTemplateSave against the same
 // registry-drift risk Task 6/8 covered for defaults/processes: idle_suspend_after
-// and provider are fields that were entirely missing from the old hand-rolled
-// handleConfigTemplate, and must round-trip through the schema-driven save path.
+// was entirely missing from the old hand-rolled handleConfigTemplate, and must
+// round-trip through the schema-driven save path.
 func TestTemplateSaveNewFields(t *testing.T) {
 	s, dir, _ := newTestServerWithAgents(t) // seed config's "coding" template (handlers_agents_test.go)
 	form := templateFormBase(t, s, "coding")
 	form.Set("idle_suspend_after", "2h")
-	form.Set("provider", "")
 
 	w := postForm(t, s, "/web/config/template/coding", form)
 	if w.Code != http.StatusOK {
@@ -510,12 +492,9 @@ func TestTemplateSaveNewFields(t *testing.T) {
 	if tmpl.IdleSuspendAfter != "2h" {
 		t.Errorf("idle_suspend_after not saved: %+v", tmpl)
 	}
-	if tmpl.Provider != "" {
-		t.Errorf("provider not saved: %+v", tmpl)
-	}
 }
 
-// TestTemplateEditPageShowsAllFields is the "16 fields" self-review check:
+// TestTemplateEditPageShowsAllFields is the "15 fields" self-review check:
 // every TemplateConfig field must render on /config/templates/{name}, either
 // in the primary form or inside the Advanced <details>.
 func TestTemplateEditPageShowsAllFields(t *testing.T) {
@@ -530,7 +509,7 @@ func TestTemplateEditPageShowsAllFields(t *testing.T) {
 	body := w.Body.String()
 
 	for _, key := range []string{
-		"workspace", "agent", "model", "provider", "max_turns",
+		"workspace", "agent", "model", "max_turns",
 		"channels", "dev_channels", "permission_mode", "allowed_tools",
 		"disallowed_tools", "mcp_config", "add_dirs", "env",
 		"append_system_prompt", "remote_control", "idle_suspend_after",
@@ -617,182 +596,6 @@ func deleteRequest(t *testing.T, s *Server, path string) *httptest.ResponseRecor
 	return w
 }
 
-// TestProviderCRUD is this task's TDD anchor (adapted from the brief's sketch
-// to this codebase's actual helpers — postForm/deleteRequest/reloadTestConfig
-// instead of the brief's postFormWithCookie/deleteWithCookie, and no auth
-// cookie since newTestServer's stack doesn't require one). It also folds in
-// the add-semantics decision documented on handleProviderAdd: add creates a
-// placeholder-valued entry (not an empty struct) so validateAndSave's
-// exactly-one-of-api_key_env/api_key_cmd + base_url-required rules don't
-// reject the add itself; edit then overwrites the placeholder with real
-// values, which is what this test verifies persists.
-func TestProviderCRUD(t *testing.T) {
-	s, dir := newTestServer(t)
-
-	// add
-	w := postForm(t, s, "/web/provider/add", url.Values{"name": {"zai"}})
-	if w.Code != http.StatusOK {
-		t.Fatalf("add: %d, body=%s", w.Code, readBody(t, w))
-	}
-	if w.Header().Get("HX-Refresh") != "true" {
-		t.Errorf("add: HX-Refresh header = %q, want \"true\"", w.Header().Get("HX-Refresh"))
-	}
-	cfg := reloadTestConfig(t, dir)
-	added, ok := cfg.Providers["zai"]
-	if !ok {
-		t.Fatal("provider not created")
-	}
-	if added.BaseURL == "" || added.APIKeyEnv == "" {
-		t.Errorf("placeholder provider should have non-empty base_url/api_key_env so it round-trips through Validate(): %+v", added)
-	}
-
-	// edit
-	form := url.Values{"base_url": {"https://api.z.ai/api/anthropic"}, "api_key_env": {"ZAI_API_KEY"}, "api_key_cmd": {""}, "default_model": {"glm-4.6"}}
-	w = postForm(t, s, "/web/config/provider/zai", form)
-	if w.Code != http.StatusOK {
-		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
-	}
-	cfg = reloadTestConfig(t, dir)
-	if cfg.Providers["zai"].BaseURL != "https://api.z.ai/api/anthropic" ||
-		cfg.Providers["zai"].APIKeyEnv != "ZAI_API_KEY" ||
-		cfg.Providers["zai"].DefaultModel != "glm-4.6" {
-		t.Errorf("provider not saved: %+v", cfg.Providers["zai"])
-	}
-
-	// delete
-	w = deleteRequest(t, s, "/web/provider/zai")
-	if w.Code != http.StatusOK {
-		t.Fatalf("delete: %d, body=%s", w.Code, readBody(t, w))
-	}
-	if w.Header().Get("HX-Refresh") != "true" {
-		t.Errorf("delete: HX-Refresh header = %q, want \"true\"", w.Header().Get("HX-Refresh"))
-	}
-	cfg = reloadTestConfig(t, dir)
-	if _, ok := cfg.Providers["zai"]; ok {
-		t.Error("provider not deleted")
-	}
-}
-
-// TestProviderAddRejectsDuplicate guards handleProviderAdd's existence check.
-func TestProviderAddRejectsDuplicate(t *testing.T) {
-	s, dir := newTestServer(t)
-	postForm(t, s, "/web/provider/add", url.Values{"name": {"zai"}})
-
-	w := postForm(t, s, "/web/provider/add", url.Values{"name": {"zai"}})
-	body := readBody(t, w)
-	if !strings.Contains(body, "flash-error") {
-		t.Errorf("want validation flash for duplicate name, got: %s", body)
-	}
-
-	cfg := reloadTestConfig(t, dir)
-	if len(cfg.Providers) != 1 {
-		t.Errorf("duplicate add should not have touched config: %+v", cfg.Providers)
-	}
-}
-
-// TestProviderAddRejectsEmptyName guards handleProviderAdd's required-field check.
-func TestProviderAddRejectsEmptyName(t *testing.T) {
-	s, dir := newTestServer(t)
-	w := postForm(t, s, "/web/provider/add", url.Values{"name": {""}})
-	body := readBody(t, w)
-	if !strings.Contains(body, "flash-error") {
-		t.Errorf("want validation flash for empty name, got: %s", body)
-	}
-	cfg := reloadTestConfig(t, dir)
-	if len(cfg.Providers) != 0 {
-		t.Errorf("empty-name add should not have created a provider: %+v", cfg.Providers)
-	}
-}
-
-// TestProviderDeleteRefusedWhileReferenced pins the delete-refusal path: this
-// task lets Config.Validate()'s existing checkProviderRef sweep (over
-// defaults/processes/templates/sessions/tasks) carry the refusal rather than
-// hand-rolling a duplicate reference scan in the handler. Deleting a
-// provider still referenced by a process must fail validation, leaving the
-// on-disk config untouched.
-func TestProviderDeleteRefusedWhileReferenced(t *testing.T) {
-	s, dir := newTestServer(t)
-	postForm(t, s, "/web/provider/add", url.Values{"name": {"zai"}})
-	form := processFormBase(t, s, "assistant")
-	form.Set("provider", "zai")
-	if w := postForm(t, s, "/web/config/process/assistant", form); w.Code != http.StatusOK {
-		t.Fatalf("seeding process.provider: %d, body=%s", w.Code, readBody(t, w))
-	}
-
-	w := deleteRequest(t, s, "/web/provider/zai")
-	body := readBody(t, w)
-	if !strings.Contains(body, "flash-error") {
-		t.Errorf("want validation flash refusing delete, got: %s", body)
-	}
-
-	cfg := reloadTestConfig(t, dir)
-	if _, ok := cfg.Providers["zai"]; !ok {
-		t.Error("referenced provider should not have been deleted")
-	}
-	if cfg.Processes["assistant"].Provider != "zai" {
-		t.Errorf("referencing process should be untouched: %+v", cfg.Processes["assistant"])
-	}
-}
-
-// TestProviderDeleteNotFound guards the not-found branch of handleProviderDelete.
-func TestProviderDeleteNotFound(t *testing.T) {
-	s, _ := newTestServer(t)
-	w := deleteRequest(t, s, "/web/provider/does-not-exist")
-	body := readBody(t, w)
-	if !strings.Contains(body, "flash-error") {
-		t.Errorf("want not-found flash, got: %s", body)
-	}
-}
-
-// TestPageConfigProvidersEmptyState guards the empty-state copy on
-// /config/providers when no providers are configured.
-func TestPageConfigProvidersEmptyState(t *testing.T) {
-	s, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/config/providers", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "No providers configured.") {
-		t.Errorf("empty state copy missing: %s", body)
-	}
-	if !strings.Contains(body, `action="/web/provider/add"`) && !strings.Contains(body, `hx-post="/web/provider/add"`) {
-		t.Errorf("add-provider form missing from empty state: %s", body)
-	}
-}
-
-// TestPageConfigProvidersListsCards guards the populated-state card list:
-// each provider gets its own inline config_form (Action /web/config/provider/{name},
-// DeleteURL /web/provider/{name}), not a separate edit page.
-func TestPageConfigProvidersListsCards(t *testing.T) {
-	s, _ := newTestServer(t)
-	postForm(t, s, "/web/provider/add", url.Values{"name": {"zai"}})
-
-	req := httptest.NewRequest(http.MethodGet, "/config/providers", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, ">zai<") {
-		t.Errorf("provider name not rendered: %s", body)
-	}
-	if !strings.Contains(body, `hx-post="/web/config/provider/zai"`) {
-		t.Errorf("provider card missing inline save form: %s", body)
-	}
-	if !strings.Contains(body, `hx-delete="/web/provider/zai"`) {
-		t.Errorf("provider card missing delete action: %s", body)
-	}
-	for _, key := range []string{"base_url", "api_key_env", "api_key_cmd", "default_model"} {
-		if !strings.Contains(body, `name="`+key+`"`) {
-			t.Errorf("provider card missing field %q", key)
-		}
-	}
-}
-
 // TestConfigFormRendersEverySection is a structural smoke test: it builds a
 // form for every schema.Section against a zero-value target and renders
 // config_form, exercising every Kind branch (bool, tribool, select, envmap,
@@ -869,10 +672,10 @@ func TestClientDefaultHostSave(t *testing.T) {
 	}
 }
 
-// TestHostCRUD mirrors TestProviderCRUD's add/edit/delete shape for
-// cfg.Client.Hosts. Unlike providers, HostConfig has no fields
-// Config.Validate() requires non-empty, so add creates a genuinely empty
-// entry (see handleHostAdd's doc comment) rather than a forced placeholder.
+// TestHostCRUD exercises add/edit/delete for cfg.Client.Hosts. HostConfig
+// has no fields Config.Validate() requires non-empty, so add creates a
+// genuinely empty entry (see handleHostAdd's doc comment) rather than a
+// forced placeholder.
 func TestHostCRUD(t *testing.T) {
 	s, dir := newTestServer(t)
 
@@ -961,10 +764,10 @@ func TestHostDeleteNotFound(t *testing.T) {
 	}
 }
 
-// TestHostDeleteNoReferenceCheck pins the brief's explicit "no
-// reference-check on delete" decision: unlike providers, deleting a host
-// that's named by client.default_host must still succeed — nothing in
-// Config.Validate() treats default_host as a foreign key into hosts.
+// TestHostDeleteNoReferenceCheck pins the "no reference-check on delete"
+// decision: deleting a host that's named by client.default_host must still
+// succeed — nothing in Config.Validate() treats default_host as a foreign
+// key into hosts.
 func TestHostDeleteNoReferenceCheck(t *testing.T) {
 	s, dir := newTestServer(t)
 	postForm(t, s, "/web/host/add", url.Values{"name": {"prod"}})

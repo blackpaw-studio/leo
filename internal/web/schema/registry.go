@@ -14,11 +14,15 @@ var Excluded = map[Section][]string{
 	// harness/harness_options land in the web UI once the harness picker and
 	// a per-adapter options editor ship (later plan); config/validation
 	// support them today (see internal/config/harness.go).
-	SectionDefaults: {"harness", "harness_options"},
-	SectionProcess:  {"harness", "harness_options"},
-	SectionTask:     {"harness", "harness_options"},
-	SectionTemplate: {"harness", "harness_options"},
-	SectionSession:  {"harness", "harness_options"},
+	// provider is excluded on every scope below: the standalone providers
+	// management page was removed (endpoints are becoming the harness's own
+	// concern); the underlying config field is still parsed/validated for
+	// backward compatibility but has no web-UI surface anymore.
+	SectionDefaults: {"harness", "harness_options", "provider"},
+	SectionProcess:  {"harness", "harness_options", "provider"},
+	SectionTask:     {"harness", "harness_options", "provider"},
+	SectionTemplate: {"harness", "harness_options", "provider"},
+	SectionSession:  {"harness", "harness_options", "provider"},
 }
 
 // --- Shared field builders -------------------------------------------------
@@ -27,11 +31,6 @@ var Excluded = map[Section][]string{
 
 func fModel(group string) Field {
 	return Field{Key: "model", Label: "Model", Kind: KindSelect, Options: "models", Group: group}
-}
-
-func fProvider(group string) Field {
-	return Field{Key: "provider", Label: "Provider", Kind: KindSelect, Options: "providers", Group: group,
-		Help: "Third-party Anthropic-compatible endpoint; empty = inherit"}
 }
 
 func fAgent(group string) Field {
@@ -70,8 +69,6 @@ func fEnv(group string, advanced bool) Field {
 var registry = map[Section][]Field{
 	SectionDefaults: {
 		{Key: "model", Label: "Model", Kind: KindSelect, Options: "models", Group: "Model"},
-		{Key: "provider", Label: "Provider", Kind: KindSelect, Options: "providers", Group: "Model",
-			Help: "Third-party Anthropic-compatible endpoint; empty = Anthropic"},
 		{Key: "max_turns", Label: "Max turns", Group: "Limits"},
 		{Key: "permission_mode", Label: "Permission mode", Kind: KindSelect, Options: "permission_modes", Group: "Permissions"},
 		{Key: "bypass_permissions", Label: "Bypass permissions", Group: "Permissions",
@@ -91,7 +88,6 @@ var registry = map[Section][]Field{
 		{Key: "workspace", Label: "Workspace", Group: "General"},
 		fAgent("General"),
 		fModel("Model"),
-		fProvider("Model"),
 		{Key: "max_turns", Label: "Max turns", Group: "Model"},
 	}, fChannels("Channels")...), fPermissions()...), []Field{
 		{Key: "mcp_config", Label: "MCP config", Group: "Advanced", Advanced: true, Help: "Path to an MCP server config file"},
@@ -111,7 +107,6 @@ var registry = map[Section][]Field{
 		{Key: "enabled", Label: "Enabled", Group: "Schedule"},
 		{Key: "prompt_file", Label: "Prompt file", Group: "Prompt"},
 		fModel("Model"),
-		fProvider("Model"),
 		{Key: "max_turns", Label: "Max turns", Group: "Model"},
 		{Key: "timeout", Label: "Timeout", Kind: KindDuration, Group: "Execution"},
 		{Key: "retries", Label: "Retries", Group: "Execution"},
@@ -134,7 +129,6 @@ var registry = map[Section][]Field{
 		{Key: "workspace", Label: "Workspace", Group: "General"},
 		fAgent("General"),
 		fModel("Model"),
-		fProvider("Model"),
 		{Key: "max_turns", Label: "Max turns", Group: "Model"},
 	}, fChannels("Channels")...), fPermissions()...), []Field{
 		{Key: "mcp_config", Label: "MCP config", Group: "Advanced", Advanced: true, Help: "Path to an MCP server config file"},
@@ -150,7 +144,6 @@ var registry = map[Section][]Field{
 		{Key: "workspace", Label: "Workspace", Group: "General"},
 		fAgent("General"),
 		fModel("Model"),
-		fProvider("Model"),
 		{Key: "channels", Label: "Channels", Group: "Channels"},
 	}, fPermissions()...), []Field{
 		fAddDirs("Advanced", true),
@@ -158,13 +151,6 @@ var registry = map[Section][]Field{
 		fAppendSystemPrompt("Advanced", true),
 		{Key: "idle_timeout", Label: "Idle timeout", Kind: KindDuration, Group: "Advanced", Advanced: true},
 	}...),
-
-	SectionProvider: {
-		{Key: "base_url", Label: "Base URL", Group: "General", Help: "Anthropic-Messages-compatible endpoint"},
-		{Key: "api_key_env", Label: "API key env var", Group: "General", Help: "environment variable holding the API key"},
-		{Key: "api_key_cmd", Label: "API key command", Group: "General", Help: "command that prints the API key"},
-		{Key: "default_model", Label: "Default model", Group: "General"},
-	},
 
 	SectionClientHost: {
 		{Key: "ssh", Label: "SSH", Group: "General", Help: "user@host"},

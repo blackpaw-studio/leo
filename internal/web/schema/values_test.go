@@ -31,7 +31,6 @@ func TestRoundTripTask(t *testing.T) {
 		Schedule:   "30 8,15 * * 1-5",
 		PromptFile: "prompts/trade.md",
 		Model:      "sonnet",
-		Provider:   "zai",
 		Enabled:    true,
 		Silent:     true,
 		Timeout:    "45m",

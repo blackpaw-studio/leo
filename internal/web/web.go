@@ -218,7 +218,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /config/defaults", s.handlePage("config_defaults", "Defaults", s.buildDefaultsData))
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
 	mux.HandleFunc("GET /config/templates/{name}", s.handleTemplateEditPage)
-	mux.HandleFunc("GET /config/providers", s.handlePage("config_providers", "Providers", s.buildProvidersData))
 	mux.HandleFunc("GET /config/settings", s.handlePage("config_settings", "Settings", s.buildSettingsData))
 	mux.HandleFunc("GET /service", s.handlePage("service", "Service", s.buildServiceData))
 
@@ -258,14 +257,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
 	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
 
-	// Provider config management — full CRUD lives on one page (no separate
-	// edit page); see handlers.go's "Provider config management" section.
-	mux.HandleFunc("POST /web/config/provider/{name}", s.handleConfigProviderSave)
-	mux.HandleFunc("POST /web/provider/add", s.handleProviderAdd)
-	mux.HandleFunc("DELETE /web/provider/{name}", s.handleProviderDelete)
-
 	// Settings page: Web UI + Remote client config, and remote-host CRUD —
-	// same one-page-no-separate-edit-page pattern as providers above.
+	// full CRUD lives on one page (no separate edit page).
 	mux.HandleFunc("POST /web/config/web", s.handleConfigWebSave)
 	mux.HandleFunc("POST /web/config/client", s.handleConfigClientSave)
 	mux.HandleFunc("POST /web/config/host/{name}", s.handleConfigHostSave)
@@ -273,7 +266,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("DELETE /web/host/{name}", s.handleHostDelete)
 
 	// Session config management — full CRUD lives on one page, same
-	// one-page-no-separate-edit-page pattern as providers above, plus a
+	// one-page-no-separate-edit-page pattern as hosts above, plus a
 	// runtime reset action (kills tmux, drops queued work, clears the
 	// stored --resume session id).
 	mux.HandleFunc("POST /web/config/session/{name}", s.handleConfigSessionSave)

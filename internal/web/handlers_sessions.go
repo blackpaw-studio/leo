@@ -80,13 +80,13 @@ func (s *Server) tmuxSessionLive(target string) bool {
 }
 
 // handleSessionAdd creates a new persistent-session entry and reports back
-// on the sessions page itself (HX-Refresh, mirroring handleProviderAdd).
-// Unlike hosts (which round-trip an empty HostConfig{} through Validate()
-// as-is), Config.Validate() requires sessions.<name>.workspace to be
-// non-empty, so the new entry is seeded with cfg.DefaultWorkspace() — a
-// real, working default, not an obviously-fake placeholder like providers'
-// forced base_url/api_key_env — so the session actually boots there until
-// the operator picks a workspace of their own via the card's inline form.
+// on the sessions page itself (HX-Refresh, not a redirect to a separate edit
+// page). Unlike hosts (which round-trip an empty HostConfig{} through
+// Validate() as-is), Config.Validate() requires sessions.<name>.workspace to
+// be non-empty, so the new entry is seeded with cfg.DefaultWorkspace() — a
+// real, working default, not an obviously-fake placeholder — so the session
+// actually boots there until the operator picks a workspace of their own via
+// the card's inline form.
 func (s *Server) handleSessionAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -130,16 +130,15 @@ func (s *Server) handleSessionAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSessionDelete removes a persistent-session entry and reports back
-// on the sessions page (HX-Refresh, mirroring handleProviderDelete). Design
-// decision, worth calling out: unlike hosts (nothing references a host by
-// name) but like providers (checkProviderRef sweeps every section),
-// Config.Validate() already catches a dangling reference here too — a task
-// with `runtime: persistent` and an explicit `session: <name>` pointing at
-// this entry fails ResolveSession's topology-B lookup ("task %q references
-// sessions.%s which is not defined") once the entry is gone. So this
-// handler does no reference scan of its own; it deletes optimistically and
-// lets validateAndSave's Validate() call carry the refusal, same as
-// handleProviderDelete. Note this only covers the explicit `session:` case
+// on the sessions page (HX-Refresh, not a redirect to a separate edit page).
+// Design decision, worth calling out: unlike hosts (nothing references a
+// host by name), Config.Validate() already catches a dangling reference here
+// — a task with `runtime: persistent` and an explicit `session: <name>`
+// pointing at this entry fails ResolveSession's topology-B lookup ("task %q
+// references sessions.%s which is not defined") once the entry is gone. So
+// this handler does no reference scan of its own; it deletes optimistically
+// and lets validateAndSave's Validate() call carry the refusal. Note this
+// only covers the explicit `session:` case
 // (topology B) — a task with no `session:` field gets an implicitly-named
 // dedicated session (topology A) that isn't a cfg.Sessions entry at all, so
 // there's nothing here for it to dangle against.
