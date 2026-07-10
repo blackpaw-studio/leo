@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
+	harness "github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/service"
@@ -67,7 +70,7 @@ func runService(cmd *cobra.Command, args []string) error {
 	}
 
 	if supervised {
-		claudePath, err := exec.LookPath("claude")
+		claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
 		if err != nil {
 			return fmt.Errorf("claude not found: %w", err)
 		}
@@ -123,10 +126,12 @@ func runService(cmd *cobra.Command, args []string) error {
 	store := session.NewStore(cfg.HomePath)
 	sessionKey := "process:" + procName
 	claudeArgs = append(claudeArgs,
-		resolveSessionArgs(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "")...,
+		claudeharness.Claude{}.SessionArgs(
+			resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), ""),
+		)...,
 	)
 
-	claudePath, err := exec.LookPath("claude")
+	claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
 	if err != nil {
 		return fmt.Errorf("claude not found: %w", err)
 	}
@@ -138,7 +143,7 @@ func runService(cmd *cobra.Command, args []string) error {
 
 	info.Printf("Starting session (%s)...\n", procName)
 	procEnv := processEnviron(proc, provEnv)
-	return syscall.Exec(claudePath, append([]string{"claude"}, claudeArgs...), procEnv)
+	return syscall.Exec(claudePath, append([]string{claudeharness.Claude{}.Binary()}, claudeArgs...), procEnv)
 }
 
 // processEnviron augments the current environment with LEO_CHANNELS and
@@ -215,7 +220,9 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 		store := session.NewStore(cfg.HomePath)
 		sessionKey := "process:" + name
 		args = append(args,
-			resolveSessionArgs(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] ")...,
+			claudeharness.Claude{}.SessionArgs(
+				resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] "),
+			)...,
 		)
 
 		procEnv := mergeChannelsIntoEnv(proc)
@@ -236,8 +243,8 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 	return specs
 }
 
-// resolveSessionArgs returns the session-related args (--resume / --session-id)
-// to append for a claude invocation. Preference order:
+// resolveSessionState resolves the session decision (resume / pinned fresh)
+// for a claude invocation. Preference order:
 //
 //  1. Newest *.jsonl in claude's project directory for this workspace. This
 //     matches what /resume inside claude would show at the top of its list
@@ -253,7 +260,7 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 //
 // logPrefix is prepended to warnings (e.g. "[myproc] " for supervised mode,
 // empty for the single-process foreground path).
-func resolveSessionArgs(store *session.Store, sessionKey, workspace string, maxAge time.Duration, logPrefix string) []string {
+func resolveSessionState(store *session.Store, sessionKey, workspace string, maxAge time.Duration, logPrefix string) harness.SessionState {
 	storedID, _, getErr := store.Get(sessionKey)
 	if getErr != nil {
 		warn.Printf("  %sCould not read session store: %v\n", logPrefix, getErr)
@@ -271,15 +278,15 @@ func resolveSessionArgs(store *session.Store, sessionKey, workspace string, maxA
 				warn.Printf("  %sCould not update session ID: %v\n", logPrefix, err)
 			}
 		}
-		return []string{"--resume", latestID}
+		return harness.SessionState{Mode: harness.SessionResume, ID: latestID}
 	case storedID != "":
-		return []string{"--resume", storedID}
+		return harness.SessionState{Mode: harness.SessionResume, ID: storedID}
 	default:
 		sid := session.NewID()
 		if err := store.Set(sessionKey, sid); err != nil {
 			warn.Printf("  %sCould not store session ID: %v\n", logPrefix, err)
 		}
-		return []string{"--session-id", sid}
+		return harness.SessionState{Mode: harness.SessionPinned, ID: sid}
 	}
 }
 
@@ -301,85 +308,42 @@ func mergeChannelsIntoEnv(proc config.ProcessConfig) map[string]string {
 	return merged
 }
 
-// buildProcessArgs builds claude CLI args for a named process.
+// buildProcessArgs builds claude CLI args for a named process by resolving
+// the config cascade into a harness.LaunchSpec.
 func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig) []string {
-	var claudeArgs []string
-
-	// Model
-	model := cfg.ProcessModel(proc)
-	claudeArgs = append(claudeArgs, "--model", model)
-
-	for _, ch := range proc.Channels {
-		claudeArgs = append(claudeArgs, "--channels", ch)
+	mcpConfig := ""
+	if p := cfg.ProcessMCPConfigPath(proc); config.HasMCPServers(p) {
+		mcpConfig = p
 	}
-	for _, ch := range proc.DevChannels {
-		claudeArgs = append(claudeArgs, "--dangerously-load-development-channels", ch)
+	spec := harness.LaunchSpec{
+		Kind:        harness.KindProcess,
+		Name:        name,
+		Model:       cfg.ProcessModel(proc),
+		Workspace:   cfg.ProcessWorkspace(proc),
+		AddDirs:     proc.AddDirs,
+		Channels:    proc.Channels,
+		DevChannels: proc.DevChannels,
+		Options: claudeharness.Options{
+			PermissionMode:      harness.FallbackString(proc.PermissionMode, cfg.Defaults.PermissionMode),
+			BypassPermissions:   cfg.ProcessBypassPermissions(proc),
+			RemoteControl:       cfg.ProcessRemoteControl(proc),
+			RemoteControlPrefix: name,
+			AgentFile:           proc.Agent,
+			AllowedTools:        harness.FallbackSlice(proc.AllowedTools, cfg.Defaults.AllowedTools),
+			DisallowedTools:     harness.FallbackSlice(proc.DisallowedTools, cfg.Defaults.DisallowedTools),
+			AppendSystemPrompt:  leomcp.MergeSystemPrompt(cfg, harness.FallbackString(proc.AppendSystemPrompt, cfg.Defaults.AppendSystemPrompt)),
+			MCPConfigPath:       mcpConfig,
+			LeoMCPArgs:          leomcp.AppendArg(nil, cfg),
+		},
 	}
-
-	ws := cfg.ProcessWorkspace(proc)
-	claudeArgs = append(claudeArgs, "--add-dir", ws)
-
-	for _, dir := range proc.AddDirs {
-		claudeArgs = append(claudeArgs, "--add-dir", dir)
+	args, err := claudeharness.Claude{}.Args(spec)
+	if err != nil {
+		// Unreachable with a well-formed spec; log loudly rather than
+		// silently launching claude with no args.
+		log.Printf("[%s] building claude args: %v", name, err)
+		return nil
 	}
-
-	if cfg.ProcessRemoteControl(proc) {
-		claudeArgs = append(claudeArgs, "--remote-control", "--remote-control-session-name-prefix", name)
-	}
-
-	// Permission mode: process > defaults > bypass_permissions legacy
-	permMode := proc.PermissionMode
-	if permMode == "" {
-		permMode = cfg.Defaults.PermissionMode
-	}
-	if permMode != "" {
-		claudeArgs = append(claudeArgs, "--permission-mode", permMode)
-	} else if cfg.ProcessBypassPermissions(proc) {
-		claudeArgs = append(claudeArgs, "--dangerously-skip-permissions")
-	}
-
-	mcpConfig := cfg.ProcessMCPConfigPath(proc)
-	if config.HasMCPServers(mcpConfig) {
-		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfig)
-	}
-	// Always layer in the Leo-managed MCP server (when the daemon's TCP
-	// listener is enabled) so every supervised Claude gets the universal
-	// channel slash-commands: /clear, /compact, /stop, /tasks, /agent, /agents.
-	claudeArgs = leomcp.AppendArg(claudeArgs, cfg)
-
-	if proc.Agent != "" {
-		claudeArgs = append(claudeArgs, "--agent", proc.Agent)
-	}
-
-	// Allowed tools: process overrides defaults
-	allowedTools := proc.AllowedTools
-	if len(allowedTools) == 0 {
-		allowedTools = cfg.Defaults.AllowedTools
-	}
-	if len(allowedTools) > 0 {
-		claudeArgs = append(claudeArgs, "--allowed-tools", strings.Join(allowedTools, ","))
-	}
-
-	// Disallowed tools: process overrides defaults
-	disallowedTools := proc.DisallowedTools
-	if len(disallowedTools) == 0 {
-		disallowedTools = cfg.Defaults.DisallowedTools
-	}
-	if len(disallowedTools) > 0 {
-		claudeArgs = append(claudeArgs, "--disallowed-tools", strings.Join(disallowedTools, ","))
-	}
-
-	// System prompt: process overrides defaults
-	appendPrompt := proc.AppendSystemPrompt
-	if appendPrompt == "" {
-		appendPrompt = cfg.Defaults.AppendSystemPrompt
-	}
-	appendPrompt = leomcp.MergeSystemPrompt(cfg, appendPrompt)
-	if appendPrompt != "" {
-		claudeArgs = append(claudeArgs, "--append-system-prompt", appendPrompt)
-	}
-
-	return claudeArgs
+	return args
 }
 
 func newServiceStartCmd() *cobra.Command {
