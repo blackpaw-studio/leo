@@ -3,10 +3,10 @@ package agent
 import (
 	"log"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
@@ -19,91 +19,33 @@ import (
 // alive in its tmux REPL — the same behavior an empty prompt has, plus a first
 // turn. An empty prompt appends nothing, preserving the prior arg list exactly.
 func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt string) []string {
-	var args []string
-
-	args = append(args, "--model", cfg.TemplateModel(tmpl))
-
-	for _, ch := range tmpl.Channels {
-		args = append(args, "--channels", ch)
-	}
-	for _, ch := range tmpl.DevChannels {
-		args = append(args, "--dangerously-load-development-channels", ch)
-	}
-
-	args = append(args, "--add-dir", workspace)
+	// Defense in depth: Config.Validate() also rejects these, but skip
+	// anything unsafe here in case spawn-time receives an unvalidated
+	// config. Log noisily so the silent drop isn't invisible.
+	safeDirs := make([]string, 0, len(tmpl.AddDirs))
 	for _, dir := range tmpl.AddDirs {
-		// Defense in depth: Config.Validate() also rejects these, but skip
-		// anything unsafe here in case spawn-time receives an unvalidated
-		// config (e.g. test harness, future callers). Log noisily so the
-		// silent drop isn't invisible to whoever bypassed validation.
 		if err := config.ValidateAddDir(dir); err != nil {
 			log.Printf("[agent:%s] skipping unsafe add_dirs entry %q: %v", agentName, dir, err)
 			continue
 		}
-		args = append(args, "--add-dir", dir)
+		safeDirs = append(safeDirs, dir)
 	}
 
 	rc := true
 	if tmpl.RemoteControl != nil {
 		rc = *tmpl.RemoteControl
 	}
-	if rc {
-		args = append(args, "--remote-control")
-	}
 
-	args = append(args, "--name", agentName)
-
-	permMode := tmpl.PermissionMode
-	if permMode == "" {
-		permMode = cfg.Defaults.PermissionMode
-	}
-	if permMode != "" {
-		args = append(args, "--permission-mode", permMode)
-	}
-
+	mcpConfig := ""
 	if tmpl.MCPConfig != "" {
-		mcpPath := tmpl.MCPConfig
-		if !filepath.IsAbs(mcpPath) {
-			mcpPath = filepath.Join(workspace, mcpPath)
+		p := tmpl.MCPConfig
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(workspace, p)
 		}
-		if config.HasMCPServers(mcpPath) {
-			args = append(args, "--mcp-config", mcpPath)
+		if config.HasMCPServers(p) {
+			mcpConfig = p
 		}
 	}
-
-	if tmpl.Agent != "" {
-		args = append(args, "--agent", tmpl.Agent)
-	}
-
-	allowed := tmpl.AllowedTools
-	if len(allowed) == 0 {
-		allowed = cfg.Defaults.AllowedTools
-	}
-	if len(allowed) > 0 {
-		args = append(args, "--allowed-tools", strings.Join(allowed, ","))
-	}
-
-	disallowed := tmpl.DisallowedTools
-	if len(disallowed) == 0 {
-		disallowed = cfg.Defaults.DisallowedTools
-	}
-	if len(disallowed) > 0 {
-		args = append(args, "--disallowed-tools", strings.Join(disallowed, ","))
-	}
-
-	appendPrompt := tmpl.AppendSystemPrompt
-	if appendPrompt == "" {
-		appendPrompt = cfg.Defaults.AppendSystemPrompt
-	}
-	appendPrompt = leomcp.MergeSystemPrompt(cfg, appendPrompt)
-	if appendPrompt != "" {
-		args = append(args, "--append-system-prompt", appendPrompt)
-	}
-
-	// Layer in the Leo-managed MCP server (when the daemon's TCP listener is
-	// enabled) so ephemeral agents get the universal leo_* tools — including
-	// leo_send_message for agent-to-agent messaging.
-	args = leomcp.AppendArg(args, cfg)
 
 	maxTurns := tmpl.MaxTurns
 	if maxTurns == 0 {
@@ -112,13 +54,32 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 	if maxTurns == 0 {
 		maxTurns = config.DefaultMaxTurns
 	}
-	args = append(args, "--max-turns", strconv.Itoa(maxTurns))
 
-	// Opening prompt is the trailing positional so it lands after every flag.
-	// Empty prompt => no positional, identical to the pre-prompt behavior.
-	if prompt != "" {
-		args = append(args, prompt)
+	spec := harness.LaunchSpec{
+		Kind:        harness.KindAgent,
+		Name:        agentName,
+		Model:       cfg.TemplateModel(tmpl),
+		MaxTurns:    maxTurns,
+		Workspace:   workspace,
+		AddDirs:     safeDirs,
+		Channels:    tmpl.Channels,
+		DevChannels: tmpl.DevChannels,
+		Prompt:      prompt,
+		Options: claudeharness.Options{
+			PermissionMode:     harness.FallbackString(tmpl.PermissionMode, cfg.Defaults.PermissionMode),
+			RemoteControl:      rc,
+			AgentFile:          tmpl.Agent,
+			AllowedTools:       harness.FallbackSlice(tmpl.AllowedTools, cfg.Defaults.AllowedTools),
+			DisallowedTools:    harness.FallbackSlice(tmpl.DisallowedTools, cfg.Defaults.DisallowedTools),
+			AppendSystemPrompt: leomcp.MergeSystemPrompt(cfg, harness.FallbackString(tmpl.AppendSystemPrompt, cfg.Defaults.AppendSystemPrompt)),
+			MCPConfigPath:      mcpConfig,
+			LeoMCPArgs:         leomcp.AppendArg(nil, cfg),
+		},
 	}
-
+	args, err := claudeharness.Claude{}.Args(spec)
+	if err != nil {
+		log.Printf("[agent:%s] building claude args: %v", agentName, err)
+		return nil
+	}
 	return args
 }

@@ -1,6 +1,10 @@
 package claude
 
-import "github.com/blackpaw-studio/leo/internal/harness"
+import (
+	"strconv"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
+)
 
 // processArgs reproduces internal/cli.buildProcessArgs flag order exactly.
 func processArgs(spec harness.LaunchSpec, o Options) []string {
@@ -32,8 +36,40 @@ func processArgs(spec harness.LaunchSpec, o Options) []string {
 	return args
 }
 
+// agentArgs reproduces internal/agent.BuildTemplateArgs flag order exactly.
+// Note: templates have no bypass-permissions fallback — callers must leave
+// Options.BypassPermissions false for KindAgent.
 func agentArgs(spec harness.LaunchSpec, o Options) []string {
-	panic("claude: agentArgs not yet implemented (plan task 4)")
+	var args []string
+	args = append(args, "--model", spec.Model)
+	args = appendChannelFlags(args, spec.Channels, spec.DevChannels)
+	args = append(args, "--add-dir", spec.Workspace)
+	for _, dir := range spec.AddDirs {
+		args = append(args, "--add-dir", dir)
+	}
+	if o.RemoteControl {
+		args = append(args, "--remote-control")
+	}
+	args = append(args, "--name", spec.Name)
+	args = appendPermissionFlags(args, o)
+	if o.MCPConfigPath != "" {
+		args = append(args, "--mcp-config", o.MCPConfigPath)
+	}
+	if o.AgentFile != "" {
+		args = append(args, "--agent", o.AgentFile)
+	}
+	args = appendToolFlags(args, o)
+	if o.AppendSystemPrompt != "" {
+		args = append(args, "--append-system-prompt", o.AppendSystemPrompt)
+	}
+	args = append(args, o.LeoMCPArgs...)
+	if spec.MaxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(spec.MaxTurns))
+	}
+	if spec.Prompt != "" {
+		args = append(args, spec.Prompt)
+	}
+	return args
 }
 
 func taskArgs(spec harness.LaunchSpec, o Options) []string {

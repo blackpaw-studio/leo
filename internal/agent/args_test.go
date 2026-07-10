@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -40,5 +41,93 @@ func TestBuildTemplateArgsNoLeoMCPWhenWebDisabled(t *testing.T) {
 
 	if hasFlagValue(args, "--append-system-prompt", "leo_send_message") {
 		t.Errorf("awareness line must not appear when web disabled; got %v", args)
+	}
+}
+
+func TestBuildTemplateArgsCharacterization(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name   string
+		cfg    *config.Config
+		tmpl   config.TemplateConfig
+		prompt string
+		want   []string
+	}{
+		{
+			name: "minimal — remote control defaults on, max turns default",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{Model: "opus"},
+			},
+			tmpl: config.TemplateConfig{},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
+				"--remote-control",
+				"--name", "myagent",
+				"--max-turns", "15",
+			},
+		},
+		{
+			name: "full template with opening prompt",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{Model: "opus", PermissionMode: "acceptEdits"},
+			},
+			tmpl: config.TemplateConfig{
+				Model:              "sonnet",
+				Channels:           []string{"plugin:telegram@claude-plugins-official"},
+				AddDirs:            []string{"/tmp/extra"},
+				RemoteControl:      boolPtr(false),
+				Agent:              "rocket",
+				AllowedTools:       []string{"Read"},
+				DisallowedTools:    []string{"WebFetch"},
+				AppendSystemPrompt: "be terse",
+				MaxTurns:           50,
+			},
+			prompt: "hello world",
+			want: []string{
+				"--model", "sonnet",
+				"--channels", "plugin:telegram@claude-plugins-official",
+				"--add-dir", "/tmp/ws",
+				"--add-dir", "/tmp/extra",
+				"--name", "myagent",
+				"--permission-mode", "acceptEdits",
+				"--agent", "rocket",
+				"--allowed-tools", "Read",
+				"--disallowed-tools", "WebFetch",
+				"--append-system-prompt", "be terse",
+				"--max-turns", "50",
+				"hello world",
+			},
+		},
+		{
+			name: "unsafe add_dir dropped",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{Model: "opus"},
+			},
+			tmpl: config.TemplateConfig{
+				AddDirs: []string{"/ok/dir", "/bad;dir"},
+			},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
+				"--add-dir", "/ok/dir",
+				"--remote-control",
+				"--name", "myagent",
+				"--max-turns", "15",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := BuildTemplateArgs(tt.cfg, tt.tmpl, "myagent", "/tmp/ws", tt.prompt)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("BuildTemplateArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
+			}
+		})
 	}
 }
