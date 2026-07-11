@@ -242,6 +242,30 @@ func TestResolveTemplateLaunchCodexNoLeoMCPWhenWebDisabled(t *testing.T) {
 	}
 }
 
+// TestResolveTemplateLaunchCodexNoLeoMCPWithoutToken confirms the gate
+// requires a live token, not just web.Enabled: even though codex's bridge
+// only references env-var *names* (no literal secret embedded), a bridge is
+// useless without a token for the supervisor to actually export — matching
+// processLeoMCPEnv's contract and the opencode branch in this same function.
+func TestResolveTemplateLaunchCodexNoLeoMCPWithoutToken(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true},
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+	}
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	if err != nil {
+		t.Fatalf("resolveTemplateLaunch: %v", err)
+	}
+	opts, ok := spec.Options.(codexharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
+	}
+	if opts.LeoMCP != nil {
+		t.Errorf("expected nil LeoMCP bridge without a webToken, got %+v", opts.LeoMCP)
+	}
+}
+
 // TestResolveTemplateLaunchOpencodeFillsLeoMCPBridge locks the opencode
 // branch: unlike codex's env-var-name whitelist, opencode's bridge needs the
 // literal LEO_* values inline (OPENCODE_CONFIG_CONTENT has no notion of

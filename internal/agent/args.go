@@ -21,9 +21,11 @@ import (
 // needing Args() to succeed — codex/opencode still refuse KindAgent launches
 // until their session drivers land.
 //
-// webToken is the daemon's API bearer token (Manager.webToken), used to fill
-// the literal LEO_* values a non-claude LeoMCP bridge needs inline (codex's
-// bridge only needs env-var *names*, which the supervisor already exports).
+// webToken is the daemon's API bearer token (Manager.webToken). A non-claude
+// LeoMCP bridge is only wired in when web is enabled AND webToken is
+// non-empty (mirrors run/runner.go's leoMCPEnv and cli's processLeoMCPEnv) —
+// even though codex's bridge only references env-var *names* (the supervisor
+// exports the values), a bridge is useless without a live token to export.
 func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) (harness.Harness, harness.LaunchSpec, error) {
 	// Defense in depth: Config.Validate() also rejects these, but skip
 	// anything unsafe here in case spawn-time receives an unvalidated
@@ -65,7 +67,7 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		maxTurns = config.DefaultMaxTurns
 	}
 
-	leoMCPOK := cfg != nil && cfg.Web.Enabled
+	leoMCPOK := cfg != nil && cfg.Web.Enabled && webToken != ""
 
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindAgent,
@@ -103,7 +105,7 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		}
 		spec.Options = opts
 	case opencodeharness.Options:
-		if leoMCPOK && webToken != "" {
+		if leoMCPOK {
 			opts.LeoMCP = &opencodeharness.LeoMCPBridge{
 				Command: []string{"leo", "mcp-server"},
 				Env: map[string]string{
