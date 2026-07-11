@@ -17,7 +17,7 @@ func TestAgentIDsGetSetClear(t *testing.T) {
 		t.Fatalf("agentstore.Save: %v", err)
 	}
 
-	ids := newAgentIDs(home, "leo-foo")
+	ids := NewAgentIDs(home, "leo-foo")
 	if got := ids.Get(); got != "" {
 		t.Fatalf("Get() before Set = %q, want empty", got)
 	}
@@ -43,7 +43,7 @@ func TestAgentIDsGetSetClear(t *testing.T) {
 
 func TestAgentIDsMissingRecordIsNoOp(t *testing.T) {
 	home := t.TempDir()
-	ids := newAgentIDs(home, "leo-ghost")
+	ids := NewAgentIDs(home, "leo-ghost")
 
 	if got := ids.Get(); got != "" {
 		t.Fatalf("Get() on missing record = %q, want empty", got)

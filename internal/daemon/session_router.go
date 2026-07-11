@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 type EnqueueParams struct {
@@ -199,7 +201,12 @@ func (r *sessionRouter) QueueDepth(session string) int {
 	return depth
 }
 
-type injectFn func(tmuxSession, prompt string) error
+// injectFn delivers a prompt into a session. A nil *harness.Result means
+// delivery is asynchronous (today's claude tmux path — completion arrives
+// later via Report or the pump's timeout). A non-nil *harness.Result means
+// the turn already ran to completion synchronously; the pump marks the
+// invocation completed immediately instead of waiting.
+type injectFn func(tmuxSession, prompt string) (*harness.Result, error)
 type abortFn func(tmuxSession string) error
 
 // SetInjector / SetAborter wire the tmux primitives (or test fakes).
@@ -309,6 +316,32 @@ func (r *sessionRouter) ResetSession(session, reason string) int {
 	return cleared
 }
 
+// invocationResultFromHarness translates a synchronous driver Result into the
+// same InvocationResult shape the Report path builds (see handleTaskReport),
+// so both completion sources are indistinguishable to AwaitTask callers.
+func invocationResultFromHarness(res *harness.Result) InvocationResult {
+	if res.IsError {
+		errMsg := res.Text
+		if errMsg == "" && len(res.Errors) > 0 {
+			errMsg = res.Errors[0]
+		}
+		return InvocationResult{OK: false, SessionID: res.SessionID, Err: errMsg}
+	}
+	return InvocationResult{OK: true, SessionID: res.SessionID, FinalMessage: res.Text}
+}
+
+// completeInFlight clears q.inFlight (if it still matches inv) and delivers
+// result via markCompleted. Shared by the pump's synchronous-injector path
+// and mirrors the bookkeeping Report performs for the async path.
+func (r *sessionRouter) completeInFlight(q *sessionQueue, inv *PendingInvocation, result InvocationResult) {
+	q.mu.Lock()
+	if q.inFlight != nil && q.inFlight.ID == inv.ID {
+		q.inFlight = nil
+	}
+	q.mu.Unlock()
+	r.markCompleted(inv, result)
+}
+
 // markCompleted stamps completion time and delivers a buffered result. The
 // byID entry is left in place so a slow AwaitTask caller can still observe
 // the result; the janitor reaps it after completedTTL.
@@ -364,13 +397,19 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			target := q.tmuxSession
 			q.mu.Unlock()
 
-			if err := r.currentInjector()(target, next.Prompt); err != nil {
-				q.mu.Lock()
-				if q.inFlight != nil && q.inFlight.ID == next.ID {
-					q.inFlight = nil
-				}
-				q.mu.Unlock()
-				r.markCompleted(next, InvocationResult{OK: false, Err: "inject: " + err.Error()})
+			res, err := r.currentInjector()(target, next.Prompt)
+			if err != nil {
+				r.completeInFlight(q, next, InvocationResult{OK: false, Err: "inject: " + err.Error()})
+				continue
+			}
+
+			// A non-nil Result means the injector's driver ran the turn to
+			// completion synchronously (e.g. a DriveTurns harness) — mark the
+			// invocation completed immediately using the same bookkeeping the
+			// Report path uses, and skip the await-Report/timeout window
+			// entirely. Nil Result keeps today's async wait byte-identical.
+			if res != nil {
+				r.completeInFlight(q, next, invocationResultFromHarness(res))
 				continue
 			}
 

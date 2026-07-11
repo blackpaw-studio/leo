@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
 )
 
@@ -123,9 +124,9 @@ tasks:
 	// will time out via the router's pump deadline. This drives both
 	// the original failure path AND lets us assert the follow-up notice
 	// reached the same session.
-	srv.SetInjector(func(session, prompt string) error {
+	srv.SetInjector(func(session, prompt string) (*harness.Result, error) {
 		cap.record(session, prompt)
-		return nil
+		return nil, nil
 	})
 	srv.SetAborter(func(session string) error { return nil })
 

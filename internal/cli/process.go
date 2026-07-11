@@ -11,6 +11,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/spf13/cobra"
 )
@@ -76,9 +77,23 @@ normal tmux prefix + d (default: C-b d).`,
 		ValidArgsFunction: completeProcessNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			_, res, err := dispatch(host)
+			cfg, res, err := dispatch(host)
 			if err != nil {
 				return err
+			}
+			// Non-claude harnesses have no tmux session to attach to — route
+			// through the driver instead. Localhost only: remote process
+			// attach dispatches straight over SSH with no config round-trip
+			// (see the comment below), so it stays claude-only until a later
+			// task threads harness resolution through the remote path too.
+			if res.Localhost {
+				_, spec, ok, err := resolveProcessAttachSpec(cfg, name)
+				if err != nil {
+					return err
+				}
+				if ok {
+					return attachViaDriver(res, spec)
+				}
 			}
 			// Processes use a stable session name — no daemon round-trip needed
 			// for either local or remote dispatch.
@@ -88,6 +103,43 @@ normal tmux prefix + d (default: C-b d).`,
 	addHostFlag(cmd, &host)
 	addControlModeFlag(cmd, &cc)
 	return cmd
+}
+
+// resolveProcessAttachSpec resolves a configured process's harness and, for
+// non-claude harnesses, its live AttachSpec. ok=false covers every case that
+// falls back to the existing tmux path: unknown process, claude (empty
+// harness included), or a harness with no session driver — the last
+// shouldn't happen for a validated config (interactive kinds currently
+// require claude), but is handled defensively rather than assumed away.
+func resolveProcessAttachSpec(cfg *config.Config, name string) (harnessName string, spec harness.AttachSpec, ok bool, err error) {
+	procCfg, exists := cfg.Processes[name]
+	if !exists {
+		return "", harness.AttachSpec{}, false, nil
+	}
+	harnessName = cfg.ProcessHarness(procCfg)
+	if harnessName == "" || harnessName == "claude" {
+		return harnessName, harness.AttachSpec{}, false, nil
+	}
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		return harnessName, harness.AttachSpec{}, false, fmt.Errorf("resolving harness %q: %w", harnessName, err)
+	}
+	drv := h.Driver()
+	if drv == nil {
+		return harnessName, harness.AttachSpec{}, false, fmt.Errorf("harness %q has no session driver", harnessName)
+	}
+	handle := harness.SessionHandle{
+		Kind:        harness.KindProcess,
+		Name:        name,
+		TmuxSession: processSessionName(name),
+		Workspace:   cfg.ProcessWorkspace(procCfg),
+		HomePath:    cfg.HomePath,
+	}
+	spec, err = drv.Attach(handle)
+	if err != nil {
+		return harnessName, harness.AttachSpec{}, false, fmt.Errorf("resolving attach spec: %w", err)
+	}
+	return harnessName, spec, true, nil
 }
 
 // --- logs ---

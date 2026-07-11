@@ -49,6 +49,12 @@ func sweepIdleAgents(ctx context.Context, sup *Supervisor, mgr *agent.Manager, t
 		if !ok {
 			continue
 		}
+		// Non-claude harnesses have no suspend/resume mechanic — a DriveTurns
+		// session has no resident tmux process to idle-suspend in the first
+		// place — so they are never candidates for this sweep.
+		if !isSweepEligibleHarness(rec.Harness) {
+			continue
+		}
 		idle := parseIdle(rec.IdleSuspendAfter)
 		if idle <= 0 {
 			continue
@@ -75,6 +81,14 @@ func shouldSuspend(now time.Time, act tmux.SessionActivity, idle time.Duration) 
 		return false
 	}
 	return now.Sub(act.LastActivity) >= idle
+}
+
+// isSweepEligibleHarness reports whether the idle sweep may act on a record
+// with this harness name. Empty means claude (records predate the Harness
+// field). Every other harness is DriveTurns-only today and has no live tmux
+// process to suspend, so the sweep must never touch it.
+func isSweepEligibleHarness(harnessName string) bool {
+	return harnessName == "" || harnessName == "claude"
 }
 
 // parseIdle parses a stored idle-interval string. Empty, invalid, or

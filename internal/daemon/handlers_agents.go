@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // resolveAgentOrError resolves a shorthand query against the agent manager and
@@ -224,6 +225,50 @@ func (s *Server) handleAgentSession(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling session: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
+// handleAgentAttachSpec returns how the CLI should attach to a non-claude
+// agent's live session: the driver's resolved Argv (exec locally / over ssh)
+// or HistoryPath (no live attach — tail the file instead). Claude agents
+// (Harness == "" or "claude") get an empty Argv/HistoryPath — the CLI already
+// has its own tmux-based attach flow for those via AgentSession and never
+// needs to reach this endpoint for them, but the response is still
+// well-formed if it does.
+func (s *Server) handleAgentAttachSpec(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	query := r.PathValue("name")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	rec, ok := s.resolveAgentOrError(w, query)
+	if !ok {
+		return
+	}
+
+	resp := AgentAttachSpecResponse{Name: rec.Name}
+	harnessName, h, resolved := s.agentMgr.ResolveHandle(rec.Name)
+	if resolved && harnessName != "" && harnessName != "claude" {
+		resp.Harness = harnessName
+		if hd, err := harness.Get(harnessName); err == nil {
+			if drv := hd.Driver(); drv != nil {
+				if spec, err := drv.Attach(h); err == nil {
+					resp.Argv = spec.Argv
+					resp.HistoryPath = spec.HistoryPath
+				}
+			}
+		}
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling attach spec: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})

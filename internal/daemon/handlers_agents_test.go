@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // fakeAgentManager is a minimal AgentManager for daemon endpoint tests.
@@ -41,6 +42,21 @@ type fakeAgentManager struct {
 		query   string
 		newName string
 	}
+
+	// handles backs ResolveHandle for attach-spec tests: keyed by agent name,
+	// maps to (harnessName, SessionHandle). A missing key means ok=false.
+	handles map[string]struct {
+		harnessName string
+		handle      harness.SessionHandle
+	}
+}
+
+func (f *fakeAgentManager) ResolveHandle(name string) (string, harness.SessionHandle, bool) {
+	rh, ok := f.handles[name]
+	if !ok {
+		return "", harness.SessionHandle{}, false
+	}
+	return rh.harnessName, rh.handle, true
 }
 
 func (f *fakeAgentManager) Spawn(_ context.Context, spec agent.SpawnSpec) (agent.Record, error) {

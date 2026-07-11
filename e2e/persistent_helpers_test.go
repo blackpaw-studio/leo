@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
@@ -105,13 +106,13 @@ func extractMarker(prompt string) string {
 // the session name so callers can assert resume continuity.
 func installAutoResponder(t *testing.T, srv *daemon.Server, ws string, cap *promptCapture) {
 	t.Helper()
-	srv.SetInjector(func(session, prompt string) error {
+	srv.SetInjector(func(session, prompt string) (*harness.Result, error) {
 		cap.record(session, prompt)
 		invID := extractMarker(prompt)
 		if invID == "" {
 			// No marker — this is something we don't recognise; refuse so
 			// the test surface fails loudly rather than hanging.
-			return fmt.Errorf("auto-responder: missing invocation marker in prompt")
+			return nil, fmt.Errorf("auto-responder: missing invocation marker in prompt")
 		}
 		sessionID := "csid-" + session
 		finalMsg := "FAKE-REPLY: " + truncate80(strings.TrimSpace(stripMarker(prompt)))
@@ -122,7 +123,7 @@ func installAutoResponder(t *testing.T, srv *daemon.Server, ws string, cap *prom
 				t.Logf("auto-responder: report invID=%s err=%v", invID, err)
 			}
 		}(invID, sessionID, finalMsg, session)
-		return nil
+		return nil, nil
 	})
 	srv.SetAborter(func(session string) error { return nil })
 }
@@ -175,11 +176,11 @@ func (g *gatedResponder) release(invID string) {
 
 func installGatedResponder(t *testing.T, srv *daemon.Server, ws string, g *gatedResponder) {
 	t.Helper()
-	srv.SetInjector(func(session, prompt string) error {
+	srv.SetInjector(func(session, prompt string) (*harness.Result, error) {
 		g.cap.record(session, prompt)
 		invID := extractMarker(prompt)
 		if invID == "" {
-			return fmt.Errorf("gated responder: missing invocation marker")
+			return nil, fmt.Errorf("gated responder: missing invocation marker")
 		}
 		ch := g.gate(invID)
 		go func(invID, session string) {
@@ -192,7 +193,7 @@ func installGatedResponder(t *testing.T, srv *daemon.Server, ws string, g *gated
 				t.Logf("gated responder: report invID=%s err=%v", invID, err)
 			}
 		}(invID, session)
-		return nil
+		return nil, nil
 	})
 	srv.SetAborter(func(session string) error { return nil })
 }

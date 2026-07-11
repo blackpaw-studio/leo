@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // newServerWithRouter builds a Server that has only the session router wired
@@ -16,7 +18,7 @@ import (
 func newServerWithRouter(t *testing.T) (*Server, *sessionRouter, *httptest.Server) {
 	t.Helper()
 	s := &Server{router: newSessionRouter()}
-	s.router.SetInjector(func(session, prompt string) error { return nil })
+	s.router.SetInjector(func(session, prompt string) (*harness.Result, error) { return nil, nil })
 	s.router.SetAborter(func(session string) error { return nil })
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /task/enqueue", s.handleTaskEnqueue)

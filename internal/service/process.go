@@ -183,6 +183,18 @@ func (s *Supervisor) incrementRestarts(name string) {
 	}
 }
 
+// registerIdentity creates and records a procIdentity for a config-defined
+// process so the process-side handle resolver (resolveProcessHandle) can find
+// it. Ephemeral agents register their identity inline in SpawnAgent instead —
+// this is only for the boot-time []ProcessSpec loop in defaultSupervisedExec.
+func (s *Supervisor) registerIdentity(name string, args []string) *procIdentity {
+	id := newProcIdentity(name, args)
+	s.mu.Lock()
+	s.identities[name] = id
+	s.mu.Unlock()
+	return id
+}
+
 // ReserveAgent atomically claims a name so subsequent concurrent spawns hit a
 // collision error without waiting for slow pre-spawn work (git fetch, worktree
 // add). Pair with ReleaseAgent on any failure before SpawnAgent, or let
@@ -506,6 +518,27 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
 	srv.SetLogPath(LogPathFor(homePath))
+	// Wire the session router's injector here (rather than inside daemon.New)
+	// because deciding how to inject requires resolving harness config, which
+	// only this layer (owning []ProcessSpec / harness drivers) can do without
+	// pulling config resolution into the IPC package. Today every persistent
+	// task session is claude-only (codex/opencode can't yet pass validation
+	// for interactive kinds), so this closure only carries the tmux path; a
+	// later task extends it to dispatch through a per-session SessionDriver
+	// for non-claude harnesses.
+	srv.SetInjector(func(tmuxSession, prompt string) (*harness.Result, error) {
+		return nil, tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
+	})
+	// specsByName backs the process-side web message-dispatch resolver
+	// (below): a name-keyed snapshot of the config-defined []ProcessSpec,
+	// built once here rather than per-request.
+	specsByName := make(map[string]ProcessSpec, len(processes))
+	for _, p := range processes {
+		specsByName[p.Name] = p
+	}
+	srv.SetResolveHandle(func(name string) (string, harness.SessionHandle, bool) {
+		return supervisor.resolveProcessHandle(specsByName, name)
+	})
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
@@ -557,11 +590,16 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 
 	var wg sync.WaitGroup
 	for _, proc := range processes {
+		// Registered synchronously (before the goroutine starts) so the
+		// process-side handle resolver (wired into web below) can find the
+		// identity as soon as the daemon is answering requests, rather than
+		// racing the supervise goroutine's own startup.
+		id := supervisor.registerIdentity(proc.Name, proc.ClaudeArgs)
 		wg.Add(1)
-		go func(spec ProcessSpec) {
+		go func(spec ProcessSpec, id *procIdentity) {
 			defer wg.Done()
-			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor, newProcIdentity(spec.Name, spec.ClaudeArgs))
-		}(proc)
+			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor, id)
+		}(proc, id)
 	}
 
 	// Boot persistent task session supervisors. Each SessionSpec gets its
@@ -617,6 +655,31 @@ func driverFor(harnessName string) harness.SessionDriver {
 		return nil // unreachable for validated configs; callers nil-check
 	}
 	return h.Driver()
+}
+
+// resolveProcessHandle backs the web package's process-side handle resolver
+// seam (web.Options.ResolveHandle). specs is a name-keyed snapshot of the
+// config-defined []ProcessSpec built once at boot; live argv is read from the
+// supervisor's current procIdentity for name so a rename mid-flight is
+// absorbed the same way waitForSessionEnd absorbs it. ok=false means name is
+// not a config-defined process (unknown, or an ephemeral agent — those
+// resolve via agent.Manager.ResolveHandle instead).
+func (s *Supervisor) resolveProcessHandle(specs map[string]ProcessSpec, name string) (string, harness.SessionHandle, bool) {
+	spec, ok := specs[name]
+	if !ok {
+		return "", harness.SessionHandle{}, false
+	}
+	s.mu.RLock()
+	id, idOK := s.identities[name]
+	s.mu.RUnlock()
+	if !idOK {
+		return "", harness.SessionHandle{}, false
+	}
+	harnessName := spec.Harness
+	if harnessName == "" {
+		harnessName = "claude"
+	}
+	return harnessName, handleForSpec(spec, id, s.homePath), true
 }
 
 // handleForSpec builds the SessionHandle superviseProcess hands to drivers.

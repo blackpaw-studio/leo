@@ -14,11 +14,13 @@ type agentIDs struct {
 	name     string
 }
 
-// newAgentIDs returns a harness.SessionIDStore backed by the agentstore
+// NewAgentIDs returns a harness.SessionIDStore backed by the agentstore
 // record for name. Get returns "" and Set/Clear are no-ops (logging a
 // warning) when no record exists for name yet — callers may build a handle
-// before the first agentstore.Save.
-func newAgentIDs(homePath, name string) harness.SessionIDStore {
+// before the first agentstore.Save. Exported so internal/service can share
+// this single implementation instead of maintaining its own duplicate (see
+// agentOrProcessIDs in internal/service/idstore.go).
+func NewAgentIDs(homePath, name string) harness.SessionIDStore {
 	return &agentIDs{homePath: homePath, name: name}
 }
 
