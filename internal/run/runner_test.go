@@ -996,6 +996,73 @@ func TestRunInjectsTaskEnvWithLeoMCPPrecedence(t *testing.T) {
 	}
 }
 
+// TestRunTaskEnvOverridesHarnessEnv verifies task.Env takes precedence over
+// harness-injected env (e.g. claude's own CLAUDE_CODE_ENTRYPOINT) while the
+// leo MCP env still wins over both — see runTaskAttempt's
+// mergeEnvMaps(harnessEnv, taskEnv, leoEnv) ordering.
+func TestRunTaskEnvOverridesHarnessEnv(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Web:      config.WebConfig{Enabled: true, Port: 8888},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile: "task.md",
+				Schedule:   "0 * * * *",
+				Enabled:    true,
+				Env: map[string]string{
+					"CLAUDE_CODE_ENTRYPOINT": "custom",
+					"LEO_PROCESS_NAME":       "should-not-win",
+				},
+			},
+		},
+	}
+	os.MkdirAll(cfg.StatePath(), 0750)
+	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok-xyz"), 0600)
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "env")
+	}
+
+	if err := Run(cfg, "mytask", nil); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	logFiles, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
+	if len(logFiles) == 0 {
+		t.Fatal("no log files found")
+	}
+	logData, err := os.ReadFile(logFiles[0])
+	if err != nil {
+		t.Fatalf("reading log: %v", err)
+	}
+	got := string(logData)
+
+	// task.Env deliberately overrides the harness-injected CLAUDE_CODE_ENTRYPOINT.
+	if !strings.Contains(got, "CLAUDE_CODE_ENTRYPOINT=custom") {
+		t.Errorf("expected task.Env to override harness-injected CLAUDE_CODE_ENTRYPOINT:\n%s", got)
+	}
+	if strings.Contains(got, "CLAUDE_CODE_ENTRYPOINT=cli") {
+		t.Errorf("harness-injected CLAUDE_CODE_ENTRYPOINT should have been overridden by task.Env:\n%s", got)
+	}
+
+	// leo MCP env still wins over a task.Env attempt to shadow it.
+	if !strings.Contains(got, "LEO_PROCESS_NAME=task:mytask") {
+		t.Errorf("expected leo MCP env to win over task.Env on key collision:\n%s", got)
+	}
+	if strings.Contains(got, "LEO_PROCESS_NAME=should-not-win") {
+		t.Errorf("task.Env unexpectedly overrode leo MCP env:\n%s", got)
+	}
+}
+
 func TestExecuteCommandInjectsExtraEnv(t *testing.T) {
 	orig := execCommand
 	t.Cleanup(func() { execCommand = orig })
@@ -1611,7 +1678,9 @@ func TestRunHarnessReportedErrorWithExitZero(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask", nil)
+	sessions := session.NewStore(dir)
+
+	err := Run(cfg, "mytask", sessions)
 	if err == nil {
 		t.Fatal("Run() should return an error when the harness reports a fatal error despite exit 0")
 	}
@@ -1629,6 +1698,20 @@ func TestRunHarnessReportedErrorWithExitZero(t *testing.T) {
 	}
 	if entry.Reason != history.ReasonFailure {
 		t.Errorf("history reason = %q, want %q", entry.Reason, history.ReasonFailure)
+	}
+
+	// Session persistence is deliberately unchanged for the exit-0-with-
+	// IsError case: the attempt's non-empty SessionID is still persisted,
+	// exactly like any other failed (nonzero-exit, non-interrupted) attempt.
+	gotSessionID, ok, getErr := sessions.Get("task:mytask")
+	if getErr != nil {
+		t.Fatalf("sessions.Get: %v", getErr)
+	}
+	if !ok {
+		t.Fatal("expected session ID to be persisted despite the IsError failure")
+	}
+	if gotSessionID != "sess-1" {
+		t.Errorf("stored session ID = %q, want %q", gotSessionID, "sess-1")
 	}
 }
 

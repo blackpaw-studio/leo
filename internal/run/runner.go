@@ -241,6 +241,11 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		if ar.execErr == nil && ar.result.IsError {
 			ar.execErr = fmt.Errorf("harness reported error: %s", strings.Join(ar.result.Errors, "; "))
 		}
+		// Session persistence below is deliberately unchanged for this case:
+		// an exit-0-but-IsError attempt still persists its non-empty
+		// SessionID, exactly like any other failed (nonzero-exit,
+		// non-interrupted) attempt — failure semantics mirror nonzero-exit
+		// failures.
 
 		// An interrupted attempt (Ctrl-C forwarded to the child) reflects the
 		// user asking the task to stop, not a real result — don't persist a
@@ -356,13 +361,13 @@ type attemptResult struct {
 // if the initial spawn used a session that turns out to be stale.
 //
 // Spawn env is assembled fresh on each buildArgs call (initial spawn and any
-// stale-session retry) as mergeEnvMaps(taskEnv, harnessEnv, leoEnv): leoEnv
-// wins on collision so a task can never shadow the leo MCP wiring, but a
-// task may still deliberately override a harness-injected var (e.g. claude's
-// CLAUDE_CODE_ENTRYPOINT) since harnessEnv sits between the two.
+// stale-session retry) as mergeEnvMaps(harnessEnv, taskEnv, leoEnv): harnessEnv
+// is the base, taskEnv may deliberately override it (e.g. claude's
+// CLAUDE_CODE_ENTRYPOINT), and leoEnv wins on collision last so a task can
+// never shadow the leo MCP wiring.
 func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, taskEnv, leoEnv map[string]string, channelPrefixes []string, sessions *session.Store, h harness.Harness) attemptResult {
 	args, harnessEnv := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv)
-	spawnEnv := mergeEnvMaps(taskEnv, harnessEnv, leoEnv)
+	spawnEnv := mergeEnvMaps(harnessEnv, taskEnv, leoEnv)
 
 	// Per-attempt timeout so each retry gets the full timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -380,7 +385,7 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 		}
 
 		args, harnessEnv = buildArgs(cfg, task, taskName, prompt, "", leoEnv)
-		spawnEnv = mergeEnvMaps(taskEnv, harnessEnv, leoEnv)
+		spawnEnv = mergeEnvMaps(harnessEnv, taskEnv, leoEnv)
 		output, execErr = executeCommand(ctx, h.Binary(), taskWorkspace, args, task.Channels, task.DevChannels, spawnEnv, channelPrefixes)
 		result, _ = h.ParseEvents(bytes.NewReader(output))
 	}
@@ -416,7 +421,7 @@ func notifyFailure(cfg *config.Config, taskName string, task config.TaskConfig, 
 	// channel tasks, and channels validate claude-only (see SupportsChannels).
 	// executeCommand no longer injects CLAUDE_CODE_ENTRYPOINT itself (that
 	// now lives in claude's own Env()), so it's added here explicitly.
-	notifyEnv := mergeEnvMaps(extraEnv, map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"})
+	notifyEnv := mergeEnvMaps(map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}, extraEnv)
 
 	spawn := func() ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), notifyFailureTimeout)
