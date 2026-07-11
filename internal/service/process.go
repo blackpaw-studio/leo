@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/update"
@@ -592,9 +593,31 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	return nil
 }
 
+// harnessName is hardcoded here because ProcessSpec has no harness field yet
+// (all supervised processes are claude today). A later task threads the
+// spec's actual harness name through once codex/opencode gain session
+// drivers.
+const harnessName = "claude"
+
 // superviseProcess runs a single process in a tmux session with restart loop.
 func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity) {
 	sv.initState(spec.Name)
+
+	// Resolve the driver once per supervise loop. Error is impossible for the
+	// compiled-in claude adapter; on the defensive path drv stays nil and every
+	// type assertion below (PaneCare, QuickExitRecovery) simply misses, which
+	// degrades to "skip dismissal" / "default quick-exit clear" — the
+	// historical pre-driver behavior minus dialog auto-dismissal.
+	var drv harness.SessionDriver
+	if h, err := harness.Get(harnessName); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] warning: resolving %s driver: %v\n", spec.Name, harnessName, err)
+	} else {
+		drv = h.Driver()
+	}
+	var paneKey func(string) string
+	if care, ok := drv.(harness.PaneCare); ok {
+		paneKey = care.PaneKey
+	}
 
 	backoff := initialBackoff
 	// adopt is a one-shot: honored only on the first iteration, and only when
@@ -682,7 +705,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}
 		}
 
-		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime) {
+		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey) {
 			sv.setState(name, "stopped")
 			return
 		}
@@ -718,20 +741,23 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		//      NoResume so a daemon restart won't reintroduce --resume via
 		//      RestoreAgents. No-op for non-agent specs (no matching record).
 		if elapsed < quickExitThreshold {
-			switch {
-			case hasSessionIDArg(currentArgs):
-				currentArgs = convertSessionIDToResume(currentArgs)
+			newArgs, action := recoverQuickExit(drv, currentArgs)
+			switch action {
+			case harness.QuickExitRetryArgs:
+				currentArgs = newArgs
 				id.setArgs(currentArgs)
-				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), retrying with --resume\n", name, elapsed.Seconds())
-			case hasResumeArg(currentArgs):
-				currentArgs = stripResumeArg(currentArgs)
+				fmt.Fprintf(os.Stderr, "[%s] %s exited quickly (%.0fs), retrying with --resume\n", name, harnessName, elapsed.Seconds())
+			case harness.QuickExitClearAndNoResume:
+				currentArgs = newArgs
 				id.setArgs(currentArgs)
 				clearProcessSession(homePath, name)
 				markAgentNoResume(homePath, name)
-				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session\n", name, elapsed.Seconds())
-			default:
+				fmt.Fprintf(os.Stderr, "[%s] %s exited quickly (%.0fs), cleared stale session\n", name, harnessName, elapsed.Seconds())
+			case harness.QuickExitClearSession:
 				clearProcessSession(homePath, name)
-				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs)\n", name, elapsed.Seconds())
+				fmt.Fprintf(os.Stderr, "[%s] %s exited quickly (%.0fs)\n", name, harnessName, elapsed.Seconds())
+			case harness.QuickExitNone:
+				fmt.Fprintf(os.Stderr, "[%s] %s exited quickly (%.0fs)\n", name, harnessName, elapsed.Seconds())
 			}
 		}
 
@@ -770,7 +796,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 // waitForSessionEnd blocks until the tmux session ends or the context is cancelled.
 // Returns true if the context was cancelled (should stop).
-func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time) bool {
+//
+// paneKey decides how to clear a blocking startup/announcement dialog seen in
+// a captured pane (see harness.PaneCare). nil means the driver has no pane
+// care to offer, so dismissal is skipped entirely.
+func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time, paneKey func(string) string) bool {
 	_ = spec      // kept in signature for future lifecycle hooks
 	_ = startTime // kept in signature for future lifecycle hooks
 	for {
@@ -790,63 +820,23 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 
 		// Auto-dismiss the "Resume from summary" prompt that blocks
 		// unattended sessions when they exceed the context threshold, plus any
-		// other blocking claude startup/announcement dialog.
-		dismissStartupDialog(tmuxPath, sessionName, id.Name())
+		// other blocking startup/announcement dialog, per the driver's policy.
+		if paneKey != nil {
+			dismissStartupDialog(tmuxPath, sessionName, id.Name(), paneKey)
+		}
 	}
-}
-
-// dialogDenyPattern marks dialogs that make a consequential decision — never
-// auto-answered, always left for a human. Word-boundaried, case-insensitive.
-var dialogDenyPattern = regexp.MustCompile(`(?i)\b(trust|permission|delete|overwrite)\b`)
-
-// startupDialogKey decides how to clear a blocking claude startup/announcement
-// dialog visible in pane. It returns the tmux key to send ("Enter" or "Escape"),
-// or "" to leave the pane untouched. Pure (no I/O) so it is unit-tested directly.
-//
-// This runs on EVERY session poll for the session's whole lifetime, so it must
-// never fire on ordinary output. The only reliable discriminator between a
-// blocking interactive modal and normal conversational text (which routinely
-// contains numbered lists) is the modal's confirm/cancel footer — normal output
-// never renders one. A numbered menu alone is NOT sufficient.
-//
-// Order matters:
-//  1. "Resume from summary" is a known prompt we ACCEPT (Enter).
-//  2. Otherwise, act only when genuine dialog chrome (both confirm AND cancel
-//     footer) is present; anything else is left untouched.
-//  3. A modal mentioning a consequential decision (trust/permission/delete/
-//     overwrite) is left for a human — never auto-answered.
-//  4. Any other modal is an announcement/opt-in we DECLINE with Escape so the
-//     agent's behavior stays stable.
-func startupDialogKey(pane string) string {
-	if strings.Contains(pane, "Resume from summary") && strings.Contains(pane, "Enter to confirm") {
-		return "Enter"
-	}
-	if !hasDialogChrome(pane) {
-		return ""
-	}
-	if dialogDenyPattern.MatchString(pane) {
-		return ""
-	}
-	return "Escape"
-}
-
-// hasDialogChrome reports whether pane shows an interactive modal's confirm AND
-// cancel footer — the chrome that distinguishes a blocking dialog from ordinary
-// output. Mirrors the same check in the tmux package's input classifier.
-func hasDialogChrome(pane string) bool {
-	return strings.Contains(pane, "Enter to confirm") && strings.Contains(pane, "Esc to cancel")
 }
 
 // dismissStartupDialog captures the session's recent pane and clears a blocking
-// claude startup/announcement dialog so message injection isn't stuck behind it.
-// See startupDialogKey for the policy. Best-effort: capture/send failures are
-// ignored and retried on the next poll.
-func dismissStartupDialog(tmuxPath, sessionName, processName string) {
+// startup/announcement dialog so message injection isn't stuck behind it. See
+// paneKey (harness.PaneCare.PaneKey) for the policy. Best-effort: capture/send
+// failures are ignored and retried on the next poll.
+func dismissStartupDialog(tmuxPath, sessionName, processName string, paneKey func(string) string) {
 	out, err := exec.Command(tmuxPath, tmux.Args("capture-pane", "-t", tmux.PaneTarget(sessionName), "-p", "-S", "-10")...).Output()
 	if err != nil {
 		return
 	}
-	key := startupDialogKey(string(out))
+	key := paneKey(string(out))
 	if key == "" {
 		return
 	}
@@ -854,60 +844,17 @@ func dismissStartupDialog(tmuxPath, sessionName, processName string) {
 	exec.Command(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), key)...).Run() //nolint:errcheck
 }
 
+// recoverQuickExit consults the driver's ladder when it has one; the default
+// mirrors the historical behavior (clear the stored session, keep args).
+func recoverQuickExit(drv harness.SessionDriver, args []string) ([]string, harness.QuickExitAction) {
+	if r, ok := drv.(harness.QuickExitRecovery); ok {
+		return r.RecoverQuickExit(args)
+	}
+	return args, harness.QuickExitClearSession
+}
+
 func findTmux() (string, error) {
 	return tmux.Locate()
-}
-
-// stripResumeArg removes --resume and its value from claude args.
-func stripResumeArg(args []string) []string {
-	var result []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--resume" && i+1 < len(args) {
-			i++ // skip the value too
-			continue
-		}
-		result = append(result, args[i])
-	}
-	return result
-}
-
-// hasResumeArg reports whether a `--resume <id>` pair is present in args.
-func hasResumeArg(args []string) bool {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--resume" && i+1 < len(args) {
-			return true
-		}
-	}
-	return false
-}
-
-// hasSessionIDArg reports whether a `--session-id <id>` pair is present in args.
-func hasSessionIDArg(args []string) bool {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--session-id" && i+1 < len(args) {
-			return true
-		}
-	}
-	return false
-}
-
-// convertSessionIDToResume rewrites every `--session-id <id>` pair into
-// `--resume <id>`, leaving all other args untouched. Used by the quick-exit
-// recovery: a freshly minted `--session-id` is rejected once its jsonl exists
-// on disk, so the supervisor retries by resuming that same session. A
-// `--session-id` flag with no following value, or args with none at all, are
-// returned unchanged.
-func convertSessionIDToResume(args []string) []string {
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--session-id" && i+1 < len(args) {
-			out = append(out, "--resume", args[i+1])
-			i++ // consumed the value
-			continue
-		}
-		out = append(out, args[i])
-	}
-	return out
 }
 
 // markAgentNoResume sets NoResume=true and clears SessionID on the agentstore
