@@ -5,12 +5,63 @@ A **harness** is the coding-agent CLI leo drives — `claude`, `codex`, and
 (directly or via cascade) and configures it through a strictly validated
 `harness_options:` map instead of a flat, harness-specific field list.
 
-`codex` and `opencode` currently support **scheduled tasks only**
-(`leo run <task>` / cron) — session drivers for supervised processes,
-ephemeral agents, and persistent sessions haven't landed yet. Pointing a
-`processes.*`, `templates.*`, or `sessions.*` scope (or a `tasks.*` entry with
-`runtime: persistent`) at either harness fails config validation with a
-message pointing back here.
+All three harnesses run every leo primitive: scheduled tasks (`leo run
+<task>` / cron), supervised processes, ephemeral agents, and persistent
+sessions (`processes.*`, `templates.*`, `sessions.*`, and `tasks.*` with
+`runtime: persistent`). The only thing that stays claude-only is channel
+plugins — `codex` and `opencode` message via leo's own MCP tools instead (see
+[Support matrix](#support-matrix) and [Session driver semantics](#session-driver-semantics)
+below).
+
+## Support matrix
+
+| | `claude` | `codex` | `opencode` |
+|---|---|---|---|
+| Scheduled tasks (`leo run`) | ✅ | ✅ | ✅ |
+| Supervised processes | ✅ | ✅ | ✅ |
+| Ephemeral agents | ✅ | ✅ | ✅ |
+| Persistent sessions | ✅ | ✅ | ✅ |
+| Channel plugins (`channels:`/`dev_channels:`) | ✅ | ❌ (use `leo_send_message` MCP tool) | ❌ (use `leo_send_message` MCP tool) |
+
+## Session driver semantics
+
+Each harness drives a live session (supervised process, ephemeral agent, or
+persistent session) with a different strategy, exposed internally as a
+`harness.SessionDriver`:
+
+- **`claude` — `TmuxTUIDriver`.** A resident `claude` TUI process lives inside
+  the leo-managed tmux session for the process/agent/session's whole
+  lifetime. Messages are injected via `tmux paste-buffer` + `send-keys
+  Enter`, unchanged from pre-Plan-4 behavior. `leo attach`/`leo session
+  attach` drop you straight into the live tmux pane.
+- **`codex` — `TurnDriver`.** No resident process at all. Each injected
+  message spawns a fresh `codex exec --json --skip-git-repo-check [--model
+  …] [--sandbox …] [-c mcp_servers.leo.*…] [resume <thread-id>] <message>`,
+  which blocks until the turn completes; the returned `thread_id` is stored
+  and passed to `resume` on the next message. A "restart" of a codex
+  process/agent/session is bookkeeping only — a no-op beyond recording that
+  the session is alive, since there's no process to actually restart. A
+  resume against a vanished thread (`codex` reports "no rollout found") is
+  detected and retried once as a fresh turn, clearing the stale thread id
+  first. There is **no live attach** for codex — `leo attach`/`leo agent
+  attach` instead show the tail of a per-turn transcript recorded at
+  `<home>/state/transcripts/<tmux-session>.log` (one `user`/`codex` entry
+  pair appended per turn).
+- **`opencode` — `ServerDriver`.** A resident `opencode serve --port <p>
+  --hostname 127.0.0.1` process is supervised in tmux (crash-restarted, same
+  port every time). Leo allocates the port (an ephemeral localhost bind-then-
+  close) and a random 32-hex-char password the first time a session/process/
+  agent starts, and persists both — plus the model in use — to
+  `<home>/state/opencode/<tmux-session>.json` (0600), reused stably across
+  restarts. Messages are injected via `opencode run --attach <url> --format
+  json --dir <workspace> [--model …] [-s <session-id>] <message>`, which
+  blocks until the turn completes (opencode's `--attach` event stream is
+  lossy, so leo treats process exit — not a `step_finish` event — as the
+  turn-end signal). `leo attach` maps to `opencode attach <url> --dir
+  <workspace> -p <password> [-s <session-id>]` — opencode's own TUI client,
+  talking to the resident server over `127.0.0.1` with the stored basic-auth
+  password (passed as an argv flag, not env, since attach is
+  interactive/user-invoked and env doesn't cross an SSH hop).
 
 ## What a harness is
 
@@ -130,13 +181,9 @@ whose resolved harness doesn't support channels is a validation error.
 
 ## Codex option reference
 
-`codex` currently supports **scheduled tasks only** — a `processes.*`,
-`templates.*`, or `sessions.*` scope (or a `runtime: persistent` task) that
-resolves to `harness: codex` fails validation:
-`processes.foo.harness: the codex harness cannot run supervised processes yet
-(only scheduled tasks) — see docs/configuration/harnesses.md` (same pattern
-for templates/sessions/persistent tasks). Session drivers land in a later
-plan.
+`codex` runs every leo primitive — scheduled tasks, supervised processes,
+ephemeral agents, and persistent sessions — via `TurnDriver`, described in
+[Session driver semantics](#session-driver-semantics) above.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -169,9 +216,12 @@ Other things to know:
   (`codex exec resume <thread-id>` under the hood) — leo persists the
   `thread_id` it reads from the `thread.started` event and passes it back on
   the next invocation for the same task.
-- **MCP bridge.** When the web UI is enabled, leo injects its own MCP server
-  into each invocation via per-invocation `-c mcp_servers.leo.*` overrides —
-  no config-file mutation. This includes
+- **MCP bridge.** When the web UI is enabled **and** leo can read a non-empty
+  `state/api.token` file, leo injects its own MCP server into each invocation
+  via per-invocation `-c mcp_servers.leo.*` overrides — no config-file
+  mutation. (Web-enabled-but-no-token is not an error; leo silently skips
+  wiring the bridge in, since the leo MCP server would be doomed to
+  authenticate anyway.) This includes
   `mcp_servers.leo.default_tools_approval_mode="approve"`, scoped to just the
   leo server: without it, headless codex auto-cancels every MCP tool call
   (`user cancelled MCP tool call`) even though the turn still completes with
@@ -181,9 +231,9 @@ Other things to know:
 
 ## Opencode option reference
 
-`opencode` currently supports **scheduled tasks only**, with the same
-validation-rejection behavior and message pattern as codex above
-(`the opencode harness cannot run ... yet (only scheduled tasks)`).
+`opencode` runs every leo primitive — scheduled tasks, supervised processes,
+ephemeral agents, and persistent sessions — via `ServerDriver`, described in
+[Session driver semantics](#session-driver-semantics) above.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -207,7 +257,8 @@ Other things to know:
 - **Resume** uses opencode's own session IDs (`-s ses_…`), read from the
   `sessionID` field present on every event in the stream.
 - **MCP bridge** rides in the same `OPENCODE_CONFIG_CONTENT` overlay, under a
-  `mcp.leo` entry, when the web UI is enabled.
+  `mcp.leo` entry, gated the same way as codex's — web UI enabled **and** a
+  readable, non-empty `state/api.token`.
 - **Parsing quirks leo works around:**
   - *EOF-as-turn-end.* Older opencode versions (and `--attach` mode) can omit
     the terminal `step_finish` event on a truncated stream (upstream
@@ -370,12 +421,17 @@ Other harness-related validation errors follow the same style:
   reported by the adapter's `DecodeOptions`, e.g. `defaults.harness_options: unknown option "foo" (valid: agent, allowed_tools, append_system_prompt, bypass_permissions, disallowed_tools, permission_mode, remote_control)`.
 - `channels:`/`dev_channels:` on a harness that doesn't support them:
   `processes.foo.channels: the codex harness does not support channel plugins; use leo's MCP tools for messaging`.
-- A kind the harness can't run yet: `processes.foo.harness: the codex harness
+- A kind the harness can't run: the literal error text baked into
+  `internal/config/config.go` is `processes.foo.harness: the <name> harness
   cannot run supervised processes yet (only scheduled tasks) — see
-  docs/configuration/harnesses.md` (same pattern for
-  `templates.*.harness` → "run ephemeral agents", `sessions.*.harness` →
-  "run persistent sessions", and a `runtime: persistent` task's `.harness` →
-  "run persistent tasks yet (persistent tasks run through sessions)").
+  docs/configuration/harnesses.md` (same pattern for `templates.*.harness` →
+  "run ephemeral agents", `sessions.*.harness` → "run persistent sessions",
+  and a `runtime: persistent` task's `.harness` → "run persistent tasks yet
+  (persistent tasks run through sessions)"). This is dead code for every
+  built-in harness today — `claude`, `codex`, and `opencode` all pass
+  `SupportsKind` for every primitive (see [Support matrix](#support-matrix))
+  — it only fires for a future harness whose adapter doesn't implement
+  `SupportsKind` for a given kind.
 
 If you hit any of these on an existing `leo.yaml`, move the named field
 under `harness_options` (or drop `provider`/`providers` and switch to
