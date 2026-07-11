@@ -151,6 +151,17 @@ func (d ServerDriver) Inject(ctx context.Context, h harness.SessionHandle, msg s
 		cmd.Stdout = &stdout
 		cmd.Stderr = io.Discard // stderr carries ANSI-coded errors; exit code + empty stdout is the signal
 		runErr := cmd.Run()
+		if runErr != nil && turnCtx.Err() != nil {
+			// AbortTurn (or a cancelled parent ctx) killed the child mid-turn:
+			// exec.CommandContext produces the same exit!=0 + empty-stdout
+			// shape as a stale ("Session not found") -s id. Report the
+			// cancellation explicitly so the caller never misclassifies an
+			// abort as a stale session — that would clear a perfectly valid
+			// stored id and silently re-run the message as a fresh turn. A
+			// cancelled ctx alone (without a non-nil runErr) must NOT
+			// short-circuit a turn that actually completed successfully.
+			return harness.Result{}, -1, fmt.Errorf("opencode: turn cancelled: %w", turnCtx.Err())
+		}
 		res, perr := Opencode{}.ParseEvents(&stdout)
 		if perr != nil {
 			return harness.Result{}, -1, perr
@@ -168,6 +179,9 @@ func (d ServerDriver) Inject(ctx context.Context, h harness.SessionHandle, msg s
 		return nil, err
 	}
 	if exit != 0 && id != "" && res.SessionID == "" && res.Text == "" {
+		// Any non-cancelled failure with empty output is the stale-session
+		// ("Session not found") shape — a cancelled turn is handled above
+		// and never reaches here.
 		h.IDs.Clear() // "Session not found" shape: retry once fresh
 		res, exit, err = run("")
 		if err != nil {

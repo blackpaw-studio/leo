@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -365,6 +366,75 @@ func TestServerDriverStaleSessionRetriesFresh(t *testing.T) {
 	}
 	if ids.Get() != attachSessionID {
 		t.Errorf("IDs.Get() after fallback = %q, want %q (cleared then re-set)", ids.Get(), attachSessionID)
+	}
+}
+
+// TestServerDriverAbortDuringTurnDoesNotMisclassifyAsStale guards against
+// AbortTurn's cancellation being confused with the stale-session ("Session
+// not found") shape: both produce exit!=0 with empty stdout. An abort must
+// return an error immediately — never clearing a valid stored id, never
+// retrying fresh, never falling back to `session list`.
+func TestServerDriverAbortDuringTurnDoesNotMisclassifyAsStale(t *testing.T) {
+	var calls int32
+	withExecCommand(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		atomic.AddInt32(&calls, 1)
+		return exec.CommandContext(ctx, "sh", "-c", "sleep 5")
+	})
+
+	home := t.TempDir()
+	writeServerState(t, home, "leo-test-abort", ServerState{Port: 12345, Password: "x"})
+
+	ids := &memIDStore{}
+	ids.Set("ses_valid")
+	h := harness.SessionHandle{TmuxSession: "leo-test-abort", Workspace: t.TempDir(), HomePath: home, IDs: ids}
+
+	type outcome struct {
+		res *harness.Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := (ServerDriver{}).Inject(context.Background(), h, "hi")
+		done <- outcome{res, err}
+	}()
+
+	// Wait for the turn to register its cancel func (i.e. the child is
+	// about to run), then abort it.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := aborts.Load(h.TmuxSession); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the turn to start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := (ServerDriver{}).AbortTurn(h); err != nil {
+		t.Fatalf("AbortTurn: %v", err)
+	}
+
+	var out outcome
+	select {
+	case out = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Inject did not return after abort")
+	}
+
+	if out.err == nil {
+		t.Fatal("expected an error for an aborted turn")
+	}
+	if !strings.Contains(out.err.Error(), "turn cancelled") {
+		t.Errorf("err = %v, want to mention turn cancelled", out.err)
+	}
+	if out.res != nil {
+		t.Errorf("res = %v, want nil", out.res)
+	}
+	if ids.Get() != "ses_valid" {
+		t.Errorf("IDs.Get() = %q, want unchanged %q (abort must not clear a valid session id)", ids.Get(), "ses_valid")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("exec calls = %d, want exactly 1 (no fresh retry, no session-list fallback after an abort)", got)
 	}
 }
 
