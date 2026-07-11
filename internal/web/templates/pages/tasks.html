@@ -4,12 +4,13 @@
   <div class="table-wrap">
   {{if .Data.Enabled}}
   <table>
-    <thead><tr><th>name</th><th>schedule</th><th>next</th><th>last</th><th></th></tr></thead>
+    <thead><tr><th>name</th><th>schedule</th><th>harness</th><th>next</th><th>last</th><th></th></tr></thead>
     <tbody>
     {{range .Data.Enabled}}
     <tr>
       <td><a href="/tasks/{{.Name}}">{{.Name}}</a></td>
       <td>{{cronDesc .Schedule}} <span class="dim">{{.Schedule}}</span></td>
+      <td>{{if .HarnessInherited}}<span class="dim">{{.Harness}}</span>{{else}}{{.Harness}}{{end}}</td>
       <td>{{if .Enabled}}{{relativeTime .NextRun}}{{else}}<span class="dim">&mdash;</span>{{end}}</td>
       <td>{{if .HasRun}}<span class="pill {{if eq .LastExit 0}}ok{{else}}err{{end}}">{{if eq .LastExit 0}}ok{{else}}exit {{.LastExit}}{{end}}</span>{{else}}<span class="dim">&mdash;</span>{{end}}</td>
       <td class="row-actions row-actions--fixed">
@@ -38,12 +39,13 @@
   <div class="card-head"><b>Disabled</b></div>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>name</th><th>schedule</th><th>next</th><th>last</th><th></th></tr></thead>
+    <thead><tr><th>name</th><th>schedule</th><th>harness</th><th>next</th><th>last</th><th></th></tr></thead>
     <tbody>
     {{range .Data.Disabled}}
     <tr>
       <td><a href="/tasks/{{.Name}}">{{.Name}}</a></td>
       <td>{{cronDesc .Schedule}} <span class="dim">{{.Schedule}}</span></td>
+      <td>{{if .HarnessInherited}}<span class="dim">{{.Harness}}</span>{{else}}{{.Harness}}{{end}}</td>
       <td><span class="dim">&mdash;</span></td>
       <td>{{if .HasRun}}<span class="pill {{if eq .LastExit 0}}ok{{else}}err{{end}}">{{if eq .LastExit 0}}ok{{else}}exit {{.LastExit}}{{end}}</span>{{else}}<span class="dim">&mdash;</span>{{end}}</td>
       <td class="row-actions row-actions--fixed">

@@ -111,7 +111,7 @@ func mustFieldByYAMLKey(t reflect.Type, section Section, key string) reflect.Str
 // textarea) shares the same placeholder behavior.
 func isTextKind(k Kind) bool {
 	switch k {
-	case KindText, KindSelect, KindCron, KindDuration, KindTextarea:
+	case KindText, KindSelect, KindCron, KindDuration, KindTextarea, KindDatalist:
 		return true
 	}
 	return false

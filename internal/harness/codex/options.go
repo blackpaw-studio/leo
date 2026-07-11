@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // harness_options keys accepted by the codex adapter.
@@ -93,6 +95,16 @@ func (Codex) DecodeOptions(raw map[string]any) (any, error) {
 		}
 	}
 	return o, nil
+}
+
+// OptionsSchema describes the codex harness_options for web forms. Keys
+// mirror optionKeys; TestOptionsSchemaMatchesDecodeOptions locks the two.
+func (Codex) OptionsSchema() []harness.OptionField {
+	return []harness.OptionField{
+		{Key: "sandbox", Label: "Sandbox", Type: harness.OptionEnum,
+			EnumValues: []string{"read-only", "workspace-write", "danger-full-access"},
+			Help:       "codex exec sandbox policy (default read-only)"},
+	}
 }
 
 func stringOption(key string, val any) (string, error) {

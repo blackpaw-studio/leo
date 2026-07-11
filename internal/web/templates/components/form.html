@@ -5,6 +5,10 @@
     {{if ne .Group $group}}{{$group = .Group}}<div class="form-group-label">{{.Group}}</div>{{end}}
     {{template "config_field" .}}
   {{end}}{{end}}
+  {{if .Harness}}
+  <div class="form-group-label">Harness options</div>
+  <div class="harness-options">{{template "harness_options" .Harness}}</div>
+  {{end}}
   {{$hasAdvanced := false}}
   {{range .Fields}}{{if .Advanced}}{{$hasAdvanced = true}}{{end}}{{end}}
   {{if $hasAdvanced}}
@@ -42,7 +46,9 @@
         <option value="false" {{if eq .Value "false"}}selected{{end}}>off</option>
       </select>
     {{else if eq (kindName .Kind) "select"}}
-      <select id="f-{{.Key}}" name="{{.Key}}">
+      <select id="f-{{.Key}}" name="{{.Key}}"
+        {{if eq .Key "harness"}} hx-get="/web/partials/harness-options?section={{.Section}}&scope={{.ScopeName}}"
+        hx-trigger="change" hx-include="this" hx-target="next .harness-options" hx-swap="innerHTML"{{end}}>
         {{$v := .Value}}{{range .Opts}}<option value="{{.Value}}" {{if eq .Value $v}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
     {{else if eq (kindName .Kind) "envmap"}}
@@ -57,6 +63,10 @@
       <div class="cron-preview"><span class="cron-preview-desc">{{cronDesc .Value}}</span></div>
     {{else if eq (kindName .Kind) "number"}}
       <input type="number" id="f-{{.Key}}" name="{{.Key}}" value="{{.Value}}">
+    {{else if eq (kindName .Kind) "datalist"}}
+      <input type="text" id="f-{{.Key}}" name="{{.Key}}" value="{{.Value}}" list="dl-{{.Key}}-{{.Scope}}"
+             {{if .Inherited}}placeholder="inherit: {{.Inherited}}"{{else if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}>
+      <datalist id="dl-{{.Key}}-{{.Scope}}">{{range .Opts}}<option value="{{.Value}}"></option>{{end}}</datalist>
     {{else}}
       <input type="text" id="f-{{.Key}}" name="{{.Key}}" value="{{.Value}}"
              {{if .Inherited}}placeholder="inherit: {{.Inherited}}"{{end}}>

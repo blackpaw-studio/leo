@@ -64,7 +64,7 @@ type Result struct {
 
 // Harness translates LaunchSpecs into concrete CLI invocations.
 type Harness interface {
-	// Name is the registry key (config `harness:` value in later plans).
+	// Name is the registry key (also the config `harness:` value).
 	Name() string
 	// Binary is the executable to look up / exec.
 	Binary() string
@@ -85,6 +85,11 @@ type Harness interface {
 	// errors. Runtime-only fields (MCP paths, prefixes) are left zero for
 	// the caller to fill.
 	DecodeOptions(raw map[string]any) (any, error)
+
+	// OptionsSchema describes this adapter's harness_options keys for web
+	// form rendering, in render order. Must accept exactly the keys
+	// DecodeOptions accepts (schematest.Run locks the two together).
+	OptionsSchema() []OptionField
 
 	// SupportsChannels reports whether channel plugins can load in this
 	// harness. Only Claude Code hosts channel plugins; others message via

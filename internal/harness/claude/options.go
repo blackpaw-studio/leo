@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // harness_options keys accepted by the claude adapter. These mirror the
@@ -62,6 +64,28 @@ func (Claude) DecodeOptions(raw map[string]any) (any, error) {
 		}
 	}
 	return o, nil
+}
+
+// OptionsSchema describes the claude harness_options for web forms. Keys
+// mirror optionKeys; TestOptionsSchemaMatchesDecodeOptions locks the two.
+func (Claude) OptionsSchema() []harness.OptionField {
+	return []harness.OptionField{
+		{Key: "permission_mode", Label: "Permission mode", Type: harness.OptionEnum,
+			EnumValues: []string{"acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"},
+			Help:       "--permission-mode for the spawned claude"},
+		{Key: "bypass_permissions", Label: "Bypass permissions", Type: harness.OptionBool,
+			Help: "--dangerously-skip-permissions"},
+		{Key: "remote_control", Label: "Remote control", Type: harness.OptionBool,
+			Help: "--remote-control (claude.ai remote control)"},
+		{Key: "agent", Label: "Agent", Type: harness.OptionString, Source: "agents",
+			Help: "--agent: named claude sub-agent"},
+		{Key: "allowed_tools", Label: "Allowed tools", Type: harness.OptionStringList,
+			Help: "--allowed-tools, comma-separated"},
+		{Key: "disallowed_tools", Label: "Disallowed tools", Type: harness.OptionStringList,
+			Help: "--disallowed-tools, comma-separated"},
+		{Key: "append_system_prompt", Label: "Append system prompt", Type: harness.OptionText,
+			Help: "--append-system-prompt"},
+	}
 }
 
 func stringOption(key string, val any) (string, error) {

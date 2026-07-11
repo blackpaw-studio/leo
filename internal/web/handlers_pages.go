@@ -129,10 +129,12 @@ func (s *Server) handlePage(page, title string, build func(*http.Request) (any, 
 
 // templateRow is one row of the configured-templates table (pages/config_templates.html).
 type templateRow struct {
-	Name      string
-	Workspace string
-	Model     string
-	Agent     string
+	Name             string
+	Workspace        string
+	Model            string
+	Agent            string
+	Harness          string
+	HarnessInherited bool
 }
 
 // templatesPageData feeds page_config_templates.
@@ -155,10 +157,12 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 	rows := make([]templateRow, 0, len(cfg.Templates))
 	for name, tmpl := range cfg.Templates {
 		rows = append(rows, templateRow{
-			Name:      name,
-			Workspace: tmpl.Workspace,
-			Model:     tmpl.Model,
-			Agent:     templateOwnAgent(tmpl.HarnessOptions),
+			Name:             name,
+			Workspace:        tmpl.Workspace,
+			Model:            tmpl.Model,
+			Agent:            templateOwnAgent(tmpl.HarnessOptions),
+			Harness:          cfg.TemplateHarness(tmpl),
+			HarnessInherited: tmpl.Harness == "",
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
@@ -168,10 +172,12 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 
 // processRow is one row of the configured-processes table (pages/processes.html).
 type processRow struct {
-	Name      string
-	Workspace string
-	Model     string
-	Enabled   bool
+	Name             string
+	Workspace        string
+	Model            string
+	Enabled          bool
+	Harness          string
+	HarnessInherited bool
 }
 
 // processesPageData feeds page_processes. Cards is exactly the shape
@@ -196,10 +202,12 @@ func (s *Server) buildProcessesData(r *http.Request) (any, error) {
 	rows := make([]processRow, 0, len(dd.Config.Processes))
 	for name, proc := range dd.Config.Processes {
 		rows = append(rows, processRow{
-			Name:      name,
-			Workspace: proc.Workspace,
-			Model:     proc.Model,
-			Enabled:   proc.Enabled,
+			Name:             name,
+			Workspace:        proc.Workspace,
+			Model:            proc.Model,
+			Enabled:          proc.Enabled,
+			Harness:          dd.Config.ProcessHarness(proc),
+			HarnessInherited: proc.Harness == "",
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
@@ -215,7 +223,7 @@ func (s *Server) buildDefaultsData(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
-	return s.buildForm(schema.SectionDefaults, &cfg.Defaults, cfg, "/web/config/defaults"), nil
+	return s.buildFormWithHarness(schema.SectionDefaults, &cfg.Defaults, cfg, "/web/config/defaults", ""), nil
 }
 
 // hostCard is one entry of settingsPageData.Hosts: a remote-host name paired
@@ -298,12 +306,14 @@ func (s *Server) buildAgentsData(r *http.Request) (any, error) {
 
 // taskRow is one row of the tasks list table (pages/tasks.html).
 type taskRow struct {
-	Name     string
-	Schedule string
-	NextRun  time.Time
-	HasRun   bool
-	LastExit int
-	Enabled  bool
+	Name             string
+	Schedule         string
+	NextRun          time.Time
+	HasRun           bool
+	LastExit         int
+	Enabled          bool
+	Harness          string
+	HarnessInherited bool
 }
 
 // tasksPageData feeds page_tasks.
@@ -330,7 +340,13 @@ func (s *Server) buildTasksData(r *http.Request) (any, error) {
 
 	rows := make([]taskRow, 0, len(cfg.Tasks))
 	for name, task := range cfg.Tasks {
-		row := taskRow{Name: name, Schedule: task.Schedule, Enabled: task.Enabled}
+		row := taskRow{
+			Name:             name,
+			Schedule:         task.Schedule,
+			Enabled:          task.Enabled,
+			Harness:          cfg.TaskHarness(task),
+			HarnessInherited: task.Harness == "",
+		}
 		if entry, ok := cronMap[name]; ok {
 			row.NextRun = entry.Next
 		}
@@ -384,7 +400,7 @@ func (s *Server) handleTaskEditPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	form := s.buildForm(schema.SectionTask, &task, cfg, "/web/config/task/"+url.PathEscape(name))
+	form := s.buildFormWithHarness(schema.SectionTask, &task, cfg, "/web/config/task/"+url.PathEscape(name), name)
 	form.DeleteURL = "/web/task/" + url.PathEscape(name) + "/delete"
 
 	// Best-effort: a task whose configured prompt file path is invalid
@@ -439,7 +455,7 @@ func (s *Server) handleProcessEditPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	form := s.buildForm(schema.SectionProcess, &proc, cfg, "/web/config/process/"+url.PathEscape(name))
+	form := s.buildFormWithHarness(schema.SectionProcess, &proc, cfg, "/web/config/process/"+url.PathEscape(name), name)
 	form.DeleteURL = "/web/process/" + url.PathEscape(name)
 
 	pd := pageData{
@@ -507,7 +523,7 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	form := s.buildForm(schema.SectionTemplate, &tmpl, cfg, "/web/config/template/"+url.PathEscape(name))
+	form := s.buildFormWithHarness(schema.SectionTemplate, &tmpl, cfg, "/web/config/template/"+url.PathEscape(name), name)
 	form.DeleteURL = "/web/template/" + url.PathEscape(name)
 
 	pd := pageData{

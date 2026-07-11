@@ -16,11 +16,13 @@ import (
 // attached: the stored --resume session id, whether its tmux session is
 // currently alive, and its router-reported queue depth.
 type sessionRow struct {
-	Name     string
-	StoredID string
-	TmuxLive bool
-	Depth    int // queued + in-flight; -1 when unknown (no SessionRuntimeProvider wired up)
-	Form     formData
+	Name             string
+	StoredID         string
+	TmuxLive         bool
+	Depth            int // queued + in-flight; -1 when unknown (no SessionRuntimeProvider wired up)
+	Harness          string
+	HarnessInherited bool
+	Form             formData
 }
 
 // sessionsPageData feeds page_sessions.
@@ -49,13 +51,18 @@ func (s *Server) buildSessionsData(r *http.Request) (any, error) {
 	rows := make([]sessionRow, 0, len(names))
 	for _, name := range names {
 		sc := cfg.Sessions[name]
-		row := sessionRow{Name: name, Depth: -1}
+		row := sessionRow{
+			Name:             name,
+			Depth:            -1,
+			Harness:          cfg.SessionHarness(sc),
+			HarnessInherited: sc.Harness == "",
+		}
 		row.StoredID, _, _ = store.Get("session:" + name)
 		row.TmuxLive = s.tmuxSessionLive(sessionTmuxTarget(name))
 		if s.sessionRT != nil {
 			row.Depth = s.sessionRT.SessionDepth(name)
 		}
-		row.Form = s.buildForm(schema.SectionSession, &sc, cfg, "/web/config/session/"+url.PathEscape(name))
+		row.Form = s.buildFormWithHarness(schema.SectionSession, &sc, cfg, "/web/config/session/"+url.PathEscape(name), name)
 		row.Form.DeleteURL = "/web/session/" + url.PathEscape(name)
 		rows = append(rows, row)
 	}

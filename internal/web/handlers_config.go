@@ -3,23 +3,41 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
 // fieldView pairs a resolved field value with its select options.
 type fieldView struct {
 	schema.FieldValue
-	Opts []schema.Option
+	Opts        []schema.Option
+	Section     schema.Section // for the harness select's hx-get URL
+	Scope       string         // scope-unique element-id suffix
+	ScopeName   string         // raw config map key ("" for defaults); for the harness select's hx-get URL
+	Placeholder string         // per-harness model format hint
 }
 
 // formData feeds components/form.html.
 type formData struct {
 	Action      string
+	Scope       string
 	Fields      []fieldView
+	Harness     *harnessFormData // nil = section has no harness sub-form
 	SubmitLabel string
 	DeleteURL   string // optional; renders a delete button
+}
+
+// harnessFormData feeds components/harness_options.html: the harness_options
+// sub-form for a single config scope.
+type harnessFormData struct {
+	Section   schema.Section
+	Scope     string // scope-unique element-id suffix
+	ScopeName string // raw config map key ("" for defaults)
+	Harness   string // effective harness the sub-form is rendered for
+	Fields    []schema.HarnessFieldValue
 }
 
 // buildForm renders section's registry against target for display. defaults
@@ -46,15 +64,91 @@ func (s *Server) buildForm(section schema.Section, target any, cfg *config.Confi
 	return fd
 }
 
+// buildFormWithHarness wraps buildForm for the five config sections that
+// carry harness/harness_options: it threads a scope-unique id suffix,
+// resolves the effective harness, attaches the options sub-form, and makes
+// the model field harness-aware (datalist suggestions / format hint). name is
+// the RAW config map key ("" for defaults) — scopeSuffix derives the
+// element-id suffix from it so the two can never drift apart.
+func (s *Server) buildFormWithHarness(section schema.Section, target any, cfg *config.Config, action, name string) formData {
+	scope := scopeSuffix(section, name)
+	fd := s.buildForm(section, target, cfg, action)
+	fd.Scope = scope
+	for i := range fd.Fields {
+		fd.Fields[i].Section = section
+		fd.Fields[i].Scope = scope
+		fd.Fields[i].ScopeName = name
+	}
+
+	own, harnessName, inherited := harnessView(target, cfg)
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		// Unregistered harness in a hand-edited config: render the flat form
+		// without a sub-form rather than 500ing the page; Validate() reports
+		// the real error on save.
+		return fd
+	}
+	src := schema.OptionSources{Cfg: cfg, Agents: s.agentList}
+	fd.Harness = &harnessFormData{
+		Section:   section,
+		Scope:     scope,
+		ScopeName: name,
+		Harness:   harnessName,
+		Fields:    schema.HarnessOptionValues(h, own, inherited, src),
+	}
+	for i := range fd.Fields {
+		if fd.Fields[i].Key == "model" {
+			fd.Fields[i].Opts = schema.ModelSuggestions(harnessName)
+			fd.Fields[i].Placeholder = schema.ModelPlaceholder(harnessName)
+		}
+	}
+	return fd
+}
+
+// harnessView resolves a form target's own options map, effective harness,
+// and the inherited-placeholder map per the cascade rules (mirrors
+// config.scopeHarnessOptions: defaults' options cascade only into scopes
+// running the same harness; sessions and defaults itself never show
+// inherited placeholders).
+func harnessView(target any, cfg *config.Config) (own map[string]any, name string, inherited map[string]any) {
+	sameHarnessDefaults := func(n string) map[string]any {
+		if n == cfg.DefaultsHarness() {
+			return cfg.Defaults.HarnessOptions
+		}
+		return nil
+	}
+	switch v := target.(type) {
+	case *config.DefaultsConfig:
+		return v.HarnessOptions, cfg.DefaultsHarness(), nil
+	case *config.ProcessConfig:
+		name = cfg.ProcessHarness(*v)
+		return v.HarnessOptions, name, sameHarnessDefaults(name)
+	case *config.TaskConfig:
+		name = cfg.TaskHarness(*v)
+		return v.HarnessOptions, name, sameHarnessDefaults(name)
+	case *config.TemplateConfig:
+		name = cfg.TemplateHarness(*v)
+		return v.HarnessOptions, name, sameHarnessDefaults(name)
+	case *config.SessionConfig:
+		return v.HarnessOptions, cfg.SessionHarness(*v), nil
+	}
+	return nil, config.DefaultHarnessName, nil
+}
+
 // applySection is the single save path for every schema-driven config form.
 // locate returns a pointer to the section's struct living inside cfg (or a
 // copy to be written back via put); put writes the (mutated) value back into
-// cfg. needsRestart marks process-affecting sections so the restart banner
+// cfg. applyOptions parses the section's harness_options.* inputs into
+// target (invoked after schema.Apply, so a harness change submitted in the
+// same POST is already reflected in target when the effective harness is
+// resolved) — pass nil for sections with no harness sub-form (web/client/
+// host). needsRestart marks process-affecting sections so the restart banner
 // appears after a successful save.
 func (s *Server) applySection(w http.ResponseWriter, r *http.Request,
 	section schema.Section,
 	locate func(cfg *config.Config) (any, bool),
 	put func(cfg *config.Config, v any),
+	applyOptions func(cfg *config.Config, target any, form url.Values) error,
 	okMsg string, needsRestart bool,
 ) {
 	if err := r.ParseForm(); err != nil {
@@ -75,6 +169,12 @@ func (s *Server) applySection(w http.ResponseWriter, r *http.Request,
 		s.renderFlash(w, "error", err.Error())
 		return
 	}
+	if applyOptions != nil {
+		if err := applyOptions(cfg, target, r.Form); err != nil {
+			s.renderFlash(w, "error", err.Error())
+			return
+		}
+	}
 	put(cfg, target)
 	if errMsg := s.validateAndSave(cfg); errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
@@ -88,6 +188,19 @@ func (s *Server) applySection(w http.ResponseWriter, r *http.Request,
 	s.renderFlash(w, typ, msg)
 }
 
+// applyScopeHarnessOptions decodes the harness_options.* inputs in form
+// against harnessName's options schema. harnessName is expected to be
+// resolved from the scope's already-Apply-updated target (via its cascade
+// helper, e.g. cfg.ProcessHarness), so a harness change and its options land
+// atomically in one save.
+func applyScopeHarnessOptions(form url.Values, harnessName string) (map[string]any, error) {
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		return nil, fmt.Errorf("harness %q is not registered", harnessName)
+	}
+	return schema.ApplyHarnessOptions(h, form)
+}
+
 // handleConfigDefaultsSave is the schema-driven replacement for the old
 // hand-rolled handleConfigDefaults. Defaults changes affect every process,
 // task, template, and session that inherits from them, so a restart is
@@ -96,6 +209,15 @@ func (s *Server) handleConfigDefaultsSave(w http.ResponseWriter, r *http.Request
 	s.applySection(w, r, schema.SectionDefaults,
 		func(cfg *config.Config) (any, bool) { return &cfg.Defaults, true },
 		func(cfg *config.Config, v any) {}, // &cfg.Defaults is already the live field — nothing to write back
+		func(cfg *config.Config, target any, form url.Values) error {
+			d := target.(*config.DefaultsConfig)
+			opts, err := applyScopeHarnessOptions(form, cfg.DefaultsHarness())
+			if err != nil {
+				return err
+			}
+			d.HarnessOptions = opts
+			return nil
+		},
 		"Defaults saved", true)
 }
 
@@ -110,6 +232,15 @@ func (s *Server) handleConfigTaskSave(w http.ResponseWriter, r *http.Request) {
 			return &t, ok
 		},
 		func(cfg *config.Config, v any) { cfg.Tasks[name] = *(v.(*config.TaskConfig)) },
+		func(cfg *config.Config, target any, form url.Values) error {
+			t := target.(*config.TaskConfig)
+			opts, err := applyScopeHarnessOptions(form, cfg.TaskHarness(*t))
+			if err != nil {
+				return err
+			}
+			t.HarnessOptions = opts
+			return nil
+		},
 		fmt.Sprintf("Task %q saved", name), false)
 }
 
@@ -127,6 +258,15 @@ func (s *Server) handleConfigProcessSave(w http.ResponseWriter, r *http.Request)
 			return &p, ok
 		},
 		func(cfg *config.Config, v any) { cfg.Processes[name] = *(v.(*config.ProcessConfig)) },
+		func(cfg *config.Config, target any, form url.Values) error {
+			p := target.(*config.ProcessConfig)
+			opts, err := applyScopeHarnessOptions(form, cfg.ProcessHarness(*p))
+			if err != nil {
+				return err
+			}
+			p.HarnessOptions = opts
+			return nil
+		},
 		fmt.Sprintf("Process %q saved", name), true)
 }
 
@@ -144,6 +284,15 @@ func (s *Server) handleConfigTemplateSave(w http.ResponseWriter, r *http.Request
 			return &t, ok
 		},
 		func(cfg *config.Config, v any) { cfg.Templates[name] = *(v.(*config.TemplateConfig)) },
+		func(cfg *config.Config, target any, form url.Values) error {
+			t := target.(*config.TemplateConfig)
+			opts, err := applyScopeHarnessOptions(form, cfg.TemplateHarness(*t))
+			if err != nil {
+				return err
+			}
+			t.HarnessOptions = opts
+			return nil
+		},
 		fmt.Sprintf("Template %q saved", name), false)
 }
 
@@ -158,6 +307,7 @@ func (s *Server) handleConfigWebSave(w http.ResponseWriter, r *http.Request) {
 	s.applySection(w, r, schema.SectionWeb,
 		func(cfg *config.Config) (any, bool) { return &cfg.Web, true },
 		func(cfg *config.Config, v any) {}, // &cfg.Web is already the live field — nothing to write back
+		nil,                                // no harness sub-form for this section
 		"Web UI settings saved", true)
 }
 
@@ -170,6 +320,7 @@ func (s *Server) handleConfigClientSave(w http.ResponseWriter, r *http.Request) 
 	s.applySection(w, r, schema.SectionClient,
 		func(cfg *config.Config) (any, bool) { return &cfg.Client, true },
 		func(cfg *config.Config, v any) {}, // &cfg.Client is already the live field — nothing to write back
+		nil,                                // no harness sub-form for this section
 		"Remote client settings saved", false)
 }
 
@@ -186,6 +337,7 @@ func (s *Server) handleConfigHostSave(w http.ResponseWriter, r *http.Request) {
 			return &h, ok
 		},
 		func(cfg *config.Config, v any) { cfg.Client.Hosts[name] = *(v.(*config.HostConfig)) },
+		nil, // no harness sub-form for this section
 		fmt.Sprintf("Host %q saved", name), false)
 }
 
@@ -202,6 +354,15 @@ func (s *Server) handleConfigSessionSave(w http.ResponseWriter, r *http.Request)
 			return &sc, ok
 		},
 		func(cfg *config.Config, v any) { cfg.Sessions[name] = *(v.(*config.SessionConfig)) },
+		func(cfg *config.Config, target any, form url.Values) error {
+			sc := target.(*config.SessionConfig)
+			opts, err := applyScopeHarnessOptions(form, cfg.SessionHarness(*sc))
+			if err != nil {
+				return err
+			}
+			sc.HarnessOptions = opts
+			return nil
+		},
 		fmt.Sprintf("Session %q saved", name), false)
 }
 
@@ -230,7 +391,28 @@ func kindName(k schema.Kind) string {
 		return "duration"
 	case schema.KindTextarea:
 		return "textarea"
+	case schema.KindDatalist:
+		return "datalist"
 	default:
 		return "text"
+	}
+}
+
+// optTypeName maps a harness.OptionType to the string
+// components/harness_options.html switches on.
+func optTypeName(t harness.OptionType) string {
+	switch t {
+	case harness.OptionBool:
+		return "bool"
+	case harness.OptionEnum:
+		return "enum"
+	case harness.OptionStringList:
+		return "list"
+	case harness.OptionYAMLMap:
+		return "yamlmap"
+	case harness.OptionText:
+		return "text"
+	default:
+		return "string"
 	}
 }

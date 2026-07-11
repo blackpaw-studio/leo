@@ -440,3 +440,94 @@ Other harness-related validation errors follow the same style:
 If you hit any of these on an existing `leo.yaml`, move the named field
 under `harness_options` (or drop `provider`/`providers` and switch to
 `env:`) and re-run `leo validate`.
+
+## Web UI
+
+The web UI's Defaults, Processes, Tasks, Templates, and Sessions forms all
+edit `harness:` and `harness_options:` directly — there is no separate
+"harness" management page; the adapter registry backs an ordinary form field.
+
+- **Harness dropdown.** Every one of those five forms has a `Harness` field
+  (`internal/web/schema/registry.go`'s `fHarness()`) rendered as a
+  `KindSelect` over the `"harnesses"` option source, which lists
+  `harness.Names()` — the registered adapter names (`claude`, `codex`,
+  `opencode`) — with an empty first entry labeled "inherit"
+  (`internal/web/schema/options.go`'s `TryFor("harnesses")` /
+  `namedKeys`). Leaving it unset falls through the same
+  scope-then-`defaults`-then-built-in-`claude` cascade the CLI/YAML path
+  uses.
+- **Harness-options sub-form.** Changing the dropdown fires an htmx
+  `GET /web/partials/harness-options` request (`hx-get` wired in
+  `internal/web/templates/components/form.html`, handled by
+  `handleHarnessOptionsPartial` in `internal/web/handlers_harness.go`),
+  which swaps in a typed sub-form for the newly selected adapter via
+  `harness.Harness.OptionsSchema()`
+  (`internal/web/templates/components/harness_options_partial.html`
+  re-rendering the `harness_options` template). Each `OptionField` picks its
+  control by `Type` (`internal/harness/options.go`,
+  `internal/web/templates/components/harness_options.html`):
+  - `OptionBool` → a tri-state `<select>` (inherit / on / off) — bools are
+    tri-state because unset must stay distinguishable from `false` under the
+    key-wise `harness_options` cascade, not a two-state checkbox.
+  - `OptionEnum` → a `<select>` populated from `EnumValues`.
+  - `OptionString` → a plain text input (used for `agent`, which also
+    resolves a `Source: "agents"` option list — the claude sub-agent names
+    the running web server can list — falling back to a plain input if that
+    source can't be resolved).
+  - `OptionStringList` → a single text input parsed as comma-separated
+    values on submit (`ApplyHarnessOptions` in
+    `internal/web/schema/harnessform.go`).
+  - `OptionText` → a multi-line `<textarea>`.
+  - `OptionYAMLMap` → a multi-line `<textarea>` parsed as YAML on submit.
+
+  Concretely, per adapter (`OptionsSchema()` in each adapter's `options.go`):
+  claude exposes `permission_mode` (enum), `bypass_permissions` (bool),
+  `remote_control` (bool), `agent` (string, agent-list source),
+  `allowed_tools` / `disallowed_tools` (string lists), and
+  `append_system_prompt` (text); codex exposes `sandbox` (enum:
+  `read-only`/`workspace-write`/`danger-full-access`); opencode exposes a
+  single `permission` field (YAML map).
+- **Opencode's `permission` field** is the one `OptionYAMLMap` field in the
+  registry today — it renders as a YAML textarea (`rows="4"`, monospace) so
+  the nested `{tool: {pattern: verdict}}` shape from
+  [Opencode option reference](#opencode-option-reference) can be edited
+  directly; `ApplyHarnessOptions` unmarshals it as YAML on submit and only
+  sets the key when the parsed map is non-empty.
+- **Model input.** The `model` field on every scope (`fModel()` /
+  `KindDatalist` in `internal/web/schema/registry.go`) is a free-text input
+  backed by a `<datalist>` that leo refreshes via an out-of-band htmx swap
+  whenever the harness dropdown changes (`harnessPartialData.ModelOpts` in
+  `handleHarnessOptionsPartial`). `schema.ModelSuggestions` only populates
+  that datalist for `claude`, straight from `claude.ValidModels()` — codex
+  and opencode have no fixed model list, so their inputs instead show a
+  placeholder format hint from `schema.ModelPlaceholder` ("e.g.
+  gpt-5.3-codex" for codex, "provider/model, e.g.
+  anthropic/claude-sonnet-5" for opencode). A stale datalist is harmless
+  either way: whatever is typed is only ever accepted after the resolved
+  harness's `ValidateModel` passes on save (see
+  [Validation behavior](#validation-behavior)).
+- **Inherited-value placeholders.** When a scope's resolved harness matches
+  `defaults.harness`, each option control shows the corresponding
+  `defaults.harness_options` value as a grayed-out placeholder/inherit-label
+  (`inherit (<value>)` for selects, `inherit: <value>` for text/textarea
+  inputs) rather than a stored value — mirroring the same-harness-only
+  merge rule in [Merge rules](#merge-rules). `handleHarnessOptionsPartial`
+  recomputes this placeholder set against the *newly selected* harness on
+  every dropdown change, not the stored one, so switching a scope onto the
+  defaults harness lights placeholders up and switching away drops them.
+  The defaults form itself and every `sessions.*` form never show inherited
+  placeholders — sessions don't cascade `defaults.harness_options` at all
+  (see [Merge rules](#merge-rules)), and the defaults form has no higher
+  scope to inherit from.
+- **Validation on save.** Every config-saving handler funnels through
+  `validateAndSave` (`internal/web/handlers.go`), which calls the same
+  `Config.Validate()` the CLI and daemon boot use — adapter `DecodeOptions`,
+  `ValidateModel`, kind/channel support checks, cron syntax, and everything
+  else in [Validation behavior](#validation-behavior) — before writing
+  anything to disk. A rejected save never reaches `leo.yaml`; the error
+  message (adapter-produced, field-named) is surfaced back to the form as a
+  flash message instead.
+- **Harness visibility elsewhere.** Process, template, and task list pages
+  show a harness column/badge per row (dimmed when the value is inherited
+  rather than set on that scope), and session cards show the same badge —
+  so the resolved harness is visible without opening each form.

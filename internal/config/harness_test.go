@@ -46,6 +46,8 @@ func (s stubHarness) DecodeOptions(raw map[string]any) (any, error) {
 	return raw, nil
 }
 
+func (s stubHarness) OptionsSchema() []harness.OptionField { return nil }
+
 func (s stubHarness) SupportsChannels() bool { return s.supportsChannels }
 
 func (s stubHarness) ParseEvents(io.Reader) (harness.Result, error)     { return harness.Result{}, nil }

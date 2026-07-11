@@ -45,6 +45,7 @@ func (h fakeCLITurnsHarness) Args(harness.LaunchSpec) ([]string, error) { return
 func (h fakeCLITurnsHarness) SessionArgs(harness.SessionState) []string { return nil }
 func (h fakeCLITurnsHarness) ValidateModel(string) error                { return nil }
 func (h fakeCLITurnsHarness) DecodeOptions(map[string]any) (any, error) { return nil, nil }
+func (h fakeCLITurnsHarness) OptionsSchema() []harness.OptionField      { return nil }
 func (h fakeCLITurnsHarness) SupportsChannels() bool                    { return false }
 func (h fakeCLITurnsHarness) ParseEvents(io.Reader) (harness.Result, error) {
 	return harness.Result{}, nil

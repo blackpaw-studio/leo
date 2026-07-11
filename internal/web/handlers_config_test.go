@@ -5,12 +5,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
@@ -45,6 +47,119 @@ func reloadTestConfig(t *testing.T, dir string) *config.Config {
 		t.Fatalf("reloading config: %v", err)
 	}
 	return cfg
+}
+
+// newTestServerWithConfigFile writes cfg to a fresh temp leo.yaml (via
+// config.Save, the same marshaler applySection's save path uses) and wires up
+// a Server against it, mirroring newTestServer's minimal mock providers and
+// auth-wrapping. Returns the server and the config file's path so callers can
+// inspect what actually landed on disk after a save.
+func newTestServerWithConfigFile(t *testing.T, cfg *config.Config) (*Server, string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "leo-web-test-cfg-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "state"), 0750); err != nil {
+		t.Fatalf("creating state dir: %v", err)
+	}
+
+	s := New(cfgPath, &mockProcesses{states: map[string]ProcessStateInfo{}},
+		&mockScheduler{entries: []cron.EntryInfo{}}, &mockReloader{}, nil,
+		Options{Port: testPort, APIToken: testAPIToken, LogPath: filepath.Join(dir, "state", "service.log")})
+
+	rawHandler := s.httpServer.Handler
+	s.httpServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizeTestRequest(r)
+		rawHandler.ServeHTTP(w, r)
+	})
+	return s, cfgPath
+}
+
+// loadConfigFile re-reads path off disk, mirroring reloadTestConfig but
+// keyed by an explicit path rather than newTestServer's fixed dir.
+func loadConfigFile(t *testing.T, path string) *config.Config {
+	t.Helper()
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("loading config %s: %v", path, err)
+	}
+	return cfg
+}
+
+// readFile drains path's raw bytes as a string, for asserting a save handler
+// left the on-disk YAML byte-for-byte untouched.
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return string(b)
+}
+
+// baselineProcessForm renders the named process's current config into a base
+// url.Values set, using the same Kind-driven encoding as taskFormBase/
+// templateFormBase above, plus an empty harness_options.* input for every key
+// in every registered harness's schema. Every registered field renders in the
+// real form, so a real POST carries them all; schema.Apply/ApplyHarnessOptions
+// zero absent fields, so a hand-built partial form would corrupt unrelated
+// fields on save.
+func baselineProcessForm(t *testing.T, s *Server, name string) url.Values {
+	t.Helper()
+	cfg, err := s.loadConfig()
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	p, ok := cfg.Processes[name]
+	if !ok {
+		t.Fatalf("seed process %q not found", name)
+	}
+	form := url.Values{}
+	for _, fv := range schema.Values(&p, schema.SectionProcess, nil) {
+		switch fv.Kind {
+		case schema.KindBool:
+			form.Add(fv.Key, "false")
+			if fv.Checked {
+				form.Add(fv.Key, "true")
+			}
+		default:
+			form.Set(fv.Key, fv.Value)
+		}
+	}
+	return form
+}
+
+// baselineSessionForm is baselineProcessForm's session-scope counterpart.
+func baselineSessionForm(t *testing.T, s *Server, name string) url.Values {
+	t.Helper()
+	cfg, err := s.loadConfig()
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	sc, ok := cfg.Sessions[name]
+	if !ok {
+		t.Fatalf("seed session %q not found", name)
+	}
+	form := url.Values{}
+	for _, fv := range schema.Values(&sc, schema.SectionSession, nil) {
+		switch fv.Kind {
+		case schema.KindBool:
+			form.Add(fv.Key, "false")
+			if fv.Checked {
+				form.Add(fv.Key, "true")
+			}
+		default:
+			form.Set(fv.Key, fv.Value)
+		}
+	}
+	return form
 }
 
 func TestDefaultsSaveRoundTrip(t *testing.T) {
@@ -168,8 +283,10 @@ func templateFormBase(t *testing.T, s *Server, name string) url.Values {
 // bypass_permissions/permission_mode's tri-state web-form coverage
 // (TestProcessBypassTriState) was removed along with the field's web-form
 // registration — see internal/web/schema/registry.go's Excluded map (Task 7:
-// claude flat fields moved to harness_options). The claude options editor
-// arrives with harness_options forms in a later plan.
+// claude flat fields moved to harness_options). The claude options editor now
+// lives in the dedicated harness_options sub-form (see
+// internal/web/handlers_harness_test.go and
+// docs/configuration/harnesses.md's Web UI section).
 
 // TestTaskSaveCoversNewFields guards handleConfigTaskSave against the same
 // registry-drift risk Task 6 covered for defaults: runtime/session/lazy/
@@ -787,5 +904,259 @@ func TestPageConfigSettingsListsHostCards(t *testing.T) {
 		if !strings.Contains(body, `name="`+key+`"`) {
 			t.Errorf("host card missing field %q", key)
 		}
+	}
+}
+
+// TestBuildFormWithHarnessProcess is this task's TDD anchor: it exercises
+// the harness sub-form's own-value/inherited-placeholder cascade and the
+// harness-aware model datalist for a process scope. Adapted from the brief's
+// sketch to this package's actual newTestServer(t) constructor — cfg is
+// passed straight into buildFormWithHarness rather than loaded from disk.
+func TestBuildFormWithHarnessProcess(t *testing.T) {
+	cfg := &config.Config{
+		Defaults: config.DefaultsConfig{Harness: "claude",
+			HarnessOptions: map[string]any{"permission_mode": "auto"}},
+		Processes: map[string]config.ProcessConfig{"builder": {
+			Workspace:      "/w",
+			HarnessOptions: map[string]any{"permission_mode": "plan"},
+		}},
+	}
+	s, _ := newTestServer(t)
+	p := cfg.Processes["builder"]
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "builder")
+
+	if fd.Harness == nil || fd.Harness.Harness != "claude" {
+		t.Fatalf("Harness sub-form = %+v, want claude", fd.Harness)
+	}
+	if fd.Scope != "process-builder" || fd.Harness.Scope != "process-builder" {
+		t.Errorf("scope not threaded: %q / %q", fd.Scope, fd.Harness.Scope)
+	}
+	byKey := map[string]schema.HarnessFieldValue{}
+	for _, f := range fd.Harness.Fields {
+		byKey[f.Key] = f
+	}
+	if got := byKey["permission_mode"]; got.Value != "plan" || got.Inherited != "auto" {
+		t.Errorf("permission_mode = %+v (own overrides, inherited placeholder)", got)
+	}
+	for _, f := range fd.Fields {
+		if f.Key == "model" {
+			if len(f.Opts) == 0 {
+				t.Error("claude model field has no datalist suggestions")
+			}
+			if f.Scope != "process-builder" {
+				t.Errorf("model field Scope = %q", f.Scope)
+			}
+		}
+	}
+}
+
+// TestBuildFormWithHarnessNonClaudeModelHint checks that a scope running a
+// different harness than defaults gets no inherited placeholders (harnesses
+// don't share an options namespace) and that a non-claude model field gets a
+// format hint instead of datalist suggestions.
+func TestBuildFormWithHarnessNonClaudeModelHint(t *testing.T) {
+	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"c": {Harness: "codex"}}}
+	s, _ := newTestServer(t)
+	p := cfg.Processes["c"]
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/a", "c")
+	if fd.Harness == nil || fd.Harness.Harness != "codex" {
+		t.Fatalf("want codex sub-form, got %+v", fd.Harness)
+	}
+	// scope harness (codex) != defaults harness (claude default) → no inherited placeholders
+	for _, f := range fd.Harness.Fields {
+		if f.Inherited != "" {
+			t.Errorf("field %s inherited %q, want none across harnesses", f.Key, f.Inherited)
+		}
+	}
+	for _, f := range fd.Fields {
+		if f.Key == "model" && (f.Opts != nil || f.Placeholder == "") {
+			t.Errorf("codex model field = opts %v placeholder %q, want nil + hint", f.Opts, f.Placeholder)
+		}
+	}
+}
+
+// TestBuildFormWithHarnessUnregisteredHarness covers the harness.Get error
+// fallback in buildFormWithHarness: a hand-edited config naming a harness
+// that isn't registered (e.g. a typo, or a config written by a newer leo
+// version) must not panic or 500 the page. It should render the flat form
+// with no harness sub-form; Validate() is the one that reports the real
+// error on save.
+func TestBuildFormWithHarnessUnregisteredHarness(t *testing.T) {
+	cfg := &config.Config{
+		Processes: map[string]config.ProcessConfig{"broken": {
+			Workspace: "/w",
+			Harness:   "bogus",
+		}},
+	}
+	s, _ := newTestServer(t)
+	p := cfg.Processes["broken"]
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/broken", "broken")
+
+	if fd.Harness != nil {
+		t.Errorf("Harness sub-form = %+v, want nil for unregistered harness", fd.Harness)
+	}
+	byKey := map[string]bool{}
+	for _, f := range fd.Fields {
+		byKey[f.Key] = true
+	}
+	if !byKey["harness"] {
+		t.Error("flat form missing \"harness\" field")
+	}
+	if !byKey["model"] {
+		t.Error("flat form missing \"model\" field")
+	}
+}
+
+// TestSessionsFormNeverInheritsHarnessOptions guards
+// SessionHarnessOptions'/harnessView's documented rule: persistent sessions
+// never cascaded harness_options from defaults, and the web form must not
+// start doing so either.
+func TestSessionsFormNeverInheritsHarnessOptions(t *testing.T) {
+	cfg := &config.Config{
+		Defaults: config.DefaultsConfig{HarnessOptions: map[string]any{"permission_mode": "auto"}},
+		Sessions: map[string]config.SessionConfig{"r": {Workspace: "/w"}},
+	}
+	s, _ := newTestServer(t)
+	sc := cfg.Sessions["r"]
+	fd := s.buildFormWithHarness(schema.SectionSession, &sc, cfg, "/a", "r")
+	for _, f := range fd.Harness.Fields {
+		if f.Inherited != "" {
+			t.Errorf("session field %s shows inherited %q; sessions never cascade", f.Key, f.Inherited)
+		}
+	}
+}
+
+// TestConfigFormRendersHarnessOptionsSubForm is the render-side TDD anchor:
+// it executes config_form with a formData carrying a Harness sub-form and
+// asserts the harness_options.* input name, the "Harness options" group
+// label, and the model field's harness-scoped datalist wiring all show up in
+// the rendered HTML.
+func TestConfigFormRendersHarnessOptionsSubForm(t *testing.T) {
+	cfg := &config.Config{
+		Processes: map[string]config.ProcessConfig{"builder": {Workspace: "/w"}},
+	}
+	s, _ := newTestServer(t)
+	p := cfg.Processes["builder"]
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "builder")
+
+	var buf strings.Builder
+	if err := s.templates.ExecuteTemplate(&buf, "config_form", fd); err != nil {
+		t.Fatalf("rendering config_form: %v", err)
+	}
+	body := buf.String()
+	if !strings.Contains(body, `name="harness_options.permission_mode"`) {
+		t.Errorf("missing harness_options.permission_mode input: %s", body)
+	}
+	if !strings.Contains(body, "Harness options") {
+		t.Errorf("missing Harness options group label: %s", body)
+	}
+	if !strings.Contains(body, `list="dl-model-process-builder"`) {
+		t.Errorf("missing model datalist wiring: %s", body)
+	}
+	if !strings.Contains(body, `<datalist id="dl-model-process-builder">`) {
+		t.Errorf("missing model datalist element: %s", body)
+	}
+}
+
+// TestSaveProcessWithHarnessOptions is this task's TDD anchor: a harness
+// change and its harness_options must land atomically in one POST — the
+// options are decoded against the *submitted* harness (codex), not whatever
+// the process had before the save.
+func TestSaveProcessWithHarnessOptions(t *testing.T) {
+	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"b": {Workspace: "/w"}}}
+	s, cfgPath := newTestServerWithConfigFile(t, cfg)
+
+	form := baselineProcessForm(t, s, "b")
+	form.Set("harness", "codex")
+	form.Set("harness_options.sandbox", "workspace-write")
+	w := postForm(t, s, "/web/config/process/b", form)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
+	}
+
+	saved := loadConfigFile(t, cfgPath)
+	p := saved.Processes["b"]
+	if p.Harness != "codex" {
+		t.Errorf("Harness = %q, want codex", p.Harness)
+	}
+	if got := p.HarnessOptions["sandbox"]; got != "workspace-write" {
+		t.Errorf("HarnessOptions = %#v", p.HarnessOptions)
+	}
+}
+
+// TestSaveRejectsBadHarnessOptionAndWritesNothing pins the choke-point
+// guarantee: an option value the adapter's DecodeOptions rejects at
+// Config.Validate() must surface the adapter's own key-named error and must
+// never reach disk, even though ApplyHarnessOptions itself accepted the raw
+// string (enum validation lives in the adapter, not the form parser).
+func TestSaveRejectsBadHarnessOptionAndWritesNothing(t *testing.T) {
+	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"b": {Workspace: "/w"}}}
+	s, cfgPath := newTestServerWithConfigFile(t, cfg)
+	before := readFile(t, cfgPath)
+
+	form := baselineProcessForm(t, s, "b")
+	form.Set("harness", "codex")
+	form.Set("harness_options.sandbox", "bogus")
+	w := postForm(t, s, "/web/config/process/b", form)
+	body := readBody(t, w)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, body)
+	}
+	if !strings.Contains(body, "sandbox") || !strings.Contains(body, "not valid") {
+		t.Errorf("flash does not carry the adapter's key-named error: %s", body)
+	}
+	if after := readFile(t, cfgPath); after != before {
+		t.Error("config file changed despite validation failure")
+	}
+}
+
+// TestSaveEmptyOptionsOmitsHarnessOptionsKey guards
+// ApplyHarnessOptions'/applyScopeHarnessOptions' all-empty-form contract: a
+// save with every harness_options.* input blank must clear the scope's
+// stored options entirely (nil map -> omitempty), not persist an empty map.
+func TestSaveEmptyOptionsOmitsHarnessOptionsKey(t *testing.T) {
+	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"b": {
+		Workspace:      "/w",
+		HarnessOptions: map[string]any{"permission_mode": "plan"},
+	}}}
+	s, cfgPath := newTestServerWithConfigFile(t, cfg)
+
+	form := baselineProcessForm(t, s, "b") // all harness_options.* inputs empty
+	w := postForm(t, s, "/web/config/process/b", form)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
+	}
+
+	if raw := readFile(t, cfgPath); strings.Contains(raw, "harness_options") {
+		t.Errorf("cleared options must drop the key entirely, got:\n%s", raw)
+	}
+}
+
+// TestSaveOpencodePermissionYAMLRoundTrip covers the OptionYAMLMap decode
+// path end-to-end through a real save: a multi-line YAML mapping (including a
+// nested map value) submitted as a session's harness_options.permission input
+// must come back out of the saved config as the equivalent nested
+// map[string]any.
+func TestSaveOpencodePermissionYAMLRoundTrip(t *testing.T) {
+	cfg := &config.Config{Sessions: map[string]config.SessionConfig{"r": {Workspace: "/w"}}}
+	s, cfgPath := newTestServerWithConfigFile(t, cfg)
+
+	form := baselineSessionForm(t, s, "r")
+	form.Set("harness", "opencode")
+	form.Set("model", "anthropic/claude-sonnet-5") // opencode requires provider/model
+	form.Set("harness_options.permission", "bash: allow\nwebfetch:\n  \"github.com/*\": allow")
+	w := postForm(t, s, "/web/config/session/r", form)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
+	}
+
+	saved := loadConfigFile(t, cfgPath)
+	perm, _ := saved.Sessions["r"].HarnessOptions["permission"].(map[string]any)
+	if perm["bash"] != "allow" {
+		t.Errorf("permission = %#v", perm)
+	}
+	nested, _ := perm["webfetch"].(map[string]any)
+	if nested["github.com/*"] != "allow" {
+		t.Errorf("nested pattern map lost: %#v", perm)
 	}
 }
