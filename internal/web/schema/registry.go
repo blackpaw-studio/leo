@@ -11,9 +11,11 @@ func FieldsFor(s Section) []Field {
 var Excluded = map[Section][]string{
 	// hosts is rendered as its own add/remove entries UI, not a flat field.
 	SectionClient: {"hosts"},
-	// harness/harness_options land in the web UI once the harness picker and
-	// a per-adapter options editor ship (later plan); config/validation
-	// support them today (see internal/config/harness.go).
+	// harness_options is excluded from the flat registry on every scope
+	// below: it's a map rendered by the dedicated harness-options sub-form
+	// (internal/web/schema/harnessform.go + components/harness_options.html),
+	// not a flat field — same excluded-with-own-UI pattern as client.hosts.
+	// harness itself IS registered (KindSelect over harness.Names()).
 	// provider is excluded on every scope below: the standalone providers
 	// management page was removed (endpoints are becoming the harness's own
 	// concern); the underlying config field is still parsed/validated for
@@ -23,18 +25,18 @@ var Excluded = map[Section][]string{
 	// (Validate() rejects the flat fields outright now — see
 	// docs/configuration/harnesses.md); the web UI must not write config
 	// Validate rejects, and harness_options forms arrive in a later plan.
-	SectionDefaults: {"harness", "harness_options", "provider",
+	SectionDefaults: {"harness_options", "provider",
 		"permission_mode", "bypass_permissions", "remote_control",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
-	SectionProcess: {"harness", "harness_options", "provider",
+	SectionProcess: {"harness_options", "provider",
 		"permission_mode", "bypass_permissions", "remote_control", "agent",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
-	SectionTask: {"harness", "harness_options", "provider",
+	SectionTask: {"harness_options", "provider",
 		"permission_mode", "allowed_tools", "disallowed_tools", "append_system_prompt"},
-	SectionTemplate: {"harness", "harness_options", "provider",
+	SectionTemplate: {"harness_options", "provider",
 		"permission_mode", "remote_control", "agent",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
-	SectionSession: {"harness", "harness_options", "provider",
+	SectionSession: {"harness_options", "provider",
 		"permission_mode", "agent",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
 }
@@ -42,6 +44,11 @@ var Excluded = map[Section][]string{
 // --- Shared field builders -------------------------------------------------
 // These capture patterns repeated across process/task/template/session
 // sections so the registry below stays declarative and DRY.
+
+func fHarness() Field {
+	return Field{Key: "harness", Label: "Harness", Kind: KindSelect, Options: "harnesses", Group: "Harness",
+		Help: "Coding agent CLI driving this scope; options below are harness-specific"}
+}
 
 func fModel(group string) Field {
 	return Field{Key: "model", Label: "Model", Kind: KindSelect, Options: "models", Group: group}
@@ -66,6 +73,7 @@ func fEnv(group string, advanced bool) Field {
 
 var registry = map[Section][]Field{
 	SectionDefaults: {
+		fHarness(),
 		{Key: "model", Label: "Model", Kind: KindSelect, Options: "models", Group: "Model"},
 		{Key: "max_turns", Label: "Max turns", Group: "Limits"},
 		{Key: "stale_resume_hours", Label: "Stale resume (hours)", Group: "Behavior", Advanced: true,
@@ -77,6 +85,7 @@ var registry = map[Section][]Field{
 	SectionProcess: append([]Field{
 		{Key: "enabled", Label: "Enabled", Group: "General"},
 		{Key: "workspace", Label: "Workspace", Group: "General"},
+		fHarness(),
 		fModel("Model"),
 		{Key: "max_turns", Label: "Max turns", Group: "Model"},
 	}, append(fChannels("Channels"), []Field{
@@ -92,6 +101,7 @@ var registry = map[Section][]Field{
 		{Key: "timezone", Label: "Timezone", Group: "Schedule"},
 		{Key: "enabled", Label: "Enabled", Group: "Schedule"},
 		{Key: "prompt_file", Label: "Prompt file", Group: "Prompt"},
+		fHarness(),
 		fModel("Model"),
 		{Key: "max_turns", Label: "Max turns", Group: "Model"},
 		{Key: "timeout", Label: "Timeout", Kind: KindDuration, Group: "Execution"},
@@ -110,6 +120,7 @@ var registry = map[Section][]Field{
 
 	SectionTemplate: append([]Field{
 		{Key: "workspace", Label: "Workspace", Group: "General"},
+		fHarness(),
 		fModel("Model"),
 		{Key: "max_turns", Label: "Max turns", Group: "Model"},
 	}, append(fChannels("Channels"), []Field{
@@ -122,6 +133,7 @@ var registry = map[Section][]Field{
 
 	SectionSession: append([]Field{
 		{Key: "workspace", Label: "Workspace", Group: "General"},
+		fHarness(),
 		fModel("Model"),
 		{Key: "channels", Label: "Channels", Group: "Channels"},
 	}, fAddDirs("Advanced", true), fEnv("Advanced", true),

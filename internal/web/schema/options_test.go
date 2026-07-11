@@ -61,6 +61,50 @@ func TestOptionSourcesNilAgentsFunc(t *testing.T) {
 // delegates to Harness.ValidateModel), so this test uses the adapter's
 // exported claudeharness.ValidModels() accessor plus the exported
 // Config.Validate() path, rather than reaching into internals.
+func TestHarnessesOptionSource(t *testing.T) {
+	src := OptionSources{Cfg: &config.Config{}}
+	opts := src.For("harnesses")
+	if len(opts) < 4 { // inherit + claude + codex + opencode
+		t.Fatalf("harnesses source = %v, want inherit + at least 3 registered harnesses", opts)
+	}
+	if opts[0].Value != "" || opts[0].Label != "inherit" {
+		t.Errorf("first option = %+v, want empty-value inherit", opts[0])
+	}
+	names := map[string]bool{}
+	for _, o := range opts[1:] {
+		names[o.Value] = true
+	}
+	for _, want := range []string{"claude", "codex", "opencode"} {
+		if !names[want] {
+			t.Errorf("harnesses source missing %q", want)
+		}
+	}
+}
+
+func TestTryForUnknownSourceReturnsNil(t *testing.T) {
+	src := OptionSources{Cfg: &config.Config{}}
+	if got := src.TryFor("no-such-source"); got != nil {
+		t.Fatalf("TryFor(unknown) = %v, want nil", got)
+	}
+}
+
+func TestHarnessFieldRegisteredOnConfigSections(t *testing.T) {
+	for _, section := range []Section{SectionDefaults, SectionProcess, SectionTask, SectionTemplate, SectionSession} {
+		found := false
+		for _, f := range FieldsFor(section) {
+			if f.Key == "harness" {
+				found = true
+				if EffectiveKind(section, f) != KindSelect || f.Options != "harnesses" {
+					t.Errorf("%s harness field = %+v, want KindSelect/harnesses", section, f)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("section %s has no harness field", section)
+		}
+	}
+}
+
 func TestModelOptionsMatchConfigValidModels(t *testing.T) {
 	optValues := make(map[string]bool)
 	src := OptionSources{Cfg: &config.Config{}}
