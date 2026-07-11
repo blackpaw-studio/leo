@@ -3,6 +3,8 @@ package opencode
 import (
 	"reflect"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/harness/schematest"
 )
 
 func TestDecodeOptionsPermissionFlat(t *testing.T) {
@@ -104,4 +106,10 @@ func TestDecodeOptionsNilMap(t *testing.T) {
 	if !reflect.DeepEqual(got.(Options), Options{}) {
 		t.Errorf("got %+v, want zero Options", got)
 	}
+}
+
+func TestOptionsSchemaMatchesDecodeOptions(t *testing.T) {
+	schematest.Run(t, Opencode{}, optionKeys, map[string]any{
+		"permission": map[string]any{"bash": "allow"},
+	})
 }

@@ -86,6 +86,11 @@ type Harness interface {
 	// the caller to fill.
 	DecodeOptions(raw map[string]any) (any, error)
 
+	// OptionsSchema describes this adapter's harness_options keys for web
+	// form rendering, in render order. Must accept exactly the keys
+	// DecodeOptions accepts (schematest.Run locks the two together).
+	OptionsSchema() []OptionField
+
 	// SupportsChannels reports whether channel plugins can load in this
 	// harness. Only Claude Code hosts channel plugins; others message via
 	// leo's MCP tools.

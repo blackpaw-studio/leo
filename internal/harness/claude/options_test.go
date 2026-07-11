@@ -3,6 +3,8 @@ package claude
 import (
 	"reflect"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/harness/schematest"
 )
 
 func TestDecodeOptions(t *testing.T) {
@@ -116,4 +118,8 @@ func TestDecodeOptions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOptionsSchemaMatchesDecodeOptions(t *testing.T) {
+	schematest.Run(t, Claude{}, optionKeys, nil)
 }

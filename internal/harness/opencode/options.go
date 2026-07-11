@@ -63,6 +63,15 @@ func (Opencode) DecodeOptions(raw map[string]any) (any, error) {
 	return o, nil
 }
 
+// OptionsSchema describes the opencode harness_options for web forms. Keys
+// mirror optionKeys; TestOptionsSchemaMatchesDecodeOptions locks the two.
+func (Opencode) OptionsSchema() []harness.OptionField {
+	return []harness.OptionField{
+		{Key: "permission", Label: "Permission", Type: harness.OptionYAMLMap,
+			Help: "YAML map: tool → allow/ask/deny, or tool → {pattern: verdict}"},
+	}
+}
+
 func permissionOption(val any) (map[string]any, error) {
 	m, ok := val.(map[string]any)
 	if !ok {

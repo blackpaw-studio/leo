@@ -1,6 +1,10 @@
 package codex
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/harness/schematest"
+)
 
 func TestDecodeOptions(t *testing.T) {
 	tests := []struct {
@@ -89,4 +93,8 @@ func TestDecodeOptions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOptionsSchemaMatchesDecodeOptions(t *testing.T) {
+	schematest.Run(t, Codex{}, optionKeys, nil)
 }
