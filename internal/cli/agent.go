@@ -587,7 +587,7 @@ func attachLocal(ctx context.Context, homePath, query string, opts attachOptions
 	// their SessionDriver's AttachSpec instead. attach-spec returns an empty
 	// Harness for claude agents (the overwhelming majority), so this call is
 	// on the hot path; keep it a single fast round-trip.
-	if spec, err := daemon.AgentAttachSpec(ctx, homePath, query); err == nil {
+	if spec, err := agentAttachSpecFn(ctx, homePath, query); err == nil {
 		if spec.Harness != "" && spec.Harness != "claude" {
 			res := config.HostResolution{Localhost: true}
 			return attachViaDriver(res, harness.AttachSpec{Argv: spec.Argv, HistoryPath: spec.HistoryPath})

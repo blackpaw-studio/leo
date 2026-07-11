@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
@@ -211,5 +214,235 @@ func TestAttachViaDriverNilArgvPrintsHistoryTail(t *testing.T) {
 	// note line + attachHistoryTailLines (60 written, capped at 50).
 	if gotLines != attachHistoryTailLines+1 {
 		t.Fatalf("printed %d lines, want %d (note + tail)", gotLines, attachHistoryTailLines+1)
+	}
+}
+
+// --- top-level `leo attach` shortcut (attach.go) ---
+
+// stubAgentAttachSpecFn replaces agentAttachSpecFn for the duration of the
+// test, mirroring stubAgentSession's pattern for daemon.AgentSession.
+func stubAgentAttachSpecFn(t *testing.T, fn func(workDir, name string) (daemon.AgentAttachSpecResponse, error)) {
+	t.Helper()
+	old := agentAttachSpecFn
+	agentAttachSpecFn = func(_ context.Context, workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return fn(workDir, name)
+	}
+	t.Cleanup(func() { agentAttachSpecFn = old })
+}
+
+// TestAttachTopLevelRoutesNonClaudeProcess verifies `leo attach <name>`
+// resolves a non-claude process through the driver, not tmux.
+func TestAttachTopLevelRoutesNonClaudeProcess(t *testing.T) {
+	drv := registerFakeCLITurnsHarness()
+	drv.spec = harness.AttachSpec{Argv: []string{"faketurns", "attach", "worker"}}
+	drv.err = nil
+
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath:  home,
+		Defaults:  config.DefaultsConfig{Model: "sonnet", Harness: fakeCLITurnsHarnessName},
+		Processes: map[string]config.ProcessConfig{"worker": {Enabled: true}},
+	}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	stubAgentSession(t, func(workDir, name string) (string, error) {
+		return "", fmt.Errorf("not an agent")
+	})
+	stub := withStubExec(t)
+	withStubStdio(t)
+	var execedArgv0 string
+	old := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv0 = argv0
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = old })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "worker", "--host", "localhost"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if execedArgv0 != "faketurns" {
+		t.Fatalf("argv0 = %q, want %q (driver dispatch didn't fire); ssh calls = %v", execedArgv0, "faketurns", stub.calls)
+	}
+}
+
+// TestAttachTopLevelRoutesNonClaudeAgent verifies `leo attach <name>`
+// resolves a non-claude agent through the driver, not tmux.
+func TestAttachTopLevelRoutesNonClaudeAgent(t *testing.T) {
+	drv := registerFakeCLITurnsHarness()
+	drv.spec = harness.AttachSpec{Argv: []string{"faketurns", "attach", "scratch"}}
+	drv.err = nil
+
+	path := newAttachAliasTestConfig(t, nil) // no configured processes
+	stub := withStubExec(t)
+	withStubStdio(t)
+	stubAgentSession(t, func(workDir, name string) (string, error) {
+		if name == "scratch" {
+			return "leo-scratch", nil
+		}
+		return "", fmt.Errorf("not found")
+	})
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{
+			Name:    name,
+			Harness: fakeCLITurnsHarnessName,
+			Argv:    []string{"faketurns", "attach", "scratch"},
+		}, nil
+	})
+	var execedArgv0 string
+	old := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv0 = argv0
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = old })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "scratch", "--host", "localhost"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if execedArgv0 != "faketurns" {
+		t.Fatalf("argv0 = %q, want %q (driver dispatch didn't fire); ssh calls = %v", execedArgv0, "faketurns", stub.calls)
+	}
+}
+
+// TestAttachTopLevelClaudeAgentKeepsTmuxPath verifies a claude agent (empty
+// Harness from the attach-spec endpoint) still goes through the existing
+// tmux attach flow — the driver dispatch must not fire.
+func TestAttachTopLevelClaudeAgentKeepsTmuxPath(t *testing.T) {
+	path := newAttachAliasTestConfig(t, nil)
+	withStubExec(t)
+	withStubStdio(t)
+	stubAgentSession(t, func(workDir, name string) (string, error) {
+		if name == "scratch" {
+			return "leo-scratch", nil
+		}
+		return "", fmt.Errorf("not found")
+	})
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: name}, nil // Harness == "" => claude
+	})
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	var execedArgv0 string
+	var execedArgv []string
+	old := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv0 = argv0
+		execedArgv = argv
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = old })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "scratch", "--host", "localhost"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if execedArgv0 != "/usr/bin/tmux" {
+		t.Fatalf("expected the tmux attach path for a claude agent, got argv0=%q argv=%v", execedArgv0, execedArgv)
+	}
+}
+
+// --- attach picker (attach_picker.go) ---
+
+// TestAttachPickerRoutesNonClaudeAgent verifies the picker's single-choice
+// shortcut (no promptui interaction needed) routes a non-claude agent
+// through the driver.
+func TestAttachPickerRoutesNonClaudeAgent(t *testing.T) {
+	drv := registerFakeCLITurnsHarness()
+	drv.spec = harness.AttachSpec{Argv: []string{"faketurns", "attach", "solo"}}
+	drv.err = nil
+
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home, Defaults: config.DefaultsConfig{Model: "sonnet"}}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	oldStdinTerm := stdinIsTerminal
+	stdinIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdinIsTerminal = oldStdinTerm })
+
+	oldAgentList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return []agent.Record{{Name: "solo"}}, nil
+	}
+	t.Cleanup(func() { agentListFn = oldAgentList })
+
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{
+			Name:    name,
+			Harness: fakeCLITurnsHarnessName,
+			Argv:    []string{"faketurns", "attach", "solo"},
+		}, nil
+	})
+	withStubExec(t)
+	withStubStdio(t)
+	var execedArgv0 string
+	old := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv0 = argv0
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = old })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "--host", "localhost"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if execedArgv0 != "faketurns" {
+		t.Fatalf("argv0 = %q, want %q (driver dispatch didn't fire)", execedArgv0, "faketurns")
+	}
+}
+
+// TestAttachPickerClaudeAgentKeepsTmuxPath verifies the picker's
+// single-choice shortcut keeps the tmux path for a claude agent.
+func TestAttachPickerClaudeAgentKeepsTmuxPath(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home, Defaults: config.DefaultsConfig{Model: "sonnet"}}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	oldStdinTerm := stdinIsTerminal
+	stdinIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdinIsTerminal = oldStdinTerm })
+
+	oldAgentList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return []agent.Record{{Name: "solo"}}, nil
+	}
+	t.Cleanup(func() { agentListFn = oldAgentList })
+
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: name}, nil // claude
+	})
+	withStubExec(t)
+	withStubStdio(t)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	var execedArgv0 string
+	old := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv0 = argv0
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = old })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "--host", "localhost"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if execedArgv0 != "/usr/bin/tmux" {
+		t.Fatalf("expected the tmux attach path for a claude agent, got argv0=%q", execedArgv0)
 	}
 }
