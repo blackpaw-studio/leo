@@ -6,10 +6,17 @@ Leo's config lives at `~/.leo/leo.yaml`.
 
 ```yaml
 defaults:
-  model: <string>             # Default model: sonnet, opus, or haiku (required)
-  max_turns: <int>            # Default max conversation turns (required)
-  bypass_permissions: <bool>  # Skip permission prompts (optional)
-  remote_control: <bool>      # Enable Remote Control for web/mobile access (optional)
+  model: <string>               # Default model: sonnet, opus, or haiku (required)
+  max_turns: <int>              # Default max conversation turns (required)
+  harness: <string>             # Coding-agent adapter (optional — defaults to "claude"; only "claude" is registered today)
+  harness_options:               # Adapter-specific options, strictly validated (optional)
+    permission_mode: <string>    # acceptEdits, auto, bypassPermissions, default, dontAsk, or plan
+    bypass_permissions: <bool>   # Legacy fallback — only consulted when permission_mode is empty
+    remote_control: <bool>       # Enable Remote Control for web/mobile access
+    agent: <string>
+    allowed_tools: [<string>]
+    disallowed_tools: [<string>]
+    append_system_prompt: <string>
 
 processes:
   <process-name>:
@@ -17,8 +24,8 @@ processes:
     channels: [<string>]        # Channel plugin IDs, e.g. plugin:telegram@claude-plugins-official
     model: <string>             # Override defaults.model (optional)
     max_turns: <int>            # Override defaults.max_turns (optional)
-    bypass_permissions: <bool>  # Override defaults.bypass_permissions (optional — pointer, unset != false)
-    remote_control: <bool>      # Override defaults.remote_control (optional — pointer, unset != false)
+    harness: <string>           # Override defaults.harness (optional)
+    harness_options: {}         # Same keys as defaults.harness_options, merged over defaults (scope key wins)
     mcp_config: <path>          # MCP server config path — relative to workspace or absolute (optional)
     add_dirs: [<path>]          # Additional directories passed via --add-dir (optional)
     enabled: <bool>             # Whether this process is active (default: true)
@@ -31,11 +38,15 @@ tasks:
     prompt_file: <path>       # Path relative to workspace (required)
     model: <string>           # Override defaults.model (optional)
     max_turns: <int>          # Override defaults.max_turns (optional)
+    harness: <string>         # Override defaults.harness (optional)
+    harness_options: {}       # Same keys as defaults.harness_options, merged over defaults (scope key wins)
     channels: [<string>]      # Channel plugin IDs used for notify_on_fail (optional)
     notify_on_fail: <bool>    # Spawn a child claude to notify configured channels on failure (optional)
     enabled: <bool>           # Whether cron runs this task (default: true)
     silent: <bool>            # Suppress narration, output NO_REPLY if nothing to report (optional)
 ```
+
+`templates.*` (ephemeral agent blueprints) and `sessions.*` (persistent task sessions) also support `harness` and `harness_options`. Sessions do NOT inherit `defaults.harness_options` — only processes, templates, and tasks merge defaults in (same-harness scopes only; scope key wins on conflict).
 
 ## Channels
 
@@ -67,7 +78,7 @@ effective model     = process.model     OR task.model     OR defaults.model
 effective max_turns = process.max_turns OR task.max_turns OR defaults.max_turns
 ```
 
-For `bypass_permissions` and `remote_control` in processes, a pointer type is used so that an unset value correctly falls through to defaults (rather than being treated as `false`).
+`harness_options` merges shallowly: `defaults.harness_options` is layered under a scope's own `harness_options` (only when the scope uses the same harness as defaults), and keys set on the scope win over defaults. Unknown keys are rejected by the adapter — see `harness_options.` fields above for the claude harness.
 
 ## Valid Models
 
