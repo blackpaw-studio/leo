@@ -119,31 +119,45 @@ func TestServeArgsWithoutProvisionError(t *testing.T) {
 	}
 }
 
+// authedHealthServer builds an httptest server whose /global/health
+// endpoint requires HTTP Basic auth (user "opencode" + wantPassword),
+// returning 401 for missing/wrong credentials and otherwise counting polls
+// and reporting healthy once polls >= healthyOnPoll.
+func authedHealthServer(t *testing.T, wantPassword string, healthyOnPoll int, polls *int, mu *sync.Mutex) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != serverBasicAuthUser || pass != wantPassword {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		*polls++
+		n := *polls
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if n < healthyOnPoll {
+			w.Write([]byte(`{"healthy":false}`))
+			return
+		}
+		w.Write([]byte(`{"healthy":true}`))
+	}))
+}
+
 func TestServerDriverStartWaitsForHealth(t *testing.T) {
-	t.Run("healthy on third poll", func(t *testing.T) {
+	t.Run("healthy on third poll with correct password", func(t *testing.T) {
 		orig := healthPollInterval
 		healthPollInterval = 5 * time.Millisecond
 		t.Cleanup(func() { healthPollInterval = orig })
 
 		var polls int
 		var mu sync.Mutex
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			mu.Lock()
-			polls++
-			n := polls
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			if n < 3 {
-				w.Write([]byte(`{"healthy":false}`))
-				return
-			}
-			w.Write([]byte(`{"healthy":true}`))
-		}))
+		srv := authedHealthServer(t, "secretpw", 3, &polls, &mu)
 		defer srv.Close()
 
 		port := srv.Listener.Addr().(*net.TCPAddr).Port
 		home := t.TempDir()
-		writeServerState(t, home, "leo-test-health", ServerState{Port: port, Password: "x"})
+		writeServerState(t, home, "leo-test-health", ServerState{Port: port, Password: "secretpw"})
 
 		h := harness.SessionHandle{TmuxSession: "leo-test-health", HomePath: home}
 		if err := (ServerDriver{}).Start(context.Background(), h); err != nil {
@@ -175,6 +189,56 @@ func TestServerDriverStartWaitsForHealth(t *testing.T) {
 		h := harness.SessionHandle{TmuxSession: "leo-test-unhealthy", HomePath: home}
 		if err := (ServerDriver{}).Start(context.Background(), h); err == nil {
 			t.Fatal("expected an error when the server never becomes healthy")
+		}
+	})
+
+	// The next two subtests guard the CRITICAL production bug: a secured
+	// `opencode serve` (OPENCODE_SERVER_PASSWORD set, which leo always
+	// provisions) returns 401 to unauthenticated requests on every
+	// endpoint, including /global/health. Start must send the provisioned
+	// password as HTTP Basic auth or every opencode process/agent/session
+	// would time out waiting for health at boot.
+	t.Run("missing password never authenticates, times out", func(t *testing.T) {
+		origInterval, origBudget := healthPollInterval, healthPollBudget
+		healthPollInterval = 2 * time.Millisecond
+		healthPollBudget = 20 * time.Millisecond
+		t.Cleanup(func() { healthPollInterval, healthPollBudget = origInterval, origBudget })
+
+		var polls int
+		var mu sync.Mutex
+		srv := authedHealthServer(t, "secretpw", 1, &polls, &mu)
+		defer srv.Close()
+
+		port := srv.Listener.Addr().(*net.TCPAddr).Port
+		home := t.TempDir()
+		// A stored empty password means waitForHealth sends no Basic auth
+		// header at all, so the secured server always 401s.
+		writeServerState(t, home, "leo-test-nopw", ServerState{Port: port, Password: ""})
+
+		h := harness.SessionHandle{TmuxSession: "leo-test-nopw", HomePath: home}
+		if err := (ServerDriver{}).Start(context.Background(), h); err == nil {
+			t.Fatal("expected an error: an unauthenticated request against a secured server must never report healthy")
+		}
+	})
+
+	t.Run("wrong password never authenticates, times out", func(t *testing.T) {
+		origInterval, origBudget := healthPollInterval, healthPollBudget
+		healthPollInterval = 2 * time.Millisecond
+		healthPollBudget = 20 * time.Millisecond
+		t.Cleanup(func() { healthPollInterval, healthPollBudget = origInterval, origBudget })
+
+		var polls int
+		var mu sync.Mutex
+		srv := authedHealthServer(t, "secretpw", 1, &polls, &mu)
+		defer srv.Close()
+
+		port := srv.Listener.Addr().(*net.TCPAddr).Port
+		home := t.TempDir()
+		writeServerState(t, home, "leo-test-wrongpw", ServerState{Port: port, Password: "totally-wrong"})
+
+		h := harness.SessionHandle{TmuxSession: "leo-test-wrongpw", HomePath: home}
+		if err := (ServerDriver{}).Start(context.Background(), h); err == nil {
+			t.Fatal("expected an error: a wrong password must never report healthy")
 		}
 	})
 }

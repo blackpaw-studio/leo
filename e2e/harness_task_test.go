@@ -457,16 +457,23 @@ func TestRealHarnessSmokeOpencodeServerDriver(t *testing.T) {
 	healthDeadline := time.Now().Add(30 * time.Second)
 	healthy := false
 	for time.Now().Before(healthDeadline) {
-		resp, err := http.Get(state.URL() + "/global/health") //nolint:noctx -- bounded by the surrounding deadline loop
-		if err == nil {
-			var body struct {
-				Healthy bool `json:"healthy"`
-			}
-			decodeErr := json.NewDecoder(resp.Body).Decode(&body)
-			resp.Body.Close()
-			if decodeErr == nil && body.Healthy {
-				healthy = true
-				break
+		// A secured `opencode serve` (OPENCODE_SERVER_PASSWORD set, as
+		// above) 401s every endpoint including /global/health without
+		// Basic auth — mirrors ServerDriver's own health check.
+		req, reqErr := http.NewRequest(http.MethodGet, state.URL()+"/global/health", nil) //nolint:noctx -- bounded by the surrounding deadline loop
+		if reqErr == nil {
+			req.SetBasicAuth("opencode", state.Password)
+			resp, err := http.DefaultClient.Do(req)
+			if err == nil {
+				var body struct {
+					Healthy bool `json:"healthy"`
+				}
+				decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+				resp.Body.Close()
+				if decodeErr == nil && body.Healthy {
+					healthy = true
+					break
+				}
 			}
 		}
 		time.Sleep(500 * time.Millisecond)

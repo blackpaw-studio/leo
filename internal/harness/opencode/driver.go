@@ -68,7 +68,7 @@ func (d ServerDriver) Start(ctx context.Context, h harness.SessionHandle) error 
 	if err != nil {
 		return fmt.Errorf("opencode: loading server state: %w", err)
 	}
-	if err := waitForHealth(ctx, state.URL()); err != nil {
+	if err := waitForHealth(ctx, state.URL(), state.Password); err != nil {
 		return err
 	}
 	if h.OpeningPrompt != "" && h.IDs.Get() == "" {
@@ -81,13 +81,22 @@ func (d ServerDriver) Start(ctx context.Context, h harness.SessionHandle) error 
 	return nil
 }
 
+// serverBasicAuthUser is OPENCODE_SERVER_USERNAME's default (unconfigurable
+// by leo today): when OPENCODE_SERVER_PASSWORD is set, `opencode serve`
+// requires HTTP Basic auth on every endpoint, including /global/health.
+const serverBasicAuthUser = "opencode"
+
 // waitForHealth polls GET <baseURL>/global/health until it reports
-// {"healthy":true}, the budget elapses, or ctx is cancelled.
-func waitForHealth(ctx context.Context, baseURL string) error {
+// {"healthy":true}, the budget elapses, or ctx is cancelled. password is
+// the provisioned OPENCODE_SERVER_PASSWORD; when non-empty, requests carry
+// HTTP Basic auth (the "opencode" user + password) since a secured serve
+// returns 401 to unauthenticated requests — including the health endpoint.
+// Empty password ⇒ no auth header, for an older/unsecured server.
+func waitForHealth(ctx context.Context, baseURL, password string) error {
 	url := baseURL + "/global/health"
 	deadline := time.Now().Add(healthPollBudget)
 	for {
-		if isHealthy(ctx, url) {
+		if isHealthy(ctx, url, password) {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -101,16 +110,22 @@ func waitForHealth(ctx context.Context, baseURL string) error {
 	}
 }
 
-func isHealthy(ctx context.Context, url string) bool {
+func isHealthy(ctx context.Context, url, password string) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
+	}
+	if password != "" {
+		req.SetBasicAuth(serverBasicAuthUser, password)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
 	var body struct {
 		Healthy bool `json:"healthy"`
 	}
