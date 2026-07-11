@@ -215,7 +215,7 @@ func (s *Server) buildDefaultsData(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
-	return s.buildFormWithHarness(schema.SectionDefaults, &cfg.Defaults, cfg, "/web/config/defaults", "defaults"), nil
+	return s.buildFormWithHarness(schema.SectionDefaults, &cfg.Defaults, cfg, "/web/config/defaults", ""), nil
 }
 
 // hostCard is one entry of settingsPageData.Hosts: a remote-host name paired
@@ -384,7 +384,7 @@ func (s *Server) handleTaskEditPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	form := s.buildFormWithHarness(schema.SectionTask, &task, cfg, "/web/config/task/"+url.PathEscape(name), "task-"+name)
+	form := s.buildFormWithHarness(schema.SectionTask, &task, cfg, "/web/config/task/"+url.PathEscape(name), name)
 	form.DeleteURL = "/web/task/" + url.PathEscape(name) + "/delete"
 
 	// Best-effort: a task whose configured prompt file path is invalid
@@ -439,7 +439,7 @@ func (s *Server) handleProcessEditPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	form := s.buildFormWithHarness(schema.SectionProcess, &proc, cfg, "/web/config/process/"+url.PathEscape(name), "process-"+name)
+	form := s.buildFormWithHarness(schema.SectionProcess, &proc, cfg, "/web/config/process/"+url.PathEscape(name), name)
 	form.DeleteURL = "/web/process/" + url.PathEscape(name)
 
 	pd := pageData{
@@ -507,7 +507,7 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	form := s.buildFormWithHarness(schema.SectionTemplate, &tmpl, cfg, "/web/config/template/"+url.PathEscape(name), "template-"+name)
+	form := s.buildFormWithHarness(schema.SectionTemplate, &tmpl, cfg, "/web/config/template/"+url.PathEscape(name), name)
 	form.DeleteURL = "/web/template/" + url.PathEscape(name)
 
 	pd := pageData{

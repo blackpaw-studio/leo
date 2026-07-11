@@ -15,6 +15,7 @@ type fieldView struct {
 	Opts        []schema.Option
 	Section     schema.Section // for the harness select's hx-get URL
 	Scope       string         // scope-unique element-id suffix
+	ScopeName   string         // raw config map key ("" for defaults); for the harness select's hx-get URL
 	Placeholder string         // per-harness model format hint
 }
 
@@ -31,10 +32,11 @@ type formData struct {
 // harnessFormData feeds components/harness_options.html: the harness_options
 // sub-form for a single config scope.
 type harnessFormData struct {
-	Section schema.Section
-	Scope   string
-	Harness string // effective harness the sub-form is rendered for
-	Fields  []schema.HarnessFieldValue
+	Section   schema.Section
+	Scope     string // scope-unique element-id suffix
+	ScopeName string // raw config map key ("" for defaults)
+	Harness   string // effective harness the sub-form is rendered for
+	Fields    []schema.HarnessFieldValue
 }
 
 // buildForm renders section's registry against target for display. defaults
@@ -64,13 +66,17 @@ func (s *Server) buildForm(section schema.Section, target any, cfg *config.Confi
 // buildFormWithHarness wraps buildForm for the five config sections that
 // carry harness/harness_options: it threads a scope-unique id suffix,
 // resolves the effective harness, attaches the options sub-form, and makes
-// the model field harness-aware (datalist suggestions / format hint).
-func (s *Server) buildFormWithHarness(section schema.Section, target any, cfg *config.Config, action, scope string) formData {
+// the model field harness-aware (datalist suggestions / format hint). name is
+// the RAW config map key ("" for defaults) — scopeSuffix derives the
+// element-id suffix from it so the two can never drift apart.
+func (s *Server) buildFormWithHarness(section schema.Section, target any, cfg *config.Config, action, name string) formData {
+	scope := scopeSuffix(section, name)
 	fd := s.buildForm(section, target, cfg, action)
 	fd.Scope = scope
 	for i := range fd.Fields {
 		fd.Fields[i].Section = section
 		fd.Fields[i].Scope = scope
+		fd.Fields[i].ScopeName = name
 	}
 
 	own, harnessName, inherited := harnessView(target, cfg)
@@ -83,10 +89,11 @@ func (s *Server) buildFormWithHarness(section schema.Section, target any, cfg *c
 	}
 	src := schema.OptionSources{Cfg: cfg, Agents: s.agentList}
 	fd.Harness = &harnessFormData{
-		Section: section,
-		Scope:   scope,
-		Harness: harnessName,
-		Fields:  schema.HarnessOptionValues(h, own, inherited, src),
+		Section:   section,
+		Scope:     scope,
+		ScopeName: name,
+		Harness:   harnessName,
+		Fields:    schema.HarnessOptionValues(h, own, inherited, src),
 	}
 	for i := range fd.Fields {
 		if fd.Fields[i].Key == "model" {

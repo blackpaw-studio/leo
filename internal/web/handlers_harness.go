@@ -43,11 +43,7 @@ func (s *Server) handleHarnessOptionsPartial(w http.ResponseWriter, r *http.Requ
 	stored, storedName, _ := harnessView(target, cfg)
 	name := selected
 	if name == "" {
-		if section == schema.SectionDefaults {
-			name = config.DefaultHarnessName
-		} else {
-			name = cfg.DefaultsHarness()
-		}
+		name = cfg.DefaultsHarness()
 	}
 	h, err := harness.Get(name)
 	if err != nil {
@@ -69,7 +65,7 @@ func (s *Server) handleHarnessOptionsPartial(w http.ResponseWriter, r *http.Requ
 
 	src := schema.OptionSources{Cfg: cfg, Agents: s.agentList}
 	data := harnessPartialData{
-		Form: harnessFormData{Section: section, Scope: scope, Harness: name,
+		Form: harnessFormData{Section: section, Scope: scope, ScopeName: scopeName, Harness: name,
 			Fields: schema.HarnessOptionValues(h, stored, inherited, src)},
 		ModelOpts: schema.ModelSuggestions(name),
 	}
@@ -79,27 +75,39 @@ func (s *Server) handleHarnessOptionsPartial(w http.ResponseWriter, r *http.Requ
 	}
 }
 
+// scopeSuffix returns the scope-unique element-id suffix for a section's
+// form ("defaults", "process-<name>", ...). Shared by buildFormWithHarness
+// and locateHarnessScope so URL params (raw config map keys) and element ids
+// (this suffix) can't drift apart.
+func scopeSuffix(section schema.Section, name string) string {
+	if section == schema.SectionDefaults {
+		return "defaults"
+	}
+	return string(section) + "-" + name
+}
+
 // locateHarnessScope maps a (section, scope-name) pair to the config struct
-// backing its form, plus the scope id suffix used for element ids.
+// backing its form, plus the scope id suffix used for element ids. name is
+// the RAW config map key ("" for defaults).
 func locateHarnessScope(cfg *config.Config, section schema.Section, name string) (any, string, bool) {
 	switch section {
 	case schema.SectionDefaults:
-		return &cfg.Defaults, "defaults", true
+		return &cfg.Defaults, scopeSuffix(section, name), true
 	case schema.SectionProcess:
 		if p, ok := cfg.Processes[name]; ok {
-			return &p, "process-" + name, true
+			return &p, scopeSuffix(section, name), true
 		}
 	case schema.SectionTask:
 		if t, ok := cfg.Tasks[name]; ok {
-			return &t, "task-" + name, true
+			return &t, scopeSuffix(section, name), true
 		}
 	case schema.SectionTemplate:
 		if t, ok := cfg.Templates[name]; ok {
-			return &t, "template-" + name, true
+			return &t, scopeSuffix(section, name), true
 		}
 	case schema.SectionSession:
 		if sc, ok := cfg.Sessions[name]; ok {
-			return &sc, "session-" + name, true
+			return &sc, scopeSuffix(section, name), true
 		}
 	}
 	return nil, "", false

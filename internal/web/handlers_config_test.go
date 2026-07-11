@@ -806,7 +806,7 @@ func TestBuildFormWithHarnessProcess(t *testing.T) {
 	}
 	s, _ := newTestServer(t)
 	p := cfg.Processes["builder"]
-	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "process-builder")
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "builder")
 
 	if fd.Harness == nil || fd.Harness.Harness != "claude" {
 		t.Fatalf("Harness sub-form = %+v, want claude", fd.Harness)
@@ -841,7 +841,7 @@ func TestBuildFormWithHarnessNonClaudeModelHint(t *testing.T) {
 	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"c": {Harness: "codex"}}}
 	s, _ := newTestServer(t)
 	p := cfg.Processes["c"]
-	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/a", "process-c")
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/a", "c")
 	if fd.Harness == nil || fd.Harness.Harness != "codex" {
 		t.Fatalf("want codex sub-form, got %+v", fd.Harness)
 	}
@@ -873,7 +873,7 @@ func TestBuildFormWithHarnessUnregisteredHarness(t *testing.T) {
 	}
 	s, _ := newTestServer(t)
 	p := cfg.Processes["broken"]
-	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/broken", "process-broken")
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/broken", "broken")
 
 	if fd.Harness != nil {
 		t.Errorf("Harness sub-form = %+v, want nil for unregistered harness", fd.Harness)
@@ -901,7 +901,7 @@ func TestSessionsFormNeverInheritsHarnessOptions(t *testing.T) {
 	}
 	s, _ := newTestServer(t)
 	sc := cfg.Sessions["r"]
-	fd := s.buildFormWithHarness(schema.SectionSession, &sc, cfg, "/a", "session-r")
+	fd := s.buildFormWithHarness(schema.SectionSession, &sc, cfg, "/a", "r")
 	for _, f := range fd.Harness.Fields {
 		if f.Inherited != "" {
 			t.Errorf("session field %s shows inherited %q; sessions never cascade", f.Key, f.Inherited)
@@ -920,7 +920,7 @@ func TestConfigFormRendersHarnessOptionsSubForm(t *testing.T) {
 	}
 	s, _ := newTestServer(t)
 	p := cfg.Processes["builder"]
-	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "process-builder")
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "builder")
 
 	var buf strings.Builder
 	if err := s.templates.ExecuteTemplate(&buf, "config_form", fd); err != nil {

@@ -4,7 +4,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -112,6 +114,65 @@ func TestHarnessOptionsPartialTemplateAndSessionScopes(t *testing.T) {
 	body = getBody(t, s, "/web/partials/harness-options?section=session&scope=r&harness=claude")
 	if !strings.Contains(body, `dl-model-session-r`) {
 		t.Errorf("session partial missing scoped datalist id: %s", body)
+	}
+}
+
+// hxGetPattern extracts the harness select's harness-options hx-get URL from
+// a rendered page/form.html fragment (pages carry other unrelated hx-get
+// polling endpoints too, e.g. /partials/status).
+var hxGetPattern = regexp.MustCompile(`hx-get="([^"]*harness-options[^"]*)"`)
+
+// TestHarnessSelectHxGetRoundTrips is the regression test for the bug fixed
+// by scopeSuffix: form.html's harness-select hx-get URL must carry the RAW
+// config map key ("b"), not the element-id suffix ("process-b"), because
+// locateHarnessScope (and every cfg.Processes[name]-style lookup behind it)
+// keys on the raw name. It renders the REAL process edit page — the actual
+// production wiring (handleProcessEditPage → buildFormWithHarness →
+// form.html), not a hand-built formData — and fires the exact hx-get URL
+// the page emits back through the test server, which is what the old
+// hand-typed-query-string tests structurally missed (they'd have passed
+// unchanged against the buggy code).
+func TestHarnessSelectHxGetRoundTrips(t *testing.T) {
+	cfg := &config.Config{
+		Processes: map[string]config.ProcessConfig{"b": {
+			HarnessOptions: map[string]any{"permission_mode": "plan"},
+		}},
+	}
+	s := seedHarnessTestServer(t, cfg)
+
+	body := getBody(t, s, "/processes/b")
+
+	m := hxGetPattern.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("harness select hx-get URL not found on process edit page: %s", body)
+	}
+	hxGetURL := m[1]
+
+	u, err := url.Parse(hxGetURL)
+	if err != nil {
+		t.Fatalf("parsing hx-get URL %q: %v", hxGetURL, err)
+	}
+	if got := u.Query().Get("scope"); got != "b" {
+		t.Errorf("hx-get scope param = %q, want raw config key %q", got, "b")
+	}
+
+	if !strings.Contains(body, `id="f-harness" name="harness"`) {
+		// sanity-check we found the harness select itself, not some other
+		// hx-get on the page.
+		t.Fatalf("rendered page missing harness select: %s", body)
+	}
+
+	fullURL := hxGetURL + "&harness=claude"
+	req := httptest.NewRequest(http.MethodGet, fullURL, nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s → %d, want 200 (body: %s)", fullURL, w.Code, w.Body.String())
+	}
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, `name="harness_options.permission_mode"`) {
+		t.Errorf("partial response missing permission_mode field: %s", respBody)
 	}
 }
 
