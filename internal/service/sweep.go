@@ -85,8 +85,10 @@ func shouldSuspend(now time.Time, act tmux.SessionActivity, idle time.Duration) 
 
 // isSweepEligibleHarness reports whether the idle sweep may act on a record
 // with this harness name. Empty means claude (records predate the Harness
-// field). Every other harness is DriveTurns-only today and has no live tmux
-// process to suspend, so the sweep must never touch it.
+// field). Every other harness is skipped: codex is turn-driven with no
+// resident process to suspend, and opencode's resident `opencode serve` has
+// no leo-side suspend/resume mechanic — neither can be safely touched by
+// this sweep.
 func isSweepEligibleHarness(harnessName string) bool {
 	return harnessName == "" || harnessName == "claude"
 }

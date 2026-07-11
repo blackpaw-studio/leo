@@ -277,6 +277,63 @@ func TestTurnDriverAbortDuringTurnDoesNotMisclassifyAsStale(t *testing.T) {
 	}
 }
 
+// TestTurnDriverCancelledCtxWithSuccessfulExitIsNotMisclassified guards the
+// other half of the cancellation predicate: a turn whose child process
+// completes successfully (exit 0, valid output) at the exact instant its
+// context is cancelled must NOT be treated as an abort. Misclassifying it
+// would discard a valid Result and, on a first turn, a freshly-minted
+// thread id, losing continuity. The fake execCommand ignores ctx (so
+// cancellation never kills the child), while the parent ctx passed to
+// Inject is already cancelled before the call — isolating the
+// `runErr != nil && turnCtx.Err() != nil` predicate from the unrelated
+// question of whether ctx cancellation actually killed the process.
+func TestTurnDriverCancelledCtxWithSuccessfulExitIsNotMisclassified(t *testing.T) {
+	var calls [][]string
+	var mu sync.Mutex
+	path, err := filepath.Abs(filepath.Join("testdata", "fresh.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withExecCommand(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		mu.Lock()
+		calls = append(calls, append([]string{}, args...))
+		mu.Unlock()
+		// Deliberately ignore ctx: the child must run to completion
+		// regardless of the (already-cancelled) parent context, so the
+		// test can isolate the runErr/ctx.Err() predicate.
+		return exec.Command("cat", path)
+	})
+
+	ids := &memIDStore{}
+	h := harness.SessionHandle{
+		TmuxSession: "leo-test-cancelled-success",
+		Workspace:   t.TempDir(),
+		HomePath:    t.TempDir(),
+		TurnArgs:    []string{"exec", "--json", "--skip-git-repo-check"},
+		IDs:         ids,
+	}
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled before the turn even starts
+
+	res, err := (TurnDriver{}).Inject(parentCtx, h, "hi")
+	if err != nil {
+		t.Fatalf("Inject: %v, want nil (a successful exit must not be misclassified as cancelled)", err)
+	}
+	if res == nil {
+		t.Fatal("res = nil, want a valid Result")
+	}
+	if res.Text != freshText {
+		t.Errorf("Result.Text = %q, want %q", res.Text, freshText)
+	}
+	if ids.Get() != freshThreadID {
+		t.Errorf("IDs.Get() = %q, want %q (thread id must be recorded despite the cancelled ctx)", ids.Get(), freshThreadID)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1 (no stale-thread retry)", len(calls))
+	}
+}
+
 func TestTurnDriverSerializesPerSession(t *testing.T) {
 	withExecCommand(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		path, err := filepath.Abs(filepath.Join("testdata", "fresh.jsonl"))

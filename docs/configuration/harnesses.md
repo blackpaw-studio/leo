@@ -61,7 +61,11 @@ persistent session) with a different strategy, exposed internally as a
   <workspace> -p <password> [-s <session-id>]` — opencode's own TUI client,
   talking to the resident server over `127.0.0.1` with the stored basic-auth
   password (passed as an argv flag, not env, since attach is
-  interactive/user-invoked and env doesn't cross an SSH hop).
+  interactive/user-invoked and env doesn't cross an SSH hop). `idle_suspend_after`
+  has no effect on `codex` or `opencode` ephemeral agents — the idle sweep
+  skips both harnesses (see `isSweepEligibleHarness` in
+  `internal/service/sweep.go`), since neither has a suspend/resume mechanic;
+  a resident `opencode serve` will not auto-stop on idle.
 
 ## What a harness is
 

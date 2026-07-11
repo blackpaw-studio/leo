@@ -85,13 +85,15 @@ func (d TurnDriver) runTurn(ctx context.Context, h harness.SessionHandle, msg st
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stdout
 		runErr := cmd.Run()
-		if turnCtx.Err() != nil {
+		if runErr != nil && turnCtx.Err() != nil {
 			// AbortTurn (or a cancelled parent ctx) killed the child mid-turn:
 			// exec.CommandContext produces the same exit!=0 + empty-stdout
 			// shape as a stale ("no rollout found") resume. Report the
 			// cancellation explicitly so the caller never misclassifies an
 			// abort as a stale thread — that would clear a perfectly valid
-			// stored id and silently re-run the message as a fresh turn.
+			// stored id and silently re-run the message as a fresh turn. A
+			// cancelled ctx alone (without a non-nil runErr) must NOT
+			// short-circuit a turn that actually completed successfully.
 			return harness.Result{}, -1, fmt.Errorf("codex: turn cancelled: %w", turnCtx.Err())
 		}
 		res, perr := Codex{}.ParseEvents(&stdout)
