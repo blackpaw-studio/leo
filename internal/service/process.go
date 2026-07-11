@@ -82,6 +82,16 @@ type ProcessSpec struct {
 	// session on its first iteration instead of killing and recreating it.
 	// See agent.SpawnRequest.Adopt for the rationale.
 	Adopt bool
+	// Harness is the resolved harness adapter name (e.g. "claude", "codex").
+	// Empty means "claude" — old state/records predate this field.
+	Harness string
+	// Kind identifies which leo primitive this spec represents. Empty means
+	// KindProcess — old state/records predate this field.
+	Kind harness.Kind
+	// OpeningPrompt carries the opening turn for DriveTurns harnesses, whose
+	// driver delivers it out-of-band via Start rather than as a trailing
+	// positional arg. Empty for claude, which keeps the prompt in ClaudeArgs.
+	OpeningPrompt string
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -227,13 +237,16 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	s.mu.Unlock()
 
 	procSpec := ProcessSpec{
-		Name:       spec.Name,
-		ClaudeArgs: spec.ClaudeArgs,
-		WorkDir:    spec.WorkDir,
-		Env:        spec.Env,
-		WebPort:    spec.WebPort,
-		WebToken:   spec.WebToken,
-		Adopt:      spec.Adopt,
+		Name:          spec.Name,
+		ClaudeArgs:    spec.ClaudeArgs,
+		WorkDir:       spec.WorkDir,
+		Env:           spec.Env,
+		WebPort:       spec.WebPort,
+		WebToken:      spec.WebToken,
+		Adopt:         spec.Adopt,
+		Harness:       spec.Harness,
+		Kind:          harness.KindAgent,
+		OpeningPrompt: spec.OpeningPrompt,
 	}
 	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
 	return nil
@@ -593,11 +606,53 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	return nil
 }
 
-// harnessName is hardcoded here because ProcessSpec has no harness field yet
-// (all supervised processes are claude today). A later task threads the
-// spec's actual harness name through once codex/opencode gain session
-// drivers.
-const harnessName = "claude"
+// driverFor resolves a spec's session driver. Empty harness means claude
+// (records/state written before the field existed).
+func driverFor(harnessName string) harness.SessionDriver {
+	if harnessName == "" {
+		harnessName = "claude"
+	}
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		return nil // unreachable for validated configs; callers nil-check
+	}
+	return h.Driver()
+}
+
+// handleForSpec builds the SessionHandle superviseProcess hands to drivers.
+func handleForSpec(spec ProcessSpec, id *procIdentity, homePath string) harness.SessionHandle {
+	kind := spec.Kind
+	if kind == "" {
+		kind = harness.KindProcess
+	}
+	return harness.SessionHandle{
+		Kind:          kind,
+		Name:          id.Name(),
+		TmuxSession:   id.SessionName(),
+		Workspace:     spec.WorkDir,
+		HomePath:      homePath,
+		Env:           spec.Env,
+		TurnArgs:      id.Args(),
+		OpeningPrompt: spec.OpeningPrompt,
+		IDs:           agentOrProcessIDs(homePath, id.Name()),
+	}
+}
+
+// superviseTurnBased registers a turn-driven session (codex): no resident
+// process, no restart loop. Start runs the opening turn (if any) and
+// records the thread id; the session then idles until Inject calls arrive
+// through the daemon/web dispatch paths.
+func superviseTurnBased(ctx context.Context, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity, drv harness.SessionDriver) {
+	name := id.Name()
+	sv.setState(name, "running")
+	if err := drv.Start(ctx, handleForSpec(spec, id, homePath)); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] driver start: %v\n", name, err)
+		sv.setState(name, "stopped")
+		return
+	}
+	<-ctx.Done()
+	sv.setState(name, "stopped")
+}
 
 // superviseProcess runs a single process in a tmux session with restart loop.
 func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity) {
@@ -608,12 +663,17 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	// type assertion below (PaneCare, QuickExitRecovery) simply misses, which
 	// degrades to "skip dismissal" / "default quick-exit clear" — the
 	// historical pre-driver behavior minus dialog auto-dismissal.
-	var drv harness.SessionDriver
-	if h, err := harness.Get(harnessName); err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] warning: resolving %s driver: %v\n", spec.Name, harnessName, err)
-	} else {
-		drv = h.Driver()
+	drv := driverFor(spec.Harness)
+	if drv != nil && drv.Style() == harness.DriveTurns {
+		superviseTurnBased(ctx, spec, homePath, sv, id, drv)
+		return
 	}
+
+	harnessName := spec.Harness
+	if harnessName == "" {
+		harnessName = "claude"
+	}
+
 	var paneKey func(string) string
 	if care, ok := drv.(harness.PaneCare); ok {
 		paneKey = care.PaneKey
@@ -624,6 +684,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	// the session actually survived the daemon bounce. Any in-loop restart
 	// below always spawns a fresh session.
 	adopt := spec.Adopt
+	// openingPrompt is one-shot across restart iterations: delivered by the
+	// driver's Start on the first successful launch (create or adopt), then
+	// cleared so an in-loop restart never replays it.
+	openingPrompt := spec.OpeningPrompt
 
 	for {
 		// Snapshot identity for this iteration. The tmux session name is also
@@ -703,6 +767,23 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 					}
 				}(sessionName)
 			}
+		}
+
+		// Give the driver a chance to do whatever it needs before the first
+		// Inject (e.g. delivering an opening prompt). Runs in a goroutine so
+		// a slow/blocked Start never stalls the restart loop; claude's Start
+		// is a no-op so this is behavior-neutral for every existing config.
+		// The opening prompt is one-shot: cleared after the first launch
+		// (create or adopt) so an in-loop restart never replays it.
+		if drv != nil {
+			startHandle := handleForSpec(spec, id, homePath)
+			startHandle.OpeningPrompt = openingPrompt
+			openingPrompt = ""
+			go func(h harness.SessionHandle) {
+				if err := drv.Start(ctx, h); err != nil && ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "[%s] driver start: %v\n", h.Name, err)
+				}
+			}(startHandle)
 		}
 
 		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey) {

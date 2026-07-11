@@ -92,7 +92,7 @@ func TestBuildTemplateArgsBasic(t *testing.T) {
 		MaxTurns: 200,
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test-agent", "/tmp/workspace", "")
+	args := BuildTemplateArgs(cfg, tmpl, "test-agent", "/tmp/workspace", "", "")
 
 	assertContainsFlag(t, args, "--model", "opus")
 	assertContainsFlag(t, args, "--max-turns", "200")
@@ -115,7 +115,7 @@ func TestBuildTemplateArgsInheritsDefaults(t *testing.T) {
 	}
 	tmpl := config.TemplateConfig{}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 
 	assertContainsFlag(t, args, "--model", "haiku")
 	assertContainsFlag(t, args, "--max-turns", "50")
@@ -130,7 +130,7 @@ func TestBuildTemplateArgsChannels(t *testing.T) {
 		Channels: []string{"plugin:telegram@official", "plugin:slack@custom"},
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 
 	count := 0
 	for _, a := range args {
@@ -150,7 +150,7 @@ func TestBuildTemplateArgsDevChannels(t *testing.T) {
 		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 
 	var sawChan, sawDev bool
 	for i, a := range args {
@@ -173,7 +173,7 @@ func TestBuildTemplateArgsAgent(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"agent": "my-agent"}}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 	assertContainsFlag(t, args, "--agent", "my-agent")
 }
 
@@ -181,7 +181,7 @@ func TestBuildTemplateArgsRemoteControlDisabled(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"remote_control": false}}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 	for _, a := range args {
 		if a == "--remote-control" {
 			t.Error("--remote-control should not be present when disabled")
@@ -193,7 +193,7 @@ func TestBuildTemplateArgsPromptIsTrailingPositional(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{Model: "opus"}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "investigate alert X")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "investigate alert X", "")
 
 	if len(args) == 0 {
 		t.Fatal("expected non-empty args")
@@ -216,7 +216,7 @@ func TestBuildTemplateArgsNoPromptOmitsPositional(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{Model: "opus"}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
+	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 
 	// Backward compat: with no prompt, the final arg is still a flag value
 	// (--max-turns N), never a bare positional.
@@ -301,6 +301,41 @@ func TestSpawnStampsResolvedIdleSuspend(t *testing.T) {
 	for _, r := range recs {
 		if r.IdleSuspendAfter != (15 * time.Minute).String() {
 			t.Fatalf("override not applied: %q", r.IdleSuspendAfter)
+		}
+	}
+}
+
+// TestSpawnStampsClaudeHarnessByDefault characterizes the harness-aware spawn
+// path: an agent spawned from a template with no explicit harness (the only
+// kind config validation allows today) must persist Harness == "claude" on
+// the agentstore record and keep --session-id in ClaudeArgs, so nothing
+// about the claude spawn path changes for existing configs.
+func TestSpawnStampsClaudeHarnessByDefault(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]config.TemplateConfig{
+			"t": {Workspace: home},
+		},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.Spawn(context.Background(), SpawnSpec{Template: "t", Repo: "demo"}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	recs, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("want 1 record, got %d (err=%v)", len(recs), err)
+	}
+	for _, r := range recs {
+		if r.Harness != "claude" {
+			t.Errorf("Harness = %q, want %q", r.Harness, "claude")
+		}
+		if !hasFlagValue(r.ClaudeArgs, "--session-id", "") {
+			t.Errorf("expected --session-id in ClaudeArgs, got %v", r.ClaudeArgs)
 		}
 	}
 }

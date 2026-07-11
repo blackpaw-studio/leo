@@ -17,6 +17,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
+	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
@@ -116,16 +118,23 @@ func runService(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	claudeArgs := buildProcessArgs(cfg, procName, proc)
+	// Foreground mode has no daemon API token to offer a non-claude LeoMCP
+	// bridge, so pass "" — processLeoMCPEnv gates off cleanly (matches
+	// today's process env, which never sets LEO_API_TOKEN in this path).
+	claudeArgs := buildProcessArgs(cfg, procName, proc, "")
 
-	// Add session persistence
-	store := session.NewStore(cfg.HomePath)
-	sessionKey := "process:" + procName
-	claudeArgs = append(claudeArgs,
-		claudeharness.Claude{}.SessionArgs(
-			resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), ""),
-		)...,
-	)
+	// Add session persistence. This is claude-specific (--session-id/--resume
+	// selection via claude's own jsonl transcripts); non-claude harnesses
+	// keep whatever session state their own driver manages.
+	if cfg.ProcessHarness(proc) == "" || cfg.ProcessHarness(proc) == "claude" {
+		store := session.NewStore(cfg.HomePath)
+		sessionKey := "process:" + procName
+		claudeArgs = append(claudeArgs,
+			claudeharness.Claude{}.SessionArgs(
+				resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), ""),
+			)...,
+		)
+	}
 
 	claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
 	if err != nil {
@@ -196,16 +205,21 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 			continue
 		}
 
-		args := buildProcessArgs(cfg, name, proc)
+		harnessName := cfg.ProcessHarness(proc)
+		args := buildProcessArgs(cfg, name, proc, webToken)
 
-		// Add session persistence
-		store := session.NewStore(cfg.HomePath)
-		sessionKey := "process:" + name
-		args = append(args,
-			claudeharness.Claude{}.SessionArgs(
-				resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] "),
-			)...,
-		)
+		// Add session persistence. This is claude-specific (--session-id/
+		// --resume selection via claude's own jsonl transcripts); non-claude
+		// harnesses keep whatever session state their own driver manages.
+		if harnessName == "" || harnessName == "claude" {
+			store := session.NewStore(cfg.HomePath)
+			sessionKey := "process:" + name
+			args = append(args,
+				claudeharness.Claude{}.SessionArgs(
+					resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] "),
+				)...,
+			)
+		}
 
 		procEnv := mergeChannelsIntoEnv(proc)
 
@@ -217,6 +231,8 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 			WebPort:    strconv.Itoa(cfg.WebPort()),
 			WebToken:   webToken,
 			StateDir:   cfg.StatePath(),
+			Harness:    harnessName,
+			Kind:       harness.KindProcess,
 		})
 	}
 	return specs
@@ -287,33 +303,41 @@ func mergeChannelsIntoEnv(proc config.ProcessConfig) map[string]string {
 	return merged
 }
 
-// buildProcessArgs builds claude CLI args for a named process by resolving
-// the config cascade into a harness.LaunchSpec.
-func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig) []string {
+// processLeoMCPEnv gates whether a non-claude LeoMCP bridge should be wired
+// in for a supervised process, mirroring run/runner.go's leoMCPEnv gate but
+// sourced from the webToken already resolved by the caller (supervised mode
+// resolves it once via web.EnsureAPIToken; the single-process foreground
+// path has none, so it passes ""). LEO_PROCESS_NAME is the bare process
+// name (see buildClaudeShellCmd, which exports the same three vars into the
+// supervised tmux shell).
+func processLeoMCPEnv(cfg *config.Config, name, webToken string) (map[string]string, bool) {
+	if cfg == nil || !cfg.Web.Enabled || webToken == "" {
+		return nil, false
+	}
+	return map[string]string{
+		"LEO_PROCESS_NAME": name,
+		"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
+		"LEO_API_TOKEN":    webToken,
+	}, true
+}
+
+// resolveProcessLaunch resolves the config cascade for a named process into a
+// harness.Harness + fully-populated harness.LaunchSpec, stopping just short of
+// calling h.Args(spec). Split out from buildProcessArgs so tests can assert
+// on spec.Options (e.g. a codex/opencode LeoMCP bridge) without needing
+// Args() to succeed — codex/opencode still refuse KindProcess launches until
+// their session drivers land.
+func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessConfig, webToken string) (harness.Harness, harness.LaunchSpec, error) {
 	h, err := harness.Get(cfg.ProcessHarness(proc))
 	if err != nil {
-		log.Printf("[%s] resolving harness: %v", name, err)
-		return nil
+		return nil, harness.LaunchSpec{}, fmt.Errorf("resolving harness: %w", err)
 	}
 	decoded, err := h.DecodeOptions(cfg.ProcessHarnessOptions(proc))
 	if err != nil {
-		log.Printf("[%s] decoding harness options: %v", name, err)
-		return nil
+		return nil, harness.LaunchSpec{}, fmt.Errorf("decoding harness options: %w", err)
 	}
-	opts, ok := decoded.(claudeharness.Options)
-	if !ok {
-		// Non-claude processes arrive with Plan 4 (session drivers).
-		log.Printf("[%s] harness %q cannot run supervised processes yet", name, h.Name())
-		return nil
-	}
-	mcpConfig := ""
-	if p := cfg.ProcessMCPConfigPath(proc); config.HasMCPServers(p) {
-		mcpConfig = p
-	}
-	opts.RemoteControlPrefix = name
-	opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
-	opts.MCPConfigPath = mcpConfig
-	opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+
+	leoEnv, leoMCPOK := processLeoMCPEnv(cfg, name, webToken)
 
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindProcess,
@@ -323,7 +347,53 @@ func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig
 		AddDirs:     proc.AddDirs,
 		Channels:    proc.Channels,
 		DevChannels: proc.DevChannels,
-		Options:     opts,
+	}
+
+	switch opts := decoded.(type) {
+	case claudeharness.Options:
+		mcpConfig := ""
+		if p := cfg.ProcessMCPConfigPath(proc); config.HasMCPServers(p) {
+			mcpConfig = p
+		}
+		opts.RemoteControlPrefix = name
+		opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
+		opts.MCPConfigPath = mcpConfig
+		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+		spec.Options = opts
+	case codexharness.Options:
+		if leoMCPOK {
+			opts.LeoMCP = &codexharness.LeoMCPBridge{
+				Command:      "leo",
+				Args:         []string{"mcp-server"},
+				EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+				ApprovalMode: "approve",
+			}
+		}
+		spec.Options = opts
+	case opencodeharness.Options:
+		if leoMCPOK {
+			opts.LeoMCP = &opencodeharness.LeoMCPBridge{
+				Command: []string{"leo", "mcp-server"},
+				Env:     leoEnv,
+			}
+		}
+		spec.Options = opts
+	default:
+		return h, harness.LaunchSpec{}, fmt.Errorf("harness %q returned unsupported options type %T", h.Name(), decoded)
+	}
+
+	return h, spec, nil
+}
+
+// buildProcessArgs builds CLI args for a named process by resolving the
+// config cascade into a harness.LaunchSpec. webToken is the daemon's API
+// bearer token (empty in the single-process foreground path, which has none
+// to offer); see processLeoMCPEnv.
+func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig, webToken string) []string {
+	h, spec, err := resolveProcessLaunch(cfg, name, proc, webToken)
+	if err != nil {
+		log.Printf("[%s] %v", name, err)
+		return nil
 	}
 	args, err := h.Args(spec)
 	if err != nil {

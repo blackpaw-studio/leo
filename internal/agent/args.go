@@ -1,24 +1,30 @@
 package agent
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
+	"strconv"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
+	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
-// BuildTemplateArgs assembles the claude CLI arguments for an agent spawned from a template.
-// The override cascade is template → defaults → built-in default.
+// resolveTemplateLaunch resolves the config cascade for a template spawn into
+// a harness.Harness + fully-populated harness.LaunchSpec, stopping just short
+// of calling h.Args(spec). Split out from BuildTemplateArgs so tests can
+// assert on spec.Options (e.g. a codex/opencode LeoMCP bridge) without
+// needing Args() to succeed — codex/opencode still refuse KindAgent launches
+// until their session drivers land.
 //
-// When prompt is non-empty it is appended as the trailing positional argument.
-// Claude Code treats a bare positional (with no -p/--print) as the opening turn
-// of an interactive session, so the agent processes the prompt and then stays
-// alive in its tmux REPL — the same behavior an empty prompt has, plus a first
-// turn. An empty prompt appends nothing, preserving the prior arg list exactly.
-func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt string) []string {
+// webToken is the daemon's API bearer token (Manager.webToken), used to fill
+// the literal LEO_* values a non-claude LeoMCP bridge needs inline (codex's
+// bridge only needs env-var *names*, which the supervisor already exports).
+func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) (harness.Harness, harness.LaunchSpec, error) {
 	// Defense in depth: Config.Validate() also rejects these, but skip
 	// anything unsafe here in case spawn-time receives an unvalidated
 	// config. Log noisily so the silent drop isn't invisible.
@@ -33,19 +39,11 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 
 	h, err := harness.Get(cfg.TemplateHarness(tmpl))
 	if err != nil {
-		log.Printf("[agent:%s] resolving harness: %v", agentName, err)
-		return nil
+		return nil, harness.LaunchSpec{}, fmt.Errorf("resolving harness: %w", err)
 	}
 	decoded, err := h.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
 	if err != nil {
-		log.Printf("[agent:%s] decoding harness options: %v", agentName, err)
-		return nil
-	}
-	opts, ok := decoded.(claudeharness.Options)
-	if !ok {
-		// Non-claude templates arrive with Plan 4 (session drivers).
-		log.Printf("[agent:%s] harness %q cannot spawn agents yet", agentName, h.Name())
-		return nil
+		return nil, harness.LaunchSpec{}, fmt.Errorf("decoding harness options: %w", err)
 	}
 
 	mcpConfig := ""
@@ -67,16 +65,7 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 		maxTurns = config.DefaultMaxTurns
 	}
 
-	// Agents default remote_control to true, and only the template's own
-	// options can turn it off — the defaults layer never applied to
-	// templates pre-migration and still doesn't (see plan: preserved quirks).
-	opts.RemoteControl = true
-	if v, ok := tmpl.HarnessOptions["remote_control"].(bool); ok {
-		opts.RemoteControl = v
-	}
-	opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
-	opts.MCPConfigPath = mcpConfig
-	opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+	leoMCPOK := cfg != nil && cfg.Web.Enabled
 
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindAgent,
@@ -88,7 +77,68 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 		Channels:    tmpl.Channels,
 		DevChannels: tmpl.DevChannels,
 		Prompt:      prompt,
-		Options:     opts,
+	}
+
+	switch opts := decoded.(type) {
+	case claudeharness.Options:
+		// Agents default remote_control to true, and only the template's own
+		// options can turn it off — the defaults layer never applied to
+		// templates pre-migration and still doesn't (see plan: preserved quirks).
+		opts.RemoteControl = true
+		if v, ok := tmpl.HarnessOptions["remote_control"].(bool); ok {
+			opts.RemoteControl = v
+		}
+		opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
+		opts.MCPConfigPath = mcpConfig
+		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+		spec.Options = opts
+	case codexharness.Options:
+		if leoMCPOK {
+			opts.LeoMCP = &codexharness.LeoMCPBridge{
+				Command:      "leo",
+				Args:         []string{"mcp-server"},
+				EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+				ApprovalMode: "approve",
+			}
+		}
+		spec.Options = opts
+	case opencodeharness.Options:
+		if leoMCPOK && webToken != "" {
+			opts.LeoMCP = &opencodeharness.LeoMCPBridge{
+				Command: []string{"leo", "mcp-server"},
+				Env: map[string]string{
+					"LEO_PROCESS_NAME": agentName,
+					"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
+					"LEO_API_TOKEN":    webToken,
+				},
+			}
+		}
+		spec.Options = opts
+	default:
+		return h, harness.LaunchSpec{}, fmt.Errorf("harness %q returned unsupported options type %T", h.Name(), decoded)
+	}
+
+	return h, spec, nil
+}
+
+// BuildTemplateArgs assembles the CLI arguments for an agent spawned from a template.
+// The override cascade is template → defaults → built-in default.
+//
+// When prompt is non-empty it is appended as the trailing positional argument
+// (claude only — codex/opencode carry the opening prompt elsewhere once their
+// session drivers land). Claude Code treats a bare positional (with no
+// -p/--print) as the opening turn of an interactive session, so the agent
+// processes the prompt and then stays alive in its tmux REPL — the same
+// behavior an empty prompt has, plus a first turn. An empty prompt appends
+// nothing, preserving the prior arg list exactly.
+//
+// webToken is the daemon's API bearer token (Manager.webToken); see
+// resolveTemplateLaunch.
+func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) []string {
+	h, spec, err := resolveTemplateLaunch(cfg, tmpl, agentName, workspace, prompt, webToken)
+	if err != nil {
+		log.Printf("[agent:%s] %v", agentName, err)
+		return nil
 	}
 	args, err := h.Args(spec)
 	if err != nil {

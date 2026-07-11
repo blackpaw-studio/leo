@@ -192,9 +192,17 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		return Record{}, err
 	}
 
+	harnessName := cfg.TemplateHarness(tmpl)
+	isClaude := harnessName == "" || harnessName == "claude"
+
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt)
-	claudeArgs = append(claudeArgs, "--session-id", sessionID)
+	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt, m.webToken)
+	openingPrompt := ""
+	if isClaude {
+		claudeArgs = append(claudeArgs, "--session-id", sessionID)
+	} else {
+		openingPrompt = spec.Prompt
+	}
 	webPort := strconv.Itoa(cfg.WebPort())
 	env := mergeEnv(tmpl.Env, spec.Env)
 
@@ -204,12 +212,14 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
-		Name:       agentName,
-		ClaudeArgs: claudeArgs,
-		WorkDir:    workspace,
-		Env:        env,
-		WebPort:    webPort,
-		WebToken:   m.webToken,
+		Name:          agentName,
+		ClaudeArgs:    claudeArgs,
+		WorkDir:       workspace,
+		Env:           env,
+		WebPort:       webPort,
+		WebToken:      m.webToken,
+		Harness:       harnessName,
+		OpeningPrompt: openingPrompt,
 	}); err != nil {
 		return Record{}, fmt.Errorf("spawning agent: %w", err)
 	}
@@ -227,6 +237,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
+		Harness:          harnessName,
 	}); err != nil {
 		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", agentName, err)
 	}
@@ -299,9 +310,17 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}
 	worktreeCreated := true
 
+	harnessName := cfg.TemplateHarness(tmpl)
+	isClaude := harnessName == "" || harnessName == "claude"
+
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt)
-	claudeArgs = append(claudeArgs, "--session-id", sessionID)
+	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt, m.webToken)
+	openingPrompt := ""
+	if isClaude {
+		claudeArgs = append(claudeArgs, "--session-id", sessionID)
+	} else {
+		openingPrompt = spec.Prompt
+	}
 	webPort := strconv.Itoa(cfg.WebPort())
 	env := mergeEnv(tmpl.Env, spec.Env)
 
@@ -325,12 +344,14 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
-		Name:       layout.AgentName,
-		ClaudeArgs: claudeArgs,
-		WorkDir:    layout.WorktreePath,
-		Env:        env,
-		WebPort:    webPort,
-		WebToken:   m.webToken,
+		Name:          layout.AgentName,
+		ClaudeArgs:    claudeArgs,
+		WorkDir:       layout.WorktreePath,
+		Env:           env,
+		WebPort:       webPort,
+		WebToken:      m.webToken,
+		Harness:       harnessName,
+		OpeningPrompt: openingPrompt,
 	}); err != nil {
 		// Reservation protected the name, so a collision here means the
 		// supervisor state changed unexpectedly (e.g. concurrent restore).
@@ -354,6 +375,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
+		Harness:          harnessName,
 	}); err != nil {
 		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", layout.AgentName, err)
 	}
@@ -556,11 +578,20 @@ func (m *Manager) Resume(name string) (Record, error) {
 		return Record{}, fmt.Errorf("agent %q is not suspended", name)
 	}
 
+	// The jsonl scan is a claude-specific resume mechanic (claude's own
+	// on-disk session transcripts); non-claude records resume with their
+	// stored args/SessionID unchanged.
 	resumeID := rec.SessionID
-	if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
-		resumeID = latestID
+	isClaude := rec.Harness == "" || rec.Harness == "claude"
+	if isClaude {
+		if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
+			resumeID = latestID
+		}
 	}
-	args := ResumeArgs(rec.ClaudeArgs, resumeID)
+	args := rec.ClaudeArgs
+	if isClaude {
+		args = ResumeArgs(rec.ClaudeArgs, resumeID)
+	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       rec.Name,
@@ -569,6 +600,7 @@ func (m *Manager) Resume(name string) (Record, error) {
 		Env:        rec.Env,
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
+		Harness:    rec.Harness,
 	}); err != nil {
 		return Record{}, fmt.Errorf("respawning suspended agent: %w", err)
 	}

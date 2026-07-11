@@ -66,6 +66,12 @@ type Record struct {
 	// after it consumes the flag, so a subsequent healthy session is
 	// resume-able again.
 	NoResume bool `json:"no_resume,omitempty"`
+
+	// Harness is the resolved harness adapter name this agent was spawned
+	// with (e.g. "claude", "codex"). Empty means "claude" — records written
+	// before this field existed predate it and must be treated as claude
+	// everywhere it's read.
+	Harness string `json:"harness,omitempty"`
 }
 
 // FilePath returns the path to agents.json in the state directory.

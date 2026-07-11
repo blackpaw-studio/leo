@@ -105,21 +105,29 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			// workspace over the stored SessionID — catches sessions created
 			// via /clear that agentstore never saw. maxAge=0 disables the
 			// staleness drop; agents are short-lived and the newest jsonl is
-			// virtually always the one we want.
+			// virtually always the one we want. This jsonl scan is a
+			// claude-specific resume mechanic; non-claude records keep their
+			// stored SessionID untouched.
 			resumeID = rec.SessionID
-			if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
-				if latestID != rec.SessionID {
-					updated := rec
-					updated.SessionID = latestID
-					if err := agentstore.Save(homePath, updated); err != nil {
-						fmt.Fprintf(os.Stderr, "restore: agent %q could not persist latest session id: %v\n", name, err)
+			isClaude := rec.Harness == "" || rec.Harness == "claude"
+			if isClaude {
+				if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
+					if latestID != rec.SessionID {
+						updated := rec
+						updated.SessionID = latestID
+						if err := agentstore.Save(homePath, updated); err != nil {
+							fmt.Fprintf(os.Stderr, "restore: agent %q could not persist latest session id: %v\n", name, err)
+						}
 					}
+					resumeID = latestID
 				}
-				resumeID = latestID
 			}
 		}
 
-		args := agent.ResumeArgs(rec.ClaudeArgs, resumeID)
+		args := rec.ClaudeArgs
+		if rec.Harness == "" || rec.Harness == "claude" {
+			args = agent.ResumeArgs(rec.ClaudeArgs, resumeID)
+		}
 		if resumeID == "" && !rec.NoResume {
 			fmt.Fprintf(os.Stderr, "restore: agent %q has no session_id (legacy record) — respawning with a fresh claude session\n", name)
 		}
@@ -132,6 +140,7 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			WebPort:    rec.WebPort,
 			WebToken:   webToken,
 			Adopt:      adopt,
+			Harness:    rec.Harness,
 		}
 		if err := sv.SpawnAgent(spec); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to restore agent %q: %v\n", name, err)

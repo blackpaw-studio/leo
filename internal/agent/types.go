@@ -23,6 +23,15 @@ type SpawnRequest struct {
 	// disrupts in-flight agents. Only honored for the first supervise
 	// iteration; a later in-loop restart spawns a fresh session as usual.
 	Adopt bool
+	// Harness is the resolved harness adapter name (e.g. "claude", "codex").
+	// Empty means "claude" — the value predates this field on records/specs
+	// written before it existed.
+	Harness string
+	// OpeningPrompt carries the agent's opening turn for harnesses whose
+	// driver delivers it out-of-band (DriveTurns) rather than as a trailing
+	// positional claude arg. Empty for claude, which keeps the prompt in
+	// ClaudeArgs.
+	OpeningPrompt string
 }
 
 // ProcessState is the live supervisor view of a single agent/process.

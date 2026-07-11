@@ -7,6 +7,8 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
+	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -122,7 +124,7 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildProcessArgs(tt.cfg, "myproc", tt.proc)
+			got := buildProcessArgs(tt.cfg, "myproc", tt.proc, "")
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("buildProcessArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
 			}
@@ -158,5 +160,120 @@ func TestResolveSessionStateStoredIDResumes(t *testing.T) {
 	st := resolveSessionState(store, "process:x", filepath.Join(home, "no-such-ws"), 0, "")
 	if st.Mode != harness.SessionResume || st.ID != "stored-id" {
 		t.Fatalf("state = %+v, want resume/stored-id", st)
+	}
+}
+
+// TestResolveProcessLaunchCodexFillsLeoMCPBridge locks the type-switch's
+// codex branch: when the leo MCP gate passes (web enabled + a non-empty
+// webToken), the codex options carry a LeoMCP bridge referencing the env-var
+// *names* the supervisor already exports — no literal token needed. Args()
+// itself still refuses KindProcess launches (no codex session driver yet),
+// so this asserts on spec.Options directly rather than the rendered argv.
+func TestResolveProcessLaunchCodexFillsLeoMCPBridge(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true},
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+	}
+	proc := config.ProcessConfig{Workspace: "/tmp/ws"}
+
+	h, spec, err := resolveProcessLaunch(cfg, "myproc", proc, "tok")
+	if err != nil {
+		t.Fatalf("resolveProcessLaunch: %v", err)
+	}
+	if h.Name() != "codex" {
+		t.Fatalf("resolved harness = %q, want codex", h.Name())
+	}
+	opts, ok := spec.Options.(codexharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
+	}
+	if opts.LeoMCP == nil {
+		t.Fatal("expected LeoMCP bridge to be filled when the leo MCP gate passes")
+	}
+	wantEnvVars := []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"}
+	if !reflect.DeepEqual(opts.LeoMCP.EnvVars, wantEnvVars) {
+		t.Errorf("LeoMCP.EnvVars = %v, want %v", opts.LeoMCP.EnvVars, wantEnvVars)
+	}
+	if opts.LeoMCP.ApprovalMode != "approve" {
+		t.Errorf("LeoMCP.ApprovalMode = %q, want approve", opts.LeoMCP.ApprovalMode)
+	}
+
+	// Args() itself still errors — codex has no session driver for processes yet.
+	if _, err := h.Args(spec); err == nil {
+		t.Error("expected codex Args() to still refuse a KindProcess launch")
+	}
+}
+
+// TestResolveProcessLaunchCodexNoLeoMCPWithoutToken confirms the gate: no
+// webToken (the single-process foreground path has none) means no bridge.
+func TestResolveProcessLaunchCodexNoLeoMCPWithoutToken(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true},
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+	}
+	_, spec, err := resolveProcessLaunch(cfg, "myproc", config.ProcessConfig{Workspace: "/tmp/ws"}, "")
+	if err != nil {
+		t.Fatalf("resolveProcessLaunch: %v", err)
+	}
+	opts, ok := spec.Options.(codexharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
+	}
+	if opts.LeoMCP != nil {
+		t.Errorf("expected nil LeoMCP bridge without a webToken, got %+v", opts.LeoMCP)
+	}
+}
+
+// TestResolveProcessLaunchOpencodeFillsLeoMCPBridge locks the opencode
+// branch: unlike codex's env-var-name whitelist, opencode's bridge needs the
+// literal LEO_* values inline.
+func TestResolveProcessLaunchOpencodeFillsLeoMCPBridge(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true, Port: 4141},
+		Defaults: config.DefaultsConfig{Harness: "opencode"},
+	}
+	h, spec, err := resolveProcessLaunch(cfg, "myproc", config.ProcessConfig{Workspace: "/tmp/ws"}, "sekrit-token")
+	if err != nil {
+		t.Fatalf("resolveProcessLaunch: %v", err)
+	}
+	if h.Name() != "opencode" {
+		t.Fatalf("resolved harness = %q, want opencode", h.Name())
+	}
+	opts, ok := spec.Options.(opencodeharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want opencodeharness.Options", spec.Options)
+	}
+	if opts.LeoMCP == nil {
+		t.Fatal("expected LeoMCP bridge to be filled when the leo MCP gate passes")
+	}
+	wantEnv := map[string]string{
+		"LEO_PROCESS_NAME": "myproc",
+		"LEO_WEB_PORT":     "4141",
+		"LEO_API_TOKEN":    "sekrit-token",
+	}
+	if !reflect.DeepEqual(opts.LeoMCP.Env, wantEnv) {
+		t.Errorf("LeoMCP.Env = %v, want %v", opts.LeoMCP.Env, wantEnv)
+	}
+
+	// Args() itself still errors — opencode has no session driver for
+	// processes yet.
+	if _, err := h.Args(spec); err == nil {
+		t.Error("expected opencode Args() to still refuse a KindProcess launch")
+	}
+}
+
+// TestResolveProcessLaunchKindIsProcess locks that supervised processes
+// always resolve KindProcess, regardless of harness.
+func TestResolveProcessLaunchKindIsProcess(t *testing.T) {
+	cfg := &config.Config{HomePath: t.TempDir()}
+	_, spec, err := resolveProcessLaunch(cfg, "myproc", config.ProcessConfig{Workspace: "/tmp/ws"}, "")
+	if err != nil {
+		t.Fatalf("resolveProcessLaunch: %v", err)
+	}
+	if spec.Kind != harness.KindProcess {
+		t.Errorf("spec.Kind = %q, want %q", spec.Kind, harness.KindProcess)
 	}
 }

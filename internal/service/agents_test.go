@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -303,6 +304,83 @@ func TestRestoreAgentsRespawnsSharedWithResume(t *testing.T) {
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
 	if _, ok := stored[rec.Name]; !ok {
 		t.Fatalf("shared record should survive successful respawn; got %+v", stored)
+	}
+}
+
+// TestRestoreAgentsThreadsHarnessOntoSpawnSpec locks the harness-aware
+// restore path: an empty Harness on the record (pre-migration) resolves to
+// "claude" behavior (ResumeArgs rewrite applied), and the resolved harness
+// name is threaded onto the SpawnAgent spec either way.
+func TestRestoreAgentsThreadsHarnessOntoSpawnSpec(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:       "leo-coding-plain",
+		Template:   "coding",
+		Workspace:  t.TempDir(),
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-42"},
+		SessionID:  "sid-42",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+		// Harness left empty: pre-migration record.
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	if restored := RestoreAgents(home, "", "tok", spawner); restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call, got %d", len(spawner.calls))
+	}
+	if got := spawner.calls[0].Harness; got != "" {
+		t.Errorf("Harness = %q, want empty (record predates the field; caller treats empty as claude)", got)
+	}
+	// Empty-harness (claude) records must still get the ResumeArgs rewrite.
+	want := []string{"--model", "sonnet", "--resume", "sid-42"}
+	if !reflect.DeepEqual(spawner.calls[0].ClaudeArgs, want) {
+		t.Errorf("ClaudeArgs = %v, want %v", spawner.calls[0].ClaudeArgs, want)
+	}
+}
+
+// TestRestoreAgentsSkipsClaudeOnlyResumeLogicForNonClaude locks that a
+// non-claude record's args and SessionID pass through RestoreAgents
+// unchanged: no ResumeArgs rewrite, no claude jsonl LatestSession scan.
+func TestRestoreAgentsSkipsClaudeOnlyResumeLogicForNonClaude(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:       "leo-coding-codex",
+		Template:   "coding",
+		Workspace:  t.TempDir(),
+		ClaudeArgs: []string{"exec", "--json"},
+		SessionID:  "thread-99",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+		Harness:    "codex",
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	if restored := RestoreAgents(home, "", "tok", spawner); restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call, got %d", len(spawner.calls))
+	}
+	got := spawner.calls[0]
+	if got.Harness != "codex" {
+		t.Errorf("Harness = %q, want codex", got.Harness)
+	}
+	if !reflect.DeepEqual(got.ClaudeArgs, rec.ClaudeArgs) {
+		t.Errorf("ClaudeArgs = %v, want unchanged %v (no claude-only ResumeArgs rewrite)", got.ClaudeArgs, rec.ClaudeArgs)
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if stored[rec.Name].SessionID != "thread-99" {
+		t.Errorf("SessionID = %q, want unchanged thread-99 (no claude jsonl scan)", stored[rec.Name].SessionID)
 	}
 }
 
