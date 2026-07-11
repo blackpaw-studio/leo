@@ -251,6 +251,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 
 	// Utilities
 	mux.HandleFunc("GET /web/cron/preview", s.handleCronPreview)
+	mux.HandleFunc("GET /web/partials/harness-options", s.handleHarnessOptionsPartial)
 
 	// Task mutations
 	mux.HandleFunc("POST /web/task/{name}/toggle", s.handleTaskToggle)

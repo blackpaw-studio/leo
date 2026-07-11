@@ -1,0 +1,4 @@
+{{define "harness_options_partial"}}
+{{template "harness_options" .Form}}
+<datalist id="dl-model-{{.Form.Scope}}" hx-swap-oob="true">{{range .ModelOpts}}<option value="{{.Value}}"></option>{{end}}</datalist>
+{{end}}

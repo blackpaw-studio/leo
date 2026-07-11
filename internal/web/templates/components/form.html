@@ -46,7 +46,9 @@
         <option value="false" {{if eq .Value "false"}}selected{{end}}>off</option>
       </select>
     {{else if eq (kindName .Kind) "select"}}
-      <select id="f-{{.Key}}" name="{{.Key}}">
+      <select id="f-{{.Key}}" name="{{.Key}}"
+        {{if eq .Key "harness"}} hx-get="/web/partials/harness-options?section={{.Section}}&scope={{.Scope}}"
+        hx-trigger="change" hx-include="this" hx-target="next .harness-options" hx-swap="innerHTML"{{end}}>
         {{$v := .Value}}{{range .Opts}}<option value="{{.Value}}" {{if eq .Value $v}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
     {{else if eq (kindName .Kind) "envmap"}}
