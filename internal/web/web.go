@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -57,6 +58,11 @@ type AgentService interface {
 	Resolve(query string) (agent.Record, error)
 	Rename(query, newName string) (agent.Record, error)
 	Resume(name string) (agent.Record, error)
+	// ResolveHandle resolves an agent name to its harness name and the
+	// SessionHandle a SessionDriver needs to deliver a message to it.
+	// ok=false means "not an ephemeral agent" (unknown name, or no
+	// agentstore record) — callers fall back to the tmux-based claude path.
+	ResolveHandle(name string) (harnessName string, h harness.SessionHandle, ok bool)
 }
 
 // SessionRuntimeProvider exposes the daemon's in-process session router
@@ -139,6 +145,15 @@ type Server struct {
 	// probing path (tmux.InjectPrompt). Tests replace this to verify the
 	// resumed-agent message delivery path without requiring a real tmux session.
 	injectPrompt func(ctx context.Context, session, body string) error
+
+	// resolveHandle resolves a config-defined *process* name to its harness
+	// name and SessionHandle, mirroring AgentService.ResolveHandle for
+	// agents. Wired at service boot (the layer that owns []ProcessSpec and
+	// live procIdentity argv), the same way injectPrompt's real
+	// implementation is normally supplied by the caller that owns tmux.
+	// nil or a false ok return means "not found" or "claude" — the caller
+	// falls back to today's tmux path either way.
+	resolveHandle func(name string) (harnessName string, h harness.SessionHandle, ok bool)
 }
 
 // Options bundles the knobs the web server needs that aren't part of the
@@ -157,6 +172,11 @@ type Options struct {
 	// empty disables the Service page's log tail (renders a "not
 	// configured" message instead of guessing a path).
 	LogPath string
+	// ResolveHandle resolves a config-defined process name to its harness
+	// name and SessionHandle. Optional; nil means every process is treated
+	// as claude (today's behavior). Wired from service boot the same way
+	// SessionRuntime is — see internal/service/process.go.
+	ResolveHandle func(name string) (harnessName string, h harness.SessionHandle, ok bool)
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is not available.
@@ -180,6 +200,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		serviceLogPath: opts.LogPath,
 		execCommand:    exec.Command,
 		lookTmux:       func() (string, error) { return exec.LookPath("tmux") },
+		resolveHandle:  opts.ResolveHandle,
 	}
 	s.fetchAgentListFn = s.fetchAgentList
 

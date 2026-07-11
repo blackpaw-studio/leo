@@ -32,6 +32,52 @@ func TestWrapPromptOmitsFooterWhenNoChannels(t *testing.T) {
 	}
 }
 
+// TestPromptForPersistentNonClaudeIsBare verifies that a non-claude
+// persistent task enqueues the bare assembled prompt body — no leo
+// invocation marker — since completion for those harnesses arrives
+// synchronously via the driver's Result, not an async Stop-hook Report that
+// needs the marker to correlate.
+func TestPromptForPersistentNonClaudeIsBare(t *testing.T) {
+	cfg := &config.Config{Defaults: config.DefaultsConfig{Harness: "codex"}}
+	task := config.TaskConfig{Runtime: "persistent"}
+	out := promptForPersistent(cfg, task, "abcdef0123456789abcdef0123456789", "hello")
+	if out != "hello" {
+		t.Fatalf("expected bare prompt %q, got %q", "hello", out)
+	}
+	if strings.Contains(out, "leo:invocation=") {
+		t.Fatalf("marker must be absent for non-claude persistent tasks: %q", out)
+	}
+}
+
+// TestPromptForPersistentOpencodeIsBare mirrors the codex case for opencode.
+func TestPromptForPersistentOpencodeIsBare(t *testing.T) {
+	cfg := &config.Config{}
+	task := config.TaskConfig{Runtime: "persistent", Harness: "opencode"}
+	out := promptForPersistent(cfg, task, "abcdef0123456789abcdef0123456789", "do the thing")
+	if out != "do the thing" {
+		t.Fatalf("expected bare prompt, got %q", out)
+	}
+	if strings.Contains(out, "leo:invocation=") {
+		t.Fatalf("marker must be absent for opencode persistent tasks: %q", out)
+	}
+}
+
+// TestPromptForPersistentClaudeKeepsWrap verifies claude tasks (explicit or
+// via the default harness) keep the marker+footer wrap byte-identical to
+// wrapPromptForPersistent.
+func TestPromptForPersistentClaudeKeepsWrap(t *testing.T) {
+	cfg := &config.Config{}
+	task := config.TaskConfig{Runtime: "persistent", Channels: []string{"plugin:slack@official"}}
+	out := promptForPersistent(cfg, task, "abcdef0123456789abcdef0123456789", "hello")
+	want := wrapPromptForPersistent("abcdef0123456789abcdef0123456789", "hello", task.Channels)
+	if out != want {
+		t.Fatalf("promptForPersistent(claude) = %q, want %q", out, want)
+	}
+	if !strings.Contains(out, "<!-- leo:invocation=abcdef0123456789abcdef0123456789 -->") {
+		t.Fatalf("expected marker for claude: %q", out)
+	}
+}
+
 func TestRunPersistentDispatchSelected(t *testing.T) {
 	called := false
 	orig := persistentImpl

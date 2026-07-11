@@ -40,3 +40,24 @@ func TestParseIdle(t *testing.T) {
 		t.Fatal("24h should parse")
 	}
 }
+
+// TestIsSweepEligibleHarness guards sweepIdleAgents' non-claude skip: an
+// empty Harness (pre-field records) and "claude" are the only eligible
+// values — every other harness has no suspend/resume mechanic and must never
+// be swept.
+func TestIsSweepEligibleHarness(t *testing.T) {
+	cases := []struct {
+		harness string
+		want    bool
+	}{
+		{"", true},
+		{"claude", true},
+		{"codex", false},
+		{"opencode", false},
+	}
+	for _, c := range cases {
+		if got := isSweepEligibleHarness(c.harness); got != c.want {
+			t.Fatalf("isSweepEligibleHarness(%q) = %v, want %v", c.harness, got, c.want)
+		}
+	}
+}

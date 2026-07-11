@@ -103,3 +103,15 @@ type AgentResolveResponse struct {
 type AgentRenameRequest struct {
 	NewName string `json:"new_name"`
 }
+
+// AgentAttachSpecResponse is the payload for GET /agents/{name}/attach-spec.
+// Harness == "claude" (or "") means the client should fall back to the
+// tmux-based attach flow using AgentSession's session name instead of this
+// response's Argv/HistoryPath, which are only populated for non-claude
+// harnesses.
+type AgentAttachSpecResponse struct {
+	Name        string   `json:"name"`
+	Harness     string   `json:"harness"`
+	Argv        []string `json:"argv,omitempty"`
+	HistoryPath string   `json:"history_path,omitempty"`
+}

@@ -18,6 +18,7 @@ func (f fakeHarness) SupportsChannels() bool                    { return false }
 func (f fakeHarness) ParseEvents(io.Reader) (Result, error)     { return Result{}, nil }
 func (f fakeHarness) Env(LaunchSpec) (map[string]string, error) { return nil, nil }
 func (f fakeHarness) SupportsKind(Kind) bool                    { return true }
+func (f fakeHarness) Driver() SessionDriver                     { return nil }
 
 func TestRegistryGetAndNames(t *testing.T) {
 	reset := snapshotRegistry(t)

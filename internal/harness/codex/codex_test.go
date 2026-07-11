@@ -2,6 +2,7 @@ package codex
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -49,9 +50,9 @@ func TestSupportsKind(t *testing.T) {
 		want bool
 	}{
 		{harness.KindTask, true},
-		{harness.KindProcess, false},
-		{harness.KindAgent, false},
-		{harness.KindSession, false},
+		{harness.KindProcess, true},
+		{harness.KindAgent, true},
+		{harness.KindSession, true},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.kind), func(t *testing.T) {
@@ -146,27 +147,74 @@ func TestArgs(t *testing.T) {
 	}
 }
 
+func TestCodexArgsInteractiveKindsRenderTurnPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		spec harness.LaunchSpec
+		want []string
+	}{
+		{
+			name: "KindProcess turn prefix",
+			spec: harness.LaunchSpec{
+				Kind: harness.KindProcess, Model: "gpt-5.3-codex",
+				Options: Options{Sandbox: "workspace-write"},
+			},
+			want: []string{"exec", "--json", "--skip-git-repo-check",
+				"--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
+		},
+		{
+			name: "KindAgent turn prefix",
+			spec: harness.LaunchSpec{
+				Kind: harness.KindAgent, Model: "gpt-5.3-codex",
+				Options: Options{
+					LeoMCP: &LeoMCPBridge{
+						Command: "leo", Args: []string{"mcp-server"},
+						EnvVars:      []string{"LEO_PROCESS_NAME"},
+						ApprovalMode: "approve",
+					},
+				},
+			},
+			want: []string{"exec", "--json", "--skip-git-repo-check",
+				"--model", "gpt-5.3-codex",
+				"-c", `mcp_servers.leo.command="leo"`,
+				"-c", `mcp_servers.leo.args=["mcp-server"]`,
+				"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME"]`,
+				"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`},
+		},
+		{
+			name: "KindSession turn prefix",
+			spec: harness.LaunchSpec{
+				Kind: harness.KindSession, Model: "gpt-5.3-codex",
+				Options: Options{Sandbox: "workspace-write"},
+			},
+			want: []string{"exec", "--json", "--skip-git-repo-check",
+				"--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Codex{}.Args(tt.spec)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if strings.Join(got, "\x00") != strings.Join(tt.want, "\x00") {
+				t.Errorf("got %#v\nwant %#v", got, tt.want)
+			}
+			for _, tok := range got {
+				if tok == "resume" {
+					t.Errorf("turn prefix must not include a resume subcommand: %#v", got)
+				}
+			}
+		})
+	}
+}
+
 func TestArgsErrors(t *testing.T) {
 	tests := []struct {
 		name    string
 		spec    harness.LaunchSpec
 		wantErr string
 	}{
-		{
-			name:    "KindProcess unsupported",
-			spec:    harness.LaunchSpec{Kind: harness.KindProcess, Options: Options{}},
-			wantErr: `codex: process launches are not supported yet (only scheduled tasks) — session drivers land in a later plan`,
-		},
-		{
-			name:    "KindAgent unsupported",
-			spec:    harness.LaunchSpec{Kind: harness.KindAgent, Options: Options{}},
-			wantErr: `codex: agent launches are not supported yet (only scheduled tasks) — session drivers land in a later plan`,
-		},
-		{
-			name:    "KindSession unsupported",
-			spec:    harness.LaunchSpec{Kind: harness.KindSession, Options: Options{}},
-			wantErr: `codex: session launches are not supported yet (only scheduled tasks) — session drivers land in a later plan`,
-		},
 		{
 			name:    "SessionPinned",
 			spec:    harness.LaunchSpec{Kind: harness.KindTask, Options: Options{}, Session: harness.SessionState{Mode: harness.SessionPinned, ID: "x"}},

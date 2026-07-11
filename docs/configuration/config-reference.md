@@ -12,7 +12,7 @@ Settings inherited by all processes, tasks, and templates unless overridden.
 |-------|------|----------|-------------|
 | `model` | string | No | Default model, validated by the resolved harness (`claude`: `sonnet`, `opus`, `haiku`, `sonnet[1m]`, `opus[1m]`; `codex`: any non-whitespace string; `opencode`: must be `provider/model`). Defaults to `sonnet`. Does **not** cascade to a scope whose resolved `harness` differs from `defaults.harness` — see [Harnesses → Cross-harness model cascade](harnesses.md#cross-harness-model-cascade). |
 | `max_turns` | int | No | Default maximum agent turns per execution. Defaults to `15`. Ignored by `codex` and `opencode` (no per-turn cap upstream). |
-| `harness` | string | No | Adapter name for this scope and everything that cascades from it. One of `claude`, `codex`, `opencode`. Defaults to `claude`. `codex`/`opencode` currently support scheduled tasks only — see [Harnesses](harnesses.md). |
+| `harness` | string | No | Adapter name for this scope and everything that cascades from it. One of `claude`, `codex`, `opencode`. Defaults to `claude`. All three run every leo primitive (tasks, processes, ephemeral agents, persistent sessions) — see [Harnesses](harnesses.md). |
 | `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `sandbox`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
 | `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is suspended. Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
 
@@ -37,13 +37,13 @@ all rejected at config load and before every web-UI save. Full behavior
 | `disallowed_tools` | list of strings | Tool blacklist. |
 | `append_system_prompt` | string | Extra text appended to the system prompt. |
 
-**`codex`** (task-only; 1 key):
+**`codex`** (1 key):
 
 | Key | Type | Meaning |
 |---|---|---|
 | `sandbox` | string | `read-only` (codex default), `workspace-write`, or `danger-full-access`. |
 
-**`opencode`** (task-only; 1 key):
+**`opencode`** (1 key):
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -192,7 +192,7 @@ processes:
 | `channels` | list | No | -- | Channel plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). Only valid on a channel-supporting harness. |
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
 | `model` | string | No | `defaults.model` | Model override, validated by the resolved harness. |
-| `harness` | string | No | `defaults.harness` | Adapter override for this process. `codex`/`opencode` don't support supervised processes yet — fails validation. See [Harnesses](harnesses.md). |
+| `harness` | string | No | `defaults.harness` | Adapter override for this process. All three harnesses support supervised processes. See [Harnesses](harnesses.md). |
 | `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
 | `mcp_config` | string | No | `<workspace>/config/mcp-servers.json` | Path to MCP config file. |
@@ -220,7 +220,7 @@ tasks:
 | `timezone` | string | No | System default | IANA timezone (e.g., `America/New_York`). |
 | `prompt_file` | string | Yes | -- | Path to prompt file, relative to workspace. |
 | `model` | string | No | `defaults.model` | Model override, validated by the resolved harness. Does not fall back to `defaults.model` when this task's harness differs from `defaults.harness` — see [Cross-harness model cascade](harnesses.md#cross-harness-model-cascade). |
-| `harness` | string | No | `defaults.harness` | Adapter override for this task. `claude`, `codex`, and `opencode` all support one-shot tasks; `codex`/`opencode` with `runtime: persistent` fail validation (persistent tasks run through sessions, which those harnesses don't support yet). See [Harnesses](harnesses.md). |
+| `harness` | string | No | `defaults.harness` | Adapter override for this task. `claude`, `codex`, and `opencode` all support one-shot and `runtime: persistent` tasks (persistent tasks run through sessions, which all three harnesses support). See [Harnesses](harnesses.md). |
 | `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `bypass_permissions` at task scope is honored (not defaults-only). For `codex`: `sandbox`. For `opencode`: `permission`. See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. Ignored by `codex`/`opencode`. |
 | `timeout` | string | No | `30m` | Max duration before kill (e.g., `30m`, `1h`). |
@@ -255,7 +255,7 @@ templates:
 | `channels` | list | No | -- | Channel plugin IDs for spawned agents. Only valid on a channel-supporting harness. |
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
 | `model` | string | No | `defaults.model` | Model, validated by the resolved harness. |
-| `harness` | string | No | `defaults.harness` | Adapter override for this template. `codex`/`opencode` don't support ephemeral agents yet — fails validation. See [Harnesses](harnesses.md). |
+| `harness` | string | No | `defaults.harness` | Adapter override for this template. All three harnesses support ephemeral agents. See [Harnesses](harnesses.md). |
 | `harness_options` | map | No | merged with `defaults.harness_options` (same harness only), **except `remote_control`** | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `remote_control` is template-own-only (no inheritance from `defaults.harness_options.remote_control`) and defaults to `true`. See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns. |
 | `mcp_config` | string | No | -- | Path to MCP config file. |
@@ -301,6 +301,21 @@ stamped onto the agent at spawn time. Behavior:
 
 - Suspended agents stay suspended across daemon restarts (they are not
   resurrected at boot), and their worktrees are never pruned.
+
+## State directory
+
+Leo's runtime state lives under `~/.leo/state/` (or `<home>/state` for a
+non-default leo home). Beyond `sessions.json`, `history.json`, and
+`api.token` (see [Authentication](#authentication)), non-`claude` session
+drivers persist their own per-tmux-session records here:
+
+| Path | Written by | Contents |
+|---|---|---|
+| `state/opencode/<tmux-session>.json` | `opencode` `ServerDriver` | The provisioned `opencode serve` port, basic-auth password, and last-used model for one supervised process/agent/session (mode `0600`). Reused across restarts so the port and password stay stable. |
+| `state/transcripts/<tmux-session>.log` | `codex` `TurnDriver` | Append-only per-turn transcript (`user`/`codex` entry pairs, timestamped) for one process/agent/session, since codex has no resident process or live pane to attach to. `leo attach`/`leo agent attach`/`leo session attach` tail this file for codex sessions. |
+
+See [Harnesses → Session driver semantics](harnesses.md#session-driver-semantics)
+for how each driver uses these files.
 
 ## Override Cascade
 

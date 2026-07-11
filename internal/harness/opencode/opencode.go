@@ -1,11 +1,13 @@
 // Package opencode adapts leo's harness-neutral LaunchSpec to the opencode
-// CLI. One-shot tasks only (opencode run); the server-based session driver
-// lands in a later plan. Permissions are config-only upstream, so they ride
-// in via the OPENCODE_CONFIG_CONTENT env overlay rather than argv.
+// CLI. Scheduled tasks run one-shot (opencode run); supervised processes,
+// ephemeral agents, and persistent sessions all drive a resident
+// `opencode serve` via ServerDriver. Permissions are config-only upstream, so
+// they ride in via the OPENCODE_CONFIG_CONTENT env overlay rather than argv.
 package opencode
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -33,8 +35,16 @@ func (Opencode) ValidateModel(model string) error {
 
 func (Opencode) SupportsChannels() bool { return false }
 
-// SupportsKind: one-shot tasks only until the ServerDriver lands (Plan 4).
-func (Opencode) SupportsKind(k harness.Kind) bool { return k == harness.KindTask }
+// SupportsKind: scheduled tasks plus supervised processes, ephemeral agents,
+// and persistent sessions — all driven against a resident `opencode serve`
+// via ServerDriver.
+func (Opencode) SupportsKind(k harness.Kind) bool {
+	return k == harness.KindTask || k == harness.KindProcess || k == harness.KindAgent || k == harness.KindSession
+}
+
+// Driver: ServerDriver drives processes, ephemeral agents, and persistent
+// sessions against a resident `opencode serve`.
+func (Opencode) Driver() harness.SessionDriver { return ServerDriver{} }
 
 func (Opencode) SessionArgs(s harness.SessionState) []string {
 	if s.Mode == harness.SessionResume {
@@ -44,14 +54,25 @@ func (Opencode) SessionArgs(s harness.SessionState) []string {
 }
 
 func (o Opencode) Args(spec harness.LaunchSpec) ([]string, error) {
-	if spec.Kind != harness.KindTask {
-		return nil, fmt.Errorf("opencode: %s launches are not supported yet (only scheduled tasks) — session drivers land in a later plan", spec.Kind)
-	}
-	if _, ok := spec.Options.(Options); !ok {
+	opts, ok := spec.Options.(Options)
+	if !ok {
 		return nil, fmt.Errorf("opencode: spec.Options is %T, want opencode.Options", spec.Options)
 	}
 	if len(spec.Channels) > 0 || len(spec.DevChannels) > 0 {
 		return nil, fmt.Errorf("opencode: channel plugins are not supported; use leo's MCP tools for messaging")
+	}
+
+	if spec.Kind == harness.KindProcess || spec.Kind == harness.KindAgent || spec.Kind == harness.KindSession {
+		// ServerDriver argv only: `opencode serve`. Model is per-run (Inject
+		// renders it from ServerState.Model), not per-server.
+		if opts.ServerPort == 0 {
+			return nil, fmt.Errorf("opencode: internal error: server port not provisioned")
+		}
+		return []string{"serve", "--port", strconv.Itoa(opts.ServerPort), "--hostname", "127.0.0.1"}, nil
+	}
+
+	if spec.Kind != harness.KindTask {
+		return nil, fmt.Errorf("opencode: %s launches are not supported yet (only scheduled tasks) — session drivers land in a later plan", spec.Kind)
 	}
 	if spec.Session.Mode == harness.SessionPinned {
 		return nil, fmt.Errorf("opencode: cannot start a session with a pre-issued ID")

@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/update"
@@ -81,6 +82,16 @@ type ProcessSpec struct {
 	// session on its first iteration instead of killing and recreating it.
 	// See agent.SpawnRequest.Adopt for the rationale.
 	Adopt bool
+	// Harness is the resolved harness adapter name (e.g. "claude", "codex").
+	// Empty means "claude" — old state/records predate this field.
+	Harness string
+	// Kind identifies which leo primitive this spec represents. Empty means
+	// KindProcess — old state/records predate this field.
+	Kind harness.Kind
+	// OpeningPrompt carries the opening turn for DriveTurns harnesses, whose
+	// driver delivers it out-of-band via Start rather than as a trailing
+	// positional arg. Empty for claude, which keeps the prompt in ClaudeArgs.
+	OpeningPrompt string
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -172,6 +183,18 @@ func (s *Supervisor) incrementRestarts(name string) {
 	}
 }
 
+// registerIdentity creates and records a procIdentity for a config-defined
+// process so the process-side handle resolver (resolveProcessHandle) can find
+// it. Ephemeral agents register their identity inline in SpawnAgent instead —
+// this is only for the boot-time []ProcessSpec loop in defaultSupervisedExec.
+func (s *Supervisor) registerIdentity(name string, args []string) *procIdentity {
+	id := newProcIdentity(name, args)
+	s.mu.Lock()
+	s.identities[name] = id
+	s.mu.Unlock()
+	return id
+}
+
 // ReserveAgent atomically claims a name so subsequent concurrent spawns hit a
 // collision error without waiting for slow pre-spawn work (git fetch, worktree
 // add). Pair with ReleaseAgent on any failure before SpawnAgent, or let
@@ -226,13 +249,16 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	s.mu.Unlock()
 
 	procSpec := ProcessSpec{
-		Name:       spec.Name,
-		ClaudeArgs: spec.ClaudeArgs,
-		WorkDir:    spec.WorkDir,
-		Env:        spec.Env,
-		WebPort:    spec.WebPort,
-		WebToken:   spec.WebToken,
-		Adopt:      spec.Adopt,
+		Name:          spec.Name,
+		ClaudeArgs:    spec.ClaudeArgs,
+		WorkDir:       spec.WorkDir,
+		Env:           spec.Env,
+		WebPort:       spec.WebPort,
+		WebToken:      spec.WebToken,
+		Adopt:         spec.Adopt,
+		Harness:       spec.Harness,
+		Kind:          harness.KindAgent,
+		OpeningPrompt: spec.OpeningPrompt,
 	}
 	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
 	return nil
@@ -485,6 +511,18 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 
+	// sessionCfg backs the non-claude LeoMCP bridge gate (sessionLeoMCPEnv,
+	// via BuildSessionDispatch and superviseOpencodeSession): cfg.Web.Enabled
+	// determines whether a session's driver-spawned MCP subprocess is worth
+	// wiring in at all. A load failure here is non-fatal — sessionLeoMCPEnv
+	// treats a nil cfg as "gate off", so sessions still boot, just without
+	// the bridge, exactly as if web were disabled.
+	sessionCfg, sessionCfgErr := config.Load(configPath)
+	if sessionCfgErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: loading config for session LeoMCP wiring: %v\n", sessionCfgErr)
+		sessionCfg = nil
+	}
+
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath, supervisor)
@@ -492,6 +530,49 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
 	srv.SetLogPath(LogPathFor(homePath))
+	// Wire the session router's injector/aborter here (rather than inside
+	// daemon.New) because deciding how to inject requires resolving harness
+	// config, which only this layer (owning []ProcessSpec/[]SessionSpec /
+	// harness drivers) can do without pulling config resolution into the IPC
+	// package. sessionDispatch is a tmux-session-keyed table of every
+	// non-claude session's (harness, SessionHandle) — built once here from
+	// the already-resolved sessionSpecs, not re-derived per invocation. A
+	// miss (claude sessions, and anything not in sessionSpecs) falls through
+	// to the historical tmux path.
+	sessionDispatch := BuildSessionDispatch(sessionSpecs, homePath, sessionCfg, webToken)
+	srv.SetInjector(func(ctx context.Context, tmuxSession, prompt string) (*harness.Result, error) {
+		if d, ok := sessionDispatch[tmuxSession]; ok {
+			if drv := driverFor(d.Harness); drv != nil {
+				return drv.Inject(ctx, d.Handle, prompt)
+			}
+		}
+		// claude path stays byte-identical to before the injector gained a
+		// ctx param: the pump's per-invocation timeout is a non-claude
+		// concern (it bounds a synchronous DriveTurns turn); claude's async
+		// tmux-paste call keeps its own unbounded context.Background().
+		return nil, tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
+	})
+	srv.SetAborter(func(tmuxSession string) error {
+		if d, ok := sessionDispatch[tmuxSession]; ok {
+			if drv := driverFor(d.Harness); drv != nil {
+				if aborter, ok := drv.(harness.TurnAborter); ok {
+					return aborter.AbortTurn(d.Handle)
+				}
+				return nil // driver has no in-flight turn to cancel
+			}
+		}
+		return tmux.AbortPrompt(context.Background(), tmuxPath, tmuxSession)
+	})
+	// specsByName backs the process-side web message-dispatch resolver
+	// (below): a name-keyed snapshot of the config-defined []ProcessSpec,
+	// built once here rather than per-request.
+	specsByName := make(map[string]ProcessSpec, len(processes))
+	for _, p := range processes {
+		specsByName[p.Name] = p
+	}
+	srv.SetResolveHandle(func(name string) (string, harness.SessionHandle, bool) {
+		return supervisor.resolveProcessHandle(specsByName, name)
+	})
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
@@ -543,11 +624,16 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 
 	var wg sync.WaitGroup
 	for _, proc := range processes {
+		// Registered synchronously (before the goroutine starts) so the
+		// process-side handle resolver (wired into web below) can find the
+		// identity as soon as the daemon is answering requests, rather than
+		// racing the supervise goroutine's own startup.
+		id := supervisor.registerIdentity(proc.Name, proc.ClaudeArgs)
 		wg.Add(1)
-		go func(spec ProcessSpec) {
+		go func(spec ProcessSpec, id *procIdentity) {
 			defer wg.Done()
-			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor, newProcIdentity(spec.Name, spec.ClaudeArgs))
-		}(proc)
+			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor, id)
+		}(proc, id)
 	}
 
 	// Boot persistent task session supervisors. Each SessionSpec gets its
@@ -566,7 +652,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 				sp.ResumeID = id
 			}
 			spLocal := sp
-			if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, func(_ int) {
+			if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, sessionCfg, webToken, func(_ int) {
 				supervisor.incrementRestarts(spLocal.Name)
 			}); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: supervise session %q: %v\n", spLocal.Name, err)
@@ -592,15 +678,113 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	return nil
 }
 
+// driverFor resolves a spec's session driver. Empty harness means claude
+// (records/state written before the field existed).
+func driverFor(harnessName string) harness.SessionDriver {
+	if harnessName == "" {
+		harnessName = "claude"
+	}
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		return nil // unreachable for validated configs; callers nil-check
+	}
+	return h.Driver()
+}
+
+// resolveProcessHandle backs the web package's process-side handle resolver
+// seam (web.Options.ResolveHandle). specs is a name-keyed snapshot of the
+// config-defined []ProcessSpec built once at boot; live argv is read from the
+// supervisor's current procIdentity for name so a rename mid-flight is
+// absorbed the same way waitForSessionEnd absorbs it. ok=false means name is
+// not a config-defined process (unknown, or an ephemeral agent — those
+// resolve via agent.Manager.ResolveHandle instead).
+func (s *Supervisor) resolveProcessHandle(specs map[string]ProcessSpec, name string) (string, harness.SessionHandle, bool) {
+	spec, ok := specs[name]
+	if !ok {
+		return "", harness.SessionHandle{}, false
+	}
+	s.mu.RLock()
+	id, idOK := s.identities[name]
+	s.mu.RUnlock()
+	if !idOK {
+		return "", harness.SessionHandle{}, false
+	}
+	harnessName := spec.Harness
+	if harnessName == "" {
+		harnessName = "claude"
+	}
+	return harnessName, handleForSpec(spec, id, s.homePath), true
+}
+
+// handleForSpec builds the SessionHandle superviseProcess hands to drivers.
+func handleForSpec(spec ProcessSpec, id *procIdentity, homePath string) harness.SessionHandle {
+	kind := spec.Kind
+	if kind == "" {
+		kind = harness.KindProcess
+	}
+	return harness.SessionHandle{
+		Kind:          kind,
+		Name:          id.Name(),
+		TmuxSession:   id.SessionName(),
+		Workspace:     spec.WorkDir,
+		HomePath:      homePath,
+		Env:           spec.Env,
+		TurnArgs:      id.Args(),
+		OpeningPrompt: spec.OpeningPrompt,
+		IDs:           agentOrProcessIDs(homePath, id.Name()),
+	}
+}
+
+// superviseTurnBased registers a turn-driven session (codex): no resident
+// process, no restart loop. Start runs the opening turn (if any) and
+// records the thread id; the session then idles until Inject calls arrive
+// through the daemon/web dispatch paths.
+func superviseTurnBased(ctx context.Context, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity, drv harness.SessionDriver) {
+	name := id.Name()
+	sv.setState(name, "running")
+	if err := drv.Start(ctx, handleForSpec(spec, id, homePath)); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] driver start: %v\n", name, err)
+		sv.setState(name, "stopped")
+		return
+	}
+	<-ctx.Done()
+	sv.setState(name, "stopped")
+}
+
 // superviseProcess runs a single process in a tmux session with restart loop.
 func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity) {
 	sv.initState(spec.Name)
+
+	// Resolve the driver once per supervise loop. Error is impossible for the
+	// compiled-in claude adapter; on the defensive path drv stays nil and every
+	// type assertion below (PaneCare, QuickExitRecovery) simply misses, which
+	// degrades to "skip dismissal" / "default quick-exit clear" — the
+	// historical pre-driver behavior minus dialog auto-dismissal.
+	drv := driverFor(spec.Harness)
+	if drv != nil && drv.Style() == harness.DriveTurns {
+		superviseTurnBased(ctx, spec, homePath, sv, id, drv)
+		return
+	}
+
+	harnessName := spec.Harness
+	if harnessName == "" {
+		harnessName = "claude"
+	}
+
+	var paneKey func(string) string
+	if care, ok := drv.(harness.PaneCare); ok {
+		paneKey = care.PaneKey
+	}
 
 	backoff := initialBackoff
 	// adopt is a one-shot: honored only on the first iteration, and only when
 	// the session actually survived the daemon bounce. Any in-loop restart
 	// below always spawns a fresh session.
 	adopt := spec.Adopt
+	// openingPrompt is one-shot across restart iterations: delivered by the
+	// driver's Start on the first successful launch (create or adopt), then
+	// cleared so an in-loop restart never replays it.
+	openingPrompt := spec.OpeningPrompt
 
 	for {
 		// Snapshot identity for this iteration. The tmux session name is also
@@ -682,7 +866,24 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}
 		}
 
-		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime) {
+		// Give the driver a chance to do whatever it needs before the first
+		// Inject (e.g. delivering an opening prompt). Runs in a goroutine so
+		// a slow/blocked Start never stalls the restart loop; claude's Start
+		// is a no-op so this is behavior-neutral for every existing config.
+		// The opening prompt is one-shot: cleared after the first launch
+		// (create or adopt) so an in-loop restart never replays it.
+		if drv != nil {
+			startHandle := handleForSpec(spec, id, homePath)
+			startHandle.OpeningPrompt = openingPrompt
+			openingPrompt = ""
+			go func(h harness.SessionHandle) {
+				if err := drv.Start(ctx, h); err != nil && ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "[%s] driver start: %v\n", h.Name, err)
+				}
+			}(startHandle)
+		}
+
+		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey) {
 			sv.setState(name, "stopped")
 			return
 		}
@@ -718,20 +919,23 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		//      NoResume so a daemon restart won't reintroduce --resume via
 		//      RestoreAgents. No-op for non-agent specs (no matching record).
 		if elapsed < quickExitThreshold {
-			switch {
-			case hasSessionIDArg(currentArgs):
-				currentArgs = convertSessionIDToResume(currentArgs)
+			newArgs, action := recoverQuickExit(drv, currentArgs)
+			switch action {
+			case harness.QuickExitRetryArgs:
+				currentArgs = newArgs
 				id.setArgs(currentArgs)
-				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), retrying with --resume\n", name, elapsed.Seconds())
-			case hasResumeArg(currentArgs):
-				currentArgs = stripResumeArg(currentArgs)
+				fmt.Fprintf(os.Stderr, "[%s] %s exited quickly (%.0fs), retrying with --resume\n", name, harnessName, elapsed.Seconds())
+			case harness.QuickExitClearAndNoResume:
+				currentArgs = newArgs
 				id.setArgs(currentArgs)
 				clearProcessSession(homePath, name)
 				markAgentNoResume(homePath, name)
-				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs), cleared stale session\n", name, elapsed.Seconds())
-			default:
+				fmt.Fprintf(os.Stderr, "[%s] %s exited quickly (%.0fs), cleared stale session\n", name, harnessName, elapsed.Seconds())
+			case harness.QuickExitClearSession:
 				clearProcessSession(homePath, name)
-				fmt.Fprintf(os.Stderr, "[%s] claude exited quickly (%.0fs)\n", name, elapsed.Seconds())
+				fmt.Fprintf(os.Stderr, "[%s] %s exited quickly (%.0fs)\n", name, harnessName, elapsed.Seconds())
+			case harness.QuickExitNone:
+				fmt.Fprintf(os.Stderr, "[%s] %s exited quickly (%.0fs)\n", name, harnessName, elapsed.Seconds())
 			}
 		}
 
@@ -770,7 +974,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 // waitForSessionEnd blocks until the tmux session ends or the context is cancelled.
 // Returns true if the context was cancelled (should stop).
-func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time) bool {
+//
+// paneKey decides how to clear a blocking startup/announcement dialog seen in
+// a captured pane (see harness.PaneCare). nil means the driver has no pane
+// care to offer, so dismissal is skipped entirely.
+func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time, paneKey func(string) string) bool {
 	_ = spec      // kept in signature for future lifecycle hooks
 	_ = startTime // kept in signature for future lifecycle hooks
 	for {
@@ -790,63 +998,23 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 
 		// Auto-dismiss the "Resume from summary" prompt that blocks
 		// unattended sessions when they exceed the context threshold, plus any
-		// other blocking claude startup/announcement dialog.
-		dismissStartupDialog(tmuxPath, sessionName, id.Name())
+		// other blocking startup/announcement dialog, per the driver's policy.
+		if paneKey != nil {
+			dismissStartupDialog(tmuxPath, sessionName, id.Name(), paneKey)
+		}
 	}
-}
-
-// dialogDenyPattern marks dialogs that make a consequential decision — never
-// auto-answered, always left for a human. Word-boundaried, case-insensitive.
-var dialogDenyPattern = regexp.MustCompile(`(?i)\b(trust|permission|delete|overwrite)\b`)
-
-// startupDialogKey decides how to clear a blocking claude startup/announcement
-// dialog visible in pane. It returns the tmux key to send ("Enter" or "Escape"),
-// or "" to leave the pane untouched. Pure (no I/O) so it is unit-tested directly.
-//
-// This runs on EVERY session poll for the session's whole lifetime, so it must
-// never fire on ordinary output. The only reliable discriminator between a
-// blocking interactive modal and normal conversational text (which routinely
-// contains numbered lists) is the modal's confirm/cancel footer — normal output
-// never renders one. A numbered menu alone is NOT sufficient.
-//
-// Order matters:
-//  1. "Resume from summary" is a known prompt we ACCEPT (Enter).
-//  2. Otherwise, act only when genuine dialog chrome (both confirm AND cancel
-//     footer) is present; anything else is left untouched.
-//  3. A modal mentioning a consequential decision (trust/permission/delete/
-//     overwrite) is left for a human — never auto-answered.
-//  4. Any other modal is an announcement/opt-in we DECLINE with Escape so the
-//     agent's behavior stays stable.
-func startupDialogKey(pane string) string {
-	if strings.Contains(pane, "Resume from summary") && strings.Contains(pane, "Enter to confirm") {
-		return "Enter"
-	}
-	if !hasDialogChrome(pane) {
-		return ""
-	}
-	if dialogDenyPattern.MatchString(pane) {
-		return ""
-	}
-	return "Escape"
-}
-
-// hasDialogChrome reports whether pane shows an interactive modal's confirm AND
-// cancel footer — the chrome that distinguishes a blocking dialog from ordinary
-// output. Mirrors the same check in the tmux package's input classifier.
-func hasDialogChrome(pane string) bool {
-	return strings.Contains(pane, "Enter to confirm") && strings.Contains(pane, "Esc to cancel")
 }
 
 // dismissStartupDialog captures the session's recent pane and clears a blocking
-// claude startup/announcement dialog so message injection isn't stuck behind it.
-// See startupDialogKey for the policy. Best-effort: capture/send failures are
-// ignored and retried on the next poll.
-func dismissStartupDialog(tmuxPath, sessionName, processName string) {
+// startup/announcement dialog so message injection isn't stuck behind it. See
+// paneKey (harness.PaneCare.PaneKey) for the policy. Best-effort: capture/send
+// failures are ignored and retried on the next poll.
+func dismissStartupDialog(tmuxPath, sessionName, processName string, paneKey func(string) string) {
 	out, err := exec.Command(tmuxPath, tmux.Args("capture-pane", "-t", tmux.PaneTarget(sessionName), "-p", "-S", "-10")...).Output()
 	if err != nil {
 		return
 	}
-	key := startupDialogKey(string(out))
+	key := paneKey(string(out))
 	if key == "" {
 		return
 	}
@@ -854,60 +1022,17 @@ func dismissStartupDialog(tmuxPath, sessionName, processName string) {
 	exec.Command(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), key)...).Run() //nolint:errcheck
 }
 
+// recoverQuickExit consults the driver's ladder when it has one; the default
+// mirrors the historical behavior (clear the stored session, keep args).
+func recoverQuickExit(drv harness.SessionDriver, args []string) ([]string, harness.QuickExitAction) {
+	if r, ok := drv.(harness.QuickExitRecovery); ok {
+		return r.RecoverQuickExit(args)
+	}
+	return args, harness.QuickExitClearSession
+}
+
 func findTmux() (string, error) {
 	return tmux.Locate()
-}
-
-// stripResumeArg removes --resume and its value from claude args.
-func stripResumeArg(args []string) []string {
-	var result []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--resume" && i+1 < len(args) {
-			i++ // skip the value too
-			continue
-		}
-		result = append(result, args[i])
-	}
-	return result
-}
-
-// hasResumeArg reports whether a `--resume <id>` pair is present in args.
-func hasResumeArg(args []string) bool {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--resume" && i+1 < len(args) {
-			return true
-		}
-	}
-	return false
-}
-
-// hasSessionIDArg reports whether a `--session-id <id>` pair is present in args.
-func hasSessionIDArg(args []string) bool {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--session-id" && i+1 < len(args) {
-			return true
-		}
-	}
-	return false
-}
-
-// convertSessionIDToResume rewrites every `--session-id <id>` pair into
-// `--resume <id>`, leaving all other args untouched. Used by the quick-exit
-// recovery: a freshly minted `--session-id` is rejected once its jsonl exists
-// on disk, so the supervisor retries by resuming that same session. A
-// `--session-id` flag with no following value, or args with none at all, are
-// returned unchanged.
-func convertSessionIDToResume(args []string) []string {
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--session-id" && i+1 < len(args) {
-			out = append(out, "--resume", args[i+1])
-			i++ // consumed the value
-			continue
-		}
-		out = append(out, args[i])
-	}
-	return out
 }
 
 // markAgentNoResume sets NoResume=true and clears SessionID on the agentstore

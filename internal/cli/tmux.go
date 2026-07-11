@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -223,6 +225,73 @@ func followTmuxSession(res config.HostResolution, session string, lines int) err
 	sshArgs = append(sshArgs, sshControlOpts(res)...)
 	sshArgs = append(sshArgs, buildTailCmd(res.Host.RemoteTmuxPath()))
 	return runShellCmd("ssh", sshArgs)
+}
+
+// attachHistoryTailLines bounds how much of a non-live-attach harness's turn
+// history is printed when AttachSpec.Argv is nil (see attachViaDriver).
+const attachHistoryTailLines = 50
+
+// attachViaDriver carries out a harness.AttachSpec resolved by a
+// SessionDriver — the non-claude counterpart to attachTmuxSession, which
+// handles claude targets. When spec.Argv is non-nil it is executed: locally
+// via agentSyscallExec (replacing this process, same as attachTmuxSession's
+// outside-tmux branch), or over `ssh -tt -e none` with every token
+// shell-quoted for a remote host (ssh flattens post-host argv into one shell
+// string on the remote login shell — quoting each token individually keeps
+// them intact). When spec.Argv is nil, this harness has no live attach; the
+// tail of spec.HistoryPath is printed instead, with a one-line note.
+func attachViaDriver(res config.HostResolution, spec harness.AttachSpec) error {
+	if len(spec.Argv) == 0 {
+		return printAttachHistory(spec.HistoryPath)
+	}
+	if res.Localhost {
+		return agentSyscallExec(spec.Argv[0], spec.Argv, os.Environ())
+	}
+	quoted := make([]string, len(spec.Argv))
+	for i, tok := range spec.Argv {
+		quoted[i] = shellQuoteArg(tok)
+	}
+	sshArgs := []string{"-tt", "-e", "none", res.Host.SSH}
+	sshArgs = append(sshArgs, res.Host.SSHArgs...)
+	sshArgs = append(sshArgs, sshControlOpts(res)...)
+	sshArgs = append(sshArgs, strings.Join(quoted, " "))
+	c := agentExecCommand("ssh", sshArgs...)
+	c.Stdin = os.Stdin
+	c.Stdout = agentStdout
+	c.Stderr = agentStderr
+	return hintRemoteTmuxMissing(res, c.Run())
+}
+
+// printAttachHistory writes a "no live attach" note followed by the tail of
+// path (last attachHistoryTailLines lines, or the whole file if shorter) to
+// agentStdout. An empty path or a read failure still returns nil — a missing
+// history file is not a fatal attach error, just nothing to show yet.
+func printAttachHistory(path string) error {
+	fmt.Fprintln(agentStdout, "note: this harness has no live attach; showing recent turn history:")
+	if path == "" {
+		fmt.Fprintln(agentStdout, "(no history file available yet)")
+		return nil
+	}
+	f, err := os.Open(path) // #nosec G304 -- path comes from the resolved driver's own AttachSpec, not user input
+	if err != nil {
+		fmt.Fprintf(agentStdout, "(could not read history: %v)\n", err)
+		return nil
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) > attachHistoryTailLines {
+			lines = lines[1:]
+		}
+	}
+	for _, line := range lines {
+		fmt.Fprintln(agentStdout, line)
+	}
+	return nil
 }
 
 // runShellCmd is a tiny wrapper that wires stdio to the package-level streams

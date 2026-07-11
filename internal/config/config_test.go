@@ -917,6 +917,105 @@ func TestValidateTaskEnvKeys(t *testing.T) {
 	}
 }
 
+// TestValidateHarnessKindSupport locks in the harness/kind support matrix:
+// codex processes/templates (Plan 4 Task 5) and codex sessions/persistent
+// tasks (Plan 4 Task 7 session drivers) all pass SupportsKind now.
+func TestValidateHarnessKindSupport(t *testing.T) {
+	t.Run("process on codex is valid", func(t *testing.T) {
+		cfg := &Config{
+			Processes: map[string]ProcessConfig{
+				"p": {Harness: "codex", Enabled: true},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("template on codex is valid", func(t *testing.T) {
+		cfg := &Config{
+			Templates: map[string]TemplateConfig{
+				"t": {Harness: "codex"},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("session on codex is now valid", func(t *testing.T) {
+		cfg := &Config{
+			Sessions: map[string]SessionConfig{
+				"s": {Harness: "codex", Workspace: "/tmp/leo/workspace"},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("session on opencode is now valid", func(t *testing.T) {
+		cfg := &Config{
+			Sessions: map[string]SessionConfig{
+				"s": {Harness: "opencode", Workspace: "/tmp/leo/workspace"},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("persistent task on codex is now valid", func(t *testing.T) {
+		cfg := &Config{
+			Tasks: map[string]TaskConfig{
+				"t": {
+					Harness:    "codex",
+					Schedule:   "0 * * * *",
+					PromptFile: "HEARTBEAT.md",
+					Runtime:    "persistent",
+					Enabled:    true,
+				},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("persistent task on opencode is now valid", func(t *testing.T) {
+		cfg := &Config{
+			Tasks: map[string]TaskConfig{
+				"t": {
+					Harness:    "opencode",
+					Schedule:   "0 * * * *",
+					PromptFile: "HEARTBEAT.md",
+					Runtime:    "persistent",
+					Enabled:    true,
+				},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("scheduled (non-persistent) task on codex is valid", func(t *testing.T) {
+		cfg := &Config{
+			Tasks: map[string]TaskConfig{
+				"t": {
+					Harness:    "codex",
+					Schedule:   "0 * * * *",
+					PromptFile: "HEARTBEAT.md",
+					Enabled:    true,
+				},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+}
+
 func TestValidateChannelPattern(t *testing.T) {
 	cfg := &Config{
 		Processes: map[string]ProcessConfig{

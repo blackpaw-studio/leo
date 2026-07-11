@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/session"
@@ -127,7 +128,7 @@ func TestBuildProcessArgsIncludesDevChannels(t *testing.T) {
 		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
 	}
 
-	args := buildProcessArgs(cfg, "test", proc)
+	args := buildProcessArgs(cfg, "test", proc, "")
 
 	var sawChan, sawDev bool
 	for i, a := range args {
@@ -283,7 +284,7 @@ func TestResolveSessionArgs_BrandNewMintsID(t *testing.T) {
 func TestBuildProcessArgsInjectsMessagingAwareness(t *testing.T) {
 	// HomePath set so AppendArg's EnsureConfig writes under a temp dir.
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
-	args := buildProcessArgs(cfg, "assistant", config.ProcessConfig{})
+	args := buildProcessArgs(cfg, "assistant", config.ProcessConfig{}, "")
 
 	found := false
 	for i := 0; i < len(args)-1; i++ {
@@ -332,4 +333,27 @@ func TestSupervisableUnits(t *testing.T) {
 			t.Fatalf("procs=%d sessions=%d, want 0,0", procs, sessions)
 		}
 	})
+}
+
+// TestBuildAllProcessSpecsHarnessDefaultsClaude characterizes the
+// harness-aware spec plumbing: every enabled process without an explicit
+// harness must resolve to "claude" / harness.KindProcess so nothing about
+// the claude spawn path changes for existing configs.
+func TestBuildAllProcessSpecsHarnessDefaultsClaude(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Processes: map[string]config.ProcessConfig{
+			"bot": {Enabled: true, Workspace: t.TempDir()},
+		},
+	}
+	specs := buildAllProcessSpecs(cfg, "claude", "tok")
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	if specs[0].Harness != "claude" {
+		t.Errorf("Harness = %q, want %q", specs[0].Harness, "claude")
+	}
+	if specs[0].Kind != harness.KindProcess {
+		t.Errorf("Kind = %q, want %q", specs[0].Kind, harness.KindProcess)
+	}
 }

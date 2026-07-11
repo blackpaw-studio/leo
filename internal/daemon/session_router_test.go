@@ -1,10 +1,13 @@
 package daemon
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 func TestSessionRouterEnqueueAccepts(t *testing.T) {
@@ -58,11 +61,11 @@ func TestSessionRouterPumpInjectsThenAdvances(t *testing.T) {
 	r := newSessionRouter()
 	var injMu sync.Mutex
 	var injections []string
-	injector := func(session, prompt string) error {
+	injector := func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 		injMu.Lock()
 		injections = append(injections, session+"|"+prompt)
 		injMu.Unlock()
-		return nil
+		return nil, nil
 	}
 	r.SetInjector(injector)
 	r.SetAborter(func(string) error { return nil })
@@ -103,7 +106,7 @@ func TestSessionRouterTimeoutFiresDespiteConcurrentEnqueue(t *testing.T) {
 	r := newSessionRouter()
 	defer r.Stop()
 	var aborted int32
-	r.SetInjector(func(string, string) error { return nil })
+	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) { return nil, nil })
 	r.SetAborter(func(string) error {
 		atomic.AddInt32(&aborted, 1)
 		return nil
@@ -148,7 +151,7 @@ func TestSessionRouterTimeoutFiresDespiteConcurrentEnqueue(t *testing.T) {
 func TestSessionRouterAwaitAfterReportSucceeds(t *testing.T) {
 	r := newSessionRouter()
 	defer r.Stop()
-	r.SetInjector(func(string, string) error { return nil })
+	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) { return nil, nil })
 	r.SetAborter(func(string) error { return nil })
 
 	inv, _ := r.Enqueue(EnqueueParams{Session: "s", Task: "t", Prompt: "p", QueueMax: 5, Timeout: time.Second})
@@ -178,9 +181,9 @@ func TestSessionRouterResetClearsInFlight(t *testing.T) {
 	r := newSessionRouter()
 	defer r.Stop()
 	var injected int32
-	r.SetInjector(func(string, string) error {
+	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) {
 		atomic.AddInt32(&injected, 1)
-		return nil
+		return nil, nil
 	})
 	r.SetAborter(func(string) error { return nil })
 
@@ -236,7 +239,7 @@ func TestSessionRouterPumpTimeoutAborts(t *testing.T) {
 	r := newSessionRouter()
 	var abMu sync.Mutex
 	var aborted bool
-	r.SetInjector(func(session, prompt string) error { return nil })
+	r.SetInjector(func(ctx context.Context, session, prompt string) (*harness.Result, error) { return nil, nil })
 	r.SetAborter(func(session string) error {
 		abMu.Lock()
 		aborted = true
@@ -267,11 +270,11 @@ func TestSessionRouterInjectsTmuxTarget(t *testing.T) {
 	defer r.Stop()
 	var mu sync.Mutex
 	var injectedInto string
-	r.SetInjector(func(target, _ string) error {
+	r.SetInjector(func(ctx context.Context, target, _ string) (*harness.Result, error) {
 		mu.Lock()
 		injectedInto = target
 		mu.Unlock()
-		return nil
+		return nil, nil
 	})
 	r.SetAborter(func(string) error { return nil })
 
@@ -307,7 +310,7 @@ func TestSessionRouterAbortsTmuxTargetOnTimeout(t *testing.T) {
 	defer r.Stop()
 	var mu sync.Mutex
 	var abortedTarget string
-	r.SetInjector(func(string, string) error { return nil })
+	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) { return nil, nil })
 	r.SetAborter(func(target string) error {
 		mu.Lock()
 		abortedTarget = target
@@ -343,10 +346,10 @@ func TestSessionRouterResetDuringInjectAbortsZombie(t *testing.T) {
 	injectStarted := make(chan struct{})
 	releaseInject := make(chan struct{})
 	var aborted int32
-	r.SetInjector(func(string, string) error {
+	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) {
 		close(injectStarted)
 		<-releaseInject
-		return nil
+		return nil, nil
 	})
 	r.SetAborter(func(string) error {
 		atomic.AddInt32(&aborted, 1)
@@ -380,5 +383,115 @@ func TestSessionRouterResetDuringInjectAbortsZombie(t *testing.T) {
 	}
 	if atomic.LoadInt32(&aborted) != 1 {
 		t.Fatalf("expected zombie turn aborted exactly once, got %d", atomic.LoadInt32(&aborted))
+	}
+}
+
+// TestSessionRouterSyncInjectorCompletesImmediately verifies that when the
+// injector returns a non-nil *harness.Result (a DriveTurns harness that ran
+// the turn to completion inline), the pump marks the invocation completed
+// right away — no Report call needed — surfacing the result text and session
+// id exactly like the Report path would.
+func TestSessionRouterSyncInjectorCompletesImmediately(t *testing.T) {
+	r := newSessionRouter()
+	defer r.Stop()
+	var reportCalls int32
+	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) {
+		return &harness.Result{Text: "done", SessionID: "t1"}, nil
+	})
+	r.SetAborter(func(string) error { return nil })
+
+	inv, ok := r.Enqueue(EnqueueParams{Session: "s", Task: "t", Prompt: "p", QueueMax: 5, Timeout: time.Second})
+	if !ok {
+		t.Fatal("enqueue rejected")
+	}
+	r.StartPump("s")
+
+	select {
+	case res := <-inv.Result:
+		if !res.OK {
+			t.Fatalf("expected OK completion, got %+v", res)
+		}
+		if res.FinalMessage != "done" {
+			t.Fatalf("FinalMessage = %q, want %q", res.FinalMessage, "done")
+		}
+		if res.SessionID != "t1" {
+			t.Fatalf("SessionID = %q, want %q", res.SessionID, "t1")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("sync-completed invocation never delivered a result")
+	}
+	if atomic.LoadInt32(&reportCalls) != 0 {
+		t.Fatalf("Report should never have been called for a synchronous completion")
+	}
+}
+
+// TestSessionRouterSyncInjectorErrorMarksFailed mirrors the happy-path test
+// above for the IsError case: the invocation must be marked failed, not OK.
+func TestSessionRouterSyncInjectorErrorMarksFailed(t *testing.T) {
+	r := newSessionRouter()
+	defer r.Stop()
+	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) {
+		return &harness.Result{Text: "boom", IsError: true, SessionID: "t2"}, nil
+	})
+	r.SetAborter(func(string) error { return nil })
+
+	inv, ok := r.Enqueue(EnqueueParams{Session: "s", Task: "t", Prompt: "p", QueueMax: 5, Timeout: time.Second})
+	if !ok {
+		t.Fatal("enqueue rejected")
+	}
+	r.StartPump("s")
+
+	select {
+	case res := <-inv.Result:
+		if res.OK {
+			t.Fatalf("expected failed completion, got OK: %+v", res)
+		}
+		if res.Err == "" {
+			t.Fatalf("expected a non-empty error message")
+		}
+		if res.SessionID != "t2" {
+			t.Fatalf("SessionID = %q, want %q", res.SessionID, "t2")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("sync-completed error invocation never delivered a result")
+	}
+}
+
+// TestSessionRouterInjectorTimeoutKillsHungTurn verifies that the pump
+// threads the invocation's Timeout into the ctx it passes to the injector
+// (see the injCtx wrap in the pump loop): a driver whose Inject respects ctx
+// cancellation must fail fast when the pump's timeout elapses, rather than
+// the pump only discovering the hang via its own outer per-invocation timer.
+// This is what lets a real DriveTurns harness's exec.CommandContext actually
+// kill a hung turn's subprocess.
+func TestSessionRouterInjectorTimeoutKillsHungTurn(t *testing.T) {
+	r := newSessionRouter()
+	defer r.Stop()
+	r.SetInjector(func(ctx context.Context, session, prompt string) (*harness.Result, error) {
+		select {
+		case <-time.After(2 * time.Second):
+			return &harness.Result{Text: "too slow"}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	r.SetAborter(func(string) error { return nil })
+
+	inv, ok := r.Enqueue(EnqueueParams{Session: "s", Task: "t", Prompt: "p", QueueMax: 5, Timeout: 30 * time.Millisecond})
+	if !ok {
+		t.Fatal("enqueue rejected")
+	}
+	r.StartPump("s")
+
+	select {
+	case res := <-inv.Result:
+		if res.OK {
+			t.Fatalf("expected failed completion, got OK: %+v", res)
+		}
+		if res.Err == "" {
+			t.Fatalf("expected a non-empty error message")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("hung-turn invocation never completed after the injector's ctx deadline elapsed")
 	}
 }

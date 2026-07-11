@@ -5,9 +5,14 @@
 //
 // Behavior is controlled via environment variables:
 //
-//	FAKECODEX_SCENARIO: success (default), error
+//	FAKECODEX_SCENARIO: success (default), error, stale_resume
 //	FAKECODEX_ARGLOG:   path to write received args as JSON
 //	FAKECODEX_ENVLOG:   path to write os.Environ() as JSON
+//
+// stale_resume: a call whose argv contains "resume" exits 1 with EMPTY
+// stdout (the "no rollout found" shape TurnDriver treats as a stale thread);
+// a fresh call (no "resume") succeeds normally. Mirrors the real codex CLI's
+// behavior when asked to resume a thread whose rollout file has vanished.
 package main
 
 import (
@@ -59,6 +64,17 @@ func main() {
 	}
 
 	switch scenario {
+	case "stale_resume":
+		if resumeID(os.Args[1:]) != "" {
+			// Stale thread: exit 1 with no stdout at all (the "no rollout
+			// found" shape TurnDriver's stale-thread detection depends on).
+			os.Exit(1)
+		}
+		fmt.Printf(`{"type":"thread.started","thread_id":%q}`+"\n", threadID)
+		fmt.Println(`{"type":"turn.started"}`)
+		fmt.Println(`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"fake codex fresh after stale"}}`)
+		fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}`)
+		os.Exit(0)
 	case "success":
 		fmt.Printf(`{"type":"thread.started","thread_id":%q}`+"\n", threadID)
 		fmt.Println(`{"type":"turn.started"}`)

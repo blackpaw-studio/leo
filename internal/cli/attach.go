@@ -6,8 +6,14 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/spf13/cobra"
 )
+
+// agentAttachSpecFn is a testability seam for daemon.AgentAttachSpec — tests
+// override this to simulate the daemon's view of an agent's harness/attach
+// spec without spinning up a real socket.
+var agentAttachSpecFn = daemon.AgentAttachSpec
 
 // Testability seam — tests override this to simulate the daemon's view of
 // running agents without spinning up a real socket.
@@ -76,8 +82,23 @@ render the session as a native tab via tmux control mode.`,
 			case isProcess && agentSession != "":
 				return fmt.Errorf("%q is both a process and an agent — use 'leo process attach %s' or 'leo agent attach %s'", name, name, name)
 			case isProcess:
+				// Non-claude harnesses have no tmux session to attach to —
+				// route through the driver instead, same as `leo process
+				// attach` (resolveProcessAttachSpec is localhost-only, which
+				// this branch always is: remote dispatch returned above).
+				if _, spec, ok, err := resolveProcessAttachSpec(cfg, name); err != nil {
+					return err
+				} else if ok {
+					return attachViaDriver(res, spec)
+				}
 				return attachTmuxSession(res, processSessionName(name), opts)
 			case agentSession != "":
+				// Same non-claude routing as `leo agent attach` (attachLocal):
+				// ask the daemon for the agent's harness/attach spec before
+				// falling back to the tmux session already resolved above.
+				if spec, err := agentAttachSpecFn(cmd.Context(), cfg.HomePath, name); err == nil && spec.Harness != "" && spec.Harness != "claude" {
+					return attachViaDriver(res, harness.AttachSpec{Argv: spec.Argv, HistoryPath: spec.HistoryPath})
+				}
 				return attachTmuxSession(res, agentSession, opts)
 			default:
 				return fmt.Errorf("no process or agent named %q", name)

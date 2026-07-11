@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -627,6 +628,18 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the target's harness FIRST, before any tmux-touching logic.
+	// Claude targets (harnessName == "" from an unresolved/claude target)
+	// fall straight through to the existing fast-path / suspended-resume
+	// logic below, byte-identical to before this change. A resolved
+	// non-claude target is routed to its SessionDriver and returns
+	// immediately — it never touches tmux, and never suspends (sweep skips
+	// non-claude records), so there is no resume branch to consider for it.
+	if harnessName, handle, ok := s.resolveMessageTarget(name); ok && harnessName != "" && harnessName != "claude" {
+		s.dispatchNonClaudeMessage(w, harnessName, handle, req.Text)
+		return
+	}
+
 	// Validate the target against running sessions (processes + agents).
 	// If the agent is not live but is a suspended agent, resume it first and
 	// deliver via the readiness-probing path (InjectPrompt) — a just-resumed
@@ -707,6 +720,56 @@ func (s *Server) handleProcessMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// resolveMessageTarget resolves name to its harness name and SessionHandle,
+// trying the agent resolver first (agentstore-backed, so a name that is both
+// an agent and a process resolves as the agent — consistent with the
+// agent-first precedence already used elsewhere in this handler for the
+// suspended-resume check) and falling back to the process resolver seam.
+// ok=false means neither resolver claims the name — the caller falls back to
+// the existing tmux/claude logic, which does its own "unknown target" check.
+func (s *Server) resolveMessageTarget(name string) (harnessName string, h harness.SessionHandle, ok bool) {
+	if s.agentSvc != nil {
+		if hn, handle, resolved := s.agentSvc.ResolveHandle(name); resolved {
+			return hn, handle, true
+		}
+	}
+	if s.resolveHandle != nil {
+		if hn, handle, resolved := s.resolveHandle(name); resolved {
+			return hn, handle, true
+		}
+	}
+	return "", harness.SessionHandle{}, false
+}
+
+// nonClaudeInjectTimeout bounds a synchronous DriveTurns Inject call so a
+// hung driver can't wedge the web handler indefinitely. Generous because a
+// turn-based harness's Inject IS the whole turn (no fast paste-and-confirm
+// path exists for it).
+const nonClaudeInjectTimeout = 5 * time.Minute
+
+// dispatchNonClaudeMessage delivers text to a non-claude session via its
+// SessionDriver's Inject and never touches tmux. Used by handleProcessMessage
+// once the target's harness has been resolved to something other than claude.
+func (s *Server) dispatchNonClaudeMessage(w http.ResponseWriter, harnessName string, h harness.SessionHandle, text string) {
+	hd, err := harness.Get(harnessName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("resolving harness %q: %v", harnessName, err)})
+		return
+	}
+	drv := hd.Driver()
+	if drv == nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("harness %q has no session driver", harnessName)})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), nonClaudeInjectTimeout)
+	defer cancel()
+	if _, err := drv.Inject(ctx, h, text); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("delivering message: %v", err)})
+		return
+	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
 

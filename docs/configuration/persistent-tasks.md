@@ -1,6 +1,8 @@
 # Persistent Task Sessions
 
-Tasks default to `runtime: oneshot`, which runs `claude -p <prompt>` as a fresh subprocess for each cron firing. Setting `runtime: persistent` reuses a warm `claude` session living in a leo-supervised tmux session.
+Tasks default to `runtime: oneshot`, which runs `claude -p <prompt>` as a fresh subprocess for each cron firing. Setting `runtime: persistent` reuses a warm session living in a leo-supervised tmux session.
+
+This page describes the mechanics for the default `claude` harness (Stop hook, invocation marker, async pump-and-await). `codex` and `opencode` persistent sessions use the same `sessions:`/`tasks:` config shape but a different completion path — see [Harness notes](#harness-notes) below and [Harnesses → Session driver semantics](harnesses.md#session-driver-semantics) for the full driver reference.
 
 ## Why
 
@@ -127,6 +129,39 @@ leo session drain <name>          # placeholder; not yet implemented
 4. The daemon's per-session pump goroutine pastes the prompt via `tmux paste-buffer` then `send-keys Enter`.
 5. When the turn ends, the Stop hook fires `leo internal task-report`, which reads the transcript JSONL, finds the marker, extracts the assistant reply, and POSTs to `/task/report`.
 6. The pump correlates the report to the in-flight invocation, signals the result channel, and the `leo run` subprocess returns. History is recorded; the session id is persisted for next-boot resume.
+
+## Harness notes
+
+Steps 1–6 above ("How it works") describe the `claude` path exactly: a
+resident tmux-hosted TUI, a Stop hook merged into `.claude/settings.local.json`,
+and an async pump that pastes the prompt, waits for the hook's
+`leo internal task-report` POST (correlated via the `<!-- leo:invocation=<uuid>
+--> ` sentinel), and only then returns.
+
+`codex` and `opencode` sessions use the same `sessions:`/`tasks:` config
+shape, cron firing, and daemon enqueue path, but complete differently:
+
+- **No Stop hook, no invocation marker.** Both are claude-specific machinery
+  (a `.claude/settings.local.json` hook and a transcript-JSONL sentinel) that
+  don't exist for either non-claude harness. Nothing is written into the
+  session workspace to detect turn completion.
+- **Synchronous completion.** The injected turn runs to completion inside the
+  driver's `Inject` call itself, and the daemon marks the invocation complete
+  the moment that call returns — there's no separate await-report/timeout
+  window to skip past.
+- **`codex` has no resident process.** Each firing spawns a fresh `codex exec
+  … resume <thread-id> <prompt>` (via `TurnDriver`), blocks for the whole
+  turn, and records the returned thread id for the next firing. "Restarting"
+  a codex session is bookkeeping only.
+- **`opencode` runs a supervised `serve`.** A resident `opencode serve
+  --port <p> --hostname 127.0.0.1` process backs the session (crash-restarted
+  like the claude tmux loop, but without a Stop hook); each firing runs
+  `opencode run --attach <url> …` against it and blocks until that turn
+  completes.
+
+See [Harnesses → Session driver semantics](harnesses.md#session-driver-semantics)
+for the exact argv, state files (`state/transcripts/`, `state/opencode/`),
+and attach behavior of each driver.
 
 ## Known limitations (v1)
 

@@ -3,12 +3,19 @@
 package e2e
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/blackpaw-studio/leo/internal/harness"
+	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
+	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
@@ -200,6 +207,10 @@ func TestOpencodeTruncatedStreamStillSucceeds(t *testing.T) {
 	}
 }
 
+// TestNonClaudeValidationErrors covers a harness/scope combination that
+// still fails validation after Plan 4 Task 5 (codex TurnDriver): codex
+// processes are now supported, but channel plugins never are for codex — it
+// has no channel-plugin concept, only leo's MCP tools.
 func TestNonClaudeValidationErrors(t *testing.T) {
 	const cfg = `processes:
   worker:
@@ -217,8 +228,43 @@ func TestNonClaudeValidationErrors(t *testing.T) {
 	}
 
 	combined := stdout + stderr
-	if !strings.Contains(combined, "cannot run supervised processes yet") {
-		t.Errorf("validate output = %q, want to mention that the codex harness cannot run supervised processes", combined)
+	if !strings.Contains(combined, "does not support channel plugins") {
+		t.Errorf("validate output = %q, want to mention that the codex harness does not support channel plugins", combined)
+	}
+}
+
+// TestCodexProcessValidatesClean locks in that a codex process/template/
+// session with no channels now passes validation cleanly (Plan 4 Task 5
+// TurnDriver + Plan 4 Task 7 session drivers).
+func TestCodexProcessValidatesClean(t *testing.T) {
+	const cfg = `processes:
+  worker:
+    workspace: %s
+    harness: codex
+templates:
+  helper:
+    harness: codex
+sessions:
+  chat:
+    workspace: %s
+    harness: codex
+`
+	ws := setupWorkspace(t, cfg, nil)
+	fixWorkspaceInConfig(t, ws)
+
+	stdout, stderr, code := runLeo(t, ws, nil, "validate", "-c", filepath.Join(ws, "leo.yaml"))
+	combined := stdout + stderr
+	if code != 0 {
+		t.Fatalf("expected clean validation, got exit %d: %s", code, combined)
+	}
+	if strings.Contains(combined, "cannot run persistent sessions yet") {
+		t.Errorf("validate output = %q, must not reject the codex session anymore", combined)
+	}
+	if strings.Contains(combined, "cannot run supervised processes yet") {
+		t.Errorf("validate output = %q, must not reject the codex process anymore", combined)
+	}
+	if strings.Contains(combined, "cannot run ephemeral agents yet") {
+		t.Errorf("validate output = %q, must not reject the codex template anymore", combined)
 	}
 }
 
@@ -240,16 +286,18 @@ func TestRealHarnessSmokeOpencode(t *testing.T) {
 	realSmokeTest(t, "opencode", "oc", "harness: opencode\n")
 }
 
-// realSmokeTest is the shared body for the gated real-binary smoke tests.
-func realSmokeTest(t *testing.T, binary, taskName, harnessYAML string) {
+// realBinaryPath gates a real-binary smoke test on LEO_E2E_REAL_HARNESSES=1
+// and the named binary being resolvable on a PATH that EXCLUDES the
+// fake-binary dir (so a same-named fake never shadows the real thing).
+// Returns the PATH value to use for any subprocess/driver call the caller
+// makes; skips the test otherwise.
+func realBinaryPath(t *testing.T, binary string) string {
 	t.Helper()
 
 	if os.Getenv("LEO_E2E_REAL_HARNESSES") != "1" {
 		t.Skip("set LEO_E2E_REAL_HARNESSES=1 to run real-binary smoke tests (costs API money; never runs in CI)")
 	}
 
-	// Look up the real binary on a PATH that excludes the fake-binary dir,
-	// so a fake of the same name doesn't shadow it.
 	realPath := strings.Join(filterOutDir(strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)), filepath.Dir(fakeclaude)), string(os.PathListSeparator))
 	origPath := os.Getenv("PATH")
 	os.Setenv("PATH", realPath)
@@ -258,6 +306,14 @@ func realSmokeTest(t *testing.T, binary, taskName, harnessYAML string) {
 	if err != nil || lp == "" {
 		t.Skipf("real %s binary not found on PATH (excluding fake dir): %v", binary, err)
 	}
+	return realPath
+}
+
+// realSmokeTest is the shared body for the gated real-binary smoke tests.
+func realSmokeTest(t *testing.T, binary, taskName, harnessYAML string) {
+	t.Helper()
+
+	realPath := realBinaryPath(t, binary)
 
 	cfg := "tasks:\n  " + taskName + ":\n    workspace: %s\n    schedule: \"0 9 * * *\"\n    prompt_file: prompts/SMOKE.md\n    enabled: true\n    " + harnessYAML
 
@@ -283,6 +339,190 @@ func realSmokeTest(t *testing.T, binary, taskName, harnessYAML string) {
 	sid := readStoredTaskSessionID(t, ws, taskName)
 	if sid == "" {
 		t.Errorf("expected a non-empty stored session id after the real %s smoke run", binary)
+	}
+}
+
+// stringIDStore is a trivial in-memory harness.SessionIDStore, mirroring the
+// one in driver_test.go — duplicated (not shared) since real-smoke tests are
+// meant to be readable/auditable standalone before the orchestrator runs
+// them live.
+type stringIDStoreSmoke struct{ id string }
+
+func (s *stringIDStoreSmoke) Get() string   { return s.id }
+func (s *stringIDStoreSmoke) Set(id string) { s.id = id }
+func (s *stringIDStoreSmoke) Clear()        { s.id = "" }
+
+// TestRealHarnessSmokeCodexTurnDriver drives codexharness.TurnDriver
+// directly against the real codex CLI: a fresh turn (no model pinned, see
+// the model-cascade note above), then a resume turn reusing the thread id
+// the fresh turn returned. Never runs in CI; gated identically to
+// TestRealHarnessSmokeCodex.
+func TestRealHarnessSmokeCodexTurnDriver(t *testing.T) {
+	realPath := realBinaryPath(t, "codex")
+	t.Setenv("PATH", realPath)
+
+	ws := t.TempDir()
+	turnArgs, err := codexharness.Codex{}.Args(harness.LaunchSpec{
+		Kind:      harness.KindAgent,
+		Name:      "smoke",
+		Workspace: ws,
+		Options:   codexharness.Options{},
+	})
+	if err != nil {
+		t.Fatalf("building codex turn args: %v", err)
+	}
+
+	ids := &stringIDStoreSmoke{}
+	handle := harness.SessionHandle{
+		Kind:        harness.KindAgent,
+		Name:        "smoke",
+		TmuxSession: "leo-smoke-codex",
+		Workspace:   ws,
+		HomePath:    ws,
+		TurnArgs:    turnArgs,
+		IDs:         ids,
+	}
+	drv := codexharness.TurnDriver{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	res, err := drv.Inject(ctx, handle, "Reply with exactly: pong")
+	if err != nil {
+		t.Fatalf("fresh turn: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("fresh turn reported an error: %+v", res)
+	}
+	if ids.Get() == "" {
+		t.Fatal("fresh turn did not persist a thread id")
+	}
+	freshID := ids.Get()
+
+	res2, err := drv.Inject(ctx, handle, "Reply with exactly: pong again")
+	if err != nil {
+		t.Fatalf("resume turn: %v", err)
+	}
+	if res2.IsError {
+		t.Fatalf("resume turn reported an error: %+v", res2)
+	}
+	if ids.Get() == "" {
+		t.Fatal("resume turn cleared the thread id")
+	}
+	_ = freshID // the driver may rotate the id across turns; only non-empty is asserted
+}
+
+// TestRealHarnessSmokeOpencodeServerDriver provisions and starts a REAL
+// `opencode serve`, health-waits, injects one turn, confirms the session id
+// is persisted, and exercises the `session list` fallback path by clearing
+// the stored id before a second injected turn. The server is killed via ctx
+// cancellation on cleanup. Never runs in CI; gated identically to
+// TestRealHarnessSmokeOpencode.
+func TestRealHarnessSmokeOpencodeServerDriver(t *testing.T) {
+	realPath := realBinaryPath(t, "opencode")
+	t.Setenv("PATH", realPath)
+
+	ws := t.TempDir()
+	home := t.TempDir()
+	const tmuxSession = "leo-smoke-opencode"
+
+	state, err := opencodeharness.EnsureServerState(home, tmuxSession, "")
+	if err != nil {
+		t.Fatalf("EnsureServerState: %v", err)
+	}
+
+	serveArgs, err := opencodeharness.Opencode{}.Args(harness.LaunchSpec{
+		Kind:      harness.KindAgent,
+		Name:      "smoke",
+		Workspace: ws,
+		Options:   opencodeharness.Options{ServerPort: state.Port, ServerPassword: state.Password},
+	})
+	if err != nil {
+		t.Fatalf("building opencode serve args: %v", err)
+	}
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	defer cancelServe()
+	serveCmd := exec.CommandContext(serveCtx, opencodeharness.Opencode{}.Binary(), serveArgs...)
+	serveCmd.Dir = ws
+	serveCmd.Env = append(os.Environ(), "OPENCODE_SERVER_PASSWORD="+state.Password)
+	if err := serveCmd.Start(); err != nil {
+		t.Fatalf("starting real opencode serve: %v", err)
+	}
+	t.Cleanup(func() {
+		cancelServe()
+		_ = serveCmd.Wait()
+	})
+
+	healthDeadline := time.Now().Add(30 * time.Second)
+	healthy := false
+	for time.Now().Before(healthDeadline) {
+		// A secured `opencode serve` (OPENCODE_SERVER_PASSWORD set, as
+		// above) 401s every endpoint including /global/health without
+		// Basic auth — mirrors ServerDriver's own health check.
+		req, reqErr := http.NewRequest(http.MethodGet, state.URL()+"/global/health", nil) //nolint:noctx -- bounded by the surrounding deadline loop
+		if reqErr == nil {
+			req.SetBasicAuth("opencode", state.Password)
+			resp, err := http.DefaultClient.Do(req)
+			if err == nil {
+				var body struct {
+					Healthy bool `json:"healthy"`
+				}
+				decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+				resp.Body.Close()
+				if decodeErr == nil && body.Healthy {
+					healthy = true
+					break
+				}
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !healthy {
+		t.Fatal("real opencode serve did not become healthy within 30s")
+	}
+
+	ids := &stringIDStoreSmoke{}
+	handle := harness.SessionHandle{
+		Kind:        harness.KindAgent,
+		Name:        "smoke",
+		TmuxSession: tmuxSession,
+		Workspace:   ws,
+		HomePath:    home,
+		IDs:         ids,
+	}
+	drv := opencodeharness.ServerDriver{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	res, err := drv.Inject(ctx, handle, "Reply with exactly: pong")
+	if err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("first turn reported an error: %+v", res)
+	}
+	if ids.Get() == "" {
+		t.Fatal("first turn did not persist a session id")
+	}
+
+	// Clear the stored id and run a second (resume-less) turn. If the real
+	// attach stream surfaces sessionID directly the driver resolves it that
+	// way; if it doesn't (the lossy-stream case ServerDriver's `session
+	// list --format json` fallback exists for), the fallback kicks in
+	// instead — either way a session id must land, exercising whichever
+	// path the real binary actually takes.
+	ids.Clear()
+	res2, err := drv.Inject(ctx, handle, "Reply with exactly: pong again")
+	if err != nil {
+		t.Fatalf("second turn: %v", err)
+	}
+	if res2.IsError {
+		t.Fatalf("second turn reported an error: %+v", res2)
+	}
+	if ids.Get() == "" {
+		t.Fatal("no session id resolved after the stored id was cleared (neither the attach stream nor the session-list fallback surfaced one)")
 	}
 }
 

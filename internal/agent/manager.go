@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -192,9 +194,30 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		return Record{}, err
 	}
 
+	harnessName := cfg.TemplateHarness(tmpl)
+	isClaude := harnessName == "" || harnessName == "claude"
+
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt)
-	claudeArgs = append(claudeArgs, "--session-id", sessionID)
+	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt, m.webToken)
+	openingPrompt := ""
+	// storedSessionID seeds agentstore.Record.SessionID, which a DriveTurns
+	// driver's SessionIDStore (agent.NewAgentIDs) reads back via IDs.Get() to
+	// decide whether this is a brand-new session (Start's opening-turn
+	// precondition is Get()=="") or a resume. Claude's sessionID is a
+	// leo-generated --session-id it hands claude on the command line, so it
+	// is genuinely "already assigned" from claude's perspective — storing it
+	// is correct. A non-claude harness has never talked to its own thread/
+	// session yet at this point (the driver assigns that id after the
+	// opening turn), so seeding this field with the same leo-generated uuid
+	// would make IDs.Get() falsely non-empty and skip the opening turn
+	// entirely.
+	storedSessionID := ""
+	if isClaude {
+		claudeArgs = append(claudeArgs, "--session-id", sessionID)
+		storedSessionID = sessionID
+	} else {
+		openingPrompt = spec.Prompt
+	}
 	webPort := strconv.Itoa(cfg.WebPort())
 	env := mergeEnv(tmpl.Env, spec.Env)
 
@@ -203,33 +226,50 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		idleStr = d.String()
 	}
 
-	if err := m.sup.SpawnAgent(SpawnRequest{
-		Name:       agentName,
-		ClaudeArgs: claudeArgs,
-		WorkDir:    workspace,
-		Env:        env,
-		WebPort:    webPort,
-		WebToken:   m.webToken,
-	}); err != nil {
-		return Record{}, fmt.Errorf("spawning agent: %w", err)
-	}
-	// SpawnAgent consumed the reservation on success; suppress the deferred release.
-	released = true
-
+	// The agentstore record is persisted BEFORE the supervisor spawn (not
+	// after, as the claude-only flow historically did). A DriveTurns driver
+	// (codex TurnDriver) runs its opening turn synchronously from inside
+	// SpawnAgent's goroutine, and that turn's SessionIDStore
+	// (agentOrProcessIDs) picks agentstore-backed persistence only when a
+	// record already exists for this name — save-after-spawn lost that race
+	// essentially every time, silently stashing the fresh thread id under a
+	// throwaway "process:<name>" session-store key instead of the agent's
+	// own record, which then made every subsequent turn think it had no
+	// prior thread and start over. Saving first closes that window. A failed
+	// spawn now rolls the record back so a dead agent never leaves an
+	// orphaned entry behind (matches the pre-existing worktree-flow
+	// rollback further down this file).
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:             agentName,
 		Template:         spec.Template,
 		Repo:             spec.Repo,
 		Workspace:        workspace,
 		ClaudeArgs:       claudeArgs,
-		SessionID:        sessionID,
+		SessionID:        storedSessionID,
 		Env:              env,
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
+		Harness:          harnessName,
 	}); err != nil {
-		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", agentName, err)
+		log.Printf("agent %q: agentstore.Save failed before spawn: %v — agent will not be restored on daemon restart", agentName, err)
 	}
+
+	if err := m.sup.SpawnAgent(SpawnRequest{
+		Name:          agentName,
+		ClaudeArgs:    claudeArgs,
+		WorkDir:       workspace,
+		Env:           env,
+		WebPort:       webPort,
+		WebToken:      m.webToken,
+		Harness:       harnessName,
+		OpeningPrompt: openingPrompt,
+	}); err != nil {
+		agentstore.Remove(cfg.HomePath, agentName)
+		return Record{}, fmt.Errorf("spawning agent: %w", err)
+	}
+	// SpawnAgent consumed the reservation on success; suppress the deferred release.
+	released = true
 
 	return Record{
 		Name:      agentName,
@@ -299,9 +339,23 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}
 	worktreeCreated := true
 
+	harnessName := cfg.TemplateHarness(tmpl)
+	isClaude := harnessName == "" || harnessName == "claude"
+
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt)
-	claudeArgs = append(claudeArgs, "--session-id", sessionID)
+	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt, m.webToken)
+	openingPrompt := ""
+	// See the identical storedSessionID comment in spawnShared: a non-claude
+	// harness must NOT have its agentstore SessionID pre-seeded, or its
+	// DriveTurns driver's opening-turn precondition (IDs.Get()=="") is
+	// falsely non-empty and the opening turn never runs.
+	storedSessionID := ""
+	if isClaude {
+		claudeArgs = append(claudeArgs, "--session-id", sessionID)
+		storedSessionID = sessionID
+	} else {
+		openingPrompt = spec.Prompt
+	}
 	webPort := strconv.Itoa(cfg.WebPort())
 	env := mergeEnv(tmpl.Env, spec.Env)
 
@@ -324,23 +378,10 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		idleStr = d.String()
 	}
 
-	if err := m.sup.SpawnAgent(SpawnRequest{
-		Name:       layout.AgentName,
-		ClaudeArgs: claudeArgs,
-		WorkDir:    layout.WorktreePath,
-		Env:        env,
-		WebPort:    webPort,
-		WebToken:   m.webToken,
-	}); err != nil {
-		// Reservation protected the name, so a collision here means the
-		// supervisor state changed unexpectedly (e.g. concurrent restore).
-		// Roll back the worktree so disk matches supervisor state.
-		rollbackWorktree()
-		return Record{}, fmt.Errorf("spawning agent: %w", err)
-	}
-	// SpawnAgent consumed the reservation on success.
-	released = true
-
+	// Persist before spawning — see the identical comment in spawnShared for
+	// why order matters here (a DriveTurns driver's opening turn reads back
+	// the just-saved record's SessionIDStore from inside SpawnAgent's
+	// goroutine).
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:             layout.AgentName,
 		Template:         spec.Template,
@@ -349,14 +390,36 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		Branch:           layout.Branch,
 		CanonicalPath:    canonical,
 		ClaudeArgs:       claudeArgs,
-		SessionID:        sessionID,
+		SessionID:        storedSessionID,
 		Env:              env,
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
+		Harness:          harnessName,
 	}); err != nil {
-		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", layout.AgentName, err)
+		log.Printf("agent %q: agentstore.Save failed before spawn: %v — agent will not be restored on daemon restart", layout.AgentName, err)
 	}
+
+	if err := m.sup.SpawnAgent(SpawnRequest{
+		Name:          layout.AgentName,
+		ClaudeArgs:    claudeArgs,
+		WorkDir:       layout.WorktreePath,
+		Env:           env,
+		WebPort:       webPort,
+		WebToken:      m.webToken,
+		Harness:       harnessName,
+		OpeningPrompt: openingPrompt,
+	}); err != nil {
+		// Reservation protected the name, so a collision here means the
+		// supervisor state changed unexpectedly (e.g. concurrent restore).
+		// Roll back the worktree AND the just-written record so disk matches
+		// supervisor state.
+		rollbackWorktree()
+		agentstore.Remove(cfg.HomePath, layout.AgentName)
+		return Record{}, fmt.Errorf("spawning agent: %w", err)
+	}
+	// SpawnAgent consumed the reservation on success.
+	released = true
 
 	return Record{
 		Name:          layout.AgentName,
@@ -556,11 +619,20 @@ func (m *Manager) Resume(name string) (Record, error) {
 		return Record{}, fmt.Errorf("agent %q is not suspended", name)
 	}
 
+	// The jsonl scan is a claude-specific resume mechanic (claude's own
+	// on-disk session transcripts); non-claude records resume with their
+	// stored args/SessionID unchanged.
 	resumeID := rec.SessionID
-	if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
-		resumeID = latestID
+	isClaude := rec.Harness == "" || rec.Harness == "claude"
+	if isClaude {
+		if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
+			resumeID = latestID
+		}
 	}
-	args := ResumeArgs(rec.ClaudeArgs, resumeID)
+	args := rec.ClaudeArgs
+	if isClaude {
+		args = ResumeArgs(rec.ClaudeArgs, resumeID)
+	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       rec.Name,
@@ -569,6 +641,7 @@ func (m *Manager) Resume(name string) (Record, error) {
 		Env:        rec.Env,
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
+		Harness:    rec.Harness,
 	}); err != nil {
 		return Record{}, fmt.Errorf("respawning suspended agent: %w", err)
 	}
@@ -651,12 +724,112 @@ func (m *Manager) SessionName(name string) string {
 	return SessionName(name)
 }
 
-// Logs returns the last `lines` lines of output from the agent's tmux pane.
-// If lines <= 0, returns the whole scrollback.
+// handleForRecord builds the harness.SessionHandle a SessionDriver needs to
+// act on an agentstore record — shared by ResolveHandle (web message
+// dispatch) and Logs (non-tmux history tail).
+func (m *Manager) handleForRecord(homePath string, rec agentstore.Record) harness.SessionHandle {
+	return harness.SessionHandle{
+		Kind:        harness.KindAgent,
+		Name:        rec.Name,
+		TmuxSession: m.SessionName(rec.Name),
+		Workspace:   rec.Workspace,
+		HomePath:    homePath,
+		Env:         rec.Env,
+		TurnArgs:    rec.ClaudeArgs,
+		IDs:         NewAgentIDs(homePath, rec.Name),
+	}
+}
+
+// ResolveHandle resolves an agent name to its harness name and the
+// harness.SessionHandle a SessionDriver needs to deliver a message to it.
+// Implements the web package's agent-side handle resolver seam (mirrors the
+// process-side resolver wired at service boot): ok=false means "not an
+// ephemeral agent" (unknown name, or no agentstore record yet), in which
+// case the caller falls back to today's tmux behavior.
+func (m *Manager) ResolveHandle(name string) (string, harness.SessionHandle, bool) {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return "", harness.SessionHandle{}, false
+	}
+	records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return "", harness.SessionHandle{}, false
+	}
+	rec, ok := records[name]
+	if !ok {
+		return "", harness.SessionHandle{}, false
+	}
+	harnessName := rec.Harness
+	if harnessName == "" {
+		harnessName = "claude"
+	}
+	return harnessName, m.handleForRecord(cfg.HomePath, rec), true
+}
+
+// driveTurnsHistoryPath returns the AttachSpec.HistoryPath for a record whose
+// harness driver is DriveTurns, or ("", false) when the record is claude (or
+// any harness without a DriveTurns driver) — callers fall back to tmux.
+func (m *Manager) driveTurnsHistoryPath(rec agentstore.Record) (string, bool) {
+	if rec.Harness == "" || rec.Harness == "claude" {
+		return "", false
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return "", false
+	}
+	h, err := harness.Get(rec.Harness)
+	if err != nil {
+		return "", false
+	}
+	drv := h.Driver()
+	if drv == nil || drv.Style() != harness.DriveTurns {
+		return "", false
+	}
+	spec, err := drv.Attach(m.handleForRecord(cfg.HomePath, rec))
+	if err != nil {
+		return "", false
+	}
+	return spec.HistoryPath, spec.HistoryPath != ""
+}
+
+// tailLines returns the last n lines of content, or the whole content when n
+// <= 0. Lines are split on "\n"; a trailing empty element from a final
+// newline is dropped so the count matches visible lines.
+func tailLines(content string, n int) string {
+	if n <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
+}
+
+// Logs returns the last `lines` lines of output from the agent's tmux pane
+// (or, for a DriveTurns harness, the tail of its driver's turn-history file).
+// If lines <= 0, returns the whole scrollback/history.
 func (m *Manager) Logs(name string, lines int) (string, error) {
 	live := m.sup.EphemeralAgents()
 	if _, ok := live[name]; !ok {
 		return "", fmt.Errorf("agent %q not running", name)
+	}
+
+	if cfg, err := m.cfgLoader(); err == nil {
+		if records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath)); err == nil {
+			if rec, ok := records[name]; ok {
+				if historyPath, ok := m.driveTurnsHistoryPath(rec); ok {
+					content, err := os.ReadFile(historyPath) // #nosec G304 -- path comes from the resolved driver's own AttachSpec, not user input
+					if err != nil {
+						return "", fmt.Errorf("reading turn history %s: %w", historyPath, err)
+					}
+					return tailLines(string(content), lines), nil
+				}
+			}
+		}
 	}
 
 	tmuxPath := m.tmuxPath

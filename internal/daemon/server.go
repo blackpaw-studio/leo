@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
@@ -43,6 +44,10 @@ type AgentManager interface {
 	SessionName(name string) string
 	Resolve(query string) (agent.Record, error)
 	Rename(query, newName string) (agent.Record, error)
+	// ResolveHandle resolves an agent name to its harness name and the
+	// SessionHandle a SessionDriver needs to act on it. ok=false means "not
+	// an ephemeral agent" — callers fall back to the tmux/claude path.
+	ResolveHandle(name string) (harnessName string, h harness.SessionHandle, ok bool)
 }
 
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
@@ -57,6 +62,10 @@ type Server struct {
 	agentMgr   AgentManager
 	router     *sessionRouter
 	logPath    string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
+	// resolveHandle backs web.Options.ResolveHandle: resolves a config-defined
+	// process name to its harness name and SessionHandle. Set via
+	// SetResolveHandle by service boot; nil means every process is claude.
+	resolveHandle func(name string) (harnessName string, h harness.SessionHandle, ok bool)
 }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
@@ -74,11 +83,14 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 		router:     newSessionRouter(),
 	}
 
-	// Wire the session router to real tmux primitives. Tests that need
-	// fakes can call SetInjector/SetAborter after construction.
-	s.router.SetInjector(func(tmuxSession, prompt string) error {
-		return tmux.InjectPrompt(context.Background(), tmuxPath(), tmuxSession, prompt)
-	})
+	// The injector is intentionally NOT wired here: deciding how to inject
+	// (tmux for claude, a SessionDriver for everything else) requires
+	// resolving per-session harness config, which lives in internal/service
+	// (the daemon package must not import that decision to avoid pulling
+	// config/harness resolution into the IPC layer). The caller that owns
+	// process/session specs (service.defaultSupervisedExec) calls
+	// SetInjector with a harness-aware closure after New() returns. Tests
+	// that need a fake call SetInjector directly.
 	s.router.SetAborter(func(tmuxSession string) error {
 		return tmux.AbortPrompt(context.Background(), tmuxPath(), tmuxSession)
 	})
@@ -115,6 +127,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
+	mux.HandleFunc("GET /agents/{name}/attach-spec", s.handleAgentAttachSpec)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -242,6 +255,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		AllowedHosts:   cfg.Web.AllowedHosts,
 		SessionRuntime: webSessionRuntime{s: s},
 		LogPath:        s.logPath,
+		ResolveHandle:  s.resolveHandle,
 	})
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
@@ -294,9 +308,11 @@ func (s *Server) Shutdown() error {
 }
 
 // SockPath returns the path to the Unix socket.
-// SetInjector overrides the session router's prompt-injection function.
-// Intended for tests that need to substitute a fake for the real tmux call.
-func (s *Server) SetInjector(fn func(session, prompt string) error) {
+// SetInjector wires the session router's prompt-injection function. Must be
+// called before StartPump for any session — service boot calls this with a
+// harness-aware closure once (see internal/service/process.go); tests call
+// it with a fake.
+func (s *Server) SetInjector(fn func(ctx context.Context, session, prompt string) (*harness.Result, error)) {
 	s.router.SetInjector(fn)
 }
 
@@ -314,6 +330,14 @@ func (s *Server) SockPath() string {
 // request is served; otherwise those endpoints return 503.
 func (s *Server) SetAgentManager(m AgentManager) {
 	s.agentMgr = m
+}
+
+// SetResolveHandle wires the process-side handle resolver threaded into
+// web.Options.ResolveHandle by StartWeb. Optional; if never called, every
+// process is treated as claude (today's behavior). Service boot calls this
+// with a closure over its supervisor + []ProcessSpec before StartWeb.
+func (s *Server) SetResolveHandle(fn func(name string) (harnessName string, h harness.SessionHandle, ok bool)) {
+	s.resolveHandle = fn
 }
 
 // SetLogPath records the service log path for the web UI's log tail. Must be

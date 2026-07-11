@@ -170,6 +170,26 @@ func AgentSession(ctx context.Context, workDir, name string) (string, error) {
 	return s.Session, nil
 }
 
+// AgentAttachSpec sends GET /agents/{name}/attach-spec to the daemon,
+// returning how to attach to a non-claude agent's live session (or an empty
+// Argv/HistoryPath with Harness == "claude"/"" for a claude agent — callers
+// should prefer AgentSession + the existing tmux attach flow for those). On
+// resolve failures it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous.
+func AgentAttachSpec(ctx context.Context, workDir, name string) (AgentAttachSpecResponse, error) {
+	resp, err := Send(ctx, workDir, "GET", "/agents/"+url.PathEscape(name)+"/attach-spec", nil)
+	if err != nil {
+		return AgentAttachSpecResponse{}, err
+	}
+	if !resp.OK {
+		return AgentAttachSpecResponse{}, responseError(resp, name)
+	}
+	var out AgentAttachSpecResponse
+	if err := json.Unmarshal(resp.Data, &out); err != nil {
+		return AgentAttachSpecResponse{}, fmt.Errorf("decoding attach spec response: %w", err)
+	}
+	return out, nil
+}
+
 // AgentResolve asks the daemon to resolve a shorthand query to the canonical
 // agent and returns the hydrated record (name, session, repo). Used by remote
 // clients that need to confirm an agent exists before acting on it. On resolve

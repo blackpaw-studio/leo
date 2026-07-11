@@ -76,6 +76,9 @@ func (Claude) Env(spec harness.LaunchSpec) (map[string]string, error) {
 // SupportsKind: claude runs every leo primitive.
 func (Claude) SupportsKind(harness.Kind) bool { return true }
 
+// Driver returns the claude interactive-session driver.
+func (Claude) Driver() harness.SessionDriver { return TmuxTUIDriver{} }
+
 func (Claude) SessionArgs(s harness.SessionState) []string {
 	switch s.Mode {
 	case harness.SessionResume:

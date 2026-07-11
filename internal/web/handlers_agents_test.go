@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,11 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 const testConfigWithTemplatesYAML = `
@@ -68,6 +71,25 @@ type mockAgentService struct {
 	resumeErr    error
 
 	records []agent.Record
+
+	// handles backs ResolveHandle for tests exercising non-claude message
+	// dispatch: keyed by agent name, maps to (harnessName, SessionHandle).
+	// A missing key means ok=false — the caller falls back to tmux/claude.
+	handles map[string]resolvedHandle
+}
+
+// resolvedHandle is the mockAgentService.handles value type.
+type resolvedHandle struct {
+	harnessName string
+	handle      harness.SessionHandle
+}
+
+func (m *mockAgentService) ResolveHandle(name string) (string, harness.SessionHandle, bool) {
+	rh, ok := m.handles[name]
+	if !ok {
+		return "", harness.SessionHandle{}, false
+	}
+	return rh.harnessName, rh.handle, true
 }
 
 func (m *mockAgentService) Spawn(_ context.Context, spec agent.SpawnSpec) (agent.Record, error) {
@@ -533,6 +555,129 @@ func TestProcessMessageAutoWakesSuspendedAgent(t *testing.T) {
 // TestProcessMessageUnknownTargetWithAgentServiceStill404 verifies that a name
 // that is neither live NOR a suspended agent returns 404, even when agentSvc is
 // set (Resume returns an error for truly unknown names).
+// --- non-claude dispatch (SessionDriver routing) ---
+
+// fakeTurnsDriver is a minimal harness.SessionDriver whose Inject records
+// every call instead of touching any real process. Used to verify
+// handleProcessMessage routes non-claude targets through the driver instead
+// of tmux.
+type fakeTurnsDriver struct {
+	mu      sync.Mutex
+	injects []fakeInjectCall
+	result  *harness.Result
+	err     error
+}
+
+type fakeInjectCall struct {
+	handle harness.SessionHandle
+	msg    string
+}
+
+func (d *fakeTurnsDriver) Style() harness.DriveStyle                          { return harness.DriveTurns }
+func (d *fakeTurnsDriver) Start(context.Context, harness.SessionHandle) error { return nil }
+func (d *fakeTurnsDriver) Inject(_ context.Context, h harness.SessionHandle, msg string) (*harness.Result, error) {
+	d.mu.Lock()
+	d.injects = append(d.injects, fakeInjectCall{handle: h, msg: msg})
+	d.mu.Unlock()
+	return d.result, d.err
+}
+func (d *fakeTurnsDriver) Attach(harness.SessionHandle) (harness.AttachSpec, error) {
+	return harness.AttachSpec{}, nil
+}
+
+// fakeTurnsHarness is a minimal harness.Harness wrapping a fakeTurnsDriver,
+// registered under a unique test-only name so it never collides with the
+// real claude/codex/opencode adapters.
+type fakeTurnsHarness struct {
+	name   string
+	driver *fakeTurnsDriver
+}
+
+func (h fakeTurnsHarness) Name() string                              { return h.name }
+func (h fakeTurnsHarness) Binary() string                            { return h.name }
+func (h fakeTurnsHarness) Args(harness.LaunchSpec) ([]string, error) { return nil, nil }
+func (h fakeTurnsHarness) SessionArgs(harness.SessionState) []string { return nil }
+func (h fakeTurnsHarness) ValidateModel(string) error                { return nil }
+func (h fakeTurnsHarness) DecodeOptions(map[string]any) (any, error) { return nil, nil }
+func (h fakeTurnsHarness) SupportsChannels() bool                    { return false }
+func (h fakeTurnsHarness) ParseEvents(io.Reader) (harness.Result, error) {
+	return harness.Result{}, nil
+}
+func (h fakeTurnsHarness) Env(harness.LaunchSpec) (map[string]string, error) { return nil, nil }
+func (h fakeTurnsHarness) SupportsKind(harness.Kind) bool                    { return true }
+func (h fakeTurnsHarness) Driver() harness.SessionDriver                     { return h.driver }
+
+const fakeTurnsHarnessName = "faketurns-webtest"
+
+var registerFakeTurnsHarnessOnce sync.Once
+var fakeTurnsDriverInstance = &fakeTurnsDriver{}
+
+// registerFakeTurnsHarness registers fakeTurnsHarnessName once (the harness
+// registry panics on duplicate registration) and returns the shared driver so
+// each test can reset/inspect its recorded calls.
+func registerFakeTurnsHarness() *fakeTurnsDriver {
+	registerFakeTurnsHarnessOnce.Do(func() {
+		harness.Register(fakeTurnsHarness{name: fakeTurnsHarnessName, driver: fakeTurnsDriverInstance})
+	})
+	return fakeTurnsDriverInstance
+}
+
+// TestProcessMessageDispatchesNonClaudeThroughDriver verifies that a message
+// to a target resolving to a non-claude harness is delivered via
+// driver.Inject with the resolved SessionHandle, and never touches tmux (the
+// execCommand seam sees zero calls).
+func TestProcessMessageDispatchesNonClaudeThroughDriver(t *testing.T) {
+	drv := registerFakeTurnsHarness()
+	drv.mu.Lock()
+	drv.injects = nil
+	drv.result = &harness.Result{Text: "turn done", SessionID: "thread-1"}
+	drv.err = nil
+	drv.mu.Unlock()
+
+	s, _, svc := newTestServerWithAgents(t)
+	wantHandle := harness.SessionHandle{
+		Kind:        harness.KindAgent,
+		Name:        "codex-worker",
+		TmuxSession: agent.SessionName("codex-worker"),
+		Workspace:   "/tmp/codex-worker",
+	}
+	svc.handles = map[string]resolvedHandle{
+		"codex-worker": {harnessName: fakeTurnsHarnessName, handle: wantHandle},
+	}
+
+	var execCalls int
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalls++
+		return exec.Command("true")
+	}
+
+	reqBody := strings.NewReader(`{"text":"hello codex"}`)
+	req := httptest.NewRequest("POST", "/web/process/codex-worker/message", reqBody)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if execCalls != 0 {
+		t.Fatalf("expected zero tmux exec calls for a non-claude target, got %d", execCalls)
+	}
+
+	drv.mu.Lock()
+	defer drv.mu.Unlock()
+	if len(drv.injects) != 1 {
+		t.Fatalf("expected exactly one Inject call, got %d", len(drv.injects))
+	}
+	got := drv.injects[0]
+	if got.msg != "hello codex" {
+		t.Errorf("Inject msg = %q, want %q", got.msg, "hello codex")
+	}
+	if got.handle.Name != wantHandle.Name || got.handle.TmuxSession != wantHandle.TmuxSession || got.handle.Workspace != wantHandle.Workspace {
+		t.Errorf("Inject handle = %+v, want %+v", got.handle, wantHandle)
+	}
+}
+
 func TestProcessMessageUnknownTargetWithAgentServiceStill404(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
 

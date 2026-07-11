@@ -2,10 +2,14 @@ package agent
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
+	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
+	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 )
 
 // hasFlagValue reports whether args contains `flag` immediately followed by a
@@ -25,7 +29,7 @@ func TestBuildTemplateArgsWiresLeoMCPWhenWebEnabled(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
 	tmpl := config.TemplateConfig{}
 
-	args := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "")
+	args := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "")
 
 	if !hasFlagValue(args, "--mcp-config", "leo-mcp.json") {
 		t.Errorf("expected --mcp-config pointing at leo-mcp.json; got %v", args)
@@ -37,7 +41,7 @@ func TestBuildTemplateArgsWiresLeoMCPWhenWebEnabled(t *testing.T) {
 
 func TestBuildTemplateArgsNoLeoMCPWhenWebDisabled(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: false}}
-	args := BuildTemplateArgs(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "")
+	args := BuildTemplateArgs(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
 
 	if hasFlagValue(args, "--append-system-prompt", "leo_send_message") {
 		t.Errorf("awareness line must not appear when web disabled; got %v", args)
@@ -165,10 +169,193 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := BuildTemplateArgs(tt.cfg, tt.tmpl, "myagent", "/tmp/ws", tt.prompt)
+			got := BuildTemplateArgs(tt.cfg, tt.tmpl, "myagent", "/tmp/ws", tt.prompt, "")
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("BuildTemplateArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestResolveTemplateLaunchCodexFillsLeoMCPBridge locks the type-switch's
+// codex branch: when the leo MCP gate passes (web enabled), the codex
+// options carry a LeoMCP bridge referencing the env-var *names* the
+// supervisor already exports — no literal token needed.
+func TestResolveTemplateLaunchCodexFillsLeoMCPBridge(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true},
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+	}
+	tmpl := config.TemplateConfig{}
+
+	h, spec, err := resolveTemplateLaunch(cfg, tmpl, "agent-x", "/tmp/ws", "", "tok")
+	if err != nil {
+		t.Fatalf("resolveTemplateLaunch: %v", err)
+	}
+	if h.Name() != "codex" {
+		t.Fatalf("resolved harness = %q, want codex", h.Name())
+	}
+	opts, ok := spec.Options.(codexharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
+	}
+	if opts.LeoMCP == nil {
+		t.Fatal("expected LeoMCP bridge to be filled when web is enabled")
+	}
+	if opts.LeoMCP.Command != "leo" {
+		t.Errorf("LeoMCP.Command = %q, want leo", opts.LeoMCP.Command)
+	}
+	wantEnvVars := []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"}
+	if !reflect.DeepEqual(opts.LeoMCP.EnvVars, wantEnvVars) {
+		t.Errorf("LeoMCP.EnvVars = %v, want %v", opts.LeoMCP.EnvVars, wantEnvVars)
+	}
+	if opts.LeoMCP.ApprovalMode != "approve" {
+		t.Errorf("LeoMCP.ApprovalMode = %q, want approve", opts.LeoMCP.ApprovalMode)
+	}
+
+	// Args() now renders the turn-prefix argv for KindAgent (TurnDriver,
+	// Plan 4 Task 5): the leo MCP bridge config lands in the prefix, ready
+	// for TurnArgs to be appended per-turn.
+	args, err := h.Args(spec)
+	if err != nil {
+		t.Fatalf("Args(): %v", err)
+	}
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "mcp_servers.leo.command=\"leo\"") {
+		t.Errorf("Args() = %v, want the leo MCP bridge config", args)
+	}
+}
+
+// TestResolveTemplateLaunchCodexNoLeoMCPWhenWebDisabled mirrors the claude
+// gate: web disabled means no leo MCP bridge for codex either.
+func TestResolveTemplateLaunchCodexNoLeoMCPWhenWebDisabled(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: false},
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+	}
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "tok")
+	if err != nil {
+		t.Fatalf("resolveTemplateLaunch: %v", err)
+	}
+	opts, ok := spec.Options.(codexharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
+	}
+	if opts.LeoMCP != nil {
+		t.Errorf("expected nil LeoMCP bridge when web is disabled, got %+v", opts.LeoMCP)
+	}
+}
+
+// TestResolveTemplateLaunchCodexNoLeoMCPWithoutToken confirms the gate
+// requires a live token, not just web.Enabled: even though codex's bridge
+// only references env-var *names* (no literal secret embedded), a bridge is
+// useless without a token for the supervisor to actually export — matching
+// processLeoMCPEnv's contract and the opencode branch in this same function.
+func TestResolveTemplateLaunchCodexNoLeoMCPWithoutToken(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true},
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+	}
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	if err != nil {
+		t.Fatalf("resolveTemplateLaunch: %v", err)
+	}
+	opts, ok := spec.Options.(codexharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
+	}
+	if opts.LeoMCP != nil {
+		t.Errorf("expected nil LeoMCP bridge without a webToken, got %+v", opts.LeoMCP)
+	}
+}
+
+// TestResolveTemplateLaunchOpencodeFillsLeoMCPBridge locks the opencode
+// branch: unlike codex's env-var-name whitelist, opencode's bridge needs the
+// literal LEO_* values inline (OPENCODE_CONFIG_CONTENT has no notion of
+// "read this from the parent env"), so it only fires when a non-empty
+// webToken is available.
+func TestResolveTemplateLaunchOpencodeFillsLeoMCPBridge(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true, Port: 4141},
+		Defaults: config.DefaultsConfig{Harness: "opencode"},
+	}
+	h, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "sekrit-token")
+	if err != nil {
+		t.Fatalf("resolveTemplateLaunch: %v", err)
+	}
+	if h.Name() != "opencode" {
+		t.Fatalf("resolved harness = %q, want opencode", h.Name())
+	}
+	opts, ok := spec.Options.(opencodeharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want opencodeharness.Options", spec.Options)
+	}
+	if opts.LeoMCP == nil {
+		t.Fatal("expected LeoMCP bridge to be filled when web is enabled and a token is available")
+	}
+	wantEnv := map[string]string{
+		"LEO_PROCESS_NAME": "agent-x",
+		"LEO_WEB_PORT":     "4141",
+		"LEO_API_TOKEN":    "sekrit-token",
+	}
+	if !reflect.DeepEqual(opts.LeoMCP.Env, wantEnv) {
+		t.Errorf("LeoMCP.Env = %v, want %v", opts.LeoMCP.Env, wantEnv)
+	}
+	if opts.ServerPort == 0 {
+		t.Error("expected resolveTemplateLaunch to provision a ServerPort (Plan 4 Task 6 ServerDriver)")
+	}
+	if opts.ServerPassword == "" {
+		t.Error("expected resolveTemplateLaunch to provision a ServerPassword (Plan 4 Task 6 ServerDriver)")
+	}
+
+	// Args() now renders the `opencode serve` argv for KindAgent
+	// (ServerDriver, Plan 4 Task 6).
+	args, err := h.Args(spec)
+	if err != nil {
+		t.Fatalf("Args(): %v", err)
+	}
+	want := []string{"serve", "--port", strconv.Itoa(opts.ServerPort), "--hostname", "127.0.0.1"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("Args() = %#v, want %#v", args, want)
+	}
+}
+
+// TestResolveTemplateLaunchOpencodeNoBridgeWithoutToken confirms the
+// literal-value requirement: even with web enabled, an empty webToken must
+// suppress the bridge rather than embed empty credentials.
+func TestResolveTemplateLaunchOpencodeNoBridgeWithoutToken(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true},
+		Defaults: config.DefaultsConfig{Harness: "opencode"},
+	}
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	if err != nil {
+		t.Fatalf("resolveTemplateLaunch: %v", err)
+	}
+	opts, ok := spec.Options.(opencodeharness.Options)
+	if !ok {
+		t.Fatalf("spec.Options = %T, want opencodeharness.Options", spec.Options)
+	}
+	if opts.LeoMCP != nil {
+		t.Errorf("expected nil LeoMCP bridge without a webToken, got %+v", opts.LeoMCP)
+	}
+}
+
+// TestResolveTemplateLaunchKindIsAgent locks that templates always resolve
+// KindAgent, regardless of harness — codex/opencode's Args() rejection is
+// keyed off this.
+func TestResolveTemplateLaunchKindIsAgent(t *testing.T) {
+	cfg := &config.Config{HomePath: t.TempDir()}
+	_, spec, err := resolveTemplateLaunch(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	if err != nil {
+		t.Fatalf("resolveTemplateLaunch: %v", err)
+	}
+	if spec.Kind != harness.KindAgent {
+		t.Errorf("spec.Kind = %q, want %q", spec.Kind, harness.KindAgent)
 	}
 }

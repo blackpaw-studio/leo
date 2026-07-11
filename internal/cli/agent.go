@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/spf13/cobra"
 )
 
@@ -582,6 +583,17 @@ func resolveExactCollision(match agent.Record, template string, attachExisting b
 // Shared between `leo agent attach` and the spawn collision prompt's
 // "attach-existing" branch.
 func attachLocal(ctx context.Context, homePath, query string, opts attachOptions) error {
+	// Non-claude agents have no tmux session to attach to — route through
+	// their SessionDriver's AttachSpec instead. attach-spec returns an empty
+	// Harness for claude agents (the overwhelming majority), so this call is
+	// on the hot path; keep it a single fast round-trip.
+	if spec, err := agentAttachSpecFn(ctx, homePath, query); err == nil {
+		if spec.Harness != "" && spec.Harness != "claude" {
+			res := config.HostResolution{Localhost: true}
+			return attachViaDriver(res, harness.AttachSpec{Argv: spec.Argv, HistoryPath: spec.HistoryPath})
+		}
+	}
+
 	session, err := daemon.AgentSession(ctx, homePath, query)
 	if err != nil {
 		return fmt.Errorf("looking up session: %w", err)
