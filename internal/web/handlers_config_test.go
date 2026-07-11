@@ -858,6 +858,38 @@ func TestBuildFormWithHarnessNonClaudeModelHint(t *testing.T) {
 	}
 }
 
+// TestBuildFormWithHarnessUnregisteredHarness covers the harness.Get error
+// fallback in buildFormWithHarness: a hand-edited config naming a harness
+// that isn't registered (e.g. a typo, or a config written by a newer leo
+// version) must not panic or 500 the page. It should render the flat form
+// with no harness sub-form; Validate() is the one that reports the real
+// error on save.
+func TestBuildFormWithHarnessUnregisteredHarness(t *testing.T) {
+	cfg := &config.Config{
+		Processes: map[string]config.ProcessConfig{"broken": {
+			Workspace: "/w",
+			Harness:   "bogus",
+		}},
+	}
+	s, _ := newTestServer(t)
+	p := cfg.Processes["broken"]
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/broken", "process-broken")
+
+	if fd.Harness != nil {
+		t.Errorf("Harness sub-form = %+v, want nil for unregistered harness", fd.Harness)
+	}
+	byKey := map[string]bool{}
+	for _, f := range fd.Fields {
+		byKey[f.Key] = true
+	}
+	if !byKey["harness"] {
+		t.Error("flat form missing \"harness\" field")
+	}
+	if !byKey["model"] {
+		t.Error("flat form missing \"model\" field")
+	}
+}
+
 // TestSessionsFormNeverInheritsHarnessOptions guards
 // SessionHarnessOptions'/harnessView's documented rule: persistent sessions
 // never cascaded harness_options from defaults, and the web form must not
