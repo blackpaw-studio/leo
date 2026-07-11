@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +47,10 @@ func (s stubHarness) DecodeOptions(raw map[string]any) (any, error) {
 }
 
 func (s stubHarness) SupportsChannels() bool { return s.supportsChannels }
+
+func (s stubHarness) ParseEvents(io.Reader) (harness.Result, error)     { return harness.Result{}, nil }
+func (s stubHarness) Env(harness.LaunchSpec) (map[string]string, error) { return nil, nil }
+func (s stubHarness) SupportsKind(harness.Kind) bool                    { return true }
 
 const stubNoChannelsName = "stubnochannels"
 

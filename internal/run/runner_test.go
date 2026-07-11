@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
@@ -250,87 +251,37 @@ func TestBuildArgsIncludesDevChannels(t *testing.T) {
 	}
 }
 
-func TestParseClaudeOutput(t *testing.T) {
-	tests := []struct {
-		name     string
-		output   string
-		wantSID  string
-		wantText string
-	}{
-		{
-			name:     "stream-json NDJSON",
-			output:   "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc-123\"}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hi\"}]}}\n{\"type\":\"result\",\"session_id\":\"abc-123\",\"result\":\"Hello world\",\"is_error\":false}\n",
-			wantSID:  "abc-123",
-			wantText: "Hello world",
-		},
-		{
-			name:     "stream-json error",
-			output:   "{\"type\":\"result\",\"session_id\":\"def-456\",\"result\":\"failed\",\"is_error\":true}\n",
-			wantSID:  "def-456",
-			wantText: "failed",
-		},
-		{
-			name:     "fallback single JSON object",
-			output:   `{"session_id":"abc-123","result":"Hello world","is_error":false}`,
-			wantSID:  "abc-123",
-			wantText: "Hello world",
-		},
-		{
-			name:    "invalid JSON",
-			output:  "not json at all",
-			wantSID: "",
-		},
-		{
-			name:    "empty",
-			output:  "",
-			wantSID: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := parseClaudeOutput([]byte(tt.output))
-			if result.SessionID != tt.wantSID {
-				t.Errorf("SessionID = %q, want %q", result.SessionID, tt.wantSID)
-			}
-			if result.Result != tt.wantText {
-				t.Errorf("Result = %q, want %q", result.Result, tt.wantText)
-			}
-		})
-	}
-}
-
 func TestIsSessionError(t *testing.T) {
 	tests := []struct {
 		name   string
-		result claudeResult
+		result harness.Result
 		output string
 		want   bool
 	}{
 		{
 			name:   "session not found in result",
-			result: claudeResult{Result: "Session not found"},
+			result: harness.Result{Text: "Session not found"},
 			want:   true,
 		},
 		{
 			name:   "invalid session in output",
-			result: claudeResult{},
+			result: harness.Result{},
 			output: "Error: invalid session ID",
 			want:   true,
 		},
 		{
 			name:   "expired session",
-			result: claudeResult{Result: "session expired"},
+			result: harness.Result{Text: "session expired"},
 			want:   true,
 		},
 		{
 			name:   "unrelated error",
-			result: claudeResult{Result: "model overloaded"},
+			result: harness.Result{Text: "model overloaded"},
 			want:   false,
 		},
 		{
 			name:   "empty",
-			result: claudeResult{},
+			result: harness.Result{},
 			want:   false,
 		},
 		// Pinning the raw-scan gating (finding: MINOR #3): the raw-output
@@ -342,17 +293,17 @@ func TestIsSessionError(t *testing.T) {
 		// log line.
 		{
 			name:   "non-empty result text suppresses raw-scan fallback",
-			result: claudeResult{Result: "did some work"},
+			result: harness.Result{Text: "did some work"},
 			output: "did some work; by the way, no conversation found in an unrelated log line",
 			want:   false,
 		},
 		// Inverse: when the parsed result carries no text at all (empty
-		// Result and no Errors — e.g. claude crashed before emitting a result
+		// Text and no Errors — e.g. claude crashed before emitting a result
 		// event), the raw-scan fallback is the only signal available and
 		// must still catch a stale-session phrase in the combined output.
 		{
 			name:   "empty result fields fall back to raw-scan match",
-			result: claudeResult{},
+			result: harness.Result{},
 			output: "fatal: no conversation found for session abc123",
 			want:   true,
 		},

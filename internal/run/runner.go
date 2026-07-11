@@ -80,21 +80,6 @@ var errInterrupted = errors.New("interrupted by signal")
 // itself (which would risk killing `go test`).
 var signalNotifyFn = signal.Notify
 
-// claudeResult is the minimal structure for parsing the final "result" event
-// from claude --output-format stream-json (newline-delimited JSON).
-type claudeResult struct {
-	SessionID string   `json:"session_id"`
-	Result    string   `json:"result"`
-	IsError   bool     `json:"is_error"`
-	Errors    []string `json:"errors"`
-}
-
-// streamEvent represents a single event line from stream-json output.
-type streamEvent struct {
-	Type string `json:"type"`
-	claudeResult
-}
-
 // resolveTask looks up a task by name.
 func resolveTask(cfg *config.Config, taskName string) (config.TaskConfig, error) {
 	if task, ok := cfg.Tasks[taskName]; ok {
@@ -332,7 +317,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 type attemptResult struct {
 	output  []byte
 	execErr error
-	result  claudeResult
+	result  harness.Result
 }
 
 // runTaskAttempt spawns claude for one attempt of the task, retrying
@@ -441,9 +426,9 @@ func appendNotifyOutputToLog(cfg *config.Config, logFile string, output []byte) 
 // session. It inspects the parsed result text, each entry of the "errors"
 // array (populated on subtype "error_during_execution" results, which carry
 // no "result" field), and finally the raw combined output as a last resort.
-func isSessionError(result claudeResult, output []byte) bool {
+func isSessionError(result harness.Result, output []byte) bool {
 	candidates := make([]string, 0, len(result.Errors)+1)
-	candidates = append(candidates, result.Result)
+	candidates = append(candidates, result.Text)
 	candidates = append(candidates, result.Errors...)
 
 	for _, c := range candidates {
@@ -459,7 +444,7 @@ func isSessionError(result claudeResult, output []byte) bool {
 	// "session" alongside "expired"/"invalid"/"not found" could
 	// false-trigger a stale-session clear even though the parsed result
 	// says nothing of the kind.
-	if result.Result == "" && len(result.Errors) == 0 && sessionErrorText(string(output)) {
+	if result.Text == "" && len(result.Errors) == 0 && sessionErrorText(string(output)) {
 		return true
 	}
 	return false
@@ -805,27 +790,11 @@ func channelPluginName(channel string) (string, bool) {
 	return name, true
 }
 
-// parseClaudeOutput extracts the final result from stream-json (NDJSON) output.
-// It scans for the last line with "type":"result" to get session_id and result text.
-// Falls back to single-object JSON parsing for backwards compatibility.
-func parseClaudeOutput(output []byte) claudeResult {
-	var best claudeResult
-	for _, line := range bytes.Split(output, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var evt streamEvent
-		if json.Unmarshal(line, &evt) == nil && evt.Type == "result" {
-			best = evt.claudeResult
-		}
-	}
-	if best.SessionID != "" || best.Result != "" || len(best.Errors) > 0 {
-		return best
-	}
-	// Fallback: try parsing as a single JSON object (old --output-format json).
-	_ = json.Unmarshal(output, &best)
-	return best
+// parseClaudeOutput is a Task-5 transition shim; the full per-harness
+// threading replaces it.
+func parseClaudeOutput(output []byte) harness.Result {
+	res, _ := claudeharness.Claude{}.ParseEvents(bytes.NewReader(output))
+	return res
 }
 
 func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) {

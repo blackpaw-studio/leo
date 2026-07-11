@@ -7,6 +7,8 @@
 // before the spec reaches an adapter.
 package harness
 
+import "io"
+
 // Kind identifies which leo primitive a launch belongs to. Adapters may
 // emit different flags per kind (one-shot task runs vs interactive
 // process/agent sessions).
@@ -52,6 +54,14 @@ type LaunchSpec struct {
 	Options     any // adapter-specific resolved options (e.g. claude.Options)
 }
 
+// Result is the parsed outcome of a one-shot run's output stream.
+type Result struct {
+	SessionID string   // harness-native session/thread ID; empty if none seen
+	Text      string   // final result text
+	IsError   bool     // the stream carried a fatal error event/flag
+	Errors    []string // error messages accumulated from the stream
+}
+
 // Harness translates LaunchSpecs into concrete CLI invocations.
 type Harness interface {
 	// Name is the registry key (config `harness:` value in later plans).
@@ -80,6 +90,21 @@ type Harness interface {
 	// harness. Only Claude Code hosts channel plugins; others message via
 	// leo's MCP tools.
 	SupportsChannels() bool
+
+	// ParseEvents parses the harness's one-shot output stream (stdout, or
+	// combined stdout+stderr) into a Result. Unparseable lines are skipped,
+	// never fatal; EOF is end-of-turn. The error return is reserved for
+	// reader failures, not stream content.
+	ParseEvents(r io.Reader) (Result, error)
+
+	// Env returns harness-specific extra process env for a launch (merged
+	// into the spawn env by the caller; caller-provided env must win on
+	// collision). Nil when the harness needs nothing.
+	Env(spec LaunchSpec) (map[string]string, error)
+
+	// SupportsKind reports whether this harness can run the given leo
+	// primitive. Kinds outside this set must also fail loudly in Args().
+	SupportsKind(k Kind) bool
 }
 
 // FallbackString returns primary if non-empty, else fallback. Callers use
