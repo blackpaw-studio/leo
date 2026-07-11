@@ -18,6 +18,18 @@ import (
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
+// TestMain stubs lookPathFn so unit tests never depend on a host-installed
+// harness binary (claude/codex/opencode) being present on PATH — CI runners
+// don't have them. Individual tests (e.g. TestRunPrereqCheckFailsFast) may
+// override lookPathFn to exercise the failure path, but must restore this
+// default via defer rather than falling back to exec.LookPath.
+func TestMain(m *testing.M) {
+	lookPathFn = func(string) (string, error) {
+		return "/test/bin/fake", nil
+	}
+	os.Exit(m.Run())
+}
+
 func TestAssemblePrompt(t *testing.T) {
 	dir := t.TempDir()
 
