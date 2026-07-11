@@ -38,7 +38,7 @@ cmd/leo/main.go          → cli.Execute() entry point
 internal/cli/             → Cobra command definitions (root.go wires all subcommands)
 internal/config/          → Config types + YAML loading/saving (leo.yaml)
 internal/daemon/          → Daemon IPC server (Unix socket HTTP) + client for CLI passthrough
-internal/harness/         → Coding-agent adapter registry + claude, codex, opencode adapters. codex/opencode are task-only (scheduled `leo run`) until session drivers land — see docs/configuration/harnesses.md
+internal/harness/         → Coding-agent adapter registry + claude, codex, opencode adapters. All three run every leo primitive (scheduled tasks, supervised processes, ephemeral agents, persistent sessions) — see docs/configuration/harnesses.md
 internal/agent/           → Ephemeral agent lifecycle (Manager): template resolution, workspace setup, supervisor + agentstore persistence. Shared by CLI, web, and HTTP callers.
 internal/web/             → Web UI (htmx + Go html/template, embedded via embed.FS)
 internal/service/         → Process supervisor (multi-process tmux management, launchd/systemd)
@@ -72,11 +72,12 @@ Config lives at `~/.leo/leo.yaml` (the "leo home"). Key sections:
 - `client` (default_host, hosts — remote-host definitions for `leo agent` CLI dispatch; empty on servers)
 - `processes` (map of named process configs — workspace, channels, model, harness, harness_options, env, etc.)
 - `templates` (map of agent template configs — blueprints for ephemeral agents; same fields as processes, plus `idle_suspend_after` for auto-suspending idle agents)
+- `sessions` (map of named persistent session configs — workspace, model, harness, harness_options, channels, env, etc.)
 - `tasks` (map of named task configs — schedule, prompt_file, model, harness, harness_options, timeout, retries, channels, notify_on_fail, etc.)
 
 Channels are strings like `plugin:telegram@claude-plugins-official`. Leo passes the resolved list to the spawned Claude process via the `LEO_CHANNELS` environment variable; the plugin owns its own credentials and routing. `channels`/`dev_channels` are only valid on a channel-supporting harness — `claude` is the only one today (codex/opencode have no channel-plugin concept; they message via leo's `leo_send_message` MCP tool).
 
-`harness` (on `defaults`, `processes.*`, `templates.*`, `sessions.*`, `tasks.*`) selects the coding-agent adapter — `claude`, `codex`, or `opencode` — and cascades from `defaults` down to the built-in default `claude`. `codex` and `opencode` currently support scheduled tasks only; pointing a process/template/session (or a persistent task) at either fails validation until session drivers land. The claude-specific knobs that used to be flat fields (`permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`) now live under that scope's `harness_options`, strictly validated by the adapter. There is no more `providers`/`provider` section — point a scope at a third-party Anthropic-compatible endpoint via its own `env:` map (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`) instead. See `docs/configuration/harnesses.md`.
+`harness` (on `defaults`, `processes.*`, `templates.*`, `sessions.*`, `tasks.*`) selects the coding-agent adapter — `claude`, `codex`, or `opencode` — and cascades from `defaults` down to the built-in default `claude`. All three harnesses support every leo primitive (scheduled tasks, supervised processes, ephemeral agents, persistent sessions). The claude-specific knobs that used to be flat fields (`permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`) now live under that scope's `harness_options`, strictly validated by the adapter. There is no more `providers`/`provider` section — point a scope at a third-party Anthropic-compatible endpoint via its own `env:` map (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`) instead. See `docs/configuration/harnesses.md`.
 
 Each process and task can specify its own `workspace`. Default workspace is `~/.leo/workspace/`.
 
