@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
-	harness "github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 

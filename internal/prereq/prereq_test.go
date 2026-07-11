@@ -7,74 +7,78 @@ import (
 	"testing"
 )
 
-func TestCheckClaudeFound(t *testing.T) {
-	original := lookPath
-	originalRun := runCommand
-	defer func() {
-		lookPath = original
-		runCommand = originalRun
-	}()
-
-	lookPath = func(file string) (string, error) {
-		return "/usr/local/bin/claude", nil
-	}
-	runCommand = func(path string, args ...string) ([]byte, error) {
-		return []byte("claude 1.0.0\n"), nil
-	}
-
-	result := CheckClaude()
-
-	if !result.OK {
-		t.Error("expected OK = true")
-	}
-	if result.Path != "/usr/local/bin/claude" {
-		t.Errorf("Path = %q, want %q", result.Path, "/usr/local/bin/claude")
-	}
-	if result.Version != "claude 1.0.0" {
-		t.Errorf("Version = %q, want %q", result.Version, "claude 1.0.0")
-	}
-}
-
-func TestCheckClaudeFoundNoVersion(t *testing.T) {
-	original := lookPath
-	originalRun := runCommand
-	defer func() {
-		lookPath = original
-		runCommand = originalRun
-	}()
-
-	lookPath = func(file string) (string, error) {
-		return "/usr/local/bin/claude", nil
-	}
-	runCommand = func(path string, args ...string) ([]byte, error) {
-		return nil, fmt.Errorf("exit status 1")
-	}
-
-	result := CheckClaude()
-
-	if !result.OK {
-		t.Error("expected OK = true even without version")
-	}
-	if result.Version != "" {
-		t.Errorf("Version = %q, want empty", result.Version)
-	}
-}
-
-func TestCheckClaudeNotFound(t *testing.T) {
-	original := lookPath
-	defer func() { lookPath = original }()
-
-	lookPath = func(file string) (string, error) {
-		return "", fmt.Errorf("not found")
+func TestCheckBinary(t *testing.T) {
+	tests := []struct {
+		name        string
+		lookPathFn  func(file string) (string, error)
+		runCommand  func(path string, args ...string) ([]byte, error)
+		wantOK      bool
+		wantPath    string
+		wantVersion string
+	}{
+		{
+			name: "found with version",
+			lookPathFn: func(file string) (string, error) {
+				return "/usr/local/bin/claude", nil
+			},
+			runCommand: func(path string, args ...string) ([]byte, error) {
+				return []byte("claude 1.0.0\n"), nil
+			},
+			wantOK:      true,
+			wantPath:    "/usr/local/bin/claude",
+			wantVersion: "claude 1.0.0",
+		},
+		{
+			name: "found but version command fails",
+			lookPathFn: func(file string) (string, error) {
+				return "/usr/local/bin/claude", nil
+			},
+			runCommand: func(path string, args ...string) ([]byte, error) {
+				return nil, fmt.Errorf("exit status 1")
+			},
+			wantOK:      true,
+			wantPath:    "/usr/local/bin/claude",
+			wantVersion: "",
+		},
+		{
+			name: "not found",
+			lookPathFn: func(file string) (string, error) {
+				return "", fmt.Errorf("not found")
+			},
+			runCommand: func(path string, args ...string) ([]byte, error) {
+				t.Fatal("runCommand should not be called when binary is not found")
+				return nil, nil
+			},
+			wantOK:      false,
+			wantPath:    "",
+			wantVersion: "",
+		},
 	}
 
-	result := CheckClaude()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := lookPath
+			originalRun := runCommand
+			defer func() {
+				lookPath = original
+				runCommand = originalRun
+			}()
 
-	if result.OK {
-		t.Error("expected OK = false when not found")
-	}
-	if result.Path != "" {
-		t.Errorf("Path = %q, want empty", result.Path)
+			lookPath = tt.lookPathFn
+			runCommand = tt.runCommand
+
+			result := CheckBinary("claude")
+
+			if result.OK != tt.wantOK {
+				t.Errorf("OK = %v, want %v", result.OK, tt.wantOK)
+			}
+			if result.Path != tt.wantPath {
+				t.Errorf("Path = %q, want %q", result.Path, tt.wantPath)
+			}
+			if result.Version != tt.wantVersion {
+				t.Errorf("Version = %q, want %q", result.Version, tt.wantVersion)
+			}
+		})
 	}
 }
 

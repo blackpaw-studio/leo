@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -468,7 +469,7 @@ func (s *Server) agentList() []string {
 
 // fetchAgentList runs `claude agents` and parses the agent names.
 func (s *Server) fetchAgentList() []string {
-	claudePath, err := exec.LookPath("claude")
+	claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
 	if err != nil {
 		return nil
 	}

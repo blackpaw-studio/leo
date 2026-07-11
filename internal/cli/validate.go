@@ -10,6 +10,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/spf13/cobra"
@@ -88,16 +89,24 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 	}
 	add(SeverityInfo, "config", "valid")
 
-	// 2. Check prerequisites
-	claude := prereq.CheckClaude()
-	if claude.OK {
-		v := claude.Version
-		if v == "" {
-			v = "installed"
+	// 2. Check prerequisites — one line per harness referenced by the config.
+	for _, name := range referencedHarnesses(cfg) {
+		h, err := harness.Get(name)
+		if err != nil {
+			// Config validation already caught unresolvable harnesses; skip.
+			continue
 		}
-		add(SeverityInfo, "claude", v)
-	} else {
-		add(SeverityError, "claude", "claude CLI not found")
+
+		bin := prereq.CheckBinary(h.Binary())
+		if bin.OK {
+			v := bin.Version
+			if v == "" {
+				v = "installed"
+			}
+			add(SeverityInfo, name, v)
+		} else {
+			add(SeverityError, name, fmt.Sprintf("%s CLI not found", h.Binary()))
+		}
 	}
 
 	if prereq.CheckTmux() {
@@ -190,6 +199,32 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 	}
 
 	return sortFindings(findings), cfg
+}
+
+// referencedHarnesses returns the sorted, de-duplicated set of harness names
+// referenced anywhere in the config: defaults plus every process, task,
+// template, and session scope.
+func referencedHarnesses(cfg *config.Config) []string {
+	seen := map[string]bool{cfg.DefaultsHarness(): true}
+	for _, proc := range cfg.Processes {
+		seen[cfg.ProcessHarness(proc)] = true
+	}
+	for _, task := range cfg.Tasks {
+		seen[cfg.TaskHarness(task)] = true
+	}
+	for _, tmpl := range cfg.Templates {
+		seen[cfg.TemplateHarness(tmpl)] = true
+	}
+	for _, sess := range cfg.Sessions {
+		seen[cfg.SessionHarness(sess)] = true
+	}
+
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // sortFindings returns findings sorted by severity (ERROR, WARN, INFO) while

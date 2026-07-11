@@ -288,7 +288,7 @@ func TestCheckPrerequisites_ClaudeMissing(t *testing.T) {
 		checkTmuxFn = origTmux
 	})
 
-	checkClaudeFn = func() prereq.ClaudeResult { return prereq.ClaudeResult{OK: false} }
+	checkClaudeFn = func() prereq.BinaryResult { return prereq.BinaryResult{OK: false} }
 	checkTmuxFn = func() bool { return true }
 
 	if err := checkPrerequisites(); err == nil {
@@ -304,8 +304,8 @@ func TestCheckPrerequisites_TmuxMissing(t *testing.T) {
 		checkTmuxFn = origTmux
 	})
 
-	checkClaudeFn = func() prereq.ClaudeResult {
-		return prereq.ClaudeResult{OK: true, Path: "/usr/bin/claude", Version: "1.0.0"}
+	checkClaudeFn = func() prereq.BinaryResult {
+		return prereq.BinaryResult{OK: true, Path: "/usr/bin/claude", Version: "1.0.0"}
 	}
 	checkTmuxFn = func() bool { return false }
 
@@ -322,8 +322,8 @@ func TestCheckPrerequisites_AllPresent(t *testing.T) {
 		checkTmuxFn = origTmux
 	})
 
-	checkClaudeFn = func() prereq.ClaudeResult {
-		return prereq.ClaudeResult{OK: true, Path: "/usr/bin/claude", Version: "1.0.0"}
+	checkClaudeFn = func() prereq.BinaryResult {
+		return prereq.BinaryResult{OK: true, Path: "/usr/bin/claude", Version: "1.0.0"}
 	}
 	checkTmuxFn = func() bool { return true }
 

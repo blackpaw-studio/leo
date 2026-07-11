@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
@@ -20,8 +21,10 @@ import (
 )
 
 var (
-	userHomeDirFn  = os.UserHomeDir
-	checkClaudeFn  = prereq.CheckClaude
+	userHomeDirFn = os.UserHomeDir
+	checkClaudeFn = func() prereq.BinaryResult {
+		return prereq.CheckBinary(claudeharness.Claude{}.Binary())
+	}
 	checkTmuxFn    = prereq.CheckTmux
 	daemonStatusFn = service.DaemonStatus
 	newReaderFn    = prompt.NewReader
