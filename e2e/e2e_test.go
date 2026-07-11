@@ -19,8 +19,10 @@ import (
 )
 
 var (
-	leoBin     string
-	fakeclaude string
+	leoBin       string
+	fakeclaude   string
+	fakecodex    string
+	fakeopencode string
 )
 
 func TestMain(m *testing.M) {
@@ -32,6 +34,8 @@ func TestMain(m *testing.M) {
 
 	leoBin = filepath.Join(tmp, "leo")
 	fakeclaude = filepath.Join(tmp, "claude")
+	fakecodex = filepath.Join(tmp, "codex")
+	fakeopencode = filepath.Join(tmp, "opencode")
 
 	// Build leo
 	build := exec.Command("go", "build", "-o", leoBin, "./cmd/leo")
@@ -45,6 +49,20 @@ func TestMain(m *testing.M) {
 	build.Dir = findRepoRoot()
 	if out, err := build.CombinedOutput(); err != nil {
 		panic("failed to build fakeclaude: " + string(out))
+	}
+
+	// Build fakecodex as "codex"
+	build = exec.Command("go", "build", "-o", fakecodex, "./e2e/fakecodex")
+	build.Dir = findRepoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		panic("failed to build fakecodex: " + string(out))
+	}
+
+	// Build fakeopencode as "opencode"
+	build = exec.Command("go", "build", "-o", fakeopencode, "./e2e/fakeopencode")
+	build.Dir = findRepoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		panic("failed to build fakeopencode: " + string(out))
 	}
 
 	os.Exit(m.Run())

@@ -63,6 +63,19 @@ func (Claude) ValidateModel(model string) error {
 // SupportsChannels reports that Claude Code hosts channel plugins.
 func (Claude) SupportsChannels() bool { return true }
 
+// Env returns claude-specific spawn env. One-shot task runs set the CLI
+// entrypoint marker (moved here from the task runner); interactive kinds
+// export their env at tmux launch instead.
+func (Claude) Env(spec harness.LaunchSpec) (map[string]string, error) {
+	if spec.Kind == harness.KindTask {
+		return map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}, nil
+	}
+	return nil, nil
+}
+
+// SupportsKind: claude runs every leo primitive.
+func (Claude) SupportsKind(harness.Kind) bool { return true }
+
 func (Claude) SessionArgs(s harness.SessionState) []string {
 	switch s.Mode {
 	case harness.SessionResume:

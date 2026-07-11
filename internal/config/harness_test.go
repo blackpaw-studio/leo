@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +47,10 @@ func (s stubHarness) DecodeOptions(raw map[string]any) (any, error) {
 }
 
 func (s stubHarness) SupportsChannels() bool { return s.supportsChannels }
+
+func (s stubHarness) ParseEvents(io.Reader) (harness.Result, error)     { return harness.Result{}, nil }
+func (s stubHarness) Env(harness.LaunchSpec) (map[string]string, error) { return nil, nil }
+func (s stubHarness) SupportsKind(harness.Kind) bool                    { return true }
 
 const stubNoChannelsName = "stubnochannels"
 
@@ -240,13 +245,13 @@ func TestValidateUnknownHarnessName(t *testing.T) {
 
 	t.Run("bad defaults harness errors once at defaults.harness", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.Defaults.Harness = "codex"
+		cfg.Defaults.Harness = "bogus"
 		err := cfg.Validate()
 		if err == nil {
 			t.Fatal("expected error")
 		}
 		got := err.Error()
-		if !strings.Contains(got, `defaults.harness "codex" is not a registered harness`) {
+		if !strings.Contains(got, `defaults.harness "bogus" is not a registered harness`) {
 			t.Errorf("error = %q, want mention of defaults.harness", got)
 		}
 		if !strings.Contains(got, "available:") || !strings.Contains(got, "claude") {
@@ -267,32 +272,32 @@ func TestValidateUnknownHarnessName(t *testing.T) {
 		{
 			"processes",
 			func(c *Config) {
-				c.Processes = map[string]ProcessConfig{"foo": {Harness: "codex", Enabled: true}}
+				c.Processes = map[string]ProcessConfig{"foo": {Harness: "bogus", Enabled: true}}
 			},
-			`processes.foo.harness "codex" is not a registered harness`,
+			`processes.foo.harness "bogus" is not a registered harness`,
 		},
 		{
 			"templates",
 			func(c *Config) {
-				c.Templates = map[string]TemplateConfig{"foo": {Harness: "codex"}}
+				c.Templates = map[string]TemplateConfig{"foo": {Harness: "bogus"}}
 			},
-			`templates.foo.harness "codex" is not a registered harness`,
+			`templates.foo.harness "bogus" is not a registered harness`,
 		},
 		{
 			"tasks",
 			func(c *Config) {
 				c.Tasks = map[string]TaskConfig{"foo": {
-					Schedule: "0 * * * *", PromptFile: "p.md", Harness: "codex",
+					Schedule: "0 * * * *", PromptFile: "p.md", Harness: "bogus",
 				}}
 			},
-			`tasks.foo.harness "codex" is not a registered harness`,
+			`tasks.foo.harness "bogus" is not a registered harness`,
 		},
 		{
 			"sessions",
 			func(c *Config) {
-				c.Sessions = map[string]SessionConfig{"foo": {Workspace: "/tmp/ws", Harness: "codex"}}
+				c.Sessions = map[string]SessionConfig{"foo": {Workspace: "/tmp/ws", Harness: "bogus"}}
 			},
-			`sessions.foo.harness "codex" is not a registered harness`,
+			`sessions.foo.harness "bogus" is not a registered harness`,
 		},
 	}
 	for _, sc := range scopes {
@@ -526,4 +531,164 @@ func TestValidateModelDelegation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidateKindSupportErrors locks in the exact per-scope error strings
+// emitted when a scope's harness cannot run that scope's kind — codex and
+// opencode currently support KindTask only (Plan 4 adds KindProcess/
+// KindAgent/KindSession).
+func TestValidateKindSupportErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*Config)
+		want  string
+	}{
+		{
+			"processes: codex cannot run supervised processes",
+			func(c *Config) {
+				c.Processes = map[string]ProcessConfig{"builder": {Harness: "codex", Enabled: true}}
+			},
+			"processes.builder.harness: the codex harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md",
+		},
+		{
+			"templates: opencode cannot run ephemeral agents",
+			func(c *Config) {
+				c.Templates = map[string]TemplateConfig{"helper": {Harness: "opencode"}}
+			},
+			"templates.helper.harness: the opencode harness cannot run ephemeral agents yet (only scheduled tasks) — see docs/configuration/harnesses.md",
+		},
+		{
+			"sessions: codex cannot run persistent sessions",
+			func(c *Config) {
+				c.Sessions = map[string]SessionConfig{"chat": {Workspace: "/tmp/ws", Harness: "codex"}}
+			},
+			"sessions.chat.harness: the codex harness cannot run persistent sessions yet (only scheduled tasks) — see docs/configuration/harnesses.md",
+		},
+		{
+			"tasks: opencode persistent runtime cannot run through sessions",
+			func(c *Config) {
+				c.Tasks = map[string]TaskConfig{"nightly": {
+					Schedule: "0 * * * *", PromptFile: "p.md",
+					Harness: "opencode", Runtime: "persistent",
+					Workspace: "/tmp/ws",
+				}}
+			},
+			"tasks.nightly.harness: the opencode harness cannot run persistent tasks yet (persistent tasks run through sessions) — see docs/configuration/harnesses.md",
+		},
+		{
+			"processes: inherited harness from defaults still errors",
+			func(c *Config) {
+				c.Defaults.Harness = "codex"
+				c.Processes = map[string]ProcessConfig{"plain": {Enabled: true}}
+			},
+			"processes.plain.harness: the codex harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15}, HomePath: "/tmp/leo"}
+			tt.apply(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if got := err.Error(); !strings.Contains(got, tt.want) {
+				t.Errorf("error = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidateKindSupportHappyPath confirms codex/opencode tasks with valid
+// harness_options and models validate cleanly, and that the existing
+// SupportsChannels() check still fires with codex named in the message.
+func TestValidateKindSupportHappyPath(t *testing.T) {
+	t.Run("codex task with sandbox option validates clean", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Tasks: map[string]TaskConfig{"nightly": {
+				Schedule: "0 * * * *", PromptFile: "p.md",
+				Harness:        "codex",
+				Model:          "gpt-5.3-codex",
+				HarnessOptions: map[string]any{"sandbox": "workspace-write"},
+			}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("opencode task with permission option validates clean", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Tasks: map[string]TaskConfig{"nightly": {
+				Schedule: "0 * * * *", PromptFile: "p.md",
+				Harness:        "opencode",
+				Model:          "anthropic/claude-sonnet-4-5",
+				HarnessOptions: map[string]any{"permission": map[string]any{"bash": "allow"}},
+			}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("opencode task with claude-shaped model errors", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Tasks: map[string]TaskConfig{"t": {
+				Schedule: "0 * * * *", PromptFile: "p.md",
+				Harness: "opencode", Model: "opus",
+			}},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		want := `tasks.t.model "opus" is not valid (must be provider/model, e.g. anthropic/claude-sonnet-4-5)`
+		if got := err.Error(); !strings.Contains(got, want) {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("codex task with whitespace model errors", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Tasks: map[string]TaskConfig{"t": {
+				Schedule: "0 * * * *", PromptFile: "p.md",
+				Harness: "codex", Model: "gpt 5",
+			}},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		want := `tasks.t.model "gpt 5" is not valid (must not contain whitespace)`
+		if got := err.Error(); !strings.Contains(got, want) {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("codex task with channels still errors via SupportsChannels", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Tasks: map[string]TaskConfig{"t": {
+				Schedule: "0 * * * *", PromptFile: "p.md",
+				Harness: "codex", Channels: []string{"plugin:telegram@x"},
+			}},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		want := "tasks.t.channels: the codex harness does not support channel plugins; use leo's MCP tools for messaging"
+		if got := err.Error(); !strings.Contains(got, want) {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
 }

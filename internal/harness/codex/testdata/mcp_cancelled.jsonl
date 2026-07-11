@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"019f4ebb-d318-7fc1-bb09-229d3b45157f"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"leo","tool":"leo_list_agents","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"leo","tool":"leo_list_agents","arguments":{},"result":null,"error":{"message":"user cancelled MCP tool call"},"status":"failed"}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"leo","tool":"leo_list_agents","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"leo","tool":"leo_list_agents","arguments":{},"result":null,"error":{"message":"user cancelled MCP tool call"},"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"0"}}
+{"type":"turn.completed","usage":{"input_tokens":34276,"cached_input_tokens":22709,"output_tokens":183,"reasoning_output_tokens":51}}

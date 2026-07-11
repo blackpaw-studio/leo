@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1783730971810,"sessionID":"ses_0b15975f3ffeiBHJ9UNhtqbZzJ","part":{"id":"prt_f4ea6a49b001pbFXyfMYWXHE7N","messageID":"msg_f4ea698dc001b66nXwQmGdmcBr","sessionID":"ses_0b15975f3ffeiBHJ9UNhtqbZzJ","type":"step-start"}}
+{"type":"text","timestamp":1783730972003,"sessionID":"ses_0b15975f3ffeiBHJ9UNhtqbZzJ","part":{"id":"prt_f4ea6a54d001oRCasSgs0ccED6","messageID":"msg_f4ea698dc001b66nXwQmGdmcBr","sessionID":"ses_0b15975f3ffeiBHJ9UNhtqbZzJ","type":"text","text":"pong","time":{"start":1783730971981,"end":1783730971989}}}

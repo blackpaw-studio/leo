@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"io"
 	"reflect"
 	"testing"
 )
@@ -14,6 +15,9 @@ func (f fakeHarness) SessionArgs(SessionState) []string         { return nil }
 func (f fakeHarness) ValidateModel(string) error                { return nil }
 func (f fakeHarness) DecodeOptions(map[string]any) (any, error) { return struct{}{}, nil }
 func (f fakeHarness) SupportsChannels() bool                    { return false }
+func (f fakeHarness) ParseEvents(io.Reader) (Result, error)     { return Result{}, nil }
+func (f fakeHarness) Env(LaunchSpec) (map[string]string, error) { return nil, nil }
+func (f fakeHarness) SupportsKind(Kind) bool                    { return true }
 
 func TestRegistryGetAndNames(t *testing.T) {
 	reset := snapshotRegistry(t)

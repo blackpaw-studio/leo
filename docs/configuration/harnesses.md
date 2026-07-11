@@ -1,10 +1,16 @@
 # Harnesses
 
-A **harness** is the coding-agent CLI leo drives — `claude` today, with `codex`
-and `opencode` planned. Every process, template, task, and session picks a
-harness (directly or via cascade) and configures it through a strictly
-validated `harness_options:` map instead of a flat, harness-specific field
-list.
+A **harness** is the coding-agent CLI leo drives — `claude`, `codex`, and
+`opencode` today. Every process, template, task, and session picks a harness
+(directly or via cascade) and configures it through a strictly validated
+`harness_options:` map instead of a flat, harness-specific field list.
+
+`codex` and `opencode` currently support **scheduled tasks only**
+(`leo run <task>` / cron) — session drivers for supervised processes,
+ephemeral agents, and persistent sessions haven't landed yet. Pointing a
+`processes.*`, `templates.*`, or `sessions.*` scope (or a `tasks.*` entry with
+`runtime: persistent`) at either harness fails config validation with a
+message pointing back here.
 
 ## What a harness is
 
@@ -14,8 +20,8 @@ that knows how to validate its own options, translate a harness-neutral
 launch spec into argv, and (for interactive harnesses) parse session/channel
 state.
 
-- `claude` is the only registered adapter today (`internal/harness/claude`).
-- `codex` and `opencode` adapters are planned; they'll register the same way.
+- Three adapters are registered today: `claude` (`internal/harness/claude`),
+  `codex` (`internal/harness/codex`), and `opencode` (`internal/harness/opencode`).
 - Adapters are **compiled-in Go, contributed by PR** — there is no runtime
   plugin mechanism for harnesses. (Don't confuse this with *channel*
   plugins — Telegram, Slack, etc. — which remain regular Claude Code plugins
@@ -122,6 +128,147 @@ but are only valid on a **channel-supporting** harness. `claude` is the only
 one today (`SupportsChannels() == true`); setting `channels:` on a scope
 whose resolved harness doesn't support channels is a validation error.
 
+## Codex option reference
+
+`codex` currently supports **scheduled tasks only** — a `processes.*`,
+`templates.*`, or `sessions.*` scope (or a `runtime: persistent` task) that
+resolves to `harness: codex` fails validation:
+`processes.foo.harness: the codex harness cannot run supervised processes yet
+(only scheduled tasks) — see docs/configuration/harnesses.md` (same pattern
+for templates/sessions/persistent tasks). Session drivers land in a later
+plan.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `sandbox` | string | One of `read-only` (codex's own default when unset), `workspace-write`, `danger-full-access`. Passed as `--sandbox`. |
+
+Other things to know:
+
+- **No `approval:` key.** Headless `codex exec` has no approval flag at all —
+  upstream removed it, and approval policy is hardcoded to `never`. Setting
+  `harness_options.approval` is rejected: `option "approval" is not
+  supported: codex exec always runs non-interactively (approval policy
+  "never")`.
+- **No `append_system_prompt`.** Codex's equivalent mechanism is a workspace
+  `AGENTS.md` file, not a CLI flag. Setting the key is rejected: `option
+  "append_system_prompt" is not supported: codex has no append-system-prompt
+  equivalent (use the workspace AGENTS.md)`.
+- **Model is free-form.** `codex.ValidateModel` only rejects whitespace; the
+  actual model name is validated server-side by codex (an invalid one fails
+  the run with a `model_not_found` error, not a leo validation error). An
+  unset `model:` **does not** inherit `defaults.model` across harnesses — see
+  [Cross-harness model cascade](#cross-harness-model-cascade) below.
+- **`max_turns` is ignored.** Codex has no per-turn cap leo can drive; the
+  value validates but has no effect.
+- **Auth** is `CODEX_API_KEY` set in the task's `env:`, or ambient `codex
+  login` state on the host running leo. Leo does not manage codex
+  credentials.
+- **`--skip-git-repo-check` is always passed.** Leo workspaces are frequently
+  not git repos, and codex refuses to run in one otherwise.
+- **Resume** happens via codex's own thread mechanism
+  (`codex exec resume <thread-id>` under the hood) — leo persists the
+  `thread_id` it reads from the `thread.started` event and passes it back on
+  the next invocation for the same task.
+- **MCP bridge.** When the web UI is enabled, leo injects its own MCP server
+  into each invocation via per-invocation `-c mcp_servers.leo.*` overrides —
+  no config-file mutation. This includes
+  `mcp_servers.leo.default_tools_approval_mode="approve"`, scoped to just the
+  leo server: without it, headless codex auto-cancels every MCP tool call
+  (`user cancelled MCP tool call`) even though the turn still completes with
+  exit 0.
+- **Messaging** goes through leo's `leo_send_message` MCP tool — codex has no
+  channel-plugin concept (`SupportsChannels() == false`).
+
+## Opencode option reference
+
+`opencode` currently supports **scheduled tasks only**, with the same
+validation-rejection behavior and message pattern as codex above
+(`the opencode harness cannot run ... yet (only scheduled tasks)`).
+
+| Key | Type | Meaning |
+|---|---|---|
+| `permission` | map | Per-tool permission: `allow`, `ask`, or `deny`, or a nested pattern map of the same (e.g. `{bash: {"git push *": ask}}`). Delivered via a per-spawn config overlay — see below. |
+
+Other things to know:
+
+- **Delivery mechanism.** `permission` (and leo's MCP bridge entry) are not
+  passed as argv — opencode's permission system is config-only. Leo builds a
+  JSON overlay and sets it as the `OPENCODE_CONFIG_CONTENT` environment
+  variable for that one spawn. Opencode deep-merges this over the user's own
+  `opencode.json`/global config; leo never mutates that file.
+- **Model must be `provider/model`.** `opencode.ValidateModel` rejects
+  anything without a `/`, e.g. `anthropic/claude-sonnet-4-5`. An unset
+  `model:` does not inherit `defaults.model` across harnesses — see
+  [Cross-harness model cascade](#cross-harness-model-cascade) below.
+- **`max_turns` is ignored**, same as codex.
+- **No `append_system_prompt`.** Rejected: `option "append_system_prompt" is
+  not supported: opencode has no append-system-prompt equivalent (use
+  AGENTS.md or the instructions config)`.
+- **Resume** uses opencode's own session IDs (`-s ses_…`), read from the
+  `sessionID` field present on every event in the stream.
+- **MCP bridge** rides in the same `OPENCODE_CONFIG_CONTENT` overlay, under a
+  `mcp.leo` entry, when the web UI is enabled.
+- **Parsing quirks leo works around:**
+  - *EOF-as-turn-end.* Older opencode versions (and `--attach` mode) can omit
+    the terminal `step_finish` event on a truncated stream (upstream
+    [#26855](https://github.com/sst/opencode/issues/26855)); leo treats
+    reaching EOF as the end of a turn rather than requiring `step_finish`.
+  - *In-stream errors fail the attempt even on exit 0.* Opencode sometimes
+    exits `0` after emitting an `error` event mid-stream. Leo parses the
+    stream and treats any `error` event as a failed attempt regardless of
+    the process exit code — this is a deliberate cross-harness behavior
+    change (claude exits non-zero on real errors, so this path is
+    effectively unreachable there).
+- **Messaging** goes through `leo_send_message`, same as codex —
+  `SupportsChannels() == false`.
+
+## Cross-harness model cascade
+
+`defaults.model` **does not** cascade to a task whose resolved harness
+differs from `defaults.harness` — model identifiers are harness-specific
+(`opus` means nothing to codex; codex/opencode need their own model strings),
+so leaking a claude default into a codex or opencode task would silently pass
+garbage. Concretely: if `tasks.t.harness: codex` (or `opencode`) and
+`tasks.t.model` is unset, `TaskModel` returns `""` regardless of what
+`defaults.model` is set to — an empty model means "let the harness pick its
+own default." The fall-through to `defaults.model` (then the built-in
+default) only applies when the task's resolved harness matches
+`defaults.harness`.
+
+## Example: codex and opencode tasks
+
+```yaml
+defaults:
+  harness: claude
+  model: sonnet
+
+tasks:
+  codex-refactor:
+    schedule: "0 3 * * *"
+    prompt_file: prompts/codex-refactor.md
+    harness: codex
+    model: gpt-5.3-codex
+    harness_options:
+      sandbox: workspace-write
+    env:
+      CODEX_API_KEY: ${CODEX_API_KEY}
+    enabled: true
+
+  opencode-triage:
+    schedule: "0 9 * * *"
+    prompt_file: prompts/opencode-triage.md
+    harness: opencode
+    model: anthropic/claude-sonnet-4-5
+    harness_options:
+      permission:
+        bash: ask
+        edit: allow
+    enabled: true
+```
+
+Note there is no `approval:` key for codex — approval policy is fixed at
+`never` for headless exec and isn't configurable.
+
 ## Migration table
 
 Every flat claude field that used to live directly on `defaults`,
@@ -218,11 +365,17 @@ defaults.provider has been removed along with providers — see docs/configurati
 
 Other harness-related validation errors follow the same style:
 
-- An unregistered `harness:` name: `defaults.harness "foo" is not a registered harness (available: claude)`.
+- An unregistered `harness:` name: `defaults.harness "foo" is not a registered harness (available: claude, codex, opencode)`.
 - An unknown `harness_options` key, wrong type, or invalid enum value:
   reported by the adapter's `DecodeOptions`, e.g. `defaults.harness_options: unknown option "foo" (valid: agent, allowed_tools, append_system_prompt, bypass_permissions, disallowed_tools, permission_mode, remote_control)`.
 - `channels:`/`dev_channels:` on a harness that doesn't support them:
   `processes.foo.channels: the codex harness does not support channel plugins; use leo's MCP tools for messaging`.
+- A kind the harness can't run yet: `processes.foo.harness: the codex harness
+  cannot run supervised processes yet (only scheduled tasks) — see
+  docs/configuration/harnesses.md` (same pattern for
+  `templates.*.harness` → "run ephemeral agents", `sessions.*.harness` →
+  "run persistent sessions", and a `runtime: persistent` task's `.harness` →
+  "run persistent tasks yet (persistent tasks run through sessions)").
 
 If you hit any of these on an existing `leo.yaml`, move the named field
 under `harness_options` (or drop `provider`/`providers` and switch to

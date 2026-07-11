@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"019f4ebb-41e4-7b61-a83c-ba50db2be2cd"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `not-a-real-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\",\n    \"message\": \"The requested model 'not-a-real-model' does not exist.\",\n    \"param\": \"model\"\n  },\n  \"status\": 400\n}"}
+{"type":"turn.failed","error":{"message":"{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\",\n    \"message\": \"The requested model 'not-a-real-model' does not exist.\",\n    \"param\": \"model\"\n  },\n  \"status\": 400\n}"}}

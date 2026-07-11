@@ -88,3 +88,35 @@ func TestSupportsChannels(t *testing.T) {
 		t.Fatal("SupportsChannels() = false, want true")
 	}
 }
+
+func TestClaudeEnv(t *testing.T) {
+	tests := []struct {
+		name string
+		kind harness.Kind
+		want map[string]string
+	}{
+		{"task", harness.KindTask, map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}},
+		{"process", harness.KindProcess, nil},
+		{"agent", harness.KindAgent, nil},
+		{"session", harness.KindSession, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Claude{}.Env(harness.LaunchSpec{Kind: tt.kind})
+			if err != nil {
+				t.Fatalf("Env(%v): unexpected error %v", tt.kind, err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Env(%v) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeSupportsKind(t *testing.T) {
+	for _, k := range []harness.Kind{harness.KindProcess, harness.KindAgent, harness.KindTask, harness.KindSession} {
+		if !(Claude{}.SupportsKind(k)) {
+			t.Errorf("SupportsKind(%v) = false, want true", k)
+		}
+	}
+}

@@ -630,6 +630,49 @@ func TestTaskModel(t *testing.T) {
 	}
 }
 
+// TestTaskModelHarnessCascade verifies model names never leak across
+// harnesses: the defaults/built-in fall-through only applies when the task
+// runs the same harness as defaults.
+func TestTaskModelHarnessCascade(t *testing.T) {
+	t.Run("cross-harness task with no model returns empty, not defaults model", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "opus"}, // implicit claude harness
+		}
+		task := TaskConfig{Harness: "codex"}
+
+		if got := cfg.TaskModel(task); got != "" {
+			t.Errorf("TaskModel() = %q, want empty (opus must not leak into a codex task)", got)
+		}
+	})
+
+	t.Run("cross-harness task with explicit model still wins", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "opus"},
+		}
+		task := TaskConfig{Harness: "codex", Model: "gpt-5.3-codex"}
+
+		if got := cfg.TaskModel(task); got != "gpt-5.3-codex" {
+			t.Errorf("TaskModel() = %q, want %q", got, "gpt-5.3-codex")
+		}
+	})
+
+	t.Run("same-harness task still falls through to defaults then built-in", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Harness: "codex", Model: "gpt-5.3-codex"},
+		}
+		task := TaskConfig{Harness: "codex"}
+
+		if got := cfg.TaskModel(task); got != "gpt-5.3-codex" {
+			t.Errorf("TaskModel() = %q, want %q", got, "gpt-5.3-codex")
+		}
+
+		cfgNoDefaultModel := &Config{Defaults: DefaultsConfig{Harness: "codex"}}
+		if got := cfgNoDefaultModel.TaskModel(TaskConfig{Harness: "codex"}); got != DefaultModel {
+			t.Errorf("TaskModel() = %q, want built-in default %q", got, DefaultModel)
+		}
+	})
+}
+
 func TestProcessMCPConfigPath(t *testing.T) {
 	cfg := &Config{HomePath: "/home/user/.leo"}
 
