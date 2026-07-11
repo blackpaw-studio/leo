@@ -105,6 +105,11 @@ type Harness interface {
 	// SupportsKind reports whether this harness can run the given leo
 	// primitive. Kinds outside this set must also fail loudly in Args().
 	SupportsKind(k Kind) bool
+
+	// Driver returns how leo keeps a live session for this harness and
+	// talks to it. Nil while the harness supports no interactive kinds
+	// (SupportsKind gates every call site).
+	Driver() SessionDriver
 }
 
 // FallbackString returns primary if non-empty, else fallback. Callers use

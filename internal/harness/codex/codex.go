@@ -33,6 +33,9 @@ func (Codex) SupportsChannels() bool { return false }
 // SupportsKind: one-shot tasks only until the TurnDriver lands (Plan 4).
 func (Codex) SupportsKind(k harness.Kind) bool { return k == harness.KindTask }
 
+// Driver: no interactive kinds yet — the TurnDriver/ServerDriver lands in Plan-4 Task 5/6.
+func (Codex) Driver() harness.SessionDriver { return nil }
+
 // Env: codex needs no adapter-injected env. Auth (CODEX_API_KEY or ambient
 // login state) is the caller's/user's concern.
 func (Codex) Env(harness.LaunchSpec) (map[string]string, error) { return nil, nil }

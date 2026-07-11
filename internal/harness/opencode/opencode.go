@@ -36,6 +36,9 @@ func (Opencode) SupportsChannels() bool { return false }
 // SupportsKind: one-shot tasks only until the ServerDriver lands (Plan 4).
 func (Opencode) SupportsKind(k harness.Kind) bool { return k == harness.KindTask }
 
+// Driver: no interactive kinds yet — the TurnDriver/ServerDriver lands in Plan-4 Task 5/6.
+func (Opencode) Driver() harness.SessionDriver { return nil }
+
 func (Opencode) SessionArgs(s harness.SessionState) []string {
 	if s.Mode == harness.SessionResume {
 		return []string{"-s", s.ID}
