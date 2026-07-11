@@ -227,12 +227,17 @@ func TestNonClaudeValidationErrors(t *testing.T) {
 // WITHOUT the fake-binary dir, so the fakes don't shadow the real thing)
 // AND LEO_E2E_REAL_HARNESSES=1 is set. Real runs cost API money.
 
+// No model is pinned in either smoke config: model names are account- and
+// install-specific (a hardcoded opencode model hit ProviderModelNotFoundError
+// on a machine whose registry lacked it), and the smoke's job is to verify
+// the leo↔harness integration, not model selection. The cross-harness model
+// cascade resolves to "" here, so each CLI uses its own default model.
 func TestRealHarnessSmokeCodex(t *testing.T) {
-	realSmokeTest(t, "codex", "cx", "harness: codex\n    model: gpt-5.3-codex\n")
+	realSmokeTest(t, "codex", "cx", "harness: codex\n")
 }
 
 func TestRealHarnessSmokeOpencode(t *testing.T) {
-	realSmokeTest(t, "opencode", "oc", "harness: opencode\n    model: anthropic/claude-sonnet-4-5\n")
+	realSmokeTest(t, "opencode", "oc", "harness: opencode\n")
 }
 
 // realSmokeTest is the shared body for the gated real-binary smoke tests.
