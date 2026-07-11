@@ -139,7 +139,7 @@ func TestBuildArgs(t *testing.T) {
 
 	cfg := makeTestConfig(dir, true)
 	task := config.TaskConfig{Model: "opus", MaxTurns: 20}
-	args := buildArgs(cfg, task, "mytask", "test prompt", "", false)
+	args, _ := buildArgs(cfg, task, "mytask", "test prompt", "", nil)
 
 	argsStr := strings.Join(args, " ")
 
@@ -173,7 +173,7 @@ func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", false)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil)
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--dangerously-skip-permissions") {
@@ -187,7 +187,7 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", false)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil)
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--mcp-config") {
@@ -205,7 +205,7 @@ func TestBuildArgsWithSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "session-abc-123", false)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "session-abc-123", nil)
 	argsStr := strings.Join(args, " ")
 
 	if !strings.Contains(argsStr, "--resume session-abc-123") {
@@ -217,7 +217,7 @@ func TestBuildArgsWithoutSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", false)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil)
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--resume") {
@@ -238,7 +238,7 @@ func TestBuildArgsIncludesDevChannels(t *testing.T) {
 		},
 	}
 
-	args := buildArgs(cfg, task, "mytask", "test prompt", "", false)
+	args, _ := buildArgs(cfg, task, "mytask", "test prompt", "", nil)
 
 	count := 0
 	for i, a := range args {
@@ -760,7 +760,7 @@ func TestRunConcurrencyGuard(t *testing.T) {
 
 func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "sess-1", false)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "sess-1", nil)
 
 	found := false
 	for i := 0; i < len(args)-1; i++ {
@@ -840,8 +840,8 @@ func TestBuildArgsSkipsLeoMCPWithoutToken(t *testing.T) {
 	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 	// No api.token file written.
 
-	_, leoMCPOK := leoMCPEnv(cfg, "mytask")
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoMCPOK)
+	leoEnv, _ := leoMCPEnv(cfg, "mytask")
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv)
 	for i, a := range args {
 		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
 			t.Errorf("did not expect leo MCP config wired in without a readable token; args=%v", args)
@@ -857,8 +857,8 @@ func TestBuildArgsIncludesLeoMCPWithToken(t *testing.T) {
 	os.MkdirAll(cfg.StatePath(), 0750)
 	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123"), 0600)
 
-	_, leoMCPOK := leoMCPEnv(cfg, "mytask")
-	args := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoMCPOK)
+	leoEnv, _ := leoMCPEnv(cfg, "mytask")
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv)
 	found := false
 	for i, a := range args {
 		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
@@ -921,6 +921,13 @@ func TestRunPassesLeoMCPEnvToExecuteCommand(t *testing.T) {
 	}
 	if !strings.Contains(got, "LEO_API_TOKEN=tok-xyz") {
 		t.Errorf("log missing LEO_API_TOKEN:\n%s", got)
+	}
+	// CLAUDE_CODE_ENTRYPOINT is no longer injected unconditionally by
+	// executeCommand — it now rides in via claude's own Env() (merged as
+	// harnessEnv by runTaskAttempt), so a claude task's child env must still
+	// carry it.
+	if !strings.Contains(got, "CLAUDE_CODE_ENTRYPOINT=cli") {
+		t.Errorf("log missing CLAUDE_CODE_ENTRYPOINT=cli (claude's own Env()):\n%s", got)
 	}
 }
 
@@ -994,7 +1001,7 @@ func TestExecuteCommandInjectsExtraEnv(t *testing.T) {
 	t.Cleanup(func() { execCommand = orig })
 	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("env") }
 
-	out, err := executeCommand(context.Background(), t.TempDir(), nil, nil, nil,
+	out, err := executeCommand(context.Background(), "claude", t.TempDir(), nil, nil, nil,
 		map[string]string{"ANTHROPIC_BASE_URL": "https://x.example", "ANTHROPIC_AUTH_TOKEN": "sk-t"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1013,7 +1020,7 @@ func TestExecuteCommandNoExtraEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", "")
 	os.Unsetenv("ANTHROPIC_BASE_URL")
 
-	out, err := executeCommand(context.Background(), t.TempDir(), nil, nil, nil, nil, nil)
+	out, err := executeCommand(context.Background(), "claude", t.TempDir(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1192,7 +1199,7 @@ func runExecuteCommandWithDeadline(t *testing.T, bound time.Duration, ctx contex
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		out, err := executeCommand(ctx, workDir, args, nil, nil, nil, channelInitPrefixes)
+		out, err := executeCommand(ctx, "claude", workDir, args, nil, nil, nil, channelInitPrefixes)
 		resCh <- result{out, err}
 	}()
 
@@ -1530,5 +1537,208 @@ func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
 	}
 	if sid != seededSessionID {
 		t.Errorf("session store should be untouched by an interrupt; got %q, want %q", sid, seededSessionID)
+	}
+}
+
+// TestRunPrereqCheckFailsFast verifies Run() fails immediately with the
+// documented message — and never invokes execCommand — when the resolved
+// harness's binary isn't on PATH.
+func TestRunPrereqCheckFailsFast(t *testing.T) {
+	origLook := lookPathFn
+	defer func() { lookPathFn = origLook }()
+	origExec := execCommand
+	defer func() { execCommand = origExec }()
+
+	var execCalled bool
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return exec.Command("true")
+	}
+	lookPathFn = func(file string) (string, error) {
+		return "", fmt.Errorf(`exec: %q: executable file not found in $PATH`, file)
+	}
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+
+	err := Run(cfg, "mytask", nil)
+	if err == nil {
+		t.Fatal("expected error when harness binary is not on PATH")
+	}
+	wantMsg := `task "mytask" uses the claude harness, but "claude" was not found in PATH — install it or change the task's harness`
+	if err.Error() != wantMsg {
+		t.Errorf("error = %q, want %q", err.Error(), wantMsg)
+	}
+	if execCalled {
+		t.Error("execCommand should never be invoked when the prereq check fails")
+	}
+}
+
+// TestRunHarnessReportedErrorWithExitZero verifies the exit-0-with-IsError
+// failure mode (note 4): opencode has known exit-0-on-error bugs, so a
+// harness reporting a fatal "error" event while the process itself exits 0
+// must still fail the attempt and record history as a failure.
+func TestRunHarnessReportedErrorWithExitZero(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	errorLine := `{"type":"error","sessionID":"sess-1","error":{"name":"ProviderAuthError","data":{"message":"missing API key"}}}`
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "echo '"+errorLine+"'; exit 0")
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Harness: "opencode"},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+
+	err := Run(cfg, "mytask", nil)
+	if err == nil {
+		t.Fatal("Run() should return an error when the harness reports a fatal error despite exit 0")
+	}
+	if !strings.Contains(err.Error(), "harness reported error:") {
+		t.Errorf("error = %q, want to contain 'harness reported error:'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "missing API key") {
+		t.Errorf("error = %q, want to contain the harness's own error message", err.Error())
+	}
+
+	hist := history.NewStore(cfg.HomePath)
+	entry := hist.Get("mytask")
+	if entry == nil {
+		t.Fatal("expected a history entry")
+	}
+	if entry.Reason != history.ReasonFailure {
+		t.Errorf("history reason = %q, want %q", entry.Reason, history.ReasonFailure)
+	}
+}
+
+// TestRunCodexStaleThreadRetryClearsSession is the codex analogue of
+// TestRunStaleSessionFallbackRealWorldOutput: codex's stale-thread-resume
+// failure says "thread", never "session" ("thread/resume failed: no rollout
+// found for thread id x (code -32600)"), so isSessionError's "no rollout
+// found" pattern (note 3) must catch it, the runner must clear the stale
+// session and retry without a resume token in the same attempt, and persist
+// the fresh thread id from the successful retry.
+func TestRunCodexStaleThreadRetryClearsSession(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	staleThreadID := "tid-stale-111"
+	staleOutput := "Error: thread/resume: thread/resume failed: no rollout found for thread id " + staleThreadID + " (code -32600)\n"
+	freshOutput := `{"type":"thread.started","thread_id":"tid-fresh-999"}` + "\n" +
+		`{"type":"item.completed","item":{"type":"agent_message","text":"done"}}` + "\n"
+
+	staleFile := filepath.Join(dir, "stale.out")
+	freshFile := filepath.Join(dir, "fresh.out")
+	os.WriteFile(staleFile, []byte(staleOutput), 0644)
+	os.WriteFile(freshFile, []byte(freshOutput), 0644)
+
+	var allArgs [][]string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		allArgs = append(allArgs, append([]string(nil), args...))
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "resume") {
+			return exec.Command("sh", "-c", "cat "+staleFile+" 1>&2; exit 1")
+		}
+		return exec.Command("sh", "-c", "cat "+freshFile)
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+
+	sessions := session.NewStore(dir)
+	if err := sessions.Set("task:mytask", staleThreadID); err != nil {
+		t.Fatalf("seeding stale session: %v", err)
+	}
+
+	err := Run(cfg, "mytask", sessions)
+	if err != nil {
+		t.Fatalf("Run() should succeed after the in-place stale-thread retry, got: %v", err)
+	}
+	if len(allArgs) != 2 {
+		t.Fatalf("expected 2 exec invocations (resume + fresh retry), got %d", len(allArgs))
+	}
+	if strings.Contains(strings.Join(allArgs[1], " "), "resume") {
+		t.Errorf("retry attempt should not carry a resume token; args=%v", allArgs[1])
+	}
+
+	newSID, _, getErr := sessions.Get("task:mytask")
+	if getErr != nil {
+		t.Fatalf("reading session after run: %v", getErr)
+	}
+	if newSID != "tid-fresh-999" {
+		t.Errorf("stored session id = %q, want %q", newSID, "tid-fresh-999")
+	}
+}
+
+// TestRunCodexPersistsThreadID verifies that a successful codex task run
+// stores the thread_id from the codex exec --json stream in the session
+// store, exercising ParseEvents/session persistence through the harness
+// abstraction rather than claude's stream-json shape.
+func TestRunCodexPersistsThreadID(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	stream := `{"type":"thread.started","thread_id":"tid-abc-123"}` + "\n" +
+		`{"type":"item.completed","item":{"type":"agent_message","text":"done"}}` + "\n"
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", stream)
+	}
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {PromptFile: "task.md", Schedule: "0 * * * *", Enabled: true},
+		},
+	}
+
+	sessions := session.NewStore(dir)
+	if err := Run(cfg, "mytask", sessions); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	sid, _, err := sessions.Get("task:mytask")
+	if err != nil {
+		t.Fatalf("reading session store: %v", err)
+	}
+	if sid != "tid-abc-123" {
+		t.Errorf("stored session id = %q, want %q", sid, "tid-abc-123")
 	}
 }

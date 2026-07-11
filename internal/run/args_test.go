@@ -1,7 +1,9 @@
 package run
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -14,7 +16,7 @@ func TestBuildArgsCharacterization(t *testing.T) {
 		task      config.TaskConfig
 		prompt    string
 		sessionID string
-		leoMCPOK  bool
+		leoEnv    map[string]string
 		want      []string
 	}{
 		{
@@ -120,9 +122,140 @@ func TestBuildArgsCharacterization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildArgs(tt.cfg, tt.task, "mytask", tt.prompt, tt.sessionID, tt.leoMCPOK)
+			got, _ := buildArgs(tt.cfg, tt.task, "mytask", tt.prompt, tt.sessionID, tt.leoEnv)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("buildArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildArgsCodex covers the codex adapter path through buildArgs: sandbox
+// option fill, no session, and no leo MCP env → nil extraEnv (codex needs no
+// adapter-injected env of its own).
+func TestBuildArgsCodex(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: "/tmp/leo-home",
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				Workspace:      "/tmp/ws",
+				HarnessOptions: map[string]any{"sandbox": "workspace-write"},
+			},
+		},
+	}
+	task := cfg.Tasks["mytask"]
+
+	args, env := buildArgs(cfg, task, "mytask", "do it", "", nil)
+	// No task/defaults model override, so TaskModel falls through to the
+	// built-in default ("sonnet") — the harness matches defaults.harness, so
+	// the fall-through applies.
+	want := []string{"exec", "--json", "--skip-git-repo-check", "--model", "sonnet", "--sandbox", "workspace-write", "do it"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("buildArgs argv mismatch\n got: %q\nwant: %q", args, want)
+	}
+	if env != nil {
+		t.Errorf("expected nil extraEnv without leo MCP wiring, got %v", env)
+	}
+}
+
+// TestBuildArgsCodexWithLeoMCP verifies the four `-c mcp_servers.leo.*`
+// override pairs land in argv when leoEnv is non-nil.
+func TestBuildArgsCodexWithLeoMCP(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: "/tmp/leo-home",
+		Defaults: config.DefaultsConfig{Harness: "codex"},
+	}
+	task := config.TaskConfig{Workspace: "/tmp/ws"}
+	leoEnv := map[string]string{
+		"LEO_PROCESS_NAME": "task:mytask",
+		"LEO_WEB_PORT":     "8888",
+		"LEO_API_TOKEN":    "tok",
+	}
+
+	args, _ := buildArgs(cfg, task, "mytask", "do it", "", leoEnv)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		`-c mcp_servers.leo.command="leo"`,
+		`-c mcp_servers.leo.args=["mcp-server"]`,
+		`-c mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN"]`,
+		`-c mcp_servers.leo.default_tools_approval_mode="approve"`,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("argv missing %q; got %v", want, args)
+		}
+	}
+}
+
+// TestBuildArgsOpencode covers the opencode adapter path through buildArgs:
+// permission option fill and the leo MCP bridge landing in
+// OPENCODE_CONFIG_CONTENT.
+func TestBuildArgsOpencode(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: "/tmp/leo-home",
+		Defaults: config.DefaultsConfig{Harness: "opencode"},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				Workspace: "/tmp/ws",
+				HarnessOptions: map[string]any{
+					"permission": map[string]any{"bash": "ask"},
+				},
+			},
+		},
+	}
+	task := cfg.Tasks["mytask"]
+	leoEnv := map[string]string{
+		"LEO_PROCESS_NAME": "task:mytask",
+		"LEO_WEB_PORT":     "8888",
+		"LEO_API_TOKEN":    "tok-abc",
+	}
+
+	args, env := buildArgs(cfg, task, "mytask", "do it", "", leoEnv)
+	// No task/defaults model override, so TaskModel falls through to the
+	// built-in default ("sonnet") — the harness matches defaults.harness, so
+	// the fall-through applies.
+	want := []string{"run", "--format", "json", "--model", "sonnet", "do it"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("buildArgs argv mismatch\n got: %q\nwant: %q", args, want)
+	}
+
+	content, ok := env["OPENCODE_CONFIG_CONTENT"]
+	if !ok {
+		t.Fatalf("expected OPENCODE_CONFIG_CONTENT in extraEnv, got %v", env)
+	}
+	var parsed struct {
+		MCP struct {
+			Leo struct {
+				Environment map[string]string `json:"environment"`
+			} `json:"leo"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("unmarshaling OPENCODE_CONFIG_CONTENT: %v", err)
+	}
+	if parsed.MCP.Leo.Environment["LEO_API_TOKEN"] != "tok-abc" {
+		t.Errorf("mcp.leo.environment.LEO_API_TOKEN = %q, want %q", parsed.MCP.Leo.Environment["LEO_API_TOKEN"], "tok-abc")
+	}
+}
+
+// TestBuildArgsNonClaudeModelCascade pins Task 4's model cascade for
+// codex/opencode: a claude-shaped defaults.model ("opus") must not leak into
+// a task running a different harness, so argv carries no --model flag at
+// all.
+func TestBuildArgsNonClaudeModelCascade(t *testing.T) {
+	for _, h := range []string{"codex", "opencode"} {
+		t.Run(h, func(t *testing.T) {
+			cfg := &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{Model: "opus"},
+			}
+			task := config.TaskConfig{Workspace: "/tmp/ws", Harness: h}
+
+			args, _ := buildArgs(cfg, task, "mytask", "do it", "", nil)
+			for i, a := range args {
+				if a == "--model" {
+					t.Errorf("did not expect --model in argv (defaults.model is claude-shaped); got %v (at index %d)", args, i)
+				}
 			}
 		})
 	}

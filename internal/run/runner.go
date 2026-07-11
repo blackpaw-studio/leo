@@ -23,6 +23,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
+	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/session"
@@ -32,7 +34,10 @@ import (
 
 var execCommand = exec.Command
 
-var claudeBinary = claudeharness.Claude{}.Binary()
+// lookPathFn is exec.LookPath, indirected through a package var so tests can
+// stub the per-harness binary-on-PATH prereq check without requiring the
+// real binary to be installed.
+var lookPathFn = exec.LookPath
 
 const silentPreamble = `SILENT SCHEDULED RUN — You are running as a scheduled background task, not responding to a user message.
 Work silently. Do not narrate your process or describe your tool usage.
@@ -109,10 +114,10 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store) (stri
 		sessionID = sid
 	}
 
-	_, leoMCPOK := leoMCPEnv(cfg, taskName)
+	leoEnv, leoMCPOK := leoMCPEnv(cfg, taskName)
 	warnLeoMCPSkipped(cfg, taskName, leoMCPOK)
 
-	args := buildArgs(cfg, task, taskName, prompt, sessionID, leoMCPOK)
+	args, _ := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv)
 	return prompt, args, nil
 }
 
@@ -128,6 +133,18 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	// one-shot path completely unaffected.
 	if task.Runtime == "persistent" {
 		return persistentImpl(cfg, taskName)
+	}
+
+	h, err := harness.Get(cfg.TaskHarness(task))
+	if err != nil {
+		return err
+	}
+	// Per-harness prereq: fail fast, before acquiring the task lock or doing
+	// any other work, if the harness binary isn't on PATH. Preview
+	// deliberately skips this check — previews must work without the binary
+	// installed.
+	if _, err := lookPathFn(h.Binary()); err != nil {
+		return fmt.Errorf("task %q uses the %s harness, but %q was not found in PATH — install it or change the task's harness", taskName, h.Name(), h.Binary())
 	}
 
 	// Acquire task lock to prevent concurrent execution
@@ -148,6 +165,11 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	// task.Env lets a task target a custom endpoint (ANTHROPIC_BASE_URL/
 	// ANTHROPIC_AUTH_TOKEN) or inject other env vars; leoEnv wins on key
 	// collision so the leo MCP wiring can never be shadowed by task config.
+	// The main attempt loop additionally merges in the resolved harness's own
+	// env (e.g. claude's CLAUDE_CODE_ENTRYPOINT) between the two — see
+	// runTaskAttempt — but the notify-on-fail child below stays claude-only
+	// by construction and adds that env explicitly, so this plain two-way
+	// merge is what it uses.
 	spawnEnv := mergeEnvMaps(task.Env, leoEnv)
 
 	prompt, err := assemblePrompt(cfg, task)
@@ -208,8 +230,17 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		}
 		isChannelInitRetry = false
 
-		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, spawnEnv, channelPrefixes, sessions, leoMCPOK)
+		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, task.Env, leoEnv, channelPrefixes, sessions, h)
 		lastLogContent = string(ar.output)
+
+		// A harness that exits 0 while its own stream reports a fatal error
+		// (opencode has known exit-0-on-error bugs) must still be treated as
+		// a failed attempt — claude exits nonzero on real errors, so this is
+		// unreachable there in practice, but it's a real cross-harness signal
+		// for the others.
+		if ar.execErr == nil && ar.result.IsError {
+			ar.execErr = fmt.Errorf("harness reported error: %s", strings.Join(ar.result.Errors, "; "))
+		}
 
 		// An interrupted attempt (Ctrl-C forwarded to the child) reflects the
 		// user asking the task to stop, not a real result — don't persist a
@@ -320,20 +351,27 @@ type attemptResult struct {
 	result  harness.Result
 }
 
-// runTaskAttempt spawns claude for one attempt of the task, retrying
-// in-place (same attempt, no session clear) without --resume if the initial
-// spawn used a session that turns out to be stale.
-func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, provEnv map[string]string, channelPrefixes []string, sessions *session.Store, leoMCPOK bool) attemptResult {
-	args := buildArgs(cfg, task, taskName, prompt, sessionID, leoMCPOK)
+// runTaskAttempt spawns the resolved harness for one attempt of the task,
+// retrying in-place (same attempt, no session clear) without session-resume
+// if the initial spawn used a session that turns out to be stale.
+//
+// Spawn env is assembled fresh on each buildArgs call (initial spawn and any
+// stale-session retry) as mergeEnvMaps(taskEnv, harnessEnv, leoEnv): leoEnv
+// wins on collision so a task can never shadow the leo MCP wiring, but a
+// task may still deliberately override a harness-injected var (e.g. claude's
+// CLAUDE_CODE_ENTRYPOINT) since harnessEnv sits between the two.
+func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, taskEnv, leoEnv map[string]string, channelPrefixes []string, sessions *session.Store, h harness.Harness) attemptResult {
+	args, harnessEnv := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv)
+	spawnEnv := mergeEnvMaps(taskEnv, harnessEnv, leoEnv)
 
 	// Per-attempt timeout so each retry gets the full timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	output, execErr := executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv, channelPrefixes)
-	result := parseClaudeOutput(output)
+	output, execErr := executeCommand(ctx, h.Binary(), taskWorkspace, args, task.Channels, task.DevChannels, spawnEnv, channelPrefixes)
+	result, _ := h.ParseEvents(bytes.NewReader(output))
 
-	// If --resume failed with a stale session, retry without it.
+	// If session-resume failed with a stale session, retry without it.
 	if execErr != nil && sessionID != "" && isSessionError(result, output) {
 		if sessions != nil {
 			if delErr := sessions.Delete("task:" + taskName); delErr != nil {
@@ -341,9 +379,10 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 			}
 		}
 
-		args = buildArgs(cfg, task, taskName, prompt, "", leoMCPOK)
-		output, execErr = executeCommand(ctx, taskWorkspace, args, task.Channels, task.DevChannels, provEnv, channelPrefixes)
-		result = parseClaudeOutput(output)
+		args, harnessEnv = buildArgs(cfg, task, taskName, prompt, "", leoEnv)
+		spawnEnv = mergeEnvMaps(taskEnv, harnessEnv, leoEnv)
+		output, execErr = executeCommand(ctx, h.Binary(), taskWorkspace, args, task.Channels, task.DevChannels, spawnEnv, channelPrefixes)
+		result, _ = h.ParseEvents(bytes.NewReader(output))
 	}
 
 	return attemptResult{output: output, execErr: execErr, result: result}
@@ -373,13 +412,19 @@ func notifyFailure(cfg *config.Config, taskName string, task config.TaskConfig, 
 	}
 	args = appendDevChannelFlags(args, task.DevChannels)
 
+	// notifyFailure stays claude-only by construction: it fires only for
+	// channel tasks, and channels validate claude-only (see SupportsChannels).
+	// executeCommand no longer injects CLAUDE_CODE_ENTRYPOINT itself (that
+	// now lives in claude's own Env()), so it's added here explicitly.
+	notifyEnv := mergeEnvMaps(extraEnv, map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"})
+
 	spawn := func() ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), notifyFailureTimeout)
 		defer cancel()
 		// No channel-init monitoring for the notify child: it's a short,
 		// low-stakes invocation and killing it early would only reduce the
 		// chance of the failure notice actually reaching the user.
-		return executeCommand(ctx, workspace, args, task.Channels, task.DevChannels, extraEnv, nil)
+		return executeCommand(ctx, claudeharness.Claude{}.Binary(), workspace, args, task.Channels, task.DevChannels, notifyEnv, nil)
 	}
 
 	output, err := spawn()
@@ -460,6 +505,12 @@ func sessionErrorText(text string) bool {
 	if strings.Contains(text, "no conversation found") {
 		return true
 	}
+	// codex stale-thread resume failures say "thread", never "session" (e.g.
+	// "thread/resume failed: no rollout found for thread id …"), so they
+	// never match the generic session+not-found pattern below.
+	if strings.Contains(text, "no rollout found") {
+		return true
+	}
 	return strings.Contains(text, "session") &&
 		(strings.Contains(text, "not found") || strings.Contains(text, "invalid") || strings.Contains(text, "expired"))
 }
@@ -504,10 +555,10 @@ var maxScannerBufferSize = 10 * 1024 * 1024
 // errChannelMCPInit — the caller doesn't have to wait out the full timeout
 // for a channel that will never come up. Pass nil to skip monitoring (e.g.
 // for the notify-on-fail child, where it isn't worth the complexity).
-func executeCommand(ctx context.Context, workDir string, args []string, channels, devChannels []string, extraEnv map[string]string, channelInitPrefixes []string) ([]byte, error) {
-	cmd := execCommand(claudeBinary, args...)
+func executeCommand(ctx context.Context, binary, workDir string, args []string, channels, devChannels []string, extraEnv map[string]string, channelInitPrefixes []string) ([]byte, error) {
+	cmd := execCommand(binary, args...)
 	cmd.Dir = workDir
-	env := append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=cli")
+	env := os.Environ()
 	if len(channels) > 0 {
 		env = append(env, "LEO_CHANNELS="+strings.Join(channels, ","))
 	}
@@ -790,13 +841,6 @@ func channelPluginName(channel string) (string, bool) {
 	return name, true
 }
 
-// parseClaudeOutput is a Task-5 transition shim; the full per-harness
-// threading replaces it.
-func parseClaudeOutput(output []byte) harness.Result {
-	res, _ := claudeharness.Claude{}.ParseEvents(bytes.NewReader(output))
-	return res
-}
-
 func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) {
 	taskWorkspace := cfg.TaskWorkspace(task)
 
@@ -879,44 +923,29 @@ func mergeEnvMaps(maps ...map[string]string) map[string]string {
 	return out
 }
 
-func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoMCPOK bool) []string {
+// buildArgs resolves the task's harness, fills in its runtime-only options
+// (leo MCP wiring, resolved session state, etc.), and renders both the argv
+// and the harness's own extra spawn env for one launch. leoEnv carries the
+// three LEO_* vars from leoMCPEnv when the leo MCP gate passed (see
+// leoMCPEnv/warnLeoMCPSkipped); nil means it's gated off, so no leo MCP
+// wiring is added for any harness.
+func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoEnv map[string]string) ([]string, map[string]string) {
 	h, err := harness.Get(cfg.TaskHarness(task))
 	if err != nil {
 		log.Printf("[task:%s] resolving harness: %v", taskName, err)
-		return nil
+		return nil, nil
 	}
 	decoded, err := h.DecodeOptions(cfg.TaskHarnessOptions(task))
 	if err != nil {
 		log.Printf("[task:%s] decoding harness options: %v", taskName, err)
-		return nil
+		return nil, nil
 	}
-	opts, ok := decoded.(claudeharness.Options)
-	if !ok {
-		// Non-claude tasks arrive with Plan 4 (session drivers).
-		log.Printf("[task:%s] harness %q cannot run tasks yet", taskName, h.Name())
-		return nil
-	}
+	leoMCPOK := leoEnv != nil
 
-	mcpConfig := ""
-	if p := cfg.TaskMCPConfigPath(task); config.HasMCPServers(p) {
-		mcpConfig = p
-	}
-	// leoMCPOK is the leoMCPEnv gate (web disabled, or no readable API
-	// token), evaluated once by the caller (Run/Preview) rather than here —
-	// see the pre-refactor comment history for why.
-	var leoMCPArgs []string
-	if leoMCPOK {
-		leoMCPArgs = leomcp.AppendArg(nil, cfg)
-	}
 	sess := harness.SessionState{}
 	if sessionID != "" {
 		sess = harness.SessionState{Mode: harness.SessionResume, ID: sessionID}
 	}
-
-	opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
-	opts.MCPConfigPath = mcpConfig
-	opts.LeoMCPArgs = leoMCPArgs
-
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindTask,
 		Name:        taskName,
@@ -926,14 +955,56 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		DevChannels: task.DevChannels,
 		Prompt:      prompt,
 		Session:     sess,
-		Options:     opts,
 	}
+
+	switch opts := decoded.(type) {
+	case claudeharness.Options:
+		mcpConfig := ""
+		if p := cfg.TaskMCPConfigPath(task); config.HasMCPServers(p) {
+			mcpConfig = p
+		}
+		var leoMCPArgs []string
+		if leoMCPOK {
+			leoMCPArgs = leomcp.AppendArg(nil, cfg)
+		}
+		opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
+		opts.MCPConfigPath = mcpConfig
+		opts.LeoMCPArgs = leoMCPArgs
+		spec.Options = opts
+	case codexharness.Options:
+		if leoMCPOK {
+			opts.LeoMCP = &codexharness.LeoMCPBridge{
+				Command:      "leo",
+				Args:         []string{"mcp-server"},
+				EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+				ApprovalMode: "approve",
+			}
+		}
+		spec.Options = opts
+	case opencodeharness.Options:
+		if leoMCPOK {
+			opts.LeoMCP = &opencodeharness.LeoMCPBridge{
+				Command: []string{"leo", "mcp-server"},
+				Env:     leoEnv,
+			}
+		}
+		spec.Options = opts
+	default:
+		log.Printf("[task:%s] harness %q returned unsupported options type %T", taskName, h.Name(), decoded)
+		return nil, nil
+	}
+
 	args, err := h.Args(spec)
 	if err != nil {
 		log.Printf("[task:%s] building %s args: %v", taskName, h.Name(), err)
-		return nil
+		return nil, nil
 	}
-	return args
+	env, err := h.Env(spec)
+	if err != nil {
+		log.Printf("[task:%s] building %s env: %v", taskName, h.Name(), err)
+		return nil, nil
+	}
+	return args, env
 }
 
 // appendDevChannelFlags appends one --dangerously-load-development-channels
