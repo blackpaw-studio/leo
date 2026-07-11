@@ -13,12 +13,25 @@ import (
 // tmux.InjectPrompt (readiness-probed paste + Enter).
 var injectPromptFn = tmux.InjectPrompt
 
+// locateTmuxFn is the seam driver tests replace; production uses tmux.Locate.
+// Injectable so Inject/Attach can be unit-tested on a machine (or CI runner)
+// with no tmux on PATH — otherwise the real Locate errors before delegation.
+var locateTmuxFn = tmux.Locate
+
 // SetInjectPromptForTest swaps the InjectPrompt seam and returns a restore
 // func. Exported for _test files in this package only by convention.
 func SetInjectPromptForTest(fn func(ctx context.Context, tmuxPath, session, body string) error) func() {
 	prev := injectPromptFn
 	injectPromptFn = fn
 	return func() { injectPromptFn = prev }
+}
+
+// SetLocateTmuxForTest swaps the tmux.Locate seam and returns a restore func,
+// so Inject/Attach tests don't depend on tmux being installed on the runner.
+func SetLocateTmuxForTest(fn func() (string, error)) func() {
+	prev := locateTmuxFn
+	locateTmuxFn = fn
+	return func() { locateTmuxFn = prev }
 }
 
 // TmuxTUIDriver drives the interactive Claude Code TUI supervised in a leo
@@ -37,7 +50,7 @@ func (TmuxTUIDriver) Start(context.Context, harness.SessionHandle) error { retur
 // outcome lives in the pane / arrives via the Stop hook — so the Result is
 // always nil.
 func (TmuxTUIDriver) Inject(ctx context.Context, h harness.SessionHandle, msg string) (*harness.Result, error) {
-	tmuxPath, err := tmux.Locate()
+	tmuxPath, err := locateTmuxFn()
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +61,7 @@ func (TmuxTUIDriver) Inject(ctx context.Context, h harness.SessionHandle, msg st
 // richer behavior (display-popup nesting, -CC control mode) — this spec is
 // the harness-neutral fallback shape.
 func (TmuxTUIDriver) Attach(h harness.SessionHandle) (harness.AttachSpec, error) {
-	tmuxPath, err := tmux.Locate()
+	tmuxPath, err := locateTmuxFn()
 	if err != nil {
 		return harness.AttachSpec{}, err
 	}

@@ -21,6 +21,9 @@ func TestTmuxTUIDriverStartIsNoOp(t *testing.T) {
 }
 
 func TestTmuxTUIDriverInjectDelegatesToInjectPrompt(t *testing.T) {
+	// Stub tmux.Locate so the test doesn't depend on tmux being installed on
+	// the runner (macOS CI has none); Inject calls Locate before delegating.
+	defer SetLocateTmuxForTest(func() (string, error) { return "/usr/bin/tmux", nil })()
 	var gotSession, gotBody string
 	restore := SetInjectPromptForTest(func(ctx context.Context, tmuxPath, session, body string) error {
 		gotSession, gotBody = session, body

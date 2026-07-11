@@ -91,7 +91,7 @@ func persistServerState(homePath, tmuxSession string, state ServerState) error {
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("opencode: creating server state dir %s: %w", dir, err)
 	}
-	data, err := json.Marshal(state)
+	data, err := json.Marshal(state) // #nosec G117 -- Password is a localhost basic-auth secret leo generates itself; it must round-trip to this 0600 file so `opencode serve` keeps the same credentials across restarts.
 	if err != nil {
 		return fmt.Errorf("opencode: marshaling server state: %w", err)
 	}

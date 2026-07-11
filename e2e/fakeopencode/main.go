@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 const defaultSessionID = "ses_fake000000000000000000001"
@@ -98,7 +99,7 @@ func runServe(args []string) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"healthy":true,"version":"fake"}`)
 	})
-	srv := &http.Server{Addr: "127.0.0.1:" + port, Handler: mux}
+	srv := &http.Server{Addr: "127.0.0.1:" + port, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
