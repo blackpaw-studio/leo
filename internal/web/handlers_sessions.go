@@ -55,7 +55,7 @@ func (s *Server) buildSessionsData(r *http.Request) (any, error) {
 		if s.sessionRT != nil {
 			row.Depth = s.sessionRT.SessionDepth(name)
 		}
-		row.Form = s.buildForm(schema.SectionSession, &sc, cfg, "/web/config/session/"+url.PathEscape(name))
+		row.Form = s.buildFormWithHarness(schema.SectionSession, &sc, cfg, "/web/config/session/"+url.PathEscape(name), "session-"+name)
 		row.Form.DeleteURL = "/web/session/" + url.PathEscape(name)
 		rows = append(rows, row)
 	}

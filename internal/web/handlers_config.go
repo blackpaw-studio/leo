@@ -5,21 +5,36 @@ import (
 	"net/http"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
 // fieldView pairs a resolved field value with its select options.
 type fieldView struct {
 	schema.FieldValue
-	Opts []schema.Option
+	Opts        []schema.Option
+	Section     schema.Section // for the harness select's hx-get URL
+	Scope       string         // scope-unique element-id suffix
+	Placeholder string         // per-harness model format hint
 }
 
 // formData feeds components/form.html.
 type formData struct {
 	Action      string
+	Scope       string
 	Fields      []fieldView
+	Harness     *harnessFormData // nil = section has no harness sub-form
 	SubmitLabel string
 	DeleteURL   string // optional; renders a delete button
+}
+
+// harnessFormData feeds components/harness_options.html: the harness_options
+// sub-form for a single config scope.
+type harnessFormData struct {
+	Section schema.Section
+	Scope   string
+	Harness string // effective harness the sub-form is rendered for
+	Fields  []schema.HarnessFieldValue
 }
 
 // buildForm renders section's registry against target for display. defaults
@@ -44,6 +59,72 @@ func (s *Server) buildForm(section schema.Section, target any, cfg *config.Confi
 		fd.Fields = append(fd.Fields, view)
 	}
 	return fd
+}
+
+// buildFormWithHarness wraps buildForm for the five config sections that
+// carry harness/harness_options: it threads a scope-unique id suffix,
+// resolves the effective harness, attaches the options sub-form, and makes
+// the model field harness-aware (datalist suggestions / format hint).
+func (s *Server) buildFormWithHarness(section schema.Section, target any, cfg *config.Config, action, scope string) formData {
+	fd := s.buildForm(section, target, cfg, action)
+	fd.Scope = scope
+	for i := range fd.Fields {
+		fd.Fields[i].Section = section
+		fd.Fields[i].Scope = scope
+	}
+
+	own, harnessName, inherited := harnessView(target, cfg)
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		// Unregistered harness in a hand-edited config: render the flat form
+		// without a sub-form rather than 500ing the page; Validate() reports
+		// the real error on save.
+		return fd
+	}
+	src := schema.OptionSources{Cfg: cfg, Agents: s.agentList}
+	fd.Harness = &harnessFormData{
+		Section: section,
+		Scope:   scope,
+		Harness: harnessName,
+		Fields:  schema.HarnessOptionValues(h, own, inherited, src),
+	}
+	for i := range fd.Fields {
+		if fd.Fields[i].Key == "model" {
+			fd.Fields[i].Opts = schema.ModelSuggestions(harnessName)
+			fd.Fields[i].Placeholder = schema.ModelPlaceholder(harnessName)
+		}
+	}
+	return fd
+}
+
+// harnessView resolves a form target's own options map, effective harness,
+// and the inherited-placeholder map per the cascade rules (mirrors
+// config.scopeHarnessOptions: defaults' options cascade only into scopes
+// running the same harness; sessions and defaults itself never show
+// inherited placeholders).
+func harnessView(target any, cfg *config.Config) (own map[string]any, name string, inherited map[string]any) {
+	sameHarnessDefaults := func(n string) map[string]any {
+		if n == cfg.DefaultsHarness() {
+			return cfg.Defaults.HarnessOptions
+		}
+		return nil
+	}
+	switch v := target.(type) {
+	case *config.DefaultsConfig:
+		return v.HarnessOptions, cfg.DefaultsHarness(), nil
+	case *config.ProcessConfig:
+		name = cfg.ProcessHarness(*v)
+		return v.HarnessOptions, name, sameHarnessDefaults(name)
+	case *config.TaskConfig:
+		name = cfg.TaskHarness(*v)
+		return v.HarnessOptions, name, sameHarnessDefaults(name)
+	case *config.TemplateConfig:
+		name = cfg.TemplateHarness(*v)
+		return v.HarnessOptions, name, sameHarnessDefaults(name)
+	case *config.SessionConfig:
+		return v.HarnessOptions, cfg.SessionHarness(*v), nil
+	}
+	return nil, config.DefaultHarnessName, nil
 }
 
 // applySection is the single save path for every schema-driven config form.
@@ -230,7 +311,28 @@ func kindName(k schema.Kind) string {
 		return "duration"
 	case schema.KindTextarea:
 		return "textarea"
+	case schema.KindDatalist:
+		return "datalist"
 	default:
 		return "text"
+	}
+}
+
+// optTypeName maps a harness.OptionType to the string
+// components/harness_options.html switches on.
+func optTypeName(t harness.OptionType) string {
+	switch t {
+	case harness.OptionBool:
+		return "bool"
+	case harness.OptionEnum:
+		return "enum"
+	case harness.OptionStringList:
+		return "list"
+	case harness.OptionYAMLMap:
+		return "yamlmap"
+	case harness.OptionText:
+		return "text"
+	default:
+		return "string"
 	}
 }

@@ -440,7 +440,8 @@ func (s *Server) parseTemplates() {
 			}
 			return formatDuration(time.Since(t))
 		},
-		"kindName": kindName,
+		"kindName":    kindName,
+		"optTypeName": optTypeName,
 		"truncate": func(s string, maxLen int) string {
 			runes := []rune(s)
 			if len(runes) <= maxLen {

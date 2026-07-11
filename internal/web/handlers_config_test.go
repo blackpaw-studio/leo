@@ -789,3 +789,122 @@ func TestPageConfigSettingsListsHostCards(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildFormWithHarnessProcess is this task's TDD anchor: it exercises
+// the harness sub-form's own-value/inherited-placeholder cascade and the
+// harness-aware model datalist for a process scope. Adapted from the brief's
+// sketch to this package's actual newTestServer(t) constructor — cfg is
+// passed straight into buildFormWithHarness rather than loaded from disk.
+func TestBuildFormWithHarnessProcess(t *testing.T) {
+	cfg := &config.Config{
+		Defaults: config.DefaultsConfig{Harness: "claude",
+			HarnessOptions: map[string]any{"permission_mode": "auto"}},
+		Processes: map[string]config.ProcessConfig{"builder": {
+			Workspace:      "/w",
+			HarnessOptions: map[string]any{"permission_mode": "plan"},
+		}},
+	}
+	s, _ := newTestServer(t)
+	p := cfg.Processes["builder"]
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "process-builder")
+
+	if fd.Harness == nil || fd.Harness.Harness != "claude" {
+		t.Fatalf("Harness sub-form = %+v, want claude", fd.Harness)
+	}
+	if fd.Scope != "process-builder" || fd.Harness.Scope != "process-builder" {
+		t.Errorf("scope not threaded: %q / %q", fd.Scope, fd.Harness.Scope)
+	}
+	byKey := map[string]schema.HarnessFieldValue{}
+	for _, f := range fd.Harness.Fields {
+		byKey[f.Key] = f
+	}
+	if got := byKey["permission_mode"]; got.Value != "plan" || got.Inherited != "auto" {
+		t.Errorf("permission_mode = %+v (own overrides, inherited placeholder)", got)
+	}
+	for _, f := range fd.Fields {
+		if f.Key == "model" {
+			if len(f.Opts) == 0 {
+				t.Error("claude model field has no datalist suggestions")
+			}
+			if f.Scope != "process-builder" {
+				t.Errorf("model field Scope = %q", f.Scope)
+			}
+		}
+	}
+}
+
+// TestBuildFormWithHarnessNonClaudeModelHint checks that a scope running a
+// different harness than defaults gets no inherited placeholders (harnesses
+// don't share an options namespace) and that a non-claude model field gets a
+// format hint instead of datalist suggestions.
+func TestBuildFormWithHarnessNonClaudeModelHint(t *testing.T) {
+	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"c": {Harness: "codex"}}}
+	s, _ := newTestServer(t)
+	p := cfg.Processes["c"]
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/a", "process-c")
+	if fd.Harness == nil || fd.Harness.Harness != "codex" {
+		t.Fatalf("want codex sub-form, got %+v", fd.Harness)
+	}
+	// scope harness (codex) != defaults harness (claude default) → no inherited placeholders
+	for _, f := range fd.Harness.Fields {
+		if f.Inherited != "" {
+			t.Errorf("field %s inherited %q, want none across harnesses", f.Key, f.Inherited)
+		}
+	}
+	for _, f := range fd.Fields {
+		if f.Key == "model" && (f.Opts != nil || f.Placeholder == "") {
+			t.Errorf("codex model field = opts %v placeholder %q, want nil + hint", f.Opts, f.Placeholder)
+		}
+	}
+}
+
+// TestSessionsFormNeverInheritsHarnessOptions guards
+// SessionHarnessOptions'/harnessView's documented rule: persistent sessions
+// never cascaded harness_options from defaults, and the web form must not
+// start doing so either.
+func TestSessionsFormNeverInheritsHarnessOptions(t *testing.T) {
+	cfg := &config.Config{
+		Defaults: config.DefaultsConfig{HarnessOptions: map[string]any{"permission_mode": "auto"}},
+		Sessions: map[string]config.SessionConfig{"r": {Workspace: "/w"}},
+	}
+	s, _ := newTestServer(t)
+	sc := cfg.Sessions["r"]
+	fd := s.buildFormWithHarness(schema.SectionSession, &sc, cfg, "/a", "session-r")
+	for _, f := range fd.Harness.Fields {
+		if f.Inherited != "" {
+			t.Errorf("session field %s shows inherited %q; sessions never cascade", f.Key, f.Inherited)
+		}
+	}
+}
+
+// TestConfigFormRendersHarnessOptionsSubForm is the render-side TDD anchor:
+// it executes config_form with a formData carrying a Harness sub-form and
+// asserts the harness_options.* input name, the "Harness options" group
+// label, and the model field's harness-scoped datalist wiring all show up in
+// the rendered HTML.
+func TestConfigFormRendersHarnessOptionsSubForm(t *testing.T) {
+	cfg := &config.Config{
+		Processes: map[string]config.ProcessConfig{"builder": {Workspace: "/w"}},
+	}
+	s, _ := newTestServer(t)
+	p := cfg.Processes["builder"]
+	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "process-builder")
+
+	var buf strings.Builder
+	if err := s.templates.ExecuteTemplate(&buf, "config_form", fd); err != nil {
+		t.Fatalf("rendering config_form: %v", err)
+	}
+	body := buf.String()
+	if !strings.Contains(body, `name="harness_options.permission_mode"`) {
+		t.Errorf("missing harness_options.permission_mode input: %s", body)
+	}
+	if !strings.Contains(body, "Harness options") {
+		t.Errorf("missing Harness options group label: %s", body)
+	}
+	if !strings.Contains(body, `list="dl-model-process-builder"`) {
+		t.Errorf("missing model datalist wiring: %s", body)
+	}
+	if !strings.Contains(body, `<datalist id="dl-model-process-builder">`) {
+		t.Errorf("missing model datalist element: %s", body)
+	}
+}

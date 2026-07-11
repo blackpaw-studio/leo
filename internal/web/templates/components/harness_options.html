@@ -1,0 +1,32 @@
+{{define "harness_options"}}
+{{$scope := .Scope}}
+{{range .Fields}}
+<div class="frow">
+  <label for="ho-{{.Key}}-{{$scope}}">{{.Label}}</label>
+  <div class="fctl">
+    {{if eq (optTypeName .Type) "bool"}}
+      <select id="ho-{{.Key}}-{{$scope}}" name="{{.InputName}}">
+        <option value="" {{if eq .Value ""}}selected{{end}}>{{if .Inherited}}inherit ({{.Inherited}}){{else}}inherit{{end}}</option>
+        <option value="true" {{if eq .Value "true"}}selected{{end}}>on</option>
+        <option value="false" {{if eq .Value "false"}}selected{{end}}>off</option>
+      </select>
+    {{else if .Opts}}
+      <select id="ho-{{.Key}}-{{$scope}}" name="{{.InputName}}">
+        <option value="" {{if eq .Value ""}}selected{{end}}>{{if .Inherited}}inherit ({{.Inherited}}){{else}}inherit{{end}}</option>
+        {{$v := .Value}}{{range .Opts}}<option value="{{.Value}}" {{if eq .Value $v}}selected{{end}}>{{.Label}}</option>{{end}}
+      </select>
+    {{else if eq (optTypeName .Type) "yamlmap"}}
+      <textarea id="ho-{{.Key}}-{{$scope}}" name="{{.InputName}}" rows="4" class="mono"
+                {{if .Inherited}}placeholder="inherit:&#10;{{.Inherited}}"{{end}}>{{.Value}}</textarea>
+    {{else if eq (optTypeName .Type) "text"}}
+      <textarea id="ho-{{.Key}}-{{$scope}}" name="{{.InputName}}" rows="3"
+                {{if .Inherited}}placeholder="inherit: {{.Inherited}}"{{end}}>{{.Value}}</textarea>
+    {{else}}
+      <input type="text" id="ho-{{.Key}}-{{$scope}}" name="{{.InputName}}" value="{{.Value}}"
+             {{if .Inherited}}placeholder="inherit: {{.Inherited}}"{{end}}>
+    {{end}}
+    {{if .Help}}<div class="form-help">{{.Help}}</div>{{end}}
+  </div>
+</div>
+{{end}}
+{{end}}
