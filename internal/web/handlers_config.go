@@ -24,13 +24,13 @@ type formData struct {
 
 // buildForm renders section's registry against target for display. defaults
 // (the DefaultsConfig used to compute "inherit" placeholders) is only wired
-// up for the sections that actually cascade from it — Defaults, Provider,
-// ClientHost, Web, and Client are the top of their own chain (or have no
-// notion of inheritance) and must never receive a defaults pointer.
+// up for the sections that actually cascade from it — Defaults, ClientHost,
+// Web, and Client are the top of their own chain (or have no notion of
+// inheritance) and must never receive a defaults pointer.
 func (s *Server) buildForm(section schema.Section, target any, cfg *config.Config, action string) formData {
 	src := schema.OptionSources{Cfg: cfg, Agents: s.agentList}
 	var defaults any
-	if section != schema.SectionDefaults && section != schema.SectionProvider &&
+	if section != schema.SectionDefaults &&
 		section != schema.SectionClientHost && section != schema.SectionWeb &&
 		section != schema.SectionClient {
 		defaults = &cfg.Defaults
@@ -147,29 +147,13 @@ func (s *Server) handleConfigTemplateSave(w http.ResponseWriter, r *http.Request
 		fmt.Sprintf("Template %q saved", name), false)
 }
 
-// handleConfigProviderSave is the schema-driven save path for a single
-// provider's inline card form. Mirrors handleConfigTemplateSave. Providers
-// inject ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN into every process/task/
-// template/session that opts into them at launch, so a restart is always
-// flagged.
-func (s *Server) handleConfigProviderSave(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	s.applySection(w, r, schema.SectionProvider,
-		func(cfg *config.Config) (any, bool) {
-			p, ok := cfg.Providers[name]
-			return &p, ok
-		},
-		func(cfg *config.Config, v any) { cfg.Providers[name] = *(v.(*config.ProviderConfig)) },
-		fmt.Sprintf("Provider %q saved", name), true)
-}
-
 // handleConfigWebSave is the schema-driven save path for the Web UI card on
 // /config/settings. cfg.Web is directly addressable (like cfg.Defaults), so
 // this follows handleConfigDefaultsSave's no-op-put pattern rather than the
-// map-entry copy-then-write-back pattern providers/hosts use. Port/bind/
-// allowed_hosts changes can affect how the running web server is reachable,
-// so a restart is always flagged (matches the schema.SectionWeb Warning
-// strings on those fields).
+// map-entry copy-then-write-back pattern hosts use. Port/bind/allowed_hosts
+// changes can affect how the running web server is reachable, so a restart
+// is always flagged (matches the schema.SectionWeb Warning strings on those
+// fields).
 func (s *Server) handleConfigWebSave(w http.ResponseWriter, r *http.Request) {
 	s.applySection(w, r, schema.SectionWeb,
 		func(cfg *config.Config) (any, bool) { return &cfg.Web, true },
@@ -190,8 +174,8 @@ func (s *Server) handleConfigClientSave(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleConfigHostSave is the schema-driven save path for a single remote
-// host's inline card form. Mirrors handleConfigProviderSave's map-entry
-// copy-then-write-back shape. Host connection details (ssh, ssh_args,
+// host's inline card form. Uses the same map-entry copy-then-write-back
+// shape as handleConfigSessionSave. Host connection details (ssh, ssh_args,
 // leo_path, tmux_path) only affect future `leo agent` dispatch to that host,
 // not the running service, so no restart is flagged.
 func (s *Server) handleConfigHostSave(w http.ResponseWriter, r *http.Request) {
@@ -206,10 +190,10 @@ func (s *Server) handleConfigHostSave(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConfigSessionSave is the schema-driven save path for a single
-// persistent session's inline card form. Mirrors handleConfigProviderSave's
-// map-entry copy-then-write-back shape. Sessions boot lazily on first use —
-// there is no long-running process for a config change to invalidate — so
-// unlike processes this never flags a restart.
+// persistent session's inline card form. Uses the same map-entry
+// copy-then-write-back shape as handleConfigHostSave. Sessions boot lazily
+// on first use — there is no long-running process for a config change to
+// invalidate — so unlike processes this never flags a restart.
 func (s *Server) handleConfigSessionSave(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	s.applySection(w, r, schema.SectionSession,

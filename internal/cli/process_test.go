@@ -366,8 +366,8 @@ func TestProcessAdd_NonTTY_UsesFlagsOnly(t *testing.T) {
 	if proc.Workspace != "" {
 		t.Errorf("workspace = %q, want empty (non-TTY, no flag)", proc.Workspace)
 	}
-	if proc.Agent != "" {
-		t.Errorf("agent = %q, want empty (non-TTY, no flag)", proc.Agent)
+	if proc.HarnessOptions != nil {
+		t.Errorf("harness_options = %v, want nil (non-TTY, no agent flag)", proc.HarnessOptions)
 	}
 	if !proc.Enabled {
 		t.Errorf("process should be enabled by default")
@@ -409,8 +409,8 @@ func TestProcessAdd_TTY_PromptsOnlyForMissingFlags(t *testing.T) {
 	if len(proc.Channels) != 0 {
 		t.Errorf("channels = %v, want empty (blank prompt)", proc.Channels)
 	}
-	if proc.Agent != "picky-agent" {
-		t.Errorf("agent = %q, want 'picky-agent' (from prompt)", proc.Agent)
+	if got, ok := proc.HarnessOptions["agent"].(string); !ok || got != "picky-agent" {
+		t.Errorf("harness_options[agent] = %v, want 'picky-agent' (from prompt)", proc.HarnessOptions["agent"])
 	}
 }
 

@@ -110,7 +110,6 @@ func TestResolveSessionProcess(t *testing.T) {
 				Workspace: "/tmp/bot",
 				Model:     "sonnet",
 				Channels:  []string{"plugin:slack@official"},
-				Agent:     "orchestrator",
 			},
 		},
 		Tasks: map[string]TaskConfig{
@@ -134,9 +133,9 @@ func TestResolveSessionProcess(t *testing.T) {
 	if sess.Workspace != "/tmp/bot" {
 		t.Fatalf("workspace not threaded from process: %+v", sess)
 	}
-	if sess.Agent != "orchestrator" {
-		t.Fatalf("agent not threaded from process: %+v", sess)
-	}
+	// Agent/permission_mode/etc. live in harness_options now and are
+	// decoded by the consumer, not threaded through SessionConfig — see
+	// ResolveSession's comment.
 	if len(sess.Channels) != 1 || sess.Channels[0] != "plugin:slack@official" {
 		t.Fatalf("channels not threaded from process: %+v", sess.Channels)
 	}

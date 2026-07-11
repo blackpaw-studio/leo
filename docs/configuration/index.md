@@ -16,7 +16,8 @@ leo --config /path/to/leo.yaml <command>
 defaults:
   model: sonnet
   max_turns: 15
-  remote_control: true
+  harness_options:
+    remote_control: true
 
 processes:
   assistant:
@@ -42,7 +43,14 @@ tasks:
 
 ### `defaults`
 
-Default model, max turns, and other settings applied to all processes and tasks unless overridden.
+Default model, max turns, harness, and other settings applied to all processes and tasks unless overridden.
+
+### `harness` / `harness_options`
+
+Every scope picks a coding-agent adapter (`harness:`, `claude` today) and
+configures it through a strictly validated `harness_options:` map. See
+[Harnesses](harnesses.md) for the full config shape, cascade rules, and the
+`claude` option reference.
 
 ### `processes`
 

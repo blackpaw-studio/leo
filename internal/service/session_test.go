@@ -33,7 +33,13 @@ func TestSessionTmuxName(t *testing.T) {
 func TestSessionSpecsFromConfigExplicit(t *testing.T) {
 	cfg := &config.Config{
 		Sessions: map[string]config.SessionConfig{
-			"explicit": {Workspace: "/tmp/explicit", Model: "sonnet"},
+			"explicit": {
+				Workspace: "/tmp/explicit",
+				Model:     "sonnet",
+				HarnessOptions: map[string]any{
+					"permission_mode": "acceptEdits",
+				},
+			},
 		},
 	}
 	specs, err := SessionSpecsFromConfig(cfg)
@@ -45,6 +51,35 @@ func TestSessionSpecsFromConfigExplicit(t *testing.T) {
 	}
 	if specs[0].Name != "explicit" || specs[0].Workdir != "/tmp/explicit" {
 		t.Fatalf("explicit spec wrong: %+v", specs[0])
+	}
+	if specs[0].PermissionMode != "acceptEdits" {
+		t.Fatalf("expected permission mode decoded from harness_options, got %+v", specs[0])
+	}
+}
+
+// TestSessionSpecsFromConfigExplicitDefaultsDoNotLeak verifies that
+// defaults.harness_options do NOT cascade into explicit sessions —
+// SessionHarnessOptions intentionally does not inherit defaults.
+func TestSessionSpecsFromConfigExplicitDefaultsDoNotLeak(t *testing.T) {
+	cfg := &config.Config{
+		Defaults: config.DefaultsConfig{
+			HarnessOptions: map[string]any{
+				"permission_mode": "acceptEdits",
+			},
+		},
+		Sessions: map[string]config.SessionConfig{
+			"explicit": {Workspace: "/tmp/explicit", Model: "sonnet"},
+		},
+	}
+	specs, err := SessionSpecsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	if specs[0].PermissionMode != "" {
+		t.Fatalf("expected defaults.harness_options NOT to leak into explicit session, got PermissionMode=%q", specs[0].PermissionMode)
 	}
 }
 
@@ -67,6 +102,87 @@ func TestSessionSpecsFromConfigImplicit(t *testing.T) {
 	}
 	if specs[0].Name != "morning" || specs[0].Workdir != "/tmp/morning" {
 		t.Fatalf("implicit spec wrong: %+v", specs[0])
+	}
+}
+
+// TestSessionSpecsFromConfigImplicitCopiesTaskEnv verifies task.Env reaches
+// the implicit session's SessionSpec as an independent copy (not an alias
+// of the config map), so a dedicated persistent task can target a custom
+// endpoint via env: the same way an explicit session or process can.
+func TestSessionSpecsFromConfigImplicitCopiesTaskEnv(t *testing.T) {
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"morning": {
+				Runtime:   "persistent",
+				Workspace: "/tmp/morning",
+				Model:     "sonnet",
+				Env: map[string]string{
+					"ANTHROPIC_BASE_URL": "https://x.example",
+				},
+			},
+		},
+	}
+	specs, err := SessionSpecsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 implicit spec, got %d: %+v", len(specs), specs)
+	}
+	if got := specs[0].Env["ANTHROPIC_BASE_URL"]; got != "https://x.example" {
+		t.Fatalf("expected task.Env to reach implicit session spec, got %+v", specs[0].Env)
+	}
+	// Mutating the returned spec's env must not alias the config's map.
+	specs[0].Env["ANTHROPIC_BASE_URL"] = "mutated"
+	if cfg.Tasks["morning"].Env["ANTHROPIC_BASE_URL"] != "https://x.example" {
+		t.Fatal("implicit session Env aliases the task config's Env map")
+	}
+}
+
+// TestSessionSpecsFromConfigImplicitTaskOptionsReachSpecButDefaultsDoNot
+// verifies preserved quirk #2: an implicit session reads the task's OWN
+// harness_options (no defaults cascade), matching SessionHarnessOptions'
+// own-map semantics for explicit sessions.
+func TestSessionSpecsFromConfigImplicitTaskOptionsReachSpecButDefaultsDoNot(t *testing.T) {
+	cfg := &config.Config{
+		Defaults: config.DefaultsConfig{
+			HarnessOptions: map[string]any{
+				"permission_mode": "acceptEdits",
+			},
+		},
+		Tasks: map[string]config.TaskConfig{
+			"morning": {
+				Runtime:   "persistent",
+				Workspace: "/tmp/morning",
+				Model:     "sonnet",
+				HarnessOptions: map[string]any{
+					"permission_mode": "bypassPermissions",
+				},
+			},
+			"evening": {
+				Runtime:   "persistent",
+				Workspace: "/tmp/evening",
+				Model:     "sonnet",
+				// no task-level harness_options — must NOT inherit defaults'.
+			},
+		},
+	}
+	specs, err := SessionSpecsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 implicit specs, got %d: %+v", len(specs), specs)
+	}
+	byName := map[string]SessionSpec{}
+	for _, s := range specs {
+		byName[s.Name] = s
+	}
+	if got := byName["morning"].PermissionMode; got != "bypassPermissions" {
+		t.Fatalf("expected task-level harness_options to reach implicit session, got PermissionMode=%q", got)
+	}
+	if got := byName["evening"].PermissionMode; got != "" {
+		t.Fatalf("expected defaults.harness_options NOT to leak into implicit session with no own options, got PermissionMode=%q", got)
 	}
 }
 
@@ -126,72 +242,5 @@ func TestSessionSpecsFromConfigDefaultsWorkspace(t *testing.T) {
 	}
 	if want := cfg.DefaultWorkspace(); specs[0].Workdir != want {
 		t.Fatalf("workdir = %q, want default %q", specs[0].Workdir, want)
-	}
-}
-
-func TestSessionSpecsProviderEnv(t *testing.T) {
-	t.Setenv("LEO_TEST_GLM_KEY", "sk-glm")
-	cfg := &config.Config{
-		Providers: map[string]config.ProviderConfig{
-			"glm": {BaseURL: "https://x.example", APIKeyEnv: "LEO_TEST_GLM_KEY", DefaultModel: "glm-5.2"},
-		},
-		Sessions: map[string]config.SessionConfig{
-			"research": {Workspace: "/tmp/w", Provider: "glm", Env: map[string]string{"FOO": "bar"}},
-		},
-	}
-	specs, err := SessionSpecsFromConfig(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(specs) != 1 {
-		t.Fatalf("got %d specs", len(specs))
-	}
-	s := specs[0]
-	if s.Env["ANTHROPIC_BASE_URL"] != "https://x.example" || s.Env["ANTHROPIC_AUTH_TOKEN"] != "sk-glm" {
-		t.Errorf("provider env missing: %v", s.Env)
-	}
-	if s.Env["FOO"] != "bar" {
-		t.Errorf("configured env lost: %v", s.Env)
-	}
-	if s.Model != "glm-5.2" {
-		t.Errorf("Model = %q, want provider default", s.Model)
-	}
-}
-
-func TestSessionSpecsSkipsUnresolvableProvider(t *testing.T) {
-	cfg := &config.Config{
-		Providers: map[string]config.ProviderConfig{
-			"glm": {BaseURL: "https://x.example", APIKeyEnv: "LEO_TEST_DEFINITELY_UNSET_KEY"},
-		},
-		Sessions: map[string]config.SessionConfig{
-			"broken": {Workspace: "/tmp/w", Provider: "glm"},
-			"fine":   {Workspace: "/tmp/w2"},
-		},
-	}
-	specs, err := SessionSpecsFromConfig(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(specs) != 1 || specs[0].Name != "fine" {
-		t.Fatalf("expected only fine to survive, got %+v", specs)
-	}
-}
-
-func TestImplicitSessionProviderEnv(t *testing.T) {
-	t.Setenv("LEO_TEST_GLM_KEY", "sk-glm")
-	cfg := &config.Config{
-		Providers: map[string]config.ProviderConfig{
-			"glm": {BaseURL: "https://x.example", APIKeyEnv: "LEO_TEST_GLM_KEY"},
-		},
-		Tasks: map[string]config.TaskConfig{
-			"digest": {Schedule: "0 * * * *", PromptFile: "p.md", Runtime: "persistent", Provider: "glm"},
-		},
-	}
-	specs, err := SessionSpecsFromConfig(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(specs) != 1 || specs[0].Env["ANTHROPIC_AUTH_TOKEN"] != "sk-glm" {
-		t.Fatalf("implicit session missing provider env: %+v", specs)
 	}
 }

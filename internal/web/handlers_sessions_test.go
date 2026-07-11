@@ -12,11 +12,11 @@ import (
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
-// TestSessionCRUD mirrors TestProviderCRUD's add/edit/delete shape for
-// cfg.Sessions. Like providers (and unlike hosts), Config.Validate()
-// requires sessions.<name>.workspace to be non-empty, so add seeds a real,
-// working default (cfg.DefaultWorkspace()) rather than an obviously-fake
-// placeholder — the new session actually boots there until the operator
+// TestSessionCRUD exercises add/edit/delete for cfg.Sessions. Unlike hosts,
+// Config.Validate() requires sessions.<name>.workspace to be non-empty, so
+// add seeds a real, working default (cfg.DefaultWorkspace()) rather than an
+// obviously-fake placeholder — the new session actually boots there until
+// the operator
 // picks a workspace of their own via the card's inline form.
 func TestSessionCRUD(t *testing.T) {
 	s, dir := newTestServer(t)

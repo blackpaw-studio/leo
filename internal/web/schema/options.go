@@ -40,8 +40,6 @@ func (o OptionSources) For(name string) []Option {
 			{"dontAsk", "dontAsk"}, {"plan", "plan"}}
 	case "runtimes":
 		return []Option{{"oneshot", "oneshot"}, {"persistent", "persistent"}}
-	case "providers":
-		return namedKeys(keysOf(o.Cfg.Providers), "inherit (Anthropic)")
 	case "sessions":
 		return namedKeys(keysOf(o.Cfg.Sessions), "derived per task")
 	case "templates":

@@ -15,27 +15,27 @@ var (
 	userHomeDir = os.UserHomeDir
 )
 
-// ClaudeResult holds the result of checking for the claude CLI.
-type ClaudeResult struct {
+// BinaryResult holds the result of checking for a harness CLI binary.
+type BinaryResult struct {
 	Path    string
 	Version string
 	OK      bool
 }
 
-// CheckClaude checks if the claude CLI is installed and reachable.
-func CheckClaude() ClaudeResult {
-	path, err := lookPath("claude")
+// CheckBinary checks if the named CLI binary is installed and reachable.
+func CheckBinary(name string) BinaryResult {
+	path, err := lookPath(name)
 	if err != nil {
-		return ClaudeResult{}
+		return BinaryResult{}
 	}
 
 	output, err := runCommand(path, "--version")
 	if err != nil {
-		return ClaudeResult{Path: path, OK: true}
+		return BinaryResult{Path: path, OK: true}
 	}
 
 	version := strings.TrimSpace(string(output))
-	return ClaudeResult{Path: path, Version: version, OK: true}
+	return BinaryResult{Path: path, Version: version, OK: true}
 }
 
 // CheckTmux checks if tmux is installed and reachable.

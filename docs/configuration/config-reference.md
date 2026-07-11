@@ -10,37 +10,13 @@ Settings inherited by all processes, tasks, and templates unless overridden.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `model` | string | No | Default Claude model (`sonnet`, `opus`, `haiku`). Defaults to `sonnet`. |
+| `model` | string | No | Default model, validated by the resolved harness (`claude`: `sonnet`, `opus`, `haiku`). Defaults to `sonnet`. |
 | `max_turns` | int | No | Default maximum agent turns per execution. Defaults to `15`. |
-| `permission_mode` | string | No | Default permission mode (`default`, `acceptEdits`, `auto`, `bypassPermissions`, `dontAsk`, `plan`). |
-| `bypass_permissions` | bool | No | Legacy: pass `--dangerously-skip-permissions`. Prefer `permission_mode`. Default `false`. |
-| `remote_control` | bool | No | Enable `--remote-control` for web/mobile access. Default `false`. |
+| `harness` | string | No | Adapter name for this scope and everything that cascades from it. Defaults to `claude`. See [Harnesses](harnesses.md). |
+| `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
 | `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is suspended. Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
-| `allowed_tools` | list | No | Default tool whitelist (passed via `--allowed-tools`). |
-| `disallowed_tools` | list | No | Default tool blacklist (passed via `--disallowed-tools`). |
-| `append_system_prompt` | string | No | Extra system prompt appended to all processes/tasks. |
-| `provider` | string | No | Default third-party provider name (key into `providers`). Empty means Anthropic. See [Providers](providers.md). |
 
-## `providers`
-
-Named third-party Anthropic-Messages-compatible endpoints (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …). Referenced by name from the `provider` field on `defaults`, `processes.*`, `templates.*`, `sessions.*`, and `tasks.*`. See [Providers](providers.md) for the full guide.
-
-```yaml
-providers:
-  glm:
-    base_url: https://api.z.ai/api/coding/paas/v4
-    api_key_env: GLM_API_KEY
-    default_model: glm-5.2
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `base_url` | string | Yes | Anthropic-compatible endpoint (must be an http or https URL). Injected as `ANTHROPIC_BASE_URL`. |
-| `api_key_env` | string | One of | Name of an environment variable holding the API key. Injected (trimmed) as `ANTHROPIC_AUTH_TOKEN`. |
-| `api_key_cmd` | string | One of | Shell command whose trimmed stdout is the API key. Resolved fresh on every spawn. |
-| `default_model` | string | No | Model used when the resolving scope doesn't set `model:`. |
-
-Exactly one of `api_key_env` / `api_key_cmd` is required per provider. Keys are never written to `leo.yaml` or Leo's state files. If the key can't be resolved at spawn time, interactive commands fail with an error; at daemon boot the affected process/session/agent is skipped with a warning while everything else starts normally.
+Custom Anthropic-compatible endpoints (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …) are configured via each scope's own `env:` map (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`) — see [Harnesses → providers is gone](harnesses.md#providers-is-gone).
 
 ## `web`
 
@@ -174,28 +150,23 @@ Each process is a named entry under the `processes` map. Processes define long-r
 processes:
   assistant:
     channels: [plugin:telegram@claude-plugins-official]
-    remote_control: true
+    harness_options:
+      remote_control: true
     enabled: true
 ```
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `workspace` | string | No | `~/.leo/workspace/` | Working directory for this process. |
-| `channels` | list | No | -- | Channel plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). |
+| `channels` | list | No | -- | Channel plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). Only valid on a channel-supporting harness. |
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
-| `model` | string | No | `defaults.model` | Claude model override. |
-| `provider` | string | No | `defaults.provider` | Third-party provider name (key into `providers`). Cascade: `model` → provider's `default_model` → `defaults.model` → `sonnet`. |
+| `model` | string | No | `defaults.model` | Model override, validated by the resolved harness. |
+| `harness` | string | No | `defaults.harness` | Adapter override for this process. See [Harnesses](harnesses.md). |
+| `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
-| `agent` | string | No | -- | Run as a specific agent definition. |
-| `permission_mode` | string | No | `defaults.permission_mode` | Permission mode override. |
-| `bypass_permissions` | bool | No | `defaults.bypass_permissions` | Legacy: skip permissions. |
-| `remote_control` | bool | No | `defaults.remote_control` | Enable remote control. |
 | `mcp_config` | string | No | `<workspace>/config/mcp-servers.json` | Path to MCP config file. |
 | `add_dirs` | list | No | -- | Additional directories passed via `--add-dir`. |
 | `env` | map | No | -- | Environment variables for the claude process. |
-| `allowed_tools` | list | No | `defaults.allowed_tools` | Tool whitelist. |
-| `disallowed_tools` | list | No | `defaults.disallowed_tools` | Tool blacklist. |
-| `append_system_prompt` | string | No | `defaults.append_system_prompt` | Extra system prompt. |
 | `enabled` | bool | No | `false` | Whether the service should start this process. |
 
 ## `tasks`
@@ -217,17 +188,14 @@ tasks:
 | `schedule` | string | Yes | -- | 5-field cron expression. |
 | `timezone` | string | No | System default | IANA timezone (e.g., `America/New_York`). |
 | `prompt_file` | string | Yes | -- | Path to prompt file, relative to workspace. |
-| `model` | string | No | `defaults.model` | Claude model override. |
-| `provider` | string | No | `defaults.provider` | Third-party provider name (key into `providers`). Cascade: `model` → provider's `default_model` → `defaults.model` → `sonnet`. |
+| `model` | string | No | `defaults.model` | Model override, validated by the resolved harness. |
+| `harness` | string | No | `defaults.harness` | Adapter override for this task. See [Harnesses](harnesses.md). |
+| `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `bypass_permissions` at task scope is honored (not defaults-only). See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
 | `timeout` | string | No | `30m` | Max duration before kill (e.g., `30m`, `1h`). |
 | `retries` | int | No | `0` | Retry attempts on failure. |
-| `channels` | list | No | -- | Channel plugin IDs used by `notify_on_fail`. |
+| `channels` | list | No | -- | Channel plugin IDs used by `notify_on_fail`. Only valid on a channel-supporting harness. |
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
-| `permission_mode` | string | No | `defaults.permission_mode` | Permission mode override. |
-| `allowed_tools` | list | No | `defaults.allowed_tools` | Tool whitelist. |
-| `disallowed_tools` | list | No | `defaults.disallowed_tools` | Tool blacklist. |
-| `append_system_prompt` | string | No | `defaults.append_system_prompt` | Extra system prompt. |
 | `notify_on_fail` | bool | No | `false` | Spawn a short child `claude` invocation on non-zero exit, instructing it to notify the configured channels. Requires `channels:` to be set. |
 | `enabled` | bool | No | `false` | Whether the scheduler should run this task. |
 | `silent` | bool | No | `false` | Prepend silent-mode preamble to prompt. |
@@ -244,28 +212,24 @@ Templates are reusable blueprints for spawning ephemeral agents. Dispatch them v
 templates:
   coding:
     model: sonnet
-    remote_control: true
-    permission_mode: auto
     workspace: ~/agents
+    harness_options:
+      remote_control: true
+      permission_mode: auto
 ```
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `workspace` | string | No | `~/.leo/agents/` | Base directory for agent workspaces. Repos are cloned as subdirectories. |
-| `channels` | list | No | -- | Channel plugin IDs for spawned agents. |
+| `channels` | list | No | -- | Channel plugin IDs for spawned agents. Only valid on a channel-supporting harness. |
 | `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
-| `model` | string | No | `defaults.model` | Claude model. |
-| `provider` | string | No | `defaults.provider` | Third-party provider name (key into `providers`). Cascade: `model` → provider's `default_model` → `defaults.model` → `sonnet`. |
+| `model` | string | No | `defaults.model` | Model, validated by the resolved harness. |
+| `harness` | string | No | `defaults.harness` | Adapter override for this template. See [Harnesses](harnesses.md). |
+| `harness_options` | map | No | merged with `defaults.harness_options` (same harness only), **except `remote_control`** | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `remote_control` is template-own-only (no inheritance from `defaults.harness_options.remote_control`) and defaults to `true`. See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns. |
-| `agent` | string | No | -- | Agent definition to use. |
-| `remote_control` | bool | No | `true` | Enable remote control (defaults to on for templates). |
 | `mcp_config` | string | No | -- | Path to MCP config file. |
 | `add_dirs` | list | No | -- | Additional directories. |
 | `env` | map | No | -- | Environment variables. |
-| `permission_mode` | string | No | `defaults.permission_mode` | Permission mode. |
-| `allowed_tools` | list | No | `defaults.allowed_tools` | Tool whitelist. |
-| `disallowed_tools` | list | No | `defaults.disallowed_tools` | Tool blacklist. |
-| `append_system_prompt` | string | No | `defaults.append_system_prompt` | Extra system prompt. |
 | `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are suspended. Empty inherits the default. |
 
 When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, or `leo agent spawn coding --repo owner/repo`), Leo clones the repo into `<workspace>/<repo>` using `gh`. The agent session is named `leo-<template>-<owner>-<repo>`.

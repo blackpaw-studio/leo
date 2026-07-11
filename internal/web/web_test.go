@@ -195,7 +195,7 @@ func TestPageRoutes(t *testing.T) {
 
 	pages := []string{
 		"/tasks", "/agents", "/processes", "/sessions",
-		"/config/defaults", "/config/templates", "/config/providers",
+		"/config/defaults", "/config/templates",
 		"/config/settings", "/service",
 	}
 	for _, p := range pages {
@@ -217,6 +217,20 @@ func TestPageRoutes(t *testing.T) {
 	s.httpServer.Handler.ServeHTTP(w, req)
 	if w.Code != http.StatusSeeOther && w.Code != http.StatusFound {
 		t.Errorf("GET / = %d, want redirect to /tasks", w.Code)
+	}
+}
+
+// TestPageConfigProvidersRemoved guards against the retired standalone
+// providers page reappearing: the route no longer exists, so it must 404
+// rather than fall through to a stale handler.
+func TestPageConfigProvidersRemoved(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest("GET", "/config/providers", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("GET /config/providers = %d, want 404", w.Code)
 	}
 }
 

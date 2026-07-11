@@ -25,7 +25,6 @@ import (
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
-	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/update"
 	"github.com/blackpaw-studio/leo/internal/web"
@@ -153,10 +152,6 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	}
 	defer releaseTaskLock(lockPath)
 
-	provEnv, err := provider.Env(cfg, cfg.TaskProvider(task))
-	if err != nil {
-		return fmt.Errorf("resolving provider env: %w", err)
-	}
 	// leoEnv rides along on every claude invocation for this task (main
 	// attempts and the notify-on-fail child alike) whenever the leo MCP
 	// server was actually wired into the args by buildArgs; see leoMCPEnv.
@@ -165,7 +160,10 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	// per attempt.
 	leoEnv, leoMCPOK := leoMCPEnv(cfg, taskName)
 	warnLeoMCPSkipped(cfg, taskName, leoMCPOK)
-	spawnEnv := mergeEnvMaps(provEnv, leoEnv)
+	// task.Env lets a task target a custom endpoint (ANTHROPIC_BASE_URL/
+	// ANTHROPIC_AUTH_TOKEN) or inject other env vars; leoEnv wins on key
+	// collision so the leo MCP wiring can never be shadowed by task config.
+	spawnEnv := mergeEnvMaps(task.Env, leoEnv)
 
 	prompt, err := assemblePrompt(cfg, task)
 	if err != nil {
@@ -913,6 +911,23 @@ func mergeEnvMaps(maps ...map[string]string) map[string]string {
 }
 
 func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoMCPOK bool) []string {
+	h, err := harness.Get(cfg.TaskHarness(task))
+	if err != nil {
+		log.Printf("[task:%s] resolving harness: %v", taskName, err)
+		return nil
+	}
+	decoded, err := h.DecodeOptions(cfg.TaskHarnessOptions(task))
+	if err != nil {
+		log.Printf("[task:%s] decoding harness options: %v", taskName, err)
+		return nil
+	}
+	opts, ok := decoded.(claudeharness.Options)
+	if !ok {
+		// Non-claude tasks arrive with Plan 4 (session drivers).
+		log.Printf("[task:%s] harness %q cannot run tasks yet", taskName, h.Name())
+		return nil
+	}
+
 	mcpConfig := ""
 	if p := cfg.TaskMCPConfigPath(task); config.HasMCPServers(p) {
 		mcpConfig = p
@@ -928,6 +943,11 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 	if sessionID != "" {
 		sess = harness.SessionState{Mode: harness.SessionResume, ID: sessionID}
 	}
+
+	opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
+	opts.MCPConfigPath = mcpConfig
+	opts.LeoMCPArgs = leoMCPArgs
+
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindTask,
 		Name:        taskName,
@@ -937,19 +957,11 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		DevChannels: task.DevChannels,
 		Prompt:      prompt,
 		Session:     sess,
-		Options: claudeharness.Options{
-			PermissionMode:     harness.FallbackString(task.PermissionMode, cfg.Defaults.PermissionMode),
-			BypassPermissions:  cfg.Defaults.BypassPermissions,
-			AllowedTools:       harness.FallbackSlice(task.AllowedTools, cfg.Defaults.AllowedTools),
-			DisallowedTools:    harness.FallbackSlice(task.DisallowedTools, cfg.Defaults.DisallowedTools),
-			AppendSystemPrompt: leomcp.MergeSystemPrompt(cfg, harness.FallbackString(task.AppendSystemPrompt, cfg.Defaults.AppendSystemPrompt)),
-			MCPConfigPath:      mcpConfig,
-			LeoMCPArgs:         leoMCPArgs,
-		},
+		Options:     opts,
 	}
-	args, err := claudeharness.Claude{}.Args(spec)
+	args, err := h.Args(spec)
 	if err != nil {
-		log.Printf("[task:%s] building claude args: %v", taskName, err)
+		log.Printf("[task:%s] building %s args: %v", taskName, h.Name(), err)
 		return nil
 	}
 	return args

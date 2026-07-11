@@ -11,7 +11,7 @@ import (
 )
 
 // BuildTemplateArgs assembles the claude CLI arguments for an agent spawned from a template.
-// The override cascade is template → provider default_model → defaults → built-in default.
+// The override cascade is template → defaults → built-in default.
 //
 // When prompt is non-empty it is appended as the trailing positional argument.
 // Claude Code treats a bare positional (with no -p/--print) as the opening turn
@@ -31,9 +31,21 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 		safeDirs = append(safeDirs, dir)
 	}
 
-	rc := true
-	if tmpl.RemoteControl != nil {
-		rc = *tmpl.RemoteControl
+	h, err := harness.Get(cfg.TemplateHarness(tmpl))
+	if err != nil {
+		log.Printf("[agent:%s] resolving harness: %v", agentName, err)
+		return nil
+	}
+	decoded, err := h.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
+	if err != nil {
+		log.Printf("[agent:%s] decoding harness options: %v", agentName, err)
+		return nil
+	}
+	opts, ok := decoded.(claudeharness.Options)
+	if !ok {
+		// Non-claude templates arrive with Plan 4 (session drivers).
+		log.Printf("[agent:%s] harness %q cannot spawn agents yet", agentName, h.Name())
+		return nil
 	}
 
 	mcpConfig := ""
@@ -55,6 +67,17 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 		maxTurns = config.DefaultMaxTurns
 	}
 
+	// Agents default remote_control to true, and only the template's own
+	// options can turn it off — the defaults layer never applied to
+	// templates pre-migration and still doesn't (see plan: preserved quirks).
+	opts.RemoteControl = true
+	if v, ok := tmpl.HarnessOptions["remote_control"].(bool); ok {
+		opts.RemoteControl = v
+	}
+	opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
+	opts.MCPConfigPath = mcpConfig
+	opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+
 	spec := harness.LaunchSpec{
 		Kind:        harness.KindAgent,
 		Name:        agentName,
@@ -65,20 +88,11 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 		Channels:    tmpl.Channels,
 		DevChannels: tmpl.DevChannels,
 		Prompt:      prompt,
-		Options: claudeharness.Options{
-			PermissionMode:     harness.FallbackString(tmpl.PermissionMode, cfg.Defaults.PermissionMode),
-			RemoteControl:      rc,
-			AgentFile:          tmpl.Agent,
-			AllowedTools:       harness.FallbackSlice(tmpl.AllowedTools, cfg.Defaults.AllowedTools),
-			DisallowedTools:    harness.FallbackSlice(tmpl.DisallowedTools, cfg.Defaults.DisallowedTools),
-			AppendSystemPrompt: leomcp.MergeSystemPrompt(cfg, harness.FallbackString(tmpl.AppendSystemPrompt, cfg.Defaults.AppendSystemPrompt)),
-			MCPConfigPath:      mcpConfig,
-			LeoMCPArgs:         leomcp.AppendArg(nil, cfg),
-		},
+		Options:     opts,
 	}
-	args, err := claudeharness.Claude{}.Args(spec)
+	args, err := h.Args(spec)
 	if err != nil {
-		log.Printf("[agent:%s] building claude args: %v", agentName, err)
+		log.Printf("[agent:%s] building %s args: %v", agentName, h.Name(), err)
 		return nil
 	}
 	return args

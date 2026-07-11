@@ -217,6 +217,89 @@ func TestAgentArgs(t *testing.T) {
 	}
 }
 
+func TestSessionKindArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		spec harness.LaunchSpec
+		opts Options
+		want []string
+	}{
+		{
+			name: "full-featured",
+			spec: harness.LaunchSpec{
+				Kind:      harness.KindSession,
+				Model:     "opus",
+				Workspace: "/ws",
+				AddDirs:   []string{"/extra1", "/extra2"},
+				Channels:  []string{"plugin:telegram@official", "plugin:slack@official"},
+				Session:   harness.SessionState{Mode: harness.SessionResume, ID: "csid-1"},
+			},
+			opts: Options{
+				PermissionMode:     "acceptEdits",
+				AgentFile:          "/agents/foo.md",
+				AllowedTools:       []string{"Read", "Write"},
+				DisallowedTools:    []string{"Bash"},
+				AppendSystemPrompt: "extra prompt",
+			},
+			want: []string{
+				"--model", "opus",
+				"--resume", "csid-1",
+				"--permission-mode", "acceptEdits",
+				"--channels", "plugin:telegram@official",
+				"--channels", "plugin:slack@official",
+				"--agent", "/agents/foo.md",
+				"--add-dir", "/ws",
+				"--add-dir", "/extra1",
+				"--add-dir", "/extra2",
+				"--allowed-tools", "Read,Write",
+				"--disallowed-tools", "Bash",
+				"--append-system-prompt", "extra prompt",
+			},
+		},
+		{
+			name: "minimal (only workdir)",
+			spec: harness.LaunchSpec{
+				Kind:      harness.KindSession,
+				Workspace: "/ws",
+			},
+			opts: Options{},
+			want: []string{
+				"--add-dir", "/ws",
+			},
+		},
+		{
+			name: "empty model",
+			spec: harness.LaunchSpec{
+				Kind:      harness.KindSession,
+				Model:     "",
+				Workspace: "/ws",
+				Channels:  []string{"plugin:telegram@official"},
+			},
+			opts: Options{
+				PermissionMode: "acceptEdits",
+			},
+			want: []string{
+				"--permission-mode", "acceptEdits",
+				"--channels", "plugin:telegram@official",
+				"--add-dir", "/ws",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.spec.Options = tt.opts
+			got, err := Claude{}.Args(tt.spec)
+			if err != nil {
+				t.Fatalf("Args() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Args() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTaskArgs(t *testing.T) {
 	tests := []struct {
 		name string

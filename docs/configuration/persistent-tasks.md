@@ -87,16 +87,12 @@ If a task has `notify_on_fail: true` and fails (timeout, queue full, etc.), leo 
 | Field                  | Type            | Notes                                                          |
 | ---------------------- | --------------- | -------------------------------------------------------------- |
 | `workspace`            | path            | Required. Where the session's `.claude/` lives.                |
-| `model`                | string          | `sonnet` / `opus` / `haiku`.                                   |
-| `provider`             | string          | Optional; named entry from `providers` to run this session against a third-party Anthropic-compatible endpoint; see [providers.md](providers.md). |
-| `agent`                | string          | Optional agent template.                                       |
-| `permission_mode`      | string          | One of the standard claude permission modes.                   |
-| `allowed_tools`        | list            | Restrict tool surface.                                         |
-| `disallowed_tools`     | list            | Block specific tools.                                          |
-| `append_system_prompt` | string          | Appended to the system prompt.                                 |
+| `model`                | string          | `sonnet` / `opus` / `haiku`, validated by the resolved harness. |
+| `harness`              | string          | Adapter override for this session; cascades from `defaults.harness`. See [Harnesses](harnesses.md). |
+| `harness_options`      | map             | Adapter-specific options — for `claude`: `agent`, `permission_mode`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. **Sessions never inherit `defaults.harness_options`** — set every option you want directly here. See [Harnesses](harnesses.md). |
 | `add_dirs`             | list            | Extra `--add-dir` paths.                                       |
 | `channels`             | list            | Channel plugins loaded for the session.                        |
-| `env`                  | map[str]str     | Extra env vars passed to claude.                               |
+| `env`                  | map[str]str     | Extra env vars passed to claude — including `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` for a third-party endpoint; see [Harnesses → providers is gone](harnesses.md#providers-is-gone). |
 | `idle_timeout`         | duration string | Reserved for future lazy-session support.                      |
 
 ### New `tasks.<name>` fields

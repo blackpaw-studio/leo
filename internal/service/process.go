@@ -22,7 +22,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
-	"github.com/blackpaw-studio/leo/internal/provider"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/update"
@@ -455,10 +454,9 @@ func Status(workDir string) (string, error) {
 // the RestoreAgents path so the supervised processes and any ephemeral agents can
 // authenticate against the daemon's web API.
 //
-// sessionSpecs is computed once by the caller via SessionSpecsFromConfig (which
-// may shell out to resolve provider env) and threaded through here rather than
-// re-derived, so a daemon boot never resolves provider env for the same session
-// twice.
+// sessionSpecs is computed once by the caller via SessionSpecsFromConfig and
+// threaded through here rather than re-derived, so a daemon boot never
+// rebuilds the same session specs twice.
 func RunSupervised(claudePath string, processes []ProcessSpec, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
 	return supervisedExecFn(claudePath, processes, sessionSpecs, homePath, configPath, webToken)
 }
@@ -519,14 +517,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	}
 
 	// Restore ephemeral agents from previous run
-	resolveEnv := func(name string) (map[string]string, error) {
-		cfg, err := config.Load(configPath)
-		if err != nil {
-			return nil, fmt.Errorf("loading config: %w", err)
-		}
-		return provider.Env(cfg, name)
-	}
-	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, resolveEnv)
+	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor)
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}

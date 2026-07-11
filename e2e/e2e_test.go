@@ -162,7 +162,8 @@ func argValue(args []string, flag string) string {
 const minimalConfig = `defaults:
   model: sonnet
   max_turns: 15
-  bypass_permissions: true
+  harness_options:
+    bypass_permissions: true
 tasks:
   heartbeat:
     workspace: WORKSPACE_PLACEHOLDER

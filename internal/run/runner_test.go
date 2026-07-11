@@ -115,14 +115,17 @@ func TestAssemblePromptMissingFile(t *testing.T) {
 }
 
 func makeTestConfig(dir string, bypassPermissions bool) *config.Config {
-	return &config.Config{
+	cfg := &config.Config{
 		HomePath: dir,
 		Defaults: config.DefaultsConfig{
-			Model:             "sonnet",
-			MaxTurns:          15,
-			BypassPermissions: bypassPermissions,
+			Model:    "sonnet",
+			MaxTurns: 15,
 		},
 	}
+	if bypassPermissions {
+		cfg.Defaults.HarnessOptions = map[string]any{"bypass_permissions": true}
+	}
+	return cfg
 }
 
 func TestBuildArgs(t *testing.T) {
@@ -970,6 +973,71 @@ func TestRunPassesLeoMCPEnvToExecuteCommand(t *testing.T) {
 	}
 }
 
+// TestRunInjectsTaskEnvWithLeoMCPPrecedence verifies task.Env reaches the
+// spawned claude's environment (e.g. for targeting a custom endpoint via
+// ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN), and that the leo MCP env wins on
+// key collision so task config can never shadow the leo MCP wiring.
+func TestRunInjectsTaskEnvWithLeoMCPPrecedence(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspace")
+	os.MkdirAll(ws, 0755)
+	os.WriteFile(filepath.Join(ws, "task.md"), []byte("test prompt"), 0644)
+
+	cfg := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+		Web:      config.WebConfig{Enabled: true, Port: 8888},
+		Tasks: map[string]config.TaskConfig{
+			"mytask": {
+				PromptFile: "task.md",
+				Schedule:   "0 * * * *",
+				Enabled:    true,
+				Env: map[string]string{
+					"ANTHROPIC_BASE_URL":   "https://x.example",
+					"ANTHROPIC_AUTH_TOKEN": "sk-t",
+					"LEO_PROCESS_NAME":     "should-not-win",
+				},
+			},
+		},
+	}
+	os.MkdirAll(cfg.StatePath(), 0750)
+	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok-xyz"), 0600)
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "env")
+	}
+
+	if err := Run(cfg, "mytask", nil); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	logFiles, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
+	if len(logFiles) == 0 {
+		t.Fatal("no log files found")
+	}
+	logData, err := os.ReadFile(logFiles[0])
+	if err != nil {
+		t.Fatalf("reading log: %v", err)
+	}
+	got := string(logData)
+	if !strings.Contains(got, "ANTHROPIC_BASE_URL=https://x.example") {
+		t.Errorf("log missing task.Env ANTHROPIC_BASE_URL:\n%s", got)
+	}
+	if !strings.Contains(got, "ANTHROPIC_AUTH_TOKEN=sk-t") {
+		t.Errorf("log missing task.Env ANTHROPIC_AUTH_TOKEN:\n%s", got)
+	}
+	// leo MCP env wins on key collision.
+	if !strings.Contains(got, "LEO_PROCESS_NAME=task:mytask") {
+		t.Errorf("expected leo MCP env to win over task.Env on key collision:\n%s", got)
+	}
+	if strings.Contains(got, "LEO_PROCESS_NAME=should-not-win") {
+		t.Errorf("task.Env unexpectedly overrode leo MCP env:\n%s", got)
+	}
+}
+
 func TestExecuteCommandInjectsExtraEnv(t *testing.T) {
 	orig := execCommand
 	t.Cleanup(func() { execCommand = orig })
@@ -982,7 +1050,7 @@ func TestExecuteCommandInjectsExtraEnv(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "ANTHROPIC_BASE_URL=https://x.example") ||
 		!strings.Contains(string(out), "ANTHROPIC_AUTH_TOKEN=sk-t") {
-		t.Fatalf("provider env missing from spawned env:\n%s", out)
+		t.Fatalf("extra env missing from spawned env:\n%s", out)
 	}
 }
 
@@ -999,7 +1067,7 @@ func TestExecuteCommandNoExtraEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(out), "ANTHROPIC_BASE_URL=") {
-		t.Fatalf("unexpected provider env:\n%s", out)
+		t.Fatalf("unexpected extra env:\n%s", out)
 	}
 }
 

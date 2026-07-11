@@ -84,8 +84,8 @@ For each process, Leo builds `claude` arguments based on the process config:
 claude --channels <channels>               \
        --add-dir <workspace>               \
        --add-dir <extra-dirs...>           \    # if add_dirs configured
-       --remote-control <process-name>     \    # if remote_control enabled
-       --dangerously-skip-permissions      \    # if bypass_permissions enabled
+       --remote-control <process-name>     \    # if harness_options.remote_control enabled
+       --dangerously-skip-permissions      \    # if harness_options.bypass_permissions enabled
        --mcp-config <mcp-config-path>      \    # if MCP servers exist
        --session-id <id> | --resume <id>        # session persistence
 ```

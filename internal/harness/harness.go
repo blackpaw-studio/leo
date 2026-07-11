@@ -16,6 +16,7 @@ const (
 	KindProcess Kind = "process"
 	KindAgent   Kind = "agent"
 	KindTask    Kind = "task"
+	KindSession Kind = "session"
 )
 
 // SessionMode says how a launch relates to an existing session.
@@ -62,6 +63,23 @@ type Harness interface {
 	// SessionArgs renders just the session-selection flags, for callers
 	// that append session state after a pre-built arg list.
 	SessionArgs(s SessionState) []string
+
+	// ValidateModel reports whether the model name is acceptable for this
+	// harness. Empty string is always valid (harness default). The error
+	// text is embedded verbatim in config validation output, so phrase it
+	// as `%q is not valid (…)` with no leading field path.
+	ValidateModel(model string) error
+
+	// DecodeOptions strictly decodes a harness_options map into this
+	// adapter's typed options struct. Unknown keys and mistyped values are
+	// errors. Runtime-only fields (MCP paths, prefixes) are left zero for
+	// the caller to fill.
+	DecodeOptions(raw map[string]any) (any, error)
+
+	// SupportsChannels reports whether channel plugins can load in this
+	// harness. Only Claude Code hosts channel plugins; others message via
+	// leo's MCP tools.
+	SupportsChannels() bool
 }
 
 // FallbackString returns primary if non-empty, else fallback. Callers use

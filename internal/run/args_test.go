@@ -39,17 +39,21 @@ func TestBuildArgsCharacterization(t *testing.T) {
 			cfg: &config.Config{
 				HomePath: "/tmp/leo-home",
 				Defaults: config.DefaultsConfig{
-					Model:             "opus",
-					BypassPermissions: true,
-					AllowedTools:      []string{"Read", "Bash"},
+					Model: "opus",
+					HarnessOptions: map[string]any{
+						"bypass_permissions": true,
+						"allowed_tools":      []any{"Read", "Bash"},
+					},
 				},
 			},
 			task: config.TaskConfig{
-				Workspace:          "/tmp/ws",
-				Model:              "sonnet",
-				MaxTurns:           30,
-				DevChannels:        []string{"plugin:dev@local"},
-				AppendSystemPrompt: "be terse",
+				Workspace:   "/tmp/ws",
+				Model:       "sonnet",
+				MaxTurns:    30,
+				DevChannels: []string{"plugin:dev@local"},
+				HarnessOptions: map[string]any{
+					"append_system_prompt": "be terse",
+				},
 			},
 			prompt:    "nightly run",
 			sessionID: "sess-789",
@@ -71,12 +75,36 @@ func TestBuildArgsCharacterization(t *testing.T) {
 			name: "task permission mode wins over bypass",
 			cfg: &config.Config{
 				HomePath: "/tmp/leo-home",
-				Defaults: config.DefaultsConfig{Model: "opus", BypassPermissions: true},
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"bypass_permissions": true},
+				},
 			},
 			task: config.TaskConfig{
 				Workspace:      "/tmp/ws",
-				PermissionMode: "plan",
+				HarnessOptions: map[string]any{"permission_mode": "plan"},
 			},
+			prompt: "plan it",
+			want: []string{
+				"-p", "plan it",
+				"--model", "opus",
+				"--max-turns", "15",
+				"--output-format", "stream-json",
+				"--verbose",
+				"--permission-mode", "plan",
+				"--add-dir", "/tmp/ws",
+			},
+		},
+		{
+			name: "defaults-level option inherited by task scope",
+			cfg: &config.Config{
+				HomePath: "/tmp/leo-home",
+				Defaults: config.DefaultsConfig{
+					Model:          "opus",
+					HarnessOptions: map[string]any{"permission_mode": "plan"},
+				},
+			},
+			task:   config.TaskConfig{Workspace: "/tmp/ws"},
 			prompt: "plan it",
 			want: []string{
 				"-p", "plan it",

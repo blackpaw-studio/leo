@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -59,5 +60,31 @@ func TestArgsRejectsUnknownKind(t *testing.T) {
 	_, err := Claude{}.Args(harness.LaunchSpec{Kind: harness.Kind("bogus"), Options: Options{}})
 	if err == nil {
 		t.Fatal("Args with unknown kind: expected error")
+	}
+}
+
+func TestValidateModel(t *testing.T) {
+	tests := []struct {
+		model   string
+		wantErr bool
+	}{
+		{"", false}, {"sonnet", false}, {"opus", false}, {"haiku", false},
+		{"sonnet[1m]", false}, {"opus[1m]", false},
+		{"gpt-5", true}, {"claude-3-opus", true},
+	}
+	for _, tt := range tests {
+		err := Claude{}.ValidateModel(tt.model)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ValidateModel(%q) err=%v, wantErr=%v", tt.model, err, tt.wantErr)
+		}
+		if tt.wantErr && err.Error() != fmt.Sprintf("%q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", tt.model) {
+			t.Errorf("ValidateModel(%q) wrong message: %v", tt.model, err)
+		}
+	}
+}
+
+func TestSupportsChannels(t *testing.T) {
+	if !(Claude{}.SupportsChannels()) {
+		t.Fatal("SupportsChannels() = false, want true")
 	}
 }

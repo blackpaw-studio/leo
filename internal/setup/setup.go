@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/blackpaw-studio/leo/internal/service"
@@ -20,8 +21,10 @@ import (
 )
 
 var (
-	userHomeDirFn  = os.UserHomeDir
-	checkClaudeFn  = prereq.CheckClaude
+	userHomeDirFn = os.UserHomeDir
+	checkClaudeFn = func() prereq.BinaryResult {
+		return prereq.CheckBinary(claudeharness.Claude{}.Binary())
+	}
 	checkTmuxFn    = prereq.CheckTmux
 	daemonStatusFn = service.DaemonStatus
 	newReaderFn    = prompt.NewReader
@@ -204,7 +207,6 @@ func parseUserProfile(path string) templates.UserProfileData {
 }
 
 func buildConfig(workspace string, existing *config.Config) *config.Config {
-	tr := true
 	cfg := &config.Config{
 		Defaults: config.DefaultsConfig{
 			Model:    config.DefaultModel,
@@ -212,9 +214,9 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 		},
 		Processes: map[string]config.ProcessConfig{
 			"assistant": {
-				Workspace:     workspace,
-				RemoteControl: &tr,
-				Enabled:       true,
+				Workspace:      workspace,
+				HarnessOptions: map[string]any{"remote_control": true},
+				Enabled:        true,
 			},
 		},
 		Tasks: make(map[string]config.TaskConfig),

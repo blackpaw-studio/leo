@@ -8,8 +8,23 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/cron"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
+
+// templateOwnAgent decodes a template's OWN (unmerged) harness_options for
+// display purposes — what the template itself declares, not the effective/
+// cascaded view. Decode errors are swallowed and yield an empty agent:
+// display code must never fail on a possibly-invalid literal view,
+// Validate() is the sole authority on correctness.
+func templateOwnAgent(opts map[string]any) string {
+	decoded, err := claudeharness.Claude{}.DecodeOptions(opts)
+	if err != nil {
+		return ""
+	}
+	o, _ := decoded.(claudeharness.Options)
+	return o.AgentFile
+}
 
 // pageData is the payload every full-page render receives. Pages add their
 // own data via the Data field. Status carries what partials/status.html
@@ -143,7 +158,7 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 			Name:      name,
 			Workspace: tmpl.Workspace,
 			Model:     tmpl.Model,
-			Agent:     tmpl.Agent,
+			Agent:     templateOwnAgent(tmpl.HarnessOptions),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
@@ -204,7 +219,7 @@ func (s *Server) buildDefaultsData(r *http.Request) (any, error) {
 }
 
 // hostCard is one entry of settingsPageData.Hosts: a remote-host name paired
-// with the schema-driven inline form for its card. Mirrors providerCard.
+// with the schema-driven inline form for its card.
 type hostCard struct {
 	Name string
 	Form formData
@@ -222,7 +237,7 @@ type settingsPageData struct {
 // (&cfg.Web), Remote client config (&cfg.Client, default_host only — hosts
 // is excluded from SectionClient's registry and rendered separately below),
 // and cfg.Client.Hosts as a name-sorted card list, one inline config_form
-// per host — same shape as buildProvidersData.
+// per host.
 func (s *Server) buildSettingsData(r *http.Request) (any, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -248,45 +263,6 @@ func (s *Server) buildSettingsData(r *http.Request) (any, error) {
 		ClientForm: s.buildForm(schema.SectionClient, &cfg.Client, cfg, "/web/config/client"),
 		Hosts:      hosts,
 	}, nil
-}
-
-// providerCard is one entry of providersPageData.Providers: a provider name
-// paired with the schema-driven inline form for its card.
-type providerCard struct {
-	Name string
-	Form formData
-}
-
-// providersPageData feeds page_config_providers.
-type providersPageData struct {
-	Providers []providerCard
-}
-
-// buildProvidersData assembles a name-sorted card list, one inline
-// config_form per provider — unlike processes/tasks/templates, providers
-// are few enough that there's no separate list-page-plus-edit-page split;
-// every provider's full CRUD form lives right here on /config/providers.
-func (s *Server) buildProvidersData(r *http.Request) (any, error) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
-	}
-
-	names := make([]string, 0, len(cfg.Providers))
-	for name := range cfg.Providers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	cards := make([]providerCard, 0, len(names))
-	for _, name := range names {
-		p := cfg.Providers[name]
-		form := s.buildForm(schema.SectionProvider, &p, cfg, "/web/config/provider/"+url.PathEscape(name))
-		form.DeleteURL = "/web/provider/" + url.PathEscape(name)
-		cards = append(cards, providerCard{Name: name, Form: form})
-	}
-
-	return providersPageData{Providers: cards}, nil
 }
 
 // agentsData feeds page_agents and the /partials/agents rename fragment.

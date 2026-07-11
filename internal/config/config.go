@@ -4,15 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/harness"
 	"gopkg.in/yaml.v3"
 )
 
@@ -57,37 +56,6 @@ func ValidateAddDir(dir string) error {
 	return nil
 }
 
-var validModels = map[string]bool{
-	"sonnet":     true,
-	"opus":       true,
-	"haiku":      true,
-	"sonnet[1m]": true,
-	"opus[1m]":   true,
-}
-
-// ValidModels returns the model names Config.Validate() accepts, sorted.
-// It exists so callers that need to mirror this list (e.g. the web UI's
-// model dropdown in internal/web/schema/options.go) — or tests that guard
-// against the two drifting apart — have a source of truth without
-// exporting the validModels map itself.
-func ValidModels() []string {
-	names := make([]string, 0, len(validModels))
-	for name := range validModels {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-var validPermissionModes = map[string]bool{
-	"acceptEdits":       true,
-	"auto":              true,
-	"bypassPermissions": true,
-	"default":           true,
-	"dontAsk":           true,
-	"plan":              true,
-}
-
 type Config struct {
 	Defaults  DefaultsConfig            `yaml:"defaults"`
 	Web       WebConfig                 `yaml:"web,omitempty"`
@@ -96,7 +64,10 @@ type Config struct {
 	Tasks     map[string]TaskConfig     `yaml:"tasks"`
 	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
 	Sessions  map[string]SessionConfig  `yaml:"sessions,omitempty"`
-	Providers map[string]ProviderConfig `yaml:"providers,omitempty"`
+	// Providers was removed with the harness abstraction. The field survives
+	// only so Validate() can emit a precise removal error (yaml.v3 silently
+	// ignores unknown keys).
+	Providers map[string]any `yaml:"providers,omitempty"`
 
 	// Set at load time from the config file path, not serialized.
 	HomePath string `yaml:"-"`
@@ -197,15 +168,19 @@ func IsLoopbackBind(addr string) bool {
 }
 
 type DefaultsConfig struct {
-	Model              string   `yaml:"model"`
-	Provider           string   `yaml:"provider,omitempty"`
-	MaxTurns           int      `yaml:"max_turns"`
-	BypassPermissions  bool     `yaml:"bypass_permissions,omitempty"`
-	RemoteControl      bool     `yaml:"remote_control,omitempty"`
-	PermissionMode     string   `yaml:"permission_mode,omitempty"`
-	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
-	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
-	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
+	Model              string `yaml:"model"`
+	DeprecatedProvider string `yaml:"provider,omitempty"`
+	MaxTurns           int    `yaml:"max_turns"`
+	// DeprecatedBypassPermissions/DeprecatedRemoteControl are *bool (not bool)
+	// so an explicitly-set `false` is distinguishable from unset — both moved
+	// to defaults.harness_options and are detection-only now; nothing reads
+	// them for cascading.
+	DeprecatedBypassPermissions  *bool    `yaml:"bypass_permissions,omitempty"`
+	DeprecatedRemoteControl      *bool    `yaml:"remote_control,omitempty"`
+	DeprecatedPermissionMode     string   `yaml:"permission_mode,omitempty"`
+	DeprecatedAllowedTools       []string `yaml:"allowed_tools,omitempty"`
+	DeprecatedDisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
+	DeprecatedAppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
 	// StaleResumeHours drops --resume at launch when claude's session jsonl
 	// hasn't been written in this many hours. Default 12; 0 disables.
 	StaleResumeHours int `yaml:"stale_resume_hours,omitempty"`
@@ -214,29 +189,35 @@ type DefaultsConfig struct {
 	// (process + tmux killed, conversation preserved for auto-resume). Empty
 	// disables idle-suspend. Overridable per template and per spawn.
 	IdleSuspendAfter string `yaml:"idle_suspend_after,omitempty"`
+	// Harness selects the coding-agent adapter (e.g. "claude"). Empty means
+	// DefaultHarnessName.
+	Harness        string         `yaml:"harness,omitempty"`
+	HarnessOptions map[string]any `yaml:"harness_options,omitempty"`
 }
 
 type ProcessConfig struct {
-	Workspace          string            `yaml:"workspace,omitempty"`
-	Channels           []string          `yaml:"channels,omitempty"`
-	DevChannels        []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
-	Model              string            `yaml:"model,omitempty"`
-	Provider           string            `yaml:"provider,omitempty"`
-	MaxTurns           int               `yaml:"max_turns,omitempty"`
-	BypassPermissions  *bool             `yaml:"bypass_permissions,omitempty"`
-	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
-	MCPConfig          string            `yaml:"mcp_config,omitempty"`
-	AddDirs            []string          `yaml:"add_dirs,omitempty"`
-	Env                map[string]string `yaml:"env,omitempty"`
-	Agent              string            `yaml:"agent,omitempty"`
-	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
-	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
-	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
-	PermissionMode     string            `yaml:"permission_mode,omitempty"`
+	Workspace                    string            `yaml:"workspace,omitempty"`
+	Channels                     []string          `yaml:"channels,omitempty"`
+	DevChannels                  []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
+	Model                        string            `yaml:"model,omitempty"`
+	DeprecatedProvider           string            `yaml:"provider,omitempty"`
+	MaxTurns                     int               `yaml:"max_turns,omitempty"`
+	DeprecatedBypassPermissions  *bool             `yaml:"bypass_permissions,omitempty"`
+	DeprecatedRemoteControl      *bool             `yaml:"remote_control,omitempty"`
+	MCPConfig                    string            `yaml:"mcp_config,omitempty"`
+	AddDirs                      []string          `yaml:"add_dirs,omitempty"`
+	Env                          map[string]string `yaml:"env,omitempty"`
+	DeprecatedAgent              string            `yaml:"agent,omitempty"`
+	DeprecatedAllowedTools       []string          `yaml:"allowed_tools,omitempty"`
+	DeprecatedDisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
+	DeprecatedAppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
+	DeprecatedPermissionMode     string            `yaml:"permission_mode,omitempty"`
 	// StaleResumeHours overrides defaults.stale_resume_hours for this process.
 	// nil = inherit; 0 = disable staleness check for this process.
-	StaleResumeHours *int `yaml:"stale_resume_hours,omitempty"`
-	Enabled          bool `yaml:"enabled"`
+	StaleResumeHours *int           `yaml:"stale_resume_hours,omitempty"`
+	Enabled          bool           `yaml:"enabled"`
+	Harness          string         `yaml:"harness,omitempty"`
+	HarnessOptions   map[string]any `yaml:"harness_options,omitempty"`
 }
 
 // SessionConfig defines a named persistent claude session supervised by the
@@ -244,66 +225,76 @@ type ProcessConfig struct {
 // implicitly create a dedicated one). Fields mirror ProcessConfig; see
 // docs/superpowers/specs/2026-05-17-persistent-task-sessions-design.md.
 type SessionConfig struct {
-	Workspace          string            `yaml:"workspace,omitempty"`
-	Model              string            `yaml:"model,omitempty"`
-	Provider           string            `yaml:"provider,omitempty"`
-	Agent              string            `yaml:"agent,omitempty"`
-	PermissionMode     string            `yaml:"permission_mode,omitempty"`
-	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
-	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
-	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
-	AddDirs            []string          `yaml:"add_dirs,omitempty"`
-	Channels           []string          `yaml:"channels,omitempty"`
-	Env                map[string]string `yaml:"env,omitempty"`
-	IdleTimeout        string            `yaml:"idle_timeout,omitempty"`
+	Workspace                    string            `yaml:"workspace,omitempty"`
+	Model                        string            `yaml:"model,omitempty"`
+	DeprecatedProvider           string            `yaml:"provider,omitempty"`
+	DeprecatedAgent              string            `yaml:"agent,omitempty"`
+	DeprecatedPermissionMode     string            `yaml:"permission_mode,omitempty"`
+	DeprecatedAllowedTools       []string          `yaml:"allowed_tools,omitempty"`
+	DeprecatedDisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
+	DeprecatedAppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
+	AddDirs                      []string          `yaml:"add_dirs,omitempty"`
+	Channels                     []string          `yaml:"channels,omitempty"`
+	Env                          map[string]string `yaml:"env,omitempty"`
+	IdleTimeout                  string            `yaml:"idle_timeout,omitempty"`
+	Harness                      string            `yaml:"harness,omitempty"`
+	HarnessOptions               map[string]any    `yaml:"harness_options,omitempty"`
 }
 
 type TaskConfig struct {
-	Workspace          string   `yaml:"workspace,omitempty"`
-	Schedule           string   `yaml:"schedule"`
-	Timezone           string   `yaml:"timezone,omitempty"`
-	PromptFile         string   `yaml:"prompt_file"`
-	Model              string   `yaml:"model,omitempty"`
-	Provider           string   `yaml:"provider,omitempty"`
-	MaxTurns           int      `yaml:"max_turns,omitempty"`
-	Enabled            bool     `yaml:"enabled"`
-	Silent             bool     `yaml:"silent,omitempty"`
-	Timeout            string   `yaml:"timeout,omitempty"`         // e.g. "30m", "1h" — default 30m
-	Retries            int      `yaml:"retries,omitempty"`         // number of retry attempts on failure, default 0
-	Channels           []string `yaml:"channels,omitempty"`        // channel plugin IDs used by NotifyOnFail
-	DevChannels        []string `yaml:"dev_channels,omitempty"`    // loaded via --dangerously-load-development-channels
-	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"`  // spawn a child claude to notify configured channels on failure
-	PermissionMode     string   `yaml:"permission_mode,omitempty"` // acceptEdits, auto, bypassPermissions, default, dontAsk, plan
-	AllowedTools       []string `yaml:"allowed_tools,omitempty"`
-	DisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
-	AppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
-	Runtime            string   `yaml:"runtime,omitempty"` // "oneshot" (default) | "persistent"
-	Session            string   `yaml:"session,omitempty"`
-	Lazy               bool     `yaml:"lazy,omitempty"`
-	QueueMax           int      `yaml:"queue_max,omitempty"` // 0 → use default (5)
+	Workspace          string            `yaml:"workspace,omitempty"`
+	Schedule           string            `yaml:"schedule"`
+	Timezone           string            `yaml:"timezone,omitempty"`
+	PromptFile         string            `yaml:"prompt_file"`
+	Model              string            `yaml:"model,omitempty"`
+	DeprecatedProvider string            `yaml:"provider,omitempty"`
+	MaxTurns           int               `yaml:"max_turns,omitempty"`
+	Enabled            bool              `yaml:"enabled"`
+	Silent             bool              `yaml:"silent,omitempty"`
+	Timeout            string            `yaml:"timeout,omitempty"`        // e.g. "30m", "1h" — default 30m
+	Retries            int               `yaml:"retries,omitempty"`        // number of retry attempts on failure, default 0
+	Channels           []string          `yaml:"channels,omitempty"`       // channel plugin IDs used by NotifyOnFail
+	DevChannels        []string          `yaml:"dev_channels,omitempty"`   // loaded via --dangerously-load-development-channels
+	NotifyOnFail       bool              `yaml:"notify_on_fail,omitempty"` // spawn a child claude to notify configured channels on failure
+	Env                map[string]string `yaml:"env,omitempty"`
+	// DeprecatedPermissionMode etc. moved to harness_options — see Validate().
+	DeprecatedPermissionMode     string         `yaml:"permission_mode,omitempty"`
+	DeprecatedAllowedTools       []string       `yaml:"allowed_tools,omitempty"`
+	DeprecatedDisallowedTools    []string       `yaml:"disallowed_tools,omitempty"`
+	DeprecatedAppendSystemPrompt string         `yaml:"append_system_prompt,omitempty"`
+	Runtime                      string         `yaml:"runtime,omitempty"` // "oneshot" (default) | "persistent"
+	Session                      string         `yaml:"session,omitempty"`
+	Lazy                         bool           `yaml:"lazy,omitempty"`
+	QueueMax                     int            `yaml:"queue_max,omitempty"` // 0 → use default (5)
+	Harness                      string         `yaml:"harness,omitempty"`
+	HarnessOptions               map[string]any `yaml:"harness_options,omitempty"`
 }
 
 // TemplateConfig defines a reusable blueprint for spawning ephemeral agents.
 // Workspace is the base directory — repos are cloned as subdirectories.
 type TemplateConfig struct {
-	Workspace          string            `yaml:"workspace,omitempty"`
-	Channels           []string          `yaml:"channels,omitempty"`
-	DevChannels        []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
-	Model              string            `yaml:"model,omitempty"`
-	Provider           string            `yaml:"provider,omitempty"`
-	MaxTurns           int               `yaml:"max_turns,omitempty"`
-	RemoteControl      *bool             `yaml:"remote_control,omitempty"`
-	MCPConfig          string            `yaml:"mcp_config,omitempty"`
-	AddDirs            []string          `yaml:"add_dirs,omitempty"`
-	Env                map[string]string `yaml:"env,omitempty"`
-	Agent              string            `yaml:"agent,omitempty"`
-	AllowedTools       []string          `yaml:"allowed_tools,omitempty"`
-	DisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
-	AppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
-	PermissionMode     string            `yaml:"permission_mode,omitempty"`
+	Workspace          string   `yaml:"workspace,omitempty"`
+	Channels           []string `yaml:"channels,omitempty"`
+	DevChannels        []string `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
+	Model              string   `yaml:"model,omitempty"`
+	DeprecatedProvider string   `yaml:"provider,omitempty"`
+	MaxTurns           int      `yaml:"max_turns,omitempty"`
+	// DeprecatedRemoteControl is *bool (not bool) so an explicitly-set `false`
+	// is distinguishable from unset.
+	DeprecatedRemoteControl      *bool             `yaml:"remote_control,omitempty"`
+	MCPConfig                    string            `yaml:"mcp_config,omitempty"`
+	AddDirs                      []string          `yaml:"add_dirs,omitempty"`
+	Env                          map[string]string `yaml:"env,omitempty"`
+	DeprecatedAgent              string            `yaml:"agent,omitempty"`
+	DeprecatedAllowedTools       []string          `yaml:"allowed_tools,omitempty"`
+	DeprecatedDisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
+	DeprecatedAppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
+	DeprecatedPermissionMode     string            `yaml:"permission_mode,omitempty"`
 	// IdleSuspendAfter overrides defaults.idle_suspend_after for agents spawned
 	// from this template. A Go duration ("24h"); empty inherits the default.
-	IdleSuspendAfter string `yaml:"idle_suspend_after,omitempty"`
+	IdleSuspendAfter string         `yaml:"idle_suspend_after,omitempty"`
+	Harness          string         `yaml:"harness,omitempty"`
+	HarnessOptions   map[string]any `yaml:"harness_options,omitempty"`
 }
 
 // IsClientOnly reports whether the config is a client-only install: one
@@ -340,13 +331,10 @@ func (c *Config) ProcessWorkspace(p ProcessConfig) string {
 }
 
 // ProcessModel returns the effective model for a process.
-// Cascade: process → provider default_model → defaults → DefaultModel.
+// Cascade: process → defaults → DefaultModel.
 func (c *Config) ProcessModel(p ProcessConfig) string {
 	if p.Model != "" {
 		return p.Model
-	}
-	if m := c.ProviderDefaultModel(c.ProcessProvider(p)); m != "" {
-		return m
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model
@@ -363,22 +351,6 @@ func (c *Config) ProcessMaxTurns(p ProcessConfig) int {
 		return c.Defaults.MaxTurns
 	}
 	return DefaultMaxTurns
-}
-
-// ProcessBypassPermissions returns the effective bypass_permissions for a process.
-func (c *Config) ProcessBypassPermissions(p ProcessConfig) bool {
-	if p.BypassPermissions != nil {
-		return *p.BypassPermissions
-	}
-	return c.Defaults.BypassPermissions
-}
-
-// ProcessRemoteControl returns the effective remote_control for a process.
-func (c *Config) ProcessRemoteControl(p ProcessConfig) bool {
-	if p.RemoteControl != nil {
-		return *p.RemoteControl
-	}
-	return c.Defaults.RemoteControl
 }
 
 // DefaultStaleResumeHours is the fallback staleness threshold when neither
@@ -447,19 +419,31 @@ func (c *Config) TaskWorkspace(t TaskConfig) string {
 }
 
 // TaskModel returns the effective model for a task.
-// Cascade: task → provider default_model → defaults → DefaultModel.
+// Cascade: task → defaults → DefaultModel.
 func (c *Config) TaskModel(t TaskConfig) string {
 	if t.Model != "" {
 		return t.Model
-	}
-	if m := c.ProviderDefaultModel(c.TaskProvider(t)); m != "" {
-		return m
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model
 	}
 	return DefaultModel
 }
+
+// TemplateModel resolves the model for a template: template → defaults → built-in.
+func (c *Config) TemplateModel(t TemplateConfig) string {
+	if t.Model != "" {
+		return t.Model
+	}
+	if c.Defaults.Model != "" {
+		return c.Defaults.Model
+	}
+	return DefaultModel
+}
+
+// SessionModel resolves the model for a persistent session. Empty means
+// claude picks its own default.
+func (c *Config) SessionModel(s SessionConfig) string { return s.Model }
 
 // TaskMaxTurns returns the effective max turns for a task.
 func (c *Config) TaskMaxTurns(t TaskConfig) int {
@@ -488,19 +472,71 @@ func (c *Config) TaskTimeout(t TaskConfig) time.Duration {
 	return 30 * time.Minute
 }
 
+// movedField describes one flat claude-harness field that has moved to
+// harness_options. set reports whether the deprecated field carries a
+// value on the loaded config (including an explicitly-set false for *bool
+// fields).
+type movedField struct {
+	set  bool
+	name string
+}
+
+// appendMovedFieldErrs appends one precise migration error per set field in
+// fields, scoped to scope (e.g. "processes.builder").
+func appendMovedFieldErrs(errs []string, scope string, fields []movedField) []string {
+	for _, f := range fields {
+		if f.set {
+			errs = append(errs, fmt.Sprintf("%s.%s has moved to %s.harness_options.%s (claude harness) — see docs/configuration/harnesses.md", scope, f.name, scope, f.name))
+		}
+	}
+	return errs
+}
+
 // Validate checks the config for required fields and valid values.
 func (c *Config) Validate() error {
 	var errs []string
 
-	if c.Defaults.Model != "" && c.Defaults.Provider == "" && !validModels[c.Defaults.Model] {
-		errs = append(errs, fmt.Sprintf("defaults.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", c.Defaults.Model))
+	// resolveHarness returns the adapter for a scope, emitting at most one
+	// error per bad name: defaults errors at defaults.harness; a scope only
+	// errors when it *explicitly* names an unregistered harness.
+	available := strings.Join(harness.Names(), ", ")
+	defaultsHarness, defaultsHarnessErr := harness.Get(c.DefaultsHarness())
+	if defaultsHarnessErr != nil {
+		errs = append(errs, fmt.Sprintf("defaults.harness %q is not a registered harness (available: %s)", c.DefaultsHarness(), available))
+	}
+	resolveHarness := func(scope, explicit string) (harness.Harness, bool) {
+		if explicit == "" {
+			return defaultsHarness, defaultsHarnessErr == nil
+		}
+		h, err := harness.Get(explicit)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s.harness %q is not a registered harness (available: %s)", scope, explicit, available))
+			return nil, false
+		}
+		return h, true
+	}
+
+	if defaultsHarness != nil {
+		if c.Defaults.Model != "" {
+			if err := defaultsHarness.ValidateModel(c.Defaults.Model); err != nil {
+				errs = append(errs, fmt.Sprintf("defaults.model %v", err))
+			}
+		}
+		if _, err := defaultsHarness.DecodeOptions(c.Defaults.HarnessOptions); err != nil {
+			errs = append(errs, fmt.Sprintf("defaults.harness_options: %v", err))
+		}
 	}
 	if c.Defaults.MaxTurns < 0 {
 		errs = append(errs, "defaults.max_turns must not be negative")
 	}
-	if c.Defaults.PermissionMode != "" && !validPermissionModes[c.Defaults.PermissionMode] {
-		errs = append(errs, fmt.Sprintf("defaults.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", c.Defaults.PermissionMode))
-	}
+	errs = appendMovedFieldErrs(errs, "defaults", []movedField{
+		{c.Defaults.DeprecatedPermissionMode != "", "permission_mode"},
+		{c.Defaults.DeprecatedBypassPermissions != nil, "bypass_permissions"},
+		{c.Defaults.DeprecatedRemoteControl != nil, "remote_control"},
+		{len(c.Defaults.DeprecatedAllowedTools) > 0, "allowed_tools"},
+		{len(c.Defaults.DeprecatedDisallowedTools) > 0, "disallowed_tools"},
+		{c.Defaults.DeprecatedAppendSystemPrompt != "", "append_system_prompt"},
+	})
 	if c.Defaults.StaleResumeHours < 0 {
 		errs = append(errs, "defaults.stale_resume_hours must not be negative")
 	}
@@ -510,30 +546,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	for name, p := range c.Providers {
-		if p.BaseURL == "" {
-			errs = append(errs, fmt.Sprintf("providers.%s.base_url is required", name))
-		} else if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			errs = append(errs, fmt.Sprintf("providers.%s.base_url %q must be an http(s) URL", name, p.BaseURL))
-		}
-		hasEnv := p.APIKeyEnv != ""
-		hasCmd := strings.TrimSpace(p.APIKeyCmd) != ""
-		if hasEnv == hasCmd {
-			errs = append(errs, fmt.Sprintf("providers.%s must set exactly one of api_key_env or api_key_cmd", name))
-		}
-		if hasEnv && !envKeyPattern.MatchString(p.APIKeyEnv) {
-			errs = append(errs, fmt.Sprintf("providers.%s.api_key_env %q is not a valid environment variable name", name, p.APIKeyEnv))
-		}
+	if len(c.Providers) > 0 {
+		errs = append(errs, "providers: this section has been removed — see docs/configuration/harnesses.md")
 	}
-	checkProviderRef := func(scope, ref string) {
-		if ref == "" {
-			return
-		}
-		if _, ok := c.Providers[ref]; !ok {
-			errs = append(errs, fmt.Sprintf("%s.provider %q is not defined in providers", scope, ref))
-		}
+	if c.Defaults.DeprecatedProvider != "" {
+		errs = append(errs, "defaults.provider has been removed along with providers — see docs/configuration/harnesses.md")
 	}
-	checkProviderRef("defaults", c.Defaults.Provider)
 
 	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("web.port %d is out of range (1-65535)", c.Web.Port))
@@ -560,9 +578,21 @@ func (c *Config) Validate() error {
 	}
 
 	for name, proc := range c.Processes {
-		checkProviderRef("processes."+name, proc.Provider)
-		if proc.Model != "" && c.ProcessProvider(proc) == "" && !validModels[proc.Model] {
-			errs = append(errs, fmt.Sprintf("processes.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, proc.Model))
+		if proc.DeprecatedProvider != "" {
+			errs = append(errs, fmt.Sprintf("processes.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
+		}
+		if h, ok := resolveHarness("processes."+name, proc.Harness); ok {
+			if proc.Model != "" {
+				if err := h.ValidateModel(proc.Model); err != nil {
+					errs = append(errs, fmt.Sprintf("processes.%s.model %v", name, err))
+				}
+			}
+			if _, err := h.DecodeOptions(c.ProcessHarnessOptions(proc)); err != nil {
+				errs = append(errs, fmt.Sprintf("processes.%s.harness_options: %v", name, err))
+			}
+			if !h.SupportsChannels() && (len(proc.Channels) > 0 || len(proc.DevChannels) > 0) {
+				errs = append(errs, fmt.Sprintf("processes.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
 		}
 		if proc.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("processes.%s.max_turns must not be negative", name))
@@ -587,18 +617,36 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("processes.%s.add_dirs[%d]: %v", name, i, err))
 			}
 		}
-		if proc.PermissionMode != "" && !validPermissionModes[proc.PermissionMode] {
-			errs = append(errs, fmt.Sprintf("processes.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, proc.PermissionMode))
-		}
+		errs = appendMovedFieldErrs(errs, "processes."+name, []movedField{
+			{proc.DeprecatedPermissionMode != "", "permission_mode"},
+			{proc.DeprecatedBypassPermissions != nil, "bypass_permissions"},
+			{proc.DeprecatedRemoteControl != nil, "remote_control"},
+			{proc.DeprecatedAgent != "", "agent"},
+			{len(proc.DeprecatedAllowedTools) > 0, "allowed_tools"},
+			{len(proc.DeprecatedDisallowedTools) > 0, "disallowed_tools"},
+			{proc.DeprecatedAppendSystemPrompt != "", "append_system_prompt"},
+		})
 		if proc.StaleResumeHours != nil && *proc.StaleResumeHours < 0 {
 			errs = append(errs, fmt.Sprintf("processes.%s.stale_resume_hours must not be negative", name))
 		}
 	}
 
 	for name, tmpl := range c.Templates {
-		checkProviderRef("templates."+name, tmpl.Provider)
-		if tmpl.Model != "" && c.TemplateProvider(tmpl) == "" && !validModels[tmpl.Model] {
-			errs = append(errs, fmt.Sprintf("templates.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, tmpl.Model))
+		if tmpl.DeprecatedProvider != "" {
+			errs = append(errs, fmt.Sprintf("templates.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
+		}
+		if h, ok := resolveHarness("templates."+name, tmpl.Harness); ok {
+			if tmpl.Model != "" {
+				if err := h.ValidateModel(tmpl.Model); err != nil {
+					errs = append(errs, fmt.Sprintf("templates.%s.model %v", name, err))
+				}
+			}
+			if _, err := h.DecodeOptions(c.TemplateHarnessOptions(tmpl)); err != nil {
+				errs = append(errs, fmt.Sprintf("templates.%s.harness_options: %v", name, err))
+			}
+			if !h.SupportsChannels() && (len(tmpl.Channels) > 0 || len(tmpl.DevChannels) > 0) {
+				errs = append(errs, fmt.Sprintf("templates.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
 		}
 		if tmpl.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("templates.%s.max_turns must not be negative", name))
@@ -623,9 +671,14 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("templates.%s.add_dirs[%d]: %v", name, i, err))
 			}
 		}
-		if tmpl.PermissionMode != "" && !validPermissionModes[tmpl.PermissionMode] {
-			errs = append(errs, fmt.Sprintf("templates.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, tmpl.PermissionMode))
-		}
+		errs = appendMovedFieldErrs(errs, "templates."+name, []movedField{
+			{tmpl.DeprecatedPermissionMode != "", "permission_mode"},
+			{tmpl.DeprecatedRemoteControl != nil, "remote_control"},
+			{tmpl.DeprecatedAgent != "", "agent"},
+			{len(tmpl.DeprecatedAllowedTools) > 0, "allowed_tools"},
+			{len(tmpl.DeprecatedDisallowedTools) > 0, "disallowed_tools"},
+			{tmpl.DeprecatedAppendSystemPrompt != "", "append_system_prompt"},
+		})
 		if tmpl.IdleSuspendAfter != "" {
 			if d, err := time.ParseDuration(tmpl.IdleSuspendAfter); err != nil || d <= 0 {
 				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
@@ -637,13 +690,29 @@ func (c *Config) Validate() error {
 		if sess.Workspace == "" {
 			errs = append(errs, fmt.Sprintf("sessions.%s.workspace is required", name))
 		}
-		checkProviderRef("sessions."+name, sess.Provider)
-		if sess.Model != "" && c.SessionProvider(sess) == "" && !validModels[sess.Model] {
-			errs = append(errs, fmt.Sprintf("sessions.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, sess.Model))
+		if sess.DeprecatedProvider != "" {
+			errs = append(errs, fmt.Sprintf("sessions.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
 		}
-		if sess.PermissionMode != "" && !validPermissionModes[sess.PermissionMode] {
-			errs = append(errs, fmt.Sprintf("sessions.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, sess.PermissionMode))
+		if h, ok := resolveHarness("sessions."+name, sess.Harness); ok {
+			if sess.Model != "" {
+				if err := h.ValidateModel(sess.Model); err != nil {
+					errs = append(errs, fmt.Sprintf("sessions.%s.model %v", name, err))
+				}
+			}
+			if _, err := h.DecodeOptions(c.SessionHarnessOptions(sess)); err != nil {
+				errs = append(errs, fmt.Sprintf("sessions.%s.harness_options: %v", name, err))
+			}
+			if !h.SupportsChannels() && len(sess.Channels) > 0 {
+				errs = append(errs, fmt.Sprintf("sessions.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
 		}
+		errs = appendMovedFieldErrs(errs, "sessions."+name, []movedField{
+			{sess.DeprecatedPermissionMode != "", "permission_mode"},
+			{sess.DeprecatedAgent != "", "agent"},
+			{len(sess.DeprecatedAllowedTools) > 0, "allowed_tools"},
+			{len(sess.DeprecatedDisallowedTools) > 0, "disallowed_tools"},
+			{sess.DeprecatedAppendSystemPrompt != "", "append_system_prompt"},
+		})
 		for i, ch := range sess.Channels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("sessions.%s.channels[%d] %q contains invalid characters", name, i, ch))
@@ -675,9 +744,21 @@ func (c *Config) Validate() error {
 		if task.PromptFile == "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.prompt_file is required", name))
 		}
-		checkProviderRef("tasks."+name, task.Provider)
-		if task.Model != "" && c.TaskProvider(task) == "" && !validModels[task.Model] {
-			errs = append(errs, fmt.Sprintf("tasks.%s.model %q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", name, task.Model))
+		if task.DeprecatedProvider != "" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
+		}
+		if h, ok := resolveHarness("tasks."+name, task.Harness); ok {
+			if task.Model != "" {
+				if err := h.ValidateModel(task.Model); err != nil {
+					errs = append(errs, fmt.Sprintf("tasks.%s.model %v", name, err))
+				}
+			}
+			if _, err := h.DecodeOptions(c.TaskHarnessOptions(task)); err != nil {
+				errs = append(errs, fmt.Sprintf("tasks.%s.harness_options: %v", name, err))
+			}
+			if !h.SupportsChannels() && (len(task.Channels) > 0 || len(task.DevChannels) > 0) {
+				errs = append(errs, fmt.Sprintf("tasks.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
 		}
 		if task.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.max_turns must not be negative", name))
@@ -695,9 +776,12 @@ func (c *Config) Validate() error {
 		if task.Retries < 0 {
 			errs = append(errs, fmt.Sprintf("tasks.%s.retries must not be negative", name))
 		}
-		if task.PermissionMode != "" && !validPermissionModes[task.PermissionMode] {
-			errs = append(errs, fmt.Sprintf("tasks.%s.permission_mode %q is not valid (use acceptEdits, auto, bypassPermissions, default, dontAsk, or plan)", name, task.PermissionMode))
-		}
+		errs = appendMovedFieldErrs(errs, "tasks."+name, []movedField{
+			{task.DeprecatedPermissionMode != "", "permission_mode"},
+			{len(task.DeprecatedAllowedTools) > 0, "allowed_tools"},
+			{len(task.DeprecatedDisallowedTools) > 0, "disallowed_tools"},
+			{task.DeprecatedAppendSystemPrompt != "", "append_system_prompt"},
+		})
 		for i, ch := range task.Channels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("tasks.%s.channels[%d] %q contains invalid characters", name, i, ch))
@@ -706,6 +790,11 @@ func (c *Config) Validate() error {
 		for i, ch := range task.DevChannels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("tasks.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		for k := range task.Env {
+			if !envKeyPattern.MatchString(k) {
+				errs = append(errs, fmt.Sprintf("tasks.%s.env key %q is not a valid environment variable name", name, k))
 			}
 		}
 		if task.Runtime != "" && task.Runtime != "oneshot" && task.Runtime != "persistent" {

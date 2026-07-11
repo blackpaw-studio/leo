@@ -5,7 +5,8 @@
 defaults:
   model: sonnet
   max_turns: 0
-  permission_mode: default
+  harness_options:
+    permission_mode: default
 
 web:
   enabled: false

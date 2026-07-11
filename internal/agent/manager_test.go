@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -105,11 +104,13 @@ func TestBuildTemplateArgsBasic(t *testing.T) {
 func TestBuildTemplateArgsInheritsDefaults(t *testing.T) {
 	cfg := &config.Config{
 		Defaults: config.DefaultsConfig{
-			Model:              "haiku",
-			MaxTurns:           50,
-			PermissionMode:     "auto",
-			AllowedTools:       []string{"Read", "Write"},
-			AppendSystemPrompt: "be helpful",
+			Model:    "haiku",
+			MaxTurns: 50,
+			HarnessOptions: map[string]any{
+				"permission_mode":      "auto",
+				"allowed_tools":        []any{"Read", "Write"},
+				"append_system_prompt": "be helpful",
+			},
 		},
 	}
 	tmpl := config.TemplateConfig{}
@@ -170,7 +171,7 @@ func TestBuildTemplateArgsDevChannels(t *testing.T) {
 
 func TestBuildTemplateArgsAgent(t *testing.T) {
 	cfg := &config.Config{}
-	tmpl := config.TemplateConfig{Agent: "my-agent"}
+	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"agent": "my-agent"}}
 
 	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 	assertContainsFlag(t, args, "--agent", "my-agent")
@@ -178,8 +179,7 @@ func TestBuildTemplateArgsAgent(t *testing.T) {
 
 func TestBuildTemplateArgsRemoteControlDisabled(t *testing.T) {
 	cfg := &config.Config{}
-	rc := false
-	tmpl := config.TemplateConfig{RemoteControl: &rc}
+	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"remote_control": false}}
 
 	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "")
 	for _, a := range args {
@@ -424,87 +424,6 @@ func TestListSurfacesSuspendedAgents(t *testing.T) {
 	}
 	if statuses["leo-wt"] != "suspended" {
 		t.Fatalf("worktree suspended agent missing/wrong: %v", statuses)
-	}
-}
-
-// --- Task 8: provider env at spawn ---
-
-func TestSpawnInjectsProviderEnvWithoutPersistingKey(t *testing.T) {
-	t.Setenv("LEO_TEST_GLM_KEY", "sk-glm")
-	home := t.TempDir()
-	cfg := &config.Config{
-		HomePath: home,
-		Providers: map[string]config.ProviderConfig{
-			"glm": {BaseURL: "https://glm.example", APIKeyEnv: "LEO_TEST_GLM_KEY"},
-		},
-		Templates: map[string]config.TemplateConfig{
-			"t": {Workspace: home, Provider: "glm"},
-		},
-	}
-	sup := &capturingSupervisor{}
-	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
-
-	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "t", Repo: "demo"})
-	if err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-
-	if sup.spawnCall == nil {
-		t.Fatal("SpawnAgent was not called")
-	}
-	if sup.spawnCall.Env["ANTHROPIC_BASE_URL"] != "https://glm.example" {
-		t.Errorf("spawn env ANTHROPIC_BASE_URL = %q, want https://glm.example", sup.spawnCall.Env["ANTHROPIC_BASE_URL"])
-	}
-	if sup.spawnCall.Env["ANTHROPIC_AUTH_TOKEN"] != "sk-glm" {
-		t.Errorf("spawn env ANTHROPIC_AUTH_TOKEN = %q, want sk-glm", sup.spawnCall.Env["ANTHROPIC_AUTH_TOKEN"])
-	}
-
-	recs, err := agentstore.Load(agentstore.FilePath(home))
-	if err != nil {
-		t.Fatalf("agentstore.Load: %v", err)
-	}
-	got, ok := recs[rec.Name]
-	if !ok {
-		t.Fatalf("no persisted record for %q", rec.Name)
-	}
-	if got.Provider != "glm" {
-		t.Errorf("persisted Provider = %q, want glm", got.Provider)
-	}
-	if _, has := got.Env["ANTHROPIC_AUTH_TOKEN"]; has {
-		t.Error("persisted record must not contain the resolved ANTHROPIC_AUTH_TOKEN")
-	}
-	if _, has := got.Env["ANTHROPIC_BASE_URL"]; has {
-		t.Error("persisted record must not contain the resolved ANTHROPIC_BASE_URL")
-	}
-}
-
-func TestSpawnFailsWhenProviderUnresolvable(t *testing.T) {
-	home := t.TempDir()
-	cfg := &config.Config{
-		HomePath: home,
-		Providers: map[string]config.ProviderConfig{
-			"glm": {BaseURL: "https://glm.example", APIKeyEnv: "LEO_TEST_UNSET_GLM_KEY"},
-		},
-		Templates: map[string]config.TemplateConfig{
-			"t": {Workspace: home, Provider: "glm"},
-		},
-	}
-	sup := &capturingSupervisor{}
-	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
-
-	_, err := m.Spawn(context.Background(), SpawnSpec{Template: "t", Repo: "demo"})
-	if err == nil {
-		t.Fatal("expected error when provider env cannot be resolved")
-	}
-	if !strings.Contains(err.Error(), "glm") {
-		t.Errorf("error should mention the provider name, got: %v", err)
-	}
-	if sup.spawnCall != nil {
-		t.Error("SpawnAgent must not be called when provider resolution fails")
-	}
-	recs, _ := agentstore.Load(agentstore.FilePath(home))
-	if len(recs) != 0 {
-		t.Errorf("no agentstore record should be written when provider resolution fails, got %d", len(recs))
 	}
 }
 

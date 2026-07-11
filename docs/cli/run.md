@@ -41,7 +41,7 @@ claude -p "<assembled prompt>" \
        --model <effective-model> \
        --max-turns <effective-max-turns> \
        --output-format text \
-       --dangerously-skip-permissions \  # only if bypass_permissions: true
+       --dangerously-skip-permissions \  # only if harness_options.bypass_permissions: true
        --mcp-config <workspace>/config/mcp-servers.json  # if exists
 ```
 

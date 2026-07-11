@@ -31,7 +31,6 @@ func TestRoundTripTask(t *testing.T) {
 		Schedule:   "30 8,15 * * 1-5",
 		PromptFile: "prompts/trade.md",
 		Model:      "sonnet",
-		Provider:   "zai",
 		Enabled:    true,
 		Silent:     true,
 		Timeout:    "45m",
@@ -52,37 +51,29 @@ func TestRoundTripTask(t *testing.T) {
 	}
 }
 
-func TestRoundTripProcessTriBool(t *testing.T) {
-	bTrue := true
+// TestRoundTripProcessEnv covers the Env round trip previously bundled into
+// TestRoundTripProcessTriBool. The tri-bool (bypass_permissions/
+// remote_control) round-trip coverage was removed along with those fields'
+// web-form registration (Task 7: claude flat fields moved to
+// harness_options — see internal/web/schema/registry.go's Excluded map).
+// ProcessConfig currently has no other *bool field to exercise KindTriBool
+// through the registry; schema_test.go's TestDeriveKind still covers the
+// *bool -> KindTriBool type-derivation logic directly. Re-add a
+// registry-backed round trip once a harness_options form field uses
+// KindTriBool.
+func TestRoundTripProcessEnv(t *testing.T) {
 	proc := config.ProcessConfig{
-		Enabled:           true,
-		Model:             "opus",
-		BypassPermissions: &bTrue,
-		Env:               map[string]string{"FOO": "bar", "BAZ": "qux"},
+		Enabled: true,
+		Model:   "opus",
+		Env:     map[string]string{"FOO": "bar", "BAZ": "qux"},
 	}
 	form := renderToForm(Values(&proc, SectionProcess, nil))
 	var got config.ProcessConfig
 	if err := Apply(&got, SectionProcess, form); err != nil {
 		t.Fatalf("Apply: %v", err)
-	}
-	if got.BypassPermissions == nil || !*got.BypassPermissions {
-		t.Errorf("BypassPermissions = %v, want &true", got.BypassPermissions)
 	}
 	if !reflect.DeepEqual(proc.Env, got.Env) {
 		t.Errorf("Env = %v, want %v", got.Env, proc.Env)
-	}
-}
-
-func TestTriBoolNilSurvives(t *testing.T) {
-	var proc config.ProcessConfig
-	form := renderToForm(Values(&proc, SectionProcess, nil))
-	var got config.ProcessConfig
-	if err := Apply(&got, SectionProcess, form); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if got.BypassPermissions != nil || got.RemoteControl != nil {
-		t.Errorf("nil tri-bools did not survive round trip: bypass=%v remote=%v",
-			got.BypassPermissions, got.RemoteControl)
 	}
 }
 

@@ -113,7 +113,6 @@ func TestTemplateEdit(t *testing.T) {
 	form.Set("workspace", "/tmp/updated")
 	form.Set("max_turns", "100")
 	form.Set("channels", "plugin:slack@official")
-	form.Set("permission_mode", "auto")
 
 	req := httptest.NewRequest("POST", "/web/config/template/coding", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -143,9 +142,6 @@ func TestTemplateEdit(t *testing.T) {
 	}
 	if tmpl.MaxTurns != 100 {
 		t.Errorf("max_turns: got %d, want 100", tmpl.MaxTurns)
-	}
-	if tmpl.PermissionMode != "auto" {
-		t.Errorf("permission_mode: got %q, want 'auto'", tmpl.PermissionMode)
 	}
 }
 

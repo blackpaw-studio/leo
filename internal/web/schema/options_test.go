@@ -4,11 +4,11 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 func TestOptionSources(t *testing.T) {
 	cfg := &config.Config{
-		Providers: map[string]config.ProviderConfig{"zai": {BaseURL: "https://api.z.ai/v1"}},
 		Sessions:  map[string]config.SessionConfig{"daily": {}},
 		Templates: map[string]config.TemplateConfig{"dev": {}},
 	}
@@ -19,10 +19,6 @@ func TestOptionSources(t *testing.T) {
 	}
 	if opts := src.For("models"); opts[0].Value != "" {
 		t.Errorf("models: want leading inherit option, got %v", opts)
-	}
-	provs := src.For("providers")
-	if len(provs) != 2 || provs[0].Value != "" || provs[1].Value != "zai" {
-		t.Errorf("providers: want [inherit, zai], got %v", provs)
 	}
 	if opts := src.For("sessions"); len(opts) != 2 || opts[1].Value != "daily" {
 		t.Errorf("sessions: got %v", opts)
@@ -60,12 +56,11 @@ func TestOptionSourcesNilAgentsFunc(t *testing.T) {
 }
 
 // TestModelOptionsMatchConfigValidModels guards against modelOptions (hand-
-// maintained in options.go) drifting from the model names internal/config
-// actually accepts. config's validModels map is unexported by design — this
-// test uses the exported config.ValidModels() accessor (added specifically
-// so this list doesn't need duplicating or exporting the map itself) plus
-// the exported Config.Validate() path, rather than reaching into config's
-// internals.
+// maintained in options.go) drifting from the model names the claude harness
+// adapter actually accepts. Model policy lives with the adapter (config
+// delegates to Harness.ValidateModel), so this test uses the adapter's
+// exported claudeharness.ValidModels() accessor plus the exported
+// Config.Validate() path, rather than reaching into internals.
 func TestModelOptionsMatchConfigValidModels(t *testing.T) {
 	optValues := make(map[string]bool)
 	src := OptionSources{Cfg: &config.Config{}}
@@ -77,7 +72,7 @@ func TestModelOptionsMatchConfigValidModels(t *testing.T) {
 	}
 
 	validModels := make(map[string]bool)
-	for _, name := range config.ValidModels() {
+	for _, name := range claudeharness.ValidModels() {
 		validModels[name] = true
 	}
 
@@ -93,7 +88,7 @@ func TestModelOptionsMatchConfigValidModels(t *testing.T) {
 	// Validate() call, since Validate() is the behavior that matters).
 	for name := range optValues {
 		if !validModels[name] {
-			t.Errorf("modelOptions offers %q but config.ValidModels() does not include it", name)
+			t.Errorf("modelOptions offers %q but claudeharness.ValidModels() does not include it", name)
 		}
 		cfg := &config.Config{Defaults: config.DefaultsConfig{Model: name}}
 		if err := cfg.Validate(); err != nil {

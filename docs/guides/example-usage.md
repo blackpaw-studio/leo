@@ -18,7 +18,8 @@ Everything here lives in a single `~/.leo/leo.yaml` file plus a `prompts/` direc
 defaults:
   model: opus[1m]
   max_turns: 25
-  permission_mode: auto
+  harness_options:
+    permission_mode: auto
 
 web:
   enabled: true
@@ -35,17 +36,19 @@ processes:
     channels:
       - plugin:blackpaw-telegram@blackpaw-plugins
     model: opus[1m]
-    remote_control: false
-    agent: leo           # gives this process its personality — the Claude Code
-                         # subagent at .claude/agents/leo.md supplies the system
-                         # prompt (voice, identity, preferences) every message
-                         # runs through
+    harness_options:
+      remote_control: false
+      agent: leo           # gives this process its personality — the Claude Code
+                           # subagent at .claude/agents/leo.md supplies the system
+                           # prompt (voice, identity, preferences) every message
+                           # runs through
     enabled: true
 
 templates:
   coding:
     workspace: ~/projects
-    remote_control: true
+    harness_options:
+      remote_control: true
 
 tasks:
   daily-news-briefing:
@@ -79,7 +82,8 @@ processes:
     channels:
       - plugin:blackpaw-telegram@blackpaw-plugins
     model: opus[1m]
-    agent: leo
+    harness_options:
+      agent: leo
     enabled: true
 ```
 
@@ -211,7 +215,7 @@ as you wire in new tools.
 
 Drop that at `~/.claude/agents/leo.md` (user scope) or `.claude/agents/leo.md` inside the workspace (project scope), and the `agent: leo` field on the process picks it up. Edit the file; the next run uses the new personality — no restart needed beyond the normal process lifecycle.
 
-> **Tip**: `permission_mode: auto` is the new safety-classifier-backed mode released in Claude Code — it auto-approves tool calls that align with the ongoing request while still blocking genuinely risky ones (mass deletes, data exfiltration, etc.). It's a middle ground between the prompt-on-everything `default` mode and the nothing-is-asked `bypassPermissions` mode. Scheduled tasks inherit it from `defaults` since there's no human in the loop; override per-process with `permission_mode:` if a specific process needs stricter or looser behavior. See [Claude Code docs](https://code.claude.com/docs/en/permissions).
+> **Tip**: `harness_options.permission_mode: auto` is the new safety-classifier-backed mode released in Claude Code — it auto-approves tool calls that align with the ongoing request while still blocking genuinely risky ones (mass deletes, data exfiltration, etc.). It's a middle ground between the prompt-on-everything `default` mode and the nothing-is-asked `bypassPermissions` mode. Scheduled tasks inherit it from `defaults.harness_options` since there's no human in the loop; override per-process under `harness_options:` if a specific process needs stricter or looser behavior. See [Claude Code docs](https://code.claude.com/docs/en/permissions).
 
 ## Scheduled Tasks
 
@@ -290,7 +294,8 @@ A single template handles on-demand coding work:
 templates:
   coding:
     workspace: ~/projects
-    remote_control: true
+    harness_options:
+      remote_control: true   # already the default for templates; explicit here for clarity
 ```
 
 Dispatch a new agent from Telegram (or the web UI, or `leo agent spawn`):

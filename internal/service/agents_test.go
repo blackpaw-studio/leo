@@ -192,7 +192,7 @@ func TestRestoreAgentsDropsWorktreeWithMissingWorkspace(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner, nil)
+	restored := RestoreAgents(home, "", "", spawner)
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -243,7 +243,7 @@ func TestRestoreAgentsSkipsStoppedWorktreeRecord(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner, nil)
+	restored := RestoreAgents(home, "", "", spawner)
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -277,7 +277,7 @@ func TestRestoreAgentsRespawnsSharedWithResume(t *testing.T) {
 
 	const wantToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", wantToken, spawner, nil)
+	restored := RestoreAgents(home, "", wantToken, spawner)
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -324,7 +324,7 @@ func TestRestoreAgentsLegacyRecordRespawnsWithoutResume(t *testing.T) {
 
 	const wantToken = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", wantToken, spawner, nil)
+	restored := RestoreAgents(home, "", wantToken, spawner)
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -357,7 +357,7 @@ func TestRestoreAgentsRemovesFailedSharedRecord(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{nextErr: fmt.Errorf("supervisor rejected spawn")}
-	restored := RestoreAgents(home, "", "", spawner, nil)
+	restored := RestoreAgents(home, "", "", spawner)
 	if restored != 0 {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
@@ -391,7 +391,7 @@ func TestRestoreAgentsAdoptsLiveSession(t *testing.T) {
 	defer func() { tmuxHasSession = origHas }()
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "tmux", "", spawner, nil)
+	restored := RestoreAgents(home, "tmux", "", spawner)
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -424,7 +424,7 @@ func TestRestoreAgentsFreshSpawnWhenSessionGone(t *testing.T) {
 	defer func() { tmuxHasSession = origHas }()
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "tmux", "", spawner, nil)
+	restored := RestoreAgents(home, "tmux", "", spawner)
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -433,131 +433,6 @@ func TestRestoreAgentsFreshSpawnWhenSessionGone(t *testing.T) {
 	}
 	if spawner.calls[0].Adopt {
 		t.Errorf("expected Adopt=false when no live session exists, got true")
-	}
-}
-
-func TestRestoreAgentsResolvesProviderEnv(t *testing.T) {
-	home := t.TempDir()
-	rec := agentstore.Record{
-		Name:       "leo-glm",
-		Workspace:  t.TempDir(),
-		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-glm"},
-		SessionID:  "sid-glm",
-		Env:        map[string]string{"FOO": "bar"},
-		Provider:   "glm",
-		WebPort:    "8370",
-		SpawnedAt:  time.Now(),
-	}
-	if err := agentstore.Save(home, rec); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	resolveEnv := func(name string) (map[string]string, error) {
-		if name != "glm" {
-			t.Fatalf("unexpected provider %q", name)
-		}
-		return map[string]string{"ANTHROPIC_AUTH_TOKEN": "sk-glm"}, nil
-	}
-
-	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner, resolveEnv)
-	if restored != 1 {
-		t.Fatalf("expected 1 restored, got %d", restored)
-	}
-	if len(spawner.calls) != 1 {
-		t.Fatalf("expected 1 SpawnAgent call, got %d", len(spawner.calls))
-	}
-	gotEnv := spawner.calls[0].Env
-	if gotEnv["FOO"] != "bar" {
-		t.Errorf("spec env missing configured FOO=bar: %v", gotEnv)
-	}
-	if gotEnv["ANTHROPIC_AUTH_TOKEN"] != "sk-glm" {
-		t.Errorf("spec env missing resolved ANTHROPIC_AUTH_TOKEN: %v", gotEnv)
-	}
-}
-
-func TestRestoreAgentsSkipsUnresolvableProvider(t *testing.T) {
-	home := t.TempDir()
-	badRec := agentstore.Record{
-		Name:       "leo-bad",
-		Workspace:  t.TempDir(),
-		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-bad"},
-		SessionID:  "sid-bad",
-		Provider:   "glm",
-		WebPort:    "8370",
-		SpawnedAt:  time.Now(),
-	}
-	okRec := agentstore.Record{
-		Name:       "leo-ok",
-		Workspace:  t.TempDir(),
-		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-ok"},
-		SessionID:  "sid-ok",
-		WebPort:    "8370",
-		SpawnedAt:  time.Now(),
-	}
-	if err := agentstore.Save(home, badRec); err != nil {
-		t.Fatalf("seed bad: %v", err)
-	}
-	if err := agentstore.Save(home, okRec); err != nil {
-		t.Fatalf("seed ok: %v", err)
-	}
-
-	resolveEnv := func(name string) (map[string]string, error) {
-		return nil, fmt.Errorf("provider %q key unavailable", name)
-	}
-
-	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner, resolveEnv)
-	if restored != 1 {
-		t.Fatalf("expected 1 restored (only leo-ok), got %d", restored)
-	}
-	spawned := map[string]bool{}
-	for _, c := range spawner.calls {
-		spawned[c.Name] = true
-	}
-	if spawned["leo-bad"] {
-		t.Fatal("agent with unresolvable provider must not be spawned")
-	}
-	if !spawned["leo-ok"] {
-		t.Fatal("agent without a provider should still be restored")
-	}
-
-	stored, err := agentstore.Load(agentstore.FilePath(home))
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if _, ok := stored[badRec.Name]; !ok {
-		t.Fatal("record with unresolvable provider must be kept, not removed")
-	}
-}
-
-func TestRestoreAgentsNilResolver(t *testing.T) {
-	home := t.TempDir()
-	rec := agentstore.Record{
-		Name:       "leo-glm-nil",
-		Workspace:  t.TempDir(),
-		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-nil"},
-		SessionID:  "sid-nil",
-		Env:        map[string]string{"FOO": "bar"},
-		Provider:   "glm",
-		WebPort:    "8370",
-		SpawnedAt:  time.Now(),
-	}
-	if err := agentstore.Save(home, rec); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner, nil)
-	if restored != 1 {
-		t.Fatalf("expected 1 restored, got %d", restored)
-	}
-	gotEnv := spawner.calls[0].Env
-	if gotEnv["FOO"] != "bar" {
-		t.Errorf("spec env should be rec.Env as-is: %v", gotEnv)
-	}
-	if _, has := gotEnv["ANTHROPIC_AUTH_TOKEN"]; has {
-		t.Errorf("nil resolver must not inject provider vars: %v", gotEnv)
 	}
 }
 
@@ -657,7 +532,7 @@ func TestRestoreAgentsPrefersLatestJSONLAfterClear(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner, nil)
+	restored := RestoreAgents(home, "", "", spawner)
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
@@ -701,7 +576,7 @@ func TestRestoreAgentsSkipsSuspended(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	RestoreAgents(home, "", "tok", spawner, nil)
+	RestoreAgents(home, "", "tok", spawner)
 
 	spawned := map[string]bool{}
 	for _, c := range spawner.calls {
@@ -758,7 +633,7 @@ func TestRestoreAgentsHonorsNoResume(t *testing.T) {
 	}
 
 	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner, nil)
+	restored := RestoreAgents(home, "", "", spawner)
 	if restored != 1 {
 		t.Fatalf("expected 1 restored, got %d", restored)
 	}
