@@ -334,7 +334,7 @@ func TestSuperviseSessionCodexRegistersNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	spec := SessionSpec{Name: "cx", Workdir: t.TempDir(), Harness: "codex"}
-	if err := SuperviseSession(ctx, "unused-tmux-path", "unused-claude-path", spec, t.TempDir(), nil); err != nil {
+	if err := SuperviseSession(ctx, "unused-tmux-path", "unused-claude-path", spec, t.TempDir(), nil, "", nil); err != nil {
 		t.Fatalf("SuperviseSession(codex) = %v, want nil", err)
 	}
 }
@@ -343,7 +343,7 @@ func TestSuperviseSessionCodexRegistersNothing(t *testing.T) {
 // unrecognized harness must fail loudly rather than silently doing nothing.
 func TestSuperviseSessionUnknownHarnessErrors(t *testing.T) {
 	spec := SessionSpec{Name: "x", Workdir: t.TempDir(), Harness: "bogus"}
-	if err := SuperviseSession(context.Background(), "unused", "unused", spec, t.TempDir(), nil); err == nil {
+	if err := SuperviseSession(context.Background(), "unused", "unused", spec, t.TempDir(), nil, "", nil); err == nil {
 		t.Fatal("expected an error for an unsupported harness")
 	}
 }
@@ -363,7 +363,7 @@ func TestBuildSessionDispatchCodexFillsTurnArgs(t *testing.T) {
 			HarnessOptions: map[string]any{"sandbox": "workspace-write"},
 		},
 	}
-	dispatch := BuildSessionDispatch(specs, home)
+	dispatch := BuildSessionDispatch(specs, home, nil, "")
 	d, ok := dispatch[SessionTmuxName("cx")]
 	if !ok {
 		t.Fatalf("expected a dispatch entry for %q", SessionTmuxName("cx"))
@@ -388,7 +388,7 @@ func TestBuildSessionDispatchSkipsClaude(t *testing.T) {
 		{Name: "chat", Workdir: "/tmp/chat", Harness: "claude"},
 		{Name: "old", Workdir: "/tmp/old"}, // Harness == "" (pre-field record)
 	}
-	dispatch := BuildSessionDispatch(specs, t.TempDir())
+	dispatch := BuildSessionDispatch(specs, t.TempDir(), nil, "")
 	if len(dispatch) != 0 {
 		t.Fatalf("expected no dispatch entries for claude sessions, got %+v", dispatch)
 	}
@@ -400,7 +400,7 @@ func TestBuildSessionDispatchSkipsClaude(t *testing.T) {
 func TestBuildSessionDispatchOpencodeNoTurnArgs(t *testing.T) {
 	home := t.TempDir()
 	specs := []SessionSpec{{Name: "oc", Workdir: "/tmp/oc", Harness: "opencode"}}
-	dispatch := BuildSessionDispatch(specs, home)
+	dispatch := BuildSessionDispatch(specs, home, nil, "")
 	d, ok := dispatch[SessionTmuxName("oc")]
 	if !ok {
 		t.Fatalf("expected a dispatch entry for %q", SessionTmuxName("oc"))
@@ -410,5 +410,130 @@ func TestBuildSessionDispatchOpencodeNoTurnArgs(t *testing.T) {
 	}
 	if d.Handle.HomePath != home || d.Handle.TmuxSession != SessionTmuxName("oc") {
 		t.Fatalf("handle routing fields wrong: %+v", d.Handle)
+	}
+}
+
+// TestBuildSessionDispatchCodexWiresLeoMCPBridgeWhenGated verifies that a
+// codex session's TurnArgs carry the leo MCP bridge's `-c mcp_servers.leo.*`
+// overrides — including default_tools_approval_mode="approve", required or
+// codex auto-cancels every MCP tool call — when web is enabled and a token
+// is available, mirroring cli.resolveProcessLaunch's codex branch.
+func TestBuildSessionDispatchCodexWiresLeoMCPBridgeWhenGated(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true, Port: 4180}}
+	specs := []SessionSpec{{Name: "cx", Workdir: "/tmp/cx", Harness: "codex"}}
+	dispatch := BuildSessionDispatch(specs, home, cfg, "tok-123")
+	d, ok := dispatch[SessionTmuxName("cx")]
+	if !ok {
+		t.Fatalf("expected a dispatch entry for %q", SessionTmuxName("cx"))
+	}
+	joined := strings.Join(d.Handle.TurnArgs, " ")
+	if !strings.Contains(joined, `mcp_servers.leo.default_tools_approval_mode="approve"`) {
+		t.Fatalf("TurnArgs missing leo MCP bridge: %v", d.Handle.TurnArgs)
+	}
+	if !strings.Contains(joined, `mcp_servers.leo.command="leo"`) {
+		t.Fatalf("TurnArgs missing leo MCP command override: %v", d.Handle.TurnArgs)
+	}
+	if got := d.Handle.Env["LEO_PROCESS_NAME"]; got != "session:cx" {
+		t.Fatalf("handle.Env[LEO_PROCESS_NAME] = %q, want %q", got, "session:cx")
+	}
+	if d.Handle.Env["LEO_API_TOKEN"] != "tok-123" {
+		t.Fatalf("handle.Env[LEO_API_TOKEN] = %q, want %q", d.Handle.Env["LEO_API_TOKEN"], "tok-123")
+	}
+}
+
+// TestBuildSessionDispatchCodexNoBridgeWhenTokenEmpty verifies the LeoMCP
+// bridge is omitted when no web token is available — the same gate
+// resolveProcessLaunch uses (cfg.Web.Enabled && webToken != "").
+func TestBuildSessionDispatchCodexNoBridgeWhenTokenEmpty(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true, Port: 4180}}
+	specs := []SessionSpec{{Name: "cx", Workdir: "/tmp/cx", Harness: "codex"}}
+	dispatch := BuildSessionDispatch(specs, home, cfg, "")
+	d := dispatch[SessionTmuxName("cx")]
+	joined := strings.Join(d.Handle.TurnArgs, " ")
+	if strings.Contains(joined, "mcp_servers.leo") {
+		t.Fatalf("TurnArgs should not carry a leo MCP bridge without a token: %v", d.Handle.TurnArgs)
+	}
+	if len(d.Handle.Env) != 0 {
+		t.Fatalf("handle.Env should stay empty without a token, got %+v", d.Handle.Env)
+	}
+}
+
+// TestBuildOpencodeSessionLaunchDecodesPermission verifies the fix for the
+// dropped-harness_options bug: a session-declared `permission` map must
+// reach the resident `opencode serve`'s OPENCODE_CONFIG_CONTENT, not be
+// silently discarded.
+func TestBuildOpencodeSessionLaunchDecodesPermission(t *testing.T) {
+	home := t.TempDir()
+	spec := SessionSpec{
+		Name:           "oc",
+		Workdir:        t.TempDir(),
+		Model:          "anthropic/claude-sonnet-4-5",
+		Harness:        "opencode",
+		HarnessOptions: map[string]any{"permission": map[string]any{"bash": "deny"}},
+	}
+	_, env, err := buildOpencodeSessionLaunch(spec, home, nil, "")
+	if err != nil {
+		t.Fatalf("buildOpencodeSessionLaunch: %v", err)
+	}
+	content := env["OPENCODE_CONFIG_CONTENT"]
+	if content == "" {
+		t.Fatalf("expected OPENCODE_CONFIG_CONTENT to be set when permission is declared")
+	}
+	if !strings.Contains(content, `"bash":"deny"`) {
+		t.Fatalf("OPENCODE_CONFIG_CONTENT missing permission entry: %s", content)
+	}
+}
+
+// TestBuildOpencodeSessionLaunchWiresLeoMCPBridgeWhenGated mirrors the codex
+// bridge test for opencode: web+token present ⇒ OPENCODE_CONFIG_CONTENT
+// carries the mcp.leo block.
+func TestBuildOpencodeSessionLaunchWiresLeoMCPBridgeWhenGated(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true, Port: 4180}}
+	spec := SessionSpec{Name: "oc", Workdir: t.TempDir(), Harness: "opencode"}
+	_, env, err := buildOpencodeSessionLaunch(spec, home, cfg, "tok-456")
+	if err != nil {
+		t.Fatalf("buildOpencodeSessionLaunch: %v", err)
+	}
+	content := env["OPENCODE_CONFIG_CONTENT"]
+	if !strings.Contains(content, `"mcp"`) || !strings.Contains(content, `"leo"`) {
+		t.Fatalf("OPENCODE_CONFIG_CONTENT missing mcp.leo block: %s", content)
+	}
+	if !strings.Contains(content, "session:oc") {
+		t.Fatalf("OPENCODE_CONFIG_CONTENT missing LEO_PROCESS_NAME=session:oc: %s", content)
+	}
+}
+
+// TestBuildOpencodeSessionLaunchNoBridgeWhenTokenEmpty verifies the gate:
+// no token means no mcp.leo block, and (with no permission declared either)
+// no OPENCODE_CONFIG_CONTENT at all.
+func TestBuildOpencodeSessionLaunchNoBridgeWhenTokenEmpty(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true, Port: 4180}}
+	spec := SessionSpec{Name: "oc", Workdir: t.TempDir(), Harness: "opencode"}
+	_, env, err := buildOpencodeSessionLaunch(spec, home, cfg, "")
+	if err != nil {
+		t.Fatalf("buildOpencodeSessionLaunch: %v", err)
+	}
+	if _, ok := env["OPENCODE_CONFIG_CONTENT"]; ok {
+		t.Fatalf("expected no OPENCODE_CONFIG_CONTENT without a token or permission, got %q", env["OPENCODE_CONFIG_CONTENT"])
+	}
+}
+
+// TestBuildOpencodeSessionLaunchDecodeErrorPropagates verifies a malformed
+// harness_options map fails loudly (the caller — superviseOpencodeSession —
+// warns and skips the session) rather than booting opencode with the flags
+// silently dropped.
+func TestBuildOpencodeSessionLaunchDecodeErrorPropagates(t *testing.T) {
+	spec := SessionSpec{
+		Name:           "oc",
+		Workdir:        t.TempDir(),
+		Harness:        "opencode",
+		HarnessOptions: map[string]any{"permission": map[string]any{"bash": "not-a-valid-value"}},
+	}
+	if _, _, err := buildOpencodeSessionLaunch(spec, t.TempDir(), nil, ""); err == nil {
+		t.Fatal("expected a decode error for an invalid permission value")
 	}
 }

@@ -511,6 +511,18 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 
+	// sessionCfg backs the non-claude LeoMCP bridge gate (sessionLeoMCPEnv,
+	// via BuildSessionDispatch and superviseOpencodeSession): cfg.Web.Enabled
+	// determines whether a session's driver-spawned MCP subprocess is worth
+	// wiring in at all. A load failure here is non-fatal — sessionLeoMCPEnv
+	// treats a nil cfg as "gate off", so sessions still boot, just without
+	// the bridge, exactly as if web were disabled.
+	sessionCfg, sessionCfgErr := config.Load(configPath)
+	if sessionCfgErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: loading config for session LeoMCP wiring: %v\n", sessionCfgErr)
+		sessionCfg = nil
+	}
+
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath, supervisor)
@@ -527,14 +539,18 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	// the already-resolved sessionSpecs, not re-derived per invocation. A
 	// miss (claude sessions, and anything not in sessionSpecs) falls through
 	// to the historical tmux path.
-	sessionDispatch := BuildSessionDispatch(sessionSpecs, homePath)
+	sessionDispatch := BuildSessionDispatch(sessionSpecs, homePath, sessionCfg, webToken)
 	srv.SetInjector(func(ctx context.Context, tmuxSession, prompt string) (*harness.Result, error) {
 		if d, ok := sessionDispatch[tmuxSession]; ok {
 			if drv := driverFor(d.Harness); drv != nil {
 				return drv.Inject(ctx, d.Handle, prompt)
 			}
 		}
-		return nil, tmux.InjectPrompt(ctx, tmuxPath, tmuxSession, prompt)
+		// claude path stays byte-identical to before the injector gained a
+		// ctx param: the pump's per-invocation timeout is a non-claude
+		// concern (it bounds a synchronous DriveTurns turn); claude's async
+		// tmux-paste call keeps its own unbounded context.Background().
+		return nil, tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
 	})
 	srv.SetAborter(func(tmuxSession string) error {
 		if d, ok := sessionDispatch[tmuxSession]; ok {
@@ -636,7 +652,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 				sp.ResumeID = id
 			}
 			spLocal := sp
-			if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, func(_ int) {
+			if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, sessionCfg, webToken, func(_ int) {
 				supervisor.incrementRestarts(spLocal.Name)
 			}); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: supervise session %q: %v\n", spLocal.Name, err)

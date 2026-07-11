@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -96,9 +97,29 @@ func claudeSessionOptions(opts map[string]any) (claudeharness.Options, error) {
 	return o, nil
 }
 
+// sessionLeoMCPEnv gates whether a non-claude session's LeoMCP bridge should
+// be wired in, mirroring cli.processLeoMCPEnv's web+token gate exactly
+// (cfg.Web.Enabled && webToken != ""). Sessions have no equivalent of a
+// config-defined process name, so the value exported under LEO_PROCESS_NAME
+// — the only env var internal/mcp/server.go actually reads — is
+// "session:"+name, keeping it distinct from every config-defined process
+// name in the same daemon.
+func sessionLeoMCPEnv(cfg *config.Config, sessionName, webToken string) (map[string]string, bool) {
+	if cfg == nil || !cfg.Web.Enabled || webToken == "" {
+		return nil, false
+	}
+	return map[string]string{
+		"LEO_PROCESS_NAME": "session:" + sessionName,
+		"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
+		"LEO_API_TOKEN":    webToken,
+	}, true
+}
+
 // SuperviseSession launches the restart-loop for one session in its own
 // goroutine, dispatching on spec.Harness. Caller is responsible for ctx
-// lifecycle.
+// lifecycle. cfg/webToken gate the non-claude LeoMCP bridge (see
+// sessionLeoMCPEnv) — claude never consults them (its own bridge, if any,
+// rides in through a different path today).
 //
 //   - claude (or ""): byte-identical to the original tmux-hosted claude
 //     restart loop below (Stop hook, --resume recovery).
@@ -109,32 +130,50 @@ func claudeSessionOptions(opts map[string]any) (claudeharness.Options, error) {
 //     parallel to the claude one but without the Stop hook (opencode has no
 //     equivalent) and with QuickExitNone semantics — a serve crash is not a
 //     poisoned conversation, so the stored session id and args survive it.
-func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec SessionSpec, homePath string, onSessionEnd func(int)) error {
+func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec SessionSpec, homePath string, cfg *config.Config, webToken string, onSessionEnd func(int)) error {
 	switch spec.Harness {
 	case "", "claude":
 		return superviseClaudeSession(ctx, tmuxPath, claudePath, spec, homePath, onSessionEnd)
 	case "codex":
 		return nil
 	case "opencode":
-		return superviseOpencodeSession(ctx, tmuxPath, spec, homePath, onSessionEnd)
+		return superviseOpencodeSession(ctx, tmuxPath, spec, homePath, cfg, webToken, onSessionEnd)
 	default:
 		return fmt.Errorf("session %q: unsupported harness %q", spec.Name, spec.Harness)
 	}
 }
 
-// superviseOpencodeSession launches the restart-loop for a resident
-// `opencode serve` backing one persistent session. Port/password are
-// provisioned once via EnsureServerState (keyed by the session's tmux name,
-// stable across restarts) and rendered into the serve argv + env exports the
-// same way the process/agent spawn builders do (see cli.resolveProcessLaunch)
-// — this function IS that builder for the session case.
-func superviseOpencodeSession(ctx context.Context, tmuxPath string, spec SessionSpec, homePath string, onSessionEnd func(int)) error {
+// buildOpencodeSessionLaunch resolves everything superviseOpencodeSession
+// needs to launch a resident `opencode serve` for spec: harness_options are
+// decoded here (spec.HarnessOptions is the RAW map — see SessionSpec's doc
+// comment) so a config-declared `permission` map actually reaches the
+// server, matching what SessionSpecsFromConfig does for claude's own fields
+// at spec-build time. The LeoMCP bridge is wired in exactly like
+// cli.resolveProcessLaunch's opencode branch, gated by sessionLeoMCPEnv.
+// Split out from superviseOpencodeSession so it can be unit tested without
+// spawning the restart-loop goroutine.
+func buildOpencodeSessionLaunch(spec SessionSpec, homePath string, cfg *config.Config, webToken string) (args []string, env map[string]string, err error) {
 	tmuxName := SessionTmuxName(spec.Name)
 	state, err := opencodeharness.EnsureServerState(homePath, tmuxName, spec.Model)
 	if err != nil {
-		return fmt.Errorf("session %q: provisioning opencode server state: %w", spec.Name, err)
+		return nil, nil, fmt.Errorf("session %q: provisioning opencode server state: %w", spec.Name, err)
 	}
-	opts := opencodeharness.Options{ServerPort: state.Port, ServerPassword: state.Password}
+	decoded, err := opencodeharness.Opencode{}.DecodeOptions(spec.HarnessOptions)
+	if err != nil {
+		return nil, nil, fmt.Errorf("session %q: decoding opencode harness options: %w", spec.Name, err)
+	}
+	opts, ok := decoded.(opencodeharness.Options)
+	if !ok {
+		return nil, nil, fmt.Errorf("session %q: opencode DecodeOptions returned %T, want opencodeharness.Options", spec.Name, decoded)
+	}
+	opts.ServerPort = state.Port
+	opts.ServerPassword = state.Password
+	if leoEnv, ok := sessionLeoMCPEnv(cfg, spec.Name, webToken); ok {
+		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
+			Command: []string{"leo", "mcp-server"},
+			Env:     leoEnv,
+		}
+	}
 	launchSpec := harness.LaunchSpec{
 		Kind:      harness.KindSession,
 		Name:      spec.Name,
@@ -142,13 +181,27 @@ func superviseOpencodeSession(ctx context.Context, tmuxPath string, spec Session
 		Workspace: spec.Workdir,
 		Options:   opts,
 	}
-	args, err := opencodeharness.Opencode{}.Args(launchSpec)
+	args, err = opencodeharness.Opencode{}.Args(launchSpec)
 	if err != nil {
-		return fmt.Errorf("session %q: building opencode serve args: %w", spec.Name, err)
+		return nil, nil, fmt.Errorf("session %q: building opencode serve args: %w", spec.Name, err)
 	}
-	env, err := opencodeharness.Opencode{}.Env(launchSpec)
+	env, err = opencodeharness.Opencode{}.Env(launchSpec)
 	if err != nil {
-		return fmt.Errorf("session %q: building opencode env: %w", spec.Name, err)
+		return nil, nil, fmt.Errorf("session %q: building opencode env: %w", spec.Name, err)
+	}
+	return args, env, nil
+}
+
+// superviseOpencodeSession launches the restart-loop for a resident
+// `opencode serve` backing one persistent session. Port/password are
+// provisioned once via EnsureServerState (keyed by the session's tmux name,
+// stable across restarts) and rendered into the serve argv + env exports the
+// same way the process/agent spawn builders do (see cli.resolveProcessLaunch)
+// — buildOpencodeSessionLaunch IS that builder for the session case.
+func superviseOpencodeSession(ctx context.Context, tmuxPath string, spec SessionSpec, homePath string, cfg *config.Config, webToken string, onSessionEnd func(int)) error {
+	args, env, err := buildOpencodeSessionLaunch(spec, homePath, cfg, webToken)
+	if err != nil {
+		return err
 	}
 
 	// buildShell ignores resume (opencode serve has no --resume equivalent;
@@ -171,7 +224,7 @@ func superviseOpencodeSession(ctx context.Context, tmuxPath string, spec Session
 	}
 	loop := LoopSpec{
 		Name:        spec.Name,
-		SessionName: tmuxName,
+		SessionName: SessionTmuxName(spec.Name),
 		Workdir:     spec.Workdir,
 		ShellCmd:    buildShell,
 		// QuickExitNone semantics: a crashed `opencode serve` is not a
@@ -223,6 +276,20 @@ func superviseClaudeSession(ctx context.Context, tmuxPath, claudePath string, sp
 	}
 	go runSuperviseLoop(ctx, tmuxPath, loop)
 	return nil
+}
+
+// mergeEnvMaps returns a new map with override's entries layered over base.
+// Neither input is mutated. Used to merge the LeoMCP bridge's LEO_* env vars
+// into a session's own Env map without aliasing either.
+func mergeEnvMaps(base, override map[string]string) map[string]string {
+	merged := make(map[string]string, len(base)+len(override))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range override {
+		merged[k] = v
+	}
+	return merged
 }
 
 // copyEnvMap returns an independent copy of m so callers never alias a
@@ -353,17 +420,23 @@ type SessionDispatch struct {
 // codex: harness_options are decoded here (deferred from
 // SessionSpecsFromConfig, see SessionSpec.HarnessOptions) and rendered into
 // TurnArgs via the adapter's own Args() — TurnDriver.Inject appends the
-// per-message prompt on every call. A session whose options fail to decode
-// (defensive only; Validate() should have already caught this) or whose args
-// fail to build is skipped with a warning: better to leave that one session
-// undispatchable than to fail the whole daemon boot.
+// per-message prompt on every call. The LeoMCP bridge is wired in exactly
+// like cli.resolveProcessLaunch's codex branch, gated by sessionLeoMCPEnv;
+// when it fires, the same three LEO_* vars are also merged into the
+// handle's Env so TurnDriver's spawned codex process actually has them to
+// forward (the bridge's EnvVars field is only a name whitelist — codex
+// forwards whatever is already in its own environment under those names). A
+// session whose options fail to decode (defensive only; Validate() should
+// have already caught this) or whose args fail to build is skipped with a
+// warning: better to leave that one session undispatchable than to fail the
+// whole daemon boot.
 //
 // opencode: ServerDriver.Inject resolves the server URL/password itself via
 // LoadServerState(h.HomePath, h.TmuxSession) — no TurnArgs needed. The
-// resident `opencode serve` itself is provisioned separately by
-// superviseOpencodeSession; this only needs the tmux/home coordinates to
-// build the handle.
-func BuildSessionDispatch(sessionSpecs []SessionSpec, homePath string) map[string]SessionDispatch {
+// resident `opencode serve` itself (including its own LeoMCP wiring) is
+// provisioned separately by superviseOpencodeSession; this only needs the
+// tmux/home coordinates to build the handle.
+func BuildSessionDispatch(sessionSpecs []SessionSpec, homePath string, cfg *config.Config, webToken string) map[string]SessionDispatch {
 	out := map[string]SessionDispatch{}
 	for _, sp := range sessionSpecs {
 		if sp.Harness == "" || sp.Harness == "claude" {
@@ -381,10 +454,24 @@ func BuildSessionDispatch(sessionSpecs []SessionSpec, homePath string) map[strin
 		}
 		switch sp.Harness {
 		case "codex":
-			opts, err := codexharness.Codex{}.DecodeOptions(sp.HarnessOptions)
+			decoded, err := codexharness.Codex{}.DecodeOptions(sp.HarnessOptions)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: session %q: decoding codex harness options: %v (injector disabled for this session)\n", sp.Name, err)
 				continue
+			}
+			opts, ok := decoded.(codexharness.Options)
+			if !ok {
+				fmt.Fprintf(os.Stderr, "warning: session %q: codex DecodeOptions returned %T, want codexharness.Options (injector disabled for this session)\n", sp.Name, decoded)
+				continue
+			}
+			if leoEnv, ok := sessionLeoMCPEnv(cfg, sp.Name, webToken); ok {
+				opts.LeoMCP = &codexharness.LeoMCPBridge{
+					Command:      "leo",
+					Args:         []string{"mcp-server"},
+					EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+					ApprovalMode: "approve",
+				}
+				handle.Env = mergeEnvMaps(handle.Env, leoEnv)
 			}
 			args, err := codexharness.Codex{}.Args(harness.LaunchSpec{
 				Kind:      harness.KindSession,
