@@ -53,9 +53,19 @@ func LoadServerState(homePath, tmuxSession string) (ServerState, error) {
 // (port stability across restarts), or provisions a fresh one: a free
 // localhost port (allocated via a throwaway listen-then-close, since
 // `opencode serve --port 0` picks a port discoverable only via log-scraping)
-// and a random 32-hex-char password.
+// and a random 32-hex-char password. On reuse, Port/Password are kept
+// stable, but Model is refreshed to the passed-in value (and the file
+// rewritten) so a config model change actually reaches subsequent turns
+// instead of being silently stuck at whatever was provisioned first.
 func EnsureServerState(homePath, tmuxSession, model string) (ServerState, error) {
 	if s, err := LoadServerState(homePath, tmuxSession); err == nil {
+		if s.Model == model {
+			return s, nil
+		}
+		s.Model = model
+		if err := persistServerState(homePath, tmuxSession, s); err != nil {
+			return ServerState{}, err
+		}
 		return s, nil
 	}
 
@@ -68,19 +78,27 @@ func EnsureServerState(homePath, tmuxSession, model string) (ServerState, error)
 		return ServerState{}, fmt.Errorf("opencode: generating server password: %w", err)
 	}
 	state := ServerState{Port: port, Password: password, Model: model}
+	if err := persistServerState(homePath, tmuxSession, state); err != nil {
+		return ServerState{}, err
+	}
+	return state, nil
+}
 
+// persistServerState creates the state dir (if needed) and writes state for
+// tmuxSession to disk, 0600.
+func persistServerState(homePath, tmuxSession string, state ServerState) error {
 	dir := filepath.Dir(serverStatePath(homePath, tmuxSession))
 	if err := os.MkdirAll(dir, 0750); err != nil {
-		return ServerState{}, fmt.Errorf("opencode: creating server state dir %s: %w", dir, err)
+		return fmt.Errorf("opencode: creating server state dir %s: %w", dir, err)
 	}
 	data, err := json.Marshal(state)
 	if err != nil {
-		return ServerState{}, fmt.Errorf("opencode: marshaling server state: %w", err)
+		return fmt.Errorf("opencode: marshaling server state: %w", err)
 	}
 	if err := os.WriteFile(serverStatePath(homePath, tmuxSession), data, 0600); err != nil {
-		return ServerState{}, fmt.Errorf("opencode: writing server state: %w", err)
+		return fmt.Errorf("opencode: writing server state: %w", err)
 	}
-	return state, nil
+	return nil
 }
 
 // freeLocalPort binds an ephemeral TCP port on 127.0.0.1, closes it

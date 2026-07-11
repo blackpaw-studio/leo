@@ -55,6 +55,40 @@ func TestEnsureServerStateAllocatesAndPersists(t *testing.T) {
 	}
 }
 
+// TestEnsureServerStateRefreshesModelOnReuse locks in that a config model
+// change actually reaches subsequent turns: Port/Password stay stable
+// across reuse (attach URLs and any in-flight references keep working), but
+// Model tracks the caller's latest value and the on-disk file is rewritten.
+func TestEnsureServerStateRefreshesModelOnReuse(t *testing.T) {
+	home := t.TempDir()
+	first, err := EnsureServerState(home, "leo-test-model", "provider/model-a")
+	if err != nil {
+		t.Fatalf("EnsureServerState (provision): %v", err)
+	}
+
+	second, err := EnsureServerState(home, "leo-test-model", "provider/model-b")
+	if err != nil {
+		t.Fatalf("EnsureServerState (reuse with new model): %v", err)
+	}
+	if second.Port != first.Port {
+		t.Errorf("Port = %d, want unchanged %d", second.Port, first.Port)
+	}
+	if second.Password != first.Password {
+		t.Errorf("Password = %q, want unchanged %q", second.Password, first.Password)
+	}
+	if second.Model != "provider/model-b" {
+		t.Errorf("Model = %q, want %q", second.Model, "provider/model-b")
+	}
+
+	onDisk, err := LoadServerState(home, "leo-test-model")
+	if err != nil {
+		t.Fatalf("LoadServerState after refresh: %v", err)
+	}
+	if onDisk != second {
+		t.Errorf("on-disk state = %+v, want rewritten to match %+v", onDisk, second)
+	}
+}
+
 func TestEnsureServerStateDistinctSessionsGetDistinctState(t *testing.T) {
 	home := t.TempDir()
 	a, err := EnsureServerState(home, "leo-test-a", "")

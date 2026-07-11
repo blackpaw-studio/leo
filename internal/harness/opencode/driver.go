@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -223,7 +224,7 @@ func latestSessionIDForDir(ctx context.Context, workspace string) string {
 	var bestID string
 	var bestCreated int64 = -1
 	for _, e := range entries {
-		if e.Directory != workspace {
+		if !samePath(e.Directory, workspace) {
 			continue
 		}
 		if e.Created > bestCreated {
@@ -232,6 +233,26 @@ func latestSessionIDForDir(ctx context.Context, workspace string) string {
 		}
 	}
 	return bestID
+}
+
+// samePath reports whether a and b refer to the same filesystem location.
+// A plain string/Clean comparison is insufficient: opencode reports its own
+// os.Getwd()-derived path, and on macOS /tmp is a symlink to /private/tmp —
+// a leo workspace configured as /tmp/... would otherwise never match
+// opencode's self-reported /private/tmp/... Falls back to the Clean
+// comparison if EvalSymlinks fails on either side (e.g. the dir no longer
+// exists) rather than erroring, since a missing match here is tolerable —
+// the caller's fallback just returns "".
+func samePath(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, aErr := filepath.EvalSymlinks(a)
+	rb, bErr := filepath.EvalSymlinks(b)
+	if aErr != nil || bErr != nil {
+		return false
+	}
+	return ra == rb
 }
 
 // Attach returns the argv for opencode's own TUI client, pointed at the

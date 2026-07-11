@@ -478,3 +478,86 @@ func TestServerDriverAbortTurnNoOpWhenIdle(t *testing.T) {
 		t.Errorf("AbortTurn: %v", err)
 	}
 }
+
+// TestSamePath covers the directory-compare cases samePath must handle:
+// exact match, a trailing-slash/dot-segment variant that Clean already
+// normalizes, and a symlink indirection (opencode reports its own
+// os.Getwd()-derived path, and e.g. macOS /tmp -> /private/tmp means a
+// workspace configured as /tmp/... would never string-match opencode's
+// self-reported /private/tmp/... without resolving symlinks).
+func TestSamePath(t *testing.T) {
+	tmp := t.TempDir()
+	real := filepath.Join(tmp, "real")
+	if err := os.MkdirAll(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"clean-equal", real, real, true},
+		{"trailing-slash", real + "/", real, true},
+		{"dot-segment", filepath.Join(real, ".", "."), real, true},
+		{"symlink-indirection", link, real, true},
+		{"genuinely-different", real, tmp, false},
+		{"nonexistent-differs", filepath.Join(tmp, "nope-a"), filepath.Join(tmp, "nope-b"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := samePath(tt.a, tt.b); got != tt.want {
+				t.Errorf("samePath(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestServerDriverInjectSessionIDFallbackResolvesSymlinkedWorkspace locks
+// the Inject-level integration of samePath: a workspace path that is a
+// symlink to the fixture's literal "directory" value (mirroring macOS
+// /tmp -> /private/tmp) still matches via latestSessionIDForDir.
+func TestServerDriverInjectSessionIDFallbackResolvesSymlinkedWorkspace(t *testing.T) {
+	real := "/tmp/leo-e2e-ws"
+	if err := os.MkdirAll(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	linkParent := t.TempDir()
+	link := filepath.Join(linkParent, "ws-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	var calls int
+	withExecCommand(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		calls++
+		if calls == 1 {
+			return exec.CommandContext(ctx, "true") // attach run: empty stdout
+		}
+		path, err := filepath.Abs(filepath.Join("testdata", "session_list.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return exec.CommandContext(ctx, "cat", path)
+	})
+
+	home := t.TempDir()
+	writeServerState(t, home, "leo-test-symlink-fallback", ServerState{Port: 12345, Password: "x"})
+
+	ids := &memIDStore{}
+	// h.Workspace is the symlink; session_list.json's "directory" field is
+	// the real path — samePath must bridge the two.
+	h := harness.SessionHandle{TmuxSession: "leo-test-symlink-fallback", Workspace: link, HomePath: home, IDs: ids}
+
+	res, err := (ServerDriver{}).Inject(context.Background(), h, "hi")
+	if err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	if res.SessionID != listSessionID {
+		t.Errorf("Result.SessionID = %q, want %q (symlinked workspace should still match)", res.SessionID, listSessionID)
+	}
+}
