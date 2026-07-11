@@ -418,11 +418,17 @@ func (c *Config) TaskWorkspace(t TaskConfig) string {
 	return c.DefaultWorkspace()
 }
 
-// TaskModel returns the effective model for a task.
-// Cascade: task → defaults → DefaultModel.
+// TaskModel resolves the model for a task: task → defaults → built-in.
+// The defaults/built-in fall-through only applies when the task runs the
+// same harness as defaults — model names are harness-specific, so a claude
+// default like "opus" must not leak into a codex task. Empty means the
+// harness picks its own default model.
 func (c *Config) TaskModel(t TaskConfig) string {
 	if t.Model != "" {
 		return t.Model
+	}
+	if c.TaskHarness(t) != c.DefaultsHarness() {
+		return ""
 	}
 	if c.Defaults.Model != "" {
 		return c.Defaults.Model
@@ -593,6 +599,9 @@ func (c *Config) Validate() error {
 			if !h.SupportsChannels() && (len(proc.Channels) > 0 || len(proc.DevChannels) > 0) {
 				errs = append(errs, fmt.Sprintf("processes.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
 			}
+			if !h.SupportsKind(harness.KindProcess) {
+				errs = append(errs, fmt.Sprintf("processes.%s.harness: the %s harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md", name, h.Name()))
+			}
 		}
 		if proc.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("processes.%s.max_turns must not be negative", name))
@@ -646,6 +655,9 @@ func (c *Config) Validate() error {
 			}
 			if !h.SupportsChannels() && (len(tmpl.Channels) > 0 || len(tmpl.DevChannels) > 0) {
 				errs = append(errs, fmt.Sprintf("templates.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
+			if !h.SupportsKind(harness.KindAgent) {
+				errs = append(errs, fmt.Sprintf("templates.%s.harness: the %s harness cannot run ephemeral agents yet (only scheduled tasks) — see docs/configuration/harnesses.md", name, h.Name()))
 			}
 		}
 		if tmpl.MaxTurns < 0 {
@@ -705,6 +717,9 @@ func (c *Config) Validate() error {
 			if !h.SupportsChannels() && len(sess.Channels) > 0 {
 				errs = append(errs, fmt.Sprintf("sessions.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
 			}
+			if !h.SupportsKind(harness.KindSession) {
+				errs = append(errs, fmt.Sprintf("sessions.%s.harness: the %s harness cannot run persistent sessions yet (only scheduled tasks) — see docs/configuration/harnesses.md", name, h.Name()))
+			}
 		}
 		errs = appendMovedFieldErrs(errs, "sessions."+name, []movedField{
 			{sess.DeprecatedPermissionMode != "", "permission_mode"},
@@ -758,6 +773,9 @@ func (c *Config) Validate() error {
 			}
 			if !h.SupportsChannels() && (len(task.Channels) > 0 || len(task.DevChannels) > 0) {
 				errs = append(errs, fmt.Sprintf("tasks.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
+			}
+			if task.Runtime == "persistent" && !h.SupportsKind(harness.KindSession) {
+				errs = append(errs, fmt.Sprintf("tasks.%s.harness: the %s harness cannot run persistent tasks yet (persistent tasks run through sessions) — see docs/configuration/harnesses.md", name, h.Name()))
 			}
 		}
 		if task.MaxTurns < 0 {

@@ -2,8 +2,10 @@ package config
 
 import (
 	// Adapters self-register in init; config validation must be able to
-	// resolve them. Plan 3 adds codex/opencode imports here.
+	// resolve them.
 	_ "github.com/blackpaw-studio/leo/internal/harness/claude"
+	_ "github.com/blackpaw-studio/leo/internal/harness/codex"
+	_ "github.com/blackpaw-studio/leo/internal/harness/opencode"
 )
 
 // DefaultHarnessName is the harness assumed when config specifies none.
