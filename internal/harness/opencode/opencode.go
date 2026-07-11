@@ -1,8 +1,8 @@
 // Package opencode adapts leo's harness-neutral LaunchSpec to the opencode
-// CLI. Scheduled tasks run one-shot (opencode run); supervised processes and
-// ephemeral agents drive a resident `opencode serve` via ServerDriver.
-// Permissions are config-only upstream, so they ride in via the
-// OPENCODE_CONFIG_CONTENT env overlay rather than argv.
+// CLI. Scheduled tasks run one-shot (opencode run); supervised processes,
+// ephemeral agents, and persistent sessions all drive a resident
+// `opencode serve` via ServerDriver. Permissions are config-only upstream, so
+// they ride in via the OPENCODE_CONFIG_CONTENT env overlay rather than argv.
 package opencode
 
 import (
@@ -35,15 +35,15 @@ func (Opencode) ValidateModel(model string) error {
 
 func (Opencode) SupportsChannels() bool { return false }
 
-// SupportsKind: scheduled tasks plus supervised processes and ephemeral
-// agents (resident `opencode serve` via ServerDriver). Persistent sessions
-// land in a later plan.
+// SupportsKind: scheduled tasks plus supervised processes, ephemeral agents,
+// and persistent sessions — all driven against a resident `opencode serve`
+// via ServerDriver.
 func (Opencode) SupportsKind(k harness.Kind) bool {
-	return k == harness.KindTask || k == harness.KindProcess || k == harness.KindAgent
+	return k == harness.KindTask || k == harness.KindProcess || k == harness.KindAgent || k == harness.KindSession
 }
 
-// Driver: ServerDriver drives processes and ephemeral agents against a
-// resident `opencode serve`. The persistent-session driver lands later.
+// Driver: ServerDriver drives processes, ephemeral agents, and persistent
+// sessions against a resident `opencode serve`.
 func (Opencode) Driver() harness.SessionDriver { return ServerDriver{} }
 
 func (Opencode) SessionArgs(s harness.SessionState) []string {
@@ -62,7 +62,7 @@ func (o Opencode) Args(spec harness.LaunchSpec) ([]string, error) {
 		return nil, fmt.Errorf("opencode: channel plugins are not supported; use leo's MCP tools for messaging")
 	}
 
-	if spec.Kind == harness.KindProcess || spec.Kind == harness.KindAgent {
+	if spec.Kind == harness.KindProcess || spec.Kind == harness.KindAgent || spec.Kind == harness.KindSession {
 		// ServerDriver argv only: `opencode serve`. Model is per-run (Inject
 		// renders it from ServerState.Model), not per-server.
 		if opts.ServerPort == 0 {

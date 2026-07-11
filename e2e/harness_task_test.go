@@ -226,8 +226,9 @@ func TestNonClaudeValidationErrors(t *testing.T) {
 	}
 }
 
-// TestCodexProcessValidatesClean locks in that a codex process/template with
-// no channels now passes validation (Plan 4 Task 5 TurnDriver).
+// TestCodexProcessValidatesClean locks in that a codex process/template/
+// session with no channels now passes validation cleanly (Plan 4 Task 5
+// TurnDriver + Plan 4 Task 7 session drivers).
 func TestCodexProcessValidatesClean(t *testing.T) {
 	const cfg = `processes:
   worker:
@@ -246,11 +247,11 @@ sessions:
 
 	stdout, stderr, code := runLeo(t, ws, nil, "validate", "-c", filepath.Join(ws, "leo.yaml"))
 	combined := stdout + stderr
-	if code == 0 {
-		t.Fatal("expected non-zero exit: sessions.chat still rejects codex (no session driver yet)")
+	if code != 0 {
+		t.Fatalf("expected clean validation, got exit %d: %s", code, combined)
 	}
-	if !strings.Contains(combined, "cannot run persistent sessions yet") {
-		t.Errorf("validate output = %q, want to mention codex sessions still unsupported", combined)
+	if strings.Contains(combined, "cannot run persistent sessions yet") {
+		t.Errorf("validate output = %q, must not reject the codex session anymore", combined)
 	}
 	if strings.Contains(combined, "cannot run supervised processes yet") {
 		t.Errorf("validate output = %q, must not reject the codex process anymore", combined)

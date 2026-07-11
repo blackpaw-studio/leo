@@ -52,7 +52,7 @@ func TestSupportsKind(t *testing.T) {
 		{harness.KindTask, true},
 		{harness.KindProcess, true},
 		{harness.KindAgent, true},
-		{harness.KindSession, false},
+		{harness.KindSession, true},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.kind), func(t *testing.T) {
@@ -181,6 +181,15 @@ func TestCodexArgsInteractiveKindsRenderTurnPrefix(t *testing.T) {
 				"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME"]`,
 				"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`},
 		},
+		{
+			name: "KindSession turn prefix",
+			spec: harness.LaunchSpec{
+				Kind: harness.KindSession, Model: "gpt-5.3-codex",
+				Options: Options{Sandbox: "workspace-write"},
+			},
+			want: []string{"exec", "--json", "--skip-git-repo-check",
+				"--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -206,11 +215,6 @@ func TestArgsErrors(t *testing.T) {
 		spec    harness.LaunchSpec
 		wantErr string
 	}{
-		{
-			name:    "KindSession unsupported",
-			spec:    harness.LaunchSpec{Kind: harness.KindSession, Options: Options{}},
-			wantErr: `codex: session launches are not supported yet (only scheduled tasks) — session drivers land in a later plan`,
-		},
 		{
 			name:    "SessionPinned",
 			spec:    harness.LaunchSpec{Kind: harness.KindTask, Options: Options{}, Session: harness.SessionState{Mode: harness.SessionPinned, ID: "x"}},

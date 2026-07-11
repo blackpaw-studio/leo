@@ -48,6 +48,23 @@ func wrapPromptForPersistent(invID, body string, channels []string) string {
 		strings.Join(channels, ", ") + ".\n"
 }
 
+// promptForPersistent renders the prompt to enqueue for a persistent task,
+// branching on the task's harness. claude keeps wrapPromptForPersistent's
+// marker+footer wrap byte-identical (completion arrives later via the
+// Stop-hook Report path, which needs the marker to correlate). Non-claude
+// harnesses enqueue the bare assembled prompt: their driver's Inject runs
+// the turn to completion synchronously and returns a *harness.Result
+// directly to the router, so there is no async callback to correlate and no
+// marker to strip from the model's context. Channels are never non-empty
+// here for a non-claude task — SupportsChannels()==false is enforced at
+// config validation — so there is no delivery footer to omit either.
+func promptForPersistent(cfg *config.Config, task config.TaskConfig, invID, body string) string {
+	if cfg.TaskHarness(task) == "claude" {
+		return wrapPromptForPersistent(invID, body, task.Channels)
+	}
+	return body
+}
+
 // runPersistent dispatches a task through the daemon's session router rather
 // than spawning a fresh claude process. It enqueues the prompt, long-polls
 // for completion, persists the session id on success, and records history.
@@ -69,7 +86,7 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		return fmt.Errorf("assembling prompt: %w", err)
 	}
 	invID := newInvocationID16()
-	wrapped := wrapPromptForPersistent(invID, body, task.Channels)
+	wrapped := promptForPersistent(cfg, task, invID, body)
 
 	timeout := cfg.TaskTimeout(task)
 	// Allow a small grace window on top of the per-task timeout so the

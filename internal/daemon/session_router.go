@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"sync"
@@ -206,7 +207,15 @@ func (r *sessionRouter) QueueDepth(session string) int {
 // later via Report or the pump's timeout). A non-nil *harness.Result means
 // the turn already ran to completion synchronously; the pump marks the
 // invocation completed immediately instead of waiting.
-type injectFn func(tmuxSession, prompt string) (*harness.Result, error)
+//
+// ctx carries the invocation's deadline (set by the pump from
+// PendingInvocation.Timeout — see the pump loop below): a synchronous driver
+// (DriveTurns) must thread it into its exec.CommandContext so a hung turn is
+// actually killed, not just abandoned. The async claude tmux path receives
+// the same ctx but today's tmux.InjectPrompt call completes almost
+// instantly, so the deadline is inert there — the pump's own outer timer
+// (unchanged) still governs the async wait for a Report.
+type injectFn func(ctx context.Context, tmuxSession, prompt string) (*harness.Result, error)
 type abortFn func(tmuxSession string) error
 
 // SetInjector / SetAborter wire the tmux primitives (or test fakes).
@@ -397,7 +406,16 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			target := q.tmuxSession
 			q.mu.Unlock()
 
-			res, err := r.currentInjector()(target, next.Prompt)
+			// injCtx bounds the injector call itself to the invocation's
+			// timeout: a DriveTurns driver's Inject blocks for the whole
+			// turn, so this is what actually kills a hung turn (via
+			// exec.CommandContext deep inside the driver). The claude tmux
+			// path ignores the deadline in practice (InjectPrompt returns
+			// almost instantly) and still relies on the outer timer below
+			// for its async completion wait.
+			injCtx, injCancel := context.WithTimeout(context.Background(), next.Timeout)
+			res, err := r.currentInjector()(injCtx, target, next.Prompt)
+			injCancel()
 			if err != nil {
 				r.completeInFlight(q, next, InvocationResult{OK: false, Err: "inject: " + err.Error()})
 				continue

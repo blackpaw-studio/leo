@@ -106,7 +106,7 @@ func extractMarker(prompt string) string {
 // the session name so callers can assert resume continuity.
 func installAutoResponder(t *testing.T, srv *daemon.Server, ws string, cap *promptCapture) {
 	t.Helper()
-	srv.SetInjector(func(session, prompt string) (*harness.Result, error) {
+	srv.SetInjector(func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 		cap.record(session, prompt)
 		invID := extractMarker(prompt)
 		if invID == "" {
@@ -176,7 +176,7 @@ func (g *gatedResponder) release(invID string) {
 
 func installGatedResponder(t *testing.T, srv *daemon.Server, ws string, g *gatedResponder) {
 	t.Helper()
-	srv.SetInjector(func(session, prompt string) (*harness.Result, error) {
+	srv.SetInjector(func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 		g.cap.record(session, prompt)
 		invID := extractMarker(prompt)
 		if invID == "" {

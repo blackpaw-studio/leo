@@ -53,7 +53,7 @@ func TestSupportsKind(t *testing.T) {
 		{harness.KindTask, true},
 		{harness.KindProcess, true},
 		{harness.KindAgent, true},
-		{harness.KindSession, false},
+		{harness.KindSession, true},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.kind), func(t *testing.T) {
@@ -133,6 +133,14 @@ func TestArgs(t *testing.T) {
 			},
 			want: []string{"serve", "--port", "51000", "--hostname", "127.0.0.1"},
 		},
+		{
+			name: "KindSession serve argv",
+			spec: harness.LaunchSpec{
+				Kind:    harness.KindSession,
+				Options: Options{ServerPort: 51500},
+			},
+			want: []string{"serve", "--port", "51500", "--hostname", "127.0.0.1"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -164,9 +172,9 @@ func TestArgsErrors(t *testing.T) {
 			wantErr: `opencode: internal error: server port not provisioned`,
 		},
 		{
-			name:    "KindSession unsupported",
+			name:    "KindSession without provisioned port",
 			spec:    harness.LaunchSpec{Kind: harness.KindSession, Options: Options{}},
-			wantErr: `opencode: session launches are not supported yet (only scheduled tasks) — session drivers land in a later plan`,
+			wantErr: `opencode: internal error: server port not provisioned`,
 		},
 		{
 			name:    "SessionPinned",

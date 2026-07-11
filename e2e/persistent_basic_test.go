@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -124,7 +125,7 @@ tasks:
 	// will time out via the router's pump deadline. This drives both
 	// the original failure path AND lets us assert the follow-up notice
 	// reached the same session.
-	srv.SetInjector(func(session, prompt string) (*harness.Result, error) {
+	srv.SetInjector(func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 		cap.record(session, prompt)
 		return nil, nil
 	})
@@ -160,6 +161,81 @@ tasks:
 	}
 	if notice.InvID == "" {
 		t.Error("follow-up notice should carry its own invocation marker")
+	}
+}
+
+// TestPersistentRuntimeNonClaudeSyncCompletion drives a codex persistent
+// task end-to-end against a real daemon whose injector stands in for the
+// codex driver's synchronous DriveTurns completion (a non-nil *harness.Result
+// returned directly from the injector, no async Report round-trip). It
+// asserts: (1) the enqueued prompt is bare — no leo:invocation marker, since
+// a synchronous driver has nothing to correlate a later Stop-hook callback
+// against — (2) leo run exits 0, and (3) the driver's returned SessionID is
+// persisted under the session name, mirroring the claude Report path's
+// session-id persistence.
+func TestPersistentRuntimeNonClaudeSyncCompletion(t *testing.T) {
+	dir := mkTempE2EDir(t, "leo-e2e-persist-nonclaude-*")
+
+	cfgYAML := fmt.Sprintf(`defaults:
+  max_turns: 15
+tasks:
+  nightly:
+    workspace: %s
+    schedule: "0 9 * * *"
+    prompt_file: prompts/NIGHTLY.md
+    runtime: persistent
+    harness: codex
+    enabled: true
+`, dir)
+
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatalf("writing leo.yaml: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	const promptBody = "Run the nightly build."
+	if err := os.WriteFile(filepath.Join(dir, "prompts/NIGHTLY.md"), []byte(promptBody+"\n"), 0o644); err != nil {
+		t.Fatalf("writing prompt: %v", err)
+	}
+
+	srv := startDaemon(t, dir, cfgPath)
+	cap := &promptCapture{}
+	srv.SetInjector(func(ctx context.Context, session, prompt string) (*harness.Result, error) {
+		cap.record(session, prompt)
+		return &harness.Result{Text: "done", SessionID: "thread-1"}, nil
+	})
+	srv.SetAborter(func(session string) error { return nil })
+
+	stdout, stderr, code := runLeo(t, dir, nil, "run", "nightly", "-c", cfgPath)
+	if code != 0 {
+		t.Fatalf("leo run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	rows := cap.snapshot()
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 injected prompt, got %d", len(rows))
+	}
+	row := rows[0]
+	if row.Session != "leo-session-nightly" {
+		t.Errorf("injected session = %q, want %q", row.Session, "leo-session-nightly")
+	}
+	if strings.Contains(row.Prompt, "leo:invocation=") {
+		t.Errorf("codex prompt must be bare (no marker), got %q", row.Prompt)
+	}
+	if row.Prompt != promptBody+"\n" {
+		t.Errorf("codex prompt = %q, want bare body %q", row.Prompt, promptBody+"\n")
+	}
+
+	entry := pollHistoryEntry(t, dir, "nightly", 0, 3*time.Second)
+	if entry.Reason != history.ReasonSuccess {
+		t.Errorf("history reason = %q, want %q", entry.Reason, history.ReasonSuccess)
+	}
+
+	got := pollStoredSessionID(t, dir, "nightly", 3*time.Second)
+	if got != "thread-1" {
+		t.Errorf("stored session id = %q, want %q", got, "thread-1")
 	}
 }
 

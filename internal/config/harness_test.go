@@ -534,70 +534,6 @@ func TestValidateModelDelegation(t *testing.T) {
 	}
 }
 
-// TestValidateKindSupportErrors locks in the exact per-scope error strings
-// emitted when a scope's harness cannot run that scope's kind. codex gained
-// KindProcess/KindAgent support in Plan 4 Task 5 (TurnDriver) and opencode
-// gained the same in Plan 4 Task 6 (ServerDriver) — their process/template
-// cases moved to TestValidateKindSupportHappyPath below. codex/opencode
-// sessions and persistent tasks still reject pending the session driver.
-func TestValidateKindSupportErrors(t *testing.T) {
-	tests := []struct {
-		name  string
-		apply func(*Config)
-		want  string
-	}{
-		{
-			"sessions: opencode cannot run persistent sessions",
-			func(c *Config) {
-				c.Sessions = map[string]SessionConfig{"chat": {Workspace: "/tmp/ws", Harness: "opencode"}}
-			},
-			"sessions.chat.harness: the opencode harness cannot run persistent sessions yet (only scheduled tasks) — see docs/configuration/harnesses.md",
-		},
-		{
-			"sessions: codex cannot run persistent sessions",
-			func(c *Config) {
-				c.Sessions = map[string]SessionConfig{"chat": {Workspace: "/tmp/ws", Harness: "codex"}}
-			},
-			"sessions.chat.harness: the codex harness cannot run persistent sessions yet (only scheduled tasks) — see docs/configuration/harnesses.md",
-		},
-		{
-			"tasks: opencode persistent runtime cannot run through sessions",
-			func(c *Config) {
-				c.Tasks = map[string]TaskConfig{"nightly": {
-					Schedule: "0 * * * *", PromptFile: "p.md",
-					Harness: "opencode", Runtime: "persistent",
-					Workspace: "/tmp/ws",
-				}}
-			},
-			"tasks.nightly.harness: the opencode harness cannot run persistent tasks yet (persistent tasks run through sessions) — see docs/configuration/harnesses.md",
-		},
-		{
-			"tasks: codex persistent runtime cannot run through sessions",
-			func(c *Config) {
-				c.Tasks = map[string]TaskConfig{"nightly": {
-					Schedule: "0 * * * *", PromptFile: "p.md",
-					Harness: "codex", Runtime: "persistent",
-					Workspace: "/tmp/ws",
-				}}
-			},
-			"tasks.nightly.harness: the codex harness cannot run persistent tasks yet (persistent tasks run through sessions) — see docs/configuration/harnesses.md",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15}, HomePath: "/tmp/leo"}
-			tt.apply(cfg)
-			err := cfg.Validate()
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if got := err.Error(); !strings.Contains(got, tt.want) {
-				t.Errorf("error = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 // TestValidateKindSupportHappyPath confirms codex/opencode tasks with valid
 // harness_options and models validate cleanly, and that the existing
 // SupportsChannels() check still fires with codex named in the message.
@@ -694,6 +630,58 @@ func TestValidateKindSupportHappyPath(t *testing.T) {
 			Defaults:  DefaultsConfig{Model: "anthropic/claude-sonnet-4-5", MaxTurns: 15, Harness: "opencode"},
 			HomePath:  "/tmp/leo",
 			Processes: map[string]ProcessConfig{"plain": {Enabled: true}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("codex session validates clean (Plan 4 Task 7 session drivers)", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Sessions: map[string]SessionConfig{"chat": {Workspace: "/tmp/ws", Harness: "codex"}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("opencode session validates clean (Plan 4 Task 7 session drivers)", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Sessions: map[string]SessionConfig{"chat": {Workspace: "/tmp/ws", Harness: "opencode"}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("codex persistent task validates clean (Plan 4 Task 7 session drivers)", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Tasks: map[string]TaskConfig{"nightly": {
+				Schedule: "0 * * * *", PromptFile: "p.md",
+				Harness: "codex", Runtime: "persistent",
+				Workspace: "/tmp/ws",
+			}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("opencode persistent task validates clean (Plan 4 Task 7 session drivers)", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Tasks: map[string]TaskConfig{"nightly": {
+				Schedule: "0 * * * *", PromptFile: "p.md",
+				Harness: "opencode", Runtime: "persistent",
+				Workspace: "/tmp/ws",
+			}},
 		}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate() = %v, want nil", err)

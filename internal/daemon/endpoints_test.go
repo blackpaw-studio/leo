@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +19,7 @@ import (
 func newServerWithRouter(t *testing.T) (*Server, *sessionRouter, *httptest.Server) {
 	t.Helper()
 	s := &Server{router: newSessionRouter()}
-	s.router.SetInjector(func(session, prompt string) (*harness.Result, error) { return nil, nil })
+	s.router.SetInjector(func(ctx context.Context, session, prompt string) (*harness.Result, error) { return nil, nil })
 	s.router.SetAborter(func(session string) error { return nil })
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /task/enqueue", s.handleTaskEnqueue)

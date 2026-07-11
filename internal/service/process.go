@@ -518,16 +518,34 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
 	srv.SetLogPath(LogPathFor(homePath))
-	// Wire the session router's injector here (rather than inside daemon.New)
-	// because deciding how to inject requires resolving harness config, which
-	// only this layer (owning []ProcessSpec / harness drivers) can do without
-	// pulling config resolution into the IPC package. Today every persistent
-	// task session is claude-only (codex/opencode can't yet pass validation
-	// for interactive kinds), so this closure only carries the tmux path; a
-	// later task extends it to dispatch through a per-session SessionDriver
-	// for non-claude harnesses.
-	srv.SetInjector(func(tmuxSession, prompt string) (*harness.Result, error) {
-		return nil, tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
+	// Wire the session router's injector/aborter here (rather than inside
+	// daemon.New) because deciding how to inject requires resolving harness
+	// config, which only this layer (owning []ProcessSpec/[]SessionSpec /
+	// harness drivers) can do without pulling config resolution into the IPC
+	// package. sessionDispatch is a tmux-session-keyed table of every
+	// non-claude session's (harness, SessionHandle) — built once here from
+	// the already-resolved sessionSpecs, not re-derived per invocation. A
+	// miss (claude sessions, and anything not in sessionSpecs) falls through
+	// to the historical tmux path.
+	sessionDispatch := BuildSessionDispatch(sessionSpecs, homePath)
+	srv.SetInjector(func(ctx context.Context, tmuxSession, prompt string) (*harness.Result, error) {
+		if d, ok := sessionDispatch[tmuxSession]; ok {
+			if drv := driverFor(d.Harness); drv != nil {
+				return drv.Inject(ctx, d.Handle, prompt)
+			}
+		}
+		return nil, tmux.InjectPrompt(ctx, tmuxPath, tmuxSession, prompt)
+	})
+	srv.SetAborter(func(tmuxSession string) error {
+		if d, ok := sessionDispatch[tmuxSession]; ok {
+			if drv := driverFor(d.Harness); drv != nil {
+				if aborter, ok := drv.(harness.TurnAborter); ok {
+					return aborter.AbortTurn(d.Handle)
+				}
+				return nil // driver has no in-flight turn to cancel
+			}
+		}
+		return tmux.AbortPrompt(context.Background(), tmuxPath, tmuxSession)
 	})
 	// specsByName backs the process-side web message-dispatch resolver
 	// (below): a name-keyed snapshot of the config-defined []ProcessSpec,

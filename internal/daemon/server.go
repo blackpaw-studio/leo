@@ -312,7 +312,7 @@ func (s *Server) Shutdown() error {
 // called before StartPump for any session — service boot calls this with a
 // harness-aware closure once (see internal/service/process.go); tests call
 // it with a fake.
-func (s *Server) SetInjector(fn func(session, prompt string) (*harness.Result, error)) {
+func (s *Server) SetInjector(fn func(ctx context.Context, session, prompt string) (*harness.Result, error)) {
 	s.router.SetInjector(fn)
 }
 

@@ -917,9 +917,9 @@ func TestValidateTaskEnvKeys(t *testing.T) {
 	}
 }
 
-// TestValidateHarnessKindSupport locks in the Plan-4-Task-5 config flip:
-// codex processes/templates now pass SupportsKind, while codex sessions and
-// persistent tasks still reject (no session driver yet).
+// TestValidateHarnessKindSupport locks in the harness/kind support matrix:
+// codex processes/templates (Plan 4 Task 5) and codex sessions/persistent
+// tasks (Plan 4 Task 7 session drivers) all pass SupportsKind now.
 func TestValidateHarnessKindSupport(t *testing.T) {
 	t.Run("process on codex is valid", func(t *testing.T) {
 		cfg := &Config{
@@ -943,22 +943,29 @@ func TestValidateHarnessKindSupport(t *testing.T) {
 		}
 	})
 
-	t.Run("session on codex still errors", func(t *testing.T) {
+	t.Run("session on codex is now valid", func(t *testing.T) {
 		cfg := &Config{
 			Sessions: map[string]SessionConfig{
 				"s": {Harness: "codex", Workspace: "/tmp/leo/workspace"},
 			},
 		}
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !contains(err.Error(), "sessions.s.harness: the codex harness cannot run persistent sessions yet") {
-			t.Errorf("error = %q, want mention of persistent sessions", err.Error())
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
 		}
 	})
 
-	t.Run("persistent task on codex still errors", func(t *testing.T) {
+	t.Run("session on opencode is now valid", func(t *testing.T) {
+		cfg := &Config{
+			Sessions: map[string]SessionConfig{
+				"s": {Harness: "opencode", Workspace: "/tmp/leo/workspace"},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("persistent task on codex is now valid", func(t *testing.T) {
 		cfg := &Config{
 			Tasks: map[string]TaskConfig{
 				"t": {
@@ -970,12 +977,25 @@ func TestValidateHarnessKindSupport(t *testing.T) {
 				},
 			},
 		}
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
 		}
-		if !contains(err.Error(), "tasks.t.harness: the codex harness cannot run persistent tasks yet") {
-			t.Errorf("error = %q, want mention of persistent tasks", err.Error())
+	})
+
+	t.Run("persistent task on opencode is now valid", func(t *testing.T) {
+		cfg := &Config{
+			Tasks: map[string]TaskConfig{
+				"t": {
+					Harness:    "opencode",
+					Schedule:   "0 * * * *",
+					PromptFile: "HEARTBEAT.md",
+					Runtime:    "persistent",
+					Enabled:    true,
+				},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
 		}
 	})
 

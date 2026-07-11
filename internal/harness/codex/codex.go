@@ -1,7 +1,9 @@
 // Package codex adapts leo's harness-neutral LaunchSpec to the OpenAI Codex
-// CLI. One-shot tasks only (codex exec); session drivers land in a later
-// plan. Headless exec always runs with approval policy "never" (upstream
-// removed the flag), so the only permission knob is the sandbox.
+// CLI. Scheduled tasks run one-shot (codex exec); supervised processes,
+// ephemeral agents, and persistent sessions all drive turn-per-invocation via
+// TurnDriver (no resident process). Headless exec always runs with approval
+// policy "never" (upstream removed the flag), so the only permission knob is
+// the sandbox.
 package codex
 
 import (
@@ -30,15 +32,14 @@ func (Codex) ValidateModel(model string) error {
 
 func (Codex) SupportsChannels() bool { return false }
 
-// SupportsKind: scheduled tasks plus supervised processes and ephemeral
-// agents (turn-per-process via TurnDriver). Persistent sessions land in a
-// later plan.
+// SupportsKind: scheduled tasks, supervised processes, ephemeral agents, and
+// persistent sessions — all driven turn-per-invocation via TurnDriver.
 func (Codex) SupportsKind(k harness.Kind) bool {
-	return k == harness.KindTask || k == harness.KindProcess || k == harness.KindAgent
+	return k == harness.KindTask || k == harness.KindProcess || k == harness.KindAgent || k == harness.KindSession
 }
 
-// Driver: TurnDriver drives processes and ephemeral agents turn-per-process.
-// The persistent-session driver lands in a later plan.
+// Driver: TurnDriver drives processes, ephemeral agents, and persistent
+// sessions turn-per-invocation (no resident process).
 func (Codex) Driver() harness.SessionDriver { return TurnDriver{} }
 
 // Env: codex needs no adapter-injected env. Auth (CODEX_API_KEY or ambient
@@ -56,12 +57,6 @@ func (Codex) SessionArgs(s harness.SessionState) []string {
 }
 
 func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
-	// KindSession (persistent, resident sessions) has no driver yet; that
-	// lands in a later plan. KindProcess/KindAgent are turn-per-process via
-	// TurnDriver and render below.
-	if spec.Kind == harness.KindSession {
-		return nil, fmt.Errorf("codex: %s launches are not supported yet (only scheduled tasks) — session drivers land in a later plan", spec.Kind)
-	}
 	opts, ok := spec.Options.(Options)
 	if !ok {
 		return nil, fmt.Errorf("codex: spec.Options is %T, want codex.Options", spec.Options)
@@ -85,7 +80,7 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 	}
 	args = append(args, opts.LeoMCP.configArgs()...)
 
-	if spec.Kind == harness.KindProcess || spec.Kind == harness.KindAgent {
+	if spec.Kind == harness.KindProcess || spec.Kind == harness.KindAgent || spec.Kind == harness.KindSession {
 		// Turn prefix only: TurnDriver appends ["resume", id] and the
 		// per-message prompt on each Inject/Start.
 		return args, nil
