@@ -3,6 +3,7 @@ package cli
 import (
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -166,9 +167,7 @@ func TestResolveSessionStateStoredIDResumes(t *testing.T) {
 // TestResolveProcessLaunchCodexFillsLeoMCPBridge locks the type-switch's
 // codex branch: when the leo MCP gate passes (web enabled + a non-empty
 // webToken), the codex options carry a LeoMCP bridge referencing the env-var
-// *names* the supervisor already exports — no literal token needed. Args()
-// itself still refuses KindProcess launches (no codex session driver yet),
-// so this asserts on spec.Options directly rather than the rendered argv.
+// *names* the supervisor already exports — no literal token needed.
 func TestResolveProcessLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: t.TempDir(),
@@ -199,9 +198,16 @@ func TestResolveProcessLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 		t.Errorf("LeoMCP.ApprovalMode = %q, want approve", opts.LeoMCP.ApprovalMode)
 	}
 
-	// Args() itself still errors — codex has no session driver for processes yet.
-	if _, err := h.Args(spec); err == nil {
-		t.Error("expected codex Args() to still refuse a KindProcess launch")
+	// Args() now renders the turn-prefix argv for KindProcess (TurnDriver,
+	// Plan 4 Task 5): the leo MCP bridge config lands in the prefix, ready
+	// for TurnArgs to be appended per-turn.
+	args, err := h.Args(spec)
+	if err != nil {
+		t.Fatalf("Args(): %v", err)
+	}
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "mcp_servers.leo.command=\"leo\"") {
+		t.Errorf("Args() = %v, want the leo MCP bridge config", args)
 	}
 }
 

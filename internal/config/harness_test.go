@@ -535,9 +535,11 @@ func TestValidateModelDelegation(t *testing.T) {
 }
 
 // TestValidateKindSupportErrors locks in the exact per-scope error strings
-// emitted when a scope's harness cannot run that scope's kind — codex and
-// opencode currently support KindTask only (Plan 4 adds KindProcess/
-// KindAgent/KindSession).
+// emitted when a scope's harness cannot run that scope's kind. codex gained
+// KindProcess/KindAgent support in Plan 4 Task 5 (TurnDriver) — its
+// process/template cases moved to TestValidateKindSupportHappyPath below.
+// opencode remains KindTask-only; codex sessions/persistent-tasks still
+// reject pending the session driver.
 func TestValidateKindSupportErrors(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -545,11 +547,11 @@ func TestValidateKindSupportErrors(t *testing.T) {
 		want  string
 	}{
 		{
-			"processes: codex cannot run supervised processes",
+			"processes: opencode cannot run supervised processes",
 			func(c *Config) {
-				c.Processes = map[string]ProcessConfig{"builder": {Harness: "codex", Enabled: true}}
+				c.Processes = map[string]ProcessConfig{"builder": {Harness: "opencode", Enabled: true}}
 			},
-			"processes.builder.harness: the codex harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md",
+			"processes.builder.harness: the opencode harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md",
 		},
 		{
 			"templates: opencode cannot run ephemeral agents",
@@ -577,12 +579,23 @@ func TestValidateKindSupportErrors(t *testing.T) {
 			"tasks.nightly.harness: the opencode harness cannot run persistent tasks yet (persistent tasks run through sessions) — see docs/configuration/harnesses.md",
 		},
 		{
+			"tasks: codex persistent runtime cannot run through sessions",
+			func(c *Config) {
+				c.Tasks = map[string]TaskConfig{"nightly": {
+					Schedule: "0 * * * *", PromptFile: "p.md",
+					Harness: "codex", Runtime: "persistent",
+					Workspace: "/tmp/ws",
+				}}
+			},
+			"tasks.nightly.harness: the codex harness cannot run persistent tasks yet (persistent tasks run through sessions) — see docs/configuration/harnesses.md",
+		},
+		{
 			"processes: inherited harness from defaults still errors",
 			func(c *Config) {
-				c.Defaults.Harness = "codex"
+				c.Defaults.Harness = "opencode"
 				c.Processes = map[string]ProcessConfig{"plain": {Enabled: true}}
 			},
-			"processes.plain.harness: the codex harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md",
+			"processes.plain.harness: the opencode harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md",
 		},
 	}
 	for _, tt := range tests {
@@ -614,6 +627,47 @@ func TestValidateKindSupportHappyPath(t *testing.T) {
 				Model:          "gpt-5.3-codex",
 				HarnessOptions: map[string]any{"sandbox": "workspace-write"},
 			}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("codex process validates clean (Plan 4 Task 5 TurnDriver)", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Processes: map[string]ProcessConfig{"builder": {
+				Harness:        "codex",
+				Model:          "gpt-5.3-codex",
+				HarnessOptions: map[string]any{"sandbox": "workspace-write"},
+				Enabled:        true,
+			}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("codex template validates clean (Plan 4 Task 5 TurnDriver)", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Templates: map[string]TemplateConfig{"helper": {
+				Harness: "codex",
+				Model:   "gpt-5.3-codex",
+			}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("codex process inherited from defaults validates clean", func(t *testing.T) {
+		cfg := &Config{
+			Defaults:  DefaultsConfig{Model: "sonnet", MaxTurns: 15, Harness: "codex"},
+			HomePath:  "/tmp/leo",
+			Processes: map[string]ProcessConfig{"plain": {Enabled: true}},
 		}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate() = %v, want nil", err)

@@ -200,6 +200,10 @@ func TestOpencodeTruncatedStreamStillSucceeds(t *testing.T) {
 	}
 }
 
+// TestNonClaudeValidationErrors covers a harness/scope combination that
+// still fails validation after Plan 4 Task 5 (codex TurnDriver): codex
+// processes are now supported, but channel plugins never are for codex — it
+// has no channel-plugin concept, only leo's MCP tools.
 func TestNonClaudeValidationErrors(t *testing.T) {
 	const cfg = `processes:
   worker:
@@ -217,8 +221,42 @@ func TestNonClaudeValidationErrors(t *testing.T) {
 	}
 
 	combined := stdout + stderr
-	if !strings.Contains(combined, "cannot run supervised processes yet") {
-		t.Errorf("validate output = %q, want to mention that the codex harness cannot run supervised processes", combined)
+	if !strings.Contains(combined, "does not support channel plugins") {
+		t.Errorf("validate output = %q, want to mention that the codex harness does not support channel plugins", combined)
+	}
+}
+
+// TestCodexProcessValidatesClean locks in that a codex process/template with
+// no channels now passes validation (Plan 4 Task 5 TurnDriver).
+func TestCodexProcessValidatesClean(t *testing.T) {
+	const cfg = `processes:
+  worker:
+    workspace: %s
+    harness: codex
+templates:
+  helper:
+    harness: codex
+sessions:
+  chat:
+    workspace: %s
+    harness: codex
+`
+	ws := setupWorkspace(t, cfg, nil)
+	fixWorkspaceInConfig(t, ws)
+
+	stdout, stderr, code := runLeo(t, ws, nil, "validate", "-c", filepath.Join(ws, "leo.yaml"))
+	combined := stdout + stderr
+	if code == 0 {
+		t.Fatal("expected non-zero exit: sessions.chat still rejects codex (no session driver yet)")
+	}
+	if !strings.Contains(combined, "cannot run persistent sessions yet") {
+		t.Errorf("validate output = %q, want to mention codex sessions still unsupported", combined)
+	}
+	if strings.Contains(combined, "cannot run supervised processes yet") {
+		t.Errorf("validate output = %q, must not reject the codex process anymore", combined)
+	}
+	if strings.Contains(combined, "cannot run ephemeral agents yet") {
+		t.Errorf("validate output = %q, must not reject the codex template anymore", combined)
 	}
 }
 

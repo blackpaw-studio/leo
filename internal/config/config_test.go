@@ -917,6 +917,85 @@ func TestValidateTaskEnvKeys(t *testing.T) {
 	}
 }
 
+// TestValidateHarnessKindSupport locks in the Plan-4-Task-5 config flip:
+// codex processes/templates now pass SupportsKind, while codex sessions and
+// persistent tasks still reject (no session driver yet).
+func TestValidateHarnessKindSupport(t *testing.T) {
+	t.Run("process on codex is valid", func(t *testing.T) {
+		cfg := &Config{
+			Processes: map[string]ProcessConfig{
+				"p": {Harness: "codex", Enabled: true},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("template on codex is valid", func(t *testing.T) {
+		cfg := &Config{
+			Templates: map[string]TemplateConfig{
+				"t": {Harness: "codex"},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("session on codex still errors", func(t *testing.T) {
+		cfg := &Config{
+			Sessions: map[string]SessionConfig{
+				"s": {Harness: "codex", Workspace: "/tmp/leo/workspace"},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !contains(err.Error(), "sessions.s.harness: the codex harness cannot run persistent sessions yet") {
+			t.Errorf("error = %q, want mention of persistent sessions", err.Error())
+		}
+	})
+
+	t.Run("persistent task on codex still errors", func(t *testing.T) {
+		cfg := &Config{
+			Tasks: map[string]TaskConfig{
+				"t": {
+					Harness:    "codex",
+					Schedule:   "0 * * * *",
+					PromptFile: "HEARTBEAT.md",
+					Runtime:    "persistent",
+					Enabled:    true,
+				},
+			},
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !contains(err.Error(), "tasks.t.harness: the codex harness cannot run persistent tasks yet") {
+			t.Errorf("error = %q, want mention of persistent tasks", err.Error())
+		}
+	})
+
+	t.Run("scheduled (non-persistent) task on codex is valid", func(t *testing.T) {
+		cfg := &Config{
+			Tasks: map[string]TaskConfig{
+				"t": {
+					Harness:    "codex",
+					Schedule:   "0 * * * *",
+					PromptFile: "HEARTBEAT.md",
+					Enabled:    true,
+				},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+}
+
 func TestValidateChannelPattern(t *testing.T) {
 	cfg := &Config{
 		Processes: map[string]ProcessConfig{
