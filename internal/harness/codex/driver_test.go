@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -201,6 +202,78 @@ func TestTurnDriverStaleResumeFallsBackFresh(t *testing.T) {
 	}
 	if res.Text != freshText {
 		t.Errorf("Result.Text = %q, want %q", res.Text, freshText)
+	}
+}
+
+// TestTurnDriverAbortDuringTurnDoesNotMisclassifyAsStale guards against
+// AbortTurn's cancellation being confused with the stale-thread ("no
+// rollout found") shape: both produce exit!=0 with empty stdout. An abort
+// must return an error immediately — never clearing a valid stored id or
+// silently re-running the message as a fresh turn.
+func TestTurnDriverAbortDuringTurnDoesNotMisclassifyAsStale(t *testing.T) {
+	var calls int32
+	withExecCommand(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		atomic.AddInt32(&calls, 1)
+		return exec.CommandContext(ctx, "sh", "-c", "sleep 5")
+	})
+
+	ids := &memIDStore{}
+	ids.Set("th_valid")
+	h := harness.SessionHandle{
+		TmuxSession: "leo-test-abort",
+		Workspace:   t.TempDir(),
+		HomePath:    t.TempDir(),
+		TurnArgs:    []string{"exec", "--json", "--skip-git-repo-check"},
+		IDs:         ids,
+	}
+
+	type outcome struct {
+		res *harness.Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := (TurnDriver{}).Inject(context.Background(), h, "hi")
+		done <- outcome{res, err}
+	}()
+
+	// Wait for the turn to register its cancel func (i.e. the child is
+	// about to run), then abort it.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := aborts.Load(h.TmuxSession); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the turn to start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := (TurnDriver{}).AbortTurn(h); err != nil {
+		t.Fatalf("AbortTurn: %v", err)
+	}
+
+	var out outcome
+	select {
+	case out = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Inject did not return after abort")
+	}
+
+	if out.err == nil {
+		t.Fatal("expected an error for an aborted turn")
+	}
+	if !strings.Contains(out.err.Error(), "turn cancelled") {
+		t.Errorf("err = %v, want to mention turn cancelled", out.err)
+	}
+	if out.res != nil {
+		t.Errorf("res = %v, want nil", out.res)
+	}
+	if ids.Get() != "th_valid" {
+		t.Errorf("IDs.Get() = %q, want unchanged %q (abort must not clear a valid thread id)", ids.Get(), "th_valid")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("exec calls = %d, want exactly 1 (no fresh retry after an abort)", got)
 	}
 }
 

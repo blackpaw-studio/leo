@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,10 +20,16 @@ var execCommand = exec.CommandContext
 
 // turnMu serializes turns per session: concurrent Injects into the same
 // codex thread would interleave rollout writes.
+//
+// TODO: entries are never evicted (bounded by distinct TmuxSession/session-
+// name cardinality, so not an unbounded leak) — tying eviction to process/
+// agent teardown is future work.
 var turnMu sync.Map // TmuxSession → *sync.Mutex
 
 // aborts tracks the in-flight turn's cancel func per session so AbortTurn
 // can kill it.
+//
+// TODO: same eviction caveat as turnMu above.
 var aborts sync.Map // TmuxSession → context.CancelFunc
 
 // TurnDriver drives codex turn-per-process: no resident process; each
@@ -78,13 +85,25 @@ func (d TurnDriver) runTurn(ctx context.Context, h harness.SessionHandle, msg st
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stdout
 		runErr := cmd.Run()
+		if turnCtx.Err() != nil {
+			// AbortTurn (or a cancelled parent ctx) killed the child mid-turn:
+			// exec.CommandContext produces the same exit!=0 + empty-stdout
+			// shape as a stale ("no rollout found") resume. Report the
+			// cancellation explicitly so the caller never misclassifies an
+			// abort as a stale thread — that would clear a perfectly valid
+			// stored id and silently re-run the message as a fresh turn.
+			return harness.Result{}, -1, fmt.Errorf("codex: turn cancelled: %w", turnCtx.Err())
+		}
 		res, perr := Codex{}.ParseEvents(&stdout)
 		if perr != nil {
 			return harness.Result{}, -1, perr
 		}
 		exit := 0
 		if runErr != nil {
-			exit = 1 // detail-precision not needed: any failure with empty output is the stale-thread shape
+			// Any failure with empty output is the stale-thread shape —
+			// EXCEPT a cancelled turn, which is handled above and never
+			// reaches here.
+			exit = 1
 		}
 		return res, exit, nil
 	}
@@ -133,10 +152,12 @@ func transcriptPath(h harness.SessionHandle) string {
 func appendTranscript(h harness.SessionHandle, msg string, res harness.Result) {
 	path := transcriptPath(h)
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		log.Printf("codex: transcript for %s: mkdir %s: %v", h.TmuxSession, filepath.Dir(path), err)
 		return
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
+		log.Printf("codex: transcript for %s: open %s: %v", h.TmuxSession, path, err)
 		return
 	}
 	defer f.Close()
