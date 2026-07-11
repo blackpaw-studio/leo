@@ -10,12 +10,13 @@ Add templates to your `leo.yaml`:
 templates:
   coding:
     model: sonnet
-    remote_control: true
-    permission_mode: auto
     workspace: ~/agents
+    harness_options:
+      remote_control: true
+      permission_mode: auto
 ```
 
-Templates support the same fields as processes (model, channels, permission_mode, allowed_tools, env, etc.). See the [config reference](../configuration/config-reference.md#templates) for all fields.
+Templates support the same fields as processes (model, channels, harness, harness_options, env, etc.). See the [config reference](../configuration/config-reference.md#templates) and [Harnesses](../configuration/harnesses.md) for all fields.
 
 ## Dispatching Agents
 

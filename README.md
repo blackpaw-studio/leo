@@ -115,7 +115,8 @@ A web dashboard, a token-authed HTTP API, and a built-in MCP server (so every ch
 processes:
   assistant:
     channels: [plugin:telegram@claude-plugins-official]
-    remote_control: true
+    harness_options:
+      remote_control: true
     enabled: true
 ```
 
@@ -125,9 +126,10 @@ processes:
 templates:
   coding:
     model: sonnet
-    permission_mode: auto
     workspace: ~/agents
-    remote_control: true
+    harness_options:
+      permission_mode: auto
+      remote_control: true
 ```
 
 ```bash
