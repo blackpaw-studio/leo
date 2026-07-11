@@ -136,35 +136,6 @@ func taskFormBase(t *testing.T, s *Server, name string) url.Values {
 	return form
 }
 
-// processFormBase renders the named process's current config into a base
-// url.Values set, using the same Kind-driven encoding as taskFormBase above.
-// Lets a test override only the field(s) it cares about instead of
-// hand-listing all 18 SectionProcess fields.
-func processFormBase(t *testing.T, s *Server, name string) url.Values {
-	t.Helper()
-	cfg, err := s.loadConfig()
-	if err != nil {
-		t.Fatalf("loading config: %v", err)
-	}
-	proc, ok := cfg.Processes[name]
-	if !ok {
-		t.Fatalf("seed process %q not found", name)
-	}
-	form := url.Values{}
-	for _, fv := range schema.Values(&proc, schema.SectionProcess, nil) {
-		switch fv.Kind {
-		case schema.KindBool:
-			form.Add(fv.Key, "false")
-			if fv.Checked {
-				form.Add(fv.Key, "true")
-			}
-		default:
-			form.Set(fv.Key, fv.Value)
-		}
-	}
-	return form
-}
-
 // templateFormBase renders the named template's current config into a base
 // url.Values set, using the same Kind-driven encoding as taskFormBase/
 // processFormBase above. Lets a test override only the field(s) it cares
