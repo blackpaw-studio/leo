@@ -105,6 +105,40 @@ func TestSessionSpecsFromConfigImplicit(t *testing.T) {
 	}
 }
 
+// TestSessionSpecsFromConfigImplicitCopiesTaskEnv verifies task.Env reaches
+// the implicit session's SessionSpec as an independent copy (not an alias
+// of the config map), so a dedicated persistent task can target a custom
+// endpoint via env: the same way an explicit session or process can.
+func TestSessionSpecsFromConfigImplicitCopiesTaskEnv(t *testing.T) {
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"morning": {
+				Runtime:   "persistent",
+				Workspace: "/tmp/morning",
+				Model:     "sonnet",
+				Env: map[string]string{
+					"ANTHROPIC_BASE_URL": "https://x.example",
+				},
+			},
+		},
+	}
+	specs, err := SessionSpecsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 implicit spec, got %d: %+v", len(specs), specs)
+	}
+	if got := specs[0].Env["ANTHROPIC_BASE_URL"]; got != "https://x.example" {
+		t.Fatalf("expected task.Env to reach implicit session spec, got %+v", specs[0].Env)
+	}
+	// Mutating the returned spec's env must not alias the config's map.
+	specs[0].Env["ANTHROPIC_BASE_URL"] = "mutated"
+	if cfg.Tasks["morning"].Env["ANTHROPIC_BASE_URL"] != "https://x.example" {
+		t.Fatal("implicit session Env aliases the task config's Env map")
+	}
+}
+
 // TestSessionSpecsFromConfigImplicitTaskOptionsReachSpecButDefaultsDoNot
 // verifies preserved quirk #2: an implicit session reads the task's OWN
 // harness_options (no defaults cascade), matching SessionHarnessOptions'

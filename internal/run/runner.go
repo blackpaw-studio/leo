@@ -160,7 +160,10 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	// per attempt.
 	leoEnv, leoMCPOK := leoMCPEnv(cfg, taskName)
 	warnLeoMCPSkipped(cfg, taskName, leoMCPOK)
-	spawnEnv := leoEnv
+	// task.Env lets a task target a custom endpoint (ANTHROPIC_BASE_URL/
+	// ANTHROPIC_AUTH_TOKEN) or inject other env vars; leoEnv wins on key
+	// collision so the leo MCP wiring can never be shadowed by task config.
+	spawnEnv := mergeEnvMaps(task.Env, leoEnv)
 
 	prompt, err := assemblePrompt(cfg, task)
 	if err != nil {
@@ -889,6 +892,22 @@ func warnLeoMCPSkipped(cfg *config.Config, taskName string, leoMCPOK bool) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "leo: warning: skipping leo MCP server for task %q: no readable API token\n", taskName)
+}
+
+// mergeEnvMaps combines any number of env maps into one, later maps taking
+// precedence on key collision. Returns nil (not an empty map) when the
+// result would be empty, so callers checking len(extraEnv) == 0 still work.
+func mergeEnvMaps(maps ...map[string]string) map[string]string {
+	out := make(map[string]string)
+	for _, m := range maps {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoMCPOK bool) []string {

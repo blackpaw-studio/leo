@@ -13,8 +13,8 @@ var (
 
 // Capture returns a map of environment variables relevant to Leo's daemon
 // and cron processes. It ensures common user/Homebrew bin directories are in
-// PATH. extraKeys adds caller-specific variables (e.g. provider api_key_env
-// names) to the capture set; unset keys are omitted.
+// PATH. extraKeys adds caller-specific variables to the capture set; unset
+// keys are omitted.
 func Capture(extraKeys ...string) map[string]string {
 	home, _ := userHomeDirFn()
 	env := make(map[string]string)

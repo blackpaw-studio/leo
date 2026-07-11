@@ -242,20 +242,21 @@ type SessionConfig struct {
 }
 
 type TaskConfig struct {
-	Workspace          string   `yaml:"workspace,omitempty"`
-	Schedule           string   `yaml:"schedule"`
-	Timezone           string   `yaml:"timezone,omitempty"`
-	PromptFile         string   `yaml:"prompt_file"`
-	Model              string   `yaml:"model,omitempty"`
-	DeprecatedProvider string   `yaml:"provider,omitempty"`
-	MaxTurns           int      `yaml:"max_turns,omitempty"`
-	Enabled            bool     `yaml:"enabled"`
-	Silent             bool     `yaml:"silent,omitempty"`
-	Timeout            string   `yaml:"timeout,omitempty"`        // e.g. "30m", "1h" — default 30m
-	Retries            int      `yaml:"retries,omitempty"`        // number of retry attempts on failure, default 0
-	Channels           []string `yaml:"channels,omitempty"`       // channel plugin IDs used by NotifyOnFail
-	DevChannels        []string `yaml:"dev_channels,omitempty"`   // loaded via --dangerously-load-development-channels
-	NotifyOnFail       bool     `yaml:"notify_on_fail,omitempty"` // spawn a child claude to notify configured channels on failure
+	Workspace          string            `yaml:"workspace,omitempty"`
+	Schedule           string            `yaml:"schedule"`
+	Timezone           string            `yaml:"timezone,omitempty"`
+	PromptFile         string            `yaml:"prompt_file"`
+	Model              string            `yaml:"model,omitempty"`
+	DeprecatedProvider string            `yaml:"provider,omitempty"`
+	MaxTurns           int               `yaml:"max_turns,omitempty"`
+	Enabled            bool              `yaml:"enabled"`
+	Silent             bool              `yaml:"silent,omitempty"`
+	Timeout            string            `yaml:"timeout,omitempty"`        // e.g. "30m", "1h" — default 30m
+	Retries            int               `yaml:"retries,omitempty"`        // number of retry attempts on failure, default 0
+	Channels           []string          `yaml:"channels,omitempty"`       // channel plugin IDs used by NotifyOnFail
+	DevChannels        []string          `yaml:"dev_channels,omitempty"`   // loaded via --dangerously-load-development-channels
+	NotifyOnFail       bool              `yaml:"notify_on_fail,omitempty"` // spawn a child claude to notify configured channels on failure
+	Env                map[string]string `yaml:"env,omitempty"`
 	// DeprecatedPermissionMode etc. moved to harness_options — see Validate().
 	DeprecatedPermissionMode     string         `yaml:"permission_mode,omitempty"`
 	DeprecatedAllowedTools       []string       `yaml:"allowed_tools,omitempty"`
@@ -789,6 +790,11 @@ func (c *Config) Validate() error {
 		for i, ch := range task.DevChannels {
 			if !channelPattern.MatchString(ch) {
 				errs = append(errs, fmt.Sprintf("tasks.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
+			}
+		}
+		for k := range task.Env {
+			if !envKeyPattern.MatchString(k) {
+				errs = append(errs, fmt.Sprintf("tasks.%s.env key %q is not a valid environment variable name", name, k))
 			}
 		}
 		if task.Runtime != "" && task.Runtime != "oneshot" && task.Runtime != "persistent" {

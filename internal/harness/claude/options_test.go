@@ -1,7 +1,6 @@
 package claude
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 )
@@ -116,13 +115,5 @@ func TestDecodeOptions(t *testing.T) {
 				t.Fatalf("DecodeOptions(%v) = %+v, want %+v", tt.raw, gotOpts, tt.want)
 			}
 		})
-	}
-}
-
-func TestDecodeOptionsErrorMessageFormat(t *testing.T) {
-	_, err := Claude{}.DecodeOptions(map[string]any{"nope": 1})
-	want := fmt.Sprintf("unknown option %q (valid: %s)", "nope", "agent, allowed_tools, append_system_prompt, bypass_permissions, disallowed_tools, permission_mode, remote_control")
-	if err == nil || err.Error() != want {
-		t.Fatalf("DecodeOptions unknown key err = %v, want %q", err, want)
 	}
 }

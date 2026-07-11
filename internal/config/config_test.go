@@ -855,6 +855,25 @@ func TestValidateTaskRetries(t *testing.T) {
 	}
 }
 
+func TestValidateTaskEnvKeys(t *testing.T) {
+	cfg := &Config{
+		Tasks: map[string]TaskConfig{
+			"bad": {
+				Schedule:   "0 * * * *",
+				PromptFile: "t.md",
+				Env:        map[string]string{"VALID": "ok", "1INVALID": "bad"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid env key")
+	}
+	if !contains(err.Error(), "tasks.bad.env key") {
+		t.Errorf("error should reference env key, got: %v", err)
+	}
+}
+
 func TestValidateChannelPattern(t *testing.T) {
 	cfg := &Config{
 		Processes: map[string]ProcessConfig{

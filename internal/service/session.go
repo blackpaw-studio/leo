@@ -121,6 +121,19 @@ func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec Ses
 	return nil
 }
 
+// copyEnvMap returns an independent copy of m so callers never alias a
+// config map through a SessionSpec. Returns nil for an empty/nil input.
+func copyEnvMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // SessionSpecsFromConfig builds the SessionSpec list from a config. Includes:
 // - all entries in cfg.Sessions (Topology B)
 // - implicit sessions from runtime: persistent tasks without a `session:` field (Topology A)
@@ -137,10 +150,7 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 	}
 	// explicit sessions
 	for name, sc := range cfg.Sessions {
-		env := make(map[string]string, len(sc.Env))
-		for k, v := range sc.Env {
-			env[k] = v
-		}
+		env := copyEnvMap(sc.Env)
 		o, err := claudeSessionOptions(cfg.SessionHarnessOptions(sc))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: session %q: decoding harness options: %v (skipping)\n", name, err)
@@ -194,7 +204,7 @@ func SessionSpecsFromConfig(cfg *config.Config) ([]SessionSpec, error) {
 			AppendPrompt:    o.AppendSystemPrompt,
 			Channels:        task.Channels,
 			// Note: TaskConfig has no Agent field; stays zero.
-			Env: nil,
+			Env: copyEnvMap(task.Env),
 		})
 	}
 	return out, nil

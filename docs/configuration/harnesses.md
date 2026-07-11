@@ -174,6 +174,20 @@ processes:
       ANTHROPIC_AUTH_TOKEN: ${GLM_API_KEY}
 ```
 
+`env:` works the same way on `tasks:` — both oneshot tasks and dedicated
+persistent tasks (`runtime: persistent` with no `session:`) can target a
+custom endpoint:
+
+```yaml
+tasks:
+  nightly-report:
+    schedule: "0 6 * * *"
+    prompt_file: nightly-report.md
+    env:
+      ANTHROPIC_BASE_URL: https://api.z.ai/api/coding/paas/v4
+      ANTHROPIC_AUTH_TOKEN: ${GLM_API_KEY}
+```
+
 This is the same mechanism `providers:` used internally to inject
 `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` — it just skips the indirection
 of a named provider table, and there's no more `api_key_cmd`/`default_model`

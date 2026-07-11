@@ -106,7 +106,7 @@ var registry = map[Section][]Field{
 		{Key: "channels", Label: "Channels", Group: "Notifications"},
 		{Key: "dev_channels", Label: "Dev channels", Group: "Notifications", Help: "Overrides channels when LEO_ENV=dev"},
 		{Key: "notify_on_fail", Label: "Notify on fail", Group: "Notifications"},
-	}, Field{Key: "workspace", Label: "Workspace", Group: "Advanced", Advanced: true}),
+	}, Field{Key: "workspace", Label: "Workspace", Group: "Advanced", Advanced: true}, fEnv("Advanced", true)),
 
 	SectionTemplate: append([]Field{
 		{Key: "workspace", Label: "Workspace", Group: "General"},
