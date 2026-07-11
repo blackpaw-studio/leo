@@ -51,7 +51,7 @@ func fHarness() Field {
 }
 
 func fModel(group string) Field {
-	return Field{Key: "model", Label: "Model", Kind: KindSelect, Options: "models", Group: group}
+	return Field{Key: "model", Label: "Model", Kind: KindDatalist, Group: group}
 }
 
 func fChannels(group string) []Field {
@@ -74,7 +74,7 @@ func fEnv(group string, advanced bool) Field {
 var registry = map[Section][]Field{
 	SectionDefaults: {
 		fHarness(),
-		{Key: "model", Label: "Model", Kind: KindSelect, Options: "models", Group: "Model"},
+		{Key: "model", Label: "Model", Kind: KindDatalist, Group: "Model"},
 		{Key: "max_turns", Label: "Max turns", Group: "Limits"},
 		{Key: "stale_resume_hours", Label: "Stale resume (hours)", Group: "Behavior", Advanced: true,
 			Help: "Skip --resume when the stored session is older than this"},

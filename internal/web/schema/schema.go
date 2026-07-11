@@ -26,6 +26,7 @@ const (
 	KindCron                 // string with live cron preview
 	KindDuration             // string like "30m", "2h"
 	KindTextarea             // long string
+	KindDatalist             // free-text input with a <datalist> of suggestions
 )
 
 // Section identifies which config struct a field list applies to.

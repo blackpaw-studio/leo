@@ -5,22 +5,11 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 // Option is one <option> in a KindSelect control.
 type Option struct{ Value, Label string }
-
-// modelOptions mirrors the authoritative model list validated by
-// Config.Validate() (internal/config/config.go), plus a leading empty
-// "inherit" option. Keep in sync if that list changes.
-var modelOptions = []Option{
-	{"", "inherit"},
-	{"sonnet", "sonnet"},
-	{"opus", "opus"},
-	{"haiku", "haiku"},
-	{"sonnet[1m]", "sonnet[1m]"},
-	{"opus[1m]", "opus[1m]"},
-}
 
 // OptionSources resolves named option lists against a loaded config. Agents
 // is injected because listing claude sub-agents shells out (see web.Server).
@@ -44,8 +33,6 @@ func (o OptionSources) For(name string) []Option {
 // unresolvable ones must fall back to a plain control, not panic.
 func (o OptionSources) TryFor(name string) []Option {
 	switch name {
-	case "models":
-		return modelOptions
 	case "harnesses":
 		return namedKeys(harness.Names(), "inherit")
 	case "permission_modes":
@@ -83,4 +70,31 @@ func namedKeys(keys []string, emptyLabel string) []Option {
 		opts = append(opts, Option{k, k})
 	}
 	return opts
+}
+
+// ModelSuggestions returns datalist suggestions for the model input under
+// the given harness. Claude's authoritative list comes straight from the
+// adapter (no more keep-in-sync copy); other harnesses are free-form —
+// ValidateModel gates on save.
+func ModelSuggestions(harnessName string) []Option {
+	if harnessName != "claude" {
+		return nil
+	}
+	var opts []Option
+	for _, m := range claude.ValidModels() {
+		opts = append(opts, Option{m, m})
+	}
+	return opts
+}
+
+// ModelPlaceholder returns the format hint shown in an empty model input.
+// Claude returns "" so the standard "inherit: <model>" placeholder wins.
+func ModelPlaceholder(harnessName string) string {
+	switch harnessName {
+	case "codex":
+		return "e.g. gpt-5.3-codex"
+	case "opencode":
+		return "provider/model, e.g. anthropic/claude-sonnet-5"
+	}
+	return ""
 }

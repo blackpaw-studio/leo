@@ -14,12 +14,6 @@ func TestOptionSources(t *testing.T) {
 	}
 	src := OptionSources{Cfg: cfg, Agents: func() []string { return []string{"rocket"} }}
 
-	if opts := src.For("models"); len(opts) < 3 {
-		t.Errorf("models: want sonnet/opus/haiku at least, got %v", opts)
-	}
-	if opts := src.For("models"); opts[0].Value != "" {
-		t.Errorf("models: want leading inherit option, got %v", opts)
-	}
 	if opts := src.For("sessions"); len(opts) != 2 || opts[1].Value != "daily" {
 		t.Errorf("sessions: got %v", opts)
 	}
@@ -55,12 +49,6 @@ func TestOptionSourcesNilAgentsFunc(t *testing.T) {
 	}
 }
 
-// TestModelOptionsMatchConfigValidModels guards against modelOptions (hand-
-// maintained in options.go) drifting from the model names the claude harness
-// adapter actually accepts. Model policy lives with the adapter (config
-// delegates to Harness.ValidateModel), so this test uses the adapter's
-// exported claudeharness.ValidModels() accessor plus the exported
-// Config.Validate() path, rather than reaching into internals.
 func TestHarnessesOptionSource(t *testing.T) {
 	src := OptionSources{Cfg: &config.Config{}}
 	opts := src.For("harnesses")
@@ -105,13 +93,15 @@ func TestHarnessFieldRegisteredOnConfigSections(t *testing.T) {
 	}
 }
 
-func TestModelOptionsMatchConfigValidModels(t *testing.T) {
+// TestModelSuggestionsMatchConfigValidModels guards against ModelSuggestions
+// drifting from the model names the claude harness adapter actually accepts.
+// Model policy lives with the adapter (config delegates to
+// Harness.ValidateModel), so this test uses the adapter's exported
+// claudeharness.ValidModels() accessor plus the exported Config.Validate()
+// path, rather than reaching into internals.
+func TestModelSuggestionsMatchConfigValidModels(t *testing.T) {
 	optValues := make(map[string]bool)
-	src := OptionSources{Cfg: &config.Config{}}
-	for _, opt := range src.For("models") {
-		if opt.Value == "" {
-			continue // "inherit" placeholder, not a real model
-		}
+	for _, opt := range ModelSuggestions("claude") {
 		optValues[opt.Value] = true
 	}
 
