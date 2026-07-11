@@ -200,8 +200,21 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	sessionID := session.NewID()
 	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt, m.webToken)
 	openingPrompt := ""
+	// storedSessionID seeds agentstore.Record.SessionID, which a DriveTurns
+	// driver's SessionIDStore (agent.NewAgentIDs) reads back via IDs.Get() to
+	// decide whether this is a brand-new session (Start's opening-turn
+	// precondition is Get()=="") or a resume. Claude's sessionID is a
+	// leo-generated --session-id it hands claude on the command line, so it
+	// is genuinely "already assigned" from claude's perspective — storing it
+	// is correct. A non-claude harness has never talked to its own thread/
+	// session yet at this point (the driver assigns that id after the
+	// opening turn), so seeding this field with the same leo-generated uuid
+	// would make IDs.Get() falsely non-empty and skip the opening turn
+	// entirely.
+	storedSessionID := ""
 	if isClaude {
 		claudeArgs = append(claudeArgs, "--session-id", sessionID)
+		storedSessionID = sessionID
 	} else {
 		openingPrompt = spec.Prompt
 	}
@@ -211,6 +224,35 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	idleStr := ""
 	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
 		idleStr = d.String()
+	}
+
+	// The agentstore record is persisted BEFORE the supervisor spawn (not
+	// after, as the claude-only flow historically did). A DriveTurns driver
+	// (codex TurnDriver) runs its opening turn synchronously from inside
+	// SpawnAgent's goroutine, and that turn's SessionIDStore
+	// (agentOrProcessIDs) picks agentstore-backed persistence only when a
+	// record already exists for this name — save-after-spawn lost that race
+	// essentially every time, silently stashing the fresh thread id under a
+	// throwaway "process:<name>" session-store key instead of the agent's
+	// own record, which then made every subsequent turn think it had no
+	// prior thread and start over. Saving first closes that window. A failed
+	// spawn now rolls the record back so a dead agent never leaves an
+	// orphaned entry behind (matches the pre-existing worktree-flow
+	// rollback further down this file).
+	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
+		Name:             agentName,
+		Template:         spec.Template,
+		Repo:             spec.Repo,
+		Workspace:        workspace,
+		ClaudeArgs:       claudeArgs,
+		SessionID:        storedSessionID,
+		Env:              env,
+		WebPort:          webPort,
+		SpawnedAt:        time.Now(),
+		IdleSuspendAfter: idleStr,
+		Harness:          harnessName,
+	}); err != nil {
+		log.Printf("agent %q: agentstore.Save failed before spawn: %v — agent will not be restored on daemon restart", agentName, err)
 	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
@@ -223,26 +265,11 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		Harness:       harnessName,
 		OpeningPrompt: openingPrompt,
 	}); err != nil {
+		agentstore.Remove(cfg.HomePath, agentName)
 		return Record{}, fmt.Errorf("spawning agent: %w", err)
 	}
 	// SpawnAgent consumed the reservation on success; suppress the deferred release.
 	released = true
-
-	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
-		Name:             agentName,
-		Template:         spec.Template,
-		Repo:             spec.Repo,
-		Workspace:        workspace,
-		ClaudeArgs:       claudeArgs,
-		SessionID:        sessionID,
-		Env:              env,
-		WebPort:          webPort,
-		SpawnedAt:        time.Now(),
-		IdleSuspendAfter: idleStr,
-		Harness:          harnessName,
-	}); err != nil {
-		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", agentName, err)
-	}
 
 	return Record{
 		Name:      agentName,
@@ -318,8 +345,14 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	sessionID := session.NewID()
 	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt, m.webToken)
 	openingPrompt := ""
+	// See the identical storedSessionID comment in spawnShared: a non-claude
+	// harness must NOT have its agentstore SessionID pre-seeded, or its
+	// DriveTurns driver's opening-turn precondition (IDs.Get()=="") is
+	// falsely non-empty and the opening turn never runs.
+	storedSessionID := ""
 	if isClaude {
 		claudeArgs = append(claudeArgs, "--session-id", sessionID)
+		storedSessionID = sessionID
 	} else {
 		openingPrompt = spec.Prompt
 	}
@@ -345,6 +378,28 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		idleStr = d.String()
 	}
 
+	// Persist before spawning — see the identical comment in spawnShared for
+	// why order matters here (a DriveTurns driver's opening turn reads back
+	// the just-saved record's SessionIDStore from inside SpawnAgent's
+	// goroutine).
+	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
+		Name:             layout.AgentName,
+		Template:         spec.Template,
+		Repo:             spec.Repo,
+		Workspace:        layout.WorktreePath,
+		Branch:           layout.Branch,
+		CanonicalPath:    canonical,
+		ClaudeArgs:       claudeArgs,
+		SessionID:        storedSessionID,
+		Env:              env,
+		WebPort:          webPort,
+		SpawnedAt:        time.Now(),
+		IdleSuspendAfter: idleStr,
+		Harness:          harnessName,
+	}); err != nil {
+		log.Printf("agent %q: agentstore.Save failed before spawn: %v — agent will not be restored on daemon restart", layout.AgentName, err)
+	}
+
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:          layout.AgentName,
 		ClaudeArgs:    claudeArgs,
@@ -357,30 +412,14 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}); err != nil {
 		// Reservation protected the name, so a collision here means the
 		// supervisor state changed unexpectedly (e.g. concurrent restore).
-		// Roll back the worktree so disk matches supervisor state.
+		// Roll back the worktree AND the just-written record so disk matches
+		// supervisor state.
 		rollbackWorktree()
+		agentstore.Remove(cfg.HomePath, layout.AgentName)
 		return Record{}, fmt.Errorf("spawning agent: %w", err)
 	}
 	// SpawnAgent consumed the reservation on success.
 	released = true
-
-	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
-		Name:             layout.AgentName,
-		Template:         spec.Template,
-		Repo:             spec.Repo,
-		Workspace:        layout.WorktreePath,
-		Branch:           layout.Branch,
-		CanonicalPath:    canonical,
-		ClaudeArgs:       claudeArgs,
-		SessionID:        sessionID,
-		Env:              env,
-		WebPort:          webPort,
-		SpawnedAt:        time.Now(),
-		IdleSuspendAfter: idleStr,
-		Harness:          harnessName,
-	}); err != nil {
-		log.Printf("agent %q spawned but agentstore.Save failed: %v — agent will not be restored on daemon restart", layout.AgentName, err)
-	}
 
 	return Record{
 		Name:          layout.AgentName,
