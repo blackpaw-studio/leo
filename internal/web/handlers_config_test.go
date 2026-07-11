@@ -283,8 +283,10 @@ func templateFormBase(t *testing.T, s *Server, name string) url.Values {
 // bypass_permissions/permission_mode's tri-state web-form coverage
 // (TestProcessBypassTriState) was removed along with the field's web-form
 // registration — see internal/web/schema/registry.go's Excluded map (Task 7:
-// claude flat fields moved to harness_options). The claude options editor
-// arrives with harness_options forms in a later plan.
+// claude flat fields moved to harness_options). The claude options editor now
+// lives in the dedicated harness_options sub-form (see
+// internal/web/handlers_harness_test.go and
+// docs/configuration/harnesses.md's Web UI section).
 
 // TestTaskSaveCoversNewFields guards handleConfigTaskSave against the same
 // registry-drift risk Task 6 covered for defaults: runtime/session/lazy/

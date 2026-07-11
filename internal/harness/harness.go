@@ -64,7 +64,7 @@ type Result struct {
 
 // Harness translates LaunchSpecs into concrete CLI invocations.
 type Harness interface {
-	// Name is the registry key (config `harness:` value in later plans).
+	// Name is the registry key (also the config `harness:` value).
 	Name() string
 	// Binary is the executable to look up / exec.
 	Binary() string

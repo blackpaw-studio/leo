@@ -72,7 +72,10 @@ func (o Opencode) Args(spec harness.LaunchSpec) ([]string, error) {
 	}
 
 	if spec.Kind != harness.KindTask {
-		return nil, fmt.Errorf("opencode: %s launches are not supported yet (only scheduled tasks) — session drivers land in a later plan", spec.Kind)
+		// Defensive only: harness.Kind has exactly four values and the three
+		// session-driver kinds are all handled above, so this can't fire for
+		// any kind that exists today.
+		return nil, fmt.Errorf("opencode: %s launches are not supported", spec.Kind)
 	}
 	if spec.Session.Mode == harness.SessionPinned {
 		return nil, fmt.Errorf("opencode: cannot start a session with a pre-issued ID")

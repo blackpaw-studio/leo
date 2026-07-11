@@ -24,7 +24,10 @@ var Excluded = map[Section][]string{
 	// disallowed_tools/append_system_prompt moved to harness_options
 	// (Validate() rejects the flat fields outright now — see
 	// docs/configuration/harnesses.md); the web UI must not write config
-	// Validate rejects, and harness_options forms arrive in a later plan.
+	// Validate rejects. The harness_options forms live at
+	// internal/web/schema/harnessform.go +
+	// components/harness_options.html — see docs/configuration/harnesses.md's
+	// Web UI section.
 	SectionDefaults: {"harness_options", "provider",
 		"permission_mode", "bypass_permissions", "remote_control",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
