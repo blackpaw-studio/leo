@@ -115,6 +115,12 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 				},
 			}
 		}
+		state, err := opencodeharness.EnsureServerState(cfg.HomePath, SessionName(agentName), spec.Model)
+		if err != nil {
+			return h, harness.LaunchSpec{}, fmt.Errorf("provisioning opencode server state: %w", err)
+		}
+		opts.ServerPort = state.Port
+		opts.ServerPassword = state.Password
 		spec.Options = opts
 	default:
 		return h, harness.LaunchSpec{}, fmt.Errorf("harness %q returned unsupported options type %T", h.Name(), decoded)

@@ -51,8 +51,8 @@ func TestSupportsKind(t *testing.T) {
 		want bool
 	}{
 		{harness.KindTask, true},
-		{harness.KindProcess, false},
-		{harness.KindAgent, false},
+		{harness.KindProcess, true},
+		{harness.KindAgent, true},
 		{harness.KindSession, false},
 	}
 	for _, tt := range tests {
@@ -117,6 +117,22 @@ func TestArgs(t *testing.T) {
 			want: []string{"run", "--format", "json",
 				"--model", "anthropic/claude-sonnet-4-5", "-s", "ses_42", "again"},
 		},
+		{
+			name: "KindProcess serve argv",
+			spec: harness.LaunchSpec{
+				Kind: harness.KindProcess, Model: "anthropic/claude-sonnet-4-5",
+				Options: Options{ServerPort: 45991},
+			},
+			want: []string{"serve", "--port", "45991", "--hostname", "127.0.0.1"},
+		},
+		{
+			name: "KindAgent serve argv",
+			spec: harness.LaunchSpec{
+				Kind:    harness.KindAgent,
+				Options: Options{ServerPort: 51000},
+			},
+			want: []string{"serve", "--port", "51000", "--hostname", "127.0.0.1"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -138,14 +154,14 @@ func TestArgsErrors(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "KindProcess unsupported",
+			name:    "KindProcess without provisioned port",
 			spec:    harness.LaunchSpec{Kind: harness.KindProcess, Options: Options{}},
-			wantErr: `opencode: process launches are not supported yet (only scheduled tasks) — session drivers land in a later plan`,
+			wantErr: `opencode: internal error: server port not provisioned`,
 		},
 		{
-			name:    "KindAgent unsupported",
+			name:    "KindAgent without provisioned port",
 			spec:    harness.LaunchSpec{Kind: harness.KindAgent, Options: Options{}},
-			wantErr: `opencode: agent launches are not supported yet (only scheduled tasks) — session drivers land in a later plan`,
+			wantErr: `opencode: internal error: server port not provisioned`,
 		},
 		{
 			name:    "KindSession unsupported",

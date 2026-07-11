@@ -536,10 +536,10 @@ func TestValidateModelDelegation(t *testing.T) {
 
 // TestValidateKindSupportErrors locks in the exact per-scope error strings
 // emitted when a scope's harness cannot run that scope's kind. codex gained
-// KindProcess/KindAgent support in Plan 4 Task 5 (TurnDriver) — its
-// process/template cases moved to TestValidateKindSupportHappyPath below.
-// opencode remains KindTask-only; codex sessions/persistent-tasks still
-// reject pending the session driver.
+// KindProcess/KindAgent support in Plan 4 Task 5 (TurnDriver) and opencode
+// gained the same in Plan 4 Task 6 (ServerDriver) — their process/template
+// cases moved to TestValidateKindSupportHappyPath below. codex/opencode
+// sessions and persistent tasks still reject pending the session driver.
 func TestValidateKindSupportErrors(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -547,18 +547,11 @@ func TestValidateKindSupportErrors(t *testing.T) {
 		want  string
 	}{
 		{
-			"processes: opencode cannot run supervised processes",
+			"sessions: opencode cannot run persistent sessions",
 			func(c *Config) {
-				c.Processes = map[string]ProcessConfig{"builder": {Harness: "opencode", Enabled: true}}
+				c.Sessions = map[string]SessionConfig{"chat": {Workspace: "/tmp/ws", Harness: "opencode"}}
 			},
-			"processes.builder.harness: the opencode harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md",
-		},
-		{
-			"templates: opencode cannot run ephemeral agents",
-			func(c *Config) {
-				c.Templates = map[string]TemplateConfig{"helper": {Harness: "opencode"}}
-			},
-			"templates.helper.harness: the opencode harness cannot run ephemeral agents yet (only scheduled tasks) — see docs/configuration/harnesses.md",
+			"sessions.chat.harness: the opencode harness cannot run persistent sessions yet (only scheduled tasks) — see docs/configuration/harnesses.md",
 		},
 		{
 			"sessions: codex cannot run persistent sessions",
@@ -588,14 +581,6 @@ func TestValidateKindSupportErrors(t *testing.T) {
 				}}
 			},
 			"tasks.nightly.harness: the codex harness cannot run persistent tasks yet (persistent tasks run through sessions) — see docs/configuration/harnesses.md",
-		},
-		{
-			"processes: inherited harness from defaults still errors",
-			func(c *Config) {
-				c.Defaults.Harness = "opencode"
-				c.Processes = map[string]ProcessConfig{"plain": {Enabled: true}}
-			},
-			"processes.plain.harness: the opencode harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md",
 		},
 	}
 	for _, tt := range tests {
@@ -666,6 +651,47 @@ func TestValidateKindSupportHappyPath(t *testing.T) {
 	t.Run("codex process inherited from defaults validates clean", func(t *testing.T) {
 		cfg := &Config{
 			Defaults:  DefaultsConfig{Model: "sonnet", MaxTurns: 15, Harness: "codex"},
+			HomePath:  "/tmp/leo",
+			Processes: map[string]ProcessConfig{"plain": {Enabled: true}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("opencode process validates clean (Plan 4 Task 6 ServerDriver)", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Processes: map[string]ProcessConfig{"builder": {
+				Harness:        "opencode",
+				Model:          "anthropic/claude-sonnet-4-5",
+				HarnessOptions: map[string]any{"permission": map[string]any{"bash": "allow"}},
+				Enabled:        true,
+			}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("opencode template validates clean (Plan 4 Task 6 ServerDriver)", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
+			HomePath: "/tmp/leo",
+			Templates: map[string]TemplateConfig{"helper": {
+				Harness: "opencode",
+				Model:   "anthropic/claude-sonnet-4-5",
+			}},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("opencode process inherited from defaults validates clean", func(t *testing.T) {
+		cfg := &Config{
+			Defaults:  DefaultsConfig{Model: "anthropic/claude-sonnet-4-5", MaxTurns: 15, Harness: "opencode"},
 			HomePath:  "/tmp/leo",
 			Processes: map[string]ProcessConfig{"plain": {Enabled: true}},
 		}

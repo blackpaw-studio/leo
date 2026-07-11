@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
@@ -377,6 +378,12 @@ func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessCo
 				Env:     leoEnv,
 			}
 		}
+		state, err := opencodeharness.EnsureServerState(cfg.HomePath, agent.SessionName(name), spec.Model)
+		if err != nil {
+			return h, harness.LaunchSpec{}, fmt.Errorf("provisioning opencode server state: %w", err)
+		}
+		opts.ServerPort = state.Port
+		opts.ServerPassword = state.Password
 		spec.Options = opts
 	default:
 		return h, harness.LaunchSpec{}, fmt.Errorf("harness %q returned unsupported options type %T", h.Name(), decoded)

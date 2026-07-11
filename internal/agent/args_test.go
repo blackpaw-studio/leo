@@ -2,6 +2,7 @@ package agent
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -304,10 +305,22 @@ func TestResolveTemplateLaunchOpencodeFillsLeoMCPBridge(t *testing.T) {
 	if !reflect.DeepEqual(opts.LeoMCP.Env, wantEnv) {
 		t.Errorf("LeoMCP.Env = %v, want %v", opts.LeoMCP.Env, wantEnv)
 	}
+	if opts.ServerPort == 0 {
+		t.Error("expected resolveTemplateLaunch to provision a ServerPort (Plan 4 Task 6 ServerDriver)")
+	}
+	if opts.ServerPassword == "" {
+		t.Error("expected resolveTemplateLaunch to provision a ServerPassword (Plan 4 Task 6 ServerDriver)")
+	}
 
-	// Args() itself still errors — opencode has no session driver for agents yet.
-	if _, err := h.Args(spec); err == nil {
-		t.Error("expected opencode Args() to still refuse a KindAgent launch")
+	// Args() now renders the `opencode serve` argv for KindAgent
+	// (ServerDriver, Plan 4 Task 6).
+	args, err := h.Args(spec)
+	if err != nil {
+		t.Fatalf("Args(): %v", err)
+	}
+	want := []string{"serve", "--port", strconv.Itoa(opts.ServerPort), "--hostname", "127.0.0.1"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("Args() = %#v, want %#v", args, want)
 	}
 }
 
