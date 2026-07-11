@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"019f4ebe-c9ad-71c2-b77c-851c3102efed"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"leo","tool":"leo_list_agents","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"leo","tool":"leo_list_agents","arguments":{},"result":{"content":[{"type":"text","text":"[{\"name\": \"demo-agent\", \"template\": \"coding\", \"workspace\": \"/home/user/.leo/agents/demo\", \"status\": \"running\"}, {\"name\": \"docs-agent\", \"template\": \"writing\", \"workspace\": \"/home/user/.leo/agents/docs\", \"status\": \"suspended\"}]"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"2"}}
+{"type":"turn.completed","usage":{"input_tokens":26190,"cached_input_tokens":11681,"output_tokens":148,"reasoning_output_tokens":77}}

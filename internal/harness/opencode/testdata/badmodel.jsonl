@@ -1,0 +1,12 @@
+[20:50:25.012] ERROR (#10937): failed {
+  ref: "err_568a0972",
+  error: {
+    providerID: "anthropic",
+    modelID: "not-a-real-model",
+    suggestions: [],
+    _tag: "ProviderModelNotFoundError",
+  },
+  cause: "ProviderModelNotFoundError: \n    at <anonymous> (/$bunfs/root/chunk-jkz7k480.js:687:62197)\n    at SessionPrompt.getModel (/$bunfs/root/chunk-r55s01qh.js:1030:1895)\n    at SessionPrompt.getModel (definition) (/$bunfs/root/chunk-r55s01qh.js:1029:1062)\n    at SessionPrompt.run (/$bunfs/root/chunk-r55s01qh.js:1031:1645)\n    at SessionPrompt.run (definition) (/$bunfs/root/chunk-r55s01qh.js:1030:904)\n    at SessionRunState.ensureRunning (/$bunfs/root/chunk-r55s01qh.js:1031:1616)\n    at SessionRunState.ensureRunning (definition) (/$bunfs/root/chunk-r55s01qh.js:2:8040)\n    at SessionPrompt.loop (/$bunfs/root/chunk-r55s01qh.js:1030:628)\n    at SessionPrompt.loop (definition) (/$bunfs/root/chunk-r55s01qh.js:1031:1552)\n    at SessionPrompt.prompt (/$bunfs/root/chunk-3h8gyaa6.js:3:13187)\n    at SessionPrompt.prompt (definition) (/$bunfs/root/chunk-r55s01qh.js:1030:247)",
+}
+{"type":"error","timestamp":1783731025015,"sessionID":"ses_0b1589bc3ffetZTI1wwEehWuBB","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_568a0972"}}}
+{"type":"error","timestamp":1783731025679,"sessionID":"ses_0b1589bc3ffetZTI1wwEehWuBB","error":{"name":"UnknownError","data":{"message":"Model not found: anthropic/not-a-real-model."}}}
