@@ -84,7 +84,7 @@ func freeLocalPort(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("allocating free port: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	addr, ok := l.Addr().(*net.TCPAddr)
 	if !ok {
 		t.Fatalf("unexpected listener addr type %T", l.Addr())

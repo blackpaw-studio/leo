@@ -63,19 +63,6 @@ func catFixture(t *testing.T, fixture string, calls *[][]string, mu *sync.Mutex)
 	}
 }
 
-// failEmpty builds an execCommand replacement that exits 1 with empty
-// stdout — the stale-thread ("no rollout found") shape.
-func failEmpty(calls *[][]string, mu *sync.Mutex) func(ctx context.Context, name string, args ...string) *exec.Cmd {
-	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if mu != nil {
-			mu.Lock()
-			*calls = append(*calls, append([]string{}, args...))
-			mu.Unlock()
-		}
-		return exec.CommandContext(ctx, "sh", "-c", "exit 1")
-	}
-}
-
 func withExecCommand(t *testing.T, fn func(ctx context.Context, name string, args ...string) *exec.Cmd) {
 	t.Helper()
 	orig := execCommand
@@ -256,7 +243,10 @@ func TestTurnDriverAbortDuringTurnDoesNotMisclassifyAsStale(t *testing.T) {
 	var out outcome
 	select {
 	case out = <-done:
-	case <-time.After(2 * time.Second):
+	// Comfortably past turnWaitDelay (2s): the abort SIGKILLs the child, then
+	// WaitDelay force-closes the pipe so cmd.Wait returns even if a grandchild
+	// leaked it (the cross-platform hang this guards against).
+	case <-time.After(8 * time.Second):
 		t.Fatal("Inject did not return after abort")
 	}
 

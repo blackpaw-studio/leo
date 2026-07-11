@@ -96,7 +96,7 @@ func runServe(args []string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /global/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"healthy":true,"version":"fake"}`)
+		_, _ = fmt.Fprint(w, `{"healthy":true,"version":"fake"}`)
 	})
 	srv := &http.Server{Addr: "127.0.0.1:" + port, Handler: mux}
 

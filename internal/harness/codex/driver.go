@@ -18,6 +18,16 @@ import (
 // uses exec.CommandContext. CI has no codex binary on PATH.
 var execCommand = exec.CommandContext
 
+// turnWaitDelay bounds how long cmd.Wait blocks after a turn's context is
+// cancelled (abort/timeout). Because stdout is a bytes.Buffer, exec wires an
+// internal pipe + copy goroutine; a child that forks a grandchild holding
+// that pipe open would otherwise keep Wait blocked until the grandchild
+// exits — hanging Inject past the very timeout/abort that cancelled it.
+// WaitDelay force-closes the pipes this long after the process exits, so
+// Inject always returns promptly. Never adds latency to a clean turn (the
+// process closes its pipe on exit and Wait returns immediately).
+const turnWaitDelay = 2 * time.Second
+
 // turnMu serializes turns per session: concurrent Injects into the same
 // codex thread would interleave rollout writes.
 //
@@ -81,6 +91,7 @@ func (d TurnDriver) runTurn(ctx context.Context, h harness.SessionHandle, msg st
 		cmd := execCommand(turnCtx, Codex{}.Binary(), args...)
 		cmd.Dir = h.Workspace
 		cmd.Env = append(os.Environ(), envSlice(h.Env)...)
+		cmd.WaitDelay = turnWaitDelay
 		var stdout bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stdout

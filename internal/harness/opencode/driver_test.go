@@ -481,7 +481,10 @@ func TestServerDriverAbortDuringTurnDoesNotMisclassifyAsStale(t *testing.T) {
 	var out outcome
 	select {
 	case out = <-done:
-	case <-time.After(2 * time.Second):
+	// Comfortably past turnWaitDelay (2s): the abort SIGKILLs the child, then
+	// WaitDelay force-closes the pipe so cmd.Wait returns even if a grandchild
+	// leaked it (the cross-platform hang this guards against).
+	case <-time.After(8 * time.Second):
 		t.Fatal("Inject did not return after abort")
 	}
 
