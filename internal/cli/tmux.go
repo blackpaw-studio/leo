@@ -240,12 +240,23 @@ const attachHistoryTailLines = 50
 // string on the remote login shell — quoting each token individually keeps
 // them intact). When spec.Argv is nil, this harness has no live attach; the
 // tail of spec.HistoryPath is printed instead, with a one-line note.
+//
+// The daemon's AttachSpec always sends a bare binary name at argv[0] (e.g.
+// "opencode") — syscall.Exec needs a real path, not a PATH-relative name, so
+// the local branch resolves it via exec.LookPath first. argv itself (which
+// becomes the exec'd program's os.Args) keeps the original bare name at
+// argv[0]; only the exec path is resolved. The remote branch leaves argv
+// untouched — the remote login shell resolves it against its own PATH.
 func attachViaDriver(res config.HostResolution, spec harness.AttachSpec) error {
 	if len(spec.Argv) == 0 {
 		return printAttachHistory(spec.HistoryPath)
 	}
 	if res.Localhost {
-		return agentSyscallExec(spec.Argv[0], spec.Argv, os.Environ())
+		resolved, err := exec.LookPath(spec.Argv[0])
+		if err != nil {
+			return fmt.Errorf("%s not found on PATH", spec.Argv[0])
+		}
+		return agentSyscallExec(resolved, spec.Argv, os.Environ())
 	}
 	quoted := make([]string, len(spec.Argv))
 	for i, tok := range spec.Argv {

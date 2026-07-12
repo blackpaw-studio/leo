@@ -586,12 +586,17 @@ func attachLocal(ctx context.Context, homePath, query string, opts attachOptions
 	// Non-claude agents have no tmux session to attach to — route through
 	// their SessionDriver's AttachSpec instead. attach-spec returns an empty
 	// Harness for claude agents (the overwhelming majority), so this call is
-	// on the hot path; keep it a single fast round-trip.
+	// on the hot path; keep it a single fast round-trip. A lookup failure
+	// silently fell through to the tmux attach below with no clue for the
+	// user why they landed in the raw serve pane — warn on stderr instead of
+	// swallowing the error, while still keeping the fallback itself.
 	if spec, err := agentAttachSpecFn(ctx, homePath, query); err == nil {
 		if spec.Harness != "" && spec.Harness != "claude" {
 			res := config.HostResolution{Localhost: true}
 			return attachViaDriver(res, harness.AttachSpec{Argv: spec.Argv, HistoryPath: spec.HistoryPath})
 		}
+	} else {
+		fmt.Fprintf(agentStderr, "warning: driver attach lookup failed (%v); falling back to tmux attach\n", err)
 	}
 
 	session, err := daemon.AgentSession(ctx, homePath, query)
