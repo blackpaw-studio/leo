@@ -770,6 +770,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	if harnessName == "" {
 		harnessName = "claude"
 	}
+	binPath := harnessBinaryPath(harnessName, claudePath)
 
 	var paneKey func(string) string
 	if care, ok := drv.(harness.PaneCare); ok {
@@ -817,7 +818,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// normal fresh spawn (adopt is already cleared).
 			fmt.Fprintf(os.Stdout, "[%s] adopted existing tmux session '%s', claude already running\n", name, sessionName)
 		} else {
-			claudeCmd := buildClaudeShellCmd(claudePath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
+			claudeCmd := buildClaudeShellCmd(binPath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
 
 			// Kill any stale tmux session with our name
 			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
@@ -1112,6 +1113,28 @@ var supervisorWebTokenPattern = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
 //
 // Values are shell-quoted via shellQuote (single-quote safe), so they
 // cannot introduce new shell tokens even if they contain metacharacters.
+// harnessBinaryPath resolves the executable the supervise loop should exec
+// for a spec's harness. Claude (and the empty value on pre-field records)
+// keeps the supervisor's already-resolved claudePath. Any other registered
+// harness resolves its own binary — absolute via LookPath when the daemon's
+// PATH can find it (so the pane doesn't depend on PATH order), bare
+// otherwise so the pane's exported PATH still gets a chance. An unregistered
+// name falls back to claudePath: config validation rejects those long before
+// a spec reaches the supervisor, and the pane failure is loud either way.
+func harnessBinaryPath(harnessName, claudePath string) string {
+	if harnessName == "" || harnessName == "claude" {
+		return claudePath
+	}
+	h, err := harness.Get(harnessName)
+	if err != nil {
+		return claudePath
+	}
+	if abs, err := exec.LookPath(h.Binary()); err == nil {
+		return abs
+	}
+	return h.Binary()
+}
+
 func buildClaudeShellCmd(claudePath string, args []string, tmuxPath string, spec ProcessSpec, pathEnv string, warnOut io.Writer) string {
 	quoted := make([]string, 0, len(args)+1)
 	quoted = append(quoted, shellQuote(claudePath))
