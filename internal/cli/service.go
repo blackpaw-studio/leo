@@ -122,7 +122,7 @@ func runService(cmd *cobra.Command, args []string) error {
 	// Foreground mode has no daemon API token to offer a non-claude LeoMCP
 	// bridge, so pass "" — processLeoMCPEnv gates off cleanly (matches
 	// today's process env, which never sets LEO_API_TOKEN in this path).
-	claudeArgs := buildProcessArgs(cfg, procName, proc, "")
+	claudeArgs, _ := buildProcessArgs(cfg, procName, proc, "")
 
 	// Add session persistence. This is claude-specific (--session-id/--resume
 	// selection via claude's own jsonl transcripts); non-claude harnesses
@@ -207,7 +207,7 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 		}
 
 		harnessName := cfg.ProcessHarness(proc)
-		args := buildProcessArgs(cfg, name, proc, webToken)
+		args, harnessEnv := buildProcessArgs(cfg, name, proc, webToken)
 
 		// Add session persistence. This is claude-specific (--session-id/
 		// --resume selection via claude's own jsonl transcripts); non-claude
@@ -222,7 +222,7 @@ func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []ser
 			)
 		}
 
-		procEnv := mergeChannelsIntoEnv(proc)
+		procEnv := mergeHarnessEnv(harnessEnv, mergeChannelsIntoEnv(proc))
 
 		specs = append(specs, service.ProcessSpec{
 			Name:       name,
@@ -300,6 +300,27 @@ func mergeChannelsIntoEnv(proc config.ProcessConfig) map[string]string {
 	}
 	if len(proc.DevChannels) > 0 {
 		merged["LEO_DEV_CHANNELS"] = strings.Join(proc.DevChannels, ",")
+	}
+	return merged
+}
+
+// mergeHarnessEnv returns a new map with overlay's entries layered over base,
+// overlay winning on key collision. Neither input is mutated. Used to merge a
+// harness's env overlay (h.Env(spec) — e.g. opencode's server password/config)
+// as the BASE layer under a process's own configured env, so config-provided
+// env always wins on collision (mirrors run/runner.go's mergeEnvMaps and
+// internal/agent's mergeEnv). Returns nil when both inputs are empty so
+// callers preserve the "no env" representation exactly.
+func mergeHarnessEnv(base, overlay map[string]string) map[string]string {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(base)+len(overlay))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range overlay {
+		merged[k] = v
 	}
 	return merged
 }
@@ -396,18 +417,29 @@ func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessCo
 // config cascade into a harness.LaunchSpec. webToken is the daemon's API
 // bearer token (empty in the single-process foreground path, which has none
 // to offer); see processLeoMCPEnv.
-func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig, webToken string) []string {
+//
+// The second return is the harness's env overlay (h.Env(spec)) — e.g.
+// OPENCODE_SERVER_PASSWORD/OPENCODE_CONFIG_CONTENT for opencode — meant to be
+// merged as the BASE layer under the process's own env (mergeHarnessEnv(harnessEnv,
+// procEnv)) so config-provided env always wins on collision. Nil for
+// claude/codex.
+func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig, webToken string) ([]string, map[string]string) {
 	h, spec, err := resolveProcessLaunch(cfg, name, proc, webToken)
 	if err != nil {
 		log.Printf("[%s] %v", name, err)
-		return nil
+		return nil, nil
 	}
 	args, err := h.Args(spec)
 	if err != nil {
 		log.Printf("[%s] building %s args: %v", name, h.Name(), err)
-		return nil
+		return nil, nil
 	}
-	return args
+	env, err := h.Env(spec)
+	if err != nil {
+		log.Printf("[%s] building %s env: %v", name, h.Name(), err)
+		return args, nil
+	}
+	return args, env
 }
 
 func newServiceStartCmd() *cobra.Command {

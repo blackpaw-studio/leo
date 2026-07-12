@@ -198,7 +198,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	isClaude := harnessName == "" || harnessName == "claude"
 
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt, m.webToken)
+	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt, m.webToken)
 	openingPrompt := ""
 	// storedSessionID seeds agentstore.Record.SessionID, which a DriveTurns
 	// driver's SessionIDStore (agent.NewAgentIDs) reads back via IDs.Get() to
@@ -219,7 +219,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		openingPrompt = spec.Prompt
 	}
 	webPort := strconv.Itoa(cfg.WebPort())
-	env := mergeEnv(tmpl.Env, spec.Env)
+	env := mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env)
 
 	idleStr := ""
 	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
@@ -343,7 +343,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	isClaude := harnessName == "" || harnessName == "claude"
 
 	sessionID := session.NewID()
-	claudeArgs := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt, m.webToken)
+	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt, m.webToken)
 	openingPrompt := ""
 	// See the identical storedSessionID comment in spawnShared: a non-claude
 	// harness must NOT have its agentstore SessionID pre-seeded, or its
@@ -357,7 +357,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		openingPrompt = spec.Prompt
 	}
 	webPort := strconv.Itoa(cfg.WebPort())
-	env := mergeEnv(tmpl.Env, spec.Env)
+	env := mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env)
 
 	// rollbackWorktree removes the worktree created above so disk state stays
 	// consistent with the supervisor whenever a step after worktree creation

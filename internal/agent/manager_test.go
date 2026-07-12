@@ -92,7 +92,7 @@ func TestBuildTemplateArgsBasic(t *testing.T) {
 		MaxTurns: 200,
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test-agent", "/tmp/workspace", "", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "test-agent", "/tmp/workspace", "", "")
 
 	assertContainsFlag(t, args, "--model", "opus")
 	assertContainsFlag(t, args, "--max-turns", "200")
@@ -115,7 +115,7 @@ func TestBuildTemplateArgsInheritsDefaults(t *testing.T) {
 	}
 	tmpl := config.TemplateConfig{}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 
 	assertContainsFlag(t, args, "--model", "haiku")
 	assertContainsFlag(t, args, "--max-turns", "50")
@@ -130,7 +130,7 @@ func TestBuildTemplateArgsChannels(t *testing.T) {
 		Channels: []string{"plugin:telegram@official", "plugin:slack@custom"},
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 
 	count := 0
 	for _, a := range args {
@@ -150,7 +150,7 @@ func TestBuildTemplateArgsDevChannels(t *testing.T) {
 		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
 	}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 
 	var sawChan, sawDev bool
 	for i, a := range args {
@@ -173,7 +173,7 @@ func TestBuildTemplateArgsAgent(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"agent": "my-agent"}}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 	assertContainsFlag(t, args, "--agent", "my-agent")
 }
 
@@ -181,7 +181,7 @@ func TestBuildTemplateArgsRemoteControlDisabled(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"remote_control": false}}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 	for _, a := range args {
 		if a == "--remote-control" {
 			t.Error("--remote-control should not be present when disabled")
@@ -193,7 +193,7 @@ func TestBuildTemplateArgsPromptIsTrailingPositional(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{Model: "opus"}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "investigate alert X", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "investigate alert X", "")
 
 	if len(args) == 0 {
 		t.Fatal("expected non-empty args")
@@ -216,7 +216,7 @@ func TestBuildTemplateArgsNoPromptOmitsPositional(t *testing.T) {
 	cfg := &config.Config{}
 	tmpl := config.TemplateConfig{Model: "opus"}
 
-	args := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
 
 	// Backward compat: with no prompt, the final arg is still a flag value
 	// (--max-turns N), never a bare positional.
