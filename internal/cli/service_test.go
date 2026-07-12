@@ -128,7 +128,7 @@ func TestBuildProcessArgsIncludesDevChannels(t *testing.T) {
 		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
 	}
 
-	args := buildProcessArgs(cfg, "test", proc, "")
+	args, _ := buildProcessArgs(cfg, "test", proc, "")
 
 	var sawChan, sawDev bool
 	for i, a := range args {
@@ -284,7 +284,7 @@ func TestResolveSessionArgs_BrandNewMintsID(t *testing.T) {
 func TestBuildProcessArgsInjectsMessagingAwareness(t *testing.T) {
 	// HomePath set so AppendArg's EnsureConfig writes under a temp dir.
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
-	args := buildProcessArgs(cfg, "assistant", config.ProcessConfig{}, "")
+	args, _ := buildProcessArgs(cfg, "assistant", config.ProcessConfig{}, "")
 
 	found := false
 	for i := 0; i < len(args)-1; i++ {

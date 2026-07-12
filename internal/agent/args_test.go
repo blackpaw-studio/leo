@@ -29,7 +29,7 @@ func TestBuildTemplateArgsWiresLeoMCPWhenWebEnabled(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
 	tmpl := config.TemplateConfig{}
 
-	args := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "")
 
 	if !hasFlagValue(args, "--mcp-config", "leo-mcp.json") {
 		t.Errorf("expected --mcp-config pointing at leo-mcp.json; got %v", args)
@@ -41,7 +41,7 @@ func TestBuildTemplateArgsWiresLeoMCPWhenWebEnabled(t *testing.T) {
 
 func TestBuildTemplateArgsNoLeoMCPWhenWebDisabled(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: false}}
-	args := BuildTemplateArgs(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
+	args, _ := BuildTemplateArgs(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
 
 	if hasFlagValue(args, "--append-system-prompt", "leo_send_message") {
 		t.Errorf("awareness line must not appear when web disabled; got %v", args)
@@ -169,7 +169,7 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := BuildTemplateArgs(tt.cfg, tt.tmpl, "myagent", "/tmp/ws", tt.prompt, "")
+			got, _ := BuildTemplateArgs(tt.cfg, tt.tmpl, "myagent", "/tmp/ws", tt.prompt, "")
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("BuildTemplateArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
 			}

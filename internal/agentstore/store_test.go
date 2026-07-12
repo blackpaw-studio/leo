@@ -7,6 +7,37 @@ import (
 	"time"
 )
 
+// TestSaveEnforces0600Permissions verifies agentstore writes are always
+// mode 0600, even when agents.json pre-exists with looser permissions (e.g.
+// a file written before this hardening landed). os.WriteFile's perm arg is
+// only honored on file creation — an existing file keeps its old mode — so
+// write() must explicitly chmod on every save, not just rely on WriteFile's
+// create-time perm. Records now persist OPENCODE_CONFIG_CONTENT, which can
+// embed LEO_API_TOKEN, so a world/group-readable agents.json is a secret leak.
+func TestSaveEnforces0600Permissions(t *testing.T) {
+	dir := t.TempDir()
+	path := FilePath(dir)
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Simulate a pre-existing file with looser permissions.
+	if err := os.WriteFile(path, []byte("{}"), 0644); err != nil {
+		t.Fatalf("seeding pre-existing file: %v", err)
+	}
+
+	if err := Save(dir, Record{Name: "agent-x"}); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("agents.json mode = %o, want 0600 (even though the file pre-existed at 0644)", got)
+	}
+}
+
 func TestFilePath(t *testing.T) {
 	got := FilePath("/home/user/.leo")
 	want := filepath.Join("/home/user/.leo", "state", "agents.json")

@@ -126,7 +126,7 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildProcessArgs(tt.cfg, "myproc", tt.proc, "")
+			got, _ := buildProcessArgs(tt.cfg, "myproc", tt.proc, "")
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("buildProcessArgs argv mismatch\n got: %q\nwant: %q", got, tt.want)
 			}
@@ -293,5 +293,93 @@ func TestResolveProcessLaunchKindIsProcess(t *testing.T) {
 	}
 	if spec.Kind != harness.KindProcess {
 		t.Errorf("spec.Kind = %q, want %q", spec.Kind, harness.KindProcess)
+	}
+}
+
+// TestBuildAllProcessSpecsOpencodeEnvOverlay verifies Bug A's process-path
+// fix: a supervised opencode process's ProcessSpec.Env carries the harness's
+// Env() overlay (OPENCODE_SERVER_PASSWORD/OPENCODE_CONFIG_CONTENT), not just
+// the process's own configured env. Previously buildAllProcessSpecs never
+// called h.Env(spec) at all, so `opencode serve` booted with neither var set.
+func TestBuildAllProcessSpecsOpencodeEnvOverlay(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true},
+		Processes: map[string]config.ProcessConfig{
+			"worker": {
+				Enabled:   true,
+				Workspace: t.TempDir(),
+				Harness:   "opencode",
+				Env:       map[string]string{"MY_VAR": "1"},
+			},
+		},
+	}
+	specs := buildAllProcessSpecs(cfg, "claude", "test-token")
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	env := specs[0].Env
+	pw, ok := env["OPENCODE_SERVER_PASSWORD"]
+	if !ok || pw == "" {
+		t.Fatalf("expected non-empty OPENCODE_SERVER_PASSWORD in ProcessSpec.Env, got %v", env)
+	}
+	if _, ok := env["OPENCODE_CONFIG_CONTENT"]; !ok {
+		t.Fatalf("expected OPENCODE_CONFIG_CONTENT in ProcessSpec.Env, got %v", env)
+	}
+	if env["MY_VAR"] != "1" {
+		t.Fatalf("expected process env MY_VAR to survive the merge, got %v", env)
+	}
+}
+
+// TestBuildAllProcessSpecsOpencodeProcessEnvWinsOnCollision verifies the
+// merge order: harness env is the BASE layer, so a process env key colliding
+// with a harness-provided key wins.
+func TestBuildAllProcessSpecsOpencodeProcessEnvWinsOnCollision(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Web:      config.WebConfig{Enabled: true},
+		Processes: map[string]config.ProcessConfig{
+			"worker": {
+				Enabled:   true,
+				Workspace: t.TempDir(),
+				Harness:   "opencode",
+				Env:       map[string]string{"OPENCODE_SERVER_PASSWORD": "proc-override"},
+			},
+		},
+	}
+	specs := buildAllProcessSpecs(cfg, "claude", "test-token")
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	if got := specs[0].Env["OPENCODE_SERVER_PASSWORD"]; got != "proc-override" {
+		t.Errorf("OPENCODE_SERVER_PASSWORD = %q, want process's own override to win", got)
+	}
+}
+
+// TestBuildAllProcessSpecsClaudeNoOpencodeEnvKeys is the byte-identity guard:
+// a claude process's ProcessSpec.Env must contain no OPENCODE_* keys —
+// Claude.Env() returns nil, so the merge must be a no-op for claude specs.
+func TestBuildAllProcessSpecsClaudeNoOpencodeEnvKeys(t *testing.T) {
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Processes: map[string]config.ProcessConfig{
+			"bot": {
+				Enabled:   true,
+				Workspace: t.TempDir(),
+				Env:       map[string]string{"MY_VAR": "1"},
+			},
+		},
+	}
+	specs := buildAllProcessSpecs(cfg, "claude", "tok")
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	for k := range specs[0].Env {
+		if len(k) >= 9 && k[:9] == "OPENCODE_" {
+			t.Errorf("unexpected OPENCODE_* key %q in claude ProcessSpec.Env: %v", k, specs[0].Env)
+		}
+	}
+	if specs[0].Env["MY_VAR"] != "1" {
+		t.Errorf("expected process env to survive unchanged, got %v", specs[0].Env)
 	}
 }

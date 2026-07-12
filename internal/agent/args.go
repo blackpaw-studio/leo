@@ -142,16 +142,28 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 //
 // webToken is the daemon's API bearer token (Manager.webToken); see
 // resolveTemplateLaunch.
-func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) []string {
+//
+// The second return is the harness's env overlay (h.Env(spec)) — e.g.
+// OPENCODE_SERVER_PASSWORD/OPENCODE_CONFIG_CONTENT for opencode — meant to be
+// merged as the BASE layer under the template's own env and any per-spawn
+// env (mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env)), so caller-provided
+// env always wins on collision. Nil for claude/codex, whose bridges ride argv
+// or env-var *names* the supervisor already exports.
+func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) ([]string, map[string]string) {
 	h, spec, err := resolveTemplateLaunch(cfg, tmpl, agentName, workspace, prompt, webToken)
 	if err != nil {
 		log.Printf("[agent:%s] %v", agentName, err)
-		return nil
+		return nil, nil
 	}
 	args, err := h.Args(spec)
 	if err != nil {
 		log.Printf("[agent:%s] building %s args: %v", agentName, h.Name(), err)
-		return nil
+		return nil, nil
 	}
-	return args
+	env, err := h.Env(spec)
+	if err != nil {
+		log.Printf("[agent:%s] building %s env: %v", agentName, h.Name(), err)
+		return args, nil
+	}
+	return args, env
 }

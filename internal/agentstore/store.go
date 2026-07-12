@@ -149,5 +149,17 @@ func write(path string, records map[string]Record) error {
 	if err != nil {
 		return fmt.Errorf("marshaling agent records: %w", err)
 	}
-	return os.WriteFile(path, data, 0600)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	// os.WriteFile's perm argument is only applied when the file is created;
+	// an already-existing agents.json (e.g. written before this hardening, or
+	// by any other looser-permission path) keeps its prior mode across the
+	// write above. Records now persist OPENCODE_CONFIG_CONTENT, which can
+	// embed LEO_API_TOKEN, so explicitly enforce 0600 on every save rather
+	// than trusting create-time permissions.
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("enforcing agents.json permissions: %w", err)
+	}
+	return nil
 }
