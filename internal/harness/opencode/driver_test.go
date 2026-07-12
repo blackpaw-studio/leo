@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -526,9 +527,68 @@ func TestServerDriverAttach(t *testing.T) {
 	home := t.TempDir()
 	writeServerState(t, home, "leo-test-attach", ServerState{Port: 12345, Password: "secretpw"})
 
+	// Stub lookPath to fail so this test's expected argv (bare "opencode")
+	// stays deterministic regardless of whether the real opencode binary
+	// happens to be on the test-running machine's PATH. The resolved-path
+	// and fallback behaviors are covered explicitly by
+	// TestServerDriverAttachResolvesAbsoluteBinary and
+	// TestServerDriverAttachFallsBackToBareNameWhenLookPathFails below.
+	orig := lookPath
+	lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	t.Cleanup(func() { lookPath = orig })
+
 	ids := &memIDStore{}
 	ids.Set("ses_x")
 	h := harness.SessionHandle{TmuxSession: "leo-test-attach", Workspace: "/ws", HomePath: home, IDs: ids}
+
+	spec, err := (ServerDriver{}).Attach(h)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	want := []string{"opencode", "attach", "http://127.0.0.1:12345", "--dir", "/ws", "-p", "secretpw", "-s", "ses_x"}
+	if strings.Join(spec.Argv, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("Argv = %#v, want %#v", spec.Argv, want)
+	}
+}
+
+func TestServerDriverAttachResolvesAbsoluteBinary(t *testing.T) {
+	home := t.TempDir()
+	writeServerState(t, home, "leo-test-attach-abs", ServerState{Port: 12345, Password: "secretpw"})
+
+	orig := lookPath
+	lookPath = func(file string) (string, error) {
+		if file != "opencode" {
+			t.Fatalf("lookPath called with %q, want %q", file, "opencode")
+		}
+		return "/opt/homebrew/bin/opencode", nil
+	}
+	t.Cleanup(func() { lookPath = orig })
+
+	h := harness.SessionHandle{TmuxSession: "leo-test-attach-abs", Workspace: "/ws", HomePath: home, IDs: &memIDStore{}}
+
+	spec, err := (ServerDriver{}).Attach(h)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	want := []string{"/opt/homebrew/bin/opencode", "attach", "http://127.0.0.1:12345", "--dir", "/ws", "-p", "secretpw"}
+	if strings.Join(spec.Argv, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("Argv = %#v, want %#v", spec.Argv, want)
+	}
+}
+
+func TestServerDriverAttachFallsBackToBareNameWhenLookPathFails(t *testing.T) {
+	home := t.TempDir()
+	writeServerState(t, home, "leo-test-attach-fallback", ServerState{Port: 12345, Password: "secretpw"})
+
+	orig := lookPath
+	lookPath = func(file string) (string, error) {
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { lookPath = orig })
+
+	ids := &memIDStore{}
+	ids.Set("ses_x")
+	h := harness.SessionHandle{TmuxSession: "leo-test-attach-fallback", Workspace: "/ws", HomePath: home, IDs: ids}
 
 	spec, err := (ServerDriver{}).Attach(h)
 	if err != nil {

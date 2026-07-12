@@ -21,6 +21,12 @@ import (
 // uses exec.CommandContext. CI has no opencode binary on PATH.
 var execCommand = exec.CommandContext
 
+// lookPath is the binary-resolution seam Attach uses to resolve argv[0] to
+// an absolute path; production uses exec.LookPath. Tests replace it to
+// exercise both the resolved and fallback paths without depending on the
+// real opencode binary being installed.
+var lookPath = exec.LookPath
+
 // turnMu serializes turns per session: concurrent Injects into the same
 // attach connection would interleave server-side turn state.
 //
@@ -289,7 +295,11 @@ func (ServerDriver) Attach(h harness.SessionHandle) (harness.AttachSpec, error) 
 	if err != nil {
 		return harness.AttachSpec{}, fmt.Errorf("opencode: loading server state: %w", err)
 	}
-	argv := []string{"opencode", "attach", state.URL(), "--dir", h.Workspace, "-p", state.Password}
+	bin := Opencode{}.Binary()
+	if abs, err := lookPath(bin); err == nil {
+		bin = abs
+	}
+	argv := []string{bin, "attach", state.URL(), "--dir", h.Workspace, "-p", state.Password}
 	if id := h.IDs.Get(); id != "" {
 		argv = append(argv, "-s", id)
 	}
