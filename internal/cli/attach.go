@@ -67,7 +67,7 @@ render the session as a native tab via tmux control mode.`,
 			// Remote: hand the whole `leo attach <name>` invocation to the server so
 			// it can resolve ambiguity with its own view of processes+agents.
 			if !res.Localhost {
-				return runRemoteAttach(res, name)
+				return runRemoteAttach(res, "attach", name)
 			}
 
 			_, isProcess := cfg.Processes[name]
@@ -110,16 +110,24 @@ render the session as a native tab via tmux control mode.`,
 	return cmd
 }
 
-// runRemoteAttach shells `ssh -t <host> <leo_path> attach <name>`. We keep the
-// TTY flag so the remote tmux attach inherits it cleanly.
-func runRemoteAttach(res config.HostResolution, name string) error {
+// runRemoteAttach shells `ssh -t <host> <leo_path> <remoteArgs...>`, delegating
+// the whole invocation to the remote leo binary so it can do its own
+// resolution (and, for `agent attach`, its own driver routing — see
+// newAgentAttachCmd). We keep the TTY flag so the remote tmux attach inherits
+// it cleanly.
+//
+// remoteArgs is the subcommand and args to run on the remote leo, e.g.
+// ("attach", name) for top-level attach or ("agent", "attach", name) for
+// `leo agent attach`.
+func runRemoteAttach(res config.HostResolution, remoteArgs ...string) error {
 	// The remote leo will re-resolve to a local tmux attach, which inherits
 	// $TERM from this SSH session. Make sure the remote knows that terminal
 	// type — or fall back to xterm-256color on the remote command.
 	termOverride := ensureRemoteTerminfoFn(res)
 	sshArgs := append([]string{"-t", res.Host.SSH}, res.Host.SSHArgs...)
 	prefixLen := len(sshArgs)
-	sshArgs = append(sshArgs, res.Host.RemoteLeoPath(), "attach", name)
+	sshArgs = append(sshArgs, res.Host.RemoteLeoPath())
+	sshArgs = append(sshArgs, remoteArgs...)
 	sshArgs = applyRemoteTermFallback(sshArgs, prefixLen, termOverride)
 	c := agentExecCommand("ssh", sshArgs...)
 	c.Stdin = os.Stdin

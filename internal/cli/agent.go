@@ -614,10 +614,12 @@ func newAgentAttachCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "attach <name>",
 		Short: "Attach to the agent's tmux session",
-		Long: `Attach to a running agent's tmux session. Locally this replaces the
-current process with tmux so the TUI has full control of the terminal.
-Remotely it runs 'ssh -t <host> tmux -L leo attach -t leo-<name>'. Detach
-with the usual tmux prefix + d (default: C-b d).
+		Long: `Attach to a running agent's session (tmux, or its harness driver's
+attach TUI for non-claude agents). Locally and remotely this delegates to the
+same routing logic, so a non-claude agent lands in its driver's attach view
+instead of a raw tmux pane. Remotely (non --cc) this runs 'ssh -t <host>
+<leo_path> agent attach <name>', letting the remote leo do that routing.
+Detach with the usual tmux prefix + d (default: C-b d) for claude agents.
 
 When you're already inside a tmux client, Leo opens a display-popup overlay
 that runs the attach — dismissing the popup returns you to your outer tmux.
@@ -638,15 +640,27 @@ as a native tab via tmux control mode.`,
 			}
 
 			if !res.Localhost {
-				// Remote: resolve the shorthand through the remote daemon first,
-				// then SSH -t attach to the canonical tmux session. Going via the
-				// daemon lets the user pass shorthand (repo, short suffix) over SSH
-				// and surfaces clear "no match" / "ambiguous" errors before attach.
-				session, err := resolveRemoteSession(res, name)
-				if err != nil {
-					return err
+				// --cc (tmux control mode) must be interpreted by the LOCAL
+				// terminal (iTerm2/WezTerm render it natively) — it cannot be
+				// delegated to the remote side. Keep the old flow here: resolve
+				// the shorthand through the remote daemon, then attach directly
+				// to the tmux session with -CC (attachTmuxSession carries the
+				// ssh -tt -e none handling this needs). A driver-attached agent
+				// has no tmux UI to control-mode into anyway, so this is
+				// claude/tmux-only by design (Plan 4 deferral).
+				if cc {
+					session, err := resolveRemoteSession(res, name)
+					if err != nil {
+						return err
+					}
+					return attachTmuxSession(res, session, attachOptions{cc: cc})
 				}
-				return attachTmuxSession(res, session, attachOptions{cc: cc})
+				// Non-cc: delegate the whole `leo agent attach <name>` invocation
+				// to the remote leo, same as top-level `leo attach` does — the
+				// remote binary resolves the agent and routes through its own
+				// SessionDriver (attachLocal) instead of us raw-tmux-attaching
+				// and bypassing driver routing for non-claude harnesses.
+				return runRemoteAttach(res, "agent", "attach", name)
 			}
 
 			return attachLocal(cmd.Context(), cfg.HomePath, name, attachOptions{cc: cc})

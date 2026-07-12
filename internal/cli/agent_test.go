@@ -184,7 +184,15 @@ func TestAgentRemoteHonorsLeoPathOverride(t *testing.T) {
 	}
 }
 
-func TestAgentAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
+// TestAgentAttachRemoteNonCCDelegatesToRemoteLeo verifies the non-`--cc` remote
+// `leo agent attach <name>` path delegates the WHOLE invocation to the remote
+// leo binary (`ssh -t <host> <leo_path> agent attach <name>`), same as
+// top-level `leo attach`'s remote leg — so the remote binary can route
+// non-claude agents through their SessionDriver instead of the local side
+// raw-tmux-attaching and bypassing driver routing entirely. A local TmuxPath
+// override must NOT leak into this delegated call — it's meaningless here
+// since we never invoke tmux client-side for this path anymore.
+func TestAgentAttachRemoteNonCCDelegatesToRemoteLeo(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		HomePath: home,
@@ -211,18 +219,20 @@ func TestAgentAttachRemoteHonorsTmuxPathOverride(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if len(stub.calls) != 2 {
-		t.Fatalf("expected 2 ssh calls (resolve + attach), got %d: %v", len(stub.calls), stub.calls)
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 delegated ssh call, got %d: %v", len(stub.calls), stub.calls)
 	}
-	wantResolve := append([]string{"ssh", "user@prod.example.com"}, ctlOpts(home)...)
-	wantResolve = append(wantResolve, config.DefaultRemoteLeoPath, "agent", "session-name", "scratch")
-	if !equalStrings(stub.calls[0], wantResolve) {
-		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
+	// runRemoteAttach (shared with top-level `leo attach`'s remote leg) does not
+	// splice in the ControlMaster multiplexing opts that other remote calls
+	// (resolve, --cc attach) use — that's pre-existing behavior we reuse as-is,
+	// not something this fix changes.
+	want := []string{"ssh", "-t", "user@prod.example.com", config.DefaultRemoteLeoPath, "agent", "attach", "scratch"}
+	if !equalStrings(stub.calls[0], want) {
+		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
-	wantAttach := append([]string{"ssh", "-t", "user@prod.example.com"}, ctlOpts(home)...)
-	wantAttach = append(wantAttach, "/opt/homebrew/bin/tmux", "-L", "leo", "attach", "-t", "'=leo-scratch'")
-	if !equalStrings(stub.calls[1], wantAttach) {
-		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
+	joined := strings.Join(stub.calls[0], " ")
+	if strings.Contains(joined, "tmux") {
+		t.Errorf("delegated non-cc attach must not invoke tmux client-side, got %q", joined)
 	}
 }
 
@@ -296,7 +306,11 @@ func TestAgentLogsFollowRemoteUsesTmuxPath(t *testing.T) {
 	}
 }
 
-func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
+// TestAgentAttachRemoteUsesRemoteLeoDelegate verifies the non-`--cc` remote
+// `leo agent attach <name>` path delegates via `ssh -t <host> <leo_path>
+// agent attach <name>` — a single ssh call, no local resolve-then-tmux-attach
+// round trip, and no tmux invoked client-side.
+func TestAgentAttachRemoteUsesRemoteLeoDelegate(t *testing.T) {
 	path := newAgentCLITestConfig(t)
 	stub := withStubExec(t)
 	withStubStdio(t)
@@ -306,19 +320,18 @@ func TestAgentAttachRemoteUsesTmuxDirectly(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if len(stub.calls) != 2 {
-		t.Fatalf("expected 2 ssh calls (resolve + attach), got %d: %v", len(stub.calls), stub.calls)
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 delegated ssh call, got %d: %v", len(stub.calls), stub.calls)
 	}
-	home := homeFromConfigPath(path)
-	wantResolve := append([]string{"ssh", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
-	wantResolve = append(wantResolve, config.DefaultRemoteLeoPath, "agent", "session-name", "scratch")
-	if !equalStrings(stub.calls[0], wantResolve) {
-		t.Errorf("resolve ssh args = %v, want %v", stub.calls[0], wantResolve)
+	// See TestAgentAttachRemoteNonCCDelegatesToRemoteLeo: runRemoteAttach
+	// (reused as-is from top-level `leo attach`) doesn't add ControlMaster opts.
+	want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "attach", "scratch"}
+	if !equalStrings(stub.calls[0], want) {
+		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
-	wantAttach := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, ctlOpts(home)...)
-	wantAttach = append(wantAttach, config.DefaultRemoteTmuxPath, "-L", "leo", "attach", "-t", "'=leo-scratch'")
-	if !equalStrings(stub.calls[1], wantAttach) {
-		t.Errorf("attach ssh args = %v, want %v", stub.calls[1], wantAttach)
+	joined := strings.Join(stub.calls[0], " ")
+	if strings.Contains(joined, "tmux") {
+		t.Errorf("delegated non-cc attach must not invoke tmux client-side, got %q", joined)
 	}
 }
 
