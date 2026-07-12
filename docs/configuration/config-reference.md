@@ -265,6 +265,38 @@ templates:
 
 When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, or `leo agent spawn coding --repo owner/repo`), Leo clones the repo into `<workspace>/<repo>` using `gh`. The agent session is named `leo-<template>-<owner>-<repo>`.
 
+## `sessions`
+
+Sessions back **persistent tasks** (`runtime: persistent`) and are shared across
+firings and, optionally, across multiple tasks or a supervised process. See
+the [Persistent Task Sessions guide](persistent-tasks.md) for the full
+mechanics (Stop hook, resume behavior, queueing, sharing).
+
+```yaml
+sessions:
+  daily:
+    workspace: ~/work/daily
+    model: sonnet
+    channels: [plugin:slack@official, plugin:telegram@official]
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `workspace` | string | Yes | -- | Directory where the session's `.claude/` (or equivalent) lives. |
+| `model` | string | No | -- | Model override, validated by the resolved harness. Sessions do not cascade from `defaults.model`. |
+| `harness` | string | No | `defaults.harness` | Adapter override for this session. All three harnesses support persistent sessions. See [Harnesses](harnesses.md). |
+| `harness_options` | map | No | **not merged with `defaults.harness_options`** | Adapter-specific options — for `claude`: `agent`, `permission_mode`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. Unlike processes/templates/tasks, sessions do **not** inherit `defaults.harness_options` — set every option you want directly on the session. See [Harnesses](harnesses.md). |
+| `add_dirs` | list | No | -- | Additional directories passed via `--add-dir`. |
+| `channels` | list | No | -- | Channel plugin IDs loaded for the session. Only valid on a channel-supporting harness (`claude`). Any task sharing this session must use a subset of these channels. |
+| `env` | map | No | -- | Environment variables for the session process, including `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` for a third-party endpoint. |
+| `idle_timeout` | string | No | -- | Reserved for future lazy-session support; not yet enforced. |
+
+A session can be declared implicitly (a `runtime: persistent` task with no
+`session:` field gets a dedicated `leo-session-<task>` session), or declared
+explicitly under `sessions:` and referenced by name from one or more tasks
+via `tasks.<name>.session`. See [Persistent Task Sessions](persistent-tasks.md)
+for sharing patterns across tasks and supervised processes.
+
 ## Idle-suspend
 
 Ephemeral agents can be **suspended** after a period of inactivity to free local

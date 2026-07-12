@@ -8,34 +8,46 @@
 # schema checks.
 
 # ---------------------------------------------------------------------------
-# defaults — values inherited by every process, task, and template unless
-# overridden. Keep these minimal; prefer per-process overrides for anything
-# that only applies to one workload.
+# defaults — values inherited by every process, task, template, and session
+# unless overridden. Keep these minimal; prefer per-scope overrides for
+# anything that only applies to one workload.
 # ---------------------------------------------------------------------------
 defaults:
   # Model is one of: sonnet, opus, haiku, sonnet[1m], opus[1m].
   model: sonnet
 
+  # harness selects the coding-agent adapter: claude (default), codex, or
+  # opencode. All three support every leo primitive (tasks, processes,
+  # agents, sessions); only claude supports channel plugins.
+  harness: claude
+
   # Upper bound on turns per run. 0 means "no limit" (use with care for
   # long-running supervised processes).
   max_turns: 0
 
-  # permission_mode controls how Claude handles tool-use prompts. One of:
-  #   acceptEdits, auto, bypassPermissions, default, dontAsk, plan
-  # "default" is the safest starting point — Claude asks before tools.
-  permission_mode: default
+  # harness_options carries adapter-specific knobs, validated strictly by
+  # the resolved harness. For claude, that's permission_mode,
+  # bypass_permissions, remote_control, agent, allowed_tools,
+  # disallowed_tools, and append_system_prompt (previously flat top-level
+  # fields — they now nest here). Note: sessions do NOT inherit
+  # defaults.harness_options; set them explicitly per session.
+  harness_options:
+    # permission_mode controls how Claude handles tool-use prompts. One of:
+    #   acceptEdits, auto, bypassPermissions, default, dontAsk, plan
+    # "default" is the safest starting point — Claude asks before tools.
+    permission_mode: default
 
-  # allowed_tools / disallowed_tools are passed through to claude as-is.
-  # See `claude --help` for the full tool list.
-  # allowed_tools:
-  #   - Bash
-  #   - Edit
-  #   - Read
+    # allowed_tools / disallowed_tools are passed through to claude as-is.
+    # See `claude --help` for the full tool list.
+    # allowed_tools:
+    #   - Bash
+    #   - Edit
+    #   - Read
 
-  # append_system_prompt is concatenated onto Claude's system prompt for
-  # every process and task unless overridden.
-  # append_system_prompt: |
-  #   You operate as part of the "acme" workspace. Prefer concise replies.
+    # append_system_prompt is concatenated onto Claude's system prompt for
+    # every process and task unless overridden.
+    # append_system_prompt: |
+    #   You operate as part of the "acme" workspace. Prefer concise replies.
 
 # ---------------------------------------------------------------------------
 # web — optional local web UI for watching processes and editing config.
@@ -76,7 +88,9 @@ processes:
     #   `claude plugin install <id>`
     # Leo only knows them as opaque "plugin:<name>@<marketplace>" strings
     # and passes the list to Claude via $LEO_CHANNELS. The plugin owns its
-    # own credentials (bot token, API key, etc.).
+    # own credentials (bot token, API key, etc.). Only the claude harness
+    # supports channels; codex/opencode message via leo's
+    # leo_send_message MCP tool instead.
     channels:
       - plugin:telegram@claude-plugins-official
 
@@ -88,19 +102,21 @@ processes:
   notes:
     enabled: false               # won't start until you flip this on
     workspace: ~/notes
-    permission_mode: acceptEdits # auto-accept edits inside ~/notes
-    allowed_tools:
-      - Read
-      - Edit
-      - Grep
-      - Glob
-    append_system_prompt: |
-      You are the notes assistant. Keep files in Markdown.
-      Don't create new top-level directories without asking.
+    harness_options:
+      permission_mode: acceptEdits # auto-accept edits inside ~/notes
+      allowed_tools:
+        - Read
+        - Edit
+        - Grep
+        - Glob
+      append_system_prompt: |
+        You are the notes assistant. Keep files in Markdown.
+        Don't create new top-level directories without asking.
 
 # ---------------------------------------------------------------------------
-# tasks — cron-scheduled one-shot claude invocations. Each task renders a
-# prompt file through claude and optionally notifies a channel on failure.
+# tasks — cron-scheduled one-shot invocations of the configured harness.
+# Each task renders a prompt file through the harness and optionally
+# notifies a channel on failure (claude harness only).
 # ---------------------------------------------------------------------------
 tasks:
 
@@ -127,6 +143,22 @@ tasks:
     silent: true
     timeout: 5m
 
+  # A codex-backed task, to illustrate a non-claude harness. codex has no
+  # channel-plugin concept — it messages out via leo's leo_send_message
+  # MCP tool instead — so no `channels` here. `sandbox` is the only codex
+  # harness_options key: read-only (default), workspace-write, or
+  # danger-full-access.
+  dependency-audit:
+    enabled: false
+    schedule: "0 6 * * 1"        # weekly, Monday 6am
+    workspace: ~/code
+    prompt_file: tasks/dependency-audit.md
+    harness: codex
+    model: gpt-5.3-codex
+    harness_options:
+      sandbox: workspace-write
+    timeout: 15m
+
 # ---------------------------------------------------------------------------
 # templates — blueprints for ephemeral agents spawned via `leo agent`.
 # The workspace here is a parent dir; each agent gets a fresh subdirectory.
@@ -138,12 +170,13 @@ templates:
   review:
     workspace: ~/agents/review
     model: sonnet
-    permission_mode: plan        # plan-only; won't write without approval
-    allowed_tools:
-      - Read
-      - Grep
-      - Glob
-      - Bash
-    append_system_prompt: |
-      You are a code reviewer. Your goal is to produce a concise review,
-      not to edit the code.
+    harness_options:
+      permission_mode: plan        # plan-only; won't write without approval
+      allowed_tools:
+        - Read
+        - Grep
+        - Glob
+        - Bash
+      append_system_prompt: |
+        You are a code reviewer. Your goal is to produce a concise review,
+        not to edit the code.
