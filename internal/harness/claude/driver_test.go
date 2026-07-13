@@ -8,15 +8,11 @@ import (
 )
 
 // TestClaudeDriverWiring asserts the claude-specific surface: Driver()
-// returns the shared tmuxtui driver (DriveTmux style) wired with claude's
-// pane-care and quick-exit-recovery hooks. Style/Start/Inject/Attach
-// behavior itself is the tmuxtui package's responsibility and is covered by
-// its own tests.
+// returns the shared tmuxtui driver wired with claude's pane-care and
+// quick-exit-recovery hooks. Start/Inject/Attach behavior itself is the
+// tmuxtui package's responsibility and is covered by its own tests.
 func TestClaudeDriverWiring(t *testing.T) {
 	d := (Claude{}).Driver()
-	if got := d.Style(); got != harness.DriveTmux {
-		t.Fatalf("Style() = %q, want %q", got, harness.DriveTmux)
-	}
 	if _, ok := d.(harness.PaneCare); !ok {
 		t.Fatalf("Driver() does not implement harness.PaneCare")
 	}

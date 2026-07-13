@@ -39,9 +39,6 @@ func TestResolveHandleAgentstoreRecord(t *testing.T) {
 	if h.Env["FOO"] != "bar" {
 		t.Fatalf("handle.Env not propagated: %+v", h.Env)
 	}
-	if len(h.TurnArgs) != 2 || h.TurnArgs[0] != "exec" {
-		t.Fatalf("handle.TurnArgs = %v", h.TurnArgs)
-	}
 	if h.IDs == nil {
 		t.Fatal("handle.IDs must be set")
 	}

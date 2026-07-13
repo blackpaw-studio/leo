@@ -249,8 +249,7 @@ func TestAttach_ReturnsTmuxSessionOnly(t *testing.T) {
 		t.Fatalf("Attach() error = %v", err)
 	}
 	want := harness.AttachSpec{TmuxSession: "leo-attach"}
-	if spec.TmuxSession != want.TmuxSession || len(spec.Argv) != 0 || spec.HistoryPath != "" ||
-		spec.WindowName != "" || len(spec.WindowCmd) != 0 || spec.WindowKey != "" {
+	if spec != want {
 		t.Fatalf("Attach() = %+v, want %+v", spec, want)
 	}
 }
@@ -351,12 +350,5 @@ func TestAbortTurn_LocateError(t *testing.T) {
 	err := d.AbortTurn(harness.SessionHandle{TmuxSession: "leo-abort"})
 	if err == nil {
 		t.Fatal("AbortTurn() error = nil, want locate error to surface")
-	}
-}
-
-func TestStyle_ReturnsDriveTmux(t *testing.T) {
-	d := New(Config{})
-	if d.Style() != harness.DriveTmux {
-		t.Fatalf("Style() = %v, want DriveTmux", d.Style())
 	}
 }

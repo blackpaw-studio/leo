@@ -10,13 +10,10 @@ import (
 )
 
 // TestOpencodeDriverWiring locks the capabilities the shared tmuxtui driver
-// exposes for opencode: tmux drive style, quick-exit recovery, and
-// session-args refresh (opencode has no PreLaunch hook, unlike codex).
+// exposes for opencode: quick-exit recovery and session-args refresh
+// (opencode has no PreLaunch hook, unlike codex).
 func TestOpencodeDriverWiring(t *testing.T) {
 	d := (Opencode{}).Driver()
-	if got := d.Style(); got != harness.DriveTmux {
-		t.Fatalf("Style() = %q, want %q", got, harness.DriveTmux)
-	}
 	if _, ok := d.(harness.SessionArgsRefresher); !ok {
 		t.Fatalf("Driver() does not implement harness.SessionArgsRefresher")
 	}

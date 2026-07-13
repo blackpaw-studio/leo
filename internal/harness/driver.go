@@ -2,19 +2,6 @@ package harness
 
 import "context"
 
-// DriveStyle says how a SessionDriver keeps a session alive between
-// injected messages.
-type DriveStyle string
-
-const (
-	// DriveTmux means a resident process is supervised in a leo tmux
-	// session; Inject pastes into the live pane.
-	DriveTmux DriveStyle = "tmux"
-	// DriveTurns means there is no resident process; each Inject spawns a
-	// one-shot turn.
-	DriveTurns DriveStyle = "turns"
-)
-
 // SessionIDStore persists the harness-native session/thread ID across
 // turns. Implementations are supplied by the caller (e.g. leo's session
 // store); drivers only read and write through this seam.
@@ -34,34 +21,20 @@ type SessionHandle struct {
 	Workspace     string
 	HomePath      string
 	Env           map[string]string // resolved spawn env for driver-spawned helper processes
-	TurnArgs      []string          // DriveTurns: rendered per-turn argv prefix (from Args())
 	OpeningPrompt string            // delivered by Start for drivers that can't put it in argv
 	IDs           SessionIDStore
 }
 
-// AttachSpec describes how a caller can attach to a live session for
-// interactive viewing.
+// AttachSpec says how a caller attaches to a live session: every harness
+// runs its TUI inside the leo tmux session, so attach is a tmux attach.
 type AttachSpec struct {
-	Argv        []string // exec directly (no tmux pattern; claude-external tools)
-	HistoryPath string   // when no live attach exists: tail this file
-
-	// Tmux-flavored attach: ensure a window named WindowName running
-	// WindowCmd exists inside TmuxSession (recreating it when WindowKey
-	// changes — e.g. the harness session id rotated), then tmux-attach with
-	// that window selected. Gives every harness the same attach UX
-	// (status bar, detach, remote ssh flow) as claude's native panes.
 	TmuxSession string
-	WindowName  string
-	WindowCmd   []string
-	WindowKey   string // change-detection key; stored as a tmux window option
 }
 
 // SessionDriver is the per-harness contract for keeping a live interactive
 // session and delivering messages to it. Every SupportsKind-gated
 // interactive call site goes through a SessionDriver.
 type SessionDriver interface {
-	// Style reports how this driver keeps a session alive between turns.
-	Style() DriveStyle
 	// Start arranges whatever the driver needs before the first Inject
 	// (e.g. delivering an opening prompt). Called once per session launch.
 	Start(ctx context.Context, h SessionHandle) error

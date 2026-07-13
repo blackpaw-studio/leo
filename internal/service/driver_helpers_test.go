@@ -13,15 +13,12 @@ func TestDriverForEmptyDefaultsToClaude(t *testing.T) {
 	if drv == nil {
 		t.Fatal("expected a non-nil driver for empty harness (defaults to claude)")
 	}
-	if drv.Style() != harness.DriveTmux {
-		t.Errorf("Style() = %q, want %q", drv.Style(), harness.DriveTmux)
-	}
 }
 
 func TestDriverForClaudeExplicit(t *testing.T) {
 	drv := driverFor("claude")
-	if drv == nil || drv.Style() != harness.DriveTmux {
-		t.Fatalf("driverFor(claude) = %#v, want a DriveTmux driver", drv)
+	if drv == nil {
+		t.Fatalf("driverFor(claude) = %#v, want a non-nil driver", drv)
 	}
 }
 
@@ -34,7 +31,7 @@ func TestDriverForUnknownHarnessReturnsNil(t *testing.T) {
 // TestClaudeDriverStartIsNoOp locks in the "zero new tmux/exec calls"
 // characterization for existing (claude) configs: driverFor("").Start must
 // return immediately with no error and no side effects, so wiring the
-// DriveTmux Start call into superviseProcess is behavior-neutral.
+// driver's Start call into superviseProcess is behavior-neutral.
 func TestClaudeDriverStartIsNoOp(t *testing.T) {
 	drv := driverFor("")
 	done := make(chan error, 1)

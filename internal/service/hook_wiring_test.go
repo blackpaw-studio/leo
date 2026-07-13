@@ -25,7 +25,6 @@ type fakeHookDriver struct {
 	refreshedWith  []string // storedID seen on each RefreshSessionArgs call
 }
 
-func (d *fakeHookDriver) Style() harness.DriveStyle                          { return harness.DriveTmux }
 func (d *fakeHookDriver) Start(context.Context, harness.SessionHandle) error { return nil }
 func (d *fakeHookDriver) Inject(context.Context, harness.SessionHandle, string) (*harness.Result, error) {
 	return nil, nil

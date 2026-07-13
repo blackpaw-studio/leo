@@ -505,8 +505,8 @@ func TestSuperviseSessionUnknownHarnessErrors(t *testing.T) {
 }
 
 // TestBuildSessionDispatchCodexIsHandleOnly verifies the dispatch table now
-// carries only routing coordinates for codex — no TurnArgs/argv building.
-// Codex is DriveTmux like every other non-claude harness: Inject pastes into
+// carries only routing coordinates for codex — no per-message argv building.
+// Codex drives its TUI in tmux like every other harness: Inject pastes into
 // the live tmux pane via the handle's TmuxSession, not per-message argv. The
 // resident TUI's own argv (including the LeoMCP bridge) is built by
 // superviseTUISession, not here — see TestSuperviseSessionCodex* below for
@@ -533,9 +533,6 @@ func TestBuildSessionDispatchCodexIsHandleOnly(t *testing.T) {
 	if d.Handle.IDs == nil {
 		t.Fatalf("expected a non-nil IDs store")
 	}
-	if len(d.Handle.TurnArgs) != 0 {
-		t.Fatalf("expected no TurnArgs (codex is DriveTmux, routed by TmuxSession), got %v", d.Handle.TurnArgs)
-	}
 	if d.Handle.TmuxSession != SessionTmuxName("cx") {
 		t.Fatalf("TmuxSession = %q, want %q", d.Handle.TmuxSession, SessionTmuxName("cx"))
 	}
@@ -556,8 +553,8 @@ func TestBuildSessionDispatchSkipsClaude(t *testing.T) {
 }
 
 // TestBuildSessionDispatchOpencodeNoTurnArgs verifies the opencode branch
-// builds a dispatch entry without TurnArgs — Inject pastes into the live
-// tmux pane via TmuxSession, same as codex.
+// builds a dispatch entry with only routing coordinates — Inject pastes into
+// the live tmux pane via TmuxSession, same as codex.
 func TestBuildSessionDispatchOpencodeNoTurnArgs(t *testing.T) {
 	home := t.TempDir()
 	specs := []SessionSpec{{Name: "oc", Workdir: "/tmp/oc", Harness: "opencode"}}
@@ -565,9 +562,6 @@ func TestBuildSessionDispatchOpencodeNoTurnArgs(t *testing.T) {
 	d, ok := dispatch[SessionTmuxName("oc")]
 	if !ok {
 		t.Fatalf("expected a dispatch entry for %q", SessionTmuxName("oc"))
-	}
-	if len(d.Handle.TurnArgs) != 0 {
-		t.Fatalf("expected no TurnArgs for opencode, got %v", d.Handle.TurnArgs)
 	}
 	if d.Handle.HomePath != home || d.Handle.TmuxSession != SessionTmuxName("oc") {
 		t.Fatalf("handle routing fields wrong: %+v", d.Handle)

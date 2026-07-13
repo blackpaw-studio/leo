@@ -261,9 +261,6 @@ func TestDiscoverSessionID(t *testing.T) {
 
 func TestCodexDriverWiring(t *testing.T) {
 	d := (Codex{}).Driver()
-	if got := d.Style(); got != harness.DriveTmux {
-		t.Fatalf("Style() = %q, want %q", got, harness.DriveTmux)
-	}
 	if _, ok := d.(harness.PreLauncher); !ok {
 		t.Fatalf("Driver() does not implement harness.PreLauncher")
 	}

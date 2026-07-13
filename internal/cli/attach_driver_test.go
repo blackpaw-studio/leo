@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -24,7 +22,6 @@ type fakeCLITurnsDriver struct {
 	err  error
 }
 
-func (d fakeCLITurnsDriver) Style() harness.DriveStyle                          { return harness.DriveTurns }
 func (d fakeCLITurnsDriver) Start(context.Context, harness.SessionHandle) error { return nil }
 func (d fakeCLITurnsDriver) Inject(context.Context, harness.SessionHandle, string) (*harness.Result, error) {
 	return nil, nil
@@ -73,7 +70,7 @@ func registerFakeCLITurnsHarness() *fakeCLITurnsDriver {
 // non-claude harness resolves via the driver's Attach, not the tmux path.
 func TestResolveProcessAttachSpecNonClaude(t *testing.T) {
 	drv := registerFakeCLITurnsHarness()
-	drv.spec = harness.AttachSpec{Argv: []string{"faketurns", "attach", "worker"}}
+	drv.spec = harness.AttachSpec{TmuxSession: "leo-worker"}
 	drv.err = nil
 
 	cfg := &config.Config{
@@ -94,8 +91,8 @@ func TestResolveProcessAttachSpecNonClaude(t *testing.T) {
 	if harnessName != fakeCLITurnsHarnessName {
 		t.Fatalf("harnessName = %q, want %q", harnessName, fakeCLITurnsHarnessName)
 	}
-	if len(spec.Argv) != 3 || spec.Argv[0] != "faketurns" {
-		t.Fatalf("spec.Argv = %v", spec.Argv)
+	if spec.TmuxSession != "leo-worker" {
+		t.Fatalf("spec.TmuxSession = %q, want %q", spec.TmuxSession, "leo-worker")
 	}
 }
 
@@ -132,30 +129,13 @@ func TestResolveProcessAttachSpecUnknownProcess(t *testing.T) {
 	}
 }
 
-// stubFakeExecutableOnPath creates an executable file named binName inside a
-// fresh directory and prepends that directory to $PATH for the duration of
-// the test, so exec.LookPath(binName) resolves without requiring a real
-// harness binary on the runner's PATH. Returns the resolved absolute path.
-func stubFakeExecutableOnPath(t *testing.T, binName string) string {
-	t.Helper()
-	dir := t.TempDir()
-	binPath := filepath.Join(dir, binName)
-	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0755); err != nil {
-		t.Fatalf("writing fake binary: %v", err)
-	}
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath)
-	return binPath
-}
-
-// TestAttachViaDriverLocalExecsArgv verifies a non-nil Argv is exec'd locally
-// via agentSyscallExec, mirroring attachTmuxSession's outside-tmux branch.
-// argv[0] is resolved through exec.LookPath before exec (syscall.Exec needs a
-// real path, not a bare binary name) — see TestAttachViaDriverLocalResolvesLookPath
-// for the case where argv[0] isn't already an absolute/relative path.
-func TestAttachViaDriverLocalExecsArgv(t *testing.T) {
-	binPath := stubFakeExecutableOnPath(t, "faketurns")
-
+// TestAttachViaDriverDelegatesToTmuxSession verifies a non-empty TmuxSession
+// is dispatched via attachTmuxSession — every harness's AttachSpec is a plain
+// tmux attach post-#106 cleanup, so there is no separate exec/argv branch
+// left to exercise.
+func TestAttachViaDriverDelegatesToTmuxSession(t *testing.T) {
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
 	var execedArgv0 string
 	var execedArgv []string
 	old := agentSyscallExec
@@ -166,118 +146,27 @@ func TestAttachViaDriverLocalExecsArgv(t *testing.T) {
 	}
 	t.Cleanup(func() { agentSyscallExec = old })
 
-	spec := harness.AttachSpec{Argv: []string{"faketurns", "attach", "worker"}}
+	spec := harness.AttachSpec{TmuxSession: "leo-worker"}
 	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec, attachOptions{}); err != nil {
 		t.Fatalf("attachViaDriver: %v", err)
 	}
-	if execedArgv0 != binPath {
-		t.Fatalf("argv0 = %q, want LookPath-resolved %q", execedArgv0, binPath)
+	if execedArgv0 != "/usr/bin/tmux" {
+		t.Fatalf("argv0 = %q, want tmux path %q", execedArgv0, "/usr/bin/tmux")
 	}
-	// argv itself (which becomes the exec'd program's os.Args) keeps the
-	// original bare name at argv[0] — only the exec path is resolved.
-	if len(execedArgv) != 3 || execedArgv[0] != "faketurns" {
-		t.Fatalf("argv = %v, want argv[0] to stay %q", execedArgv, "faketurns")
-	}
-}
-
-// TestAttachViaDriverLocalResolvesLookPath is the direct Bug B regression
-// test: a bare argv[0] (as the daemon's AttachSpec always sends — e.g.
-// "opencode") must be resolved to a real path via exec.LookPath before
-// syscall.Exec, or the exec fails with ENOENT even when the binary is on
-// $PATH.
-func TestAttachViaDriverLocalResolvesLookPath(t *testing.T) {
-	binPath := stubFakeExecutableOnPath(t, "opencode")
-
-	var execedArgv0 string
-	old := agentSyscallExec
-	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
-		execedArgv0 = argv0
-		return nil
-	}
-	t.Cleanup(func() { agentSyscallExec = old })
-
-	spec := harness.AttachSpec{Argv: []string{"opencode", "attach", "http://127.0.0.1:60629"}}
-	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec, attachOptions{}); err != nil {
-		t.Fatalf("attachViaDriver: %v", err)
-	}
-	if execedArgv0 != binPath {
-		t.Fatalf("execedArgv0 = %q, want resolved path %q", execedArgv0, binPath)
+	joined := strings.Join(execedArgv, " ")
+	if !strings.Contains(joined, "leo-worker") {
+		t.Fatalf("argv = %v, want it to reference the tmux session %q", execedArgv, "leo-worker")
 	}
 }
 
-// TestAttachViaDriverLocalMissingBinaryErrors verifies a missing argv[0]
-// binary produces a named error instead of a bare/confusing exec failure.
-func TestAttachViaDriverLocalMissingBinaryErrors(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // empty dir on PATH — nothing resolves
-
-	spec := harness.AttachSpec{Argv: []string{"opencode", "attach", "worker"}}
+// TestAttachViaDriverEmptyTmuxSessionErrors verifies an empty TmuxSession
+// (a driver resolve/attach failure upstream) surfaces a clear error instead
+// of silently falling through to nothing.
+func TestAttachViaDriverEmptyTmuxSessionErrors(t *testing.T) {
+	spec := harness.AttachSpec{}
 	err := attachViaDriver(config.HostResolution{Localhost: true}, spec, attachOptions{})
 	if err == nil {
-		t.Fatal("expected an error when the binary isn't on PATH")
-	}
-	if !strings.Contains(err.Error(), "opencode") || !strings.Contains(err.Error(), "not found on PATH") {
-		t.Fatalf("error = %q, want it to name the binary and say 'not found on PATH'", err.Error())
-	}
-}
-
-// TestAttachViaDriverRemoteShellQuotesEveryToken verifies a non-nil Argv on a
-// remote host is dispatched over `ssh -tt -e none` with every argv token
-// shell-quoted (ssh flattens post-host argv into one shell string, so an
-// unquoted token could be mangled by the remote login shell).
-func TestAttachViaDriverRemoteShellQuotesEveryToken(t *testing.T) {
-	stub := withStubExec(t)
-	withStubStdio(t)
-
-	spec := harness.AttachSpec{Argv: []string{"faketurns", "attach", "a worker"}}
-	res := config.HostResolution{
-		Localhost: false,
-		Host:      config.HostConfig{SSH: "user@remote.example.com"},
-	}
-	if err := attachViaDriver(res, spec, attachOptions{}); err != nil {
-		t.Fatalf("attachViaDriver: %v", err)
-	}
-	if len(stub.calls) != 1 {
-		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
-	}
-	call := stub.calls[0]
-	if call[0] != "ssh" || call[1] != "-tt" || call[2] != "-e" || call[3] != "none" {
-		t.Fatalf("unexpected ssh prefix: %v", call)
-	}
-	joined := call[len(call)-1]
-	want := "'faketurns' 'attach' 'a worker'"
-	if joined != want {
-		t.Fatalf("remote command = %q, want %q", joined, want)
-	}
-}
-
-// TestAttachViaDriverNilArgvPrintsHistoryTail verifies a nil Argv (no live
-// attach for this harness) falls back to printing the tail of HistoryPath —
-// a note plus only the last attachHistoryTailLines lines, not the whole file.
-func TestAttachViaDriverNilArgvPrintsHistoryTail(t *testing.T) {
-	out, _ := withStubStdio(t)
-
-	historyPath := filepath.Join(t.TempDir(), "history.log")
-	var lines string
-	for i := 1; i <= 60; i++ {
-		lines += "line" + string(rune('0'+i%10)) + "\n"
-	}
-	if err := os.WriteFile(historyPath, []byte(lines), 0600); err != nil {
-		t.Fatalf("writing history file: %v", err)
-	}
-
-	spec := harness.AttachSpec{HistoryPath: historyPath}
-	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec, attachOptions{}); err != nil {
-		t.Fatalf("attachViaDriver: %v", err)
-	}
-
-	printed := out.String()
-	if !strings.Contains(printed, "no live attach") {
-		t.Fatalf("expected a no-live-attach note, got: %q", printed)
-	}
-	gotLines := strings.Count(printed, "\n")
-	// note line + attachHistoryTailLines (60 written, capped at 50).
-	if gotLines != attachHistoryTailLines+1 {
-		t.Fatalf("printed %d lines, want %d (note + tail)", gotLines, attachHistoryTailLines+1)
+		t.Fatal("expected an error for an empty TmuxSession")
 	}
 }
 
@@ -318,11 +207,11 @@ func stubAgentAttachSpecFn(t *testing.T, fn func(workDir, name string) (daemon.A
 }
 
 // TestAttachTopLevelRoutesNonClaudeProcess verifies `leo attach <name>`
-// resolves a non-claude process through the driver, not tmux.
+// resolves a non-claude process through the driver, which now reports the
+// same tmux-attach shape as claude.
 func TestAttachTopLevelRoutesNonClaudeProcess(t *testing.T) {
-	binPath := stubFakeExecutableOnPath(t, "faketurns")
 	drv := registerFakeCLITurnsHarness()
-	drv.spec = harness.AttachSpec{Argv: []string{"faketurns", "attach", "worker"}}
+	drv.spec = harness.AttachSpec{TmuxSession: "leo-worker"}
 	drv.err = nil
 
 	home := t.TempDir()
@@ -339,12 +228,15 @@ func TestAttachTopLevelRoutesNonClaudeProcess(t *testing.T) {
 	stubAgentSession(t, func(workDir, name string) (string, error) {
 		return "", fmt.Errorf("not an agent")
 	})
-	stub := withStubExec(t)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
 	withStubStdio(t)
 	var execedArgv0 string
+	var execedArgv []string
 	old := agentSyscallExec
 	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
 		execedArgv0 = argv0
+		execedArgv = argv
 		return nil
 	}
 	t.Cleanup(func() { agentSyscallExec = old })
@@ -354,21 +246,25 @@ func TestAttachTopLevelRoutesNonClaudeProcess(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if execedArgv0 != binPath {
-		t.Fatalf("argv0 = %q, want LookPath-resolved %q (driver dispatch didn't fire); ssh calls = %v", execedArgv0, binPath, stub.calls)
+	if execedArgv0 != "/usr/bin/tmux" {
+		t.Fatalf("argv0 = %q, want tmux path %q (driver dispatch didn't fire); argv=%v", execedArgv0, "/usr/bin/tmux", execedArgv)
+	}
+	if !strings.Contains(strings.Join(execedArgv, " "), "leo-worker") {
+		t.Fatalf("argv = %v, want it to reference the tmux session %q", execedArgv, "leo-worker")
 	}
 }
 
 // TestAttachTopLevelRoutesNonClaudeAgent verifies `leo attach <name>`
-// resolves a non-claude agent through the driver, not tmux.
+// resolves a non-claude agent through the driver, which now reports the same
+// tmux-attach shape as claude.
 func TestAttachTopLevelRoutesNonClaudeAgent(t *testing.T) {
-	binPath := stubFakeExecutableOnPath(t, "faketurns")
 	drv := registerFakeCLITurnsHarness()
-	drv.spec = harness.AttachSpec{Argv: []string{"faketurns", "attach", "scratch"}}
+	drv.spec = harness.AttachSpec{TmuxSession: "leo-scratch"}
 	drv.err = nil
 
 	path := newAttachAliasTestConfig(t, nil) // no configured processes
-	stub := withStubExec(t)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
 	withStubStdio(t)
 	stubAgentSession(t, func(workDir, name string) (string, error) {
 		if name == "scratch" {
@@ -378,15 +274,17 @@ func TestAttachTopLevelRoutesNonClaudeAgent(t *testing.T) {
 	})
 	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
 		return daemon.AgentAttachSpecResponse{
-			Name:    name,
-			Harness: fakeCLITurnsHarnessName,
-			Argv:    []string{"faketurns", "attach", "scratch"},
+			Name:        name,
+			Harness:     fakeCLITurnsHarnessName,
+			TmuxSession: "leo-scratch",
 		}, nil
 	})
 	var execedArgv0 string
+	var execedArgv []string
 	old := agentSyscallExec
 	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
 		execedArgv0 = argv0
+		execedArgv = argv
 		return nil
 	}
 	t.Cleanup(func() { agentSyscallExec = old })
@@ -396,8 +294,11 @@ func TestAttachTopLevelRoutesNonClaudeAgent(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if execedArgv0 != binPath {
-		t.Fatalf("argv0 = %q, want LookPath-resolved %q (driver dispatch didn't fire); ssh calls = %v", execedArgv0, binPath, stub.calls)
+	if execedArgv0 != "/usr/bin/tmux" {
+		t.Fatalf("argv0 = %q, want tmux path %q (driver dispatch didn't fire); argv=%v", execedArgv0, "/usr/bin/tmux", execedArgv)
+	}
+	if !strings.Contains(strings.Join(execedArgv, " "), "leo-scratch") {
+		t.Fatalf("argv = %v, want it to reference the tmux session %q", execedArgv, "leo-scratch")
 	}
 }
 
@@ -443,11 +344,10 @@ func TestAttachTopLevelClaudeAgentKeepsTmuxPath(t *testing.T) {
 
 // TestAttachPickerRoutesNonClaudeAgent verifies the picker's single-choice
 // shortcut (no promptui interaction needed) routes a non-claude agent
-// through the driver.
+// through the driver, which now reports the same tmux-attach shape as claude.
 func TestAttachPickerRoutesNonClaudeAgent(t *testing.T) {
-	binPath := stubFakeExecutableOnPath(t, "faketurns")
 	drv := registerFakeCLITurnsHarness()
-	drv.spec = harness.AttachSpec{Argv: []string{"faketurns", "attach", "solo"}}
+	drv.spec = harness.AttachSpec{TmuxSession: "leo-solo"}
 	drv.err = nil
 
 	home := t.TempDir()
@@ -468,17 +368,20 @@ func TestAttachPickerRoutesNonClaudeAgent(t *testing.T) {
 
 	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
 		return daemon.AgentAttachSpecResponse{
-			Name:    name,
-			Harness: fakeCLITurnsHarnessName,
-			Argv:    []string{"faketurns", "attach", "solo"},
+			Name:        name,
+			Harness:     fakeCLITurnsHarnessName,
+			TmuxSession: "leo-solo",
 		}, nil
 	})
-	withStubExec(t)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
 	withStubStdio(t)
 	var execedArgv0 string
+	var execedArgv []string
 	old := agentSyscallExec
 	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
 		execedArgv0 = argv0
+		execedArgv = argv
 		return nil
 	}
 	t.Cleanup(func() { agentSyscallExec = old })
@@ -488,8 +391,11 @@ func TestAttachPickerRoutesNonClaudeAgent(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if execedArgv0 != binPath {
-		t.Fatalf("argv0 = %q, want LookPath-resolved %q (driver dispatch didn't fire)", execedArgv0, binPath)
+	if execedArgv0 != "/usr/bin/tmux" {
+		t.Fatalf("argv0 = %q, want tmux path %q (driver dispatch didn't fire); argv=%v", execedArgv0, "/usr/bin/tmux", execedArgv)
+	}
+	if !strings.Contains(strings.Join(execedArgv, " "), "leo-solo") {
+		t.Fatalf("argv = %v, want it to reference the tmux session %q", execedArgv, "leo-solo")
 	}
 }
 

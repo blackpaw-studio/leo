@@ -231,11 +231,11 @@ func (s *Server) handleAgentSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAgentAttachSpec returns how the CLI should attach to a non-claude
-// agent's live session: the driver's resolved Argv (exec locally / over ssh)
-// or HistoryPath (no live attach — tail the file instead). Claude agents
-// (Harness == "" or "claude") get an empty Argv/HistoryPath — the CLI already
-// has its own tmux-based attach flow for those via AgentSession and never
-// needs to reach this endpoint for them, but the response is still
+// agent's live session: the driver's resolved TmuxSession (every harness's
+// TUI runs in a leo tmux session, so this is always a plain tmux attach).
+// Claude agents (Harness == "" or "claude") get an empty TmuxSession — the
+// CLI already has its own tmux-based attach flow for those via AgentSession
+// and never needs to reach this endpoint for them, but the response is still
 // well-formed if it does.
 func (s *Server) handleAgentAttachSpec(w http.ResponseWriter, r *http.Request) {
 	if s.agentMgr == nil {
@@ -259,12 +259,7 @@ func (s *Server) handleAgentAttachSpec(w http.ResponseWriter, r *http.Request) {
 		if hd, err := harness.Get(harnessName); err == nil {
 			if drv := hd.Driver(); drv != nil {
 				if spec, err := drv.Attach(h); err == nil {
-					resp.Argv = spec.Argv
-					resp.HistoryPath = spec.HistoryPath
 					resp.TmuxSession = spec.TmuxSession
-					resp.WindowName = spec.WindowName
-					resp.WindowCmd = spec.WindowCmd
-					resp.WindowKey = spec.WindowKey
 				}
 			}
 		}

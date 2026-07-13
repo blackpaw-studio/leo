@@ -16,16 +16,10 @@ import (
 var agentAttachSpecFn = daemon.AgentAttachSpec
 
 // toAttachSpec converts a daemon.AgentAttachSpecResponse to the
-// harness.AttachSpec shape attachViaDriver consumes, carrying every field
-// (including the tmux flavor) across the daemon/CLI boundary unchanged.
+// harness.AttachSpec shape attachViaDriver consumes.
 func toAttachSpec(spec daemon.AgentAttachSpecResponse) harness.AttachSpec {
 	return harness.AttachSpec{
-		Argv:        spec.Argv,
-		HistoryPath: spec.HistoryPath,
 		TmuxSession: spec.TmuxSession,
-		WindowName:  spec.WindowName,
-		WindowCmd:   spec.WindowCmd,
-		WindowKey:   spec.WindowKey,
 	}
 }
 

@@ -734,7 +734,6 @@ func (m *Manager) handleForRecord(homePath string, rec agentstore.Record) harnes
 		Workspace:   rec.Workspace,
 		HomePath:    homePath,
 		Env:         rec.Env,
-		TurnArgs:    rec.ClaudeArgs,
 		IDs:         NewAgentIDs(homePath, rec.Name),
 	}
 }

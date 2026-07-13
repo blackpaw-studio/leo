@@ -46,8 +46,6 @@ type Driver struct{ cfg Config }
 
 func New(cfg Config) Driver { return Driver{cfg: cfg} }
 
-func (d Driver) Style() harness.DriveStyle { return harness.DriveTmux }
-
 // Start delivers the opening prompt (once, guarded by the empty IDs store so
 // restarts never replay it) and arms session-id discovery for harnesses that
 // can't pin an id at launch.

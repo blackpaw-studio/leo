@@ -729,7 +729,6 @@ func handleForSpec(spec ProcessSpec, id *procIdentity, homePath string) harness.
 		Workspace:     spec.WorkDir,
 		HomePath:      homePath,
 		Env:           spec.Env,
-		TurnArgs:      id.Args(),
 		OpeningPrompt: spec.OpeningPrompt,
 		IDs:           agentOrProcessIDs(homePath, id.Name()),
 	}
@@ -742,8 +741,9 @@ func handleForSpec(spec ProcessSpec, id *procIdentity, homePath string) harness.
 // behavior (workspace trust, resume-argv rewriting, dialog dismissal,
 // quick-exit recovery) is expressed entirely through the driver's optional
 // capability interfaces (PreLauncher, SessionArgsRefresher, PaneCare,
-// QuickExitRecovery), asserted below; claude's driver implements none of
-// them, so every assertion misses and claude's behavior is unchanged.
+// QuickExitRecovery), asserted below; claude's driver leaves the
+// PreLaunch/RefreshArgs hooks nil, so both no-op — it does use
+// PaneCare/QuickExitRecovery.
 func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity) {
 	sv.initState(spec.Name)
 
