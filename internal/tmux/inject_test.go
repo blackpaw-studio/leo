@@ -304,6 +304,196 @@ func TestClassifyInput(t *testing.T) {
 	}
 }
 
+// enterCallIndex returns the index of the submit-Enter send-keys call in got,
+// or -1 if none is present.
+func enterCallIndex(got [][]string) int {
+	for i, c := range got {
+		if len(c) >= 4 && c[3] == "send-keys" && c[len(c)-1] == "Enter" {
+			return i
+		}
+	}
+	return -1
+}
+
+// captureCallsBefore counts capture-pane calls in got before index idx.
+func captureCallsBefore(got [][]string, idx int) int {
+	n := 0
+	for _, c := range got[:idx] {
+		if len(c) >= 4 && c[3] == "capture-pane" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestInjectPromptConfirmsPasteBeforeSubmitting proves phase 3's post-paste
+// confirm loop actually withholds Enter until the pasted body is visible in
+// the pane — the fix for codex's async bracketed-paste commit dropping an
+// Enter that arrives in the same burst as the paste.
+func TestInjectPromptConfirmsPasteBeforeSubmitting(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 10
+	submitConfirmPoll = time.Millisecond
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	const withheldCaptures = 4 // confirm-loop captures before the body shows
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			if captureCalls == 1 {
+				// Phase 1 readiness capture: claude is ready.
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			}
+			// Phase 3 confirm-loop captures: body absent for a stretch, then present.
+			if captureCalls <= 1+withheldCaptures {
+				return exec.Command("printf", "%s", "no body here yet\n")
+			}
+			return exec.Command("printf", "%s", "codex-marker-body\nsecond line\n")
+		}
+		return exec.Command("true")
+	}
+
+	body := "codex-marker-body\nsecond line"
+	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", body, 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+
+	idx := enterCallIndex(got)
+	if idx == -1 {
+		t.Fatalf("expected a submit Enter call, got none: %#v", got)
+	}
+	if idx != len(got)-1 {
+		t.Fatalf("Enter must be the final call, got at index %d of %d: %#v", idx, len(got), got)
+	}
+	if n := captureCallsBefore(got, idx); n < 1+withheldCaptures {
+		t.Fatalf("Enter fired too early: only %d capture-pane calls before it, want >= %d (withheld until body visible): %#v", n, 1+withheldCaptures, got)
+	}
+}
+
+// TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately proves the
+// claude/opencode path — where the pasted body appears in the pane on the
+// very first confirm-loop capture — adds zero extra polling: the loop breaks
+// on its first iteration and Enter fires immediately.
+func TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 25
+	submitConfirmPoll = 200 * time.Millisecond // would be very slow if ever waited on
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			if captureCalls == 1 {
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			}
+			// Every confirm-loop capture already shows the body: claude/opencode
+			// commit a bracketed paste synchronously.
+			return exec.Command("printf", "%s", "sync-body-marker\n")
+		}
+		return exec.Command("true")
+	}
+
+	body := "sync-body-marker"
+	start := time.Now()
+	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", body, 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("expected no added latency on the synchronous-paste path, took %v", elapsed)
+	}
+	if captureCalls != 2 {
+		t.Fatalf("expected exactly 2 capture-pane calls (1 readiness + 1 confirm), got %d: %#v", captureCalls, got)
+	}
+	idx := enterCallIndex(got)
+	if idx != len(got)-1 {
+		t.Fatalf("Enter must be the final call, got index %d of %d: %#v", idx, len(got), got)
+	}
+}
+
+// TestInjectPromptConfirmFallsThroughToEnterOnBudgetExpiry proves the confirm
+// loop never blocks or drops the message when the needle never appears
+// (capture-pane unavailable, or a TUI whose rendering this heuristic can't
+// see): it exhausts its bounded budget and still submits with Enter.
+func TestInjectPromptConfirmFallsThroughToEnterOnBudgetExpiry(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 3
+	submitConfirmPoll = time.Millisecond
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			if captureCalls == 1 {
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			}
+			// Body never appears in the confirm loop.
+			return exec.Command("printf", "%s", "body never lands here\n")
+		}
+		return exec.Command("true")
+	}
+
+	body := "unconfirmable-body"
+	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", body, 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+	idx := enterCallIndex(got)
+	if idx != len(got)-1 {
+		t.Fatalf("Enter must still be sent as the final call even when unconfirmed, got index %d of %d: %#v", idx, len(got), got)
+	}
+	// 1 readiness capture + submitConfirmAttempts confirm-loop captures.
+	if captureCalls != 1+submitConfirmAttempts {
+		t.Fatalf("expected the confirm loop to exhaust its budget (%d captures after readiness), got %d total captures: %#v", submitConfirmAttempts, captureCalls, got)
+	}
+}
+
+// TestInjectPromptConfirmSkipsLoopForEmptyBody proves an empty (or
+// whitespace-only) body skips the confirm loop entirely — there is nothing to
+// confirm — and behavior is otherwise unchanged: paste once, submit once.
+func TestInjectPromptConfirmSkipsLoopForEmptyBody(t *testing.T) {
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			return exec.Command("printf", "%s", paneWithInput(inputProbe))
+		}
+		return exec.Command("true")
+	}
+
+	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "   \n  ", 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+	// Only the single phase-1 readiness capture — no confirm-loop captures.
+	if captureCalls != 1 {
+		t.Fatalf("expected no confirm-loop captures for an empty body, got %d total captures: %#v", captureCalls, got)
+	}
+	if n := countSub(got, "paste-buffer"); n != 1 {
+		t.Fatalf("expected exactly 1 paste-buffer, got %d: %#v", n, got)
+	}
+	last := got[len(got)-1]
+	if last[3] != "send-keys" || last[len(last)-1] != "Enter" {
+		t.Fatalf("last call must be submit Enter, got %#v", last)
+	}
+}
+
 func TestAbortPromptCalls(t *testing.T) {
 	var got [][]string
 	orig := execCommand

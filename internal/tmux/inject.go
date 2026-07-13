@@ -23,6 +23,23 @@ const (
 	injectReadyPoll     = 500 * time.Millisecond
 )
 
+// submitConfirm* bound the post-paste "did the body land before we hit
+// Enter?" poll. Some TUIs (codex) commit a bracketed paste asynchronously,
+// so an Enter sent in the same burst as the paste is dropped. We poll until
+// a distinctive slice of the body appears in the pane, then submit.
+//
+// Package-level vars (not consts) so tests can shrink them to keep the
+// confirm-loop tests fast.
+var (
+	submitConfirmAttempts = 25
+	submitConfirmPoll     = 200 * time.Millisecond
+)
+
+// submitConfirmNeedleRunes bounds how much of body's first line we look for
+// in the pane before submitting with Enter — long enough to be distinctive,
+// short enough to survive an input-line wrapping the pasted text.
+const submitConfirmNeedleRunes = 24
+
 // inputProbe is a single throwaway character typed to test whether claude is
 // accepting keystrokes yet. One character is fully removable with a single
 // Ctrl-U (which only kills one input line), so probing never risks leaving
@@ -208,19 +225,68 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 	// ready, or the pane format was never recognized (fall open rather than
 	// block, so this can't make an otherwise-working session worse).
 
-	// Phase 2: stage and paste the body exactly once, then submit.
+	// Phase 2: stage and paste the body exactly once.
 	buf := sessionBufferName(session)
 	for _, args := range [][]string{
 		Args("set-buffer", "-b", buf, "--", body),
 		Args("paste-buffer", "-b", buf, "-t", PaneTarget(session), "-d"),
-		Args("send-keys", "-t", PaneTarget(session), "Enter"),
 	} {
 		cmd := execCommand(ctx, tmuxPath, args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("tmux %s: %w: %s", args[2], err, string(out))
 		}
 	}
+
+	// Phase 3: confirm the pasted body actually landed in the pane before
+	// submitting. Some TUIs (codex) commit a bracketed paste asynchronously,
+	// so an Enter fired immediately after paste-buffer can arrive before the
+	// text lands and gets silently dropped. claude/opencode render the body
+	// synchronously, so this loop breaks on its first iteration for them —
+	// zero added latency. This is best-effort: a capture-pane error, or the
+	// needle never appearing within the budget, still falls through to
+	// sending Enter (never blocks/loses the message).
+	if needle := submitConfirmNeedle(body); needle != "" {
+		for attempt := 0; attempt < submitConfirmAttempts; attempt++ {
+			out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", PaneTarget(session))...).Output()
+			if err == nil && strings.Contains(string(out), needle) {
+				break
+			}
+			if attempt == submitConfirmAttempts-1 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(submitConfirmPoll):
+			}
+		}
+	}
+
+	if err := runKey("Enter"); err != nil {
+		return err
+	}
 	return nil
+}
+
+// submitConfirmNeedle derives a short, distinctive slice of body's first line
+// to look for in the pane before submitting — long enough to be unlikely to
+// appear by coincidence, short enough to survive the input line wrapping the
+// pasted text. Returns "" for an empty/whitespace-only body, which callers
+// treat as "nothing to confirm — just submit."
+func submitConfirmNeedle(body string) string {
+	firstLine := body
+	if idx := strings.IndexByte(body, '\n'); idx >= 0 {
+		firstLine = body[:idx]
+	}
+	firstLine = strings.TrimSpace(firstLine)
+	if firstLine == "" {
+		return ""
+	}
+	runes := []rune(firstLine)
+	if len(runes) > submitConfirmNeedleRunes {
+		runes = runes[:submitConfirmNeedleRunes]
+	}
+	return string(runes)
 }
 
 // PaneInputHasContent reports whether a captured claude pane shows text
