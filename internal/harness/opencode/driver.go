@@ -287,9 +287,23 @@ func samePath(a, b string) bool {
 	return ra == rb
 }
 
-// Attach returns the argv for opencode's own TUI client, pointed at the
-// same server. The password rides in argv here (not env) because attach is
-// interactive/user-invoked and, over ssh, env is not forwarded.
+// Attach returns a tmux-flavored spec that runs opencode's own TUI client,
+// pointed at the same server, inside a lazily-created "tui" window in the
+// session's own tmux session — giving opencode agents the same attach UX
+// (status bar, detach, remote ssh flow) as claude's native tmux panes. The
+// password rides in argv here (not env) because attach is interactive/
+// user-invoked and, over ssh, env is not forwarded.
+//
+// WindowKey is the current harness session id (or "" before the first
+// message has been sent). The CLI's window-ensure logic recreates the window
+// whenever this key changes, so a rotated session id (e.g. after a stale-
+// session retry) always reattaches to the right conversation instead of a
+// stale TUI left pointed at an old -s argument. An empty key still creates
+// the window — WITHOUT -s the TUI opens a fresh conversation on opencode's
+// default model, rather than the agent's actual session; that's an
+// acceptable edge (ephemeral agents get an opening prompt at spawn, so a
+// session id exists almost immediately), and a later attach with a real id
+// naturally recreates the window once WindowKey no longer matches "".
 func (ServerDriver) Attach(h harness.SessionHandle) (harness.AttachSpec, error) {
 	state, err := LoadServerState(h.HomePath, h.TmuxSession)
 	if err != nil {
@@ -300,10 +314,16 @@ func (ServerDriver) Attach(h harness.SessionHandle) (harness.AttachSpec, error) 
 		bin = abs
 	}
 	argv := []string{bin, "attach", state.URL(), "--dir", h.Workspace, "-p", state.Password}
-	if id := h.IDs.Get(); id != "" {
+	id := h.IDs.Get()
+	if id != "" {
 		argv = append(argv, "-s", id)
 	}
-	return harness.AttachSpec{Argv: argv}, nil
+	return harness.AttachSpec{
+		TmuxSession: h.TmuxSession,
+		WindowName:  "tui",
+		WindowCmd:   argv,
+		WindowKey:   id,
+	}, nil
 }
 
 // RecoverQuickExit: a crashed `opencode serve` is not a poisoned
