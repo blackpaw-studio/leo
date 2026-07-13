@@ -573,7 +573,6 @@ type fakeInjectCall struct {
 	msg    string
 }
 
-func (d *fakeTurnsDriver) Style() harness.DriveStyle                          { return harness.DriveTurns }
 func (d *fakeTurnsDriver) Start(context.Context, harness.SessionHandle) error { return nil }
 func (d *fakeTurnsDriver) Inject(_ context.Context, h harness.SessionHandle, msg string) (*harness.Result, error) {
 	d.mu.Lock()

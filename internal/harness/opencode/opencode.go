@@ -1,16 +1,18 @@
 // Package opencode adapts leo's harness-neutral LaunchSpec to the opencode
 // CLI. Scheduled tasks run one-shot (opencode run); supervised processes,
-// ephemeral agents, and persistent sessions all drive a resident
-// `opencode serve` via ServerDriver. Permissions are config-only upstream, so
+// ephemeral agents, and persistent sessions all drive the interactive
+// opencode TUI supervised in a leo tmux session (parity with claude/codex),
+// via the shared tmuxtui.Driver. Permissions are config-only upstream, so
 // they ride in via the OPENCODE_CONFIG_CONTENT env overlay rather than argv.
 package opencode
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // Opencode is the opencode adapter.
@@ -36,15 +38,24 @@ func (Opencode) ValidateModel(model string) error {
 func (Opencode) SupportsChannels() bool { return false }
 
 // SupportsKind: scheduled tasks plus supervised processes, ephemeral agents,
-// and persistent sessions — all driven against a resident `opencode serve`
-// via ServerDriver.
+// and persistent sessions — all driven against the interactive opencode TUI
+// supervised in tmux.
 func (Opencode) SupportsKind(k harness.Kind) bool {
 	return k == harness.KindTask || k == harness.KindProcess || k == harness.KindAgent || k == harness.KindSession
 }
 
-// Driver: ServerDriver drives processes, ephemeral agents, and persistent
-// sessions against a resident `opencode serve`.
-func (Opencode) Driver() harness.SessionDriver { return ServerDriver{} }
+// Driver: the shared tmuxtui driver, wired with opencode's readiness-probe
+// marker, resume-argv refresher, quick-exit recovery, and post-hoc
+// session-id discovery (no session exists at TUI launch — one is created on
+// the first turn).
+func (Opencode) Driver() harness.SessionDriver {
+	return tmuxtui.New(tmuxtui.Config{
+		Probe:         tmux.Profile{Marker: "┃", Classify: tmux.ProbeClassifier("┃")},
+		RecoverFn:     recoverQuickExitArgs,
+		RefreshArgsFn: refreshSessionArgs,
+		DiscoverIDFn:  discoverSessionID,
+	})
+}
 
 func (Opencode) SessionArgs(s harness.SessionState) []string {
 	if s.Mode == harness.SessionResume {
@@ -54,8 +65,7 @@ func (Opencode) SessionArgs(s harness.SessionState) []string {
 }
 
 func (o Opencode) Args(spec harness.LaunchSpec) ([]string, error) {
-	opts, ok := spec.Options.(Options)
-	if !ok {
+	if _, ok := spec.Options.(Options); !ok {
 		return nil, fmt.Errorf("opencode: spec.Options is %T, want opencode.Options", spec.Options)
 	}
 	if len(spec.Channels) > 0 || len(spec.DevChannels) > 0 {
@@ -63,12 +73,16 @@ func (o Opencode) Args(spec harness.LaunchSpec) ([]string, error) {
 	}
 
 	if spec.Kind == harness.KindProcess || spec.Kind == harness.KindAgent || spec.Kind == harness.KindSession {
-		// ServerDriver argv only: `opencode serve`. Model is per-run (Inject
-		// renders it from ServerState.Model), not per-server.
-		if opts.ServerPort == 0 {
-			return nil, fmt.Errorf("opencode: internal error: server port not provisioned")
+		// Interactive TUI argv; workspace rides in as tmux new-session's -c
+		// cwd. Resume (-s) is added by RefreshSessionArgs once a session id
+		// is discovered; the opening prompt is injected by the driver's
+		// Start. Permissions and the leo MCP bridge ride in via the
+		// OPENCODE_CONFIG_CONTENT env overlay (Env), unchanged.
+		var args []string
+		if spec.Model != "" {
+			args = append(args, "--model", spec.Model)
 		}
-		return []string{"serve", "--port", strconv.Itoa(opts.ServerPort), "--hostname", "127.0.0.1"}, nil
+		return args, nil
 	}
 
 	if spec.Kind != harness.KindTask {

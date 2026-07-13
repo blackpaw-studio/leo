@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -200,17 +199,17 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	sessionID := session.NewID()
 	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt, m.webToken)
 	openingPrompt := ""
-	// storedSessionID seeds agentstore.Record.SessionID, which a DriveTurns
+	// storedSessionID seeds agentstore.Record.SessionID, which the tmux-TUI
 	// driver's SessionIDStore (agent.NewAgentIDs) reads back via IDs.Get() to
-	// decide whether this is a brand-new session (Start's opening-turn
+	// decide whether this is a brand-new session (Start's opening-prompt
 	// precondition is Get()=="") or a resume. Claude's sessionID is a
 	// leo-generated --session-id it hands claude on the command line, so it
 	// is genuinely "already assigned" from claude's perspective — storing it
-	// is correct. A non-claude harness has never talked to its own thread/
-	// session yet at this point (the driver assigns that id after the
-	// opening turn), so seeding this field with the same leo-generated uuid
-	// would make IDs.Get() falsely non-empty and skip the opening turn
-	// entirely.
+	// is correct. A non-claude harness has never talked to its own rollout/
+	// session yet at this point (the driver discovers that id post-hoc, after
+	// the opening prompt is injected and the first turn runs), so seeding
+	// this field with the same leo-generated uuid would make IDs.Get()
+	// falsely non-empty and skip the opening-prompt injection entirely.
 	storedSessionID := ""
 	if isClaude {
 		claudeArgs = append(claudeArgs, "--session-id", sessionID)
@@ -227,17 +226,18 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}
 
 	// The agentstore record is persisted BEFORE the supervisor spawn (not
-	// after, as the claude-only flow historically did). A DriveTurns driver
-	// (codex TurnDriver) runs its opening turn synchronously from inside
-	// SpawnAgent's goroutine, and that turn's SessionIDStore
+	// after, as the claude-only flow historically did). A non-claude
+	// harness's tmux-TUI driver injects the opening prompt and starts
+	// post-hoc session-id discovery from inside the supervise goroutine
+	// almost immediately after spawn, and that discovery's SessionIDStore
 	// (agentOrProcessIDs) picks agentstore-backed persistence only when a
 	// record already exists for this name — save-after-spawn lost that race
-	// essentially every time, silently stashing the fresh thread id under a
-	// throwaway "process:<name>" session-store key instead of the agent's
-	// own record, which then made every subsequent turn think it had no
-	// prior thread and start over. Saving first closes that window. A failed
-	// spawn now rolls the record back so a dead agent never leaves an
-	// orphaned entry behind (matches the pre-existing worktree-flow
+	// essentially every time, silently stashing the freshly discovered id
+	// under a throwaway "process:<name>" session-store key instead of the
+	// agent's own record, which then made every subsequent restart think it
+	// had no prior session and start over. Saving first closes that window.
+	// A failed spawn now rolls the record back so a dead agent never leaves
+	// an orphaned entry behind (matches the pre-existing worktree-flow
 	// rollback further down this file).
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:             agentName,
@@ -347,8 +347,8 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	openingPrompt := ""
 	// See the identical storedSessionID comment in spawnShared: a non-claude
 	// harness must NOT have its agentstore SessionID pre-seeded, or its
-	// DriveTurns driver's opening-turn precondition (IDs.Get()=="") is
-	// falsely non-empty and the opening turn never runs.
+	// tmux-TUI driver's opening-prompt precondition (IDs.Get()=="") is
+	// falsely non-empty and the opening prompt never gets injected.
 	storedSessionID := ""
 	if isClaude {
 		claudeArgs = append(claudeArgs, "--session-id", sessionID)
@@ -379,9 +379,10 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}
 
 	// Persist before spawning — see the identical comment in spawnShared for
-	// why order matters here (a DriveTurns driver's opening turn reads back
-	// the just-saved record's SessionIDStore from inside SpawnAgent's
-	// goroutine).
+	// why order matters here (a non-claude harness's tmux-TUI driver injects
+	// the opening prompt and starts session-id discovery, both reading back
+	// the just-saved record's SessionIDStore, from inside the supervise
+	// goroutine almost immediately after spawn).
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:             layout.AgentName,
 		Template:         spec.Template,
@@ -735,7 +736,6 @@ func (m *Manager) handleForRecord(homePath string, rec agentstore.Record) harnes
 		Workspace:   rec.Workspace,
 		HomePath:    homePath,
 		Env:         rec.Env,
-		TurnArgs:    rec.ClaudeArgs,
 		IDs:         NewAgentIDs(homePath, rec.Name),
 	}
 }
@@ -766,70 +766,14 @@ func (m *Manager) ResolveHandle(name string) (string, harness.SessionHandle, boo
 	return harnessName, m.handleForRecord(cfg.HomePath, rec), true
 }
 
-// driveTurnsHistoryPath returns the AttachSpec.HistoryPath for a record whose
-// harness driver is DriveTurns, or ("", false) when the record is claude (or
-// any harness without a DriveTurns driver) — callers fall back to tmux.
-func (m *Manager) driveTurnsHistoryPath(rec agentstore.Record) (string, bool) {
-	if rec.Harness == "" || rec.Harness == "claude" {
-		return "", false
-	}
-	cfg, err := m.cfgLoader()
-	if err != nil {
-		return "", false
-	}
-	h, err := harness.Get(rec.Harness)
-	if err != nil {
-		return "", false
-	}
-	drv := h.Driver()
-	if drv == nil || drv.Style() != harness.DriveTurns {
-		return "", false
-	}
-	spec, err := drv.Attach(m.handleForRecord(cfg.HomePath, rec))
-	if err != nil {
-		return "", false
-	}
-	return spec.HistoryPath, spec.HistoryPath != ""
-}
-
-// tailLines returns the last n lines of content, or the whole content when n
-// <= 0. Lines are split on "\n"; a trailing empty element from a final
-// newline is dropped so the count matches visible lines.
-func tailLines(content string, n int) string {
-	if n <= 0 {
-		return content
-	}
-	lines := strings.Split(content, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) <= n {
-		return strings.Join(lines, "\n")
-	}
-	return strings.Join(lines[len(lines)-n:], "\n")
-}
-
-// Logs returns the last `lines` lines of output from the agent's tmux pane
-// (or, for a DriveTurns harness, the tail of its driver's turn-history file).
-// If lines <= 0, returns the whole scrollback/history.
+// Logs returns the last `lines` lines of output from the agent's tmux pane.
+// Every harness (claude, codex, opencode) drives its TUI inside a resident
+// tmux pane, so capture-pane is the single source of truth here. If lines <=
+// 0, returns the whole scrollback.
 func (m *Manager) Logs(name string, lines int) (string, error) {
 	live := m.sup.EphemeralAgents()
 	if _, ok := live[name]; !ok {
 		return "", fmt.Errorf("agent %q not running", name)
-	}
-
-	if cfg, err := m.cfgLoader(); err == nil {
-		if records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath)); err == nil {
-			if rec, ok := records[name]; ok {
-				if historyPath, ok := m.driveTurnsHistoryPath(rec); ok {
-					content, err := os.ReadFile(historyPath) // #nosec G304 -- path comes from the resolved driver's own AttachSpec, not user input
-					if err != nil {
-						return "", fmt.Errorf("reading turn history %s: %w", historyPath, err)
-					}
-					return tailLines(string(content), lines), nil
-				}
-			}
-		}
 	}
 
 	tmuxPath := m.tmuxPath

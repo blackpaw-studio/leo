@@ -12,7 +12,4 @@ A stale `-s` session id produces **no stdout** (`Error: Session not found` on st
 
 ## Driver fixtures (Plan 4)
 
-Captured 2026-07-11 from opencode 1.17.7 running `opencode serve` + `opencode run --attach` against it:
-
-- `attach_fresh.jsonl` — the complete stdout of an attached run whose turn **completed server-side** (assistant replied, `finish: stop`): attach-mode event forwarding is lossy, so only a single `step_start` arrived — no `text`, no `step_finish`. The one event carries top-level `sessionID`. Process exit, not events, is the turn-end signal in attach mode.
 - `session_list.json` — `opencode session list --format json -n 1` output (the `directory` value sanitized to `/tmp/leo-e2e-ws`). The list spans ALL projects; consumers filter by `directory` and take the newest `created`.

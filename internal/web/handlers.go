@@ -744,10 +744,11 @@ func (s *Server) resolveMessageTarget(name string) (harnessName string, h harnes
 	return "", harness.SessionHandle{}, false
 }
 
-// nonClaudeInjectTimeout bounds a synchronous DriveTurns Inject call so a
-// hung driver can't wedge the web handler indefinitely. Generous because a
-// turn-based harness's Inject IS the whole turn (no fast paste-and-confirm
-// path exists for it).
+// nonClaudeInjectTimeout bounds a non-claude driver's Inject call (a
+// readiness-probed tmux paste, not a synchronous turn — Inject returns as
+// soon as the message lands in the pane) so a wedged pane or hung probe loop
+// can't block the web handler indefinitely. Generous because the readiness
+// probe itself may need to wait out a busy TUI before it can paste.
 const nonClaudeInjectTimeout = 5 * time.Minute
 
 // dispatchNonClaudeMessage delivers text to a non-claude session via its
@@ -788,7 +789,7 @@ var (
 func (s *Server) waitForInputContent(tmuxPath, sessionName string) {
 	for i := 0; i < messageInputAttempts; i++ {
 		out, err := s.execCommand(tmuxPath, tmux.Args("capture-pane", "-p", "-t", tmux.PaneTarget(sessionName))...).Output()
-		if err == nil && tmux.InputHasContent(string(out)) {
+		if err == nil && tmux.PaneInputHasContent(string(out)) {
 			return
 		}
 		time.Sleep(messageInputPoll)

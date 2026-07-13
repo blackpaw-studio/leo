@@ -172,7 +172,7 @@ func AgentSession(ctx context.Context, workDir, name string) (string, error) {
 
 // AgentAttachSpec sends GET /agents/{name}/attach-spec to the daemon,
 // returning how to attach to a non-claude agent's live session (or an empty
-// Argv/HistoryPath with Harness == "claude"/"" for a claude agent — callers
+// TmuxSession with Harness == "claude"/"" for a claude agent — callers
 // should prefer AgentSession + the existing tmux attach flow for those). On
 // resolve failures it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous.
 func AgentAttachSpec(ctx context.Context, workDir, name string) (AgentAttachSpecResponse, error) {

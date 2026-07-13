@@ -2,19 +2,6 @@ package harness
 
 import "context"
 
-// DriveStyle says how a SessionDriver keeps a session alive between
-// injected messages.
-type DriveStyle string
-
-const (
-	// DriveTmux means a resident process is supervised in a leo tmux
-	// session; Inject pastes into the live pane.
-	DriveTmux DriveStyle = "tmux"
-	// DriveTurns means there is no resident process; each Inject spawns a
-	// one-shot turn.
-	DriveTurns DriveStyle = "turns"
-)
-
 // SessionIDStore persists the harness-native session/thread ID across
 // turns. Implementations are supplied by the caller (e.g. leo's session
 // store); drivers only read and write through this seam.
@@ -34,34 +21,20 @@ type SessionHandle struct {
 	Workspace     string
 	HomePath      string
 	Env           map[string]string // resolved spawn env for driver-spawned helper processes
-	TurnArgs      []string          // DriveTurns: rendered per-turn argv prefix (from Args())
 	OpeningPrompt string            // delivered by Start for drivers that can't put it in argv
 	IDs           SessionIDStore
 }
 
-// AttachSpec describes how a caller can attach to a live session for
-// interactive viewing.
+// AttachSpec says how a caller attaches to a live session: every harness
+// runs its TUI inside the leo tmux session, so attach is a tmux attach.
 type AttachSpec struct {
-	Argv        []string // exec directly (no tmux pattern; claude-external tools)
-	HistoryPath string   // when no live attach exists: tail this file
-
-	// Tmux-flavored attach: ensure a window named WindowName running
-	// WindowCmd exists inside TmuxSession (recreating it when WindowKey
-	// changes — e.g. the harness session id rotated), then tmux-attach with
-	// that window selected. Gives every harness the same attach UX
-	// (status bar, detach, remote ssh flow) as claude's native panes.
 	TmuxSession string
-	WindowName  string
-	WindowCmd   []string
-	WindowKey   string // change-detection key; stored as a tmux window option
 }
 
 // SessionDriver is the per-harness contract for keeping a live interactive
 // session and delivering messages to it. Every SupportsKind-gated
 // interactive call site goes through a SessionDriver.
 type SessionDriver interface {
-	// Style reports how this driver keeps a session alive between turns.
-	Style() DriveStyle
 	// Start arranges whatever the driver needs before the first Inject
 	// (e.g. delivering an opening prompt). Called once per session launch.
 	Start(ctx context.Context, h SessionHandle) error
@@ -94,8 +67,8 @@ const (
 	// QuickExitClearAndNoResume clears the stored id AND marks the agent
 	// no-resume.
 	QuickExitClearAndNoResume
-	// QuickExitNone keeps the args and stored id (e.g. opencode serve
-	// crash does not mean a poisoned conversation).
+	// QuickExitNone keeps the args and stored id (e.g. a quick exit that
+	// doesn't imply the resumed conversation itself is poisoned).
 	QuickExitNone
 )
 
@@ -103,6 +76,26 @@ const (
 // that need custom recovery behavior on a quick exit.
 type QuickExitRecovery interface {
 	RecoverQuickExit(args []string) ([]string, QuickExitAction)
+}
+
+// PreLauncher is an optional SessionDriver capability: PreLaunch runs before
+// every tmux new-session spawn of this session (fresh and restart alike), in
+// the supervisor's goroutine. It must be idempotent and fast — e.g. codex
+// registers the workspace as trusted in ~/.codex/config.toml so the TUI
+// never blocks on its trust dialog. Errors are logged, never fatal: a failed
+// hook degrades to the TUI showing its dialog, which the operator can answer.
+type PreLauncher interface {
+	PreLaunch(h SessionHandle) error
+}
+
+// SessionArgsRefresher is an optional SessionDriver capability for harnesses
+// that cannot pin a session id at launch (codex, opencode): the supervisor
+// calls it before every spawn to rewrite the launch argv from the currently
+// stored session id — adding resume tokens once a post-hoc-discovered id
+// exists, and stripping stale ones when the store was cleared. storedID ==
+// "" must return argv with no session tokens.
+type SessionArgsRefresher interface {
+	RefreshSessionArgs(args []string, storedID string) []string
 }
 
 // TurnAborter is an optional SessionDriver capability for harnesses that

@@ -84,7 +84,7 @@ func (Codex) DecodeOptions(raw map[string]any) (any, error) {
 				}
 			}
 		case "approval":
-			err = fmt.Errorf("option %q is not supported: codex exec always runs non-interactively (approval policy %q)", key, "never")
+			err = fmt.Errorf("option %q is not supported: leo always launches codex with approval policy %q (unattended sessions)", key, "never")
 		case "append_system_prompt":
 			err = fmt.Errorf("option %q is not supported: codex has no append-system-prompt equivalent (use the workspace AGENTS.md)", key)
 		default:

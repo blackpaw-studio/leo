@@ -25,47 +25,55 @@ below).
 
 ## Session driver semantics
 
-Each harness drives a live session (supervised process, ephemeral agent, or
-persistent session) with a different strategy, exposed internally as a
-`harness.SessionDriver`:
+Every harness drives a live session (supervised process, ephemeral agent, or
+persistent session) the same way: a resident, interactive TUI process lives
+inside the leo-managed tmux session (`leo-<name>`) for the whole lifetime of
+the process/agent/session. Messages are injected by pasting into that pane —
+a readiness probe confirms the TUI's input line is idle and the pasted text
+actually landed before `send-keys Enter` fires — and delivery is
+fire-and-forget: leo does not wait on (or return) a synchronous per-turn
+result for any harness. `leo attach` / `leo session attach` / `leo agent
+attach` are a plain `tmux attach` for all three harnesses — same status bar,
+same `Ctrl-b d` detach, same remote-ssh attach flow, no per-harness special
+casing.
 
-- **`claude` — `TmuxTUIDriver`.** A resident `claude` TUI process lives inside
-  the leo-managed tmux session for the process/agent/session's whole
-  lifetime. Messages are injected via `tmux paste-buffer` + `send-keys
-  Enter`, unchanged from pre-Plan-4 behavior. `leo attach`/`leo session
-  attach` drop you straight into the live tmux pane.
-- **`codex` — `TurnDriver`.** No resident process at all. Each injected
-  message spawns a fresh `codex exec --json --skip-git-repo-check [--model
-  …] [--sandbox …] [-c mcp_servers.leo.*…] [resume <thread-id>] <message>`,
-  which blocks until the turn completes; the returned `thread_id` is stored
-  and passed to `resume` on the next message. A "restart" of a codex
-  process/agent/session is bookkeeping only — a no-op beyond recording that
-  the session is alive, since there's no process to actually restart. A
-  resume against a vanished thread (`codex` reports "no rollout found") is
-  detected and retried once as a fresh turn, clearing the stale thread id
-  first. There is **no live attach** for codex — `leo attach`/`leo agent
-  attach` instead show the tail of a per-turn transcript recorded at
-  `<home>/state/transcripts/<tmux-session>.log` (one `user`/`codex` entry
-  pair appended per turn).
-- **`opencode` — `ServerDriver`.** A resident `opencode serve --port <p>
-  --hostname 127.0.0.1` process is supervised in tmux (crash-restarted, same
-  port every time). Leo allocates the port (an ephemeral localhost bind-then-
-  close) and a random 32-hex-char password the first time a session/process/
-  agent starts, and persists both — plus the model in use — to
-  `<home>/state/opencode/<tmux-session>.json` (0600), reused stably across
-  restarts. Messages are injected via `opencode run --attach <url> --format
-  json --dir <workspace> [--model …] [-s <session-id>] <message>`, which
-  blocks until the turn completes (opencode's `--attach` event stream is
-  lossy, so leo treats process exit — not a `step_finish` event — as the
-  turn-end signal). `leo attach` maps to `opencode attach <url> --dir
-  <workspace> -p <password> [-s <session-id>]` — opencode's own TUI client,
-  talking to the resident server over `127.0.0.1` with the stored basic-auth
-  password (passed as an argv flag, not env, since attach is
-  interactive/user-invoked and env doesn't cross an SSH hop). `idle_suspend_after`
-  has no effect on `codex` or `opencode` ephemeral agents — the idle sweep
-  skips both harnesses (see `isSweepEligibleHarness` in
-  `internal/service/sweep.go`), since neither has a suspend/resume mechanic;
-  a resident `opencode serve` will not auto-stop on idle.
+What differs is only session-id bookkeeping and per-harness launch
+specifics:
+
+- **`claude`.** `--session-id` is pinned up front at spawn time (the id is
+  chosen by leo, not discovered). Recovery from a quick exit follows the
+  existing ladder: `--session-id` → `--resume` → fresh.
+- **`codex`.** There's no start-time flag to choose a session id, so codex
+  always launches fresh (`-a never`, approval policy hardcoded to "never")
+  and leo discovers the session id **after the first turn** by scanning
+  `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` for the newest rollout file
+  whose recorded cwd matches the workspace, then stores it. A later
+  restart/resume launches `codex resume <session-id>` instead of a fresh
+  session. Workspaces are auto-trusted by pre-writing a
+  `[projects."<dir>"]\ntrust_level = "trusted"` entry into
+  `~/.codex/config.toml` before first spawn, so the "do you trust this
+  directory?" dialog never appears. Recovery ladder: `resume <id>` → fresh
+  (clearing the stored id).
+- **`opencode`.** Same discover-after-first-turn pattern: leo runs `opencode
+  session list` after the first turn to find the new session id and stores
+  it; a later restart/resume launches with `-s <session-id>`. Config,
+  permissions, and the MCP bridge all ride the `OPENCODE_CONFIG_CONTENT`
+  environment overlay set at spawn time — there is no separate config file
+  leo writes to disk. Recovery ladder: `-s <id>` → fresh (clearing the
+  stored id).
+
+`idle_suspend_after` now works identically across all three harnesses — every
+harness has a resident tmux TUI that can be suspended (tmux session killed)
+and resumed (relaunched with the stored session id), so the idle sweep no
+longer skips codex/opencode.
+
+**Migration note.** If you're updating from a pre-uniform-tmux-TUI build:
+stale `~/.leo/state/opencode/*.json` (old server port/password state) and
+`~/.leo/state/transcripts/*.log` (old per-turn codex/opencode transcripts)
+files are inert under the new model and can be deleted manually. Any
+running codex/opencode process, agent, or session started under the old
+model must be stopped and respawned to pick up the tmux-TUI supervise
+model — there is no live in-place migration.
 
 ## What a harness is
 
@@ -186,8 +194,13 @@ whose resolved harness doesn't support channels is a validation error.
 ## Codex option reference
 
 `codex` runs every leo primitive — scheduled tasks, supervised processes,
-ephemeral agents, and persistent sessions — via `TurnDriver`, described in
-[Session driver semantics](#session-driver-semantics) above.
+ephemeral agents, and persistent sessions. Supervised processes, ephemeral
+agents, and persistent sessions drive a resident TUI in tmux, described in
+[Session driver semantics](#session-driver-semantics) above. One-shot
+scheduled tasks (`leo run <task>` without `runtime: persistent`) stay
+headless: each firing spawns a fresh `codex exec --json
+--skip-git-repo-check [--model …] [--sandbox …] [-c mcp_servers.leo.*…]
+<message>` and leo parses the JSON event stream.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -236,8 +249,13 @@ Other things to know:
 ## Opencode option reference
 
 `opencode` runs every leo primitive — scheduled tasks, supervised processes,
-ephemeral agents, and persistent sessions — via `ServerDriver`, described in
-[Session driver semantics](#session-driver-semantics) above.
+ephemeral agents, and persistent sessions. Supervised processes, ephemeral
+agents, and persistent sessions drive a resident TUI in tmux, described in
+[Session driver semantics](#session-driver-semantics) above. One-shot
+scheduled tasks (`leo run <task>` without `runtime: persistent`) stay
+headless: each firing spawns a fresh `opencode run --format json --dir
+<workspace> [--model …] [-s <session-id>] <message>` and leo parses the JSON
+event stream.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -264,8 +282,8 @@ Other things to know:
   `mcp.leo` entry, gated the same way as codex's — web UI enabled **and** a
   readable, non-empty `state/api.token`.
 - **Parsing quirks leo works around:**
-  - *EOF-as-turn-end.* Older opencode versions (and `--attach` mode) can omit
-    the terminal `step_finish` event on a truncated stream (upstream
+  - *EOF-as-turn-end.* Older opencode versions can omit
+    the terminal `step_finish` event on a truncated `--format json` stream (upstream
     [#26855](https://github.com/sst/opencode/issues/26855)); leo treats
     reaching EOF as the end of a turn rather than requiring `step_finish`.
   - *In-stream errors fail the attempt even on exit 0.* Opencode sometimes

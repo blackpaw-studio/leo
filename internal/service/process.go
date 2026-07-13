@@ -88,9 +88,10 @@ type ProcessSpec struct {
 	// Kind identifies which leo primitive this spec represents. Empty means
 	// KindProcess — old state/records predate this field.
 	Kind harness.Kind
-	// OpeningPrompt carries the opening turn for DriveTurns harnesses, whose
-	// driver delivers it out-of-band via Start rather than as a trailing
-	// positional arg. Empty for claude, which keeps the prompt in ClaudeArgs.
+	// OpeningPrompt carries the opening turn for non-claude harnesses, whose
+	// tmux-TUI driver injects it into the pane via Start rather than passing
+	// it as a trailing positional arg. Empty for claude, which keeps the
+	// prompt in ClaudeArgs.
 	OpeningPrompt string
 }
 
@@ -512,7 +513,7 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 	supervisor.configPath = configPath
 
 	// sessionCfg backs the non-claude LeoMCP bridge gate (sessionLeoMCPEnv,
-	// via BuildSessionDispatch and superviseOpencodeSession): cfg.Web.Enabled
+	// via BuildSessionDispatch and superviseTUISession): cfg.Web.Enabled
 	// determines whether a session's driver-spawned MCP subprocess is worth
 	// wiring in at all. A load failure here is non-fatal — sessionLeoMCPEnv
 	// treats a nil cfg as "gate off", so sessions still boot, just without
@@ -547,9 +548,11 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 			}
 		}
 		// claude path stays byte-identical to before the injector gained a
-		// ctx param: the pump's per-invocation timeout is a non-claude
-		// concern (it bounds a synchronous DriveTurns turn); claude's async
-		// tmux-paste call keeps its own unbounded context.Background().
+		// ctx param: the pump's per-invocation timeout backstops the
+		// non-claude tmux-TUI drivers dispatched above (a wedged pane or
+		// hung probe loop); claude's own tmux-paste call keeps its
+		// pre-existing unbounded context.Background() rather than adopting
+		// the same deadline.
 		return nil, tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
 	})
 	srv.SetAborter(func(tmuxSession string) error {
@@ -729,42 +732,32 @@ func handleForSpec(spec ProcessSpec, id *procIdentity, homePath string) harness.
 		Workspace:     spec.WorkDir,
 		HomePath:      homePath,
 		Env:           spec.Env,
-		TurnArgs:      id.Args(),
 		OpeningPrompt: spec.OpeningPrompt,
 		IDs:           agentOrProcessIDs(homePath, id.Name()),
 	}
 }
 
-// superviseTurnBased registers a turn-driven session (codex): no resident
-// process, no restart loop. Start runs the opening turn (if any) and
-// records the thread id; the session then idles until Inject calls arrive
-// through the daemon/web dispatch paths.
-func superviseTurnBased(ctx context.Context, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity, drv harness.SessionDriver) {
-	name := id.Name()
-	sv.setState(name, "running")
-	if err := drv.Start(ctx, handleForSpec(spec, id, homePath)); err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] driver start: %v\n", name, err)
-		sv.setState(name, "stopped")
-		return
-	}
-	<-ctx.Done()
-	sv.setState(name, "stopped")
-}
-
 // superviseProcess runs a single process in a tmux session with restart loop.
+// Every registered harness (claude, codex, opencode) is DriveTmux today — a
+// resident TUI supervised in a leo tmux session — so this loop is the single
+// supervise path for every spec regardless of harness. Harness-specific
+// behavior (workspace trust, resume-argv rewriting, dialog dismissal,
+// quick-exit recovery) is expressed entirely through the driver's optional
+// capability interfaces (PreLauncher, SessionArgsRefresher, PaneCare,
+// QuickExitRecovery), asserted below; claude's driver leaves the
+// PreLaunch/RefreshArgs hooks nil, so both no-op — it does use
+// PaneCare/QuickExitRecovery.
 func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec ProcessSpec, homePath string, sv *Supervisor, id *procIdentity) {
 	sv.initState(spec.Name)
 
 	// Resolve the driver once per supervise loop. Error is impossible for the
 	// compiled-in claude adapter; on the defensive path drv stays nil and every
-	// type assertion below (PaneCare, QuickExitRecovery) simply misses, which
-	// degrades to "skip dismissal" / "default quick-exit clear" — the
-	// historical pre-driver behavior minus dialog auto-dismissal.
+	// type assertion below (PaneCare, QuickExitRecovery, PreLauncher,
+	// SessionArgsRefresher) simply misses, which degrades to "skip
+	// dismissal" / "default quick-exit clear" / "no pre-launch hook" / "argv
+	// unchanged" — the historical pre-driver behavior minus dialog
+	// auto-dismissal.
 	drv := driverFor(spec.Harness)
-	if drv != nil && drv.Style() == harness.DriveTurns {
-		superviseTurnBased(ctx, spec, homePath, sv, id, drv)
-		return
-	}
 
 	harnessName := spec.Harness
 	if harnessName == "" {
@@ -818,6 +811,16 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// normal fresh spawn (adopt is already cleared).
 			fmt.Fprintf(os.Stdout, "[%s] adopted existing tmux session '%s', claude already running\n", name, sessionName)
 		} else {
+			if pl, ok := drv.(harness.PreLauncher); ok {
+				if err := pl.PreLaunch(handleForSpec(spec, id, homePath)); err != nil {
+					fmt.Fprintf(os.Stderr, "[%s] pre-launch: %v\n", name, err)
+				}
+			}
+			if rf, ok := drv.(harness.SessionArgsRefresher); ok {
+				currentArgs = rf.RefreshSessionArgs(currentArgs, agentOrProcessIDs(homePath, name).Get())
+				id.setArgs(currentArgs)
+			}
+
 			claudeCmd := buildClaudeShellCmd(binPath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
 
 			// Kill any stale tmux session with our name

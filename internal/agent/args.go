@@ -18,8 +18,7 @@ import (
 // a harness.Harness + fully-populated harness.LaunchSpec, stopping just short
 // of calling h.Args(spec). Split out from BuildTemplateArgs so tests can
 // assert on spec.Options (e.g. a codex/opencode LeoMCP bridge) without
-// needing Args() to succeed — codex/opencode still refuse KindAgent launches
-// until their session drivers land.
+// needing Args() to succeed.
 //
 // webToken is the daemon's API bearer token (Manager.webToken). A non-claude
 // LeoMCP bridge is only wired in when web is enabled AND webToken is
@@ -115,12 +114,6 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 				},
 			}
 		}
-		state, err := opencodeharness.EnsureServerState(cfg.HomePath, SessionName(agentName), spec.Model)
-		if err != nil {
-			return h, harness.LaunchSpec{}, fmt.Errorf("provisioning opencode server state: %w", err)
-		}
-		opts.ServerPort = state.Port
-		opts.ServerPassword = state.Password
 		spec.Options = opts
 	default:
 		return h, harness.LaunchSpec{}, fmt.Errorf("harness %q returned unsupported options type %T", h.Name(), decoded)
@@ -133,8 +126,8 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 // The override cascade is template → defaults → built-in default.
 //
 // When prompt is non-empty it is appended as the trailing positional argument
-// (claude only — codex/opencode carry the opening prompt elsewhere once their
-// session drivers land). Claude Code treats a bare positional (with no
+// (claude only — codex/opencode carry the opening prompt elsewhere, via their
+// session driver's Start). Claude Code treats a bare positional (with no
 // -p/--print) as the opening turn of an interactive session, so the agent
 // processes the prompt and then stays alive in its tmux REPL — the same
 // behavior an empty prompt has, plus a first turn. An empty prompt appends
@@ -144,9 +137,9 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 // resolveTemplateLaunch.
 //
 // The second return is the harness's env overlay (h.Env(spec)) — e.g.
-// OPENCODE_SERVER_PASSWORD/OPENCODE_CONFIG_CONTENT for opencode — meant to be
-// merged as the BASE layer under the template's own env and any per-spawn
-// env (mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env)), so caller-provided
+// OPENCODE_CONFIG_CONTENT for opencode — meant to be merged as the BASE
+// layer under the template's own env and any per-spawn env
+// (mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env)), so caller-provided
 // env always wins on collision. Nil for claude/codex, whose bridges ride argv
 // or env-var *names* the supervisor already exports.
 func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) ([]string, map[string]string) {

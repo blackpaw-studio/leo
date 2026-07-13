@@ -1,46 +1,27 @@
 package claude
 
 import (
-	"context"
 	"reflect"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
-func TestTmuxTUIDriverStyle(t *testing.T) {
-	if got := (Claude{}).Driver().Style(); got != harness.DriveTmux {
-		t.Fatalf("Style() = %q, want %q", got, harness.DriveTmux)
+// TestClaudeDriverWiring asserts the claude-specific surface: Driver()
+// returns the shared tmuxtui driver wired with claude's pane-care and
+// quick-exit-recovery hooks. Start/Inject/Attach behavior itself is the
+// tmuxtui package's responsibility and is covered by its own tests.
+func TestClaudeDriverWiring(t *testing.T) {
+	d := (Claude{}).Driver()
+	if _, ok := d.(harness.PaneCare); !ok {
+		t.Fatalf("Driver() does not implement harness.PaneCare")
+	}
+	if _, ok := d.(harness.QuickExitRecovery); !ok {
+		t.Fatalf("Driver() does not implement harness.QuickExitRecovery")
 	}
 }
 
-func TestTmuxTUIDriverStartIsNoOp(t *testing.T) {
-	if err := (Claude{}).Driver().Start(context.Background(), harness.SessionHandle{}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-}
-
-func TestTmuxTUIDriverInjectDelegatesToInjectPrompt(t *testing.T) {
-	// Stub tmux.Locate so the test doesn't depend on tmux being installed on
-	// the runner (macOS CI has none); Inject calls Locate before delegating.
-	defer SetLocateTmuxForTest(func() (string, error) { return "/usr/bin/tmux", nil })()
-	var gotSession, gotBody string
-	restore := SetInjectPromptForTest(func(ctx context.Context, tmuxPath, session, body string) error {
-		gotSession, gotBody = session, body
-		return nil
-	})
-	defer restore()
-	res, err := (Claude{}).Driver().Inject(context.Background(), harness.SessionHandle{TmuxSession: "leo-x"}, "hello")
-	if err != nil || res != nil {
-		t.Fatalf("Inject = (%v, %v), want (nil, nil)", res, err)
-	}
-	if gotSession != "leo-x" || gotBody != "hello" {
-		t.Fatalf("delegated (%q, %q)", gotSession, gotBody)
-	}
-}
-
-func TestTmuxTUIDriverPaneKey(t *testing.T) {
-	d := TmuxTUIDriver{}
+func TestDialogKey(t *testing.T) {
 	cases := []struct {
 		name string
 		pane string
@@ -87,8 +68,8 @@ func TestTmuxTUIDriverPaneKey(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := d.PaneKey(c.pane); got != c.want {
-				t.Fatalf("PaneKey = %q, want %q", got, c.want)
+			if got := DialogKey(c.pane); got != c.want {
+				t.Fatalf("DialogKey = %q, want %q", got, c.want)
 			}
 		})
 	}
@@ -226,7 +207,6 @@ func TestConvertSessionIDToResume(t *testing.T) {
 }
 
 func TestRecoverQuickExitLadder(t *testing.T) {
-	d := TmuxTUIDriver{}
 	tests := []struct {
 		name     string
 		args     []string
@@ -239,7 +219,7 @@ func TestRecoverQuickExitLadder(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotArgs, gotAct := d.RecoverQuickExit(tt.args)
+			gotArgs, gotAct := RecoverQuickExitArgs(tt.args)
 			if !reflect.DeepEqual(gotArgs, tt.wantArgs) || gotAct != tt.wantAct {
 				t.Errorf("got (%v, %d), want (%v, %d)", gotArgs, gotAct, tt.wantArgs, tt.wantAct)
 			}

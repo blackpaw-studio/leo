@@ -14,18 +14,12 @@ var optionKeys = []string{"permission"}
 
 var validPermissionValues = map[string]bool{"allow": true, "ask": true, "deny": true}
 
-// Options carries the opencode-specific knobs. LeoMCP, ServerPort, and
-// ServerPassword are runtime-only: LeoMCP is filled by the task runner when
-// leo's MCP server is wired in; ServerPort/ServerPassword are filled by the
-// process/agent spawn builders after EnsureServerState provisions (or
-// reuses) the resident `opencode serve` for this session — never set from
-// harness_options.
+// Options carries the opencode-specific knobs. LeoMCP is runtime-only:
+// filled by the task runner or spawn builder when leo's MCP server is wired
+// in — never set from harness_options.
 type Options struct {
 	Permission map[string]any // tool → "allow"|"ask"|"deny", or pattern map of the same
 	LeoMCP     *LeoMCPBridge
-
-	ServerPort     int    // KindProcess/KindAgent: the port `opencode serve` binds to
-	ServerPassword string // KindProcess/KindAgent: OPENCODE_SERVER_PASSWORD for serve + run/attach clients
 }
 
 // LeoMCPBridge describes the leo MCP server entry injected into the
@@ -103,11 +97,8 @@ func permissionOption(val any) (map[string]any, error) {
 }
 
 // Env builds the launch env overlay: OPENCODE_CONFIG_CONTENT (the leo MCP
-// server entry when wired, plus the user's permission map) and, for
-// KindProcess/KindAgent launches with a provisioned server,
-// OPENCODE_SERVER_PASSWORD so `opencode serve` and any run/attach client
-// spawned against it authenticate. Returns nil when there is nothing to
-// inject.
+// server entry when wired, plus the user's permission map). Returns nil when
+// there is nothing to inject.
 func (Opencode) Env(spec harness.LaunchSpec) (map[string]string, error) {
 	opts, ok := spec.Options.(Options)
 	if !ok {
@@ -134,9 +125,6 @@ func (Opencode) Env(spec harness.LaunchSpec) (map[string]string, error) {
 			return nil, fmt.Errorf("opencode: marshaling config content: %w", err)
 		}
 		env["OPENCODE_CONFIG_CONTENT"] = string(content)
-	}
-	if opts.ServerPassword != "" {
-		env["OPENCODE_SERVER_PASSWORD"] = opts.ServerPassword
 	}
 	if len(env) == 0 {
 		return nil, nil

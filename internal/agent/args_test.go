@@ -2,7 +2,6 @@ package agent
 
 import (
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -214,9 +213,9 @@ func TestResolveTemplateLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 		t.Errorf("LeoMCP.ApprovalMode = %q, want approve", opts.LeoMCP.ApprovalMode)
 	}
 
-	// Args() now renders the turn-prefix argv for KindAgent (TurnDriver,
-	// Plan 4 Task 5): the leo MCP bridge config lands in the prefix, ready
-	// for TurnArgs to be appended per-turn.
+	// Args() renders the codex TUI launch argv for KindAgent: the leo MCP
+	// bridge config lands in the launch argv via -c mcp_servers.leo.*
+	// overrides, same as the headless exec path.
 	args, err := h.Args(spec)
 	if err != nil {
 		t.Fatalf("Args(): %v", err)
@@ -305,20 +304,15 @@ func TestResolveTemplateLaunchOpencodeFillsLeoMCPBridge(t *testing.T) {
 	if !reflect.DeepEqual(opts.LeoMCP.Env, wantEnv) {
 		t.Errorf("LeoMCP.Env = %v, want %v", opts.LeoMCP.Env, wantEnv)
 	}
-	if opts.ServerPort == 0 {
-		t.Error("expected resolveTemplateLaunch to provision a ServerPort (Plan 4 Task 6 ServerDriver)")
-	}
-	if opts.ServerPassword == "" {
-		t.Error("expected resolveTemplateLaunch to provision a ServerPassword (Plan 4 Task 6 ServerDriver)")
-	}
 
-	// Args() now renders the `opencode serve` argv for KindAgent
-	// (ServerDriver, Plan 4 Task 6).
+	// Args() renders the interactive TUI argv for KindAgent (tmuxtui driver).
+	// spec.Model falls back to cfg.TemplateModel's built-in default ("sonnet")
+	// since the template config here sets none.
 	args, err := h.Args(spec)
 	if err != nil {
 		t.Fatalf("Args(): %v", err)
 	}
-	want := []string{"serve", "--port", strconv.Itoa(opts.ServerPort), "--hostname", "127.0.0.1"}
+	want := []string{"--model", spec.Model}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("Args() = %#v, want %#v", args, want)
 	}

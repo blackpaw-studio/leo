@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -227,181 +226,17 @@ func followTmuxSession(res config.HostResolution, session string, lines int) err
 	return runShellCmd("ssh", sshArgs)
 }
 
-// attachHistoryTailLines bounds how much of a non-live-attach harness's turn
-// history is printed when AttachSpec.Argv is nil (see attachViaDriver).
-const attachHistoryTailLines = 50
-
-// leoTUIWindowKeyOption is the tmux window user option storing the WindowKey
-// a tmux-flavored AttachSpec's window was last created with. Comparing it on
-// the next attach tells ensureTmuxWindow "reuse" from "the harness session id
-// rotated, recreate" — chosen over #{pane_start_command} after live testing
-// showed that field unreliable for staleness detection.
-const leoTUIWindowKeyOption = "@leo_tui_key"
-
-// windowTarget composes an exact-match tmux target-window ("=session:window")
-// from a session name and window name, extending tmux.Target/PaneTarget's
-// exact-match rationale (avoiding tmux's prefix-matching fallback) to
-// window-qualified targets.
-func windowTarget(session, window string) string {
-	return tmux.Target(session) + ":" + window
-}
-
-// attachViaDriver carries out a harness.AttachSpec resolved by a
-// SessionDriver — the non-claude counterpart to attachTmuxSession, which
-// handles claude targets. Three shapes, checked in order:
-//
-//   - spec.TmuxSession != "": tmux-flavored attach (opencode today). Ensure
-//     the window (see ensureTmuxWindow), select it, then delegate to
-//     attachTmuxSession so every existing flavor (nested-tmux popup, --cc
-//     control mode, remote ssh + terminfo handling) applies unchanged. This
-//     always runs on the host: remote dispatch of `leo agent attach` /
-//     `leo attach` is already delegated to the remote leo binary before this
-//     function is ever reached with a tmux-flavored spec (see #104), so no
-//     remote branch is needed here.
-//   - len(spec.Argv) != 0: exec directly — locally via agentSyscallExec
-//     (replacing this process, same as attachTmuxSession's outside-tmux
-//     branch), or over `ssh -tt -e none` with every token shell-quoted for a
-//     remote host (ssh flattens post-host argv into one shell string on the
-//     remote login shell — quoting each token individually keeps them
-//     intact).
-//   - otherwise: no live attach; the tail of spec.HistoryPath is printed
-//     instead, with a one-line note.
-//
-// The daemon's AttachSpec always sends a bare binary name at argv[0] (e.g.
-// "opencode") — syscall.Exec needs a real path, not a PATH-relative name, so
-// the local branch resolves it via exec.LookPath first. argv itself (which
-// becomes the exec'd program's os.Args) keeps the original bare name at
-// argv[0]; only the exec path is resolved. The remote branch leaves argv
-// untouched — the remote login shell resolves it against its own PATH.
+// attachViaDriver attaches to a driver-reported session. Every harness's
+// AttachSpec is a tmux session (the TUI lives in the supervised pane), so
+// this delegates to attachTmuxSession, which owns every attach flavor
+// (nested-tmux popup, --cc control mode, terminfo fallback). Remote clients
+// never reach here — `leo agent attach` delegates the whole command to the
+// host-side leo (#104).
 func attachViaDriver(res config.HostResolution, spec harness.AttachSpec, opts attachOptions) error {
-	if spec.TmuxSession != "" {
-		return attachViaDriverTmux(res, spec, opts)
-	}
-	if len(spec.Argv) == 0 {
-		return printAttachHistory(spec.HistoryPath)
-	}
-	if res.Localhost {
-		resolved, err := exec.LookPath(spec.Argv[0])
-		if err != nil {
-			return fmt.Errorf("%s not found on PATH", spec.Argv[0])
-		}
-		return agentSyscallExec(resolved, spec.Argv, os.Environ())
-	}
-	quoted := make([]string, len(spec.Argv))
-	for i, tok := range spec.Argv {
-		quoted[i] = shellQuoteArg(tok)
-	}
-	sshArgs := []string{"-tt", "-e", "none", res.Host.SSH}
-	sshArgs = append(sshArgs, res.Host.SSHArgs...)
-	sshArgs = append(sshArgs, sshControlOpts(res)...)
-	sshArgs = append(sshArgs, strings.Join(quoted, " "))
-	c := agentExecCommand("ssh", sshArgs...)
-	c.Stdin = os.Stdin
-	c.Stdout = agentStdout
-	c.Stderr = agentStderr
-	return hintRemoteTmuxMissing(res, c.Run())
-}
-
-// attachViaDriverTmux ensures a tmux-flavored AttachSpec's window exists,
-// selects it, then hands off to attachTmuxSession for the rest of the attach
-// (nested-tmux popup, --cc, terminfo). Localhost only — see attachViaDriver's
-// doc for why the remote case never reaches here.
-func attachViaDriverTmux(res config.HostResolution, spec harness.AttachSpec, opts attachOptions) error {
-	tmuxPath, err := tmuxLocate()
-	if err != nil {
-		return err
-	}
-	if err := ensureTmuxWindow(tmuxPath, spec.TmuxSession, spec.WindowName, spec.WindowCmd, spec.WindowKey); err != nil {
-		return err
-	}
-	if err := runShellCmd(tmuxPath, tmux.Args("select-window", "-t", windowTarget(spec.TmuxSession, spec.WindowName))); err != nil {
-		return fmt.Errorf("selecting %s window: %w", spec.WindowName, err)
+	if spec.TmuxSession == "" {
+		return fmt.Errorf("driver returned no attachable tmux session")
 	}
 	return attachTmuxSession(res, spec.TmuxSession, opts)
-}
-
-// tmuxWindowKey reports the leoTUIWindowKeyOption stored on session's window
-// named windowName, and whether that window exists at all. Uses
-// list-windows' -F format expansion (not show-options) so an existing window
-// whose option was never set reports exists=true, key="" instead of being
-// indistinguishable from a missing window — show-options errors on both a
-// missing target AND an unset user option, which would conflate them.
-// list-windows failing outright (e.g. no such tmux session yet) is reported
-// as exists=false; the caller's create path surfaces any real problem when
-// it tries to create the window.
-func tmuxWindowKey(tmuxPath, session, windowName string) (key string, exists bool) {
-	out, err := agentExecCommand(tmuxPath, tmux.Args("list-windows", "-t", tmux.Target(session), "-F", "#{window_name}\t#{"+leoTUIWindowKeyOption+"}")...).Output()
-	if err != nil {
-		return "", false
-	}
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		name, k, ok := strings.Cut(line, "\t")
-		if ok && name == windowName {
-			return k, true
-		}
-	}
-	return "", false
-}
-
-// ensureTmuxWindow makes sure session has a window named windowName running
-// cmd, recreating it if a prior window's stored key doesn't match key. A
-// matching existing window is left completely alone (no kill, no
-// recreation) — reusing the live TUI process is the whole point of the key
-// check.
-func ensureTmuxWindow(tmuxPath, session, windowName string, cmd []string, key string) error {
-	existingKey, exists := tmuxWindowKey(tmuxPath, session, windowName)
-	if exists && existingKey == key {
-		return nil
-	}
-	if exists {
-		if err := runShellCmd(tmuxPath, tmux.Args("kill-window", "-t", windowTarget(session, windowName))); err != nil {
-			return fmt.Errorf("killing stale %s window: %w", windowName, err)
-		}
-	}
-	quoted := make([]string, len(cmd))
-	for i, tok := range cmd {
-		quoted[i] = shellQuoteArg(tok)
-	}
-	windowCmd := strings.Join(quoted, " ")
-	if err := runShellCmd(tmuxPath, tmux.Args("new-window", "-d", "-t", tmux.Target(session), "-n", windowName, windowCmd)); err != nil {
-		return fmt.Errorf("creating %s window: %w", windowName, err)
-	}
-	if err := runShellCmd(tmuxPath, tmux.Args("set-option", "-w", "-t", windowTarget(session, windowName), leoTUIWindowKeyOption, key)); err != nil {
-		return fmt.Errorf("tagging %s window: %w", windowName, err)
-	}
-	return nil
-}
-
-// printAttachHistory writes a "no live attach" note followed by the tail of
-// path (last attachHistoryTailLines lines, or the whole file if shorter) to
-// agentStdout. An empty path or a read failure still returns nil — a missing
-// history file is not a fatal attach error, just nothing to show yet.
-func printAttachHistory(path string) error {
-	fmt.Fprintln(agentStdout, "note: this harness has no live attach; showing recent turn history:")
-	if path == "" {
-		fmt.Fprintln(agentStdout, "(no history file available yet)")
-		return nil
-	}
-	f, err := os.Open(path) // #nosec G304 -- path comes from the resolved driver's own AttachSpec, not user input
-	if err != nil {
-		fmt.Fprintf(agentStdout, "(could not read history: %v)\n", err)
-		return nil
-	}
-	defer f.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		if len(lines) > attachHistoryTailLines {
-			lines = lines[1:]
-		}
-	}
-	for _, line := range lines {
-		fmt.Fprintln(agentStdout, line)
-	}
-	return nil
 }
 
 // runShellCmd is a tiny wrapper that wires stdio to the package-level streams

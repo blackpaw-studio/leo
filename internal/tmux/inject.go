@@ -23,19 +23,119 @@ const (
 	injectReadyPoll     = 500 * time.Millisecond
 )
 
+// submitConfirm* bound the post-paste "did the body land before we hit
+// Enter?" poll. Some TUIs (codex) commit a bracketed paste asynchronously,
+// so an Enter sent in the same burst as the paste is dropped. We poll until
+// a distinctive slice of the body appears in the pane, then submit.
+//
+// Package-level vars (not consts) so tests can shrink them to keep the
+// confirm-loop tests fast.
+var (
+	submitConfirmAttempts = 25
+	submitConfirmPoll     = 200 * time.Millisecond
+)
+
+// submitConfirmNeedleRunes bounds how much of body's first non-empty line we
+// look for in the pane before submitting with Enter — long enough to be
+// distinctive, short enough to survive an input-line wrapping the pasted
+// text.
+const submitConfirmNeedleRunes = 24
+
+// submitNeedleMinRunes floors how short a derived needle may be before we
+// stop trusting Contains-matching against the pane. A very short needle
+// (e.g. "ok") can already exist in the pane — a hint, placeholder, or prior
+// output — before an async paste actually commits, so the confirm loop
+// would break on a coincidental match and fire Enter into an uncommitted
+// paste (the original bug, for short bodies). Below this floor we can't
+// tell "landed" from "coincidence," so we don't try — see
+// submitConfirmFallbackDelays.
+const submitNeedleMinRunes = 4
+
+// submitConfirmFallbackDelays bounds the fixed settle beat given to bodies
+// whose needle is too short (or empty) to distinguish a landed paste from a
+// coincidental pane match. It's a small, fixed number of submitConfirmPoll
+// waits — still best-effort, still bounded, still always followed by Enter —
+// rather than an unreliable substring match.
+const submitConfirmFallbackDelays = 3
+
 // inputProbe is a single throwaway character typed to test whether claude is
 // accepting keystrokes yet. One character is fully removable with a single
 // Ctrl-U (which only kills one input line), so probing never risks leaving
 // residue ahead of the real prompt.
 const inputProbe = "."
 
-type inputState int
+// InputState classifies a captured pane's input box during the readiness
+// probe.
+type InputState int
 
 const (
-	inputUnknown    inputState = iota // pane couldn't be read/parsed — don't block on it
-	inputEmpty                        // input box present but empty (paste not landed)
-	inputHasContent                   // input box carries text (paste landed)
+	InputUnknown    InputState = iota // pane couldn't be read/parsed — don't block on it
+	InputEmpty                        // input box present but probe not landed
+	InputHasContent                   // input box carries the probe/typed text
 )
+
+// inputState/inputUnknown/inputEmpty/inputHasContent are unexported aliases
+// for InputState and its values, kept so pre-existing internal call sites
+// and tests using the lowercase names keep compiling unchanged.
+type inputState = InputState
+
+const (
+	inputUnknown    = InputUnknown
+	inputEmpty      = InputEmpty
+	inputHasContent = InputHasContent
+)
+
+// Profile describes one harness TUI's input-line shape for the readiness
+// probe. Marker prefixes the input line. Classify inspects a captured pane
+// and reports the input state; harnesses whose input line renders
+// placeholder hints (codex, opencode) must use ProbeClassifier, which only
+// accepts the exact probe char as "content" — a bare non-empty check would
+// mistake the placeholder for a landed probe.
+type Profile struct {
+	Marker   string
+	Classify func(pane string) InputState
+}
+
+// ClaudeProfile is claude's probe profile: the existing classifier with its
+// menu-option and dialog-chrome guards, unchanged.
+func ClaudeProfile() Profile {
+	return Profile{Marker: claudePromptGlyph, Classify: classifyInput}
+}
+
+// ProbeClassifier returns a classifier for TUIs whose input line starts with
+// marker and may render placeholder hints: only a line whose content is
+// exactly the probe char counts as landed; any other content (including
+// placeholders, or text a human left in an attached box) reports InputEmpty
+// so the probe keeps waiting.
+//
+// Some TUIs (opencode) render a bordered multi-line panel where every row
+// shares the same leading marker (e.g. "┃") — the actual input row is not
+// necessarily the last marker-prefixed line (a footer status line can also
+// carry the marker). So this scans every marker-prefixed line for an exact
+// probe match rather than trusting only the last one; if none carries the
+// exact probe but at least one marker line was seen, the box is present but
+// not yet landed (InputEmpty).
+func ProbeClassifier(marker string) func(string) InputState {
+	return func(pane string) InputState {
+		lines := strings.Split(pane, "\n")
+		sawMarker := false
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.TrimLeft(lines[i], " \t")
+			if !strings.HasPrefix(line, marker) {
+				continue
+			}
+			sawMarker = true
+			content := strings.TrimSpace(line[len(marker):])
+			if content == inputProbe {
+				return InputHasContent
+			}
+		}
+		if sawMarker {
+			return InputEmpty
+		}
+		return InputUnknown
+	}
+}
 
 // execCommand is the seam tests replace.
 var execCommand = exec.CommandContext
@@ -62,11 +162,27 @@ func sessionBufferName(session string) string {
 // the real body exactly once. The body is never pasted more than once, so it
 // can never be stacked/duplicated regardless of timing.
 func InjectPrompt(ctx context.Context, tmuxPath, session, body string) error {
-	return injectPrompt(ctx, tmuxPath, session, body, injectReadyAttempts, injectReadyPoll)
+	return InjectPromptTUI(ctx, tmuxPath, session, body, ClaudeProfile())
 }
 
-// injectPrompt is the testable inner form with injectable probe bounds.
+// InjectPromptTUI is the harness-neutral entry point: it sends body to the
+// TUI running in `session` as a single submission, probing readiness with p's
+// classifier before pasting. InjectPrompt is a thin wrapper over this using
+// ClaudeProfile.
+func InjectPromptTUI(ctx context.Context, tmuxPath, session, body string, p Profile) error {
+	return injectPromptProfile(ctx, tmuxPath, session, body, p, injectReadyAttempts, injectReadyPoll)
+}
+
+// injectPrompt is the testable inner form with injectable probe bounds, kept
+// with its pre-existing signature (defaulting to ClaudeProfile) so existing
+// call sites and tests exercising the claude path are unaffected by the
+// profile generalization.
 func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttempts int, poll time.Duration) error {
+	return injectPromptProfile(ctx, tmuxPath, session, body, ClaudeProfile(), maxAttempts, poll)
+}
+
+// injectPromptProfile is the profile-parameterized inner form.
+func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p Profile, maxAttempts int, poll time.Duration) error {
 	runKey := func(keys ...string) error {
 		args := append([]string{"send-keys", "-t", PaneTarget(session)}, keys...)
 		cmd := execCommand(ctx, tmuxPath, Args(args...)...)
@@ -102,17 +218,17 @@ func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttemp
 			return ctx.Err()
 		case <-time.After(poll):
 		}
-		st := paneInputState(ctx, tmuxPath, session)
+		st := paneInputState(ctx, tmuxPath, session, p)
 		if err := runKey("C-u"); err != nil {
 			return err
 		}
 		switch st {
-		case inputHasContent:
+		case InputHasContent:
 			ready = true
-		case inputEmpty:
-			// Box is drawn but the probe was dropped — claude still booting.
+		case InputEmpty:
+			// Box is drawn but the probe was dropped — TUI still booting.
 			sawInputBox = true
-		case inputUnknown:
+		case InputUnknown:
 			// No recognizable input box yet (mid-boot before the TUI draws).
 		}
 		if ready {
@@ -122,43 +238,115 @@ func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttemp
 	if !ready && sawInputBox {
 		// The input box exists but never accepted our probe within the budget —
 		// pasting the body would be dropped too. Fail fast instead of hanging.
-		return fmt.Errorf("claude session %q never started accepting input after %d attempts", session, maxAttempts)
+		return fmt.Errorf("session %q's TUI never started accepting input after %d attempts", session, maxAttempts)
 	}
 	// ready, or the pane format was never recognized (fall open rather than
 	// block, so this can't make an otherwise-working session worse).
 
-	// Phase 2: stage and paste the body exactly once, then submit.
+	// Phase 2: stage and paste the body exactly once.
 	buf := sessionBufferName(session)
 	for _, args := range [][]string{
 		Args("set-buffer", "-b", buf, "--", body),
 		Args("paste-buffer", "-b", buf, "-t", PaneTarget(session), "-d"),
-		Args("send-keys", "-t", PaneTarget(session), "Enter"),
 	} {
 		cmd := execCommand(ctx, tmuxPath, args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("tmux %s: %w: %s", args[2], err, string(out))
 		}
 	}
+
+	// Phase 3: confirm the pasted body actually landed in the pane before
+	// submitting. Some TUIs (codex) commit a bracketed paste asynchronously,
+	// so an Enter fired immediately after paste-buffer can arrive before the
+	// text lands and gets silently dropped. claude/opencode render the body
+	// synchronously, so this loop breaks on its first iteration for them —
+	// zero added latency. This is best-effort: a capture-pane error, or the
+	// needle never appearing within the budget, still falls through to
+	// sending Enter (never blocks/loses the message).
+	needle := submitConfirmNeedle(body)
+	if len([]rune(needle)) >= submitNeedleMinRunes {
+		for attempt := 0; attempt < submitConfirmAttempts; attempt++ {
+			out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", PaneTarget(session))...).Output()
+			if err == nil && strings.Contains(string(out), needle) {
+				break
+			}
+			if attempt == submitConfirmAttempts-1 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(submitConfirmPoll):
+			}
+		}
+	} else {
+		// The needle is too short (or the body was empty/whitespace-only) to
+		// trust Contains-matching — fall back to a bounded fixed delay so
+		// short bodies still get a settle beat before Enter, without risking
+		// a coincidental early match.
+		for i := 0; i < submitConfirmFallbackDelays; i++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(submitConfirmPoll):
+			}
+		}
+	}
+
+	if err := runKey("Enter"); err != nil {
+		return err
+	}
 	return nil
 }
 
-// InputHasContent reports whether a captured claude pane shows text waiting in
-// its input box (the prompt-glyph line carries non-whitespace). Callers use it
-// to confirm typed text landed before submitting with Enter — an Enter that
-// arrives in the same input burst as the text is treated as a literal newline
-// by claude's Ink REPL, not a submit, leaving the message unsent.
-func InputHasContent(pane string) bool {
-	return classifyInput(pane) == inputHasContent
+// submitConfirmNeedle derives a short, distinctive slice of body's first
+// NON-EMPTY line to look for in the pane before submitting — long enough to
+// be unlikely to appear by coincidence, short enough to survive the input
+// line wrapping the pasted text. A body like "\n\nreal text" would otherwise
+// yield an empty needle from its literal first line and skip confirmation
+// entirely, even though it plainly has distinctive content further down.
+// Returns "" if every line is empty/whitespace-only, which callers treat as
+// "nothing distinctive to match" (see submitConfirmFallbackDelays).
+func submitConfirmNeedle(body string) string {
+	var firstNonEmpty string
+	for _, line := range strings.Split(body, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			firstNonEmpty = trimmed
+			break
+		}
+	}
+	if firstNonEmpty == "" {
+		return ""
+	}
+	runes := []rune(firstNonEmpty)
+	if len(runes) > submitConfirmNeedleRunes {
+		runes = runes[:submitConfirmNeedleRunes]
+	}
+	return string(runes)
+}
+
+// PaneInputHasContent reports whether a captured claude pane shows text
+// waiting in its input box (the prompt-glyph line carries non-whitespace).
+// Callers use it to confirm typed text landed before submitting with Enter —
+// an Enter that arrives in the same input burst as the text is treated as a
+// literal newline by claude's Ink REPL, not a submit, leaving the message
+// unsent.
+//
+// Named PaneInputHasContent (rather than InputHasContent) to avoid colliding
+// with the InputHasContent InputState value.
+func PaneInputHasContent(pane string) bool {
+	return classifyInput(pane) == InputHasContent
 }
 
 // paneInputState captures the session's visible pane and classifies its input
-// box. Read failures classify as inputUnknown so the caller falls open.
-func paneInputState(ctx context.Context, tmuxPath, session string) inputState {
+// box using p's Classify. Read failures classify as InputUnknown so the
+// caller falls open.
+func paneInputState(ctx context.Context, tmuxPath, session string, p Profile) InputState {
 	out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", PaneTarget(session))...).Output()
 	if err != nil {
-		return inputUnknown
+		return InputUnknown
 	}
-	return classifyInput(string(out))
+	return p.Classify(string(out))
 }
 
 // menuOptionPattern matches a numbered selection-menu option like "1. Yes" or
@@ -177,9 +365,9 @@ func hasDialogChrome(pane string) bool {
 // selection menu or a confirm/cancel dialog is reported as inputUnknown — the
 // glyph there is a menu selector, not a ready input box, so callers keep waiting
 // instead of pasting into the dialog.
-func classifyInput(pane string) inputState {
+func classifyInput(pane string) InputState {
 	if hasDialogChrome(pane) {
-		return inputUnknown
+		return InputUnknown
 	}
 	lines := strings.Split(pane, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -189,14 +377,14 @@ func classifyInput(pane string) inputState {
 		}
 		content := strings.TrimSpace(line[len(claudePromptGlyph):])
 		if content == "" {
-			return inputEmpty
+			return InputEmpty
 		}
 		if menuOptionPattern.MatchString(content) {
-			return inputUnknown
+			return InputUnknown
 		}
-		return inputHasContent
+		return InputHasContent
 	}
-	return inputUnknown
+	return InputUnknown
 }
 
 // AbortPrompt cancels a mid-turn claude by sending Escape then Ctrl-C.
