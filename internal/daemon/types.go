@@ -107,11 +107,17 @@ type AgentRenameRequest struct {
 // AgentAttachSpecResponse is the payload for GET /agents/{name}/attach-spec.
 // Harness == "claude" (or "") means the client should fall back to the
 // tmux-based attach flow using AgentSession's session name instead of this
-// response's Argv/HistoryPath, which are only populated for non-claude
-// harnesses.
+// response's fields, which are only populated for non-claude harnesses. The
+// Tmux* fields mirror harness.AttachSpec's tmux flavor (see its doc) — when
+// TmuxSession is non-empty the client ensures/selects that window instead of
+// treating Argv as directly exec'able.
 type AgentAttachSpecResponse struct {
 	Name        string   `json:"name"`
 	Harness     string   `json:"harness"`
 	Argv        []string `json:"argv,omitempty"`
 	HistoryPath string   `json:"history_path,omitempty"`
+	TmuxSession string   `json:"tmux_session,omitempty"`
+	WindowName  string   `json:"window_name,omitempty"`
+	WindowCmd   []string `json:"window_cmd,omitempty"`
+	WindowKey   string   `json:"window_key,omitempty"`
 }

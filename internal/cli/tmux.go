@@ -231,15 +231,41 @@ func followTmuxSession(res config.HostResolution, session string, lines int) err
 // history is printed when AttachSpec.Argv is nil (see attachViaDriver).
 const attachHistoryTailLines = 50
 
+// leoTUIWindowKeyOption is the tmux window user option storing the WindowKey
+// a tmux-flavored AttachSpec's window was last created with. Comparing it on
+// the next attach tells ensureTmuxWindow "reuse" from "the harness session id
+// rotated, recreate" — chosen over #{pane_start_command} after live testing
+// showed that field unreliable for staleness detection.
+const leoTUIWindowKeyOption = "@leo_tui_key"
+
+// windowTarget composes an exact-match tmux target-window ("=session:window")
+// from a session name and window name, extending tmux.Target/PaneTarget's
+// exact-match rationale (avoiding tmux's prefix-matching fallback) to
+// window-qualified targets.
+func windowTarget(session, window string) string {
+	return tmux.Target(session) + ":" + window
+}
+
 // attachViaDriver carries out a harness.AttachSpec resolved by a
 // SessionDriver — the non-claude counterpart to attachTmuxSession, which
-// handles claude targets. When spec.Argv is non-nil it is executed: locally
-// via agentSyscallExec (replacing this process, same as attachTmuxSession's
-// outside-tmux branch), or over `ssh -tt -e none` with every token
-// shell-quoted for a remote host (ssh flattens post-host argv into one shell
-// string on the remote login shell — quoting each token individually keeps
-// them intact). When spec.Argv is nil, this harness has no live attach; the
-// tail of spec.HistoryPath is printed instead, with a one-line note.
+// handles claude targets. Three shapes, checked in order:
+//
+//   - spec.TmuxSession != "": tmux-flavored attach (opencode today). Ensure
+//     the window (see ensureTmuxWindow), select it, then delegate to
+//     attachTmuxSession so every existing flavor (nested-tmux popup, --cc
+//     control mode, remote ssh + terminfo handling) applies unchanged. This
+//     always runs on the host: remote dispatch of `leo agent attach` /
+//     `leo attach` is already delegated to the remote leo binary before this
+//     function is ever reached with a tmux-flavored spec (see #104), so no
+//     remote branch is needed here.
+//   - len(spec.Argv) != 0: exec directly — locally via agentSyscallExec
+//     (replacing this process, same as attachTmuxSession's outside-tmux
+//     branch), or over `ssh -tt -e none` with every token shell-quoted for a
+//     remote host (ssh flattens post-host argv into one shell string on the
+//     remote login shell — quoting each token individually keeps them
+//     intact).
+//   - otherwise: no live attach; the tail of spec.HistoryPath is printed
+//     instead, with a one-line note.
 //
 // The daemon's AttachSpec always sends a bare binary name at argv[0] (e.g.
 // "opencode") — syscall.Exec needs a real path, not a PATH-relative name, so
@@ -247,7 +273,10 @@ const attachHistoryTailLines = 50
 // becomes the exec'd program's os.Args) keeps the original bare name at
 // argv[0]; only the exec path is resolved. The remote branch leaves argv
 // untouched — the remote login shell resolves it against its own PATH.
-func attachViaDriver(res config.HostResolution, spec harness.AttachSpec) error {
+func attachViaDriver(res config.HostResolution, spec harness.AttachSpec, opts attachOptions) error {
+	if spec.TmuxSession != "" {
+		return attachViaDriverTmux(res, spec, opts)
+	}
 	if len(spec.Argv) == 0 {
 		return printAttachHistory(spec.HistoryPath)
 	}
@@ -271,6 +300,76 @@ func attachViaDriver(res config.HostResolution, spec harness.AttachSpec) error {
 	c.Stdout = agentStdout
 	c.Stderr = agentStderr
 	return hintRemoteTmuxMissing(res, c.Run())
+}
+
+// attachViaDriverTmux ensures a tmux-flavored AttachSpec's window exists,
+// selects it, then hands off to attachTmuxSession for the rest of the attach
+// (nested-tmux popup, --cc, terminfo). Localhost only — see attachViaDriver's
+// doc for why the remote case never reaches here.
+func attachViaDriverTmux(res config.HostResolution, spec harness.AttachSpec, opts attachOptions) error {
+	tmuxPath, err := tmuxLocate()
+	if err != nil {
+		return err
+	}
+	if err := ensureTmuxWindow(tmuxPath, spec.TmuxSession, spec.WindowName, spec.WindowCmd, spec.WindowKey); err != nil {
+		return err
+	}
+	if err := runShellCmd(tmuxPath, tmux.Args("select-window", "-t", windowTarget(spec.TmuxSession, spec.WindowName))); err != nil {
+		return fmt.Errorf("selecting %s window: %w", spec.WindowName, err)
+	}
+	return attachTmuxSession(res, spec.TmuxSession, opts)
+}
+
+// tmuxWindowKey reports the leoTUIWindowKeyOption stored on session's window
+// named windowName, and whether that window exists at all. Uses
+// list-windows' -F format expansion (not show-options) so an existing window
+// whose option was never set reports exists=true, key="" instead of being
+// indistinguishable from a missing window — show-options errors on both a
+// missing target AND an unset user option, which would conflate them.
+// list-windows failing outright (e.g. no such tmux session yet) is reported
+// as exists=false; the caller's create path surfaces any real problem when
+// it tries to create the window.
+func tmuxWindowKey(tmuxPath, session, windowName string) (key string, exists bool) {
+	out, err := agentExecCommand(tmuxPath, tmux.Args("list-windows", "-t", tmux.Target(session), "-F", "#{window_name}\t#{"+leoTUIWindowKeyOption+"}")...).Output()
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		name, k, ok := strings.Cut(line, "\t")
+		if ok && name == windowName {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// ensureTmuxWindow makes sure session has a window named windowName running
+// cmd, recreating it if a prior window's stored key doesn't match key. A
+// matching existing window is left completely alone (no kill, no
+// recreation) — reusing the live TUI process is the whole point of the key
+// check.
+func ensureTmuxWindow(tmuxPath, session, windowName string, cmd []string, key string) error {
+	existingKey, exists := tmuxWindowKey(tmuxPath, session, windowName)
+	if exists && existingKey == key {
+		return nil
+	}
+	if exists {
+		if err := runShellCmd(tmuxPath, tmux.Args("kill-window", "-t", windowTarget(session, windowName))); err != nil {
+			return fmt.Errorf("killing stale %s window: %w", windowName, err)
+		}
+	}
+	quoted := make([]string, len(cmd))
+	for i, tok := range cmd {
+		quoted[i] = shellQuoteArg(tok)
+	}
+	windowCmd := strings.Join(quoted, " ")
+	if err := runShellCmd(tmuxPath, tmux.Args("new-window", "-d", "-t", tmux.Target(session), "-n", windowName, windowCmd)); err != nil {
+		return fmt.Errorf("creating %s window: %w", windowName, err)
+	}
+	if err := runShellCmd(tmuxPath, tmux.Args("set-option", "-w", "-t", windowTarget(session, windowName), leoTUIWindowKeyOption, key)); err != nil {
+		return fmt.Errorf("tagging %s window: %w", windowName, err)
+	}
+	return nil
 }
 
 // printAttachHistory writes a "no live attach" note followed by the tail of

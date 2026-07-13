@@ -15,6 +15,20 @@ import (
 // spec without spinning up a real socket.
 var agentAttachSpecFn = daemon.AgentAttachSpec
 
+// toAttachSpec converts a daemon.AgentAttachSpecResponse to the
+// harness.AttachSpec shape attachViaDriver consumes, carrying every field
+// (including the tmux flavor) across the daemon/CLI boundary unchanged.
+func toAttachSpec(spec daemon.AgentAttachSpecResponse) harness.AttachSpec {
+	return harness.AttachSpec{
+		Argv:        spec.Argv,
+		HistoryPath: spec.HistoryPath,
+		TmuxSession: spec.TmuxSession,
+		WindowName:  spec.WindowName,
+		WindowCmd:   spec.WindowCmd,
+		WindowKey:   spec.WindowKey,
+	}
+}
+
 // Testability seam — tests override this to simulate the daemon's view of
 // running agents without spinning up a real socket.
 var lookupAgentSession = daemon.AgentSession
@@ -89,7 +103,7 @@ render the session as a native tab via tmux control mode.`,
 				if _, spec, ok, err := resolveProcessAttachSpec(cfg, name); err != nil {
 					return err
 				} else if ok {
-					return attachViaDriver(res, spec)
+					return attachViaDriver(res, spec, opts)
 				}
 				return attachTmuxSession(res, processSessionName(name), opts)
 			case agentSession != "":
@@ -97,7 +111,7 @@ render the session as a native tab via tmux control mode.`,
 				// ask the daemon for the agent's harness/attach spec before
 				// falling back to the tmux session already resolved above.
 				if spec, err := agentAttachSpecFn(cmd.Context(), cfg.HomePath, name); err == nil && spec.Harness != "" && spec.Harness != "claude" {
-					return attachViaDriver(res, harness.AttachSpec{Argv: spec.Argv, HistoryPath: spec.HistoryPath})
+					return attachViaDriver(res, toAttachSpec(spec), opts)
 				}
 				return attachTmuxSession(res, agentSession, opts)
 			default:

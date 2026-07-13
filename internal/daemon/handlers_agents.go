@@ -261,6 +261,10 @@ func (s *Server) handleAgentAttachSpec(w http.ResponseWriter, r *http.Request) {
 				if spec, err := drv.Attach(h); err == nil {
 					resp.Argv = spec.Argv
 					resp.HistoryPath = spec.HistoryPath
+					resp.TmuxSession = spec.TmuxSession
+					resp.WindowName = spec.WindowName
+					resp.WindowCmd = spec.WindowCmd
+					resp.WindowKey = spec.WindowKey
 				}
 			}
 		}
