@@ -3,7 +3,6 @@ package cli
 import (
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -264,20 +263,15 @@ func TestResolveProcessLaunchOpencodeFillsLeoMCPBridge(t *testing.T) {
 	if !reflect.DeepEqual(opts.LeoMCP.Env, wantEnv) {
 		t.Errorf("LeoMCP.Env = %v, want %v", opts.LeoMCP.Env, wantEnv)
 	}
-	if opts.ServerPort == 0 {
-		t.Error("expected resolveProcessLaunch to provision a ServerPort (Plan 4 Task 6 ServerDriver)")
-	}
-	if opts.ServerPassword == "" {
-		t.Error("expected resolveProcessLaunch to provision a ServerPassword (Plan 4 Task 6 ServerDriver)")
-	}
 
-	// Args() now renders the `opencode serve` argv for KindProcess
-	// (ServerDriver, Plan 4 Task 6).
+	// Args() renders the interactive TUI argv for KindProcess (tmuxtui
+	// driver). spec.Model falls back to cfg.ProcessModel's built-in default
+	// ("sonnet") since the process config here sets none.
 	args, err := h.Args(spec)
 	if err != nil {
 		t.Fatalf("Args(): %v", err)
 	}
-	want := []string{"serve", "--port", strconv.Itoa(opts.ServerPort), "--hostname", "127.0.0.1"}
+	want := []string{"--model", spec.Model}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("Args() = %#v, want %#v", args, want)
 	}
@@ -298,9 +292,9 @@ func TestResolveProcessLaunchKindIsProcess(t *testing.T) {
 
 // TestBuildAllProcessSpecsOpencodeEnvOverlay verifies Bug A's process-path
 // fix: a supervised opencode process's ProcessSpec.Env carries the harness's
-// Env() overlay (OPENCODE_SERVER_PASSWORD/OPENCODE_CONFIG_CONTENT), not just
-// the process's own configured env. Previously buildAllProcessSpecs never
-// called h.Env(spec) at all, so `opencode serve` booted with neither var set.
+// Env() overlay (OPENCODE_CONFIG_CONTENT), not just the process's own
+// configured env. Previously buildAllProcessSpecs never called h.Env(spec)
+// at all, so the process booted with no overlay set.
 func TestBuildAllProcessSpecsOpencodeEnvOverlay(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: t.TempDir(),
@@ -319,10 +313,6 @@ func TestBuildAllProcessSpecsOpencodeEnvOverlay(t *testing.T) {
 		t.Fatalf("expected 1 spec, got %d", len(specs))
 	}
 	env := specs[0].Env
-	pw, ok := env["OPENCODE_SERVER_PASSWORD"]
-	if !ok || pw == "" {
-		t.Fatalf("expected non-empty OPENCODE_SERVER_PASSWORD in ProcessSpec.Env, got %v", env)
-	}
 	if _, ok := env["OPENCODE_CONFIG_CONTENT"]; !ok {
 		t.Fatalf("expected OPENCODE_CONFIG_CONTENT in ProcessSpec.Env, got %v", env)
 	}
@@ -343,7 +333,7 @@ func TestBuildAllProcessSpecsOpencodeProcessEnvWinsOnCollision(t *testing.T) {
 				Enabled:   true,
 				Workspace: t.TempDir(),
 				Harness:   "opencode",
-				Env:       map[string]string{"OPENCODE_SERVER_PASSWORD": "proc-override"},
+				Env:       map[string]string{"OPENCODE_CONFIG_CONTENT": "proc-override"},
 			},
 		},
 	}
@@ -351,8 +341,8 @@ func TestBuildAllProcessSpecsOpencodeProcessEnvWinsOnCollision(t *testing.T) {
 	if len(specs) != 1 {
 		t.Fatalf("expected 1 spec, got %d", len(specs))
 	}
-	if got := specs[0].Env["OPENCODE_SERVER_PASSWORD"]; got != "proc-override" {
-		t.Errorf("OPENCODE_SERVER_PASSWORD = %q, want process's own override to win", got)
+	if got := specs[0].Env["OPENCODE_CONFIG_CONTENT"]; got != "proc-override" {
+		t.Errorf("OPENCODE_CONFIG_CONTENT = %q, want process's own override to win", got)
 	}
 }
 

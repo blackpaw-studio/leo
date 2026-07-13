@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
-	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 )
 
 // newEnvTestManager builds a Manager+capturingSupervisor pair for a single
@@ -29,12 +28,12 @@ func newEnvTestManager(t *testing.T, tmplName string, tmpl config.TemplateConfig
 
 // TestSpawnSharedOpencodeEnvOverlay verifies Bug A's fix: an opencode
 // template's spawn env carries the harness's Env() overlay
-// (OPENCODE_SERVER_PASSWORD/OPENCODE_CONFIG_CONTENT), not just the
-// template's own configured env. Previously SpawnAgent's SpawnRequest.Env
-// only ever contained mergeEnv(tmpl.Env, spec.Env), silently dropping the
-// harness overlay entirely.
+// (OPENCODE_CONFIG_CONTENT), not just the template's own configured env.
+// Previously SpawnAgent's SpawnRequest.Env only ever contained
+// mergeEnv(tmpl.Env, spec.Env), silently dropping the harness overlay
+// entirely.
 func TestSpawnSharedOpencodeEnvOverlay(t *testing.T) {
-	mgr, sup, home := newEnvTestManager(t, "coding", config.TemplateConfig{
+	mgr, sup, _ := newEnvTestManager(t, "coding", config.TemplateConfig{
 		Workspace: t.TempDir(),
 		Harness:   "opencode",
 		Env:       map[string]string{"MY_VAR": "1"},
@@ -52,32 +51,18 @@ func TestSpawnSharedOpencodeEnvOverlay(t *testing.T) {
 		t.Fatal("SpawnAgent not called")
 	}
 	env := sup.spawnCall.Env
-	pw, ok := env["OPENCODE_SERVER_PASSWORD"]
-	if !ok || pw == "" {
-		t.Fatalf("expected non-empty OPENCODE_SERVER_PASSWORD in spawn env, got %v", env)
-	}
-	if _, ok := env["OPENCODE_CONFIG_CONTENT"]; !ok {
-		t.Fatalf("expected OPENCODE_CONFIG_CONTENT in spawn env, got %v", env)
+	content, ok := env["OPENCODE_CONFIG_CONTENT"]
+	if !ok || content == "" {
+		t.Fatalf("expected non-empty OPENCODE_CONFIG_CONTENT in spawn env, got %v", env)
 	}
 	if env["MY_VAR"] != "1" {
 		t.Fatalf("expected template env MY_VAR to survive the merge, got %v", env)
 	}
 
-	// The password must match what EnsureServerState provisioned for this
-	// agent name — same state file the driver reads back to talk to `opencode
-	// serve`.
-	state, err := opencodeharness.EnsureServerState(home, SessionName(rec.Name), "")
-	if err != nil {
-		t.Fatalf("EnsureServerState: %v", err)
-	}
-	if pw != state.Password {
-		t.Errorf("OPENCODE_SERVER_PASSWORD = %q, want %q (from EnsureServerState)", pw, state.Password)
-	}
-
 	// rec.Env (the Manager's own return value) must also carry the overlay —
 	// it's what List()/Resolve() surface back to callers.
-	if rec.Env["OPENCODE_SERVER_PASSWORD"] == "" {
-		t.Errorf("Record.Env missing OPENCODE_SERVER_PASSWORD: %v", rec.Env)
+	if rec.Env["OPENCODE_CONFIG_CONTENT"] == "" {
+		t.Errorf("Record.Env missing OPENCODE_CONFIG_CONTENT: %v", rec.Env)
 	}
 }
 
@@ -88,7 +73,7 @@ func TestSpawnSharedOpencodeTemplateEnvWinsOnCollision(t *testing.T) {
 	mgr, sup, _ := newEnvTestManager(t, "coding", config.TemplateConfig{
 		Workspace: t.TempDir(),
 		Harness:   "opencode",
-		Env:       map[string]string{"OPENCODE_SERVER_PASSWORD": "template-override"},
+		Env:       map[string]string{"OPENCODE_CONFIG_CONTENT": "template-override"},
 	})
 
 	if _, err := mgr.Spawn(context.Background(), SpawnSpec{Template: "coding", Repo: "myagent"}); err != nil {
@@ -97,8 +82,8 @@ func TestSpawnSharedOpencodeTemplateEnvWinsOnCollision(t *testing.T) {
 	if sup.spawnCall == nil {
 		t.Fatal("SpawnAgent not called")
 	}
-	if got := sup.spawnCall.Env["OPENCODE_SERVER_PASSWORD"]; got != "template-override" {
-		t.Errorf("OPENCODE_SERVER_PASSWORD = %q, want template's own override to win", got)
+	if got := sup.spawnCall.Env["OPENCODE_CONFIG_CONTENT"]; got != "template-override" {
+		t.Errorf("OPENCODE_CONFIG_CONTENT = %q, want template's own override to win", got)
 	}
 }
 

@@ -6,7 +6,27 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
 )
+
+// TestOpencodeDriverWiring locks the capabilities the shared tmuxtui driver
+// exposes for opencode: tmux drive style, quick-exit recovery, and
+// session-args refresh (opencode has no PreLaunch hook, unlike codex).
+func TestOpencodeDriverWiring(t *testing.T) {
+	d := (Opencode{}).Driver()
+	if got := d.Style(); got != harness.DriveTmux {
+		t.Fatalf("Style() = %q, want %q", got, harness.DriveTmux)
+	}
+	if _, ok := d.(harness.SessionArgsRefresher); !ok {
+		t.Fatalf("Driver() does not implement harness.SessionArgsRefresher")
+	}
+	if _, ok := d.(harness.QuickExitRecovery); !ok {
+		t.Fatalf("Driver() does not implement harness.QuickExitRecovery")
+	}
+	if _, ok := d.(tmuxtui.Driver); !ok {
+		t.Fatalf("Driver() is not a tmuxtui.Driver")
+	}
+}
 
 func TestValidateModel(t *testing.T) {
 	tests := []struct {
@@ -118,28 +138,28 @@ func TestArgs(t *testing.T) {
 				"--model", "anthropic/claude-sonnet-4-5", "-s", "ses_42", "again"},
 		},
 		{
-			name: "KindProcess serve argv",
+			name: "KindProcess TUI argv with model",
 			spec: harness.LaunchSpec{
-				Kind: harness.KindProcess, Model: "anthropic/claude-sonnet-4-5",
-				Options: Options{ServerPort: 45991},
+				Kind: harness.KindProcess, Model: "lmstudio/qwen/qwen3.6-35b-a3b",
+				Options: Options{},
 			},
-			want: []string{"serve", "--port", "45991", "--hostname", "127.0.0.1"},
+			want: []string{"--model", "lmstudio/qwen/qwen3.6-35b-a3b"},
 		},
 		{
-			name: "KindAgent serve argv",
+			name: "KindAgent TUI argv without model",
 			spec: harness.LaunchSpec{
 				Kind:    harness.KindAgent,
-				Options: Options{ServerPort: 51000},
+				Options: Options{},
 			},
-			want: []string{"serve", "--port", "51000", "--hostname", "127.0.0.1"},
+			want: nil,
 		},
 		{
-			name: "KindSession serve argv",
+			name: "KindSession TUI argv with model",
 			spec: harness.LaunchSpec{
-				Kind:    harness.KindSession,
-				Options: Options{ServerPort: 51500},
+				Kind: harness.KindSession, Model: "anthropic/claude-sonnet-4-5",
+				Options: Options{},
 			},
-			want: []string{"serve", "--port", "51500", "--hostname", "127.0.0.1"},
+			want: []string{"--model", "anthropic/claude-sonnet-4-5"},
 		},
 	}
 	for _, tt := range tests {
@@ -161,21 +181,6 @@ func TestArgsErrors(t *testing.T) {
 		spec    harness.LaunchSpec
 		wantErr string
 	}{
-		{
-			name:    "KindProcess without provisioned port",
-			spec:    harness.LaunchSpec{Kind: harness.KindProcess, Options: Options{}},
-			wantErr: `opencode: internal error: server port not provisioned`,
-		},
-		{
-			name:    "KindAgent without provisioned port",
-			spec:    harness.LaunchSpec{Kind: harness.KindAgent, Options: Options{}},
-			wantErr: `opencode: internal error: server port not provisioned`,
-		},
-		{
-			name:    "KindSession without provisioned port",
-			spec:    harness.LaunchSpec{Kind: harness.KindSession, Options: Options{}},
-			wantErr: `opencode: internal error: server port not provisioned`,
-		},
 		{
 			name:    "SessionPinned",
 			spec:    harness.LaunchSpec{Kind: harness.KindTask, Options: Options{}, Session: harness.SessionState{Mode: harness.SessionPinned, ID: "x"}},
@@ -297,5 +302,23 @@ func TestEnvNeitherReturnsNil(t *testing.T) {
 	}
 	if env != nil {
 		t.Errorf("got %v, want nil", env)
+	}
+}
+
+// TestEnvNeverEmitsServerPassword locks the deletion of the resident
+// `opencode serve` machinery: no Options field can populate
+// OPENCODE_SERVER_PASSWORD anymore, so Env must never emit it, even when
+// every other overlay knob (permission + LeoMCP) is populated.
+func TestEnvNeverEmitsServerPassword(t *testing.T) {
+	spec := harness.LaunchSpec{Kind: harness.KindTask, Options: Options{
+		Permission: map[string]any{"bash": "deny"},
+		LeoMCP:     &LeoMCPBridge{Command: []string{"leo", "mcp-server"}},
+	}}
+	env, err := Opencode{}.Env(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := env["OPENCODE_SERVER_PASSWORD"]; ok {
+		t.Errorf("Env() emitted OPENCODE_SERVER_PASSWORD = %q, want it gone entirely", env["OPENCODE_SERVER_PASSWORD"])
 	}
 }

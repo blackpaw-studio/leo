@@ -11,7 +11,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
-	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 	"github.com/blackpaw-studio/leo/internal/hooks"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
@@ -126,10 +125,8 @@ func sessionLeoMCPEnv(cfg *config.Config, sessionName, webToken string) (map[str
 //   - codex: TurnDriver has no resident process — turns spawn per message via
 //     the daemon's harness-aware injector (wired from the same []SessionSpec
 //     in service.defaultSupervisedExec). Nothing to supervise here.
-//   - opencode: a resident `opencode serve` restart loop, structurally
-//     parallel to the claude one but without the Stop hook (opencode has no
-//     equivalent) and with QuickExitNone semantics — a serve crash is not a
-//     poisoned conversation, so the stored session id and args survive it.
+//   - opencode: TEMPORARY no-op, like codex above — Task 7 replaces both
+//     non-claude branches with a generic tmuxtui-driven supervise loop.
 func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec SessionSpec, homePath string, cfg *config.Config, webToken string, onSessionEnd func(int)) error {
 	switch spec.Harness {
 	case "", "claude":
@@ -137,104 +134,10 @@ func SuperviseSession(ctx context.Context, tmuxPath, claudePath string, spec Ses
 	case "codex":
 		return nil
 	case "opencode":
-		return superviseOpencodeSession(ctx, tmuxPath, spec, homePath, cfg, webToken, onSessionEnd)
+		return nil
 	default:
 		return fmt.Errorf("session %q: unsupported harness %q", spec.Name, spec.Harness)
 	}
-}
-
-// buildOpencodeSessionLaunch resolves everything superviseOpencodeSession
-// needs to launch a resident `opencode serve` for spec: harness_options are
-// decoded here (spec.HarnessOptions is the RAW map — see SessionSpec's doc
-// comment) so a config-declared `permission` map actually reaches the
-// server, matching what SessionSpecsFromConfig does for claude's own fields
-// at spec-build time. The LeoMCP bridge is wired in exactly like
-// cli.resolveProcessLaunch's opencode branch, gated by sessionLeoMCPEnv.
-// Split out from superviseOpencodeSession so it can be unit tested without
-// spawning the restart-loop goroutine.
-func buildOpencodeSessionLaunch(spec SessionSpec, homePath string, cfg *config.Config, webToken string) (args []string, env map[string]string, err error) {
-	tmuxName := SessionTmuxName(spec.Name)
-	state, err := opencodeharness.EnsureServerState(homePath, tmuxName, spec.Model)
-	if err != nil {
-		return nil, nil, fmt.Errorf("session %q: provisioning opencode server state: %w", spec.Name, err)
-	}
-	decoded, err := opencodeharness.Opencode{}.DecodeOptions(spec.HarnessOptions)
-	if err != nil {
-		return nil, nil, fmt.Errorf("session %q: decoding opencode harness options: %w", spec.Name, err)
-	}
-	opts, ok := decoded.(opencodeharness.Options)
-	if !ok {
-		return nil, nil, fmt.Errorf("session %q: opencode DecodeOptions returned %T, want opencodeharness.Options", spec.Name, decoded)
-	}
-	opts.ServerPort = state.Port
-	opts.ServerPassword = state.Password
-	if leoEnv, ok := sessionLeoMCPEnv(cfg, spec.Name, webToken); ok {
-		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-			Command: []string{"leo", "mcp-server"},
-			Env:     leoEnv,
-		}
-	}
-	launchSpec := harness.LaunchSpec{
-		Kind:      harness.KindSession,
-		Name:      spec.Name,
-		Model:     spec.Model,
-		Workspace: spec.Workdir,
-		Options:   opts,
-	}
-	args, err = opencodeharness.Opencode{}.Args(launchSpec)
-	if err != nil {
-		return nil, nil, fmt.Errorf("session %q: building opencode serve args: %w", spec.Name, err)
-	}
-	env, err = opencodeharness.Opencode{}.Env(launchSpec)
-	if err != nil {
-		return nil, nil, fmt.Errorf("session %q: building opencode env: %w", spec.Name, err)
-	}
-	return args, env, nil
-}
-
-// superviseOpencodeSession launches the restart-loop for a resident
-// `opencode serve` backing one persistent session. Port/password are
-// provisioned once via EnsureServerState (keyed by the session's tmux name,
-// stable across restarts) and rendered into the serve argv + env exports the
-// same way the process/agent spawn builders do (see cli.resolveProcessLaunch)
-// — buildOpencodeSessionLaunch IS that builder for the session case.
-func superviseOpencodeSession(ctx context.Context, tmuxPath string, spec SessionSpec, homePath string, cfg *config.Config, webToken string, onSessionEnd func(int)) error {
-	args, env, err := buildOpencodeSessionLaunch(spec, homePath, cfg, webToken)
-	if err != nil {
-		return err
-	}
-
-	// buildShell ignores resume (opencode serve has no --resume equivalent;
-	// the same argv is exec'd on every (re)spawn) but keeps the LoopSpec's
-	// func(bool) string shape.
-	buildShell := func(bool) string {
-		shellCmd := shellQuote(opencodeharness.Opencode{}.Binary())
-		for _, a := range args {
-			shellCmd += " " + shellQuote(a)
-		}
-		envExports := fmt.Sprintf("export LEO_SESSION_NAME=%s; export LEO_HOME=%s;",
-			shellQuote(spec.Name), shellQuote(homePath))
-		for k, v := range env {
-			envExports += fmt.Sprintf(" export %s=%s;", k, shellQuote(v))
-		}
-		for k, v := range spec.Env {
-			envExports += fmt.Sprintf(" export %s=%s;", k, shellQuote(v))
-		}
-		return envExports + " exec " + shellCmd
-	}
-	loop := LoopSpec{
-		Name:        spec.Name,
-		SessionName: SessionTmuxName(spec.Name),
-		Workdir:     spec.Workdir,
-		ShellCmd:    buildShell,
-		// QuickExitNone semantics: a crashed `opencode serve` is not a
-		// poisoned conversation — the stored session id must survive
-		// restarts, unlike claude's OnQuickExit below.
-		OnQuickExit:  func() {},
-		OnSessionEnd: onSessionEnd,
-	}
-	go runSuperviseLoop(ctx, tmuxPath, loop)
-	return nil
 }
 
 // superviseClaudeSession is the original tmux-hosted claude restart loop,

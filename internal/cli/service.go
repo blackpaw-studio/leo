@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
@@ -347,8 +346,7 @@ func processLeoMCPEnv(cfg *config.Config, name, webToken string) (map[string]str
 // harness.Harness + fully-populated harness.LaunchSpec, stopping just short of
 // calling h.Args(spec). Split out from buildProcessArgs so tests can assert
 // on spec.Options (e.g. a codex/opencode LeoMCP bridge) without needing
-// Args() to succeed — codex/opencode still refuse KindProcess launches until
-// their session drivers land.
+// Args() to succeed.
 func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessConfig, webToken string) (harness.Harness, harness.LaunchSpec, error) {
 	h, err := harness.Get(cfg.ProcessHarness(proc))
 	if err != nil {
@@ -399,12 +397,6 @@ func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessCo
 				Env:     leoEnv,
 			}
 		}
-		state, err := opencodeharness.EnsureServerState(cfg.HomePath, agent.SessionName(name), spec.Model)
-		if err != nil {
-			return h, harness.LaunchSpec{}, fmt.Errorf("provisioning opencode server state: %w", err)
-		}
-		opts.ServerPort = state.Port
-		opts.ServerPassword = state.Password
 		spec.Options = opts
 	default:
 		return h, harness.LaunchSpec{}, fmt.Errorf("harness %q returned unsupported options type %T", h.Name(), decoded)
@@ -419,10 +411,9 @@ func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessCo
 // to offer); see processLeoMCPEnv.
 //
 // The second return is the harness's env overlay (h.Env(spec)) — e.g.
-// OPENCODE_SERVER_PASSWORD/OPENCODE_CONFIG_CONTENT for opencode — meant to be
-// merged as the BASE layer under the process's own env (mergeHarnessEnv(harnessEnv,
-// procEnv)) so config-provided env always wins on collision. Nil for
-// claude/codex.
+// OPENCODE_CONFIG_CONTENT for opencode — meant to be merged as the BASE
+// layer under the process's own env (mergeHarnessEnv(harnessEnv, procEnv))
+// so config-provided env always wins on collision. Nil for claude/codex.
 func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig, webToken string) ([]string, map[string]string) {
 	h, spec, err := resolveProcessLaunch(cfg, name, proc, webToken)
 	if err != nil {
