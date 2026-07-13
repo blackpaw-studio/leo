@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -24,6 +26,12 @@ type LoopSpec struct {
 	// state. Optional.
 	OnQuickExit  func()
 	OnSessionEnd func(restartCount int) // optional callback after each end
+	// PreLaunch runs immediately before every tmux new-session spawn (fresh
+	// and restart alike). Optional — nil means no hook. Errors are the
+	// caller's concern to log; a failure here never aborts the spawn (e.g.
+	// codex's workspace-trust hook degrading to "the TUI shows its trust
+	// dialog" is preferable to blocking the restart loop entirely).
+	PreLaunch func() error
 }
 
 // loopExecCommand is the seam tests replace for tmux invocations made by
@@ -50,6 +58,12 @@ func runSuperviseLoop(ctx context.Context, tmuxPath string, spec LoopSpec) {
 		}
 		// kill any stale session
 		_ = loopExecCommand(tmuxPath, "-L", "leo", "kill-session", "-t", tmux.Target(spec.SessionName)).Run()
+
+		if spec.PreLaunch != nil {
+			if err := spec.PreLaunch(); err != nil {
+				fmt.Fprintf(os.Stderr, "[%s] pre-launch: %v\n", spec.Name, err)
+			}
+		}
 
 		// new-session
 		start := time.Now()

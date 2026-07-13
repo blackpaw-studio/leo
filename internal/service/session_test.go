@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"os/exec"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 func TestSessionSpecBuildArgs(t *testing.T) {
@@ -325,17 +329,169 @@ func TestSessionSpecsFromConfigDefaultsWorkspace(t *testing.T) {
 	}
 }
 
-// TestSuperviseSessionCodexRegistersNothing verifies that a codex session has
-// no resident tmux process to supervise: SuperviseSession returns
-// immediately (nil error) without spawning a restart-loop goroutine. The
-// session still exists as stored state + driver dispatch, reached by the
-// daemon's harness-aware injector, not by anything this call registers.
-func TestSuperviseSessionCodexRegistersNothing(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// runLoopForTest drives runSuperviseLoop under the test's own goroutine (the
+// same pattern superviseloop_test.go uses for claude), so cancel+<-done gives
+// a genuine synchronization point before the test returns — critical for
+// -race, since SuperviseSession's own "go runSuperviseLoop(...)" internal
+// goroutine gives the caller no such handle.
+func runLoopForTest(t *testing.T, ctx context.Context, tmuxPath string, loop LoopSpec) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSuperviseLoop(ctx, tmuxPath, loop)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("runSuperviseLoop did not exit after cancel")
+		}
+	})
+}
+
+// waitForNewSessionCmd polls newSessionCmds until at least one entry is
+// present, or fails the test after a deadline.
+func waitForNewSessionCmd(t *testing.T, mu *sync.Mutex, newSessionCmds *[]string) string {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(*newSessionCmds)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("no new-session invocation within deadline")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return (*newSessionCmds)[0]
+}
+
+// TestSuperviseSessionCodexSpawnsTUILoop verifies a codex session now gets a
+// real resident-TUI supervise loop (Task 7), not the old turn-based no-op:
+// buildTUISessionLoop must produce a LoopSpec whose new-session invocation
+// runs the codex binary with its TUI argv, exactly like a claude session.
+func TestSuperviseSessionCodexSpawnsTUILoop(t *testing.T) {
+	orig := loopExecCommand
+	t.Cleanup(func() { loopExecCommand = orig })
+	var mu sync.Mutex
+	var newSessionCmds []string
+	loopExecCommand = func(name string, args ...string) *exec.Cmd {
+		if hasArg(args, "has-session") {
+			return exec.Command("false") // report gone so the loop doesn't spin forever
+		}
+		if hasArg(args, "new-session") {
+			mu.Lock()
+			newSessionCmds = append(newSessionCmds, strings.Join(args, " "))
+			mu.Unlock()
+		}
+		return exec.Command("true")
+	}
+
 	spec := SessionSpec{Name: "cx", Workdir: t.TempDir(), Harness: "codex"}
-	if err := SuperviseSession(ctx, "unused-tmux-path", "unused-claude-path", spec, t.TempDir(), nil, "", nil); err != nil {
-		t.Fatalf("SuperviseSession(codex) = %v, want nil", err)
+	loop, err := buildTUISessionLoop(spec, t.TempDir(), nil, "", nil)
+	if err != nil {
+		t.Fatalf("buildTUISessionLoop(codex) = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runLoopForTest(t, ctx, "tmux", loop)
+	t.Cleanup(cancel)
+
+	cmd := waitForNewSessionCmd(t, &mu, &newSessionCmds)
+	if !strings.Contains(cmd, "codex") {
+		t.Fatalf("new-session command does not reference the codex binary: %s", cmd)
+	}
+	if !strings.Contains(cmd, "'-a' 'never'") {
+		t.Fatalf("new-session command missing codex TUI argv: %s", cmd)
+	}
+}
+
+// TestSuperviseSessionCodexResumesStoredID verifies that a stored session id
+// surfaces as resume tokens on the NEXT loop iteration's shell command, via
+// codex's SessionArgsRefresher.
+func TestSuperviseSessionCodexResumesStoredID(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	if err := store.Set("session:cx2", "thread-abc"); err != nil {
+		t.Fatalf("seeding stored session id: %v", err)
+	}
+
+	orig := loopExecCommand
+	t.Cleanup(func() { loopExecCommand = orig })
+	var mu sync.Mutex
+	var newSessionCmds []string
+	loopExecCommand = func(name string, args ...string) *exec.Cmd {
+		if hasArg(args, "has-session") {
+			return exec.Command("false")
+		}
+		if hasArg(args, "new-session") {
+			mu.Lock()
+			newSessionCmds = append(newSessionCmds, strings.Join(args, " "))
+			mu.Unlock()
+		}
+		return exec.Command("true")
+	}
+
+	spec := SessionSpec{Name: "cx2", Workdir: t.TempDir(), Harness: "codex"}
+	loop, err := buildTUISessionLoop(spec, home, nil, "", nil)
+	if err != nil {
+		t.Fatalf("buildTUISessionLoop(codex) = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runLoopForTest(t, ctx, "tmux", loop)
+	t.Cleanup(cancel)
+
+	cmd := waitForNewSessionCmd(t, &mu, &newSessionCmds)
+	if !strings.Contains(cmd, "'resume' 'thread-abc'") {
+		t.Fatalf("first spawn should resume the stored id, got: %s", cmd)
+	}
+}
+
+// TestSuperviseSessionOpencodeSpawnsTUILoop mirrors the codex test for
+// opencode, confirming superviseTUISession/buildTUISessionLoop is generic
+// over the harness (no per-harness-name special-casing beyond the LeoMCP
+// bridge wiring).
+func TestSuperviseSessionOpencodeSpawnsTUILoop(t *testing.T) {
+	orig := loopExecCommand
+	t.Cleanup(func() { loopExecCommand = orig })
+	var mu sync.Mutex
+	var newSessionCmds []string
+	loopExecCommand = func(name string, args ...string) *exec.Cmd {
+		if hasArg(args, "has-session") {
+			return exec.Command("false")
+		}
+		if hasArg(args, "new-session") {
+			mu.Lock()
+			newSessionCmds = append(newSessionCmds, strings.Join(args, " "))
+			mu.Unlock()
+		}
+		return exec.Command("true")
+	}
+
+	spec := SessionSpec{Name: "oc", Workdir: t.TempDir(), Harness: "opencode", Model: "anthropic/claude-sonnet-4-5"}
+	loop, err := buildTUISessionLoop(spec, t.TempDir(), nil, "", nil)
+	if err != nil {
+		t.Fatalf("buildTUISessionLoop(opencode) = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runLoopForTest(t, ctx, "tmux", loop)
+	t.Cleanup(cancel)
+
+	cmd := waitForNewSessionCmd(t, &mu, &newSessionCmds)
+	if !strings.Contains(cmd, "opencode") {
+		t.Fatalf("new-session command does not reference the opencode binary: %s", cmd)
+	}
+	if !strings.Contains(cmd, "'--model' 'anthropic/claude-sonnet-4-5'") {
+		t.Fatalf("new-session command missing opencode model flag: %s", cmd)
 	}
 }
 
@@ -348,11 +504,14 @@ func TestSuperviseSessionUnknownHarnessErrors(t *testing.T) {
 	}
 }
 
-// TestBuildSessionDispatchCodexFillsTurnArgs verifies the codex branch
-// decodes the session's raw harness_options and renders TurnArgs via the
-// adapter's Args(), and that the handle's routing fields (TmuxSession,
-// IDs) are populated.
-func TestBuildSessionDispatchCodexFillsTurnArgs(t *testing.T) {
+// TestBuildSessionDispatchCodexIsHandleOnly verifies the dispatch table now
+// carries only routing coordinates for codex — no TurnArgs/argv building.
+// Codex is DriveTmux like every other non-claude harness: Inject pastes into
+// the live tmux pane via the handle's TmuxSession, not per-message argv. The
+// resident TUI's own argv (including the LeoMCP bridge) is built by
+// superviseTUISession, not here — see TestSuperviseSessionCodex* below for
+// that coverage.
+func TestBuildSessionDispatchCodexIsHandleOnly(t *testing.T) {
 	home := t.TempDir()
 	specs := []SessionSpec{
 		{
@@ -374,9 +533,11 @@ func TestBuildSessionDispatchCodexFillsTurnArgs(t *testing.T) {
 	if d.Handle.IDs == nil {
 		t.Fatalf("expected a non-nil IDs store")
 	}
-	joined := strings.Join(d.Handle.TurnArgs, " ")
-	if !strings.Contains(joined, "--sandbox workspace-write") || !strings.Contains(joined, "--model gpt-5.3-codex") {
-		t.Fatalf("TurnArgs = %v, want sandbox+model rendered", d.Handle.TurnArgs)
+	if len(d.Handle.TurnArgs) != 0 {
+		t.Fatalf("expected no TurnArgs (codex is DriveTmux, routed by TmuxSession), got %v", d.Handle.TurnArgs)
+	}
+	if d.Handle.TmuxSession != SessionTmuxName("cx") {
+		t.Fatalf("TmuxSession = %q, want %q", d.Handle.TmuxSession, SessionTmuxName("cx"))
 	}
 }
 
@@ -395,8 +556,8 @@ func TestBuildSessionDispatchSkipsClaude(t *testing.T) {
 }
 
 // TestBuildSessionDispatchOpencodeNoTurnArgs verifies the opencode branch
-// builds a dispatch entry without TurnArgs — ServerDriver.Inject resolves
-// the server itself via LoadServerState(HomePath, TmuxSession).
+// builds a dispatch entry without TurnArgs — Inject pastes into the live
+// tmux pane via TmuxSession, same as codex.
 func TestBuildSessionDispatchOpencodeNoTurnArgs(t *testing.T) {
 	home := t.TempDir()
 	specs := []SessionSpec{{Name: "oc", Workdir: "/tmp/oc", Harness: "opencode"}}
@@ -413,49 +574,89 @@ func TestBuildSessionDispatchOpencodeNoTurnArgs(t *testing.T) {
 	}
 }
 
-// TestBuildSessionDispatchCodexWiresLeoMCPBridgeWhenGated verifies that a
-// codex session's TurnArgs carry the leo MCP bridge's `-c mcp_servers.leo.*`
-// overrides — including default_tools_approval_mode="approve", required or
-// codex auto-cancels every MCP tool call — when web is enabled and a token
-// is available, mirroring cli.resolveProcessLaunch's codex branch.
-func TestBuildSessionDispatchCodexWiresLeoMCPBridgeWhenGated(t *testing.T) {
-	home := t.TempDir()
+// TestSuperviseSessionCodexWiresLeoMCPBridgeWhenGated verifies that a codex
+// session's spawned TUI argv carries the leo MCP bridge's
+// `-c mcp_servers.leo.*` overrides — including
+// default_tools_approval_mode="approve", required or codex auto-cancels
+// every MCP tool call — when web is enabled and a token is available, and
+// that the literal LEO_* values are exported into the spawned shell's env
+// (codex's bridge EnvVars field is only a parent-env name whitelist).
+func TestSuperviseSessionCodexWiresLeoMCPBridgeWhenGated(t *testing.T) {
+	orig := loopExecCommand
+	t.Cleanup(func() { loopExecCommand = orig })
+	var mu sync.Mutex
+	var newSessionCmds []string
+	loopExecCommand = func(name string, args ...string) *exec.Cmd {
+		if hasArg(args, "has-session") {
+			return exec.Command("false")
+		}
+		if hasArg(args, "new-session") {
+			mu.Lock()
+			newSessionCmds = append(newSessionCmds, strings.Join(args, " "))
+			mu.Unlock()
+		}
+		return exec.Command("true")
+	}
+
 	cfg := &config.Config{Web: config.WebConfig{Enabled: true, Port: 4180}}
-	specs := []SessionSpec{{Name: "cx", Workdir: "/tmp/cx", Harness: "codex"}}
-	dispatch := BuildSessionDispatch(specs, home, cfg, "tok-123")
-	d, ok := dispatch[SessionTmuxName("cx")]
-	if !ok {
-		t.Fatalf("expected a dispatch entry for %q", SessionTmuxName("cx"))
+	spec := SessionSpec{Name: "cx3", Workdir: t.TempDir(), Harness: "codex"}
+	loop, err := buildTUISessionLoop(spec, t.TempDir(), cfg, "tok-123", nil)
+	if err != nil {
+		t.Fatalf("buildTUISessionLoop(codex) = %v, want nil", err)
 	}
-	joined := strings.Join(d.Handle.TurnArgs, " ")
-	if !strings.Contains(joined, `mcp_servers.leo.default_tools_approval_mode="approve"`) {
-		t.Fatalf("TurnArgs missing leo MCP bridge: %v", d.Handle.TurnArgs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runLoopForTest(t, ctx, "tmux", loop)
+	t.Cleanup(cancel)
+
+	cmd := waitForNewSessionCmd(t, &mu, &newSessionCmds)
+	if !strings.Contains(cmd, `mcp_servers.leo.default_tools_approval_mode="approve"`) {
+		t.Fatalf("new-session command missing leo MCP bridge: %s", cmd)
 	}
-	if !strings.Contains(joined, `mcp_servers.leo.command="leo"`) {
-		t.Fatalf("TurnArgs missing leo MCP command override: %v", d.Handle.TurnArgs)
+	if !strings.Contains(cmd, "LEO_PROCESS_NAME='session:cx3'") {
+		t.Fatalf("new-session command missing exported LEO_PROCESS_NAME: %s", cmd)
 	}
-	if got := d.Handle.Env["LEO_PROCESS_NAME"]; got != "session:cx" {
-		t.Fatalf("handle.Env[LEO_PROCESS_NAME] = %q, want %q", got, "session:cx")
-	}
-	if d.Handle.Env["LEO_API_TOKEN"] != "tok-123" {
-		t.Fatalf("handle.Env[LEO_API_TOKEN] = %q, want %q", d.Handle.Env["LEO_API_TOKEN"], "tok-123")
+	if !strings.Contains(cmd, "LEO_API_TOKEN='tok-123'") {
+		t.Fatalf("new-session command missing exported LEO_API_TOKEN: %s", cmd)
 	}
 }
 
-// TestBuildSessionDispatchCodexNoBridgeWhenTokenEmpty verifies the LeoMCP
-// bridge is omitted when no web token is available — the same gate
+// TestSuperviseSessionCodexNoBridgeWhenTokenEmpty verifies the LeoMCP bridge
+// is omitted when no web token is available — the same gate
 // resolveProcessLaunch uses (cfg.Web.Enabled && webToken != "").
-func TestBuildSessionDispatchCodexNoBridgeWhenTokenEmpty(t *testing.T) {
-	home := t.TempDir()
-	cfg := &config.Config{Web: config.WebConfig{Enabled: true, Port: 4180}}
-	specs := []SessionSpec{{Name: "cx", Workdir: "/tmp/cx", Harness: "codex"}}
-	dispatch := BuildSessionDispatch(specs, home, cfg, "")
-	d := dispatch[SessionTmuxName("cx")]
-	joined := strings.Join(d.Handle.TurnArgs, " ")
-	if strings.Contains(joined, "mcp_servers.leo") {
-		t.Fatalf("TurnArgs should not carry a leo MCP bridge without a token: %v", d.Handle.TurnArgs)
+func TestSuperviseSessionCodexNoBridgeWhenTokenEmpty(t *testing.T) {
+	orig := loopExecCommand
+	t.Cleanup(func() { loopExecCommand = orig })
+	var mu sync.Mutex
+	var newSessionCmds []string
+	loopExecCommand = func(name string, args ...string) *exec.Cmd {
+		if hasArg(args, "has-session") {
+			return exec.Command("false")
+		}
+		if hasArg(args, "new-session") {
+			mu.Lock()
+			newSessionCmds = append(newSessionCmds, strings.Join(args, " "))
+			mu.Unlock()
+		}
+		return exec.Command("true")
 	}
-	if len(d.Handle.Env) != 0 {
-		t.Fatalf("handle.Env should stay empty without a token, got %+v", d.Handle.Env)
+
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true, Port: 4180}}
+	spec := SessionSpec{Name: "cx4", Workdir: t.TempDir(), Harness: "codex"}
+	loop, err := buildTUISessionLoop(spec, t.TempDir(), cfg, "", nil)
+	if err != nil {
+		t.Fatalf("buildTUISessionLoop(codex) = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runLoopForTest(t, ctx, "tmux", loop)
+	t.Cleanup(cancel)
+
+	cmd := waitForNewSessionCmd(t, &mu, &newSessionCmds)
+	if strings.Contains(cmd, "mcp_servers.leo") {
+		t.Fatalf("new-session command should not carry a leo MCP bridge without a token: %s", cmd)
+	}
+	if strings.Contains(cmd, "LEO_API_TOKEN") {
+		t.Fatalf("new-session command should not export LEO_API_TOKEN without a token: %s", cmd)
 	}
 }
