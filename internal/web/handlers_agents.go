@@ -120,6 +120,78 @@ func (s *Server) handleAPIAgentStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
 
+// handleAPIAgentSuspend suspends a running agent via JSON.
+// POST /api/agent/suspend  {name: "agent-name"}
+//
+// A running agent resolves normally, so shorthand queries work here just like
+// stop. (Resume, by contrast, cannot resolve — see handleAPIAgentResume.)
+func (s *Server) handleAPIAgentSuspend(w http.ResponseWriter, r *http.Request) {
+	if s.agentSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "name is required"})
+		return
+	}
+
+	rec, status, err := resolveAgentQuery(s.agentSvc, req.Name)
+	if err != nil {
+		writeJSON(w, status, apiResponse{Error: err.Error()})
+		return
+	}
+	if err := s.agentSvc.Suspend(rec.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// handleAPIAgentResume resumes a suspended agent via JSON.
+// POST /api/agent/resume  {name: "agent-name"}
+//
+// Unlike stop/suspend this does NOT resolve shorthand: Manager.Resolve matches
+// live agents only, and a suspended agent is not live. Callers pass the exact
+// agent name; Resume looks it up in the agentstore itself.
+func (s *Server) handleAPIAgentResume(w http.ResponseWriter, r *http.Request) {
+	if s.agentSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "name is required"})
+		return
+	}
+
+	rec, err := s.agentSvc.Resume(req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{
+		"name":   rec.Name,
+		"status": rec.Status,
+	}})
+}
+
 // handleAPIAgentList returns all running ephemeral agents.
 // GET /api/agent/list
 func (s *Server) handleAPIAgentList(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +282,47 @@ func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", rec.Name))
+}
+
+// handleWebAgentSuspend suspends a running agent via the web UI (form post),
+// then re-renders the agents partial so the status flips to "suspended" and the
+// action becomes Resume. Both this and handleWebAgentResume take the canonical
+// name straight from the path — the agents template only ever posts {{.Name}},
+// and unlike stop/rename we cannot round-trip through resolveAgentQuery for the
+// resume case (Manager.Resolve matches live agents only, and a suspended agent
+// is not live). The Suspend/Resume methods look up the agentstore themselves.
+//
+// On success the button's hx-target (#agents-content, outerHTML swap) receives
+// the re-rendered list; the error path retargets to #flash-container, mirroring
+// handleWebAgentRename's swap strategy.
+func (s *Server) handleWebAgentSuspend(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if s.agentSvc == nil {
+		s.renderFlashToContainer(w, "error", "Agent service not available")
+		return
+	}
+	if err := s.agentSvc.Suspend(name); err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to suspend agent: %v", err))
+		return
+	}
+	// Re-render so the suspended agent shows its new status and Resume button.
+	s.handlePartialAgents(w, r)
+}
+
+// handleWebAgentResume resumes a suspended agent via the web UI (form post),
+// rejoining its prior session, then re-renders the agents partial so the status
+// flips back to running. See handleWebAgentSuspend for the name/swap rationale.
+func (s *Server) handleWebAgentResume(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if s.agentSvc == nil {
+		s.renderFlashToContainer(w, "error", "Agent service not available")
+		return
+	}
+	if _, err := s.agentSvc.Resume(name); err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to resume agent: %v", err))
+		return
+	}
+	s.handlePartialAgents(w, r)
 }
 
 // renameErrorStatus classifies a Manager.Rename error into an HTTP status,

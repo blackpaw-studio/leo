@@ -523,22 +523,55 @@ func (m *Manager) List() []Record {
 // checkout while RestoreAgents knows not to resurrect the agent on daemon
 // restart; operators can always call Prune explicitly to drop the worktree
 // and record in one step.
+//
+// Stop also terminates a suspended agent: a suspended (or otherwise dead) agent
+// has no supervised process, so StopAgent would return "not found". We only
+// call StopAgent when the agent is actually live and otherwise fall straight
+// through to record cleanup, clearing Suspended so the agent shows as stopped
+// and never auto-resumes. A name that is neither live nor persisted is a real
+// "not found".
 func (m *Manager) Stop(name string) error {
-	if err := m.sup.StopAgent(name); err != nil {
-		return err
+	_, live := m.sup.EphemeralAgents()[name]
+	if live {
+		if err := m.sup.StopAgent(name); err != nil {
+			return err
+		}
 	}
+
+	// Config/store failures are swallowed only when the process was live: it's
+	// already been killed, so cleanup is best-effort (a parse error leaves the
+	// record for Prune to surface). When the agent is NOT live, the record
+	// lookup is the whole operation — a failure there must be reported, not
+	// silently treated as success.
 	cfg, err := m.cfgLoader()
 	if err != nil {
-		return nil
+		if live {
+			return nil
+		}
+		return fmt.Errorf("loading config to stop agent %q: %w", name, err)
 	}
 	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
-	if err != nil {
-		// Best-effort: a missing file means nothing to remove. A parse
-		// error leaves the record in place; Prune will surface it.
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if live {
+			return nil
+		}
+		return fmt.Errorf("loading agentstore to stop agent %q: %w", name, err)
+	}
+	rec, ok := stored[name]
+	if !ok {
+		if !live {
+			// Nothing to stop: not running and never persisted (or the store
+			// file is missing, which stored=nil already reflects).
+			return fmt.Errorf("agent %q not found", name)
+		}
+		// Live but record-less (a legitimate shared, unpersisted agent) — the
+		// process is already killed; nothing left to clean up.
+		agentstore.Remove(cfg.HomePath, name)
 		return nil
 	}
-	if rec, ok := stored[name]; ok && rec.Branch != "" {
+	if rec.Branch != "" {
 		rec.Stopped = true
+		rec.Suspended = false
 		if saveErr := agentstore.Save(cfg.HomePath, rec); saveErr != nil {
 			log.Printf("agent %q stopped but marking Stopped=true failed: %v — agent may be resurrected on daemon restart", name, saveErr)
 		}
