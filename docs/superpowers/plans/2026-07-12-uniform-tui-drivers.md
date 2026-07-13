@@ -12,7 +12,7 @@
 
 - Gates on EVERY task commit: `go test -race ./...`, `make lint`, `make e2e` (build-tagged; `go test ./...` does NOT run it), `golangci-lint run ./...` (v2.12.2, brew), `~/go/bin/gosec -exclude=G104,G204,G304,G306,G602,G702,G703,G704 -quiet ./...` — all clean.
 - CI runners have NO tmux and NO harness binaries: tests must stub the existing seams (`injectPromptFn`, `locateTmuxFn`, `execCommand`, `lookPath`, `loopExecCommand`, `supervisedExecFn`) — never invoke real binaries.
-- Existing claude behavior is byte-identical: claude inject/attach/supervise/quick-exit tests pass UNMODIFIED. If a claude test needs changing, stop — the design is being violated.
+- Existing claude BEHAVIOR is byte-identical: claude's behavioral assertions (which dialog→which key, which args→which quick-exit action) and the service-layer supervise/inject tests stay unmodified. Task 4 relocates claude's driver methods into the shared driver, so the claude driver-PACKAGE unit tests may be rewired to the relocated funcs (`DialogKey`, `RecoverQuickExitArgs`, tmuxtui seams) with IDENTICAL expected values. If a behavioral expectation itself must change, stop — the design is being violated. (Pre-flight resolution, 2026-07-12.)
 - Do NOT restart any leo service. Do NOT touch `~/.leo/leo.yaml` or running agents.
 - Commit format `<type>: <description>`, no attribution.
 - Non-persistent scheduled tasks (KindTask) are UNCHANGED for all three harnesses (`claude -p` / `codex exec --json` / `opencode run --format json` + ParseEvents).
@@ -657,7 +657,7 @@ func discoverSessionID(_ context.Context, h harness.SessionHandle, since time.Ti
 			return nil
 		}
 		id, cwd, ok := readRolloutMeta(path)
-		if !ok || !samePath(cwd, h.Workspace) {
+		if !ok || !harness.SamePath(cwd, h.Workspace) {
 			return nil
 		}
 		matches++
@@ -693,14 +693,28 @@ func readRolloutMeta(path string) (id, cwd string, ok bool) {
 	return meta.Payload.ID, meta.Payload.Cwd, meta.Payload.ID != "" && meta.Payload.Cwd != ""
 }
 
-// samePath reports whether a and b refer to the same filesystem location.
-// A plain Clean comparison is insufficient: codex records its own
-// os.Getwd()-derived path, and on macOS /tmp symlinks to /private/tmp.
-// Falls back to the Clean comparison when EvalSymlinks fails on either side
-// (e.g. the dir no longer exists) — a missed match here is tolerable, the
-// caller just keeps polling. (Same shape as opencode's samePath, which
-// stays in its own package.)
-func samePath(a, b string) bool {
+// (Path comparison uses the shared harness.SamePath — see Step 3a. This is
+// a pre-flight change from the original plan text: the symlink-aware compare
+// is hoisted to internal/harness rather than duplicated in the codex and
+// opencode packages.)
+```
+
+- [ ] **Step 3a: Hoist the symlink-aware path compare to `internal/harness`** (pre-flight decision, replaces the duplicate-samePath instruction). Create `internal/harness/paths.go`:
+
+```go
+package harness
+
+import "path/filepath"
+
+// SamePath reports whether a and b refer to the same filesystem location.
+// A plain Clean comparison is insufficient: a harness reports its own
+// os.Getwd()-derived path, and on macOS /tmp symlinks to /private/tmp — a
+// leo workspace configured as /tmp/... would otherwise never match the
+// harness's self-reported /private/tmp/... Falls back to the Clean
+// comparison when EvalSymlinks fails on either side (e.g. the dir no longer
+// exists) rather than erroring, since a missed match is tolerable to
+// callers (they keep polling).
+func SamePath(a, b string) bool {
 	if filepath.Clean(a) == filepath.Clean(b) {
 		return true
 	}
@@ -712,6 +726,8 @@ func samePath(a, b string) bool {
 	return ra == rb
 }
 ```
+
+  Add `internal/harness/paths_test.go` covering: identical Clean paths → true; /tmp vs /private/tmp symlink equivalence on the real temp dir → true; genuinely different dirs → false; non-existent path with no Clean match → false. Then `discoverSessionID` calls `harness.SamePath(cwd, h.Workspace)` (no local `samePath`).
 
   Delete from the old driver.go: `TurnDriver`, `execCommand`, `turnWaitDelay`, `turnMu`, `aborts`, `lockFor`, `runTurn`, `transcriptPath`, `appendTranscript`, `envSlice`, the old `Attach`/`AbortTurn`. Delete `testdata` fixtures that only served TurnDriver tests. Note `ParseEvents` (parse.go) stays — the KindTask path uses it.
   - `options.go`: update the `"approval"` rejection message to `option %q is not supported: leo always launches codex with approval policy "never" (unattended sessions)`. `LeoMCPBridge`/`configArgs` unchanged (verified to work at TUI launch).
@@ -764,7 +780,7 @@ func (Opencode) Driver() harness.SessionDriver {
 }
 ```
 
-  - `driver.go`: keep `execCommand` seam, `latestSessionIDForDir` (add a `sinceMillis int64` parameter filtering `e.Created >= sinceMillis`), and `samePath`. Add `refreshSessionArgs`, `recoverQuickExitArgs`, `discoverSessionID` (thin wrapper: `latestSessionIDForDir(ctx, h.Workspace, since.UnixMilli())`, returning `("", nil)` on no match). Delete: `ServerDriver`, `lookPath`, `turnMu`, `aborts`, `lockFor`, health-poll machinery, `Inject`, `Attach`, `Start`, `AbortTurn`, `waitForHealth`, `isHealthy`, `serverBasicAuthUser`, `turnWaitDelay`.
+  - `driver.go`: keep `execCommand` seam and `latestSessionIDForDir` (add a `sinceMillis int64` parameter filtering `e.Created >= sinceMillis`). DELETE the local `samePath` and switch its call site in `latestSessionIDForDir` to `harness.SamePath` (hoisted to internal/harness in Task 5 Step 3a); drop `samePath`'s own test. Add `refreshSessionArgs`, `recoverQuickExitArgs`, `discoverSessionID` (thin wrapper: `latestSessionIDForDir(ctx, h.Workspace, since.UnixMilli())`, returning `("", nil)` on no match). Delete: `ServerDriver`, `lookPath`, `turnMu`, `aborts`, `lockFor`, health-poll machinery, `Inject`, `Attach`, `Start`, `AbortTurn`, `waitForHealth`, `isHealthy`, `serverBasicAuthUser`, `turnWaitDelay`.
   - `options.go`: delete `ServerPort`/`ServerPassword` fields and `Env()`'s password branch; update doc comments.
   - `internal/agent/args.go`: in the `opencodeharness.Options` case delete the `EnsureServerState` block (keep the LeoMCP bridge wiring); fix its doc comment.
   - `internal/service/session.go`: change `SuperviseSession`'s `case "opencode":` to `return nil` (temporary — Task 7 replaces both non-claude branches with the generic loop) and delete `buildOpencodeSessionLaunch` + `superviseOpencodeSession` + their tests.
