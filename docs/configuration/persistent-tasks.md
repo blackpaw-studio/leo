@@ -156,10 +156,18 @@ but completion detection is different:
   to report completion, a codex/opencode persistent-task invocation
   routed through this same pump falls through to the pump's outer timeout
   and completes via the timer (abort + `"timeout"` result) rather than a
-  real signal that the turn actually finished. This does not affect
-  ephemeral agents, which deliver messages directly and don't go through
-  this completion-tracking pump. A TUI-native turn-completion signal for
-  non-claude sessions is a deferred follow-up, not yet implemented.
+  real signal that the turn actually finished. In practice this means every
+  firing of a persistent `codex`/`opencode` session — even one where the
+  turn actually succeeded — is currently recorded as a failed run
+  (`"task: timeout"`, `handlePersistentFailure` in `internal/run/persistent.go`),
+  which triggers a false `notify_on_fail` alarm if configured, and the pump
+  sends its abort sequence (Escape, then Ctrl-C) into the live tmux pane on
+  every one of these timeouts (see the `KNOWN LIMITATION` comments in
+  `internal/daemon/session_router.go`). This does not affect ephemeral
+  agents, which deliver messages directly and don't go through this
+  completion-tracking pump, and does not affect `claude`, which has a real
+  Stop-hook signal. A TUI-native turn-completion signal for non-claude
+  sessions is a deferred follow-up, not yet implemented.
 - **`codex` has no resident session id until after the first turn.** Each
   firing targets the resident TUI (fresh on first launch, `codex resume
   <session-id>` afterward); leo discovers the session id post-hoc by
