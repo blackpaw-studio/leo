@@ -42,9 +42,12 @@ func TestInjectPromptCalls(t *testing.T) {
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
 		// Warm path: claude is ready, so the readiness probe is echoed into the
-		// input box on the first capture.
+		// input box on the first capture. The pane also already carries the
+		// body, mirroring real claude's synchronous paste render, so phase
+		// 3's confirm loop breaks on its first capture instead of exercising
+		// the full budget-expiry fallback.
 		if len(args) >= 3 && args[2] == "capture-pane" {
-			return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			return exec.Command("printf", "%s", paneWithInput(inputProbe)+"hello\nworld\n")
 		}
 		return exec.Command("true")
 	}
@@ -87,11 +90,13 @@ func TestInjectPromptProbesUntilReady(t *testing.T) {
 		got = append(got, append([]string{name}, args...))
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
-			// First two probes dropped (box empty); third probe registers.
+			// First two probes dropped (box empty); third probe registers,
+			// and the pane already carries the body so phase 3's confirm
+			// loop breaks immediately (real claude renders synchronously).
 			if captureCalls < 3 {
 				return exec.Command("printf", "%s", paneWithInput(""))
 			}
-			return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			return exec.Command("printf", "%s", paneWithInput(inputProbe)+"body\nlines\n")
 		}
 		return exec.Command("true")
 	}
@@ -172,7 +177,9 @@ func TestInjectPromptWaitsForLateSession(t *testing.T) {
 			return exec.Command("true")
 		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
-			return exec.Command("printf", "%s", paneWithInput(inputProbe)) // ready once the session exists
+			// Ready once the session exists; the pane also carries the body
+			// so phase 3's confirm loop breaks immediately.
+			return exec.Command("printf", "%s", paneWithInput(inputProbe)+"body\n")
 		}
 		return exec.Command("true")
 	}
@@ -203,7 +210,9 @@ func TestInjectPromptFallsOpenWhenInputBoxUnrecognized(t *testing.T) {
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
 		if len(args) >= 3 && args[2] == "capture-pane" {
-			return exec.Command("printf", "%s", "some unrecognized pane\nno prompt glyph anywhere\n")
+			// Includes the body so phase 3's confirm loop breaks on its
+			// first capture rather than exhausting the full budget.
+			return exec.Command("printf", "%s", "some unrecognized pane\nno prompt glyph anywhere\nbody\n")
 		}
 		return exec.Command("true")
 	}
@@ -255,6 +264,11 @@ func TestInjectPromptTUICustomProfile(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			// Carries the body so phase 3's confirm loop breaks on its
+			// first capture instead of exhausting the full budget.
+			return exec.Command("printf", "%s", "hello\n")
+		}
 		return exec.Command("true")
 	}
 	profile := Profile{
@@ -461,10 +475,21 @@ func TestInjectPromptConfirmFallsThroughToEnterOnBudgetExpiry(t *testing.T) {
 	}
 }
 
-// TestInjectPromptConfirmSkipsLoopForEmptyBody proves an empty (or
-// whitespace-only) body skips the confirm loop entirely — there is nothing to
-// confirm — and behavior is otherwise unchanged: paste once, submit once.
-func TestInjectPromptConfirmSkipsLoopForEmptyBody(t *testing.T) {
+// TestInjectPromptConfirmEmptyBodyUsesFixedDelay proves an empty (or
+// whitespace-only) body's confirm phase takes the short-needle fixed-delay
+// fallback rather than skipping confirmation altogether: there's no
+// distinctive line to derive a needle from, so submitConfirmNeedle returns
+// "" (below submitNeedleMinRunes) and the loop falls back to a bounded fixed
+// settle beat before Enter — never calling capture-pane in that fallback.
+// (Prior to the short-needle floor, an empty needle skipped confirmation
+// entirely; this test's expectation was updated accordingly — see the fix
+// report.)
+func TestInjectPromptConfirmEmptyBodyUsesFixedDelay(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 25
+	submitConfirmPoll = 2 * time.Millisecond
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
 	var got [][]string
 	captureCalls := 0
 	orig := execCommand
@@ -478,12 +503,19 @@ func TestInjectPromptConfirmSkipsLoopForEmptyBody(t *testing.T) {
 		return exec.Command("true")
 	}
 
+	start := time.Now()
 	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "   \n  ", 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
-	// Only the single phase-1 readiness capture — no confirm-loop captures.
+	elapsed := time.Since(start)
+
+	// Only the single phase-1 readiness capture — the fixed-delay fallback
+	// never calls capture-pane.
 	if captureCalls != 1 {
 		t.Fatalf("expected no confirm-loop captures for an empty body, got %d total captures: %#v", captureCalls, got)
+	}
+	if want := time.Duration(submitConfirmFallbackDelays) * submitConfirmPoll; elapsed < want {
+		t.Fatalf("expected the fixed-delay fallback to wait >= %v, took %v", want, elapsed)
 	}
 	if n := countSub(got, "paste-buffer"); n != 1 {
 		t.Fatalf("expected exactly 1 paste-buffer, got %d: %#v", n, got)
@@ -491,6 +523,98 @@ func TestInjectPromptConfirmSkipsLoopForEmptyBody(t *testing.T) {
 	last := got[len(got)-1]
 	if last[3] != "send-keys" || last[len(last)-1] != "Enter" {
 		t.Fatalf("last call must be submit Enter, got %#v", last)
+	}
+}
+
+// TestInjectPromptShortBodyUsesFixedDelayNotNeedleMatch proves a body whose
+// needle falls below submitNeedleMinRunes (e.g. "ok") does NOT rely on
+// Contains-matching against the pane — a 2-rune needle could coincidentally
+// already exist in the pane (a hint, placeholder, or prior output) before an
+// async paste actually commits, which would break the loop early and fire
+// Enter into an uncommitted paste. Instead it takes the bounded fixed delay:
+// even though every capture-pane call here (including the very first, phase
+// 1's readiness capture) already contains "ok", the confirm phase must still
+// wait out the fixed delay rather than matching on the first opportunity.
+func TestInjectPromptShortBodyUsesFixedDelayNotNeedleMatch(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 25
+	submitConfirmPoll = 5 * time.Millisecond
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			return exec.Command("printf", "%s", paneWithInput(inputProbe)+"ok\n")
+		}
+		return exec.Command("true")
+	}
+
+	start := time.Now()
+	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "ok", 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if want := time.Duration(submitConfirmFallbackDelays) * submitConfirmPoll; elapsed < want {
+		t.Fatalf("expected the fixed-delay fallback to wait >= %v, took %v (proves it did NOT break early on the coincidental \"ok\" match)", want, elapsed)
+	}
+	// Only the single phase-1 readiness capture — a Contains-matching loop
+	// would have made at least one additional capture-pane call and broken
+	// on it immediately (near-zero elapsed time) instead of waiting.
+	if captureCalls != 1 {
+		t.Fatalf("expected no confirm-loop capture-pane calls for a short body, got %d: %#v", captureCalls, got)
+	}
+	idx := enterCallIndex(got)
+	if idx != len(got)-1 {
+		t.Fatalf("Enter must be the final call, got index %d of %d: %#v", idx, len(got), got)
+	}
+}
+
+// TestInjectPromptNeedleUsesFirstNonEmptyLine proves Fix 3: the confirm-loop
+// needle is derived from the body's first NON-EMPTY line, not the literal
+// first line — a body starting with blank lines (e.g. "\n\nreal text") still
+// gets a distinctive needle and goes through the Contains-matching confirm
+// loop, instead of silently falling back to the short/empty-needle path.
+func TestInjectPromptNeedleUsesFirstNonEmptyLine(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 10
+	submitConfirmPoll = time.Millisecond
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			if captureCalls == 1 {
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			}
+			// Only matches once the pane shows the first NON-EMPTY line's
+			// text — proving the needle skipped the leading blank lines
+			// rather than deriving an empty needle from them.
+			return exec.Command("printf", "%s", "hello world this is the real content\n")
+		}
+		return exec.Command("true")
+	}
+
+	body := "\n\nhello world this is the real content"
+	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", body, 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+	if captureCalls != 2 {
+		t.Fatalf("expected exactly 2 captures (1 readiness + 1 confirm-loop match), got %d: %#v", captureCalls, got)
+	}
+	idx := enterCallIndex(got)
+	if idx != len(got)-1 {
+		t.Fatalf("Enter must be the final call, got index %d of %d: %#v", idx, len(got), got)
 	}
 }
 
@@ -566,11 +690,13 @@ func TestInjectPromptWaitsThroughMenu(t *testing.T) {
 		got = append(got, append([]string{name}, args...))
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
-			// First two captures show a blocking menu; then the real input box.
+			// First two captures show a blocking menu; then the real input
+			// box, already carrying the body so phase 3's confirm loop
+			// breaks on its first capture instead of exhausting the budget.
 			if captureCalls < 3 {
 				return exec.Command("printf", "%s", "  Try the new fullscreen renderer?\n  ❯ 1. Yes, try it\n    2. Not now\n  Enter to confirm · Esc to cancel\n")
 			}
-			return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			return exec.Command("printf", "%s", paneWithInput(inputProbe)+"body\n")
 		}
 		return exec.Command("true")
 	}

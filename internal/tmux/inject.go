@@ -35,10 +35,28 @@ var (
 	submitConfirmPoll     = 200 * time.Millisecond
 )
 
-// submitConfirmNeedleRunes bounds how much of body's first line we look for
-// in the pane before submitting with Enter — long enough to be distinctive,
-// short enough to survive an input-line wrapping the pasted text.
+// submitConfirmNeedleRunes bounds how much of body's first non-empty line we
+// look for in the pane before submitting with Enter — long enough to be
+// distinctive, short enough to survive an input-line wrapping the pasted
+// text.
 const submitConfirmNeedleRunes = 24
+
+// submitNeedleMinRunes floors how short a derived needle may be before we
+// stop trusting Contains-matching against the pane. A very short needle
+// (e.g. "ok") can already exist in the pane — a hint, placeholder, or prior
+// output — before an async paste actually commits, so the confirm loop
+// would break on a coincidental match and fire Enter into an uncommitted
+// paste (the original bug, for short bodies). Below this floor we can't
+// tell "landed" from "coincidence," so we don't try — see
+// submitConfirmFallbackDelays.
+const submitNeedleMinRunes = 4
+
+// submitConfirmFallbackDelays bounds the fixed settle beat given to bodies
+// whose needle is too short (or empty) to distinguish a landed paste from a
+// coincidental pane match. It's a small, fixed number of submitConfirmPoll
+// waits — still best-effort, still bounded, still always followed by Enter —
+// rather than an unreliable substring match.
+const submitConfirmFallbackDelays = 3
 
 // inputProbe is a single throwaway character typed to test whether claude is
 // accepting keystrokes yet. One character is fully removable with a single
@@ -245,7 +263,8 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 	// zero added latency. This is best-effort: a capture-pane error, or the
 	// needle never appearing within the budget, still falls through to
 	// sending Enter (never blocks/loses the message).
-	if needle := submitConfirmNeedle(body); needle != "" {
+	needle := submitConfirmNeedle(body)
+	if len([]rune(needle)) >= submitNeedleMinRunes {
 		for attempt := 0; attempt < submitConfirmAttempts; attempt++ {
 			out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", PaneTarget(session))...).Output()
 			if err == nil && strings.Contains(string(out), needle) {
@@ -260,6 +279,18 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 			case <-time.After(submitConfirmPoll):
 			}
 		}
+	} else {
+		// The needle is too short (or the body was empty/whitespace-only) to
+		// trust Contains-matching — fall back to a bounded fixed delay so
+		// short bodies still get a settle beat before Enter, without risking
+		// a coincidental early match.
+		for i := 0; i < submitConfirmFallbackDelays; i++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(submitConfirmPoll):
+			}
+		}
 	}
 
 	if err := runKey("Enter"); err != nil {
@@ -268,21 +299,26 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 	return nil
 }
 
-// submitConfirmNeedle derives a short, distinctive slice of body's first line
-// to look for in the pane before submitting — long enough to be unlikely to
-// appear by coincidence, short enough to survive the input line wrapping the
-// pasted text. Returns "" for an empty/whitespace-only body, which callers
-// treat as "nothing to confirm — just submit."
+// submitConfirmNeedle derives a short, distinctive slice of body's first
+// NON-EMPTY line to look for in the pane before submitting — long enough to
+// be unlikely to appear by coincidence, short enough to survive the input
+// line wrapping the pasted text. A body like "\n\nreal text" would otherwise
+// yield an empty needle from its literal first line and skip confirmation
+// entirely, even though it plainly has distinctive content further down.
+// Returns "" if every line is empty/whitespace-only, which callers treat as
+// "nothing distinctive to match" (see submitConfirmFallbackDelays).
 func submitConfirmNeedle(body string) string {
-	firstLine := body
-	if idx := strings.IndexByte(body, '\n'); idx >= 0 {
-		firstLine = body[:idx]
+	var firstNonEmpty string
+	for _, line := range strings.Split(body, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			firstNonEmpty = trimmed
+			break
+		}
 	}
-	firstLine = strings.TrimSpace(firstLine)
-	if firstLine == "" {
+	if firstNonEmpty == "" {
 		return ""
 	}
-	runes := []rune(firstLine)
+	runes := []rune(firstNonEmpty)
 	if len(runes) > submitConfirmNeedleRunes {
 		runes = runes[:submitConfirmNeedleRunes]
 	}
