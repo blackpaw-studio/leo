@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -514,6 +515,10 @@ func (m *Manager) List() []Record {
 			Env:           rec.Env,
 		})
 	}
+	// Sort by name for a stable order: `out` is assembled by ranging over the
+	// live and stored maps, whose iteration order is randomized, so without this
+	// the list reshuffles on every refresh/suspend/resume.
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 

@@ -260,7 +260,7 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.renderFlash(w, "success", fmt.Sprintf("Agent %q spawned — connect via Claude web or app", rec.Name))
+	s.renderFlash(w, "success", fmt.Sprintf("Agent %q spawned — connect via Claude web or app", agent.DisplayName(rec.Name)))
 }
 
 // handleWebAgentStop stops an agent via the web UI (form post).
@@ -281,7 +281,7 @@ func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", rec.Name))
+	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", agent.DisplayName(rec.Name)))
 }
 
 // handleWebAgentSuspend suspends a running agent via the web UI (form post),
