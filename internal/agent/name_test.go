@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestDisplayName(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"leo-foo", "foo"},
+		{"leo-coding-acme-widget", "coding-acme-widget"},
+		{"foo", "foo"},             // already display-form, unchanged
+		{"leo-", ""},               // bare prefix
+		{"leo-leo-foo", "leo-foo"}, // strips only one prefix (inverse of SessionName)
+	}
+	for _, tc := range cases {
+		if got := DisplayName(tc.in); got != tc.want {
+			t.Errorf("DisplayName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestNormalizeAgentName(t *testing.T) {
 	cases := []struct {
 		in      string

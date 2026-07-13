@@ -35,7 +35,7 @@
     <div id="agent-cards" class="cards">
         {{range .Agents}}
         <div class="process-card {{statusColor .Status}}">
-            <div class="process-name">{{.Name}}</div>
+            <div class="process-name">{{displayName .Name}}</div>
             <div class="process-status">
                 <span class="status-dot {{statusColor .Status}}"></span>
                 {{.Status}}
@@ -48,15 +48,15 @@
             <div class="process-actions">
                 <form class="agent-rename" hx-post="/web/agent/{{.Name}}/rename" hx-target="#agents-content" hx-swap="outerHTML"
                       onsubmit="return this.new_name.value.trim() !== '';">
-                    <input type="text" name="new_name" placeholder="new name" aria-label="Rename {{.Name}}" autocomplete="off">
+                    <input type="text" name="new_name" placeholder="new name" aria-label="Rename {{displayName .Name}}" autocomplete="off">
                     <button type="submit" class="btn btn-sm">Rename</button>
                 </form>
                 {{if eq .Status "suspended"}}
-                <button class="btn btn-sm hot" hx-post="/web/agent/{{.Name}}/resume" hx-target="#agents-content" hx-swap="outerHTML" hx-confirm="Resume agent {{.Name}}?">Resume</button>
+                <button class="btn btn-sm hot" hx-post="/web/agent/{{.Name}}/resume" hx-target="#agents-content" hx-swap="outerHTML" hx-confirm="Resume agent {{displayName .Name}}?">Resume</button>
                 {{else if eq .Status "running"}}
-                <button class="btn btn-sm" hx-post="/web/agent/{{.Name}}/suspend" hx-target="#agents-content" hx-swap="outerHTML" hx-confirm="Suspend agent {{.Name}}?">Suspend</button>
+                <button class="btn btn-sm" hx-post="/web/agent/{{.Name}}/suspend" hx-target="#agents-content" hx-swap="outerHTML" hx-confirm="Suspend agent {{displayName .Name}}?">Suspend</button>
                 {{end}}
-                <button class="btn btn-sm btn-danger" hx-post="/web/agent/{{.Name}}/stop" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Stop agent {{.Name}}?">Stop</button>
+                <button class="btn btn-sm btn-danger" hx-post="/web/agent/{{.Name}}/stop" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Stop agent {{displayName .Name}}?">Stop</button>
             </div>
         </div>
         {{else}}

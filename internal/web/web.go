@@ -416,6 +416,7 @@ func (s *Server) loadHistory(cfg *config.Config) *history.Store {
 func (s *Server) parseTemplates() {
 	funcMap := template.FuncMap{
 		"statusColor": statusColor,
+		"displayName": agent.DisplayName,
 		"cronDesc":    describeCron,
 		"relativeTime": func(t time.Time) string {
 			if t.IsZero() {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -534,6 +535,34 @@ func TestListSurfacesSuspendedAgents(t *testing.T) {
 	}
 	if statuses["leo-wt"] != "suspended" {
 		t.Fatalf("worktree suspended agent missing/wrong: %v", statuses)
+	}
+}
+
+func TestListReturnsStableSortedOrder(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{} // no live agents; store-only ordering
+
+	// Insert out of alphabetical order across enough records that a randomized
+	// map iteration would almost certainly not land on sorted order by chance.
+	for _, name := range []string{"leo-delta", "leo-alpha", "leo-charlie", "leo-echo", "leo-bravo"} {
+		_ = agentstore.Save(home, agentstore.Record{Name: name, Workspace: "/w", Suspended: true})
+	}
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	want := []string{"leo-alpha", "leo-bravo", "leo-charlie", "leo-delta", "leo-echo"}
+	// Repeat: map iteration order is randomized per range, so a single pass could
+	// coincidentally be sorted. Every pass must come back sorted.
+	for i := 0; i < 20; i++ {
+		got := m.List()
+		names := make([]string, len(got))
+		for j, r := range got {
+			names[j] = r.Name
+		}
+		if !slices.Equal(names, want) {
+			t.Fatalf("pass %d: List() order = %v, want %v", i, names, want)
+		}
 	}
 }
 

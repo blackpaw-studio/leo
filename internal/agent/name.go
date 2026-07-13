@@ -21,6 +21,14 @@ const (
 // must be tmux-safe and slug-shaped (no dots, colons, slashes, spaces, etc.).
 var charsetRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+// DisplayName strips the canonical leo- prefix for user-facing display. It is
+// the inverse of SessionName: the stored/tmux name is always leo-<body>, but the
+// prefix is a tmux implementation detail the UI shouldn't force users to see or
+// retype. A name without the prefix (already display-form) is returned as-is.
+func DisplayName(name string) string {
+	return strings.TrimPrefix(name, agentNamePrefix)
+}
+
 // NormalizeAgentName validates and canonicalizes a user-supplied agent name.
 // It lowercases, ensures exactly one leo- prefix, rejects tmux-hostile
 // characters, collapses repeated/edge dashes, and caps the total length so the
