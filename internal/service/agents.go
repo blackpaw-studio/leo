@@ -107,7 +107,10 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			// staleness drop; agents are short-lived and the newest jsonl is
 			// virtually always the one we want. This jsonl scan is a
 			// claude-specific resume mechanic; non-claude records keep their
-			// stored SessionID untouched.
+			// stored SessionID untouched here — the supervisor's
+			// SessionArgsRefresher is responsible for injecting resume tokens
+			// into their args at spawn time, so restore must not pre-inject
+			// them itself.
 			resumeID = rec.SessionID
 			isClaude := rec.Harness == "" || rec.Harness == "claude"
 			if isClaude {

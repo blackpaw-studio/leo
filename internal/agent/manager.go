@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -766,70 +765,14 @@ func (m *Manager) ResolveHandle(name string) (string, harness.SessionHandle, boo
 	return harnessName, m.handleForRecord(cfg.HomePath, rec), true
 }
 
-// driveTurnsHistoryPath returns the AttachSpec.HistoryPath for a record whose
-// harness driver is DriveTurns, or ("", false) when the record is claude (or
-// any harness without a DriveTurns driver) — callers fall back to tmux.
-func (m *Manager) driveTurnsHistoryPath(rec agentstore.Record) (string, bool) {
-	if rec.Harness == "" || rec.Harness == "claude" {
-		return "", false
-	}
-	cfg, err := m.cfgLoader()
-	if err != nil {
-		return "", false
-	}
-	h, err := harness.Get(rec.Harness)
-	if err != nil {
-		return "", false
-	}
-	drv := h.Driver()
-	if drv == nil || drv.Style() != harness.DriveTurns {
-		return "", false
-	}
-	spec, err := drv.Attach(m.handleForRecord(cfg.HomePath, rec))
-	if err != nil {
-		return "", false
-	}
-	return spec.HistoryPath, spec.HistoryPath != ""
-}
-
-// tailLines returns the last n lines of content, or the whole content when n
-// <= 0. Lines are split on "\n"; a trailing empty element from a final
-// newline is dropped so the count matches visible lines.
-func tailLines(content string, n int) string {
-	if n <= 0 {
-		return content
-	}
-	lines := strings.Split(content, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) <= n {
-		return strings.Join(lines, "\n")
-	}
-	return strings.Join(lines[len(lines)-n:], "\n")
-}
-
-// Logs returns the last `lines` lines of output from the agent's tmux pane
-// (or, for a DriveTurns harness, the tail of its driver's turn-history file).
-// If lines <= 0, returns the whole scrollback/history.
+// Logs returns the last `lines` lines of output from the agent's tmux pane.
+// Every harness (claude, codex, opencode) drives its TUI inside a resident
+// tmux pane, so capture-pane is the single source of truth here. If lines <=
+// 0, returns the whole scrollback.
 func (m *Manager) Logs(name string, lines int) (string, error) {
 	live := m.sup.EphemeralAgents()
 	if _, ok := live[name]; !ok {
 		return "", fmt.Errorf("agent %q not running", name)
-	}
-
-	if cfg, err := m.cfgLoader(); err == nil {
-		if records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath)); err == nil {
-			if rec, ok := records[name]; ok {
-				if historyPath, ok := m.driveTurnsHistoryPath(rec); ok {
-					content, err := os.ReadFile(historyPath) // #nosec G304 -- path comes from the resolved driver's own AttachSpec, not user input
-					if err != nil {
-						return "", fmt.Errorf("reading turn history %s: %w", historyPath, err)
-					}
-					return tailLines(string(content), lines), nil
-				}
-			}
-		}
 	}
 
 	tmuxPath := m.tmuxPath

@@ -422,14 +422,29 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			}
 
 			// A non-nil Result means the injector's driver ran the turn to
-			// completion synchronously (e.g. a DriveTurns harness) — mark the
-			// invocation completed immediately using the same bookkeeping the
-			// Report path uses, and skip the await-Report/timeout window
-			// entirely. Nil Result keeps today's async wait byte-identical.
+			// completion synchronously — mark the invocation completed
+			// immediately using the same bookkeeping the Report path uses,
+			// and skip the await-Report/timeout window entirely. Nil Result
+			// keeps today's async wait byte-identical.
 			if res != nil {
 				r.completeInFlight(q, next, invocationResultFromHarness(res))
 				continue
 			}
+
+			// KNOWN LIMITATION: every driver's Inject is now fire-and-forget
+			// (nil Result on success, claude parity) — including dispatched
+			// codex/opencode SESSIONS routed through this pump. Those
+			// harnesses drive a resident TUI with no Stop-hook-style Report
+			// callback, so a queued invocation here falls through to the
+			// timeout branch below and completes via the timer (abort +
+			// "timeout" result) rather than a genuine turn-done signal. This
+			// does not affect ephemeral agents (they use the direct
+			// fire-and-forget path in internal/web/handlers.go, not this
+			// router) or claude sessions (which still get a Stop-hook
+			// Report). Tracked as a follow-up: a TUI turn-completion signal
+			// for non-claude sessions. Do not "fix" this by synthesizing a
+			// delivered Result here — that's a deliberate, deferred design
+			// decision.
 
 			// A ResetSession (or Report) may have cleared inFlight while we
 			// were inside the injector. If so, the result was already
