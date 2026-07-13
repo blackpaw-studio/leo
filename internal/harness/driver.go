@@ -42,8 +42,18 @@ type SessionHandle struct {
 // AttachSpec describes how a caller can attach to a live session for
 // interactive viewing.
 type AttachSpec struct {
-	Argv        []string // exec locally, or run verbatim on the remote host over ssh; nil = no live attach
-	HistoryPath string   // when Argv is nil: file whose tail is the recent turn history
+	Argv        []string // exec directly (no tmux pattern; claude-external tools)
+	HistoryPath string   // when no live attach exists: tail this file
+
+	// Tmux-flavored attach: ensure a window named WindowName running
+	// WindowCmd exists inside TmuxSession (recreating it when WindowKey
+	// changes — e.g. the harness session id rotated), then tmux-attach with
+	// that window selected. Gives every harness the same attach UX
+	// (status bar, detach, remote ssh flow) as claude's native panes.
+	TmuxSession string
+	WindowName  string
+	WindowCmd   []string
+	WindowKey   string // change-detection key; stored as a tmux window option
 }
 
 // SessionDriver is the per-harness contract for keeping a live interactive

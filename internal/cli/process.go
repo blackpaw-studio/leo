@@ -92,7 +92,7 @@ normal tmux prefix + d (default: C-b d).`,
 					return err
 				}
 				if ok {
-					return attachViaDriver(res, spec)
+					return attachViaDriver(res, spec, attachOptions{cc: cc})
 				}
 			}
 			// Processes use a stable session name — no daemon round-trip needed

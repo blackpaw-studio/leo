@@ -12,7 +12,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
-	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/manifoldco/promptui"
 )
@@ -110,11 +109,11 @@ func attachChosenSession(ctx context.Context, cfg *config.Config, res config.Hos
 			if _, spec, ok, err := resolveProcessAttachSpec(cfg, choice.name); err != nil {
 				return err
 			} else if ok {
-				return attachViaDriver(res, spec)
+				return attachViaDriver(res, spec, opts)
 			}
 		case attachChoiceAgent:
 			if spec, err := agentAttachSpecFn(ctx, cfg.HomePath, choice.name); err == nil && spec.Harness != "" && spec.Harness != "claude" {
-				return attachViaDriver(res, harness.AttachSpec{Argv: spec.Argv, HistoryPath: spec.HistoryPath})
+				return attachViaDriver(res, toAttachSpec(spec), opts)
 			}
 		case attachChoiceRemote:
 			// No per-row identity to resolve against — always tmux.

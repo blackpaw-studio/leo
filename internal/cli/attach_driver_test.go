@@ -167,7 +167,7 @@ func TestAttachViaDriverLocalExecsArgv(t *testing.T) {
 	t.Cleanup(func() { agentSyscallExec = old })
 
 	spec := harness.AttachSpec{Argv: []string{"faketurns", "attach", "worker"}}
-	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec); err != nil {
+	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec, attachOptions{}); err != nil {
 		t.Fatalf("attachViaDriver: %v", err)
 	}
 	if execedArgv0 != binPath {
@@ -197,7 +197,7 @@ func TestAttachViaDriverLocalResolvesLookPath(t *testing.T) {
 	t.Cleanup(func() { agentSyscallExec = old })
 
 	spec := harness.AttachSpec{Argv: []string{"opencode", "attach", "http://127.0.0.1:60629"}}
-	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec); err != nil {
+	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec, attachOptions{}); err != nil {
 		t.Fatalf("attachViaDriver: %v", err)
 	}
 	if execedArgv0 != binPath {
@@ -211,7 +211,7 @@ func TestAttachViaDriverLocalMissingBinaryErrors(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // empty dir on PATH — nothing resolves
 
 	spec := harness.AttachSpec{Argv: []string{"opencode", "attach", "worker"}}
-	err := attachViaDriver(config.HostResolution{Localhost: true}, spec)
+	err := attachViaDriver(config.HostResolution{Localhost: true}, spec, attachOptions{})
 	if err == nil {
 		t.Fatal("expected an error when the binary isn't on PATH")
 	}
@@ -233,7 +233,7 @@ func TestAttachViaDriverRemoteShellQuotesEveryToken(t *testing.T) {
 		Localhost: false,
 		Host:      config.HostConfig{SSH: "user@remote.example.com"},
 	}
-	if err := attachViaDriver(res, spec); err != nil {
+	if err := attachViaDriver(res, spec, attachOptions{}); err != nil {
 		t.Fatalf("attachViaDriver: %v", err)
 	}
 	if len(stub.calls) != 1 {
@@ -266,7 +266,7 @@ func TestAttachViaDriverNilArgvPrintsHistoryTail(t *testing.T) {
 	}
 
 	spec := harness.AttachSpec{HistoryPath: historyPath}
-	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec); err != nil {
+	if err := attachViaDriver(config.HostResolution{Localhost: true}, spec, attachOptions{}); err != nil {
 		t.Fatalf("attachViaDriver: %v", err)
 	}
 

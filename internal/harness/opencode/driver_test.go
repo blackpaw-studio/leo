@@ -546,8 +546,43 @@ func TestServerDriverAttach(t *testing.T) {
 		t.Fatalf("Attach: %v", err)
 	}
 	want := []string{"opencode", "attach", "http://127.0.0.1:12345", "--dir", "/ws", "-p", "secretpw", "-s", "ses_x"}
-	if strings.Join(spec.Argv, "\x00") != strings.Join(want, "\x00") {
-		t.Errorf("Argv = %#v, want %#v", spec.Argv, want)
+	if strings.Join(spec.WindowCmd, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("WindowCmd = %#v, want %#v", spec.WindowCmd, want)
+	}
+	if spec.TmuxSession != "leo-test-attach" {
+		t.Errorf("TmuxSession = %q, want %q", spec.TmuxSession, "leo-test-attach")
+	}
+	if spec.WindowName != "tui" {
+		t.Errorf("WindowName = %q, want %q", spec.WindowName, "tui")
+	}
+	if spec.WindowKey != "ses_x" {
+		t.Errorf("WindowKey = %q, want %q", spec.WindowKey, "ses_x")
+	}
+	if len(spec.Argv) != 0 {
+		t.Errorf("Argv = %#v, want empty — tmux-flavored spec carries WindowCmd instead", spec.Argv)
+	}
+}
+
+func TestServerDriverAttachEmptySessionIDYieldsEmptyWindowKey(t *testing.T) {
+	home := t.TempDir()
+	writeServerState(t, home, "leo-test-attach-noid", ServerState{Port: 12345, Password: "secretpw"})
+
+	orig := lookPath
+	lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	t.Cleanup(func() { lookPath = orig })
+
+	h := harness.SessionHandle{TmuxSession: "leo-test-attach-noid", Workspace: "/ws", HomePath: home, IDs: &memIDStore{}}
+
+	spec, err := (ServerDriver{}).Attach(h)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if spec.WindowKey != "" {
+		t.Errorf("WindowKey = %q, want empty when no session id yet", spec.WindowKey)
+	}
+	want := []string{"opencode", "attach", "http://127.0.0.1:12345", "--dir", "/ws", "-p", "secretpw"}
+	if strings.Join(spec.WindowCmd, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("WindowCmd = %#v, want %#v", spec.WindowCmd, want)
 	}
 }
 
@@ -571,8 +606,8 @@ func TestServerDriverAttachResolvesAbsoluteBinary(t *testing.T) {
 		t.Fatalf("Attach: %v", err)
 	}
 	want := []string{"/opt/homebrew/bin/opencode", "attach", "http://127.0.0.1:12345", "--dir", "/ws", "-p", "secretpw"}
-	if strings.Join(spec.Argv, "\x00") != strings.Join(want, "\x00") {
-		t.Errorf("Argv = %#v, want %#v", spec.Argv, want)
+	if strings.Join(spec.WindowCmd, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("WindowCmd = %#v, want %#v", spec.WindowCmd, want)
 	}
 }
 
@@ -595,8 +630,8 @@ func TestServerDriverAttachFallsBackToBareNameWhenLookPathFails(t *testing.T) {
 		t.Fatalf("Attach: %v", err)
 	}
 	want := []string{"opencode", "attach", "http://127.0.0.1:12345", "--dir", "/ws", "-p", "secretpw", "-s", "ses_x"}
-	if strings.Join(spec.Argv, "\x00") != strings.Join(want, "\x00") {
-		t.Errorf("Argv = %#v, want %#v", spec.Argv, want)
+	if strings.Join(spec.WindowCmd, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("WindowCmd = %#v, want %#v", spec.WindowCmd, want)
 	}
 }
 

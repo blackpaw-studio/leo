@@ -17,7 +17,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
-	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/spf13/cobra"
 )
 
@@ -593,7 +592,7 @@ func attachLocal(ctx context.Context, homePath, query string, opts attachOptions
 	if spec, err := agentAttachSpecFn(ctx, homePath, query); err == nil {
 		if spec.Harness != "" && spec.Harness != "claude" {
 			res := config.HostResolution{Localhost: true}
-			return attachViaDriver(res, harness.AttachSpec{Argv: spec.Argv, HistoryPath: spec.HistoryPath})
+			return attachViaDriver(res, toAttachSpec(spec), opts)
 		}
 	} else {
 		fmt.Fprintf(agentStderr, "warning: driver attach lookup failed (%v); falling back to tmux attach\n", err)
