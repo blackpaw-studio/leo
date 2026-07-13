@@ -8,6 +8,8 @@ import (
 	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // Options carries the claude-specific knobs, fully resolved by the caller:
@@ -76,8 +78,15 @@ func (Claude) Env(spec harness.LaunchSpec) (map[string]string, error) {
 // SupportsKind: claude runs every leo primitive.
 func (Claude) SupportsKind(harness.Kind) bool { return true }
 
-// Driver returns the claude interactive-session driver.
-func (Claude) Driver() harness.SessionDriver { return TmuxTUIDriver{} }
+// Driver: the shared tmux-TUI driver with claude's probe profile, dialog
+// policy, and --session-id → --resume → fresh quick-exit ladder.
+func (Claude) Driver() harness.SessionDriver {
+	return tmuxtui.New(tmuxtui.Config{
+		Probe:     tmux.ClaudeProfile(),
+		PaneKeyFn: DialogKey,
+		RecoverFn: RecoverQuickExitArgs,
+	})
+}
 
 func (Claude) SessionArgs(s harness.SessionState) []string {
 	switch s.Mode {
