@@ -438,6 +438,81 @@ func TestResumeRespawnsWithResumeAndClearsFlag(t *testing.T) {
 	}
 }
 
+// TestStopTerminatesSuspendedWorktreeAgent verifies Stop can terminate an agent
+// that is suspended (not live): StopAgent must be skipped (it would error
+// "not found" on a dead process) and the worktree record flipped to Stopped
+// with Suspended cleared, so it no longer auto-resumes.
+func TestStopTerminatesSuspendedWorktreeAgent(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{} // no live agents — the agent is suspended
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:      "leo-x",
+		Workspace: "/w",
+		Branch:    "feat/x",
+		SessionID: "sid",
+		Suspended: true,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Stop("leo-x"); err != nil {
+		t.Fatalf("stop suspended agent: %v", err)
+	}
+
+	if len(sup.stopCalls) != 0 {
+		t.Fatalf("StopAgent must not be called for a non-live agent, got %v", sup.stopCalls)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	got, ok := recs["leo-x"]
+	if !ok {
+		t.Fatal("worktree record should survive Stop for Prune")
+	}
+	if !got.Stopped {
+		t.Error("record should be marked Stopped=true")
+	}
+	if got.Suspended {
+		t.Error("Suspended flag should be cleared so the agent does not auto-resume")
+	}
+}
+
+// TestStopTerminatesSuspendedSharedAgent verifies a suspended shared-workspace
+// agent (no branch) has its record removed entirely by Stop.
+func TestStopTerminatesSuspendedSharedAgent(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:      "leo-x",
+		Workspace: "/w",
+		SessionID: "sid",
+		Suspended: true, // Branch == "" => shared workspace
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Stop("leo-x"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := recs["leo-x"]; ok {
+		t.Error("shared suspended agent record should be removed on Stop")
+	}
+}
+
+// TestStopUnknownAgentErrors verifies Stop still errors on a name that is
+// neither live nor persisted — the liveness guard must not turn an unknown
+// agent into a silent success.
+func TestStopUnknownAgentErrors(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{} // nothing live, nothing stored
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Stop("ghost"); err == nil {
+		t.Fatal("stopping an unknown agent should error")
+	}
+}
+
 // --- Task 8: List surfaces suspended agents ---
 
 func TestListSurfacesSuspendedAgents(t *testing.T) {

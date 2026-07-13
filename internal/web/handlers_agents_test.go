@@ -368,6 +368,76 @@ func TestAPIAgentStopMissingName(t *testing.T) {
 	}
 }
 
+func TestAPIAgentSuspend(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	body := `{"name":"leo-coding-leo"}`
+	req := httptest.NewRequest("POST", "/api/agent/suspend", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !svc.suspendCalled {
+		t.Fatal("expected Suspend to be called")
+	}
+	if svc.suspendName != "leo-coding-leo" {
+		t.Errorf("expected suspend name 'leo-coding-leo', got %q", svc.suspendName)
+	}
+}
+
+func TestAPIAgentSuspendMissingName(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	req := httptest.NewRequest("POST", "/api/agent/suspend", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// TestAPIAgentResume passes a name that is NOT among the live records to prove
+// the handler forwards it to Resume verbatim rather than round-tripping through
+// resolveAgentQuery (which only matches live agents and would 404 a suspended
+// one).
+func TestAPIAgentResume(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	body := `{"name":"suspended-worker"}`
+	req := httptest.NewRequest("POST", "/api/agent/resume", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !svc.resumeCalled {
+		t.Fatal("expected Resume to be called")
+	}
+	if svc.resumeName != "suspended-worker" {
+		t.Errorf("expected resume name 'suspended-worker' passed verbatim, got %q", svc.resumeName)
+	}
+}
+
+func TestAPIAgentResumeMissingName(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	req := httptest.NewRequest("POST", "/api/agent/resume", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
 func TestAPIAgentRename(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
 	svc.renameResult = agent.Record{Name: "leo-renamed", Status: "running"}
@@ -778,12 +848,16 @@ func TestWebAgentSuspendSuccess(t *testing.T) {
 	if !strings.Contains(body, `id="agents-content"`) {
 		t.Errorf("expected agents partial re-render, got %q", body)
 	}
-	// A suspended agent must offer Resume, not Suspend/Stop.
+	// A suspended agent must offer Resume (to wake) and Stop (to terminate),
+	// but not Suspend.
 	if !strings.Contains(body, "/web/agent/leo-coding-leo/resume") {
 		t.Errorf("expected Resume action for suspended agent, got %q", body)
 	}
-	if strings.Contains(body, "/web/agent/leo-coding-leo/stop") {
-		t.Errorf("suspended agent must not show a Stop button (it errors), got %q", body)
+	if !strings.Contains(body, "/web/agent/leo-coding-leo/stop") {
+		t.Errorf("expected Stop action for suspended agent, got %q", body)
+	}
+	if strings.Contains(body, "/web/agent/leo-coding-leo/suspend") {
+		t.Errorf("suspended agent must not show a Suspend button, got %q", body)
 	}
 }
 
