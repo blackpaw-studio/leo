@@ -105,6 +105,26 @@ type QuickExitRecovery interface {
 	RecoverQuickExit(args []string) ([]string, QuickExitAction)
 }
 
+// PreLauncher is an optional SessionDriver capability: PreLaunch runs before
+// every tmux new-session spawn of this session (fresh and restart alike), in
+// the supervisor's goroutine. It must be idempotent and fast — e.g. codex
+// registers the workspace as trusted in ~/.codex/config.toml so the TUI
+// never blocks on its trust dialog. Errors are logged, never fatal: a failed
+// hook degrades to the TUI showing its dialog, which the operator can answer.
+type PreLauncher interface {
+	PreLaunch(h SessionHandle) error
+}
+
+// SessionArgsRefresher is an optional SessionDriver capability for harnesses
+// that cannot pin a session id at launch (codex, opencode): the supervisor
+// calls it before every spawn to rewrite the launch argv from the currently
+// stored session id — adding resume tokens once a post-hoc-discovered id
+// exists, and stripping stale ones when the store was cleared. storedID ==
+// "" must return argv with no session tokens.
+type SessionArgsRefresher interface {
+	RefreshSessionArgs(args []string, storedID string) []string
+}
+
 // TurnAborter is an optional SessionDriver capability for harnesses that
 // can cancel an in-flight injected turn.
 type TurnAborter interface {
