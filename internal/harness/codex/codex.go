@@ -1,9 +1,11 @@
 // Package codex adapts leo's harness-neutral LaunchSpec to the OpenAI Codex
-// CLI. Scheduled tasks run one-shot (codex exec); supervised processes,
-// ephemeral agents, and persistent sessions all drive turn-per-invocation via
-// TurnDriver (no resident process). Headless exec always runs with approval
-// policy "never" (upstream removed the flag), so the only permission knob is
-// the sandbox.
+// CLI. Scheduled tasks run one-shot (codex exec --json); supervised
+// processes, ephemeral agents, and persistent sessions all drive the
+// interactive codex TUI supervised in a leo tmux session (parity with
+// claude), via the shared tmuxtui.Driver. Both launch shapes always run with
+// approval policy "never" (headless exec has no other option; the TUI is
+// pinned to it for unattended parity), so the only permission knob is the
+// sandbox.
 package codex
 
 import (
@@ -11,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // Codex is the OpenAI Codex adapter.
@@ -32,15 +36,24 @@ func (Codex) ValidateModel(model string) error {
 
 func (Codex) SupportsChannels() bool { return false }
 
-// SupportsKind: scheduled tasks, supervised processes, ephemeral agents, and
-// persistent sessions — all driven turn-per-invocation via TurnDriver.
+// SupportsKind: scheduled tasks run one-shot; supervised processes, ephemeral
+// agents, and persistent sessions all drive the codex TUI in tmux.
 func (Codex) SupportsKind(k harness.Kind) bool {
 	return k == harness.KindTask || k == harness.KindProcess || k == harness.KindAgent || k == harness.KindSession
 }
 
-// Driver: TurnDriver drives processes, ephemeral agents, and persistent
-// sessions turn-per-invocation (no resident process).
-func (Codex) Driver() harness.SessionDriver { return TurnDriver{} }
+// Driver: the shared tmuxtui driver, wired with codex's readiness-probe
+// marker, trust pre-launch hook, resume-argv refresher, and quick-exit
+// recovery.
+func (Codex) Driver() harness.SessionDriver {
+	return tmuxtui.New(tmuxtui.Config{
+		Probe:         tmux.Profile{Marker: "› ", Classify: tmux.ProbeClassifier("› ")},
+		RecoverFn:     recoverQuickExitArgs,
+		PreLaunchFn:   ensureWorkspaceTrusted,
+		RefreshArgsFn: refreshSessionArgs,
+		DiscoverIDFn:  discoverSessionID,
+	})
+}
 
 // Env: codex needs no adapter-injected env. Auth (CODEX_API_KEY or ambient
 // login state) is the caller's/user's concern.
@@ -68,24 +81,33 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		return nil, fmt.Errorf("codex: cannot start a session with a pre-issued ID")
 	}
 
-	// --skip-git-repo-check always: leo workspaces are leo-managed
-	// directories, frequently not git repos, and codex refuses to run in
-	// them otherwise.
-	args := []string{"exec", "--json", "--skip-git-repo-check"}
+	if spec.Kind == harness.KindTask {
+		// --skip-git-repo-check always: leo workspaces are leo-managed
+		// directories, frequently not git repos, and codex refuses to run in
+		// them otherwise.
+		args := []string{"exec", "--json", "--skip-git-repo-check"}
+		if spec.Model != "" {
+			args = append(args, "--model", spec.Model)
+		}
+		if opts.Sandbox != "" {
+			args = append(args, "--sandbox", opts.Sandbox)
+		}
+		args = append(args, opts.LeoMCP.configArgs()...)
+		args = append(args, c.SessionArgs(spec.Session)...)
+		return append(args, spec.Prompt), nil
+	}
+
+	// Interactive TUI argv. -a never keeps an unattended TUI from ever
+	// blocking on an approval prompt (parity with headless exec, which
+	// always ran approval policy "never"). Resume tokens are added by
+	// the supervisor via RefreshSessionArgs once a session id is
+	// discovered; the opening prompt is injected by the driver's Start.
+	args := []string{"-a", "never"}
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
 	if opts.Sandbox != "" {
 		args = append(args, "--sandbox", opts.Sandbox)
 	}
-	args = append(args, opts.LeoMCP.configArgs()...)
-
-	if spec.Kind == harness.KindProcess || spec.Kind == harness.KindAgent || spec.Kind == harness.KindSession {
-		// Turn prefix only: TurnDriver appends ["resume", id] and the
-		// per-message prompt on each Inject/Start.
-		return args, nil
-	}
-
-	args = append(args, c.SessionArgs(spec.Session)...)
-	return append(args, spec.Prompt), nil
+	return append(args, opts.LeoMCP.configArgs()...), nil
 }

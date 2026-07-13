@@ -41,7 +41,7 @@ func TestDecodeOptions(t *testing.T) {
 		{
 			name:    "approval unsupported",
 			raw:     map[string]any{"approval": "never"},
-			wantErr: `option "approval" is not supported: codex exec always runs non-interactively (approval policy "never")`,
+			wantErr: `option "approval" is not supported: leo always launches codex with approval policy "never" (unattended sessions)`,
 		},
 		{
 			name:    "append_system_prompt unsupported",
@@ -56,7 +56,7 @@ func TestDecodeOptions(t *testing.T) {
 		{
 			name:    "two bad keys fail on lexicographically first",
 			raw:     map[string]any{"zzz": "bar", "approval": "never"},
-			wantErr: `option "approval" is not supported: codex exec always runs non-interactively (approval policy "never")`,
+			wantErr: `option "approval" is not supported: leo always launches codex with approval policy "never" (unattended sessions)`,
 		},
 		{
 			name: "nil map",

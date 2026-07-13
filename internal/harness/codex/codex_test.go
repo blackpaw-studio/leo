@@ -2,7 +2,6 @@ package codex
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -147,25 +146,30 @@ func TestArgs(t *testing.T) {
 	}
 }
 
-func TestCodexArgsInteractiveKindsRenderTurnPrefix(t *testing.T) {
+func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 	tests := []struct {
 		name string
 		spec harness.LaunchSpec
 		want []string
 	}{
 		{
-			name: "KindProcess turn prefix",
+			name: "KindProcess TUI argv",
 			spec: harness.LaunchSpec{
 				Kind: harness.KindProcess, Model: "gpt-5.3-codex",
 				Options: Options{Sandbox: "workspace-write"},
 			},
-			want: []string{"exec", "--json", "--skip-git-repo-check",
-				"--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
+			want: []string{"-a", "never", "--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
 		},
 		{
-			name: "KindAgent turn prefix",
+			name: "KindAgent TUI argv",
+			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol",
+				Options: Options{Sandbox: "workspace-write"}},
+			want: []string{"-a", "never", "--model", "gpt-5.6-sol", "--sandbox", "workspace-write"},
+		},
+		{
+			name: "KindSession TUI argv with MCP bridge",
 			spec: harness.LaunchSpec{
-				Kind: harness.KindAgent, Model: "gpt-5.3-codex",
+				Kind: harness.KindSession, Model: "gpt-5.3-codex",
 				Options: Options{
 					LeoMCP: &LeoMCPBridge{
 						Command: "leo", Args: []string{"mcp-server"},
@@ -174,21 +178,16 @@ func TestCodexArgsInteractiveKindsRenderTurnPrefix(t *testing.T) {
 					},
 				},
 			},
-			want: []string{"exec", "--json", "--skip-git-repo-check",
-				"--model", "gpt-5.3-codex",
+			want: []string{"-a", "never", "--model", "gpt-5.3-codex",
 				"-c", `mcp_servers.leo.command="leo"`,
 				"-c", `mcp_servers.leo.args=["mcp-server"]`,
 				"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME"]`,
 				"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`},
 		},
 		{
-			name: "KindSession turn prefix",
-			spec: harness.LaunchSpec{
-				Kind: harness.KindSession, Model: "gpt-5.3-codex",
-				Options: Options{Sandbox: "workspace-write"},
-			},
-			want: []string{"exec", "--json", "--skip-git-repo-check",
-				"--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
+			name: "KindProcess no model no sandbox",
+			spec: harness.LaunchSpec{Kind: harness.KindProcess, Options: Options{}},
+			want: []string{"-a", "never"},
 		},
 	}
 	for _, tt := range tests {
@@ -197,12 +196,12 @@ func TestCodexArgsInteractiveKindsRenderTurnPrefix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if strings.Join(got, "\x00") != strings.Join(tt.want, "\x00") {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got %#v\nwant %#v", got, tt.want)
 			}
 			for _, tok := range got {
-				if tok == "resume" {
-					t.Errorf("turn prefix must not include a resume subcommand: %#v", got)
+				if tok == "exec" || tok == "--json" || tok == "resume" {
+					t.Errorf("TUI argv must not include %q: %#v", tok, got)
 				}
 			}
 		})
