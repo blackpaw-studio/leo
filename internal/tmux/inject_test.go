@@ -219,6 +219,70 @@ func TestInjectPromptFallsOpenWhenInputBoxUnrecognized(t *testing.T) {
 	}
 }
 
+func TestProbeClassifier(t *testing.T) {
+	codexReady := "  Tip: Our most capable model yet.\n› Use /skills to list available skills\n  gpt-5.6-sol default"
+	codexProbe := "  Tip: Our most capable model yet.\n› .\n  gpt-5.6-sol default"
+	opencodeReady := "┃\n┃  Ask anything... \"Fix a TODO in the codebase\"\n┃\n┃  Build · Qwen 3.6 35B A3B (local)"
+	opencodeProbe := "┃\n┃  .\n┃\n┃  Build · Qwen 3.6 35B A3B (local)"
+	tests := []struct {
+		name, marker, pane string
+		want               InputState
+	}{
+		{"codex placeholder is not probe", "› ", codexReady, InputEmpty},
+		{"codex probe landed", "› ", codexProbe, InputHasContent},
+		{"opencode placeholder is not probe", "┃", opencodeReady, InputEmpty},
+		{"opencode probe landed", "┃", opencodeProbe, InputHasContent},
+		{"no marker at all", "› ", "plain output\nno input box", InputUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ProbeClassifier(tt.marker)(tt.pane); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestInjectPromptTUICustomProfile proves InjectPromptTUI drives phase 1's
+// readiness probe using the supplied Profile's Classify function rather than
+// claude's classifyInput — mirroring the existing injectPrompt readiness
+// tests' seam usage, but with a canned classifier standing in for a
+// different harness's TUI.
+func TestInjectPromptTUICustomProfile(t *testing.T) {
+	var got [][]string
+	classifyCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		return exec.Command("true")
+	}
+	profile := Profile{
+		Marker: "› ",
+		Classify: func(pane string) InputState {
+			classifyCalls++
+			// First two probes report empty (not yet landed); third lands.
+			if classifyCalls < 3 {
+				return InputEmpty
+			}
+			return InputHasContent
+		},
+	}
+	if err := InjectPromptTUI(context.Background(), "tmux", "leo-session-foo", "hello", profile); err != nil {
+		t.Fatalf("InjectPromptTUI: %v", err)
+	}
+	if classifyCalls < 3 {
+		t.Fatalf("expected the custom profile's Classify to be called >=3 times, got %d", classifyCalls)
+	}
+	if n := countSub(got, "paste-buffer"); n != 1 {
+		t.Fatalf("body must be pasted exactly once, got %d paste-buffer calls: %#v", n, got)
+	}
+	last := got[len(got)-1]
+	if last[3] != "send-keys" || last[len(last)-1] != "Enter" {
+		t.Fatalf("last call must be submit Enter, got %#v", last)
+	}
+}
+
 func TestClassifyInput(t *testing.T) {
 	tests := []struct {
 		name string

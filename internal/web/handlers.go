@@ -788,7 +788,7 @@ var (
 func (s *Server) waitForInputContent(tmuxPath, sessionName string) {
 	for i := 0; i < messageInputAttempts; i++ {
 		out, err := s.execCommand(tmuxPath, tmux.Args("capture-pane", "-p", "-t", tmux.PaneTarget(sessionName))...).Output()
-		if err == nil && tmux.InputHasContent(string(out)) {
+		if err == nil && tmux.PaneInputHasContent(string(out)) {
 			return
 		}
 		time.Sleep(messageInputPoll)
