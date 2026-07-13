@@ -212,6 +212,47 @@ func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", rec.Name))
 }
 
+// handleWebAgentSuspend suspends a running agent via the web UI (form post),
+// then re-renders the agents partial so the status flips to "suspended" and the
+// action becomes Resume. Both this and handleWebAgentResume take the canonical
+// name straight from the path — the agents template only ever posts {{.Name}},
+// and unlike stop/rename we cannot round-trip through resolveAgentQuery for the
+// resume case (Manager.Resolve matches live agents only, and a suspended agent
+// is not live). The Suspend/Resume methods look up the agentstore themselves.
+//
+// On success the button's hx-target (#agents-content, outerHTML swap) receives
+// the re-rendered list; the error path retargets to #flash-container, mirroring
+// handleWebAgentRename's swap strategy.
+func (s *Server) handleWebAgentSuspend(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if s.agentSvc == nil {
+		s.renderFlashToContainer(w, "error", "Agent service not available")
+		return
+	}
+	if err := s.agentSvc.Suspend(name); err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to suspend agent: %v", err))
+		return
+	}
+	// Re-render so the suspended agent shows its new status and Resume button.
+	s.handlePartialAgents(w, r)
+}
+
+// handleWebAgentResume resumes a suspended agent via the web UI (form post),
+// rejoining its prior session, then re-renders the agents partial so the status
+// flips back to running. See handleWebAgentSuspend for the name/swap rationale.
+func (s *Server) handleWebAgentResume(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if s.agentSvc == nil {
+		s.renderFlashToContainer(w, "error", "Agent service not available")
+		return
+	}
+	if _, err := s.agentSvc.Resume(name); err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to resume agent: %v", err))
+		return
+	}
+	s.handlePartialAgents(w, r)
+}
+
 // renameErrorStatus classifies a Manager.Rename error into an HTTP status,
 // mirroring how the daemon maps the same sentinels: collisions/unchanged/invalid
 // names are client errors (4xx), everything else is a server error.

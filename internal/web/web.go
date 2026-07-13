@@ -57,6 +57,7 @@ type AgentService interface {
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)
 	Rename(query, newName string) (agent.Record, error)
+	Suspend(name string) error
 	Resume(name string) (agent.Record, error)
 	// ResolveHandle resolves an agent name to its harness name and the
 	// SessionHandle a SessionDriver needs to deliver a message to it.
@@ -310,6 +311,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// routed — see handlers_agents.go.
 	mux.HandleFunc("POST /web/agent/spawn", s.handleWebAgentSpawn)
 	mux.HandleFunc("POST /web/agent/{name}/stop", s.handleWebAgentStop)
+	mux.HandleFunc("POST /web/agent/{name}/suspend", s.handleWebAgentSuspend)
+	mux.HandleFunc("POST /web/agent/{name}/resume", s.handleWebAgentResume)
 	mux.HandleFunc("POST /web/agent/{name}/rename", s.handleWebAgentRename)
 
 	// Agent + task management (JSON API — used by channel plugins and external

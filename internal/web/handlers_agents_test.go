@@ -65,6 +65,10 @@ type mockAgentService struct {
 	renameResult  agent.Record
 	renameErr     error
 
+	suspendCalled bool
+	suspendName   string
+	suspendErr    error
+
 	resumeCalled bool
 	resumeName   string
 	resumeResult agent.Record
@@ -145,6 +149,12 @@ func (m *mockAgentService) Resolve(query string) (agent.Record, error) {
 		}
 	}
 	return agent.Record{}, &agent.ErrNotFound{Query: query}
+}
+
+func (m *mockAgentService) Suspend(name string) error {
+	m.suspendCalled = true
+	m.suspendName = name
+	return m.suspendErr
 }
 
 func (m *mockAgentService) Resume(name string) (agent.Record, error) {
@@ -734,5 +744,125 @@ func TestWebAgentRenameSuccess(t *testing.T) {
 	}
 	if !strings.Contains(body, "leo-renamed") {
 		t.Errorf("expected renamed agent in re-rendered list, got %q", body)
+	}
+}
+
+// --- Web form suspend/resume tests ---
+
+// TestWebAgentSuspendSuccess drives the FORM handler with a running agent and
+// asserts Suspend is called and the agents partial is re-rendered in place (so
+// the flipped status and Resume button show), with no flash retarget.
+func TestWebAgentSuspendSuccess(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	// After suspend the list reflects the new suspended status.
+	svc.records = []agent.Record{{Name: "leo-coding-leo", Status: "suspended", StartedAt: time.Now()}}
+
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/suspend", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.suspendCalled {
+		t.Fatal("expected Suspend to be called")
+	}
+	if svc.suspendName != "leo-coding-leo" {
+		t.Errorf("expected Suspend called with canonical name, got %q", svc.suspendName)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("HX-Retarget"); got != "" {
+		t.Errorf("success path must not set HX-Retarget, got %q", got)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, `id="agents-content"`) {
+		t.Errorf("expected agents partial re-render, got %q", body)
+	}
+	// A suspended agent must offer Resume, not Suspend/Stop.
+	if !strings.Contains(body, "/web/agent/leo-coding-leo/resume") {
+		t.Errorf("expected Resume action for suspended agent, got %q", body)
+	}
+	if strings.Contains(body, "/web/agent/leo-coding-leo/stop") {
+		t.Errorf("suspended agent must not show a Stop button (it errors), got %q", body)
+	}
+}
+
+// TestWebAgentSuspendError asserts a failing Suspend retargets its error flash
+// to the shared #flash-container rather than outerHTML-swapping the agents tab.
+func TestWebAgentSuspendError(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.suspendErr = fmt.Errorf("agent %q is not running", "leo-coding-leo")
+
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/suspend", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.suspendCalled {
+		t.Fatal("expected Suspend to be called")
+	}
+	if got := w.Header().Get("HX-Retarget"); got != "#flash-container" {
+		t.Errorf("expected HX-Retarget '#flash-container', got %q", got)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("expected flash markup in body, got %q", body)
+	}
+	if strings.Contains(body, `id="agents-content"`) {
+		t.Errorf("error response must not re-render the agents tab, got %q", body)
+	}
+}
+
+// TestWebAgentResumeSuccess drives the FORM handler with a suspended agent and
+// asserts Resume is called with the canonical name (Resolve is skipped because
+// suspended agents are not live) and the partial is re-rendered in place.
+func TestWebAgentResumeSuccess(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.resumeResult = agent.Record{Name: "leo-coding-leo", Status: "running"}
+	svc.records = []agent.Record{{Name: "leo-coding-leo", Status: "running", StartedAt: time.Now()}}
+
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/resume", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.resumeCalled {
+		t.Fatal("expected Resume to be called")
+	}
+	if svc.resumeName != "leo-coding-leo" {
+		t.Errorf("expected Resume called with canonical name, got %q", svc.resumeName)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("HX-Retarget"); got != "" {
+		t.Errorf("success path must not set HX-Retarget, got %q", got)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `id="agents-content"`) {
+		t.Errorf("expected agents partial re-render, got %q", body)
+	}
+	// A running agent offers Suspend + Stop, not Resume.
+	if !strings.Contains(body, "/web/agent/leo-coding-leo/suspend") {
+		t.Errorf("expected Suspend action for running agent, got %q", body)
+	}
+}
+
+// TestWebAgentResumeError asserts a failing Resume retargets its error flash to
+// the shared #flash-container and leaves the agents tab intact.
+func TestWebAgentResumeError(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.resumeErr = fmt.Errorf("no suspended agent %q", "leo-coding-leo")
+
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/resume", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.resumeCalled {
+		t.Fatal("expected Resume to be called")
+	}
+	if got := w.Header().Get("HX-Retarget"); got != "#flash-container" {
+		t.Errorf("expected HX-Retarget '#flash-container', got %q", got)
+	}
+	if strings.Contains(w.Body.String(), `id="agents-content"`) {
+		t.Errorf("error response must not re-render the agents tab")
 	}
 }
