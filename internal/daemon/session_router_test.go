@@ -387,10 +387,12 @@ func TestSessionRouterResetDuringInjectAbortsZombie(t *testing.T) {
 }
 
 // TestSessionRouterSyncInjectorCompletesImmediately verifies that when the
-// injector returns a non-nil *harness.Result (a DriveTurns harness that ran
-// the turn to completion inline), the pump marks the invocation completed
-// right away — no Report call needed — surfacing the result text and session
-// id exactly like the Report path would.
+// injector returns a non-nil *harness.Result (a synchronous-completion
+// signal; no production driver returns one today — every real driver is a
+// fire-and-forget tmux-TUI paste — this exercises the pump's branch for a
+// hypothetical future synchronous injector), the pump marks the invocation
+// completed right away — no Report call needed — surfacing the result text
+// and session id exactly like the Report path would.
 func TestSessionRouterSyncInjectorCompletesImmediately(t *testing.T) {
 	r := newSessionRouter()
 	defer r.Stop()
@@ -459,11 +461,12 @@ func TestSessionRouterSyncInjectorErrorMarksFailed(t *testing.T) {
 
 // TestSessionRouterInjectorTimeoutKillsHungTurn verifies that the pump
 // threads the invocation's Timeout into the ctx it passes to the injector
-// (see the injCtx wrap in the pump loop): a driver whose Inject respects ctx
+// (see the injCtx wrap in the pump loop): an injector whose call respects ctx
 // cancellation must fail fast when the pump's timeout elapses, rather than
 // the pump only discovering the hang via its own outer per-invocation timer.
-// This is what lets a real DriveTurns harness's exec.CommandContext actually
-// kill a hung turn's subprocess.
+// This is what lets a real tmux-paste injector's exec.CommandContext actually
+// kill a hung invocation's subprocess (probe/paste/dismissal helpers all shell
+// out).
 func TestSessionRouterInjectorTimeoutKillsHungTurn(t *testing.T) {
 	r := newSessionRouter()
 	defer r.Stop()

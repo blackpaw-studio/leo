@@ -337,17 +337,18 @@ stamped onto the agent at spawn time. Behavior:
 ## State directory
 
 Leo's runtime state lives under `~/.leo/state/` (or `<home>/state` for a
-non-default leo home). Beyond `sessions.json`, `history.json`, and
-`api.token` (see [Authentication](#authentication)), non-`claude` session
-drivers persist their own per-tmux-session records here:
+non-default leo home): `sessions.json` (session-id bookkeeping — including
+the post-hoc-discovered codex/opencode session ids, see
+[Harnesses → Session driver semantics](harnesses.md#session-driver-semantics)),
+`history.json`, and `api.token` (see [Authentication](#authentication)).
+There is no more per-harness state directory — codex and opencode drive a
+resident tmux TUI the same way claude does, so their session ids live in the
+same `sessions.json` store rather than separate per-tmux-session files.
 
-| Path | Written by | Contents |
-|---|---|---|
-| `state/opencode/<tmux-session>.json` | `opencode` `ServerDriver` | The provisioned `opencode serve` port, basic-auth password, and last-used model for one supervised process/agent/session (mode `0600`). Reused across restarts so the port and password stay stable. |
-| `state/transcripts/<tmux-session>.log` | `codex` `TurnDriver` | Append-only per-turn transcript (`user`/`codex` entry pairs, timestamped) for one process/agent/session, since codex has no resident process or live pane to attach to. `leo attach`/`leo agent attach`/`leo session attach` tail this file for codex sessions. |
-
-See [Harnesses → Session driver semantics](harnesses.md#session-driver-semantics)
-for how each driver uses these files.
+If you're updating from a pre-uniform-tmux-TUI build, stale
+`state/opencode/*.json` and `state/transcripts/*.log` files from the old
+model are inert and safe to delete; see the migration note in
+[Harnesses](harnesses.md#session-driver-semantics).
 
 ## Override Cascade
 

@@ -165,14 +165,18 @@ tasks:
 }
 
 // TestPersistentRuntimeNonClaudeSyncCompletion drives a codex persistent
-// task end-to-end against a real daemon whose injector stands in for the
-// codex driver's synchronous DriveTurns completion (a non-nil *harness.Result
-// returned directly from the injector, no async Report round-trip). It
-// asserts: (1) the enqueued prompt is bare — no leo:invocation marker, since
-// a synchronous driver has nothing to correlate a later Stop-hook callback
-// against — (2) leo run exits 0, and (3) the driver's returned SessionID is
-// persisted under the session name, mirroring the claude Report path's
-// session-id persistence.
+// task end-to-end against a real daemon whose test injector is a synthetic
+// fake that returns a non-nil *harness.Result directly (no async Report
+// round-trip). No production driver returns a non-nil Result today — every
+// real driver (claude, codex, opencode) pastes into its tmux-TUI pane and
+// completes asynchronously — so this test exists purely to exercise the
+// pump's synchronous-completion branch via a hand-written injector,
+// retaining that branch as the insertion point for a future non-claude
+// turn-completion signal. It asserts: (1) the enqueued prompt is bare — no
+// leo:invocation marker, since a synchronous injector has nothing to
+// correlate a later Stop-hook callback against — (2) leo run exits 0, and
+// (3) the injector's returned SessionID is persisted under the session name,
+// mirroring the claude Report path's session-id persistence.
 func TestPersistentRuntimeNonClaudeSyncCompletion(t *testing.T) {
 	dir := mkTempE2EDir(t, "leo-e2e-persist-nonclaude-*")
 

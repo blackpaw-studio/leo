@@ -8,7 +8,8 @@ import (
 )
 
 // agentIDs adapts an agentstore.Record's SessionID field to
-// harness.SessionIDStore for a DriveTurns driver (e.g. codex thread ids).
+// harness.SessionIDStore for the tmux-TUI drivers' post-hoc-discovered
+// session ids (e.g. codex rollout ids, opencode session ids).
 type agentIDs struct {
 	homePath string
 	name     string

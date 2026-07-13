@@ -28,9 +28,9 @@ type SpawnRequest struct {
 	// written before it existed.
 	Harness string
 	// OpeningPrompt carries the agent's opening turn for harnesses whose
-	// driver delivers it out-of-band (DriveTurns) rather than as a trailing
-	// positional claude arg. Empty for claude, which keeps the prompt in
-	// ClaudeArgs.
+	// driver injects it into the TUI pane after launch (the tmux-TUI driver's
+	// Start call) rather than passing it as a trailing positional claude arg.
+	// Empty for claude, which keeps the prompt in ClaudeArgs.
 	OpeningPrompt string
 }
 

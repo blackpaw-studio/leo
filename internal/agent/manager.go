@@ -199,17 +199,17 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	sessionID := session.NewID()
 	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt, m.webToken)
 	openingPrompt := ""
-	// storedSessionID seeds agentstore.Record.SessionID, which a DriveTurns
+	// storedSessionID seeds agentstore.Record.SessionID, which the tmux-TUI
 	// driver's SessionIDStore (agent.NewAgentIDs) reads back via IDs.Get() to
-	// decide whether this is a brand-new session (Start's opening-turn
+	// decide whether this is a brand-new session (Start's opening-prompt
 	// precondition is Get()=="") or a resume. Claude's sessionID is a
 	// leo-generated --session-id it hands claude on the command line, so it
 	// is genuinely "already assigned" from claude's perspective — storing it
-	// is correct. A non-claude harness has never talked to its own thread/
-	// session yet at this point (the driver assigns that id after the
-	// opening turn), so seeding this field with the same leo-generated uuid
-	// would make IDs.Get() falsely non-empty and skip the opening turn
-	// entirely.
+	// is correct. A non-claude harness has never talked to its own rollout/
+	// session yet at this point (the driver discovers that id post-hoc, after
+	// the opening prompt is injected and the first turn runs), so seeding
+	// this field with the same leo-generated uuid would make IDs.Get()
+	// falsely non-empty and skip the opening-prompt injection entirely.
 	storedSessionID := ""
 	if isClaude {
 		claudeArgs = append(claudeArgs, "--session-id", sessionID)
@@ -226,17 +226,18 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}
 
 	// The agentstore record is persisted BEFORE the supervisor spawn (not
-	// after, as the claude-only flow historically did). A DriveTurns driver
-	// (codex TurnDriver) runs its opening turn synchronously from inside
-	// SpawnAgent's goroutine, and that turn's SessionIDStore
+	// after, as the claude-only flow historically did). A non-claude
+	// harness's tmux-TUI driver injects the opening prompt and starts
+	// post-hoc session-id discovery from inside the supervise goroutine
+	// almost immediately after spawn, and that discovery's SessionIDStore
 	// (agentOrProcessIDs) picks agentstore-backed persistence only when a
 	// record already exists for this name — save-after-spawn lost that race
-	// essentially every time, silently stashing the fresh thread id under a
-	// throwaway "process:<name>" session-store key instead of the agent's
-	// own record, which then made every subsequent turn think it had no
-	// prior thread and start over. Saving first closes that window. A failed
-	// spawn now rolls the record back so a dead agent never leaves an
-	// orphaned entry behind (matches the pre-existing worktree-flow
+	// essentially every time, silently stashing the freshly discovered id
+	// under a throwaway "process:<name>" session-store key instead of the
+	// agent's own record, which then made every subsequent restart think it
+	// had no prior session and start over. Saving first closes that window.
+	// A failed spawn now rolls the record back so a dead agent never leaves
+	// an orphaned entry behind (matches the pre-existing worktree-flow
 	// rollback further down this file).
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:             agentName,
@@ -346,8 +347,8 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	openingPrompt := ""
 	// See the identical storedSessionID comment in spawnShared: a non-claude
 	// harness must NOT have its agentstore SessionID pre-seeded, or its
-	// DriveTurns driver's opening-turn precondition (IDs.Get()=="") is
-	// falsely non-empty and the opening turn never runs.
+	// tmux-TUI driver's opening-prompt precondition (IDs.Get()=="") is
+	// falsely non-empty and the opening prompt never gets injected.
 	storedSessionID := ""
 	if isClaude {
 		claudeArgs = append(claudeArgs, "--session-id", sessionID)
@@ -378,9 +379,10 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}
 
 	// Persist before spawning — see the identical comment in spawnShared for
-	// why order matters here (a DriveTurns driver's opening turn reads back
-	// the just-saved record's SessionIDStore from inside SpawnAgent's
-	// goroutine).
+	// why order matters here (a non-claude harness's tmux-TUI driver injects
+	// the opening prompt and starts session-id discovery, both reading back
+	// the just-saved record's SessionIDStore, from inside the supervise
+	// goroutine almost immediately after spawn).
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:             layout.AgentName,
 		Template:         spec.Template,

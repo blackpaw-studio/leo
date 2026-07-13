@@ -88,9 +88,10 @@ type ProcessSpec struct {
 	// Kind identifies which leo primitive this spec represents. Empty means
 	// KindProcess — old state/records predate this field.
 	Kind harness.Kind
-	// OpeningPrompt carries the opening turn for DriveTurns harnesses, whose
-	// driver delivers it out-of-band via Start rather than as a trailing
-	// positional arg. Empty for claude, which keeps the prompt in ClaudeArgs.
+	// OpeningPrompt carries the opening turn for non-claude harnesses, whose
+	// tmux-TUI driver injects it into the pane via Start rather than passing
+	// it as a trailing positional arg. Empty for claude, which keeps the
+	// prompt in ClaudeArgs.
 	OpeningPrompt string
 }
 
@@ -547,9 +548,11 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 			}
 		}
 		// claude path stays byte-identical to before the injector gained a
-		// ctx param: the pump's per-invocation timeout is a non-claude
-		// concern (it bounds a synchronous DriveTurns turn); claude's async
-		// tmux-paste call keeps its own unbounded context.Background().
+		// ctx param: the pump's per-invocation timeout backstops the
+		// non-claude tmux-TUI drivers dispatched above (a wedged pane or
+		// hung probe loop); claude's own tmux-paste call keeps its
+		// pre-existing unbounded context.Background() rather than adopting
+		// the same deadline.
 		return nil, tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
 	})
 	srv.SetAborter(func(tmuxSession string) error {

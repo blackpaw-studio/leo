@@ -198,9 +198,9 @@ func TestResolveProcessLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 		t.Errorf("LeoMCP.ApprovalMode = %q, want approve", opts.LeoMCP.ApprovalMode)
 	}
 
-	// Args() now renders the turn-prefix argv for KindProcess (TurnDriver,
-	// Plan 4 Task 5): the leo MCP bridge config lands in the prefix, ready
-	// for TurnArgs to be appended per-turn.
+	// Args() renders the codex TUI launch argv for KindProcess: the leo MCP
+	// bridge config lands in the launch argv via -c mcp_servers.leo.*
+	// overrides, same as the headless exec path.
 	args, err := h.Args(spec)
 	if err != nil {
 		t.Fatalf("Args(): %v", err)

@@ -451,11 +451,11 @@ type SessionDispatch struct {
 // are intentionally excluded — the injector's default tmux path handles
 // them, and a miss in this map falls through to that path.
 //
-// Every non-claude harness (codex, opencode, and any future adapter) is
-// DriveTmux: Inject pastes into the session's live tmux pane using only the
-// handle's routing coordinates (TmuxSession/Workspace/HomePath/IDs) — no
-// TurnArgs needed, since the resident TUI itself (including its own LeoMCP
-// wiring) is provisioned separately by superviseTUISession. This table is
+// Every non-claude harness (codex, opencode, and any future adapter) drives
+// a resident tmux-TUI: Inject pastes into the session's live tmux pane using
+// only the handle's routing coordinates (TmuxSession/Workspace/HomePath/IDs)
+// — no turn-prefix argv needed, since the resident TUI itself (including its
+// own LeoMCP wiring) is provisioned separately by superviseTUISession. This table is
 // therefore purely "route Inject/Abort to the harness driver with these
 // coordinates"; it does not decode harness_options or build argv. cfg/
 // webToken are unused now that no branch here wires a LeoMCP bridge, but the

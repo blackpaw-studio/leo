@@ -203,18 +203,21 @@ func (r *sessionRouter) QueueDepth(session string) int {
 }
 
 // injectFn delivers a prompt into a session. A nil *harness.Result means
-// delivery is asynchronous (today's claude tmux path — completion arrives
-// later via Report or the pump's timeout). A non-nil *harness.Result means
-// the turn already ran to completion synchronously; the pump marks the
-// invocation completed immediately instead of waiting.
+// delivery is asynchronous — every real driver today (claude, codex,
+// opencode) pastes into its tmux-TUI pane and returns immediately; completion
+// arrives later via Report or the pump's timeout. A non-nil *harness.Result
+// means the turn already ran to completion synchronously; the pump marks the
+// invocation completed immediately instead of waiting. No production driver
+// returns a non-nil Result today — the branch exists as the insertion point
+// for a future synchronous injector.
 //
 // ctx carries the invocation's deadline (set by the pump from
-// PendingInvocation.Timeout — see the pump loop below): a synchronous driver
-// (DriveTurns) must thread it into its exec.CommandContext so a hung turn is
-// actually killed, not just abandoned. The async claude tmux path receives
-// the same ctx but today's tmux.InjectPrompt call completes almost
-// instantly, so the deadline is inert there — the pump's own outer timer
-// (unchanged) still governs the async wait for a Report.
+// PendingInvocation.Timeout — see the pump loop below): a hypothetical
+// synchronous injector would need to thread it into its own
+// exec.CommandContext so a hung call is actually killed, not just abandoned.
+// Every real driver's tmux paste call completes almost instantly, so the
+// deadline is inert there — the pump's own outer timer (unchanged) still
+// governs the async wait for a Report.
 type injectFn func(ctx context.Context, tmuxSession, prompt string) (*harness.Result, error)
 type abortFn func(tmuxSession string) error
 
@@ -407,12 +410,14 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			q.mu.Unlock()
 
 			// injCtx bounds the injector call itself to the invocation's
-			// timeout: a DriveTurns driver's Inject blocks for the whole
-			// turn, so this is what actually kills a hung turn (via
-			// exec.CommandContext deep inside the driver). The claude tmux
-			// path ignores the deadline in practice (InjectPrompt returns
-			// almost instantly) and still relies on the outer timer below
-			// for its async completion wait.
+			// timeout: every real driver's Inject is a readiness-probed tmux
+			// paste that returns almost instantly, so in practice this
+			// deadline just backstops a wedged pane or hung probe loop (via
+			// exec.CommandContext deep inside the driver) rather than a
+			// synchronous turn — no production driver blocks for a whole
+			// turn today. Completion for all of them still relies on the
+			// outer timer below for the async Report wait (see the
+			// KNOWN LIMITATION note further down).
 			injCtx, injCancel := context.WithTimeout(context.Background(), next.Timeout)
 			res, err := r.currentInjector()(injCtx, target, next.Prompt)
 			injCancel()

@@ -67,8 +67,8 @@ const (
 	// QuickExitClearAndNoResume clears the stored id AND marks the agent
 	// no-resume.
 	QuickExitClearAndNoResume
-	// QuickExitNone keeps the args and stored id (e.g. opencode serve
-	// crash does not mean a poisoned conversation).
+	// QuickExitNone keeps the args and stored id (e.g. a quick exit that
+	// doesn't imply the resumed conversation itself is poisoned).
 	QuickExitNone
 )
 

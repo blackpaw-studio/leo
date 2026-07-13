@@ -139,29 +139,36 @@ and an async pump that pastes the prompt, waits for the hook's
 --> ` sentinel), and only then returns.
 
 `codex` and `opencode` sessions use the same `sessions:`/`tasks:` config
-shape, cron firing, and daemon enqueue path, but complete differently:
+shape, cron firing, and daemon enqueue path, and drive a resident TUI in
+tmux exactly like claude (see
+[Harnesses → Session driver semantics](harnesses.md#session-driver-semantics)),
+but completion detection is different:
 
 - **No Stop hook, no invocation marker.** Both are claude-specific machinery
   (a `.claude/settings.local.json` hook and a transcript-JSONL sentinel) that
   don't exist for either non-claude harness. Nothing is written into the
   session workspace to detect turn completion.
-- **Synchronous completion.** The injected turn runs to completion inside the
-  driver's `Inject` call itself, and the daemon marks the invocation complete
-  the moment that call returns — there's no separate await-report/timeout
-  window to skip past.
-- **`codex` has no resident process.** Each firing spawns a fresh `codex exec
-  … resume <thread-id> <prompt>` (via `TurnDriver`), blocks for the whole
-  turn, and records the returned thread id for the next firing. "Restarting"
-  a codex session is bookkeeping only.
-- **`opencode` runs a supervised `serve`.** A resident `opencode serve
-  --port <p> --hostname 127.0.0.1` process backs the session (crash-restarted
-  like the claude tmux loop, but without a Stop hook); each firing runs
-  `opencode run --attach <url> …` against it and blocks until that turn
-  completes.
+- **Delivery is fire-and-forget, same as claude.** The daemon pastes the
+  prompt into the session's tmux pane and the injector call returns almost
+  immediately — it does not wait for the turn to finish.
+- **Known limitation: no genuine turn-done signal for non-claude sessions.**
+  Because there's no Stop hook (or any TUI event leo currently listens for)
+  to report completion, a codex/opencode persistent-task invocation
+  routed through this same pump falls through to the pump's outer timeout
+  and completes via the timer (abort + `"timeout"` result) rather than a
+  real signal that the turn actually finished. This does not affect
+  ephemeral agents, which deliver messages directly and don't go through
+  this completion-tracking pump. A TUI-native turn-completion signal for
+  non-claude sessions is a deferred follow-up, not yet implemented.
+- **`codex` has no resident session id until after the first turn.** Each
+  firing targets the resident TUI (fresh on first launch, `codex resume
+  <session-id>` afterward); leo discovers the session id post-hoc by
+  scanning rollout files and records it for the next firing.
+- **`opencode` discovers its session id the same way**, via `opencode
+  session list` after the first turn, and resumes with `-s <session-id>`.
 
 See [Harnesses → Session driver semantics](harnesses.md#session-driver-semantics)
-for the exact argv, state files (`state/transcripts/`, `state/opencode/`),
-and attach behavior of each driver.
+for the exact argv and attach behavior of each driver.
 
 ## Known limitations (v1)
 
