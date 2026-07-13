@@ -35,17 +35,26 @@ var codexSessionsDir = func() (string, error) {
 	return filepath.Join(home, ".codex", "sessions"), nil
 }
 
-// ensureWorkspaceTrusted idempotently registers h.Workspace as trusted in
-// ~/.codex/config.toml so the TUI skips its trust dialog (which the dialog
-// policy correctly refuses to auto-answer — it contains "trust"). This is
-// the same write codex itself performs when the user answers "Yes"; inline
-// -c overrides do NOT skip the dialog (verified 2026-07-12).
+// ensureWorkspaceTrusted idempotently registers the symlink-resolved
+// h.Workspace path as trusted in ~/.codex/config.toml so the TUI skips its
+// trust dialog (which the dialog policy correctly refuses to auto-answer —
+// it contains "trust"). This is the same write codex itself performs when
+// the user answers "Yes"; inline -c overrides do NOT skip the dialog
+// (verified 2026-07-12). The path is resolved via filepath.EvalSymlinks
+// before writing because codex canonicalizes its working directory before
+// looking up the trust entry (e.g. macOS /tmp -> /private/tmp), so writing
+// the raw path would mismatch codex's lookup key and the dialog would still
+// appear (verified 2026-07-12).
 func ensureWorkspaceTrusted(h harness.SessionHandle) error {
 	path, err := codexConfigPath()
 	if err != nil {
 		return fmt.Errorf("codex: resolving config path: %w", err)
 	}
-	header := fmt.Sprintf("[projects.%q]", h.Workspace)
+	ws := h.Workspace
+	if resolved, rerr := filepath.EvalSymlinks(ws); rerr == nil {
+		ws = resolved
+	}
+	header := fmt.Sprintf("[projects.%q]", ws)
 	existing, err := os.ReadFile(path) // #nosec G304 -- fixed well-known path
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("codex: reading %s: %w", path, err)

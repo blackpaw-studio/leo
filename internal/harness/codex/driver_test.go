@@ -151,6 +151,40 @@ func TestEnsureWorkspaceTrusted(t *testing.T) {
 			t.Errorf("content = %q, missing projects block", content)
 		}
 	})
+
+	t.Run("symlinked workspace resolved before writing", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.toml")
+		withCodexConfigPath(t, path)
+
+		real := filepath.Join(dir, "real-ws")
+		if err := os.Mkdir(real, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := filepath.EvalSymlinks(real)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(real): %v", err)
+		}
+		link := filepath.Join(dir, "link-ws")
+		if err := os.Symlink(real, link); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: link}); err != nil {
+			t.Fatalf("ensureWorkspaceTrusted: %v", err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := string(data)
+		if !strings.Contains(content, `[projects."`+resolved+`"]`) {
+			t.Errorf("content = %q, missing resolved projects block for %q", content, resolved)
+		}
+		if strings.Contains(content, `[projects."`+link+`"]`) {
+			t.Errorf("content = %q, unexpectedly contains unresolved symlink path %q", content, link)
+		}
+	})
 }
 
 func writeRollout(t *testing.T, path, id, cwd string, mtime time.Time) {
