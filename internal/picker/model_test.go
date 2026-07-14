@@ -166,7 +166,7 @@ func TestSuspendKeyDispatchesSuspend(t *testing.T) {
 	m = sized(m)
 	m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: "running"}}, nil)
 
-	m, _ = drive(t, m, keyRunes("s"))
+	_, _ = drive(t, m, keyRunes("s"))
 
 	if len(fb.calls) != 1 || fb.calls[0] != "suspend:alpha" {
 		t.Fatalf("calls = %v, want [suspend:alpha]", fb.calls)

@@ -135,7 +135,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			delete(m.byHostErr, msg.host)
 		}
-		return m, m.rebuild()
+		cmd := m.rebuild()
+		return m, cmd
 
 	case actionMsg:
 		return m.onActionDone(msg)

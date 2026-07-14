@@ -20,7 +20,7 @@ func TestAgentZeroValue(t *testing.T) {
 // the Backend interface without pulling in any real I/O.
 type staticBackend struct{ agents []Agent }
 
-func (s staticBackend) List(context.Context) ([]Agent, error) { return s.agents, nil }
+func (s staticBackend) List(context.Context) ([]Agent, error)      { return s.agents, nil }
 func (staticBackend) Rename(context.Context, string, string) error { return nil }
 func (staticBackend) Stop(context.Context, string) error           { return nil }
 func (staticBackend) Suspend(context.Context, string) error        { return nil }
