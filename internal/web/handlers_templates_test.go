@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
@@ -211,6 +212,79 @@ func TestTemplateDeleteNotFound(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "not found") {
 		t.Error("expected error about template not found")
+	}
+}
+
+func TestTemplateRenameSuccess(t *testing.T) {
+	s, dir, _ := newTestServerWithAgents(t)
+
+	// Seed an agentstore record spawned from "coding" so we can assert the
+	// pointer cascade.
+	if err := agentstore.Save(dir, agentstore.Record{Name: "leo-coding-leo", Template: "coding"}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+
+	form := url.Values{"new_name": {"engineering"}}
+	req := httptest.NewRequest("POST", "/web/template/coding/rename", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got := w.Header().Get("HX-Redirect"); got != "/config/templates/engineering" {
+		t.Errorf("HX-Redirect = %q, want /config/templates/engineering", got)
+	}
+
+	cfg, err := config.Load(filepath.Join(dir, "leo.yaml"))
+	if err != nil {
+		t.Fatalf("reloading config: %v", err)
+	}
+	if _, ok := cfg.Templates["coding"]; ok {
+		t.Error("old template key 'coding' still present")
+	}
+	if _, ok := cfg.Templates["engineering"]; !ok {
+		t.Error("new template key 'engineering' missing")
+	}
+
+	records, err := agentstore.Load(agentstore.FilePath(dir))
+	if err != nil {
+		t.Fatalf("loading agentstore: %v", err)
+	}
+	if got := records["leo-coding-leo"].Template; got != "engineering" {
+		t.Errorf("agent record Template = %q, want engineering", got)
+	}
+}
+
+func TestTemplateRenameCollision(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	form := url.Values{"new_name": {"research"}} // already exists
+	req := httptest.NewRequest("POST", "/web/template/coding/rename", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if got := w.Header().Get("HX-Redirect"); got != "" {
+		t.Errorf("expected no HX-Redirect on collision, got %q", got)
+	}
+	if !strings.Contains(w.Body.String(), "already exists") {
+		t.Errorf("expected collision flash, got %q", w.Body.String())
+	}
+}
+
+func TestTemplateRenameInvalidName(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	form := url.Values{"new_name": {"bad name"}} // space is invalid
+	req := httptest.NewRequest("POST", "/web/template/coding/rename", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !strings.Contains(w.Body.String(), entityNameError) {
+		t.Errorf("expected name-format flash, got %q", w.Body.String())
 	}
 }
 

@@ -232,6 +232,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/config/template/{name}", s.handleConfigTemplateSave)
 	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
 	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
+	mux.HandleFunc("POST /web/template/{name}/rename", s.handleTemplateRename)
 
 	// Settings page: Web UI + Remote client config, and remote-host CRUD —
 	// full CRUD lives on one page (no separate edit page).
