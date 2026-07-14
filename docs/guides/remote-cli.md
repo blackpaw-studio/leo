@@ -48,6 +48,8 @@ leo config show
 
 ## First spawn
 
+`--repo` is optional — `leo agent spawn coding` alone runs the template as-is on the remote host, with the agent named after the template.
+
 ```bash
 # On the client
 leo agent spawn coding --repo blackpaw-studio/leo --name demo

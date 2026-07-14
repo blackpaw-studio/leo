@@ -155,21 +155,18 @@ func newRegistry(client *daemonClient, processName string) *registry {
 
 	r.add(toolDef{
 		Name:        "leo_spawn_agent",
-		Description: "Spawn an ephemeral Leo agent from a template against a repo. Returns the agent's name and workspace path.",
+		Description: "Spawn an ephemeral Leo agent from a template, optionally against a repo. Returns the agent's name and workspace path.",
 		InputSchema: objectSchema(map[string]any{
 			"template": map[string]any{"type": "string", "description": "Template name as defined in leo.yaml templates section."},
-			"repo":     map[string]any{"type": "string", "description": "Target repo as 'owner/repo' (cloned to a worktree) or a workspace name."},
-			"name":     map[string]any{"type": "string", "description": "Optional explicit agent name; if omitted, generated from template+repo."},
-		}, "template", "repo"),
+			"repo":     map[string]any{"type": "string", "description": "Optional target repo as 'owner/repo' (cloned to a worktree) or a workspace name. Omit to run the template as-is in its own workspace; the agent is named after the template."},
+			"name":     map[string]any{"type": "string", "description": "Optional explicit agent name; if omitted, generated from template+repo (or just the template name when repo is omitted)."},
+		}, "template"),
 	}, func(args map[string]any) (string, error) {
 		template, err := stringArg(args, "template")
 		if err != nil {
 			return "", err
 		}
-		repo, err := stringArg(args, "repo")
-		if err != nil {
-			return "", err
-		}
+		repo, _ := args["repo"].(string)
 		name, _ := args["name"].(string)
 		data, err := client.spawnAgent(template, repo, name)
 		if err != nil {

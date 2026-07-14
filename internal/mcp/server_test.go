@@ -204,6 +204,35 @@ func TestToolCallSpawnAgentRoundtrips(t *testing.T) {
 	}
 }
 
+func TestToolCallSpawnAgentWithoutRepoSucceeds(t *testing.T) {
+	daemon := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		return http.StatusOK, `{"ok":true,"data":{"name":"assistant","workspace":"/tmp/assistant"}}`
+	})
+	defer daemon.close()
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary")
+
+	resp := runRequest(t, reg, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      4,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "leo_spawn_agent",
+			"arguments": map[string]any{"template": "assistant"},
+		},
+	})
+	result := resp["result"].(map[string]any)
+	if isErr, _ := result["isError"].(bool); isErr {
+		t.Fatalf("expected success spawning without repo, got %+v", result)
+	}
+	c := daemon.calls[0]
+	if c.Path != "/api/agent/spawn" {
+		t.Errorf("wrong path: %s", c.Path)
+	}
+	if !strings.Contains(c.Body, `"template":"assistant"`) {
+		t.Errorf("body missing template: %s", c.Body)
+	}
+}
+
 func TestToolCallReturnsIsErrorOnDaemonFailure(t *testing.T) {
 	daemon := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		return http.StatusOK, `{"ok":false,"error":"task not found"}`

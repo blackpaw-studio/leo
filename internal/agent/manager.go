@@ -74,10 +74,14 @@ func New(cfgLoader ConfigLoader, sup Supervisor, tmuxPath, webToken string) *Man
 // SpawnSpec describes a spawn request in terms of high-level intent.
 type SpawnSpec struct {
 	Template string // required — template name from config.Templates
-	Repo     string // required — owner/repo (clones) OR a plain name (uses template workspace)
-	Name     string // optional — overrides the derived agent name
-	Branch   string // optional — when non-empty, spawn in a dedicated worktree on this branch
-	Base     string // optional — base ref for new branches (defaults to origin HEAD)
+	// Repo is optional. owner/repo clones into the template workspace; a bare
+	// name reuses the template workspace under a per-name subdir; empty runs
+	// the template as-is directly in its own workspace (agent named after the
+	// template). Branch (worktree mode) requires a non-empty owner/repo.
+	Repo   string
+	Name   string // optional — overrides the derived agent name
+	Branch string // optional — when non-empty, spawn in a dedicated worktree on this branch
+	Base   string // optional — base ref for new branches (defaults to origin HEAD)
 	// Prompt, when non-empty, is delivered to the agent as the opening turn of
 	// its interactive session (appended as the trailing positional claude arg).
 	Prompt string
@@ -149,11 +153,16 @@ type PruneOptions struct {
 // best-effort persistence op) and results in a missing restore entry on next
 // daemon start.
 func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
-	if spec.Template == "" || spec.Repo == "" {
-		return Record{}, fmt.Errorf("template and repo are required")
+	if spec.Template == "" {
+		return Record{}, fmt.Errorf("template is required")
 	}
-	if err := ValidateRepo(spec.Repo); err != nil {
-		return Record{}, err
+	if spec.Branch != "" && spec.Repo == "" {
+		return Record{}, fmt.Errorf("--worktree requires a repo")
+	}
+	if spec.Repo != "" {
+		if err := ValidateRepo(spec.Repo); err != nil {
+			return Record{}, err
+		}
 	}
 
 	cfg, err := m.cfgLoader()

@@ -64,9 +64,18 @@ type WorktreeLayout struct {
 // without touching the filesystem. Separate from ResolveWorkspace so callers
 // can reserve the name in the supervisor before ResolveWorkspace does a
 // potentially slow `gh repo clone`.
+//
+// An empty repo (repo-less spawn — the template run as-is) derives the agent
+// name from the template name alone, with no "leo-" or repo segment. This
+// intentionally diverges from the repo-bearing naming scheme: repo-less
+// spawns are meant to read as "the assistant agent", not
+// "leo-assistant-<repo>".
 func DeriveSharedAgentName(templateName, repo, nameOverride string) string {
 	if nameOverride != "" {
 		return nameOverride
+	}
+	if repo == "" {
+		return templateName
 	}
 	if strings.Contains(repo, "/") {
 		owner, repoShort := splitRepo(repo)
@@ -75,8 +84,22 @@ func DeriveSharedAgentName(templateName, repo, nameOverride string) string {
 	return fmt.Sprintf("%s-%s-%s", baseAgentName, templateName, repo)
 }
 
+// ResolveWorkspace resolves the workspace and agent name for a shared spawn.
+// An empty repo resolves to the template's own base workspace (no per-repo
+// subdirectory) with the agent named after the template — see
+// DeriveSharedAgentName.
 func ResolveWorkspace(tmpl config.TemplateConfig, templateName, repo, nameOverride string) (workspace, agentName string, err error) {
 	base := BaseWorkspace(tmpl)
+	if repo == "" {
+		if err := os.MkdirAll(base, 0750); err != nil {
+			return "", "", fmt.Errorf("creating workspace dir: %w", err)
+		}
+		name := templateName
+		if nameOverride != "" {
+			name = nameOverride
+		}
+		return base, name, nil
+	}
 	if strings.Contains(repo, "/") {
 		canonical, err := EnsureCanonical(base, repo)
 		if err != nil {

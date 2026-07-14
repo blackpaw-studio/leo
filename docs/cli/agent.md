@@ -6,6 +6,7 @@ Spawn and control ephemeral Claude agents on a leo server. The `leo` binary is d
 
 ```bash
 leo agent list                                                     # list running agents
+leo agent spawn <template>                                         # spawn the template as-is (no repo)
 leo agent spawn <template> --repo <owner/repo>                     # spawn from a template
 leo agent spawn <template> --repo <name> --name <n>                # spawn with a custom name
 leo agent spawn <template> --repo <owner/repo> --worktree <branch> # spawn into a dedicated git worktree
@@ -84,14 +85,15 @@ leo-scratch         -         ~/agents/scratch       running  1
 
 ### `leo agent spawn <template>`
 
-Spawn a new agent from the named template. `--repo` is required and takes either an `owner/repo` pair (Leo clones via `gh repo clone`) or a plain name (Leo reuses the template's configured workspace path).
+Spawn a new agent from the named template. `--repo` (or the positional `[repo]` arg) is optional and takes either an `owner/repo` pair (Leo clones via `gh repo clone`) or a plain name (Leo reuses the template's configured workspace path under a per-name subdir). Omit it entirely to run the template as-is, directly in its own workspace — the agent is named after the template.
 
 ```bash
+leo agent spawn coding                          # run the template as-is; agent named "coding"
 leo agent spawn coding --repo blackpaw-studio/leo
 leo agent spawn coding --repo my-app --name scratch
 ```
 
-`--name` overrides the auto-derived name. When the agent already exists, Leo appends a numeric suffix (`-1`, `-2`, …) so repeated spawns never collide.
+`--name` overrides the auto-derived name (the template name for a repo-less spawn, `leo-<template>-<repo>` otherwise). When the agent already exists, Leo appends a numeric suffix (`-2`, `-3`, …) so repeated spawns never collide.
 
 #### Worktree Spawns
 
@@ -102,7 +104,7 @@ leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
 leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/new --base main
 ```
 
-- `--worktree` requires `owner/repo` (slashless repos have no canonical clone to branch from).
+- `--worktree` requires a repo, and specifically `owner/repo` (a repo-less or slashless spawn has no canonical clone to branch from).
 - If the branch exists locally or on `origin`, Leo attaches to it. Otherwise Leo creates a new branch off `--base`, defaulting to origin's default branch.
 - The worktree lives at `<baseWorkspace>/.worktrees/<repo-short>/<branch-slug>/`. See [workspace structure](../configuration/workspace-structure.md) for the full layout.
 - The agent name includes the branch slug: `leo-<template>-<owner>-<repo>-<branch-slug>`.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,47 @@ func TestResolveWorkspaceDefaultWorkspace(t *testing.T) {
 	}
 	if workspace == "" {
 		t.Error("expected non-empty default workspace")
+	}
+}
+
+func TestResolveWorkspaceEmptyRepoUsesBaseWorkspace(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fresh") // does not exist yet
+	tmpl := config.TemplateConfig{Workspace: dir}
+
+	workspace, name, err := ResolveWorkspace(tmpl, "assistant", "", "")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if workspace != dir {
+		t.Errorf("workspace = %q, want %q (base workspace directly, no subdir)", workspace, dir)
+	}
+	if name != "assistant" {
+		t.Errorf("name = %q, want %q", name, "assistant")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("expected base workspace dir to be created: %v", err)
+	}
+}
+
+func TestResolveWorkspaceEmptyRepoNameOverride(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := config.TemplateConfig{Workspace: dir}
+
+	_, name, err := ResolveWorkspace(tmpl, "assistant", "", "custom-name")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if name != "custom-name" {
+		t.Errorf("name = %q, want custom-name", name)
+	}
+}
+
+func TestDeriveSharedAgentNameEmptyRepo(t *testing.T) {
+	if got := DeriveSharedAgentName("assistant", "", ""); got != "assistant" {
+		t.Errorf("DeriveSharedAgentName = %q, want %q", got, "assistant")
+	}
+	if got := DeriveSharedAgentName("assistant", "", "custom"); got != "custom" {
+		t.Errorf("DeriveSharedAgentName with override = %q, want %q", got, "custom")
 	}
 }
 
@@ -350,6 +392,93 @@ func TestSpawnStampsClaudeHarnessByDefault(t *testing.T) {
 		if !hasFlagValue(r.ClaudeArgs, "--session-id", "") {
 			t.Errorf("expected --session-id in ClaudeArgs, got %v", r.ClaudeArgs)
 		}
+	}
+}
+
+// --- Spawn with no repo (repo-less template run) ---
+
+func TestSpawnWithEmptyRepoSucceeds(t *testing.T) {
+	home := t.TempDir()
+	wsDir := filepath.Join(home, "ws")
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]config.TemplateConfig{
+			"assistant": {Workspace: wsDir},
+		},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "assistant"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if rec.Name != "assistant" {
+		t.Errorf("Name = %q, want %q", rec.Name, "assistant")
+	}
+	if rec.Workspace != wsDir {
+		t.Errorf("Workspace = %q, want %q", rec.Workspace, wsDir)
+	}
+	if rec.Repo != "" {
+		t.Errorf("Repo = %q, want empty", rec.Repo)
+	}
+
+	recs, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("want 1 record, got %d (err=%v)", len(recs), err)
+	}
+	stored, ok := recs["assistant"]
+	if !ok {
+		t.Fatalf("expected record keyed %q, got %v", "assistant", recs)
+	}
+	if stored.Repo != "" {
+		t.Errorf("stored Repo = %q, want empty", stored.Repo)
+	}
+}
+
+func TestSpawnWithEmptyRepoNameCollisionSuffixes(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]config.TemplateConfig{
+			"assistant": {Workspace: t.TempDir()},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"assistant": {Name: "assistant", Status: "running"},
+		},
+	}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "assistant"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if rec.Name != "assistant-2" {
+		t.Errorf("Name = %q, want %q (collision suffix)", rec.Name, "assistant-2")
+	}
+}
+
+func TestSpawnWorktreeWithoutRepoErrors(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"assistant": {Workspace: t.TempDir()},
+		},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	_, err := m.Spawn(context.Background(), SpawnSpec{Template: "assistant", Branch: "feat/x"})
+	if err == nil {
+		t.Fatal("expected error spawning a worktree without a repo")
+	}
+	if !strings.Contains(err.Error(), "requires a repo") {
+		t.Errorf("error = %q, want it to mention repo is required for worktrees", err.Error())
 	}
 }
 
