@@ -51,7 +51,7 @@ func TestInjectPromptCalls(t *testing.T) {
 		}
 		return exec.Command("true")
 	}
-	if err := InjectPrompt(context.Background(), "tmux", "leo-session-foo", "hello\nworld"); err != nil {
+	if err := InjectPrompt(context.Background(), "tmux", "leo-agent-foo", "hello\nworld"); err != nil {
 		t.Fatalf("InjectPrompt: %v", err)
 	}
 	// The body must be staged and pasted exactly once (never stacked).
@@ -61,8 +61,8 @@ func TestInjectPromptCalls(t *testing.T) {
 	if n := countSub(got, "paste-buffer"); n != 1 {
 		t.Fatalf("expected exactly 1 paste-buffer, got %d: %#v", n, got)
 	}
-	expectSet := []string{"tmux", "-L", "leo", "set-buffer", "-b", "leo-leo-session-foo", "--", "hello\nworld"}
-	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo-leo-session-foo", "-t", "=leo-session-foo:", "-d"}
+	expectSet := []string{"tmux", "-L", "leo", "set-buffer", "-b", "leo-leo-agent-foo", "--", "hello\nworld"}
+	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo-leo-agent-foo", "-t", "=leo-agent-foo:", "-d"}
 	if c := firstSub(got, "set-buffer"); !reflect.DeepEqual(c, expectSet) {
 		t.Fatalf("set-buffer call wrong:\n got %#v\nwant %#v", c, expectSet)
 	}
@@ -71,7 +71,7 @@ func TestInjectPromptCalls(t *testing.T) {
 	}
 	// The submit Enter must be the final call.
 	last := got[len(got)-1]
-	expectEnter := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-session-foo:", "Enter"}
+	expectEnter := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-agent-foo:", "Enter"}
 	if !reflect.DeepEqual(last, expectEnter) {
 		t.Fatalf("last call must be submit Enter:\n got %#v\nwant %#v", last, expectEnter)
 	}
@@ -101,7 +101,7 @@ func TestInjectPromptProbesUntilReady(t *testing.T) {
 		return exec.Command("true")
 	}
 
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "body\nlines", 10, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", "body\nlines", 10, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestInjectPromptFailsWhenNeverReady(t *testing.T) {
 		}
 		return exec.Command("true")
 	}
-	err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "body", 3, time.Millisecond)
+	err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", "body", 3, time.Millisecond)
 	if err == nil {
 		t.Fatal("expected error when claude never accepts input, got nil")
 	}
@@ -184,7 +184,7 @@ func TestInjectPromptWaitsForLateSession(t *testing.T) {
 		return exec.Command("true")
 	}
 
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "body", 10, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", "body", 10, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt should tolerate a late-appearing session: %v", err)
 	}
 	if probeSendKeys < 3 {
@@ -216,7 +216,7 @@ func TestInjectPromptFallsOpenWhenInputBoxUnrecognized(t *testing.T) {
 		}
 		return exec.Command("true")
 	}
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "body", 3, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", "body", 3, time.Millisecond); err != nil {
 		t.Fatalf("expected fall-open (nil error), got %v", err)
 	}
 	if n := countSub(got, "paste-buffer"); n != 1 {
@@ -282,7 +282,7 @@ func TestInjectPromptTUICustomProfile(t *testing.T) {
 			return InputHasContent
 		},
 	}
-	if err := InjectPromptTUI(context.Background(), "tmux", "leo-session-foo", "hello", profile); err != nil {
+	if err := InjectPromptTUI(context.Background(), "tmux", "leo-agent-foo", "hello", profile); err != nil {
 		t.Fatalf("InjectPromptTUI: %v", err)
 	}
 	if classifyCalls < 3 {
@@ -373,7 +373,7 @@ func TestInjectPromptConfirmsPasteBeforeSubmitting(t *testing.T) {
 	}
 
 	body := "codex-marker-body\nsecond line"
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", body, 1, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
 
@@ -419,7 +419,7 @@ func TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately(t *testing.T) {
 
 	body := "sync-body-marker"
 	start := time.Now()
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", body, 1, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
@@ -462,7 +462,7 @@ func TestInjectPromptConfirmFallsThroughToEnterOnBudgetExpiry(t *testing.T) {
 	}
 
 	body := "unconfirmable-body"
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", body, 1, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
 	idx := enterCallIndex(got)
@@ -504,7 +504,7 @@ func TestInjectPromptConfirmEmptyBodyUsesFixedDelay(t *testing.T) {
 	}
 
 	start := time.Now()
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "   \n  ", 1, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", "   \n  ", 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -555,7 +555,7 @@ func TestInjectPromptShortBodyUsesFixedDelayNotNeedleMatch(t *testing.T) {
 	}
 
 	start := time.Now()
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "ok", 1, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", "ok", 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -606,7 +606,7 @@ func TestInjectPromptNeedleUsesFirstNonEmptyLine(t *testing.T) {
 	}
 
 	body := "\n\nhello world this is the real content"
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", body, 1, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
 	if captureCalls != 2 {
@@ -626,14 +626,14 @@ func TestAbortPromptCalls(t *testing.T) {
 		got = append(got, append([]string{name}, args...))
 		return exec.Command("true")
 	}
-	if err := AbortPrompt(context.Background(), "tmux", "leo-session-foo"); err != nil {
+	if err := AbortPrompt(context.Background(), "tmux", "leo-agent-foo"); err != nil {
 		t.Fatalf("AbortPrompt: %v", err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(got))
 	}
-	expectEscape := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-session-foo:", "Escape"}
-	expectCtrlC := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-session-foo:", "C-c"}
+	expectEscape := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-agent-foo:", "Escape"}
+	expectCtrlC := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-agent-foo:", "C-c"}
 	if !reflect.DeepEqual(got[0], expectEscape) {
 		t.Fatalf("Escape call wrong:\n got %#v\nwant %#v", got[0], expectEscape)
 	}
@@ -701,7 +701,7 @@ func TestInjectPromptWaitsThroughMenu(t *testing.T) {
 		return exec.Command("true")
 	}
 
-	if err := injectPrompt(context.Background(), "tmux", "leo-session-foo", "body", 10, time.Millisecond); err != nil {
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", "body", 10, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
 

@@ -16,7 +16,7 @@ templates:
       permission_mode: auto
 ```
 
-Templates support the same fields as persistent sessions (model, channels, harness, harness_options, env, etc.). See the [config reference](../configuration/config-reference.md#templates) and [Harnesses](../configuration/harnesses.md) for all fields.
+Templates support model, channels, harness, harness_options, env, and more. They also back **persistent tasks** — a `runtime: persistent` task can target a template's agent instead of spawning `claude -p` per firing; see [Persistent Tasks](../configuration/persistent-tasks.md). See the [config reference](../configuration/config-reference.md#templates) and [Harnesses](../configuration/harnesses.md) for all fields.
 
 ## Dispatching Agents
 
@@ -149,7 +149,7 @@ Agent records are stored in `~/.leo/state/agents.json`. When the daemon restarts
 
 ## Supervisor Behavior
 
-Ephemeral agents use the same supervisor as persistent sessions:
+Every agent — spawned directly or as the implicit/explicit target of a `runtime: persistent` task — is supervised the same way:
 
 - Auto-restart on exit with exponential backoff
 - Quick-exit detection (< 15s) clears stale sessions

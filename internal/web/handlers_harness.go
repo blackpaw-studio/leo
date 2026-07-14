@@ -56,10 +56,9 @@ func (s *Server) handleHarnessOptionsPartial(w http.ResponseWriter, r *http.Requ
 	// Recompute the inherited-placeholder map against the SELECTED harness
 	// (harnessView computed it against the stored one — switching TO the
 	// defaults harness must light the placeholders up, and away must drop
-	// them). Sessions and the defaults form itself never show any.
+	// them). The defaults form itself never shows any.
 	var inherited map[string]any
-	if section != schema.SectionDefaults && section != schema.SectionSession &&
-		name == cfg.DefaultsHarness() {
+	if section != schema.SectionDefaults && name == cfg.DefaultsHarness() {
 		inherited = cfg.Defaults.HarnessOptions
 	}
 
@@ -100,10 +99,6 @@ func locateHarnessScope(cfg *config.Config, section schema.Section, name string)
 	case schema.SectionTemplate:
 		if t, ok := cfg.Templates[name]; ok {
 			return &t, scopeSuffix(section, name), true
-		}
-	case schema.SectionSession:
-		if sc, ok := cfg.Sessions[name]; ok {
-			return &sc, scopeSuffix(section, name), true
 		}
 	}
 	return nil, "", false

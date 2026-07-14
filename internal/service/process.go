@@ -24,7 +24,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
-	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -464,22 +463,17 @@ func Status(workDir string) (string, error) {
 }
 
 // RunSupervised starts the leo daemon: the web UI, cron scheduler, and the
-// daemon IPC server, then restores + supervises ephemeral agents and
-// persistent sessions (each in its own tmux session with a restart loop).
-// It no longer starts any config-declared "processes" — agents and sessions
-// are the only supervised primitives.
+// daemon IPC server, then restores + supervises ephemeral agents (each in
+// its own tmux session with a restart loop). It no longer starts any
+// config-declared "processes" — agents are the only supervised primitive.
 // webToken is the daemon's API bearer token, propagated to the agent.Manager and
-// the RestoreAgents path so restored/respawned agents and sessions can
-// authenticate against the daemon's web API.
-//
-// sessionSpecs is computed once by the caller via SessionSpecsFromConfig and
-// threaded through here rather than re-derived, so a daemon boot never
-// rebuilds the same session specs twice.
-func RunSupervised(claudePath string, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
-	return supervisedExecFn(claudePath, sessionSpecs, homePath, configPath, webToken)
+// the RestoreAgents path so restored/respawned agents can authenticate
+// against the daemon's web API.
+func RunSupervised(claudePath string, homePath, configPath, webToken string) error {
+	return supervisedExecFn(claudePath, homePath, configPath, webToken)
 }
 
-func defaultSupervisedExec(claudePath string, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
+func defaultSupervisedExec(claudePath string, homePath, configPath, webToken string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
@@ -503,18 +497,6 @@ func defaultSupervisedExec(claudePath string, sessionSpecs []SessionSpec, homePa
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 
-	// sessionCfg backs the non-claude LeoMCP bridge gate (sessionLeoMCPEnv,
-	// via BuildSessionDispatch and superviseTUISession): cfg.Web.Enabled
-	// determines whether a session's driver-spawned MCP subprocess is worth
-	// wiring in at all. A load failure here is non-fatal — sessionLeoMCPEnv
-	// treats a nil cfg as "gate off", so sessions still boot, just without
-	// the bridge, exactly as if web were disabled.
-	sessionCfg, sessionCfgErr := config.Load(configPath)
-	if sessionCfgErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: loading config for session LeoMCP wiring: %v\n", sessionCfgErr)
-		sessionCfg = nil
-	}
-
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath, supervisor)
@@ -522,39 +504,15 @@ func defaultSupervisedExec(claudePath string, sessionSpecs []SessionSpec, homePa
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
 	srv.SetLogPath(LogPathFor(homePath))
-	// Wire the session router's injector/aborter here (rather than inside
-	// daemon.New) because deciding how to inject requires resolving harness
-	// config, which only this layer (owning []ProcessSpec/[]SessionSpec /
-	// harness drivers) can do without pulling config resolution into the IPC
-	// package. sessionDispatch is a tmux-session-keyed table of every
-	// non-claude session's (harness, SessionHandle) — built once here from
-	// the already-resolved sessionSpecs, not re-derived per invocation. A
-	// miss (claude sessions, and anything not in sessionSpecs) falls through
-	// to the historical tmux path.
-	sessionDispatch := BuildSessionDispatch(sessionSpecs, homePath, sessionCfg, webToken)
+	// Wire the router's injector/aborter to the tmux path directly. Every
+	// persistent-task delivery target is an agent tmux session now (Task 1-3
+	// of the sessions->agents collapse); non-claude ephemeral agents don't
+	// yet have a harness-aware injection dispatch table of their own, so
+	// this stays the single fallback for every tmux session.
 	srv.SetInjector(func(ctx context.Context, tmuxSession, prompt string) (*harness.Result, error) {
-		if d, ok := sessionDispatch[tmuxSession]; ok {
-			if drv := driverFor(d.Harness); drv != nil {
-				return drv.Inject(ctx, d.Handle, prompt)
-			}
-		}
-		// claude path stays byte-identical to before the injector gained a
-		// ctx param: the pump's per-invocation timeout backstops the
-		// non-claude tmux-TUI drivers dispatched above (a wedged pane or
-		// hung probe loop); claude's own tmux-paste call keeps its
-		// pre-existing unbounded context.Background() rather than adopting
-		// the same deadline.
 		return nil, tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
 	})
 	srv.SetAborter(func(tmuxSession string) error {
-		if d, ok := sessionDispatch[tmuxSession]; ok {
-			if drv := driverFor(d.Harness); drv != nil {
-				if aborter, ok := drv.(harness.TurnAborter); ok {
-					return aborter.AbortTurn(d.Handle)
-				}
-				return nil // driver has no in-flight turn to cancel
-			}
-		}
 		return tmux.AbortPrompt(context.Background(), tmuxPath, tmuxSession)
 	})
 	if err := srv.Start(); err != nil {
@@ -567,6 +525,11 @@ func defaultSupervisedExec(claudePath string, sessionSpecs []SessionSpec, homePa
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
 		srv.SetAgentManager(agentMgr)
+		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
+		// runPersistent) needs the same agent.Manager to spawn/resume targets
+		// before injection. agentMgr already satisfies daemon.EnsureAgentManager
+		// (Live/Suspended/Resume/SpawnFromTemplate).
+		srv.SetEnsurer(daemon.NewAgentEnsurer(agentMgr))
 
 		// Idle-suspend sweep: suspends ephemeral agents that have gone idle
 		// past their configured interval (see Manager.Suspend). Runs for the
@@ -597,39 +560,10 @@ func defaultSupervisedExec(claudePath string, sessionSpecs []SessionSpec, homePa
 		}
 	}
 
-	// Boot persistent task session supervisors. Each SessionSpec gets its
-	// own tmux-backed restart loop. Stored session IDs are resumed via
-	// --resume so claude rejoins the same conversation across daemon
-	// restarts. Session boot failures are non-fatal for the daemon as a
-	// whole — log and continue so process supervision still runs.
-	//
-	// sessionSpecs is supplied by the caller (already resolved once via
-	// SessionSpecsFromConfig) rather than re-derived from configPath here.
-	if len(sessionSpecs) > 0 {
-		sessions := session.NewStore(homePath)
-		booted := 0
-		for _, sp := range sessionSpecs {
-			if id, _, _ := sessions.Get("session:" + sp.Name); id != "" {
-				sp.ResumeID = id
-			}
-			spLocal := sp
-			if err := SuperviseSession(supervisor.ctx, tmuxPath, claudePath, spLocal, homePath, sessionCfg, webToken, func(_ int) {
-				supervisor.incrementRestarts(spLocal.Name)
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: supervise session %q: %v\n", spLocal.Name, err)
-				continue
-			}
-			booted++
-		}
-		if booted > 0 {
-			fmt.Fprintf(os.Stdout, "supervising %d session(s)\n", booted)
-		}
-	}
-
 	// Block until shutdown is signalled. Ephemeral agents (restored above or
-	// spawned later via SpawnAgent) and persistent task session supervisors
-	// both run their own goroutines against ctx and clean themselves up on
-	// cancellation, so this call simply blocks until shutdown.
+	// spawned later via SpawnAgent) run their own goroutines against ctx and
+	// clean themselves up on cancellation, so this call simply blocks until
+	// shutdown.
 	<-ctx.Done()
 	return nil
 }

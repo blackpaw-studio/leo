@@ -13,7 +13,7 @@ import (
 func TestSessionRouterEnqueueAccepts(t *testing.T) {
 	r := newSessionRouter()
 	inv, ok := r.Enqueue(EnqueueParams{
-		Session:  "leo-session-foo",
+		Session:  "leo-agent-foo",
 		Task:     "morning",
 		Prompt:   "do the thing",
 		Channels: []string{"plugin:slack@official"},
@@ -174,52 +174,6 @@ func TestSessionRouterAwaitAfterReportSucceeds(t *testing.T) {
 	}
 }
 
-// TestSessionRouterResetClearsInFlight verifies that ResetSession delivers a
-// "reset" error to the in-flight waiter and any queued items, and that the
-// pump resumes accepting new work afterwards.
-func TestSessionRouterResetClearsInFlight(t *testing.T) {
-	r := newSessionRouter()
-	defer r.Stop()
-	var injected int32
-	r.SetInjector(func(context.Context, string, string) (*harness.Result, error) {
-		atomic.AddInt32(&injected, 1)
-		return nil, nil
-	})
-	r.SetAborter(func(string) error { return nil })
-
-	inv1, _ := r.Enqueue(EnqueueParams{Session: "s", Task: "stuck", Prompt: "p1", QueueMax: 5, Timeout: 10 * time.Second})
-	inv2, _ := r.Enqueue(EnqueueParams{Session: "s", Task: "queued", Prompt: "p2", QueueMax: 5, Timeout: 10 * time.Second})
-	r.StartPump("s")
-	time.Sleep(20 * time.Millisecond)
-	if cleared := r.ResetSession("s", "test"); cleared != 2 {
-		t.Fatalf("ResetSession cleared %d, want 2", cleared)
-	}
-	for _, inv := range []*PendingInvocation{inv1, inv2} {
-		select {
-		case res := <-inv.Result:
-			if res.OK || res.Err == "" {
-				t.Fatalf("expected reset error result, got %+v", res)
-			}
-		case <-time.After(500 * time.Millisecond):
-			t.Fatalf("reset did not deliver result for %s", inv.Task)
-		}
-	}
-	// New enqueue should run normally after reset.
-	inv3, _ := r.Enqueue(EnqueueParams{Session: "s", Task: "after", Prompt: "p3", QueueMax: 5, Timeout: time.Second})
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		r.Report(inv3.ID, InvocationResult{OK: true, FinalMessage: "ok"})
-	}()
-	select {
-	case res := <-inv3.Result:
-		if !res.OK {
-			t.Fatalf("post-reset enqueue failed: %+v", res)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("post-reset enqueue never ran")
-	}
-}
-
 // TestSessionRouterEnqueueTimeoutClamp verifies that an in-process caller
 // passing Timeout=0 does not get an immediate abort (the timer would fire
 // on a zero duration). The router clamps to the default.
@@ -263,7 +217,7 @@ func TestSessionRouterPumpTimeoutAborts(t *testing.T) {
 // TestSessionRouterInjectsTmuxTarget verifies the pump injects into (and
 // aborts) the concrete tmux session target carried on the invocation, NOT the
 // bare logical session key used for FIFO routing. A persistent session keyed
-// "daily" actually lives in tmux as "leo-session-daily"; injecting into the
+// "daily" actually lives in tmux as "leo-agent-daily"; injecting into the
 // bare key targets a nonexistent session.
 func TestSessionRouterInjectsTmuxTarget(t *testing.T) {
 	r := newSessionRouter()
@@ -279,8 +233,8 @@ func TestSessionRouterInjectsTmuxTarget(t *testing.T) {
 	r.SetAborter(func(string) error { return nil })
 
 	inv, ok := r.Enqueue(EnqueueParams{
-		Session:     "daily",             // FIFO key (bare logical name)
-		TmuxSession: "leo-session-daily", // concrete tmux target
+		Session:     "daily",           // FIFO key (bare logical name)
+		TmuxSession: "leo-agent-daily", // concrete tmux target
 		Task:        "t",
 		Prompt:      "p",
 		QueueMax:    5,
@@ -298,8 +252,8 @@ func TestSessionRouterInjectsTmuxTarget(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if injectedInto != "leo-session-daily" {
-		t.Fatalf("injector targeted %q, want tmux session %q", injectedInto, "leo-session-daily")
+	if injectedInto != "leo-agent-daily" {
+		t.Fatalf("injector targeted %q, want tmux session %q", injectedInto, "leo-agent-daily")
 	}
 }
 
@@ -334,13 +288,13 @@ func TestSessionRouterAbortsTmuxTargetOnTimeout(t *testing.T) {
 	}
 }
 
-// TestSessionRouterResetDuringInjectAbortsZombie reproduces the race where
-// ResetSession clears inFlight while the pump is still inside the injector.
+// TestSessionRouterReportDuringInjectAbortsZombie reproduces the race where a
+// Report call clears inFlight while the pump is still inside the injector.
 // Without the post-inject re-check, the pump would start a timer on an
 // already-cleared invocation and the freshly-injected (now orphaned) turn
 // would keep running in tmux. The pump must instead abort the zombie turn
-// and move on; the reset result must be delivered exactly once.
-func TestSessionRouterResetDuringInjectAbortsZombie(t *testing.T) {
+// and move on; the result must be delivered exactly once.
+func TestSessionRouterReportDuringInjectAbortsZombie(t *testing.T) {
 	r := newSessionRouter()
 	defer r.Stop()
 	injectStarted := make(chan struct{})
@@ -357,7 +311,7 @@ func TestSessionRouterResetDuringInjectAbortsZombie(t *testing.T) {
 	})
 	inv, _ := r.Enqueue(EnqueueParams{
 		Session:     "s",
-		TmuxSession: "leo-session-s",
+		TmuxSession: "leo-agent-s",
 		Task:        "t",
 		Prompt:      "p",
 		QueueMax:    5,
@@ -366,15 +320,12 @@ func TestSessionRouterResetDuringInjectAbortsZombie(t *testing.T) {
 	r.StartPump("s")
 
 	<-injectStarted // pump is inside the injector, inFlight=inv
-	cleared := r.ResetSession("s", "killed")
+	r.Report(inv.ID, InvocationResult{OK: false, Err: "killed"})
 	close(releaseInject) // injector returns; pump re-checks inFlight
 
 	res := <-inv.Result
 	if res.OK {
-		t.Fatalf("expected reset error result, got OK")
-	}
-	if cleared != 1 {
-		t.Fatalf("reset cleared %d, want 1", cleared)
+		t.Fatalf("expected error result, got OK")
 	}
 	// The pump must abort the orphaned turn it just injected.
 	deadline := time.Now().Add(time.Second)

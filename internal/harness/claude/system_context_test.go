@@ -28,10 +28,6 @@ func TestSystemContextMerge(t *testing.T) {
 		{"agent: nudge + user", harness.KindAgent, nudge, user, true, nudge + "\n\n" + user},
 		{"agent: neither", harness.KindAgent, "", "", false, ""},
 
-		{"session: nudge only", harness.KindSession, nudge, "", true, nudge},
-		{"session: nudge + user", harness.KindSession, nudge, user, true, nudge + "\n\n" + user},
-		{"session: neither", harness.KindSession, "", "", false, ""},
-
 		{"task: nudge only", harness.KindTask, nudge, "", true, nudge},
 		{"task: nudge + user", harness.KindTask, nudge, user, true, nudge + "\n\n" + user},
 		{"task: neither", harness.KindTask, "", "", false, ""},

@@ -1,15 +1,15 @@
 # Background Mode
 
-For production use, you'll want the daemon (and the agents/sessions it supervises) to stay alive and restart automatically if it crashes. Leo offers two options.
+For production use, you'll want the daemon (and the agents it supervises) to stay alive and restart automatically if it crashes. Leo offers two options.
 
 ## Simple Background Mode
 
-Spawns the daemon in the background with automatic restart and exponential backoff for every supervised agent/session. No OS-level installation required.
+Spawns the daemon in the background with automatic restart and exponential backoff for every supervised agent. No OS-level installation required.
 
 ```bash
 leo service start            # start in background
 leo service status           # check if running
-leo service stop             # stop the session
+leo service stop             # stop the daemon
 ```
 
 **How it works:**

@@ -10,12 +10,12 @@ import (
 var cfgFile string
 
 // rootLong is shown by `leo --help` and by `leo` with no subcommand.
-const rootLong = `Leo supervises persistent Claude Code sessions and scheduled tasks.
+const rootLong = `Leo supervises Claude Code agents and scheduled tasks.
 
-Three core primitives:
-  - Agents     on-demand ephemeral sessions spawned from templates (` + "`leo agent`" + `)
-  - Tasks      cron-scheduled prompts that run on their own (` + "`leo run`" + `)
-  - Sessions   persistent Claude sessions managed under ` + "`leo service`" + `
+Two core primitives:
+  - Agents     on-demand ephemeral sessions spawned from templates (` + "`leo agent`" + `);
+               persistent tasks deliver into agent tmux sessions
+  - Tasks      cron-scheduled prompts, oneshot or persistent (` + "`leo run`" + `)
 
 Channels (Telegram, Slack, webhook, etc.) are provided by separately-installed
 Claude Code plugins — Leo only knows them as opaque plugin IDs.`
@@ -56,7 +56,6 @@ func newRootCmd() *cobra.Command {
 		newSetupCmd(),
 		newValidateCmd(),
 		newUpdateCmd(),
-		newSessionCmd(),
 		newCompletionCmd(),
 		newStatusCmd(),
 		newConfigCmd(),

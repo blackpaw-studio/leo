@@ -179,7 +179,7 @@ func TestClientReportTask(t *testing.T) {
 	})
 	ts := httptest.NewServer(h)
 	defer ts.Close()
-	if err := ReportTaskHTTP(context.Background(), ts.URL, "id-xyz", "csid", "all done", "leo-session-foo"); err != nil {
+	if err := ReportTaskHTTP(context.Background(), ts.URL, "id-xyz", "csid", "all done", "leo-agent-foo"); err != nil {
 		t.Fatalf("report: %v", err)
 	}
 	if received.InvocationID != "id-xyz" || received.SessionID != "csid" || received.FinalMessage != "all done" {

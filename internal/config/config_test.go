@@ -166,9 +166,6 @@ func TestValidateRejectsRemovedProviders(t *testing.T) {
 			Templates: map[string]TemplateConfig{
 				"x": {},
 			},
-			Sessions: map[string]SessionConfig{
-				"s": {Workspace: "/tmp/leo/workspace"},
-			},
 			HomePath: "/tmp/leo",
 		}
 	}
@@ -192,11 +189,6 @@ func TestValidateRejectsRemovedProviders(t *testing.T) {
 			tmpl.DeprecatedProvider = "corp"
 			c.Templates["x"] = tmpl
 		}, "templates.x.provider has been removed along with providers — see docs/configuration/harnesses.md"},
-		{"sessions.s.provider", func(c *Config) {
-			sess := c.Sessions["s"]
-			sess.DeprecatedProvider = "corp"
-			c.Sessions["s"] = sess
-		}, "sessions.s.provider has been removed along with providers — see docs/configuration/harnesses.md"},
 	}
 
 	for _, tt := range tests {
@@ -697,28 +689,6 @@ func TestValidateHarnessKindSupport(t *testing.T) {
 		cfg := &Config{
 			Templates: map[string]TemplateConfig{
 				"t": {Harness: "codex"},
-			},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Errorf("expected no error, got %v", err)
-		}
-	})
-
-	t.Run("session on codex is now valid", func(t *testing.T) {
-		cfg := &Config{
-			Sessions: map[string]SessionConfig{
-				"s": {Harness: "codex", Workspace: "/tmp/leo/workspace"},
-			},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Errorf("expected no error, got %v", err)
-		}
-	})
-
-	t.Run("session on opencode is now valid", func(t *testing.T) {
-		cfg := &Config{
-			Sessions: map[string]SessionConfig{
-				"s": {Harness: "opencode", Workspace: "/tmp/leo/workspace"},
 			},
 		}
 		if err := cfg.Validate(); err != nil {
@@ -1234,9 +1204,9 @@ func TestValidate_WebBind_InvalidNoDoubleError(t *testing.T) {
 	})
 }
 
-func TestSessionConfigParses(t *testing.T) {
+func TestPersistentTaskTemplateConfigParses(t *testing.T) {
 	yamlBlob := []byte(`
-sessions:
+templates:
   daily:
     workspace: /tmp/daily
     model: sonnet
@@ -1245,30 +1215,29 @@ sessions:
 tasks:
   standup:
     runtime: persistent
-    session: daily
+    template: daily
     schedule: "0 7 * * *"
     prompt_file: prompts/standup.md
     channels:
       - plugin:slack@official
     queue_max: 3
-    lazy: false
 `)
 	var cfg Config
 	if err := yaml.Unmarshal(yamlBlob, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	sess, ok := cfg.Sessions["daily"]
+	tmpl, ok := cfg.Templates["daily"]
 	if !ok {
-		t.Fatalf("expected sessions.daily")
+		t.Fatalf("expected templates.daily")
 	}
-	if sess.Workspace != "/tmp/daily" || sess.Model != "sonnet" {
-		t.Fatalf("session fields wrong: %+v", sess)
+	if tmpl.Workspace != "/tmp/daily" || tmpl.Model != "sonnet" {
+		t.Fatalf("template fields wrong: %+v", tmpl)
 	}
-	if got := sess.Channels; len(got) != 1 || got[0] != "plugin:slack@official" {
+	if got := tmpl.Channels; len(got) != 1 || got[0] != "plugin:slack@official" {
 		t.Fatalf("channels wrong: %+v", got)
 	}
 	task := cfg.Tasks["standup"]
-	if task.Runtime != "persistent" || task.Session != "daily" || task.QueueMax != 3 || task.Lazy {
+	if task.Runtime != "persistent" || task.Template != "daily" || task.QueueMax != 3 {
 		t.Fatalf("task fields wrong: %+v", task)
 	}
 }

@@ -108,8 +108,6 @@ func (c Claude) Args(spec harness.LaunchSpec) ([]string, error) {
 		return agentArgs(spec, opts), nil
 	case harness.KindTask:
 		return taskArgs(spec, opts), nil
-	case harness.KindSession:
-		return sessionArgs(spec, opts), nil
 	default:
 		return nil, fmt.Errorf("claude: unknown launch kind %q", spec.Kind)
 	}

@@ -437,6 +437,119 @@ func TestSpawnWithEmptyRepoSucceeds(t *testing.T) {
 	}
 }
 
+// --- SpawnFromTemplate (ensure-exists path for implicit persistent-task targets) ---
+
+// TestSpawnFromTemplateReachesSupervisor verifies SpawnFromTemplate spawns a
+// repo-less agent through the same supervisor path as a repo-less Spawn,
+// skipping the cfg.Templates[...] lookup entirely (the caller hands the
+// TemplateConfig directly, as config.ResolveTaskTarget does for implicit
+// targets).
+func TestSpawnFromTemplateReachesSupervisor(t *testing.T) {
+	home := t.TempDir()
+	wsDir := filepath.Join(home, "ws")
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	tmpl := config.TemplateConfig{Workspace: wsDir}
+	rec, err := m.SpawnFromTemplate(context.Background(), "my-task", tmpl)
+	if err != nil {
+		t.Fatalf("SpawnFromTemplate: %v", err)
+	}
+	if rec.Name != "my-task" {
+		t.Errorf("Name = %q, want %q", rec.Name, "my-task")
+	}
+	if rec.Workspace != wsDir {
+		t.Errorf("Workspace = %q, want %q", rec.Workspace, wsDir)
+	}
+	if sup.spawnCall == nil {
+		t.Fatalf("expected supervisor.SpawnAgent to be called")
+	}
+	if sup.spawnCall.Name != "my-task" {
+		t.Errorf("SpawnAgent name = %q, want %q", sup.spawnCall.Name, "my-task")
+	}
+	if sup.spawnCall.WorkDir != wsDir {
+		t.Errorf("SpawnAgent WorkDir = %q, want %q", sup.spawnCall.WorkDir, wsDir)
+	}
+
+	recs, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("want 1 record, got %d (err=%v)", len(recs), err)
+	}
+	if _, ok := recs["my-task"]; !ok {
+		t.Fatalf("expected record keyed %q, got %v", "my-task", recs)
+	}
+}
+
+func TestSpawnFromTemplateRequiresName(t *testing.T) {
+	m := New(func() (*config.Config, error) { return &config.Config{}, nil }, &capturingSupervisor{}, "", "")
+	if _, err := m.SpawnFromTemplate(context.Background(), "", config.TemplateConfig{}); err == nil {
+		t.Fatalf("expected error for empty name")
+	}
+}
+
+// --- Live / Suspended (ensure-exists liveness probes) ---
+
+func TestLiveReportsSupervisorState(t *testing.T) {
+	sup := &capturingSupervisor{agents: map[string]ProcessState{
+		"running-agent":    {Name: "running-agent", Status: "running"},
+		"starting-agent":   {Name: "starting-agent", Status: "starting"},
+		"stopped-agent":    {Name: "stopped-agent", Status: "stopped"},
+		"restarting-agent": {Name: "restarting-agent", Status: "restarting"},
+	}}
+	m := New(func() (*config.Config, error) { return &config.Config{}, nil }, sup, "", "")
+
+	if !m.Live("running-agent") {
+		t.Errorf("expected Live(running-agent) = true")
+	}
+	if !m.Live("starting-agent") {
+		t.Errorf("expected Live(starting-agent) = true (readiness-probed on injection)")
+	}
+	if m.Live("stopped-agent") {
+		t.Errorf("expected Live(stopped-agent) = false")
+	}
+	if m.Live("restarting-agent") {
+		t.Errorf("expected Live(restarting-agent) = false")
+	}
+	if m.Live("unknown") {
+		t.Errorf("expected Live(unknown) = false")
+	}
+}
+
+func TestSuspendedReportsAgentstoreState(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	if err := agentstore.Save(home, agentstore.Record{Name: "suspended-agent", Suspended: true}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "")
+
+	if !m.Suspended("suspended-agent") {
+		t.Errorf("expected Suspended(suspended-agent) = true")
+	}
+	if m.Suspended("unknown") {
+		t.Errorf("expected Suspended(unknown) = false")
+	}
+}
+
+func TestSuspendedFalseWhenLive(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	if err := agentstore.Save(home, agentstore.Record{Name: "both", Suspended: true}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"both": {Name: "both", Status: "running"}}}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "")
+
+	if m.Suspended("both") {
+		t.Errorf("expected Suspended(both) = false when Live is true")
+	}
+}
+
 func TestSpawnWithEmptyRepoNameCollisionSuffixes(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -577,6 +690,201 @@ func TestResumeRespawnsWithResumeAndClearsFlag(t *testing.T) {
 	// resuming a non-suspended/unknown agent errors
 	if _, err := m.Resume("ghost"); err == nil {
 		t.Fatal("resuming unknown agent should error")
+	}
+}
+
+// --- Reset ---
+
+// TestResetStopsClearsAndRespawns asserts Reset's stop -> clear -> start
+// order for a live claude agent, and that the record ends up with a fresh
+// (different) SessionID rather than the pre-reset one, with NoResume cleared
+// again once the fresh spawn succeeds.
+func TestResetStopsClearsAndRespawns(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"leo-x": {Name: "leo-x", Status: "running"},
+		},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "old-sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "old-sid"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("leo-x"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	// Order: StopAgent before SpawnAgent.
+	wantOrder := []string{"stop:leo-x", "spawn:leo-x"}
+	if len(sup.callOrder) != len(wantOrder) {
+		t.Fatalf("callOrder = %v, want %v", sup.callOrder, wantOrder)
+	}
+	for i, c := range wantOrder {
+		if sup.callOrder[i] != c {
+			t.Fatalf("callOrder[%d] = %q, want %q (full: %v)", i, sup.callOrder[i], c, sup.callOrder)
+		}
+	}
+
+	if sup.spawnCall == nil {
+		t.Fatal("SpawnAgent was not called")
+	}
+	// Fresh spawn: a --session-id, never --resume, and NOT the old id.
+	if containsFlag(sup.spawnCall.ClaudeArgs, "--resume") {
+		t.Fatalf("reset spawn must not pass --resume: %v", sup.spawnCall.ClaudeArgs)
+	}
+	if containsPair(sup.spawnCall.ClaudeArgs, "--session-id", "old-sid") {
+		t.Fatalf("reset spawn must not reuse the old session id: %v", sup.spawnCall.ClaudeArgs)
+	}
+	if !containsFlag(sup.spawnCall.ClaudeArgs, "--session-id") {
+		t.Fatalf("reset spawn (claude) should pass a fresh --session-id: %v", sup.spawnCall.ClaudeArgs)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	got := recs["leo-x"]
+	if got.SessionID == "" || got.SessionID == "old-sid" {
+		t.Fatalf("record SessionID = %q, want a fresh non-empty id", got.SessionID)
+	}
+	if got.NoResume {
+		t.Fatal("NoResume must be cleared once the fresh spawn succeeds")
+	}
+}
+
+// TestResetSkipsStopWhenNotLive verifies Reset on a suspended (non-live) agent
+// clears state and respawns without calling StopAgent (which would error
+// "not found" for a dead process).
+func TestResetSkipsStopWhenNotLive(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "old-sid",
+		ClaudeArgs: []string{"--session-id", "old-sid"},
+		Suspended:  true,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("leo-x"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if len(sup.stopCalls) != 0 {
+		t.Fatalf("StopAgent must not be called for a non-live agent, got %v", sup.stopCalls)
+	}
+	if sup.spawnCall == nil {
+		t.Fatal("SpawnAgent was not called")
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if recs["leo-x"].Suspended {
+		t.Fatal("Suspended flag must be cleared by Reset")
+	}
+}
+
+// TestResetUnknownAgentErrors verifies Reset errors on a name with no
+// persisted agentstore record.
+func TestResetUnknownAgentErrors(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("ghost"); err == nil {
+		t.Fatal("resetting an unknown agent should error")
+	}
+}
+
+// TestResetSpawnFailureLeavesRecoverableState verifies that when the early
+// clear-and-save succeeds but the respawn fails, Reset returns an error and
+// leaves the record in the documented interim state (SessionID cleared,
+// NoResume set, Suspended false) — not live, not resumable, but recognizable
+// as "mid-reset" — and that simply re-running Reset on the same name recovers:
+// StopAgent is skipped (the agent isn't live) and the spawn is retried.
+func TestResetSpawnFailureLeavesRecoverableState(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"leo-x": {Name: "leo-x", Status: "running"},
+		},
+		spawnErr: errors.New("supervisor boom"),
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "old-sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "old-sid"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	err := m.Reset("leo-x")
+	if err == nil {
+		t.Fatal("expected error when SpawnAgent fails")
+	}
+	if !strings.Contains(err.Error(), "leo agent reset leo-x") {
+		t.Fatalf("error should point at the recovery command, got: %v", err)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	got := recs["leo-x"]
+	if got.SessionID != "" {
+		t.Fatalf("interim SessionID = %q, want empty", got.SessionID)
+	}
+	if !got.NoResume {
+		t.Fatal("interim NoResume must be true")
+	}
+	if got.Suspended {
+		t.Fatal("interim Suspended must be false")
+	}
+
+	// Recovery: re-running Reset skips the stop (agent no longer live, since
+	// the earlier StopAgent call succeeded before the spawn failed) and
+	// retries the spawn.
+	sup.spawnErr = nil
+	if err := m.Reset("leo-x"); err != nil {
+		t.Fatalf("recovery reset: %v", err)
+	}
+	if len(sup.stopCalls) != 1 {
+		t.Fatalf("recovery reset must not call StopAgent again, stopCalls = %v", sup.stopCalls)
+	}
+
+	recs, _ = agentstore.Load(agentstore.FilePath(home))
+	got = recs["leo-x"]
+	if got.SessionID == "" {
+		t.Fatal("recovered record should have a fresh SessionID")
+	}
+	if got.NoResume {
+		t.Fatal("recovered record NoResume must be cleared")
+	}
+}
+
+// TestResetStopFailureAbortsBeforeClearing verifies a StopAgent failure stops
+// Reset before the record is mutated, so a failed reset leaves the original
+// session id intact rather than orphaning the agent mid-transition.
+func TestResetStopFailureAbortsBeforeClearing(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents:  map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+		stopErr: errors.New("tmux kill failed"),
+	}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Workspace: "/w", SessionID: "old-sid"})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("leo-x"); err == nil {
+		t.Fatal("expected error when StopAgent fails")
+	}
+	if sup.spawnCall != nil {
+		t.Fatal("SpawnAgent must not be called when StopAgent fails")
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if recs["leo-x"].SessionID != "old-sid" {
+		t.Fatal("SessionID must be left untouched when reset aborts on stop failure")
 	}
 }
 

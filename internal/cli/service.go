@@ -20,10 +20,11 @@ var supervised bool
 func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "service",
-		Short: "Run the leo daemon (persistent task sessions + agent supervision)",
-		Long: `Run the leo daemon, which boots every persistent task session in its
-own tmux session with restart-on-crash semantics. Subcommands
-(start/stop/restart/logs) manage the background daemon.`,
+		Short: "Run the leo daemon (agent supervision + persistent tasks)",
+		Long: `Run the leo daemon, which supervises every ephemeral agent in its own
+tmux session with restart-on-crash semantics. Persistent tasks deliver their
+prompts into agent tmux sessions, spawning/resuming the target agent on
+demand. Subcommands (start/stop/restart/logs) manage the background daemon.`,
 		Example: `  # Background daemon lifecycle
   leo service start
   leo service logs -f
@@ -71,14 +72,8 @@ func runService(cmd *cobra.Command, args []string) error {
 		warn.Printf("  web api token unavailable: %v — MCP server will refuse to start; slash commands will be unavailable\n", tokErr)
 	}
 
-	sessionSpecs, sErr := service.SessionSpecsFromConfig(cfg)
-	if sErr != nil {
-		warn.Printf("  session specs: %v\n", sErr)
-		sessionSpecs = nil
-	}
-	sessionCount := len(sessionSpecs)
-	info.Printf("Starting supervised mode (%d session(s))...\n", sessionCount)
-	return service.RunSupervised(claudePath, sessionSpecs, cfg.HomePath, cfgPath, webToken)
+	info.Printf("Starting supervised mode...\n")
+	return service.RunSupervised(claudePath, cfg.HomePath, cfgPath, webToken)
 }
 
 func newServiceStartCmd() *cobra.Command {
@@ -88,12 +83,12 @@ func newServiceStartCmd() *cobra.Command {
 		Use:   "start",
 		Short: "Start service in the background",
 		Long: `Start the leo daemon (web UI, cron scheduler, and agent supervision).
-It restores any previously running ephemeral agents and persistent task
-sessions, each in its own tmux session with restart-on-crash. The daemon no
-longer launches config-declared processes — agents and sessions are the only
-supervised primitives. The CLI stays foreground-free so this is safe to call
-from shell scripts. Pass --daemon to install the daemon as an OS service
-(launchd on macOS, systemd on Linux) so it survives reboots.`,
+It restores any previously running ephemeral agents, each in its own tmux
+session with restart-on-crash. The daemon no longer launches config-declared
+processes — agents are the only supervised primitive. The CLI stays
+foreground-free so this is safe to call from shell scripts. Pass --daemon to
+install the daemon as an OS service (launchd on macOS, systemd on Linux) so
+it survives reboots.`,
 		Example: `  # One-shot background start (this shell session)
   leo service start
 

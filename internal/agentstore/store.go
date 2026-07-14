@@ -141,6 +141,23 @@ func Rename(homePath, oldName, newName string, mutate func(Record) Record) error
 	return write(path, records)
 }
 
+// Update atomically re-reads, mutates, and re-saves a single agent record. It
+// errors if name is absent. The whole load-modify-write happens under storeMu
+// so it is consistent with concurrent Save/Remove/Load/Rename, matching the
+// existing Rename helper's shape.
+func Update(homePath, name string, mutate func(Record) Record) error {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	path := FilePath(homePath)
+	records, _ := loadLocked(path)
+	rec, ok := records[name]
+	if !ok {
+		return fmt.Errorf("agent %q not found", name)
+	}
+	records[name] = mutate(rec)
+	return write(path, records)
+}
+
 func write(path string, records map[string]Record) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating state dir: %w", err)

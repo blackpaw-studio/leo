@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -245,6 +246,38 @@ func pollStoredSessionID(t *testing.T, ws, sessionName string, timeout time.Dura
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("session id for %q was not persisted within %s", sessionName, timeout)
+	return ""
+}
+
+// readAgentstoreSessionID returns the persisted claude session id for the
+// named agent record (the key persistent, agent-routed tasks resume from —
+// see agent.Manager.Spawn/Resume and run.runPersistent's report-path
+// agentstore.Update call), or "" if the record doesn't exist yet or carries
+// no session id.
+func readAgentstoreSessionID(t *testing.T, ws, agentName string) string {
+	t.Helper()
+	recs, err := agentstore.Load(agentstore.FilePath(ws))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ""
+		}
+		t.Fatalf("loading agentstore: %v", err)
+	}
+	return recs[agentName].SessionID
+}
+
+// pollAgentstoreSessionID waits up to timeout for the agent's session id to
+// be persisted in the agentstore, returning the final value.
+func pollAgentstoreSessionID(t *testing.T, ws, agentName string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if id := readAgentstoreSessionID(t, ws, agentName); id != "" {
+			return id
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("agentstore session id for %q was not persisted within %s", agentName, timeout)
 	return ""
 }
 

@@ -25,7 +25,7 @@
   <img src="docs/demo/leo-demo.gif" alt="leo demo" width="860">
 </p>
 
-Leo keeps long-running [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions alive, runs cron-driven Claude tasks, and spawns on-demand coding agents from templates. Manage it from the CLI, a browser, or any Claude Code channel plugin (Telegram, Slack, webhook, …).
+Leo supervises long-running [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents — spawned from templates, restarted on crash — and runs cron-driven Claude tasks (which can inject into those agents). Manage it from the CLI, a browser, or any Claude Code channel plugin (Telegram, Slack, webhook, …).
 
 ## Install
 

@@ -97,7 +97,6 @@ nav:
       - leo status: cli/status.md
       - leo validate: cli/validate.md
       - leo config: cli/config.md
-      - leo session: cli/session.md
       - leo logs: cli/logs.md
       - leo update: cli/update.md
       - leo completion: cli/completion.md

@@ -36,9 +36,6 @@ var Excluded = map[Section][]string{
 	SectionTemplate: {"harness_options", "provider",
 		"permission_mode", "remote_control", "agent",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
-	SectionSession: {"harness_options", "provider",
-		"permission_mode", "agent",
-		"allowed_tools", "disallowed_tools", "append_system_prompt"},
 }
 
 // --- Shared field builders -------------------------------------------------
@@ -92,10 +89,9 @@ var registry = map[Section][]Field{
 		{Key: "retries", Label: "Retries", Group: "Execution"},
 		{Key: "silent", Label: "Silent", Group: "Execution"},
 		{Key: "runtime", Label: "Runtime", Kind: KindSelect, Options: "runtimes", Group: "Execution",
-			Help: "persistent injects into a supervised session instead of spawning claude -p"},
-		{Key: "session", Label: "Session", Kind: KindSelect, Options: "sessions", Group: "Execution",
-			Help: "named session from the sessions: block; empty derives one per task"},
-		{Key: "lazy", Label: "Lazy", Group: "Execution", Help: "start the session on first firing instead of at boot"},
+			Help: "persistent delivers into a supervised agent instead of spawning claude -p"},
+		{Key: "template", Label: "Template", Kind: KindSelect, Options: "templates", Group: "Execution",
+			Help: "named template from the templates: block; empty derives an implicit agent from this task"},
 		{Key: "queue_max", Label: "Queue max", Group: "Execution", Help: "max queued firings; 0 = default (5)"},
 		{Key: "channels", Label: "Channels", Group: "Notifications"},
 		{Key: "dev_channels", Label: "Dev channels", Group: "Notifications", Help: "Overrides channels when LEO_ENV=dev"},
@@ -114,14 +110,6 @@ var registry = map[Section][]Field{
 		{Key: "idle_suspend_after", Label: "Idle suspend after", Kind: KindDuration, Group: "Advanced", Advanced: true,
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},
 	}...)...),
-
-	SectionSession: append([]Field{
-		{Key: "workspace", Label: "Workspace", Group: "General"},
-		fHarness(),
-		fModel("Model"),
-		{Key: "channels", Label: "Channels", Group: "Channels"},
-	}, fAddDirs("Advanced", true), fEnv("Advanced", true),
-		Field{Key: "idle_timeout", Label: "Idle timeout", Kind: KindDuration, Group: "Advanced", Advanced: true}),
 
 	SectionClientHost: {
 		{Key: "ssh", Label: "SSH", Group: "General", Help: "user@host"},

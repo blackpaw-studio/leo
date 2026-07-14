@@ -124,6 +124,12 @@ type EnqueueRequest struct {
 	Channels     []string
 	QueueMax     int
 	Timeout      time.Duration
+	// Ensure, when non-nil, tells the daemon to make sure the target agent is
+	// injectable (spawn/resume as needed) before this invocation is injected.
+	// Set by runPersistent for every persistent task, which always resolves a
+	// target agent via config.ResolveTaskTarget. Nil is only used by callers
+	// (e.g. tests) that inject directly without an agent target.
+	Ensure *EnsureSpec
 }
 
 // EnqueueResponse is the daemon's reply to /task/enqueue.
@@ -164,6 +170,7 @@ func enqueueTask(ctx context.Context, cli *http.Client, baseURL string, req Enqu
 		"channels":        req.Channels,
 		"queue_max":       req.QueueMax,
 		"timeout_seconds": int(req.Timeout.Seconds()),
+		"ensure":          req.Ensure,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -264,88 +271,4 @@ func reportTask(ctx context.Context, cli *http.Client, baseURL, invocationID, se
 		return fmt.Errorf("report: status %d", resp.StatusCode)
 	}
 	return nil
-}
-
-// SessionResetResponse is the daemon's reply to /session/reset.
-type SessionResetResponse struct {
-	OK      bool `json:"ok"`
-	Cleared int  `json:"cleared"`
-}
-
-// ResetSession asks the daemon to drop all in-flight and queued invocations
-// for the named session, delivering an error result to each waiter. The
-// daemon does not abort tmux — callers (e.g. `leo session reset`) are
-// expected to have already killed the underlying claude. Reason is logged
-// in the error result delivered to waiters.
-func ResetSession(ctx context.Context, workDir, session, reason string) (SessionResetResponse, error) {
-	cli := newUnixClient(SockPath(workDir))
-	return resetSession(ctx, cli, "http://daemon", session, reason)
-}
-
-// ResetSessionHTTP is the test variant.
-func ResetSessionHTTP(ctx context.Context, baseURL, session, reason string) (SessionResetResponse, error) {
-	return resetSession(ctx, &http.Client{Timeout: 5 * time.Second}, baseURL, session, reason)
-}
-
-func resetSession(ctx context.Context, cli *http.Client, baseURL, session, reason string) (SessionResetResponse, error) {
-	body, err := json.Marshal(map[string]any{"session": session, "reason": reason})
-	if err != nil {
-		return SessionResetResponse{}, fmt.Errorf("marshaling reset request: %w", err)
-	}
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/session/reset", bytes.NewReader(body))
-	if err != nil {
-		return SessionResetResponse{}, fmt.Errorf("creating reset request: %w", err)
-	}
-	hreq.Header.Set("Content-Type", "application/json")
-	resp, err := cli.Do(hreq)
-	if err != nil {
-		return SessionResetResponse{}, fmt.Errorf("posting reset: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return SessionResetResponse{}, fmt.Errorf("reset: status %d", resp.StatusCode)
-	}
-	var out SessionResetResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return SessionResetResponse{}, fmt.Errorf("decoding reset response: %w", err)
-	}
-	return out, nil
-}
-
-// SessionDepthResponse is the daemon's reply to /session/depth.
-type SessionDepthResponse struct {
-	OK    bool `json:"ok"`
-	Depth int  `json:"depth"`
-}
-
-// SessionDepth returns the current queued + in-flight count for a session.
-func SessionDepth(ctx context.Context, workDir, session string) (SessionDepthResponse, error) {
-	cli := newUnixClient(SockPath(workDir))
-	return sessionDepth(ctx, cli, "http://daemon", session)
-}
-
-// SessionDepthHTTP is the test variant.
-func SessionDepthHTTP(ctx context.Context, baseURL, session string) (SessionDepthResponse, error) {
-	return sessionDepth(ctx, &http.Client{Timeout: 5 * time.Second}, baseURL, session)
-}
-
-func sessionDepth(ctx context.Context, cli *http.Client, baseURL, session string) (SessionDepthResponse, error) {
-	u := baseURL + "/session/depth?session=" + url.QueryEscape(session)
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return SessionDepthResponse{}, fmt.Errorf("creating depth request: %w", err)
-	}
-	resp, err := cli.Do(hreq)
-	if err != nil {
-		return SessionDepthResponse{}, fmt.Errorf("fetching depth: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return SessionDepthResponse{}, fmt.Errorf("depth: status %d", resp.StatusCode)
-	}
-	var out SessionDepthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return SessionDepthResponse{}, fmt.Errorf("decoding depth response: %w", err)
-	}
-	return out, nil
 }

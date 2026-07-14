@@ -5,7 +5,7 @@
     <span>
       <button class="btn" hx-post="/web/config/reload" hx-target="#flash-container">Reload config</button>
       <button class="btn danger" hx-post="/web/service/restart" hx-target="#flash-container"
-              hx-confirm="Restart the leo service? All supervised sessions and running agents restart.">Restart service</button>
+              hx-confirm="Restart the leo service? All supervised agents restart.">Restart service</button>
     </span>
   </div>
   {{if .Data.States}}
@@ -20,7 +20,7 @@
     </tbody>
   </table></div>
   {{else}}
-  <p class="empty-state">No agents or sessions running.</p>
+  <p class="empty-state">No agents running.</p>
   {{end}}
 </div>
 <div class="card">

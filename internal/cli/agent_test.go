@@ -941,6 +941,19 @@ func TestAgentCmdRegistersSuspendResume(t *testing.T) {
 	}
 }
 
+// TestAgentCmdRegistersReset verifies that 'reset' is registered as a
+// subcommand of 'agent', mirroring TestAgentCmdRegistersSuspendResume.
+func TestAgentCmdRegistersReset(t *testing.T) {
+	cmd := newAgentCmd()
+	names := make(map[string]bool)
+	for _, sub := range cmd.Commands() {
+		names[sub.Name()] = true
+	}
+	if !names["reset"] {
+		t.Error("expected 'reset' subcommand to be registered under agent")
+	}
+}
+
 // TestAgentSpawnHasIdleSuspendFlag verifies that the spawn subcommand exposes
 // the --idle-suspend flag.
 func TestAgentSpawnHasIdleSuspendFlag(t *testing.T) {

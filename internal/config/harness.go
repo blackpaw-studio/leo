@@ -31,24 +31,15 @@ func (c *Config) TemplateHarness(t TemplateConfig) string {
 	return harnessOrDefault(t.Harness, c.Defaults.Harness)
 }
 
-func (c *Config) SessionHarness(s SessionConfig) string {
-	return harnessOrDefault(s.Harness, c.Defaults.Harness)
-}
-
 // UsesHarness reports whether any scope in the config — defaults, or any
-// template/session/task — resolves (after the empty-string cascade down
-// from defaults) to the named harness.
+// template/task — resolves (after the empty-string cascade down from
+// defaults) to the named harness.
 func (c *Config) UsesHarness(name string) bool {
 	if c.DefaultsHarness() == name {
 		return true
 	}
 	for _, t := range c.Templates {
 		if c.TemplateHarness(t) == name {
-			return true
-		}
-	}
-	for _, s := range c.Sessions {
-		if c.SessionHarness(s) == name {
 			return true
 		}
 	}
@@ -89,11 +80,4 @@ func (c *Config) TaskHarnessOptions(t TaskConfig) map[string]any {
 
 func (c *Config) TemplateHarnessOptions(t TemplateConfig) map[string]any {
 	return c.scopeHarnessOptions(c.TemplateHarness(t), t.HarnessOptions)
-}
-
-// SessionHarnessOptions intentionally does NOT inherit defaults: persistent
-// sessions never cascaded the claude flat fields from defaults, and the
-// migration preserves that behavior exactly.
-func (c *Config) SessionHarnessOptions(s SessionConfig) map[string]any {
-	return mergeHarnessOptions(nil, s.HarnessOptions)
 }

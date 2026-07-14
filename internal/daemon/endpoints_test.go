@@ -33,7 +33,7 @@ func newServerWithRouter(t *testing.T) (*Server, *sessionRouter, *httptest.Serve
 func TestEnqueueRouteAccepts(t *testing.T) {
 	_, _, ts := newServerWithRouter(t)
 	body, _ := json.Marshal(map[string]any{
-		"session":         "leo-session-foo",
+		"session":         "leo-agent-foo",
 		"task":            "t",
 		"prompt":          "do it",
 		"channels":        []string{"plugin:slack@official"},
@@ -58,7 +58,7 @@ func TestEnqueueRouteAccepts(t *testing.T) {
 func TestAwaitGetsReport(t *testing.T) {
 	_, _, ts := newServerWithRouter(t)
 	enqBody, _ := json.Marshal(map[string]any{
-		"session":         "leo-session-foo",
+		"session":         "leo-agent-foo",
 		"task":            "t",
 		"prompt":          "x",
 		"queue_max":       3,
@@ -102,7 +102,7 @@ func TestAwaitGetsReport(t *testing.T) {
 func TestEnqueueRejectsOnQueueFull(t *testing.T) {
 	_, _, ts := newServerWithRouter(t)
 	body, _ := json.Marshal(map[string]any{
-		"session":         "leo-session-foo-full",
+		"session":         "leo-agent-foo-full",
 		"task":            "t",
 		"prompt":          "x",
 		"queue_max":       1,

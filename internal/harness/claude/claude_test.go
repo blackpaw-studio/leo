@@ -97,7 +97,6 @@ func TestClaudeEnv(t *testing.T) {
 	}{
 		{"task", harness.KindTask, map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}},
 		{"agent", harness.KindAgent, nil},
-		{"session", harness.KindSession, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -113,7 +112,7 @@ func TestClaudeEnv(t *testing.T) {
 }
 
 func TestClaudeSupportsKind(t *testing.T) {
-	for _, k := range []harness.Kind{harness.KindAgent, harness.KindTask, harness.KindSession} {
+	for _, k := range []harness.Kind{harness.KindAgent, harness.KindTask} {
 		if !(Claude{}.SupportsKind(k)) {
 			t.Errorf("SupportsKind(%v) = false, want true", k)
 		}

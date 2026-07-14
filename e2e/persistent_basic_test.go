@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
 )
@@ -18,9 +19,11 @@ import (
 // TestPersistentRuntimeHappyPath drives the persistent runner end-to-end
 // against a real daemon (with a fake injector standing in for tmux) and
 // asserts: (1) leo run exits 0, (2) the injected prompt carries the leo
-// marker plus task body, (3) history is recorded as success, and (4) the
-// session id derived from the auto-responder is persisted under the
-// session name for next-run resume.
+// marker plus task body, targeting the agent named after the task itself —
+// the implicit-target case (no `template:` field) — (3) history is recorded
+// as success, and (4) the session id the auto-responder derives is persisted
+// onto the agentstore record under the task/agent name, not the legacy
+// session store.
 func TestPersistentRuntimeHappyPath(t *testing.T) {
 	dir := mkTempE2EDir(t, "leo-e2e-persist-basic-*")
 
@@ -48,6 +51,16 @@ tasks:
 		t.Fatalf("writing prompt: %v", err)
 	}
 
+	// No AgentEnsurer is wired on this daemon (the test drives the injector
+	// directly, bypassing agent.Manager.Spawn — see
+	// TestPersistentEnsureSpawnsMissingAgent for real-spawn coverage), so
+	// pre-seed an agentstore record for the implicit target agent — mirrors
+	// the real-world side effect of a first spawn — so the report-path
+	// agentstore.Update call below has a record to mutate.
+	if err := agentstore.Save(dir, agentstore.Record{Name: "daily", Workspace: dir}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+
 	srv := startDaemon(t, dir, cfgPath)
 	cap := &promptCapture{}
 	installAutoResponder(t, srv, dir, cap)
@@ -62,10 +75,12 @@ tasks:
 		t.Fatalf("expected exactly 1 injected prompt, got %d", len(rows))
 	}
 	row := rows[0]
-	// Topology A's implicit session is supervised as "leo-session-<task>";
-	// the injector must target that, not the bare task name.
-	if row.Session != "leo-session-daily" {
-		t.Errorf("injected session = %q, want %q (implicit Topology A)", row.Session, "leo-session-daily")
+	// A task with no `session:` field routes through the agent-ensure path
+	// (config.ResolveTaskTarget's implicit target): the injector must target
+	// the agent's tmux session "leo-<task>", not the legacy
+	// "leo-session-<task>" supervised-session name.
+	if row.Session != "leo-daily" {
+		t.Errorf("injected session = %q, want %q (agent-routed implicit target)", row.Session, "leo-daily")
 	}
 	if row.InvID == "" {
 		t.Error("injected prompt missing leo:invocation marker")
@@ -79,9 +94,21 @@ tasks:
 		t.Errorf("history reason = %q, want %q", entry.Reason, history.ReasonSuccess)
 	}
 
-	got := pollStoredSessionID(t, dir, "daily", 3*time.Second)
-	if want := "csid-leo-session-daily"; got != want {
-		t.Errorf("stored session id = %q, want %q", got, want)
+	// Agent-routed tasks do not persist through the legacy
+	// "session:"+name store — agents track their own session id via
+	// agentstore instead (see agent.Manager.Spawn/Resume). Give the runner a
+	// moment to (not) write it, then assert it stayed empty.
+	time.Sleep(200 * time.Millisecond)
+	if got := readStoredSessionID(t, dir, "daily"); got != "" {
+		t.Errorf("expected no legacy session-store entry for an agent-routed task, got %q", got)
+	}
+
+	// The discovered session id lands on the agentstore record keyed by the
+	// implicit target's name — "daily", the task name itself, since no
+	// `template:` was set (config.ResolveTaskTarget's implicit branch).
+	got := pollAgentstoreSessionID(t, dir, "daily", 3*time.Second)
+	if want := "csid-leo-daily"; got != want {
+		t.Errorf("agentstore session id = %q, want %q", got, want)
 	}
 }
 
@@ -156,8 +183,11 @@ tasks:
 	if !strings.Contains(strings.ToLower(notice.Prompt), "failed") {
 		t.Errorf("follow-up notice should mention failure: %q", notice.Prompt)
 	}
-	if notice.Session != "leo-session-flaky" {
-		t.Errorf("follow-up should target original session %q, got %q", "leo-session-flaky", notice.Session)
+	// "flaky" has no `session:` field, so it (and its notify_on_fail
+	// follow-up) route through the agent-ensure path: "leo-flaky", not the
+	// legacy "leo-session-flaky".
+	if notice.Session != "leo-flaky" {
+		t.Errorf("follow-up should target original agent session %q, got %q", "leo-flaky", notice.Session)
 	}
 	if notice.InvID == "" {
 		t.Error("follow-up notice should carry its own invocation marker")
@@ -222,8 +252,10 @@ tasks:
 		t.Fatalf("expected exactly 1 injected prompt, got %d", len(rows))
 	}
 	row := rows[0]
-	if row.Session != "leo-session-nightly" {
-		t.Errorf("injected session = %q, want %q", row.Session, "leo-session-nightly")
+	// No `session:` field → agent-ensure routing: "leo-nightly", not the
+	// legacy "leo-session-nightly".
+	if row.Session != "leo-nightly" {
+		t.Errorf("injected session = %q, want %q", row.Session, "leo-nightly")
 	}
 	if strings.Contains(row.Prompt, "leo:invocation=") {
 		t.Errorf("codex prompt must be bare (no marker), got %q", row.Prompt)
@@ -237,9 +269,11 @@ tasks:
 		t.Errorf("history reason = %q, want %q", entry.Reason, history.ReasonSuccess)
 	}
 
-	got := pollStoredSessionID(t, dir, "nightly", 3*time.Second)
-	if got != "thread-1" {
-		t.Errorf("stored session id = %q, want %q", got, "thread-1")
+	// Agent-routed tasks skip the legacy "session:"+name store entirely (see
+	// the identical note in TestPersistentRuntimeHappyPath).
+	time.Sleep(200 * time.Millisecond)
+	if got := readStoredSessionID(t, dir, "nightly"); got != "" {
+		t.Errorf("expected no legacy session-store entry for an agent-routed task, got %q", got)
 	}
 }
 

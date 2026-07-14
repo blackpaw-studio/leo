@@ -9,14 +9,10 @@ import (
 
 func TestOptionSources(t *testing.T) {
 	cfg := &config.Config{
-		Sessions:  map[string]config.SessionConfig{"daily": {}},
 		Templates: map[string]config.TemplateConfig{"dev": {}},
 	}
 	src := OptionSources{Cfg: cfg, Agents: func() []string { return []string{"rocket"} }}
 
-	if opts := src.For("sessions"); len(opts) != 2 || opts[1].Value != "daily" {
-		t.Errorf("sessions: got %v", opts)
-	}
 	if opts := src.For("agents"); len(opts) != 2 || opts[1].Value != "rocket" {
 		t.Errorf("agents: got %v", opts)
 	}
@@ -77,7 +73,7 @@ func TestTryForUnknownSourceReturnsNil(t *testing.T) {
 }
 
 func TestHarnessFieldRegisteredOnConfigSections(t *testing.T) {
-	for _, section := range []Section{SectionDefaults, SectionTask, SectionTemplate, SectionSession} {
+	for _, section := range []Section{SectionDefaults, SectionTask, SectionTemplate} {
 		found := false
 		for _, f := range FieldsFor(section) {
 			if f.Key == "harness" {

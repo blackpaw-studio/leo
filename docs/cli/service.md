@@ -23,15 +23,15 @@ leo service status --daemon
 
 ## Description
 
-`leo service` runs the leo daemon: the web UI, the cron scheduler, the daemon IPC server, and supervision for ephemeral agents and persistent task sessions. On start it restores any agents/sessions that were running before the daemon last stopped (see `RestoreAgents`), then keeps each of them alive in its own tmux session with restart-on-crash and exponential backoff.
+`leo service` runs the leo daemon: the web UI, the cron scheduler, the daemon IPC server, and supervision for ephemeral agents — including the agents backing `runtime: persistent` tasks. On start it restores any agents that were running before the daemon last stopped (see `RestoreAgents`), then keeps each of them alive in its own tmux session with restart-on-crash and exponential backoff.
 
-`leo service` no longer manages config-declared "processes" — agents (spawned via `leo agent spawn` or a template) and persistent task sessions are the only things it supervises.
+`leo service` no longer manages config-declared "processes" — agents (spawned via `leo agent spawn`, a template, or ensure-exists'd by a persistent task firing) are the only thing it supervises.
 
 ## Subcommands
 
 ### `leo service start`
 
-Starts the daemon in the background with automatic restart on crash for supervised agents/sessions. Uses exponential backoff (5s initial, 60s max) to avoid rapid restart loops.
+Starts the daemon in the background with automatic restart on crash for supervised agents. Uses exponential backoff (5s initial, 60s max) to avoid rapid restart loops.
 
 **Flags:**
 
@@ -41,7 +41,7 @@ Starts the daemon in the background with automatic restart on crash for supervis
 
 ### `leo service stop`
 
-Stops the running daemon and tears down its supervised tmux sessions. Session IDs are preserved so a subsequent start resumes where each agent/session left off.
+Stops the running daemon and tears down its supervised tmux sessions. Session IDs are preserved so a subsequent start resumes where each agent left off.
 
 **Flags:**
 
@@ -76,7 +76,7 @@ Tail the daemon log file.
 
 ## Claude Arguments
 
-For each supervised agent or session, Leo builds `claude` arguments based on its config:
+For each supervised agent, Leo builds `claude` arguments based on its config:
 
 ```
 claude --channels <channels>               \

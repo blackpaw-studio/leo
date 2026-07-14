@@ -104,32 +104,6 @@ func readFile(t *testing.T, path string) string {
 	return string(b)
 }
 
-// baselineSessionForm is taskFormBase's session-scope counterpart.
-func baselineSessionForm(t *testing.T, s *Server, name string) url.Values {
-	t.Helper()
-	cfg, err := s.loadConfig()
-	if err != nil {
-		t.Fatalf("loading config: %v", err)
-	}
-	sc, ok := cfg.Sessions[name]
-	if !ok {
-		t.Fatalf("seed session %q not found", name)
-	}
-	form := url.Values{}
-	for _, fv := range schema.Values(&sc, schema.SectionSession, nil) {
-		switch fv.Kind {
-		case schema.KindBool:
-			form.Add(fv.Key, "false")
-			if fv.Checked {
-				form.Add(fv.Key, "true")
-			}
-		default:
-			form.Set(fv.Key, fv.Value)
-		}
-	}
-	return form
-}
-
 func TestDefaultsSaveRoundTrip(t *testing.T) {
 	s, dir := newTestServer(t)
 	form := url.Values{}
@@ -255,17 +229,15 @@ func templateFormBase(t *testing.T, s *Server, name string) url.Values {
 // docs/configuration/harnesses.md's Web UI section).
 
 // TestTaskSaveCoversNewFields guards handleConfigTaskSave against the same
-// registry-drift risk Task 6 covered for defaults: runtime/session/lazy/
+// registry-drift risk Task 6 covered for defaults: runtime/template/
 // queue_max are the fields added since the old hand-rolled handleConfigTask,
 // and must round-trip through the schema-driven save path.
 func TestTaskSaveCoversNewFields(t *testing.T) {
 	s, dir := newTestServer(t) // seed config's "demo" task (web_test.go)
 	form := taskFormBase(t, s, "demo")
 	form.Set("runtime", "persistent")
-	form.Set("session", "")
+	form.Set("template", "")
 	form.Set("queue_max", "7")
-	form.Set("lazy", "false")
-	form.Add("lazy", "true")
 
 	w := postForm(t, s, "/web/config/task/demo", form)
 	if w.Code != http.StatusOK {
@@ -273,7 +245,7 @@ func TestTaskSaveCoversNewFields(t *testing.T) {
 	}
 	cfg := reloadTestConfig(t, dir)
 	task := cfg.Tasks["demo"]
-	if task.Runtime != "persistent" || task.QueueMax != 7 || !task.Lazy {
+	if task.Runtime != "persistent" || task.QueueMax != 7 {
 		t.Errorf("new fields not saved: %+v", task)
 	}
 }
@@ -366,8 +338,8 @@ func TestTaskEditPageShowsAllFields(t *testing.T) {
 
 	for _, key := range []string{
 		"schedule", "timezone", "enabled", "prompt_file", "model",
-		"max_turns", "timeout", "retries", "silent", "runtime", "session",
-		"lazy", "queue_max", "channels", "dev_channels", "notify_on_fail",
+		"max_turns", "timeout", "retries", "silent", "runtime", "template",
+		"queue_max", "channels", "dev_channels", "notify_on_fail",
 		"workspace",
 	} {
 		if !strings.Contains(body, `name="`+key+`"`) {
@@ -892,25 +864,6 @@ func TestBuildFormWithHarnessUnregisteredHarness(t *testing.T) {
 	}
 }
 
-// TestSessionsFormNeverInheritsHarnessOptions guards
-// SessionHarnessOptions'/harnessView's documented rule: persistent sessions
-// never cascaded harness_options from defaults, and the web form must not
-// start doing so either.
-func TestSessionsFormNeverInheritsHarnessOptions(t *testing.T) {
-	cfg := &config.Config{
-		Defaults: config.DefaultsConfig{HarnessOptions: map[string]any{"permission_mode": "auto"}},
-		Sessions: map[string]config.SessionConfig{"r": {Workspace: "/w"}},
-	}
-	s, _ := newTestServer(t)
-	sc := cfg.Sessions["r"]
-	fd := s.buildFormWithHarness(schema.SectionSession, &sc, cfg, "/a", "r")
-	for _, f := range fd.Harness.Fields {
-		if f.Inherited != "" {
-			t.Errorf("session field %s shows inherited %q; sessions never cascade", f.Key, f.Inherited)
-		}
-	}
-}
-
 // TestConfigFormRendersHarnessOptionsSubForm is the render-side TDD anchor:
 // it executes config_form with a formData carrying a Harness sub-form and
 // asserts the harness_options.* input name, the "Harness options" group
@@ -1022,24 +975,26 @@ func TestSaveEmptyOptionsOmitsHarnessOptionsKey(t *testing.T) {
 
 // TestSaveOpencodePermissionYAMLRoundTrip covers the OptionYAMLMap decode
 // path end-to-end through a real save: a multi-line YAML mapping (including a
-// nested map value) submitted as a session's harness_options.permission input
+// nested map value) submitted as a task's harness_options.permission input
 // must come back out of the saved config as the equivalent nested
 // map[string]any.
 func TestSaveOpencodePermissionYAMLRoundTrip(t *testing.T) {
-	cfg := &config.Config{Sessions: map[string]config.SessionConfig{"r": {Workspace: "/w"}}}
+	cfg := &config.Config{Tasks: map[string]config.TaskConfig{
+		"r": {Schedule: "0 * * * *", PromptFile: "p.md", Workspace: "/w"},
+	}}
 	s, cfgPath := newTestServerWithConfigFile(t, cfg)
 
-	form := baselineSessionForm(t, s, "r")
+	form := taskFormBase(t, s, "r")
 	form.Set("harness", "opencode")
 	form.Set("model", "anthropic/claude-sonnet-5") // opencode requires provider/model
 	form.Set("harness_options.permission", "bash: allow\nwebfetch:\n  \"github.com/*\": allow")
-	w := postForm(t, s, "/web/config/session/r", form)
+	w := postForm(t, s, "/web/config/task/r", form)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
 	}
 
 	saved := loadConfigFile(t, cfgPath)
-	perm, _ := saved.Sessions["r"].HarnessOptions["permission"].(map[string]any)
+	perm, _ := saved.Tasks["r"].HarnessOptions["permission"].(map[string]any)
 	if perm["bash"] != "allow" {
 		t.Errorf("permission = %#v", perm)
 	}

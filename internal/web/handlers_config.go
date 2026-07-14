@@ -108,8 +108,8 @@ func (s *Server) buildFormWithHarness(section schema.Section, target any, cfg *c
 // harnessView resolves a form target's own options map, effective harness,
 // and the inherited-placeholder map per the cascade rules (mirrors
 // config.scopeHarnessOptions: defaults' options cascade only into scopes
-// running the same harness; sessions and defaults itself never show
-// inherited placeholders).
+// running the same harness; defaults itself never shows inherited
+// placeholders).
 func harnessView(target any, cfg *config.Config) (own map[string]any, name string, inherited map[string]any) {
 	sameHarnessDefaults := func(n string) map[string]any {
 		if n == cfg.DefaultsHarness() {
@@ -126,8 +126,6 @@ func harnessView(target any, cfg *config.Config) (own map[string]any, name strin
 	case *config.TemplateConfig:
 		name = cfg.TemplateHarness(*v)
 		return v.HarnessOptions, name, sameHarnessDefaults(name)
-	case *config.SessionConfig:
-		return v.HarnessOptions, cfg.SessionHarness(*v), nil
 	}
 	return nil, config.DefaultHarnessName, nil
 }
@@ -297,7 +295,7 @@ func (s *Server) handleConfigClientSave(w http.ResponseWriter, r *http.Request) 
 
 // handleConfigHostSave is the schema-driven save path for a single remote
 // host's inline card form. Uses the same map-entry copy-then-write-back
-// shape as handleConfigSessionSave. Host connection details (ssh, ssh_args,
+// shape as handleConfigTemplateSave. Host connection details (ssh, ssh_args,
 // leo_path, tmux_path) only affect future `leo agent` dispatch to that host,
 // not the running service, so no restart is flagged.
 func (s *Server) handleConfigHostSave(w http.ResponseWriter, r *http.Request) {
@@ -310,31 +308,6 @@ func (s *Server) handleConfigHostSave(w http.ResponseWriter, r *http.Request) {
 		func(cfg *config.Config, v any) { cfg.Client.Hosts[name] = *(v.(*config.HostConfig)) },
 		nil, // no harness sub-form for this section
 		fmt.Sprintf("Host %q saved", name), false)
-}
-
-// handleConfigSessionSave is the schema-driven save path for a single
-// persistent session's inline card form. Uses the same map-entry
-// copy-then-write-back shape as handleConfigHostSave. Sessions boot lazily
-// on first use — there is no long-running process for a config change to
-// invalidate — so unlike processes this never flags a restart.
-func (s *Server) handleConfigSessionSave(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	s.applySection(w, r, schema.SectionSession,
-		func(cfg *config.Config) (any, bool) {
-			sc, ok := cfg.Sessions[name]
-			return &sc, ok
-		},
-		func(cfg *config.Config, v any) { cfg.Sessions[name] = *(v.(*config.SessionConfig)) },
-		func(cfg *config.Config, target any, form url.Values) error {
-			sc := target.(*config.SessionConfig)
-			opts, err := applyScopeHarnessOptions(form, cfg.SessionHarness(*sc))
-			if err != nil {
-				return err
-			}
-			sc.HarnessOptions = opts
-			return nil
-		},
-		fmt.Sprintf("Session %q saved", name), false)
 }
 
 // kindName maps a resolved schema.Kind to the string components/form.html

@@ -156,14 +156,6 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
 	if spec.Template == "" {
 		return Record{}, fmt.Errorf("template is required")
 	}
-	if spec.Branch != "" && spec.Repo == "" {
-		return Record{}, fmt.Errorf("--worktree requires a repo")
-	}
-	if spec.Repo != "" {
-		if err := ValidateRepo(spec.Repo); err != nil {
-			return Record{}, err
-		}
-	}
 
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -174,10 +166,80 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
 		return Record{}, fmt.Errorf("template %q not found", spec.Template)
 	}
 
+	return m.spawnResolved(ctx, cfg, tmpl, spec)
+}
+
+// SpawnFromTemplate spawns a repo-less agent named `name` directly from an
+// already-resolved TemplateConfig, skipping the cfg.Templates[...] lookup
+// Spawn performs. Used by the daemon's ensure-exists task-delivery path
+// (internal/daemon/ensure.go) for persistent tasks with an implicit target —
+// config.ResolveTaskTarget synthesizes tmpl from the task's own fields rather
+// than a named config template, so there is nothing to look up.
+func (m *Manager) SpawnFromTemplate(ctx context.Context, name string, tmpl config.TemplateConfig) (Record, error) {
+	if name == "" {
+		return Record{}, fmt.Errorf("name is required")
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return Record{}, fmt.Errorf("loading config: %w", err)
+	}
+	return m.spawnResolved(ctx, cfg, tmpl, SpawnSpec{Template: name, Name: name})
+}
+
+// spawnResolved is the shared post-template-lookup body for Spawn and
+// SpawnFromTemplate: validate, then route to the worktree or shared-workspace
+// flow.
+func (m *Manager) spawnResolved(ctx context.Context, cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec) (Record, error) {
+	if spec.Branch != "" && spec.Repo == "" {
+		return Record{}, fmt.Errorf("--worktree requires a repo")
+	}
+	if spec.Repo != "" {
+		if err := ValidateRepo(spec.Repo); err != nil {
+			return Record{}, err
+		}
+	}
+
 	if spec.Branch != "" {
 		return m.spawnWorktree(ctx, cfg, tmpl, spec)
 	}
 	return m.spawnShared(cfg, tmpl, spec)
+}
+
+// Live reports whether name is a currently running (supervised) agent.
+// Live reports whether name is a currently supervised ephemeral agent whose
+// process is up or coming up. "running" and "starting" both count: the
+// injector readiness-probes before delivering, so it's safe (and desirable)
+// to treat a still-booting agent as a valid injection target rather than
+// falsely reporting "not live" and triggering a redundant spawn/resume.
+// "restarting" and "stopped" do not count — there is no process to inject
+// into yet.
+func (m *Manager) Live(name string) bool {
+	info, ok := m.sup.EphemeralAgents()[name]
+	if !ok {
+		return false
+	}
+	return info.Status == "running" || info.Status == "starting"
+}
+
+// Suspended reports whether name has a persisted agentstore record marked
+// Suspended (and is not currently live). Config/store load failures are
+// treated as "not suspended" — the caller (the ensure-exists path) falls
+// through to spawning fresh, which is the safe default when state can't be
+// read.
+func (m *Manager) Suspended(name string) bool {
+	if m.Live(name) {
+		return false
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return false
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return false
+	}
+	rec, ok := stored[name]
+	return ok && rec.Suspended
 }
 
 // spawnShared is the non-worktree flow. Workspace resolution may do a network
@@ -711,6 +773,78 @@ func (m *Manager) Resume(name string) (Record, error) {
 		StartedAt:     time.Now(),
 		Env:           rec.Env,
 	}, nil
+}
+
+// Reset forces an agent back to a brand-new conversation: it stops any live
+// process/tmux session, clears the persisted SessionID (and marks NoResume so
+// a daemon restart racing this call can't resurrect the old session via
+// RestoreAgents' jsonl scan), then respawns the agent fresh — the same
+// spawn-a-new-session logic Spawn/spawnShared uses, not Resume's --resume
+// path. Errors when name has no persisted agentstore record. If the respawn
+// itself fails, the record is left in that already-cleared interim state
+// (SessionID="", NoResume=true, Suspended=false) rather than rolled back;
+// re-running Reset on the same name recovers, since the agent is no longer
+// live so the stop is skipped and only the spawn is retried.
+func (m *Manager) Reset(name string) error {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return fmt.Errorf("loading agentstore: %w", err)
+	}
+	rec, ok := stored[name]
+	if !ok {
+		return fmt.Errorf("no agentstore record for %q (cannot reset an unpersisted agent)", name)
+	}
+
+	if _, live := m.sup.EphemeralAgents()[name]; live {
+		if err := m.sup.StopAgent(name); err != nil {
+			return fmt.Errorf("stopping agent for reset: %w", err)
+		}
+	}
+
+	rec.SessionID = ""
+	rec.NoResume = true
+	rec.Suspended = false
+	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
+		return fmt.Errorf("clearing agent session state: %w", err)
+	}
+
+	// Fresh spawn, not resume: strip any stored --session-id/--resume flags,
+	// then (claude only) mint and pass a brand-new --session-id the same way
+	// spawnShared does for a first spawn. Non-claude harnesses leave
+	// storedSessionID empty so the tmux-TUI driver's post-hoc discovery
+	// (IDs.Get()=="") re-arms, matching a genuinely fresh spawn.
+	isClaude := rec.Harness == "" || rec.Harness == "claude"
+	args := ResumeArgs(rec.ClaudeArgs, "")
+	storedSessionID := ""
+	if isClaude {
+		sessionID := session.NewID()
+		args = append(args, "--session-id", sessionID)
+		storedSessionID = sessionID
+	}
+
+	if err := m.sup.SpawnAgent(SpawnRequest{
+		Name:       rec.Name,
+		ClaudeArgs: args,
+		WorkDir:    rec.Workspace,
+		Env:        rec.Env,
+		WebPort:    rec.WebPort,
+		WebToken:   m.webToken,
+		Harness:    rec.Harness,
+	}); err != nil {
+		return fmt.Errorf("respawning %q after reset: %w (re-run 'leo agent reset %s' to retry)", name, err, name)
+	}
+
+	rec.ClaudeArgs = args
+	rec.SessionID = storedSessionID
+	rec.NoResume = false
+	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
+		log.Printf("agent %q reset but agentstore.Save failed: %v — flag may persist until next save", rec.Name, err)
+	}
+	return nil
 }
 
 // Prune removes the on-disk worktree and agentstore record for a stopped

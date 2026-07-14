@@ -178,8 +178,8 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 }
 
 // referencedHarnesses returns the sorted, de-duplicated set of harness names
-// referenced anywhere in the config: defaults plus every task, template, and
-// session scope.
+// referenced anywhere in the config: defaults plus every task and template
+// scope.
 func referencedHarnesses(cfg *config.Config) []string {
 	seen := map[string]bool{cfg.DefaultsHarness(): true}
 	for _, task := range cfg.Tasks {
@@ -187,9 +187,6 @@ func referencedHarnesses(cfg *config.Config) []string {
 	}
 	for _, tmpl := range cfg.Templates {
 		seen[cfg.TemplateHarness(tmpl)] = true
-	}
-	for _, sess := range cfg.Sessions {
-		seen[cfg.SessionHarness(sess)] = true
 	}
 
 	names := make([]string, 0, len(seen))

@@ -193,7 +193,7 @@ func TestPageRoutes(t *testing.T) {
 	s, _ := newTestServer(t)
 
 	pages := []string{
-		"/tasks", "/agents", "/sessions",
+		"/tasks", "/agents",
 		"/config/defaults", "/config/templates",
 		"/config/settings", "/service",
 	}

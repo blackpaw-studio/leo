@@ -30,7 +30,7 @@ internal/prereq/          -> Prerequisite checks (claude CLI, tmux)
 internal/prompt/          -> Interactive terminal helpers (colored prompts,
                              yes/no, choices)
 internal/run/             -> Task runner: prompt assembly + claude invocation
-internal/service/         -> Daemon lifecycle + agent/session supervisor
+internal/service/         -> Daemon lifecycle + agent supervisor
                              (tmux management, launchd/systemd integration)
 internal/session/         -> Session ID persistence (JSON key-value store)
 internal/setup/           -> Setup wizard
@@ -47,8 +47,8 @@ internal/web/             -> Web UI (htmx + Go html/template, embedded via
 
 ### Key Design Patterns
 
-**Agent/session supervisor**
-:   `service.RunSupervised()` starts the daemon, then restores and supervises every ephemeral agent and persistent task session, each in its own tmux session (`leo-<name>`) with restart loop and backoff.
+**Agent supervisor**
+:   `service.RunSupervised()` starts the daemon, then restores and supervises every ephemeral agent — including the agents backing `runtime: persistent` tasks — each in its own tmux session (`leo-<name>`) with restart loop and backoff.
 
 **Dual listener daemon**
 :   The daemon serves a Unix socket for CLI IPC and an optional TCP listener for the web UI from the same process. Bearer-token auth and allowed-hosts pinning gate non-loopback binds.
@@ -57,7 +57,7 @@ internal/web/             -> Web UI (htmx + Go html/template, embedded via
 :   Package-level function variables (`run.execCommand`, `service.supervisedExecFn`, and similar) are replaced in tests so command execution and side effects can be stubbed.
 
 **Config resolution**
-:   `config.FindConfig()` walks up from the current directory to find `leo.yaml`, falling back to `~/.leo/leo.yaml`. Settings cascade from `defaults` to per-session and per-task overrides.
+:   `config.FindConfig()` walks up from the current directory to find `leo.yaml`, falling back to `~/.leo/leo.yaml`. Settings cascade from `defaults` to per-template and per-task overrides.
 
 **Leo home**
 :   Config lives at `~/.leo/leo.yaml`, state at `~/.leo/state/`, default workspace at `~/.leo/workspace/`.

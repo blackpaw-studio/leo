@@ -1,6 +1,6 @@
 # tmux Config
 
-Leo attaches you to running agents and persistent sessions through `tmux`. Every `leo attach`, `leo agent attach`, and `leo session attach` ultimately runs `tmux -L leo attach -t leo-<name>` — locally or, for remote hosts, over `ssh -t`. Your `~/.tmux.conf` is the UI you see whenever you're driving an agent interactively.
+Leo attaches you to running agents through `tmux`. Every `leo attach` and `leo agent attach` ultimately runs `tmux -L leo attach -t leo-<name>` — locally or, for remote hosts, over `ssh -t`. Your `~/.tmux.conf` is the UI you see whenever you're driving an agent interactively, including one backing a `runtime: persistent` task.
 
 > **Leo uses a dedicated tmux socket.** Every Leo session lives on the `leo` server, so `tmux ls` on your personal tmux is unaffected — no `leo-*` clutter. To inspect Leo's sessions directly run `tmux -L leo ls`. The tmux config below still applies: `~/.tmux.conf` is loaded for every server, including `leo`.
 

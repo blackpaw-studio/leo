@@ -1,13 +1,14 @@
 # Harnesses
 
 A **harness** is the coding-agent CLI leo drives — `claude`, `codex`, and
-`opencode` today. Every template, task, and session picks a harness
+`opencode` today. Every template and task picks a harness
 (directly or via cascade) and configures it through a strictly validated
 `harness_options:` map instead of a flat, harness-specific field list.
 
 All three harnesses run every leo primitive: scheduled tasks (`leo run
-<task>` / cron), ephemeral agents, and persistent sessions (`templates.*`,
-`sessions.*`, and `tasks.*` with `runtime: persistent`). The only thing that
+<task>` / cron), ephemeral agents, and persistent tasks (`templates.*` and
+`tasks.*` with `runtime: persistent`, which deliver into a template's
+agent — see [Persistent Tasks](persistent-tasks.md)). The only thing that
 stays claude-only is channel plugins — `codex` and `opencode` message via
 leo's own MCP tools instead (see [Support matrix](#support-matrix) and
 [Session driver semantics](#session-driver-semantics) below).
@@ -18,22 +19,21 @@ leo's own MCP tools instead (see [Support matrix](#support-matrix) and
 |---|---|---|---|
 | Scheduled tasks (`leo run`) | ✅ | ✅ | ✅ |
 | Ephemeral agents | ✅ | ✅ | ✅ |
-| Persistent sessions | ✅ | ✅ | ✅ |
+| Persistent tasks | ✅ | ✅ | ✅ |
 | Channel plugins (`channels:`/`dev_channels:`) | ✅ | ❌ (use `leo_send_message` MCP tool) | ❌ (use `leo_send_message` MCP tool) |
 
 ## Session driver semantics
 
-Every harness drives a live session (ephemeral agent or persistent session)
-the same way: a resident, interactive TUI process lives inside the
-leo-managed tmux session (`leo-<name>`) for the whole lifetime of the
-agent/session. Messages are injected by pasting into that pane —
+Every harness drives a live agent (spawned directly, or ensure-exists'd as a
+persistent task's target) the same way: a resident, interactive TUI process
+lives inside the leo-managed tmux session (`leo-<name>`) for the whole
+lifetime of the agent. Messages are injected by pasting into that pane —
 a readiness probe confirms the TUI's input line is idle and the pasted text
 actually landed before `send-keys Enter` fires — and delivery is
 fire-and-forget: leo does not wait on (or return) a synchronous per-turn
-result for any harness. `leo attach` / `leo session attach` / `leo agent
-attach` are a plain `tmux attach` for all three harnesses — same status bar,
-same `Ctrl-b d` detach, same remote-ssh attach flow, no per-harness special
-casing.
+result for any harness. `leo attach` and `leo agent attach` are a plain
+`tmux attach` for all three harnesses — same status bar, same `Ctrl-b d`
+detach, same remote-ssh attach flow, no per-harness special casing.
 
 What differs is only session-id bookkeeping and per-harness launch
 specifics:
@@ -63,13 +63,14 @@ specifics:
 `idle_suspend_after` now works identically across all three harnesses — every
 harness has a resident tmux TUI that can be suspended (tmux session killed)
 and resumed (relaunched with the stored session id), so the idle sweep no
-longer skips codex/opencode.
+longer skips codex/opencode. This applies equally to a persistent task's
+target agent — see [Persistent Tasks → Idle-suspend interaction](persistent-tasks.md#idle-suspend-interaction).
 
 **Migration note.** If you're updating from a pre-uniform-tmux-TUI build:
 stale `~/.leo/state/opencode/*.json` (old server port/password state) and
 `~/.leo/state/transcripts/*.log` (old per-turn codex/opencode transcripts)
 files are inert under the new model and can be deleted manually. Any
-running codex/opencode agent or session started under the old model must be
+running codex/opencode agent started under the old model must be
 stopped and respawned to pick up the tmux-TUI supervise model — there is no
 live in-place migration.
 
@@ -97,11 +98,10 @@ any consumer's config shape beyond that adapter's own `harness_options` keys.
 Every scope that used to accept flat claude fields now has two knobs:
 
 - **`harness:`** — the adapter name for that scope. Optional; when unset on
-  a template/task/session it cascades from `defaults.harness`, and
+  a template/task it cascades from `defaults.harness`, and
   `defaults.harness` itself falls back to the built-in default `claude` when
-  unset. Applies to `defaults`, `templates.*`, `tasks.*`, and
-  `sessions.*` — there is no separate top-level `harness:` key; `defaults`
-  is the root of the cascade.
+  unset. Applies to `defaults`, `templates.*`, and `tasks.*` — there is no
+  separate top-level `harness:` key; `defaults` is the root of the cascade.
 - **`harness_options:`** — a map of adapter-specific keys. The adapter named
   by that scope's resolved `harness:` strictly validates the map at config
   load and on every web-UI save: unknown keys, wrong value types, and
@@ -115,7 +115,7 @@ defaults:
     permission_mode: default
     allowed_tools: [Read, Grep]
 
-sessions:
+templates:
   assistant:
     workspace: ~/.leo/workspace
     channels: [plugin:telegram@claude-plugins-official]
@@ -126,7 +126,6 @@ sessions:
       allowed_tools: [Read, Edit, Bash]
       disallowed_tools: [WebFetch]
 
-templates:
   coding:
     workspace: ~/agents
     harness_options:
@@ -153,11 +152,9 @@ tasks:
   nested values. This only happens when the scope resolves to the **same
   harness** as `defaults`; options never leak across harnesses (e.g. a
   `defaults.harness: codex` block's options are not merged into a
-  `templates.foo` entry that sets `harness: claude`).
-- **Sessions never inherit `defaults.harness_options`.** This matches
-  pre-migration behavior — persistent sessions never cascaded the flat
-  claude fields from `defaults` either — and the migration preserves it
-  exactly. Set every option you want directly under `sessions.<name>.harness_options`.
+  `templates.foo` entry that sets `harness: claude`). This applies the same
+  way whether a template backs ephemeral agents or a persistent task's
+  target — the merge rule is per-scope, not per-primitive.
 - **Template `remote_control` is template-own-only.** Unlike every other
   claude option, `templates.*.harness_options.remote_control` does *not*
   inherit from `defaults.harness_options.remote_control` — the defaults
@@ -191,7 +188,7 @@ whose resolved harness doesn't support channels is a validation error.
 ## Codex option reference
 
 `codex` runs every leo primitive — scheduled tasks, ephemeral agents, and
-persistent sessions. Ephemeral agents and persistent sessions drive a
+persistent tasks. Ephemeral agents and persistent-task targets drive a
 resident TUI in tmux, described in
 [Session driver semantics](#session-driver-semantics) above. One-shot
 scheduled tasks (`leo run <task>` without `runtime: persistent`) stay
@@ -246,7 +243,7 @@ Other things to know:
 ## Opencode option reference
 
 `opencode` runs every leo primitive — scheduled tasks, ephemeral agents, and
-persistent sessions. Ephemeral agents and persistent sessions drive a
+persistent tasks. Ephemeral agents and persistent-task targets drive a
 resident TUI in tmux, described in
 [Session driver semantics](#session-driver-semantics) above. One-shot
 scheduled tasks (`leo run <task>` without `runtime: persistent`) stay
@@ -353,7 +350,7 @@ Note there is no `approval:` key for codex — approval policy is fixed at
 ## Migration table
 
 Every flat claude field that used to live directly on `defaults`,
-`templates.*`, `tasks.*`, or `sessions.*` has moved one level
+`templates.*`, or `tasks.*` has moved one level
 down, under `harness_options`, with the same key name:
 
 | Old field | New field |
@@ -370,13 +367,13 @@ For example:
 
 ```yaml
 # before
-sessions:
+templates:
   assistant:
     permission_mode: acceptEdits
     remote_control: true
 
 # after
-sessions:
+templates:
   assistant:
     harness_options:
       permission_mode: acceptEdits
@@ -395,7 +392,7 @@ endpoint (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …) using its
 existing per-scope `env:` map:
 
 ```yaml
-sessions:
+templates:
   scout:
     workspace: ~/agents/scout
     env:
@@ -403,9 +400,9 @@ sessions:
       ANTHROPIC_AUTH_TOKEN: ${GLM_API_KEY}
 ```
 
-`env:` works the same way on `tasks:` — both oneshot tasks and dedicated
-persistent tasks (`runtime: persistent` with no `session:`) can target a
-custom endpoint:
+`env:` works the same way on `tasks:` — both oneshot tasks and
+persistent tasks with an implicit target (`runtime: persistent` with no
+`template:`) can target a custom endpoint:
 
 ```yaml
 tasks:
@@ -440,7 +437,7 @@ startup, daemon boot) and before every web-UI config save. Each error names
 the exact scope, the exact field, and points back here:
 
 ```
-sessions.foo.permission_mode has moved to sessions.foo.harness_options.permission_mode (claude harness) — see docs/configuration/harnesses.md
+templates.foo.permission_mode has moved to templates.foo.harness_options.permission_mode (claude harness) — see docs/configuration/harnesses.md
 providers: this section has been removed — see docs/configuration/harnesses.md
 defaults.provider has been removed along with providers — see docs/configuration/harnesses.md
 ```
@@ -451,17 +448,17 @@ Other harness-related validation errors follow the same style:
 - An unknown `harness_options` key, wrong type, or invalid enum value:
   reported by the adapter's `DecodeOptions`, e.g. `defaults.harness_options: unknown option "foo" (valid: agent, allowed_tools, append_system_prompt, bypass_permissions, disallowed_tools, permission_mode, remote_control)`.
 - `channels:`/`dev_channels:` on a harness that doesn't support them:
-  `sessions.foo.channels: the codex harness does not support channel plugins; use leo's MCP tools for messaging`.
+  `templates.foo.channels: the codex harness does not support channel plugins; use leo's MCP tools for messaging`.
 - A kind the harness can't run: the literal error text baked into
   `internal/config/config.go` is `templates.foo.harness: the <name> harness
   cannot run ephemeral agents yet (only scheduled tasks) — see
-  docs/configuration/harnesses.md` (same pattern for `sessions.*.harness` →
-  "run persistent sessions", and a `runtime: persistent` task's `.harness` →
-  "run persistent tasks yet (persistent tasks run through sessions)"). This
-  is dead code for every built-in harness today — `claude`, `codex`, and
-  `opencode` all pass `SupportsKind` for every primitive (see
-  [Support matrix](#support-matrix)) — it only fires for a future harness
-  whose adapter doesn't implement `SupportsKind` for a given kind.
+  docs/configuration/harnesses.md` (same pattern for a `runtime: persistent`
+  task's `.harness` → "cannot run persistent tasks yet (persistent tasks
+  deliver into agents)"). This is dead code for every built-in harness
+  today — `claude`, `codex`, and `opencode` all pass `SupportsKind` for
+  every primitive (see [Support matrix](#support-matrix)) — it only fires
+  for a future harness whose adapter doesn't implement `SupportsKind` for a
+  given kind.
 
 If you hit any of these on an existing `leo.yaml`, move the named field
 under `harness_options` (or drop `provider`/`providers` and switch to
@@ -469,11 +466,11 @@ under `harness_options` (or drop `provider`/`providers` and switch to
 
 ## Web UI
 
-The web UI's Defaults, Tasks, Templates, and Sessions forms all
+The web UI's Defaults, Tasks, and Templates forms all
 edit `harness:` and `harness_options:` directly — there is no separate
 "harness" management page; the adapter registry backs an ordinary form field.
 
-- **Harness dropdown.** Every one of those four forms has a `Harness` field
+- **Harness dropdown.** Every one of those three forms has a `Harness` field
   (`internal/web/schema/registry.go`'s `fHarness()`) rendered as a
   `KindSelect` over the `"harnesses"` option source, which lists
   `harness.Names()` — the registered adapter names (`claude`, `codex`,
@@ -541,10 +538,8 @@ edit `harness:` and `harness_options:` directly — there is no separate
   recomputes this placeholder set against the *newly selected* harness on
   every dropdown change, not the stored one, so switching a scope onto the
   defaults harness lights placeholders up and switching away drops them.
-  The defaults form itself and every `sessions.*` form never show inherited
-  placeholders — sessions don't cascade `defaults.harness_options` at all
-  (see [Merge rules](#merge-rules)), and the defaults form has no higher
-  scope to inherit from.
+  The defaults form itself never shows inherited placeholders — it has no
+  higher scope to inherit from.
 - **Validation on save.** Every config-saving handler funnels through
   `validateAndSave` (`internal/web/handlers.go`), which calls the same
   `Config.Validate()` the CLI and daemon boot use — adapter `DecodeOptions`,
@@ -555,5 +550,5 @@ edit `harness:` and `harness_options:` directly — there is no separate
   flash message instead.
 - **Harness visibility elsewhere.** Template and task list pages
   show a harness column/badge per row (dimmed when the value is inherited
-  rather than set on that scope), and session cards show the same badge —
-  so the resolved harness is visible without opening each form.
+  rather than set on that scope), so the resolved harness is visible
+  without opening each form.
