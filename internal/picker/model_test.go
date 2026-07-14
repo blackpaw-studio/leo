@@ -42,36 +42,82 @@ func (f *fakeBackend) Resume(_ context.Context, name string) error {
 	return nil
 }
 
-// drive feeds a message to the model, runs the returned command to completion
-// (recursively feeding produced messages except tea.Quit), and returns the
-// resulting model. Batched/tick commands other than Quit are executed once.
+// drive feeds a message to the model and, if it returns a command, executes
+// that command and recursively feeds its result back in (except tea.Quit,
+// which stops the drive and reports quit=true).
+//
+// The real Bubble Tea runtime never delivers a raw tea.BatchMsg to
+// model.Update — it intercepts Batch commands itself (tea.go) and schedules
+// each sub-command independently, in its own goroutine, with no ordering
+// guarantee and no deadline. This harness has no such runtime underneath it,
+// so every command — whether standalone or a sub-command unpacked from a
+// tea.BatchMsg — is executed via driveCmd, which time-boxes the call. That
+// matters because a single, non-batched command can itself resolve into a
+// slow chain: e.g. bubbles' textinput cursor accepts an initialBlinkMsg and
+// replies with a BlinkCmd that blocks for its ~530ms blink interval. Test
+// assertions in this package only depend on sub-millisecond synchronous
+// commands (action dispatch, filter matching, spinner ticks), so anything
+// slower than driveCmdTimeout is simply abandoned rather than awaited.
 func drive(t *testing.T, m model, msg tea.Msg) (model, bool) {
 	t.Helper()
 	next, cmd := m.Update(msg)
 	nm := next.(model)
-	quit := false
-	if cmd != nil {
-		if isQuit(cmd) {
-			return nm, true
-		}
-		// Execute the command and feed non-quit messages back in.
-		out := cmd()
-		if out != nil {
-			if _, isQ := out.(tea.QuitMsg); isQ {
-				return nm, true
-			}
-			nm, quit = drive(t, nm, out)
-		}
+	if cmd == nil {
+		return nm, false
 	}
-	return nm, quit
+	return driveCmd(t, nm, cmd)
 }
 
-func isQuit(cmd tea.Cmd) bool {
-	if cmd == nil {
-		return false
+// driveCmdTimeout bounds how long driveCmd waits for a command to resolve.
+// It must comfortably exceed every command this package's model actually
+// depends on for its assertions (all synchronous, sub-millisecond) while
+// staying well under bubbles' cursor-blink interval (~530ms) so that chain
+// is reliably abandoned rather than awaited.
+const driveCmdTimeout = 50 * time.Millisecond
+
+// driveCmd executes cmd on its own goroutine and waits up to driveCmdTimeout
+// for a result, discarding (never blocking on) anything slower.
+func driveCmd(t *testing.T, m model, cmd tea.Cmd) (model, bool) {
+	t.Helper()
+	ch := make(chan tea.Msg, 1)
+	go func() { ch <- cmd() }()
+	select {
+	case out := <-ch:
+		return driveMsg(t, m, out)
+	case <-time.After(driveCmdTimeout):
+		// The command didn't resolve promptly (e.g. cursor blink); not
+		// needed for these assertions, so move on without it.
+		return m, false
 	}
-	_, ok := cmd().(tea.QuitMsg)
-	return ok
+}
+
+// driveMsg feeds a single already-produced message back into the model. A
+// tea.BatchMsg is unpacked sub-command by sub-command instead of being
+// handed to model.Update directly, since the model (like the real runtime)
+// does not know how to interpret a raw batch.
+func driveMsg(t *testing.T, m model, out tea.Msg) (model, bool) {
+	t.Helper()
+	if out == nil {
+		return m, false
+	}
+	if _, isQ := out.(tea.QuitMsg); isQ {
+		return m, true
+	}
+	if batch, ok := out.(tea.BatchMsg); ok {
+		quit := false
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			var q bool
+			m, q = driveCmd(t, m, c)
+			if q {
+				quit = true
+			}
+		}
+		return m, quit
+	}
+	return drive(t, m, out)
 }
 
 func sized(m model) model {
@@ -101,12 +147,12 @@ func TestFilterNarrowsRows(t *testing.T) {
 		t.Fatalf("pre-filter visible = %d, want 2", got)
 	}
 
-	// Enter filter mode and type "alp".
-	next, _ := m.Update(keyRunes("/"))
-	m = next.(model)
+	// Enter filter mode and type "alp". Filtering is async in bubbles v1
+	// (list.filterItems runs as a Cmd), so each keystroke's Cmd must be
+	// driven to completion for VisibleItems to reflect it.
+	m, _ = drive(t, m, keyRunes("/"))
 	for _, ch := range []string{"a", "l", "p"} {
-		next, _ = m.Update(keyRunes(ch))
-		m = next.(model)
+		m, _ = drive(t, m, keyRunes(ch))
 	}
 
 	if got := len(m.list.VisibleItems()); got != 1 {

@@ -137,9 +137,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.rebuild()
 
-	case tea.BatchMsg:
-		return m.updateBatch(msg)
-
 	case actionMsg:
 		return m.onActionDone(msg)
 
@@ -153,7 +150,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// While the user is typing a filter, the list owns every key.
 		if m.list.SettingFilter() {
-			return m.updateFilterKey(msg)
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
 		}
 		if m.renaming {
 			return m.updateRename(msg)
@@ -167,36 +166,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
-}
-
-// updateBatch resolves a tea.BatchMsg (the message tea.Batch's Cmd produces
-// when executed) by running each sub-command in order and feeding its result
-// back through Update, accumulating model state as it goes. Bubble Tea's real
-// runtime never delivers a raw BatchMsg to Update — it unpacks batches itself
-// and schedules each sub-command independently — so this case only matters
-// for callers (tests, or a future alternate runtime) that execute a Cmd
-// directly and forward whatever Msg it yields; it keeps that path equivalent
-// to what the real runtime would eventually deliver, one message at a time.
-func (m model) updateBatch(msg tea.BatchMsg) (tea.Model, tea.Cmd) {
-	var follow []tea.Cmd
-	for _, c := range msg {
-		if c == nil {
-			continue
-		}
-		out := c()
-		if out == nil {
-			continue
-		}
-		if _, isQuit := out.(tea.QuitMsg); isQuit {
-			return m, tea.Quit
-		}
-		next, cmd := m.Update(out)
-		m = next.(model)
-		if cmd != nil {
-			follow = append(follow, cmd)
-		}
-	}
-	return m, tea.Batch(follow...)
 }
 
 // updateKey handles the top-level keybindings when not filtering/renaming/confirming.
@@ -229,30 +198,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
-}
-
-// updateFilterKey forwards a keystroke to the list while the filter input is
-// focused. bubbles' list applies filtering asynchronously: typing a character
-// returns a Cmd batching a cursor-blink tick with list.filterItems, and the
-// latter must be executed and fed back in as a list.FilterMatchesMsg before
-// VisibleItems reflects the new filter text. We resolve that hop eagerly —
-// the closures involved (filter matching, cursor blink) are synchronous and
-// side-effect-free — by routing the result back through Update (which knows
-// how to unpack a BatchMsg and forward an unrecognized message straight to
-// the list, exactly like list.FilterMatchesMsg needs) so filtering is never
-// a keystroke behind.
-func (m model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	if cmd == nil {
-		return m, nil
-	}
-	out := cmd()
-	if out == nil {
-		return m, nil
-	}
-	next, followCmd := m.Update(out)
-	return next.(model), followCmd
 }
 
 func (m model) selectedRow() (row, bool) {
