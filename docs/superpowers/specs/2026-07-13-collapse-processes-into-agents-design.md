@@ -65,11 +65,14 @@ change. Nothing reads the old `processes:` section afterward.
   persistence, boot restore.
 - `/agents` as the single runtime home; `/templates` for editing blueprints.
 
-### Salvage (small, additive)
+### Salvage — CUT
 
-- `stale_resume_hours` (currently process-only, controls `--resume` staleness) moves onto
-  `TemplateConfig` and the agentstore record, resolved defaults → template → record. This
-  is a real knob for long-lived agents that resume often. Optional — cut if it adds noise.
+- `stale_resume_hours` was considered for a move onto `TemplateConfig`. **Cut.**
+  Investigation showed the staleness gate (`resolveSessionState`) is wired *only* into the
+  process supervision path (`cli/service.go:136,221`); `SpawnAgent` receives pre-built args
+  with no staleness gate, so agents have no stale-resume behavior today. Keeping the field
+  would mean building a new gate into the agent arg-builder — a feature, not a salvage.
+  This change stays a pure deletion. Stale-resume on agents can be a focused follow-up.
 
 ## Non-goals
 
@@ -85,6 +88,18 @@ change. Nothing reads the old `processes:` section afterward.
    template's own workspace for a no-git fixed workspace).
 3. The agent persists in `agents.json` and auto-returns on every daemon restart.
 4. Manage it with `leo agent suspend|resume|stop|attach|logs|rename`.
+
+## Resolved during planning (code-level forks)
+
+- **`session: process:<name>` (persistent-task Topology C):** **dropped entirely.**
+  `config.SessionTopology`/`TopologyProcess`, the `process:` case in `ResolveSession`
+  (`internal/config/session.go`), and its consumer in `internal/run/persistent.go` are
+  removed. Persistent tasks still bind to long-lived sessions via the `sessions:` map;
+  the `process:`-prefixed binding form is gone.
+- **`leo setup` default assistant:** setup now seeds a `templates.assistant` blueprint
+  **and performs a one-time `agent spawn` of it** after the daemon starts, so a fresh
+  install still has a running assistant. The spawn is imperative (a one-time action), not
+  config-driven autostart — consistent with the no-autostart decision.
 
 ## Testing
 
