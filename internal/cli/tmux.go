@@ -175,32 +175,6 @@ func shellQuoteArg(s string) string {
 // tmux with the quotes still attached and fail to resolve.
 func remoteShellTarget(target string) string { return shellQuoteArg(target) }
 
-// captureTmuxPane runs a one-shot `tmux capture-pane -p -S -<lines>` against
-// the given session and writes output to the shared agentStdout. Local and
-// remote paths share identical shape — remote just wraps through ssh with the
-// host's configured tmux path.
-func captureTmuxPane(res config.HostResolution, session string, lines int) error {
-	tail := []string{"-p", "-S", fmt.Sprintf("-%d", lines)}
-	if res.Localhost {
-		tmuxPath, err := tmuxLocate()
-		if err != nil {
-			return err
-		}
-		// Local: argv goes straight to tmux, no shell, so the raw "=name:" target
-		// resolves as-is.
-		subArgs := tmux.Args(append([]string{"capture-pane", "-t", tmux.PaneTarget(session)}, tail...)...)
-		return runShellCmd(tmuxPath, subArgs)
-	}
-	// Remote: the target crosses the remote login shell, so quote the exact-match
-	// pane target to survive zsh `=` expansion (see remoteShellTarget).
-	subArgs := tmux.Args(append([]string{"capture-pane", "-t", remoteShellTarget(tmux.PaneTarget(session))}, tail...)...)
-	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
-	sshArgs = append(sshArgs, sshControlOpts(res)...)
-	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
-	sshArgs = append(sshArgs, subArgs...)
-	return hintRemoteTmuxMissing(res, runShellCmd("ssh", sshArgs))
-}
-
 // followTmuxSession streams tmux pane output via `tail -f` on a pipe-pane log.
 // Used by `leo agent logs -f`. When res is remote, it shells through ssh and
 // uses the host's configured tmux path.

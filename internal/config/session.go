@@ -32,8 +32,7 @@ func (c *Config) ResolveSession(taskName string) (string, SessionTopology, Sessi
 		return "", TopologyDedicated, SessionConfig{}, fmt.Errorf("task %q is not runtime: persistent", taskName)
 	}
 
-	switch {
-	case task.Session == "":
+	if task.Session == "" {
 		// Topology A — dedicated, inherit from task. Lazy and QueueMax remain
 		// task-scoped fields; they are not threaded into SessionConfig.
 		// TaskConfig has no Agent/Env/AddDirs fields, so those stay zero in
@@ -47,15 +46,14 @@ func (c *Config) ResolveSession(taskName string) (string, SessionTopology, Sessi
 			Model:     task.Model,
 			Channels:  task.Channels,
 		}, nil
-
-	default:
-		// Topology B — shared session from sessions: map.
-		sess, ok := c.Sessions[task.Session]
-		if !ok {
-			return "", TopologyShared, SessionConfig{}, fmt.Errorf("task %q references sessions.%s which is not defined", taskName, task.Session)
-		}
-		return task.Session, TopologyShared, sess, nil
 	}
+
+	// Topology B — shared session from sessions: map.
+	sess, ok := c.Sessions[task.Session]
+	if !ok {
+		return "", TopologyShared, SessionConfig{}, fmt.Errorf("task %q references sessions.%s which is not defined", taskName, task.Session)
+	}
+	return task.Session, TopologyShared, sess, nil
 }
 
 // channelSubset reports whether every element of want appears in have.
