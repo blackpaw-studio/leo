@@ -39,26 +39,35 @@ const (
 
 // Run starts the MCP server on stdin/stdout. It reads env (LEO_PROCESS_NAME,
 // LEO_WEB_PORT, LEO_API_TOKEN) to bind itself to the supervised process and
-// authenticate against the daemon. Returns when stdin closes or a fatal
-// error occurs.
+// authenticate against the daemon. When the daemon's TCP listener isn't
+// available (LEO_WEB_PORT/LEO_API_TOKEN unset), it degrades to local-only
+// mode instead of refusing to start: purely local tools (leo_skill) still
+// work, daemon-backed tools are simply omitted from the registry. Returns
+// when stdin closes or a fatal error occurs.
 func Run() error {
+	return runWith(os.Stdin, os.Stdout, registryFromEnv())
+}
+
+// registryFromEnv builds the tool registry from the process environment.
+// Full mode (daemon-backed tools + leo_skill) requires both LEO_WEB_PORT and
+// LEO_API_TOKEN — the daemon's /api/* and /web/* routes are bearer-protected,
+// so an unauthenticated client would fail every daemon call with 401 anyway.
+// If either is missing, it falls back to local-only mode (leo_skill only)
+// rather than erroring, so the MCP server still starts when the web listener
+// is disabled. LEO_PROCESS_NAME may be empty in local-only mode since no
+// registered tool in that mode uses it.
+func registryFromEnv() *registry {
 	processName := os.Getenv("LEO_PROCESS_NAME")
-	if processName == "" {
-		return fmt.Errorf("LEO_PROCESS_NAME not set; leo mcp-server must be launched by a supervised Claude process")
-	}
 	port := os.Getenv("LEO_WEB_PORT")
-	if port == "" {
-		return fmt.Errorf("LEO_WEB_PORT not set; the Leo daemon TCP listener must be enabled")
-	}
-	// LEO_API_TOKEN is required: the daemon's /api/* and /web/* routes are
-	// bearer-protected, so an unauthenticated MCP client will fail every
-	// request with 401. Refusing to start gives a clearer error than letting
-	// every tool call fail opaquely.
 	token := os.Getenv("LEO_API_TOKEN")
-	if token == "" {
-		return fmt.Errorf("LEO_API_TOKEN not set; Leo web auth is required (check that the daemon created ~/.leo/state/api.token)")
+
+	if port == "" || token == "" {
+		fmt.Fprintln(os.Stderr, "leo mcp-server: local-only mode (daemon listener unavailable)")
+		return newRegistry(nil, processName)
 	}
-	return runWith(os.Stdin, os.Stdout, newRegistry(newDaemonClient(port, token), processName))
+
+	fmt.Fprintln(os.Stderr, "leo mcp-server: full mode (daemon listener available)")
+	return newRegistry(newDaemonClient(port, token), processName)
 }
 
 func runWith(in io.Reader, out io.Writer, reg *registry) error {

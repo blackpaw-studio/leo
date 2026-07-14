@@ -68,21 +68,26 @@ func TestEnsureConfigIdempotent(t *testing.T) {
 	}
 }
 
-func TestAppendArgSkippedWhenWebDisabled(t *testing.T) {
+func TestAppendArgIncludedWhenWebDisabled(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{HomePath: dir}
 	cfg.Web.Enabled = false
 
 	args := AppendArg([]string{"--model", "sonnet"}, cfg)
-	for i, a := range args {
-		if a == "--mcp-config" {
-			t.Errorf("--mcp-config unexpectedly added at %d: %v", i, args)
+	found := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--mcp-config" && strings.HasSuffix(args[i+1], "leo-mcp.json") {
+			found = true
 		}
 	}
+	if !found {
+		t.Errorf("expected --mcp-config <leo-mcp.json> in args even when web is disabled; got %v", args)
+	}
 
-	// File should not have been written either.
-	if _, err := os.Stat(ConfigPath(cfg)); !os.IsNotExist(err) {
-		t.Errorf("leo MCP file should not exist when web is disabled (err=%v)", err)
+	// The MCP server is always wired in now (it self-selects local-only
+	// mode from its env), so the file should be written.
+	if _, err := os.Stat(ConfigPath(cfg)); err != nil {
+		t.Errorf("leo MCP file should exist even when web is disabled: %v", err)
 	}
 }
 
@@ -103,6 +108,21 @@ func TestAppendArgIncludedWhenWebEnabled(t *testing.T) {
 	}
 }
 
+func TestAppendArgSkippedWhenHomePathEmpty(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Web.Enabled = true
+
+	args := AppendArg([]string{"--model", "sonnet"}, cfg)
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--mcp-config" {
+			t.Fatalf("expected no --mcp-config when HomePath is empty; got %v", args)
+		}
+	}
+	if len(args) != 2 {
+		t.Errorf("expected args unchanged when HomePath is empty; got %v", args)
+	}
+}
+
 func TestMergeSystemPrompt(t *testing.T) {
 	enabled := &config.Config{Web: config.WebConfig{Enabled: true}}
 	disabled := &config.Config{Web: config.WebConfig{Enabled: false}}
@@ -114,8 +134,8 @@ func TestMergeSystemPrompt(t *testing.T) {
 		wantHas   []string // substrings that must appear
 		wantEmpty bool
 	}{
-		{"disabled+no user", disabled, "", nil, true},
-		{"disabled keeps user only", disabled, "be terse", []string{"be terse"}, false},
+		{"disabled+no user", disabled, "", []string{"leo_skill"}, false},
+		{"disabled keeps user only", disabled, "be terse", []string{"be terse", "leo_skill"}, false},
 		{"enabled adds awareness", enabled, "", []string{"leo_send_message"}, false},
 		{"enabled merges both", enabled, "be terse", []string{"leo_send_message", "be terse"}, false},
 		{"nil cfg keeps user", nil, "be terse", []string{"be terse"}, false},
@@ -136,6 +156,41 @@ func TestMergeSystemPrompt(t *testing.T) {
 				if strings.Index(got, "leo_send_message") > strings.Index(got, tt.user) {
 					t.Errorf("awareness text should come before user text; got %q", got)
 				}
+			}
+		})
+	}
+}
+
+func TestLeoNudge(t *testing.T) {
+	enabled := &config.Config{Web: config.WebConfig{Enabled: true}}
+	disabled := &config.Config{Web: config.WebConfig{Enabled: false}}
+
+	tests := []struct {
+		name      string
+		cfg       *config.Config
+		wantEmpty bool
+		wantHas   []string
+	}{
+		{"nil cfg", nil, true, nil},
+		{"web disabled", disabled, false, []string{"leo_skill"}},
+		{"web enabled", enabled, false, []string{"leo_send_message", "leo_skill"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LeoNudge(tt.cfg)
+			if tt.wantEmpty && got != "" {
+				t.Fatalf("want empty, got %q", got)
+			}
+			if !tt.wantEmpty && got == "" {
+				t.Fatalf("want non-empty nudge, got empty")
+			}
+			for _, sub := range tt.wantHas {
+				if !strings.Contains(got, sub) {
+					t.Errorf("result missing %q; got %q", sub, got)
+				}
+			}
+			if tt.name == "web disabled" && strings.Contains(got, "leo_send_message") {
+				t.Errorf("web-disabled nudge should not mention leo_send_message; got %q", got)
 			}
 		})
 	}

@@ -14,6 +14,7 @@ import (
 	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
 	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
 	"github.com/blackpaw-studio/leo/internal/hooks"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -98,22 +99,27 @@ func claudeSessionOptions(opts map[string]any) (claudeharness.Options, error) {
 	return o, nil
 }
 
-// sessionLeoMCPEnv gates whether a non-claude session's LeoMCP bridge should
-// be wired in, mirroring cli.processLeoMCPEnv's web+token gate exactly
-// (cfg.Web.Enabled && webToken != ""). Sessions have no equivalent of a
-// config-defined process name, so the value exported under LEO_PROCESS_NAME
-// — the only env var internal/mcp/server.go actually reads — is
-// "session:"+name, keeping it distinct from every config-defined process
-// name in the same daemon.
+// sessionLeoMCPEnv builds the env a non-claude session's LeoMCP bridge needs,
+// mirroring cli.processLeoMCPEnv. The leo MCP server is always wired in now —
+// the bridge is built regardless of whether web is enabled or a token is
+// available — and self-selects local-only mode at runtime when
+// LEO_WEB_PORT/LEO_API_TOKEN are empty. The bool return reports whether a
+// live token was available (cfg.Web.Enabled && webToken != ""), for callers
+// that still want to know; it no longer gates injection. Sessions have no
+// equivalent of a config-defined process name, so the value exported under
+// LEO_PROCESS_NAME — the only env var internal/mcp/server.go actually reads
+// — is "session:"+name, keeping it distinct from every config-defined
+// process name in the same daemon.
 func sessionLeoMCPEnv(cfg *config.Config, sessionName, webToken string) (map[string]string, bool) {
-	if cfg == nil || !cfg.Web.Enabled || webToken == "" {
-		return nil, false
+	webPort := 0
+	if cfg != nil {
+		webPort = cfg.WebPort()
 	}
 	return map[string]string{
 		"LEO_PROCESS_NAME": "session:" + sessionName,
-		"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
+		"LEO_WEB_PORT":     strconv.Itoa(webPort),
 		"LEO_API_TOKEN":    webToken,
-	}, true
+	}, cfg != nil && cfg.Web.Enabled && webToken != ""
 }
 
 // SuperviseSession launches the restart-loop for one session in its own
@@ -228,32 +234,31 @@ func buildTUISessionLoop(spec SessionSpec, homePath string, cfg *config.Config, 
 	leoEnv := map[string]string{}
 	switch opts := decoded.(type) {
 	case codexharness.Options:
-		if env, ok := sessionLeoMCPEnv(cfg, spec.Name, webToken); ok {
-			opts.LeoMCP = &codexharness.LeoMCPBridge{
-				Command:      "leo",
-				Args:         []string{"mcp-server"},
-				EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
-				ApprovalMode: "approve",
-			}
-			leoEnv = env
+		env, _ := sessionLeoMCPEnv(cfg, spec.Name, webToken)
+		opts.LeoMCP = &codexharness.LeoMCPBridge{
+			Command:      "leo",
+			Args:         []string{"mcp-server"},
+			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+			ApprovalMode: "approve",
 		}
+		leoEnv = env
 		decoded = opts
 	case opencodeharness.Options:
-		if env, ok := sessionLeoMCPEnv(cfg, spec.Name, webToken); ok {
-			opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-				Command: []string{"leo", "mcp-server"},
-				Env:     env,
-			}
+		env, _ := sessionLeoMCPEnv(cfg, spec.Name, webToken)
+		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
+			Command: []string{"leo", "mcp-server"},
+			Env:     env,
 		}
 		decoded = opts
 	}
 
 	ls := harness.LaunchSpec{
-		Kind:      harness.KindSession,
-		Name:      spec.Name,
-		Model:     spec.Model,
-		Workspace: spec.Workdir,
-		Options:   decoded,
+		Kind:          harness.KindSession,
+		Name:          spec.Name,
+		Model:         spec.Model,
+		Workspace:     spec.Workdir,
+		SystemContext: leomcp.LeoNudge(cfg),
+		Options:       decoded,
 	}
 	baseArgs, err := h.Args(ls)
 	if err != nil {

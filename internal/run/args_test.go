@@ -9,6 +9,17 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
+// leoSkillNudgeText mirrors leomcp's unconditional leo_skill guidance
+// (unexported there), so characterization tests below can assert the exact
+// --append-system-prompt value the leo MCP server injection produces when
+// web is disabled (as in every case here — none of these configs set
+// Web.Enabled).
+const leoSkillNudgeText = "When you need to operate Leo — schedule or trigger tasks, read logs, or manage the daemon and agents — call the `leo_skill` tool for step-by-step instructions."
+
+// leoMCPConfigPath is the leo MCP config path AppendArg always adds now,
+// derived from the fixed HomePath used by every case in this table.
+const leoMCPConfigPath = "/tmp/leo-home/state/leo-mcp.json"
+
 func TestBuildArgsCharacterization(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -33,7 +44,9 @@ func TestBuildArgsCharacterization(t *testing.T) {
 				"--max-turns", "15",
 				"--output-format", "stream-json",
 				"--verbose",
+				"--mcp-config", leoMCPConfigPath,
 				"--add-dir", "/tmp/ws",
+				"--append-system-prompt", leoSkillNudgeText,
 			},
 		},
 		{
@@ -68,9 +81,10 @@ func TestBuildArgsCharacterization(t *testing.T) {
 				"--dangerously-load-development-channels", "plugin:dev@local",
 				"--resume", "sess-789",
 				"--dangerously-skip-permissions",
+				"--mcp-config", leoMCPConfigPath,
 				"--add-dir", "/tmp/ws",
 				"--allowed-tools", "Read,Bash",
-				"--append-system-prompt", "be terse",
+				"--append-system-prompt", leoSkillNudgeText + "\n\nbe terse",
 			},
 		},
 		{
@@ -94,7 +108,9 @@ func TestBuildArgsCharacterization(t *testing.T) {
 				"--output-format", "stream-json",
 				"--verbose",
 				"--permission-mode", "plan",
+				"--mcp-config", leoMCPConfigPath,
 				"--add-dir", "/tmp/ws",
+				"--append-system-prompt", leoSkillNudgeText,
 			},
 		},
 		{
@@ -115,7 +131,9 @@ func TestBuildArgsCharacterization(t *testing.T) {
 				"--output-format", "stream-json",
 				"--verbose",
 				"--permission-mode", "plan",
+				"--mcp-config", leoMCPConfigPath,
 				"--add-dir", "/tmp/ws",
+				"--append-system-prompt", leoSkillNudgeText,
 			},
 		},
 	}
@@ -131,8 +149,9 @@ func TestBuildArgsCharacterization(t *testing.T) {
 }
 
 // TestBuildArgsCodex covers the codex adapter path through buildArgs: sandbox
-// option fill, no session, and no leo MCP env → nil extraEnv (codex needs no
-// adapter-injected env of its own).
+// option fill, no session, and no adapter-injected env of its own — the leo
+// MCP bridge is always wired in now (env-var names only, no literal values),
+// so it appears in argv even with a nil leoEnv.
 func TestBuildArgsCodex(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: "/tmp/leo-home",
@@ -147,15 +166,24 @@ func TestBuildArgsCodex(t *testing.T) {
 	task := cfg.Tasks["mytask"]
 
 	args, env := buildArgs(cfg, task, "mytask", "do it", "", nil)
+	joined := strings.Join(args, " ")
 	// No task/defaults model override, so TaskModel falls through to the
 	// built-in default ("sonnet") — the harness matches defaults.harness, so
 	// the fall-through applies.
-	want := []string{"exec", "--json", "--skip-git-repo-check", "--model", "sonnet", "--sandbox", "workspace-write", "do it"}
-	if !reflect.DeepEqual(args, want) {
-		t.Fatalf("buildArgs argv mismatch\n got: %q\nwant: %q", args, want)
+	for _, want := range []string{
+		"exec --json --skip-git-repo-check --model sonnet --sandbox workspace-write",
+		`-c mcp_servers.leo.command="leo"`,
+		`developer_instructions="` + leoSkillNudgeText + `"`,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("argv missing %q; got %v", want, args)
+		}
+	}
+	if !strings.HasSuffix(joined, "do it") {
+		t.Errorf("expected argv to end with the prompt; got %v", args)
 	}
 	if env != nil {
-		t.Errorf("expected nil extraEnv without leo MCP wiring, got %v", env)
+		t.Errorf("expected nil extraEnv (codex needs no adapter-injected env of its own), got %v", env)
 	}
 }
 

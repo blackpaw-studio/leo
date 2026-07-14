@@ -52,6 +52,13 @@ type LaunchSpec struct {
 	Prompt      string // opening prompt (agents) or task prompt; empty for processes
 	Session     SessionState
 	Options     any // adapter-specific resolved options (e.g. claude.Options)
+
+	// SystemContext is a Leo-injected, harness-neutral system-prompt
+	// addendum (messaging + skill-tool awareness). Each adapter renders it
+	// via its native channel (claude: --append-system-prompt; codex: -c
+	// developer_instructions). Empty to omit. opencode cannot argv-inject
+	// and ignores it.
+	SystemContext string
 }
 
 // Result is the parsed outcome of a one-shot run's output stream.

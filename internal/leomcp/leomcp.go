@@ -44,12 +44,20 @@ func EnsureConfig(cfg *config.Config) (string, error) {
 	return path, nil
 }
 
-// AppendArg appends `--mcp-config <path>` to args when the daemon's TCP
-// listener is enabled. Without the listener the MCP server has nowhere to
-// send its HTTP calls, so registering it would only produce confusing
-// errors in the supervised Claude's /mcp output.
+// AppendArg appends `--mcp-config <path>` to args, always wiring the leo MCP
+// server into the supervised Claude process. When the daemon's TCP listener
+// is enabled the server operates in full mode (daemon-backed tools like
+// leo_send_message); without it, the server self-selects local-only mode
+// from its environment and serves only the local leo_skill tool.
 func AppendArg(args []string, cfg *config.Config) []string {
-	if cfg == nil || !cfg.Web.Enabled {
+	if cfg == nil {
+		return args
+	}
+	if cfg.HomePath == "" {
+		// No valid state dir to write into (HomePath is always set in real
+		// daemon/CLI paths); skip rather than writing leo-mcp.json relative
+		// to the process's cwd, which pollutes whatever directory tests or
+		// misconfigured callers happen to run from.
 		return args
 	}
 	path, err := EnsureConfig(cfg)
@@ -60,22 +68,42 @@ func AppendArg(args []string, cfg *config.Config) []string {
 	return append(args, "--mcp-config", path)
 }
 
-// messagingAwareness is the built-in system-prompt line that tells a Claude
-// process it can message other Leo agents. Injected only when the leo MCP
-// server is wired in (see MergeSystemPrompt).
-const messagingAwareness = "You can send a message to another Leo agent or process with the `leo_send_message` tool — set `to` to its name and `message` to the text. Use `leo_list_agents` to see which agents are running. The message arrives in the recipient's prompt as a new turn."
+// leoSkillNudgeText tells a coding agent it can call the leo_skill tool for
+// step-by-step instructions on operating Leo itself (scheduling/triggering
+// tasks, reading logs, managing the daemon and agents). The leo_skill tool
+// is always available — the MCP server is wired in regardless of web mode —
+// so this text is unconditional.
+const leoSkillNudgeText = "When you need to operate Leo — schedule or trigger tasks, read logs, or manage the daemon and agents — call the `leo_skill` tool for step-by-step instructions."
 
-// MergeSystemPrompt combines Leo's built-in append-system-prompt additions
-// with any user-configured prompt into a single value. The built-in
-// messaging-awareness line is included only when the leo MCP server is wired
-// in (cfg.Web.Enabled) — the same gate AppendArg uses — so an agent is told
-// it can message others exactly when it actually can. Returns "" when there
-// is nothing to append.
-func MergeSystemPrompt(cfg *config.Config, userPrompt string) string {
-	var builtin string
-	if cfg != nil && cfg.Web.Enabled {
-		builtin = messagingAwareness
+// leoMessagingNudgeText tells a coding agent it can message other Leo
+// agents/the user. Only true when the daemon's web listener is enabled (the
+// daemon-backed messaging tools require it), so it's gated on
+// cfg.Web.Enabled.
+const leoMessagingNudgeText = "You're running under Leo. Message other agents or the user with the `leo_send_message` tool (use `leo_list_agents` to see who's running)."
+
+// LeoNudge returns Leo's built-in harness-neutral system-prompt addendum.
+// The leo_skill guidance is always included since the leo_skill tool is
+// always available; the messaging guidance is included only when the
+// daemon's web listener is enabled (cfg.Web.Enabled), since that's what
+// daemon-backed messaging tools require. Returns "" only when cfg is nil.
+// Callers set harness.LaunchSpec.SystemContext to this value; each adapter
+// renders it via its own native channel.
+func LeoNudge(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
 	}
+	if cfg.Web.Enabled {
+		return leoMessagingNudgeText + " " + leoSkillNudgeText
+	}
+	return leoSkillNudgeText
+}
+
+// MergeSystemPrompt combines Leo's built-in nudge with any user-configured
+// prompt into a single value, nudge first. Returns "" when there is nothing
+// to append. Kept for callers that render a single merged string rather than
+// threading LaunchSpec.SystemContext through an adapter.
+func MergeSystemPrompt(cfg *config.Config, userPrompt string) string {
+	builtin := LeoNudge(cfg)
 	switch {
 	case builtin == "":
 		return userPrompt

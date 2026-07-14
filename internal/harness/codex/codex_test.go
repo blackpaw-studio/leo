@@ -132,6 +132,27 @@ func TestArgs(t *testing.T) {
 				"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`,
 				"p"},
 		},
+		{
+			name: "leo system context nudge",
+			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "p", SystemContext: "you're running under leo",
+				Options: Options{}},
+			want: []string{"exec", "--json", "--skip-git-repo-check",
+				"-c", `developer_instructions="you're running under leo"`,
+				"p"},
+		},
+		{
+			name: "empty system context omits developer_instructions",
+			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "p", SystemContext: "", Options: Options{}},
+			want: []string{"exec", "--json", "--skip-git-repo-check", "p"},
+		},
+		{
+			name: "multi-line system context is toml-escaped",
+			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "p", SystemContext: "line one\nline two\ttabbed",
+				Options: Options{}},
+			want: []string{"exec", "--json", "--skip-git-repo-check",
+				"-c", `developer_instructions="line one\nline two\ttabbed"`,
+				"p"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -188,6 +209,13 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 			name: "KindProcess no model no sandbox",
 			spec: harness.LaunchSpec{Kind: harness.KindProcess, Options: Options{}},
 			want: []string{"-a", "never"},
+		},
+		{
+			name: "KindAgent TUI argv with system context",
+			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol",
+				SystemContext: "you're running under leo", Options: Options{}},
+			want: []string{"-a", "never", "--model", "gpt-5.6-sol",
+				"-c", `developer_instructions="you're running under leo"`},
 		},
 	}
 	for _, tt := range tests {

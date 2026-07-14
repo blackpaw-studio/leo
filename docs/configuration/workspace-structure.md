@@ -8,16 +8,8 @@ Leo uses a home directory at `~/.leo/` that holds config, state, and the default
 ~/.leo/
 ├── leo.yaml                    # Leo config
 ├── workspace/                  # Default workspace
-│   ├── CLAUDE.md               # Agent instructions (generated)
 │   ├── USER.md                 # Your profile (created during setup)
 │   ├── prompts/                # Task prompt files
-│   ├── skills/                 # Agent skill files (generated)
-│   │   ├── managing-tasks.md
-│   │   ├── debugging-logs.md
-│   │   ├── daemon-management.md
-│   │   ├── config-reference.md
-│   │   ├── workspace-maintenance.md
-│   │   └── agent-management.md
 │   └── config/
 │       └── mcp-servers.json    # MCP server configuration
 ├── agents/                     # Default agent workspace (for templates)
@@ -40,17 +32,13 @@ The main configuration file. See [Configuration](index.md) for details.
 
 The default workspace directory. Processes and tasks use this workspace unless they specify their own `workspace` field. The workspace is passed to Claude via `--add-dir` so the assistant can read and write files here.
 
-### `~/.leo/workspace/CLAUDE.md`
-
-Generated agent instructions that give Claude context about Leo's capabilities. Rendered from a template during setup and refreshed by `leo update`.
-
 ### `~/.leo/workspace/USER.md`
 
 A user profile filled in during setup. Included in the assistant's context so it knows who you are, your role, preferences, and timezone.
 
-### `~/.leo/workspace/skills/`
+### Operational instructions and skills
 
-Auto-generated skill files that teach the assistant how to manage tasks, read logs, control the daemon, and dispatch agents. Refreshed by `leo update`.
+Leo no longer writes `CLAUDE.md` or `skills/*.md` into the workspace. Instead, every agent — regardless of harness or whether the web UI is enabled — gets Leo's built-in `leo_skill` MCP tool, which serves the same operational how-to (managing tasks, reading logs, controlling the daemon, dispatching agents) on demand instead of as always-loaded workspace files. A small nudge pointing the agent at `leo_skill` is injected into its system prompt at launch.
 
 ### `~/.leo/workspace/config/mcp-servers.json`
 

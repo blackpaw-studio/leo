@@ -92,6 +92,7 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		if opts.Sandbox != "" {
 			args = append(args, "--sandbox", opts.Sandbox)
 		}
+		args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 		args = append(args, opts.LeoMCP.configArgs()...)
 		args = append(args, c.SessionArgs(spec.Session)...)
 		return append(args, spec.Prompt), nil
@@ -109,5 +110,18 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 	if opts.Sandbox != "" {
 		args = append(args, "--sandbox", opts.Sandbox)
 	}
+	args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 	return append(args, opts.LeoMCP.configArgs()...), nil
+}
+
+// developerInstructionsArgs renders Leo's harness-neutral system-context
+// addendum via codex's additive `developer_instructions` config override
+// (supplements, rather than replaces, codex's built-in instructions — unlike
+// model_instructions_file, which replaces them). Empty spec.SystemContext
+// omits the flag entirely.
+func developerInstructionsArgs(systemContext string) []string {
+	if systemContext == "" {
+		return nil
+	}
+	return []string{"-c", "developer_instructions=" + tomlString(systemContext)}
 }

@@ -120,7 +120,7 @@ func TestToolsListContainsCanonicalCommands(t *testing.T) {
 		"leo_clear", "leo_compact", "leo_interrupt",
 		"leo_list_tasks", "leo_run_task", "leo_toggle_task",
 		"leo_list_templates", "leo_spawn_agent", "leo_list_agents", "leo_stop_agent",
-		"leo_send_message",
+		"leo_send_message", "leo_skill",
 	}
 	got := map[string]bool{}
 	for _, t := range tools {
@@ -263,6 +263,53 @@ func TestUnknownMethodReturnsMethodNotFound(t *testing.T) {
 	}
 }
 
+func TestRegistryFromEnv(t *testing.T) {
+	tests := []struct {
+		name        string
+		port        string
+		token       string
+		processName string
+		wantFull    bool
+	}{
+		{
+			name:        "port and token set builds full registry",
+			port:        "12345",
+			token:       "secret",
+			processName: "primary",
+			wantFull:    true,
+		},
+		{
+			name:  "missing port falls back to local-only",
+			token: "secret",
+		},
+		{
+			name: "missing token falls back to local-only",
+			port: "12345",
+		},
+		{
+			name: "both missing falls back to local-only",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LEO_WEB_PORT", tt.port)
+			t.Setenv("LEO_API_TOKEN", tt.token)
+			t.Setenv("LEO_PROCESS_NAME", tt.processName)
+
+			reg := registryFromEnv()
+
+			_, hasDaemonTool := reg.handlers["leo_list_tasks"]
+			if hasDaemonTool != tt.wantFull {
+				t.Errorf("daemon tool present = %v, want %v", hasDaemonTool, tt.wantFull)
+			}
+			if _, ok := reg.handlers["leo_skill"]; !ok {
+				t.Errorf("leo_skill should always be registered")
+			}
+		})
+	}
+}
+
 func TestSendMessageDeliversWithSenderPrefix(t *testing.T) {
 	daemon := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		return http.StatusOK, `{"ok":true,"data":{}}`
@@ -312,5 +359,80 @@ func TestSendMessageRequiresMessage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "message") {
 		t.Errorf("error should mention the missing field; got %v", err)
+	}
+}
+
+func TestSkillToolWithNoArgsListsCatalog(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "primary")
+	out, err := reg.call("leo_skill", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	for _, name := range []string{"managing-tasks", "debugging-logs", "daemon-management", "config-reference", "workspace-maintenance", "agent-management"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("catalog listing missing skill %q; got %q", name, out)
+		}
+	}
+}
+
+func TestSkillToolByNameReturnsFullContent(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "primary")
+
+	for _, name := range []string{"managing-tasks", "managing-tasks.md"} {
+		t.Run(name, func(t *testing.T) {
+			out, err := reg.call("leo_skill", json.RawMessage(`{"name":"`+name+`"}`))
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if !strings.Contains(out, "# Managing Tasks") {
+				t.Errorf("expected full skill content with heading; got %q", out)
+			}
+		})
+	}
+}
+
+func TestLocalOnlyRegistryOmitsDaemonTools(t *testing.T) {
+	reg := newRegistry(nil, "")
+	resp := runRequest(t, reg, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      8,
+		"method":  "tools/list",
+	})
+	result := resp["result"].(map[string]any)
+	tools := result["tools"].([]any)
+
+	got := map[string]bool{}
+	for _, tl := range tools {
+		got[tl.(map[string]any)["name"].(string)] = true
+	}
+	if !got["leo_skill"] {
+		t.Errorf("expected leo_skill in local-only registry, got %v", got)
+	}
+	if got["leo_list_tasks"] {
+		t.Errorf("expected daemon tool leo_list_tasks to be absent in local-only registry, got %v", got)
+	}
+}
+
+func TestLocalOnlyRegistryCanCallSkillTool(t *testing.T) {
+	reg := newRegistry(nil, "")
+	out, err := reg.call("leo_skill", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !strings.Contains(out, "managing-tasks") {
+		t.Errorf("expected skill catalog listing, got %q", out)
+	}
+}
+
+func TestSkillToolUnknownNameListsValidNames(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "primary")
+	_, err := reg.call("leo_skill", json.RawMessage(`{"name":"nonexistent"}`))
+	if err == nil {
+		t.Fatal("expected error for unknown skill name")
+	}
+	for _, name := range []string{"managing-tasks", "daemon-management"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error should list valid names, missing %q; got %v", name, err)
+		}
 	}
 }

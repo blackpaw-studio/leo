@@ -193,6 +193,11 @@ func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
 	}
 }
 
+// TestBuildArgsWithoutMCPConfig verifies the task's own, user-configured
+// mcp-servers.json is skipped when the file doesn't exist. The leo MCP
+// server's own --mcp-config (leo-mcp.json) is always wired in now regardless
+// — a separate flag occurrence — so this only asserts no --mcp-config points
+// at a user config file.
 func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 	dir := t.TempDir()
 	// No mcp-servers.json created
@@ -202,8 +207,10 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil)
 	argsStr := strings.Join(args, " ")
 
-	if strings.Contains(argsStr, "--mcp-config") {
-		t.Error("should not contain --mcp-config when file doesn't exist")
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--mcp-config" && !strings.HasSuffix(args[i+1], "leo-mcp.json") {
+			t.Errorf("should not contain --mcp-config pointing at a user config file when it doesn't exist; got %q", args[i+1])
+		}
 	}
 	if !strings.Contains(argsStr, "--model sonnet") {
 		t.Error("should use default model")
@@ -785,8 +792,11 @@ func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
 	}
 }
 
-// TestLeoMCPEnv covers the three-way gate: web disabled, web enabled but no
-// token file, and web enabled with a readable non-empty token file.
+// TestLeoMCPEnv covers the always-non-nil env: web disabled, web enabled but
+// no token file, web enabled with a blank token file, and web enabled with a
+// readable non-empty token file. LEO_API_TOKEN is present only in the last
+// case; the other three still get LEO_PROCESS_NAME (and LEO_WEB_PORT when
+// cfg is non-nil), just without a live token.
 func TestLeoMCPEnv(t *testing.T) {
 	t.Run("web disabled", func(t *testing.T) {
 		dir := t.TempDir()
@@ -794,9 +804,12 @@ func TestLeoMCPEnv(t *testing.T) {
 		os.MkdirAll(cfg.StatePath(), 0750)
 		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123"), 0600)
 
-		env, ok := leoMCPEnv(cfg, "mytask")
-		if ok {
-			t.Errorf("expected ok=false when web disabled, got env=%v", env)
+		env := leoMCPEnv(cfg, "mytask")
+		if env["LEO_PROCESS_NAME"] != "task:mytask" {
+			t.Errorf("LEO_PROCESS_NAME = %q, want task:mytask", env["LEO_PROCESS_NAME"])
+		}
+		if _, ok := env["LEO_API_TOKEN"]; ok {
+			t.Errorf("expected no LEO_API_TOKEN when web disabled, got env=%v", env)
 		}
 	})
 
@@ -804,9 +817,9 @@ func TestLeoMCPEnv(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 
-		env, ok := leoMCPEnv(cfg, "mytask")
-		if ok {
-			t.Errorf("expected ok=false when token file missing, got env=%v", env)
+		env := leoMCPEnv(cfg, "mytask")
+		if _, ok := env["LEO_API_TOKEN"]; ok {
+			t.Errorf("expected no LEO_API_TOKEN when token file missing, got env=%v", env)
 		}
 	})
 
@@ -816,9 +829,9 @@ func TestLeoMCPEnv(t *testing.T) {
 		os.MkdirAll(cfg.StatePath(), 0750)
 		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("   \n"), 0600)
 
-		env, ok := leoMCPEnv(cfg, "mytask")
-		if ok {
-			t.Errorf("expected ok=false when token file is blank, got env=%v", env)
+		env := leoMCPEnv(cfg, "mytask")
+		if _, ok := env["LEO_API_TOKEN"]; ok {
+			t.Errorf("expected no LEO_API_TOKEN when token file is blank, got env=%v", env)
 		}
 	})
 
@@ -828,10 +841,7 @@ func TestLeoMCPEnv(t *testing.T) {
 		os.MkdirAll(cfg.StatePath(), 0750)
 		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123\n"), 0600)
 
-		env, ok := leoMCPEnv(cfg, "mytask")
-		if !ok {
-			t.Fatal("expected ok=true when web enabled and token present")
-		}
+		env := leoMCPEnv(cfg, "mytask")
 		if env["LEO_PROCESS_NAME"] != "task:mytask" {
 			t.Errorf("LEO_PROCESS_NAME = %q, want %q", env["LEO_PROCESS_NAME"], "task:mytask")
 		}
@@ -844,32 +854,37 @@ func TestLeoMCPEnv(t *testing.T) {
 	})
 }
 
-// TestBuildArgsSkipsLeoMCPWithoutToken verifies buildArgs (and by extension
-// Preview, which shares this code path) doesn't wire in the leo MCP server
-// when the token gate fails, even though cfg.Web.Enabled is true.
-func TestBuildArgsSkipsLeoMCPWithoutToken(t *testing.T) {
+// TestBuildArgsWiresLeoMCPWithoutToken verifies buildArgs (and by extension
+// Preview, which shares this code path) still wires in the leo MCP server
+// when no readable token is available, even though cfg.Web.Enabled is true —
+// the server self-selects local-only mode from the missing token at runtime.
+func TestBuildArgsWiresLeoMCPWithoutToken(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 	// No api.token file written.
 
-	leoEnv, _ := leoMCPEnv(cfg, "mytask")
+	leoEnv := leoMCPEnv(cfg, "mytask")
 	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv)
+	found := false
 	for i, a := range args {
 		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
-			t.Errorf("did not expect leo MCP config wired in without a readable token; args=%v", args)
+			found = true
 		}
+	}
+	if !found {
+		t.Errorf("expected leo MCP config wired in even without a readable token; args=%v", args)
 	}
 }
 
 // TestBuildArgsIncludesLeoMCPWithToken verifies buildArgs wires in the leo
-// MCP server when the gate passes (web enabled + readable non-empty token).
+// MCP server when web is enabled and a readable non-empty token is present.
 func TestBuildArgsIncludesLeoMCPWithToken(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 	os.MkdirAll(cfg.StatePath(), 0750)
 	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123"), 0600)
 
-	leoEnv, _ := leoMCPEnv(cfg, "mytask")
+	leoEnv := leoMCPEnv(cfg, "mytask")
 	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv)
 	found := false
 	for i, a := range args {

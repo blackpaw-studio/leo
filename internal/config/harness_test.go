@@ -148,6 +148,84 @@ func TestScopeHarnessCascade(t *testing.T) {
 	})
 }
 
+func TestUsesHarness(t *testing.T) {
+	tests := []struct {
+		name  string
+		cfg   Config
+		query string
+		want  bool
+	}{
+		{"empty config, claude default matches", Config{}, "claude", true},
+		{"empty config, other harness does not match", Config{}, "opencode", false},
+		{
+			"defaults harness matches",
+			Config{Defaults: DefaultsConfig{Harness: "opencode"}},
+			"opencode",
+			true,
+		},
+		{
+			"process explicit harness matches even when defaults differ",
+			Config{
+				Defaults:  DefaultsConfig{Harness: "claude"},
+				Processes: map[string]ProcessConfig{"p": {Harness: "opencode"}},
+			},
+			"opencode",
+			true,
+		},
+		{
+			"process inherits defaults harness",
+			Config{
+				Defaults:  DefaultsConfig{Harness: "opencode"},
+				Processes: map[string]ProcessConfig{"p": {}},
+			},
+			"opencode",
+			true,
+		},
+		{
+			"template explicit harness matches",
+			Config{
+				Templates: map[string]TemplateConfig{"t": {Harness: "codex"}},
+			},
+			"codex",
+			true,
+		},
+		{
+			"session explicit harness matches",
+			Config{
+				Sessions: map[string]SessionConfig{"s": {Harness: "opencode"}},
+			},
+			"opencode",
+			true,
+		},
+		{
+			"task explicit harness matches",
+			Config{
+				Tasks: map[string]TaskConfig{"t": {Harness: "opencode"}},
+			},
+			"opencode",
+			true,
+		},
+		{
+			"no scope uses the queried harness",
+			Config{
+				Defaults:  DefaultsConfig{Harness: "claude"},
+				Processes: map[string]ProcessConfig{"p": {Harness: "codex"}},
+				Tasks:     map[string]TaskConfig{"t": {}},
+			},
+			"opencode",
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			if got := cfg.UsesHarness(tt.query); got != tt.want {
+				t.Errorf("UsesHarness(%q) = %v, want %v", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMergeHarnessOptionsImmutability(t *testing.T) {
 	base := map[string]any{"permission_mode": "plan", "agent": "a.md"}
 	override := map[string]any{"agent": "b.md"}

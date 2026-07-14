@@ -47,8 +47,19 @@ func (b *LeoMCPBridge) configArgs() []string {
 	}
 }
 
+// tomlString renders s as a TOML basic string, escaping backslashes, quotes,
+// and the control characters (newline, tab, carriage return) TOML basic
+// strings forbid as literal bytes — required for multi-line values like the
+// Leo system-context nudge.
 func tomlString(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+	)
+	return `"` + r.Replace(s) + `"`
 }
 
 func tomlStringArray(items []string) string {

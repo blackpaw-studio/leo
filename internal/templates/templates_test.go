@@ -5,40 +5,6 @@ import (
 	"testing"
 )
 
-func TestRenderHeartbeat(t *testing.T) {
-	result, err := RenderHeartbeat()
-	if err != nil {
-		t.Fatalf("RenderHeartbeat() error: %v", err)
-	}
-
-	if result == "" {
-		t.Error("RenderHeartbeat returned empty string")
-	}
-}
-
-func TestRenderClaudeWorkspace(t *testing.T) {
-	data := AgentData{
-		Workspace: "/home/user/myagent",
-	}
-
-	result, err := RenderClaudeWorkspace(data)
-	if err != nil {
-		t.Fatalf("RenderClaudeWorkspace() error: %v", err)
-	}
-
-	if result == "" {
-		t.Error("RenderClaudeWorkspace returned empty string")
-	}
-
-	if strings.Contains(result, "{{") {
-		t.Error("rendered output contains unresolved template directives")
-	}
-
-	if !strings.Contains(result, "/home/user/myagent") {
-		t.Error("rendered output missing workspace path")
-	}
-}
-
 func TestSkillFiles(t *testing.T) {
 	skills := SkillFiles()
 
@@ -81,6 +47,50 @@ func TestReadSkillInvalid(t *testing.T) {
 	_, err := ReadSkill("nonexistent.md")
 	if err == nil {
 		t.Error("expected error for nonexistent skill")
+	}
+}
+
+func TestSkillCatalog(t *testing.T) {
+	catalog, err := SkillCatalog()
+	if err != nil {
+		t.Fatalf("SkillCatalog() error: %v", err)
+	}
+
+	if len(catalog) != len(SkillFiles()) {
+		t.Fatalf("SkillCatalog() returned %d entries, want %d", len(catalog), len(SkillFiles()))
+	}
+
+	var managingTasks *SkillMeta
+	for i := range catalog {
+		meta := catalog[i]
+
+		if meta.Name == "" {
+			t.Errorf("entry has empty Name: %+v", meta)
+		}
+		if strings.HasSuffix(meta.Name, ".md") {
+			t.Errorf("Name %q should not include .md suffix", meta.Name)
+		}
+		if meta.Title == "" {
+			t.Errorf("entry %q has empty Title", meta.Name)
+		}
+		if meta.Summary == "" {
+			t.Errorf("entry %q has empty Summary", meta.Name)
+		}
+		if strings.Contains(meta.Summary, "\n") {
+			t.Errorf("entry %q Summary should be a single line, got %q", meta.Name, meta.Summary)
+		}
+
+		if meta.Name == "managing-tasks" {
+			m := meta
+			managingTasks = &m
+		}
+	}
+
+	if managingTasks == nil {
+		t.Fatal("expected a managing-tasks entry")
+	}
+	if managingTasks.Title != "Managing Tasks" {
+		t.Errorf("managing-tasks Title = %q, want %q", managingTasks.Title, "Managing Tasks")
 	}
 }
 

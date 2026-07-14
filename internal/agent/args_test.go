@@ -38,14 +38,35 @@ func TestBuildTemplateArgsWiresLeoMCPWhenWebEnabled(t *testing.T) {
 	}
 }
 
-func TestBuildTemplateArgsNoLeoMCPWhenWebDisabled(t *testing.T) {
+func TestBuildTemplateArgsLeoMCPAlwaysWiredWhenWebDisabled(t *testing.T) {
+	// The leo MCP server is now always wired in — it self-selects
+	// local-only mode from its env when web is disabled — so --mcp-config
+	// and the leo_skill nudge still appear, but the messaging nudge (which
+	// requires the daemon's web listener) does not.
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: false}}
 	args, _ := BuildTemplateArgs(cfg, config.TemplateConfig{}, "agent-x", "/tmp/ws", "", "")
 
+	if !hasFlagValue(args, "--mcp-config", "leo-mcp.json") {
+		t.Errorf("expected --mcp-config pointing at leo-mcp.json even when web disabled; got %v", args)
+	}
+	if !hasFlagValue(args, "--append-system-prompt", "leo_skill") {
+		t.Errorf("expected leo_skill nudge even when web disabled; got %v", args)
+	}
 	if hasFlagValue(args, "--append-system-prompt", "leo_send_message") {
-		t.Errorf("awareness line must not appear when web disabled; got %v", args)
+		t.Errorf("messaging nudge must not appear when web disabled; got %v", args)
 	}
 }
+
+// leoSkillNudgeText mirrors leomcp's unconditional leo_skill guidance
+// (unexported there), so characterization tests below can assert the exact
+// --append-system-prompt value the leo MCP server injection produces when
+// web is disabled (as in every case here — none of these configs set
+// Web.Enabled).
+const leoSkillNudgeText = "When you need to operate Leo — schedule or trigger tasks, read logs, or manage the daemon and agents — call the `leo_skill` tool for step-by-step instructions."
+
+// leoMCPConfigPath is the leo MCP config path AppendArg always adds now,
+// derived from the fixed HomePath used by every case in this table.
+const leoMCPConfigPath = "/tmp/leo-home/state/leo-mcp.json"
 
 func TestBuildTemplateArgsCharacterization(t *testing.T) {
 	tests := []struct {
@@ -67,6 +88,8 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 				"--add-dir", "/tmp/ws",
 				"--remote-control",
 				"--name", "myagent",
+				"--append-system-prompt", leoSkillNudgeText,
+				"--mcp-config", leoMCPConfigPath,
 				"--max-turns", "15",
 			},
 		},
@@ -103,7 +126,8 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 				"--agent", "rocket",
 				"--allowed-tools", "Read",
 				"--disallowed-tools", "WebFetch",
-				"--append-system-prompt", "be terse",
+				"--append-system-prompt", leoSkillNudgeText + "\n\nbe terse",
+				"--mcp-config", leoMCPConfigPath,
 				"--max-turns", "50",
 				"hello world",
 			},
@@ -123,6 +147,8 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 				"--add-dir", "/ok/dir",
 				"--remote-control",
 				"--name", "myagent",
+				"--append-system-prompt", leoSkillNudgeText,
+				"--mcp-config", leoMCPConfigPath,
 				"--max-turns", "15",
 			},
 		},
@@ -142,6 +168,8 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 				"--remote-control",
 				"--name", "myagent",
 				"--agent", "shared-agent",
+				"--append-system-prompt", leoSkillNudgeText,
+				"--mcp-config", leoMCPConfigPath,
 				"--max-turns", "15",
 			},
 		},
@@ -161,6 +189,8 @@ func TestBuildTemplateArgsCharacterization(t *testing.T) {
 				"--model", "opus",
 				"--add-dir", "/tmp/ws",
 				"--name", "myagent",
+				"--append-system-prompt", leoSkillNudgeText,
+				"--mcp-config", leoMCPConfigPath,
 				"--max-turns", "15",
 			},
 		},
@@ -226,9 +256,12 @@ func TestResolveTemplateLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 	}
 }
 
-// TestResolveTemplateLaunchCodexNoLeoMCPWhenWebDisabled mirrors the claude
-// gate: web disabled means no leo MCP bridge for codex either.
-func TestResolveTemplateLaunchCodexNoLeoMCPWhenWebDisabled(t *testing.T) {
+// TestResolveTemplateLaunchCodexLeoMCPWhenWebDisabled confirms the codex
+// bridge is always wired in now, even with web disabled — the env-var names
+// are always referenced; the actual values (LEO_WEB_PORT/LEO_API_TOKEN) are
+// simply absent/empty at spawn time, and the leo MCP server self-selects
+// local-only mode from that.
+func TestResolveTemplateLaunchCodexLeoMCPWhenWebDisabled(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: t.TempDir(),
 		Web:      config.WebConfig{Enabled: false},
@@ -242,17 +275,16 @@ func TestResolveTemplateLaunchCodexNoLeoMCPWhenWebDisabled(t *testing.T) {
 	if !ok {
 		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
 	}
-	if opts.LeoMCP != nil {
-		t.Errorf("expected nil LeoMCP bridge when web is disabled, got %+v", opts.LeoMCP)
+	if opts.LeoMCP == nil {
+		t.Fatal("expected LeoMCP bridge to be filled even when web is disabled")
 	}
 }
 
-// TestResolveTemplateLaunchCodexNoLeoMCPWithoutToken confirms the gate
-// requires a live token, not just web.Enabled: even though codex's bridge
-// only references env-var *names* (no literal secret embedded), a bridge is
-// useless without a token for the supervisor to actually export — matching
-// processLeoMCPEnv's contract and the opencode branch in this same function.
-func TestResolveTemplateLaunchCodexNoLeoMCPWithoutToken(t *testing.T) {
+// TestResolveTemplateLaunchCodexLeoMCPWithoutToken confirms the codex bridge
+// is wired in even without a live token: codex's bridge only references
+// env-var *names* (no literal secret embedded), so an empty token at spawn
+// time is harmless — the MCP server just runs local-only.
+func TestResolveTemplateLaunchCodexLeoMCPWithoutToken(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: t.TempDir(),
 		Web:      config.WebConfig{Enabled: true},
@@ -266,8 +298,8 @@ func TestResolveTemplateLaunchCodexNoLeoMCPWithoutToken(t *testing.T) {
 	if !ok {
 		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
 	}
-	if opts.LeoMCP != nil {
-		t.Errorf("expected nil LeoMCP bridge without a webToken, got %+v", opts.LeoMCP)
+	if opts.LeoMCP == nil {
+		t.Fatal("expected LeoMCP bridge to be filled even without a webToken")
 	}
 }
 
@@ -318,10 +350,11 @@ func TestResolveTemplateLaunchOpencodeFillsLeoMCPBridge(t *testing.T) {
 	}
 }
 
-// TestResolveTemplateLaunchOpencodeNoBridgeWithoutToken confirms the
-// literal-value requirement: even with web enabled, an empty webToken must
-// suppress the bridge rather than embed empty credentials.
-func TestResolveTemplateLaunchOpencodeNoBridgeWithoutToken(t *testing.T) {
+// TestResolveTemplateLaunchOpencodeBridgeWithEmptyTokenWhenTokenEmpty
+// confirms the opencode bridge is now always wired in, even with an empty
+// webToken — the leo MCP server self-selects local-only mode from the
+// (empty) LEO_API_TOKEN value rather than the bridge being suppressed.
+func TestResolveTemplateLaunchOpencodeBridgeWithEmptyTokenWhenTokenEmpty(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: t.TempDir(),
 		Web:      config.WebConfig{Enabled: true},
@@ -335,8 +368,11 @@ func TestResolveTemplateLaunchOpencodeNoBridgeWithoutToken(t *testing.T) {
 	if !ok {
 		t.Fatalf("spec.Options = %T, want opencodeharness.Options", spec.Options)
 	}
-	if opts.LeoMCP != nil {
-		t.Errorf("expected nil LeoMCP bridge without a webToken, got %+v", opts.LeoMCP)
+	if opts.LeoMCP == nil {
+		t.Fatal("expected LeoMCP bridge to be filled even without a webToken")
+	}
+	if opts.LeoMCP.Env["LEO_API_TOKEN"] != "" {
+		t.Errorf("expected empty LEO_API_TOKEN, got %q", opts.LeoMCP.Env["LEO_API_TOKEN"])
 	}
 }
 

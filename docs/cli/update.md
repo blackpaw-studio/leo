@@ -16,7 +16,7 @@ leo update --version main-<short-sha>
 
 Fetches the latest release from GitHub, verifies its cosign signature (keyless, via the public Sigstore transparency log), and swaps it in atomically. If Leo was installed via Homebrew, `leo update` delegates to `brew upgrade leo` so your package manager stays in sync.
 
-Workspace templates (`CLAUDE.md`, `skills/*.md`) re-sync automatically whenever the service starts — **restart the daemon after updating** to pick up any template changes.
+Operational instructions/skills are served on demand via the `leo_skill` MCP tool rather than synced files, so they update automatically with the binary — no workspace re-sync or daemon restart required to pick them up.
 
 ## Flags
 

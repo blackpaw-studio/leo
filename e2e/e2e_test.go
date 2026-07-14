@@ -300,9 +300,17 @@ func TestRunWithoutMCPConfig(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d", code)
 	}
 
+	// With no user-provided config/mcp-servers.json, the only --mcp-config is
+	// Leo's own leo-mcp.json, which is now always injected (the leo MCP server
+	// self-selects local-only mode when the web listener is off, serving just
+	// the leo_skill tool). It must NOT point at a user config file.
 	args := readArgLog(t, argLog)
-	if argValue(args, "--mcp-config") != "" {
-		t.Error("--mcp-config should not be present when no config file exists")
+	mcpPath := argValue(args, "--mcp-config")
+	if mcpPath == "" {
+		t.Fatal("expected Leo's own --mcp-config to be present (always injected)")
+	}
+	if !strings.HasSuffix(mcpPath, "leo-mcp.json") {
+		t.Errorf("expected --mcp-config to point at leo-mcp.json, got: %s", mcpPath)
 	}
 }
 

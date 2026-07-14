@@ -20,11 +20,11 @@ import (
 // assert on spec.Options (e.g. a codex/opencode LeoMCP bridge) without
 // needing Args() to succeed.
 //
-// webToken is the daemon's API bearer token (Manager.webToken). A non-claude
-// LeoMCP bridge is only wired in when web is enabled AND webToken is
-// non-empty (mirrors run/runner.go's leoMCPEnv and cli's processLeoMCPEnv) —
-// even though codex's bridge only references env-var *names* (the supervisor
-// exports the values), a bridge is useless without a live token to export.
+// webToken is the daemon's API bearer token (Manager.webToken). The
+// non-claude LeoMCP bridge is always wired in (mirrors run/runner.go's
+// leoMCPEnv and cli's processLeoMCPEnv); webToken/cfg.WebPort() may be empty
+// or zero when web is disabled, in which case the leo MCP server self-selects
+// local-only mode at runtime (only leo_skill is served).
 func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) (harness.Harness, harness.LaunchSpec, error) {
 	// Defense in depth: Config.Validate() also rejects these, but skip
 	// anything unsafe here in case spawn-time receives an unvalidated
@@ -66,18 +66,17 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		maxTurns = config.DefaultMaxTurns
 	}
 
-	leoMCPOK := cfg != nil && cfg.Web.Enabled && webToken != ""
-
 	spec := harness.LaunchSpec{
-		Kind:        harness.KindAgent,
-		Name:        agentName,
-		Model:       cfg.TemplateModel(tmpl),
-		MaxTurns:    maxTurns,
-		Workspace:   workspace,
-		AddDirs:     safeDirs,
-		Channels:    tmpl.Channels,
-		DevChannels: tmpl.DevChannels,
-		Prompt:      prompt,
+		Kind:          harness.KindAgent,
+		Name:          agentName,
+		Model:         cfg.TemplateModel(tmpl),
+		MaxTurns:      maxTurns,
+		Workspace:     workspace,
+		AddDirs:       safeDirs,
+		Channels:      tmpl.Channels,
+		DevChannels:   tmpl.DevChannels,
+		Prompt:        prompt,
+		SystemContext: leomcp.LeoNudge(cfg),
 	}
 
 	switch opts := decoded.(type) {
@@ -89,30 +88,25 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		if v, ok := tmpl.HarnessOptions["remote_control"].(bool); ok {
 			opts.RemoteControl = v
 		}
-		opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
 		opts.MCPConfigPath = mcpConfig
 		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
 		spec.Options = opts
 	case codexharness.Options:
-		if leoMCPOK {
-			opts.LeoMCP = &codexharness.LeoMCPBridge{
-				Command:      "leo",
-				Args:         []string{"mcp-server"},
-				EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
-				ApprovalMode: "approve",
-			}
+		opts.LeoMCP = &codexharness.LeoMCPBridge{
+			Command:      "leo",
+			Args:         []string{"mcp-server"},
+			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+			ApprovalMode: "approve",
 		}
 		spec.Options = opts
 	case opencodeharness.Options:
-		if leoMCPOK {
-			opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-				Command: []string{"leo", "mcp-server"},
-				Env: map[string]string{
-					"LEO_PROCESS_NAME": agentName,
-					"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
-					"LEO_API_TOKEN":    webToken,
-				},
-			}
+		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
+			Command: []string{"leo", "mcp-server"},
+			Env: map[string]string{
+				"LEO_PROCESS_NAME": agentName,
+				"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
+				"LEO_API_TOKEN":    webToken,
+			},
 		}
 		spec.Options = opts
 	default:

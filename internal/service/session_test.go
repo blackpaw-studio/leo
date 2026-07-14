@@ -615,10 +615,12 @@ func TestSuperviseSessionCodexWiresLeoMCPBridgeWhenGated(t *testing.T) {
 	}
 }
 
-// TestSuperviseSessionCodexNoBridgeWhenTokenEmpty verifies the LeoMCP bridge
-// is omitted when no web token is available — the same gate
-// resolveProcessLaunch uses (cfg.Web.Enabled && webToken != "").
-func TestSuperviseSessionCodexNoBridgeWhenTokenEmpty(t *testing.T) {
+// TestSuperviseSessionCodexBridgeWithEmptyTokenWhenTokenEmpty verifies the
+// LeoMCP bridge is still wired in when no web token is available — the leo
+// MCP server is always injected now, regardless of cfg.Web.Enabled/webToken
+// — but the exported LEO_API_TOKEN is empty rather than carrying a live
+// token, so the server self-selects local-only mode at runtime.
+func TestSuperviseSessionCodexBridgeWithEmptyTokenWhenTokenEmpty(t *testing.T) {
 	orig := loopExecCommand
 	t.Cleanup(func() { loopExecCommand = orig })
 	var mu sync.Mutex
@@ -647,10 +649,10 @@ func TestSuperviseSessionCodexNoBridgeWhenTokenEmpty(t *testing.T) {
 	t.Cleanup(cancel)
 
 	cmd := waitForNewSessionCmd(t, &mu, &newSessionCmds)
-	if strings.Contains(cmd, "mcp_servers.leo") {
-		t.Fatalf("new-session command should not carry a leo MCP bridge without a token: %s", cmd)
+	if !strings.Contains(cmd, "mcp_servers.leo") {
+		t.Fatalf("new-session command should carry a leo MCP bridge even without a token: %s", cmd)
 	}
-	if strings.Contains(cmd, "LEO_API_TOKEN") {
-		t.Fatalf("new-session command should not export LEO_API_TOKEN without a token: %s", cmd)
+	if strings.Contains(cmd, "LEO_API_TOKEN='") && !strings.Contains(cmd, "LEO_API_TOKEN=''") {
+		t.Fatalf("new-session command should export an empty LEO_API_TOKEN without a token: %s", cmd)
 	}
 }

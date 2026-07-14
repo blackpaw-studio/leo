@@ -119,8 +119,10 @@ func runService(cmd *cobra.Command, args []string) error {
 	}
 
 	// Foreground mode has no daemon API token to offer a non-claude LeoMCP
-	// bridge, so pass "" — processLeoMCPEnv gates off cleanly (matches
-	// today's process env, which never sets LEO_API_TOKEN in this path).
+	// bridge, so pass "" — the bridge is still wired in (leo MCP server
+	// self-selects local-only mode), just with an empty LEO_API_TOKEN
+	// (matches today's process env, which never sets LEO_API_TOKEN in this
+	// path).
 	claudeArgs, _ := buildProcessArgs(cfg, procName, proc, "")
 
 	// Add session persistence. This is claude-specific (--session-id/--resume
@@ -324,22 +326,27 @@ func mergeHarnessEnv(base, overlay map[string]string) map[string]string {
 	return merged
 }
 
-// processLeoMCPEnv gates whether a non-claude LeoMCP bridge should be wired
-// in for a supervised process, mirroring run/runner.go's leoMCPEnv gate but
-// sourced from the webToken already resolved by the caller (supervised mode
-// resolves it once via web.EnsureAPIToken; the single-process foreground
-// path has none, so it passes ""). LEO_PROCESS_NAME is the bare process
-// name (see buildClaudeShellCmd, which exports the same three vars into the
-// supervised tmux shell).
+// processLeoMCPEnv builds the env a non-claude LeoMCP bridge needs for a
+// supervised process, sourced from the webToken already resolved by the
+// caller (supervised mode resolves it once via web.EnsureAPIToken; the
+// single-process foreground path has none, so it passes ""). The leo MCP
+// server is always wired in now — the bridge is built regardless of whether
+// web is enabled or a token is available — and self-selects local-only mode
+// at runtime when LEO_WEB_PORT/LEO_API_TOKEN are empty/absent. The bool
+// return reports whether a live token was available, for callers that still
+// want to know (it no longer gates injection). LEO_PROCESS_NAME is the bare
+// process name (see buildClaudeShellCmd, which exports the same three vars
+// into the supervised tmux shell).
 func processLeoMCPEnv(cfg *config.Config, name, webToken string) (map[string]string, bool) {
-	if cfg == nil || !cfg.Web.Enabled || webToken == "" {
-		return nil, false
+	webPort := 0
+	if cfg != nil {
+		webPort = cfg.WebPort()
 	}
 	return map[string]string{
 		"LEO_PROCESS_NAME": name,
-		"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
+		"LEO_WEB_PORT":     strconv.Itoa(webPort),
 		"LEO_API_TOKEN":    webToken,
-	}, true
+	}, cfg != nil && cfg.Web.Enabled && webToken != ""
 }
 
 // resolveProcessLaunch resolves the config cascade for a named process into a
@@ -357,16 +364,17 @@ func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessCo
 		return nil, harness.LaunchSpec{}, fmt.Errorf("decoding harness options: %w", err)
 	}
 
-	leoEnv, leoMCPOK := processLeoMCPEnv(cfg, name, webToken)
+	leoEnv, _ := processLeoMCPEnv(cfg, name, webToken)
 
 	spec := harness.LaunchSpec{
-		Kind:        harness.KindProcess,
-		Name:        name,
-		Model:       cfg.ProcessModel(proc),
-		Workspace:   cfg.ProcessWorkspace(proc),
-		AddDirs:     proc.AddDirs,
-		Channels:    proc.Channels,
-		DevChannels: proc.DevChannels,
+		Kind:          harness.KindProcess,
+		Name:          name,
+		Model:         cfg.ProcessModel(proc),
+		Workspace:     cfg.ProcessWorkspace(proc),
+		AddDirs:       proc.AddDirs,
+		Channels:      proc.Channels,
+		DevChannels:   proc.DevChannels,
+		SystemContext: leomcp.LeoNudge(cfg),
 	}
 
 	switch opts := decoded.(type) {
@@ -376,26 +384,21 @@ func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessCo
 			mcpConfig = p
 		}
 		opts.RemoteControlPrefix = name
-		opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
 		opts.MCPConfigPath = mcpConfig
 		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
 		spec.Options = opts
 	case codexharness.Options:
-		if leoMCPOK {
-			opts.LeoMCP = &codexharness.LeoMCPBridge{
-				Command:      "leo",
-				Args:         []string{"mcp-server"},
-				EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
-				ApprovalMode: "approve",
-			}
+		opts.LeoMCP = &codexharness.LeoMCPBridge{
+			Command:      "leo",
+			Args:         []string{"mcp-server"},
+			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+			ApprovalMode: "approve",
 		}
 		spec.Options = opts
 	case opencodeharness.Options:
-		if leoMCPOK {
-			opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-				Command: []string{"leo", "mcp-server"},
-				Env:     leoEnv,
-			}
+		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
+			Command: []string{"leo", "mcp-server"},
+			Env:     leoEnv,
 		}
 		spec.Options = opts
 	default:
