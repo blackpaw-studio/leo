@@ -2,11 +2,14 @@ package run
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 func TestWrapPromptWithMarkerAndFooter(t *testing.T) {
@@ -177,6 +180,226 @@ func TestPersistentFailureDoesNotNotifyWithoutChannels(t *testing.T) {
 	handlePersistentFailure(cfg, "t1", "reason")
 	if called {
 		t.Fatalf("expected no follow-up when channels are empty")
+	}
+}
+
+// --- resolveDeliveryTarget: the routing split between the new agent path
+// (no `session:`) and the legacy session-router path (`session:` set). ---
+
+func TestResolveDeliveryTargetTemplateTaskUsesAgentEnsurePath(t *testing.T) {
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"nightly": {Runtime: "persistent", Template: "worker"},
+		},
+		Templates: map[string]config.TemplateConfig{
+			"worker": {Workspace: "/tmp/worker-ws", Model: "sonnet"},
+		},
+	}
+
+	target, err := resolveDeliveryTarget(cfg, "nightly")
+	if err != nil {
+		t.Fatalf("resolveDeliveryTarget: %v", err)
+	}
+	if target.queueKey != "worker" {
+		t.Errorf("queueKey = %q, want %q", target.queueKey, "worker")
+	}
+	if target.tmux != "leo-worker" {
+		t.Errorf("tmux = %q, want %q", target.tmux, "leo-worker")
+	}
+	if target.ensure == nil {
+		t.Fatalf("expected non-nil ensure spec")
+	}
+	if target.ensure.Name != "worker" {
+		t.Errorf("ensure.Name = %q, want %q", target.ensure.Name, "worker")
+	}
+	if target.ensure.TemplateName != "worker" {
+		t.Errorf("ensure.TemplateName = %q, want %q", target.ensure.TemplateName, "worker")
+	}
+	if target.ensure.Implicit {
+		t.Errorf("expected Implicit=false for an explicit template: task")
+	}
+	if target.ensure.Template.Workspace != "/tmp/worker-ws" {
+		t.Errorf("ensure.Template.Workspace = %q, want %q", target.ensure.Template.Workspace, "/tmp/worker-ws")
+	}
+}
+
+func TestResolveDeliveryTargetImplicitTaskSynthesizesTemplate(t *testing.T) {
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"digest": {Runtime: "persistent", Workspace: "/tmp/digest-ws", Model: "opus"},
+		},
+	}
+
+	target, err := resolveDeliveryTarget(cfg, "digest")
+	if err != nil {
+		t.Fatalf("resolveDeliveryTarget: %v", err)
+	}
+	if target.queueKey != "digest" {
+		t.Errorf("queueKey = %q, want %q", target.queueKey, "digest")
+	}
+	if target.tmux != "leo-digest" {
+		t.Errorf("tmux = %q, want %q", target.tmux, "leo-digest")
+	}
+	if target.ensure == nil {
+		t.Fatalf("expected non-nil ensure spec")
+	}
+	if !target.ensure.Implicit {
+		t.Errorf("expected Implicit=true for a task with no template:")
+	}
+	if target.ensure.Template.Workspace != "/tmp/digest-ws" {
+		t.Errorf("ensure.Template.Workspace = %q, want %q", target.ensure.Template.Workspace, "/tmp/digest-ws")
+	}
+}
+
+// TestResolveDeliveryTargetSessionTaskUnchanged verifies a task with an
+// explicit `session:` field keeps resolving through the legacy
+// cfg.ResolveSession/sessionTmuxTarget path byte-for-byte — no ensure spec is
+// ever attached, so the router never spawns/resumes anything for it.
+func TestResolveDeliveryTargetSessionTaskUnchanged(t *testing.T) {
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"shared": {Runtime: "persistent", Session: "team"},
+		},
+		Sessions: map[string]config.SessionConfig{"team": {Workspace: "/w"}},
+	}
+
+	target, err := resolveDeliveryTarget(cfg, "shared")
+	if err != nil {
+		t.Fatalf("resolveDeliveryTarget: %v", err)
+	}
+	if target.queueKey != "team" {
+		t.Errorf("queueKey = %q, want %q", target.queueKey, "team")
+	}
+	if target.tmux != "leo-session-team" {
+		t.Errorf("tmux = %q, want %q", target.tmux, "leo-session-team")
+	}
+	if target.ensure != nil {
+		t.Errorf("expected nil ensure spec for a session-routed task, got %+v", target.ensure)
+	}
+}
+
+// shortTempDir returns a short-path temp dir under /tmp (unlike t.TempDir(),
+// which nests under the test name and can exceed the ~104-char Unix socket
+// path limit on macOS once daemon.SockPath appends "state/leo.sock").
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "leo-rt-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// fakeEnsurer adapts a func to daemon.AgentEnsurer for tests.
+type fakeEnsurer func(ctx context.Context, spec daemon.EnsureSpec) error
+
+func (f fakeEnsurer) Ensure(ctx context.Context, spec daemon.EnsureSpec) error { return f(ctx, spec) }
+
+// newTestDaemon starts a real daemon.Server on a temp Unix socket under
+// cfg.HomePath/state/leo.sock (the path daemon.EnqueueTask/AwaitTask dial),
+// wired with a synchronous fake injector (returns a *harness.Result
+// immediately, so the pump completes without an async Report/timeout) and
+// the given ensurer. Returns the server for Shutdown.
+func newTestDaemon(t *testing.T, homePath string, ensurer daemon.AgentEnsurer) *daemon.Server {
+	t.Helper()
+	stateDir := filepath.Join(homePath, "state")
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
+		t.Fatalf("creating state dir: %v", err)
+	}
+	srv := daemon.New(daemon.SockPath(homePath), filepath.Join(homePath, "leo.yaml"), nil)
+	srv.SetInjector(func(ctx context.Context, tmuxSession, prompt string) (*harness.Result, error) {
+		return &harness.Result{SessionID: "sid-123", Text: "done"}, nil
+	})
+	if ensurer != nil {
+		srv.SetEnsurer(ensurer)
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("starting daemon: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown() })
+	return srv
+}
+
+// writePromptFile writes a minimal prompt file under workspace and returns
+// its basename, ready to use as TaskConfig.PromptFile.
+func writePromptFile(t *testing.T, workspace string) string {
+	t.Helper()
+	if err := os.MkdirAll(workspace, 0750); err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "prompt.md"), []byte("do the thing"), 0600); err != nil {
+		t.Fatalf("writing prompt file: %v", err)
+	}
+	return "prompt.md"
+}
+
+// TestRunPersistentTemplateTaskEnqueuesWithAgentEnsure is the end-to-end
+// counterpart to TestResolveDeliveryTargetTemplateTaskUsesAgentEnsurePath:
+// a real runPersistent call against a real (in-process) daemon must invoke
+// the wired AgentEnsurer with the resolved agent target before the fake
+// injector completes the turn.
+func TestRunPersistentTemplateTaskEnqueuesWithAgentEnsure(t *testing.T) {
+	home := shortTempDir(t)
+	ws := filepath.Join(home, "ws")
+	promptFile := writePromptFile(t, ws)
+
+	var calls []daemon.EnsureSpec
+	newTestDaemon(t, home, fakeEnsurer(func(_ context.Context, spec daemon.EnsureSpec) error {
+		calls = append(calls, spec)
+		return nil
+	}))
+
+	cfg := &config.Config{
+		HomePath: home,
+		Tasks: map[string]config.TaskConfig{
+			"nightly": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Template: "worker"},
+		},
+		Templates: map[string]config.TemplateConfig{
+			"worker": {Workspace: ws},
+		},
+	}
+
+	if err := runPersistent(cfg, "nightly"); err != nil {
+		t.Fatalf("runPersistent: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 Ensure call, got %d: %+v", len(calls), calls)
+	}
+	if calls[0].Name != "worker" {
+		t.Errorf("Ensure spec Name = %q, want %q", calls[0].Name, "worker")
+	}
+}
+
+// TestRunPersistentSessionTaskDoesNotEnsure mirrors the above for a task with
+// an explicit `session:` — the router must never consult the AgentEnsurer for
+// it, proving the legacy path is untouched by the new ensure-exists wiring.
+func TestRunPersistentSessionTaskDoesNotEnsure(t *testing.T) {
+	home := shortTempDir(t)
+	ws := filepath.Join(home, "ws")
+	promptFile := writePromptFile(t, ws)
+
+	var calls []daemon.EnsureSpec
+	newTestDaemon(t, home, fakeEnsurer(func(_ context.Context, spec daemon.EnsureSpec) error {
+		calls = append(calls, spec)
+		return nil
+	}))
+
+	cfg := &config.Config{
+		HomePath: home,
+		Tasks: map[string]config.TaskConfig{
+			"reporter": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Session: "team"},
+		},
+		Sessions: map[string]config.SessionConfig{
+			"team": {Workspace: ws},
+		},
+	}
+
+	if err := runPersistent(cfg, "reporter"); err != nil {
+		t.Fatalf("runPersistent: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("expected no Ensure calls for a session-routed task, got %+v", calls)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -30,6 +31,56 @@ func sessionTmuxTarget(cfg *config.Config, taskName string) (string, error) {
 
 // persistentImpl is a seam for tests to override the runPersistent dispatch.
 var persistentImpl = runPersistent
+
+// deliveryTarget describes where a persistent task's prompt is delivered:
+// the router's FIFO queue key, the concrete tmux session to inject into, and
+// (agent-routed tasks only) the ensure-exists spec the daemon must satisfy
+// before injecting.
+type deliveryTarget struct {
+	queueKey string
+	tmux     string
+	ensure   *daemon.EnsureSpec
+}
+
+// resolveDeliveryTarget picks a persistent task's delivery target. Tasks with
+// no `session:` field route through the new agent path — config.ResolveTaskTarget
+// resolves the target agent (explicit via `template:`, or implicit/synthesized
+// from the task itself) and the daemon ensures it is spawned/resumed before
+// injection. Tasks with `session:` keep today's session-router path verbatim
+// (dies in a later step of the sessions->agents collapse).
+func resolveDeliveryTarget(cfg *config.Config, taskName string) (deliveryTarget, error) {
+	task, ok := cfg.Tasks[taskName]
+	if !ok {
+		return deliveryTarget{}, fmt.Errorf("task %q not found", taskName)
+	}
+
+	if task.Session == "" {
+		agentName, tmpl, implicit, err := cfg.ResolveTaskTarget(taskName)
+		if err != nil {
+			return deliveryTarget{}, fmt.Errorf("resolving agent target for task %q: %w", taskName, err)
+		}
+		return deliveryTarget{
+			queueKey: agentName,
+			tmux:     agent.SessionName(agentName),
+			ensure: &daemon.EnsureSpec{
+				Name:         agentName,
+				TemplateName: task.Template,
+				Template:     tmpl,
+				Implicit:     implicit,
+			},
+		}, nil
+	}
+
+	sessName, _, _, err := cfg.ResolveSession(taskName)
+	if err != nil {
+		return deliveryTarget{}, fmt.Errorf("resolving session for task %q: %w", taskName, err)
+	}
+	tmuxTarget, err := sessionTmuxTarget(cfg, taskName)
+	if err != nil {
+		return deliveryTarget{}, fmt.Errorf("resolving tmux session for task %q: %w", taskName, err)
+	}
+	return deliveryTarget{queueKey: sessName, tmux: tmuxTarget}, nil
+}
 
 // wrapPromptForPersistent prepends the leo invocation marker and (when
 // channels are non-empty) appends the delivery footer. The marker lets the
@@ -69,13 +120,9 @@ func runPersistent(cfg *config.Config, taskName string) error {
 	if err != nil {
 		return err
 	}
-	sessName, _, _, err := cfg.ResolveSession(taskName)
+	target, err := resolveDeliveryTarget(cfg, taskName)
 	if err != nil {
-		return fmt.Errorf("resolving session for task %q: %w", taskName, err)
-	}
-	tmuxTarget, err := sessionTmuxTarget(cfg, taskName)
-	if err != nil {
-		return fmt.Errorf("resolving tmux session for task %q: %w", taskName, err)
+		return err
 	}
 	body, err := assemblePrompt(cfg, task)
 	if err != nil {
@@ -93,13 +140,14 @@ func runPersistent(cfg *config.Config, taskName string) error {
 
 	enq, err := daemon.EnqueueTask(ctx, cfg.HomePath, daemon.EnqueueRequest{
 		InvocationID: invID,
-		Session:      sessName,
-		TmuxSession:  tmuxTarget,
+		Session:      target.queueKey,
+		TmuxSession:  target.tmux,
 		Task:         taskName,
 		Prompt:       wrapped,
 		Channels:     task.Channels,
 		QueueMax:     task.QueueMax,
 		Timeout:      timeout,
+		Ensure:       target.ensure,
 	})
 	if err != nil {
 		handlePersistentFailure(cfg, taskName, fmt.Sprintf("enqueue: %v", err))
@@ -120,9 +168,13 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		return fmt.Errorf("task failed: %s", aw.Err)
 	}
 
-	if aw.SessionID != "" {
+	// Session-id persistence only applies to the legacy session-router path:
+	// agent-routed tasks (target.ensure != nil) track their own session id via
+	// agentstore.Record.SessionID (see agent.Manager.Spawn/Resume), not this
+	// generic "session:"+name store.
+	if target.ensure == nil && aw.SessionID != "" {
 		store := session.NewStore(cfg.HomePath)
-		if err := store.Set("session:"+sessName, aw.SessionID); err != nil {
+		if err := store.Set("session:"+target.queueKey, aw.SessionID); err != nil {
 			// Non-fatal: the task succeeded; we just couldn't persist
 			// the session id for next-run resume.
 			fmt.Printf("warning: failed to persist session id: %v\n", err)
@@ -154,11 +206,7 @@ func handlePersistentFailure(cfg *config.Config, taskName, reason string) {
 	if !task.NotifyOnFail || len(task.Channels) == 0 {
 		return
 	}
-	sessName, _, _, err := cfg.ResolveSession(taskName)
-	if err != nil {
-		return
-	}
-	tmuxTarget, err := sessionTmuxTarget(cfg, taskName)
+	target, err := resolveDeliveryTarget(cfg, taskName)
 	if err != nil {
 		return
 	}
@@ -173,13 +221,14 @@ func handlePersistentFailure(cfg *config.Config, taskName, reason string) {
 	defer cancel()
 	enqueueFollowUp(ctx, cfg.HomePath, daemon.EnqueueRequest{
 		InvocationID: invID,
-		Session:      sessName,
-		TmuxSession:  tmuxTarget,
+		Session:      target.queueKey,
+		TmuxSession:  target.tmux,
 		Task:         taskName + ":notify",
 		Prompt:       wrapped,
 		Channels:     task.Channels,
 		QueueMax:     0, // default = 5; failure notice should not be rejected
 		Timeout:      60 * time.Second,
+		Ensure:       target.ensure,
 	})
 	// Fire-and-forget: we do NOT await the result. The pump processes the
 	// notice once the original task's slot clears (Report or timeout); if

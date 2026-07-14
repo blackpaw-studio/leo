@@ -124,6 +124,11 @@ type EnqueueRequest struct {
 	Channels     []string
 	QueueMax     int
 	Timeout      time.Duration
+	// Ensure, when non-nil, tells the daemon to make sure the target agent is
+	// injectable (spawn/resume as needed) before this invocation is injected.
+	// Nil preserves the legacy session-only delivery path untouched — set by
+	// runPersistent only for tasks that resolve via config.ResolveTaskTarget.
+	Ensure *EnsureSpec
 }
 
 // EnqueueResponse is the daemon's reply to /task/enqueue.
@@ -164,6 +169,7 @@ func enqueueTask(ctx context.Context, cli *http.Client, baseURL string, req Enqu
 		"channels":        req.Channels,
 		"queue_max":       req.QueueMax,
 		"timeout_seconds": int(req.Timeout.Seconds()),
+		"ensure":          req.Ensure,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

@@ -156,14 +156,6 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
 	if spec.Template == "" {
 		return Record{}, fmt.Errorf("template is required")
 	}
-	if spec.Branch != "" && spec.Repo == "" {
-		return Record{}, fmt.Errorf("--worktree requires a repo")
-	}
-	if spec.Repo != "" {
-		if err := ValidateRepo(spec.Repo); err != nil {
-			return Record{}, err
-		}
-	}
 
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -174,10 +166,70 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
 		return Record{}, fmt.Errorf("template %q not found", spec.Template)
 	}
 
+	return m.spawnResolved(ctx, cfg, tmpl, spec)
+}
+
+// SpawnFromTemplate spawns a repo-less agent named `name` directly from an
+// already-resolved TemplateConfig, skipping the cfg.Templates[...] lookup
+// Spawn performs. Used by the daemon's ensure-exists task-delivery path
+// (internal/daemon/ensure.go) for persistent tasks with an implicit target —
+// config.ResolveTaskTarget synthesizes tmpl from the task's own fields rather
+// than a named config template, so there is nothing to look up.
+func (m *Manager) SpawnFromTemplate(ctx context.Context, name string, tmpl config.TemplateConfig) (Record, error) {
+	if name == "" {
+		return Record{}, fmt.Errorf("name is required")
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return Record{}, fmt.Errorf("loading config: %w", err)
+	}
+	return m.spawnResolved(ctx, cfg, tmpl, SpawnSpec{Template: name, Name: name})
+}
+
+// spawnResolved is the shared post-template-lookup body for Spawn and
+// SpawnFromTemplate: validate, then route to the worktree or shared-workspace
+// flow.
+func (m *Manager) spawnResolved(ctx context.Context, cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec) (Record, error) {
+	if spec.Branch != "" && spec.Repo == "" {
+		return Record{}, fmt.Errorf("--worktree requires a repo")
+	}
+	if spec.Repo != "" {
+		if err := ValidateRepo(spec.Repo); err != nil {
+			return Record{}, err
+		}
+	}
+
 	if spec.Branch != "" {
 		return m.spawnWorktree(ctx, cfg, tmpl, spec)
 	}
 	return m.spawnShared(cfg, tmpl, spec)
+}
+
+// Live reports whether name is a currently running (supervised) agent.
+func (m *Manager) Live(name string) bool {
+	_, ok := m.sup.EphemeralAgents()[name]
+	return ok
+}
+
+// Suspended reports whether name has a persisted agentstore record marked
+// Suspended (and is not currently live). Config/store load failures are
+// treated as "not suspended" — the caller (the ensure-exists path) falls
+// through to spawning fresh, which is the safe default when state can't be
+// read.
+func (m *Manager) Suspended(name string) bool {
+	if m.Live(name) {
+		return false
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return false
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return false
+	}
+	rec, ok := stored[name]
+	return ok && rec.Suspended
 }
 
 // spawnShared is the non-worktree flow. Workspace resolution may do a network

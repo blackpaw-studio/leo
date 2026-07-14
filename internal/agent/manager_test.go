@@ -437,6 +437,105 @@ func TestSpawnWithEmptyRepoSucceeds(t *testing.T) {
 	}
 }
 
+// --- SpawnFromTemplate (ensure-exists path for implicit persistent-task targets) ---
+
+// TestSpawnFromTemplateReachesSupervisor verifies SpawnFromTemplate spawns a
+// repo-less agent through the same supervisor path as a repo-less Spawn,
+// skipping the cfg.Templates[...] lookup entirely (the caller hands the
+// TemplateConfig directly, as config.ResolveTaskTarget does for implicit
+// targets).
+func TestSpawnFromTemplateReachesSupervisor(t *testing.T) {
+	home := t.TempDir()
+	wsDir := filepath.Join(home, "ws")
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	tmpl := config.TemplateConfig{Workspace: wsDir}
+	rec, err := m.SpawnFromTemplate(context.Background(), "my-task", tmpl)
+	if err != nil {
+		t.Fatalf("SpawnFromTemplate: %v", err)
+	}
+	if rec.Name != "my-task" {
+		t.Errorf("Name = %q, want %q", rec.Name, "my-task")
+	}
+	if rec.Workspace != wsDir {
+		t.Errorf("Workspace = %q, want %q", rec.Workspace, wsDir)
+	}
+	if sup.spawnCall == nil {
+		t.Fatalf("expected supervisor.SpawnAgent to be called")
+	}
+	if sup.spawnCall.Name != "my-task" {
+		t.Errorf("SpawnAgent name = %q, want %q", sup.spawnCall.Name, "my-task")
+	}
+	if sup.spawnCall.WorkDir != wsDir {
+		t.Errorf("SpawnAgent WorkDir = %q, want %q", sup.spawnCall.WorkDir, wsDir)
+	}
+
+	recs, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("want 1 record, got %d (err=%v)", len(recs), err)
+	}
+	if _, ok := recs["my-task"]; !ok {
+		t.Fatalf("expected record keyed %q, got %v", "my-task", recs)
+	}
+}
+
+func TestSpawnFromTemplateRequiresName(t *testing.T) {
+	m := New(func() (*config.Config, error) { return &config.Config{}, nil }, &capturingSupervisor{}, "", "")
+	if _, err := m.SpawnFromTemplate(context.Background(), "", config.TemplateConfig{}); err == nil {
+		t.Fatalf("expected error for empty name")
+	}
+}
+
+// --- Live / Suspended (ensure-exists liveness probes) ---
+
+func TestLiveReportsSupervisorState(t *testing.T) {
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"running-agent": {Name: "running-agent", Status: "running"}}}
+	m := New(func() (*config.Config, error) { return &config.Config{}, nil }, sup, "", "")
+
+	if !m.Live("running-agent") {
+		t.Errorf("expected Live(running-agent) = true")
+	}
+	if m.Live("unknown") {
+		t.Errorf("expected Live(unknown) = false")
+	}
+}
+
+func TestSuspendedReportsAgentstoreState(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	if err := agentstore.Save(home, agentstore.Record{Name: "suspended-agent", Suspended: true}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "")
+
+	if !m.Suspended("suspended-agent") {
+		t.Errorf("expected Suspended(suspended-agent) = true")
+	}
+	if m.Suspended("unknown") {
+		t.Errorf("expected Suspended(unknown) = false")
+	}
+}
+
+func TestSuspendedFalseWhenLive(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	if err := agentstore.Save(home, agentstore.Record{Name: "both", Suspended: true}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"both": {Name: "both", Status: "running"}}}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "")
+
+	if m.Suspended("both") {
+		t.Errorf("expected Suspended(both) = false when Live is true")
+	}
+}
+
 func TestSpawnWithEmptyRepoNameCollisionSuffixes(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{

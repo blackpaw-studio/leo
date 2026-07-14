@@ -331,6 +331,15 @@ func (s *Server) SetAgentManager(m AgentManager) {
 	s.agentMgr = m
 }
 
+// SetEnsurer wires the session router's AgentEnsurer, used by the
+// ensure-exists task-delivery path (spawn/resume an agent target before
+// injecting) for persistent tasks routed via config.ResolveTaskTarget.
+// Optional: leaving it unset is safe — invocations without an EnsureSpec
+// (every legacy session-only task) never consult it.
+func (s *Server) SetEnsurer(e AgentEnsurer) {
+	s.router.SetEnsurer(e)
+}
+
 // SetResolveHandle wires the process-side handle resolver threaded into
 // web.Options.ResolveHandle by StartWeb. Optional; if never called, every
 // process is treated as claude (today's behavior). Service boot calls this
@@ -362,6 +371,10 @@ type taskEnqueueReq struct {
 	Channels       []string `json:"channels"`
 	QueueMax       int      `json:"queue_max"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
+	// Ensure, when present, is the ensure-exists spec for the new
+	// agent-routed persistent-task path — nil for the legacy session-only
+	// path (see EnqueueParams.Ensure).
+	Ensure *EnsureSpec `json:"ensure,omitempty"`
 }
 
 type taskEnqueueResp struct {
@@ -398,6 +411,7 @@ func (s *Server) handleTaskEnqueue(w http.ResponseWriter, r *http.Request) {
 		Channels:    req.Channels,
 		QueueMax:    req.QueueMax,
 		Timeout:     timeout,
+		Ensure:      req.Ensure,
 	})
 	if !ok {
 		writeJSON(w, http.StatusOK, taskEnqueueResp{Accepted: false, Reason: "queue full"})

@@ -18,6 +18,11 @@ type EnqueueParams struct {
 	Channels    []string // for record-keeping only; delivery happens in-session
 	QueueMax    int
 	Timeout     time.Duration
+	// Ensure, when non-nil, tells the pump to make sure the target agent is
+	// injectable (spawn/resume as needed) before injecting this invocation's
+	// prompt. Nil preserves the legacy session-only delivery path untouched —
+	// no ensure step runs, matching pre-agent-collapse behavior.
+	Ensure *EnsureSpec
 }
 
 type InvocationResult struct {
@@ -36,6 +41,9 @@ type PendingInvocation struct {
 	Timeout  time.Duration
 	Enqueued time.Time
 	Result   chan InvocationResult // buffered(1); never close from inside the queue
+	// Ensure carries the ensure-exists spec from EnqueueParams (nil for the
+	// legacy session-only path). The pump runs it just before injection.
+	Ensure *EnsureSpec
 
 	// completed is set under sessionRouter.mu once a terminal Result has been
 	// posted to Result. The janitor reaps byID entries TTL after this stamp.
@@ -65,6 +73,7 @@ type sessionRouter struct {
 	byID         map[string]*PendingInvocation
 	inject       injectFn
 	abort        abortFn
+	ensurer      AgentEnsurer
 	done         chan struct{}
 	stopOnce     sync.Once
 	gcInterval   time.Duration
@@ -157,6 +166,7 @@ func (r *sessionRouter) EnqueueWithID(id string, p EnqueueParams) (*PendingInvoc
 		Timeout:  p.Timeout,
 		Enqueued: time.Now(),
 		Result:   make(chan InvocationResult, 1),
+		Ensure:   p.Ensure,
 	}
 	q.fifo = append(q.fifo, inv)
 
@@ -234,6 +244,16 @@ func (r *sessionRouter) SetAborter(fn abortFn) {
 	r.mu.Unlock()
 }
 
+// SetEnsurer wires the ensure-exists step the pump runs before injecting an
+// invocation that carries an EnsureSpec. Optional: nil (never called, or
+// explicitly set to nil) is safe — invocations without an EnsureSpec never
+// consult it, which is every invocation on the legacy session-only path.
+func (r *sessionRouter) SetEnsurer(e AgentEnsurer) {
+	r.mu.Lock()
+	r.ensurer = e
+	r.mu.Unlock()
+}
+
 func (r *sessionRouter) currentInjector() injectFn {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -244,6 +264,12 @@ func (r *sessionRouter) currentAborter() abortFn {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.abort
+}
+
+func (r *sessionRouter) currentEnsurer() AgentEnsurer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ensurer
 }
 
 // StartPump launches the per-session pump goroutine. Idempotent: a session
@@ -408,6 +434,28 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			q.inFlight = next
 			target := q.tmuxSession
 			q.mu.Unlock()
+
+			// Ensure-exists step: invocations carrying an EnsureSpec (the new
+			// agent-routed persistent-task path) need their target agent
+			// spawned or resumed before injection can succeed. Nil Ensure
+			// (every legacy session-only invocation) skips this entirely. A
+			// failed ensure completes the invocation as failed through the
+			// same path an inject error takes, so AwaitTask callers (and
+			// notify_on_fail) observe it exactly like any other delivery
+			// failure. This runs on the per-session pump goroutine, so a slow
+			// spawn only blocks this one queue — other sessions/agents keep
+			// draining on their own goroutines.
+			if next.Ensure != nil {
+				if ensurer := r.currentEnsurer(); ensurer != nil {
+					ensureCtx, ensureCancel := context.WithTimeout(context.Background(), next.Timeout)
+					err := ensurer.Ensure(ensureCtx, *next.Ensure)
+					ensureCancel()
+					if err != nil {
+						r.completeInFlight(q, next, InvocationResult{OK: false, Err: "ensure: " + err.Error()})
+						continue
+					}
+				}
+			}
 
 			// injCtx bounds the injector call itself to the invocation's
 			// timeout: every real driver's Inject is a readiness-probed tmux

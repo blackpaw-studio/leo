@@ -567,6 +567,11 @@ func defaultSupervisedExec(claudePath string, sessionSpecs []SessionSpec, homePa
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
 		srv.SetAgentManager(agentMgr)
+		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
+		// runPersistent) needs the same agent.Manager to spawn/resume targets
+		// before injection. agentMgr already satisfies daemon.EnsureAgentManager
+		// (Live/Suspended/Resume/SpawnFromTemplate).
+		srv.SetEnsurer(daemon.NewAgentEnsurer(agentMgr))
 
 		// Idle-suspend sweep: suspends ephemeral agents that have gone idle
 		// past their configured interval (see Manager.Suspend). Runs for the
