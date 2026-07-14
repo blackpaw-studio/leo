@@ -105,9 +105,8 @@ defaults cascade) governs.
 - `leo session reset` is replaced by **`leo agent reset <name>`**: kill the
   agent's tmux, clear its stored SessionID (mark no-resume), and let the
   supervisor restart it fresh. This ports the one genuinely useful session
-  command. Web: the sessions page's reset moves to an action on the agents
-  page (or is dropped from web and stays CLI-only if the page change is
-  disproportionate — implementer's judgment, documented in the PR).
+  command. It is CLI-only: the web sessions page dies with the primitive and
+  no web reset action is added (unused by the sole user; add later if missed).
 
 ### 6. Deletions
 
@@ -118,9 +117,7 @@ defaults cascade) governs.
   `superviseTUISession` and the session boot arm of the daemon —
   supervision is the agent supervisor, full stop.
 - `leo session *` CLI (list/status/attach/logs/reset/drain). `leo agent *`
-  equivalents already exist; reset is ported per §5. Drain's depth-polling
-  moves to the agent surface only if trivially cheap; otherwise dropped
-  (unused by the sole user).
+  equivalents already exist; reset is ported per §5. Drain is dropped (unused by the sole user).
 - Web `/sessions` page + `handlers_sessions.go` + nav entry; daemon
   `/session/*` endpoints (reset/depth) — replaced by agent-addressed
   equivalents where §5 requires them.
