@@ -16,16 +16,15 @@ import (
 // cascades applied, system prompt merged (leomcp.MergeSystemPrompt), MCP
 // paths gated (config.HasMCPServers), leo MCP flag precomputed.
 type Options struct {
-	PermissionMode      string
-	BypassPermissions   bool // legacy fallback; only consulted when PermissionMode == ""
-	RemoteControl       bool
-	RemoteControlPrefix string // when set, adds --remote-control-session-name-prefix
-	AgentFile           string // --agent
-	AllowedTools        []string
-	DisallowedTools     []string
-	AppendSystemPrompt  string
-	MCPConfigPath       string   // user MCP config; empty when absent or serverless
-	LeoMCPArgs          []string // precomputed leomcp.AppendArg(nil, cfg); nil when gated off
+	PermissionMode     string
+	BypassPermissions  bool // legacy fallback; only consulted when PermissionMode == ""
+	RemoteControl      bool
+	AgentFile          string // --agent
+	AllowedTools       []string
+	DisallowedTools    []string
+	AppendSystemPrompt string
+	MCPConfigPath      string   // user MCP config; empty when absent or serverless
+	LeoMCPArgs         []string // precomputed leomcp.AppendArg(nil, cfg); nil when gated off
 }
 
 // Claude is the Claude Code adapter.

@@ -118,7 +118,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	fmt.Println("  #   - plugin:telegram@claude-plugins-official")
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Printf("  leo agent spawn assistant assistant   # Start the assistant agent\n")
+	fmt.Printf("  leo agent spawn assistant assistant --name assistant   # Start the assistant agent\n")
 	fmt.Printf("  leo task list                         # View configured tasks\n")
 
 	return nil

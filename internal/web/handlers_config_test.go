@@ -135,14 +135,12 @@ func TestDefaultsSaveRoundTrip(t *testing.T) {
 	form := url.Values{}
 	form.Set("model", "opus")
 	form.Set("max_turns", "50")
-	form.Set("stale_resume_hours", "12")
 	w := postForm(t, s, "/web/config/defaults", form)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save: %d", w.Code)
 	}
 	cfg := reloadTestConfig(t, dir)
-	if cfg.Defaults.Model != "opus" || cfg.Defaults.MaxTurns != 50 ||
-		cfg.Defaults.StaleResumeHours != 12 {
+	if cfg.Defaults.Model != "opus" || cfg.Defaults.MaxTurns != 50 {
 		t.Errorf("saved defaults wrong: %+v", cfg.Defaults)
 	}
 }
@@ -177,7 +175,7 @@ func TestPageConfigDefaultsShowsAllFields(t *testing.T) {
 	body := w.Body.String()
 
 	for _, key := range []string{
-		"model", "max_turns", "stale_resume_hours",
+		"model", "max_turns",
 		"idle_suspend_after",
 	} {
 		if !strings.Contains(body, `name="`+key+`"`) {

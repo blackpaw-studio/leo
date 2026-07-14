@@ -180,9 +180,6 @@ type DefaultsConfig struct {
 	DeprecatedAllowedTools       []string `yaml:"allowed_tools,omitempty"`
 	DeprecatedDisallowedTools    []string `yaml:"disallowed_tools,omitempty"`
 	DeprecatedAppendSystemPrompt string   `yaml:"append_system_prompt,omitempty"`
-	// StaleResumeHours drops --resume at launch when claude's session jsonl
-	// hasn't been written in this many hours. Default 12; 0 disables.
-	StaleResumeHours int `yaml:"stale_resume_hours,omitempty"`
 	// IdleSuspendAfter, when set to a Go duration (e.g. "24h", "30m"), is the
 	// global default idle interval after which an ephemeral agent is suspended
 	// (process + tmux killed, conversation preserved for auto-resume). Empty
@@ -294,10 +291,6 @@ func (c *Config) DefaultWorkspace() string {
 func (c *Config) StatePath() string {
 	return filepath.Join(c.HomePath, "state")
 }
-
-// DefaultStaleResumeHours is the fallback staleness threshold when neither
-// Defaults nor a scope-level override is set.
-const DefaultStaleResumeHours = 12
 
 // ResolveIdleSuspend returns the effective idle-suspend interval for an agent
 // spawned from tmpl, with an optional per-spawn override. Cascade:
@@ -454,9 +447,6 @@ func (c *Config) Validate() error {
 		{len(c.Defaults.DeprecatedDisallowedTools) > 0, "disallowed_tools"},
 		{c.Defaults.DeprecatedAppendSystemPrompt != "", "append_system_prompt"},
 	})
-	if c.Defaults.StaleResumeHours < 0 {
-		errs = append(errs, "defaults.stale_resume_hours must not be negative")
-	}
 	if c.Defaults.IdleSuspendAfter != "" {
 		if d, err := time.ParseDuration(c.Defaults.IdleSuspendAfter); err != nil || d <= 0 {
 			errs = append(errs, fmt.Sprintf("defaults.idle_suspend_after %q must be a positive duration", c.Defaults.IdleSuspendAfter))

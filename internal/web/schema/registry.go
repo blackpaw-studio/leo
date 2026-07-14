@@ -76,8 +76,6 @@ var registry = map[Section][]Field{
 		fHarness(),
 		{Key: "model", Label: "Model", Kind: KindDatalist, Group: "Model"},
 		{Key: "max_turns", Label: "Max turns", Group: "Limits"},
-		{Key: "stale_resume_hours", Label: "Stale resume (hours)", Group: "Behavior", Advanced: true,
-			Help: "Skip --resume when the stored session is older than this"},
 		{Key: "idle_suspend_after", Label: "Idle suspend after", Kind: KindDuration, Group: "Behavior", Advanced: true,
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},
 	},

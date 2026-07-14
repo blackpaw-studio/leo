@@ -387,16 +387,6 @@ func TestDefaultWorkspace(t *testing.T) {
 	}
 }
 
-func TestValidateStaleResumeHours(t *testing.T) {
-	t.Run("negative defaults rejected", func(t *testing.T) {
-		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: -1}}
-		err := cfg.Validate()
-		if err == nil || !strings.Contains(err.Error(), "defaults.stale_resume_hours must not be negative") {
-			t.Errorf("expected validation error, got %v", err)
-		}
-	})
-}
-
 func TestTaskModel(t *testing.T) {
 	cfg := &Config{
 		Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},

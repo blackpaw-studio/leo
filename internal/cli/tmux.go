@@ -202,8 +202,8 @@ func captureTmuxPane(res config.HostResolution, session string, lines int) error
 }
 
 // followTmuxSession streams tmux pane output via `tail -f` on a pipe-pane log.
-// Used by `leo agent logs -f` and `leo process logs -f`. When res is remote, it
-// shells through ssh and uses the host's configured tmux path.
+// Used by `leo agent logs -f`. When res is remote, it shells through ssh and
+// uses the host's configured tmux path.
 func followTmuxSession(res config.HostResolution, session string, lines int) error {
 	buildTailCmd := func(tmuxCmd string) string {
 		return fmt.Sprintf("%s -L %s capture-pane -t %s -p -S -%d; %s -L %s pipe-pane -t %s 'cat >> /tmp/%s.log' 2>/dev/null; tail -f /tmp/%s.log",

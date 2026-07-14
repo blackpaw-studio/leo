@@ -37,9 +37,9 @@ func (Opencode) ValidateModel(model string) error {
 
 func (Opencode) SupportsChannels() bool { return false }
 
-// SupportsKind: scheduled tasks plus supervised processes, ephemeral agents,
-// and persistent sessions — all driven against the interactive opencode TUI
-// supervised in tmux.
+// SupportsKind: scheduled tasks plus ephemeral agents and persistent
+// sessions — all driven against the interactive opencode TUI supervised in
+// tmux.
 func (Opencode) SupportsKind(k harness.Kind) bool {
 	return k == harness.KindTask || k == harness.KindAgent || k == harness.KindSession
 }

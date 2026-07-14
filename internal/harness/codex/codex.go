@@ -36,8 +36,8 @@ func (Codex) ValidateModel(model string) error {
 
 func (Codex) SupportsChannels() bool { return false }
 
-// SupportsKind: scheduled tasks run one-shot; supervised processes, ephemeral
-// agents, and persistent sessions all drive the codex TUI in tmux.
+// SupportsKind: scheduled tasks run one-shot; ephemeral agents and
+// persistent sessions all drive the codex TUI in tmux.
 func (Codex) SupportsKind(k harness.Kind) bool {
 	return k == harness.KindTask || k == harness.KindAgent || k == harness.KindSession
 }
