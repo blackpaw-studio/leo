@@ -21,10 +21,13 @@ func (c *Config) ResolveTaskTarget(taskName string) (string, TemplateConfig, boo
 
 	if task.Template == "" {
 		return taskName, TemplateConfig{
-			Workspace:   task.Workspace,
-			Model:       task.Model,
-			Channels:    task.Channels,
-			DevChannels: task.DevChannels,
+			Workspace:      task.Workspace,
+			Model:          task.Model,
+			Channels:       task.Channels,
+			DevChannels:    task.DevChannels,
+			Harness:        task.Harness,
+			HarnessOptions: task.HarnessOptions,
+			Env:            task.Env,
 		}, true, nil
 	}
 

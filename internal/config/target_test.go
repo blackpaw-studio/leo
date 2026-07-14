@@ -30,6 +30,32 @@ func TestResolveTaskTargetImplicit(t *testing.T) {
 	}
 }
 
+func TestResolveTaskTargetImplicitCarriesRuntimeFields(t *testing.T) {
+	cfg := &Config{Tasks: map[string]TaskConfig{"digest": {
+		Runtime:        "persistent",
+		Workspace:      "/tw",
+		Harness:        "codex",
+		HarnessOptions: map[string]any{"sandbox": "workspace-write"},
+		Env:            map[string]string{"K": "V"},
+	}}}
+	name, tmpl, implicit, err := cfg.ResolveTaskTarget("digest")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if name != "digest" || !implicit {
+		t.Fatalf("got name=%q implicit=%v", name, implicit)
+	}
+	if tmpl.Harness != "codex" {
+		t.Fatalf("expected harness carried, got %q", tmpl.Harness)
+	}
+	if tmpl.HarnessOptions["sandbox"] != "workspace-write" {
+		t.Fatalf("expected harness_options carried, got %+v", tmpl.HarnessOptions)
+	}
+	if tmpl.Env["K"] != "V" {
+		t.Fatalf("expected env carried, got %+v", tmpl.Env)
+	}
+}
+
 func TestResolveTaskTargetMissingTemplate(t *testing.T) {
 	cfg := &Config{Tasks: map[string]TaskConfig{"x": {Runtime: "persistent", Template: "nope"}}}
 	if _, _, _, err := cfg.ResolveTaskTarget("x"); err == nil {
