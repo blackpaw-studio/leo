@@ -5,12 +5,18 @@
 //	FAKECLAUDE_ARGLOG:   path to write received args as JSON
 //	FAKECLAUDE_ENVLOG:   path to write os.Environ() as JSON (verifies env passthrough)
 //
-// In addition to the one-shot `claude -p` simulation, an interactive mode is
-// available for persistent-session tests:
+// Any invocation without a `-p` flag enters an interactive REPL mode instead
+// of the one-shot scenario switch — mirroring real claude, which only runs
+// one-shot when given `-p`; without it, it starts an interactive session and
+// stays resident. This is what makes fakeclaude usable as the spawned binary
+// for agent/session tmux tests (leo never passes `-p` when launching an
+// agent). The REPL accepts two flags for finer control, both optional:
 //
-//	--interactive             enter interactive REPL mode (no -p)
 //	--transcript-path <path>  append JSONL transcript events here
 //	--resume <id>             echo "resumed: <id>" on first line of output
+//
+// --interactive is still accepted (and implied) for backward compatibility
+// with callers that passed it explicitly.
 package main
 
 import (
@@ -59,14 +65,20 @@ func main() {
 		}
 	}
 
-	// Interactive mode is opt-in via --interactive. We parse a small flag set
-	// scoped to the interactive surface so the existing -p scenario path is
-	// untouched. ContinueOnError + ignoring unknown flags keeps us tolerant
-	// of any other args the caller threads through.
-	if hasFlag(os.Args[1:], "--interactive") {
+	// Interactive mode is now the default whenever no `-p` flag is present —
+	// matching real claude's actual behavior (no `-p` means an interactive
+	// session, not a one-shot run). --interactive is still accepted as an
+	// explicit (now redundant) marker for backward compatibility. We parse a
+	// small flag set scoped to the interactive surface so the existing -p
+	// scenario path is untouched. ContinueOnError + ignoring unknown flags
+	// keeps us tolerant of any other args the caller threads through.
+	if !hasFlag(os.Args[1:], "-p") {
 		interactiveFlags := flag.NewFlagSet("fakeclaude-interactive", flag.ContinueOnError)
 		interactiveFlags.SetOutput(&bytes.Buffer{}) // swallow flag-parsing noise
-		interactiveFlag := interactiveFlags.Bool("interactive", false, "interactive mode — no -p")
+		// Registered so Parse tolerates an explicit --interactive appearing
+		// anywhere in argv, even though it's no longer load-bearing (absence
+		// of -p is now sufficient on its own).
+		interactiveFlags.Bool("interactive", false, "interactive mode marker (accepted, ignored)")
 		transcriptPathFlag := interactiveFlags.String("transcript-path", "", "JSONL transcript path")
 		resumeFlag := interactiveFlags.String("resume", "", "resume session id")
 
@@ -75,10 +87,8 @@ func main() {
 		filtered := filterKnownFlags(os.Args[1:], []string{"interactive", "transcript-path", "resume"})
 		_ = interactiveFlags.Parse(filtered)
 
-		if *interactiveFlag {
-			runInteractive(*transcriptPathFlag, *resumeFlag)
-			return
-		}
+		runInteractive(*transcriptPathFlag, *resumeFlag)
+		return
 	}
 
 	scenario := os.Getenv("FAKECLAUDE_SCENARIO")

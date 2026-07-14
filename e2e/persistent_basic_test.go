@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
 )
@@ -18,9 +19,11 @@ import (
 // TestPersistentRuntimeHappyPath drives the persistent runner end-to-end
 // against a real daemon (with a fake injector standing in for tmux) and
 // asserts: (1) leo run exits 0, (2) the injected prompt carries the leo
-// marker plus task body, (3) history is recorded as success, and (4) the
-// session id derived from the auto-responder is persisted under the
-// session name for next-run resume.
+// marker plus task body, targeting the agent named after the task itself —
+// the implicit-target case (no `template:` field) — (3) history is recorded
+// as success, and (4) the session id the auto-responder derives is persisted
+// onto the agentstore record under the task/agent name, not the legacy
+// session store.
 func TestPersistentRuntimeHappyPath(t *testing.T) {
 	dir := mkTempE2EDir(t, "leo-e2e-persist-basic-*")
 
@@ -46,6 +49,16 @@ tasks:
 	const promptBody = "Run the daily report."
 	if err := os.WriteFile(filepath.Join(dir, "prompts/DAILY.md"), []byte(promptBody+"\n"), 0o644); err != nil {
 		t.Fatalf("writing prompt: %v", err)
+	}
+
+	// No AgentEnsurer is wired on this daemon (the test drives the injector
+	// directly, bypassing agent.Manager.Spawn — see
+	// TestPersistentEnsureSpawnsMissingAgent for real-spawn coverage), so
+	// pre-seed an agentstore record for the implicit target agent — mirrors
+	// the real-world side effect of a first spawn — so the report-path
+	// agentstore.Update call below has a record to mutate.
+	if err := agentstore.Save(dir, agentstore.Record{Name: "daily", Workspace: dir}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
 	}
 
 	srv := startDaemon(t, dir, cfgPath)
@@ -88,6 +101,14 @@ tasks:
 	time.Sleep(200 * time.Millisecond)
 	if got := readStoredSessionID(t, dir, "daily"); got != "" {
 		t.Errorf("expected no legacy session-store entry for an agent-routed task, got %q", got)
+	}
+
+	// The discovered session id lands on the agentstore record keyed by the
+	// implicit target's name — "daily", the task name itself, since no
+	// `template:` was set (config.ResolveTaskTarget's implicit branch).
+	got := pollAgentstoreSessionID(t, dir, "daily", 3*time.Second)
+	if want := "csid-leo-daily"; got != want {
+		t.Errorf("agentstore session id = %q, want %q", got, want)
 	}
 }
 
