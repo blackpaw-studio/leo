@@ -14,9 +14,6 @@ func TestValidateRejectsMovedClaudeFields(t *testing.T) {
 				Model:    "sonnet",
 				MaxTurns: 15,
 			},
-			Processes: map[string]ProcessConfig{
-				"p": {Enabled: true},
-			},
 			Tasks: map[string]TaskConfig{
 				"t": {Schedule: "0 * * * *", PromptFile: "HEARTBEAT.md", Enabled: true},
 			},
@@ -54,43 +51,6 @@ func TestValidateRejectsMovedClaudeFields(t *testing.T) {
 			"defaults.disallowed_tools has moved to defaults.harness_options.disallowed_tools (claude harness) — see docs/configuration/harnesses.md"},
 		{"defaults.append_system_prompt", func(c *Config) { c.Defaults.DeprecatedAppendSystemPrompt = "be nice" },
 			"defaults.append_system_prompt has moved to defaults.harness_options.append_system_prompt (claude harness) — see docs/configuration/harnesses.md"},
-
-		// --- processes ---
-		{"processes.p.permission_mode", func(c *Config) {
-			p := c.Processes["p"]
-			p.DeprecatedPermissionMode = "plan"
-			c.Processes["p"] = p
-		}, "processes.p.permission_mode has moved to processes.p.harness_options.permission_mode (claude harness) — see docs/configuration/harnesses.md"},
-		{"processes.p.bypass_permissions", func(c *Config) {
-			p := c.Processes["p"]
-			p.DeprecatedBypassPermissions = boolPtr(true)
-			c.Processes["p"] = p
-		}, "processes.p.bypass_permissions has moved to processes.p.harness_options.bypass_permissions (claude harness) — see docs/configuration/harnesses.md"},
-		{"processes.p.remote_control", func(c *Config) {
-			p := c.Processes["p"]
-			p.DeprecatedRemoteControl = boolPtr(true)
-			c.Processes["p"] = p
-		}, "processes.p.remote_control has moved to processes.p.harness_options.remote_control (claude harness) — see docs/configuration/harnesses.md"},
-		{"processes.p.agent", func(c *Config) {
-			p := c.Processes["p"]
-			p.DeprecatedAgent = "reviewer"
-			c.Processes["p"] = p
-		}, "processes.p.agent has moved to processes.p.harness_options.agent (claude harness) — see docs/configuration/harnesses.md"},
-		{"processes.p.allowed_tools", func(c *Config) {
-			p := c.Processes["p"]
-			p.DeprecatedAllowedTools = []string{"Read"}
-			c.Processes["p"] = p
-		}, "processes.p.allowed_tools has moved to processes.p.harness_options.allowed_tools (claude harness) — see docs/configuration/harnesses.md"},
-		{"processes.p.disallowed_tools", func(c *Config) {
-			p := c.Processes["p"]
-			p.DeprecatedDisallowedTools = []string{"Bash"}
-			c.Processes["p"] = p
-		}, "processes.p.disallowed_tools has moved to processes.p.harness_options.disallowed_tools (claude harness) — see docs/configuration/harnesses.md"},
-		{"processes.p.append_system_prompt", func(c *Config) {
-			p := c.Processes["p"]
-			p.DeprecatedAppendSystemPrompt = "be nice"
-			c.Processes["p"] = p
-		}, "processes.p.append_system_prompt has moved to processes.p.harness_options.append_system_prompt (claude harness) — see docs/configuration/harnesses.md"},
 
 		// --- templates ---
 		{"templates.x.permission_mode", func(c *Config) {
@@ -206,9 +166,6 @@ func TestValidateAcceptsHarnessOptionsForm(t *testing.T) {
 				"disallowed_tools":     []any{"Bash"},
 				"append_system_prompt": "be nice",
 			},
-		},
-		Processes: map[string]ProcessConfig{
-			"p": {Enabled: true, HarnessOptions: map[string]any{"agent": "reviewer"}},
 		},
 		Tasks: map[string]TaskConfig{
 			"t": {Schedule: "0 * * * *", PromptFile: "HEARTBEAT.md", Enabled: true},

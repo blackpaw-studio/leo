@@ -1,6 +1,6 @@
 # leo attach
 
-Top-level shortcut for [`leo process attach`](process.md) and [`leo agent attach`](agent.md).
+Top-level shortcut for [`leo agent attach`](agent.md).
 
 ## Usage
 
@@ -10,16 +10,11 @@ leo attach [name] [--host <host>] [--cc]
 
 ## Description
 
-Leo resolves `<name>` against both the configured processes and the set of running agents:
+Leo resolves `<name>` against the set of running agents (spawned via `leo agent spawn` or a template) and attaches to its tmux session. If no agent matches, Leo returns an error.
 
-- If only a configured process matches, Leo attaches to its tmux session.
-- If only a running agent matches, Leo attaches to the agent's tmux session.
-- If both match, Leo refuses to guess and asks you to use the explicit subcommand.
-- If neither matches, Leo returns an error.
+Omitting the name opens an interactive arrow-key picker over the available agents (local or remote).
 
-Omitting the name opens an interactive arrow-key picker over the available processes and agents (local or remote).
-
-When `--host` targets a remote, Leo delegates the whole resolution to the server by shelling `ssh -t <host> leo attach <name>` — the client does not need to know the remote's process list.
+When `--host` targets a remote, Leo delegates the whole resolution to the server by shelling `ssh -t <host> leo attach <name>` — the client does not need to know the remote's agent list.
 
 ## Flags
 
@@ -34,7 +29,7 @@ When `--host` targets a remote, Leo delegates the whole resolution to the server
 # Pick interactively from the local daemon
 leo attach
 
-# Attach to a configured process or running agent by name
+# Attach to a running agent by name
 leo attach coding-assistant
 
 # Target a specific remote host from client.hosts
@@ -46,6 +41,5 @@ leo attach coding-assistant --cc
 
 ## See Also
 
-- [`leo process attach`](process.md#leo-process-attach-name) — explicit form for supervised processes
 - [`leo agent attach`](agent.md#leo-agent-attach-name) — explicit form for ephemeral agents
 - [Remote CLI guide](../guides/remote-cli.md) — configuring `client.hosts`

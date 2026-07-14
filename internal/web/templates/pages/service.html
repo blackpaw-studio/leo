@@ -5,12 +5,12 @@
     <span>
       <button class="btn" hx-post="/web/config/reload" hx-target="#flash-container">Reload config</button>
       <button class="btn danger" hx-post="/web/service/restart" hx-target="#flash-container"
-              hx-confirm="Restart the leo service? All supervised processes and running agents restart.">Restart service</button>
+              hx-confirm="Restart the leo service? All supervised sessions and running agents restart.">Restart service</button>
     </span>
   </div>
   {{if .Data.States}}
   <div class="table-wrap"><table>
-    <thead><tr><th>process</th><th>status</th><th>uptime</th><th>restarts</th></tr></thead>
+    <thead><tr><th>name</th><th>status</th><th>uptime</th><th>restarts</th></tr></thead>
     <tbody>
     {{range .Data.States}}
     <tr><td>{{.Name}}{{if .Ephemeral}} <span class="dim">(agent)</span>{{end}}</td>
@@ -20,7 +20,7 @@
     </tbody>
   </table></div>
   {{else}}
-  <p class="empty-state">No processes or agents running.</p>
+  <p class="empty-state">No agents or sessions running.</p>
   {{end}}
 </div>
 <div class="card">

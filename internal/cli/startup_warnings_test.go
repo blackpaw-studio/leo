@@ -28,28 +28,6 @@ func TestStartupWarnings_MissingDefaultWorkspace(t *testing.T) {
 	}
 }
 
-func TestStartupWarnings_MissingProcessWorkspace(t *testing.T) {
-	home := t.TempDir()
-	// Create default workspace so only the process workspace is missing.
-	if err := os.MkdirAll(filepath.Join(home, "workspace"), 0750); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &config.Config{
-		HomePath: home,
-		Processes: map[string]config.ProcessConfig{
-			"bad":      {Enabled: true, Workspace: "/does/not/exist"},
-			"disabled": {Enabled: false, Workspace: "/also/missing/but/disabled"},
-		},
-	}
-	warnings := startupWarnings(cfg)
-	if len(warnings) != 1 {
-		t.Fatalf("want 1 warning, got %d: %v", len(warnings), warnings)
-	}
-	if !strings.Contains(warnings[0], `"bad"`) {
-		t.Errorf("warnings[0] = %q, want mention of process \"bad\"", warnings[0])
-	}
-}
-
 func TestStartupWarnings_MissingPromptFile(t *testing.T) {
 	home := t.TempDir()
 	ws := filepath.Join(home, "workspace")

@@ -13,9 +13,9 @@ var cfgFile string
 const rootLong = `Leo supervises persistent Claude Code sessions and scheduled tasks.
 
 Three core primitives:
-  - Processes  long-running Claude sessions managed under ` + "`leo service`" + `
   - Agents     on-demand ephemeral sessions spawned from templates (` + "`leo agent`" + `)
   - Tasks      cron-scheduled prompts that run on their own (` + "`leo run`" + `)
+  - Sessions   persistent Claude sessions managed under ` + "`leo service`" + `
 
 Channels (Telegram, Slack, webhook, etc.) are provided by separately-installed
 Claude Code plugins — Leo only knows them as opaque plugin IDs.`
@@ -47,7 +47,6 @@ func newRootCmd() *cobra.Command {
 		newOnboardCmd(),
 		newRunCmd(),
 		newServiceCmd(),
-		newProcessCmd(),
 		newAgentCmd(),
 		newHostCmd(),
 		newAttachCmd(),
@@ -85,7 +84,7 @@ func runRootNoArgs(out io.Writer, cfgPath string) {
 	}
 
 	if hasConfig {
-		_, _ = io.WriteString(out, "  leo status    check processes, tasks, and daemon health\n")
+		_, _ = io.WriteString(out, "  leo status    check agents, tasks, and daemon health\n")
 		_, _ = io.WriteString(out, "  leo --help    list all commands\n")
 	} else {
 		_, _ = io.WriteString(out, "  leo setup     create a leo.yaml and take the guided tour\n")

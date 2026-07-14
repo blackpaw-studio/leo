@@ -193,9 +193,6 @@ func TestSessionSpecsFromConfigImplicitTaskOptionsReachSpecButDefaultsDoNot(t *t
 
 func TestSessionSpecsFromConfigSkipsProcessReference(t *testing.T) {
 	cfg := &config.Config{
-		Processes: map[string]config.ProcessConfig{
-			"bot": {Workspace: "/tmp/bot"},
-		},
 		Tasks: map[string]config.TaskConfig{
 			"poke": {
 				Runtime: "persistent",

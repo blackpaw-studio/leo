@@ -89,7 +89,6 @@ nav:
       - cli/index.md
       - leo setup: cli/setup.md
       - leo service: cli/service.md
-      - leo process: cli/process.md
       - leo run: cli/run.md
       - leo task: cli/task.md
       - leo template: cli/template.md

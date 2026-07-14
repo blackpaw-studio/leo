@@ -105,7 +105,6 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("POST /task/enable", s.handleTaskEnable)
 	mux.HandleFunc("POST /task/disable", s.handleTaskDisable)
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
-	mux.HandleFunc("GET /process/list", s.handleProcessList)
 	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
 
 	// Session-routed task delivery (persistent task sessions).
@@ -352,20 +351,6 @@ func (s *Server) SetLogPath(path string) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true})
-}
-
-func (s *Server) handleProcessList(w http.ResponseWriter, r *http.Request) {
-	if s.processes == nil {
-		writeJSON(w, http.StatusOK, Response{OK: true, Data: json.RawMessage("{}")})
-		return
-	}
-	states := s.processes.States()
-	data, err := json.Marshal(states)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling process states: %v", err))
-		return
-	}
-	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
 type taskEnqueueReq struct {

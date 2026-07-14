@@ -177,14 +177,14 @@ func TestPageServiceShowsProcessTableAndRestartWarning(t *testing.T) {
 		t.Error("expected Reload config button wired to /web/config/reload")
 	}
 
-	// hx-confirm text must name both processes and agents restarting.
+	// hx-confirm text must name both sessions and agents restarting.
 	confirmIdx := strings.Index(body, "hx-confirm=")
 	if confirmIdx == -1 {
 		t.Fatal("expected an hx-confirm attribute on the Restart service button")
 	}
 	confirmSnippet := body[confirmIdx : confirmIdx+250]
-	if !strings.Contains(strings.ToLower(confirmSnippet), "process") {
-		t.Errorf("hx-confirm text should mention processes: %s", confirmSnippet)
+	if !strings.Contains(strings.ToLower(confirmSnippet), "session") {
+		t.Errorf("hx-confirm text should mention sessions: %s", confirmSnippet)
 	}
 	if !strings.Contains(strings.ToLower(confirmSnippet), "agent") {
 		t.Errorf("hx-confirm text should mention agents: %s", confirmSnippet)

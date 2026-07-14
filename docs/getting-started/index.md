@@ -42,13 +42,13 @@ If you want mobile access or another way to chat with your assistant, install a 
 claude plugin install telegram@claude-plugins-official
 ```
 
-Follow the plugin's own setup flow to connect your bot. Then reference the plugin in `leo.yaml`:
+Follow the plugin's own setup flow to connect your bot. Then reference the plugin in `leo.yaml` under a persistent session:
 
 ```yaml
-processes:
+sessions:
   assistant:
+    workspace: ~/agents/assistant
     channels: [plugin:telegram@claude-plugins-official]
-    enabled: true
 ```
 
 Leo passes the list to the spawned Claude process via the `LEO_CHANNELS` environment variable; the plugin owns its own auth and routing.
@@ -62,7 +62,7 @@ leo service start
 Your assistant is now listening. If you configured a channel plugin, send a message to it and the agent will respond.
 
 !!! info "Background operation"
-    `leo service start` runs all enabled processes in the background with automatic restart. For daemon mode (persists across reboots), see [Background Mode](../guides/background-mode.md).
+    `leo service start` runs the daemon (and everything it supervises — agents and persistent sessions) in the background with automatic restart. For daemon mode (persists across reboots), see [Background Mode](../guides/background-mode.md).
 
 ## 5. Test a Scheduled Task
 

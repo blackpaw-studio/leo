@@ -15,7 +15,6 @@ import "io"
 type Kind string
 
 const (
-	KindProcess Kind = "process"
 	KindAgent   Kind = "agent"
 	KindTask    Kind = "task"
 	KindSession Kind = "session"

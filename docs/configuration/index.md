@@ -19,11 +19,11 @@ defaults:
   harness_options:
     remote_control: true
 
-processes:
+sessions:
   assistant:
+    workspace: ~/agents/assistant
     channels:
       - plugin:telegram@claude-plugins-official
-    enabled: true
 
 tasks:
   daily-news-briefing:
@@ -43,7 +43,7 @@ tasks:
 
 ### `defaults`
 
-Default model, max turns, harness, and other settings applied to all processes and tasks unless overridden.
+Default model, max turns, harness, and other settings applied to all agents, sessions, and tasks unless overridden.
 
 ### `harness` / `harness_options`
 
@@ -52,9 +52,13 @@ configures it through a strictly validated `harness_options:` map. See
 [Harnesses](harnesses.md) for the full config shape, cascade rules, and the
 `claude` option reference.
 
-### `processes`
+### `sessions`
 
-Named long-running Claude sessions. Each process can specify its own workspace, channels, model, and settings.
+Named long-running Claude sessions (see [Persistent Task Sessions](persistent-tasks.md)). Each session can specify its own workspace, channels, model, and settings.
+
+### `templates`
+
+Named blueprints for on-demand ephemeral agents, spawned via `leo agent spawn` or the web UI. See the [Agent guide](../guides/agents.md).
 
 ### `tasks`
 
@@ -62,9 +66,9 @@ Named tasks with cron schedules, prompt files, and optional overrides. Each task
 
 ### Channels
 
-Channels are Claude Code plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). Install the plugin via `claude plugin install <id>` and reference it in a process or task `channels:` list. Leo passes the list to the spawned Claude process via `LEO_CHANNELS`; the plugin owns its own credentials and routing.
+Channels are Claude Code plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). Install the plugin via `claude plugin install <id>` and reference it in a session or task `channels:` list. Leo passes the list to the spawned Claude process via `LEO_CHANNELS`; the plugin owns its own credentials and routing.
 
-For plugins not yet published to a registry, use `dev_channels:` instead. Leo passes them via `--dangerously-load-development-channels` and auto-accepts the in-terminal confirmation prompt for supervised processes. See the [Config Reference](config-reference.md#development-channels) for details.
+For plugins not yet published to a registry, use `dev_channels:` instead. Leo passes them via `--dangerously-load-development-channels` and auto-accepts the in-terminal confirmation prompt for supervised sessions. See the [Config Reference](config-reference.md#development-channels) for details.
 
 ---
 

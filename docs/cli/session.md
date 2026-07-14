@@ -5,9 +5,9 @@ Manage stored Claude session IDs used for conversation persistence. Subcommands:
 - [`leo session list`](#leo-session-list)
 - [`leo session clear`](#leo-session-clear)
 
-Leo records a session ID per task and supervised process so subsequent runs resume the same Claude conversation. Clearing a session forces the next run to start a fresh conversation.
+Leo records a session ID per task and persistent task session so subsequent runs resume the same Claude conversation. Clearing a session forces the next run to start a fresh conversation.
 
-Session keys look like `task:<name>` (scheduled tasks) and `service:<name>` (supervised processes).
+Session keys look like `task:<name>` (scheduled tasks) and `session:<name>` (persistent task sessions). Ephemeral agents track their session ID separately, via the agent store — see [`leo agent`](agent.md).
 
 ## leo session list
 

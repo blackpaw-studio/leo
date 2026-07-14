@@ -40,15 +40,13 @@ type pageData struct {
 }
 
 // statusData is the subset of dashboard state partials/status.html renders:
-// process/task counts and the next scheduled task run. It intentionally
-// excludes per-process detail (that lives on the /processes page) and
-// RestartNeeded (which stays a top-level pageData field so status.html's
-// existing `.RestartNeeded` reference keeps working unmodified).
+// the task count and the next scheduled task run. RestartNeeded stays a
+// top-level pageData field so status.html's existing `.RestartNeeded`
+// reference keeps working unmodified.
 type statusData struct {
-	ProcessCount int
-	TaskCount    int
-	NextRunName  string
-	NextRunTime  time.Time
+	TaskCount   int
+	NextRunName string
+	NextRunTime time.Time
 }
 
 // nextScheduledRun returns the name and time of the earliest upcoming cron
@@ -81,10 +79,9 @@ func (s *Server) fillStatus(pd *pageData) error {
 	nextRunName, nextRunTime := s.nextScheduledRun()
 
 	pd.Status = statusData{
-		ProcessCount: len(cfg.Processes),
-		TaskCount:    len(cfg.Tasks),
-		NextRunName:  nextRunName,
-		NextRunTime:  nextRunTime,
+		TaskCount:   len(cfg.Tasks),
+		NextRunName: nextRunName,
+		NextRunTime: nextRunTime,
 	}
 	pd.RestartNeeded = s.restartNeeded.Load()
 	return nil
@@ -144,10 +141,8 @@ type templatesPageData struct {
 
 // buildTemplatesData assembles the templates list: a name-sorted table of
 // every configured template. Templates are blueprints for future ephemeral
-// agent spawns, not live processes, so unlike buildProcessesData/
-// buildTasksData there's no status/history to join in — just the config.
-// Cut over to this lightweight shape in Task 9, mirroring buildProcessesData
-// (Task 8) and buildTasksData (Task 7).
+// agent spawns, not live agents, so unlike buildTasksData there's no
+// status/history to join in — just the config.
 func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -168,51 +163,6 @@ func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 
 	return templatesPageData{Rows: rows}, nil
-}
-
-// processRow is one row of the configured-processes table (pages/processes.html).
-type processRow struct {
-	Name             string
-	Workspace        string
-	Model            string
-	Enabled          bool
-	Harness          string
-	HarnessInherited bool
-}
-
-// processesPageData feeds page_processes. Cards is exactly the shape
-// partials/processes.html expects — it's reused unmodified by both the
-// initial page render and the 5s poll target (/partials/processes) so the
-// card fragment never drifts between the two. Rows backs the table of
-// configured processes below the cards.
-type processesPageData struct {
-	Cards *dashboardData
-	Rows  []processRow
-}
-
-// buildProcessesData assembles the processes page: the live-status cards
-// (via buildDashboardData, which already computes per-process state) plus a
-// name-sorted table of every configured process.
-func (s *Server) buildProcessesData(r *http.Request) (any, error) {
-	dd, err := s.buildDashboardData()
-	if err != nil {
-		return nil, err
-	}
-
-	rows := make([]processRow, 0, len(dd.Config.Processes))
-	for name, proc := range dd.Config.Processes {
-		rows = append(rows, processRow{
-			Name:             name,
-			Workspace:        proc.Workspace,
-			Model:            proc.Model,
-			Enabled:          proc.Enabled,
-			Harness:          dd.Config.ProcessHarness(proc),
-			HarnessInherited: proc.Harness == "",
-		})
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
-
-	return processesPageData{Cards: dd, Rows: rows}, nil
 }
 
 // buildDefaultsData feeds page_config_defaults with a schema-driven form
@@ -429,53 +379,6 @@ func (s *Server) handleTaskEditPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// processEditData feeds page_process_edit: the schema-driven form over the
-// process's config.
-type processEditData struct {
-	Name string
-	Form formData
-}
-
-// handleProcessEditPage renders a single process's edit page: every
-// ProcessConfig field through the schema-driven form. Not wired through
-// handlePage because the page title is per-process and an unknown name must
-// 404 rather than 500. Mirrors handleTaskEditPage.
-func (s *Server) handleProcessEditPage(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-
-	cfg, err := s.loadConfig()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	proc, ok := cfg.Processes[name]
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	form := s.buildFormWithHarness(schema.SectionProcess, &proc, cfg, "/web/config/process/"+url.PathEscape(name), name)
-	form.DeleteURL = "/web/process/" + url.PathEscape(name)
-
-	pd := pageData{
-		Page:  "process_edit",
-		Title: "Process: " + name,
-		Data: processEditData{
-			Name: name,
-			Form: form,
-		},
-	}
-	if err := s.fillStatus(&pd); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, "layout.html", pd); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
 // serviceData feeds page_service: a name-sorted snapshot of every supervised
 // process/agent's live status for the Supervisor table.
 type serviceData struct {
@@ -507,7 +410,7 @@ type templateEditData struct {
 // handleTemplateEditPage renders a single template's edit page: every
 // TemplateConfig field through the schema-driven form. Not wired through
 // handlePage because the page title is per-template and an unknown name must
-// 404 rather than 500. Mirrors handleProcessEditPage.
+// 404 rather than 500.
 func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 

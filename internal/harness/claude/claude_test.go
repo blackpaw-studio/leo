@@ -50,7 +50,7 @@ func TestSessionArgs(t *testing.T) {
 }
 
 func TestArgsRejectsWrongOptionsType(t *testing.T) {
-	_, err := Claude{}.Args(harness.LaunchSpec{Kind: harness.KindProcess, Options: "nope"})
+	_, err := Claude{}.Args(harness.LaunchSpec{Kind: harness.KindAgent, Options: "nope"})
 	if err == nil {
 		t.Fatal("Args with non-claude.Options: expected error")
 	}
@@ -96,7 +96,6 @@ func TestClaudeEnv(t *testing.T) {
 		want map[string]string
 	}{
 		{"task", harness.KindTask, map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}},
-		{"process", harness.KindProcess, nil},
 		{"agent", harness.KindAgent, nil},
 		{"session", harness.KindSession, nil},
 	}
@@ -114,7 +113,7 @@ func TestClaudeEnv(t *testing.T) {
 }
 
 func TestClaudeSupportsKind(t *testing.T) {
-	for _, k := range []harness.Kind{harness.KindProcess, harness.KindAgent, harness.KindTask, harness.KindSession} {
+	for _, k := range []harness.Kind{harness.KindAgent, harness.KindTask, harness.KindSession} {
 		if !(Claude{}.SupportsKind(k)) {
 			t.Errorf("SupportsKind(%v) = false, want true", k)
 		}

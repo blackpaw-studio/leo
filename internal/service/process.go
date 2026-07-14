@@ -86,7 +86,7 @@ type ProcessSpec struct {
 	// Empty means "claude" — old state/records predate this field.
 	Harness string
 	// Kind identifies which leo primitive this spec represents. Empty means
-	// KindProcess — old state/records predate this field.
+	// an old state/record that predates this field.
 	Kind harness.Kind
 	// OpeningPrompt carries the opening turn for non-claude harnesses, whose
 	// tmux-TUI driver injects it into the pane via Start rather than passing
@@ -182,18 +182,6 @@ func (s *Supervisor) incrementRestarts(name string) {
 		st.Restarts++
 		st.StartedAt = time.Now()
 	}
-}
-
-// registerIdentity creates and records a procIdentity for a config-defined
-// process so the process-side handle resolver (resolveProcessHandle) can find
-// it. Ephemeral agents register their identity inline in SpawnAgent instead —
-// this is only for the boot-time []ProcessSpec loop in defaultSupervisedExec.
-func (s *Supervisor) registerIdentity(name string, args []string) *procIdentity {
-	id := newProcIdentity(name, args)
-	s.mu.Lock()
-	s.identities[name] = id
-	s.mu.Unlock()
-	return id
 }
 
 // ReserveAgent atomically claims a name so subsequent concurrent spawns hit a
@@ -475,20 +463,23 @@ func Status(workDir string) (string, error) {
 	return "stopped", nil
 }
 
-// RunSupervised starts all processes in supervised mode with a restart loop.
-// It also starts the daemon IPC server for cron scheduling and process management.
+// RunSupervised starts the leo daemon: the web UI, cron scheduler, and the
+// daemon IPC server, then restores + supervises ephemeral agents and
+// persistent sessions (each in its own tmux session with a restart loop).
+// It no longer starts any config-declared "processes" — agents and sessions
+// are the only supervised primitives.
 // webToken is the daemon's API bearer token, propagated to the agent.Manager and
-// the RestoreAgents path so the supervised processes and any ephemeral agents can
+// the RestoreAgents path so restored/respawned agents and sessions can
 // authenticate against the daemon's web API.
 //
 // sessionSpecs is computed once by the caller via SessionSpecsFromConfig and
 // threaded through here rather than re-derived, so a daemon boot never
 // rebuilds the same session specs twice.
-func RunSupervised(claudePath string, processes []ProcessSpec, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
-	return supervisedExecFn(claudePath, processes, sessionSpecs, homePath, configPath, webToken)
+func RunSupervised(claudePath string, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
+	return supervisedExecFn(claudePath, sessionSpecs, homePath, configPath, webToken)
 }
 
-func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
+func defaultSupervisedExec(claudePath string, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
@@ -566,16 +557,6 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 		}
 		return tmux.AbortPrompt(context.Background(), tmuxPath, tmuxSession)
 	})
-	// specsByName backs the process-side web message-dispatch resolver
-	// (below): a name-keyed snapshot of the config-defined []ProcessSpec,
-	// built once here rather than per-request.
-	specsByName := make(map[string]ProcessSpec, len(processes))
-	for _, p := range processes {
-		specsByName[p.Name] = p
-	}
-	srv.SetResolveHandle(func(name string) (string, harness.SessionHandle, bool) {
-		return supervisor.resolveProcessHandle(specsByName, name)
-	})
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
@@ -616,27 +597,6 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 		}
 	}
 
-	// Validate process workspaces before starting
-	for _, proc := range processes {
-		if _, err := os.Stat(proc.WorkDir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: [%s] workspace %s does not exist\n", proc.Name, proc.WorkDir)
-		}
-	}
-
-	var wg sync.WaitGroup
-	for _, proc := range processes {
-		// Registered synchronously (before the goroutine starts) so the
-		// process-side handle resolver (wired into web below) can find the
-		// identity as soon as the daemon is answering requests, rather than
-		// racing the supervise goroutine's own startup.
-		id := supervisor.registerIdentity(proc.Name, proc.ClaudeArgs)
-		wg.Add(1)
-		go func(spec ProcessSpec, id *procIdentity) {
-			defer wg.Done()
-			superviseProcess(ctx, tmuxPath, claudePath, spec, homePath, supervisor, id)
-		}(proc, id)
-	}
-
 	// Boot persistent task session supervisors. Each SessionSpec gets its
 	// own tmux-backed restart loop. Stored session IDs are resumed via
 	// --resume so claude rejoins the same conversation across daemon
@@ -666,16 +626,11 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 		}
 	}
 
-	fmt.Fprintf(os.Stdout, "supervising %d process(es)\n", len(processes))
-
-	// Block until shutdown is signalled. Both process and session supervisor
-	// goroutines run until ctx is cancelled; process goroutines additionally
-	// register in wg for clean reaping. Waiting on ctx first (rather than only
-	// wg) keeps the daemon alive for session-only homes — those register no
-	// process goroutines, so a bare wg.Wait() would return immediately and tear
-	// the daemon down while persistent task sessions are still supervised.
+	// Block until shutdown is signalled. Ephemeral agents (restored above or
+	// spawned later via SpawnAgent) and persistent task session supervisors
+	// both run their own goroutines against ctx and clean themselves up on
+	// cancellation, so this call simply blocks until shutdown.
 	<-ctx.Done()
-	wg.Wait()
 	return nil
 }
 
@@ -692,36 +647,11 @@ func driverFor(harnessName string) harness.SessionDriver {
 	return h.Driver()
 }
 
-// resolveProcessHandle backs the web package's process-side handle resolver
-// seam (web.Options.ResolveHandle). specs is a name-keyed snapshot of the
-// config-defined []ProcessSpec built once at boot; live argv is read from the
-// supervisor's current procIdentity for name so a rename mid-flight is
-// absorbed the same way waitForSessionEnd absorbs it. ok=false means name is
-// not a config-defined process (unknown, or an ephemeral agent — those
-// resolve via agent.Manager.ResolveHandle instead).
-func (s *Supervisor) resolveProcessHandle(specs map[string]ProcessSpec, name string) (string, harness.SessionHandle, bool) {
-	spec, ok := specs[name]
-	if !ok {
-		return "", harness.SessionHandle{}, false
-	}
-	s.mu.RLock()
-	id, idOK := s.identities[name]
-	s.mu.RUnlock()
-	if !idOK {
-		return "", harness.SessionHandle{}, false
-	}
-	harnessName := spec.Harness
-	if harnessName == "" {
-		harnessName = "claude"
-	}
-	return harnessName, handleForSpec(spec, id, s.homePath), true
-}
-
 // handleForSpec builds the SessionHandle superviseProcess hands to drivers.
 func handleForSpec(spec ProcessSpec, id *procIdentity, homePath string) harness.SessionHandle {
 	kind := spec.Kind
 	if kind == "" {
-		kind = harness.KindProcess
+		kind = harness.KindAgent
 	}
 	return harness.SessionHandle{
 		Kind:          kind,

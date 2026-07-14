@@ -21,13 +21,12 @@ import (
 var agentListFn = daemon.AgentList
 
 // attachChoiceKind distinguishes what a picker row resolves to, so the
-// picker can route non-claude processes/agents through their SessionDriver
-// instead of assuming every row is a tmux session.
+// picker can route non-claude agents through their SessionDriver instead of
+// assuming every row is a tmux session.
 type attachChoiceKind int
 
 const (
-	attachChoiceProcess attachChoiceKind = iota
-	attachChoiceAgent
+	attachChoiceAgent attachChoiceKind = iota
 	attachChoiceRemote
 )
 
@@ -36,13 +35,12 @@ const (
 // targets, and enough identity (kind + bare name) to resolve a non-claude
 // harness's driver attach spec. Remote rows carry no kind-specific identity
 // (the remote listing only has tmux session names — see
-// remoteAttachChoices), so they always fall through to the tmux path, same
-// as leo process attach's existing localhost-only note.
+// remoteAttachChoices), so they always fall through to the tmux path.
 type attachChoice struct {
 	label   string
 	session string
 	kind    attachChoiceKind
-	name    string // bare process/agent name; empty for remote rows
+	name    string // bare agent name; empty for remote rows
 }
 
 // runAttachPicker handles `leo attach` with no positional arg. It enumerates
@@ -97,20 +95,13 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, res config.HostRes
 	return attachChosenSession(ctx, cfg, res, choices[idx], opts)
 }
 
-// attachChosenSession dispatches a picked attachChoice: a non-claude
-// process/agent (localhost only — mirrors resolveProcessAttachSpec's and
-// attachLocal's own localhost-only scope) routes through its SessionDriver;
-// everything else (claude, unresolved, or a remote row) keeps the existing
-// tmux attach flow byte-identical.
+// attachChosenSession dispatches a picked attachChoice: a non-claude agent
+// (localhost only — mirrors attachLocal's own localhost-only scope) routes
+// through its SessionDriver; everything else (claude, unresolved, or a
+// remote row) keeps the existing tmux attach flow byte-identical.
 func attachChosenSession(ctx context.Context, cfg *config.Config, res config.HostResolution, choice attachChoice, opts attachOptions) error {
 	if res.Localhost {
 		switch choice.kind {
-		case attachChoiceProcess:
-			if _, spec, ok, err := resolveProcessAttachSpec(cfg, choice.name); err != nil {
-				return err
-			} else if ok {
-				return attachViaDriver(res, spec, opts)
-			}
 		case attachChoiceAgent:
 			if spec, err := agentAttachSpecFn(ctx, cfg.HomePath, choice.name); err == nil && spec.Harness != "" && spec.Harness != "claude" {
 				return attachViaDriver(res, toAttachSpec(spec), opts)
@@ -122,29 +113,9 @@ func attachChosenSession(ctx context.Context, cfg *config.Config, res config.Hos
 	return attachTmuxSession(res, choice.session, opts)
 }
 
-// localAttachChoices combines configured processes (always visible, even when
-// not currently running — attaching a stopped process surfaces the
-// supervisor's failure message) with any live ephemeral agents the daemon
-// reports. Names that collide between the two lists get a " (agent)" suffix
-// on the agent entry so the picker is unambiguous.
+// localAttachChoices lists live ephemeral agents the daemon reports.
 func localAttachChoices(ctx context.Context, cfg *config.Config) []attachChoice {
-	seen := make(map[string]struct{})
-	out := make([]attachChoice, 0, len(cfg.Processes))
-
-	procNames := make([]string, 0, len(cfg.Processes))
-	for name := range cfg.Processes {
-		procNames = append(procNames, name)
-	}
-	sort.Strings(procNames)
-	for _, name := range procNames {
-		out = append(out, attachChoice{
-			label:   fmt.Sprintf("process  %s", name),
-			session: processSessionName(name),
-			kind:    attachChoiceProcess,
-			name:    name,
-		})
-		seen[name] = struct{}{}
-	}
+	var out []attachChoice
 
 	// Daemon may be down (tests, fresh install) — absence of a daemon is
 	// fine; just skip the agent list.
@@ -153,12 +124,8 @@ func localAttachChoices(ctx context.Context, cfg *config.Config) []attachChoice 
 		agentRecords := append([]agent.Record(nil), records...)
 		sort.Slice(agentRecords, func(i, j int) bool { return agentRecords[i].Name < agentRecords[j].Name })
 		for _, rec := range agentRecords {
-			label := fmt.Sprintf("agent    %s", rec.Name)
-			if _, dup := seen[rec.Name]; dup {
-				label = fmt.Sprintf("agent    %s (agent)", rec.Name)
-			}
 			out = append(out, attachChoice{
-				label:   label,
+				label:   fmt.Sprintf("agent    %s", rec.Name),
 				session: agent.SessionName(rec.Name),
 				kind:    attachChoiceAgent,
 				name:    rec.Name,

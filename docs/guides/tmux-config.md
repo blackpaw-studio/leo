@@ -1,6 +1,6 @@
 # tmux Config
 
-Leo attaches you to running agents and supervised processes through `tmux`. Every `leo attach`, `leo agent attach`, and `leo process attach` ultimately runs `tmux -L leo attach -t leo-<name>` — locally or, for remote hosts, over `ssh -t`. Your `~/.tmux.conf` is the UI you see whenever you're driving an agent interactively.
+Leo attaches you to running agents and persistent sessions through `tmux`. Every `leo attach`, `leo agent attach`, and `leo session attach` ultimately runs `tmux -L leo attach -t leo-<name>` — locally or, for remote hosts, over `ssh -t`. Your `~/.tmux.conf` is the UI you see whenever you're driving an agent interactively.
 
 > **Leo uses a dedicated tmux socket.** Every Leo session lives on the `leo` server, so `tmux ls` on your personal tmux is unaffected — no `leo-*` clutter. To inspect Leo's sessions directly run `tmux -L leo ls`. The tmux config below still applies: `~/.tmux.conf` is loaded for every server, including `leo`.
 
@@ -153,7 +153,7 @@ If you'd rather hop between running leo agents when one exits — nice if you ro
 
 ### Session picker
 
-`prefix + A` pops a fuzzy picker of every tmux session on the current server. Leo sessions live on the dedicated `leo` socket, so the built-in picker only sees them once you're already attached to a Leo session. For a picker scoped to Leo, run `leo attach` with no arguments — arrow-key navigation over every configured process and live agent, local or remote.
+`prefix + A` pops a fuzzy picker of every tmux session on the current server. Leo sessions live on the dedicated `leo` socket, so the built-in picker only sees them once you're already attached to a Leo session. For a picker scoped to Leo, run `leo attach` with no arguments — arrow-key navigation over every live agent, local or remote.
 
 ### Attaching from inside tmux
 

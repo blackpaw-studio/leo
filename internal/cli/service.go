@@ -2,26 +2,15 @@ package cli
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
-	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
-	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
-	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
-	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/service"
-	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/web"
 	"github.com/spf13/cobra"
 )
@@ -30,23 +19,16 @@ var supervised bool
 
 func newServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "service [process-name]",
-		Short: "Start a persistent claude session",
-		Long: `Start a long-running Claude session for a configured process. With no
-argument, runs the first enabled process (alphabetically) in the foreground.
-Subcommands (start/stop/restart/logs) manage the background supervisor
-daemon, which runs every enabled process in its own tmux session with
-restart-on-crash semantics.`,
-		Example: `  # Run a specific process in the foreground
-  leo service my-bot
-
-  # Background daemon lifecycle
+		Use:   "service",
+		Short: "Run the leo daemon (persistent task sessions + agent supervision)",
+		Long: `Run the leo daemon, which boots every persistent task session in its
+own tmux session with restart-on-crash semantics. Subcommands
+(start/stop/restart/logs) manage the background daemon.`,
+		Example: `  # Background daemon lifecycle
   leo service start
   leo service logs -f
   leo service stop`,
-		Args:              cobra.MaximumNArgs(1),
-		RunE:              runService,
-		ValidArgsFunction: completeProcessNames,
+		RunE: runService,
 	}
 
 	cmd.Flags().BoolVar(&supervised, "supervised", false, "run in supervised mode with restart loop (used internally)")
@@ -70,370 +52,33 @@ func runService(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if supervised {
-		claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
-		if err != nil {
-			return fmt.Errorf("claude not found: %w", err)
-		}
-		cfgPath, err := resolveConfigPath(cfg)
-		if err != nil {
-			return fmt.Errorf("resolving config path: %w", err)
-		}
-
-		// Resolve the API bearer token once so every supervised process and
-		// every ephemeral agent gets LEO_API_TOKEN exported uniformly. An
-		// error here is non-fatal for the daemon itself, but the MCP server
-		// refuses to start without it, which is the behaviour we want
-		// rather than silently starting a broken session.
-		webToken, tokErr := web.EnsureAPIToken(cfg.StatePath())
-		if tokErr != nil {
-			warn.Printf("  web api token unavailable: %v — MCP server will refuse to start; slash commands will be unavailable\n", tokErr)
-		}
-
-		// In supervised mode, start ALL enabled processes AND boot persistent
-		// task sessions. The guard counts both: a home with only persistent
-		// tasks (no enabled processes) is still something to supervise.
-		//
-		// buildAllProcessSpecs and SessionSpecsFromConfig are each called
-		// exactly once here so the resulting specs are threaded straight
-		// into RunSupervised rather than re-derived.
-		specs := buildAllProcessSpecs(cfg, claudePath, webToken)
-		procCount := len(specs)
-		sessionSpecs, sErr := service.SessionSpecsFromConfig(cfg)
-		if sErr != nil {
-			warn.Printf("  session specs: %v\n", sErr)
-			sessionSpecs = nil
-		}
-		sessionCount := len(sessionSpecs)
-		if procCount == 0 && sessionCount == 0 {
-			return fmt.Errorf("no enabled processes or persistent task sessions in config")
-		}
-		info.Printf("Starting supervised mode (%d process(es), %d session(s))...\n", procCount, sessionCount)
-		return service.RunSupervised(claudePath, specs, sessionSpecs, cfg.HomePath, cfgPath, webToken)
-	}
-
-	// Foreground mode: run a single process, exec replaces this process
-	procName, proc, err := resolveProcess(cfg, args)
-	if err != nil {
-		return err
-	}
-
-	// Foreground mode has no daemon API token to offer a non-claude LeoMCP
-	// bridge, so pass "" — the bridge is still wired in (leo MCP server
-	// self-selects local-only mode), just with an empty LEO_API_TOKEN
-	// (matches today's process env, which never sets LEO_API_TOKEN in this
-	// path).
-	claudeArgs, _ := buildProcessArgs(cfg, procName, proc, "")
-
-	// Add session persistence. This is claude-specific (--session-id/--resume
-	// selection via claude's own jsonl transcripts); non-claude harnesses
-	// keep whatever session state their own driver manages.
-	if cfg.ProcessHarness(proc) == "" || cfg.ProcessHarness(proc) == "claude" {
-		store := session.NewStore(cfg.HomePath)
-		sessionKey := "process:" + procName
-		claudeArgs = append(claudeArgs,
-			claudeharness.Claude{}.SessionArgs(
-				resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), ""),
-			)...,
-		)
-	}
-
 	claudePath, err := exec.LookPath(claudeharness.Claude{}.Binary())
 	if err != nil {
 		return fmt.Errorf("claude not found: %w", err)
 	}
-
-	info.Printf("Starting session (%s)...\n", procName)
-	procEnv := processEnviron(proc)
-	return syscall.Exec(claudePath, append([]string{claudeharness.Claude{}.Binary()}, claudeArgs...), procEnv)
-}
-
-// processEnviron augments the current environment with LEO_CHANNELS and
-// LEO_DEV_CHANNELS (if any) and per-process env vars. Returned slice is safe
-// to pass to syscall.Exec.
-func processEnviron(proc config.ProcessConfig) []string {
-	env := os.Environ()
-	if len(proc.Channels) > 0 {
-		env = append(env, "LEO_CHANNELS="+strings.Join(proc.Channels, ","))
-	}
-	if len(proc.DevChannels) > 0 {
-		env = append(env, "LEO_DEV_CHANNELS="+strings.Join(proc.DevChannels, ","))
-	}
-	for k, v := range proc.Env {
-		env = append(env, k+"="+v)
-	}
-	return env
-}
-
-// resolveProcess finds the target process by name or returns the first enabled process (sorted by name).
-func resolveProcess(cfg *config.Config, args []string) (string, config.ProcessConfig, error) {
-	if len(args) > 0 {
-		name := args[0]
-		proc, ok := cfg.Processes[name]
-		if !ok {
-			return "", config.ProcessConfig{}, fmt.Errorf("process %q not found in config", name)
-		}
-		if !proc.Enabled {
-			return "", config.ProcessConfig{}, fmt.Errorf("process %q is disabled", name)
-		}
-		return name, proc, nil
-	}
-
-	// Find first enabled process, sorted by name for deterministic selection
-	names := make([]string, 0, len(cfg.Processes))
-	for name := range cfg.Processes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		proc := cfg.Processes[name]
-		if proc.Enabled {
-			return name, proc, nil
-		}
-	}
-
-	return "", config.ProcessConfig{}, fmt.Errorf("no enabled processes in config")
-}
-
-// buildAllProcessSpecs builds ProcessSpec for all enabled processes.
-// webToken is the daemon's API bearer token; pass the empty string when it
-// could not be resolved (the supervisor will log a warning and the MCP
-// server inside each process will fail fast on missing LEO_API_TOKEN).
-func buildAllProcessSpecs(cfg *config.Config, claudePath, webToken string) []service.ProcessSpec {
-	var specs []service.ProcessSpec
-	for name, proc := range cfg.Processes {
-		if !proc.Enabled {
-			continue
-		}
-
-		harnessName := cfg.ProcessHarness(proc)
-		args, harnessEnv := buildProcessArgs(cfg, name, proc, webToken)
-
-		// Add session persistence. This is claude-specific (--session-id/
-		// --resume selection via claude's own jsonl transcripts); non-claude
-		// harnesses keep whatever session state their own driver manages.
-		if harnessName == "" || harnessName == "claude" {
-			store := session.NewStore(cfg.HomePath)
-			sessionKey := "process:" + name
-			args = append(args,
-				claudeharness.Claude{}.SessionArgs(
-					resolveSessionState(store, sessionKey, cfg.ProcessWorkspace(proc), cfg.ProcessStaleResume(proc), "["+name+"] "),
-				)...,
-			)
-		}
-
-		procEnv := mergeHarnessEnv(harnessEnv, mergeChannelsIntoEnv(proc))
-
-		specs = append(specs, service.ProcessSpec{
-			Name:       name,
-			ClaudeArgs: args,
-			WorkDir:    cfg.ProcessWorkspace(proc),
-			Env:        procEnv,
-			WebPort:    strconv.Itoa(cfg.WebPort()),
-			WebToken:   webToken,
-			StateDir:   cfg.StatePath(),
-			Harness:    harnessName,
-			Kind:       harness.KindProcess,
-		})
-	}
-	return specs
-}
-
-// resolveSessionState resolves the session decision (resume / pinned fresh)
-// for a claude invocation. Preference order:
-//
-//  1. Newest *.jsonl in claude's project directory for this workspace. This
-//     matches what /resume inside claude would show at the top of its list
-//     and correctly handles sessions created via /clear that Leo's own store
-//     never saw.
-//  2. Stored session ID from Leo's state — honored as-is so claude can reuse
-//     the pre-issued ID when no jsonl has been written yet.
-//  3. Fresh session ID minted by Leo and pinned via --session-id.
-//
-// On a successful step-1 pick that disagrees with the stored ID, the store is
-// updated so subsequent restarts, web UI, and `leo agent list` stay in sync
-// with what claude is actually running.
-//
-// logPrefix is prepended to warnings (e.g. "[myproc] " for supervised mode,
-// empty for the single-process foreground path).
-func resolveSessionState(store *session.Store, sessionKey, workspace string, maxAge time.Duration, logPrefix string) harness.SessionState {
-	storedID, _, getErr := store.Get(sessionKey)
-	if getErr != nil {
-		warn.Printf("  %sCould not read session store: %v\n", logPrefix, getErr)
-	}
-
-	latestID, _, latestErr := session.LatestSession(workspace, maxAge)
-	if latestErr != nil {
-		warn.Printf("  %sCould not inspect claude project directory: %v\n", logPrefix, latestErr)
-	}
-
-	switch {
-	case latestID != "":
-		if latestID != storedID {
-			if err := store.Set(sessionKey, latestID); err != nil {
-				warn.Printf("  %sCould not update session ID: %v\n", logPrefix, err)
-			}
-		}
-		return harness.SessionState{Mode: harness.SessionResume, ID: latestID}
-	case storedID != "":
-		return harness.SessionState{Mode: harness.SessionResume, ID: storedID}
-	default:
-		sid := session.NewID()
-		if err := store.Set(sessionKey, sid); err != nil {
-			warn.Printf("  %sCould not store session ID: %v\n", logPrefix, err)
-		}
-		return harness.SessionState{Mode: harness.SessionPinned, ID: sid}
-	}
-}
-
-// mergeChannelsIntoEnv returns a new env map combining the process's declared
-// env vars with injected LEO_CHANNELS / LEO_DEV_CHANNELS entries (if any are
-// configured). The supervisor exports these before launching claude in the
-// tmux session.
-func mergeChannelsIntoEnv(proc config.ProcessConfig) map[string]string {
-	merged := make(map[string]string, len(proc.Env)+2)
-	for k, v := range proc.Env {
-		merged[k] = v
-	}
-	if len(proc.Channels) > 0 {
-		merged["LEO_CHANNELS"] = strings.Join(proc.Channels, ",")
-	}
-	if len(proc.DevChannels) > 0 {
-		merged["LEO_DEV_CHANNELS"] = strings.Join(proc.DevChannels, ",")
-	}
-	return merged
-}
-
-// mergeHarnessEnv returns a new map with overlay's entries layered over base,
-// overlay winning on key collision. Neither input is mutated. Used to merge a
-// harness's env overlay (h.Env(spec) — e.g. opencode's server password/config)
-// as the BASE layer under a process's own configured env, so config-provided
-// env always wins on collision (mirrors run/runner.go's mergeEnvMaps and
-// internal/agent's mergeEnv). Returns nil when both inputs are empty so
-// callers preserve the "no env" representation exactly.
-func mergeHarnessEnv(base, overlay map[string]string) map[string]string {
-	if len(base) == 0 && len(overlay) == 0 {
-		return nil
-	}
-	merged := make(map[string]string, len(base)+len(overlay))
-	for k, v := range base {
-		merged[k] = v
-	}
-	for k, v := range overlay {
-		merged[k] = v
-	}
-	return merged
-}
-
-// processLeoMCPEnv builds the env a non-claude LeoMCP bridge needs for a
-// supervised process, sourced from the webToken already resolved by the
-// caller (supervised mode resolves it once via web.EnsureAPIToken; the
-// single-process foreground path has none, so it passes ""). The leo MCP
-// server is always wired in now — the bridge is built regardless of whether
-// web is enabled or a token is available — and self-selects local-only mode
-// at runtime when LEO_WEB_PORT/LEO_API_TOKEN are empty/absent. The bool
-// return reports whether a live token was available, for callers that still
-// want to know (it no longer gates injection). LEO_PROCESS_NAME is the bare
-// process name (see buildClaudeShellCmd, which exports the same three vars
-// into the supervised tmux shell).
-func processLeoMCPEnv(cfg *config.Config, name, webToken string) (map[string]string, bool) {
-	webPort := 0
-	if cfg != nil {
-		webPort = cfg.WebPort()
-	}
-	return map[string]string{
-		"LEO_PROCESS_NAME": name,
-		"LEO_WEB_PORT":     strconv.Itoa(webPort),
-		"LEO_API_TOKEN":    webToken,
-	}, cfg != nil && cfg.Web.Enabled && webToken != ""
-}
-
-// resolveProcessLaunch resolves the config cascade for a named process into a
-// harness.Harness + fully-populated harness.LaunchSpec, stopping just short of
-// calling h.Args(spec). Split out from buildProcessArgs so tests can assert
-// on spec.Options (e.g. a codex/opencode LeoMCP bridge) without needing
-// Args() to succeed.
-func resolveProcessLaunch(cfg *config.Config, name string, proc config.ProcessConfig, webToken string) (harness.Harness, harness.LaunchSpec, error) {
-	h, err := harness.Get(cfg.ProcessHarness(proc))
+	cfgPath, err := resolveConfigPath(cfg)
 	if err != nil {
-		return nil, harness.LaunchSpec{}, fmt.Errorf("resolving harness: %w", err)
-	}
-	decoded, err := h.DecodeOptions(cfg.ProcessHarnessOptions(proc))
-	if err != nil {
-		return nil, harness.LaunchSpec{}, fmt.Errorf("decoding harness options: %w", err)
+		return fmt.Errorf("resolving config path: %w", err)
 	}
 
-	leoEnv, _ := processLeoMCPEnv(cfg, name, webToken)
-
-	spec := harness.LaunchSpec{
-		Kind:          harness.KindProcess,
-		Name:          name,
-		Model:         cfg.ProcessModel(proc),
-		Workspace:     cfg.ProcessWorkspace(proc),
-		AddDirs:       proc.AddDirs,
-		Channels:      proc.Channels,
-		DevChannels:   proc.DevChannels,
-		SystemContext: leomcp.LeoNudge(cfg),
+	// Resolve the API bearer token once so every ephemeral agent gets
+	// LEO_API_TOKEN exported uniformly. An error here is non-fatal for the
+	// daemon itself, but the MCP server refuses to start without it, which
+	// is the behaviour we want rather than silently starting a broken
+	// session.
+	webToken, tokErr := web.EnsureAPIToken(cfg.StatePath())
+	if tokErr != nil {
+		warn.Printf("  web api token unavailable: %v — MCP server will refuse to start; slash commands will be unavailable\n", tokErr)
 	}
 
-	switch opts := decoded.(type) {
-	case claudeharness.Options:
-		mcpConfig := ""
-		if p := cfg.ProcessMCPConfigPath(proc); config.HasMCPServers(p) {
-			mcpConfig = p
-		}
-		opts.RemoteControlPrefix = name
-		opts.MCPConfigPath = mcpConfig
-		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
-		spec.Options = opts
-	case codexharness.Options:
-		opts.LeoMCP = &codexharness.LeoMCPBridge{
-			Command:      "leo",
-			Args:         []string{"mcp-server"},
-			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
-			ApprovalMode: "approve",
-		}
-		spec.Options = opts
-	case opencodeharness.Options:
-		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-			Command: []string{"leo", "mcp-server"},
-			Env:     leoEnv,
-		}
-		spec.Options = opts
-	default:
-		return h, harness.LaunchSpec{}, fmt.Errorf("harness %q returned unsupported options type %T", h.Name(), decoded)
+	sessionSpecs, sErr := service.SessionSpecsFromConfig(cfg)
+	if sErr != nil {
+		warn.Printf("  session specs: %v\n", sErr)
+		sessionSpecs = nil
 	}
-
-	return h, spec, nil
-}
-
-// buildProcessArgs builds CLI args for a named process by resolving the
-// config cascade into a harness.LaunchSpec. webToken is the daemon's API
-// bearer token (empty in the single-process foreground path, which has none
-// to offer); see processLeoMCPEnv.
-//
-// The second return is the harness's env overlay (h.Env(spec)) — e.g.
-// OPENCODE_CONFIG_CONTENT for opencode — meant to be merged as the BASE
-// layer under the process's own env (mergeHarnessEnv(harnessEnv, procEnv))
-// so config-provided env always wins on collision. Nil for claude/codex.
-func buildProcessArgs(cfg *config.Config, name string, proc config.ProcessConfig, webToken string) ([]string, map[string]string) {
-	h, spec, err := resolveProcessLaunch(cfg, name, proc, webToken)
-	if err != nil {
-		log.Printf("[%s] %v", name, err)
-		return nil, nil
-	}
-	args, err := h.Args(spec)
-	if err != nil {
-		log.Printf("[%s] building %s args: %v", name, h.Name(), err)
-		return nil, nil
-	}
-	env, err := h.Env(spec)
-	if err != nil {
-		log.Printf("[%s] building %s env: %v", name, h.Name(), err)
-		return args, nil
-	}
-	return args, env
+	sessionCount := len(sessionSpecs)
+	info.Printf("Starting supervised mode (%d session(s))...\n", sessionCount)
+	return service.RunSupervised(claudePath, sessionSpecs, cfg.HomePath, cfgPath, webToken)
 }
 
 func newServiceStartCmd() *cobra.Command {
@@ -442,11 +87,13 @@ func newServiceStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start service in the background",
-		Long: `Start the background supervisor, which launches every enabled process
-in its own tmux session with restart-on-crash. The CLI stays foreground-free
-so this is safe to call from shell scripts. Pass --daemon to install the
-supervisor as an OS service (launchd on macOS, systemd on Linux) so it
-survives reboots.`,
+		Long: `Start the leo daemon (web UI, cron scheduler, and agent supervision).
+It restores any previously running ephemeral agents and persistent task
+sessions, each in its own tmux session with restart-on-crash. The daemon no
+longer launches config-declared processes — agents and sessions are the only
+supervised primitives. The CLI stays foreground-free so this is safe to call
+from shell scripts. Pass --daemon to install the daemon as an OS service
+(launchd on macOS, systemd on Linux) so it survives reboots.`,
 		Example: `  # One-shot background start (this shell session)
   leo service start
 
@@ -577,18 +224,16 @@ func newServiceLogsCmd() *cobra.Command {
 	var follow bool
 
 	cmd := &cobra.Command{
-		Use:   "logs [process-name]",
-		Short: "Show service or process logs",
-		Long: `Tail the supervisor's aggregate log, or filter it for a single process.
-The log is written by 'leo service start' to a file under the leo home dir;
-this is the supervisor's own chatter (restart events, config reloads), not
-the Claude process output itself. For per-process Claude output, use
-'leo process logs <name>' which reads the tmux pane directly.`,
+		Use:   "logs [name]",
+		Short: "Show service logs",
+		Long: `Tail the supervisor's aggregate log, or filter it for a single named
+entry. The log is written by 'leo service start' to a file under the leo
+home dir; this is the supervisor's own chatter (restart events, config
+reloads), not the Claude session output itself.`,
 		Example: `  leo service logs -n 200
   leo service logs -f
-  leo service logs my-bot -f`,
-		Args:              cobra.MaximumNArgs(1),
-		ValidArgsFunction: completeProcessNames,
+  leo service logs my-session -f`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -682,21 +327,4 @@ func resolveConfigPath(cfg *config.Config) (string, error) {
 		return filepath.Abs(cfgFile)
 	}
 	return filepath.Abs(filepath.Join(cfg.HomePath, "leo.yaml"))
-}
-
-func completeProcessNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	if len(args) > 0 {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-	cfg, err := loadConfig()
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-	var names []string
-	for name, proc := range cfg.Processes {
-		if proc.Enabled {
-			names = append(names, name)
-		}
-	}
-	return names, cobra.ShellCompDirectiveNoFileComp
 }

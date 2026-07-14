@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/prereq"
 	"github.com/blackpaw-studio/leo/internal/service"
+	"gopkg.in/yaml.v3"
 )
 
 // --- buildConfig ---
@@ -30,21 +31,37 @@ func TestBuildConfig_FreshWorkspace(t *testing.T) {
 	if cfg.Defaults.MaxTurns != config.DefaultMaxTurns {
 		t.Errorf("Defaults.MaxTurns = %d, want %d", cfg.Defaults.MaxTurns, config.DefaultMaxTurns)
 	}
-	proc, ok := cfg.Processes["assistant"]
+	tmpl, ok := cfg.Templates["assistant"]
 	if !ok {
-		t.Fatal("expected default 'assistant' process")
+		t.Fatal("expected default 'assistant' template")
 	}
-	if proc.Workspace != "/my/workspace" {
-		t.Errorf("process workspace = %q, want %q", proc.Workspace, "/my/workspace")
+	if tmpl.Workspace != "/my/workspace" {
+		t.Errorf("template workspace = %q, want %q", tmpl.Workspace, "/my/workspace")
 	}
-	if !proc.Enabled {
-		t.Error("default process should be enabled")
+	if v, ok := tmpl.HarnessOptions["remote_control"].(bool); !ok || !v {
+		t.Error("default template should have remote_control enabled")
 	}
-	if v, ok := proc.HarnessOptions["remote_control"].(bool); !ok || !v {
-		t.Error("default process should have remote_control enabled")
+	if len(tmpl.Channels) != 0 {
+		t.Errorf("expected empty channels (channel-agnostic default), got %v", tmpl.Channels)
 	}
-	if len(proc.Channels) != 0 {
-		t.Errorf("expected empty channels (channel-agnostic default), got %v", proc.Channels)
+}
+
+// TestDefaultConfigSeedsAssistantTemplate locks in the templates.assistant
+// seeding contract: a fresh config carries templates["assistant"] and no
+// processes: key at all (config.Config no longer has a Processes field, so
+// this is asserted via YAML marshalling rather than a struct field check).
+func TestDefaultConfigSeedsAssistantTemplate(t *testing.T) {
+	cfg := buildConfig("/my/workspace", nil)
+	if _, ok := cfg.Templates["assistant"]; !ok {
+		t.Fatalf("expected templates[assistant] in seeded config")
+	}
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshaling config: %v", err)
+	}
+	if strings.Contains(string(data), "processes:") {
+		t.Errorf("seeded config YAML should not contain a processes: key, got:\n%s", data)
 	}
 }
 
@@ -66,13 +83,6 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 				"myhost": {SSH: "alice@myhost.local"},
 			},
 		},
-		Processes: map[string]config.ProcessConfig{
-			"custom": {
-				Workspace: "/custom/ws",
-				Channels:  []string{"plugin:telegram@claude-plugins-official"},
-				Enabled:   true,
-			},
-		},
 		Tasks: map[string]config.TaskConfig{
 			"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"},
 		},
@@ -86,8 +96,8 @@ func TestBuildConfig_PreservesExistingConfig(t *testing.T) {
 	if cfg.Defaults.Model != "opus" {
 		t.Errorf("Defaults.Model = %q, want 'opus'", cfg.Defaults.Model)
 	}
-	if _, ok := cfg.Processes["custom"]; !ok {
-		t.Error("expected existing 'custom' process preserved")
+	if _, ok := cfg.Templates["coding"]; !ok {
+		t.Error("expected existing 'coding' template preserved")
 	}
 	if _, ok := cfg.Tasks["heartbeat"]; !ok {
 		t.Error("expected existing 'heartbeat' task preserved")
@@ -211,7 +221,7 @@ func TestFindExistingConfig_Found(t *testing.T) {
 
 	cfg := &config.Config{
 		Defaults:  config.DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-		Processes: map[string]config.ProcessConfig{"assistant": {Enabled: true}},
+		Templates: map[string]config.TemplateConfig{"assistant": {}},
 	}
 	if err := config.Save(filepath.Join(leoHome, "leo.yaml"), cfg); err != nil {
 		t.Fatalf("saving config: %v", err)
@@ -436,8 +446,8 @@ func TestBuildClientConfig_FreshInstall(t *testing.T) {
 	if got := cfg.Client.Hosts["myhost"].SSH; got != "alice@myhost.local" {
 		t.Errorf("Hosts[myhost].SSH = %q, want %q", got, "alice@myhost.local")
 	}
-	if cfg.Processes != nil {
-		t.Errorf("fresh client install should leave Processes nil, got %v", cfg.Processes)
+	if cfg.Templates != nil {
+		t.Errorf("fresh client install should leave Templates nil, got %v", cfg.Templates)
 	}
 	if cfg.Tasks != nil {
 		t.Errorf("fresh client install should leave Tasks nil, got %v", cfg.Tasks)
@@ -447,7 +457,7 @@ func TestBuildClientConfig_FreshInstall(t *testing.T) {
 func TestBuildClientConfig_PreservesExistingServerConfig(t *testing.T) {
 	existing := &config.Config{
 		Defaults: config.DefaultsConfig{Model: "opus"},
-		Processes: map[string]config.ProcessConfig{
+		Templates: map[string]config.TemplateConfig{
 			"assistant": {Workspace: "/ws"},
 		},
 		Tasks: map[string]config.TaskConfig{
@@ -457,8 +467,8 @@ func TestBuildClientConfig_PreservesExistingServerConfig(t *testing.T) {
 	host := config.HostConfig{SSH: "alice@myhost.local"}
 	cfg := buildClientConfig(existing, "myhost", host, "myhost")
 
-	if _, ok := cfg.Processes["assistant"]; !ok {
-		t.Error("existing process should be preserved")
+	if _, ok := cfg.Templates["assistant"]; !ok {
+		t.Error("existing template should be preserved")
 	}
 	if _, ok := cfg.Tasks["heartbeat"]; !ok {
 		t.Error("existing task should be preserved")
@@ -515,7 +525,7 @@ func TestTestSSHConnectivity_FailureIncludesStderr(t *testing.T) {
 	}
 }
 
-// Hybrid config (hosts + processes) must default to server mode so a
+// Hybrid config (hosts + templates) must default to server mode so a
 // re-run can't silently clobber a server install with a client-only config.
 func TestPromptSetupMode_DefaultsToServerForHybridConfig(t *testing.T) {
 	existing := &config.Config{
@@ -523,7 +533,7 @@ func TestPromptSetupMode_DefaultsToServerForHybridConfig(t *testing.T) {
 			DefaultHost: "myhost",
 			Hosts:       map[string]config.HostConfig{"myhost": {SSH: "alice@myhost.local"}},
 		},
-		Processes: map[string]config.ProcessConfig{"assistant": {Workspace: "/ws"}},
+		Templates: map[string]config.TemplateConfig{"assistant": {Workspace: "/ws"}},
 	}
 	reader := bufio.NewReader(strings.NewReader("\n"))
 	if got := promptSetupMode(reader, existing); got {
@@ -536,7 +546,7 @@ func TestPromptSetupMode_DefaultsToServerForHybridConfig(t *testing.T) {
 // silent cross-mutation.
 func TestBuildClientConfig_DoesNotMutateExisting(t *testing.T) {
 	existing := &config.Config{
-		Processes: map[string]config.ProcessConfig{"assistant": {Workspace: "/ws"}},
+		Templates: map[string]config.TemplateConfig{"assistant": {Workspace: "/ws"}},
 		Tasks:     map[string]config.TaskConfig{"heartbeat": {Schedule: "0 * * * *", PromptFile: "x.md"}},
 		Client: config.ClientConfig{
 			DefaultHost: "myhost",

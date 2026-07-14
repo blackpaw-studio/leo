@@ -8,39 +8,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
-// TestBuildProcessesDataHarnessBadges exercises buildProcessesData's harness
-// cascade: an explicit harness on the process reports itself with
-// HarnessInherited=false, while an empty harness falls back to
-// Defaults.Harness with HarnessInherited=true.
-func TestBuildProcessesDataHarnessBadges(t *testing.T) {
-	cfg := &config.Config{
-		Defaults: config.DefaultsConfig{Harness: "codex"},
-		Processes: map[string]config.ProcessConfig{
-			"explicit": {Workspace: "/w", Harness: "claude"},
-			"inherit":  {Workspace: "/w"},
-		},
-	}
-	s := seedHarnessTestServer(t, cfg)
-
-	data, err := s.buildProcessesData(httptest.NewRequest("GET", "/processes", nil))
-	if err != nil {
-		t.Fatalf("buildProcessesData: %v", err)
-	}
-	rows := data.(processesPageData).Rows
-
-	byName := make(map[string]processRow, len(rows))
-	for _, row := range rows {
-		byName[row.Name] = row
-	}
-
-	if got := byName["explicit"]; got.Harness != "claude" || got.HarnessInherited {
-		t.Errorf("explicit process row = %+v, want {Harness: claude, HarnessInherited: false}", got)
-	}
-	if got := byName["inherit"]; got.Harness != "codex" || !got.HarnessInherited {
-		t.Errorf("inherit process row = %+v, want {Harness: codex, HarnessInherited: true}", got)
-	}
-}
-
 func TestBuildTemplatesDataHarnessBadges(t *testing.T) {
 	cfg := &config.Config{
 		Defaults: config.DefaultsConfig{Harness: "codex"},
@@ -133,35 +100,8 @@ func TestBuildSessionsDataHarnessBadges(t *testing.T) {
 	}
 }
 
-// TestPageProcessesRendersHarnessColumn is a render-level smoke test: the
-// processes table gains a harness column and the empty-state colspan grows
-// to 6 to match the new column count.
-func TestPageProcessesRendersHarnessColumn(t *testing.T) {
-	cfg := &config.Config{
-		Defaults:  config.DefaultsConfig{Harness: "codex"},
-		Processes: map[string]config.ProcessConfig{"a": {Workspace: "/w", Harness: "claude"}},
-	}
-	s := seedHarnessTestServer(t, cfg)
-
-	body := getBody(t, s, "/processes")
-	if !strings.Contains(body, "<th>harness</th>") {
-		t.Error("expected processes table to show a harness column header")
-	}
-}
-
-// TestPageProcessesEmptyStateColspan confirms the empty-state row's colspan
-// grew from 5 to 6 to match the added harness column.
-func TestPageProcessesEmptyStateColspan(t *testing.T) {
-	s := seedHarnessTestServer(t, &config.Config{})
-
-	body := getBody(t, s, "/processes")
-	if !strings.Contains(body, `colspan="6"`) {
-		t.Errorf("expected empty-state colspan bumped to 6: %s", body)
-	}
-}
-
-// TestPageConfigTemplatesRendersHarnessColumn mirrors
-// TestPageProcessesRendersHarnessColumn for the templates page.
+// TestPageConfigTemplatesRendersHarnessColumn is a render-level smoke test:
+// the templates table shows a harness column.
 func TestPageConfigTemplatesRendersHarnessColumn(t *testing.T) {
 	cfg := &config.Config{
 		Defaults:  config.DefaultsConfig{Harness: "codex"},
@@ -175,8 +115,8 @@ func TestPageConfigTemplatesRendersHarnessColumn(t *testing.T) {
 	}
 }
 
-// TestPageConfigTemplatesEmptyStateColspan mirrors
-// TestPageProcessesEmptyStateColspan for the templates page.
+// TestPageConfigTemplatesEmptyStateColspan confirms the empty-state row's
+// colspan matches the templates table's column count.
 func TestPageConfigTemplatesEmptyStateColspan(t *testing.T) {
 	s := seedHarnessTestServer(t, &config.Config{})
 

@@ -1,6 +1,6 @@
 # CLI Reference
 
-Leo provides commands for setup, process management, task scheduling, template management, agent dispatch, and day-to-day operations.
+Leo provides commands for setup, agent supervision, task scheduling, template management, and day-to-day operations.
 
 ## Command Overview
 
@@ -14,24 +14,23 @@ Leo provides commands for setup, process management, task scheduling, template m
 | [`leo completion`](completion.md) | Generate shell completion script (bash/zsh/fish) |
 | [`leo version`](version.md) | Print version |
 
-### Processes, agents, and tasks
+### Agents and tasks
 
 | Command | Description |
 |---------|-------------|
-| [`leo service`](service.md) | Manage persistent Claude sessions and the daemon |
-| [`leo process`](process.md) | List, add, remove, enable, or disable supervised processes |
+| [`leo service`](service.md) | Manage the daemon (web UI, cron, agent supervision) |
 | [`leo task`](task.md) | Manage scheduled tasks (list, add, remove, enable, disable, history, logs) |
 | [`leo template`](template.md) | Inspect and remove agent templates |
 | [`leo agent`](agent.md) | Spawn and control ephemeral agents (local or via SSH) |
-| [`leo attach`](attach.md) | Attach to a supervised process or running agent (with optional interactive picker) |
+| [`leo attach`](attach.md) | Attach to a running agent (with optional interactive picker) |
 | [`leo run`](run.md) | Run a scheduled task once |
 
 ### Observability
 
 | Command | Description |
 |---------|-------------|
-| [`leo status`](status.md) | Overall status (service, processes, tasks, templates, web UI) |
-| [`leo logs`](logs.md) | Tail service or per-process logs |
+| [`leo status`](status.md) | Overall status (service, agents, tasks, templates, web UI) |
+| [`leo logs`](logs.md) | Tail service or per-agent logs |
 | [`leo session list`](session.md#leo-session-list) | List stored session mappings |
 | [`leo session clear`](session.md#leo-session-clear) | Clear stored session(s) |
 
@@ -49,7 +48,7 @@ Leo provides commands for setup, process management, task scheduling, template m
 |---------|-------------|
 | [`leo web`](web.md) | Web UI utilities (`login-url`) |
 | [`leo channels`](channels.md) | Per-channel-type bootstrap (e.g. register slash commands with Telegram) |
-| [`leo mcp-server`](mcp-server.md) | MCP server wired into supervised processes (internal) |
+| [`leo mcp-server`](mcp-server.md) | MCP server wired into supervised agents and sessions (internal) |
 
 ### Deprecated
 

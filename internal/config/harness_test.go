@@ -86,28 +86,6 @@ func TestDefaultsHarness(t *testing.T) {
 }
 
 func TestScopeHarnessCascade(t *testing.T) {
-	t.Run("process", func(t *testing.T) {
-		tests := []struct {
-			name          string
-			scope         string
-			defaultsValue string
-			want          string
-		}{
-			{"scope wins", "codex", "opencode", "codex"},
-			{"falls back to defaults", "", "opencode", "opencode"},
-			{"falls back to claude", "", "", "claude"},
-		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				cfg := &Config{Defaults: DefaultsConfig{Harness: tt.defaultsValue}}
-				got := cfg.ProcessHarness(ProcessConfig{Harness: tt.scope})
-				if got != tt.want {
-					t.Errorf("ProcessHarness() = %q, want %q", got, tt.want)
-				}
-			})
-		}
-	})
-
 	t.Run("task", func(t *testing.T) {
 		cfg := &Config{Defaults: DefaultsConfig{Harness: "opencode"}}
 		if got := cfg.TaskHarness(TaskConfig{Harness: "codex"}); got != "codex" {
@@ -164,24 +142,6 @@ func TestUsesHarness(t *testing.T) {
 			true,
 		},
 		{
-			"process explicit harness matches even when defaults differ",
-			Config{
-				Defaults:  DefaultsConfig{Harness: "claude"},
-				Processes: map[string]ProcessConfig{"p": {Harness: "opencode"}},
-			},
-			"opencode",
-			true,
-		},
-		{
-			"process inherits defaults harness",
-			Config{
-				Defaults:  DefaultsConfig{Harness: "opencode"},
-				Processes: map[string]ProcessConfig{"p": {}},
-			},
-			"opencode",
-			true,
-		},
-		{
 			"template explicit harness matches",
 			Config{
 				Templates: map[string]TemplateConfig{"t": {Harness: "codex"}},
@@ -208,9 +168,8 @@ func TestUsesHarness(t *testing.T) {
 		{
 			"no scope uses the queried harness",
 			Config{
-				Defaults:  DefaultsConfig{Harness: "claude"},
-				Processes: map[string]ProcessConfig{"p": {Harness: "codex"}},
-				Tasks:     map[string]TaskConfig{"t": {}},
+				Defaults: DefaultsConfig{Harness: "claude"},
+				Tasks:    map[string]TaskConfig{"t": {}},
 			},
 			"opencode",
 			false,
@@ -257,22 +216,6 @@ func TestMergeHarnessOptionsNeverNil(t *testing.T) {
 	merged := mergeHarnessOptions(nil, nil)
 	if merged == nil {
 		t.Error("mergeHarnessOptions(nil, nil) = nil, want empty non-nil map")
-	}
-}
-
-func TestProcessHarnessOptionsMerge(t *testing.T) {
-	cfg := &Config{
-		Defaults: DefaultsConfig{
-			Harness:        "claude",
-			HarnessOptions: map[string]any{"permission_mode": "plan", "agent": "a.md"},
-		},
-	}
-	proc := ProcessConfig{HarnessOptions: map[string]any{"agent": "b.md"}}
-
-	got := cfg.ProcessHarnessOptions(proc)
-	want := map[string]any{"permission_mode": "plan", "agent": "b.md"}
-	if len(got) != len(want) || got["permission_mode"] != want["permission_mode"] || got["agent"] != want["agent"] {
-		t.Errorf("ProcessHarnessOptions() = %v, want %v", got, want)
 	}
 }
 
@@ -351,13 +294,6 @@ func TestValidateUnknownHarnessName(t *testing.T) {
 		want  string
 	}{
 		{
-			"processes",
-			func(c *Config) {
-				c.Processes = map[string]ProcessConfig{"foo": {Harness: "bogus", Enabled: true}}
-			},
-			`processes.foo.harness "bogus" is not a registered harness`,
-		},
-		{
 			"templates",
 			func(c *Config) {
 				c.Templates = map[string]TemplateConfig{"foo": {Harness: "bogus"}}
@@ -420,15 +356,6 @@ func TestValidateHarnessOptionsErrors(t *testing.T) {
 			"defaults.harness_options: ",
 		},
 		{
-			"processes unknown key",
-			func(c *Config) {
-				c.Processes = map[string]ProcessConfig{"foo": {
-					Enabled: true, HarnessOptions: map[string]any{"bogus": "x"},
-				}}
-			},
-			"processes.foo.harness_options: ",
-		},
-		{
 			"templates bad type",
 			func(c *Config) {
 				c.Templates = map[string]TemplateConfig{"foo": {
@@ -480,26 +407,6 @@ func TestValidateChannelsUnsupportedHarness(t *testing.T) {
 		apply func(*Config)
 		want  string
 	}{
-		{
-			"processes channels",
-			func(c *Config) {
-				c.Processes = map[string]ProcessConfig{"foo": {
-					Enabled: true, Harness: stubNoChannelsName,
-					Channels: []string{"plugin:telegram@x"},
-				}}
-			},
-			"processes.foo.channels: the stubnochannels harness does not support channel plugins",
-		},
-		{
-			"processes dev_channels",
-			func(c *Config) {
-				c.Processes = map[string]ProcessConfig{"foo": {
-					Enabled: true, Harness: stubNoChannelsName,
-					DevChannels: []string{"plugin:telegram@x"},
-				}}
-			},
-			"processes.foo.channels: the stubnochannels harness does not support channel plugins",
-		},
 		{
 			"templates channels",
 			func(c *Config) {
@@ -569,13 +476,6 @@ func TestValidateModelDelegation(t *testing.T) {
 		want  string
 	}{
 		{
-			"processes",
-			func(c *Config) {
-				c.Processes = map[string]ProcessConfig{"foo": {Model: "gpt-5", Enabled: true}}
-			},
-			fmt.Sprintf(want, "processes.foo"),
-		},
-		{
 			"templates",
 			func(c *Config) {
 				c.Templates = map[string]TemplateConfig{"foo": {Model: "gpt-5"}}
@@ -634,22 +534,6 @@ func TestValidateKindSupportHappyPath(t *testing.T) {
 		}
 	})
 
-	t.Run("codex process validates clean (Plan 4 Task 5 TurnDriver)", func(t *testing.T) {
-		cfg := &Config{
-			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-			HomePath: "/tmp/leo",
-			Processes: map[string]ProcessConfig{"builder": {
-				Harness:        "codex",
-				Model:          "gpt-5.3-codex",
-				HarnessOptions: map[string]any{"sandbox": "workspace-write"},
-				Enabled:        true,
-			}},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("Validate() = %v, want nil", err)
-		}
-	})
-
 	t.Run("codex template validates clean (Plan 4 Task 5 TurnDriver)", func(t *testing.T) {
 		cfg := &Config{
 			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
@@ -657,33 +541,6 @@ func TestValidateKindSupportHappyPath(t *testing.T) {
 			Templates: map[string]TemplateConfig{"helper": {
 				Harness: "codex",
 				Model:   "gpt-5.3-codex",
-			}},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("Validate() = %v, want nil", err)
-		}
-	})
-
-	t.Run("codex process inherited from defaults validates clean", func(t *testing.T) {
-		cfg := &Config{
-			Defaults:  DefaultsConfig{Model: "sonnet", MaxTurns: 15, Harness: "codex"},
-			HomePath:  "/tmp/leo",
-			Processes: map[string]ProcessConfig{"plain": {Enabled: true}},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("Validate() = %v, want nil", err)
-		}
-	})
-
-	t.Run("opencode process validates clean (Plan 4 Task 6 ServerDriver)", func(t *testing.T) {
-		cfg := &Config{
-			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-			HomePath: "/tmp/leo",
-			Processes: map[string]ProcessConfig{"builder": {
-				Harness:        "opencode",
-				Model:          "anthropic/claude-sonnet-4-5",
-				HarnessOptions: map[string]any{"permission": map[string]any{"bash": "allow"}},
-				Enabled:        true,
 			}},
 		}
 		if err := cfg.Validate(); err != nil {
@@ -699,17 +556,6 @@ func TestValidateKindSupportHappyPath(t *testing.T) {
 				Harness: "opencode",
 				Model:   "anthropic/claude-sonnet-4-5",
 			}},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("Validate() = %v, want nil", err)
-		}
-	})
-
-	t.Run("opencode process inherited from defaults validates clean", func(t *testing.T) {
-		cfg := &Config{
-			Defaults:  DefaultsConfig{Model: "anthropic/claude-sonnet-4-5", MaxTurns: 15, Harness: "opencode"},
-			HomePath:  "/tmp/leo",
-			Processes: map[string]ProcessConfig{"plain": {Enabled: true}},
 		}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate() = %v, want nil", err)

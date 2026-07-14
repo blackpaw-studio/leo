@@ -1,14 +1,14 @@
 # leo service
 
-Manage persistent Claude sessions.
+Manage the leo daemon.
 
 ## Usage
 
 ```bash
-# Run a single process in the foreground
-leo service [process-name]
+# Run the daemon in the foreground
+leo service
 
-# Background with auto-restart (all enabled processes)
+# Background with auto-restart
 leo service start
 leo service stop
 leo service status
@@ -23,17 +23,15 @@ leo service status --daemon
 
 ## Description
 
-`leo service` manages long-running Claude sessions for the processes defined in your config. Each process can have its own workspace, channels, model, and settings.
+`leo service` runs the leo daemon: the web UI, the cron scheduler, the daemon IPC server, and supervision for ephemeral agents and persistent task sessions. On start it restores any agents/sessions that were running before the daemon last stopped (see `RestoreAgents`), then keeps each of them alive in its own tmux session with restart-on-crash and exponential backoff.
 
-When run in **supervised mode** (via `leo service start`), Leo starts all enabled processes and restarts them on crash with exponential backoff.
-
-When run in **foreground mode** (via `leo service [process-name]`), Leo starts a single process. If no name is given, it picks the first enabled process.
+`leo service` no longer manages config-declared "processes" — agents (spawned via `leo agent spawn` or a template) and persistent task sessions are the only things it supervises.
 
 ## Subcommands
 
 ### `leo service start`
 
-Starts all enabled processes in the background with automatic restart on crash. Uses exponential backoff (5s initial, 60s max) to avoid rapid restart loops.
+Starts the daemon in the background with automatic restart on crash for supervised agents/sessions. Uses exponential backoff (5s initial, 60s max) to avoid rapid restart loops.
 
 **Flags:**
 
@@ -43,7 +41,7 @@ Starts all enabled processes in the background with automatic restart on crash. 
 
 ### `leo service stop`
 
-Stops all running background processes.
+Stops the running daemon and tears down its supervised tmux sessions. Session IDs are preserved so a subsequent start resumes where each agent/session left off.
 
 **Flags:**
 
@@ -53,7 +51,7 @@ Stops all running background processes.
 
 ### `leo service status`
 
-Shows whether the service is currently running.
+Shows whether the daemon is currently running.
 
 **Flags:**
 
@@ -67,7 +65,7 @@ Restarts the daemon.
 
 ### `leo service logs`
 
-Tail the service log file.
+Tail the daemon log file.
 
 **Flags:**
 
@@ -78,13 +76,13 @@ Tail the service log file.
 
 ## Claude Arguments
 
-For each process, Leo builds `claude` arguments based on the process config:
+For each supervised agent or session, Leo builds `claude` arguments based on its config:
 
 ```
 claude --channels <channels>               \
        --add-dir <workspace>               \
        --add-dir <extra-dirs...>           \    # if add_dirs configured
-       --remote-control <process-name>     \    # if harness_options.remote_control enabled
+       --remote-control <name>             \    # if harness_options.remote_control enabled
        --dangerously-skip-permissions      \    # if harness_options.bypass_permissions enabled
        --mcp-config <mcp-config-path>      \    # if MCP servers exist
        --session-id <id> | --resume <id>        # session persistence
@@ -92,7 +90,7 @@ claude --channels <channels>               \
 
 ## Logs
 
-All modes write logs to `~/.leo/state/service.log`. The supervised child rotates this file automatically on size: when it reaches 10 MB, [lumberjack](https://pkg.go.dev/gopkg.in/natefinch/lumberjack.v2) renames it to a timestamped backup (`service-<timestamp>.log.gz`) and opens a fresh file in place. Up to 3 backups are retained for 30 days, gzipped. No external logrotate setup is required. `leo service logs -f` reopens cleanly across rotations.
+All modes write logs to `~/.leo/state/service.log`. The daemon rotates this file automatically on size: when it reaches 10 MB, [lumberjack](https://pkg.go.dev/gopkg.in/natefinch/lumberjack.v2) renames it to a timestamped backup (`service-<timestamp>.log.gz`) and opens a fresh file in place. Up to 3 backups are retained for 30 days, gzipped. No external logrotate setup is required. `leo service logs -f` reopens cleanly across rotations.
 
 ## Service Labels
 

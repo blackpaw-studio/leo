@@ -66,69 +66,6 @@ func registerFakeCLITurnsHarness() *fakeCLITurnsDriver {
 	return &fakeCLITurnsDriverInstance
 }
 
-// TestResolveProcessAttachSpecNonClaude verifies a process configured with a
-// non-claude harness resolves via the driver's Attach, not the tmux path.
-func TestResolveProcessAttachSpecNonClaude(t *testing.T) {
-	drv := registerFakeCLITurnsHarness()
-	drv.spec = harness.AttachSpec{TmuxSession: "leo-worker"}
-	drv.err = nil
-
-	cfg := &config.Config{
-		HomePath: t.TempDir(),
-		Defaults: config.DefaultsConfig{Model: "sonnet", Harness: fakeCLITurnsHarnessName},
-		Processes: map[string]config.ProcessConfig{
-			"worker": {Enabled: true},
-		},
-	}
-
-	harnessName, spec, ok, err := resolveProcessAttachSpec(cfg, "worker")
-	if err != nil {
-		t.Fatalf("resolveProcessAttachSpec: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected ok=true for a non-claude process")
-	}
-	if harnessName != fakeCLITurnsHarnessName {
-		t.Fatalf("harnessName = %q, want %q", harnessName, fakeCLITurnsHarnessName)
-	}
-	if spec.TmuxSession != "leo-worker" {
-		t.Fatalf("spec.TmuxSession = %q, want %q", spec.TmuxSession, "leo-worker")
-	}
-}
-
-// TestResolveProcessAttachSpecClaudeFallsBack verifies a claude (default
-// harness) process reports ok=false so the caller falls back to the existing
-// tmux attach flow.
-func TestResolveProcessAttachSpecClaudeFallsBack(t *testing.T) {
-	cfg := &config.Config{
-		HomePath: t.TempDir(),
-		Defaults: config.DefaultsConfig{Model: "sonnet"},
-		Processes: map[string]config.ProcessConfig{
-			"worker": {Enabled: true},
-		},
-	}
-	_, _, ok, err := resolveProcessAttachSpec(cfg, "worker")
-	if err != nil {
-		t.Fatalf("resolveProcessAttachSpec: %v", err)
-	}
-	if ok {
-		t.Fatal("expected ok=false for a claude process")
-	}
-}
-
-// TestResolveProcessAttachSpecUnknownProcess verifies ok=false, no error, for
-// a name that isn't in the config at all.
-func TestResolveProcessAttachSpecUnknownProcess(t *testing.T) {
-	cfg := &config.Config{HomePath: t.TempDir()}
-	_, _, ok, err := resolveProcessAttachSpec(cfg, "ghost")
-	if err != nil {
-		t.Fatalf("resolveProcessAttachSpec: %v", err)
-	}
-	if ok {
-		t.Fatal("expected ok=false for an unknown process")
-	}
-}
-
 // TestAttachViaDriverDelegatesToTmuxSession verifies a non-empty TmuxSession
 // is dispatched via attachTmuxSession — every harness's AttachSpec is a plain
 // tmux attach post-#106 cleanup, so there is no separate exec/argv branch
@@ -206,54 +143,6 @@ func stubAgentAttachSpecFn(t *testing.T, fn func(workDir, name string) (daemon.A
 	t.Cleanup(func() { agentAttachSpecFn = old })
 }
 
-// TestAttachTopLevelRoutesNonClaudeProcess verifies `leo attach <name>`
-// resolves a non-claude process through the driver, which now reports the
-// same tmux-attach shape as claude.
-func TestAttachTopLevelRoutesNonClaudeProcess(t *testing.T) {
-	drv := registerFakeCLITurnsHarness()
-	drv.spec = harness.AttachSpec{TmuxSession: "leo-worker"}
-	drv.err = nil
-
-	home := t.TempDir()
-	cfg := &config.Config{
-		HomePath:  home,
-		Defaults:  config.DefaultsConfig{Model: "sonnet", Harness: fakeCLITurnsHarnessName},
-		Processes: map[string]config.ProcessConfig{"worker": {Enabled: true}},
-	}
-	path := home + "/leo.yaml"
-	if err := config.Save(path, cfg); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	stubAgentSession(t, func(workDir, name string) (string, error) {
-		return "", fmt.Errorf("not an agent")
-	})
-	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
-	stubOutsideTmux(t)
-	withStubStdio(t)
-	var execedArgv0 string
-	var execedArgv []string
-	old := agentSyscallExec
-	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
-		execedArgv0 = argv0
-		execedArgv = argv
-		return nil
-	}
-	t.Cleanup(func() { agentSyscallExec = old })
-
-	root := newRootCmd()
-	root.SetArgs([]string{"--config", path, "attach", "worker", "--host", "localhost"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	if execedArgv0 != "/usr/bin/tmux" {
-		t.Fatalf("argv0 = %q, want tmux path %q (driver dispatch didn't fire); argv=%v", execedArgv0, "/usr/bin/tmux", execedArgv)
-	}
-	if !strings.Contains(strings.Join(execedArgv, " "), "leo-worker") {
-		t.Fatalf("argv = %v, want it to reference the tmux session %q", execedArgv, "leo-worker")
-	}
-}
-
 // TestAttachTopLevelRoutesNonClaudeAgent verifies `leo attach <name>`
 // resolves a non-claude agent through the driver, which now reports the same
 // tmux-attach shape as claude.
@@ -262,7 +151,7 @@ func TestAttachTopLevelRoutesNonClaudeAgent(t *testing.T) {
 	drv.spec = harness.AttachSpec{TmuxSession: "leo-scratch"}
 	drv.err = nil
 
-	path := newAttachAliasTestConfig(t, nil) // no configured processes
+	path := newAttachAliasTestConfig(t)
 	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
 	stubOutsideTmux(t)
 	withStubStdio(t)
@@ -306,7 +195,7 @@ func TestAttachTopLevelRoutesNonClaudeAgent(t *testing.T) {
 // Harness from the attach-spec endpoint) still goes through the existing
 // tmux attach flow — the driver dispatch must not fire.
 func TestAttachTopLevelClaudeAgentKeepsTmuxPath(t *testing.T) {
-	path := newAttachAliasTestConfig(t, nil)
+	path := newAttachAliasTestConfig(t)
 	withStubExec(t)
 	withStubStdio(t)
 	stubAgentSession(t, func(workDir, name string) (string, error) {

@@ -57,25 +57,6 @@ tasks:
 
 Tasks share the same `claude` process and channel plugins. Each firing's prompt is queued per-session (FIFO), so they execute in arrival order.
 
-## Sharing with a supervised process
-
-```yaml
-processes:
-  bot:
-    workspace: ~/work/bot
-    channels: [plugin:telegram@official]
-
-tasks:
-  midday-poke:
-    runtime: persistent
-    session: process:bot
-    schedule: "0 12 * * *"
-    prompt_file: prompts/midday.md
-    channels: [plugin:telegram@official]
-```
-
-The same tmux session hosts both your interactive process and the scheduled prompt. Sentinel correlation in the injected prompt distinguishes leo's turns from human ones.
-
 ## Channel delivery
 
 Persistent tasks reuse the channel plugins loaded by the session at boot (via `LEO_CHANNELS`). The injected prompt ends with a footer instructing the model to deliver its reply via the task's channel list. No `claude -p` is invoked for delivery.
@@ -102,7 +83,7 @@ If a task has `notify_on_fail: true` and fails (timeout, queue full, etc.), leo 
 | Field      | Type   | Notes                                                                                  |
 | ---------- | ------ | -------------------------------------------------------------------------------------- |
 | `runtime`  | enum   | `oneshot` (default) or `persistent`.                                                   |
-| `session`  | string | `<name>` references `sessions:`; `process:<name>` references `processes:`. Optional — omit for an implicit dedicated session. |
+| `session`  | string | `<name>` references `sessions:`. Optional — omit for an implicit dedicated session. |
 | `lazy`     | bool   | Parsed but not yet honored; always-on for now.                                         |
 | `queue_max`| int    | Max queued firings per session (default 5; overflow rejected with "queue full").       |
 

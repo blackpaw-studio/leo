@@ -26,7 +26,7 @@ var validPermissionModes = map[string]bool{
 }
 
 // DecodeOptions strictly decodes a harness_options map into Options.
-// Runtime fields (RemoteControlPrefix, MCPConfigPath, LeoMCPArgs) stay zero.
+// Runtime fields (MCPConfigPath, LeoMCPArgs) stay zero.
 // Keys are processed in sorted order so multi-error maps fail deterministically.
 func (Claude) DecodeOptions(raw map[string]any) (any, error) {
 	var o Options

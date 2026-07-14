@@ -1,18 +1,18 @@
 # leo logs
 
-Show the service log, or filter it for a specific supervised process.
+Show the service log, or filter it for a specific supervised agent or session.
 
 ## Usage
 
 ```bash
-leo logs [process-name] [-n <lines>] [-f]
+leo logs [name] [-n <lines>] [-f]
 ```
 
 ## Description
 
-Tails the daemon/service log stored under `~/.leo/state/`. Passing a process name filters the stream to lines emitted by that process.
+Tails the daemon/service log stored under `~/.leo/state/`. Passing a name filters the stream to lines emitted by that agent or persistent session.
 
-Process-name arguments support tab-completion (see [`leo completion`](completion.md)).
+Name arguments support tab-completion (see [`leo completion`](completion.md)).
 
 ## Flags
 
@@ -27,14 +27,14 @@ Process-name arguments support tab-completion (see [`leo completion`](completion
 # Last 50 service log lines
 leo logs
 
-# Last 200 lines for a specific process
+# Last 200 lines for a specific agent
 leo logs coding-assistant -n 200
 
-# Follow a process's log in real time
+# Follow an agent's log in real time
 leo logs coding-assistant -f
 ```
 
 ## See Also
 
-- [`leo process logs`](process.md) — per-process tmux scrollback
+- [`leo agent logs`](agent.md) — per-agent tmux scrollback
 - [`leo task logs`](task.md) — per-task execution history

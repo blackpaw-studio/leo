@@ -94,15 +94,15 @@ func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error
 	return env.Data, nil
 }
 
-func (c *daemonClient) sendKeys(processName string, keys []string) error {
-	_, err := c.do(http.MethodPost, "/web/process/"+processName+"/send", map[string]any{"keys": keys})
+func (c *daemonClient) sendKeys(agentName string, keys []string) error {
+	_, err := c.do(http.MethodPost, "/web/agent/"+agentName+"/send", map[string]any{"keys": keys})
 	return err
 }
 
-func (c *daemonClient) interrupt(processName string) error {
+func (c *daemonClient) interrupt(agentName string) error {
 	// Interrupt currently returns an HTML flash, not the apiEnvelope. We
 	// don't need its body — accept any 2xx as success.
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/web/process/"+processName+"/interrupt", nil)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/web/agent/"+agentName+"/interrupt", nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
@@ -147,7 +147,7 @@ func (c *daemonClient) listAgents() (json.RawMessage, error) {
 }
 
 func (c *daemonClient) sendMessage(target, text string) error {
-	_, err := c.do(http.MethodPost, "/web/process/"+target+"/message", map[string]any{"text": text})
+	_, err := c.do(http.MethodPost, "/web/agent/"+target+"/message", map[string]any{"text": text})
 	return err
 }
 

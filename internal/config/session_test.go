@@ -103,51 +103,22 @@ func TestValidatePersistentDedicatedNameConflict(t *testing.T) {
 	}
 }
 
-func TestResolveSessionProcess(t *testing.T) {
-	cfg := &Config{
-		Processes: map[string]ProcessConfig{
-			"bot": {
-				Workspace: "/tmp/bot",
-				Model:     "sonnet",
-				Channels:  []string{"plugin:slack@official"},
-			},
-		},
-		Tasks: map[string]TaskConfig{
-			"poke": {
-				Runtime:  "persistent",
-				Session:  "process:bot",
-				Channels: []string{"plugin:slack@official"},
-			},
-		},
-	}
-	name, topo, sess, err := cfg.ResolveSession("poke")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if topo != TopologyProcess {
-		t.Fatalf("expected TopologyProcess, got %v", topo)
-	}
-	if name != "bot" {
-		t.Fatalf("expected name 'bot', got %q", name)
-	}
-	if sess.Workspace != "/tmp/bot" {
-		t.Fatalf("workspace not threaded from process: %+v", sess)
-	}
-	// Agent/permission_mode/etc. live in harness_options now and are
-	// decoded by the consumer, not threaded through SessionConfig — see
-	// ResolveSession's comment.
-	if len(sess.Channels) != 1 || sess.Channels[0] != "plugin:slack@official" {
-		t.Fatalf("channels not threaded from process: %+v", sess.Channels)
-	}
-}
-
-func TestResolveSessionProcessMissing(t *testing.T) {
+// TestResolveSessionProcessPrefixTreatedAsShared verifies that the removed
+// Topology C (`session: process:<name>`) form now falls through to the
+// default Topology B branch: it is looked up verbatim (including the
+// "process:" prefix) against Sessions and errors as an unresolved shared
+// session, exactly like any other unknown session reference.
+func TestResolveSessionProcessPrefixTreatedAsShared(t *testing.T) {
 	cfg := &Config{
 		Tasks: map[string]TaskConfig{
-			"poke": {Runtime: "persistent", Session: "process:nope"},
+			"poke": {Runtime: "persistent", Session: "process:bot"},
 		},
 	}
-	if _, _, _, err := cfg.ResolveSession("poke"); err == nil {
-		t.Fatalf("expected error for missing process reference")
+	_, topo, _, err := cfg.ResolveSession("poke")
+	if err == nil || !strings.Contains(err.Error(), "sessions.process:bot") {
+		t.Fatalf("expected unresolved sessions.process:bot error, got topo=%v err=%v", topo, err)
+	}
+	if topo != TopologyShared {
+		t.Fatalf("expected TopologyShared fallback, got %v", topo)
 	}
 }

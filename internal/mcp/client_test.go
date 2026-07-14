@@ -91,7 +91,7 @@ func TestDaemonClientSendMessage(t *testing.T) {
 	if err := c.sendMessage("worker-1", "build is green"); err != nil {
 		t.Fatalf("sendMessage: %v", err)
 	}
-	if gotPath != "/web/process/worker-1/message" {
+	if gotPath != "/web/agent/worker-1/message" {
 		t.Errorf("path = %q", gotPath)
 	}
 	if !strings.Contains(gotBody, "build is green") {

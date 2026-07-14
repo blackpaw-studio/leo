@@ -68,23 +68,15 @@ leo agent stop leo-demo
 
 Every non-attach subcommand runs `ssh <host> leo agent <subcommand>` under the hood. Attach runs `ssh -t <host> tmux attach -t leo-<name>` so terminal resizing and scrollback work normally.
 
-## Attaching to supervised processes
+## Attaching from the top-level shortcut
 
-Configured processes (the ones managed by `leo service` on the server) expose the same attach and logs commands:
-
-```bash
-leo process attach primary        # ssh -t <host> tmux attach -t leo-primary
-leo process logs primary -n 100
-leo process logs primary --follow
-```
-
-And `leo attach <name>` resolves against both processes and agents — handy when you don't want to remember which namespace a name lives in:
+`leo attach <name>` is a shortcut for `leo agent attach <name>` — handy when you don't want to type the full subcommand:
 
 ```bash
-leo attach primary     # process? agent? both? Leo figures it out.
+leo attach leo-demo     # ssh -t <host> tmux attach -t leo-demo
 ```
 
-When a name exists in both namespaces, Leo errors rather than guessing and points you at the explicit `leo process attach` / `leo agent attach` forms. For remote hosts the resolution is deferred to the server so the client never needs to know the remote's process list.
+For remote hosts the resolution is deferred to the server so the client never needs to know the remote's agent list. Persistent task sessions (configured under `sessions:`) are a server-local concept — use `leo session attach <name>` directly on the server, or `ssh <host> leo session attach <name>` — see [Persistent Task Sessions](../configuration/persistent-tasks.md).
 
 ## Overriding the target host
 

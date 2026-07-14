@@ -23,10 +23,6 @@ func harnessOrDefault(scope, def string) string {
 
 func (c *Config) DefaultsHarness() string { return harnessOrDefault(c.Defaults.Harness, "") }
 
-func (c *Config) ProcessHarness(p ProcessConfig) string {
-	return harnessOrDefault(p.Harness, c.Defaults.Harness)
-}
-
 func (c *Config) TaskHarness(t TaskConfig) string {
 	return harnessOrDefault(t.Harness, c.Defaults.Harness)
 }
@@ -40,16 +36,11 @@ func (c *Config) SessionHarness(s SessionConfig) string {
 }
 
 // UsesHarness reports whether any scope in the config — defaults, or any
-// process/template/session/task — resolves (after the empty-string cascade
-// down from defaults) to the named harness.
+// template/session/task — resolves (after the empty-string cascade down
+// from defaults) to the named harness.
 func (c *Config) UsesHarness(name string) bool {
 	if c.DefaultsHarness() == name {
 		return true
-	}
-	for _, p := range c.Processes {
-		if c.ProcessHarness(p) == name {
-			return true
-		}
 	}
 	for _, t := range c.Templates {
 		if c.TemplateHarness(t) == name {
@@ -90,10 +81,6 @@ func (c *Config) scopeHarnessOptions(scopeHarness string, opts map[string]any) m
 		return mergeHarnessOptions(nil, opts)
 	}
 	return mergeHarnessOptions(c.Defaults.HarnessOptions, opts)
-}
-
-func (c *Config) ProcessHarnessOptions(p ProcessConfig) map[string]any {
-	return c.scopeHarnessOptions(c.ProcessHarness(p), p.HarnessOptions)
 }
 
 func (c *Config) TaskHarnessOptions(t TaskConfig) map[string]any {

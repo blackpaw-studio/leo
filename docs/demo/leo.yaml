@@ -11,21 +11,6 @@ defaults:
 web:
   enabled: false
 
-processes:
-  # Unauthenticated `claude` lands on a first-run theme picker and sits
-  # idle, which is fine for the demo — supervisor sees it as running.
-  assistant:
-    enabled: true
-    workspace: /home/demo/workspace/assistant
-    model: sonnet
-    channels:
-      - plugin:telegram@claude-plugins-official
-
-  watchdog:
-    enabled: true
-    workspace: /home/demo/workspace/watchdog
-    model: haiku
-
 templates:
   coding:
     model: sonnet

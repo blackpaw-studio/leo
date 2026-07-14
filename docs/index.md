@@ -1,20 +1,20 @@
 # Leo
 
-**A process supervisor and task scheduler for Claude Code**
+**An agent supervisor and task scheduler for Claude Code**
 
-Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions, schedules autonomous tasks, and lets you spawn on-demand coding agents. Leo is channel-agnostic — bring your own messaging channel via any Claude Code plugin (Telegram, Slack, webhook, etc.). A built-in web dashboard lets you manage everything from a browser.
+Leo spawns and supervises [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents, schedules autonomous tasks, and keeps long-running persistent task sessions alive. Leo is channel-agnostic — bring your own messaging channel via any Claude Code plugin (Telegram, Slack, webhook, etc.). A built-in web dashboard lets you manage everything from a browser.
 
 ---
 
 <div class="grid cards" markdown>
 
--   :material-chat-outline:{ .lg .middle } **Processes**
+-   :material-chat-outline:{ .lg .middle } **Persistent Sessions**
 
     ---
 
-    Define multiple persistent Claude sessions with different channels, workspaces, and settings. Leo supervises them with auto-restart and exponential backoff.
+    Declare long-running Claude sessions with their own channels, workspaces, and settings under `sessions:`. Leo supervises them with auto-restart and exponential backoff.
 
-    [:octicons-arrow-right-24: Configuration](configuration/config-reference.md)
+    [:octicons-arrow-right-24: Configuration](configuration/persistent-tasks.md)
 
 -   :material-rocket-launch-outline:{ .lg .middle } **Agent Templates**
 
@@ -36,7 +36,7 @@ Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-c
 
     ---
 
-    Monitor processes, manage tasks, spawn agents, edit config, and preview cron schedules from a browser on your LAN.
+    Monitor agents and sessions, manage tasks, spawn agents, edit config, and preview cron schedules from a browser on your LAN.
 
     [:octicons-arrow-right-24: Configuration](configuration/config-reference.md)
 
@@ -48,7 +48,7 @@ Leo manages persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-c
 
 Leo operates in three modes, all invoking the stock `claude` CLI:
 
-### Processes
+### Persistent Sessions
 
 ```
 User (channel) --> Channel plugin --> claude --> Agent
@@ -56,7 +56,7 @@ User (channel) --> Channel plugin --> claude --> Agent
 User (channel) <-- Channel plugin <-- claude <----+
 ```
 
-`leo service start` launches all enabled processes in supervised mode. Each process is a long-running Claude session with its own workspace, model, and channel plugin list.
+`leo service start` boots the daemon, which supervises every configured `sessions:` entry (and any implicit dedicated sessions created by `runtime: persistent` tasks). Each session is a long-running Claude session with its own workspace, model, and channel plugin list, restarted on crash with exponential backoff.
 
 ### Agent Templates
 

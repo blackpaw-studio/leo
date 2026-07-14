@@ -196,22 +196,20 @@ func TestNewInvocationID16IsHex32(t *testing.T) {
 }
 
 // TestSessionTmuxTargetTopologies verifies the bare logical session name is
-// mapped to the correct concrete tmux session for each topology. This is the
-// seam that was wrong: the router was injecting into the bare name.
+// mapped to the correct concrete tmux session for each remaining topology.
+// This is the seam that was wrong: the router was injecting into the bare
+// name.
 func TestSessionTmuxTargetTopologies(t *testing.T) {
 	cfg := &config.Config{
 		Tasks: map[string]config.TaskConfig{
 			"dedicated": {Runtime: "persistent", Workspace: "/w"},
 			"shared":    {Runtime: "persistent", Session: "team"},
-			"attached":  {Runtime: "persistent", Session: "process:web"},
 		},
-		Sessions:  map[string]config.SessionConfig{"team": {Workspace: "/w"}},
-		Processes: map[string]config.ProcessConfig{"web": {Workspace: "/w"}},
+		Sessions: map[string]config.SessionConfig{"team": {Workspace: "/w"}},
 	}
 	cases := map[string]string{
 		"dedicated": "leo-session-dedicated", // Topology A — implicit dedicated
 		"shared":    "leo-session-team",      // Topology B — shared session
-		"attached":  "leo-web",               // Topology C — process-attached
 	}
 	for task, want := range cases {
 		got, err := sessionTmuxTarget(cfg, task)
@@ -221,5 +219,19 @@ func TestSessionTmuxTargetTopologies(t *testing.T) {
 		if got != want {
 			t.Fatalf("%s: tmux target = %q, want %q", task, got, want)
 		}
+	}
+}
+
+// TestSessionTmuxTargetProcessPrefixNowUnresolved verifies the removed
+// Topology C form (`session: process:<name>`) now errors as an unresolved
+// shared-session reference rather than being routed to a supervised process.
+func TestSessionTmuxTargetProcessPrefixNowUnresolved(t *testing.T) {
+	cfg := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"attached": {Runtime: "persistent", Session: "process:web"},
+		},
+	}
+	if _, err := sessionTmuxTarget(cfg, "attached"); err == nil {
+		t.Fatalf("expected error resolving process:-prefixed session, got nil")
 	}
 }

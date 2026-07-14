@@ -31,9 +31,6 @@ var Excluded = map[Section][]string{
 	SectionDefaults: {"harness_options", "provider",
 		"permission_mode", "bypass_permissions", "remote_control",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
-	SectionProcess: {"harness_options", "provider",
-		"permission_mode", "bypass_permissions", "remote_control", "agent",
-		"allowed_tools", "disallowed_tools", "append_system_prompt"},
 	SectionTask: {"harness_options", "provider",
 		"permission_mode", "allowed_tools", "disallowed_tools", "append_system_prompt"},
 	SectionTemplate: {"harness_options", "provider",
@@ -79,25 +76,9 @@ var registry = map[Section][]Field{
 		fHarness(),
 		{Key: "model", Label: "Model", Kind: KindDatalist, Group: "Model"},
 		{Key: "max_turns", Label: "Max turns", Group: "Limits"},
-		{Key: "stale_resume_hours", Label: "Stale resume (hours)", Group: "Behavior", Advanced: true,
-			Help: "Skip --resume when the stored session is older than this"},
 		{Key: "idle_suspend_after", Label: "Idle suspend after", Kind: KindDuration, Group: "Behavior", Advanced: true,
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},
 	},
-
-	SectionProcess: append([]Field{
-		{Key: "enabled", Label: "Enabled", Group: "General"},
-		{Key: "workspace", Label: "Workspace", Group: "General"},
-		fHarness(),
-		fModel("Model"),
-		{Key: "max_turns", Label: "Max turns", Group: "Model"},
-	}, append(fChannels("Channels"), []Field{
-		{Key: "mcp_config", Label: "MCP config", Group: "Advanced", Advanced: true, Help: "Path to an MCP server config file"},
-		fAddDirs("Advanced", true),
-		fEnv("Advanced", true),
-		{Key: "stale_resume_hours", Label: "Stale resume (hours)", Kind: KindNumber, Group: "Advanced", Advanced: true,
-			Help: "Skip --resume when the stored session is older than this"},
-	}...)...),
 
 	SectionTask: append([]Field{
 		{Key: "schedule", Label: "Schedule", Kind: KindCron, Group: "Schedule"},

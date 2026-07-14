@@ -86,7 +86,7 @@ func RunInteractive(reader *bufio.Reader) error {
 	if userName != "" {
 		fmt.Printf("  User:      %s\n", userName)
 	}
-	fmt.Printf("  Processes: %d\n", len(cfg.Processes))
+	fmt.Printf("  Templates: %d\n", len(cfg.Templates))
 	fmt.Printf("  Tasks:     %d\n", len(cfg.Tasks))
 	fmt.Println()
 
@@ -111,15 +111,15 @@ func RunInteractive(reader *bufio.Reader) error {
 	prompt.Bold.Printf("\nSetup complete! Leo home: %s\n", leoHome)
 	fmt.Println()
 	fmt.Println("To surface messages via a Claude Code channel plugin (Telegram, Slack, webhook,")
-	fmt.Println("etc.), install the plugin separately and add its ID to your process's channels:")
+	fmt.Println("etc.), install the plugin separately and add its ID to your assistant's channels:")
 	fmt.Println()
 	fmt.Println("  claude plugin install telegram@claude-plugins-official")
-	fmt.Println("  # then edit leo.yaml → processes.assistant.channels:")
+	fmt.Println("  # then edit leo.yaml → templates.assistant.channels:")
 	fmt.Println("  #   - plugin:telegram@claude-plugins-official")
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Printf("  leo service              # Start interactive session\n")
-	fmt.Printf("  leo task list            # View configured tasks\n")
+	fmt.Printf("  leo agent spawn assistant assistant --name assistant   # Start the assistant agent\n")
+	fmt.Printf("  leo task list                         # View configured tasks\n")
 
 	return nil
 }
@@ -212,11 +212,10 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 			Model:    config.DefaultModel,
 			MaxTurns: config.DefaultMaxTurns,
 		},
-		Processes: map[string]config.ProcessConfig{
+		Templates: map[string]config.TemplateConfig{
 			"assistant": {
 				Workspace:      workspace,
 				HarnessOptions: map[string]any{"remote_control": true},
-				Enabled:        true,
 			},
 		},
 		Tasks: make(map[string]config.TaskConfig),
@@ -227,9 +226,8 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 		cfg.Web = existing.Web
 		cfg.Client = existing.Client
 		cfg.Client.Hosts = maps.Clone(existing.Client.Hosts)
-		cfg.Templates = maps.Clone(existing.Templates)
-		for k, v := range existing.Processes {
-			cfg.Processes[k] = v
+		for k, v := range existing.Templates {
+			cfg.Templates[k] = v
 		}
 		for k, v := range existing.Tasks {
 			cfg.Tasks[k] = v
@@ -574,16 +572,15 @@ func testSSHConnectivity(host config.HostConfig) error {
 // buildClientConfig returns a fresh *config.Config with the given
 // host/nickname added to client.hosts and default_host set to the
 // pre-resolved defaultHost (see resolveDefaultHost). It is a pure
-// function: existing map fields (Processes/Tasks/Templates/Client.Hosts)
-// are deep-copied via maps.Clone so mutations cannot alias back into the
+// function: existing map fields (Tasks/Templates/Client.Hosts) are
+// deep-copied via maps.Clone so mutations cannot alias back into the
 // caller's existing value. Fresh installs (existing == nil) produce a
-// minimal config — nil Processes/Tasks maps stay nil so the emitted YAML
-// does not carry empty `processes: {}` / `tasks: {}` keys.
+// minimal config — nil Tasks/Templates maps stay nil so the emitted YAML
+// does not carry empty `tasks: {}` / `templates: {}` keys.
 func buildClientConfig(existing *config.Config, nickname string, host config.HostConfig, defaultHost string) *config.Config {
 	cfg := &config.Config{}
 	if existing != nil {
 		*cfg = *existing
-		cfg.Processes = maps.Clone(existing.Processes)
 		cfg.Tasks = maps.Clone(existing.Tasks)
 		cfg.Templates = maps.Clone(existing.Templates)
 		cfg.Client.Hosts = maps.Clone(existing.Client.Hosts)

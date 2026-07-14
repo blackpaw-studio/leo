@@ -68,7 +68,6 @@ func TestSupportsKind(t *testing.T) {
 		want bool
 	}{
 		{harness.KindTask, true},
-		{harness.KindProcess, true},
 		{harness.KindAgent, true},
 		{harness.KindSession, true},
 	}
@@ -135,9 +134,9 @@ func TestArgs(t *testing.T) {
 				"--model", "anthropic/claude-sonnet-4-5", "-s", "ses_42", "again"},
 		},
 		{
-			name: "KindProcess TUI argv with model",
+			name: "KindAgent TUI argv with model",
 			spec: harness.LaunchSpec{
-				Kind: harness.KindProcess, Model: "lmstudio/qwen/qwen3.6-35b-a3b",
+				Kind: harness.KindAgent, Model: "lmstudio/qwen/qwen3.6-35b-a3b",
 				Options: Options{},
 			},
 			want: []string{"--model", "lmstudio/qwen/qwen3.6-35b-a3b"},
