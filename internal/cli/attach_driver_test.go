@@ -277,6 +277,44 @@ func TestAttachPickedAgentRoutesNonClaudeAgent(t *testing.T) {
 	}
 }
 
+// TestAttachPickedAgentAttachOnlyRemoteRowAttachesSessionDirectly verifies a
+// tmux-fallback remote row (AttachOnly, Name is the full tmux session name)
+// attaches that tmux session directly over ssh instead of routing through
+// `agent attach <name>` on the remote — the fallback Name is not a bare agent
+// name, so the remote CLI resolution would fail.
+func TestAttachPickedAgentAttachOnlyRemoteRowAttachesSessionDirectly(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Client: config.ClientConfig{
+			Hosts: map[string]config.HostConfig{
+				"prod": {SSH: "user@prod.example.com", SSHArgs: []string{"-p", "2222"}},
+			},
+		},
+	}
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	err := attachPickedAgent(context.Background(), cfg, picker.Agent{
+		Host:       "prod",
+		Name:       "leo-orphan",
+		AttachOnly: true,
+	}, attachOptions{})
+	if err != nil {
+		t.Fatalf("attachPickedAgent: %v", err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	if strings.Contains(joined, "agent attach") {
+		t.Fatalf("argv = %v, must NOT invoke remote `agent attach` for an AttachOnly row", stub.calls[0])
+	}
+	if !strings.Contains(joined, "attach") || !strings.Contains(joined, "leo-orphan") {
+		t.Fatalf("argv = %v, want a tmux attach targeting session %q", stub.calls[0], "leo-orphan")
+	}
+}
+
 // TestAttachPickedAgentClaudeAgentKeepsTmuxPath verifies a local claude agent
 // chosen in the picker keeps the plain tmux attach path.
 func TestAttachPickedAgentClaudeAgentKeepsTmuxPath(t *testing.T) {

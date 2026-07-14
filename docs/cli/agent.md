@@ -141,9 +141,13 @@ sessions never mix with your personal tmux server.
 - **From inside tmux:** Leo uses `display-popup -E` on your outer tmux server to open the leo session as an overlay, preserving your original tmux session when the popup is dismissed (no nested tmux).
 - **Remotely:** Leo runs `ssh -t <host> tmux -L leo attach -t leo-<name>`.
 
-Running `leo attach` without a name opens an arrow-key picker over
-processes, agents, and (for remote hosts) sessions from `tmux -L leo
-list-sessions`. Auto-attaches when exactly one session exists.
+Running `leo attach` without a name opens a full-screen, fuzzy-filterable
+picker over every agent — local and every configured remote host — in every
+state (running, starting, suspended, stopped). Beyond attaching, the picker
+doubles as a lifecycle surface: **Enter** attach (a suspended agent is resumed
+first), **s** suspend, **u** resume, **x** stop (with confirmation), **r**
+rename, **/** filter, **q** quit. The picker always opens when no name is
+given — there is no longer a single-candidate auto-attach shortcut.
 
 Pass `--cc` to open the session in tmux control mode (`-CC`), which iTerm2
 and WezTerm pick up as a native tab. Control mode is refused cleanly from

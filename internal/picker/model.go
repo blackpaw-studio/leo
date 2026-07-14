@@ -283,6 +283,9 @@ func (m model) onActionDone(msg actionMsg) (tea.Model, tea.Cmd) {
 	m.pending = newPending
 
 	if msg.kind == actionResumeAttach && msg.err == nil {
+		// Template/StartedAt are intentionally left zero: the attach path only
+		// consumes Name+Host, and this Agent is synthesized here rather than
+		// refetched from the backend.
 		m.result = Result{Agent: &Agent{Name: msg.name, Host: msg.host, Status: "running"}}
 		return m, tea.Quit
 	}

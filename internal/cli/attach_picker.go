@@ -105,6 +105,18 @@ func attachPickedAgent(ctx context.Context, cfg *config.Config, a picker.Agent, 
 	if err != nil {
 		return fmt.Errorf("resolving host %q: %w", a.Host, err)
 	}
+	if a.AttachOnly {
+		// tmux-fallback row: a.Name is already the full remote tmux session
+		// name (e.g. "leo-foo"), not a bare agent name — attach the session
+		// directly instead of routing through `agent attach <name>`, which
+		// expects a bare name and would fail to resolve.
+		choice := attachChoice{
+			label:   a.Name,
+			session: a.Name,
+			kind:    attachChoiceRemote,
+		}
+		return attachChosenSession(ctx, cfg, res, choice, opts)
+	}
 	return runRemoteAttach(res, "agent", "attach", a.Name)
 }
 

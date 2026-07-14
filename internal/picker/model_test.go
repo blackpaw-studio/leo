@@ -12,16 +12,12 @@ import (
 // fakeBackend records calls so tests can assert an action was dispatched.
 type fakeBackend struct {
 	agents    []Agent
-	listErr   error
 	calls     []string
 	renameOld string
 	renameNew string
 }
 
 func (f *fakeBackend) List(context.Context) ([]Agent, error) {
-	if f.listErr != nil {
-		return nil, f.listErr
-	}
 	return f.agents, nil
 }
 func (f *fakeBackend) Rename(_ context.Context, oldName, newName string) error {
@@ -264,5 +260,4 @@ func TestHostFetchFailureRendersErrorRow(t *testing.T) {
 	if !contains(r.desc, "connection refused") {
 		t.Fatalf("error row desc = %q", r.desc)
 	}
-	_ = time.Now
 }
