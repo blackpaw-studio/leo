@@ -14,7 +14,7 @@ Leo uses a home directory at `~/.leo/` that holds config, state, and the default
 │       └── mcp-servers.json    # MCP server configuration
 ├── agents/                     # Default agent workspace (for templates)
 └── state/                      # Runtime state and logs
-    ├── sessions.json           # Process session ID mappings
+    ├── sessions.json           # Session ID mappings
     ├── agents.json             # Ephemeral agent records (for restart recovery)
     ├── task-history.json       # Task execution history
     ├── service.log             # Service log output
@@ -30,7 +30,7 @@ The main configuration file. See [Configuration](index.md) for details.
 
 ### `~/.leo/workspace/`
 
-The default workspace directory. Processes and tasks use this workspace unless they specify their own `workspace` field. The workspace is passed to Claude via `--add-dir` so the assistant can read and write files here.
+The default workspace directory. Sessions and tasks use this workspace unless they specify their own `workspace` field. The workspace is passed to Claude via `--add-dir` so the assistant can read and write files here.
 
 ### `~/.leo/workspace/USER.md`
 
@@ -60,19 +60,19 @@ Multiple agents can run in parallel against the same repo without stepping on ea
 
 Runtime files managed by Leo:
 
-- **`sessions.json`** -- process name to Claude session UUID mappings (for `--resume`)
+- **`sessions.json`** -- session/task name to Claude session UUID mappings (for `--resume`)
 - **`agents.json`** -- ephemeral agent records, used to restore agents after daemon restart
 - **`task-history.json`** -- execution history for scheduled tasks
-- **`service.log`** -- output from the daemon (all supervised processes)
+- **`service.log`** -- output from the daemon (all supervised agents/sessions)
 - **`service.pid`** -- PID file for the background service
 - **`leo.sock`** -- Unix socket for CLI-to-daemon IPC
 
 ## Custom Workspaces
 
-Processes, tasks, and templates can each specify their own `workspace`:
+Sessions, tasks, and templates can each specify their own `workspace`:
 
 ```yaml
-processes:
+sessions:
   coding:
     workspace: ~/projects/my-app
 
@@ -85,4 +85,4 @@ templates:
     workspace: ~/agents
 ```
 
-When no `workspace` is specified, processes and tasks use `~/.leo/workspace/`, and templates use `~/.leo/agents/`.
+When no `workspace` is specified, sessions and tasks use `~/.leo/workspace/`, and templates use `~/.leo/agents/`.

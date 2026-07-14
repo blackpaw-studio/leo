@@ -141,10 +141,8 @@ type templatesPageData struct {
 
 // buildTemplatesData assembles the templates list: a name-sorted table of
 // every configured template. Templates are blueprints for future ephemeral
-// agent spawns, not live processes, so unlike buildProcessesData/
-// buildTasksData there's no status/history to join in — just the config.
-// Cut over to this lightweight shape in Task 9, mirroring buildProcessesData
-// (Task 8) and buildTasksData (Task 7).
+// agent spawns, not live agents, so unlike buildTasksData there's no
+// status/history to join in — just the config.
 func (s *Server) buildTemplatesData(r *http.Request) (any, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -412,7 +410,7 @@ type templateEditData struct {
 // handleTemplateEditPage renders a single template's edit page: every
 // TemplateConfig field through the schema-driven form. Not wired through
 // handlePage because the page title is per-template and an unknown name must
-// 404 rather than 500. Mirrors handleProcessEditPage.
+// 404 rather than 500.
 func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 

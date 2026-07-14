@@ -16,7 +16,7 @@ templates:
       permission_mode: auto
 ```
 
-Templates support the same fields as processes (model, channels, harness, harness_options, env, etc.). See the [config reference](../configuration/config-reference.md#templates) and [Harnesses](../configuration/harnesses.md) for all fields.
+Templates support the same fields as persistent sessions (model, channels, harness, harness_options, env, etc.). See the [config reference](../configuration/config-reference.md#templates) and [Harnesses](../configuration/harnesses.md) for all fields.
 
 ## Dispatching Agents
 
@@ -145,9 +145,8 @@ Agent records are stored in `~/.leo/state/agents.json`. When the daemon restarts
 
 ## Supervisor Behavior
 
-Ephemeral agents use the same supervisor as regular processes:
+Ephemeral agents use the same supervisor as persistent sessions:
 
 - Auto-restart on exit with exponential backoff
 - Quick-exit detection (< 15s) clears stale sessions
 - Resume prompt auto-dismissal (the "Resume from summary" prompt is handled automatically)
-- process supervisor lifecycle (restart on crash, backoff)

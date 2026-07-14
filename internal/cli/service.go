@@ -87,11 +87,13 @@ func newServiceStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start service in the background",
-		Long: `Start the background supervisor, which launches every enabled process
-in its own tmux session with restart-on-crash. The CLI stays foreground-free
-so this is safe to call from shell scripts. Pass --daemon to install the
-supervisor as an OS service (launchd on macOS, systemd on Linux) so it
-survives reboots.`,
+		Long: `Start the leo daemon (web UI, cron scheduler, and agent supervision).
+It restores any previously running ephemeral agents and persistent task
+sessions, each in its own tmux session with restart-on-crash. The daemon no
+longer launches config-declared processes — agents and sessions are the only
+supervised primitives. The CLI stays foreground-free so this is safe to call
+from shell scripts. Pass --daemon to install the daemon as an OS service
+(launchd on macOS, systemd on Linux) so it survives reboots.`,
 		Example: `  # One-shot background start (this shell session)
   leo service start
 

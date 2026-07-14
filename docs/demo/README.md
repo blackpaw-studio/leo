@@ -24,7 +24,7 @@ Claude Code CLI, `agg`). Subsequent runs with `SKIP_BUILD=1` reuse the image.
 | File               | Purpose                                                    |
 |--------------------|------------------------------------------------------------|
 | `Dockerfile`       | Multi-stage image: builder compiles `leo`, runtime adds `tmux`, `asciinema`, `agg`, Claude Code |
-| `leo.yaml`         | Fictional demo config (2 processes, 4 tasks, 1 template)   |
+| `leo.yaml`         | Fictional demo config (4 tasks, 1 template)                |
 | `prompts/`         | Placeholder prompt files referenced by the tasks           |
 | `entrypoint.sh`    | Container entry: boots daemon, preloads agents, records    |
 | `script.sh`        | Typewriter demo recorded by asciinema (edit to change pacing / commands) |
@@ -41,7 +41,7 @@ Claude Code CLI, `agg`). Subsequent runs with `SKIP_BUILD=1` reuse the image.
 
 ## Why containerised
 
-- Runs against a generated `leo.yaml` with fictional process and task names
+- Runs against a generated `leo.yaml` with fictional task and template names
   — no sanitisation regexes needed
 - Reproducible: anyone with Docker can regenerate the GIF after a UI change
 - Isolated: doesn't touch the host's `~/.leo` or `~/.claude`

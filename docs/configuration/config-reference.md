@@ -6,13 +6,13 @@ Config lives at `~/.leo/leo.yaml` (the Leo home directory).
 
 ## `defaults`
 
-Settings inherited by all processes, tasks, and templates unless overridden.
+Settings inherited by all sessions, tasks, and templates unless overridden.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `model` | string | No | Default model, validated by the resolved harness (`claude`: `sonnet`, `opus`, `haiku`, `sonnet[1m]`, `opus[1m]`; `codex`: any non-whitespace string; `opencode`: must be `provider/model`). Defaults to `sonnet`. Does **not** cascade to a scope whose resolved `harness` differs from `defaults.harness` — see [Harnesses → Cross-harness model cascade](harnesses.md#cross-harness-model-cascade). |
 | `max_turns` | int | No | Default maximum agent turns per execution. Defaults to `15`. Ignored by `codex` and `opencode` (no per-turn cap upstream). |
-| `harness` | string | No | Adapter name for this scope and everything that cascades from it. One of `claude`, `codex`, `opencode`. Defaults to `claude`. All three run every leo primitive (tasks, processes, ephemeral agents, persistent sessions) — see [Harnesses](harnesses.md). |
+| `harness` | string | No | Adapter name for this scope and everything that cascades from it. One of `claude`, `codex`, `opencode`. Defaults to `claude`. All three run every leo primitive (tasks, ephemeral agents, persistent sessions) — see [Harnesses](harnesses.md). |
 | `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `sandbox`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
 | `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is suspended. Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
 
@@ -58,7 +58,7 @@ all rejected at config load and before every web-UI save. Full behavior
 | `bind` | string | No | `127.0.0.1` | Bind address. Loopback-only by default. |
 | `allowed_hosts` | list of strings | No | `[]` | Extra hostnames/IPs accepted in the `Host` and `Origin` headers, in addition to loopback. Required when `bind` is non-loopback. Entries must not include a port. |
 
-When enabled, the daemon serves a web dashboard with process monitoring, task management, agent dispatch, config editing, and cron preview.
+When enabled, the daemon serves a web dashboard with agent/session monitoring, task management, agent dispatch, config editing, and cron preview.
 
 ### Authentication
 
@@ -83,7 +83,7 @@ curl -H "Authorization: Bearer $(cat ~/.leo/state/api.token)" \
 
 Rotate the token by deleting `api.token` and restarting the daemon. Existing browser sessions remain valid until they expire (7 days).
 
-**Token scope.** The bearer token grants access to the full daemon API — including `/web/*` routes that can restart the service, mutate config, send keys to supervised processes, and write prompt files. Treat it like a root credential. Supervised Claude processes receive this token via `LEO_API_TOKEN` so the built-in MCP server can call `/api/*`; if you don't trust a channel plugin with full daemon access, don't install it as a supervised process.
+**Token scope.** The bearer token grants access to the full daemon API — including `/web/*` routes that can restart the service, mutate config, send keys to supervised agents/sessions, and write prompt files. Treat it like a root credential. Supervised Claude agents and sessions receive this token via `LEO_API_TOKEN` so the built-in MCP server can call `/api/*`; if you don't trust a channel plugin with full daemon access, don't install it as a supervised session.
 
 ### Non-loopback access
 
@@ -140,7 +140,7 @@ Resolution order for the target host: `--host` flag → `LEO_HOST` env → `defa
 
 ## Channels
 
-Leo does not ship with any built-in messaging channel. Channels are Claude Code plugins the user installs separately (e.g. Telegram, Slack, webhook). In `leo.yaml` they are referenced by plugin ID strings like `plugin:telegram@claude-plugins-official` on the `channels:` field of processes and tasks.
+Leo does not ship with any built-in messaging channel. Channels are Claude Code plugins the user installs separately (e.g. Telegram, Slack, webhook). In `leo.yaml` they are referenced by plugin ID strings like `plugin:telegram@claude-plugins-official` on the `channels:` field of sessions and tasks.
 
 Leo passes the resolved list to the spawned Claude process via the `LEO_CHANNELS` environment variable. The plugin owns its own credentials, routing, and inbound-message handling.
 
@@ -153,52 +153,27 @@ claude plugin install telegram@claude-plugins-official
 Then reference it:
 
 ```yaml
-processes:
+sessions:
   assistant:
+    workspace: ~/agents/assistant
     channels: [plugin:telegram@claude-plugins-official]
 ```
 
 ## Development Channels
 
-For channel plugins that aren't yet published to a registry (or for local plugin development), processes, tasks, and templates accept a parallel `dev_channels:` field. Leo passes each entry to Claude Code via `--dangerously-load-development-channels <id>` and exports the list in `LEO_DEV_CHANNELS`.
+For channel plugins that aren't yet published to a registry (or for local plugin development), sessions, tasks, and templates accept a parallel `dev_channels:` field. Leo passes each entry to Claude Code via `--dangerously-load-development-channels <id>` and exports the list in `LEO_DEV_CHANNELS`.
 
 ```yaml
-processes:
+sessions:
   assistant:
+    workspace: ~/agents/assistant
     channels: [plugin:blackpaw-telegram@blackpaw-plugins]
     dev_channels: [plugin:blackpaw-telegram@blackpaw-plugins]
 ```
 
 Validation matches `channels` — each entry must be a valid plugin ID.
 
-Claude Code displays a confirmation prompt before loading development channels. For supervised processes, Leo watches the tmux pane and auto-accepts the prompt so the session starts non-interactively. Silent/nonexistent entries are ignored by Claude Code without warning — verify spellings carefully.
-
-## `processes`
-
-Each process is a named entry under the `processes` map. Processes define long-running Claude sessions supervised by the daemon.
-
-```yaml
-processes:
-  assistant:
-    channels: [plugin:telegram@claude-plugins-official]
-    harness_options:
-      remote_control: true
-    enabled: true
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `workspace` | string | No | `~/.leo/workspace/` | Working directory for this process. |
-| `channels` | list | No | -- | Channel plugin IDs (e.g., `plugin:telegram@claude-plugins-official`). Only valid on a channel-supporting harness. |
-| `dev_channels` | list | No | -- | Unpublished channel plugin IDs loaded via `--dangerously-load-development-channels`. |
-| `model` | string | No | `defaults.model` | Model override, validated by the resolved harness. |
-| `harness` | string | No | `defaults.harness` | Adapter override for this process. All three harnesses support supervised processes. See [Harnesses](harnesses.md). |
-| `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. See [Harnesses](harnesses.md). |
-| `max_turns` | int | No | `defaults.max_turns` | Max turns override. |
-| `mcp_config` | string | No | `<workspace>/config/mcp-servers.json` | Path to MCP config file. |
-| `add_dirs` | list | No | -- | Additional directories passed via `--add-dir`. |
-| `env` | map | No | -- | Environment variables for the claude process. |
-| `enabled` | bool | No | `false` | Whether the service should start this process. |
+Claude Code displays a confirmation prompt before loading development channels. For supervised sessions, Leo watches the tmux pane and auto-accepts the prompt so the session starts non-interactively. Silent/nonexistent entries are ignored by Claude Code without warning — verify spellings carefully.
 
 ## `tasks`
 
@@ -268,7 +243,7 @@ When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, o
 ## `sessions`
 
 Sessions back **persistent tasks** (`runtime: persistent`) and are shared across
-firings and, optionally, across multiple tasks or a supervised process. See
+firings and, optionally, across multiple tasks. See
 the [Persistent Task Sessions guide](persistent-tasks.md) for the full
 mechanics (Stop hook, resume behavior, queueing, sharing).
 
@@ -285,7 +260,7 @@ sessions:
 | `workspace` | string | Yes | -- | Directory where the session's `.claude/` (or equivalent) lives. |
 | `model` | string | No | -- | Model override, validated by the resolved harness. Sessions do not cascade from `defaults.model`. |
 | `harness` | string | No | `defaults.harness` | Adapter override for this session. All three harnesses support persistent sessions. See [Harnesses](harnesses.md). |
-| `harness_options` | map | No | **not merged with `defaults.harness_options`** | Adapter-specific options — for `claude`: `agent`, `permission_mode`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. Unlike processes/templates/tasks, sessions do **not** inherit `defaults.harness_options` — set every option you want directly on the session. See [Harnesses](harnesses.md). |
+| `harness_options` | map | No | **not merged with `defaults.harness_options`** | Adapter-specific options — for `claude`: `agent`, `permission_mode`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. Unlike templates/tasks, sessions do **not** inherit `defaults.harness_options` — set every option you want directly on the session. See [Harnesses](harnesses.md). |
 | `add_dirs` | list | No | -- | Additional directories passed via `--add-dir`. |
 | `channels` | list | No | -- | Channel plugin IDs loaded for the session. Only valid on a channel-supporting harness (`claude`). Any task sharing this session must use a subset of these channels. |
 | `env` | map | No | -- | Environment variables for the session process, including `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` for a third-party endpoint. |
@@ -295,7 +270,7 @@ A session can be declared implicitly (a `runtime: persistent` task with no
 `session:` field gets a dedicated `leo-session-<task>` session), or declared
 explicitly under `sessions:` and referenced by name from one or more tasks
 via `tasks.<name>.session`. See [Persistent Task Sessions](persistent-tasks.md)
-for sharing patterns across tasks and supervised processes.
+for sharing patterns across tasks.
 
 ## Idle-suspend
 
@@ -352,8 +327,8 @@ model are inert and safe to delete; see the migration note in
 
 ## Override Cascade
 
-Process, task, and template settings override defaults:
+Session, task, and template settings override defaults:
 
 ```
-effective value = process/task/template value OR defaults value
+effective value = session/task/template value OR defaults value
 ```

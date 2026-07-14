@@ -703,7 +703,7 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 // straight to its edit page, where every other TemplateConfig field can be
 // set through the schema-driven form. Workspace is left empty ("") to
 // inherit the default workspace, matching the empty-means-inherit convention
-// handleProcessAdd already established. Mirrors handleProcessAdd.
+// used elsewhere in this file (e.g. handleHostAdd below).
 func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -743,7 +743,7 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 
 // handleTemplateDelete removes a template and sends htmx an HX-Redirect back
 // to the template list — the edit page the delete button lives on no longer
-// has anything to show once the template is gone. Mirrors handleProcessDelete.
+// has anything to show once the template is gone.
 func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -779,7 +779,7 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 // settings page itself (HX-Refresh, not a redirect to a separate edit page).
 // HostConfig has no fields Config.Validate() requires to be non-empty (no
 // ssh-non-empty check exists), so a genuinely empty HostConfig{} round-trips
-// through validateAndSave as-is, same as handleProcessAdd/handleTemplateAdd.
+// through validateAndSave as-is, same as handleTemplateAdd.
 // The flash message still tells the operator to fill in ssh via the card's
 // inline form before the host is usable.
 func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {

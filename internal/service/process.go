@@ -463,10 +463,13 @@ func Status(workDir string) (string, error) {
 	return "stopped", nil
 }
 
-// RunSupervised starts all processes in supervised mode with a restart loop.
-// It also starts the daemon IPC server for cron scheduling and process management.
+// RunSupervised starts the leo daemon: the web UI, cron scheduler, and the
+// daemon IPC server, then restores + supervises ephemeral agents and
+// persistent sessions (each in its own tmux session with a restart loop).
+// It no longer starts any config-declared "processes" — agents and sessions
+// are the only supervised primitives.
 // webToken is the daemon's API bearer token, propagated to the agent.Manager and
-// the RestoreAgents path so the supervised processes and any ephemeral agents can
+// the RestoreAgents path so restored/respawned agents and sessions can
 // authenticate against the daemon's web API.
 //
 // sessionSpecs is computed once by the caller via SessionSpecsFromConfig and
