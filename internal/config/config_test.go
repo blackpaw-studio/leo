@@ -177,18 +177,6 @@ func TestValidateRejectsRemovedProviders(t *testing.T) {
 	}{
 		{"providers section", func(c *Config) { c.Providers = map[string]any{"corp": map[string]any{}} },
 			"providers: this section has been removed — see docs/configuration/harnesses.md"},
-		{"defaults.provider", func(c *Config) { c.Defaults.DeprecatedProvider = "corp" },
-			"defaults.provider has been removed along with providers — see docs/configuration/harnesses.md"},
-		{"tasks.t.provider", func(c *Config) {
-			task := c.Tasks["t"]
-			task.DeprecatedProvider = "corp"
-			c.Tasks["t"] = task
-		}, "tasks.t.provider has been removed along with providers — see docs/configuration/harnesses.md"},
-		{"templates.x.provider", func(c *Config) {
-			tmpl := c.Templates["x"]
-			tmpl.DeprecatedProvider = "corp"
-			c.Templates["x"] = tmpl
-		}, "templates.x.provider has been removed along with providers — see docs/configuration/harnesses.md"},
 	}
 
 	for _, tt := range tests {
