@@ -51,44 +51,43 @@ func TestRoundTripTask(t *testing.T) {
 	}
 }
 
-// TestRoundTripProcessEnv covers the Env round trip previously bundled into
-// TestRoundTripProcessTriBool. The tri-bool (bypass_permissions/
+// TestRoundTripTemplateEnv covers the Env round trip previously bundled into
+// TestRoundTripProcessTriBool (renamed/reworked when the Processes section
+// was removed; TemplateConfig now carries the vehicle struct since it has
+// the same Env field shape). The tri-bool (bypass_permissions/
 // remote_control) round-trip coverage was removed along with those fields'
 // web-form registration (Task 7: claude flat fields moved to
 // harness_options — see internal/web/schema/registry.go's Excluded map).
-// ProcessConfig currently has no other *bool field to exercise KindTriBool
-// through the registry; schema_test.go's TestDeriveKind still covers the
-// *bool -> KindTriBool type-derivation logic directly. Re-add a
-// registry-backed round trip once a harness_options form field uses
-// KindTriBool.
-func TestRoundTripProcessEnv(t *testing.T) {
-	proc := config.ProcessConfig{
-		Enabled: true,
-		Model:   "opus",
-		Env:     map[string]string{"FOO": "bar", "BAZ": "qux"},
+// schema_test.go's TestDeriveKind still covers the *bool -> KindTriBool
+// type-derivation logic directly. Re-add a registry-backed round trip once a
+// harness_options form field uses KindTriBool.
+func TestRoundTripTemplateEnv(t *testing.T) {
+	tmpl := config.TemplateConfig{
+		Model: "opus",
+		Env:   map[string]string{"FOO": "bar", "BAZ": "qux"},
 	}
-	form := renderToForm(Values(&proc, SectionProcess, nil))
-	var got config.ProcessConfig
-	if err := Apply(&got, SectionProcess, form); err != nil {
+	form := renderToForm(Values(&tmpl, SectionTemplate, nil))
+	var got config.TemplateConfig
+	if err := Apply(&got, SectionTemplate, form); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if !reflect.DeepEqual(proc.Env, got.Env) {
-		t.Errorf("Env = %v, want %v", got.Env, proc.Env)
+	if !reflect.DeepEqual(tmpl.Env, got.Env) {
+		t.Errorf("Env = %v, want %v", got.Env, tmpl.Env)
 	}
 }
 
 func TestApplyClearsEmptied(t *testing.T) {
-	proc := config.ProcessConfig{MCPConfig: "mcp.json", Model: "opus"}
-	form := renderToForm(Values(&proc, SectionProcess, nil))
+	tmpl := config.TemplateConfig{MCPConfig: "mcp.json", Model: "opus"}
+	form := renderToForm(Values(&tmpl, SectionTemplate, nil))
 	form.Set("mcp_config", "") // user cleared the field
-	if err := Apply(&proc, SectionProcess, form); err != nil {
+	if err := Apply(&tmpl, SectionTemplate, form); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if proc.MCPConfig != "" {
-		t.Errorf("cleared field survived: %q", proc.MCPConfig)
+	if tmpl.MCPConfig != "" {
+		t.Errorf("cleared field survived: %q", tmpl.MCPConfig)
 	}
-	if proc.Model != "opus" {
-		t.Errorf("untouched field lost: %q", proc.Model)
+	if tmpl.Model != "opus" {
+		t.Errorf("untouched field lost: %q", tmpl.Model)
 	}
 }
 
@@ -102,27 +101,11 @@ func TestApplyRejectsBadNumber(t *testing.T) {
 }
 
 func TestApplyRejectsBadEnvLine(t *testing.T) {
-	var proc config.ProcessConfig
-	form := renderToForm(Values(&proc, SectionProcess, nil))
+	var tmpl config.TemplateConfig
+	form := renderToForm(Values(&tmpl, SectionTemplate, nil))
 	form.Set("env", "FOO=bar\nnot-an-assignment\n")
-	if err := Apply(&proc, SectionProcess, form); err == nil {
+	if err := Apply(&tmpl, SectionTemplate, form); err == nil {
 		t.Fatal("want error for env line without '=', got nil")
-	}
-}
-
-func TestPtrIntExplicitZeroSurvives(t *testing.T) {
-	zero := 0
-	proc := config.ProcessConfig{StaleResumeHours: &zero}
-	form := renderToForm(Values(&proc, SectionProcess, nil))
-	var got config.ProcessConfig
-	if err := Apply(&got, SectionProcess, form); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if got.StaleResumeHours == nil {
-		t.Fatal("StaleResumeHours = nil, want non-nil pointer to 0 (explicit disable)")
-	}
-	if *got.StaleResumeHours != 0 {
-		t.Errorf("StaleResumeHours = %d, want 0", *got.StaleResumeHours)
 	}
 }
 

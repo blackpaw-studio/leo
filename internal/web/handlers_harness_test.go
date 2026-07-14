@@ -15,7 +15,7 @@ import (
 
 // seedHarnessTestServer spins up the shared test server (web_test.go's
 // newTestServer) and immediately overwrites its on-disk config with cfg, so
-// these handler tests can seed arbitrary Processes/Tasks/Defaults instead of
+// these handler tests can seed arbitrary Tasks/Templates/Defaults instead of
 // the fixed testConfigYAML fixture — mirrors handlers_sessions_test.go's
 // config.Save seeding pattern.
 func seedHarnessTestServer(t *testing.T, cfg *config.Config) *Server {
@@ -51,25 +51,27 @@ func getStatus(t *testing.T, s *Server, path string) int {
 }
 
 func TestHarnessOptionsPartialRendersSelectedHarness(t *testing.T) {
-	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"b": {
+	cfg := &config.Config{Tasks: map[string]config.TaskConfig{"b": {
+		Schedule:       "@daily",
+		PromptFile:     "p.md",
 		HarnessOptions: map[string]any{"permission_mode": "plan"},
 	}}}
 	s := seedHarnessTestServer(t, cfg)
 
 	// Same harness as stored (claude via default) → stored values render.
-	body := getBody(t, s, "/web/partials/harness-options?section=process&scope=b&harness=claude")
+	body := getBody(t, s, "/web/partials/harness-options?section=task&scope=b&harness=claude")
 	if !strings.Contains(body, `name="harness_options.permission_mode"`) {
 		t.Errorf("claude partial missing permission_mode field: %s", body)
 	}
 	if !strings.Contains(body, `value="plan" selected`) {
 		t.Errorf("claude partial does not preselect stored value plan: %s", body)
 	}
-	if !strings.Contains(body, `hx-swap-oob`) || !strings.Contains(body, `dl-model-process-b`) {
+	if !strings.Contains(body, `hx-swap-oob`) || !strings.Contains(body, `dl-model-task-b`) {
 		t.Errorf("partial missing OOB datalist refresh: %s", body)
 	}
 
 	// Different harness → blank slate for that harness's fields.
-	body = getBody(t, s, "/web/partials/harness-options?section=process&scope=b&harness=codex")
+	body = getBody(t, s, "/web/partials/harness-options?section=task&scope=b&harness=codex")
 	if !strings.Contains(body, `name="harness_options.sandbox"`) {
 		t.Errorf("codex partial missing sandbox field: %s", body)
 	}
@@ -81,9 +83,9 @@ func TestHarnessOptionsPartialRendersSelectedHarness(t *testing.T) {
 func TestHarnessOptionsPartialRejectsUnknown(t *testing.T) {
 	s := seedHarnessTestServer(t, &config.Config{})
 	for _, path := range []string{
-		"/web/partials/harness-options?section=process&scope=nope&harness=claude", // unknown scope
-		"/web/partials/harness-options?section=bogus&scope=x&harness=claude",      // unknown section
-		"/web/partials/harness-options?section=defaults&harness=doesnotexist",     // unknown harness
+		"/web/partials/harness-options?section=task&scope=nope&harness=claude", // unknown scope
+		"/web/partials/harness-options?section=bogus&scope=x&harness=claude",   // unknown section
+		"/web/partials/harness-options?section=defaults&harness=doesnotexist",  // unknown harness
 	} {
 		if code := getStatus(t, s, path); code != http.StatusBadRequest && code != http.StatusNotFound {
 			t.Errorf("%s → %d, want 400/404", path, code)
@@ -124,27 +126,30 @@ var hxGetPattern = regexp.MustCompile(`hx-get="([^"]*harness-options[^"]*)"`)
 
 // TestHarnessSelectHxGetRoundTrips is the regression test for the bug fixed
 // by scopeSuffix: form.html's harness-select hx-get URL must carry the RAW
-// config map key ("b"), not the element-id suffix ("process-b"), because
-// locateHarnessScope (and every cfg.Processes[name]-style lookup behind it)
-// keys on the raw name. It renders the REAL process edit page — the actual
-// production wiring (handleProcessEditPage → buildFormWithHarness →
-// form.html), not a hand-built formData — and fires the exact hx-get URL
-// the page emits back through the test server, which is what the old
-// hand-typed-query-string tests structurally missed (they'd have passed
-// unchanged against the buggy code).
+// config map key ("b"), not the element-id suffix ("task-b"), because
+// locateHarnessScope (and every cfg.Tasks[name]-style lookup behind it) keys
+// on the raw name. It renders the REAL task edit page — the actual
+// production wiring (handleTaskEditPage → buildFormWithHarness → form.html),
+// not a hand-built formData — and fires the exact hx-get URL the page emits
+// back through the test server, which is what the old hand-typed-query-string
+// tests structurally missed (they'd have passed unchanged against the buggy
+// code). Formerly rendered the process edit page before the Processes
+// section was removed.
 func TestHarnessSelectHxGetRoundTrips(t *testing.T) {
 	cfg := &config.Config{
-		Processes: map[string]config.ProcessConfig{"b": {
+		Tasks: map[string]config.TaskConfig{"b": {
+			Schedule:       "@daily",
+			PromptFile:     "p.md",
 			HarnessOptions: map[string]any{"permission_mode": "plan"},
 		}},
 	}
 	s := seedHarnessTestServer(t, cfg)
 
-	body := getBody(t, s, "/processes/b")
+	body := getBody(t, s, "/tasks/b")
 
 	m := hxGetPattern.FindStringSubmatch(body)
 	if m == nil {
-		t.Fatalf("harness select hx-get URL not found on process edit page: %s", body)
+		t.Fatalf("harness select hx-get URL not found on task edit page: %s", body)
 	}
 	hxGetURL := m[1]
 

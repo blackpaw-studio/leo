@@ -77,7 +77,7 @@ func TestTryForUnknownSourceReturnsNil(t *testing.T) {
 }
 
 func TestHarnessFieldRegisteredOnConfigSections(t *testing.T) {
-	for _, section := range []Section{SectionDefaults, SectionProcess, SectionTask, SectionTemplate, SectionSession} {
+	for _, section := range []Section{SectionDefaults, SectionTask, SectionTemplate, SectionSession} {
 		found := false
 		for _, f := range FieldsFor(section) {
 			if f.Key == "harness" {

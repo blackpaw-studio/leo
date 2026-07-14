@@ -34,7 +34,6 @@ type Section string
 
 const (
 	SectionDefaults   Section = "defaults"
-	SectionProcess    Section = "process"
 	SectionTask       Section = "task"
 	SectionTemplate   Section = "template"
 	SectionSession    Section = "session"
@@ -46,7 +45,7 @@ const (
 // AllSections returns every section in stable order.
 func AllSections() []Section {
 	return []Section{
-		SectionDefaults, SectionProcess, SectionTask, SectionTemplate,
+		SectionDefaults, SectionTask, SectionTemplate,
 		SectionSession, SectionClientHost, SectionWeb,
 		SectionClient,
 	}
@@ -57,8 +56,6 @@ func StructFor(s Section) reflect.Type {
 	switch s {
 	case SectionDefaults:
 		return reflect.TypeOf(config.DefaultsConfig{})
-	case SectionProcess:
-		return reflect.TypeOf(config.ProcessConfig{})
 	case SectionTask:
 		return reflect.TypeOf(config.TaskConfig{})
 	case SectionTemplate:

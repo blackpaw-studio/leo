@@ -93,10 +93,6 @@ func locateHarnessScope(cfg *config.Config, section schema.Section, name string)
 	switch section {
 	case schema.SectionDefaults:
 		return &cfg.Defaults, scopeSuffix(section, name), true
-	case schema.SectionProcess:
-		if p, ok := cfg.Processes[name]; ok {
-			return &p, scopeSuffix(section, name), true
-		}
 	case schema.SectionTask:
 		if t, ok := cfg.Tasks[name]; ok {
 			return &t, scopeSuffix(section, name), true

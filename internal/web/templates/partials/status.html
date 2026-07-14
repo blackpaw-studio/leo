@@ -2,7 +2,7 @@
 <div id="status-banner" hx-get="/partials/status" hx-trigger="every 5s" hx-swap="outerHTML">
     <div class="statusline">
         <b>Leo</b>
-        <span>{{.Status.ProcessCount}} processes &middot; {{.Status.TaskCount}} tasks</span>
+        <span>{{.Status.TaskCount}} tasks</span>
         {{if .Status.NextRunName}}<span>next: <b>{{.Status.NextRunName}}</b> {{relativeTime .Status.NextRunTime}}</span>{{end}}
     </div>
     {{if .RestartNeeded}}

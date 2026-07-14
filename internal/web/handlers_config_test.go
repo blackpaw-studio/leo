@@ -104,39 +104,7 @@ func readFile(t *testing.T, path string) string {
 	return string(b)
 }
 
-// baselineProcessForm renders the named process's current config into a base
-// url.Values set, using the same Kind-driven encoding as taskFormBase/
-// templateFormBase above, plus an empty harness_options.* input for every key
-// in every registered harness's schema. Every registered field renders in the
-// real form, so a real POST carries them all; schema.Apply/ApplyHarnessOptions
-// zero absent fields, so a hand-built partial form would corrupt unrelated
-// fields on save.
-func baselineProcessForm(t *testing.T, s *Server, name string) url.Values {
-	t.Helper()
-	cfg, err := s.loadConfig()
-	if err != nil {
-		t.Fatalf("loading config: %v", err)
-	}
-	p, ok := cfg.Processes[name]
-	if !ok {
-		t.Fatalf("seed process %q not found", name)
-	}
-	form := url.Values{}
-	for _, fv := range schema.Values(&p, schema.SectionProcess, nil) {
-		switch fv.Kind {
-		case schema.KindBool:
-			form.Add(fv.Key, "false")
-			if fv.Checked {
-				form.Add(fv.Key, "true")
-			}
-		default:
-			form.Set(fv.Key, fv.Value)
-		}
-	}
-	return form
-}
-
-// baselineSessionForm is baselineProcessForm's session-scope counterpart.
+// baselineSessionForm is taskFormBase's session-scope counterpart.
 func baselineSessionForm(t *testing.T, s *Server, name string) url.Values {
 	t.Helper()
 	cfg, err := s.loadConfig()
@@ -447,89 +415,8 @@ func TestTaskDeleteRedirectsToList(t *testing.T) {
 	}
 }
 
-// TestProcessEditPageShowsAllFields is the "17 fields" self-review check:
-// every ProcessConfig field must render on /processes/{name}, either in the
-// primary form or inside the Advanced <details>.
-func TestProcessEditPageShowsAllFields(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/processes/assistant", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-
-	for _, key := range []string{
-		"enabled", "workspace", "model", "max_turns",
-		"channels", "dev_channels", "mcp_config", "add_dirs", "env",
-		"stale_resume_hours",
-	} {
-		if !strings.Contains(body, `name="`+key+`"`) {
-			t.Errorf("process edit page missing field %q", key)
-		}
-	}
-}
-
-// TestProcessEditPageNotFound guards the 404 branch of handleProcessEditPage:
-// an unknown process name must not fall through to a 200 empty-form page.
-func TestProcessEditPageNotFound(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/processes/does-not-exist", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", w.Code)
-	}
-}
-
-// TestProcessAddRedirectsToEdit exercises the add-then-edit flow: adding a
-// process creates a bare (disabled, name-only) entry and 303s straight to its
-// edit page, mirroring TestTaskAddRedirectsToEdit.
-func TestProcessAddRedirectsToEdit(t *testing.T) {
-	s, dir := newTestServer(t)
-	form := url.Values{"name": {"fresh-process"}}
-	w := postForm(t, s, "/web/process/add", form)
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/processes/fresh-process" {
-		t.Errorf("add: status=%d loc=%q", w.Code, w.Header().Get("Location"))
-	}
-	cfg := reloadTestConfig(t, dir)
-	proc, ok := cfg.Processes["fresh-process"]
-	if !ok {
-		t.Fatal("process not created")
-	}
-	if proc.Enabled {
-		t.Error("new process should start disabled")
-	}
-}
-
-// TestProcessDeleteRedirectsToList guards the edit page's delete button: on
-// success the handler must send HX-Redirect: /processes so htmx navigates
-// the browser back to the list.
-func TestProcessDeleteRedirectsToList(t *testing.T) {
-	s, dir := newTestServer(t)
-
-	req := httptest.NewRequest(http.MethodDelete, "/web/process/assistant", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body = %s", w.Code, readBody(t, w))
-	}
-	if loc := w.Header().Get("HX-Redirect"); loc != "/processes" {
-		t.Errorf("HX-Redirect = %q, want /processes", loc)
-	}
-
-	cfg := reloadTestConfig(t, dir)
-	if _, ok := cfg.Processes["assistant"]; ok {
-		t.Error("process should have been deleted")
-	}
-}
-
 // TestTemplateSaveNewFields guards handleConfigTemplateSave against the same
-// registry-drift risk Task 6/8 covered for defaults/processes: idle_suspend_after
+// registry-drift risk Task 6 covered for defaults: idle_suspend_after
 // was entirely missing from the old hand-rolled handleConfigTemplate, and must
 // round-trip through the schema-driven save path.
 func TestTemplateSaveNewFields(t *testing.T) {
@@ -907,28 +794,28 @@ func TestPageConfigSettingsListsHostCards(t *testing.T) {
 	}
 }
 
-// TestBuildFormWithHarnessProcess is this task's TDD anchor: it exercises
-// the harness sub-form's own-value/inherited-placeholder cascade and the
-// harness-aware model datalist for a process scope. Adapted from the brief's
-// sketch to this package's actual newTestServer(t) constructor — cfg is
-// passed straight into buildFormWithHarness rather than loaded from disk.
-func TestBuildFormWithHarnessProcess(t *testing.T) {
+// TestBuildFormWithHarnessTask exercises the harness sub-form's own-value/
+// inherited-placeholder cascade and the harness-aware model datalist for a
+// task scope. Formerly exercised a process scope before the Processes
+// section was removed; cfg is passed straight into buildFormWithHarness
+// rather than loaded from disk.
+func TestBuildFormWithHarnessTask(t *testing.T) {
 	cfg := &config.Config{
 		Defaults: config.DefaultsConfig{Harness: "claude",
 			HarnessOptions: map[string]any{"permission_mode": "auto"}},
-		Processes: map[string]config.ProcessConfig{"builder": {
+		Tasks: map[string]config.TaskConfig{"builder": {
 			Workspace:      "/w",
 			HarnessOptions: map[string]any{"permission_mode": "plan"},
 		}},
 	}
 	s, _ := newTestServer(t)
-	p := cfg.Processes["builder"]
-	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "builder")
+	task := cfg.Tasks["builder"]
+	fd := s.buildFormWithHarness(schema.SectionTask, &task, cfg, "/web/config/task/builder", "builder")
 
 	if fd.Harness == nil || fd.Harness.Harness != "claude" {
 		t.Fatalf("Harness sub-form = %+v, want claude", fd.Harness)
 	}
-	if fd.Scope != "process-builder" || fd.Harness.Scope != "process-builder" {
+	if fd.Scope != "task-builder" || fd.Harness.Scope != "task-builder" {
 		t.Errorf("scope not threaded: %q / %q", fd.Scope, fd.Harness.Scope)
 	}
 	byKey := map[string]schema.HarnessFieldValue{}
@@ -943,7 +830,7 @@ func TestBuildFormWithHarnessProcess(t *testing.T) {
 			if len(f.Opts) == 0 {
 				t.Error("claude model field has no datalist suggestions")
 			}
-			if f.Scope != "process-builder" {
+			if f.Scope != "task-builder" {
 				t.Errorf("model field Scope = %q", f.Scope)
 			}
 		}
@@ -955,10 +842,10 @@ func TestBuildFormWithHarnessProcess(t *testing.T) {
 // don't share an options namespace) and that a non-claude model field gets a
 // format hint instead of datalist suggestions.
 func TestBuildFormWithHarnessNonClaudeModelHint(t *testing.T) {
-	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"c": {Harness: "codex"}}}
+	cfg := &config.Config{Tasks: map[string]config.TaskConfig{"c": {Harness: "codex"}}}
 	s, _ := newTestServer(t)
-	p := cfg.Processes["c"]
-	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/a", "c")
+	task := cfg.Tasks["c"]
+	fd := s.buildFormWithHarness(schema.SectionTask, &task, cfg, "/a", "c")
 	if fd.Harness == nil || fd.Harness.Harness != "codex" {
 		t.Fatalf("want codex sub-form, got %+v", fd.Harness)
 	}
@@ -983,14 +870,14 @@ func TestBuildFormWithHarnessNonClaudeModelHint(t *testing.T) {
 // error on save.
 func TestBuildFormWithHarnessUnregisteredHarness(t *testing.T) {
 	cfg := &config.Config{
-		Processes: map[string]config.ProcessConfig{"broken": {
+		Tasks: map[string]config.TaskConfig{"broken": {
 			Workspace: "/w",
 			Harness:   "bogus",
 		}},
 	}
 	s, _ := newTestServer(t)
-	p := cfg.Processes["broken"]
-	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/broken", "broken")
+	task := cfg.Tasks["broken"]
+	fd := s.buildFormWithHarness(schema.SectionTask, &task, cfg, "/web/config/task/broken", "broken")
 
 	if fd.Harness != nil {
 		t.Errorf("Harness sub-form = %+v, want nil for unregistered harness", fd.Harness)
@@ -1033,11 +920,11 @@ func TestSessionsFormNeverInheritsHarnessOptions(t *testing.T) {
 // the rendered HTML.
 func TestConfigFormRendersHarnessOptionsSubForm(t *testing.T) {
 	cfg := &config.Config{
-		Processes: map[string]config.ProcessConfig{"builder": {Workspace: "/w"}},
+		Tasks: map[string]config.TaskConfig{"builder": {Workspace: "/w"}},
 	}
 	s, _ := newTestServer(t)
-	p := cfg.Processes["builder"]
-	fd := s.buildFormWithHarness(schema.SectionProcess, &p, cfg, "/web/config/process/builder", "builder")
+	task := cfg.Tasks["builder"]
+	fd := s.buildFormWithHarness(schema.SectionTask, &task, cfg, "/web/config/task/builder", "builder")
 
 	var buf strings.Builder
 	if err := s.templates.ExecuteTemplate(&buf, "config_form", fd); err != nil {
@@ -1050,37 +937,38 @@ func TestConfigFormRendersHarnessOptionsSubForm(t *testing.T) {
 	if !strings.Contains(body, "Harness options") {
 		t.Errorf("missing Harness options group label: %s", body)
 	}
-	if !strings.Contains(body, `list="dl-model-process-builder"`) {
+	if !strings.Contains(body, `list="dl-model-task-builder"`) {
 		t.Errorf("missing model datalist wiring: %s", body)
 	}
-	if !strings.Contains(body, `<datalist id="dl-model-process-builder">`) {
+	if !strings.Contains(body, `<datalist id="dl-model-task-builder">`) {
 		t.Errorf("missing model datalist element: %s", body)
 	}
 }
 
-// TestSaveProcessWithHarnessOptions is this task's TDD anchor: a harness
-// change and its harness_options must land atomically in one POST — the
-// options are decoded against the *submitted* harness (codex), not whatever
-// the process had before the save.
-func TestSaveProcessWithHarnessOptions(t *testing.T) {
-	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"b": {Workspace: "/w"}}}
+// TestSaveTaskWithHarnessOptions pins that a harness change and its
+// harness_options land atomically in one POST — the options are decoded
+// against the *submitted* harness (codex), not whatever the task had before
+// the save. Formerly exercised a process scope before the Processes section
+// was removed.
+func TestSaveTaskWithHarnessOptions(t *testing.T) {
+	cfg := &config.Config{Tasks: map[string]config.TaskConfig{"b": {Workspace: "/w", Schedule: "0 9 * * *", PromptFile: "p.md"}}}
 	s, cfgPath := newTestServerWithConfigFile(t, cfg)
 
-	form := baselineProcessForm(t, s, "b")
+	form := taskFormBase(t, s, "b")
 	form.Set("harness", "codex")
 	form.Set("harness_options.sandbox", "workspace-write")
-	w := postForm(t, s, "/web/config/process/b", form)
+	w := postForm(t, s, "/web/config/task/b", form)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
 	}
 
 	saved := loadConfigFile(t, cfgPath)
-	p := saved.Processes["b"]
-	if p.Harness != "codex" {
-		t.Errorf("Harness = %q, want codex", p.Harness)
+	task := saved.Tasks["b"]
+	if task.Harness != "codex" {
+		t.Errorf("Harness = %q, want codex", task.Harness)
 	}
-	if got := p.HarnessOptions["sandbox"]; got != "workspace-write" {
-		t.Errorf("HarnessOptions = %#v", p.HarnessOptions)
+	if got := task.HarnessOptions["sandbox"]; got != "workspace-write" {
+		t.Errorf("HarnessOptions = %#v", task.HarnessOptions)
 	}
 }
 
@@ -1090,14 +978,14 @@ func TestSaveProcessWithHarnessOptions(t *testing.T) {
 // never reach disk, even though ApplyHarnessOptions itself accepted the raw
 // string (enum validation lives in the adapter, not the form parser).
 func TestSaveRejectsBadHarnessOptionAndWritesNothing(t *testing.T) {
-	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"b": {Workspace: "/w"}}}
+	cfg := &config.Config{Tasks: map[string]config.TaskConfig{"b": {Workspace: "/w", Schedule: "0 9 * * *", PromptFile: "p.md"}}}
 	s, cfgPath := newTestServerWithConfigFile(t, cfg)
 	before := readFile(t, cfgPath)
 
-	form := baselineProcessForm(t, s, "b")
+	form := taskFormBase(t, s, "b")
 	form.Set("harness", "codex")
 	form.Set("harness_options.sandbox", "bogus")
-	w := postForm(t, s, "/web/config/process/b", form)
+	w := postForm(t, s, "/web/config/task/b", form)
 	body := readBody(t, w)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save: %d, body=%s", w.Code, body)
@@ -1115,14 +1003,16 @@ func TestSaveRejectsBadHarnessOptionAndWritesNothing(t *testing.T) {
 // save with every harness_options.* input blank must clear the scope's
 // stored options entirely (nil map -> omitempty), not persist an empty map.
 func TestSaveEmptyOptionsOmitsHarnessOptionsKey(t *testing.T) {
-	cfg := &config.Config{Processes: map[string]config.ProcessConfig{"b": {
+	cfg := &config.Config{Tasks: map[string]config.TaskConfig{"b": {
 		Workspace:      "/w",
+		Schedule:       "0 9 * * *",
+		PromptFile:     "p.md",
 		HarnessOptions: map[string]any{"permission_mode": "plan"},
 	}}}
 	s, cfgPath := newTestServerWithConfigFile(t, cfg)
 
-	form := baselineProcessForm(t, s, "b") // all harness_options.* inputs empty
-	w := postForm(t, s, "/web/config/process/b", form)
+	form := taskFormBase(t, s, "b") // all harness_options.* inputs empty
+	w := postForm(t, s, "/web/config/task/b", form)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
 	}

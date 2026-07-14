@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -194,7 +193,7 @@ func TestPageRoutes(t *testing.T) {
 	s, _ := newTestServer(t)
 
 	pages := []string{
-		"/tasks", "/agents", "/processes", "/sessions",
+		"/tasks", "/agents", "/sessions",
 		"/config/defaults", "/config/templates",
 		"/config/settings", "/service",
 	}
@@ -256,22 +255,6 @@ func TestPageTasksReturns200(t *testing.T) {
 	}
 }
 
-func TestPageProcessesReturns200(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	req := httptest.NewRequest("GET", "/processes", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "assistant") {
-		t.Error("expected page to contain process name 'assistant'")
-	}
-}
-
 func TestStaticServing(t *testing.T) {
 	s, _ := newTestServer(t)
 
@@ -304,22 +287,6 @@ func TestPartialStatusReturnsFragment(t *testing.T) {
 	}
 	if !strings.Contains(body, "status-banner") {
 		t.Error("expected status banner fragment")
-	}
-}
-
-func TestPartialProcessesReturnsFragment(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	req := httptest.NewRequest("GET", "/partials/processes", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "assistant") {
-		t.Error("expected process card for 'assistant'")
 	}
 }
 
@@ -403,25 +370,6 @@ func TestPageConfigDefaultsShowsModel(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "sonnet") {
 		t.Error("expected defaults page to show model 'sonnet'")
-	}
-}
-
-func TestPageProcessesShowsManageForm(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	req := httptest.NewRequest("GET", "/processes", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "assistant") {
-		t.Error("expected processes page to show 'assistant'")
-	}
-	if !strings.Contains(body, "New process") {
-		t.Error("expected processes page to show add form")
 	}
 }
 
@@ -513,7 +461,7 @@ defaults:
 
 	s := New(cfgPath, nil, nil, nil, nil, Options{Port: testPort, APIToken: testAPIToken})
 
-	req := httptest.NewRequest("GET", "/processes", nil)
+	req := httptest.NewRequest("GET", "/tasks", nil)
 	req.Host = testHost
 	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	w := httptest.NewRecorder()
@@ -523,20 +471,6 @@ defaults:
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "No processes configured") {
-		t.Error("expected empty state message for processes")
-	}
-
-	req = httptest.NewRequest("GET", "/tasks", nil)
-	req.Host = testHost
-	req.Header.Set("Authorization", "Bearer "+testAPIToken)
-	w = httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-	body = w.Body.String()
 	if !strings.Contains(body, "No enabled tasks") {
 		t.Error("expected empty state message for tasks")
 	}
@@ -877,223 +811,5 @@ func TestTaskPromptSave_NoFileSelected(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "No prompt file selected") {
 		t.Errorf("response should contain 'No prompt file selected', got: %s", body)
-	}
-}
-
-func TestProcessMessageSendsLiteralThenEnter(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	oldPoll := messageInputPoll
-	messageInputPoll = time.Millisecond
-	defer func() { messageInputPoll = oldPoll }()
-
-	var calls [][]string
-	s.execCommand = func(name string, args ...string) *exec.Cmd {
-		calls = append(calls, args)
-		if argsContain(args, "capture-pane") {
-			return exec.Command("echo", "❯ Enter the build status please")
-		}
-		return exec.Command("true") // harmless no-op
-	}
-
-	body := strings.NewReader(`{"text":"Enter the build status please"}`)
-	req := httptest.NewRequest("POST", "/web/process/assistant/message", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
-	}
-	first := strings.Join(calls[0], " ")
-	if !strings.Contains(first, "send-keys") || !strings.Contains(first, "-l") ||
-		!strings.Contains(first, "leo-assistant") || !strings.Contains(first, "Enter the build status please") {
-		t.Errorf("first call should be literal send to leo-assistant; got %v", calls[0])
-	}
-	last := calls[len(calls)-1]
-	if last[len(last)-1] != "Enter" {
-		t.Errorf("last call should submit with Enter; got %v", last)
-	}
-}
-
-// argsContain reports whether a tmux arg slice includes sub (e.g. "capture-pane").
-func argsContain(args []string, sub string) bool {
-	for _, a := range args {
-		if a == sub {
-			return true
-		}
-	}
-	return false
-}
-
-// TestProcessMessageConfirmsInputBeforeEnter guards the fix for the
-// intermittent "Enter not registered" bug: an Enter fired in the same input
-// burst as the literal text is treated by claude's Ink REPL as a newline, not
-// a submit, leaving the message unsent. The handler must capture-pane and
-// confirm the typed text landed in the input box before sending Enter.
-func TestProcessMessageConfirmsInputBeforeEnter(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	oldPoll := messageInputPoll
-	messageInputPoll = time.Millisecond
-	defer func() { messageInputPoll = oldPoll }()
-
-	var calls [][]string
-	s.execCommand = func(name string, args ...string) *exec.Cmd {
-		calls = append(calls, args)
-		if argsContain(args, "capture-pane") {
-			return exec.Command("echo", "❯ hello there") // text landed
-		}
-		return exec.Command("true")
-	}
-
-	body := strings.NewReader(`{"text":"hello there"}`)
-	req := httptest.NewRequest("POST", "/web/process/assistant/message", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
-	}
-
-	// First call: literal text send.
-	if !argsContain(calls[0], "-l") || !argsContain(calls[0], "hello there") {
-		t.Errorf("first call should be literal text send; got %v", calls[0])
-	}
-	// Last call: Enter submit.
-	last := calls[len(calls)-1]
-	if last[len(last)-1] != "Enter" {
-		t.Errorf("last call should submit with Enter; got %v", last)
-	}
-	// A capture-pane must occur between the literal send and the Enter — the
-	// confirmation that breaks the paste/submit race.
-	enterIdx := len(calls) - 1
-	sawCaptureBeforeEnter := false
-	for i := 1; i < enterIdx; i++ {
-		if argsContain(calls[i], "capture-pane") {
-			sawCaptureBeforeEnter = true
-		}
-	}
-	if !sawCaptureBeforeEnter {
-		t.Errorf("handler must capture-pane to confirm input before Enter; calls=%v", calls)
-	}
-}
-
-// TestProcessMessageFallsOpenWhenInputNeverConfirms ensures a message is never
-// silently dropped: if the input box never reflects the typed text within the
-// bounded poll window (busy/mid-turn or unreadable pane), the handler still
-// submits with Enter rather than hanging or skipping the send.
-func TestProcessMessageFallsOpenWhenInputNeverConfirms(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	oldPoll, oldAttempts := messageInputPoll, messageInputAttempts
-	messageInputPoll, messageInputAttempts = time.Millisecond, 3
-	defer func() { messageInputPoll, messageInputAttempts = oldPoll, oldAttempts }()
-
-	var calls [][]string
-	captureCount := 0
-	s.execCommand = func(name string, args ...string) *exec.Cmd {
-		calls = append(calls, args)
-		if argsContain(args, "capture-pane") {
-			captureCount++
-			return exec.Command("echo", "❯ ") // empty input box — never confirms
-		}
-		return exec.Command("true")
-	}
-
-	body := strings.NewReader(`{"text":"hi"}`)
-	req := httptest.NewRequest("POST", "/web/process/assistant/message", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
-	}
-	// Polling is bounded — must not exceed the attempt budget.
-	if captureCount > messageInputAttempts {
-		t.Errorf("capture-pane polled %d times, want <= %d", captureCount, messageInputAttempts)
-	}
-	// Falls open: Enter is still sent so the message is delivered.
-	last := calls[len(calls)-1]
-	if last[len(last)-1] != "Enter" {
-		t.Errorf("handler should fall open and still submit with Enter; got %v", last)
-	}
-}
-
-func TestProcessMessageUnknownTargetListsRecipients(t *testing.T) {
-	s, _ := newTestServer(t) // mock has process "assistant"
-
-	body := strings.NewReader(`{"text":"hi"}`)
-	req := httptest.NewRequest("POST", "/web/process/ghost/message", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != 404 {
-		t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "assistant") {
-		t.Errorf("not-found error should list recipients; got %s", w.Body.String())
-	}
-}
-
-func TestProcessMessageRejectsEmptyText(t *testing.T) {
-	s, _ := newTestServer(t)
-	body := strings.NewReader(`{"text":""}`)
-	req := httptest.NewRequest("POST", "/web/process/assistant/message", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != 400 {
-		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
-	}
-}
-
-// TestProcessMessageLeoPrefixedTargetUsesSingleLeoPrefix guards against the
-// double-prefix bug: agents whose canonical name already starts with "leo-"
-// (e.g. renamed agents and auto-named leo-coding-* agents) have a tmux session
-// named exactly after their canonical name, not "leo-"+name. The handler must
-// resolve the session via agent.SessionName, which keeps a single prefix.
-func TestProcessMessageLeoPrefixedTargetUsesSingleLeoPrefix(t *testing.T) {
-	s, _ := newTestServer(t)
-
-	oldPoll, oldAttempts := messageInputPoll, messageInputAttempts
-	messageInputPoll, messageInputAttempts = time.Millisecond, 2
-	defer func() { messageInputPoll, messageInputAttempts = oldPoll, oldAttempts }()
-
-	s.processes.(*mockProcesses).states["leo-coding-foo"] = ProcessStateInfo{
-		Name:   "leo-coding-foo",
-		Status: "running",
-	}
-
-	var calls [][]string
-	s.execCommand = func(name string, args ...string) *exec.Cmd {
-		calls = append(calls, args)
-		return exec.Command("true")
-	}
-
-	body := strings.NewReader(`{"text":"hello"}`)
-	req := httptest.NewRequest("POST", "/web/process/leo-coding-foo/message", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
-	}
-	if len(calls) == 0 {
-		t.Fatal("expected at least one tmux call")
-	}
-	for i, call := range calls {
-		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "leo-leo-coding-foo") {
-			t.Errorf("call %d targets double-prefixed session: %v", i, call)
-		}
-		if !strings.Contains(joined, "leo-coding-foo") {
-			t.Errorf("call %d should target leo-coding-foo: %v", i, call)
-		}
 	}
 }

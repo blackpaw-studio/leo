@@ -235,8 +235,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /tasks", s.handlePage("tasks", "Tasks", s.buildTasksData))
 	mux.HandleFunc("GET /tasks/{name}", s.handleTaskEditPage)
 	mux.HandleFunc("GET /agents", s.handlePage("agents", "Agents", s.buildAgentsData))
-	mux.HandleFunc("GET /processes", s.handlePage("processes", "Processes", s.buildProcessesData))
-	mux.HandleFunc("GET /processes/{name}", s.handleProcessEditPage)
 	mux.HandleFunc("GET /sessions", s.handlePage("sessions", "Sessions", s.buildSessionsData))
 	mux.HandleFunc("GET /config/defaults", s.handlePage("config_defaults", "Defaults", s.buildDefaultsData))
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
@@ -246,7 +244,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 
 	// Partials (htmx polling targets)
 	mux.HandleFunc("GET /partials/status", s.handlePartialStatus)
-	mux.HandleFunc("GET /partials/processes", s.handlePartialProcesses)
 	mux.HandleFunc("GET /partials/task/{name}/history", s.handlePartialTaskHistory)
 	mux.HandleFunc("GET /partials/task/{name}/log", s.handleTaskRunLog)
 
@@ -261,12 +258,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Config mutations
 	mux.HandleFunc("POST /web/config/reload", s.handleConfigReload)
 	mux.HandleFunc("POST /web/config/defaults", s.handleConfigDefaultsSave)
-	mux.HandleFunc("POST /web/config/process/{name}", s.handleConfigProcessSave)
 	mux.HandleFunc("POST /web/config/task/{name}", s.handleConfigTaskSave)
-
-	// Process CRUD
-	mux.HandleFunc("POST /web/process/add", s.handleProcessAdd)
-	mux.HandleFunc("DELETE /web/process/{name}", s.handleProcessDelete)
 
 	// Task CRUD
 	mux.HandleFunc("POST /web/task/add", s.handleTaskAdd)
@@ -301,10 +293,6 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("GET /web/service/logtail", s.handleServiceLogTail)
-	mux.HandleFunc("POST /web/process/{name}/interrupt", s.handleProcessInterrupt)
-	mux.HandleFunc("POST /web/process/{name}/restart", s.handleProcessRestart)
-	mux.HandleFunc("POST /web/process/{name}/send", s.handleProcessSendKeys)
-	mux.HandleFunc("POST /web/process/{name}/message", s.handleProcessMessage)
 
 	// Agent management (web UI). handlePartialAgents (agents.html re-render
 	// after a rename) is invoked directly by handleWebAgentRename, not
