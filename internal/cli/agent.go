@@ -183,9 +183,11 @@ func newAgentSpawnCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "spawn <template> [repo]",
 		Short: "Spawn a new agent from a template",
-		Long: `Spawn a new ephemeral agent from a template. Repo can be passed as a
-positional arg or via --repo. Use owner/repo to clone a canonical repo, or a
-plain name to reuse the template workspace.
+		Long: `Spawn a new ephemeral agent from a template. Repo is optional and can be
+passed as a positional arg or via --repo. Use owner/repo to clone a canonical
+repo, a plain name to reuse the template workspace under a per-name subdir, or
+omit it entirely to run the template as-is directly in its own workspace (the
+agent is named after the template).
 
 When repo is slashless and matches an existing agent's short name, the CLI
 prompts the user for how to proceed: attach to the existing agent, spawn using
@@ -194,8 +196,9 @@ repo is slashed (owner/repo) and an agent already targets the same repo and
 branch, the CLI prompts to attach or spawn a fresh suffixed agent. The prompt
 is skipped in non-interactive runs (no TTY) — in that case the command errors
 unless --attach-existing or --reuse-owner is set. Flags override the prompt:
---reuse-owner forces the canonical repo, --attach-existing attaches instead.`,
-		Example: `  # Spawn an agent from the 'mcp-node' template using the template workspace
+--reuse-owner forces the canonical repo, --attach-existing attaches instead.
+--worktree requires a repo (owner/repo).`,
+		Example: `  # Spawn an agent from the 'mcp-node' template as-is (no repo)
   leo agent spawn mcp-node
 
   # Spawn against a specific repo with a dedicated git worktree
@@ -212,11 +215,11 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 				}
 				repo = args[1]
 			}
-			if repo == "" {
-				return fmt.Errorf("repo is required (pass as positional or --repo)")
-			}
 			if reuseOwner && attachExisting {
 				return fmt.Errorf("--reuse-owner and --attach-existing are mutually exclusive")
+			}
+			if branch != "" && repo == "" {
+				return fmt.Errorf("--worktree requires a repo")
 			}
 			if branch != "" && !strings.Contains(repo, "/") {
 				return fmt.Errorf("--worktree requires owner/repo; got %q", repo)
@@ -235,7 +238,10 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 				return err
 			}
 			if !res.Localhost {
-				extra := []string{"spawn", template, "--repo", repo}
+				extra := []string{"spawn", template}
+				if repo != "" {
+					extra = append(extra, "--repo", repo)
+				}
 				if asJSON {
 					extra = append(extra, "--json")
 				}
@@ -268,7 +274,13 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 
 			// Collision detection: slashless repos match by repo short-name
 			// (ambiguous owner), slashed repos match exactly on (Repo, Branch).
-			if !strings.Contains(repo, "/") {
+			// A repo-less spawn (template run as-is) has no short-name to
+			// collide on — agentstore records with no Repo are never returned
+			// by findRepoShortMatches — so skip the round trip entirely.
+			switch {
+			case repo == "":
+				// No conflict — fall through and spawn.
+			case !strings.Contains(repo, "/"):
 				matches, err := findRepoShortMatches(cmd.Context(), cfg.HomePath, repo)
 				if err != nil {
 					return fmt.Errorf("checking existing agents: %w", err)
@@ -297,7 +309,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 					return fmt.Errorf("multiple existing agents match %q: %s — pass the full owner/repo or run 'leo agent list' to disambiguate",
 						repo, strings.Join(labels, ", "))
 				}
-			} else {
+			default:
 				matches, err := findExactMatches(cmd.Context(), cfg.HomePath, repo, branch)
 				if err != nil {
 					return fmt.Errorf("checking existing agents: %w", err)

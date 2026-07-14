@@ -46,12 +46,15 @@ The web dashboard has an agent panel where you can spawn and stop agents. Naviga
 ### From the CLI
 
 ```bash
+leo agent spawn coding                                     # run the template as-is; agent named "coding"
 leo agent spawn coding --repo blackpaw-studio/leo --name demo
 leo agent list
 leo agent attach demo      # full tmux attach to the Claude TUI
 leo agent logs demo -n 100
 leo agent stop demo
 ```
+
+`--repo` is optional. Omit it to run the template directly in its own workspace, with the agent named after the template (`--name` still overrides, and a collision appends `-2`, `-3`, ...).
 
 Run these locally on the server, or from a laptop against a remote host by adding a `client.hosts` section to `leo.yaml`. See the [Remote CLI guide](remote-cli.md) and the [`leo agent` reference](../cli/agent.md).
 
@@ -72,7 +75,7 @@ Worktree agents run in parallel on the same repo without fighting over `.git/HEA
 The daemon exposes both a Unix-socket API (used by the CLI) and an HTTP API on the web port (used by the channel plugin and web UI):
 
 ```
-POST /agents/spawn        {"template": "coding", "repo": "owner/repo", "branch": "feat/x"}  (daemon socket)
+POST /agents/spawn        {"template": "coding", "repo": "owner/repo", "branch": "feat/x"}  (daemon socket; "repo" is optional)
 GET  /agents/list                                                                            (daemon socket)
 POST /agents/{name}/stop                                                                     (daemon socket)
 POST /agents/{name}/prune {"force": false, "delete_branch": false}                           (daemon socket)
@@ -125,10 +128,11 @@ Stopping a shared-workspace agent kills its tmux session and removes it from the
 
 ## Session Naming
 
-Agents are named based on the template and repo:
+Agents are named based on the template and repo. A repo-less spawn is the one exception — the name is just the template name, with no `leo-` prefix or repo segment:
 
 | Input | Agent Name |
 |-------|------------|
+| `leo agent spawn coding` (no repo) | `coding` |
 | `/agent coding owner/repo` | `leo-coding-owner-repo` |
 | `/agent coding my-project` | `leo-coding-my-project` |
 | `leo agent spawn coding --repo owner/repo --worktree feat/cache` | `leo-coding-owner-repo-feat-cache` |

@@ -133,6 +133,7 @@ templates:
 ```
 
 ```bash
+leo agent spawn coding                                   # run the template as-is (no repo)
 leo agent spawn coding --repo blackpaw-studio/leo --name demo
 leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
 leo agent attach demo                                    # full tmux attach

@@ -686,6 +686,41 @@ func TestAgentSpawnAcceptsPositionalRepo(t *testing.T) {
 	}
 }
 
+func TestAgentSpawnWithoutRepoOmitsRepoFlag(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "spawn", "coding"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	if strings.Contains(joined, "--repo") {
+		t.Errorf("repo-less spawn must not forward --repo: %s", joined)
+	}
+	if !strings.Contains(joined, "spawn coding") {
+		t.Errorf("expected spawn coding in call: %s", joined)
+	}
+}
+
+func TestAgentSpawnWorktreeWithoutRepoErrors(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "spawn", "coding", "--worktree", "feat/x", "--host", "localhost"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for --worktree without a repo")
+	}
+	if !strings.Contains(err.Error(), "--worktree requires a repo") {
+		t.Errorf("error = %v, want mention that --worktree requires a repo", err)
+	}
+}
+
 func TestAgentSpawnRejectsConflictingFlags(t *testing.T) {
 	path := newAgentCLITestConfig(t)
 	withStubExec(t)

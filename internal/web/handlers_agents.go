@@ -249,8 +249,8 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 
 	templateName := r.FormValue("template")
 	repo := r.FormValue("repo")
-	if templateName == "" || repo == "" {
-		s.renderFlash(w, "error", "Template and name/repo are required")
+	if templateName == "" {
+		s.renderFlash(w, "error", "Template is required")
 		return
 	}
 

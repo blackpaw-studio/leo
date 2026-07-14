@@ -308,6 +308,49 @@ func TestAPIAgentSpawn(t *testing.T) {
 	}
 }
 
+func TestAPIAgentSpawnWithoutRepoSucceeds(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	body := `{"template":"coding"}`
+	req := httptest.NewRequest("POST", "/api/agent/spawn", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !svc.spawnCalled {
+		t.Fatal("expected Spawn to be called")
+	}
+	if svc.spawnSpec.Template != "coding" {
+		t.Errorf("expected template=coding, got %q", svc.spawnSpec.Template)
+	}
+	if svc.spawnSpec.Repo != "" {
+		t.Errorf("expected empty repo, got %q", svc.spawnSpec.Repo)
+	}
+}
+
+func TestWebAgentSpawnWithoutRepoSucceeds(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+
+	form := url.Values{"template": {"coding"}}
+	req := httptest.NewRequest("POST", "/web/agent/spawn", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !svc.spawnCalled {
+		t.Fatal("expected Spawn to be called")
+	}
+	if svc.spawnSpec.Repo != "" {
+		t.Errorf("expected empty repo, got %q", svc.spawnSpec.Repo)
+	}
+}
+
 func TestAPIAgentSpawnNoService(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "leo-web-test-*")
 	defer os.RemoveAll(dir)

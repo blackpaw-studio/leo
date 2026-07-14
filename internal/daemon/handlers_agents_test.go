@@ -191,7 +191,7 @@ func TestAgentSpawnMissingFields(t *testing.T) {
 	mgr := &fakeAgentManager{}
 	_, client := startTestServerWithAgent(t, mgr)
 
-	body, _ := json.Marshal(AgentSpawnRequest{Template: "coding"})
+	body, _ := json.Marshal(AgentSpawnRequest{})
 	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -199,6 +199,24 @@ func TestAgentSpawnMissingFields(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentSpawnWithoutRepoSucceeds(t *testing.T) {
+	mgr := &fakeAgentManager{}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{Template: "coding"})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastSpawn.Template != "coding" || mgr.lastSpawn.Repo != "" {
+		t.Errorf("spawn spec = %+v, want empty repo", mgr.lastSpawn)
 	}
 }
 

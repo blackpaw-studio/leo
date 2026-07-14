@@ -46,8 +46,8 @@ func (s *Server) handleAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
 		return
 	}
-	if req.Template == "" || req.Repo == "" {
-		writeError(w, http.StatusBadRequest, "template and repo are required")
+	if req.Template == "" {
+		writeError(w, http.StatusBadRequest, "template is required")
 		return
 	}
 
