@@ -146,7 +146,7 @@ func newAgentListCmd() *cobra.Command {
 				return runRemote(res, extra)
 			}
 
-			records, err := daemon.AgentList(cmd.Context(), cfg.HomePath)
+			records, err := agentListFn(cmd.Context(), cfg.HomePath)
 			if err != nil {
 				return fmt.Errorf("listing agents: %w", err)
 			}

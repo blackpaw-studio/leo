@@ -153,7 +153,7 @@ If you'd rather hop between running leo agents when one exits — nice if you ro
 
 ### Session picker
 
-`prefix + A` pops a fuzzy picker of every tmux session on the current server. Leo sessions live on the dedicated `leo` socket, so the built-in picker only sees them once you're already attached to a Leo session. For a picker scoped to Leo, run `leo attach` with no arguments — arrow-key navigation over every live agent, local or remote.
+`prefix + A` pops a fuzzy picker of every tmux session on the current server. Leo sessions live on the dedicated `leo` socket, so the built-in picker only sees them once you're already attached to a Leo session. For a picker scoped to Leo, run `leo attach` with no arguments — a fuzzy-filterable picker over every agent, local or remote, in every state, with in-place lifecycle actions (attach, suspend, resume, stop, rename).
 
 ### Attaching from inside tmux
 

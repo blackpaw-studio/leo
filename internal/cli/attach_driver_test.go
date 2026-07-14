@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/picker"
 )
 
 // fakeCLITurnsDriver is a minimal harness.SessionDriver whose Attach returns
@@ -230,30 +230,22 @@ func TestAttachTopLevelClaudeAgentKeepsTmuxPath(t *testing.T) {
 }
 
 // --- attach picker (attach_picker.go) ---
+//
+// The picker itself (internal/picker) is a full-screen Bubble Tea program and
+// is unit-tested in its own package. Here we only verify attachPickedAgent —
+// the post-picker dispatch step — routes a chosen agent through the correct
+// path, without driving the real TUI (which needs a TTY the test env lacks).
 
-// TestAttachPickerRoutesNonClaudeAgent verifies the picker's single-choice
-// shortcut (no promptui interaction needed) routes a non-claude agent
-// through the driver, which now reports the same tmux-attach shape as claude.
-func TestAttachPickerRoutesNonClaudeAgent(t *testing.T) {
+// TestAttachPickedAgentRoutesNonClaudeAgent verifies a local, non-claude
+// agent chosen in the picker routes through the driver, which now reports
+// the same tmux-attach shape as claude.
+func TestAttachPickedAgentRoutesNonClaudeAgent(t *testing.T) {
 	drv := registerFakeCLITurnsHarness()
 	drv.spec = harness.AttachSpec{TmuxSession: "leo-solo"}
 	drv.err = nil
 
 	home := t.TempDir()
 	cfg := &config.Config{HomePath: home, Defaults: config.DefaultsConfig{Model: "sonnet"}}
-	path := home + "/leo.yaml"
-	if err := config.Save(path, cfg); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	oldStdinTerm := stdinIsTerminal
-	stdinIsTerminal = func() bool { return true }
-	t.Cleanup(func() { stdinIsTerminal = oldStdinTerm })
-
-	oldAgentList := agentListFn
-	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
-		return []agent.Record{{Name: "solo"}}, nil
-	}
-	t.Cleanup(func() { agentListFn = oldAgentList })
 
 	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
 		return daemon.AgentAttachSpecResponse{
@@ -264,7 +256,6 @@ func TestAttachPickerRoutesNonClaudeAgent(t *testing.T) {
 	})
 	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
 	stubOutsideTmux(t)
-	withStubStdio(t)
 	var execedArgv0 string
 	var execedArgv []string
 	old := agentSyscallExec
@@ -275,10 +266,8 @@ func TestAttachPickerRoutesNonClaudeAgent(t *testing.T) {
 	}
 	t.Cleanup(func() { agentSyscallExec = old })
 
-	root := newRootCmd()
-	root.SetArgs([]string{"--config", path, "attach", "--host", "localhost"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute: %v", err)
+	if err := attachPickedAgent(context.Background(), cfg, picker.Agent{Host: picker.LocalHost, Name: "solo"}, attachOptions{}); err != nil {
+		t.Fatalf("attachPickedAgent: %v", err)
 	}
 	if execedArgv0 != "/usr/bin/tmux" {
 		t.Fatalf("argv0 = %q, want tmux path %q (driver dispatch didn't fire); argv=%v", execedArgv0, "/usr/bin/tmux", execedArgv)
@@ -288,30 +277,53 @@ func TestAttachPickerRoutesNonClaudeAgent(t *testing.T) {
 	}
 }
 
-// TestAttachPickerClaudeAgentKeepsTmuxPath verifies the picker's
-// single-choice shortcut keeps the tmux path for a claude agent.
-func TestAttachPickerClaudeAgentKeepsTmuxPath(t *testing.T) {
+// TestAttachPickedAgentAttachOnlyRemoteRowAttachesSessionDirectly verifies a
+// tmux-fallback remote row (AttachOnly, Name is the full tmux session name)
+// attaches that tmux session directly over ssh instead of routing through
+// `agent attach <name>` on the remote — the fallback Name is not a bare agent
+// name, so the remote CLI resolution would fail.
+func TestAttachPickedAgentAttachOnlyRemoteRowAttachesSessionDirectly(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Client: config.ClientConfig{
+			Hosts: map[string]config.HostConfig{
+				"prod": {SSH: "user@prod.example.com", SSHArgs: []string{"-p", "2222"}},
+			},
+		},
+	}
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	err := attachPickedAgent(context.Background(), cfg, picker.Agent{
+		Host:       "prod",
+		Name:       "leo-orphan",
+		AttachOnly: true,
+	}, attachOptions{})
+	if err != nil {
+		t.Fatalf("attachPickedAgent: %v", err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	if strings.Contains(joined, "agent attach") {
+		t.Fatalf("argv = %v, must NOT invoke remote `agent attach` for an AttachOnly row", stub.calls[0])
+	}
+	if !strings.Contains(joined, "attach") || !strings.Contains(joined, "leo-orphan") {
+		t.Fatalf("argv = %v, want a tmux attach targeting session %q", stub.calls[0], "leo-orphan")
+	}
+}
+
+// TestAttachPickedAgentClaudeAgentKeepsTmuxPath verifies a local claude agent
+// chosen in the picker keeps the plain tmux attach path.
+func TestAttachPickedAgentClaudeAgentKeepsTmuxPath(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{HomePath: home, Defaults: config.DefaultsConfig{Model: "sonnet"}}
-	path := home + "/leo.yaml"
-	if err := config.Save(path, cfg); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	oldStdinTerm := stdinIsTerminal
-	stdinIsTerminal = func() bool { return true }
-	t.Cleanup(func() { stdinIsTerminal = oldStdinTerm })
-
-	oldAgentList := agentListFn
-	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
-		return []agent.Record{{Name: "solo"}}, nil
-	}
-	t.Cleanup(func() { agentListFn = oldAgentList })
 
 	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
 		return daemon.AgentAttachSpecResponse{Name: name}, nil // claude
 	})
-	withStubExec(t)
-	withStubStdio(t)
 	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
 	stubOutsideTmux(t)
 	var execedArgv0 string
@@ -322,10 +334,8 @@ func TestAttachPickerClaudeAgentKeepsTmuxPath(t *testing.T) {
 	}
 	t.Cleanup(func() { agentSyscallExec = old })
 
-	root := newRootCmd()
-	root.SetArgs([]string{"--config", path, "attach", "--host", "localhost"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute: %v", err)
+	if err := attachPickedAgent(context.Background(), cfg, picker.Agent{Host: picker.LocalHost, Name: "solo"}, attachOptions{}); err != nil {
+		t.Fatalf("attachPickedAgent: %v", err)
 	}
 	if execedArgv0 != "/usr/bin/tmux" {
 		t.Fatalf("expected the tmux attach path for a claude agent, got argv0=%q", execedArgv0)
