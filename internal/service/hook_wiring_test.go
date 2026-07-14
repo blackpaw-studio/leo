@@ -130,7 +130,7 @@ func TestSuperviseProcessRunsPreLaunchBeforeNewSession(t *testing.T) {
 	sv.homePath = t.TempDir()
 
 	id := newProcIdentity("hookproc", []string{"--x"})
-	spec := ProcessSpec{Name: "hookproc", WorkDir: t.TempDir(), Harness: "fakehook", Kind: harness.KindProcess}
+	spec := ProcessSpec{Name: "hookproc", WorkDir: t.TempDir(), Harness: "fakehook", Kind: harness.KindAgent}
 
 	done := make(chan struct{})
 	go func() {
@@ -166,7 +166,7 @@ func TestSuperviseProcessRefreshesArgsFromStoredID(t *testing.T) {
 	sv.homePath = home
 
 	id := newProcIdentity("hookproc2", []string{"--x"})
-	spec := ProcessSpec{Name: "hookproc2", WorkDir: t.TempDir(), Harness: "fakehook", Kind: harness.KindProcess}
+	spec := ProcessSpec{Name: "hookproc2", WorkDir: t.TempDir(), Harness: "fakehook", Kind: harness.KindAgent}
 
 	done := make(chan struct{})
 	go func() {
@@ -198,7 +198,7 @@ func TestSuperviseProcessNoStoredIDLeavesArgsUnchanged(t *testing.T) {
 	sv.homePath = t.TempDir()
 
 	id := newProcIdentity("hookproc3", []string{"--x"})
-	spec := ProcessSpec{Name: "hookproc3", WorkDir: t.TempDir(), Harness: "fakehook", Kind: harness.KindProcess}
+	spec := ProcessSpec{Name: "hookproc3", WorkDir: t.TempDir(), Harness: "fakehook", Kind: harness.KindAgent}
 
 	done := make(chan struct{})
 	go func() {

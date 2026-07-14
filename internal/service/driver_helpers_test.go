@@ -46,14 +46,14 @@ func TestClaudeDriverStartIsNoOp(t *testing.T) {
 	}
 }
 
-func TestHandleForSpecDefaultsKindToProcess(t *testing.T) {
+func TestHandleForSpecDefaultsKindToAgent(t *testing.T) {
 	home := t.TempDir()
 	id := newProcIdentity("myproc", []string{"--model", "sonnet"})
 	spec := ProcessSpec{Name: "myproc", WorkDir: "/tmp/ws", Env: map[string]string{"A": "1"}, OpeningPrompt: "hi"}
 
 	h := handleForSpec(spec, id, home)
-	if h.Kind != harness.KindProcess {
-		t.Errorf("Kind = %q, want %q", h.Kind, harness.KindProcess)
+	if h.Kind != harness.KindAgent {
+		t.Errorf("Kind = %q, want %q", h.Kind, harness.KindAgent)
 	}
 	if h.Name != "myproc" {
 		t.Errorf("Name = %q, want myproc", h.Name)

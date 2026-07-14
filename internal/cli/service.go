@@ -78,7 +78,7 @@ func runService(cmd *cobra.Command, args []string) error {
 	}
 	sessionCount := len(sessionSpecs)
 	info.Printf("Starting supervised mode (%d session(s))...\n", sessionCount)
-	return service.RunSupervised(claudePath, nil, sessionSpecs, cfg.HomePath, cfgPath, webToken)
+	return service.RunSupervised(claudePath, sessionSpecs, cfg.HomePath, cfgPath, webToken)
 }
 
 func newServiceStartCmd() *cobra.Command {
