@@ -71,35 +71,6 @@ func TestBuildTasksDataHarnessBadges(t *testing.T) {
 	}
 }
 
-func TestBuildSessionsDataHarnessBadges(t *testing.T) {
-	cfg := &config.Config{
-		Defaults: config.DefaultsConfig{Harness: "codex"},
-		Sessions: map[string]config.SessionConfig{
-			"explicit": {Workspace: "/w", Harness: "claude"},
-			"inherit":  {Workspace: "/w"},
-		},
-	}
-	s := seedHarnessTestServer(t, cfg)
-
-	data, err := s.buildSessionsData(httptest.NewRequest("GET", "/sessions", nil))
-	if err != nil {
-		t.Fatalf("buildSessionsData: %v", err)
-	}
-	rows := data.(sessionsPageData).Sessions
-
-	byName := make(map[string]sessionRow, len(rows))
-	for _, row := range rows {
-		byName[row.Name] = row
-	}
-
-	if got := byName["explicit"]; got.Harness != "claude" || got.HarnessInherited {
-		t.Errorf("explicit session row = %+v, want {Harness: claude, HarnessInherited: false}", got)
-	}
-	if got := byName["inherit"]; got.Harness != "codex" || !got.HarnessInherited {
-		t.Errorf("inherit session row = %+v, want {Harness: codex, HarnessInherited: true}", got)
-	}
-}
-
 // TestPageConfigTemplatesRendersHarnessColumn is a render-level smoke test:
 // the templates table shows a harness column.
 func TestPageConfigTemplatesRendersHarnessColumn(t *testing.T) {
@@ -141,26 +112,5 @@ func TestPageTasksRendersHarnessColumn(t *testing.T) {
 	body := getBody(t, s, "/tasks")
 	if n := strings.Count(body, "<th>harness</th>"); n != 2 {
 		t.Errorf("expected 2 harness column headers (enabled + disabled tables), got %d", n)
-	}
-}
-
-// TestPageSessionsRendersHarnessBadgeAndCopy confirms the session card shows
-// a harness pill and the updated coding-agent-neutral intro copy.
-func TestPageSessionsRendersHarnessBadgeAndCopy(t *testing.T) {
-	cfg := &config.Config{
-		Defaults: config.DefaultsConfig{Harness: "codex"},
-		Sessions: map[string]config.SessionConfig{"r": {Workspace: "/w", Harness: "claude"}},
-	}
-	s := seedHarnessTestServer(t, cfg)
-
-	body := getBody(t, s, "/sessions")
-	if !strings.Contains(body, `<span class="pill">claude</span>`) {
-		t.Errorf("expected session card to show a harness pill: %s", body)
-	}
-	if !strings.Contains(body, "Persistent coding-agent sessions used by runtime: persistent tasks.") {
-		t.Error("expected updated coding-agent-neutral intro copy")
-	}
-	if strings.Contains(body, "Persistent Claude sessions used by runtime: persistent tasks.") {
-		t.Error("old Claude-specific intro copy should be gone")
 	}
 }

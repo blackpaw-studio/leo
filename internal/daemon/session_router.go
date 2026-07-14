@@ -20,8 +20,8 @@ type EnqueueParams struct {
 	Timeout     time.Duration
 	// Ensure, when non-nil, tells the pump to make sure the target agent is
 	// injectable (spawn/resume as needed) before injecting this invocation's
-	// prompt. Nil preserves the legacy session-only delivery path untouched —
-	// no ensure step runs, matching pre-agent-collapse behavior.
+	// prompt. Nil skips the ensure step (used by callers that inject directly
+	// without an agent target, e.g. tests).
 	Ensure *EnsureSpec
 }
 
@@ -41,8 +41,9 @@ type PendingInvocation struct {
 	Timeout  time.Duration
 	Enqueued time.Time
 	Result   chan InvocationResult // buffered(1); never close from inside the queue
-	// Ensure carries the ensure-exists spec from EnqueueParams (nil for the
-	// legacy session-only path). The pump runs it just before injection.
+	// Ensure carries the ensure-exists spec from EnqueueParams (nil when the
+	// caller injects directly without an agent target). The pump runs it just
+	// before injection.
 	Ensure *EnsureSpec
 
 	// completed is set under sessionRouter.mu once a terminal Result has been
@@ -56,7 +57,7 @@ type sessionQueue struct {
 	inFlight    *PendingInvocation // non-nil while one invocation is executing; nil otherwise
 	tmuxSession string             // concrete tmux session this queue injects into
 	enqueueSig  chan struct{}      // buffered(1); fired by Enqueue
-	reportSig   chan struct{}      // buffered(1); fired by Report / pump failure / ResetSession
+	reportSig   chan struct{}      // buffered(1); fired by Report / pump failure
 	pumpStarted bool
 }
 
@@ -196,22 +197,6 @@ func (r *sessionRouter) queueFor(session string) *sessionQueue {
 	return r.queues[session]
 }
 
-// QueueDepth returns the number of queued plus in-flight invocations for a
-// session, or 0 if no queue has ever been created for it.
-func (r *sessionRouter) QueueDepth(session string) int {
-	q := r.queueFor(session)
-	if q == nil {
-		return 0
-	}
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	depth := len(q.fifo)
-	if q.inFlight != nil {
-		depth++
-	}
-	return depth
-}
-
 // injectFn delivers a prompt into a session. A nil *harness.Result means
 // delivery is asynchronous — every real driver today (claude, codex,
 // opencode) pastes into its tmux-TUI pane and returns immediately; completion
@@ -247,7 +232,7 @@ func (r *sessionRouter) SetAborter(fn abortFn) {
 // SetEnsurer wires the ensure-exists step the pump runs before injecting an
 // invocation that carries an EnsureSpec. Optional: nil (never called, or
 // explicitly set to nil) is safe — invocations without an EnsureSpec never
-// consult it, which is every invocation on the legacy session-only path.
+// consult it.
 func (r *sessionRouter) SetEnsurer(e AgentEnsurer) {
 	r.mu.Lock()
 	r.ensurer = e
@@ -317,41 +302,6 @@ func (r *sessionRouter) Report(id string, result InvocationResult) {
 	case q.reportSig <- struct{}{}:
 	default:
 	}
-}
-
-// ResetSession drains all in-flight and queued invocations for the given
-// session, delivering an error result to each. Intended for `leo session
-// reset` to recover when the underlying claude is killed/restarted outside
-// the pump's awareness. Does NOT call the aborter (tmux is presumed already
-// killed). After this call the queue is empty and the pump is ready to
-// accept new work.
-func (r *sessionRouter) ResetSession(session, reason string) int {
-	q := r.queueFor(session)
-	if q == nil {
-		return 0
-	}
-	q.mu.Lock()
-	inv := q.inFlight
-	pending := q.fifo
-	q.inFlight = nil
-	q.fifo = nil
-	q.mu.Unlock()
-
-	cleared := 0
-	if inv != nil {
-		r.markCompleted(inv, InvocationResult{OK: false, Err: "reset: " + reason})
-		cleared++
-	}
-	for _, p := range pending {
-		r.markCompleted(p, InvocationResult{OK: false, Err: "reset: " + reason})
-		cleared++
-	}
-	// Wake the pump so any inner-select wait observes the cleared inFlight.
-	select {
-	case q.reportSig <- struct{}{}:
-	default:
-	}
-	return cleared
 }
 
 // invocationResultFromHarness translates a synchronous driver Result into the
@@ -435,16 +385,15 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			target := q.tmuxSession
 			q.mu.Unlock()
 
-			// Ensure-exists step: invocations carrying an EnsureSpec (the new
+			// Ensure-exists step: invocations carrying an EnsureSpec (the
 			// agent-routed persistent-task path) need their target agent
-			// spawned or resumed before injection can succeed. Nil Ensure
-			// (every legacy session-only invocation) skips this entirely. A
-			// failed ensure completes the invocation as failed through the
-			// same path an inject error takes, so AwaitTask callers (and
-			// notify_on_fail) observe it exactly like any other delivery
-			// failure. This runs on the per-session pump goroutine, so a slow
-			// spawn only blocks this one queue — other sessions/agents keep
-			// draining on their own goroutines.
+			// spawned or resumed before injection can succeed. A nil Ensure
+			// skips this entirely. A failed ensure completes the invocation
+			// as failed through the same path an inject error takes, so
+			// AwaitTask callers (and notify_on_fail) observe it exactly like
+			// any other delivery failure. This runs on the per-session pump
+			// goroutine, so a slow spawn only blocks this one queue — other
+			// sessions/agents keep draining on their own goroutines.
 			if next.Ensure != nil {
 				if ensurer := r.currentEnsurer(); ensurer != nil {
 					ensureCtx, ensureCancel := context.WithTimeout(context.Background(), next.Timeout)
@@ -499,10 +448,10 @@ func (r *sessionRouter) pump(session string, q *sessionQueue) {
 			// delivered Result here — that's a deliberate, deferred design
 			// decision.
 
-			// A ResetSession (or Report) may have cleared inFlight while we
-			// were inside the injector. If so, the result was already
-			// delivered; abort the turn we just started so the orphaned
-			// prompt doesn't keep running, then move on.
+			// A Report may have cleared inFlight while we were inside the
+			// injector. If so, the result was already delivered; abort the
+			// turn we just started so the orphaned prompt doesn't keep
+			// running, then move on.
 			q.mu.Lock()
 			stillMine := q.inFlight != nil && q.inFlight.ID == next.ID
 			q.mu.Unlock()

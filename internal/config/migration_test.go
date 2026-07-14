@@ -20,9 +20,6 @@ func TestValidateRejectsMovedClaudeFields(t *testing.T) {
 			Templates: map[string]TemplateConfig{
 				"x": {},
 			},
-			Sessions: map[string]SessionConfig{
-				"s": {Workspace: "/tmp/leo/workspace"},
-			},
 			HomePath: "/tmp/leo",
 		}
 	}
@@ -83,33 +80,6 @@ func TestValidateRejectsMovedClaudeFields(t *testing.T) {
 			tmpl.DeprecatedAppendSystemPrompt = "be nice"
 			c.Templates["x"] = tmpl
 		}, "templates.x.append_system_prompt has moved to templates.x.harness_options.append_system_prompt (claude harness) — see docs/configuration/harnesses.md"},
-
-		// --- sessions ---
-		{"sessions.s.permission_mode", func(c *Config) {
-			sess := c.Sessions["s"]
-			sess.DeprecatedPermissionMode = "plan"
-			c.Sessions["s"] = sess
-		}, "sessions.s.permission_mode has moved to sessions.s.harness_options.permission_mode (claude harness) — see docs/configuration/harnesses.md"},
-		{"sessions.s.agent", func(c *Config) {
-			sess := c.Sessions["s"]
-			sess.DeprecatedAgent = "reviewer"
-			c.Sessions["s"] = sess
-		}, "sessions.s.agent has moved to sessions.s.harness_options.agent (claude harness) — see docs/configuration/harnesses.md"},
-		{"sessions.s.allowed_tools", func(c *Config) {
-			sess := c.Sessions["s"]
-			sess.DeprecatedAllowedTools = []string{"Read"}
-			c.Sessions["s"] = sess
-		}, "sessions.s.allowed_tools has moved to sessions.s.harness_options.allowed_tools (claude harness) — see docs/configuration/harnesses.md"},
-		{"sessions.s.disallowed_tools", func(c *Config) {
-			sess := c.Sessions["s"]
-			sess.DeprecatedDisallowedTools = []string{"Bash"}
-			c.Sessions["s"] = sess
-		}, "sessions.s.disallowed_tools has moved to sessions.s.harness_options.disallowed_tools (claude harness) — see docs/configuration/harnesses.md"},
-		{"sessions.s.append_system_prompt", func(c *Config) {
-			sess := c.Sessions["s"]
-			sess.DeprecatedAppendSystemPrompt = "be nice"
-			c.Sessions["s"] = sess
-		}, "sessions.s.append_system_prompt has moved to sessions.s.harness_options.append_system_prompt (claude harness) — see docs/configuration/harnesses.md"},
 
 		// --- tasks ---
 		{"tasks.t.permission_mode", func(c *Config) {
@@ -172,9 +142,6 @@ func TestValidateAcceptsHarnessOptionsForm(t *testing.T) {
 		},
 		Templates: map[string]TemplateConfig{
 			"x": {HarnessOptions: map[string]any{"agent": "reviewer", "remote_control": true}},
-		},
-		Sessions: map[string]SessionConfig{
-			"s": {Workspace: "/tmp/leo/workspace", HarnessOptions: map[string]any{"agent": "reviewer"}},
 		},
 		HomePath: "/tmp/leo",
 	}

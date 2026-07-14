@@ -330,7 +330,7 @@ func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
 
 	// HX-Refresh triggers a full page reload, so the list's button
 	// label/next-run/state all pick up the new value — the same convention
-	// handleHostAdd/handleSessionAdd use. That makes the response body
+	// handleHostAdd/handleTemplateAdd use. That makes the response body
 	// itself moot (the page reloads before it's swapped in), but render the
 	// flash normally anyway for tests/non-htmx callers.
 	w.Header().Set("HX-Refresh", "true")

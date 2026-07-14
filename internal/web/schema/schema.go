@@ -36,7 +36,6 @@ const (
 	SectionDefaults   Section = "defaults"
 	SectionTask       Section = "task"
 	SectionTemplate   Section = "template"
-	SectionSession    Section = "session"
 	SectionClientHost Section = "client_host"
 	SectionWeb        Section = "web"
 	SectionClient     Section = "client"
@@ -46,7 +45,7 @@ const (
 func AllSections() []Section {
 	return []Section{
 		SectionDefaults, SectionTask, SectionTemplate,
-		SectionSession, SectionClientHost, SectionWeb,
+		SectionClientHost, SectionWeb,
 		SectionClient,
 	}
 }
@@ -60,8 +59,6 @@ func StructFor(s Section) reflect.Type {
 		return reflect.TypeOf(config.TaskConfig{})
 	case SectionTemplate:
 		return reflect.TypeOf(config.TemplateConfig{})
-	case SectionSession:
-		return reflect.TypeOf(config.SessionConfig{})
 	case SectionClientHost:
 		return reflect.TypeOf(config.HostConfig{})
 	case SectionWeb:

@@ -112,18 +112,6 @@ func TestScopeHarnessCascade(t *testing.T) {
 		}
 	})
 
-	t.Run("session", func(t *testing.T) {
-		cfg := &Config{Defaults: DefaultsConfig{Harness: "opencode"}}
-		if got := cfg.SessionHarness(SessionConfig{Harness: "codex"}); got != "codex" {
-			t.Errorf("SessionHarness() scope = %q, want codex", got)
-		}
-		if got := cfg.SessionHarness(SessionConfig{}); got != "opencode" {
-			t.Errorf("SessionHarness() defaults fallback = %q, want opencode", got)
-		}
-		if got := (&Config{}).SessionHarness(SessionConfig{}); got != "claude" {
-			t.Errorf("SessionHarness() claude fallback = %q, want claude", got)
-		}
-	})
 }
 
 func TestUsesHarness(t *testing.T) {
@@ -147,14 +135,6 @@ func TestUsesHarness(t *testing.T) {
 				Templates: map[string]TemplateConfig{"t": {Harness: "codex"}},
 			},
 			"codex",
-			true,
-		},
-		{
-			"session explicit harness matches",
-			Config{
-				Sessions: map[string]SessionConfig{"s": {Harness: "opencode"}},
-			},
-			"opencode",
 			true,
 		},
 		{
@@ -239,26 +219,6 @@ func TestScopeHarnessOptionsDifferentHarnessDoesNotLeak(t *testing.T) {
 	}
 }
 
-// TestSessionHarnessOptionsIgnoresDefaults preserves quirk #1: sessions
-// never cascaded the claude flat fields from defaults, so
-// SessionHarnessOptions must ignore defaults.harness_options entirely, even
-// when the session's harness matches defaults' harness.
-func TestSessionHarnessOptionsIgnoresDefaults(t *testing.T) {
-	cfg := &Config{
-		Defaults: DefaultsConfig{
-			Harness:        "claude",
-			HarnessOptions: map[string]any{"permission_mode": "plan"},
-		},
-	}
-	sess := SessionConfig{HarnessOptions: map[string]any{"agent": "s.md"}}
-
-	got := cfg.SessionHarnessOptions(sess)
-	want := map[string]any{"agent": "s.md"}
-	if len(got) != len(want) || got["agent"] != want["agent"] {
-		t.Errorf("SessionHarnessOptions() = %v, want %v (must not inherit defaults)", got, want)
-	}
-}
-
 func TestValidateUnknownHarnessName(t *testing.T) {
 	validConfig := func() *Config {
 		return &Config{
@@ -308,13 +268,6 @@ func TestValidateUnknownHarnessName(t *testing.T) {
 				}}
 			},
 			`tasks.foo.harness "bogus" is not a registered harness`,
-		},
-		{
-			"sessions",
-			func(c *Config) {
-				c.Sessions = map[string]SessionConfig{"foo": {Workspace: "/tmp/ws", Harness: "bogus"}}
-			},
-			`sessions.foo.harness "bogus" is not a registered harness`,
 		},
 	}
 	for _, sc := range scopes {
@@ -374,15 +327,6 @@ func TestValidateHarnessOptionsErrors(t *testing.T) {
 			},
 			"tasks.foo.harness_options: ",
 		},
-		{
-			"sessions unknown key",
-			func(c *Config) {
-				c.Sessions = map[string]SessionConfig{"foo": {
-					Workspace: "/tmp/ws", HarnessOptions: map[string]any{"bogus": "x"},
-				}}
-			},
-			"sessions.foo.harness_options: ",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -425,16 +369,6 @@ func TestValidateChannelsUnsupportedHarness(t *testing.T) {
 				}}
 			},
 			"tasks.foo.channels: the stubnochannels harness does not support channel plugins",
-		},
-		{
-			"sessions channels",
-			func(c *Config) {
-				c.Sessions = map[string]SessionConfig{"foo": {
-					Workspace: "/tmp/ws", Harness: stubNoChannelsName,
-					Channels: []string{"plugin:telegram@x"},
-				}}
-			},
-			"sessions.foo.channels: the stubnochannels harness does not support channel plugins",
 		},
 	}
 	for _, tt := range tests {
@@ -490,13 +424,6 @@ func TestValidateModelDelegation(t *testing.T) {
 				}}
 			},
 			fmt.Sprintf(want, "tasks.foo"),
-		},
-		{
-			"sessions",
-			func(c *Config) {
-				c.Sessions = map[string]SessionConfig{"foo": {Workspace: "/tmp/ws", Model: "gpt-5"}}
-			},
-			fmt.Sprintf(want, "sessions.foo"),
 		},
 	}
 	for _, tt := range tests {
@@ -556,28 +483,6 @@ func TestValidateKindSupportHappyPath(t *testing.T) {
 				Harness: "opencode",
 				Model:   "anthropic/claude-sonnet-4-5",
 			}},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("Validate() = %v, want nil", err)
-		}
-	})
-
-	t.Run("codex session validates clean (Plan 4 Task 7 session drivers)", func(t *testing.T) {
-		cfg := &Config{
-			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-			HomePath: "/tmp/leo",
-			Sessions: map[string]SessionConfig{"chat": {Workspace: "/tmp/ws", Harness: "codex"}},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("Validate() = %v, want nil", err)
-		}
-	})
-
-	t.Run("opencode session validates clean (Plan 4 Task 7 session drivers)", func(t *testing.T) {
-		cfg := &Config{
-			Defaults: DefaultsConfig{Model: "sonnet", MaxTurns: 15},
-			HomePath: "/tmp/leo",
-			Sessions: map[string]SessionConfig{"chat": {Workspace: "/tmp/ws", Harness: "opencode"}},
 		}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate() = %v, want nil", err)

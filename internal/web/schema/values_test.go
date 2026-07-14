@@ -27,7 +27,7 @@ func renderToForm(fvs []FieldValue) url.Values {
 }
 
 func TestRoundTripTask(t *testing.T) {
-	lazy := config.TaskConfig{
+	persistent := config.TaskConfig{
 		Schedule:   "30 8,15 * * 1-5",
 		PromptFile: "prompts/trade.md",
 		Model:      "sonnet",
@@ -37,17 +37,15 @@ func TestRoundTripTask(t *testing.T) {
 		Retries:    2,
 		Channels:   []string{"plugin:telegram@claude-plugins-official"},
 		Runtime:    "persistent",
-		Session:    "daily",
-		Lazy:       true,
 		QueueMax:   9,
 	}
-	form := renderToForm(Values(&lazy, SectionTask, nil))
+	form := renderToForm(Values(&persistent, SectionTask, nil))
 	var got config.TaskConfig
 	if err := Apply(&got, SectionTask, form); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if !reflect.DeepEqual(lazy, got) {
-		t.Errorf("round trip mismatch:\n want %+v\n got  %+v", lazy, got)
+	if !reflect.DeepEqual(persistent, got) {
+		t.Errorf("round trip mismatch:\n want %+v\n got  %+v", persistent, got)
 	}
 }
 

@@ -13,74 +13,43 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/history"
-	"github.com/blackpaw-studio/leo/internal/service"
-	"github.com/blackpaw-studio/leo/internal/session"
 )
-
-// sessionTmuxTarget resolves a persistent task's logical session name to the
-// concrete tmux session it is supervised under. Topology A/B sessions are
-// hosted as "leo-session-<name>". This is the mapping the daemon's prompt
-// injector must target — the bare logical name is only the router's FIFO
-// key.
-func sessionTmuxTarget(cfg *config.Config, taskName string) (string, error) {
-	name, _, _, err := cfg.ResolveSession(taskName)
-	if err != nil {
-		return "", err
-	}
-	return service.SessionTmuxName(name), nil
-}
 
 // persistentImpl is a seam for tests to override the runPersistent dispatch.
 var persistentImpl = runPersistent
 
 // deliveryTarget describes where a persistent task's prompt is delivered:
 // the router's FIFO queue key, the concrete tmux session to inject into, and
-// (agent-routed tasks only) the ensure-exists spec the daemon must satisfy
-// before injecting.
+// the ensure-exists spec the daemon must satisfy before injecting.
 type deliveryTarget struct {
 	queueKey string
 	tmux     string
 	ensure   *daemon.EnsureSpec
 }
 
-// resolveDeliveryTarget picks a persistent task's delivery target. Tasks with
-// no `session:` field route through the new agent path — config.ResolveTaskTarget
-// resolves the target agent (explicit via `template:`, or implicit/synthesized
-// from the task itself) and the daemon ensures it is spawned/resumed before
-// injection. Tasks with `session:` keep today's session-router path verbatim
-// (dies in a later step of the sessions->agents collapse).
+// resolveDeliveryTarget picks a persistent task's delivery target.
+// config.ResolveTaskTarget resolves the target agent (explicit via
+// `template:`, or implicit/synthesized from the task itself) and the daemon
+// ensures it is spawned/resumed before injection.
 func resolveDeliveryTarget(cfg *config.Config, taskName string) (deliveryTarget, error) {
 	task, ok := cfg.Tasks[taskName]
 	if !ok {
 		return deliveryTarget{}, fmt.Errorf("task %q not found", taskName)
 	}
-
-	if task.Session == "" {
-		agentName, tmpl, implicit, err := cfg.ResolveTaskTarget(taskName)
-		if err != nil {
-			return deliveryTarget{}, fmt.Errorf("resolving agent target for task %q: %w", taskName, err)
-		}
-		return deliveryTarget{
-			queueKey: agentName,
-			tmux:     agent.SessionName(agentName),
-			ensure: &daemon.EnsureSpec{
-				Name:         agentName,
-				TemplateName: task.Template,
-				Template:     tmpl,
-				Implicit:     implicit,
-			},
-		}, nil
-	}
-
-	sessName, _, _, err := cfg.ResolveSession(taskName)
+	agentName, tmpl, implicit, err := cfg.ResolveTaskTarget(taskName)
 	if err != nil {
-		return deliveryTarget{}, fmt.Errorf("resolving session for task %q: %w", taskName, err)
+		return deliveryTarget{}, fmt.Errorf("resolving agent target for task %q: %w", taskName, err)
 	}
-	tmuxTarget, err := sessionTmuxTarget(cfg, taskName)
-	if err != nil {
-		return deliveryTarget{}, fmt.Errorf("resolving tmux session for task %q: %w", taskName, err)
-	}
-	return deliveryTarget{queueKey: sessName, tmux: tmuxTarget}, nil
+	return deliveryTarget{
+		queueKey: agentName,
+		tmux:     agent.SessionName(agentName),
+		ensure: &daemon.EnsureSpec{
+			Name:         agentName,
+			TemplateName: task.Template,
+			Template:     tmpl,
+			Implicit:     implicit,
+		},
+	}, nil
 }
 
 // wrapPromptForPersistent prepends the leo invocation marker and (when
@@ -113,9 +82,10 @@ func promptForPersistent(cfg *config.Config, task config.TaskConfig, invID, body
 	return body
 }
 
-// runPersistent dispatches a task through the daemon's session router rather
-// than spawning a fresh claude process. It enqueues the prompt, long-polls
-// for completion, persists the session id on success, and records history.
+// runPersistent dispatches a task through the daemon's router into its
+// target agent's tmux session, rather than spawning a fresh claude process.
+// It enqueues the prompt, long-polls for completion, persists the session id
+// on success, and records history.
 func runPersistent(cfg *config.Config, taskName string) error {
 	task, err := resolveTask(cfg, taskName)
 	if err != nil {
@@ -169,30 +139,17 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		return fmt.Errorf("task failed: %s", aw.Err)
 	}
 
-	// Session-id persistence branches on delivery target: agent-routed tasks
-	// (target.ensure != nil) persist the discovered id onto the agentstore
-	// record itself — target.queueKey is the agent's name in that case — so
-	// agent.Manager.Resume/RestoreAgents pick it up the same way a spawn or
-	// resume would. Legacy session-routed tasks keep writing the generic
-	// "session:"+name store (dies with the rest of the session machinery in a
-	// later step of the sessions->agents collapse).
+	// Persist the discovered session id onto the agentstore record itself —
+	// target.queueKey is the agent's name — so agent.Manager.Resume/
+	// RestoreAgents pick it up the same way a spawn or resume would.
 	if aw.SessionID != "" {
-		if target.ensure != nil {
-			if err := agentstore.Update(cfg.HomePath, target.queueKey, func(rec agentstore.Record) agentstore.Record {
-				rec.SessionID = aw.SessionID
-				return rec
-			}); err != nil {
-				// Non-fatal: the task succeeded; we just couldn't persist
-				// the session id for next-run resume.
-				fmt.Printf("warning: failed to persist session id: %v\n", err)
-			}
-		} else {
-			store := session.NewStore(cfg.HomePath)
-			if err := store.Set("session:"+target.queueKey, aw.SessionID); err != nil {
-				// Non-fatal: the task succeeded; we just couldn't persist
-				// the session id for next-run resume.
-				fmt.Printf("warning: failed to persist session id: %v\n", err)
-			}
+		if err := agentstore.Update(cfg.HomePath, target.queueKey, func(rec agentstore.Record) agentstore.Record {
+			rec.SessionID = aw.SessionID
+			return rec
+		}); err != nil {
+			// Non-fatal: the task succeeded; we just couldn't persist
+			// the session id for next-run resume.
+			fmt.Printf("warning: failed to persist session id: %v\n", err)
 		}
 	}
 	hist := history.NewStore(cfg.HomePath)

@@ -185,8 +185,9 @@ func TestPersistentFailureDoesNotNotifyWithoutChannels(t *testing.T) {
 	}
 }
 
-// --- resolveDeliveryTarget: the routing split between the new agent path
-// (no `session:`) and the legacy session-router path (`session:` set). ---
+// --- resolveDeliveryTarget: every persistent task resolves to an agent
+// target (explicit via `template:`, or implicit/synthesized from the task
+// itself). ---
 
 func TestResolveDeliveryTargetTemplateTaskUsesAgentEnsurePath(t *testing.T) {
 	cfg := &config.Config{
@@ -250,33 +251,6 @@ func TestResolveDeliveryTargetImplicitTaskSynthesizesTemplate(t *testing.T) {
 	}
 	if target.ensure.Template.Workspace != "/tmp/digest-ws" {
 		t.Errorf("ensure.Template.Workspace = %q, want %q", target.ensure.Template.Workspace, "/tmp/digest-ws")
-	}
-}
-
-// TestResolveDeliveryTargetSessionTaskUnchanged verifies a task with an
-// explicit `session:` field keeps resolving through the legacy
-// cfg.ResolveSession/sessionTmuxTarget path byte-for-byte — no ensure spec is
-// ever attached, so the router never spawns/resumes anything for it.
-func TestResolveDeliveryTargetSessionTaskUnchanged(t *testing.T) {
-	cfg := &config.Config{
-		Tasks: map[string]config.TaskConfig{
-			"shared": {Runtime: "persistent", Session: "team"},
-		},
-		Sessions: map[string]config.SessionConfig{"team": {Workspace: "/w"}},
-	}
-
-	target, err := resolveDeliveryTarget(cfg, "shared")
-	if err != nil {
-		t.Fatalf("resolveDeliveryTarget: %v", err)
-	}
-	if target.queueKey != "team" {
-		t.Errorf("queueKey = %q, want %q", target.queueKey, "team")
-	}
-	if target.tmux != "leo-session-team" {
-		t.Errorf("tmux = %q, want %q", target.tmux, "leo-session-team")
-	}
-	if target.ensure != nil {
-		t.Errorf("expected nil ensure spec for a session-routed task, got %+v", target.ensure)
 	}
 }
 
@@ -373,44 +347,11 @@ func TestRunPersistentTemplateTaskEnqueuesWithAgentEnsure(t *testing.T) {
 	}
 }
 
-// TestRunPersistentSessionTaskDoesNotEnsure mirrors the above for a task with
-// an explicit `session:` — the router must never consult the AgentEnsurer for
-// it, proving the legacy path is untouched by the new ensure-exists wiring.
-func TestRunPersistentSessionTaskDoesNotEnsure(t *testing.T) {
-	home := shortTempDir(t)
-	ws := filepath.Join(home, "ws")
-	promptFile := writePromptFile(t, ws)
-
-	var calls []daemon.EnsureSpec
-	newTestDaemon(t, home, fakeEnsurer(func(_ context.Context, spec daemon.EnsureSpec) error {
-		calls = append(calls, spec)
-		return nil
-	}))
-
-	cfg := &config.Config{
-		HomePath: home,
-		Tasks: map[string]config.TaskConfig{
-			"reporter": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Session: "team"},
-		},
-		Sessions: map[string]config.SessionConfig{
-			"team": {Workspace: ws},
-		},
-	}
-
-	if err := runPersistent(cfg, "reporter"); err != nil {
-		t.Fatalf("runPersistent: %v", err)
-	}
-	if len(calls) != 0 {
-		t.Fatalf("expected no Ensure calls for a session-routed task, got %+v", calls)
-	}
-}
-
 // TestRunPersistentAgentTaskPersistsSessionIDToAgentstore is the report-path
 // counterpart to TestRunPersistentTemplateTaskEnqueuesWithAgentEnsure: once
-// the (fake) daemon reports completion with a discovered session id, an
-// agent-routed invocation (target.ensure != nil) must persist that id onto
-// the agentstore record — NOT the legacy "session:"+name session store, which
-// only the session-routed path below still writes.
+// the (fake) daemon reports completion with a discovered session id, a
+// persistent task's invocation must persist that id onto the agentstore
+// record — NOT the generic "session:"+name key-value store.
 func TestRunPersistentAgentTaskPersistsSessionIDToAgentstore(t *testing.T) {
 	home := shortTempDir(t)
 	ws := filepath.Join(home, "ws")
@@ -451,49 +392,7 @@ func TestRunPersistentAgentTaskPersistsSessionIDToAgentstore(t *testing.T) {
 	if _, found, err := session.NewStore(home).Get("session:worker"); err != nil {
 		t.Fatalf("checking session store: %v", err)
 	} else if found {
-		t.Error("agent-routed invocation must not write to the legacy session store")
-	}
-}
-
-// TestRunPersistentSessionTaskPersistsSessionIDToSessionStore mirrors the
-// above for the legacy session-routed path (task.Session set, no ensure
-// spec): the discovered session id must land in the generic "session:"+name
-// store, and must NOT create an agentstore record.
-func TestRunPersistentSessionTaskPersistsSessionIDToSessionStore(t *testing.T) {
-	home := shortTempDir(t)
-	ws := filepath.Join(home, "ws")
-	promptFile := writePromptFile(t, ws)
-
-	newTestDaemon(t, home, nil)
-
-	cfg := &config.Config{
-		HomePath: home,
-		Tasks: map[string]config.TaskConfig{
-			"reporter": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Session: "team"},
-		},
-		Sessions: map[string]config.SessionConfig{
-			"team": {Workspace: ws},
-		},
-	}
-
-	if err := runPersistent(cfg, "reporter"); err != nil {
-		t.Fatalf("runPersistent: %v", err)
-	}
-
-	got, _, err := session.NewStore(home).Get("session:team")
-	if err != nil {
-		t.Fatalf("expected session:team to be stored: %v", err)
-	}
-	if got != "sid-123" {
-		t.Errorf("session:team = %q, want %q", got, "sid-123")
-	}
-
-	recs, err := agentstore.Load(agentstore.FilePath(home))
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("loading agentstore: %v", err)
-	}
-	if _, ok := recs["team"]; ok {
-		t.Error("session-routed invocation must not create an agentstore record")
+		t.Error("persistent task invocations must not write to the generic session store")
 	}
 }
 
@@ -509,46 +408,5 @@ func TestNewInvocationID16IsHex32(t *testing.T) {
 				t.Fatalf("non-hex char in id: %q", id)
 			}
 		}
-	}
-}
-
-// TestSessionTmuxTargetTopologies verifies the bare logical session name is
-// mapped to the correct concrete tmux session for each remaining topology.
-// This is the seam that was wrong: the router was injecting into the bare
-// name.
-func TestSessionTmuxTargetTopologies(t *testing.T) {
-	cfg := &config.Config{
-		Tasks: map[string]config.TaskConfig{
-			"dedicated": {Runtime: "persistent", Workspace: "/w"},
-			"shared":    {Runtime: "persistent", Session: "team"},
-		},
-		Sessions: map[string]config.SessionConfig{"team": {Workspace: "/w"}},
-	}
-	cases := map[string]string{
-		"dedicated": "leo-session-dedicated", // Topology A — implicit dedicated
-		"shared":    "leo-session-team",      // Topology B — shared session
-	}
-	for task, want := range cases {
-		got, err := sessionTmuxTarget(cfg, task)
-		if err != nil {
-			t.Fatalf("%s: %v", task, err)
-		}
-		if got != want {
-			t.Fatalf("%s: tmux target = %q, want %q", task, got, want)
-		}
-	}
-}
-
-// TestSessionTmuxTargetProcessPrefixNowUnresolved verifies the removed
-// Topology C form (`session: process:<name>`) now errors as an unresolved
-// shared-session reference rather than being routed to a supervised process.
-func TestSessionTmuxTargetProcessPrefixNowUnresolved(t *testing.T) {
-	cfg := &config.Config{
-		Tasks: map[string]config.TaskConfig{
-			"attached": {Runtime: "persistent", Session: "process:web"},
-		},
-	}
-	if _, err := sessionTmuxTarget(cfg, "attached"); err == nil {
-		t.Fatalf("expected error resolving process:-prefixed session, got nil")
 	}
 }

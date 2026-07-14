@@ -34,3 +34,19 @@ func (c *Config) ResolveTaskTarget(taskName string) (string, TemplateConfig, boo
 	}
 	return task.Template, tmpl, false, nil
 }
+
+// channelSubset reports whether every element of want appears in have.
+// Returns (missing, false) when an element of want is absent from have.
+// Returns ("", true) when want is empty or fully covered.
+func channelSubset(want, have []string) (string, bool) {
+	set := make(map[string]struct{}, len(have))
+	for _, c := range have {
+		set[c] = struct{}{}
+	}
+	for _, c := range want {
+		if _, ok := set[c]; !ok {
+			return c, false
+		}
+	}
+	return "", true
+}

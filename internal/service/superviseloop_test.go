@@ -38,7 +38,7 @@ func TestRunSuperviseLoopExitsOnCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		runSuperviseLoop(ctx, "tmux", LoopSpec{
-			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp",
+			Name: "x", SessionName: "leo-agent-x", Workdir: "/tmp",
 			ShellCmd: func(bool) string { return "echo hi" },
 		})
 		close(done)
@@ -58,12 +58,12 @@ func TestRunSuperviseLoopExitsOnCancel(t *testing.T) {
 
 // TestRunSuperviseLoopUsesExactMatchTarget locks the fix for the "vanishing
 // agent" bug: the loop's has-session and kill-session calls MUST target the
-// exact-match form (=leo-session-x), not the bare name. With a bare name tmux
-// prefix-matches a longer session (e.g. "leo-session-xyz" or "leo-leoterm"),
+// exact-match form (=leo-agent-x), not the bare name. With a bare name tmux
+// prefix-matches a longer session (e.g. "leo-agent-xyz" or "leo-leoterm"),
 // so the liveness probe never reports the real session as gone and the
 // supervisor stops restarting it.
 func TestRunSuperviseLoopUsesExactMatchTarget(t *testing.T) {
-	want := tmux.Target("leo-session-x") // "=leo-session-x"
+	want := tmux.Target("leo-agent-x") // "=leo-agent-x"
 	var mu sync.Mutex
 	var hasExact, killExact bool
 
@@ -88,7 +88,7 @@ func TestRunSuperviseLoopUsesExactMatchTarget(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		runSuperviseLoop(ctx, "tmux", LoopSpec{
-			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp",
+			Name: "x", SessionName: "leo-agent-x", Workdir: "/tmp",
 			ShellCmd: func(bool) string { return "echo hi" },
 		})
 		close(done)
@@ -133,7 +133,7 @@ func TestRunSuperviseLoopRestartsAndCallsOnSessionEnd(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		runSuperviseLoop(ctx, "tmux", LoopSpec{
-			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp",
+			Name: "x", SessionName: "leo-agent-x", Workdir: "/tmp",
 			ShellCmd: func(bool) string { return "echo hi" }, OnSessionEnd: onEnd,
 		})
 		close(done)
@@ -176,7 +176,7 @@ func TestRunSuperviseLoopStripsResumeOnQuickExit(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		runSuperviseLoop(ctx, "tmux", LoopSpec{
-			Name: "x", SessionName: "leo-session-x", Workdir: "/tmp",
+			Name: "x", SessionName: "leo-agent-x", Workdir: "/tmp",
 			ShellCmd: func(resume bool) string {
 				mu.Lock()
 				resumeArgs = append(resumeArgs, resume)

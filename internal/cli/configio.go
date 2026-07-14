@@ -1,28 +1,10 @@
 package cli
 
 import (
-	"io"
-	"os"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
-
-// Testability seams — overridden in tests so confirm-on-reset prompts can be
-// exercised without a real TTY.
-var (
-	processStdin io.Reader = os.Stdin
-	processIsTTY           = defaultProcessIsTTY
-)
-
-// defaultProcessIsTTY reports whether stdin is an interactive character device.
-func defaultProcessIsTTY() bool {
-	info, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
-}
 
 // saveConfig writes the config to its source path.
 func saveConfig(cfg *config.Config) error {

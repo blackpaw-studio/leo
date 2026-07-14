@@ -93,15 +93,14 @@ func TestHarnessOptionsPartialRejectsUnknown(t *testing.T) {
 	}
 }
 
-// TestHarnessOptionsPartialTemplateAndSessionScopes exercises
-// locateHarnessScope's template and session branches, which the brief's core
-// three tests (process/task/defaults) don't reach.
-func TestHarnessOptionsPartialTemplateAndSessionScopes(t *testing.T) {
+// TestHarnessOptionsPartialTemplateScope exercises locateHarnessScope's
+// template branch, which the brief's core three tests (process/task/
+// defaults) don't reach.
+func TestHarnessOptionsPartialTemplateScope(t *testing.T) {
 	cfg := &config.Config{
 		Templates: map[string]config.TemplateConfig{"coding": {
 			HarnessOptions: map[string]any{"permission_mode": "auto"},
 		}},
-		Sessions: map[string]config.SessionConfig{"r": {Workspace: "/w"}},
 	}
 	s := seedHarnessTestServer(t, cfg)
 
@@ -111,11 +110,6 @@ func TestHarnessOptionsPartialTemplateAndSessionScopes(t *testing.T) {
 	}
 	if !strings.Contains(body, `dl-model-template-coding`) {
 		t.Errorf("template partial missing scoped datalist id: %s", body)
-	}
-
-	body = getBody(t, s, "/web/partials/harness-options?section=session&scope=r&harness=claude")
-	if !strings.Contains(body, `dl-model-session-r`) {
-		t.Errorf("session partial missing scoped datalist id: %s", body)
 	}
 }
 

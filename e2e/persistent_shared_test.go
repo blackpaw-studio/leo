@@ -11,21 +11,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
-// TestPersistentSharedSession exercises Topology B: multiple tasks point
-// at the same sessions: entry via session: <name>. Each task should land
-// in the same session and the sentinel marker is what correlates each
+// TestPersistentSharedTemplate exercises multiple tasks pointing at the same
+// templates: entry via template: <name>. Each task should land in the same
+// agent's tmux session and the sentinel marker is what correlates each
 // invocation to its waiting runner. A "human turn" (Report with empty
 // invocation_id) must be silently ignored, not crash anything.
-func TestPersistentSharedSession(t *testing.T) {
+func TestPersistentSharedTemplate(t *testing.T) {
 	dir := mkTempE2EDir(t, "leo-e2e-persist-shared-*")
 
 	cfgYAML := fmt.Sprintf(`defaults:
   model: sonnet
   max_turns: 15
-sessions:
+templates:
   homebase:
     workspace: %s
     model: sonnet
@@ -37,7 +38,7 @@ tasks:
     schedule: "0 9 * * *"
     prompt_file: prompts/MORNING.md
     runtime: persistent
-    session: homebase
+    template: homebase
     channels:
       - plugin:telegram@claude-plugins-official
     enabled: true
@@ -46,7 +47,7 @@ tasks:
     schedule: "0 21 * * *"
     prompt_file: prompts/EVENING.md
     runtime: persistent
-    session: homebase
+    template: homebase
     channels:
       - plugin:telegram@claude-plugins-official
     enabled: true
@@ -66,6 +67,15 @@ tasks:
 		t.Fatalf("writing evening prompt: %v", err)
 	}
 
+	// No AgentEnsurer is wired on this daemon (the test drives the injector
+	// directly, bypassing agent.Manager.Spawn), so pre-seed an agentstore
+	// record for the shared target agent — mirrors the real-world side
+	// effect of a first spawn — so the report-path agentstore.Update call
+	// below has a record to mutate.
+	if err := agentstore.Save(dir, agentstore.Record{Name: "homebase", Workspace: dir}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+
 	srv := startDaemon(t, dir, cfgPath)
 	cap := &promptCapture{}
 	installAutoResponder(t, srv, dir, cap)
@@ -74,7 +84,7 @@ tasks:
 	// router must accept this without disturbing future correlations.
 	humanCtx, humanCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer humanCancel()
-	if err := daemon.ReportTask(humanCtx, dir, "" /* no invocation id */, "human-csid", "human typing", "homebase"); err != nil {
+	if err := daemon.ReportTask(humanCtx, dir, "" /* no invocation id */, "human-csid", "human typing", "leo-homebase"); err != nil {
 		t.Fatalf("human-turn report: %v", err)
 	}
 
@@ -95,11 +105,11 @@ tasks:
 		t.Fatalf("expected 2 injections (one per task), got %d", len(rows))
 	}
 	for i, row := range rows {
-		// The injector must receive the concrete tmux session name
-		// ("leo-session-<name>" for a shared session), NOT the bare logical
-		// name — injecting into the bare name targets a nonexistent session.
-		if row.Session != "leo-session-homebase" {
-			t.Errorf("row[%d] injected session = %q, want %q", i, row.Session, "leo-session-homebase")
+		// The injector must receive the concrete tmux session name for the
+		// shared agent ("leo-<template>"), NOT either task's own name —
+		// both tasks deliver into the same agent-ensure target.
+		if row.Session != "leo-homebase" {
+			t.Errorf("row[%d] injected session = %q, want %q", i, row.Session, "leo-homebase")
 		}
 		if row.InvID == "" {
 			t.Errorf("row[%d] missing invocation marker", i)
@@ -123,12 +133,13 @@ tasks:
 		}
 	}
 
-	// Both tasks share a session; the second run should overwrite the
+	// Both tasks share an agent; the second run should overwrite the
 	// first's stored session id (the auto-responder derives it from the
 	// injected tmux session name), demonstrating shared resume state. The
-	// id is keyed under the bare logical session name ("homebase").
-	got := pollStoredSessionID(t, dir, "homebase", 3*time.Second)
-	if want := "csid-leo-session-homebase"; got != want {
+	// id is keyed under the shared agent's name ("homebase") in the
+	// agentstore, not the legacy generic session store.
+	got := pollAgentstoreSessionID(t, dir, "homebase", 3*time.Second)
+	if want := "csid-leo-homebase"; got != want {
 		t.Errorf("stored session id = %q, want %q", got, want)
 	}
 }

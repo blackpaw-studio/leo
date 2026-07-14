@@ -485,30 +485,27 @@ func TestRunSupervisedDelegates(t *testing.T) {
 	defer func() { supervisedExecFn = origFn }()
 
 	var calledPath string
-	var calledSessions []SessionSpec
+	var calledHomePath string
 	var calledConfigPath string
 	var calledToken string
-	supervisedExecFn = func(claudePath string, sessionSpecs []SessionSpec, homePath, configPath, webToken string) error {
+	supervisedExecFn = func(claudePath string, homePath, configPath, webToken string) error {
 		calledPath = claudePath
-		calledSessions = sessionSpecs
+		calledHomePath = homePath
 		calledConfigPath = configPath
 		calledToken = webToken
 		return nil
 	}
 
-	sessionSpecs := []SessionSpec{
-		{Name: "research", Workdir: "/workspace"},
-	}
 	const wantToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err := RunSupervised("/usr/bin/claude", sessionSpecs, "/home/.leo", "/home/.leo/leo.yaml", wantToken)
+	err := RunSupervised("/usr/bin/claude", "/home/.leo", "/home/.leo/leo.yaml", wantToken)
 	if err != nil {
 		t.Fatalf("RunSupervised() error: %v", err)
 	}
 	if calledPath != "/usr/bin/claude" {
 		t.Errorf("path = %q, want /usr/bin/claude", calledPath)
 	}
-	if len(calledSessions) != 1 || calledSessions[0].Name != "research" {
-		t.Errorf("sessionSpecs = %v, want 1 session named research", calledSessions)
+	if calledHomePath != "/home/.leo" {
+		t.Errorf("homePath = %q, want /home/.leo", calledHomePath)
 	}
 	if calledConfigPath != "/home/.leo/leo.yaml" {
 		t.Errorf("configPath = %q, want /home/.leo/leo.yaml", calledConfigPath)

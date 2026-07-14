@@ -44,23 +44,6 @@ func TestResolveTaskTargetOneshotErrors(t *testing.T) {
 	}
 }
 
-func TestValidateTemplateAndSessionMutuallyExclusive(t *testing.T) {
-	cfg := &Config{
-		Templates: map[string]TemplateConfig{"assistant": {Channels: []string{"plugin:a@b"}}},
-		Sessions:  map[string]SessionConfig{"daily": {Channels: []string{"plugin:a@b"}}},
-		Tasks: map[string]TaskConfig{
-			"bad": {
-				Runtime: "persistent", Template: "assistant", Session: "daily",
-				Schedule: "0 7 * * *", PromptFile: "p.md",
-			},
-		},
-	}
-	err := cfg.Validate()
-	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("expected mutually-exclusive error, got %v", err)
-	}
-}
-
 func TestValidateTaskTemplateMissing(t *testing.T) {
 	cfg := &Config{
 		Tasks: map[string]TaskConfig{

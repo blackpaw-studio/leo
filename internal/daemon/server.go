@@ -108,12 +108,10 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
 	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
 
-	// Session-routed task delivery (persistent task sessions).
+	// Persistent-task prompt delivery (ensure-exists into agent tmux sessions).
 	mux.HandleFunc("POST /task/enqueue", s.handleTaskEnqueue)
 	mux.HandleFunc("GET /task/await", s.handleTaskAwait)
 	mux.HandleFunc("POST /task/report", s.handleTaskReport)
-	mux.HandleFunc("POST /session/reset", s.handleSessionReset)
-	mux.HandleFunc("GET /session/depth", s.handleSessionDepth)
 
 	// Agent lifecycle — served only when an AgentManager has been attached via
 	// SetAgentManager(). Handlers short-circuit with 503 when s.agentMgr is nil.
@@ -211,23 +209,6 @@ func (a *processAdapter) States() map[string]web.ProcessStateInfo {
 	return result
 }
 
-// webSessionRuntime adapts this Server's in-process sessionRouter to
-// web.SessionRuntimeProvider. The web UI is always served embedded inside
-// this same daemon process (see StartWeb below), so — unlike the CLI, a
-// separate process that must reach the router over the daemon's Unix-socket
-// HTTP API at /session/reset and /session/depth (see
-// internal/cli/session.go and handleSessionReset/handleSessionDepth above)
-// — this calls straight through to s.router with no socket round-trip.
-type webSessionRuntime struct{ s *Server }
-
-func (w webSessionRuntime) ResetSession(session, reason string) int {
-	return w.s.router.ResetSession(session, reason)
-}
-
-func (w webSessionRuntime) SessionDepth(session string) int {
-	return w.s.router.QueueDepth(session)
-}
-
 // AgentSpawnSpec is retained as an alias to agent.SpawnRequest for backwards
 // compatibility with call sites; new code should use agent.SpawnRequest directly.
 type AgentSpawnSpec = agent.SpawnRequest
@@ -251,12 +232,11 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 
 	port := cfg.WebPort()
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
-		Port:           port,
-		APIToken:       apiToken,
-		AllowedHosts:   cfg.Web.AllowedHosts,
-		SessionRuntime: webSessionRuntime{s: s},
-		LogPath:        s.logPath,
-		ResolveHandle:  s.resolveHandle,
+		Port:          port,
+		APIToken:      apiToken,
+		AllowedHosts:  cfg.Web.AllowedHosts,
+		LogPath:       s.logPath,
+		ResolveHandle: s.resolveHandle,
 	})
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
@@ -337,7 +317,7 @@ func (s *Server) SetAgentManager(m AgentManager) {
 // ensure-exists task-delivery path (spawn/resume an agent target before
 // injecting) for persistent tasks routed via config.ResolveTaskTarget.
 // Optional: leaving it unset is safe — invocations without an EnsureSpec
-// (every legacy session-only task) never consult it.
+// never consult it.
 func (s *Server) SetEnsurer(e AgentEnsurer) {
 	s.router.SetEnsurer(e)
 }
@@ -373,9 +353,8 @@ type taskEnqueueReq struct {
 	Channels       []string `json:"channels"`
 	QueueMax       int      `json:"queue_max"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
-	// Ensure, when present, is the ensure-exists spec for the new
-	// agent-routed persistent-task path — nil for the legacy session-only
-	// path (see EnqueueParams.Ensure).
+	// Ensure, when present, is the ensure-exists spec for the agent-routed
+	// persistent-task path (see EnqueueParams.Ensure).
 	Ensure *EnsureSpec `json:"ensure,omitempty"`
 }
 
@@ -473,38 +452,6 @@ func (s *Server) handleTaskReport(w http.ResponseWriter, r *http.Request) {
 		FinalMessage: req.FinalMessage,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-type sessionResetReq struct {
-	Session string `json:"session"`
-	Reason  string `json:"reason"`
-}
-
-func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request) {
-	var req sessionResetReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
-		return
-	}
-	if req.Session == "" {
-		writeError(w, http.StatusBadRequest, "session required")
-		return
-	}
-	reason := req.Reason
-	if reason == "" {
-		reason = "session reset"
-	}
-	cleared := s.router.ResetSession(req.Session, reason)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": cleared})
-}
-
-func (s *Server) handleSessionDepth(w http.ResponseWriter, r *http.Request) {
-	session := r.URL.Query().Get("session")
-	if session == "" {
-		writeError(w, http.StatusBadRequest, "session required")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "depth": s.router.QueueDepth(session)})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
