@@ -80,7 +80,8 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          # Pinned for determinism — keep in sync with GOLANGCI_VERSION in the Makefile.
+          version: v2.12.2
 
       # Pin gosec to a known-good release. Bump deliberately after reviewing
       # release notes at https://github.com/securego/gosec/releases.
