@@ -1,11 +1,11 @@
 {{define "page_template_edit"}}
 <h1 class="page-title"><a href="/config/templates">Templates</a> / {{.Data.Name}}</h1>
 <div class="card">
-  <h2 class="card-title">Rename</h2>
-  <form hx-post="/web/template/{{.Data.Name}}/rename" hx-target="#flash-container" hx-swap="innerHTML" class="inline-form">
+  <div class="card-head"><b>Rename</b></div>
+  <form hx-post="/web/template/{{.Data.Name}}/rename" hx-target="#flash-container" hx-swap="innerHTML" class="inline-rename">
     <input type="text" name="new_name" value="{{.Data.Name}}" required
            pattern="[A-Za-z0-9._-]+" aria-label="New template name" />
-    <button type="submit">Rename</button>
+    <button type="submit" class="btn">Rename</button>
   </form>
 </div>
 <div class="card">{{template "config_form" .Data.Form}}</div>
