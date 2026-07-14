@@ -288,6 +288,25 @@ func TestTemplateRenameInvalidName(t *testing.T) {
 	}
 }
 
+func TestTemplateRenameNonexistent(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	// A no-op rename (new_name == path name) of a template that does not exist
+	// must flash "not found", not redirect to a nonexistent edit page.
+	form := url.Values{"new_name": {"ghost"}}
+	req := httptest.NewRequest("POST", "/web/template/ghost/rename", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if got := w.Header().Get("HX-Redirect"); got != "" {
+		t.Errorf("expected no HX-Redirect for missing template, got %q", got)
+	}
+	if !strings.Contains(w.Body.String(), "not found") {
+		t.Errorf("expected not-found flash, got %q", w.Body.String())
+	}
+}
+
 func TestTemplateEditShowsRenameForm(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 

@@ -788,12 +788,6 @@ func (s *Server) handleTemplateRename(w http.ResponseWriter, r *http.Request) {
 		s.renderFlashToContainer(w, "error", "New name is required")
 		return
 	}
-	if newName == name {
-		// No-op rename: bounce back to the same edit page.
-		w.Header().Set("HX-Redirect", "/config/templates/"+url.PathEscape(name))
-		w.WriteHeader(http.StatusOK)
-		return
-	}
 	if !validEntityName(newName) {
 		s.renderFlashToContainer(w, "error", entityNameError)
 		return
@@ -802,6 +796,19 @@ func (s *Server) handleTemplateRename(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.loadConfig()
 	if err != nil {
 		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if _, ok := cfg.Templates[name]; !ok {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Template %q not found", name))
+		return
+	}
+	if newName == name {
+		// No-op rename: bounce back to the same edit page. Guarded by the
+		// existence check above so a stale path can't redirect to a page that
+		// isn't there.
+		w.Header().Set("HX-Redirect", "/config/templates/"+url.PathEscape(name))
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
