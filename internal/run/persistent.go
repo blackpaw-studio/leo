@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -18,16 +17,13 @@ import (
 
 // sessionTmuxTarget resolves a persistent task's logical session name to the
 // concrete tmux session it is supervised under. Topology A/B sessions are
-// hosted as "leo-session-<name>"; Topology C routes into an existing process
-// hosted as "leo-<name>". This is the mapping the daemon's prompt injector
-// must target — the bare logical name is only the router's FIFO key.
+// hosted as "leo-session-<name>". This is the mapping the daemon's prompt
+// injector must target — the bare logical name is only the router's FIFO
+// key.
 func sessionTmuxTarget(cfg *config.Config, taskName string) (string, error) {
-	name, topo, _, err := cfg.ResolveSession(taskName)
+	name, _, _, err := cfg.ResolveSession(taskName)
 	if err != nil {
 		return "", err
-	}
-	if topo == config.TopologyProcess {
-		return agent.SessionName(name), nil
 	}
 	return service.SessionTmuxName(name), nil
 }
