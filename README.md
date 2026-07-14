@@ -1,7 +1,7 @@
 <h1 align="center">🐈‍⬛ Leo</h1>
 
 <p align="center">
-  <em>A process supervisor and task scheduler for Claude Code.</em>
+  <em>Supervises Claude Code agents and schedules tasks.</em>
 </p>
 
 <p align="center">
@@ -90,40 +90,36 @@ cosign verify-blob \
 ## Quick Start
 
 ```bash
-leo setup              # interactive: profile, workspace, first process
-leo service start      # supervise processes in the foreground
+leo setup              # interactive: profile, workspace, first agent
+leo service start      # start the daemon in the foreground
 leo service start -d   # install as a launchd/systemd service
 ```
 
-Open the dashboard at <http://127.0.0.1:8370>. For mobile or chat access, install a channel plugin and add its ID to the process's `channels:` list.
+Open the dashboard at <http://127.0.0.1:8370>. For mobile or chat access, install a channel plugin and add its ID to the agent's `channels:` list.
 
 ## What Leo does
 
-Three primitives, one daemon:
+Two primitives, one daemon:
 
 | Primitive | What it is |
 |---|---|
-| **Processes** | Long-running supervised Claude sessions. Auto-restart with exponential backoff. Each gets its own workspace, model, channels, and permissions. |
-| **Templates → Agents** | Reusable blueprints for ephemeral agents. Spawn from CLI, web UI, or a channel. Each agent clones a repo into its own tmux session. |
+| **Agents** | Spawned from reusable templates via CLI, web UI, or a channel — with or without a repo. Auto-restart with exponential backoff, own workspace/model/channels/permissions, each in its own tmux session. A long-lived assistant is just an agent that never stops: it persists in the agent store and auto-restores on daemon restart. |
 | **Tasks** | Cron-driven non-interactive Claude runs. Prompt file + schedule. Optional retry, channel notify on failure. |
 
 A web dashboard, a token-authed HTTP API, and a built-in MCP server (so every channel gets `/clear`, `/compact`, `/stop`, `/tasks`, `/agent`, `/agents` for free) all live in the same daemon.
 
-### Processes
+### Agents / Templates
 
-```yaml
-processes:
-  assistant:
-    channels: [plugin:telegram@claude-plugins-official]
-    harness_options:
-      remote_control: true
-    enabled: true
-```
-
-### Agent templates
+Templates are reusable blueprints — spawn an agent from one with or without a repo:
 
 ```yaml
 templates:
+  assistant:
+    model: sonnet
+    channels: [plugin:telegram@claude-plugins-official]
+    harness_options:
+      remote_control: true
+
   coding:
     model: sonnet
     workspace: ~/agents
@@ -133,14 +129,17 @@ templates:
 ```
 
 ```bash
-leo agent spawn coding                                   # run the template as-is (no repo)
+leo agent spawn assistant                                 # no repo — run the template as-is, agent named "assistant"
+leo agent spawn coding                                    # same, for a repo-driven template
 leo agent spawn coding --repo blackpaw-studio/leo --name demo
 leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
-leo agent attach demo                                    # full tmux attach
-leo attach                                               # no name → interactive picker
-leo attach demo --cc                                     # iTerm2 / WezTerm native tab via tmux control mode
-leo agent stop feat-cache --prune --delete-branch        # stop + clean worktree
+leo agent attach demo                                     # full tmux attach
+leo attach                                                # no name → interactive picker
+leo attach demo --cc                                      # iTerm2 / WezTerm native tab via tmux control mode
+leo agent stop feat-cache --prune --delete-branch          # stop + clean worktree
 ```
+
+A repo-less spawn (like `assistant` above) is how you run a long-lived, always-on assistant — it just keeps running, restarts on crash, and comes back after `leo service restart`.
 
 ### Scheduled tasks
 
@@ -187,7 +186,7 @@ web:
   port: 8370
 ```
 
-Browser UI for processes, tasks, config, agents, and cron previews. Binds to `127.0.0.1` by default.
+Browser UI for agents, tasks, config, and cron previews. Binds to `127.0.0.1` by default.
 
 <details>
 <summary><strong>Auth model</strong> (read this before exposing the daemon)</summary>
@@ -213,10 +212,9 @@ The token file is readable by any process running as the same Unix user — inte
 | Command | What it does |
 |---|---|
 | `leo setup` | Interactive setup wizard |
-| `leo status` | Overall snapshot — service, processes, tasks, templates, web |
+| `leo status` | Overall snapshot — service, agents, tasks, templates, web |
 | `leo validate` | Check config, prerequisites, workspace health |
 | `leo service start` / `stop` / `restart` / `logs` | Supervisor lifecycle |
-| `leo process …` | `list`, `add`, `remove`, `enable`, `disable` |
 | `leo task …` | `list`, `add`, `remove`, `enable`, `disable`, `history`, `logs` |
 | `leo template …` | `list`, `show`, `remove` |
 | `leo agent …` | `list`, `spawn`, `attach`, `stop`, `logs` (local or over SSH) |
