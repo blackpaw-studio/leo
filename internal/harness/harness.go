@@ -15,9 +15,8 @@ import "io"
 type Kind string
 
 const (
-	KindAgent   Kind = "agent"
-	KindTask    Kind = "task"
-	KindSession Kind = "session"
+	KindAgent Kind = "agent"
+	KindTask  Kind = "task"
 )
 
 // SessionMode says how a launch relates to an existing session.

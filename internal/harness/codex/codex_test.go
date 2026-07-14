@@ -50,7 +50,6 @@ func TestSupportsKind(t *testing.T) {
 	}{
 		{harness.KindTask, true},
 		{harness.KindAgent, true},
-		{harness.KindSession, true},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.kind), func(t *testing.T) {
@@ -179,9 +178,9 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 			want: []string{"-a", "never", "--model", "gpt-5.6-sol", "--sandbox", "workspace-write"},
 		},
 		{
-			name: "KindSession TUI argv with MCP bridge",
+			name: "KindAgent TUI argv with MCP bridge",
 			spec: harness.LaunchSpec{
-				Kind: harness.KindSession, Model: "gpt-5.3-codex",
+				Kind: harness.KindAgent, Model: "gpt-5.3-codex",
 				Options: Options{
 					LeoMCP: &LeoMCPBridge{
 						Command: "leo", Args: []string{"mcp-server"},

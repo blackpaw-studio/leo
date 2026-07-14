@@ -37,11 +37,10 @@ func (Opencode) ValidateModel(model string) error {
 
 func (Opencode) SupportsChannels() bool { return false }
 
-// SupportsKind: scheduled tasks plus ephemeral agents and persistent
-// sessions — all driven against the interactive opencode TUI supervised in
-// tmux.
+// SupportsKind: scheduled tasks plus ephemeral agents — all driven against
+// the interactive opencode TUI supervised in tmux.
 func (Opencode) SupportsKind(k harness.Kind) bool {
-	return k == harness.KindTask || k == harness.KindAgent || k == harness.KindSession
+	return k == harness.KindTask || k == harness.KindAgent
 }
 
 // Driver: the shared tmuxtui driver, wired with opencode's readiness-probe
@@ -72,7 +71,7 @@ func (o Opencode) Args(spec harness.LaunchSpec) ([]string, error) {
 		return nil, fmt.Errorf("opencode: channel plugins are not supported; use leo's MCP tools for messaging")
 	}
 
-	if spec.Kind == harness.KindAgent || spec.Kind == harness.KindSession {
+	if spec.Kind == harness.KindAgent {
 		// Interactive TUI argv; workspace rides in as tmux new-session's -c
 		// cwd. Resume (-s) is added by RefreshSessionArgs once a session id
 		// is discovered; the opening prompt is injected by the driver's

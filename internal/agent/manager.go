@@ -206,9 +206,19 @@ func (m *Manager) spawnResolved(ctx context.Context, cfg *config.Config, tmpl co
 }
 
 // Live reports whether name is a currently running (supervised) agent.
+// Live reports whether name is a currently supervised ephemeral agent whose
+// process is up or coming up. "running" and "starting" both count: the
+// injector readiness-probes before delivering, so it's safe (and desirable)
+// to treat a still-booting agent as a valid injection target rather than
+// falsely reporting "not live" and triggering a redundant spawn/resume.
+// "restarting" and "stopped" do not count — there is no process to inject
+// into yet.
 func (m *Manager) Live(name string) bool {
-	_, ok := m.sup.EphemeralAgents()[name]
-	return ok
+	info, ok := m.sup.EphemeralAgents()[name]
+	if !ok {
+		return false
+	}
+	return info.Status == "running" || info.Status == "starting"
 }
 
 // Suspended reports whether name has a persisted agentstore record marked

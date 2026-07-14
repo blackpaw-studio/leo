@@ -494,11 +494,25 @@ func TestSpawnFromTemplateRequiresName(t *testing.T) {
 // --- Live / Suspended (ensure-exists liveness probes) ---
 
 func TestLiveReportsSupervisorState(t *testing.T) {
-	sup := &capturingSupervisor{agents: map[string]ProcessState{"running-agent": {Name: "running-agent", Status: "running"}}}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{
+		"running-agent":    {Name: "running-agent", Status: "running"},
+		"starting-agent":   {Name: "starting-agent", Status: "starting"},
+		"stopped-agent":    {Name: "stopped-agent", Status: "stopped"},
+		"restarting-agent": {Name: "restarting-agent", Status: "restarting"},
+	}}
 	m := New(func() (*config.Config, error) { return &config.Config{}, nil }, sup, "", "")
 
 	if !m.Live("running-agent") {
 		t.Errorf("expected Live(running-agent) = true")
+	}
+	if !m.Live("starting-agent") {
+		t.Errorf("expected Live(starting-agent) = true (readiness-probed on injection)")
+	}
+	if m.Live("stopped-agent") {
+		t.Errorf("expected Live(stopped-agent) = false")
+	}
+	if m.Live("restarting-agent") {
+		t.Errorf("expected Live(restarting-agent) = false")
 	}
 	if m.Live("unknown") {
 		t.Errorf("expected Live(unknown) = false")

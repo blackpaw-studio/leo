@@ -586,9 +586,9 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("tasks.%s.template is only valid when runtime: persistent", name))
 		}
 		if task.Runtime == "persistent" && task.Template != "" {
-			tmpl, ok := c.Templates[task.Template]
-			if !ok {
-				errs = append(errs, fmt.Sprintf("tasks.%s references templates.%s which is not defined", name, task.Template))
+			_, tmpl, _, err := c.ResolveTaskTarget(name)
+			if err != nil {
+				errs = append(errs, err.Error())
 			} else {
 				if missing, ok := channelSubset(task.Channels, tmpl.Channels); !ok {
 					errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in templates.%s.channels (task.channels must be a subset)", name, missing, task.Template))

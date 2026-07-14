@@ -18,6 +18,10 @@ type fakeEnsureMgr struct {
 	spawned   []string
 	resumeErr error
 	spawnErr  error
+	// spawnName, when set, is returned as the spawned Record.Name instead of
+	// the requested name — simulating a reservation collision that suffixed
+	// the name (e.g. "foo" -> "foo-2").
+	spawnName string
 }
 
 func (f *fakeEnsureMgr) Live(name string) bool      { return f.live[name] }
@@ -35,6 +39,9 @@ func (f *fakeEnsureMgr) SpawnFromTemplate(_ context.Context, name string, _ conf
 	f.spawned = append(f.spawned, name)
 	if f.spawnErr != nil {
 		return agent.Record{}, f.spawnErr
+	}
+	if f.spawnName != "" {
+		return agent.Record{Name: f.spawnName}, nil
 	}
 	return agent.Record{Name: name}, nil
 }
@@ -96,6 +103,19 @@ func TestEnsureSpawnFailurePropagates(t *testing.T) {
 	}
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected wrapped %v, got %v", wantErr, err)
+	}
+}
+
+func TestEnsureSpawnNameCollisionFails(t *testing.T) {
+	f := &fakeEnsureMgr{spawnName: "foo-2"}
+	e := NewAgentEnsurer(f)
+
+	err := e.Ensure(context.Background(), EnsureSpec{Name: "foo"})
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if len(f.spawned) != 1 || f.spawned[0] != "foo" {
+		t.Fatalf("expected SpawnFromTemplate(foo) once, got %v", f.spawned)
 	}
 }
 

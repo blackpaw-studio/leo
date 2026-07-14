@@ -69,7 +69,6 @@ func TestSupportsKind(t *testing.T) {
 	}{
 		{harness.KindTask, true},
 		{harness.KindAgent, true},
-		{harness.KindSession, true},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.kind), func(t *testing.T) {
@@ -148,14 +147,6 @@ func TestArgs(t *testing.T) {
 				Options: Options{},
 			},
 			want: nil,
-		},
-		{
-			name: "KindSession TUI argv with model",
-			spec: harness.LaunchSpec{
-				Kind: harness.KindSession, Model: "anthropic/claude-sonnet-4-5",
-				Options: Options{},
-			},
-			want: []string{"--model", "anthropic/claude-sonnet-4-5"},
 		},
 	}
 	for _, tt := range tests {

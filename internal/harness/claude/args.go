@@ -2,7 +2,6 @@ package claude
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -60,40 +59,6 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 		args = append(args, spec.Prompt)
 	}
 	return args
-}
-
-// sessionArgs reproduces the pre-harness buildSessionClaudeArgs
-// byte-for-byte for persistent task sessions. No MCP flags: channel
-// plugins load at session boot and delivery happens in-session.
-func sessionArgs(spec harness.LaunchSpec, o Options) []string {
-	var a []string
-	if spec.Model != "" {
-		a = append(a, "--model", spec.Model)
-	}
-	a = append(a, Claude{}.SessionArgs(spec.Session)...)
-	if o.PermissionMode != "" {
-		a = append(a, "--permission-mode", o.PermissionMode)
-	}
-	for _, ch := range spec.Channels {
-		a = append(a, "--channels", ch)
-	}
-	if o.AgentFile != "" {
-		a = append(a, "--agent", o.AgentFile)
-	}
-	a = append(a, "--add-dir", spec.Workspace)
-	for _, d := range spec.AddDirs {
-		a = append(a, "--add-dir", d)
-	}
-	if len(o.AllowedTools) > 0 {
-		a = append(a, "--allowed-tools", strings.Join(o.AllowedTools, ","))
-	}
-	if len(o.DisallowedTools) > 0 {
-		a = append(a, "--disallowed-tools", strings.Join(o.DisallowedTools, ","))
-	}
-	if sp := mergeSystemPrompt(spec.SystemContext, o.AppendSystemPrompt); sp != "" {
-		a = append(a, "--append-system-prompt", sp)
-	}
-	return a
 }
 
 // taskArgs reproduces internal/run.buildArgs flag order exactly.

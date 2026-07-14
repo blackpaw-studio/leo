@@ -71,8 +71,12 @@ func (e *managerEnsurer) Ensure(ctx context.Context, spec EnsureSpec) error {
 		}
 		return nil
 	}
-	if _, err := e.mgr.SpawnFromTemplate(ctx, spec.Name, spec.Template); err != nil {
+	rec, err := e.mgr.SpawnFromTemplate(ctx, spec.Name, spec.Template)
+	if err != nil {
 		return fmt.Errorf("spawning agent %q: %w", spec.Name, err)
+	}
+	if rec.Name != spec.Name {
+		return fmt.Errorf("ensure %q: spawn produced agent %q (name collision); cannot deliver", spec.Name, rec.Name)
 	}
 	return nil
 }
