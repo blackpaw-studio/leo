@@ -15,20 +15,6 @@ defaults:
   model: sonnet
   max_turns: 15
 
-processes:
-  assistant:
-    channels:
-      - "plugin:telegram@claude-plugins-official"
-    remote_control: true
-    enabled: true
-
-  researcher:
-    workspace: /tmp/research
-    model: opus
-    add_dirs:
-      - /tmp/data
-    enabled: true
-
 tasks:
   heartbeat:
     schedule: "0,30 7-22 * * *"
@@ -58,13 +44,6 @@ func TestValidate(t *testing.T) {
 			Defaults: DefaultsConfig{
 				Model:    "sonnet",
 				MaxTurns: 15,
-			},
-			Processes: map[string]ProcessConfig{
-				"assistant": {
-					Channels:       []string{"plugin:telegram@claude-plugins-official"},
-					HarnessOptions: map[string]any{"remote_control": true},
-					Enabled:        true,
-				},
 			},
 			Tasks: map[string]TaskConfig{
 				"heartbeat": {
@@ -116,30 +95,6 @@ func TestValidate(t *testing.T) {
 		cfg.Tasks["heartbeat"] = task
 		if err := cfg.Validate(); err == nil {
 			t.Error("expected error for invalid channel ID")
-		}
-	})
-
-	t.Run("process invalid model", func(t *testing.T) {
-		cfg := validConfig()
-		cfg.Processes["bad"] = ProcessConfig{Model: "gpt-4", Enabled: true}
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if got := err.Error(); !contains(got, "processes.bad.model") {
-			t.Errorf("error = %q, want mention of processes.bad.model", got)
-		}
-	})
-
-	t.Run("process negative max turns", func(t *testing.T) {
-		cfg := validConfig()
-		cfg.Processes["bad"] = ProcessConfig{MaxTurns: -1, Enabled: true}
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if got := err.Error(); !contains(got, "processes.bad.max_turns") {
-			t.Errorf("error = %q, want mention of max_turns", got)
 		}
 	})
 
@@ -205,9 +160,6 @@ func TestValidateRejectsRemovedProviders(t *testing.T) {
 				Model:    "sonnet",
 				MaxTurns: 15,
 			},
-			Processes: map[string]ProcessConfig{
-				"p": {Enabled: true},
-			},
 			Tasks: map[string]TaskConfig{
 				"t": {Schedule: "0 * * * *", PromptFile: "HEARTBEAT.md", Enabled: true},
 			},
@@ -230,11 +182,6 @@ func TestValidateRejectsRemovedProviders(t *testing.T) {
 			"providers: this section has been removed — see docs/configuration/harnesses.md"},
 		{"defaults.provider", func(c *Config) { c.Defaults.DeprecatedProvider = "corp" },
 			"defaults.provider has been removed along with providers — see docs/configuration/harnesses.md"},
-		{"processes.p.provider", func(c *Config) {
-			p := c.Processes["p"]
-			p.DeprecatedProvider = "corp"
-			c.Processes["p"] = p
-		}, "processes.p.provider has been removed along with providers — see docs/configuration/harnesses.md"},
 		{"tasks.t.provider", func(c *Config) {
 			task := c.Tasks["t"]
 			task.DeprecatedProvider = "corp"
@@ -382,22 +329,8 @@ func TestLoadConfig(t *testing.T) {
 		t.Errorf("default max_turns = %d, want %d", cfg.Defaults.MaxTurns, 15)
 	}
 
-	if len(cfg.Processes) != 2 {
-		t.Errorf("processes count = %d, want %d", len(cfg.Processes), 2)
-	}
-
 	if len(cfg.Tasks) != 3 {
 		t.Errorf("tasks count = %d, want %d", len(cfg.Tasks), 3)
-	}
-
-	// Check process workspace was kept
-	if ws := cfg.Processes["researcher"].Workspace; ws != "/tmp/research" {
-		t.Errorf("researcher workspace = %q, want /tmp/research", ws)
-	}
-
-	// Check assistant has no explicit workspace (defaults apply)
-	if ws := cfg.Processes["assistant"].Workspace; ws != "" {
-		t.Errorf("assistant workspace = %q, want empty", ws)
 	}
 }
 
@@ -417,14 +350,6 @@ func TestIsClientOnly(t *testing.T) {
 		{
 			name: "no client hosts",
 			cfg:  Config{},
-			want: false,
-		},
-		{
-			name: "hosts plus local process",
-			cfg: Config{
-				Client:    ClientConfig{Hosts: hosts},
-				Processes: map[string]ProcessConfig{"main": {}},
-			},
 			want: false,
 		},
 		{
@@ -462,126 +387,11 @@ func TestDefaultWorkspace(t *testing.T) {
 	}
 }
 
-func TestProcessWorkspace(t *testing.T) {
-	cfg := &Config{HomePath: "/home/user/.leo"}
-
-	t.Run("explicit workspace", func(t *testing.T) {
-		p := ProcessConfig{Workspace: "/custom/workspace"}
-		if got := cfg.ProcessWorkspace(p); got != "/custom/workspace" {
-			t.Errorf("ProcessWorkspace() = %q, want /custom/workspace", got)
-		}
-	})
-
-	t.Run("default workspace", func(t *testing.T) {
-		p := ProcessConfig{}
-		want := "/home/user/.leo/workspace"
-		if got := cfg.ProcessWorkspace(p); got != want {
-			t.Errorf("ProcessWorkspace() = %q, want %q", got, want)
-		}
-	})
-}
-
-func TestProcessDefaults(t *testing.T) {
-	cfg := &Config{
-		Defaults: DefaultsConfig{
-			Model:    "sonnet",
-			MaxTurns: 15,
-		},
-	}
-
-	t.Run("process model override", func(t *testing.T) {
-		p := ProcessConfig{Model: "opus"}
-		if got := cfg.ProcessModel(p); got != "opus" {
-			t.Errorf("ProcessModel() = %q, want opus", got)
-		}
-	})
-
-	t.Run("process model default", func(t *testing.T) {
-		p := ProcessConfig{}
-		if got := cfg.ProcessModel(p); got != "sonnet" {
-			t.Errorf("ProcessModel() = %q, want sonnet", got)
-		}
-	})
-
-	t.Run("process max_turns override", func(t *testing.T) {
-		p := ProcessConfig{MaxTurns: 30}
-		if got := cfg.ProcessMaxTurns(p); got != 30 {
-			t.Errorf("ProcessMaxTurns() = %d, want 30", got)
-		}
-	})
-
-	t.Run("process max_turns default", func(t *testing.T) {
-		p := ProcessConfig{}
-		if got := cfg.ProcessMaxTurns(p); got != 15 {
-			t.Errorf("ProcessMaxTurns() = %d, want 15", got)
-		}
-	})
-
-}
-
-func TestProcessStaleResume(t *testing.T) {
-	zero := 0
-	six := 6
-	neg := -1
-
-	t.Run("no config returns 12h default", func(t *testing.T) {
-		cfg := &Config{}
-		if got := cfg.ProcessStaleResume(ProcessConfig{}); got != 12*time.Hour {
-			t.Errorf("ProcessStaleResume() = %s, want 12h", got)
-		}
-	})
-
-	t.Run("defaults override to 24", func(t *testing.T) {
-		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: 24}}
-		if got := cfg.ProcessStaleResume(ProcessConfig{}); got != 24*time.Hour {
-			t.Errorf("ProcessStaleResume() = %s, want 24h", got)
-		}
-	})
-
-	t.Run("per-process override wins", func(t *testing.T) {
-		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: 24}}
-		p := ProcessConfig{StaleResumeHours: &six}
-		if got := cfg.ProcessStaleResume(p); got != 6*time.Hour {
-			t.Errorf("ProcessStaleResume() = %s, want 6h", got)
-		}
-	})
-
-	t.Run("zero on process disables check", func(t *testing.T) {
-		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: 12}}
-		p := ProcessConfig{StaleResumeHours: &zero}
-		if got := cfg.ProcessStaleResume(p); got != 0 {
-			t.Errorf("ProcessStaleResume() = %s, want 0 (disabled)", got)
-		}
-	})
-
-	t.Run("negative process override disables", func(t *testing.T) {
-		cfg := &Config{}
-		p := ProcessConfig{StaleResumeHours: &neg}
-		if got := cfg.ProcessStaleResume(p); got != 0 {
-			t.Errorf("ProcessStaleResume() = %s, want 0 (disabled)", got)
-		}
-	})
-}
-
 func TestValidateStaleResumeHours(t *testing.T) {
-	neg := -1
-
 	t.Run("negative defaults rejected", func(t *testing.T) {
 		cfg := &Config{Defaults: DefaultsConfig{StaleResumeHours: -1}}
 		err := cfg.Validate()
 		if err == nil || !strings.Contains(err.Error(), "defaults.stale_resume_hours must not be negative") {
-			t.Errorf("expected validation error, got %v", err)
-		}
-	})
-
-	t.Run("negative process override rejected", func(t *testing.T) {
-		cfg := &Config{
-			Processes: map[string]ProcessConfig{
-				"assistant": {StaleResumeHours: &neg, Enabled: true},
-			},
-		}
-		err := cfg.Validate()
-		if err == nil || !strings.Contains(err.Error(), "processes.assistant.stale_resume_hours must not be negative") {
 			t.Errorf("expected validation error, got %v", err)
 		}
 	})
@@ -673,33 +483,6 @@ func TestTaskModelHarnessCascade(t *testing.T) {
 	})
 }
 
-func TestProcessMCPConfigPath(t *testing.T) {
-	cfg := &Config{HomePath: "/home/user/.leo"}
-
-	t.Run("default mcp config", func(t *testing.T) {
-		p := ProcessConfig{Workspace: "/my/workspace"}
-		want := filepath.Join("/my/workspace", "config", "mcp-servers.json")
-		if got := cfg.ProcessMCPConfigPath(p); got != want {
-			t.Errorf("ProcessMCPConfigPath() = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("custom relative mcp config", func(t *testing.T) {
-		p := ProcessConfig{Workspace: "/my/workspace", MCPConfig: "custom/mcp.json"}
-		want := filepath.Join("/my/workspace", "custom/mcp.json")
-		if got := cfg.ProcessMCPConfigPath(p); got != want {
-			t.Errorf("ProcessMCPConfigPath() = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("custom absolute mcp config", func(t *testing.T) {
-		p := ProcessConfig{Workspace: "/my/workspace", MCPConfig: "/abs/mcp.json"}
-		if got := cfg.ProcessMCPConfigPath(p); got != "/abs/mcp.json" {
-			t.Errorf("ProcessMCPConfigPath() = %q, want /abs/mcp.json", got)
-		}
-	})
-}
-
 func TestSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "leo.yaml")
@@ -709,11 +492,10 @@ func TestSaveAndLoad(t *testing.T) {
 			Model:    "sonnet",
 			MaxTurns: 10,
 		},
-		Processes: map[string]ProcessConfig{
+		Templates: map[string]TemplateConfig{
 			"main": {
 				Channels:       []string{"plugin:telegram@claude-plugins-official"},
 				HarnessOptions: map[string]any{"remote_control": true},
-				Enabled:        true,
 			},
 		},
 		Tasks: map[string]TaskConfig{
@@ -747,8 +529,8 @@ func TestSaveAndLoad(t *testing.T) {
 	if len(loaded.Tasks) != 1 {
 		t.Errorf("loaded tasks = %d, want 1", len(loaded.Tasks))
 	}
-	if len(loaded.Processes) != 1 {
-		t.Errorf("loaded processes = %d, want 1", len(loaded.Processes))
+	if len(loaded.Templates) != 1 {
+		t.Errorf("loaded templates = %d, want 1", len(loaded.Templates))
 	}
 }
 
@@ -918,20 +700,9 @@ func TestValidateTaskEnvKeys(t *testing.T) {
 }
 
 // TestValidateHarnessKindSupport locks in the harness/kind support matrix:
-// codex processes/templates (Plan 4 Task 5) and codex sessions/persistent
-// tasks (Plan 4 Task 7 session drivers) all pass SupportsKind now.
+// codex templates (Plan 4 Task 5) and codex sessions/persistent tasks
+// (Plan 4 Task 7 session drivers) all pass SupportsKind now.
 func TestValidateHarnessKindSupport(t *testing.T) {
-	t.Run("process on codex is valid", func(t *testing.T) {
-		cfg := &Config{
-			Processes: map[string]ProcessConfig{
-				"p": {Harness: "codex", Enabled: true},
-			},
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Errorf("expected no error, got %v", err)
-		}
-	})
-
 	t.Run("template on codex is valid", func(t *testing.T) {
 		cfg := &Config{
 			Templates: map[string]TemplateConfig{
@@ -1018,8 +789,8 @@ func TestValidateHarnessKindSupport(t *testing.T) {
 
 func TestValidateChannelPattern(t *testing.T) {
 	cfg := &Config{
-		Processes: map[string]ProcessConfig{
-			"bad": {Channels: []string{"$(evil)"}, Enabled: true},
+		Templates: map[string]TemplateConfig{
+			"bad": {Channels: []string{"$(evil)"}},
 		},
 	}
 	err := cfg.Validate()
@@ -1037,15 +808,6 @@ func TestValidateDevChannelPattern(t *testing.T) {
 		cfg        *Config
 		wantInPath string
 	}{
-		{
-			name: "process",
-			cfg: &Config{
-				Processes: map[string]ProcessConfig{
-					"bad": {DevChannels: []string{"$(evil)"}, Enabled: true},
-				},
-			},
-			wantInPath: "processes.bad.dev_channels[0]",
-		},
 		{
 			name: "template",
 			cfg: &Config{
@@ -1415,28 +1177,6 @@ func TestValidateAddDir(t *testing.T) {
 }
 
 func TestValidateRejectsBadAddDirs(t *testing.T) {
-	t.Run("process add_dirs", func(t *testing.T) {
-		cfg := &Config{
-			Processes: map[string]ProcessConfig{
-				"p": {
-					AddDirs: []string{"/ok/path", "-rf", "/tmp;evil"},
-					Enabled: true,
-				},
-			},
-		}
-		err := cfg.Validate()
-		if err == nil {
-			t.Fatal("expected validation error")
-		}
-		msg := err.Error()
-		if !contains(msg, "processes.p.add_dirs[1]") {
-			t.Errorf("error = %q, want mention of processes.p.add_dirs[1]", msg)
-		}
-		if !contains(msg, "processes.p.add_dirs[2]") {
-			t.Errorf("error = %q, want mention of processes.p.add_dirs[2]", msg)
-		}
-	})
-
 	t.Run("template add_dirs", func(t *testing.T) {
 		cfg := &Config{
 			Templates: map[string]TemplateConfig{

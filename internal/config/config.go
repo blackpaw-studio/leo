@@ -60,7 +60,6 @@ type Config struct {
 	Defaults  DefaultsConfig            `yaml:"defaults"`
 	Web       WebConfig                 `yaml:"web,omitempty"`
 	Client    ClientConfig              `yaml:"client,omitempty"`
-	Processes map[string]ProcessConfig  `yaml:"processes"`
 	Tasks     map[string]TaskConfig     `yaml:"tasks"`
 	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
 	Sessions  map[string]SessionConfig  `yaml:"sessions,omitempty"`
@@ -195,34 +194,9 @@ type DefaultsConfig struct {
 	HarnessOptions map[string]any `yaml:"harness_options,omitempty"`
 }
 
-type ProcessConfig struct {
-	Workspace                    string            `yaml:"workspace,omitempty"`
-	Channels                     []string          `yaml:"channels,omitempty"`
-	DevChannels                  []string          `yaml:"dev_channels,omitempty"` // loaded via --dangerously-load-development-channels
-	Model                        string            `yaml:"model,omitempty"`
-	DeprecatedProvider           string            `yaml:"provider,omitempty"`
-	MaxTurns                     int               `yaml:"max_turns,omitempty"`
-	DeprecatedBypassPermissions  *bool             `yaml:"bypass_permissions,omitempty"`
-	DeprecatedRemoteControl      *bool             `yaml:"remote_control,omitempty"`
-	MCPConfig                    string            `yaml:"mcp_config,omitempty"`
-	AddDirs                      []string          `yaml:"add_dirs,omitempty"`
-	Env                          map[string]string `yaml:"env,omitempty"`
-	DeprecatedAgent              string            `yaml:"agent,omitempty"`
-	DeprecatedAllowedTools       []string          `yaml:"allowed_tools,omitempty"`
-	DeprecatedDisallowedTools    []string          `yaml:"disallowed_tools,omitempty"`
-	DeprecatedAppendSystemPrompt string            `yaml:"append_system_prompt,omitempty"`
-	DeprecatedPermissionMode     string            `yaml:"permission_mode,omitempty"`
-	// StaleResumeHours overrides defaults.stale_resume_hours for this process.
-	// nil = inherit; 0 = disable staleness check for this process.
-	StaleResumeHours *int           `yaml:"stale_resume_hours,omitempty"`
-	Enabled          bool           `yaml:"enabled"`
-	Harness          string         `yaml:"harness,omitempty"`
-	HarnessOptions   map[string]any `yaml:"harness_options,omitempty"`
-}
-
 // SessionConfig defines a named persistent claude session supervised by the
 // daemon. Tasks with runtime: persistent reference a session by name (or
-// implicitly create a dedicated one). Fields mirror ProcessConfig; see
+// implicitly create a dedicated one). See
 // docs/superpowers/specs/2026-05-17-persistent-task-sessions-design.md.
 type SessionConfig struct {
 	Workspace                    string            `yaml:"workspace,omitempty"`
@@ -303,7 +277,6 @@ type TemplateConfig struct {
 // machines that only dispatch commands to remote leo servers.
 func (c *Config) IsClientOnly() bool {
 	return len(c.Client.Hosts) > 0 &&
-		len(c.Processes) == 0 &&
 		len(c.Tasks) == 0 &&
 		len(c.Templates) == 0 &&
 		len(c.Sessions) == 0
@@ -322,57 +295,9 @@ func (c *Config) StatePath() string {
 	return filepath.Join(c.HomePath, "state")
 }
 
-// ProcessWorkspace returns the effective workspace for a process.
-func (c *Config) ProcessWorkspace(p ProcessConfig) string {
-	if p.Workspace != "" {
-		return p.Workspace
-	}
-	return c.DefaultWorkspace()
-}
-
-// ProcessModel returns the effective model for a process.
-// Cascade: process → defaults → DefaultModel.
-func (c *Config) ProcessModel(p ProcessConfig) string {
-	if p.Model != "" {
-		return p.Model
-	}
-	if c.Defaults.Model != "" {
-		return c.Defaults.Model
-	}
-	return DefaultModel
-}
-
-// ProcessMaxTurns returns the effective max turns for a process.
-func (c *Config) ProcessMaxTurns(p ProcessConfig) int {
-	if p.MaxTurns > 0 {
-		return p.MaxTurns
-	}
-	if c.Defaults.MaxTurns > 0 {
-		return c.Defaults.MaxTurns
-	}
-	return DefaultMaxTurns
-}
-
 // DefaultStaleResumeHours is the fallback staleness threshold when neither
-// Defaults nor per-process override is set.
+// Defaults nor a scope-level override is set.
 const DefaultStaleResumeHours = 12
-
-// ProcessStaleResume returns the effective staleness threshold for a process's
-// --resume session jsonl. A zero duration means the check is disabled.
-// Cascade: process override → defaults → DefaultStaleResumeHours.
-func (c *Config) ProcessStaleResume(p ProcessConfig) time.Duration {
-	hours := DefaultStaleResumeHours
-	if c.Defaults.StaleResumeHours != 0 {
-		hours = c.Defaults.StaleResumeHours
-	}
-	if p.StaleResumeHours != nil {
-		hours = *p.StaleResumeHours
-	}
-	if hours <= 0 {
-		return 0
-	}
-	return time.Duration(hours) * time.Hour
-}
 
 // ResolveIdleSuspend returns the effective idle-suspend interval for an agent
 // spawned from tmpl, with an optional per-spawn override. Cascade:
@@ -394,20 +319,6 @@ func (c *Config) ResolveIdleSuspend(tmpl TemplateConfig, override string) time.D
 		return 0
 	}
 	return d
-}
-
-// ProcessMCPConfigPath returns the MCP config path for a process.
-// If the process specifies one, it's resolved relative to its workspace.
-// Otherwise falls back to <workspace>/config/mcp-servers.json.
-func (c *Config) ProcessMCPConfigPath(p ProcessConfig) string {
-	ws := c.ProcessWorkspace(p)
-	if p.MCPConfig != "" {
-		if filepath.IsAbs(p.MCPConfig) {
-			return p.MCPConfig
-		}
-		return filepath.Join(ws, p.MCPConfig)
-	}
-	return filepath.Join(ws, "config", "mcp-servers.json")
 }
 
 // TaskWorkspace returns the effective workspace for a task.
@@ -581,60 +492,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Web.Enabled && c.Web.Bind != "" && bindValid && !IsLoopbackBind(c.Web.Bind) && len(c.Web.AllowedHosts) == 0 {
 		errs = append(errs, "web.allowed_hosts must be set when web.bind is not a loopback address")
-	}
-
-	for name, proc := range c.Processes {
-		if proc.DeprecatedProvider != "" {
-			errs = append(errs, fmt.Sprintf("processes.%s.provider has been removed along with providers — see docs/configuration/harnesses.md", name))
-		}
-		if h, ok := resolveHarness("processes."+name, proc.Harness); ok {
-			if proc.Model != "" {
-				if err := h.ValidateModel(proc.Model); err != nil {
-					errs = append(errs, fmt.Sprintf("processes.%s.model %v", name, err))
-				}
-			}
-			if _, err := h.DecodeOptions(c.ProcessHarnessOptions(proc)); err != nil {
-				errs = append(errs, fmt.Sprintf("processes.%s.harness_options: %v", name, err))
-			}
-			if !h.SupportsChannels() && (len(proc.Channels) > 0 || len(proc.DevChannels) > 0) {
-				errs = append(errs, fmt.Sprintf("processes.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
-			}
-		}
-		if proc.MaxTurns < 0 {
-			errs = append(errs, fmt.Sprintf("processes.%s.max_turns must not be negative", name))
-		}
-		for i, ch := range proc.Channels {
-			if !channelPattern.MatchString(ch) {
-				errs = append(errs, fmt.Sprintf("processes.%s.channels[%d] %q contains invalid characters", name, i, ch))
-			}
-		}
-		for i, ch := range proc.DevChannels {
-			if !channelPattern.MatchString(ch) {
-				errs = append(errs, fmt.Sprintf("processes.%s.dev_channels[%d] %q contains invalid characters", name, i, ch))
-			}
-		}
-		for k := range proc.Env {
-			if !envKeyPattern.MatchString(k) {
-				errs = append(errs, fmt.Sprintf("processes.%s.env key %q is not a valid environment variable name", name, k))
-			}
-		}
-		for i, dir := range proc.AddDirs {
-			if err := ValidateAddDir(dir); err != nil {
-				errs = append(errs, fmt.Sprintf("processes.%s.add_dirs[%d]: %v", name, i, err))
-			}
-		}
-		errs = appendMovedFieldErrs(errs, "processes."+name, []movedField{
-			{proc.DeprecatedPermissionMode != "", "permission_mode"},
-			{proc.DeprecatedBypassPermissions != nil, "bypass_permissions"},
-			{proc.DeprecatedRemoteControl != nil, "remote_control"},
-			{proc.DeprecatedAgent != "", "agent"},
-			{len(proc.DeprecatedAllowedTools) > 0, "allowed_tools"},
-			{len(proc.DeprecatedDisallowedTools) > 0, "disallowed_tools"},
-			{proc.DeprecatedAppendSystemPrompt != "", "append_system_prompt"},
-		})
-		if proc.StaleResumeHours != nil && *proc.StaleResumeHours < 0 {
-			errs = append(errs, fmt.Sprintf("processes.%s.stale_resume_hours must not be negative", name))
-		}
 	}
 
 	for name, tmpl := range c.Templates {
@@ -830,15 +687,10 @@ func (c *Config) Validate() error {
 				}
 				// Topology A's session is synthesized from task.Channels, so
 				// the subset check is trivially true and we skip it. For B
-				// and C the channels live under different config blocks —
-				// point the error at the correct one.
+				// the channels live under sessions.<name>.channels — point
+				// the error at the correct one.
 				if task.Session != "" {
-					var src string
-					if strings.HasPrefix(task.Session, "process:") {
-						src = fmt.Sprintf("processes.%s.channels", sessName)
-					} else {
-						src = fmt.Sprintf("sessions.%s.channels", sessName)
-					}
+					src := fmt.Sprintf("sessions.%s.channels", sessName)
 					if missing, ok := channelSubset(task.Channels, sess.Channels); !ok {
 						errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in %s (task.channels must be a subset)", name, missing, src))
 					}
@@ -880,14 +732,6 @@ func Load(path string) (*Config, error) {
 
 // expandPaths expands ~ in workspace and path fields.
 func (c *Config) expandPaths() {
-	for name, proc := range c.Processes {
-		proc.Workspace = expandHome(proc.Workspace)
-		proc.MCPConfig = expandHome(proc.MCPConfig)
-		for i, dir := range proc.AddDirs {
-			proc.AddDirs[i] = expandHome(dir)
-		}
-		c.Processes[name] = proc
-	}
 	for name, task := range c.Tasks {
 		task.Workspace = expandHome(task.Workspace)
 		c.Tasks[name] = task

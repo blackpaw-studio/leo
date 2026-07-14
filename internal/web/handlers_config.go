@@ -188,8 +188,8 @@ func (s *Server) applySection(w http.ResponseWriter, r *http.Request,
 // applyScopeHarnessOptions decodes the harness_options.* inputs in form
 // against harnessName's options schema. harnessName is expected to be
 // resolved from the scope's already-Apply-updated target (via its cascade
-// helper, e.g. cfg.ProcessHarness), so a harness change and its options land
-// atomically in one save.
+// helper, e.g. cfg.TemplateHarness), so a harness change and its options
+// land atomically in one save.
 func applyScopeHarnessOptions(form url.Values, harnessName string) (map[string]any, error) {
 	h, err := harness.Get(harnessName)
 	if err != nil {
