@@ -74,7 +74,7 @@ func (b *SSHBackend) List(ctx context.Context) ([]Agent, error) {
 
 // listViaTmux enumerates leo- sessions on the remote and returns attach-only
 // rows. The format arg is single-quoted so the `#` cannot start a remote shell
-// comment (see internal/cli.remoteAttachChoices for the same gotcha).
+// comment.
 func (b *SSHBackend) listViaTmux(ctx context.Context) ([]Agent, error) {
 	tail := append([]string{b.tmuxPath}, tmux.Args("list-sessions", "-F", shellQuoteArg("#{session_name}"))...)
 	out, err := b.run(ctx, tail...)

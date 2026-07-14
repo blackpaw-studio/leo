@@ -1,28 +1,25 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"sort"
-	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
-	"github.com/blackpaw-studio/leo/internal/tmux"
-	"github.com/manifoldco/promptui"
+	"github.com/blackpaw-studio/leo/internal/picker"
 )
 
-// agentListFn is a testability seam for daemon.AgentList — tests override
-// this to simulate the daemon's agent list without spinning up a real socket.
+// agentListFn is a testability seam for daemon.AgentList — tests override this
+// to simulate the daemon's agent list without spinning up a real socket. Used
+// by `leo agent list` (via the seam) and by the attach picker's daemon-down
+// fail-fast probe.
 var agentListFn = daemon.AgentList
 
-// attachChoiceKind distinguishes what a picker row resolves to, so the
-// picker can route non-claude agents through their SessionDriver instead of
-// assuming every row is a tmux session.
+// attachChoiceKind distinguishes what an attach target resolves to, so the
+// attach path can route non-claude agents through their SessionDriver instead
+// of assuming every target is a tmux session.
 type attachChoiceKind int
 
 const (
@@ -30,12 +27,9 @@ const (
 	attachChoiceRemote
 )
 
-// attachChoice is one row in the attach picker — a human label (what the
-// user navigates through), the tmux session name to fall back to for claude
-// targets, and enough identity (kind + bare name) to resolve a non-claude
-// harness's driver attach spec. Remote rows carry no kind-specific identity
-// (the remote listing only has tmux session names — see
-// remoteAttachChoices), so they always fall through to the tmux path.
+// attachChoice is a resolved attach target: a human label, the tmux session
+// name to fall back to for claude targets, and enough identity (kind + bare
+// name) to resolve a non-claude harness's driver attach spec.
 type attachChoice struct {
 	label   string
 	session string
@@ -43,62 +37,80 @@ type attachChoice struct {
 	name    string // bare agent name; empty for remote rows
 }
 
-// runAttachPicker handles `leo attach` with no positional arg. It enumerates
-// candidate sessions (local processes + agents via the daemon, or remote
-// sessions via `ssh <host> tmux -L leo list-sessions`), shows an arrow-key
-// picker, and attaches to the selection. Errors cleanly when stdin is not a
-// TTY so non-interactive callers don't hang.
-func runAttachPicker(ctx context.Context, cfg *config.Config, res config.HostResolution, opts attachOptions) error {
+// runAttachPicker handles `leo attach` / `leo agent attach` with no positional
+// arg. It opens the full-screen Bubble Tea picker over all agents (local daemon
+// + every configured client.hosts entry), then attaches to the chosen agent
+// after the TUI exits. The picker is always shown when no name is given — the
+// former single-candidate auto-attach is intentionally gone, because the picker
+// is now the management surface too.
+func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResolution, opts attachOptions) error {
 	if !stdinIsTerminal() {
 		return fmt.Errorf("no session name given and stdin is not a terminal — pass a name explicitly")
 	}
 
-	var (
-		choices []attachChoice
-		err     error
-	)
-	if res.Localhost {
-		choices = localAttachChoices(ctx, cfg)
-	} else {
-		choices, err = remoteAttachChoices(res)
-		if err != nil {
-			return err
-		}
-	}
-	if len(choices) == 0 {
-		return fmt.Errorf("no attachable sessions found")
+	// Fail fast if the local daemon is unreachable, before entering alt-screen —
+	// a blank picker over a dead daemon is worse than a clear error.
+	if _, err := agentListFn(ctx, cfg.HomePath); err != nil {
+		return fmt.Errorf("cannot reach the leo daemon (is 'leo service' running?): %w", err)
 	}
 
-	// Shorthand: a single candidate means we skip the picker — if the user
-	// has one thing running there is nothing to choose between.
-	if len(choices) == 1 {
-		return attachChosenSession(ctx, cfg, res, choices[0], opts)
-	}
-
-	labels := make([]string, len(choices))
-	for i, c := range choices {
-		labels[i] = c.label
-	}
-	selector := promptui.Select{
-		Label: "Attach to",
-		Items: labels,
-		Size:  min(len(labels), 10),
-	}
-	idx, _, err := selector.Run()
+	backends := buildPickerBackends(cfg)
+	result, err := picker.Run(ctx, backends)
 	if err != nil {
-		// Ctrl-C / Escape: exit cleanly with no error — conventional CLI behavior.
-		if errors.Is(err, promptui.ErrInterrupt) {
-			return nil
-		}
 		return fmt.Errorf("picker: %w", err)
 	}
-	return attachChosenSession(ctx, cfg, res, choices[idx], opts)
+	if result.Agent == nil {
+		return nil // quit without attaching
+	}
+	return attachPickedAgent(ctx, cfg, *result.Agent, opts)
 }
 
-// attachChosenSession dispatches a picked attachChoice: a non-claude agent
-// (localhost only — mirrors attachLocal's own localhost-only scope) routes
-// through its SessionDriver; everything else (claude, unresolved, or a
-// remote row) keeps the existing tmux attach flow byte-identical.
+// buildPickerBackends assembles one backend per host: the local daemon under
+// picker.LocalHost, plus an SSH backend for every configured client.hosts entry.
+func buildPickerBackends(cfg *config.Config) map[string]picker.Backend {
+	backends := map[string]picker.Backend{
+		picker.LocalHost: picker.NewLocalBackend(cfg.HomePath),
+	}
+	for name := range cfg.Client.Hosts {
+		res, err := cfg.ResolveHost(name)
+		if err != nil {
+			continue // skip a host that fails to resolve rather than aborting the picker
+		}
+		r := res // capture per-iteration copy for the closure
+		backends[name] = picker.NewSSHBackend(
+			name,
+			r.Host.RemoteLeoPath(),
+			r.Host.RemoteTmuxPath(),
+			func(tail ...string) []string { return buildSSHArgs(r, tail...) },
+		)
+	}
+	return backends
+}
+
+// attachPickedAgent routes the chosen agent to the correct attach path. Local
+// agents go through the existing attachChosenSession flow (driver-aware); remote
+// agents delegate the whole `agent attach <name>` invocation to the remote leo
+// over SSH so it does its own resolution and driver routing.
+func attachPickedAgent(ctx context.Context, cfg *config.Config, a picker.Agent, opts attachOptions) error {
+	if a.Host == picker.LocalHost {
+		choice := attachChoice{
+			label:   a.Name,
+			session: agent.SessionName(a.Name),
+			kind:    attachChoiceAgent,
+			name:    a.Name,
+		}
+		return attachChosenSession(ctx, cfg, config.HostResolution{Localhost: true}, choice, opts)
+	}
+	res, err := cfg.ResolveHost(a.Host)
+	if err != nil {
+		return fmt.Errorf("resolving host %q: %w", a.Host, err)
+	}
+	return runRemoteAttach(res, "agent", "attach", a.Name)
+}
+
+// attachChosenSession dispatches a resolved attachChoice: a non-claude agent
+// (localhost only) routes through its SessionDriver; everything else keeps the
+// tmux attach flow.
 func attachChosenSession(ctx context.Context, cfg *config.Config, res config.HostResolution, choice attachChoice, opts attachOptions) error {
 	if res.Localhost {
 		switch choice.kind {
@@ -113,78 +125,8 @@ func attachChosenSession(ctx context.Context, cfg *config.Config, res config.Hos
 	return attachTmuxSession(res, choice.session, opts)
 }
 
-// localAttachChoices lists live ephemeral agents the daemon reports.
-func localAttachChoices(ctx context.Context, cfg *config.Config) []attachChoice {
-	var out []attachChoice
-
-	// Daemon may be down (tests, fresh install) — absence of a daemon is
-	// fine; just skip the agent list.
-	records, err := agentListFn(ctx, cfg.HomePath)
-	if err == nil {
-		agentRecords := append([]agent.Record(nil), records...)
-		sort.Slice(agentRecords, func(i, j int) bool { return agentRecords[i].Name < agentRecords[j].Name })
-		for _, rec := range agentRecords {
-			out = append(out, attachChoice{
-				label:   fmt.Sprintf("agent    %s", rec.Name),
-				session: agent.SessionName(rec.Name),
-				kind:    attachChoiceAgent,
-				name:    rec.Name,
-			})
-		}
-	}
-	return out
-}
-
-// remoteAttachChoices enumerates Leo-owned sessions on a remote host by
-// running `tmux -L leo list-sessions -F '#{session_name}'` via the configured
-// SSH transport. Sessions are filtered to the leo- prefix so unrelated state
-// on the remote server doesn't bleed into the picker. Returns an empty slice
-// (not an error) when tmux reports no sessions.
-func remoteAttachChoices(res config.HostResolution) ([]attachChoice, error) {
-	// ssh joins argv with spaces and pipes the result to the remote `$SHELL -c`,
-	// so `#` in `#{session_name}` would start a shell comment and swallow the
-	// format argument. Single-quote it up front to survive the extra shell layer.
-	sshArgs := append([]string{res.Host.SSH}, res.Host.SSHArgs...)
-	sshArgs = append(sshArgs, res.Host.RemoteTmuxPath())
-	sshArgs = append(sshArgs, tmux.Args("list-sessions", "-F", shellQuoteArg("#{session_name}"))...)
-
-	cmd := agentExecCommand("ssh", sshArgs...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		// `tmux list-sessions` exits 1 when no server is running. Treat
-		// that as "nothing attachable" rather than a hard error — the
-		// remote may simply not have Leo's daemon up yet.
-		stderrMsg := strings.TrimSpace(stderr.String())
-		if strings.Contains(stderrMsg, "no server running") || strings.Contains(stderrMsg, "no current session") {
-			return nil, nil
-		}
-		if stderrMsg != "" {
-			return nil, fmt.Errorf("listing remote sessions: %w: %s", err, stderrMsg)
-		}
-		return nil, fmt.Errorf("listing remote sessions: %w", err)
-	}
-
-	var choices []attachChoice
-	for _, line := range strings.Split(string(out), "\n") {
-		name := strings.TrimSpace(line)
-		if !strings.HasPrefix(name, "leo-") {
-			continue
-		}
-		choices = append(choices, attachChoice{
-			label:   fmt.Sprintf("remote   %s", name),
-			session: name,
-			kind:    attachChoiceRemote,
-		})
-	}
-	sort.Slice(choices, func(i, j int) bool { return choices[i].label < choices[j].label })
-	return choices, nil
-}
-
-// stdinIsTerminal reports whether os.Stdin is connected to an interactive
-// TTY. Indirected as a var so tests can simulate a pipe or terminal without
-// touching real file descriptors.
+// stdinIsTerminal reports whether os.Stdin is an interactive TTY. Indirected as
+// a var so tests can simulate a pipe or terminal.
 var stdinIsTerminal = defaultStdinIsTerminal
 
 func defaultStdinIsTerminal() bool {
