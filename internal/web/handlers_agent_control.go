@@ -1,0 +1,290 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/tmux"
+)
+
+// handleWebAgentInterrupt sends a burst of Escape keys into an agent's tmux
+// session to interrupt whatever it's currently doing. Escapes are sent
+// immediately (to catch the common case) and then repeated in the
+// background for a few seconds to catch state transitions (e.g. a tool call
+// that completes mid-interrupt and re-arms the input prompt).
+//
+// POST /web/agent/{name}/interrupt
+func (s *Server) handleWebAgentInterrupt(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionName := agent.SessionName(name)
+
+	tmuxPath := findTmuxPath()
+	escArgs := tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "Escape")
+	// Send Escape immediately, then keep sending to catch state transitions.
+	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
+	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
+	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
+	// Also send delayed Escapes in background to catch tool completions
+	go func() {
+		for i := 0; i < 5; i++ {
+			time.Sleep(500 * time.Millisecond)
+			s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
+		}
+	}()
+	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
+}
+
+// handleWebAgentSendKeys sends arbitrary keys/text to an agent's tmux session.
+// POST /web/agent/{name}/send  {"keys": ["/clear", "Enter"]}
+//
+// Multi-char literal strings (e.g. "/clear") are split into individual
+// keystrokes with a small inter-key delay. Claude Code's Ink-based REPL
+// treats rapid bulk send-keys as pasted text and won't activate slash-command
+// menus; per-char sends make each key register as a real keypress.
+func (s *Server) handleWebAgentSendKeys(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionName := agent.SessionName(name)
+
+	var req struct {
+		Keys []string `json:"keys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if len(req.Keys) == 0 {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "keys is required"})
+		return
+	}
+
+	tmuxPath := findTmuxPath()
+	for _, key := range req.Keys {
+		if needsCharSplit(key) {
+			for _, ch := range key {
+				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), string(ch))...).Run(); err != nil {
+					writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
+					return
+				}
+				time.Sleep(30 * time.Millisecond)
+			}
+			continue
+		}
+		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), key)...).Run(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// handleWebAgentMessage delivers a free-text message into an agent's live
+// Claude prompt and submits it. Unlike handleWebAgentSendKeys (which types
+// char-by-char to drive slash-command menus), this sends the body verbatim
+// with `send-keys -l` so arbitrary text — including tmux key names like
+// "Enter" or "C-c" — is typed literally, then submits with a separate Enter.
+//
+// POST /web/agent/{name}/message  {"text": "hello"}
+func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if req.Text == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "text is required"})
+		return
+	}
+
+	// Resolve the target's harness FIRST, before any tmux-touching logic.
+	// Claude targets (harnessName == "" from an unresolved/claude target)
+	// fall straight through to the existing fast-path / suspended-resume
+	// logic below, byte-identical to before this change. A resolved
+	// non-claude target is routed to its SessionDriver and returns
+	// immediately — it never touches tmux, and never suspends (sweep skips
+	// non-claude records), so there is no resume branch to consider for it.
+	if harnessName, handle, ok := s.resolveMessageTarget(name); ok && harnessName != "" && harnessName != "claude" {
+		s.dispatchNonClaudeMessage(w, harnessName, handle, req.Text)
+		return
+	}
+
+	// Validate the target against running sessions (agents). If the agent is
+	// not live but is a suspended agent, resume it first and deliver via the
+	// readiness-probing path (InjectPrompt) — a just-resumed claude takes
+	// tens of seconds to boot before its input box accepts input, so the 2s
+	// fast-path below would silently drop the message.
+	//
+	// NOTE: a concurrent sweep suspend can race here and make the live send-keys
+	// path 500; the sender retries and auto-wakes again.
+	states := s.processes.States()
+	if _, ok := states[name]; !ok {
+		if s.agentSvc != nil {
+			rec, err := s.agentSvc.Resume(name)
+			if err != nil {
+				// Not a suspended agent — unknown target.
+				names := make([]string, 0, len(states))
+				for n := range states {
+					names = append(names, n)
+				}
+				sort.Strings(names)
+				writeJSON(w, http.StatusNotFound, apiResponse{
+					Error: fmt.Sprintf("no such agent %q; running: %s", name, strings.Join(names, ", ")),
+				})
+				return
+			}
+			// Resumed successfully. A cold-booting claude can take ~60s to load
+			// plugins/MCP before its input box accepts input — longer than the
+			// server's WriteTimeout — and the readiness-probing injector blocks
+			// for that whole window. Deliver asynchronously on a detached context
+			// (r.Context() is cancelled once this handler returns) and respond
+			// now, so the caller isn't held on the connection and won't
+			// false-timeout and retry into a duplicate message.
+			const wakeDeliverTimeout = 3 * time.Minute
+			sessionName := agent.SessionName(rec.Name)
+			body := req.Text
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), wakeDeliverTimeout)
+				defer cancel()
+				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
+					log.Printf("web: async message delivery after resume of %q failed: %v", sessionName, err)
+				}
+			}()
+			writeJSON(w, http.StatusAccepted, apiResponse{OK: true})
+			return
+		}
+		names := make([]string, 0, len(states))
+		for n := range states {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		writeJSON(w, http.StatusNotFound, apiResponse{
+			Error: fmt.Sprintf("no such agent %q; running: %s", name, strings.Join(names, ", ")),
+		})
+		return
+	}
+
+	// Live (already-running) fast path: literal paste + readiness confirmation + Enter.
+	sessionName := agent.SessionName(name)
+	tmuxPath := findTmuxPath()
+
+	// Literal paste of the message body.
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "-l", req.Text)...).Run(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send message failed: %v", err)})
+		return
+	}
+
+	// Wait until the input box reflects the typed text before submitting.
+	// Claude's Ink REPL batches stdin; an Enter that lands in the same input
+	// burst as the literal text is treated as a newline, not a submit, leaving
+	// the message unsent (the intermittent "Enter not registered" bug).
+	// Confirming the text rendered forces Enter to arrive as a discrete
+	// keypress. Bounded, and falls open if the pane never confirms (busy
+	// mid-turn or unreadable) so a message is never silently dropped.
+	s.waitForInputContent(tmuxPath, sessionName)
+
+	// Separate Enter to submit.
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "Enter")...).Run(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("submit message failed: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// resolveMessageTarget resolves name to its harness name and SessionHandle,
+// trying the agent resolver first (agentstore-backed) and falling back to
+// the generic resolveHandle seam. ok=false means neither resolver claims the
+// name — the caller falls back to the existing tmux/claude logic, which does
+// its own "unknown target" check.
+func (s *Server) resolveMessageTarget(name string) (harnessName string, h harness.SessionHandle, ok bool) {
+	if s.agentSvc != nil {
+		if hn, handle, resolved := s.agentSvc.ResolveHandle(name); resolved {
+			return hn, handle, true
+		}
+	}
+	if s.resolveHandle != nil {
+		if hn, handle, resolved := s.resolveHandle(name); resolved {
+			return hn, handle, true
+		}
+	}
+	return "", harness.SessionHandle{}, false
+}
+
+// nonClaudeInjectTimeout bounds a non-claude driver's Inject call (a
+// readiness-probed tmux paste, not a synchronous turn — Inject returns as
+// soon as the message lands in the pane) so a wedged pane or hung probe loop
+// can't block the web handler indefinitely. Generous because the readiness
+// probe itself may need to wait out a busy TUI before it can paste.
+const nonClaudeInjectTimeout = 5 * time.Minute
+
+// dispatchNonClaudeMessage delivers text to a non-claude session via its
+// SessionDriver's Inject and never touches tmux. Used by
+// handleWebAgentMessage once the target's harness has been resolved to
+// something other than claude.
+func (s *Server) dispatchNonClaudeMessage(w http.ResponseWriter, harnessName string, h harness.SessionHandle, text string) {
+	hd, err := harness.Get(harnessName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("resolving harness %q: %v", harnessName, err)})
+		return
+	}
+	drv := hd.Driver()
+	if drv == nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("harness %q has no session driver", harnessName)})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), nonClaudeInjectTimeout)
+	defer cancel()
+	if _, err := drv.Inject(ctx, h, text); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("delivering message: %v", err)})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// messageInputAttempts / messageInputPoll bound how long
+// handleWebAgentMessage waits for typed text to surface in claude's input
+// box before submitting. ~messageInputAttempts*messageInputPoll (≈2s) is
+// ample for an already-running session to echo input; package vars so tests
+// can shrink them.
+var (
+	messageInputAttempts = 40
+	messageInputPoll     = 50 * time.Millisecond
+)
+
+// waitForInputContent polls the session pane until the input box carries the
+// just-typed text, then returns. Falls open after the attempt budget so a busy
+// or unreadable pane never blocks (or drops) the submit.
+func (s *Server) waitForInputContent(tmuxPath, sessionName string) {
+	for i := 0; i < messageInputAttempts; i++ {
+		out, err := s.execCommand(tmuxPath, tmux.Args("capture-pane", "-p", "-t", tmux.PaneTarget(sessionName))...).Output()
+		if err == nil && tmux.PaneInputHasContent(string(out)) {
+			return
+		}
+		time.Sleep(messageInputPoll)
+	}
+}
+
+// needsCharSplit reports whether a send-keys arg is a multi-char literal
+// string that should be typed one character at a time. Single chars and
+// tmux key names (Enter, Escape, BSpace, F1, C-u, M-a, …) are sent as one
+// keypress. Heuristic: key names begin with an uppercase letter, literals
+// do not.
+func needsCharSplit(s string) bool {
+	if len(s) <= 1 {
+		return false
+	}
+	r := rune(s[0])
+	return r < 'A' || r > 'Z'
+}

@@ -161,7 +161,7 @@ func TestToolCallClearSendsKeystrokes(t *testing.T) {
 		t.Fatalf("expected 1 daemon call, got %d", len(daemon.calls))
 	}
 	c := daemon.calls[0]
-	if c.Method != http.MethodPost || c.Path != "/web/process/primary/send" {
+	if c.Method != http.MethodPost || c.Path != "/web/agent/primary/send" {
 		t.Errorf("wrong call: %+v", c)
 	}
 	var sent struct {
@@ -329,8 +329,8 @@ func TestSendMessageDeliversWithSenderPrefix(t *testing.T) {
 	if c.Method != http.MethodPost {
 		t.Errorf("expected POST, got %s", c.Method)
 	}
-	if c.Path != "/web/process/worker-1/message" {
-		t.Errorf("expected path /web/process/worker-1/message, got %s", c.Path)
+	if c.Path != "/web/agent/worker-1/message" {
+		t.Errorf("expected path /web/agent/worker-1/message, got %s", c.Path)
 	}
 	if !strings.Contains(c.Body, "sender-proc") || !strings.Contains(c.Body, "ping") {
 		t.Errorf("delivered body should carry sender + message; got %q", c.Body)
