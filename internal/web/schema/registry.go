@@ -31,8 +31,11 @@ var Excluded = map[Section][]string{
 	SectionDefaults: {"harness_options", "provider",
 		"permission_mode", "bypass_permissions", "remote_control",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
+	// template is excluded pending its own web-UI treatment — the config-layer
+	// field (task.Template, ResolveTaskTarget) lands ahead of the
+	// session→agent web UI migration that will register it.
 	SectionTask: {"harness_options", "provider",
-		"permission_mode", "allowed_tools", "disallowed_tools", "append_system_prompt"},
+		"permission_mode", "allowed_tools", "disallowed_tools", "append_system_prompt", "template"},
 	SectionTemplate: {"harness_options", "provider",
 		"permission_mode", "remote_control", "agent",
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},

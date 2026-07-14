@@ -235,6 +235,7 @@ type TaskConfig struct {
 	DeprecatedAppendSystemPrompt string         `yaml:"append_system_prompt,omitempty"`
 	Runtime                      string         `yaml:"runtime,omitempty"` // "oneshot" (default) | "persistent"
 	Session                      string         `yaml:"session,omitempty"`
+	Template                     string         `yaml:"template,omitempty"`
 	Lazy                         bool           `yaml:"lazy,omitempty"`
 	QueueMax                     int            `yaml:"queue_max,omitempty"` // 0 → use default (5)
 	Harness                      string         `yaml:"harness,omitempty"`
@@ -664,6 +665,25 @@ func (c *Config) Validate() error {
 		}
 		if task.Runtime != "persistent" && task.Session != "" {
 			errs = append(errs, fmt.Sprintf("tasks.%s.session is only valid when runtime: persistent", name))
+		}
+		if task.Runtime != "persistent" && task.Template != "" {
+			errs = append(errs, fmt.Sprintf("tasks.%s.template is only valid when runtime: persistent", name))
+		}
+		if task.Template != "" && task.Session != "" {
+			errs = append(errs, fmt.Sprintf("task %q: template and session are mutually exclusive", name))
+		}
+		if task.Runtime == "persistent" && task.Template != "" {
+			tmpl, ok := c.Templates[task.Template]
+			if !ok {
+				errs = append(errs, fmt.Sprintf("tasks.%s references templates.%s which is not defined", name, task.Template))
+			} else {
+				if missing, ok := channelSubset(task.Channels, tmpl.Channels); !ok {
+					errs = append(errs, fmt.Sprintf("tasks.%s: channel %q is not in templates.%s.channels (task.channels must be a subset)", name, missing, task.Template))
+				}
+				if missing, ok := channelSubset(task.DevChannels, tmpl.DevChannels); !ok {
+					errs = append(errs, fmt.Sprintf("tasks.%s: dev_channel %q is not in templates.%s.dev_channels (task.dev_channels must be a subset)", name, missing, task.Template))
+				}
+			}
 		}
 		if task.Runtime == "persistent" {
 			sessName, _, sess, err := c.ResolveSession(name)
