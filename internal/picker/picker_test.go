@@ -16,8 +16,8 @@ func TestAgentZeroValue(t *testing.T) {
 	}
 }
 
-// staticBackend is a trivial Backend used to prove Run wires up and returns
-// without a selection when the caller-cancelled context tears the program down.
+// staticBackend is a trivial Backend used to prove a concrete type satisfies
+// the Backend interface without pulling in any real I/O.
 type staticBackend struct{ agents []Agent }
 
 func (s staticBackend) List(context.Context) ([]Agent, error) { return s.agents, nil }

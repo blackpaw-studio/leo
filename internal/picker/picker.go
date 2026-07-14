@@ -6,7 +6,10 @@ package picker
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // LocalHost is the reserved backend key (and Agent.Host value) for agents
@@ -38,4 +41,21 @@ type Backend interface {
 // choosing anything.
 type Result struct {
 	Agent *Agent
+}
+
+// Run starts the picker over the given backends (keyed by host name) and blocks
+// until the user attaches or quits. Attach happens in the caller AFTER Run
+// returns, so tmux inherits a clean terminal.
+func Run(ctx context.Context, backends map[string]Backend) (Result, error) {
+	m := newModel(ctx, backends)
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
+	final, err := p.Run()
+	if err != nil {
+		return Result{}, err
+	}
+	fm, ok := final.(model)
+	if !ok {
+		return Result{}, fmt.Errorf("picker: unexpected final model type %T", final)
+	}
+	return fm.result, nil
 }
