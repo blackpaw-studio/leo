@@ -350,8 +350,8 @@ Note there is no `approval:` key for codex — approval policy is fixed at
 ## Migration table
 
 Every flat claude field that used to live directly on `defaults`,
-`templates.*`, or `tasks.*` has moved one level
-down, under `harness_options`, with the same key name:
+`templates.*`, or `tasks.*` moved one level down, under `harness_options`,
+with the same key name (shipped in v0.8.0, 2026-07-11):
 
 | Old field | New field |
 |---|---|
@@ -379,6 +379,12 @@ templates:
       permission_mode: acceptEdits
       remote_control: true
 ```
+
+The old flat fields are no longer detected or rejected — a stray
+`permission_mode:` (etc.) at the top level of a scope is now silently
+ignored as an unknown YAML key (the loader is non-strict) rather than
+producing a validation error. Move it under `harness_options:` to have
+it take effect.
 
 ### `providers:` is gone
 
@@ -434,13 +440,17 @@ This is a real behavior change from `providers:`, which allowed an arbitrary
 
 Every one of these mistakes is caught at config load (`leo validate`, CLI
 startup, daemon boot) and before every web-UI config save. Each error names
-the exact scope, the exact field, and points back here:
+the exact scope and the exact field:
 
 ```
-templates.foo.permission_mode has moved to templates.foo.harness_options.permission_mode (claude harness) — see docs/configuration/harnesses.md
 providers: this section has been removed — see docs/configuration/harnesses.md
-defaults.provider has been removed along with providers — see docs/configuration/harnesses.md
 ```
+
+(The old flat-field migration errors, e.g. `templates.foo.permission_mode has
+moved to templates.foo.harness_options.permission_mode`, were removed once
+the migration had shipped for long enough — those fields are now silently
+ignored unknown keys instead. `providers:` remains a hard error since there
+is no replacement key to auto-detect a typo against.)
 
 Other harness-related validation errors follow the same style:
 
