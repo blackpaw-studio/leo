@@ -123,15 +123,7 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 		add(SeverityInfo, "workspace", defaultWS)
 	}
 
-	// 4. Process workspaces
-	for name, proc := range cfg.Processes {
-		ws := cfg.ProcessWorkspace(proc)
-		if _, err := os.Stat(ws); err != nil {
-			add(SeverityWarn, fmt.Sprintf("process:%s", name), fmt.Sprintf("workspace %s does not exist", ws))
-		}
-	}
-
-	// 5. Prompt files for enabled tasks (missing prompt file is ERROR)
+	// 4. Prompt files for enabled tasks (missing prompt file is ERROR)
 	for name, task := range cfg.Tasks {
 		if !task.Enabled {
 			continue
@@ -143,30 +135,14 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 		}
 	}
 
-	// 6. MCP configs for processes
-	for name, proc := range cfg.Processes {
-		mcpPath := cfg.ProcessMCPConfigPath(proc)
-		if _, err := os.Stat(mcpPath); err == nil {
-			data, readErr := os.ReadFile(mcpPath)
-			if readErr != nil {
-				add(SeverityWarn, fmt.Sprintf("process:%s", name), fmt.Sprintf("MCP config %s unreadable", mcpPath))
-				continue
-			}
-			var parsed map[string]json.RawMessage
-			if json.Unmarshal(data, &parsed) != nil {
-				add(SeverityError, fmt.Sprintf("process:%s", name), fmt.Sprintf("MCP config %s is not valid JSON", mcpPath))
-			}
-		}
-	}
-
-	// 7. Web bind exposure
+	// 5. Web bind exposure
 	if cfg.Web.Enabled && !config.IsLoopbackBind(cfg.WebBind()) {
 		add(SeverityWarn, "web", fmt.Sprintf("bind=%q exposes the dashboard beyond localhost; clients must authenticate with the api token", cfg.WebBind()))
 	} else if !cfg.Web.Enabled {
 		add(SeverityInfo, "web", "web UI disabled")
 	}
 
-	// 8. Daemon health. If the socket is present but unresponsive, that's ERROR —
+	// 6. Daemon health. If the socket is present but unresponsive, that's ERROR —
 	// someone clearly intended the daemon to be running.
 	if daemon.IsRunning(cfg.HomePath) {
 		resp, err := daemon.Send(ctx, cfg.HomePath, "GET", "/health", nil)
@@ -182,11 +158,11 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 		add(SeverityInfo, "daemon", "not running")
 	}
 
-	// 9. Service status
+	// 7. Service status
 	svcStatus, _ := service.Status(cfg.HomePath)
 	add(SeverityInfo, "service", svcStatus)
 
-	// 10. Service log — large logs are a WARN.
+	// 8. Service log — large logs are a WARN.
 	logPath := service.LogPathFor(cfg.HomePath)
 	if fi, err := os.Stat(logPath); err == nil {
 		if fi.Size() > logSizeWarnBytes {
@@ -202,13 +178,10 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 }
 
 // referencedHarnesses returns the sorted, de-duplicated set of harness names
-// referenced anywhere in the config: defaults plus every process, task,
-// template, and session scope.
+// referenced anywhere in the config: defaults plus every task, template, and
+// session scope.
 func referencedHarnesses(cfg *config.Config) []string {
 	seen := map[string]bool{cfg.DefaultsHarness(): true}
-	for _, proc := range cfg.Processes {
-		seen[cfg.ProcessHarness(proc)] = true
-	}
 	for _, task := range cfg.Tasks {
 		seen[cfg.TaskHarness(task)] = true
 	}

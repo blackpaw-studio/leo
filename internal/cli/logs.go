@@ -14,11 +14,10 @@ func newLogsCmd() *cobra.Command {
 	var follow bool
 
 	cmd := &cobra.Command{
-		Use:               "logs [process-name]",
-		Short:             "Show service or process logs",
-		Long:              "Show the main service log, or filter for a specific process by name.",
-		Args:              cobra.MaximumNArgs(1),
-		ValidArgsFunction: completeProcessNames,
+		Use:   "logs [name]",
+		Short: "Show service logs",
+		Long:  "Show the main service log, or filter for a specific named entry.",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {

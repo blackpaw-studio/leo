@@ -23,10 +23,6 @@ import (
 // agentSessionName is the supervisor's stable session-name convention.
 func agentSessionName(name string) string { return agent.SessionName(name) }
 
-// processSessionName matches internal/service.ProcessSpec.Name — the supervisor
-// creates `leo-<name>` tmux sessions for configured processes.
-func processSessionName(name string) string { return "leo-" + name }
-
 // Testability seams — overridden in tests.
 var (
 	agentExecCommand           = exec.Command

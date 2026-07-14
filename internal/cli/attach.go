@@ -27,10 +27,8 @@ func toAttachSpec(spec daemon.AgentAttachSpecResponse) harness.AttachSpec {
 // running agents without spinning up a real socket.
 var lookupAgentSession = daemon.AgentSession
 
-// newAttachCmd registers a top-level `leo attach <name>` shortcut that
-// disambiguates between configured processes and running agents. When the name
-// exists in both namespaces, Leo refuses to guess — the user must use the
-// explicit `leo process attach` or `leo agent attach` form.
+// newAttachCmd registers a top-level `leo attach <name>` shortcut for
+// `leo agent attach`.
 //
 // Calling `leo attach` with no arguments opens an interactive picker over the
 // available sessions (local or remote) so you don't have to remember names.
@@ -39,19 +37,16 @@ func newAttachCmd() *cobra.Command {
 	var cc bool
 	cmd := &cobra.Command{
 		Use:   "attach [name]",
-		Short: "Attach to a supervised process or running agent",
-		Long: `Shortcut for 'leo process attach' or 'leo agent attach'. The name
-is resolved against both namespaces — if it matches exactly one, Leo attaches
-there. If both namespaces contain the name, Leo errors and asks you to use the
-explicit subcommand.
+		Short: "Attach to a running agent",
+		Long: `Shortcut for 'leo agent attach'.
 
 When --host targets a remote, the resolution is delegated to the server so the
-client does not need to know the remote's process list.
+client does not need to know the remote's agent list.
 
 Passing no name opens an interactive arrow-key picker over the available
-processes and agents. Pass --cc in a tmux-aware terminal (iTerm2, WezTerm) to
-render the session as a native tab via tmux control mode.`,
-		Example: `  # Attach to a configured process or running agent by name
+agents. Pass --cc in a tmux-aware terminal (iTerm2, WezTerm) to render the
+session as a native tab via tmux control mode.`,
+		Example: `  # Attach to a running agent by name
   leo attach coding-assistant
 
   # Target a specific remote host from client.hosts
@@ -73,44 +68,25 @@ render the session as a native tab via tmux control mode.`,
 			name := args[0]
 
 			// Remote: hand the whole `leo attach <name>` invocation to the server so
-			// it can resolve ambiguity with its own view of processes+agents.
+			// it can resolve ambiguity with its own view of agents.
 			if !res.Localhost {
 				return runRemoteAttach(res, "attach", name)
 			}
 
-			_, isProcess := cfg.Processes[name]
 			// AgentSession is the authoritative presence check: the daemon only
 			// returns a session for agents the agentstore knows about.
-			var agentSession string
-			if session, err := lookupAgentSession(cmd.Context(), cfg.HomePath, name); err == nil && session != "" {
-				agentSession = session
+			session, err := lookupAgentSession(cmd.Context(), cfg.HomePath, name)
+			if err != nil || session == "" {
+				return fmt.Errorf("no agent named %q", name)
 			}
 
-			switch {
-			case isProcess && agentSession != "":
-				return fmt.Errorf("%q is both a process and an agent — use 'leo process attach %s' or 'leo agent attach %s'", name, name, name)
-			case isProcess:
-				// Non-claude harnesses have no tmux session to attach to —
-				// route through the driver instead, same as `leo process
-				// attach` (resolveProcessAttachSpec is localhost-only, which
-				// this branch always is: remote dispatch returned above).
-				if _, spec, ok, err := resolveProcessAttachSpec(cfg, name); err != nil {
-					return err
-				} else if ok {
-					return attachViaDriver(res, spec, opts)
-				}
-				return attachTmuxSession(res, processSessionName(name), opts)
-			case agentSession != "":
-				// Same non-claude routing as `leo agent attach` (attachLocal):
-				// ask the daemon for the agent's harness/attach spec before
-				// falling back to the tmux session already resolved above.
-				if spec, err := agentAttachSpecFn(cmd.Context(), cfg.HomePath, name); err == nil && spec.Harness != "" && spec.Harness != "claude" {
-					return attachViaDriver(res, toAttachSpec(spec), opts)
-				}
-				return attachTmuxSession(res, agentSession, opts)
-			default:
-				return fmt.Errorf("no process or agent named %q", name)
+			// Non-claude routing (attachLocal): ask the daemon for the agent's
+			// harness/attach spec before falling back to the tmux session
+			// already resolved above.
+			if spec, err := agentAttachSpecFn(cmd.Context(), cfg.HomePath, name); err == nil && spec.Harness != "" && spec.Harness != "claude" {
+				return attachViaDriver(res, toAttachSpec(spec), opts)
 			}
+			return attachTmuxSession(res, session, opts)
 		},
 	}
 	addHostFlag(cmd, &host)

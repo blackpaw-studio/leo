@@ -128,7 +128,7 @@ func TestRunStatusJSON_ValidOutput(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("not valid JSON: %v\n%s", err, out)
 	}
-	for _, k := range []string{"leo_version", "config_valid", "service", "daemon", "processes", "tasks"} {
+	for _, k := range []string{"leo_version", "config_valid", "service", "daemon", "agents", "tasks"} {
 		if _, ok := parsed[k]; !ok {
 			t.Errorf("missing JSON key %q in %v", k, keys(parsed))
 		}

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/daemon"
@@ -15,8 +16,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// badProcessStates are daemon-reported statuses we consider unhealthy.
-var badProcessStates = map[string]bool{
+// badAgentStates are daemon-reported statuses we consider unhealthy.
+var badAgentStates = map[string]bool{
 	"stopped":    true,
 	"crashed":    true,
 	"exited":     true,
@@ -26,20 +27,20 @@ var badProcessStates = map[string]bool{
 
 // StatusReport is the structured representation of `leo status`, used by --json.
 type StatusReport struct {
-	LeoVersion    string                  `json:"leo_version"`
-	HomePath      string                  `json:"home_path"`
-	ConfigValid   bool                    `json:"config_valid"`
-	ConfigError   string                  `json:"config_error,omitempty"`
-	Service       string                  `json:"service"`
-	Daemon        string                  `json:"daemon"`
-	Web           *StatusWeb              `json:"web,omitempty"`
-	Processes     StatusProcessesSummary  `json:"processes"`
-	ProcessStates []StatusProcessState    `json:"process_states,omitempty"`
-	BadProcesses  []string                `json:"bad_processes,omitempty"`
-	Tasks         StatusTasksSummary      `json:"tasks"`
-	TaskIssues    []StatusTaskIssue       `json:"task_issues,omitempty"`
-	Templates     int                     `json:"templates,omitempty"`
-	Next          *StatusNextScheduledRun `json:"next_scheduled_run,omitempty"`
+	LeoVersion  string                  `json:"leo_version"`
+	HomePath    string                  `json:"home_path"`
+	ConfigValid bool                    `json:"config_valid"`
+	ConfigError string                  `json:"config_error,omitempty"`
+	Service     string                  `json:"service"`
+	Daemon      string                  `json:"daemon"`
+	Web         *StatusWeb              `json:"web,omitempty"`
+	Agents      StatusAgentsSummary     `json:"agents"`
+	AgentStates []StatusAgentState      `json:"agent_states,omitempty"`
+	BadAgents   []string                `json:"bad_agents,omitempty"`
+	Tasks       StatusTasksSummary      `json:"tasks"`
+	TaskIssues  []StatusTaskIssue       `json:"task_issues,omitempty"`
+	Templates   int                     `json:"templates,omitempty"`
+	Next        *StatusNextScheduledRun `json:"next_scheduled_run,omitempty"`
 }
 
 // StatusWeb captures the resolved web UI config for the status report.
@@ -50,15 +51,17 @@ type StatusWeb struct {
 	URL      string `json:"url"`
 }
 
-// StatusProcessesSummary holds process counts.
-type StatusProcessesSummary struct {
-	Enabled int `json:"enabled"`
-	Total   int `json:"total"`
+// StatusAgentsSummary holds live ephemeral-agent counts, reported by the
+// daemon (empty/zero when the daemon isn't running).
+type StatusAgentsSummary struct {
+	Running   int `json:"running"`
+	Suspended int `json:"suspended"`
+	Total     int `json:"total"`
 }
 
-// StatusProcessState mirrors daemon.ProcessStateInfo but trims fields for
-// the status report.
-type StatusProcessState struct {
+// StatusAgentState mirrors agent.Record but trims fields for the status
+// report.
+type StatusAgentState struct {
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
 	StartedAt time.Time `json:"started_at,omitempty"`
@@ -89,7 +92,7 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show overall leo status",
-		Long:  "Show service status, daemon state, processes, tasks, and next scheduled run.",
+		Long:  "Show service status, daemon state, agents, tasks, and next scheduled run.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if asJSON {
 				return runStatusJSON(cmd.Context())
@@ -138,31 +141,27 @@ func buildStatusReport(ctx context.Context) StatusReport {
 		}
 	}
 
-	// Process counts + states.
-	for _, p := range cfg.Processes {
-		report.Processes.Total++
-		if p.Enabled {
-			report.Processes.Enabled++
-		}
-	}
-
+	// Live agent counts + states, sourced from the daemon's agent list (same
+	// data the web UI's GET /api/agent/list serves — see fetchAgentStates).
 	if daemon.IsRunning(cfg.HomePath) {
-		if states, err := fetchProcessStates(ctx, cfg.HomePath); err == nil {
-			names := make([]string, 0, len(states))
-			for name := range states {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				state := states[name]
-				report.ProcessStates = append(report.ProcessStates, StatusProcessState{
-					Name:      name,
-					Status:    state.Status,
-					StartedAt: state.StartedAt,
-					Restarts:  state.Restarts,
+		if records, err := fetchAgentStates(ctx, cfg.HomePath); err == nil {
+			sort.Slice(records, func(i, j int) bool { return records[i].Name < records[j].Name })
+			for _, rec := range records {
+				report.AgentStates = append(report.AgentStates, StatusAgentState{
+					Name:      rec.Name,
+					Status:    rec.Status,
+					StartedAt: rec.StartedAt,
+					Restarts:  rec.Restarts,
 				})
-				if badProcessStates[state.Status] {
-					report.BadProcesses = append(report.BadProcesses, name)
+				report.Agents.Total++
+				switch rec.Status {
+				case "running":
+					report.Agents.Running++
+				case "suspended":
+					report.Agents.Suspended++
+				}
+				if badAgentStates[rec.Status] {
+					report.BadAgents = append(report.BadAgents, rec.Name)
 				}
 			}
 		}
@@ -191,20 +190,14 @@ func buildStatusReport(ctx context.Context) StatusReport {
 	return report
 }
 
-// fetchProcessStates returns the current process states from the daemon.
-func fetchProcessStates(ctx context.Context, homePath string) (map[string]daemon.ProcessStateInfo, error) {
-	resp, err := daemon.Send(ctx, homePath, "GET", "/process/list", nil)
-	if err != nil {
-		return nil, err
-	}
-	if !resp.OK {
-		return nil, fmt.Errorf("daemon returned error: %s", resp.Error)
-	}
-	var states map[string]daemon.ProcessStateInfo
-	if err := json.Unmarshal(resp.Data, &states); err != nil {
-		return nil, err
-	}
-	return states, nil
+// fetchAgentStates returns the current live ephemeral-agent records from the
+// daemon. This is the same underlying data (agent.Record, from
+// Manager.List()) that the web UI's GET /api/agent/list serves; the CLI
+// reaches it over the daemon's own Unix-socket IPC (GET /agents/list) rather
+// than the bearer-token-protected TCP listener, since the daemon may be
+// running with the web UI disabled.
+func fetchAgentStates(ctx context.Context, homePath string) ([]agent.Record, error) {
+	return daemon.AgentList(ctx, homePath)
 }
 
 // fetchNextScheduledRun picks the nearest upcoming cron fire time.
@@ -292,9 +285,9 @@ func runStatus(ctx context.Context) error {
 		}
 	}
 
-	// Processes
-	info.Printf("Processes:  %d/%d enabled\n", report.Processes.Enabled, report.Processes.Total)
-	for _, state := range report.ProcessStates {
+	// Agents
+	info.Printf("Agents:     %d running, %d suspended (%d total)\n", report.Agents.Running, report.Agents.Suspended, report.Agents.Total)
+	for _, state := range report.AgentStates {
 		uptime := ""
 		if !state.StartedAt.IsZero() {
 			uptime = fmt.Sprintf(" uptime %s", time.Since(state.StartedAt).Round(time.Second))
@@ -312,10 +305,10 @@ func runStatus(ctx context.Context) error {
 			info.Printf("  %-20s %s%s%s\n", state.Name, state.Status, uptime, restarts)
 		}
 	}
-	if len(report.BadProcesses) > 0 {
-		warn.Printf("%d process(es) in bad state: %s\n",
-			len(report.BadProcesses),
-			joinNames(report.BadProcesses))
+	if len(report.BadAgents) > 0 {
+		warn.Printf("%d agent(s) in bad state: %s\n",
+			len(report.BadAgents),
+			joinNames(report.BadAgents))
 	}
 
 	// Tasks

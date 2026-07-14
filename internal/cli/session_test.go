@@ -3,11 +3,50 @@ package cli
 import (
 	"bytes"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
+
+// newTestConfig writes a minimal config to a tmp home and sets cfgFile so
+// loadConfig/saveConfig target it.
+func newTestConfig(t *testing.T) (*config.Config, string) {
+	t.Helper()
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "leo.yaml")
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// loadConfig reads via FindConfig — use explicit cfgFile.
+	oldCfgFile := cfgFile
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+	return cfg, cfgPath
+}
+
+// withStubProcessStdio replaces processStdin for the duration of the test.
+func withStubProcessStdio(t *testing.T, stdin io.Reader) {
+	t.Helper()
+	old := processStdin
+	processStdin = stdin
+	t.Cleanup(func() { processStdin = old })
+}
+
+// withProcessTTY overrides the TTY probe so tests can pick interactive vs
+// non-interactive modes deterministically.
+func withProcessTTY(t *testing.T, isTTY bool) {
+	t.Helper()
+	old := processIsTTY
+	processIsTTY = func() bool { return isTTY }
+	t.Cleanup(func() { processIsTTY = old })
+}
 
 func TestNewSessionCmdSubcommands(t *testing.T) {
 	var buf bytes.Buffer

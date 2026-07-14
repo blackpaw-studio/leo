@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
@@ -50,12 +51,13 @@ func TestRunAttachPickerAutoAttachesSingle(t *testing.T) {
 	stubOutsideTmux(t)
 	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
 
-	cfg := &config.Config{
-		HomePath: t.TempDir(),
-		Processes: map[string]config.ProcessConfig{
-			"only": {Enabled: true, Model: "sonnet"},
-		},
+	oldAgentList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return []agent.Record{{Name: "only"}}, nil
 	}
+	t.Cleanup(func() { agentListFn = oldAgentList })
+
+	cfg := &config.Config{HomePath: t.TempDir()}
 
 	var execed bool
 	var execedArgv []string
@@ -79,15 +81,14 @@ func TestRunAttachPickerAutoAttachesSingle(t *testing.T) {
 	}
 }
 
-func TestLocalAttachChoicesSortsProcesses(t *testing.T) {
-	cfg := &config.Config{
-		HomePath: t.TempDir(),
-		Processes: map[string]config.ProcessConfig{
-			"zulu":  {Enabled: true, Model: "sonnet"},
-			"alpha": {Enabled: true, Model: "sonnet"},
-			"mike":  {Enabled: true, Model: "sonnet"},
-		},
+func TestLocalAttachChoicesSortsAgents(t *testing.T) {
+	oldAgentList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return []agent.Record{{Name: "zulu"}, {Name: "alpha"}, {Name: "mike"}}, nil
 	}
+	t.Cleanup(func() { agentListFn = oldAgentList })
+
+	cfg := &config.Config{HomePath: t.TempDir()}
 	out := localAttachChoices(context.Background(), cfg)
 	if len(out) != 3 {
 		t.Fatalf("want 3 choices, got %d", len(out))
