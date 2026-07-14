@@ -288,6 +288,25 @@ func TestTemplateRenameInvalidName(t *testing.T) {
 	}
 }
 
+func TestTemplateEditShowsRenameForm(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	req := httptest.NewRequest("GET", "/config/templates/coding", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `hx-post="/web/template/coding/rename"`) {
+		t.Errorf("expected rename form posting to /web/template/coding/rename, got %q", body)
+	}
+	if !strings.Contains(body, `name="new_name"`) {
+		t.Error("expected a new_name input in the rename form")
+	}
+}
+
 // loadConfigFromDisk reads and parses the config file from disk.
 func loadConfigFromDisk(t *testing.T, dir string) *config.Config {
 	t.Helper()
