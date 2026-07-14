@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -977,4 +979,52 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestAgentListJSONUsesSeam(t *testing.T) {
+	// Point loadConfig() at an isolated, host-less config so dispatch()
+	// resolves Localhost (no client.hosts to fall through to) instead of
+	// picking up whatever leo.yaml happens to be discoverable from the
+	// process's cwd — without this, a real leo.yaml (and its daemon socket)
+	// could be reached by loadConfig()'s upward directory walk.
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
+	}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	oldList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return []agent.Record{
+			{Name: "alpha", Template: "writer", Status: "running"},
+			{Name: "beta", Status: "suspended"},
+		}, nil
+	}
+	t.Cleanup(func() { agentListFn = oldList })
+
+	var buf bytes.Buffer
+	oldOut := agentStdout
+	agentStdout = &buf
+	t.Cleanup(func() { agentStdout = oldOut })
+
+	cmd := newAgentListCmd()
+	cmd.SetArgs([]string{"--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var got []agent.Record
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("output is not a JSON array of records: %v\noutput: %s", err, buf.String())
+	}
+	if len(got) != 2 || got[0].Name != "alpha" || got[1].Status != "suspended" {
+		t.Fatalf("unexpected decoded records: %+v", got)
+	}
 }
