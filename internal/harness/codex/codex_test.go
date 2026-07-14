@@ -49,7 +49,6 @@ func TestSupportsKind(t *testing.T) {
 		want bool
 	}{
 		{harness.KindTask, true},
-		{harness.KindProcess, true},
 		{harness.KindAgent, true},
 		{harness.KindSession, true},
 	}
@@ -174,14 +173,6 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "KindProcess TUI argv",
-			spec: harness.LaunchSpec{
-				Kind: harness.KindProcess, Model: "gpt-5.3-codex",
-				Options: Options{Sandbox: "workspace-write"},
-			},
-			want: []string{"-a", "never", "--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
-		},
-		{
 			name: "KindAgent TUI argv",
 			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol",
 				Options: Options{Sandbox: "workspace-write"}},
@@ -206,8 +197,8 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 				"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`},
 		},
 		{
-			name: "KindProcess no model no sandbox",
-			spec: harness.LaunchSpec{Kind: harness.KindProcess, Options: Options{}},
+			name: "KindAgent no model no sandbox",
+			spec: harness.LaunchSpec{Kind: harness.KindAgent, Options: Options{}},
 			want: []string{"-a", "never"},
 		},
 		{

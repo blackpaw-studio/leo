@@ -24,11 +24,6 @@ func TestSystemContextMerge(t *testing.T) {
 		wantFlag      bool
 		wantValue     string
 	}{
-		{"process: nudge only", harness.KindProcess, nudge, "", true, nudge},
-		{"process: nudge + user", harness.KindProcess, nudge, user, true, nudge + "\n\n" + user},
-		{"process: neither", harness.KindProcess, "", "", false, ""},
-		{"process: user only", harness.KindProcess, "", user, true, user},
-
 		{"agent: nudge only", harness.KindAgent, nudge, "", true, nudge},
 		{"agent: nudge + user", harness.KindAgent, nudge, user, true, nudge + "\n\n" + user},
 		{"agent: neither", harness.KindAgent, "", "", false, ""},

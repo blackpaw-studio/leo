@@ -105,8 +105,6 @@ func (c Claude) Args(spec harness.LaunchSpec) ([]string, error) {
 		return nil, fmt.Errorf("claude: spec.Options is %T, want claude.Options", spec.Options)
 	}
 	switch spec.Kind {
-	case harness.KindProcess:
-		return processArgs(spec, opts), nil
 	case harness.KindAgent:
 		return agentArgs(spec, opts), nil
 	case harness.KindTask:

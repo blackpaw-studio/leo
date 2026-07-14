@@ -192,7 +192,7 @@ func TestDiscoverSessionID(t *testing.T) {
 }
 
 func TestOpencodeSessionArgsWithoutModel(t *testing.T) {
-	spec := harness.LaunchSpec{Kind: harness.KindProcess, Options: Options{}}
+	spec := harness.LaunchSpec{Kind: harness.KindAgent, Options: Options{}}
 	args, err := (Opencode{}).Args(spec)
 	if err != nil {
 		t.Fatalf("Args: %v", err)

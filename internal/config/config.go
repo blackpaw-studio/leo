@@ -599,9 +599,6 @@ func (c *Config) Validate() error {
 			if !h.SupportsChannels() && (len(proc.Channels) > 0 || len(proc.DevChannels) > 0) {
 				errs = append(errs, fmt.Sprintf("processes.%s.channels: the %s harness does not support channel plugins; use leo's MCP tools for messaging", name, h.Name()))
 			}
-			if !h.SupportsKind(harness.KindProcess) {
-				errs = append(errs, fmt.Sprintf("processes.%s.harness: the %s harness cannot run supervised processes yet (only scheduled tasks) — see docs/configuration/harnesses.md", name, h.Name()))
-			}
 		}
 		if proc.MaxTurns < 0 {
 			errs = append(errs, fmt.Sprintf("processes.%s.max_turns must not be negative", name))

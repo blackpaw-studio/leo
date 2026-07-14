@@ -86,7 +86,7 @@ type ProcessSpec struct {
 	// Empty means "claude" — old state/records predate this field.
 	Harness string
 	// Kind identifies which leo primitive this spec represents. Empty means
-	// KindProcess — old state/records predate this field.
+	// an old state/record that predates this field.
 	Kind harness.Kind
 	// OpeningPrompt carries the opening turn for non-claude harnesses, whose
 	// tmux-TUI driver injects it into the pane via Start rather than passing

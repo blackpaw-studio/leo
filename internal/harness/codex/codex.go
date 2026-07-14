@@ -39,7 +39,7 @@ func (Codex) SupportsChannels() bool { return false }
 // SupportsKind: scheduled tasks run one-shot; supervised processes, ephemeral
 // agents, and persistent sessions all drive the codex TUI in tmux.
 func (Codex) SupportsKind(k harness.Kind) bool {
-	return k == harness.KindTask || k == harness.KindProcess || k == harness.KindAgent || k == harness.KindSession
+	return k == harness.KindTask || k == harness.KindAgent || k == harness.KindSession
 }
 
 // Driver: the shared tmuxtui driver, wired with codex's readiness-probe
