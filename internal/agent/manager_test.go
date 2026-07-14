@@ -784,6 +784,70 @@ func TestResetUnknownAgentErrors(t *testing.T) {
 	}
 }
 
+// TestResetSpawnFailureLeavesRecoverableState verifies that when the early
+// clear-and-save succeeds but the respawn fails, Reset returns an error and
+// leaves the record in the documented interim state (SessionID cleared,
+// NoResume set, Suspended false) — not live, not resumable, but recognizable
+// as "mid-reset" — and that simply re-running Reset on the same name recovers:
+// StopAgent is skipped (the agent isn't live) and the spawn is retried.
+func TestResetSpawnFailureLeavesRecoverableState(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"leo-x": {Name: "leo-x", Status: "running"},
+		},
+		spawnErr: errors.New("supervisor boom"),
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "old-sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "old-sid"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	err := m.Reset("leo-x")
+	if err == nil {
+		t.Fatal("expected error when SpawnAgent fails")
+	}
+	if !strings.Contains(err.Error(), "leo agent reset leo-x") {
+		t.Fatalf("error should point at the recovery command, got: %v", err)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	got := recs["leo-x"]
+	if got.SessionID != "" {
+		t.Fatalf("interim SessionID = %q, want empty", got.SessionID)
+	}
+	if !got.NoResume {
+		t.Fatal("interim NoResume must be true")
+	}
+	if got.Suspended {
+		t.Fatal("interim Suspended must be false")
+	}
+
+	// Recovery: re-running Reset skips the stop (agent no longer live, since
+	// the earlier StopAgent call succeeded before the spawn failed) and
+	// retries the spawn.
+	sup.spawnErr = nil
+	if err := m.Reset("leo-x"); err != nil {
+		t.Fatalf("recovery reset: %v", err)
+	}
+	if len(sup.stopCalls) != 1 {
+		t.Fatalf("recovery reset must not call StopAgent again, stopCalls = %v", sup.stopCalls)
+	}
+
+	recs, _ = agentstore.Load(agentstore.FilePath(home))
+	got = recs["leo-x"]
+	if got.SessionID == "" {
+		t.Fatal("recovered record should have a fresh SessionID")
+	}
+	if got.NoResume {
+		t.Fatal("recovered record NoResume must be cleared")
+	}
+}
+
 // TestResetStopFailureAbortsBeforeClearing verifies a StopAgent failure stops
 // Reset before the record is mutated, so a failed reset leaves the original
 // session id intact rather than orphaning the agent mid-transition.

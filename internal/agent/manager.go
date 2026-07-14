@@ -770,7 +770,11 @@ func (m *Manager) Resume(name string) (Record, error) {
 // a daemon restart racing this call can't resurrect the old session via
 // RestoreAgents' jsonl scan), then respawns the agent fresh — the same
 // spawn-a-new-session logic Spawn/spawnShared uses, not Resume's --resume
-// path. Errors when name has no persisted agentstore record.
+// path. Errors when name has no persisted agentstore record. If the respawn
+// itself fails, the record is left in that already-cleared interim state
+// (SessionID="", NoResume=true, Suspended=false) rather than rolled back;
+// re-running Reset on the same name recovers, since the agent is no longer
+// live so the stop is skipped and only the spawn is retried.
 func (m *Manager) Reset(name string) error {
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -821,7 +825,7 @@ func (m *Manager) Reset(name string) error {
 		WebToken:   m.webToken,
 		Harness:    rec.Harness,
 	}); err != nil {
-		return fmt.Errorf("respawning agent after reset: %w", err)
+		return fmt.Errorf("respawning %q after reset: %w (re-run 'leo agent reset %s' to retry)", name, err, name)
 	}
 
 	rec.ClaudeArgs = args
