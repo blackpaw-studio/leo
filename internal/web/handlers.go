@@ -834,6 +834,7 @@ func (s *Server) handleTemplateRename(w http.ResponseWriter, r *http.Request) {
 				r.Template = newName
 				return r
 			}); err != nil {
+				// #nosec G706 -- name/newName/recName are validated identifiers (validEntityName / existing config + agentstore keys); no control chars can reach the log
 				log.Printf("template rename %q→%q: agentstore.Update(%q) failed: %v", name, newName, recName, err)
 			}
 		}
