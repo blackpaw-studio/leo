@@ -3,6 +3,9 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/templates"
 )
 
 // msgPrefixFormat is the wire format prepended to a delivered message so the
@@ -25,8 +28,12 @@ type registry struct {
 	handlers map[string]toolHandler
 }
 
-// newRegistry builds the full Leo tool surface bound to the given daemon
-// client and process name (the "self" the slash commands operate on).
+// newRegistry builds the Leo tool surface bound to the given daemon client
+// and process name (the "self" the slash commands operate on). Local tools
+// (currently just leo_skill) are always registered. When client is nil (no
+// daemon listener reachable), the daemon-backed tools are omitted entirely
+// rather than registered with a handler that would nil-deref or fail on
+// every call.
 func newRegistry(client *daemonClient, processName string) *registry {
 	r := &registry{handlers: make(map[string]toolHandler)}
 
@@ -41,6 +48,18 @@ func newRegistry(client *daemonClient, processName string) *registry {
 		return s
 	}
 	emptyArgs := objectSchema(map[string]any{})
+
+	r.add(toolDef{
+		Name:        "leo_skill",
+		Description: "Load Leo's operational instructions on demand. Call with no arguments to list available skills (managing scheduled tasks, reading/debugging logs, daemon control, config reference, workspace maintenance, agent management). Call with `name` set to a skill name to get that skill's full step-by-step instructions. Use this whenever you need to operate Leo.",
+		InputSchema: objectSchema(map[string]any{
+			"name": map[string]any{"type": "string", "description": "Skill name (with or without .md), e.g. \"managing-tasks\". Omit to list all available skills."},
+		}),
+	}, handleLeoSkill)
+
+	if client == nil {
+		return r
+	}
 
 	r.add(toolDef{
 		Name:        "leo_clear",
@@ -215,6 +234,52 @@ func newRegistry(client *daemonClient, processName string) *registry {
 	})
 
 	return r
+}
+
+// handleLeoSkill is the leo_skill tool handler. It is pure-local: it reads
+// embedded skill templates in-process and never touches the daemon client,
+// so it ignores the process-scoped args every other handler closes over.
+func handleLeoSkill(args map[string]any) (string, error) {
+	name, _ := args["name"].(string)
+	if name == "" {
+		return renderSkillCatalog()
+	}
+	return readNamedSkill(templates.NormalizeSkillName(name))
+}
+
+// renderSkillCatalog builds the "no arguments" listing of all skills.
+func renderSkillCatalog() (string, error) {
+	catalog, err := templates.SkillCatalog()
+	if err != nil {
+		return "", fmt.Errorf("loading skill catalog: %w", err)
+	}
+
+	var b strings.Builder
+	b.WriteString("Available Leo skills (call leo_skill with name=<name> for full instructions):\n")
+	for _, meta := range catalog {
+		fmt.Fprintf(&b, "- %s — %s\n", meta.Name, meta.Summary)
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// readNamedSkill returns the full content of the named skill, or an error
+// listing the valid names if it doesn't exist.
+func readNamedSkill(name string) (string, error) {
+	for _, file := range templates.SkillFiles() {
+		if templates.NormalizeSkillName(file) == name {
+			return templates.ReadSkill(file)
+		}
+	}
+
+	catalog, err := templates.SkillCatalog()
+	if err != nil {
+		return "", fmt.Errorf("unknown skill %q", name)
+	}
+	names := make([]string, 0, len(catalog))
+	for _, meta := range catalog {
+		names = append(names, meta.Name)
+	}
+	return "", fmt.Errorf("unknown skill %q; valid skills: %s", name, strings.Join(names, ", "))
 }
 
 func (r *registry) add(def toolDef, h toolHandler) {

@@ -73,7 +73,7 @@ Rules to remember:
 
 ## Channel Slash Commands
 
-Leo ships a built-in MCP server (registered as `leo` in your `--mcp-config`) that gives every channel plugin a uniform slash-command surface — `/agent`, `/agents`, `/tasks`, `/clear`, `/compact`, `/stop`. Stock channel plugins forward `/`-prefixed messages to you as `<channel>` notifications; the dispatch instructions live in `claude-workspace.md` ("Channel Slash Commands"). The MCP tools (`leo_spawn_agent`, `leo_list_agents`, `leo_stop_agent`, …) wrap the HTTP endpoints documented above.
+Leo ships a built-in MCP server (registered as `leo` in your `--mcp-config`) that gives every channel plugin a uniform slash-command surface — `/agent`, `/agents`, `/tasks`, `/clear`, `/compact`, `/stop`. Stock channel plugins forward `/`-prefixed messages to you as `<channel>` notifications. The MCP tools (`leo_spawn_agent`, `leo_list_agents`, `leo_stop_agent`, …) wrap the HTTP endpoints documented above.
 
 A plugin author who wants channel-native UX (Telegram inline keyboards, Discord buttons) can still call the HTTP API directly — but it's no longer required for the basic command surface.
 

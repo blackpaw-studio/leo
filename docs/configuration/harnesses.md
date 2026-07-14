@@ -276,6 +276,17 @@ Other things to know:
 - **No `append_system_prompt`.** Rejected: `option "append_system_prompt" is
   not supported: opencode has no append-system-prompt equivalent (use
   AGENTS.md or the instructions config)`.
+- **Leo's nudge goes through the global AGENTS.md.** Every harness gets a
+  small system-prompt nudge pointing the agent at the `leo_skill` MCP tool
+  (see [Directory Structure](workspace-structure.md)), but opencode has no
+  per-invocation system-prompt flag. Instead, the daemon maintains a managed
+  block (delimited by `<!-- BEGIN LEO (managed) -->` / `<!-- END LEO
+  (managed) -->`) inside opencode's global `~/.config/opencode/AGENTS.md`
+  (or `$XDG_CONFIG_HOME/opencode/AGENTS.md`), which opencode merges with any
+  project-level `AGENTS.md` rather than overwriting. Only the managed block
+  is ever touched; the rest of the file — including content you've written
+  yourself — is left alone. This only happens when opencode is actually
+  configured somewhere in `leo.yaml`.
 - **Resume** uses opencode's own session IDs (`-s ses_…`), read from the
   `sessionID` field present on every event in the stream.
 - **MCP bridge** rides in the same `OPENCODE_CONFIG_CONTENT` overlay, under a

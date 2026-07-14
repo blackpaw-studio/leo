@@ -23,9 +23,9 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
-	"github.com/blackpaw-studio/leo/internal/update"
 )
 
 // Testability seams
@@ -606,16 +606,14 @@ func defaultSupervisedExec(claudePath string, processes []ProcessSpec, sessionSp
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}
 
-	// Sync workspace templates (CLAUDE.md, skills/*.md) with whatever's
-	// embedded in this binary. Content-diffed, so it's a no-op when files
-	// already match. Called on every daemon start so `brew upgrade` +
-	// `leo service restart` (or `leo update` + restart) re-syncs the
-	// workspace automatically — no manual step.
-	workspacePath := filepath.Join(homePath, "workspace")
-	if written, err := update.RefreshWorkspace(workspacePath); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: workspace refresh failed: %v\n", err)
-	} else if len(written) > 0 {
-		fmt.Fprintf(os.Stdout, "refreshed %d workspace file(s)\n", len(written))
+	// opencode has no per-invocation system-prompt flag, so Leo's nudge is
+	// delivered via opencode's global AGENTS.md instead. Only touch that
+	// file (which lives outside any leo-managed directory) when opencode is
+	// actually configured somewhere in this config.
+	if cfg, err := config.Load(configPath); err == nil && cfg.UsesHarness("opencode") {
+		if err := leomcp.EnsureOpenCodeContext(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: opencode global AGENTS.md refresh failed: %v\n", err)
+		}
 	}
 
 	// Validate process workspaces before starting

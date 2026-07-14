@@ -122,7 +122,9 @@ func TestProcessEnviron(t *testing.T) {
 }
 
 func TestBuildProcessArgsIncludesDevChannels(t *testing.T) {
-	cfg := &config.Config{}
+	// HomePath set so AppendArg's EnsureConfig writes under a temp dir
+	// instead of the empty-HomePath no-op (which would skip --mcp-config).
+	cfg := &config.Config{HomePath: t.TempDir()}
 	proc := config.ProcessConfig{
 		Channels:    []string{"plugin:telegram@claude-plugins-official"},
 		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},

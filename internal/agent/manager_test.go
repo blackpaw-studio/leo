@@ -122,11 +122,13 @@ func TestBuildTemplateArgsInheritsDefaults(t *testing.T) {
 	assertContainsFlag(t, args, "--max-turns", "50")
 	assertContainsFlag(t, args, "--permission-mode", "auto")
 	assertContainsFlag(t, args, "--allowed-tools", "Read,Write")
-	assertContainsFlag(t, args, "--append-system-prompt", "be helpful")
+	assertContainsFlag(t, args, "--append-system-prompt", leoSkillNudgeText+"\n\nbe helpful")
 }
 
 func TestBuildTemplateArgsChannels(t *testing.T) {
-	cfg := &config.Config{}
+	// HomePath set: BuildTemplateArgs reaches AppendArg, which writes
+	// leo-mcp.json under HomePath/state; an empty HomePath would no-op.
+	cfg := &config.Config{HomePath: t.TempDir()}
 	tmpl := config.TemplateConfig{
 		Channels: []string{"plugin:telegram@official", "plugin:slack@custom"},
 	}
@@ -145,7 +147,9 @@ func TestBuildTemplateArgsChannels(t *testing.T) {
 }
 
 func TestBuildTemplateArgsDevChannels(t *testing.T) {
-	cfg := &config.Config{}
+	// HomePath set: BuildTemplateArgs reaches AppendArg, which writes
+	// leo-mcp.json under HomePath/state; an empty HomePath would no-op.
+	cfg := &config.Config{HomePath: t.TempDir()}
 	tmpl := config.TemplateConfig{
 		Channels:    []string{"plugin:telegram@official"},
 		DevChannels: []string{"plugin:blackpaw-telegram@blackpaw-plugins"},
@@ -171,7 +175,9 @@ func TestBuildTemplateArgsDevChannels(t *testing.T) {
 }
 
 func TestBuildTemplateArgsAgent(t *testing.T) {
-	cfg := &config.Config{}
+	// HomePath set: BuildTemplateArgs reaches AppendArg, which writes
+	// leo-mcp.json under HomePath/state; an empty HomePath would no-op.
+	cfg := &config.Config{HomePath: t.TempDir()}
 	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"agent": "my-agent"}}
 
 	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
@@ -179,7 +185,9 @@ func TestBuildTemplateArgsAgent(t *testing.T) {
 }
 
 func TestBuildTemplateArgsRemoteControlDisabled(t *testing.T) {
-	cfg := &config.Config{}
+	// HomePath set: BuildTemplateArgs reaches AppendArg, which writes
+	// leo-mcp.json under HomePath/state; an empty HomePath would no-op.
+	cfg := &config.Config{HomePath: t.TempDir()}
 	tmpl := config.TemplateConfig{HarnessOptions: map[string]any{"remote_control": false}}
 
 	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")
@@ -191,7 +199,9 @@ func TestBuildTemplateArgsRemoteControlDisabled(t *testing.T) {
 }
 
 func TestBuildTemplateArgsPromptIsTrailingPositional(t *testing.T) {
-	cfg := &config.Config{}
+	// HomePath set: BuildTemplateArgs reaches AppendArg, which writes
+	// leo-mcp.json under HomePath/state; an empty HomePath would no-op.
+	cfg := &config.Config{HomePath: t.TempDir()}
 	tmpl := config.TemplateConfig{Model: "opus"}
 
 	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "investigate alert X", "")
@@ -214,7 +224,9 @@ func TestBuildTemplateArgsPromptIsTrailingPositional(t *testing.T) {
 }
 
 func TestBuildTemplateArgsNoPromptOmitsPositional(t *testing.T) {
-	cfg := &config.Config{}
+	// HomePath set: BuildTemplateArgs reaches AppendArg, which writes
+	// leo-mcp.json under HomePath/state; an empty HomePath would no-op.
+	cfg := &config.Config{HomePath: t.TempDir()}
 	tmpl := config.TemplateConfig{Model: "opus"}
 
 	args, _ := BuildTemplateArgs(cfg, tmpl, "test", "/tmp/ws", "", "")

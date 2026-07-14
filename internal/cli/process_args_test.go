@@ -13,9 +13,21 @@ import (
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
+// leoSkillNudgeText mirrors leomcp's unconditional leo_skill guidance
+// (unexported there), so characterization tests below can assert the exact
+// --append-system-prompt value the leo MCP server injection produces when
+// web is disabled (as in every case here — none of these configs set
+// Web.Enabled).
+const leoSkillNudgeText = "When you need to operate Leo — schedule or trigger tasks, read logs, or manage the daemon and agents — call the `leo_skill` tool for step-by-step instructions."
+
+// leoMCPConfigPath is the leo MCP config path AppendArg always adds now,
+// derived from the fixed HomePath used by every case in this table.
+const leoMCPConfigPath = "/tmp/leo-home/state/leo-mcp.json"
+
 // Characterization tests: lock buildProcessArgs's argv byte-for-byte across
-// the harness refactor. Web is disabled in every case so leomcp.AppendArg
-// is a no-op and MergeSystemPrompt passes through (no state-dir writes).
+// the harness refactor. Web is disabled in every case, so the leo MCP
+// server is always wired in via --mcp-config, but only the unconditional
+// leo_skill nudge appears in --append-system-prompt (not leo_send_message).
 func TestBuildProcessArgsCharacterization(t *testing.T) {
 	tests := []struct {
 		name string
@@ -30,7 +42,12 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 				Defaults: config.DefaultsConfig{Model: "opus"},
 			},
 			proc: config.ProcessConfig{Workspace: "/tmp/ws"},
-			want: []string{"--model", "opus", "--add-dir", "/tmp/ws"},
+			want: []string{
+				"--model", "opus",
+				"--add-dir", "/tmp/ws",
+				"--mcp-config", leoMCPConfigPath,
+				"--append-system-prompt", leoSkillNudgeText,
+			},
 		},
 		{
 			name: "kitchen sink",
@@ -64,10 +81,11 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 				"--add-dir", "/tmp/extra",
 				"--remote-control", "--remote-control-session-name-prefix", "myproc",
 				"--permission-mode", "acceptEdits",
+				"--mcp-config", leoMCPConfigPath,
 				"--agent", "rocket",
 				"--allowed-tools", "Read,Bash",
 				"--disallowed-tools", "WebFetch",
-				"--append-system-prompt", "be terse",
+				"--append-system-prompt", leoSkillNudgeText + "\n\nbe terse",
 			},
 		},
 		{
@@ -84,6 +102,8 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 				"--model", "sonnet",
 				"--add-dir", "/tmp/ws",
 				"--dangerously-skip-permissions",
+				"--mcp-config", leoMCPConfigPath,
+				"--append-system-prompt", leoSkillNudgeText,
 			},
 		},
 		{
@@ -100,6 +120,8 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 				"--model", "opus",
 				"--add-dir", "/tmp/ws",
 				"--permission-mode", "plan",
+				"--mcp-config", leoMCPConfigPath,
+				"--append-system-prompt", leoSkillNudgeText,
 			},
 		},
 		{
@@ -119,6 +141,8 @@ func TestBuildProcessArgsCharacterization(t *testing.T) {
 				"--model", "opus",
 				"--add-dir", "/tmp/ws",
 				"--permission-mode", "acceptEdits",
+				"--mcp-config", leoMCPConfigPath,
+				"--append-system-prompt", leoSkillNudgeText,
 			},
 		},
 	}
@@ -211,9 +235,11 @@ func TestResolveProcessLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 	}
 }
 
-// TestResolveProcessLaunchCodexNoLeoMCPWithoutToken confirms the gate: no
-// webToken (the single-process foreground path has none) means no bridge.
-func TestResolveProcessLaunchCodexNoLeoMCPWithoutToken(t *testing.T) {
+// TestResolveProcessLaunchCodexLeoMCPWithoutToken confirms the codex bridge
+// is wired in even without a webToken (the single-process foreground path
+// has none) — codex's bridge only references env-var *names*, so an empty
+// token at spawn time is harmless; the leo MCP server runs local-only.
+func TestResolveProcessLaunchCodexLeoMCPWithoutToken(t *testing.T) {
 	cfg := &config.Config{
 		HomePath: t.TempDir(),
 		Web:      config.WebConfig{Enabled: true},
@@ -227,8 +253,8 @@ func TestResolveProcessLaunchCodexNoLeoMCPWithoutToken(t *testing.T) {
 	if !ok {
 		t.Fatalf("spec.Options = %T, want codexharness.Options", spec.Options)
 	}
-	if opts.LeoMCP != nil {
-		t.Errorf("expected nil LeoMCP bridge without a webToken, got %+v", opts.LeoMCP)
+	if opts.LeoMCP == nil {
+		t.Fatal("expected LeoMCP bridge to be filled even without a webToken")
 	}
 }
 

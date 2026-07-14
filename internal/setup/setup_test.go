@@ -257,8 +257,6 @@ func TestScaffoldWorkspace_CreatesFiles(t *testing.T) {
 
 	for _, rel := range []string{
 		"USER.md",
-		"CLAUDE.md",
-		"skills/managing-tasks.md",
 		"config/mcp-servers.json",
 	} {
 		if _, err := os.Stat(filepath.Join(workspace, rel)); err != nil {
@@ -266,15 +264,13 @@ func TestScaffoldWorkspace_CreatesFiles(t *testing.T) {
 		}
 	}
 
-	claudeData, err := os.ReadFile(filepath.Join(workspace, "CLAUDE.md"))
-	if err != nil {
-		t.Fatalf("reading CLAUDE.md: %v", err)
+	// Operational instructions/skills are now served via the leo_skill MCP
+	// tool, not scaffolded into the workspace.
+	if _, err := os.Stat(filepath.Join(workspace, "CLAUDE.md")); err == nil {
+		t.Error("CLAUDE.md should not be scaffolded into the workspace")
 	}
-	if strings.Contains(string(claudeData), "Telegram Messaging Rules") {
-		t.Error("CLAUDE.md should not reference telegram-specific rules")
-	}
-	if !strings.Contains(string(claudeData), "LEO_CHANNELS") {
-		t.Error("CLAUDE.md should reference LEO_CHANNELS env var")
+	if _, err := os.Stat(filepath.Join(workspace, "skills")); err == nil {
+		t.Error("skills/ should not be scaffolded into the workspace")
 	}
 }
 

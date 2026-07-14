@@ -28,7 +28,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/session"
-	"github.com/blackpaw-studio/leo/internal/update"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
 
@@ -114,8 +113,7 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store) (stri
 		sessionID = sid
 	}
 
-	leoEnv, leoMCPOK := leoMCPEnv(cfg, taskName)
-	warnLeoMCPSkipped(cfg, taskName, leoMCPOK)
+	leoEnv := leoMCPEnv(cfg, taskName)
 
 	args, _ := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv)
 	return prompt, args, nil
@@ -155,13 +153,9 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	defer releaseTaskLock(lockPath)
 
 	// leoEnv rides along on every claude invocation for this task (main
-	// attempts and the notify-on-fail child alike) whenever the leo MCP
-	// server was actually wired into the args by buildArgs; see leoMCPEnv.
-	// The gate is evaluated once here (not once per buildArgs call) so a
-	// missing/unreadable token only produces one warning per run, not one
-	// per attempt.
-	leoEnv, leoMCPOK := leoMCPEnv(cfg, taskName)
-	warnLeoMCPSkipped(cfg, taskName, leoMCPOK)
+	// attempts and the notify-on-fail child alike) — the leo MCP server is
+	// always wired into the args by buildArgs now; see leoMCPEnv.
+	leoEnv := leoMCPEnv(cfg, taskName)
 	// task.Env lets a task target a custom endpoint (ANTHROPIC_BASE_URL/
 	// ANTHROPIC_AUTH_TOKEN) or inject other env vars; leoEnv wins on key
 	// collision so the leo MCP wiring can never be shadowed by task config.
@@ -188,19 +182,6 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 
 	timeout := cfg.TaskTimeout(task)
 	taskWorkspace := cfg.TaskWorkspace(task)
-
-	// Sync workspace templates (CLAUDE.md, skills/*.md) with this binary's
-	// embedded versions. Content-diffed, so it's a no-op when up to date.
-	// Covers cron-invoked `leo run <task>` paths that don't go through the
-	// daemon (the daemon supervisor does its own refresh at startup).
-	//
-	// Only refresh the default workspace — a task that explicitly overrides
-	// `workspace:` is user-managed; don't stomp on it with template files.
-	if taskWorkspace == cfg.DefaultWorkspace() {
-		if _, err := update.RefreshWorkspace(taskWorkspace); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: workspace refresh failed: %v\n", err)
-		}
-	}
 
 	maxAttempts := task.Retries + 1
 	var lastErr error
@@ -871,45 +852,35 @@ func assemblePrompt(cfg *config.Config, task config.TaskConfig) (string, error) 
 }
 
 // leoMCPEnv builds the LEO_PROCESS_NAME / LEO_WEB_PORT / LEO_API_TOKEN
-// environment that `leo mcp-server` (internal/mcp/server.go) requires to
-// bind itself to this task and authenticate against the daemon's web API
-// (see internal/service/process.go, which exports the same three vars for
-// supervised processes). Returns ok=false when the leo MCP server would be
-// doomed to fail — web UI/API disabled, or no readable, non-empty API token
-// file — so callers can skip wiring it in entirely rather than let it fail
-// at spawn time.
-func leoMCPEnv(cfg *config.Config, taskName string) (map[string]string, bool) {
-	if cfg == nil || !cfg.Web.Enabled {
-		return nil, false
+// environment that `leo mcp-server` (internal/mcp/server.go) uses to bind
+// itself to this task and, when a daemon token is available, authenticate
+// against the daemon's web API (see internal/service/process.go, which
+// exports the same three vars for supervised processes). The leo MCP server
+// is always wired in for every task; LEO_WEB_PORT/LEO_API_TOKEN are simply
+// absent/empty when the web UI is disabled or no readable, non-empty API
+// token file exists, in which case the server self-selects local-only mode
+// (only the local leo_skill tool is served).
+func leoMCPEnv(cfg *config.Config, taskName string) map[string]string {
+	env := map[string]string{
+		"LEO_PROCESS_NAME": "task:" + taskName,
+	}
+	if cfg == nil {
+		return env
+	}
+	env["LEO_WEB_PORT"] = strconv.Itoa(cfg.WebPort())
+	if !cfg.Web.Enabled {
+		return env
 	}
 	// api.token lives at <state>/api.token; see web.APITokenPath, which
 	// owns the canonical path (and file-creation logic) for this file.
 	data, err := os.ReadFile(web.APITokenPath(cfg.StatePath()))
 	if err != nil {
-		return nil, false
+		return env
 	}
-	token := strings.TrimSpace(string(data))
-	if token == "" {
-		return nil, false
+	if token := strings.TrimSpace(string(data)); token != "" {
+		env["LEO_API_TOKEN"] = token
 	}
-	return map[string]string{
-		"LEO_PROCESS_NAME": "task:" + taskName,
-		"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
-		"LEO_API_TOKEN":    token,
-	}, true
-}
-
-// warnLeoMCPSkipped prints the "leo MCP server skipped" warning at most once
-// per Run/Preview call, when the leoMCPEnv gate failed despite the web UI
-// being enabled (the only case worth flagging — otherwise it's simply not
-// configured). Callers evaluate the gate once and thread the result through
-// buildArgs, rather than each buildArgs call re-evaluating (and
-// re-warning) independently.
-func warnLeoMCPSkipped(cfg *config.Config, taskName string, leoMCPOK bool) {
-	if leoMCPOK || cfg == nil || !cfg.Web.Enabled {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "leo: warning: skipping leo MCP server for task %q: no readable API token\n", taskName)
+	return env
 }
 
 // mergeEnvMaps combines any number of env maps into one, later maps taking
@@ -931,9 +902,9 @@ func mergeEnvMaps(maps ...map[string]string) map[string]string {
 // buildArgs resolves the task's harness, fills in its runtime-only options
 // (leo MCP wiring, resolved session state, etc.), and renders both the argv
 // and the harness's own extra spawn env for one launch. leoEnv carries the
-// three LEO_* vars from leoMCPEnv when the leo MCP gate passed (see
-// leoMCPEnv/warnLeoMCPSkipped); nil means it's gated off, so no leo MCP
-// wiring is added for any harness.
+// LEO_* vars from leoMCPEnv, always non-nil now — the leo MCP server is
+// always wired in for every harness, with LEO_WEB_PORT/LEO_API_TOKEN simply
+// absent/empty when web is disabled or no token is available.
 func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoEnv map[string]string) ([]string, map[string]string) {
 	h, err := harness.Get(cfg.TaskHarness(task))
 	if err != nil {
@@ -945,21 +916,21 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		log.Printf("[task:%s] decoding harness options: %v", taskName, err)
 		return nil, nil
 	}
-	leoMCPOK := leoEnv != nil
 
 	sess := harness.SessionState{}
 	if sessionID != "" {
 		sess = harness.SessionState{Mode: harness.SessionResume, ID: sessionID}
 	}
 	spec := harness.LaunchSpec{
-		Kind:        harness.KindTask,
-		Name:        taskName,
-		Model:       cfg.TaskModel(task),
-		MaxTurns:    cfg.TaskMaxTurns(task),
-		Workspace:   cfg.TaskWorkspace(task),
-		DevChannels: task.DevChannels,
-		Prompt:      prompt,
-		Session:     sess,
+		Kind:          harness.KindTask,
+		Name:          taskName,
+		Model:         cfg.TaskModel(task),
+		MaxTurns:      cfg.TaskMaxTurns(task),
+		Workspace:     cfg.TaskWorkspace(task),
+		DevChannels:   task.DevChannels,
+		Prompt:        prompt,
+		Session:       sess,
+		SystemContext: leomcp.LeoNudge(cfg),
 	}
 
 	switch opts := decoded.(type) {
@@ -968,30 +939,21 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		if p := cfg.TaskMCPConfigPath(task); config.HasMCPServers(p) {
 			mcpConfig = p
 		}
-		var leoMCPArgs []string
-		if leoMCPOK {
-			leoMCPArgs = leomcp.AppendArg(nil, cfg)
-		}
-		opts.AppendSystemPrompt = leomcp.MergeSystemPrompt(cfg, opts.AppendSystemPrompt)
 		opts.MCPConfigPath = mcpConfig
-		opts.LeoMCPArgs = leoMCPArgs
+		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
 		spec.Options = opts
 	case codexharness.Options:
-		if leoMCPOK {
-			opts.LeoMCP = &codexharness.LeoMCPBridge{
-				Command:      "leo",
-				Args:         []string{"mcp-server"},
-				EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
-				ApprovalMode: "approve",
-			}
+		opts.LeoMCP = &codexharness.LeoMCPBridge{
+			Command:      "leo",
+			Args:         []string{"mcp-server"},
+			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+			ApprovalMode: "approve",
 		}
 		spec.Options = opts
 	case opencodeharness.Options:
-		if leoMCPOK {
-			opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-				Command: []string{"leo", "mcp-server"},
-				Env:     leoEnv,
-			}
+		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
+			Command: []string{"leo", "mcp-server"},
+			Env:     leoEnv,
 		}
 		spec.Options = opts
 	default:

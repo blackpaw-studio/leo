@@ -28,10 +28,9 @@ The interactive wizard walks you through:
 
 1. **Creating a user profile** — tells the assistant who you are
 2. **Picking a workspace** — the root directory for your agent's files
-3. **Scaffolding `CLAUDE.md` and skills** — baseline context for the agent
-4. **Configuring MCP servers** (optional) — integrations (calendar, email, etc.)
-5. **Adding scheduled tasks** (optional) — recurring jobs like daily briefings
-6. **Optionally installing as a daemon** — for persistence across reboots
+3. **Configuring MCP servers** (optional) — integrations (calendar, email, etc.)
+4. **Adding scheduled tasks** (optional) — recurring jobs like daily briefings
+5. **Optionally installing as a daemon** — for persistence across reboots
 
 The wizard does **not** install or configure any messaging channel. Leo is channel-agnostic.
 

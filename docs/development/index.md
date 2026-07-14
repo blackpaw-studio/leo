@@ -34,8 +34,9 @@ internal/service/         -> Process supervisor (multi-process tmux
                              management, launchd/systemd integration)
 internal/session/         -> Session ID persistence (JSON key-value store)
 internal/setup/           -> Setup wizard
-internal/templates/       -> embed.FS templates for user profile, CLAUDE.md,
-                             skills/
+internal/templates/       -> embed.FS templates for user profile and
+                             skill catalog metadata (skill text served
+                             via the leo_skill MCP tool)
 internal/tmux/            -> tmux helpers (dedicated `-L leo` socket,
                              attach/popup/control-mode, session picker)
 internal/update/          -> Self-update (binary download + cosign

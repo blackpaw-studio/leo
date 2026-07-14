@@ -31,10 +31,25 @@ func processArgs(spec harness.LaunchSpec, o Options) []string {
 		args = append(args, "--agent", o.AgentFile)
 	}
 	args = appendToolFlags(args, o)
-	if o.AppendSystemPrompt != "" {
-		args = append(args, "--append-system-prompt", o.AppendSystemPrompt)
+	if sp := mergeSystemPrompt(spec.SystemContext, o.AppendSystemPrompt); sp != "" {
+		args = append(args, "--append-system-prompt", sp)
 	}
 	return args
+}
+
+// mergeSystemPrompt joins Leo's harness-neutral system-context addendum
+// (nudge, first) with the user-configured append_system_prompt harness
+// option (second), separated by a blank line. Either half may be empty;
+// returns "" when both are.
+func mergeSystemPrompt(systemContext, userPrompt string) string {
+	switch {
+	case systemContext == "":
+		return userPrompt
+	case userPrompt == "":
+		return systemContext
+	default:
+		return systemContext + "\n\n" + userPrompt
+	}
 }
 
 // agentArgs reproduces internal/agent.BuildTemplateArgs flag order exactly.
@@ -64,8 +79,8 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 		args = append(args, "--agent", o.AgentFile)
 	}
 	args = appendToolFlags(args, o)
-	if o.AppendSystemPrompt != "" {
-		args = append(args, "--append-system-prompt", o.AppendSystemPrompt)
+	if sp := mergeSystemPrompt(spec.SystemContext, o.AppendSystemPrompt); sp != "" {
+		args = append(args, "--append-system-prompt", sp)
 	}
 	args = append(args, o.LeoMCPArgs...)
 	if spec.MaxTurns > 0 {
@@ -105,8 +120,8 @@ func sessionArgs(spec harness.LaunchSpec, o Options) []string {
 	if len(o.DisallowedTools) > 0 {
 		a = append(a, "--disallowed-tools", strings.Join(o.DisallowedTools, ","))
 	}
-	if o.AppendSystemPrompt != "" {
-		a = append(a, "--append-system-prompt", o.AppendSystemPrompt)
+	if sp := mergeSystemPrompt(spec.SystemContext, o.AppendSystemPrompt); sp != "" {
+		a = append(a, "--append-system-prompt", sp)
 	}
 	return a
 }
@@ -131,8 +146,8 @@ func taskArgs(spec harness.LaunchSpec, o Options) []string {
 	args = append(args, o.LeoMCPArgs...)
 	args = append(args, "--add-dir", spec.Workspace)
 	args = appendToolFlags(args, o)
-	if o.AppendSystemPrompt != "" {
-		args = append(args, "--append-system-prompt", o.AppendSystemPrompt)
+	if sp := mergeSystemPrompt(spec.SystemContext, o.AppendSystemPrompt); sp != "" {
+		args = append(args, "--append-system-prompt", sp)
 	}
 	return args
 }

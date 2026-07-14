@@ -372,39 +372,9 @@ func scaffoldWorkspace(opts scaffoldOptions) error {
 		prompt.Info.Printf("  Wrote %s\n", opts.userPath)
 	}
 
-	// Write CLAUDE.md (only if missing)
-	claudeMDPath := filepath.Join(workspace, "CLAUDE.md")
-	if _, err := os.Stat(claudeMDPath); os.IsNotExist(err) {
-		claudeContent, err := templates.RenderClaudeWorkspace(templates.AgentData{
-			Workspace: workspace,
-		})
-		if err != nil {
-			return fmt.Errorf("rendering CLAUDE.md: %w", err)
-		}
-		if err := os.WriteFile(claudeMDPath, []byte(claudeContent), 0644); err != nil {
-			return fmt.Errorf("writing CLAUDE.md: %w", err)
-		}
-		prompt.Info.Printf("  Wrote %s\n", claudeMDPath)
-	}
-
-	// Write skill files (only if missing)
-	skillsDir := filepath.Join(workspace, "skills")
-	if err := os.MkdirAll(skillsDir, 0750); err != nil {
-		return fmt.Errorf("creating skills directory: %w", err)
-	}
-	for _, skillName := range templates.SkillFiles() {
-		skillPath := filepath.Join(skillsDir, skillName)
-		if _, err := os.Stat(skillPath); os.IsNotExist(err) {
-			content, err := templates.ReadSkill(skillName)
-			if err != nil {
-				return fmt.Errorf("reading skill template %s: %w", skillName, err)
-			}
-			if err := os.WriteFile(skillPath, []byte(content), 0644); err != nil {
-				return fmt.Errorf("writing skill %s: %w", skillName, err)
-			}
-			prompt.Info.Printf("  Wrote %s\n", skillPath)
-		}
-	}
+	// Operational instructions and skills are served on demand via the
+	// leo_skill MCP tool rather than written into the workspace, so no
+	// CLAUDE.md or skills/*.md scaffolding happens here.
 
 	// Write empty MCP config if not exists
 	mcpPath := filepath.Join(workspace, "config", "mcp-servers.json")

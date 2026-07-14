@@ -91,8 +91,7 @@ Each task has a `prompt_file` (relative to workspace) containing the instruction
 ```
 prompts/
 ├── daily-briefing.md
-├── weekly-review.md
-└── heartbeat.md
+└── weekly-review.md
 ```
 
 The prompt file content is assembled with:

@@ -39,6 +39,36 @@ func (c *Config) SessionHarness(s SessionConfig) string {
 	return harnessOrDefault(s.Harness, c.Defaults.Harness)
 }
 
+// UsesHarness reports whether any scope in the config — defaults, or any
+// process/template/session/task — resolves (after the empty-string cascade
+// down from defaults) to the named harness.
+func (c *Config) UsesHarness(name string) bool {
+	if c.DefaultsHarness() == name {
+		return true
+	}
+	for _, p := range c.Processes {
+		if c.ProcessHarness(p) == name {
+			return true
+		}
+	}
+	for _, t := range c.Templates {
+		if c.TemplateHarness(t) == name {
+			return true
+		}
+	}
+	for _, s := range c.Sessions {
+		if c.SessionHarness(s) == name {
+			return true
+		}
+	}
+	for _, t := range c.Tasks {
+		if c.TaskHarness(t) == name {
+			return true
+		}
+	}
+	return false
+}
+
 // mergeHarnessOptions returns a new map with override entries layered over
 // base. Neither input is mutated; the result is never nil.
 func mergeHarnessOptions(base, override map[string]any) map[string]any {
