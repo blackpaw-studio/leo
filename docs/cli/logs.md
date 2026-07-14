@@ -1,6 +1,6 @@
 # leo logs
 
-Show the service log, or filter it for a specific supervised agent or session.
+Show the service log, or filter it for a specific supervised agent.
 
 ## Usage
 
@@ -10,7 +10,7 @@ leo logs [name] [-n <lines>] [-f]
 
 ## Description
 
-Tails the daemon/service log stored under `~/.leo/state/`. Passing a name filters the stream to lines emitted by that agent or persistent session.
+Tails the daemon/service log stored under `~/.leo/state/`. Passing a name filters the stream to lines emitted by that agent — including the agent backing a `runtime: persistent` task.
 
 Name arguments support tab-completion (see [`leo completion`](completion.md)).
 

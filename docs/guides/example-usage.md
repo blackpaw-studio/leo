@@ -4,7 +4,7 @@ This guide shows a real-world Leo setup — the author's personal assistant — 
 
 The setup combines:
 
-- **One always-on persistent session** wired to a Telegram channel plugin for conversational chat
+- **One always-on assistant agent** wired to a Telegram channel plugin for conversational chat
 - **A pair of scheduled tasks** — a morning news briefing and a rolling inbox + calendar watcher
 - **A `coding` agent template** for spawning ephemeral coding agents on demand
 - **A laptop client** that dispatches `leo agent` commands to the home-lab daemon over SSH
@@ -30,7 +30,7 @@ web:
                     # put authentication in front of it (reverse proxy with
                     # basic auth, tailscale, Cloudflare Access, etc.).
 
-sessions:
+templates:
   assistant:
     workspace: ~/.leo/workspace
     channels:
@@ -38,12 +38,11 @@ sessions:
     model: opus[1m]
     harness_options:
       remote_control: false
-      agent: leo           # gives this session its personality — the Claude Code
+      agent: leo           # gives this agent its personality — the Claude Code
                            # subagent at .claude/agents/leo.md supplies the system
                            # prompt (voice, identity, preferences) every message
                            # runs through
 
-templates:
   coding:
     workspace: ~/projects
     harness_options:
@@ -70,12 +69,12 @@ tasks:
 
 Replace the channel plugin ID with whichever one you've installed (`claude plugin list`). The workspace points at `~/.leo/workspace/` — a directory with a `prompts/` subfolder and `USER.md`. If you want the assistant to remember things across sessions, install any Claude Code memory plugin (for example [claude-mem](https://github.com/thedotmack/claude-mem)) — Leo doesn't impose a memory format. See [Workspace Structure](../configuration/workspace-structure.md).
 
-## The Always-On Session
+## The Always-On Assistant Agent
 
-The `assistant` session is a long-running Claude session the author chats with from Telegram. The channel plugin handles the Telegram side; Leo supervises the Claude process and keeps it alive across crashes and restarts.
+The `assistant` agent is a long-running Claude agent the author chats with from Telegram. The channel plugin handles the Telegram side; Leo supervises the Claude process and keeps it alive across crashes and restarts.
 
 ```yaml
-sessions:
+templates:
   assistant:
     workspace: ~/.leo/workspace
     channels:
@@ -85,14 +84,17 @@ sessions:
       agent: leo
 ```
 
-Start it:
+Start the daemon, then spawn the assistant from its own template — repo-less, so it runs directly in `workspace` and is named after the template:
 
 ```bash
 leo service start --daemon     # installs launchd/systemd unit
 leo service status             # verify it's running
+leo agent spawn assistant      # spawns "assistant", named after the template
 ```
 
-The `agent: leo` field is how you give the assistant a **personality** — a soul, an identity, a way of speaking. It points at a [Claude Code subagent](https://code.claude.com/docs/en/sub-agents), which is where you write who this assistant *is*: how they talk to you, what they care about, what they refuse to do, their running in-jokes. Leo the assistant feels different from Leo the app precisely because a subagent file gives the session a voice. See the Claude Code docs linked above for the file format and frontmatter options.
+The agent is supervised the same way any other agent is — auto-restart on crash, resume on daemon restart — so once spawned it stays up without further intervention.
+
+The `agent: leo` field is how you give the assistant a **personality** — a soul, an identity, a way of speaking. It points at a [Claude Code subagent](https://code.claude.com/docs/en/sub-agents), which is where you write who this assistant *is*: how they talk to you, what they care about, what they refuse to do, their running in-jokes. Leo the assistant feels different from Leo the app precisely because a subagent file gives the agent a voice. See the Claude Code docs linked above for the file format and frontmatter options.
 
 ### Example subagent file
 
@@ -211,9 +213,9 @@ as you wire in new tools.
 - When reporting results, cite the source.
 ```
 
-Drop that at `~/.claude/agents/leo.md` (user scope) or `.claude/agents/leo.md` inside the workspace (project scope), and the `agent: leo` field on the session picks it up. Edit the file; the next run uses the new personality — no restart needed beyond the normal session lifecycle.
+Drop that at `~/.claude/agents/leo.md` (user scope) or `.claude/agents/leo.md` inside the workspace (project scope), and the `agent: leo` field on the template picks it up. Edit the file; the next run uses the new personality — no restart needed beyond the normal agent lifecycle.
 
-> **Tip**: `harness_options.permission_mode: auto` is the new safety-classifier-backed mode released in Claude Code — it auto-approves tool calls that align with the ongoing request while still blocking genuinely risky ones (mass deletes, data exfiltration, etc.). It's a middle ground between the prompt-on-everything `default` mode and the nothing-is-asked `bypassPermissions` mode. Scheduled tasks inherit it from `defaults.harness_options` since there's no human in the loop; override per-session under `harness_options:` if a specific session needs stricter or looser behavior. See [Claude Code docs](https://code.claude.com/docs/en/permissions).
+> **Tip**: `harness_options.permission_mode: auto` is the new safety-classifier-backed mode released in Claude Code — it auto-approves tool calls that align with the ongoing request while still blocking genuinely risky ones (mass deletes, data exfiltration, etc.). It's a middle ground between the prompt-on-everything `default` mode and the nothing-is-asked `bypassPermissions` mode. Scheduled tasks inherit it from `defaults.harness_options` since there's no human in the loop; override per-template under `harness_options:` if a specific agent needs stricter or looser behavior. See [Claude Code docs](https://code.claude.com/docs/en/permissions).
 
 ## Scheduled Tasks
 
@@ -315,7 +317,7 @@ Each worktree agent gets its own branch checkout under `<workspace>/.worktrees/<
 
 ## Driving It From A Laptop
 
-In this setup the leo daemon lives on a home-lab box, not on the laptop — the mac mini runs `leo service` and hosts all the long-running sessions. The laptop only needs a `client:` block in its own `~/.leo/leo.yaml` to reach the daemon over SSH:
+In this setup the leo daemon lives on a home-lab box, not on the laptop — the mac mini runs `leo service` and hosts every long-running agent. The laptop only needs a `client:` block in its own `~/.leo/leo.yaml` to reach the daemon over SSH:
 
 ```yaml
 # ~/.leo/leo.yaml on the laptop
@@ -343,12 +345,13 @@ Once `leo.yaml` and the prompt files are in place:
 
 ```bash
 leo validate                   # sanity-check the config
-leo service start --daemon     # launch the daemon (assistant session, tasks, agent supervision)
+leo service start --daemon     # launch the daemon (tasks, agent supervision)
+leo agent spawn assistant      # start the always-on assistant agent
 leo task list                  # confirm schedules are loaded
 leo run daily-news-briefing    # manually test a task end-to-end
 ```
 
-Then open `http://localhost:8370` for the web dashboard — session/agent status, task history, cron previews, and live logs.
+Then open `http://localhost:8370` for the web dashboard — agent status, task history, cron previews, and live logs.
 
 ## Adapting This To Your Own Use
 
@@ -357,7 +360,7 @@ Good places to start:
 - **Replace the channel plugin** with whichever messenger you use — Telegram, iMessage, or Discord are the currently available plugins. Leo is channel-agnostic; only the plugin ID changes.
 - **Keep 2–3 tasks max to start.** A news briefing + an inbox watcher is enough to feel the value without running up cost.
 - **Move fast-running tasks to `silent: true`** immediately — the `NO_REPLY` habit is what makes high-frequency schedules tolerable.
-- **Codify preferences in your workspace's `CLAUDE.md`** rather than inside every prompt. The `agent:` field on sessions lets each session pull a different persona / toolset.
+- **Codify preferences in your workspace's `CLAUDE.md`** rather than inside every prompt. The `agent:` field on a template lets each agent pull a different persona / toolset.
 - **Use the producer / aggregator split** for anything monitoring many sources. It lets you scale frequency without scaling notifications.
 
 ## See Also

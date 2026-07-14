@@ -31,8 +31,6 @@ Leo provides commands for setup, agent supervision, task scheduling, template ma
 |---------|-------------|
 | [`leo status`](status.md) | Overall status (service, agents, tasks, templates, web UI) |
 | [`leo logs`](logs.md) | Tail service or per-agent logs |
-| [`leo session list`](session.md#leo-session-list) | List stored session mappings |
-| [`leo session clear`](session.md#leo-session-clear) | Clear stored session(s) |
 
 ### Config
 
@@ -48,7 +46,7 @@ Leo provides commands for setup, agent supervision, task scheduling, template ma
 |---------|-------------|
 | [`leo web`](web.md) | Web UI utilities (`login-url`) |
 | [`leo channels`](channels.md) | Per-channel-type bootstrap (e.g. register slash commands with Telegram) |
-| [`leo mcp-server`](mcp-server.md) | MCP server wired into supervised agents and sessions (internal) |
+| [`leo mcp-server`](mcp-server.md) | MCP server wired into supervised agents (internal) |
 
 ### Deprecated
 

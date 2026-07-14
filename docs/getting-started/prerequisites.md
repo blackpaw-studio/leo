@@ -25,7 +25,7 @@ See the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-co
 
 ## tmux
 
-Required for persistent sessions and ephemeral agents. Leo wraps each Claude session in a tmux session so channel plugins that need a terminal can attach to one.
+Required for ephemeral agents (including the agents backing persistent tasks). Leo wraps each Claude session in a tmux session so channel plugins that need a terminal can attach to one.
 
 ```bash
 tmux -V
@@ -41,7 +41,7 @@ Leo does not ship with any built-in messaging channel. To surface messages via T
 claude plugin install telegram@claude-plugins-official
 ```
 
-Then reference the plugin ID in your session or task `channels:` list. See [Configuration → Channels](../configuration/config-reference.md#channels).
+Then reference the plugin ID in your template or task `channels:` list. See [Configuration → Channels](../configuration/config-reference.md#channels).
 
 ## Supported Platforms
 

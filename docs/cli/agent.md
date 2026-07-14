@@ -13,11 +13,14 @@ leo agent spawn <template> --repo <owner/repo> --worktree <branch> # spawn into 
 leo agent attach <name>                                            # attach to the agent's tmux session
 leo agent session-name <query>                                     # print the tmux session name
 leo agent stop <name> [--prune]                                    # stop a running agent (optionally remove worktree)
+leo agent suspend <name>                                           # suspend a running agent (idle-suspend, manual)
+leo agent resume <name>                                            # resume a suspended agent, rejoining its prior conversation
+leo agent reset <name>                                             # stop, clear stored session id, and respawn fresh
 leo agent prune <name>                                             # remove a stopped worktree agent's on-disk state
 leo agent logs <name> [-n LINES] [-f]                              # tail the agent's pane output
 ```
 
-`<name>` for `attach`, `stop`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `prune` takes the canonical name only (stopped agents don't appear in the resolver). `session-name` is the explicit resolver.
+`<name>` for `attach`, `stop`, `suspend`, `reset`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `resume` and `prune` take the canonical name only — the shorthand resolver only matches *live* agents, and both a suspended agent (`resume`'s target) and a stopped worktree agent (`prune`'s target) are not live. `session-name` is the explicit resolver.
 
 ## Flags
 
@@ -171,6 +174,22 @@ Flags (only meaningful with `--prune`, and only for worktree agents):
 - `--prune` — also remove the on-disk worktree and agentstore record
 - `--force` — with `--prune`, remove even when the worktree is dirty
 - `--delete-branch` — with `--prune`, delete the local branch after the worktree is gone
+
+### `leo agent suspend <name>`
+
+Suspend a running agent: kills the process/tmux session but preserves the workspace and stored claude session id. Accepts shorthand. A suspended agent shows as `suspended` in `leo agent list` and auto-resumes on the next incoming message. See [Config Reference → Idle-suspend](../configuration/config-reference.md#idle-suspend).
+
+### `leo agent resume <name>`
+
+Resume a suspended agent, rejoining its prior conversation via `--resume`. Takes the canonical name only — shorthand resolution only matches live agents, and a suspended agent isn't one.
+
+### `leo agent reset <name>`
+
+Reset an agent to a brand-new conversation: stops any live process/tmux session, clears the stored claude session id, and respawns fresh from the agent's template. Accepts shorthand. Unlike `resume`, which rejoins the prior conversation, `reset` deliberately discards it — use this when an agent's context has gotten stuck or corrupted (a common case: a long-lived agent backing a `runtime: persistent` task whose conversation has filled up). See [Persistent Tasks → `leo agent reset`](../configuration/persistent-tasks.md#leo-agent-reset).
+
+```bash
+leo agent reset leo-coding-owner-fetch
+```
 
 ### `leo agent prune <name>`
 

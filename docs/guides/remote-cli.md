@@ -78,7 +78,7 @@ Every non-attach subcommand runs `ssh <host> leo agent <subcommand>` under the h
 leo attach leo-demo     # ssh -t <host> tmux attach -t leo-demo
 ```
 
-For remote hosts the resolution is deferred to the server so the client never needs to know the remote's agent list. Persistent task sessions (configured under `sessions:`) are a server-local concept — use `leo session attach <name>` directly on the server, or `ssh <host> leo session attach <name>` — see [Persistent Task Sessions](../configuration/persistent-tasks.md).
+For remote hosts the resolution is deferred to the server so the client never needs to know the remote's agent list. The agent backing a persistent task is an agent like any other, so `leo agent attach <name>` (or the `leo attach` shortcut) works identically whether the target was spawned directly or ensure-exists'd by a task firing — see [Persistent Tasks](../configuration/persistent-tasks.md).
 
 ## Overriding the target host
 

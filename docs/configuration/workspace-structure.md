@@ -30,7 +30,7 @@ The main configuration file. See [Configuration](index.md) for details.
 
 ### `~/.leo/workspace/`
 
-The default workspace directory. Sessions and tasks use this workspace unless they specify their own `workspace` field. The workspace is passed to Claude via `--add-dir` so the assistant can read and write files here.
+The default workspace directory. Tasks use this workspace unless they specify their own `workspace` field. The workspace is passed to Claude via `--add-dir` so the assistant can read and write files here.
 
 ### `~/.leo/workspace/USER.md`
 
@@ -60,22 +60,18 @@ Multiple agents can run in parallel against the same repo without stepping on ea
 
 Runtime files managed by Leo:
 
-- **`sessions.json`** -- session/task name to Claude session UUID mappings (for `--resume`)
+- **`sessions.json`** -- task/agent name to Claude session UUID mappings (for `--resume`)
 - **`agents.json`** -- ephemeral agent records, used to restore agents after daemon restart
 - **`task-history.json`** -- execution history for scheduled tasks
-- **`service.log`** -- output from the daemon (all supervised agents/sessions)
+- **`service.log`** -- output from the daemon (all supervised agents)
 - **`service.pid`** -- PID file for the background service
 - **`leo.sock`** -- Unix socket for CLI-to-daemon IPC
 
 ## Custom Workspaces
 
-Sessions, tasks, and templates can each specify their own `workspace`:
+Tasks and templates can each specify their own `workspace`:
 
 ```yaml
-sessions:
-  coding:
-    workspace: ~/projects/my-app
-
 tasks:
   repo-check:
     workspace: ~/projects/my-app
@@ -85,4 +81,4 @@ templates:
     workspace: ~/agents
 ```
 
-When no `workspace` is specified, sessions and tasks use `~/.leo/workspace/`, and templates use `~/.leo/agents/`.
+When no `workspace` is specified, tasks use `~/.leo/workspace/`, and templates use `~/.leo/agents/`.
