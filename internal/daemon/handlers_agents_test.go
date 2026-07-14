@@ -21,6 +21,7 @@ type fakeAgentManager struct {
 	suspendErr error
 	resumeErr  error
 	resumeRec  agent.Record
+	resetErr   error
 	pruneErr   error
 	logsErr    error
 	logsOut    string
@@ -30,6 +31,7 @@ type fakeAgentManager struct {
 	lastStop    string
 	lastSuspend string
 	lastResume  string
+	lastReset   string
 	lastPrune   struct {
 		name string
 		opts agent.PruneOptions
@@ -86,6 +88,11 @@ func (f *fakeAgentManager) Resume(name string) (agent.Record, error) {
 		return f.resumeRec, nil
 	}
 	return agent.Record{Name: name}, nil
+}
+
+func (f *fakeAgentManager) Reset(name string) error {
+	f.lastReset = name
+	return f.resetErr
 }
 
 func (f *fakeAgentManager) Prune(_ context.Context, name string, opts agent.PruneOptions) error {
@@ -700,6 +707,87 @@ func TestAgentResumeHandlerError(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+// --- reset handler coverage ---
+//
+// Reset resolves its name query the same way Stop does (resolveAgentOrError
+// against mgr.Resolve), unlike suspend/resume which pass the raw name
+// straight through — so these tests seed mgr.records like the stop tests do.
+
+func TestAgentResetHandler(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/reset", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastReset != "foo" {
+		t.Errorf("lastReset = %q, want foo", mgr.lastReset)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !env.OK {
+		t.Errorf("env.OK = false, want true")
+	}
+}
+
+func TestAgentResetHandlerNotFound(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/missing/reset", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentResetHandlerError(t *testing.T) {
+	mgr := &fakeAgentManager{
+		records:  []agent.Record{{Name: "foo"}},
+		resetErr: errors.New("stopping agent for reset: tmux kill failed"),
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/reset", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentResetHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/reset", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
 	}
 }
 

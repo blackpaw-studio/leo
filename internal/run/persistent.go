@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/history"
@@ -168,16 +169,30 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		return fmt.Errorf("task failed: %s", aw.Err)
 	}
 
-	// Session-id persistence only applies to the legacy session-router path:
-	// agent-routed tasks (target.ensure != nil) track their own session id via
-	// agentstore.Record.SessionID (see agent.Manager.Spawn/Resume), not this
-	// generic "session:"+name store.
-	if target.ensure == nil && aw.SessionID != "" {
-		store := session.NewStore(cfg.HomePath)
-		if err := store.Set("session:"+target.queueKey, aw.SessionID); err != nil {
-			// Non-fatal: the task succeeded; we just couldn't persist
-			// the session id for next-run resume.
-			fmt.Printf("warning: failed to persist session id: %v\n", err)
+	// Session-id persistence branches on delivery target: agent-routed tasks
+	// (target.ensure != nil) persist the discovered id onto the agentstore
+	// record itself — target.queueKey is the agent's name in that case — so
+	// agent.Manager.Resume/RestoreAgents pick it up the same way a spawn or
+	// resume would. Legacy session-routed tasks keep writing the generic
+	// "session:"+name store (dies with the rest of the session machinery in a
+	// later step of the sessions->agents collapse).
+	if aw.SessionID != "" {
+		if target.ensure != nil {
+			if err := agentstore.Update(cfg.HomePath, target.queueKey, func(rec agentstore.Record) agentstore.Record {
+				rec.SessionID = aw.SessionID
+				return rec
+			}); err != nil {
+				// Non-fatal: the task succeeded; we just couldn't persist
+				// the session id for next-run resume.
+				fmt.Printf("warning: failed to persist session id: %v\n", err)
+			}
+		} else {
+			store := session.NewStore(cfg.HomePath)
+			if err := store.Set("session:"+target.queueKey, aw.SessionID); err != nil {
+				// Non-fatal: the task succeeded; we just couldn't persist
+				// the session id for next-run resume.
+				fmt.Printf("warning: failed to persist session id: %v\n", err)
+			}
 		}
 	}
 	hist := history.NewStore(cfg.HomePath)

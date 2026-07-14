@@ -679,6 +679,137 @@ func TestResumeRespawnsWithResumeAndClearsFlag(t *testing.T) {
 	}
 }
 
+// --- Reset ---
+
+// TestResetStopsClearsAndRespawns asserts Reset's stop -> clear -> start
+// order for a live claude agent, and that the record ends up with a fresh
+// (different) SessionID rather than the pre-reset one, with NoResume cleared
+// again once the fresh spawn succeeds.
+func TestResetStopsClearsAndRespawns(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"leo-x": {Name: "leo-x", Status: "running"},
+		},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "old-sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "old-sid"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("leo-x"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	// Order: StopAgent before SpawnAgent.
+	wantOrder := []string{"stop:leo-x", "spawn:leo-x"}
+	if len(sup.callOrder) != len(wantOrder) {
+		t.Fatalf("callOrder = %v, want %v", sup.callOrder, wantOrder)
+	}
+	for i, c := range wantOrder {
+		if sup.callOrder[i] != c {
+			t.Fatalf("callOrder[%d] = %q, want %q (full: %v)", i, sup.callOrder[i], c, sup.callOrder)
+		}
+	}
+
+	if sup.spawnCall == nil {
+		t.Fatal("SpawnAgent was not called")
+	}
+	// Fresh spawn: a --session-id, never --resume, and NOT the old id.
+	if containsFlag(sup.spawnCall.ClaudeArgs, "--resume") {
+		t.Fatalf("reset spawn must not pass --resume: %v", sup.spawnCall.ClaudeArgs)
+	}
+	if containsPair(sup.spawnCall.ClaudeArgs, "--session-id", "old-sid") {
+		t.Fatalf("reset spawn must not reuse the old session id: %v", sup.spawnCall.ClaudeArgs)
+	}
+	if !containsFlag(sup.spawnCall.ClaudeArgs, "--session-id") {
+		t.Fatalf("reset spawn (claude) should pass a fresh --session-id: %v", sup.spawnCall.ClaudeArgs)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	got := recs["leo-x"]
+	if got.SessionID == "" || got.SessionID == "old-sid" {
+		t.Fatalf("record SessionID = %q, want a fresh non-empty id", got.SessionID)
+	}
+	if got.NoResume {
+		t.Fatal("NoResume must be cleared once the fresh spawn succeeds")
+	}
+}
+
+// TestResetSkipsStopWhenNotLive verifies Reset on a suspended (non-live) agent
+// clears state and respawns without calling StopAgent (which would error
+// "not found" for a dead process).
+func TestResetSkipsStopWhenNotLive(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "old-sid",
+		ClaudeArgs: []string{"--session-id", "old-sid"},
+		Suspended:  true,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("leo-x"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if len(sup.stopCalls) != 0 {
+		t.Fatalf("StopAgent must not be called for a non-live agent, got %v", sup.stopCalls)
+	}
+	if sup.spawnCall == nil {
+		t.Fatal("SpawnAgent was not called")
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if recs["leo-x"].Suspended {
+		t.Fatal("Suspended flag must be cleared by Reset")
+	}
+}
+
+// TestResetUnknownAgentErrors verifies Reset errors on a name with no
+// persisted agentstore record.
+func TestResetUnknownAgentErrors(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("ghost"); err == nil {
+		t.Fatal("resetting an unknown agent should error")
+	}
+}
+
+// TestResetStopFailureAbortsBeforeClearing verifies a StopAgent failure stops
+// Reset before the record is mutated, so a failed reset leaves the original
+// session id intact rather than orphaning the agent mid-transition.
+func TestResetStopFailureAbortsBeforeClearing(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents:  map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+		stopErr: errors.New("tmux kill failed"),
+	}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Workspace: "/w", SessionID: "old-sid"})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("leo-x"); err == nil {
+		t.Fatal("expected error when StopAgent fails")
+	}
+	if sup.spawnCall != nil {
+		t.Fatal("SpawnAgent must not be called when StopAgent fails")
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if recs["leo-x"].SessionID != "old-sid" {
+		t.Fatal("SessionID must be left untouched when reset aborts on stop failure")
+	}
+}
+
 // TestStopTerminatesSuspendedWorktreeAgent verifies Stop can terminate an agent
 // that is suspended (not live): StopAgent must be skipped (it would error
 // "not found" on a dead process) and the worktree record flipped to Stopped

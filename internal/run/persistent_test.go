@@ -7,9 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 func TestWrapPromptWithMarkerAndFooter(t *testing.T) {
@@ -400,6 +402,98 @@ func TestRunPersistentSessionTaskDoesNotEnsure(t *testing.T) {
 	}
 	if len(calls) != 0 {
 		t.Fatalf("expected no Ensure calls for a session-routed task, got %+v", calls)
+	}
+}
+
+// TestRunPersistentAgentTaskPersistsSessionIDToAgentstore is the report-path
+// counterpart to TestRunPersistentTemplateTaskEnqueuesWithAgentEnsure: once
+// the (fake) daemon reports completion with a discovered session id, an
+// agent-routed invocation (target.ensure != nil) must persist that id onto
+// the agentstore record — NOT the legacy "session:"+name session store, which
+// only the session-routed path below still writes.
+func TestRunPersistentAgentTaskPersistsSessionIDToAgentstore(t *testing.T) {
+	home := shortTempDir(t)
+	ws := filepath.Join(home, "ws")
+	promptFile := writePromptFile(t, ws)
+
+	newTestDaemon(t, home, fakeEnsurer(func(context.Context, daemon.EnsureSpec) error { return nil }))
+
+	// Simulate the ensurer's real-world side effect (agent.Manager.Spawn
+	// persists a record before the tmux-TUI driver starts): pre-seed an
+	// agentstore record for the target agent so the report-path Update finds
+	// something to mutate.
+	if err := agentstore.Save(home, agentstore.Record{Name: "worker", Workspace: ws}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+
+	cfg := &config.Config{
+		HomePath: home,
+		Tasks: map[string]config.TaskConfig{
+			"nightly": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Template: "worker"},
+		},
+		Templates: map[string]config.TemplateConfig{
+			"worker": {Workspace: ws},
+		},
+	}
+
+	if err := runPersistent(cfg, "nightly"); err != nil {
+		t.Fatalf("runPersistent: %v", err)
+	}
+
+	recs, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("loading agentstore: %v", err)
+	}
+	if got := recs["worker"].SessionID; got != "sid-123" {
+		t.Errorf("agentstore SessionID = %q, want %q", got, "sid-123")
+	}
+
+	if _, found, err := session.NewStore(home).Get("session:worker"); err != nil {
+		t.Fatalf("checking session store: %v", err)
+	} else if found {
+		t.Error("agent-routed invocation must not write to the legacy session store")
+	}
+}
+
+// TestRunPersistentSessionTaskPersistsSessionIDToSessionStore mirrors the
+// above for the legacy session-routed path (task.Session set, no ensure
+// spec): the discovered session id must land in the generic "session:"+name
+// store, and must NOT create an agentstore record.
+func TestRunPersistentSessionTaskPersistsSessionIDToSessionStore(t *testing.T) {
+	home := shortTempDir(t)
+	ws := filepath.Join(home, "ws")
+	promptFile := writePromptFile(t, ws)
+
+	newTestDaemon(t, home, nil)
+
+	cfg := &config.Config{
+		HomePath: home,
+		Tasks: map[string]config.TaskConfig{
+			"reporter": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Session: "team"},
+		},
+		Sessions: map[string]config.SessionConfig{
+			"team": {Workspace: ws},
+		},
+	}
+
+	if err := runPersistent(cfg, "reporter"); err != nil {
+		t.Fatalf("runPersistent: %v", err)
+	}
+
+	got, _, err := session.NewStore(home).Get("session:team")
+	if err != nil {
+		t.Fatalf("expected session:team to be stored: %v", err)
+	}
+	if got != "sid-123" {
+		t.Errorf("session:team = %q, want %q", got, "sid-123")
+	}
+
+	recs, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("loading agentstore: %v", err)
+	}
+	if _, ok := recs["team"]; ok {
+		t.Error("session-routed invocation must not create an agentstore record")
 	}
 }
 

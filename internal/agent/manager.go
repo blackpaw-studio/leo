@@ -765,6 +765,74 @@ func (m *Manager) Resume(name string) (Record, error) {
 	}, nil
 }
 
+// Reset forces an agent back to a brand-new conversation: it stops any live
+// process/tmux session, clears the persisted SessionID (and marks NoResume so
+// a daemon restart racing this call can't resurrect the old session via
+// RestoreAgents' jsonl scan), then respawns the agent fresh — the same
+// spawn-a-new-session logic Spawn/spawnShared uses, not Resume's --resume
+// path. Errors when name has no persisted agentstore record.
+func (m *Manager) Reset(name string) error {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return fmt.Errorf("loading agentstore: %w", err)
+	}
+	rec, ok := stored[name]
+	if !ok {
+		return fmt.Errorf("no agentstore record for %q (cannot reset an unpersisted agent)", name)
+	}
+
+	if _, live := m.sup.EphemeralAgents()[name]; live {
+		if err := m.sup.StopAgent(name); err != nil {
+			return fmt.Errorf("stopping agent for reset: %w", err)
+		}
+	}
+
+	rec.SessionID = ""
+	rec.NoResume = true
+	rec.Suspended = false
+	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
+		return fmt.Errorf("clearing agent session state: %w", err)
+	}
+
+	// Fresh spawn, not resume: strip any stored --session-id/--resume flags,
+	// then (claude only) mint and pass a brand-new --session-id the same way
+	// spawnShared does for a first spawn. Non-claude harnesses leave
+	// storedSessionID empty so the tmux-TUI driver's post-hoc discovery
+	// (IDs.Get()=="") re-arms, matching a genuinely fresh spawn.
+	isClaude := rec.Harness == "" || rec.Harness == "claude"
+	args := ResumeArgs(rec.ClaudeArgs, "")
+	storedSessionID := ""
+	if isClaude {
+		sessionID := session.NewID()
+		args = append(args, "--session-id", sessionID)
+		storedSessionID = sessionID
+	}
+
+	if err := m.sup.SpawnAgent(SpawnRequest{
+		Name:       rec.Name,
+		ClaudeArgs: args,
+		WorkDir:    rec.Workspace,
+		Env:        rec.Env,
+		WebPort:    rec.WebPort,
+		WebToken:   m.webToken,
+		Harness:    rec.Harness,
+	}); err != nil {
+		return fmt.Errorf("respawning agent after reset: %w", err)
+	}
+
+	rec.ClaudeArgs = args
+	rec.SessionID = storedSessionID
+	rec.NoResume = false
+	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
+		log.Printf("agent %q reset but agentstore.Save failed: %v — flag may persist until next save", rec.Name, err)
+	}
+	return nil
+}
+
 // Prune removes the on-disk worktree and agentstore record for a stopped
 // worktree agent. Returns ErrAgentStillRunning if the agent has a live tmux
 // session, ErrNotWorktreeAgent for shared-workspace agents, and

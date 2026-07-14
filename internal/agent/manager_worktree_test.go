@@ -23,6 +23,11 @@ type capturingSupervisor struct {
 	stopCalls    []string
 	stopErr      error // when non-nil, StopAgent returns this error
 	releaseCalls []string
+	// callOrder records "stop:<name>" / "spawn:<name>" in invocation order,
+	// letting tests assert cross-method sequencing (e.g. Reset's
+	// stop-then-clear-then-spawn contract) that the per-method call slices
+	// above can't express on their own.
+	callOrder []string
 }
 
 func (s *capturingSupervisor) ReserveAgent(name string) error {
@@ -47,6 +52,7 @@ func (s *capturingSupervisor) ReleaseAgent(name string) {
 func (s *capturingSupervisor) SpawnAgent(req SpawnRequest) error {
 	spec := req
 	s.spawnCall = &spec
+	s.callOrder = append(s.callOrder, "spawn:"+req.Name)
 	if s.spawnErr != nil {
 		return s.spawnErr
 	}
@@ -60,6 +66,7 @@ func (s *capturingSupervisor) SpawnAgent(req SpawnRequest) error {
 
 func (s *capturingSupervisor) StopAgent(name string) error {
 	s.stopCalls = append(s.stopCalls, name)
+	s.callOrder = append(s.callOrder, "stop:"+name)
 	if s.stopErr != nil {
 		return s.stopErr
 	}

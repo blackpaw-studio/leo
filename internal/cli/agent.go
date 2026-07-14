@@ -62,6 +62,7 @@ so remote calls use your existing SSH setup.`,
 		newAgentStopCmd(),
 		newAgentSuspendCmd(),
 		newAgentResumeCmd(),
+		newAgentResetCmd(),
 		newAgentRenameCmd(),
 		newAgentPruneCmd(),
 		newAgentLogsCmd(),
@@ -904,6 +905,45 @@ resolution is not available).`,
 			}
 			fmt.Fprintf(agentStdout, "resumed %s (status: %s)\n", rec.Name, rec.Status)
 			fmt.Fprintf(agentStdout, "attach with: leo agent attach %s\n", rec.Name)
+			return nil
+		},
+	}
+	addHostFlag(cmd, &host)
+	return cmd
+}
+
+// --- reset ---
+
+func newAgentResetCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:   "reset <name>",
+		Short: "Reset an agent to a brand-new conversation",
+		Long: `Reset an agent by stopping its process/tmux session, clearing its stored
+claude session id, and respawning it fresh. Unlike 'leo agent resume', which
+rejoins the prior conversation, reset starts a brand-new one — use this when
+an agent's context has gotten stuck or corrupted.`,
+		Example:           `  leo agent reset leo-coding-owner-fetch`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				return runRemote(res, []string{"reset", name})
+			}
+			// Resolve shorthand to canonical name (same resolution as stop/suspend).
+			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
+			if err != nil {
+				return fmt.Errorf("resolving agent: %w", err)
+			}
+			if err := daemon.AgentReset(cmd.Context(), cfg.HomePath, resolved.Name); err != nil {
+				return fmt.Errorf("resetting agent: %w", err)
+			}
+			fmt.Fprintf(agentStdout, "reset %s\n", resolved.Name)
 			return nil
 		},
 	}

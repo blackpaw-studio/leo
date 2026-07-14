@@ -130,6 +130,20 @@ func AgentResume(ctx context.Context, workDir, name string) (agent.Record, error
 	return rec, nil
 }
 
+// AgentReset sends POST /agents/{name}/reset to the daemon. The agent's
+// process/tmux session is stopped, its stored claude session id is cleared,
+// and it is respawned fresh — a brand-new conversation, not a resume.
+func AgentReset(ctx context.Context, workDir, name string) error {
+	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/reset", nil)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return responseError(resp, name)
+	}
+	return nil
+}
+
 // AgentLogs sends GET /agents/{name}/logs?lines=N to the daemon.
 // Pass lines<=0 to request the default tail. On resolve failures it returns
 // typed *agent.ErrNotFound or *agent.ErrAmbiguous.
