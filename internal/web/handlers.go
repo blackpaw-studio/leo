@@ -17,6 +17,7 @@ import (
 
 	robfigcron "github.com/robfig/cron/v3"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -767,6 +768,81 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	s.reloadConfigOrWarn()
 
 	w.Header().Set("HX-Redirect", "/config/templates")
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleTemplateRename re-keys a template and cascades the new name to every
+// task that referenced it (via config.RenameTemplate) and to persisted agent
+// records' template pointers. Running/suspended agents keep their spawn-time
+// identity (name + tmux session); only the Record.Template pointer moves.
+//
+// On success it HX-Redirects to the renamed template's edit page — the current
+// URL still holds the old name. Error paths mirror handleWebAgentRename: the
+// rename form targets a non-#flash-container element, so failures are retargeted
+// to the shared flash container via renderFlashToContainer.
+func (s *Server) handleTemplateRename(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	newName := r.FormValue("new_name")
+	if newName == "" {
+		s.renderFlashToContainer(w, "error", "New name is required")
+		return
+	}
+	if !validEntityName(newName) {
+		s.renderFlashToContainer(w, "error", entityNameError)
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to load config: %v", err))
+		return
+	}
+
+	if _, ok := cfg.Templates[name]; !ok {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Template %q not found", name))
+		return
+	}
+	if newName == name {
+		// No-op rename: bounce back to the same edit page. Guarded by the
+		// existence check above so a stale path can't redirect to a page that
+		// isn't there.
+		w.Header().Set("HX-Redirect", "/config/templates/"+url.PathEscape(name))
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if err := config.RenameTemplate(cfg, name, newName); err != nil {
+		s.renderFlashToContainer(w, "error", err.Error())
+		return
+	}
+
+	if errMsg := s.validateAndSave(cfg); errMsg != "" {
+		s.renderFlashToContainer(w, "error", errMsg)
+		return
+	}
+
+	// Best-effort: move the template pointer on every persisted agent record
+	// spawned from the old name. A failure here must not fail a rename that
+	// already updated config + tasks, so we log and continue.
+	if records, err := agentstore.Load(agentstore.FilePath(cfg.HomePath)); err == nil {
+		for recName, rec := range records {
+			if rec.Template != name {
+				continue
+			}
+			if err := agentstore.Update(cfg.HomePath, recName, func(r agentstore.Record) agentstore.Record {
+				r.Template = newName
+				return r
+			}); err != nil {
+				// #nosec G706 -- name/newName/recName are validated identifiers (validEntityName / existing config + agentstore keys); no control chars can reach the log
+				log.Printf("template rename %q→%q: agentstore.Update(%q) failed: %v", name, newName, recName, err)
+			}
+		}
+	}
+
+	s.reloadConfigOrWarn()
+
+	w.Header().Set("HX-Redirect", "/config/templates/"+url.PathEscape(newName))
 	w.WriteHeader(http.StatusOK)
 }
 

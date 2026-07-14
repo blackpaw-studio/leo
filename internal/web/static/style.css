@@ -179,8 +179,8 @@ select.form-input {
 .status-dot.status-stopped { background: var(--bad); }
 .process-meta { font-size: var(--fs-xs); color: var(--dim); margin-top: var(--sp-1); }
 .process-actions { margin-top: var(--sp-2); display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
-.agent-rename { display: flex; align-items: center; gap: var(--sp-1); margin: 0; }
-.agent-rename input[type="text"] { width: 120px; }
+.agent-rename, .inline-rename { display: flex; align-items: center; gap: var(--sp-1); margin: 0; }
+.agent-rename input[type="text"], .inline-rename input[type="text"] { width: 120px; }
 
 /* cron preview + exit status (components/form.html, components/task_history.html) */
 .cron-preview { margin-top: var(--sp-1); min-height: 18px; }
