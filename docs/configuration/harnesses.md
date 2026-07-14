@@ -470,7 +470,7 @@ The web UI's Defaults, Tasks, and Templates forms all
 edit `harness:` and `harness_options:` directly — there is no separate
 "harness" management page; the adapter registry backs an ordinary form field.
 
-- **Harness dropdown.** Every one of those four forms has a `Harness` field
+- **Harness dropdown.** Every one of those three forms has a `Harness` field
   (`internal/web/schema/registry.go`'s `fHarness()`) rendered as a
   `KindSelect` over the `"harnesses"` option source, which lists
   `harness.Names()` — the registered adapter names (`claude`, `codex`,
