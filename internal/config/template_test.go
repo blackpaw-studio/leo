@@ -106,6 +106,42 @@ func TestValidateTemplateValidPermissionMode(t *testing.T) {
 	}
 }
 
+func TestTemplateMaxTurns(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       *Config
+		tmpl      TemplateConfig
+		wantTurns int
+	}{
+		{
+			name:      "uses template max_turns when set",
+			cfg:       &Config{Defaults: DefaultsConfig{MaxTurns: 15}},
+			tmpl:      TemplateConfig{MaxTurns: 20},
+			wantTurns: 20,
+		},
+		{
+			name:      "falls back to defaults",
+			cfg:       &Config{Defaults: DefaultsConfig{MaxTurns: 15}},
+			tmpl:      TemplateConfig{},
+			wantTurns: 15,
+		},
+		{
+			name:      "falls back to built-in when defaults unset",
+			cfg:       &Config{},
+			tmpl:      TemplateConfig{},
+			wantTurns: DefaultMaxTurns,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.TemplateMaxTurns(tt.tmpl); got != tt.wantTurns {
+				t.Errorf("TemplateMaxTurns() = %d, want %d", got, tt.wantTurns)
+			}
+		})
+	}
+}
+
 func TestTemplatePathExpansion(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

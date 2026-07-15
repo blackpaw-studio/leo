@@ -16,6 +16,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
@@ -119,6 +120,11 @@ type Server struct {
 	// nil or a false ok return means "not found" or "claude" — the caller
 	// falls back to today's tmux path either way.
 	resolveHandle func(name string) (harnessName string, h harness.SessionHandle, ok bool)
+
+	// consults dispatches one-off consultant subagents (leo_consult). Its
+	// reply path is s.deliverConsultReply; tests reach through it to stub
+	// the exec seam.
+	consults *consult.Dispatcher
 }
 
 // Options bundles the knobs the web server needs that aren't part of the
@@ -165,6 +171,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		resolveHandle:  opts.ResolveHandle,
 	}
 	s.fetchAgentListFn = s.fetchAgentList
+	s.consults = consult.NewDispatcher(s.deliverConsultReply)
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)
@@ -267,6 +274,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/suspend", s.handleAPIAgentSuspend)
 	apiMux.HandleFunc("POST /api/agent/resume", s.handleAPIAgentResume)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
+	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
 	apiMux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
 	apiMux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
 	apiMux.HandleFunc("GET /api/task/list", s.handleAPITaskList)

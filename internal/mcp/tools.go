@@ -230,6 +230,44 @@ func newRegistry(client *daemonClient, processName string) *registry {
 		return "Sent message to " + to, nil
 	})
 
+	r.add(toolDef{
+		Name: "leo_consult",
+		Description: "Dispatch a one-off consultant subagent for a second opinion from another model. " +
+			"Pick a template (see leo_list_templates) — it determines the harness and model; `model` optionally overrides the template's model. " +
+			"The prompt must be self-contained: the consultant sees none of your conversation, only files in your workspace. " +
+			"Returns immediately with a consult id; the answer arrives later as a message framed `[consult <id> · <harness>/<model> · <elapsed>] …`. " +
+			"For a council, call this several times with different templates in one turn and reconcile the replies as they arrive.",
+		InputSchema: objectSchema(map[string]any{
+			"template": map[string]any{"type": "string", "description": "Template name from leo.yaml supplying harness/model/env."},
+			"prompt":   map[string]any{"type": "string", "description": "Self-contained question for the consultant."},
+			"model":    map[string]any{"type": "string", "description": "Optional model override, validated against the template's harness."},
+		}, "template", "prompt"),
+	}, func(args map[string]any) (string, error) {
+		template, err := stringArg(args, "template")
+		if err != nil {
+			return "", err
+		}
+		prompt, err := stringArg(args, "prompt")
+		if err != nil {
+			return "", err
+		}
+		model, _ := args["model"].(string)
+		data, err := client.consult(processName, template, model, prompt)
+		if err != nil {
+			return "", err
+		}
+		var tk struct {
+			ID      string `json:"id"`
+			Harness string `json:"harness"`
+			Model   string `json:"model"`
+		}
+		if err := json.Unmarshal(data, &tk); err != nil || tk.ID == "" {
+			return string(data), nil
+		}
+		return fmt.Sprintf("Dispatched consult %s to %s (%s/%s). The reply will arrive as a message framed [consult %s · …].",
+			tk.ID, template, tk.Harness, tk.Model, tk.ID), nil
+	})
+
 	return r
 }
 

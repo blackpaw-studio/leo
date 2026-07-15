@@ -154,3 +154,14 @@ func (c *daemonClient) sendMessage(target, text string) error {
 func (c *daemonClient) stopAgent(name string) (json.RawMessage, error) {
 	return c.do(http.MethodPost, "/api/agent/stop", map[string]string{"name": name})
 }
+
+// consult dispatches a one-off consultant subagent via the daemon. The
+// answer is delivered later as an injected message; the returned data
+// carries the consult id used in that reply's frame.
+func (c *daemonClient) consult(from, template, model, prompt string) (json.RawMessage, error) {
+	body := map[string]string{"from": from, "template": template, "prompt": prompt}
+	if model != "" {
+		body["model"] = model
+	}
+	return c.do(http.MethodPost, "/api/consult", body)
+}

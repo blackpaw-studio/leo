@@ -312,6 +312,17 @@ func (c *Config) TaskMaxTurns(t TaskConfig) int {
 	return DefaultMaxTurns
 }
 
+// TemplateMaxTurns returns the effective max turns for a template.
+func (c *Config) TemplateMaxTurns(t TemplateConfig) int {
+	if t.MaxTurns > 0 {
+		return t.MaxTurns
+	}
+	if c.Defaults.MaxTurns > 0 {
+		return c.Defaults.MaxTurns
+	}
+	return DefaultMaxTurns
+}
+
 // TaskMCPConfigPath returns the MCP config path for a task.
 func (c *Config) TaskMCPConfigPath(t TaskConfig) string {
 	ws := c.TaskWorkspace(t)

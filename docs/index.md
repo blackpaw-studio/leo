@@ -16,6 +16,14 @@ Leo spawns and supervises [Claude Code](https://docs.anthropic.com/en/docs/claud
 
     [:octicons-arrow-right-24: Configuration](configuration/persistent-tasks.md)
 
+-   :material-chat-question-outline:{ .lg .middle } **Consults**
+
+    ---
+
+    One-off second-opinion subagents via leo_consult
+
+    [:octicons-arrow-right-24: Configuration](configuration/consults.md)
+
 -   :material-rocket-launch-outline:{ .lg .middle } **Agent Templates**
 
     ---
