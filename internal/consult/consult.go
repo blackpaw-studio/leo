@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -147,6 +148,22 @@ func (d *Dispatcher) run(tk Ticket, h harness.Harness, req Request, args []strin
 		env = append(env, k+"="+v)
 	}
 	cmd.Env = env
+	// Run in its own process group and kill the whole group on ctx
+	// cancellation (deadline or Dispatcher shutdown), not just the direct
+	// child — coding-agent CLIs spawn children that inherit stdout/stdin and
+	// would otherwise survive a parent-only SIGKILL and keep the output pipe
+	// open. This is the compact version of internal/run/runner.go's
+	// executeCommand: that one re-sends SIGKILL to the group on a short
+	// ticker to close a fork-after-signal race window; a one-off consultant
+	// isn't worth that complexity, so a single group kill plus WaitDelay
+	// (below) bounds the residual case instead.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	// A cancelled consultant may leave children holding the output pipes;
 	// WaitDelay bounds how long Wait blocks on them after ctx fires.
 	cmd.WaitDelay = 10 * time.Second
