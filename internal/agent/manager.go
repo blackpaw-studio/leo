@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,6 +84,12 @@ type SpawnSpec struct {
 	Name   string // optional — overrides the derived agent name
 	Branch string // optional — when non-empty, spawn in a dedicated worktree on this branch
 	Base   string // optional — base ref for new branches (defaults to origin HEAD)
+	// FromAgent, when non-empty, derives the spawn from an existing agent's
+	// record: template and env are inherited, and the source workspace (or
+	// canonical, for worktree sources) becomes the git canonical. Requires
+	// Branch; Template and Repo must be empty. Works for any agent whose
+	// workspace is a git repository — no owner/repo needed.
+	FromAgent string
 	// Prompt, when non-empty, is delivered to the agent as the opening turn of
 	// its interactive session (appended as the trailing positional claude arg).
 	Prompt string
@@ -153,19 +161,23 @@ type PruneOptions struct {
 // best-effort persistence op) and results in a missing restore entry on next
 // daemon start.
 func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
-	if spec.Template == "" {
-		return Record{}, fmt.Errorf("template is required")
-	}
-
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		return Record{}, fmt.Errorf("loading config: %w", err)
+	}
+	if spec.FromAgent != "" {
+		if spec.Template != "" || spec.Repo != "" {
+			return Record{}, fmt.Errorf("from-agent spawn derives template and repo from the source agent; do not set them")
+		}
+		return m.spawnFromAgent(ctx, cfg, spec)
+	}
+	if spec.Template == "" {
+		return Record{}, fmt.Errorf("template is required")
 	}
 	tmpl, ok := cfg.Templates[spec.Template]
 	if !ok {
 		return Record{}, fmt.Errorf("template %q not found", spec.Template)
 	}
-
 	return m.spawnResolved(ctx, cfg, tmpl, spec)
 }
 
@@ -395,6 +407,78 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		},
 		fetch: true,
 		repo:  spec.Repo,
+	})
+}
+
+// lookupStored returns the raw agentstore record for query, trying the query
+// verbatim and its normalized form. Mirrors resolveStored but returns the
+// stored record (env, canonical path) rather than the public Record view.
+func lookupStored(homePath, query string) (agentstore.Record, bool) {
+	stored, err := agentstore.Load(agentstore.FilePath(homePath))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return agentstore.Record{}, false
+	}
+	candidates := []string{strings.TrimSpace(query)}
+	if norm, err := NormalizeAgentName(query); err == nil {
+		candidates = append(candidates, norm)
+	}
+	for _, name := range candidates {
+		if rec, ok := stored[name]; ok {
+			if rec.Name == "" {
+				rec.Name = name
+			}
+			return rec, true
+		}
+	}
+	return agentstore.Record{}, false
+}
+
+// spawnFromAgent spawns a worktree agent derived from an existing agent's
+// record. Unlike spawnWorktree there is no owner/repo requirement: the
+// source agent's workspace (or its canonical, for worktree sources) is the
+// git canonical, fetch is skipped for remoteless repos, and new branches on
+// remoteless repos fall back to HEAD as their base ref.
+func (m *Manager) spawnFromAgent(ctx context.Context, cfg *config.Config, spec SpawnSpec) (Record, error) {
+	if spec.Branch == "" {
+		return Record{}, fmt.Errorf("worktree spawn requires a branch name")
+	}
+	src, ok := lookupStored(cfg.HomePath, spec.FromAgent)
+	if !ok {
+		return Record{}, fmt.Errorf("%w: %q (run 'leo agent list')", ErrSourceAgentNotFound, spec.FromAgent)
+	}
+	tmpl, ok := cfg.Templates[src.Template]
+	if !ok {
+		return Record{}, fmt.Errorf("template %q (from agent %q) not found", src.Template, src.Name)
+	}
+	canonical := src.CanonicalPath
+	if canonical == "" {
+		canonical = src.Workspace
+	}
+	if _, err := os.Stat(filepath.Join(canonical, ".git")); err != nil {
+		return Record{}, fmt.Errorf("%w: %s", ErrSourceNotGitRepo, canonical)
+	}
+	hasOrigin := git.HasOrigin(ctx, canonical)
+	if !hasOrigin && spec.Base == "" {
+		// AddWorktreeForBranch resolves origin's default branch when no base
+		// is given; remoteless repos have no origin, so branch off HEAD.
+		spec.Base = "HEAD"
+	}
+	spec.Template = src.Template
+
+	base := BaseWorkspace(tmpl)
+	layout, err := ResolveAgentWorktreeLayout(base, canonical, src.Name, spec.Branch, spec.Name)
+	if err != nil {
+		return Record{}, err
+	}
+	return m.spawnWorktreeCore(ctx, cfg, tmpl, spec, worktreeSpawnParams{
+		baseName:  layout.AgentName,
+		canonical: func() (string, error) { return canonical, nil },
+		layout: func(string) (WorktreeLayout, error) {
+			return ResolveAgentWorktreeLayout(base, canonical, src.Name, spec.Branch, spec.Name)
+		},
+		fetch:      hasOrigin,
+		repo:       src.Repo,
+		inheritEnv: src.Env,
 	})
 }
 

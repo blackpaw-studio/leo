@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -429,5 +430,235 @@ func TestListIncludesStoppedWorktreeAgent(t *testing.T) {
 	}
 	if found.Branch != "feat/list-stopped" {
 		t.Errorf("branch = %q, want feat/list-stopped", found.Branch)
+	}
+}
+
+// --- SpawnSpec.FromAgent fixtures ---
+//
+// These use real `git` (no fakeGit), since git.HasOrigin and the
+// AddWorktreeForBranch flow need to observe a genuinely remoteless repo. All
+// other worktree tests in this file fake ExecGit; from-agent tests need the
+// real thing to exercise the "no origin -> HEAD base, no fetch" path.
+
+// gitTestEnv returns an environment with deterministic committer/author
+// identity so `git commit` works on CI machines without a configured user.
+func gitTestEnv() []string {
+	return append(os.Environ(),
+		"GIT_AUTHOR_NAME=test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	)
+}
+
+// initRemotelessRepo creates a real git repository at dir with one commit and
+// no remotes.
+func initRemotelessRepo(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	mustRun := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = gitTestEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	mustRun("init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	mustRun("add", ".")
+	mustRun("commit", "-m", "initial")
+}
+
+// newFromAgentTestManager wires a Manager over a capturingSupervisor with a
+// "claude" template pointed at a fresh workspace root, for FromAgent spawn
+// tests. Returns (manager, home, baseWorkspace).
+func newFromAgentTestManager(t *testing.T) (*Manager, string, string) {
+	t.Helper()
+	home := t.TempDir()
+	base := filepath.Join(home, "workspace")
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"claude": {Workspace: base},
+		},
+	}
+	sup := &capturingSupervisor{}
+	loader := func() (*config.Config, error) { return cfg, nil }
+	return New(loader, sup, "", ""), home, base
+}
+
+func TestSpawnFromAgent_LocalRepoNoRemote(t *testing.T) {
+	mgr, home, base := newFromAgentTestManager(t)
+
+	srcRepo := filepath.Join(t.TempDir(), "chronicle-repo")
+	initRemotelessRepo(t, srcRepo)
+
+	if err := agentstore.Save(home, agentstore.Record{
+		Name:      "chronicle",
+		Template:  "claude",
+		Workspace: srcRepo,
+		Env:       map[string]string{"FOO": "bar"},
+	}); err != nil {
+		t.Fatalf("agentstore.Save: %v", err)
+	}
+
+	rec, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "chronicle", Branch: "a11y"})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	if rec.Name != "chronicle-a11y" {
+		t.Errorf("rec.Name = %q, want chronicle-a11y", rec.Name)
+	}
+	if rec.Template != "claude" {
+		t.Errorf("rec.Template = %q, want claude", rec.Template)
+	}
+	if rec.Branch != "a11y" {
+		t.Errorf("rec.Branch = %q, want a11y", rec.Branch)
+	}
+	if rec.CanonicalPath != srcRepo {
+		t.Errorf("rec.CanonicalPath = %q, want %q", rec.CanonicalPath, srcRepo)
+	}
+	wantWorkspace := filepath.Join(base, ".worktrees", "chronicle", "a11y")
+	if rec.Workspace != wantWorkspace {
+		t.Errorf("rec.Workspace = %q, want %q", rec.Workspace, wantWorkspace)
+	}
+	if rec.Env["FOO"] != "bar" {
+		t.Errorf("rec.Env[FOO] = %q, want bar (inherited)", rec.Env["FOO"])
+	}
+
+	if _, err := os.Stat(filepath.Join(rec.Workspace, ".git")); err != nil {
+		t.Errorf("worktree dir missing .git marker: %v", err)
+	}
+
+	stored, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("agentstore.Load: %v", err)
+	}
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("agentstore missing record for %q", rec.Name)
+	}
+	if got.Branch != rec.Branch || got.CanonicalPath != rec.CanonicalPath || got.Workspace != rec.Workspace {
+		t.Errorf("stored record = %+v, want to match rec = %+v", got, rec)
+	}
+	if got.Env["FOO"] != "bar" {
+		t.Errorf("stored Env[FOO] = %q, want bar", got.Env["FOO"])
+	}
+}
+
+func TestSpawnFromAgent_WorktreeSourceUsesCanonical(t *testing.T) {
+	mgr, home, _ := newFromAgentTestManager(t)
+
+	canonical := filepath.Join(t.TempDir(), "canonical-repo")
+	initRemotelessRepo(t, canonical)
+	// Workspace simulates a worktree subdir distinct from the canonical repo.
+	workspaceSubdir := filepath.Join(t.TempDir(), "some-worktree-subdir")
+
+	if err := agentstore.Save(home, agentstore.Record{
+		Name:          "worktree-src",
+		Template:      "claude",
+		Workspace:     workspaceSubdir,
+		CanonicalPath: canonical,
+	}); err != nil {
+		t.Fatalf("agentstore.Save: %v", err)
+	}
+
+	rec, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "worktree-src", Branch: "fix-2"})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rec.CanonicalPath != canonical {
+		t.Errorf("rec.CanonicalPath = %q, want %q", rec.CanonicalPath, canonical)
+	}
+}
+
+func TestSpawnFromAgent_EnvOverridesInherited(t *testing.T) {
+	mgr, home, _ := newFromAgentTestManager(t)
+
+	srcRepo := filepath.Join(t.TempDir(), "envsrc-repo")
+	initRemotelessRepo(t, srcRepo)
+
+	if err := agentstore.Save(home, agentstore.Record{
+		Name:      "envsrc",
+		Template:  "claude",
+		Workspace: srcRepo,
+		Env:       map[string]string{"FOO": "bar", "KEEP": "1"},
+	}); err != nil {
+		t.Fatalf("agentstore.Save: %v", err)
+	}
+
+	rec, err := mgr.Spawn(context.Background(), SpawnSpec{
+		FromAgent: "envsrc",
+		Branch:    "override-branch",
+		Env:       map[string]string{"FOO": "override"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rec.Env["FOO"] != "override" {
+		t.Errorf("rec.Env[FOO] = %q, want override", rec.Env["FOO"])
+	}
+	if rec.Env["KEEP"] != "1" {
+		t.Errorf("rec.Env[KEEP] = %q, want 1", rec.Env["KEEP"])
+	}
+}
+
+func TestSpawnFromAgent_SourceNotFound(t *testing.T) {
+	mgr, _, _ := newFromAgentTestManager(t)
+
+	_, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "ghost", Branch: "x"})
+	if !errors.Is(err, ErrSourceAgentNotFound) {
+		t.Fatalf("want ErrSourceAgentNotFound, got %v", err)
+	}
+}
+
+func TestSpawnFromAgent_SourceNotGitRepo(t *testing.T) {
+	mgr, home, _ := newFromAgentTestManager(t)
+
+	plainDir := t.TempDir()
+	if err := agentstore.Save(home, agentstore.Record{
+		Name:      "plain",
+		Template:  "claude",
+		Workspace: plainDir,
+	}); err != nil {
+		t.Fatalf("agentstore.Save: %v", err)
+	}
+
+	_, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "plain", Branch: "x"})
+	if !errors.Is(err, ErrSourceNotGitRepo) {
+		t.Fatalf("want ErrSourceNotGitRepo, got %v", err)
+	}
+}
+
+func TestSpawnFromAgent_RequiresBranch(t *testing.T) {
+	mgr, _, _ := newFromAgentTestManager(t)
+
+	_, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "chronicle"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "branch") {
+		t.Errorf("error %q should mention branch", err.Error())
+	}
+}
+
+func TestSpawnFromAgent_RejectsExplicitTemplateOrRepo(t *testing.T) {
+	mgr, _, _ := newFromAgentTestManager(t)
+
+	if _, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "chronicle", Branch: "x", Template: "claude"}); err == nil {
+		t.Error("expected error when Template is set alongside FromAgent")
+	}
+	if _, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "chronicle", Branch: "x", Repo: "a/b"}); err == nil {
+		t.Error("expected error when Repo is set alongside FromAgent")
 	}
 }
