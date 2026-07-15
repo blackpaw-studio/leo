@@ -39,7 +39,9 @@ leo agent worktree <agent> <branch> [--base <ref>] [--name <n>] [--prompt <p>] [
 Look up `<agent>` in the agentstore (same resolution as other agent
 subcommands):
 
-1. **Not found** → error, listing close matches.
+1. **Not found** → error suggesting `leo agent list`. Lookup is by name
+   (verbatim, then normalized) against the agentstore — deliberately narrower
+   than live-agent resolution so stopped agents remain valid sources.
 2. **Source is itself a worktree agent** (record has `CanonicalPath`) →
    canonical = its `CanonicalPath`. This allows branching off e.g.
    `chronicle-a11y`; pass `--base a11y` to fork from that branch instead of
@@ -77,7 +79,7 @@ No changes. `stop --prune` and `agent prune` already operate on
 
 ## Error handling
 
-- Source agent not found → error with close-match suggestions.
+- Source agent not found → error suggesting `leo agent list`.
 - Source workspace not a git repo → explicit error naming the workspace.
 - Branch already checked out in another worktree → git's own error surfaced.
 - Fetch failures on remoteless repos are impossible (fetch skipped); fetch
