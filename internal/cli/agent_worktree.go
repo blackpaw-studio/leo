@@ -25,10 +25,15 @@ func newAgentWorktreeCmd() *cobra.Command {
 		Use:   "worktree <agent> <branch>",
 		Short: "Spawn a worktree agent branched off an existing agent",
 		Long: `Spawn a new agent in a dedicated git worktree derived from an existing
-agent: the source agent's template and env are inherited, and its workspace
-serves as the git canonical. Works for any agent whose workspace is a git
-repository — no owner/repo required. Branching off a worktree agent uses its
-canonical repo; pass --base <its-branch> to fork from that branch.
+agent: the source agent's template and env are inherited by default, and its
+workspace serves as the git canonical. Works for any agent whose workspace is
+a git repository — no owner/repo required. Branching off a worktree agent
+uses its canonical repo; pass --base <its-branch> to fork from that branch.
+
+Pass --template <name> to build the new agent from a different template
+while keeping the same source repo; the override template must exist in
+config, and with it set none of the source agent's env is inherited — only
+the override template's own env plus --env.
 
 The new agent is named <agent>-<branch-slug> and its worktree lives under
 <workspace>/.worktrees/<agent>/<branch-slug>. Clean up with
