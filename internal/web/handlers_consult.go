@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
@@ -39,4 +42,66 @@ func (s *Server) deliverConsultReply(ctx context.Context, name, body string) err
 		return s.injectPrompt(ctx, agent.SessionName(rec.Name), body)
 	}
 	return s.injectPrompt(ctx, agent.SessionName(name), body)
+}
+
+// handleAPIConsult dispatches a one-off consultant subagent for a calling
+// agent. Validation errors return synchronously; the consultant's answer is
+// delivered later via deliverConsultReply.
+//
+// POST /api/consult {"from": "...", "template": "...", "model": "...", "prompt": "..."}
+func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		From     string `json:"from"`
+		Template string `json:"template"`
+		Model    string `json:"model,omitempty"`
+		Prompt   string `json:"prompt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	if req.From == "" || req.Template == "" || req.Prompt == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "from, template, and prompt are required"})
+		return
+	}
+
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("loading config: %v", err)})
+		return
+	}
+
+	// The caller must be a supervised agent: it needs a live (or resumable)
+	// session for the reply to land in. Its workspace becomes the
+	// consultant's working directory when known.
+	workspace := ""
+	if s.agentSvc != nil {
+		if rec, err := s.agentSvc.Resolve(req.From); err == nil {
+			workspace = rec.Workspace
+		}
+	}
+	_, live := s.processes.States()[req.From]
+	if workspace == "" && !live {
+		writeJSON(w, http.StatusBadRequest, apiResponse{
+			Error: fmt.Sprintf("caller %q is not a supervised agent; consults need a session to reply into", req.From),
+		})
+		return
+	}
+
+	tk, err := s.consults.Dispatch(cfg, consult.Request{
+		From:      req.From,
+		Template:  req.Template,
+		Model:     req.Model,
+		Prompt:    req.Prompt,
+		Workspace: workspace,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{
+		"id":      tk.ID,
+		"harness": tk.Harness,
+		"model":   tk.Model,
+	}})
 }

@@ -2,7 +2,13 @@ package web
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -95,5 +101,70 @@ func TestDeliverConsultReplyNonClaudeDriver(t *testing.T) {
 	}
 	if got.handle.Name != wantHandle.Name || got.handle.TmuxSession != wantHandle.TmuxSession || got.handle.Workspace != wantHandle.Workspace {
 		t.Errorf("Inject handle = %+v, want %+v", got.handle, wantHandle)
+	}
+}
+
+func TestAPIConsultDispatchesAndDelivers(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	delivered := make(chan string, 1)
+	s.injectPrompt = func(_ context.Context, _, body string) error {
+		delivered <- body
+		return nil
+	}
+	s.consults.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"gpt says yes","is_error":false}`)
+	}
+
+	// testConfigWithTemplatesYAML defines a "coding" template.
+	body := `{"from":"assistant","template":"coding","prompt":"opinion?"}`
+	req := httptest.NewRequest("POST", "/api/consult", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleAPIConsult(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			ID      string `json:"id"`
+			Harness string `json:"harness"`
+			Model   string `json:"model"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || !resp.OK || resp.Data.ID == "" {
+		t.Fatalf("bad response %s (err %v)", w.Body.String(), err)
+	}
+
+	select {
+	case got := <-delivered:
+		if !strings.Contains(got, "gpt says yes") || !strings.Contains(got, resp.Data.ID) {
+			t.Fatalf("unexpected delivery %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reply never delivered")
+	}
+}
+
+func TestAPIConsultRejectsUnknownCaller(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	body := `{"from":"ghost","template":"coding","prompt":"q"}`
+	req := httptest.NewRequest("POST", "/api/consult", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleAPIConsult(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
+	}
+}
+
+func TestAPIConsultRejectsUnknownTemplate(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	body := `{"from":"assistant","template":"nope","prompt":"q"}`
+	req := httptest.NewRequest("POST", "/api/consult", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleAPIConsult(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
 	}
 }
