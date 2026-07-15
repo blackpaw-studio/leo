@@ -59,6 +59,7 @@ so remote calls use your existing SSH setup.`,
 	cmd.AddCommand(
 		newAgentListCmd(),
 		newAgentSpawnCmd(),
+		newAgentWorktreeCmd(),
 		newAgentAttachCmd(),
 		newAgentStopCmd(),
 		newAgentSuspendCmd(),
