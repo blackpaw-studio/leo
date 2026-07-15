@@ -1,6 +1,16 @@
-# CLAUDE.md
+# Repository agent guidance
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides shared guidance to coding agents working in this repository. `AGENTS.md` is a symlink to this file so Claude Code and Codex use one source of truth.
+
+## Shared project memory
+
+Claude Code's existing project memory is the canonical memory store for this repository:
+
+```text
+$HOME/.claude/projects/-Users-evan--leo-agents-leo/memory/
+```
+
+At the start of a task, read `MEMORY.md` there and follow links relevant to the task. When durable project knowledge is learned, update that same memory store rather than creating a Codex-specific copy. Keep `MEMORY.md` as a concise index and put detailed notes in topic files alongside it. Never store credentials or secret values in memory.
 
 ## What is Leo
 
