@@ -16,15 +16,17 @@ type Response struct {
 
 // Error code constants used on the wire.
 const (
-	ErrorCodeNotFound           = "not_found"
-	ErrorCodeAmbiguous          = "ambiguous"
-	ErrorCodeWorktreeDirty      = "worktree_dirty"
-	ErrorCodeBranchCheckedOut   = "branch_checked_out"
-	ErrorCodeBranchNotMerged    = "branch_not_merged"
-	ErrorCodeBranchNotFound     = "branch_not_found"
-	ErrorCodeAgentStillRunning  = "agent_still_running"
-	ErrorCodeNotWorktreeAgent   = "not_worktree_agent"
-	ErrorCodeWorktreeRequireSep = "worktree_requires_slash"
+	ErrorCodeNotFound            = "not_found"
+	ErrorCodeAmbiguous           = "ambiguous"
+	ErrorCodeWorktreeDirty       = "worktree_dirty"
+	ErrorCodeBranchCheckedOut    = "branch_checked_out"
+	ErrorCodeBranchNotMerged     = "branch_not_merged"
+	ErrorCodeBranchNotFound      = "branch_not_found"
+	ErrorCodeAgentStillRunning   = "agent_still_running"
+	ErrorCodeNotWorktreeAgent    = "not_worktree_agent"
+	ErrorCodeWorktreeRequireSep  = "worktree_requires_slash"
+	ErrorCodeSourceAgentNotFound = "source_agent_not_found"
+	ErrorCodeSourceNotGitRepo    = "source_not_git_repo"
 )
 
 // TaskAddRequest is the body for POST /task/add.
@@ -50,6 +52,10 @@ type AgentSpawnRequest struct {
 	Template string `json:"template"`
 	Repo     string `json:"repo"`
 	Name     string `json:"name,omitempty"`
+	// FromAgent, when set, derives the spawn from an existing agent's record
+	// (template, repo, env inherited; its workspace is the git canonical).
+	// Requires Branch; Template and Repo must be empty.
+	FromAgent string `json:"from_agent,omitempty"`
 	// Branch opts into a dedicated git worktree on this branch. Requires an
 	// owner/repo Repo. When empty, the agent uses today's shared workspace.
 	Branch string `json:"branch,omitempty"`

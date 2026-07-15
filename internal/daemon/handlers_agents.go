@@ -46,13 +46,14 @@ func (s *Server) handleAgentSpawn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
 		return
 	}
-	if req.Template == "" {
-		writeError(w, http.StatusBadRequest, "template is required")
+	if req.Template == "" && req.FromAgent == "" {
+		writeError(w, http.StatusBadRequest, "template or from_agent is required")
 		return
 	}
 
 	rec, err := s.agentMgr.Spawn(r.Context(), agent.SpawnSpec{
 		Template:    req.Template,
+		FromAgent:   req.FromAgent,
 		Repo:        req.Repo,
 		Name:        req.Name,
 		Branch:      req.Branch,
@@ -479,6 +480,10 @@ func writeAgentError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeBranchNotMerged})
 	case errors.Is(err, agent.ErrBranchNotFound):
 		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeBranchNotFound})
+	case errors.Is(err, agent.ErrSourceAgentNotFound):
+		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceAgentNotFound})
+	case errors.Is(err, agent.ErrSourceNotGitRepo):
+		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceNotGitRepo})
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}
