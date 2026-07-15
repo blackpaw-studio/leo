@@ -207,6 +207,39 @@ func ResolveWorktreeLayout(baseWorkspace, canonicalPath, templateName, repo, bra
 	}, nil
 }
 
+// ResolveAgentWorktreeLayout computes the layout for a worktree spawned from
+// an existing agent (leo agent worktree <agent> <branch>). Unlike
+// ResolveWorktreeLayout it keys paths and naming off the source agent's name
+// rather than owner/repo, so it works for any git workspace:
+//
+//	worktree: <base>/.worktrees/<source-agent>/<branch-slug>
+//	name:     <source-agent>-<branch-slug>
+//
+// Pure — no filesystem access; callers validate canonicalPath themselves.
+func ResolveAgentWorktreeLayout(baseWorkspace, canonicalPath, sourceAgent, branch, nameOverride string) (WorktreeLayout, error) {
+	if sourceAgent == "" {
+		return WorktreeLayout{}, fmt.Errorf("from-agent worktree spawn requires a source agent name")
+	}
+	if branch == "" {
+		return WorktreeLayout{}, fmt.Errorf("worktree spawn requires a branch name")
+	}
+	slug, err := git.SlugifyBranch(branch)
+	if err != nil {
+		return WorktreeLayout{}, fmt.Errorf("computing branch slug: %w", err)
+	}
+	name := nameOverride
+	if name == "" {
+		name = fmt.Sprintf("%s-%s", sourceAgent, git.BoundedSlug(slug, maxBranchSlugInName))
+	}
+	return WorktreeLayout{
+		CanonicalPath: canonicalPath,
+		WorktreePath:  filepath.Join(WorktreeRoot(baseWorkspace), sourceAgent, slug),
+		Branch:        branch,
+		BranchSlug:    slug,
+		AgentName:     name,
+	}, nil
+}
+
 // AddWorktreeForBranch runs `git worktree add` against canonical in a way that
 // matches the current state of the branch:
 //   - exists locally → attach to existing branch
