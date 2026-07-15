@@ -85,6 +85,7 @@ nav:
       - Workspace Structure: configuration/workspace-structure.md
       - Persistent Tasks: configuration/persistent-tasks.md
       - Harnesses: configuration/harnesses.md
+      - Consults: configuration/consults.md
   - CLI Reference:
       - cli/index.md
       - leo setup: cli/setup.md
