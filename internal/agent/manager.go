@@ -354,7 +354,51 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}, nil
 }
 
-// spawnWorktree implements the worktree flow. Ordering matters:
+// worktreeSpawnParams carries what spawnWorktreeCore needs beyond the
+// SpawnSpec: how to obtain the canonical repo, how to lay out the worktree,
+// and what to persist/inherit. Two producers exist — spawnWorktree
+// (owner/repo mode) and spawnFromAgent (existing-agent mode).
+type worktreeSpawnParams struct {
+	// baseName is the derived agent name before -2/-3 collision suffixing.
+	baseName string
+	// canonical returns the canonical repo path. Called after the agent name
+	// is reserved so slow work (cloning) never races a concurrent spawn.
+	canonical func() (string, error)
+	// layout computes the worktree layout given the canonical path.
+	layout func(canonical string) (WorktreeLayout, error)
+	// fetch controls whether origin is fetched before the worktree add.
+	// False when the canonical has no origin remote.
+	fetch bool
+	// repo is persisted as the record's Repo. May be empty or a bare name
+	// for from-agent spawns.
+	repo string
+	// inheritEnv is merged between tmpl.Env and spec.Env, minus any key the
+	// freshly computed harness env defines — stale harness values from a
+	// source agent's record must not leak into the new agent.
+	inheritEnv map[string]string
+}
+
+func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec) (Record, error) {
+	if !strings.Contains(spec.Repo, "/") {
+		return Record{}, ErrWorktreeRequiresSlash
+	}
+	base := BaseWorkspace(tmpl)
+	baseName, err := DeriveWorktreeAgentName(spec.Template, spec.Repo, spec.Branch, spec.Name)
+	if err != nil {
+		return Record{}, err
+	}
+	return m.spawnWorktreeCore(ctx, cfg, tmpl, spec, worktreeSpawnParams{
+		baseName:  baseName,
+		canonical: func() (string, error) { return EnsureCanonical(base, spec.Repo) },
+		layout: func(canonical string) (WorktreeLayout, error) {
+			return ResolveWorktreeLayout(base, canonical, spec.Template, spec.Repo, spec.Branch, spec.Name)
+		},
+		fetch: true,
+		repo:  spec.Repo,
+	})
+}
+
+// spawnWorktreeCore implements the worktree flow. Ordering matters:
 //
 //  1. Reserve the agent name atomically with the supervisor so concurrent
 //     spawns of the same name fail fast instead of racing through fetch and
@@ -367,16 +411,8 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 //
 // Any failure before step 5 releases the reservation and, if step 4 already
 // succeeded, removes the worktree so disk state stays consistent.
-func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec) (Record, error) {
-	if !strings.Contains(spec.Repo, "/") {
-		return Record{}, ErrWorktreeRequiresSlash
-	}
-	base := BaseWorkspace(tmpl)
-	baseName, err := DeriveWorktreeAgentName(spec.Template, spec.Repo, spec.Branch, spec.Name)
-	if err != nil {
-		return Record{}, err
-	}
-	agentName, err := m.reserveUniqueName(baseName)
+func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmpl config.TemplateConfig, spec SpawnSpec, p worktreeSpawnParams) (Record, error) {
+	agentName, err := m.reserveUniqueName(p.baseName)
 	if err != nil {
 		return Record{}, err
 	}
@@ -389,21 +425,23 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	}
 	defer release()
 
-	canonical, err := EnsureCanonical(base, spec.Repo)
+	canonical, err := p.canonical()
 	if err != nil {
 		return Record{}, err
 	}
 
-	layout, err := ResolveWorktreeLayout(base, canonical, spec.Template, spec.Repo, spec.Branch, spec.Name)
+	layout, err := p.layout(canonical)
 	if err != nil {
 		return Record{}, err
 	}
 	layout.AgentName = agentName
 
-	fetchCtx, cancel := context.WithTimeout(ctx, gitFetchTimeout)
-	defer cancel()
-	if err := git.Fetch(fetchCtx, canonical); err != nil {
-		return Record{}, fmt.Errorf("fetching origin: %w", err)
+	if p.fetch {
+		fetchCtx, cancel := context.WithTimeout(ctx, gitFetchTimeout)
+		defer cancel()
+		if err := git.Fetch(fetchCtx, canonical); err != nil {
+			return Record{}, fmt.Errorf("fetching origin: %w", err)
+		}
 	}
 
 	if err := AddWorktreeForBranch(ctx, canonical, layout.WorktreePath, layout.Branch, spec.Base); err != nil {
@@ -429,7 +467,17 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 		openingPrompt = spec.Prompt
 	}
 	webPort := strconv.Itoa(cfg.WebPort())
-	env := mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env)
+	inherited := p.inheritEnv
+	if len(inherited) > 0 && len(harnessEnv) > 0 {
+		pruned := make(map[string]string, len(inherited))
+		for k, v := range inherited {
+			if _, fresh := harnessEnv[k]; !fresh {
+				pruned[k] = v
+			}
+		}
+		inherited = pruned
+	}
+	env := mergeEnv(mergeEnv(mergeEnv(harnessEnv, tmpl.Env), inherited), spec.Env)
 
 	// rollbackWorktree removes the worktree created above so disk state stays
 	// consistent with the supervisor whenever a step after worktree creation
@@ -458,7 +506,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	if err := agentstore.Save(cfg.HomePath, agentstore.Record{
 		Name:             layout.AgentName,
 		Template:         spec.Template,
-		Repo:             spec.Repo,
+		Repo:             p.repo,
 		Workspace:        layout.WorktreePath,
 		Branch:           layout.Branch,
 		CanonicalPath:    canonical,
@@ -497,7 +545,7 @@ func (m *Manager) spawnWorktree(ctx context.Context, cfg *config.Config, tmpl co
 	return Record{
 		Name:          layout.AgentName,
 		Template:      spec.Template,
-		Repo:          spec.Repo,
+		Repo:          p.repo,
 		Workspace:     layout.WorktreePath,
 		Branch:        layout.Branch,
 		CanonicalPath: canonical,
