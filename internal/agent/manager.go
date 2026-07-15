@@ -847,6 +847,106 @@ func (m *Manager) Reset(name string) error {
 	return nil
 }
 
+// Restart bounces a currently-running agent's tmux session while preserving
+// its conversation: it stops the live process, then respawns with --resume
+// (the same jsonl-preferring resume logic as Resume), leaving Suspended,
+// SessionID-clearing, and NoResume untouched — unlike Suspend/Reset, Restart
+// never marks the record suspended and never starts a fresh session. Errors
+// when name has no live process (suspended/stopped/unknown agents are not
+// restartable — callers driving --all should treat that as a skip, not a
+// failure). If the respawn fails after the stop succeeds, the record is left
+// exactly as before (still pointing at the same SessionID/ClaudeArgs) so the
+// agent is not left flagged as suspended; re-running Restart retries the
+// respawn since the agent is no longer live.
+func (m *Manager) Restart(name string) error {
+	if _, ok := m.sup.EphemeralAgents()[name]; !ok {
+		return fmt.Errorf("agent %q is not running", name)
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return fmt.Errorf("loading agentstore: %w", err)
+	}
+	rec, ok := stored[name]
+	if !ok {
+		return fmt.Errorf("no agentstore record for %q (cannot restart an unpersisted agent)", name)
+	}
+
+	if err := m.sup.StopAgent(name); err != nil {
+		return fmt.Errorf("stopping agent for restart: %w", err)
+	}
+
+	// Claude-specific resume mechanic, matching Resume: prefer the newest
+	// on-disk jsonl transcript over the stored SessionID so a /clear session
+	// the store never saw is still picked up.
+	resumeID := rec.SessionID
+	isClaude := rec.Harness == "" || rec.Harness == "claude"
+	if isClaude {
+		if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
+			resumeID = latestID
+		}
+	}
+	args := rec.ClaudeArgs
+	if isClaude {
+		args = ResumeArgs(rec.ClaudeArgs, resumeID)
+	}
+
+	if err := m.sup.SpawnAgent(SpawnRequest{
+		Name:       rec.Name,
+		ClaudeArgs: args,
+		WorkDir:    rec.Workspace,
+		Env:        rec.Env,
+		WebPort:    rec.WebPort,
+		WebToken:   m.webToken,
+		Harness:    rec.Harness,
+	}); err != nil {
+		return fmt.Errorf("respawning %q after restart: %w (re-run 'leo agent restart %s' to retry)", name, err, name)
+	}
+
+	rec.SessionID = resumeID
+	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
+		log.Printf("agent %q restarted but agentstore.Save failed: %v — stored SessionID may lag until next save", name, err)
+	}
+	return nil
+}
+
+// RestartResult summarizes the outcome of a RestartAll batch: which agents
+// were actually bounced, which were skipped because they weren't running
+// (suspended/stopped agents are not restartable), and any per-agent errors
+// encountered along the way. A batch failure on one agent never aborts the
+// rest — every running agent gets its own attempt.
+type RestartResult struct {
+	Restarted []string
+	Skipped   []string
+	Failed    map[string]error
+}
+
+// RestartAll bounces every live agent (see Restart), skipping only the
+// intentionally-down ones: records whose Status is "suspended" or "stopped".
+// Everything else the supervisor still holds live — including "starting" and
+// "restarting" (crash-loop backoff) agents — is bounced; restarting a
+// backing-off agent simply short-circuits its crash loop with a fresh spawn.
+// Failures are isolated per-agent so one bad respawn doesn't block the rest of
+// the batch.
+func (m *Manager) RestartAll() RestartResult {
+	result := RestartResult{Failed: map[string]error{}}
+	for _, rec := range m.List() {
+		if rec.Status == "suspended" || rec.Status == "stopped" {
+			result.Skipped = append(result.Skipped, rec.Name)
+			continue
+		}
+		if err := m.Restart(rec.Name); err != nil {
+			result.Failed[rec.Name] = err
+			continue
+		}
+		result.Restarted = append(result.Restarted, rec.Name)
+	}
+	return result
+}
+
 // Prune removes the on-disk worktree and agentstore record for a stopped
 // worktree agent. Returns ErrAgentStillRunning if the agent has a live tmux
 // session, ErrNotWorktreeAgent for shared-workspace agents, and

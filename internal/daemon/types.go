@@ -104,6 +104,16 @@ type AgentRenameRequest struct {
 	NewName string `json:"new_name"`
 }
 
+// AgentRestartAllResponse is the payload for POST /agents/restart. Restarted
+// and Skipped list agent names; Failed maps agent name to its error string
+// (errors don't survive JSON round-trips, so callers reconstruct plain
+// fmt.Errorf values from these on the client side).
+type AgentRestartAllResponse struct {
+	Restarted []string          `json:"restarted"`
+	Skipped   []string          `json:"skipped"`
+	Failed    map[string]string `json:"failed,omitempty"`
+}
+
 // AgentAttachSpecResponse is the payload for GET /agents/{name}/attach-spec.
 // Harness == "claude" (or "") means the client should fall back to the
 // tmux-based attach flow using AgentSession's session name instead of this

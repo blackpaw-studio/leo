@@ -22,17 +22,21 @@ type fakeAgentManager struct {
 	resumeErr  error
 	resumeRec  agent.Record
 	resetErr   error
+	restartErr error
+	restartAll agent.RestartResult
 	pruneErr   error
 	logsErr    error
 	logsOut    string
 	renameErr  error
 
-	lastSpawn   agent.SpawnSpec
-	lastStop    string
-	lastSuspend string
-	lastResume  string
-	lastReset   string
-	lastPrune   struct {
+	lastSpawn        agent.SpawnSpec
+	lastStop         string
+	lastSuspend      string
+	lastResume       string
+	lastReset        string
+	lastRestart      string
+	restartAllCalled bool
+	lastPrune        struct {
 		name string
 		opts agent.PruneOptions
 	}
@@ -93,6 +97,16 @@ func (f *fakeAgentManager) Resume(name string) (agent.Record, error) {
 func (f *fakeAgentManager) Reset(name string) error {
 	f.lastReset = name
 	return f.resetErr
+}
+
+func (f *fakeAgentManager) Restart(name string) error {
+	f.lastRestart = name
+	return f.restartErr
+}
+
+func (f *fakeAgentManager) RestartAll() agent.RestartResult {
+	f.restartAllCalled = true
+	return f.restartAll
 }
 
 func (f *fakeAgentManager) Prune(_ context.Context, name string, opts agent.PruneOptions) error {
@@ -781,6 +795,143 @@ func TestAgentResetHandlerNoManager(t *testing.T) {
 	_, client := startTestServer(t, cfgPath) // no SetAgentManager
 
 	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/reset", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentRestartHandler(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/restart", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastRestart != "foo" {
+		t.Errorf("lastRestart = %q, want foo", mgr.lastRestart)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !env.OK {
+		t.Errorf("env.OK = false, want true")
+	}
+}
+
+func TestAgentRestartHandlerNotFound(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/missing/restart", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentRestartHandlerError(t *testing.T) {
+	mgr := &fakeAgentManager{
+		records:    []agent.Record{{Name: "foo"}},
+		restartErr: errors.New("stopping agent for restart: tmux kill failed"),
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/restart", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentRestartHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/restart", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentRestartAllHandler(t *testing.T) {
+	mgr := &fakeAgentManager{
+		restartAll: agent.RestartResult{
+			Restarted: []string{"leo-a"},
+			Skipped:   []string{"leo-b"},
+			Failed:    map[string]error{"leo-c": errors.New("boom")},
+		},
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/restart", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if !mgr.restartAllCalled {
+		t.Fatal("RestartAll was not called")
+	}
+
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !env.OK {
+		t.Fatalf("env.OK = false, want true")
+	}
+	var out AgentRestartAllResponse
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	if len(out.Restarted) != 1 || out.Restarted[0] != "leo-a" {
+		t.Errorf("Restarted = %v, want [leo-a]", out.Restarted)
+	}
+	if len(out.Skipped) != 1 || out.Skipped[0] != "leo-b" {
+		t.Errorf("Skipped = %v, want [leo-b]", out.Skipped)
+	}
+	if out.Failed["leo-c"] != "boom" {
+		t.Errorf("Failed[leo-c] = %q, want boom", out.Failed["leo-c"])
+	}
+}
+
+func TestAgentRestartAllHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/restart", nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("post: %v", err)
