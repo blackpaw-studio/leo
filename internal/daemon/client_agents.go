@@ -144,6 +144,51 @@ func AgentReset(ctx context.Context, workDir, name string) error {
 	return nil
 }
 
+// AgentRestart sends POST /agents/{name}/restart to the daemon. The agent's
+// process/tmux session is stopped and respawned with --resume so the prior
+// conversation continues (unlike AgentReset, which starts fresh). On resolve
+// failures it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous.
+func AgentRestart(ctx context.Context, workDir, name string) error {
+	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/restart", nil)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return responseError(resp, name)
+	}
+	return nil
+}
+
+// AgentRestartAllResult is the client-side decoding of AgentRestartAllResponse,
+// with Failed reconstructed as plain errors instead of strings.
+type AgentRestartAllResult struct {
+	Restarted []string
+	Skipped   []string
+	Failed    map[string]error
+}
+
+// AgentRestartAll sends POST /agents/restart to the daemon, bouncing every
+// currently-running agent (skipping suspended/stopped ones). Per-agent
+// failures are reported in the result rather than surfaced as the call error.
+func AgentRestartAll(ctx context.Context, workDir string) (AgentRestartAllResult, error) {
+	resp, err := Send(ctx, workDir, "POST", "/agents/restart", nil)
+	if err != nil {
+		return AgentRestartAllResult{}, err
+	}
+	if !resp.OK {
+		return AgentRestartAllResult{}, fmt.Errorf("%s", resp.Error)
+	}
+	var out AgentRestartAllResponse
+	if err := json.Unmarshal(resp.Data, &out); err != nil {
+		return AgentRestartAllResult{}, fmt.Errorf("decoding restart-all response: %w", err)
+	}
+	failed := make(map[string]error, len(out.Failed))
+	for name, msg := range out.Failed {
+		failed[name] = fmt.Errorf("%s", msg)
+	}
+	return AgentRestartAllResult{Restarted: out.Restarted, Skipped: out.Skipped, Failed: failed}, nil
+}
+
 // AgentLogs sends GET /agents/{name}/logs?lines=N to the daemon.
 // Pass lines<=0 to request the default tail. On resolve failures it returns
 // typed *agent.ErrNotFound or *agent.ErrAmbiguous.

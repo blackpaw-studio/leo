@@ -888,6 +888,187 @@ func TestResetStopFailureAbortsBeforeClearing(t *testing.T) {
 	}
 }
 
+// --- Restart ---
+
+// TestRestartStopsAndRespawnsWithResume verifies Restart's stop -> respawn
+// order for a live claude agent, that it passes --resume (not a fresh
+// --session-id, unlike Reset), and that it never touches the Suspended flag.
+func TestRestartStopsAndRespawnsWithResume(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"leo-x": {Name: "leo-x", Status: "running"},
+		},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	wantOrder := []string{"stop:leo-x", "spawn:leo-x"}
+	if len(sup.callOrder) != len(wantOrder) {
+		t.Fatalf("callOrder = %v, want %v", sup.callOrder, wantOrder)
+	}
+	for i, c := range wantOrder {
+		if sup.callOrder[i] != c {
+			t.Fatalf("callOrder[%d] = %q, want %q (full: %v)", i, sup.callOrder[i], c, sup.callOrder)
+		}
+	}
+
+	if sup.spawnCall == nil {
+		t.Fatal("SpawnAgent was not called")
+	}
+	got := sup.spawnCall.ClaudeArgs
+	if !containsPair(got, "--resume", "sid") || containsFlag(got, "--session-id") {
+		t.Fatalf("restart args wrong: %v", got)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	rec := recs["leo-x"]
+	if rec.Suspended {
+		t.Fatal("Restart must never mark the record Suspended")
+	}
+	if rec.SessionID != "sid" {
+		t.Fatalf("SessionID = %q, want unchanged %q", rec.SessionID, "sid")
+	}
+}
+
+// TestRestartNotRunningErrors verifies Restart errors (rather than silently
+// no-oping) on a suspended or unknown agent — callers driving --all treat
+// this as "skip", but a direct single-name Restart must surface it.
+func TestRestartNotRunningErrors(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{} // nothing live
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Workspace: "/w", Suspended: true})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err == nil {
+		t.Fatal("restarting a suspended (non-live) agent should error")
+	}
+	if err := m.Restart("ghost"); err == nil {
+		t.Fatal("restarting an unknown agent should error")
+	}
+	if len(sup.stopCalls) != 0 {
+		t.Fatalf("StopAgent must not be called for a non-live agent, got %v", sup.stopCalls)
+	}
+}
+
+// TestRestartStopFailureAbortsBeforeSpawn verifies a StopAgent failure stops
+// Restart before any respawn is attempted, and the record is left untouched.
+func TestRestartStopFailureAbortsBeforeSpawn(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents:  map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+		stopErr: errors.New("tmux kill failed"),
+	}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Workspace: "/w", SessionID: "sid"})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err == nil {
+		t.Fatal("expected error when StopAgent fails")
+	}
+	if sup.spawnCall != nil {
+		t.Fatal("SpawnAgent must not be called when StopAgent fails")
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if recs["leo-x"].SessionID != "sid" {
+		t.Fatal("SessionID must be left untouched when restart aborts on stop failure")
+	}
+}
+
+// TestRestartAllSkipsSuspendedAndStoppedAndIsolatesFailures verifies RestartAll
+// bounces every running agent, skips suspended/stopped ones, and keeps a
+// per-agent failure from blocking the rest of the batch.
+func TestRestartAllSkipsSuspendedAndStoppedAndIsolatesFailures(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"leo-a": {Name: "leo-a", Status: "running"},
+			"leo-b": {Name: "leo-b", Status: "running"},
+		},
+	}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-a", Workspace: "/w"})
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-b", Workspace: "/w"})
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-suspended", Workspace: "/w", Suspended: true})
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-stopped", Workspace: "/w", Branch: "feat", Stopped: true})
+
+	// Wrap the supervisor so leo-b's respawn fails while leo-a succeeds,
+	// proving one failure doesn't abort the batch.
+	sup2 := &failingOnSpawnSupervisor{capturingSupervisor: sup, failName: "leo-b"}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup2, "", "tok")
+
+	result := m.RestartAll()
+
+	if len(result.Restarted) != 1 || result.Restarted[0] != "leo-a" {
+		t.Fatalf("Restarted = %v, want [leo-a]", result.Restarted)
+	}
+	if len(result.Skipped) != 2 {
+		t.Fatalf("Skipped = %v, want 2 entries (suspended + stopped)", result.Skipped)
+	}
+	if _, ok := result.Failed["leo-b"]; !ok {
+		t.Fatalf("Failed = %v, want an entry for leo-b", result.Failed)
+	}
+}
+
+// TestRestartAllBouncesLiveNonRunningStatuses verifies that live agents whose
+// supervisor status is not the literal "running" — e.g. "starting" or
+// "restarting" (crash-loop backoff) — are still bounced by RestartAll, not
+// skipped. Only "suspended"/"stopped" records are intentionally skipped.
+func TestRestartAllBouncesLiveNonRunningStatuses(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"leo-starting":   {Name: "leo-starting", Status: "starting"},
+			"leo-restarting": {Name: "leo-restarting", Status: "restarting"},
+		},
+	}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-starting", Workspace: "/w"})
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-restarting", Workspace: "/w"})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	result := m.RestartAll()
+
+	if len(result.Restarted) != 2 {
+		t.Fatalf("Restarted = %v, want both live agents bounced", result.Restarted)
+	}
+	if len(result.Skipped) != 0 {
+		t.Fatalf("Skipped = %v, want none (starting/restarting are live)", result.Skipped)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v, want none", result.Failed)
+	}
+}
+
+// failingOnSpawnSupervisor wraps capturingSupervisor to fail SpawnAgent only
+// for a single named agent, letting a RestartAll test exercise per-agent
+// failure isolation without one shared spawnErr field failing everything.
+type failingOnSpawnSupervisor struct {
+	*capturingSupervisor
+	failName string
+}
+
+func (s *failingOnSpawnSupervisor) SpawnAgent(req SpawnRequest) error {
+	if req.Name == s.failName {
+		s.callOrder = append(s.callOrder, "spawn:"+req.Name)
+		return errors.New("spawn boom")
+	}
+	return s.capturingSupervisor.SpawnAgent(req)
+}
+
 // TestStopTerminatesSuspendedWorktreeAgent verifies Stop can terminate an agent
 // that is suspended (not live): StopAgent must be skipped (it would error
 // "not found" on a dead process) and the worktree record flipped to Stopped

@@ -152,6 +152,62 @@ func TestAgentStopRemote(t *testing.T) {
 	}
 }
 
+func TestAgentRestartRemote(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "restart", "leo-coding-bar"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	if !strings.Contains(joined, config.DefaultRemoteLeoPath+" agent restart leo-coding-bar") {
+		t.Errorf("unexpected call: %s", joined)
+	}
+}
+
+func TestAgentRestartRemoteForwardsAllYesJSON(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	stub := withStubExec(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "restart", "--all", "--yes", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	joined := strings.Join(stub.calls[0], " ")
+	for _, want := range []string{"agent restart", "--all", "--yes", "--json"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ssh call missing %q: %s", want, joined)
+		}
+	}
+}
+
+func TestAgentRestartRequiresNameOrAll(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "restart"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("expected an error when neither a name nor --all is given")
+	}
+}
+
+func TestAgentRestartRejectsNameWithAll(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	withStubStdio(t)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "agent", "restart", "leo-x", "--all"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("expected an error when both a name and --all are given")
+	}
+}
+
 func TestAgentRemoteHonorsLeoPathOverride(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{

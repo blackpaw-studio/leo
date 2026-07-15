@@ -183,6 +183,58 @@ func (s *Server) handleAgentReset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
+// handleAgentRestart bounces a running agent by name or shorthand via POST
+// /agents/{name}/restart: the server resolves the query to a canonical agent
+// (same resolution as stop/reset), then kills and respawns it with --resume
+// so the conversation carries over.
+func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	query := r.PathValue("name")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	rec, ok := s.resolveAgentOrError(w, query)
+	if !ok {
+		return
+	}
+	if err := s.agentMgr.Restart(rec.Name); err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true})
+}
+
+// handleAgentRestartAll bounces every currently-running agent via POST
+// /agents/restart, skipping suspended/stopped agents. Per-agent failures are
+// reported in the response rather than aborting the batch.
+func (s *Server) handleAgentRestartAll(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	result := s.agentMgr.RestartAll()
+
+	failed := make(map[string]string, len(result.Failed))
+	for name, err := range result.Failed {
+		failed[name] = err.Error()
+	}
+	resp := AgentRestartAllResponse{
+		Restarted: result.Restarted,
+		Skipped:   result.Skipped,
+		Failed:    failed,
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling restart-all response: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
 // handleAgentLogs returns the most recent `lines` lines of the agent's tmux
 // pane. The `name` path segment may be a shorthand query; it is resolved to
 // the canonical agent before capturing the pane. Defaults to 200 lines when

@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/prompt"
 	"github.com/spf13/cobra"
 )
 
@@ -63,6 +64,7 @@ so remote calls use your existing SSH setup.`,
 		newAgentSuspendCmd(),
 		newAgentResumeCmd(),
 		newAgentResetCmd(),
+		newAgentRestartCmd(),
 		newAgentRenameCmd(),
 		newAgentPruneCmd(),
 		newAgentLogsCmd(),
@@ -948,6 +950,147 @@ an agent's context has gotten stuck or corrupted.`,
 		},
 	}
 	addHostFlag(cmd, &host)
+	return cmd
+}
+
+// --- restart ---
+
+// agentRestartAllResult is the JSON shape for `leo agent restart --all --json`.
+type agentRestartAllResult struct {
+	Restarted []string          `json:"restarted"`
+	Skipped   []string          `json:"skipped"`
+	Failed    map[string]string `json:"failed,omitempty"`
+}
+
+func newAgentRestartCmd() *cobra.Command {
+	var host string
+	var all, assumeYes, asJSON bool
+	cmd := &cobra.Command{
+		Use:   "restart [name]",
+		Short: "Bounce a running agent's tmux session, preserving its conversation",
+		Long: `Restart a running agent by killing its process/tmux session and
+respawning it with --resume, so the conversation carries over. Unlike 'leo
+agent reset', which starts a brand-new conversation, restart just bounces the
+process — use this after a config/template change that needs a fresh process
+but should keep context.
+
+Pass a single agent name, or --all to bounce every currently-running agent
+(suspended and stopped agents are skipped, not restarted).`,
+		Example: `  # Bounce one agent
+  leo agent restart leo-coding-owner-fetch
+
+  # Bounce every running agent, skipping the confirmation prompt
+  leo agent restart --all --yes`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all {
+				if len(args) != 0 {
+					return fmt.Errorf("cannot combine an agent name with --all")
+				}
+				return nil
+			}
+			if len(args) != 1 {
+				return fmt.Errorf("requires exactly one agent name, or --all to restart every running agent")
+			}
+			return nil
+		},
+		ValidArgsFunction: completeAgentNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				extra := []string{"restart"}
+				if all {
+					extra = append(extra, "--all")
+				} else {
+					extra = append(extra, args[0])
+				}
+				if assumeYes {
+					extra = append(extra, "--yes")
+				}
+				if asJSON {
+					extra = append(extra, "--json")
+				}
+				return runRemote(res, extra)
+			}
+
+			if !all {
+				name := args[0]
+				// Resolve shorthand to canonical name (same resolution as stop/reset).
+				resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
+				if err != nil {
+					return fmt.Errorf("resolving agent: %w", err)
+				}
+				if err := daemon.AgentRestart(cmd.Context(), cfg.HomePath, resolved.Name); err != nil {
+					return fmt.Errorf("restarting agent: %w", err)
+				}
+				if asJSON {
+					enc := json.NewEncoder(agentStdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode(agentRestartAllResult{Restarted: []string{resolved.Name}})
+				}
+				fmt.Fprintf(agentStdout, "restarted %s\n", resolved.Name)
+				return nil
+			}
+
+			if !assumeYes {
+				if !agentIsTTY() {
+					return fmt.Errorf("refusing to restart every running agent without confirmation: pass --yes to skip the prompt when stdin is not a TTY")
+				}
+				reader := bufio.NewReader(agentStdin)
+				if !prompt.YesNo(reader, "Restart every running agent?", false) {
+					fmt.Fprintln(agentStdout, "Aborted.")
+					return nil
+				}
+			}
+
+			result, err := daemon.AgentRestartAll(cmd.Context(), cfg.HomePath)
+			if err != nil {
+				return fmt.Errorf("restarting agents: %w", err)
+			}
+
+			if asJSON {
+				failed := make(map[string]string, len(result.Failed))
+				for name, ferr := range result.Failed {
+					failed[name] = ferr.Error()
+				}
+				enc := json.NewEncoder(agentStdout)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(agentRestartAllResult{
+					Restarted: result.Restarted,
+					Skipped:   result.Skipped,
+					Failed:    failed,
+				}); err != nil {
+					return err
+				}
+				if len(result.Failed) > 0 {
+					return fmt.Errorf("%d agent(s) failed to restart", len(result.Failed))
+				}
+				return nil
+			}
+
+			for _, name := range result.Restarted {
+				fmt.Fprintf(agentStdout, "restarted %s\n", name)
+			}
+			for _, name := range result.Skipped {
+				fmt.Fprintf(agentStdout, "skipped %s (not running)\n", name)
+			}
+			for name, ferr := range result.Failed {
+				fmt.Fprintf(agentStdout, "failed %s: %v\n", name, ferr)
+			}
+			total := len(result.Restarted) + len(result.Skipped) + len(result.Failed)
+			fmt.Fprintf(agentStdout, "restarted %d of %d\n", len(result.Restarted), total)
+			if len(result.Failed) > 0 {
+				return fmt.Errorf("%d agent(s) failed to restart", len(result.Failed))
+			}
+			return nil
+		},
+	}
+	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&all, "all", false, "restart every currently-running agent (skips suspended/stopped agents)")
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the confirmation prompt when using --all")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output the restart result as JSON")
 	return cmd
 }
 
