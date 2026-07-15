@@ -120,7 +120,7 @@ func TestToolsListContainsCanonicalCommands(t *testing.T) {
 		"leo_clear", "leo_compact", "leo_interrupt",
 		"leo_list_tasks", "leo_run_task", "leo_toggle_task",
 		"leo_list_templates", "leo_spawn_agent", "leo_list_agents", "leo_stop_agent",
-		"leo_send_message", "leo_skill",
+		"leo_send_message", "leo_skill", "leo_consult",
 	}
 	got := map[string]bool{}
 	for _, t := range tools {
@@ -388,6 +388,38 @@ func TestSendMessageRequiresMessage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "message") {
 		t.Errorf("error should mention the missing field; got %v", err)
+	}
+}
+
+func TestLeoConsultDispatches(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]string
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		gotPath = method + " " + path
+		json.Unmarshal(body, &gotBody)
+		return 200, `{"ok":true,"data":{"id":"c-4f2a","harness":"codex","model":"gpt-5.6-sol"}}`
+	})
+	defer d.close()
+
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant")
+	resp := runRequest(t, reg, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "leo_consult",
+			"arguments": map[string]any{"template": "codex", "prompt": "opinion?"},
+		},
+	})
+
+	if gotPath != "POST /api/consult" {
+		t.Fatalf("daemon call %q", gotPath)
+	}
+	if gotBody["from"] != "assistant" || gotBody["template"] != "codex" || gotBody["prompt"] != "opinion?" {
+		t.Fatalf("body %+v", gotBody)
+	}
+	result := resp["result"].(map[string]any)
+	content := result["content"].([]any)[0].(map[string]any)
+	if !strings.Contains(content["text"].(string), "c-4f2a") {
+		t.Fatalf("tool result %v", content)
 	}
 }
 
