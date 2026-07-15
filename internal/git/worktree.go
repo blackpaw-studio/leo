@@ -49,6 +49,14 @@ func Fetch(ctx context.Context, repoPath string) error {
 	return nil
 }
 
+// HasOrigin reports whether the repository at repoPath has an origin remote
+// configured. From-agent worktree spawns use this to decide whether a fetch
+// (and origin-based default-branch resolution) makes sense.
+func HasOrigin(ctx context.Context, repoPath string) bool {
+	_, err := ExecGit(ctx, repoPath, "remote", "get-url", "origin")
+	return err == nil
+}
+
 // DefaultBranch returns the default branch name of origin. It reads
 // refs/remotes/origin/HEAD first, then falls back to probing for main and
 // master.

@@ -296,6 +296,25 @@ func TestPruneWorktrees(t *testing.T) {
 	}
 }
 
+func TestHasOrigin(t *testing.T) {
+	ctx := testCtx(t)
+	clone, _ := setupScratchRepo(t)
+	if !HasOrigin(ctx, clone) {
+		t.Fatal("expected HasOrigin=true for a repo cloned from an origin")
+	}
+
+	// A freshly init'd repo has no origin remote.
+	bare := t.TempDir()
+	cmd := exec.CommandContext(ctx, "git", "init", bare)
+	cmd.Env = gitEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if HasOrigin(ctx, bare) {
+		t.Fatal("expected HasOrigin=false for a repo with no remotes")
+	}
+}
+
 func TestIsDirty(t *testing.T) {
 	t.Parallel()
 	clone, _ := setupScratchRepo(t)
