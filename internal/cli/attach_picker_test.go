@@ -8,6 +8,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/picker"
 )
 
 // stubStdinIsTerminal forces stdinIsTerminal() to the given value for the
@@ -43,5 +44,86 @@ func TestRunAttachPickerFailsFastWhenDaemonDown(t *testing.T) {
 	err := runAttachPicker(context.Background(), cfg, config.HostResolution{Localhost: true}, attachOptions{})
 	if err == nil || !strings.Contains(err.Error(), "leo service") {
 		t.Fatalf("want daemon-down fail-fast error mentioning leo service, got %v", err)
+	}
+}
+
+// stubPickerRun forces pickerRunFn to a fake for the duration of the test,
+// capturing the backends map it was invoked with so tests can assert on
+// which hosts were included without driving the real TUI.
+func stubPickerRun(t *testing.T) *map[string]picker.Backend {
+	t.Helper()
+	var captured map[string]picker.Backend
+	old := pickerRunFn
+	pickerRunFn = func(ctx context.Context, backends map[string]picker.Backend) (picker.Result, error) {
+		captured = backends
+		return picker.Result{}, nil
+	}
+	t.Cleanup(func() { pickerRunFn = old })
+	return &captured
+}
+
+func TestRunAttachPickerSkipsLocalWhenDaemonDownButHostsConfigured(t *testing.T) {
+	stubStdinIsTerminal(t, true)
+
+	oldList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return nil, fmt.Errorf("connecting to daemon: dial unix: connect: no such file or directory")
+	}
+	t.Cleanup(func() { agentListFn = oldList })
+
+	captured := stubPickerRun(t)
+
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Client: config.ClientConfig{
+			Hosts: map[string]config.HostConfig{
+				"dionysus": {SSH: "leo@dionysus.example.com"},
+			},
+		},
+	}
+	err := runAttachPicker(context.Background(), cfg, config.HostResolution{Localhost: true}, attachOptions{})
+	if err != nil {
+		t.Fatalf("want no error when remote hosts are configured, got %v", err)
+	}
+
+	backends := *captured
+	if _, ok := backends[picker.LocalHost]; ok {
+		t.Errorf("backends = %v, want no local backend when the daemon probe failed", backends)
+	}
+	if _, ok := backends["dionysus"]; !ok {
+		t.Errorf("backends = %v, want dionysus SSH backend present", backends)
+	}
+}
+
+func TestRunAttachPickerIncludesLocalWhenDaemonUp(t *testing.T) {
+	stubStdinIsTerminal(t, true)
+
+	oldList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { agentListFn = oldList })
+
+	captured := stubPickerRun(t)
+
+	cfg := &config.Config{
+		HomePath: t.TempDir(),
+		Client: config.ClientConfig{
+			Hosts: map[string]config.HostConfig{
+				"dionysus": {SSH: "leo@dionysus.example.com"},
+			},
+		},
+	}
+	err := runAttachPicker(context.Background(), cfg, config.HostResolution{Localhost: true}, attachOptions{})
+	if err != nil {
+		t.Fatalf("want no error when the daemon probe succeeds, got %v", err)
+	}
+
+	backends := *captured
+	if _, ok := backends[picker.LocalHost]; !ok {
+		t.Errorf("backends = %v, want local backend present when the daemon probe succeeded", backends)
+	}
+	if _, ok := backends["dionysus"]; !ok {
+		t.Errorf("backends = %v, want dionysus SSH backend present", backends)
 	}
 }

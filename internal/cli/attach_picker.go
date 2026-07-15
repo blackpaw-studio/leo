@@ -17,6 +17,10 @@ import (
 // fail-fast probe.
 var agentListFn = daemon.AgentList
 
+// pickerRunFn is a testability seam for picker.Run — tests override this to
+// avoid driving the real full-screen Bubble Tea program.
+var pickerRunFn = picker.Run
+
 // attachChoiceKind distinguishes what an attach target resolves to, so the
 // attach path can route non-claude agents through their SessionDriver instead
 // of assuming every target is a tmux session.
@@ -48,14 +52,19 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 		return fmt.Errorf("no session name given and stdin is not a terminal — pass a name explicitly")
 	}
 
-	// Fail fast if the local daemon is unreachable, before entering alt-screen —
-	// a blank picker over a dead daemon is worse than a clear error.
-	if _, err := agentListFn(ctx, cfg.HomePath); err != nil {
-		return fmt.Errorf("cannot reach the leo daemon (is 'leo service' running?): %w", err)
+	// Probe the local daemon before entering alt-screen — a blank picker over a
+	// dead daemon is worse than a clear error. On a client-only machine (remote
+	// hosts configured, no local daemon) a dead local daemon is not fatal: skip
+	// the local backend and proceed with the configured SSH backends instead.
+	// Only fail fast when there is nowhere else to look, i.e. no remote hosts
+	// are configured either.
+	_, localErr := agentListFn(ctx, cfg.HomePath)
+	if localErr != nil && len(cfg.Client.Hosts) == 0 {
+		return fmt.Errorf("cannot reach the leo daemon (is 'leo service' running?): %w", localErr)
 	}
 
-	backends := buildPickerBackends(cfg)
-	result, err := picker.Run(ctx, backends)
+	backends := buildPickerBackends(cfg, localErr == nil)
+	result, err := pickerRunFn(ctx, backends)
 	if err != nil {
 		return fmt.Errorf("picker: %w", err)
 	}
@@ -66,10 +75,14 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 }
 
 // buildPickerBackends assembles one backend per host: the local daemon under
-// picker.LocalHost, plus an SSH backend for every configured client.hosts entry.
-func buildPickerBackends(cfg *config.Config) map[string]picker.Backend {
-	backends := map[string]picker.Backend{
-		picker.LocalHost: picker.NewLocalBackend(cfg.HomePath),
+// picker.LocalHost (only when includeLocal is true — the caller sets this to
+// false when the local daemon probe failed but remote hosts are configured,
+// so a dead local daemon doesn't produce a phantom error row), plus an SSH
+// backend for every configured client.hosts entry.
+func buildPickerBackends(cfg *config.Config, includeLocal bool) map[string]picker.Backend {
+	backends := map[string]picker.Backend{}
+	if includeLocal {
+		backends[picker.LocalHost] = picker.NewLocalBackend(cfg.HomePath)
 	}
 	for name := range cfg.Client.Hosts {
 		res, err := cfg.ResolveHost(name)
