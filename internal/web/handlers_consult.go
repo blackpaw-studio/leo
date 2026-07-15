@@ -73,15 +73,20 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 
 	// The caller must be a supervised agent: it needs a live (or resumable)
 	// session for the reply to land in. Its workspace becomes the
-	// consultant's working directory when known.
+	// consultant's working directory when known. resolved tracks whether the
+	// agent record exists at all — distinct from workspace being non-empty,
+	// since a suspended agent can have a resolvable record with an empty
+	// Workspace field.
 	workspace := ""
+	resolved := false
 	if s.agentSvc != nil {
 		if rec, err := s.agentSvc.Resolve(req.From); err == nil {
+			resolved = true
 			workspace = rec.Workspace
 		}
 	}
 	_, live := s.processes.States()[req.From]
-	if workspace == "" && !live {
+	if !resolved && !live {
 		writeJSON(w, http.StatusBadRequest, apiResponse{
 			Error: fmt.Sprintf("caller %q is not a supervised agent; consults need a session to reply into", req.From),
 		})

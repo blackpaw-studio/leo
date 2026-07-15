@@ -423,6 +423,28 @@ func TestLeoConsultDispatches(t *testing.T) {
 	}
 }
 
+func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
+	var gotBody map[string]string
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		json.Unmarshal(body, &gotBody)
+		return 200, `{"ok":true,"data":{"id":"c-4f2a","harness":"codex","model":"gpt-x"}}`
+	})
+	defer d.close()
+
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant")
+	runRequest(t, reg, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "leo_consult",
+			"arguments": map[string]any{"template": "codex", "prompt": "opinion?", "model": "gpt-x"},
+		},
+	})
+
+	if gotBody["model"] != "gpt-x" {
+		t.Fatalf("daemon POST body model = %q, want gpt-x; body %+v", gotBody["model"], gotBody)
+	}
+}
+
 func TestSkillToolWithNoArgsListsCatalog(t *testing.T) {
 	reg := newRegistry(newDaemonClient("0", ""), "primary")
 	out, err := reg.call("leo_skill", json.RawMessage(`{}`))
