@@ -223,6 +223,90 @@ func TestAgentSpawnMissingFields(t *testing.T) {
 	}
 }
 
+func TestAgentSpawnHandlerForwardsFromAgent(t *testing.T) {
+	mgr := &fakeAgentManager{}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{FromAgent: "chronicle", Branch: "a11y"})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastSpawn.FromAgent != "chronicle" || mgr.lastSpawn.Branch != "a11y" {
+		t.Errorf("spawn spec = %+v, want FromAgent=chronicle Branch=a11y", mgr.lastSpawn)
+	}
+}
+
+func TestAgentSpawnMissingTemplateAndFromAgent(t *testing.T) {
+	mgr := &fakeAgentManager{}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Error != "template or from_agent is required" {
+		t.Errorf("error = %q, want %q", env.Error, "template or from_agent is required")
+	}
+}
+
+func TestAgentSpawnHandlerSourceAgentNotFound(t *testing.T) {
+	mgr := &fakeAgentManager{spawnErr: agent.ErrSourceAgentNotFound}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{FromAgent: "ghost", Branch: "x"})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Code != ErrorCodeSourceAgentNotFound {
+		t.Errorf("code = %q, want %q", env.Code, ErrorCodeSourceAgentNotFound)
+	}
+}
+
+func TestAgentSpawnHandlerSourceNotGitRepo(t *testing.T) {
+	mgr := &fakeAgentManager{spawnErr: agent.ErrSourceNotGitRepo}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentSpawnRequest{FromAgent: "plain", Branch: "x"})
+	resp, err := client.Post("http://localhost/agents/spawn", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Code != ErrorCodeSourceNotGitRepo {
+		t.Errorf("code = %q, want %q", env.Code, ErrorCodeSourceNotGitRepo)
+	}
+}
+
 func TestAgentSpawnWithoutRepoSucceeds(t *testing.T) {
 	mgr := &fakeAgentManager{}
 	_, client := startTestServerWithAgent(t, mgr)

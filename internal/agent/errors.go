@@ -36,4 +36,13 @@ var (
 	ErrWorktreeDirty    = git.ErrWorktreeDirty
 	ErrBranchNotMerged  = git.ErrBranchNotMerged
 	ErrBranchNotFound   = git.ErrBranchNotFound
+
+	// ErrSourceAgentNotFound is returned by from-agent worktree spawns when
+	// the named source agent has no agentstore record.
+	ErrSourceAgentNotFound = errors.New("source agent not found")
+
+	// ErrSourceNotGitRepo is returned by from-agent worktree spawns when the
+	// source agent's workspace is not a git repository — there is nothing to
+	// add a worktree to.
+	ErrSourceNotGitRepo = errors.New("source agent's workspace is not a git repository")
 )

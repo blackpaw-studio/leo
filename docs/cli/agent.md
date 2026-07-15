@@ -10,6 +10,7 @@ leo agent spawn <template>                                         # spawn the t
 leo agent spawn <template> --repo <owner/repo>                     # spawn from a template
 leo agent spawn <template> --repo <name> --name <n>                # spawn with a custom name
 leo agent spawn <template> --repo <owner/repo> --worktree <branch> # spawn into a dedicated git worktree
+leo agent worktree <agent> <branch>                                # spawn a worktree agent branched off an existing agent
 leo agent attach <name>                                            # attach to the agent's tmux session
 leo agent session-name <query>                                     # print the tmux session name
 leo agent stop <name> [--prune]                                    # stop a running agent (optionally remove worktree)
@@ -130,6 +131,40 @@ Non-TTY runs skip the prompt and default to fresh-template. Two flags override t
 - `--reuse-owner` — always respawn using the existing canonical repo (slashless only)
 
 On success Leo prints the resolved name and workspace, plus the one-liner to attach.
+
+### `leo agent worktree <agent> <branch>`
+
+Spawn a worktree agent branched off an existing agent — sugar over `spawn --worktree` that derives everything from the source agent's record instead of an `owner/repo`. Works for **any** agent whose workspace is a git repository, not just ones spawned with `--repo owner/repo`.
+
+```bash
+leo agent worktree chronicle a11y
+leo agent worktree chronicle hotfix --base v1.2.0 --prompt "fix the crash"
+```
+
+- **Template and env are inherited** from the source agent's record; the source's workspace (or its canonical repo, if the source is itself a worktree agent) becomes the new agent's git canonical.
+- **Naming:** `<agent>-<branch-slug>`. The worktree lives at `<workspace-base>/.worktrees/<agent>/<branch-slug>/`.
+- **Branching off a worktree agent** uses that agent's canonical repo, not its own checkout — pass `--base <its-branch>` to fork from the branch it's on rather than the canonical's default.
+- **Remoteless repos** (no `origin`): the fetch step is skipped and new branches are cut from `HEAD` instead of origin's default branch.
+- If the branch exists locally or on `origin`, Leo attaches to it; otherwise it creates a new branch off `--base` (or the remoteless/default-branch fallback above).
+
+Flags:
+
+- `--name` — override the derived agent name
+- `--base` — base ref for new branches (defaults to origin's default branch, or `HEAD` for remoteless repos)
+- `--prompt` — opening prompt delivered as the agent's first interactive turn
+- `--env KEY=VALUE` — extra env var (repeatable); overrides an inherited value on collision
+- `--json` — emit the spawned `AgentRecord` as JSON
+
+Clean up the same way as any worktree agent: `leo agent stop <name> --prune`.
+
+```bash
+# chronicle is a running agent with a git workspace; branch it onto an a11y pass
+leo agent worktree chronicle a11y
+# spawned chronicle-a11y (branch: a11y, worktree: ~/.leo/workspace/.worktrees/chronicle/a11y)
+# attach with: leo agent attach chronicle-a11y
+
+leo agent stop chronicle-a11y --prune   # done — tear down the checkout
+```
 
 ### `leo agent attach <name>`
 
