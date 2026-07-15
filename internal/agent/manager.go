@@ -166,8 +166,8 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (Record, error) {
 		return Record{}, fmt.Errorf("loading config: %w", err)
 	}
 	if spec.FromAgent != "" {
-		if spec.Template != "" || spec.Repo != "" {
-			return Record{}, fmt.Errorf("from-agent spawn derives template and repo from the source agent; do not set them")
+		if spec.Repo != "" {
+			return Record{}, fmt.Errorf("from-agent spawn derives the repo from the source agent; do not set it")
 		}
 		return m.spawnFromAgent(ctx, cfg, spec)
 	}
@@ -446,7 +446,7 @@ func (m *Manager) spawnFromAgent(ctx context.Context, cfg *config.Config, spec S
 	if !ok {
 		return Record{}, fmt.Errorf("%w: %q (run 'leo agent list')", ErrSourceAgentNotFound, spec.FromAgent)
 	}
-	tmpl, ok := cfg.Templates[src.Template]
+	srcTmpl, ok := cfg.Templates[src.Template]
 	if !ok {
 		return Record{}, fmt.Errorf("template %q (from agent %q) not found", src.Template, src.Name)
 	}
@@ -463,14 +463,32 @@ func (m *Manager) spawnFromAgent(ctx context.Context, cfg *config.Config, spec S
 		// is given; remoteless repos have no origin, so branch off HEAD.
 		spec.Base = "HEAD"
 	}
-	spec.Template = src.Template
 
-	base := BaseWorkspace(tmpl)
+	// runTmpl is the template that actually builds the new agent: the source
+	// template by default, or the caller's --template override. The base
+	// workspace (worktree placement) always stays derived from the SOURCE
+	// template so an override with a different pinned workspace doesn't
+	// relocate the worktree away from the source agent's other worktrees.
+	runTmpl := srcTmpl
+	runTmplName := src.Template
+	inheritEnv := src.Env
+	if spec.Template != "" {
+		t, ok := cfg.Templates[spec.Template]
+		if !ok {
+			return Record{}, fmt.Errorf("template %q not found", spec.Template)
+		}
+		runTmpl = t
+		runTmplName = spec.Template
+		inheritEnv = nil // override template: do not inherit the source agent's env
+	}
+	spec.Template = runTmplName
+
+	base := BaseWorkspace(srcTmpl)
 	layout, err := ResolveAgentWorktreeLayout(base, canonical, src.Name, spec.Branch, spec.Name)
 	if err != nil {
 		return Record{}, err
 	}
-	return m.spawnWorktreeCore(ctx, cfg, tmpl, spec, worktreeSpawnParams{
+	return m.spawnWorktreeCore(ctx, cfg, runTmpl, spec, worktreeSpawnParams{
 		baseName:  layout.AgentName,
 		canonical: func() (string, error) { return canonical, nil },
 		layout: func(string) (WorktreeLayout, error) {
@@ -478,7 +496,7 @@ func (m *Manager) spawnFromAgent(ctx context.Context, cfg *config.Config, spec S
 		},
 		fetch:      hasOrigin,
 		repo:       src.Repo,
-		inheritEnv: src.Env,
+		inheritEnv: inheritEnv,
 	})
 }
 

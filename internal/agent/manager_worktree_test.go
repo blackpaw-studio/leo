@@ -652,13 +652,100 @@ func TestSpawnFromAgent_RequiresBranch(t *testing.T) {
 	}
 }
 
-func TestSpawnFromAgent_RejectsExplicitTemplateOrRepo(t *testing.T) {
+func TestSpawnFromAgent_RejectsRepoWithFromAgent(t *testing.T) {
 	mgr, _, _ := newFromAgentTestManager(t)
 
-	if _, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "chronicle", Branch: "x", Template: "claude"}); err == nil {
-		t.Error("expected error when Template is set alongside FromAgent")
-	}
 	if _, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "chronicle", Branch: "x", Repo: "a/b"}); err == nil {
 		t.Error("expected error when Repo is set alongside FromAgent")
+	}
+}
+
+// newFromAgentTemplateOverrideTestManager wires a Manager over two templates —
+// "claude" (the source's template) and "override" (a distinct template with
+// its own env) — for --template override tests.
+func newFromAgentTemplateOverrideTestManager(t *testing.T) (*Manager, string, string) {
+	t.Helper()
+	home := t.TempDir()
+	base := filepath.Join(home, "workspace")
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"claude":   {Workspace: base},
+			"override": {Workspace: filepath.Join(home, "other-workspace"), Env: map[string]string{"TMPL_ENV": "x"}},
+		},
+	}
+	sup := &capturingSupervisor{}
+	loader := func() (*config.Config, error) { return cfg, nil }
+	return New(loader, sup, "", ""), home, base
+}
+
+func TestSpawnFromAgent_TemplateOverride(t *testing.T) {
+	mgr, home, base := newFromAgentTemplateOverrideTestManager(t)
+
+	srcRepo := filepath.Join(t.TempDir(), "chronicle-repo")
+	initRemotelessRepo(t, srcRepo)
+
+	if err := agentstore.Save(home, agentstore.Record{
+		Name:      "chronicle",
+		Template:  "claude",
+		Workspace: srcRepo,
+		Env:       map[string]string{"SRC_ONLY": "1"},
+	}); err != nil {
+		t.Fatalf("agentstore.Save: %v", err)
+	}
+
+	rec, err := mgr.Spawn(context.Background(), SpawnSpec{
+		FromAgent: "chronicle",
+		Branch:    "b",
+		Template:  "override",
+		Env:       map[string]string{"CLI_ENV": "y"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	if rec.Template != "override" {
+		t.Errorf("rec.Template = %q, want override", rec.Template)
+	}
+	if rec.CanonicalPath != srcRepo {
+		t.Errorf("rec.CanonicalPath = %q, want %q (source repo, not override template's workspace)", rec.CanonicalPath, srcRepo)
+	}
+	// Worktree placement is derived from the SOURCE template's base
+	// workspace, not the override template's differently-pinned workspace.
+	wantWorkspace := filepath.Join(base, ".worktrees", "chronicle", "b")
+	if rec.Workspace != wantWorkspace {
+		t.Errorf("rec.Workspace = %q, want %q", rec.Workspace, wantWorkspace)
+	}
+	if _, ok := rec.Env["SRC_ONLY"]; ok {
+		t.Errorf("rec.Env should not inherit the source agent's env on override, got %+v", rec.Env)
+	}
+	if rec.Env["CLI_ENV"] != "y" {
+		t.Errorf("rec.Env[CLI_ENV] = %q, want y", rec.Env["CLI_ENV"])
+	}
+	if rec.Env["TMPL_ENV"] != "x" {
+		t.Errorf("rec.Env[TMPL_ENV] = %q, want x (from override template)", rec.Env["TMPL_ENV"])
+	}
+}
+
+func TestSpawnFromAgent_OverrideTemplateNotFound(t *testing.T) {
+	mgr, home, _ := newFromAgentTemplateOverrideTestManager(t)
+
+	srcRepo := filepath.Join(t.TempDir(), "chronicle-repo")
+	initRemotelessRepo(t, srcRepo)
+
+	if err := agentstore.Save(home, agentstore.Record{
+		Name:      "chronicle",
+		Template:  "claude",
+		Workspace: srcRepo,
+	}); err != nil {
+		t.Fatalf("agentstore.Save: %v", err)
+	}
+
+	_, err := mgr.Spawn(context.Background(), SpawnSpec{FromAgent: "chronicle", Branch: "b", Template: "ghost"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "ghost") {
+		t.Errorf("error %q should mention the missing template name", err.Error())
 	}
 }

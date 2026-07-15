@@ -16,6 +16,7 @@ func newAgentWorktreeCmd() *cobra.Command {
 		host     string
 		name     string
 		base     string
+		template string
 		prompt   string
 		envPairs []string
 		asJSON   bool
@@ -59,6 +60,9 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 				if base != "" {
 					extra = append(extra, "--base", base)
 				}
+				if template != "" {
+					extra = append(extra, "--template", template)
+				}
 				if prompt != "" {
 					extra = append(extra, "--prompt", prompt)
 				}
@@ -72,6 +76,7 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 				FromAgent: sourceAgent,
 				Branch:    branch,
 				Base:      base,
+				Template:  template,
 				Name:      name,
 				Prompt:    prompt,
 				Env:       env,
@@ -93,6 +98,7 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 	cmd.Flags().BoolVar(&asJSON, "json", false, "output the spawned agent record as JSON")
 	cmd.Flags().StringVar(&name, "name", "", "override the derived agent name")
 	cmd.Flags().StringVar(&base, "base", "", "base ref for new branches (defaults to origin HEAD, or HEAD for remoteless repos)")
+	cmd.Flags().StringVar(&template, "template", "", "override the template that builds the new agent (source repo is still used; source env is not inherited)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "opening prompt delivered as the agent's first interactive turn")
 	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "extra env var as KEY=VALUE (repeatable); overrides inherited env on collision")
 	return cmd

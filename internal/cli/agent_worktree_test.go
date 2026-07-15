@@ -82,7 +82,7 @@ func TestAgentWorktreeLocalDispatchSendsRequest(t *testing.T) {
 	})
 
 	root := newRootCmd()
-	root.SetArgs([]string{"--config", path, "agent", "worktree", "chronicle", "a11y", "--base", "main", "--env", "K=V"})
+	root.SetArgs([]string{"--config", path, "agent", "worktree", "chronicle", "a11y", "--base", "main", "--template", "foo", "--env", "K=V"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -99,6 +99,9 @@ func TestAgentWorktreeLocalDispatchSendsRequest(t *testing.T) {
 	}
 	if req.Base != "main" {
 		t.Errorf("Base = %q, want main", req.Base)
+	}
+	if req.Template != "foo" {
+		t.Errorf("Template = %q, want foo", req.Template)
 	}
 	if req.Env["K"] != "V" {
 		t.Errorf("Env[K] = %q, want V", req.Env["K"])
@@ -150,7 +153,7 @@ func TestAgentWorktreeRemoteDispatchForwardsArgs(t *testing.T) {
 	withStubStdio(t)
 
 	root := newRootCmd()
-	root.SetArgs([]string{"--config", path, "agent", "worktree", "chronicle", "a11y", "--base", "main", "--env", "K=V"})
+	root.SetArgs([]string{"--config", path, "agent", "worktree", "chronicle", "a11y", "--base", "main", "--template", "foo", "--env", "K=V"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -158,7 +161,7 @@ func TestAgentWorktreeRemoteDispatchForwardsArgs(t *testing.T) {
 		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
 	}
 	joined := strings.Join(stub.calls[0], " ")
-	for _, want := range []string{"agent", "worktree", "chronicle", "a11y", "--base", "main", "--env", "K=V"} {
+	for _, want := range []string{"agent", "worktree", "chronicle", "a11y", "--base", "main", "--template", "foo", "--env", "K=V"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ssh call missing %q: %s", want, joined)
 		}
