@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,17 +33,20 @@ func TestSortAgentsByName(t *testing.T) {
 	}
 }
 
-func TestBuildRowsGroupsHostsAndErrorRows(t *testing.T) {
+func TestBuildRowsIncludesAgentsAndErrorRows(t *testing.T) {
 	byHost := map[string][]Agent{
 		LocalHost: {{Name: "alpha", Template: "writer", Host: LocalHost, Status: "running"}},
 		"hestia":  {{Name: "rocket", Host: "hestia", Status: "suspended"}},
 	}
 	byHostErr := map[string]error{"down": errBoom}
-	items := buildRows(byHost, byHostErr, map[string]struct{}{}, 0)
+	header, items := buildRows(byHost, byHostErr, map[string]struct{}{}, 0)
 
 	// 2 agent rows + 1 error row.
 	if len(items) != 3 {
 		t.Fatalf("want 3 rows, got %d", len(items))
+	}
+	if !contains(header, "NAME") || !contains(header, "TEMPLATE") || !contains(header, "HOST") || !contains(header, "UPTIME") {
+		t.Errorf("header = %q, want all column titles present", header)
 	}
 
 	var sawError, sawAlpha bool
@@ -50,14 +54,17 @@ func TestBuildRowsGroupsHostsAndErrorRows(t *testing.T) {
 		r := it.(row)
 		if r.ag == nil && r.host == "down" {
 			sawError = true
-			if !contains(r.desc, "boom") {
-				t.Errorf("error row desc = %q, want it to mention the error", r.desc)
+			if !contains(r.line, "error:") || !contains(r.line, "boom") {
+				t.Errorf("error row line = %q, want it to mention the error", r.line)
 			}
 		}
 		if r.ag != nil && r.ag.Name == "alpha" {
 			sawAlpha = true
 			if r.filter != "alpha writer local" {
 				t.Errorf("alpha filter = %q", r.filter)
+			}
+			if !contains(r.line, "alpha") || !contains(r.line, "writer") || !contains(r.line, "local") {
+				t.Errorf("alpha row line = %q, want name/template/host present", r.line)
 			}
 		}
 	}
@@ -66,15 +73,33 @@ func TestBuildRowsGroupsHostsAndErrorRows(t *testing.T) {
 	}
 }
 
+func TestBuildRowsErrorRowIsSingleLine(t *testing.T) {
+	byHostErr := map[string]error{"hestia": errBoom}
+	_, items := buildRows(nil, byHostErr, map[string]struct{}{}, 0)
+	if len(items) != 1 {
+		t.Fatalf("want 1 error row, got %d", len(items))
+	}
+	r := items[0].(row)
+	if r.ag != nil {
+		t.Fatalf("error row must have nil agent")
+	}
+	if strings.Count(r.line, "\n") != 0 {
+		t.Errorf("error row line = %q, want a single line", r.line)
+	}
+	if !contains(r.line, "error:") {
+		t.Errorf("error row line = %q, want it to contain \"error:\"", r.line)
+	}
+}
+
 func TestBuildRowsSpinnerForPending(t *testing.T) {
 	byHost := map[string][]Agent{
 		LocalHost: {{Name: "alpha", Host: LocalHost, Status: "running"}},
 	}
 	pending := map[string]struct{}{rowKey(LocalHost, "alpha"): {}}
-	items := buildRows(byHost, nil, pending, 2)
+	_, items := buildRows(byHost, nil, pending, 2)
 	r := items[0].(row)
-	if !hasPrefix(r.title, spinnerFrames[2]) {
-		t.Errorf("pending row title = %q, want spinner-prefixed", r.title)
+	if !hasPrefix(r.line, spinnerFrames[2]) {
+		t.Errorf("pending row line = %q, want spinner-prefixed", r.line)
 	}
 }
 
@@ -96,6 +121,69 @@ func TestHumanDuration(t *testing.T) {
 	}
 	if got := humanDuration(5 * time.Minute); got != "5m" {
 		t.Errorf("humanDuration = %q, want 5m", got)
+	}
+}
+
+func TestColumnWidthsUsesHeaderFloorAndContentMax(t *testing.T) {
+	// Content shorter than the header text — widths should fall back to the
+	// header's own length rather than shrinking below it.
+	byHost := map[string][]Agent{
+		LocalHost: {{Name: "a", Template: "b", Host: LocalHost}},
+	}
+	nameW, templateW, _ := columnWidths([]string{LocalHost}, byHost)
+	if nameW != len(headerName) {
+		t.Errorf("nameW = %d, want header floor %d", nameW, len(headerName))
+	}
+	if templateW != len(headerTemplate) {
+		t.Errorf("templateW = %d, want header floor %d", templateW, len(headerTemplate))
+	}
+
+	// Content longer than the header text — widths should grow to fit it.
+	byHost2 := map[string][]Agent{
+		LocalHost: {{Name: "alphabet-soup", Template: "writer", Host: LocalHost}},
+		"hestia":  {{Name: "a", Template: "b", Host: "hestia"}},
+	}
+	nameW2, templateW2, hostW2 := columnWidths([]string{LocalHost, "hestia"}, byHost2)
+	if nameW2 != len("alphabet-soup") {
+		t.Errorf("nameW2 = %d, want %d (longest name)", nameW2, len("alphabet-soup"))
+	}
+	if templateW2 != len(headerTemplate) {
+		t.Errorf("templateW2 = %d, want header floor %d (longest template %q is shorter)", templateW2, len(headerTemplate), "writer")
+	}
+	if hostW2 != len("hestia") {
+		t.Errorf("hostW2 = %d, want %d (longest host name)", hostW2, len("hestia"))
+	}
+}
+
+func TestColumnWidthsCapsLongValues(t *testing.T) {
+	longName := strings.Repeat("x", maxNameColumn+10)
+	longTemplate := strings.Repeat("y", maxTemplateColumn+10)
+	byHost := map[string][]Agent{
+		LocalHost: {{Name: longName, Template: longTemplate, Host: LocalHost}},
+	}
+	nameW, templateW, _ := columnWidths([]string{LocalHost}, byHost)
+	if nameW != maxNameColumn {
+		t.Errorf("nameW = %d, want capped at %d", nameW, maxNameColumn)
+	}
+	if templateW != maxTemplateColumn {
+		t.Errorf("templateW = %d, want capped at %d", templateW, maxTemplateColumn)
+	}
+}
+
+func TestCellTruncatesWithEllipsis(t *testing.T) {
+	got := cell("this-is-a-very-long-agent-name", 10)
+	if n := len([]rune(got)); n != 10 {
+		t.Fatalf("cell() = %q (rune len %d), want rune len 10", got, n)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("cell() = %q, want truncated value to end with an ellipsis", got)
+	}
+}
+
+func TestCellPadsShortValues(t *testing.T) {
+	got := cell("hi", 5)
+	if got != "hi   " {
+		t.Errorf("cell() = %q, want %q", got, "hi   ")
 	}
 }
 

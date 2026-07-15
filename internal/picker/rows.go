@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/list"
 )
@@ -25,18 +27,38 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 // re-normalizes to a leo- slug; this only guards against empty/whitespace input.
 var nameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
 
+// Column caps: the NAME/TEMPLATE columns are truncated past this width so one
+// long agent name or template can't blow out the whole table's alignment.
+const (
+	maxNameColumn     = 28
+	maxTemplateColumn = 28
+)
+
+// Column headers, also used as the floor for their column widths.
+const (
+	headerName     = "NAME"
+	headerTemplate = "TEMPLATE"
+	headerHost     = "HOST"
+	headerUptime   = "UPTIME"
+)
+
+// prefixWidth is the width reserved for the selection cursor / glyph column
+// ("❯ " or "  ", then a one-rune status glyph and a following space) that
+// every row and the header must both leave room for so columns line up.
+const prefixWidth = 4
+
 // row is one list item. ag is nil for synthetic error rows (a host whose List
-// failed); those cannot be acted on or attached.
+// failed); those cannot be acted on or attached. line is the fully-rendered,
+// pre-padded table row (minus the selection cursor, which the delegate adds).
 type row struct {
-	title  string
-	desc   string
+	line   string
 	filter string
 	host   string
 	ag     *Agent
 }
 
-func (r row) Title() string       { return r.title }
-func (r row) Description() string { return r.desc }
+// FilterValue satisfies list.Item — the only method the list actually needs
+// from a row.
 func (r row) FilterValue() string { return r.filter }
 
 // glyph maps a status string to its display glyph. Unknown statuses render as
@@ -65,18 +87,67 @@ func sortAgents(a []Agent) {
 	sort.Slice(a, func(i, j int) bool { return a[i].Name < a[j].Name })
 }
 
-// buildRows flattens the per-host agent map into list items, one host group at
-// a time (hosts sorted, agents sorted within each host). A host with a fetch
-// error contributes a single non-selectable error row. Rows whose action is
-// in flight (present in pending) render a spinner in place of the glyph.
-func buildRows(byHost map[string][]Agent, byHostErr map[string]error, pending map[string]struct{}, frame int) []list.Item {
+// columnWidths computes the NAME/TEMPLATE/HOST column widths from the
+// current agent data: the max of each column's header and its content,
+// capped for NAME and TEMPLATE so one long value can't blow out alignment.
+// Widths count runes, matching cell's rune-based truncation and padding.
+func columnWidths(hosts []string, byHost map[string][]Agent) (nameW, templateW, hostW int) {
+	nameW = len(headerName)
+	templateW = len(headerTemplate)
+	hostW = len(headerHost)
+	for _, h := range hosts {
+		if w := utf8.RuneCountInString(h); w > hostW {
+			hostW = w
+		}
+		for _, a := range byHost[h] {
+			if w := utf8.RuneCountInString(a.Name); w > nameW {
+				nameW = w
+			}
+			if w := utf8.RuneCountInString(dash(a.Template)); w > templateW {
+				templateW = w
+			}
+		}
+	}
+	if nameW > maxNameColumn {
+		nameW = maxNameColumn
+	}
+	if templateW > maxTemplateColumn {
+		templateW = maxTemplateColumn
+	}
+	return nameW, templateW, hostW
+}
+
+// cell truncates s to width runes (appending an ellipsis when it doesn't fit)
+// and right-pads it with trailing spaces so every row's columns line up.
+// Operates on runes rather than bytes so multi-byte characters — including
+// the ellipsis itself — count as a single display column.
+func cell(s string, width int) string {
+	r := []rune(s)
+	if len(r) > width {
+		if width <= 1 {
+			return string(r[:width])
+		}
+		r = append(r[:width-1], '…')
+	}
+	return fmt.Sprintf("%-*s", width, string(r))
+}
+
+// buildRows flattens the per-host agent map into list items — one row per
+// agent, plus a single-line row for any host whose List call failed — and
+// the column-aligned header line to render above them. Hosts are sorted with
+// LocalHost first; agents are sorted by name within each host. Rows whose
+// action is in flight (present in pending) render a spinner in place of the
+// status glyph.
+func buildRows(byHost map[string][]Agent, byHostErr map[string]error, pending map[string]struct{}, frame int) (string, []list.Item) {
 	hosts := sortedHosts(byHost, byHostErr)
+	nameW, templateW, hostW := columnWidths(hosts, byHost)
+	header := buildHeader(nameW, templateW, hostW)
+
 	var items []list.Item
 	for _, h := range hosts {
 		if err := byHostErr[h]; err != nil {
 			items = append(items, row{
-				title:  glyphStopped + "  " + h,
-				desc:   "error: " + err.Error(),
+				line:   glyphStopped + " " + cell(h, nameW) + " error: " + err.Error(),
 				filter: h,
 				host:   h,
 			})
@@ -91,16 +162,24 @@ func buildRows(byHost map[string][]Agent, byHostErr map[string]error, pending ma
 				g = spinnerFrames[frame%len(spinnerFrames)]
 			}
 			ac := a // stable pointer for the selected-row result
+			line := g + " " + cell(a.Name, nameW) + " " + cell(dash(a.Template), templateW) + " " + cell(h, hostW) + " " + ageLabel(a)
 			items = append(items, row{
-				title:  g + "  " + a.Name,
-				desc:   fmt.Sprintf("%s · %s · %s", dash(a.Template), h, ageLabel(a)),
+				line:   line,
 				filter: a.Name + " " + a.Template + " " + h,
 				host:   h,
 				ag:     &ac,
 			})
 		}
 	}
-	return items
+	return header, items
+}
+
+// buildHeader renders the column-title line, indented to align under the
+// data rows' NAME column (past the cursor/glyph prefix both selected and
+// unselected rows reserve).
+func buildHeader(nameW, templateW, hostW int) string {
+	pad := strings.Repeat(" ", prefixWidth)
+	return pad + cell(headerName, nameW) + " " + cell(headerTemplate, templateW) + " " + cell(headerHost, hostW) + " " + headerUptime
 }
 
 // sortedHosts returns the union of host keys from both maps, sorted, with

@@ -22,6 +22,9 @@ const (
 	// footerLines is the vertical space reserved below the list for the status
 	// bar and help footer.
 	footerLines = 3
+	// headerLines is the vertical space reserved above the list for the
+	// column-header line (see rows.go's buildHeader).
+	headerLines = 1
 )
 
 // actionKind identifies which Backend method a dispatch invokes.
@@ -70,6 +73,7 @@ type model struct {
 	backends map[string]Backend
 
 	list   list.Model
+	header string
 	help   help.Model
 	keys   keyMap
 	styles styles
@@ -90,7 +94,7 @@ type model struct {
 }
 
 func newModel(ctx context.Context, backends map[string]Backend) model {
-	delegate := list.NewDefaultDelegate()
+	delegate := newTableDelegate()
 	l := list.New(nil, delegate, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
@@ -125,7 +129,7 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.list.SetSize(msg.Width, msg.Height-footerLines)
+		m.list.SetSize(msg.Width, msg.Height-footerLines-headerLines)
 		return m, nil
 
 	case rowsMsg:
@@ -366,13 +370,18 @@ func (m model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// rebuild refreshes the list items from the current per-host state.
+// rebuild refreshes the list items and column header from the current
+// per-host state.
 func (m *model) rebuild() tea.Cmd {
-	return m.list.SetItems(buildRows(m.byHost, m.byHostErr, m.pending, m.frame))
+	header, items := buildRows(m.byHost, m.byHostErr, m.pending, m.frame)
+	m.header = header
+	return m.list.SetItems(items)
 }
 
 func (m model) View() string {
 	var b strings.Builder
+	b.WriteString(m.styles.header.Render(m.header))
+	b.WriteString("\n")
 	b.WriteString(m.list.View())
 	b.WriteString("\n")
 	switch {

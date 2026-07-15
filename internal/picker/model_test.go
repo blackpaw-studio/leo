@@ -257,7 +257,7 @@ func TestHostFetchFailureRendersErrorRow(t *testing.T) {
 	if r.ag != nil {
 		t.Fatalf("error row must have nil agent")
 	}
-	if !contains(r.desc, "connection refused") {
-		t.Fatalf("error row desc = %q", r.desc)
+	if !contains(r.line, "error:") || !contains(r.line, "connection refused") {
+		t.Fatalf("error row line = %q", r.line)
 	}
 }
