@@ -107,6 +107,7 @@ func (d *Dispatcher) Dispatch(cfg *config.Config, req Request) (Ticket, error) {
 		Kind:      harness.KindTask,
 		Name:      "consult-" + id,
 		Model:     model,
+		MaxTurns:  cfg.TemplateMaxTurns(tmpl),
 		Workspace: req.Workspace,
 		Prompt:    preamble + "\n\n" + req.Prompt,
 		Options:   decoded,
