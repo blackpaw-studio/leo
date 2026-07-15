@@ -79,7 +79,7 @@ leo agent worktree chronicle a11y                                          # chr
 leo agent worktree chronicle hotfix --base v1.2.0 --prompt "fix the crash"
 ```
 
-This works for any agent whose workspace is a git repo, no `owner/repo` needed — the source agent's template and env are inherited, and its workspace (or canonical repo, if the source is itself a worktree agent — pass `--base <its-branch>` to fork from that branch) becomes the new agent's git canonical. Remoteless repos skip the fetch step and branch off `HEAD` instead of origin's default branch. Naming and cleanup match ordinary worktree agents: `<agent>-<branch-slug>`, and `leo agent stop <name> --prune` tears it down. See the [`leo agent worktree` reference](../cli/agent.md#leo-agent-worktree-agent-branch) for the full flag set.
+This works for any agent whose workspace is a git repo, no `owner/repo` needed — the source agent's template and env are inherited by default, and its workspace (or canonical repo, if the source is itself a worktree agent — pass `--base <its-branch>` to fork from that branch) becomes the new agent's git canonical. Pass `--template <name>` to run the same source repo under a different template — the git canonical stays tied to the source agent, but the override template must already exist in config and none of the source agent's env carries over (only the override template's own env plus `--env`). Remoteless repos skip the fetch step and branch off `HEAD` instead of origin's default branch. Naming and cleanup match ordinary worktree agents: `<agent>-<branch-slug>`, and `leo agent stop <name> --prune` tears it down. See the [`leo agent worktree` reference](../cli/agent.md#leo-agent-worktree-agent-branch) for the full flag set.
 
 ### From the JSON API
 

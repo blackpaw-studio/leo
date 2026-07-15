@@ -16,6 +16,7 @@ func newAgentWorktreeCmd() *cobra.Command {
 		host     string
 		name     string
 		base     string
+		template string
 		prompt   string
 		envPairs []string
 		asJSON   bool
@@ -24,10 +25,15 @@ func newAgentWorktreeCmd() *cobra.Command {
 		Use:   "worktree <agent> <branch>",
 		Short: "Spawn a worktree agent branched off an existing agent",
 		Long: `Spawn a new agent in a dedicated git worktree derived from an existing
-agent: the source agent's template and env are inherited, and its workspace
-serves as the git canonical. Works for any agent whose workspace is a git
-repository — no owner/repo required. Branching off a worktree agent uses its
-canonical repo; pass --base <its-branch> to fork from that branch.
+agent: the source agent's template and env are inherited by default, and its
+workspace serves as the git canonical. Works for any agent whose workspace is
+a git repository — no owner/repo required. Branching off a worktree agent
+uses its canonical repo; pass --base <its-branch> to fork from that branch.
+
+Pass --template <name> to build the new agent from a different template
+while keeping the same source repo; the override template must exist in
+config, and with it set none of the source agent's env is inherited — only
+the override template's own env plus --env.
 
 The new agent is named <agent>-<branch-slug> and its worktree lives under
 <workspace>/.worktrees/<agent>/<branch-slug>. Clean up with
@@ -59,6 +65,9 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 				if base != "" {
 					extra = append(extra, "--base", base)
 				}
+				if template != "" {
+					extra = append(extra, "--template", template)
+				}
 				if prompt != "" {
 					extra = append(extra, "--prompt", prompt)
 				}
@@ -72,6 +81,7 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 				FromAgent: sourceAgent,
 				Branch:    branch,
 				Base:      base,
+				Template:  template,
 				Name:      name,
 				Prompt:    prompt,
 				Env:       env,
@@ -93,6 +103,7 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
 	cmd.Flags().BoolVar(&asJSON, "json", false, "output the spawned agent record as JSON")
 	cmd.Flags().StringVar(&name, "name", "", "override the derived agent name")
 	cmd.Flags().StringVar(&base, "base", "", "base ref for new branches (defaults to origin HEAD, or HEAD for remoteless repos)")
+	cmd.Flags().StringVar(&template, "template", "", "override the template that builds the new agent (source repo is still used; source env is not inherited)")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "opening prompt delivered as the agent's first interactive turn")
 	cmd.Flags().StringArrayVar(&envPairs, "env", nil, "extra env var as KEY=VALUE (repeatable); overrides inherited env on collision")
 	return cmd

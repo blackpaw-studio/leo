@@ -141,7 +141,7 @@ leo agent worktree chronicle a11y
 leo agent worktree chronicle hotfix --base v1.2.0 --prompt "fix the crash"
 ```
 
-- **Template and env are inherited** from the source agent's record; the source's workspace (or its canonical repo, if the source is itself a worktree agent) becomes the new agent's git canonical.
+- **Template and env are inherited** from the source agent's record by default; the source's workspace (or its canonical repo, if the source is itself a worktree agent) becomes the new agent's git canonical.
 - **Naming:** `<agent>-<branch-slug>`. The worktree lives at `<workspace-base>/.worktrees/<agent>/<branch-slug>/`.
 - **Branching off a worktree agent** uses that agent's canonical repo, not its own checkout — pass `--base <its-branch>` to fork from the branch it's on rather than the canonical's default.
 - **Remoteless repos** (no `origin`): the fetch step is skipped and new branches are cut from `HEAD` instead of origin's default branch.
@@ -151,6 +151,7 @@ Flags:
 
 - `--name` — override the derived agent name
 - `--base` — base ref for new branches (defaults to origin's default branch, or `HEAD` for remoteless repos)
+- `--template` — build the new agent from a different template than the source agent's, keeping the same source repo as the git canonical; the override template must exist in config. Model, harness, and args re-resolve from it. **When set, none of the source agent's env is inherited** — only the override template's own env plus `--env`.
 - `--prompt` — opening prompt delivered as the agent's first interactive turn
 - `--env KEY=VALUE` — extra env var (repeatable); overrides an inherited value on collision
 - `--json` — emit the spawned `AgentRecord` as JSON
