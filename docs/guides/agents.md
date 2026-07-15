@@ -70,6 +70,17 @@ leo agent stop feat-cache --prune --delete-branch   # stop and clean up in one s
 
 Worktree agents run in parallel on the same repo without fighting over `.git/HEAD` — every branch gets its own checkout under `<baseWorkspace>/.worktrees/<repo-short>/<branch-slug>/`. The agent name includes the branch slug, and `leo agent list` shows a `BRANCH` column for worktree agents. See the [`leo agent` reference](../cli/agent.md#worktree-spawns) for the full flag set.
 
+#### Branching From an Existing Agent
+
+`--worktree` requires `--repo owner/repo`. If you'd rather branch off an *agent* you already have running — regardless of how it was spawned — use the shorthand form instead:
+
+```bash
+leo agent worktree chronicle a11y                                          # chronicle-a11y, branched off chronicle's workspace
+leo agent worktree chronicle hotfix --base v1.2.0 --prompt "fix the crash"
+```
+
+This works for any agent whose workspace is a git repo, no `owner/repo` needed — the source agent's template and env are inherited, and its workspace (or canonical repo, if the source is itself a worktree agent — pass `--base <its-branch>` to fork from that branch) becomes the new agent's git canonical. Remoteless repos skip the fetch step and branch off `HEAD` instead of origin's default branch. Naming and cleanup match ordinary worktree agents: `<agent>-<branch-slug>`, and `leo agent stop <name> --prune` tears it down. See the [`leo agent worktree` reference](../cli/agent.md#leo-agent-worktree-agent-branch) for the full flag set.
+
 ### From the JSON API
 
 The daemon exposes both a Unix-socket API (used by the CLI) and an HTTP API on the web port (used by the channel plugin and web UI):
