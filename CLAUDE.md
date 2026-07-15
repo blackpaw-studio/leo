@@ -1,6 +1,6 @@
-# CLAUDE.md
+# Repository agent guidance
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides shared guidance to coding agents working in this repository. `AGENTS.md` is a symlink to this file so Claude Code and Codex use one source of truth.
 
 ## What is Leo
 
