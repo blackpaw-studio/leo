@@ -118,6 +118,24 @@ func mergeEnv(base, overlay map[string]string) map[string]string {
 	return merged
 }
 
+// pruneEnv returns a copy of env with any key also defined in fresh removed.
+// Used to keep a stale inherited-env layer (a worktree/from-agent spawn's
+// source-agent env, or the same layer replayed at restart) from shadowing a
+// key the harness's own env now defines — same semantics whether "fresh" is
+// the harness env computed at spawn time or recomputed at restart time.
+func pruneEnv(env, fresh map[string]string) map[string]string {
+	if len(env) == 0 || len(fresh) == 0 {
+		return env
+	}
+	pruned := make(map[string]string, len(env))
+	for k, v := range env {
+		if _, shadowed := fresh[k]; !shadowed {
+			pruned[k] = v
+		}
+	}
+	return pruned
+}
+
 // Record is the public view of an agent, merging persisted metadata with live state.
 // Branch + CanonicalPath are populated only for worktree agents.
 type Record struct {
@@ -331,6 +349,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		ClaudeArgs:       claudeArgs,
 		SessionID:        storedSessionID,
 		Env:              env,
+		SpawnEnv:         spec.Env,
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
@@ -569,16 +588,15 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		openingPrompt = spec.Prompt
 	}
 	webPort := strconv.Itoa(cfg.WebPort())
-	inherited := p.inheritEnv
-	if len(inherited) > 0 && len(harnessEnv) > 0 {
-		pruned := make(map[string]string, len(inherited))
-		for k, v := range inherited {
-			if _, fresh := harnessEnv[k]; !fresh {
-				pruned[k] = v
-			}
-		}
-		inherited = pruned
-	}
+	// p.inheritEnv is stored on the record RAW (unpruned) as InheritedEnv, so
+	// a config-aware restart can re-prune it against the harness env computed
+	// at restart time instead of replaying this spawn-time snapshot — a
+	// harness env key that didn't exist yet at spawn time must still be able
+	// to win on restart. spec.Env is stored separately as SpawnEnv: explicit
+	// --env overrides always win, including over harness env, matching
+	// spawnShared's layering (mergeEnv(harnessEnv, tmpl.Env) as the base,
+	// caller env as the top overlay).
+	inherited := pruneEnv(p.inheritEnv, harnessEnv)
 	env := mergeEnv(mergeEnv(mergeEnv(harnessEnv, tmpl.Env), inherited), spec.Env)
 
 	// rollbackWorktree removes the worktree created above so disk state stays
@@ -615,6 +633,8 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		ClaudeArgs:       claudeArgs,
 		SessionID:        storedSessionID,
 		Env:              env,
+		SpawnEnv:         spec.Env,
+		InheritedEnv:     p.inheritEnv,
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
@@ -999,15 +1019,25 @@ func (m *Manager) Reset(name string) error {
 
 // Restart bounces a currently-running agent's tmux session while preserving
 // its conversation: it stops the live process, then respawns with --resume
-// (the same jsonl-preferring resume logic as Resume), leaving Suspended,
-// SessionID-clearing, and NoResume untouched — unlike Suspend/Reset, Restart
-// never marks the record suspended and never starts a fresh session. Errors
-// when name has no live process (suspended/stopped/unknown agents are not
-// restartable — callers driving --all should treat that as a skip, not a
-// failure). If the respawn fails after the stop succeeds, the record is left
-// exactly as before (still pointing at the same SessionID/ClaudeArgs) so the
-// agent is not left flagged as suspended; re-running Restart retries the
-// respawn since the agent is no longer live.
+// (the same jsonl-preferring resume logic as Resume), leaving Suspended and
+// NoResume untouched — unlike Suspend/Reset, Restart never marks the record
+// suspended and never starts a fresh session. Errors when name has no live
+// process (suspended/stopped/unknown agents are not restartable — callers
+// driving --all should treat that as a skip, not a failure). If the respawn
+// fails after the stop succeeds, the record is left exactly as before (still
+// pointing at the same SessionID/ClaudeArgs) so the agent is not left flagged
+// as suspended; re-running Restart retries the respawn since the agent is no
+// longer live.
+//
+// Restart is also the one deliberate "apply current config" verb: for an
+// agent spawned from a template that still exists in the current config,
+// with its effective harness unchanged, it rebuilds ClaudeArgs/Env from
+// today's defaults+template cascade (see resolveRestartArgs) before
+// resuming — so a harness_options/model change made after the agent started
+// takes effect on restart. Ad-hoc agents (no Template), agents whose
+// template was deleted, and agents whose effective harness changed all fall
+// back to the stored args/env unchanged, since re-resolving those safely
+// isn't possible.
 func (m *Manager) Restart(name string) error {
 	if _, ok := m.sup.EphemeralAgents()[name]; !ok {
 		return fmt.Errorf("agent %q is not running", name)
@@ -1039,16 +1069,17 @@ func (m *Manager) Restart(name string) error {
 			resumeID = latestID
 		}
 	}
-	args := rec.ClaudeArgs
+
+	args, env := resolveRestartArgs(cfg, rec, m.webToken)
 	if isClaude {
-		args = ResumeArgs(rec.ClaudeArgs, resumeID)
+		args = ResumeArgs(args, resumeID)
 	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       rec.Name,
 		ClaudeArgs: args,
 		WorkDir:    rec.Workspace,
-		Env:        rec.Env,
+		Env:        env,
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
 		Harness:    rec.Harness,
@@ -1056,11 +1087,78 @@ func (m *Manager) Restart(name string) error {
 		return fmt.Errorf("respawning %q after restart: %w (re-run 'leo agent restart %s' to retry)", name, err, name)
 	}
 
+	rec.ClaudeArgs = args
+	rec.Env = env
 	rec.SessionID = resumeID
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		log.Printf("agent %q restarted but agentstore.Save failed: %v — stored SessionID may lag until next save", name, err)
 	}
 	return nil
+}
+
+// resolveRestartArgs decides whether Restart can safely re-resolve rec's
+// ClaudeArgs/Env from cfg's current template+defaults cascade, or must fall
+// back to what's already stored. It returns args WITHOUT any --resume/
+// --session-id mutation — Restart applies that afterward, same as a fresh
+// resolveRestartArgs-less restart did.
+//
+// Re-resolution requires all of:
+//   - rec.Template is set (ad-hoc/from-agent spawns have no template to
+//     re-resolve against)
+//   - that template still exists in cfg (a deleted template can't be
+//     re-resolved; keep the agent on its last-known-good args)
+//   - the effective harness is unchanged (swapping harness under a resumed
+//     conversation is not supported — the resume mechanic, MCP bridge, and
+//     env shape all differ per harness)
+//
+// When it re-resolves, env is rebuilt layer by layer exactly like a fresh
+// spawn (see spawnShared/spawnWorktreeCore): the harness env and template env
+// as the base, then rec.InheritedEnv re-pruned against the CURRENT harness
+// env (not the stale spawn-time pruning — a harness env key that didn't
+// exist yet at spawn time must still be able to win here), then rec.SpawnEnv
+// (the caller's explicit --env overrides) always winning on top. Legacy
+// records (both SpawnEnv and InheritedEnv nil, Env non-nil — written before
+// either field existed) still get re-resolved args, but keep their stored Env
+// unchanged: leo has no record of which layer produced which key, so
+// reconstructing it here could silently drop caller-supplied env instead of
+// just leaving it as-is.
+func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken string) (args []string, env map[string]string) {
+	fallback := func() ([]string, map[string]string) { return rec.ClaudeArgs, rec.Env }
+
+	if rec.Template == "" {
+		return fallback()
+	}
+	tmpl, ok := cfg.Templates[rec.Template]
+	if !ok {
+		return fallback()
+	}
+	normalizeHarness := func(h string) string {
+		if h == "" {
+			return "claude"
+		}
+		return h
+	}
+	if normalizeHarness(cfg.TemplateHarness(tmpl)) != normalizeHarness(rec.Harness) {
+		return fallback()
+	}
+
+	// Empty prompt: restart resumes an existing conversation, it never
+	// re-sends an opening prompt. No --session-id is appended here (that's
+	// first-spawn-only) — Restart's caller applies --resume itself.
+	newArgs, newHarnessEnv := BuildTemplateArgs(cfg, tmpl, rec.Name, rec.Workspace, "", webToken)
+	if newArgs == nil {
+		// BuildTemplateArgs already logged the failure; keep the agent alive
+		// on its last-known-good args rather than respawning it broken.
+		return fallback()
+	}
+
+	newEnv := rec.Env
+	if rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.Env == nil {
+		inherited := pruneEnv(rec.InheritedEnv, newHarnessEnv)
+		newEnv = mergeEnv(mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), inherited), rec.SpawnEnv)
+	}
+
+	return newArgs, newEnv
 }
 
 // RestartResult summarizes the outcome of a RestartAll batch: which agents

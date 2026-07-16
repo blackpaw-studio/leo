@@ -71,6 +71,9 @@ type mockAgentService struct {
 	resumeResult agent.Record
 	resumeErr    error
 
+	restartAllCalled bool
+	restartAllResult agent.RestartResult
+
 	records []agent.Record
 
 	// handles backs ResolveHandle for tests exercising non-claude message
@@ -164,6 +167,11 @@ func (m *mockAgentService) Resume(name string) (agent.Record, error) {
 		return m.resumeResult, nil
 	}
 	return agent.Record{Name: name, Status: "starting"}, nil
+}
+
+func (m *mockAgentService) RestartAll() agent.RestartResult {
+	m.restartAllCalled = true
+	return m.restartAllResult
 }
 
 func newTestServerWithAgents(t *testing.T) (*Server, string, *mockAgentService) {

@@ -975,6 +975,13 @@ agent reset', which starts a brand-new conversation, restart just bounces the
 process — use this after a config/template change that needs a fresh process
 but should keep context.
 
+For an agent spawned from a template that still exists in the current config
+with its harness unchanged, restart also re-applies today's defaults +
+template config (e.g. an updated harness_options or model) before resuming —
+not just the args it was originally spawned with. Ad-hoc agents, agents whose
+template was deleted, and agents whose effective harness changed keep their
+original args.
+
 Pass a single agent name, or --all to bounce every currently-running agent
 (suspended and stopped agents are skipped, not restarted).`,
 		Example: `  # Bounce one agent

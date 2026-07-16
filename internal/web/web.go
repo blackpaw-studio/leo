@@ -60,6 +60,10 @@ type AgentService interface {
 	Rename(query, newName string) (agent.Record, error)
 	Suspend(name string) error
 	Resume(name string) (agent.Record, error)
+	// RestartAll bounces every live agent in place (skipping suspended/
+	// stopped ones), re-applying current config for template-spawned agents.
+	// Backs POST /web/agents/restart.
+	RestartAll() agent.RestartResult
 	// ResolveHandle resolves an agent name to its harness name and the
 	// SessionHandle a SessionDriver needs to deliver a message to it.
 	// ok=false means "not an ephemeral agent" (unknown name, or no
@@ -69,20 +73,29 @@ type AgentService interface {
 
 // Server serves the Leo web UI over HTTP.
 type Server struct {
-	configPath    string
-	processes     ProcessStateProvider
-	scheduler     SchedulerProvider
-	reloader      ConfigReloader
-	agentSvc      AgentService
-	leoPath       string
-	templates     *template.Template
-	httpServer    *http.Server
-	listener      net.Listener
-	restartNeeded atomic.Bool   // set when process-affecting config changes are saved; touched from concurrent handlers
-	port          int           // port the listener is expected to bind on; used for Host/Origin checks
-	apiToken      string        // bearer token required on /api/* routes; empty disables API
-	allowedHosts  []string      // extra hosts permitted beyond loopback (e.g. LAN IPs)
-	sessions      *sessionStore // in-memory browser sessions for cookie-based auth
+	configPath string
+	processes  ProcessStateProvider
+	scheduler  SchedulerProvider
+	reloader   ConfigReloader
+	agentSvc   AgentService
+	leoPath    string
+	templates  *template.Template
+	httpServer *http.Server
+	listener   net.Listener
+	// serviceRestartNeeded is set when a Web UI config save (port/bind/
+	// enabled) changes settings that only take effect when the daemon's TCP
+	// listener is rebuilt at boot. Cleared by handleServiceRestart.
+	serviceRestartNeeded atomic.Bool
+	// agentsRestartNeeded is set when a Defaults or Template config save
+	// changes settings a *running* agent won't see until it's individually
+	// restarted (config reload already makes new spawns/task runs pick it up
+	// immediately — see applySection). Cleared by handleAgentsRestart on a
+	// restart batch with no failures.
+	agentsRestartNeeded atomic.Bool
+	port                int           // port the listener is expected to bind on; used for Host/Origin checks
+	apiToken            string        // bearer token required on /api/* routes; empty disables API
+	allowedHosts        []string      // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	sessions            *sessionStore // in-memory browser sessions for cookie-based auth
 
 	// serviceLogPath is the absolute path to the service log tailed by the
 	// Service page's log viewer. Computed by service.LogPathFor(homePath) —
@@ -250,6 +263,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Service control
 	mux.HandleFunc("POST /web/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("GET /web/service/logtail", s.handleServiceLogTail)
+
+	// Agent fleet control: bounce every running agent in place, re-applying
+	// current config for template-spawned agents (see agent.Manager.Restart).
+	mux.HandleFunc("POST /web/agents/restart", s.handleAgentsRestart)
 
 	// Agent management (web UI). handlePartialAgents (agents.html re-render
 	// after a rename) is invoked directly by handleWebAgentRename, not

@@ -1053,6 +1053,305 @@ func TestRestartAllBouncesLiveNonRunningStatuses(t *testing.T) {
 	}
 }
 
+// --- Restart config re-resolution ---
+
+// TestRestartReResolvesTemplateSpawnedAgent verifies that restarting an agent
+// spawned from a template that still exists in cfg, with its harness
+// unchanged, rebuilds ClaudeArgs from today's template+defaults cascade (so a
+// harness_options/model change made after the agent started is picked up)
+// while still passing --resume, not a fresh --session-id.
+func TestRestartReResolvesTemplateSpawnedAgent(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Model: "opus", MaxTurns: 200},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	got := sup.spawnCall.ClaudeArgs
+	if !containsPair(got, "--model", "opus") {
+		t.Fatalf("expected re-resolved args to use the current template's model, got: %v", got)
+	}
+	if !containsPair(got, "--max-turns", "200") {
+		t.Fatalf("expected re-resolved args to include the current template's max-turns, got: %v", got)
+	}
+	if !containsPair(got, "--resume", "sid") || containsFlag(got, "--session-id") {
+		t.Fatalf("restart args wrong: %v", got)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if !containsPair(recs["leo-x"].ClaudeArgs, "--model", "opus") {
+		t.Fatalf("persisted record should store the re-resolved args, got: %v", recs["leo-x"].ClaudeArgs)
+	}
+}
+
+// TestRestartAdHocAgentKeepsStoredArgs verifies an agent with no Template
+// (ad-hoc/from-agent spawn) falls back to its stored args unchanged — there
+// is nothing to re-resolve against.
+func TestRestartAdHocAgentKeepsStoredArgs(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	stored := []string{"--model", "sonnet", "--session-id", "sid"}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: stored,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	got := sup.spawnCall.ClaudeArgs
+	if !containsPair(got, "--model", "sonnet") || !containsPair(got, "--resume", "sid") {
+		t.Fatalf("expected stored args (minus session-id, plus resume), got: %v", got)
+	}
+}
+
+// TestRestartDeletedTemplateKeepsStoredArgs verifies an agent whose Template
+// no longer exists in cfg falls back to its stored args unchanged, rather
+// than erroring or silently dropping the invocation.
+func TestRestartDeletedTemplateKeepsStoredArgs(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home} // no "coding" template
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	got := sup.spawnCall.ClaudeArgs
+	if !containsPair(got, "--model", "sonnet") || !containsPair(got, "--resume", "sid") {
+		t.Fatalf("expected stored args to survive a deleted template, got: %v", got)
+	}
+}
+
+// TestRestartHarnessChangedKeepsStoredArgs verifies an agent whose effective
+// harness changed since it was spawned falls back to its stored args — the
+// resume mechanic, MCP bridge, and env shape differ per harness, so swapping
+// harness under a resumed conversation is not supported.
+func TestRestartHarnessChangedKeepsStoredArgs(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Harness: "codex"},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Harness:    "claude",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	got := sup.spawnCall.ClaudeArgs
+	if !containsPair(got, "--model", "sonnet") || !containsPair(got, "--resume", "sid") {
+		t.Fatalf("expected stored args to survive a harness change, got: %v", got)
+	}
+}
+
+// TestRestartSpawnEnvOverlayWinsAndSurvives verifies a re-resolved restart
+// rebuilds Env as mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), rec.SpawnEnv),
+// so the per-spawn overlay wins over the template's env and survives the
+// re-resolve.
+func TestRestartSpawnEnvOverlayWinsAndSurvives(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Env: map[string]string{"FOO": "template", "BAR": "template"}},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--session-id", "sid"},
+		Env:        map[string]string{"FOO": "spawn-override", "BAR": "template"},
+		SpawnEnv:   map[string]string{"FOO": "spawn-override"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	env := sup.spawnCall.Env
+	if env["FOO"] != "spawn-override" {
+		t.Fatalf("SpawnEnv overlay should win over template.Env, got FOO=%q", env["FOO"])
+	}
+	if env["BAR"] != "template" {
+		t.Fatalf("expected template.Env's BAR to survive re-resolve, got BAR=%q", env["BAR"])
+	}
+}
+
+// TestRestartFreshHarnessEnvWinsOverStaleInheritedEnv verifies that on a
+// re-resolving restart, a key the CURRENT harness env now defines beats a
+// stale value carried in rec.InheritedEnv (a worktree/from-agent spawn's
+// inherited layer) — the inherited layer is re-pruned against the fresh
+// harness env at restart time, not replayed from its spawn-time snapshot.
+// Reachable today via opencode's OPENCODE_CONFIG_CONTENT harness env.
+func TestRestartFreshHarnessEnvWinsOverStaleInheritedEnv(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Harness: "opencode"},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:      "leo-x",
+		Template:  "coding",
+		Harness:   "opencode",
+		Workspace: "/w",
+		SessionID: "sid",
+		Env:       map[string]string{"OPENCODE_CONFIG_CONTENT": "stale-inherited"},
+		InheritedEnv: map[string]string{
+			"OPENCODE_CONFIG_CONTENT": "stale-inherited",
+			"OTHER_INHERITED":         "carries-over",
+		},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	env := sup.spawnCall.Env
+	if env["OPENCODE_CONFIG_CONTENT"] == "stale-inherited" {
+		t.Fatalf("fresh harness env should win over stale InheritedEnv, got %q", env["OPENCODE_CONFIG_CONTENT"])
+	}
+	if env["OTHER_INHERITED"] != "carries-over" {
+		t.Fatalf("expected non-shadowed InheritedEnv key to survive, got: %v", env)
+	}
+}
+
+// TestRestartSpawnEnvOverlayWinsOverFreshHarnessEnv verifies that SpawnEnv
+// (an explicit --env override) beats even the freshly re-resolved harness
+// env on restart, matching spawn-time layering where the caller's env is
+// always the top overlay.
+func TestRestartSpawnEnvOverlayWinsOverFreshHarnessEnv(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Harness: "opencode"},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:      "leo-x",
+		Template:  "coding",
+		Harness:   "opencode",
+		Workspace: "/w",
+		SessionID: "sid",
+		Env:       map[string]string{"OPENCODE_CONFIG_CONTENT": "explicit-override"},
+		SpawnEnv:  map[string]string{"OPENCODE_CONFIG_CONTENT": "explicit-override"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	env := sup.spawnCall.Env
+	if env["OPENCODE_CONFIG_CONTENT"] != "explicit-override" {
+		t.Fatalf("SpawnEnv override should win over fresh harness env, got %q", env["OPENCODE_CONFIG_CONTENT"])
+	}
+}
+
+// TestRestartLegacyRecordKeepsStoredEnvButReResolvesArgs verifies a legacy
+// record (SpawnEnv nil, written before the field existed) still gets its
+// args re-resolved, but keeps its stored Env untouched — leo can't tell
+// which layer produced which key, so reconstructing it here could silently
+// drop caller-supplied env.
+func TestRestartLegacyRecordKeepsStoredEnvButReResolvesArgs(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Model: "opus"},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	legacyEnv := map[string]string{"LEGACY_KEY": "legacy-value"}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+		Env:        legacyEnv,
+		SpawnEnv:   nil, // legacy: predates SpawnEnv
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	got := sup.spawnCall.ClaudeArgs
+	if !containsPair(got, "--model", "opus") {
+		t.Fatalf("expected args to re-resolve to the current template's model, got: %v", got)
+	}
+	if sup.spawnCall.Env["LEGACY_KEY"] != "legacy-value" {
+		t.Fatalf("expected legacy Env to survive unchanged, got: %v", sup.spawnCall.Env)
+	}
+}
+
 // failingOnSpawnSupervisor wraps capturingSupervisor to fail SpawnAgent only
 // for a single named agent, letting a RestartAll test exercise per-agent
 // failure isolation without one shared spawnErr field failing everything.

@@ -32,17 +32,26 @@ func templateOwnAgent(opts map[string]any) string {
 // and the standalone /partials/status poll target (handlePartialStatus), so
 // the fragment never drifts from what a full page render would show.
 type pageData struct {
-	Page          string
-	Title         string
-	Status        statusData
-	RestartNeeded bool
-	Data          any
+	Page   string
+	Title  string
+	Status statusData
+	// ServiceRestartNeeded reflects s.serviceRestartNeeded: a Web UI config
+	// save changed settings (port/bind/enabled) that only take effect when
+	// the daemon restarts.
+	ServiceRestartNeeded bool
+	// AgentsRestartNeeded reflects s.agentsRestartNeeded: a Defaults or
+	// Template config save changed settings that new spawns/task runs
+	// already use, but a running agent won't pick up until it's
+	// individually restarted.
+	AgentsRestartNeeded bool
+	Data                any
 }
 
 // statusData is the subset of dashboard state partials/status.html renders:
-// the task count and the next scheduled task run. RestartNeeded stays a
-// top-level pageData field so status.html's existing `.RestartNeeded`
-// reference keeps working unmodified.
+// the task count and the next scheduled task run. ServiceRestartNeeded and
+// AgentsRestartNeeded stay top-level pageData fields (not part of
+// statusData) so status.html's existing `.ServiceRestartNeeded` /
+// `.AgentsRestartNeeded` references keep working unmodified.
 type statusData struct {
 	TaskCount   int
 	NextRunName string
@@ -66,10 +75,11 @@ func (s *Server) nextScheduledRun() (name string, at time.Time) {
 	return name, at
 }
 
-// fillStatus populates pd.Status and pd.RestartNeeded. It's the refactor of
-// the status portion of buildDashboardData: process/task counts and the
-// earliest next cron run, without the heavier per-process/per-task detail
-// buildDashboardData also loads for pages that need it.
+// fillStatus populates pd.Status, pd.ServiceRestartNeeded, and
+// pd.AgentsRestartNeeded. It's the refactor of the status portion of
+// buildDashboardData: process/task counts and the earliest next cron run,
+// without the heavier per-process/per-task detail buildDashboardData also
+// loads for pages that need it.
 func (s *Server) fillStatus(pd *pageData) error {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -83,7 +93,8 @@ func (s *Server) fillStatus(pd *pageData) error {
 		NextRunName: nextRunName,
 		NextRunTime: nextRunTime,
 	}
-	pd.RestartNeeded = s.restartNeeded.Load()
+	pd.ServiceRestartNeeded = s.serviceRestartNeeded.Load()
+	pd.AgentsRestartNeeded = s.agentsRestartNeeded.Load()
 	return nil
 }
 
