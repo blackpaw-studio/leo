@@ -72,6 +72,17 @@ type Record struct {
 	// before this field existed predate it and must be treated as claude
 	// everywhere it's read.
 	Harness string `json:"harness,omitempty"`
+
+	// SpawnEnv is the per-spawn env overlay the caller supplied (SpawnSpec.Env
+	// for a shared spawn; the caller layer minus the harness/template layers
+	// for a worktree spawn) — i.e. Env with the harness-env and template.Env
+	// base layers subtracted back out. Restart re-resolves ClaudeArgs/Env from
+	// current config when possible; SpawnEnv lets it rebuild Env as
+	// mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), rec.SpawnEnv) without
+	// clobbering caller-supplied overrides. Nil for records written before
+	// this field existed (legacy records keep their stored Env unchanged on
+	// restart rather than silently dropping env that can't be reconstructed).
+	SpawnEnv map[string]string `json:"spawn_env,omitempty"`
 }
 
 // FilePath returns the path to agents.json in the state directory.
