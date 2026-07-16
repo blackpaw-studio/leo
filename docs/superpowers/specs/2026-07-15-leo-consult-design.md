@@ -5,9 +5,8 @@
 
 ## One sentence
 
-Any supervised Leo agent can dispatch a one-off headless subagent on any
-template (any harness/model) for a second opinion, with the answer injected
-back into its session as a message.
+Any Leo process can synchronously run a one-off headless subagent on any
+template (any harness/model) and receive its answer as the tool result.
 
 ## Motivation
 
@@ -15,8 +14,8 @@ While working in one agent (e.g. a Claude session), Evan wants a second
 opinion from a different model — GPT via codex, qwen via LM Studio, opus —
 without leaving the conversation. A "council" (fan the same question out to
 several models and reconcile) should be possible, but is deliberately **not**
-a built feature: the caller invokes the tool N times in one turn and
-reconciles the replies itself, correlated by consult ID. Reconciliation is
+a built feature: the caller invokes the tool N times concurrently and
+reconciles the returned replies itself. Reconciliation is
 what the calling model is good at; hardcoding quorum/synthesis logic in Go
 would bake in decisions better varied per question.
 
@@ -32,36 +31,32 @@ leo_consult(template: string, prompt: string, model?: string)
   `subagent_type` (carries harness, env, harness_options), `model`
   optionally overrides the template's model, `prompt` must be
   self-contained — the consultant sees none of the caller's conversation.
-- Returns **immediately** with a consult ID:
-  `dispatched consult c-4f2a to codex (gpt-5.6-sol)`.
-- The answer arrives later as an injected turn in the caller's session,
-  clearly framed for correlation:
+- Waits for the consultant and returns the answer directly, framed with its
+  provenance:
 
   ```
-  [consult c-4f2a · codex/gpt-5.6-sol · 3m12s]
+  [consult · codex/gpt-5.6-sol]
   <answer text>
   ```
 
 ## Flow
 
-1. **Dispatch.** MCP server forwards to the daemon over the existing Unix
+1. **Call.** MCP server forwards to the daemon over the existing API:
    socket: `{from: <caller process name>, template, model?, prompt}`.
 2. **Validate (synchronous, errors returned as tool errors):**
    - template exists;
    - model override passes the resolved harness's `ValidateModel`;
    - the harness supports one-shot runs (`SupportsKind`);
-   - the caller is a supervised agent — it needs a live tmux session to
-     receive the reply. Otherwise the tool errors with a clear message.
+   - the caller workspace is resolved when it belongs to a supervised agent.
 3. **Run.** Daemon resolves the template's harness, env, and
    `harness_options` exactly as for tasks, builds a one-shot `LaunchSpec`
    with **workspace = the caller's workspace** (from the agent store, not
    the template's workspace), and execs the harness headlessly in a
-   goroutine — no tmux, no supervision, no session persistence. Output is
+   request — no tmux, no supervision, no session persistence. Output is
    parsed with the adapter's existing `ParseEvents` into a `Result`.
 4. **Reply.** On completion, failure, or timeout (default 10 minutes,
-   constant), the daemon injects the framed reply into the caller's session
-   via the persistent-task `InjectPrompt` path. Failures inject an error
-   notice — a consult is never silently dropped.
+   constant), the daemon returns the parsed result or error through HTTP and
+   MCP to the original tool call.
 
 ## Guardrails
 
@@ -88,6 +83,6 @@ leo_consult(template: string, prompt: string, model?: string)
 - Runner-style unit tests through the `execCommand` seam for each harness's
   one-shot argv.
 - MCP tool handler tests (arg validation, dispatch response shape).
-- Daemon endpoint tests: validation failures, reply injection on success,
-  error injection on failure/timeout, concurrency cap.
+- Daemon endpoint tests: validation failures, synchronous results,
+  failure/timeout propagation, concurrency cap.
 - `make e2e` before push — this adds a new argv path (PR #97 lesson).

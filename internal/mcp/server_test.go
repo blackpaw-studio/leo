@@ -391,13 +391,13 @@ func TestSendMessageRequiresMessage(t *testing.T) {
 	}
 }
 
-func TestLeoConsultDispatches(t *testing.T) {
+func TestLeoConsultReturnsResult(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]string
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		gotPath = method + " " + path
 		json.Unmarshal(body, &gotBody)
-		return 200, `{"ok":true,"data":{"id":"c-4f2a","harness":"codex","model":"gpt-5.6-sol"}}`
+		return 200, `{"ok":true,"data":{"harness":"codex","model":"gpt-5.6-sol","text":"review looks good"}}`
 	})
 	defer d.close()
 
@@ -418,7 +418,7 @@ func TestLeoConsultDispatches(t *testing.T) {
 	}
 	result := resp["result"].(map[string]any)
 	content := result["content"].([]any)[0].(map[string]any)
-	if !strings.Contains(content["text"].(string), "c-4f2a") {
+	if !strings.Contains(content["text"].(string), "review looks good") || !strings.Contains(content["text"].(string), "codex/gpt-5.6-sol") {
 		t.Fatalf("tool result %v", content)
 	}
 }
@@ -427,7 +427,7 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 	var gotBody map[string]string
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		json.Unmarshal(body, &gotBody)
-		return 200, `{"ok":true,"data":{"id":"c-4f2a","harness":"codex","model":"gpt-x"}}`
+		return 200, `{"ok":true,"data":{"harness":"codex","model":"gpt-x","text":"answer"}}`
 	})
 	defer d.close()
 
