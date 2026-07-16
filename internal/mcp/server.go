@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -111,6 +112,7 @@ func runWith(in io.Reader, out io.Writer, reg *registry) error {
 		var msg jsonRPCMessage
 		if err := dec.Decode(&msg); err != nil {
 			if err == io.EOF {
+				cancelAll()
 				wg.Wait()
 				return writeErr
 			}
@@ -125,7 +127,7 @@ func runWith(in io.Reader, out io.Writer, reg *registry) error {
 			}
 			if json.Unmarshal(msg.Params, &params) == nil {
 				requestsMu.Lock()
-				cancel := requests[string(params.RequestID)]
+				cancel := requests[requestKey(params.RequestID)]
 				requestsMu.Unlock()
 				if cancel != nil {
 					cancel()
@@ -135,7 +137,7 @@ func runWith(in io.Reader, out io.Writer, reg *registry) error {
 		}
 
 		requestCtx, cancel := context.WithCancel(ctx)
-		key := string(msg.ID)
+		key := requestKey(msg.ID)
 		if key != "" {
 			requestsMu.Lock()
 			requests[key] = cancel
@@ -158,6 +160,14 @@ func runWith(in io.Reader, out io.Writer, reg *registry) error {
 			}
 		}(msg)
 	}
+}
+
+func requestKey(id json.RawMessage) string {
+	var compact bytes.Buffer
+	if json.Compact(&compact, id) == nil {
+		return compact.String()
+	}
+	return string(id)
 }
 
 // dispatch handles a single inbound message. The second return reports

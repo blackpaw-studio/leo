@@ -94,6 +94,35 @@ func TestRunWithCancellationNotificationCancelsTool(t *testing.T) {
 	}
 }
 
+func TestRunWithEOFCancelsInflightTool(t *testing.T) {
+	reg := &registry{
+		handlers:           make(map[string]toolHandler),
+		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
+	}
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	reg.addContext(toolDef{Name: "slow"}, func(ctx context.Context, _ map[string]any) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return "", ctx.Err()
+	})
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- runWith(reader, io.Discard, reg) }()
+	_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": map[string]any{"name": "slow", "arguments": map[string]any{}}})
+	<-started
+	_ = writer.Close()
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("stdin EOF did not cancel the in-flight tool")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("runWith: %v", err)
+	}
+}
+
 type recordedCall struct {
 	Method string
 	Path   string
@@ -121,24 +150,29 @@ func (d *fakeDaemon) port() string {
 
 func (d *fakeDaemon) close() { d.srv.Close() }
 
-// runRequest pipes a single JSON-RPC request through the server and returns
-// the decoded response, dispatching against the supplied registry.
+// runRequest dispatches one request directly. Stream lifecycle behavior is
+// covered separately because EOF intentionally cancels in-flight requests.
 func runRequest(t *testing.T, reg *registry, req map[string]any) map[string]any {
 	t.Helper()
-	in := &bytes.Buffer{}
-	if err := json.NewEncoder(in).Encode(req); err != nil {
+	raw, err := json.Marshal(req)
+	if err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
-	out := &bytes.Buffer{}
-	if err := runWith(in, out, reg); err != nil {
-		t.Fatalf("runWith: %v", err)
+	var msg jsonRPCMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatalf("decode request: %v", err)
 	}
-	if out.Len() == 0 {
+	rpcResp, send := dispatch(context.Background(), &msg, reg)
+	if !send {
 		return nil
 	}
+	out, err := json.Marshal(rpcResp)
+	if err != nil {
+		t.Fatalf("encode response: %v", err)
+	}
 	var resp map[string]any
-	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v (raw: %s)", err, out.String())
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("decode response: %v (raw: %s)", err, out)
 	}
 	return resp
 }
