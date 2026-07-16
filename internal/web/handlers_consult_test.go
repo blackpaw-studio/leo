@@ -8,7 +8,18 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
+
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadlineCleared bool
+}
+
+func (r *deadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	r.deadlineCleared = deadline.IsZero()
+	return nil
+}
 
 func TestAPIConsultReturnsResultSynchronously(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
@@ -16,7 +27,7 @@ func TestAPIConsultReturnsResultSynchronously(t *testing.T) {
 		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"consultant says yes","is_error":false}`)
 	}
 	req := httptest.NewRequest("POST", "/api/consult", strings.NewReader(`{"from":"assistant","template":"coding","prompt":"opinion?"}`))
-	w := httptest.NewRecorder()
+	w := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
 	s.handleAPIConsult(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
@@ -30,6 +41,22 @@ func TestAPIConsultReturnsResultSynchronously(t *testing.T) {
 	}
 	if resp.Data.Text != "consultant says yes" || resp.Data.Harness != "claude" {
 		t.Fatalf("unexpected result %+v", resp.Data)
+	}
+	if !w.deadlineCleared {
+		t.Fatal("consult handler did not clear the server write deadline")
+	}
+}
+
+func TestAPIConsultExecutionFailureIsBadGateway(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	s.consults.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "false")
+	}
+	req := httptest.NewRequest("POST", "/api/consult", strings.NewReader(`{"template":"coding","prompt":"q"}`))
+	w := httptest.NewRecorder()
+	s.handleAPIConsult(w, req)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502: %s", w.Code, w.Body.String())
 	}
 }
 

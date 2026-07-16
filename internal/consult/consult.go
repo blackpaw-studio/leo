@@ -35,6 +35,17 @@ type Result struct {
 	Text    string `json:"text"`
 }
 
+// ValidationError reports a request/configuration problem that should be
+// returned to API clients as a 4xx response rather than an execution failure.
+type ValidationError struct{ Err error }
+
+func (e *ValidationError) Error() string { return e.Err.Error() }
+func (e *ValidationError) Unwrap() error { return e.Err }
+
+func invalidf(format string, args ...any) error {
+	return &ValidationError{Err: fmt.Errorf(format, args...)}
+}
+
 type Dispatcher struct {
 	sem                chan struct{}
 	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
@@ -49,25 +60,25 @@ func NewDispatcher() *Dispatcher {
 func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
 	tmpl, ok := cfg.Templates[req.Template]
 	if !ok {
-		return Result{}, fmt.Errorf("unknown template %q", req.Template)
+		return Result{}, invalidf("unknown template %q", req.Template)
 	}
 	h, err := harness.Get(cfg.TemplateHarness(tmpl))
 	if err != nil {
-		return Result{}, fmt.Errorf("resolving harness for template %q: %w", req.Template, err)
+		return Result{}, invalidf("resolving harness for template %q: %v", req.Template, err)
 	}
 	if !h.SupportsKind(harness.KindTask) {
-		return Result{}, fmt.Errorf("harness %q does not support one-shot runs", h.Name())
+		return Result{}, invalidf("harness %q does not support one-shot runs", h.Name())
 	}
 	model := req.Model
 	if model == "" {
 		model = cfg.TemplateModel(tmpl)
 	}
 	if err := h.ValidateModel(model); err != nil {
-		return Result{}, fmt.Errorf("model for consult: %w", err)
+		return Result{}, invalidf("model for consult: %v", err)
 	}
 	decoded, err := h.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
 	if err != nil {
-		return Result{}, fmt.Errorf("template %q harness_options: %w", req.Template, err)
+		return Result{}, invalidf("template %q harness_options: %v", req.Template, err)
 	}
 
 	spec := harness.LaunchSpec{
@@ -77,11 +88,11 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 	}
 	args, err := h.Args(spec)
 	if err != nil {
-		return Result{}, fmt.Errorf("building %s args: %w", h.Name(), err)
+		return Result{}, invalidf("building %s args: %v", h.Name(), err)
 	}
 	harnessEnv, err := h.Env(spec)
 	if err != nil {
-		return Result{}, fmt.Errorf("building %s env: %w", h.Name(), err)
+		return Result{}, invalidf("building %s env: %v", h.Name(), err)
 	}
 
 	select {

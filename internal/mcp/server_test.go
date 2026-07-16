@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeDaemon stands in for the Leo daemon's TCP listener and records the
@@ -18,6 +20,78 @@ type fakeDaemon struct {
 	calls   []recordedCall
 	srv     *httptest.Server
 	respond func(method, path string, body []byte) (int, string)
+}
+
+func TestRunWithDispatchesRequestsConcurrently(t *testing.T) {
+	reg := &registry{
+		handlers:           make(map[string]toolHandler),
+		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
+	}
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	reg.addContext(toolDef{Name: "slow"}, func(context.Context, map[string]any) (string, error) {
+		started <- struct{}{}
+		<-release
+		return "done", nil
+	})
+
+	reader, writer := io.Pipe()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- runWith(reader, &out, reg) }()
+	enc := json.NewEncoder(writer)
+	for id := 1; id <= 2; id++ {
+		if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": map[string]any{"name": "slow", "arguments": map[string]any{}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("second request did not start concurrently")
+		}
+	}
+	close(release)
+	_ = writer.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("runWith: %v", err)
+	}
+	if lines := strings.Count(strings.TrimSpace(out.String()), "\n") + 1; lines != 2 {
+		t.Fatalf("got %d responses: %s", lines, out.String())
+	}
+}
+
+func TestRunWithCancellationNotificationCancelsTool(t *testing.T) {
+	reg := &registry{
+		handlers:           make(map[string]toolHandler),
+		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
+	}
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	reg.addContext(toolDef{Name: "slow"}, func(ctx context.Context, _ map[string]any) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return "", ctx.Err()
+	})
+	reader, writer := io.Pipe()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- runWith(reader, &out, reg) }()
+	enc := json.NewEncoder(writer)
+	_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": map[string]any{"name": "slow", "arguments": map[string]any{}}})
+	<-started
+	_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/cancelled", "params": map[string]any{"requestId": 7}})
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("tool context was not cancelled")
+	}
+	_ = writer.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("runWith: %v", err)
+	}
 }
 
 type recordedCall struct {

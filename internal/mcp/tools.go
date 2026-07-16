@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -24,8 +25,9 @@ type toolHandler func(args map[string]any) (string, error)
 
 // registry holds the tool definitions and their handlers.
 type registry struct {
-	defs     []toolDef
-	handlers map[string]toolHandler
+	defs               []toolDef
+	handlers           map[string]toolHandler
+	contextualHandlers map[string]func(context.Context, map[string]any) (string, error)
 }
 
 // newRegistry builds the Leo tool surface bound to the given daemon client
@@ -35,7 +37,10 @@ type registry struct {
 // rather than registered with a handler that would nil-deref or fail on
 // every call.
 func newRegistry(client *daemonClient, processName string) *registry {
-	r := &registry{handlers: make(map[string]toolHandler)}
+	r := &registry{
+		handlers:           make(map[string]toolHandler),
+		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
+	}
 
 	objectSchema := func(props map[string]any, required ...string) map[string]any {
 		s := map[string]any{
@@ -230,7 +235,7 @@ func newRegistry(client *daemonClient, processName string) *registry {
 		return "Sent message to " + to, nil
 	})
 
-	r.add(toolDef{
+	r.addContext(toolDef{
 		Name: "leo_consult",
 		Description: "Run a one-off consultant subagent for a second opinion from another model. " +
 			"Pick a template (see leo_list_templates) — it determines the harness and model; `model` optionally overrides the template's model. " +
@@ -241,7 +246,7 @@ func newRegistry(client *daemonClient, processName string) *registry {
 			"prompt":   map[string]any{"type": "string", "description": "Self-contained question for the consultant."},
 			"model":    map[string]any{"type": "string", "description": "Optional model override, validated against the template's harness."},
 		}, "template", "prompt"),
-	}, func(args map[string]any) (string, error) {
+	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, err := stringArg(args, "template")
 		if err != nil {
 			return "", err
@@ -251,7 +256,7 @@ func newRegistry(client *daemonClient, processName string) *registry {
 			return "", err
 		}
 		model, _ := args["model"].(string)
-		data, err := client.consult(processName, template, model, prompt)
+		data, err := client.consult(ctx, processName, template, model, prompt)
 		if err != nil {
 			return "", err
 		}
@@ -320,11 +325,29 @@ func (r *registry) add(def toolDef, h toolHandler) {
 	r.handlers[def.Name] = h
 }
 
+func (r *registry) addContext(def toolDef, h func(context.Context, map[string]any) (string, error)) {
+	r.defs = append(r.defs, def)
+	r.contextualHandlers[def.Name] = h
+}
+
 func (r *registry) list() []toolDef {
 	return r.defs
 }
 
 func (r *registry) call(name string, raw json.RawMessage) (string, error) {
+	return r.callContext(context.Background(), name, raw)
+}
+
+func (r *registry) callContext(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if h, ok := r.contextualHandlers[name]; ok {
+		var args map[string]any
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+		}
+		return h(ctx, args)
+	}
 	h, ok := r.handlers[name]
 	if !ok {
 		return "", fmt.Errorf("unknown tool %q", name)

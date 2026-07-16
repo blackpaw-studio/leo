@@ -6,6 +6,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,10 @@ type apiEnvelope struct {
 }
 
 func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error) {
+	return c.doContext(context.Background(), method, path, body)
+}
+
+func (c *daemonClient) doContext(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
 	var reqBody io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -64,7 +69,7 @@ func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error
 		}
 		reqBody = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequest(method, c.baseURL+path, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -160,12 +165,12 @@ func (c *daemonClient) stopAgent(name string) (json.RawMessage, error) {
 }
 
 // consult runs a one-off consultant via the daemon and waits for its answer.
-func (c *daemonClient) consult(from, template, model, prompt string) (json.RawMessage, error) {
+func (c *daemonClient) consult(ctx context.Context, from, template, model, prompt string) (json.RawMessage, error) {
 	body := map[string]string{"from": from, "template": template, "prompt": prompt}
 	if model != "" {
 		body["model"] = model
 	}
 	client := *c
 	client.http = &http.Client{Timeout: consultHTTPTimeout}
-	return client.do(http.MethodPost, "/api/consult", body)
+	return client.doContext(ctx, http.MethodPost, "/api/consult", body)
 }

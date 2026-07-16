@@ -1,9 +1,12 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
 )
@@ -12,6 +15,10 @@ import (
 //
 // POST /api/consult {"from":"...", "template":"...", "model":"...", "prompt":"..."}
 func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
+	// Consults legitimately outlive the server-wide 30-second WriteTimeout.
+	// The consultant's own ten-minute deadline remains authoritative.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
 	var req struct {
 		From     string `json:"from"`
 		Template string `json:"template"`
@@ -46,7 +53,17 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 		Template: req.Template, Model: req.Model, Prompt: req.Prompt, Workspace: workspace,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
+		status := http.StatusBadGateway
+		var validationErr *consult.ValidationError
+		switch {
+		case errors.As(err, &validationErr):
+			status = http.StatusBadRequest
+		case errors.Is(err, context.DeadlineExceeded):
+			status = http.StatusGatewayTimeout
+		case errors.Is(err, context.Canceled):
+			status = http.StatusRequestTimeout
+		}
+		writeJSON(w, status, apiResponse{Error: err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: result})

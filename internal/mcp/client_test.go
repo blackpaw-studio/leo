@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestDaemonClientSetsBearerAuth asserts the MCP daemon client always attaches
@@ -42,6 +44,40 @@ func TestDaemonClientSetsBearerAuth(t *testing.T) {
 		if got != want {
 			t.Errorf("request %d Authorization = %q, want %q", i, got, want)
 		}
+	}
+}
+
+func TestConsultPropagatesCallerCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCancelled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(requestStarted)
+		<-r.Context().Done()
+		close(requestCancelled)
+	}))
+	defer srv.Close()
+	c := newDaemonClient(strings.TrimPrefix(srv.URL, "http://127.0.0.1:"), "")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.consult(ctx, "caller", "coding", "", "question")
+		done <- err
+	}()
+	<-requestStarted
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("got %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("consult HTTP request did not cancel")
+	}
+	select {
+	case <-requestCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("daemon request context was not cancelled")
 	}
 }
 
