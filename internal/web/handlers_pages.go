@@ -48,9 +48,10 @@ type pageData struct {
 }
 
 // statusData is the subset of dashboard state partials/status.html renders:
-// the task count and the next scheduled task run. RestartNeeded stays a
-// top-level pageData field so status.html's existing `.RestartNeeded`
-// reference keeps working unmodified.
+// the task count and the next scheduled task run. ServiceRestartNeeded and
+// AgentsRestartNeeded stay top-level pageData fields (not part of
+// statusData) so status.html's existing `.ServiceRestartNeeded` /
+// `.AgentsRestartNeeded` references keep working unmodified.
 type statusData struct {
 	TaskCount   int
 	NextRunName string
