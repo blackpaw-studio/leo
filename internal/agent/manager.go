@@ -118,6 +118,24 @@ func mergeEnv(base, overlay map[string]string) map[string]string {
 	return merged
 }
 
+// pruneEnv returns a copy of env with any key also defined in fresh removed.
+// Used to keep a stale inherited-env layer (a worktree/from-agent spawn's
+// source-agent env, or the same layer replayed at restart) from shadowing a
+// key the harness's own env now defines — same semantics whether "fresh" is
+// the harness env computed at spawn time or recomputed at restart time.
+func pruneEnv(env, fresh map[string]string) map[string]string {
+	if len(env) == 0 || len(fresh) == 0 {
+		return env
+	}
+	pruned := make(map[string]string, len(env))
+	for k, v := range env {
+		if _, shadowed := fresh[k]; !shadowed {
+			pruned[k] = v
+		}
+	}
+	return pruned
+}
+
 // Record is the public view of an agent, merging persisted metadata with live state.
 // Branch + CanonicalPath are populated only for worktree agents.
 type Record struct {
@@ -570,18 +588,16 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		openingPrompt = spec.Prompt
 	}
 	webPort := strconv.Itoa(cfg.WebPort())
-	inherited := p.inheritEnv
-	if len(inherited) > 0 && len(harnessEnv) > 0 {
-		pruned := make(map[string]string, len(inherited))
-		for k, v := range inherited {
-			if _, fresh := harnessEnv[k]; !fresh {
-				pruned[k] = v
-			}
-		}
-		inherited = pruned
-	}
-	spawnEnv := mergeEnv(inherited, spec.Env)
-	env := mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spawnEnv)
+	// p.inheritEnv is stored on the record RAW (unpruned) as InheritedEnv, so
+	// a config-aware restart can re-prune it against the harness env computed
+	// at restart time instead of replaying this spawn-time snapshot — a
+	// harness env key that didn't exist yet at spawn time must still be able
+	// to win on restart. spec.Env is stored separately as SpawnEnv: explicit
+	// --env overrides always win, including over harness env, matching
+	// spawnShared's layering (mergeEnv(harnessEnv, tmpl.Env) as the base,
+	// caller env as the top overlay).
+	inherited := pruneEnv(p.inheritEnv, harnessEnv)
+	env := mergeEnv(mergeEnv(mergeEnv(harnessEnv, tmpl.Env), inherited), spec.Env)
 
 	// rollbackWorktree removes the worktree created above so disk state stays
 	// consistent with the supervisor whenever a step after worktree creation
@@ -617,7 +633,8 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		ClaudeArgs:       claudeArgs,
 		SessionID:        storedSessionID,
 		Env:              env,
-		SpawnEnv:         spawnEnv,
+		SpawnEnv:         spec.Env,
+		InheritedEnv:     p.inheritEnv,
 		WebPort:          webPort,
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
@@ -1094,13 +1111,17 @@ func (m *Manager) Restart(name string) error {
 //     conversation is not supported — the resume mechanic, MCP bridge, and
 //     env shape all differ per harness)
 //
-// When it re-resolves, env is rebuilt as
-// mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), rec.SpawnEnv) so a changed
-// harness_options/template.env change is picked up too. Legacy records
-// (SpawnEnv nil, Env non-nil — written before SpawnEnv existed) still get
-// re-resolved args, but keep their stored Env unchanged: leo has no record of
-// which layer produced which key, so reconstructing it here could silently
-// drop caller-supplied env instead of just leaving it as-is.
+// When it re-resolves, env is rebuilt layer by layer exactly like a fresh
+// spawn (see spawnShared/spawnWorktreeCore): the harness env and template env
+// as the base, then rec.InheritedEnv re-pruned against the CURRENT harness
+// env (not the stale spawn-time pruning — a harness env key that didn't
+// exist yet at spawn time must still be able to win here), then rec.SpawnEnv
+// (the caller's explicit --env overrides) always winning on top. Legacy
+// records (both SpawnEnv and InheritedEnv nil, Env non-nil — written before
+// either field existed) still get re-resolved args, but keep their stored Env
+// unchanged: leo has no record of which layer produced which key, so
+// reconstructing it here could silently drop caller-supplied env instead of
+// just leaving it as-is.
 func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken string) (args []string, env map[string]string) {
 	fallback := func() ([]string, map[string]string) { return rec.ClaudeArgs, rec.Env }
 
@@ -1132,8 +1153,9 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 	}
 
 	newEnv := rec.Env
-	if rec.SpawnEnv != nil || rec.Env == nil {
-		newEnv = mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), rec.SpawnEnv)
+	if rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.Env == nil {
+		inherited := pruneEnv(rec.InheritedEnv, newHarnessEnv)
+		newEnv = mergeEnv(mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), inherited), rec.SpawnEnv)
 	}
 
 	return newArgs, newEnv

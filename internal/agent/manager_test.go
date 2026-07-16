@@ -1231,6 +1231,86 @@ func TestRestartSpawnEnvOverlayWinsAndSurvives(t *testing.T) {
 	}
 }
 
+// TestRestartFreshHarnessEnvWinsOverStaleInheritedEnv verifies that on a
+// re-resolving restart, a key the CURRENT harness env now defines beats a
+// stale value carried in rec.InheritedEnv (a worktree/from-agent spawn's
+// inherited layer) — the inherited layer is re-pruned against the fresh
+// harness env at restart time, not replayed from its spawn-time snapshot.
+// Reachable today via opencode's OPENCODE_CONFIG_CONTENT harness env.
+func TestRestartFreshHarnessEnvWinsOverStaleInheritedEnv(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Harness: "opencode"},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:      "leo-x",
+		Template:  "coding",
+		Harness:   "opencode",
+		Workspace: "/w",
+		SessionID: "sid",
+		Env:       map[string]string{"OPENCODE_CONFIG_CONTENT": "stale-inherited"},
+		InheritedEnv: map[string]string{
+			"OPENCODE_CONFIG_CONTENT": "stale-inherited",
+			"OTHER_INHERITED":         "carries-over",
+		},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	env := sup.spawnCall.Env
+	if env["OPENCODE_CONFIG_CONTENT"] == "stale-inherited" {
+		t.Fatalf("fresh harness env should win over stale InheritedEnv, got %q", env["OPENCODE_CONFIG_CONTENT"])
+	}
+	if env["OTHER_INHERITED"] != "carries-over" {
+		t.Fatalf("expected non-shadowed InheritedEnv key to survive, got: %v", env)
+	}
+}
+
+// TestRestartSpawnEnvOverlayWinsOverFreshHarnessEnv verifies that SpawnEnv
+// (an explicit --env override) beats even the freshly re-resolved harness
+// env on restart, matching spawn-time layering where the caller's env is
+// always the top overlay.
+func TestRestartSpawnEnvOverlayWinsOverFreshHarnessEnv(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Harness: "opencode"},
+		},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:      "leo-x",
+		Template:  "coding",
+		Harness:   "opencode",
+		Workspace: "/w",
+		SessionID: "sid",
+		Env:       map[string]string{"OPENCODE_CONFIG_CONTENT": "explicit-override"},
+		SpawnEnv:  map[string]string{"OPENCODE_CONFIG_CONTENT": "explicit-override"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	env := sup.spawnCall.Env
+	if env["OPENCODE_CONFIG_CONTENT"] != "explicit-override" {
+		t.Fatalf("SpawnEnv override should win over fresh harness env, got %q", env["OPENCODE_CONFIG_CONTENT"])
+	}
+}
+
 // TestRestartLegacyRecordKeepsStoredEnvButReResolvesArgs verifies a legacy
 // record (SpawnEnv nil, written before the field existed) still gets its
 // args re-resolved, but keeps its stored Env untouched — leo can't tell

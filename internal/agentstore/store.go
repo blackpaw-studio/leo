@@ -73,16 +73,26 @@ type Record struct {
 	// everywhere it's read.
 	Harness string `json:"harness,omitempty"`
 
-	// SpawnEnv is the per-spawn env overlay the caller supplied (SpawnSpec.Env
-	// for a shared spawn; the caller layer minus the harness/template layers
-	// for a worktree spawn) — i.e. Env with the harness-env and template.Env
-	// base layers subtracted back out. Restart re-resolves ClaudeArgs/Env from
-	// current config when possible; SpawnEnv lets it rebuild Env as
-	// mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), rec.SpawnEnv) without
-	// clobbering caller-supplied overrides. Nil for records written before
-	// this field existed (legacy records keep their stored Env unchanged on
+	// SpawnEnv is exactly SpawnSpec.Env — the caller's explicit --env
+	// overrides. It always wins on collision, including over harness/template
+	// env, matching spawn-time layering. Restart re-resolves ClaudeArgs/Env
+	// from current config when possible; SpawnEnv lets it rebuild Env as
+	// mergeEnv(mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), prunedInherited),
+	// rec.SpawnEnv) without clobbering caller-supplied overrides. Nil for
+	// records written before this field existed (a legacy record with a nil
+	// SpawnEnv AND a nil InheritedEnv keeps its stored Env unchanged on
 	// restart rather than silently dropping env that can't be reconstructed).
 	SpawnEnv map[string]string `json:"spawn_env,omitempty"`
+
+	// InheritedEnv is the worktree/from-agent spawn's inherited env layer —
+	// e.g. a spawnFromAgent's source-agent env — stored RAW, before the
+	// spawn-time pruning against that spawn's harness env. Restart re-prunes
+	// it against the CURRENT harness env (see agent.pruneEnv) rather than
+	// replaying the spawn-time snapshot, so a harness env key that didn't
+	// exist yet at spawn time still wins on restart instead of being shadowed
+	// by a stale inherited value. Empty/nil for shared spawns (no inheritance
+	// concept) and legacy records written before this field existed.
+	InheritedEnv map[string]string `json:"inherited_env,omitempty"`
 }
 
 // FilePath returns the path to agents.json in the state directory.

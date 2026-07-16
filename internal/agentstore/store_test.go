@@ -94,23 +94,26 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
-// TestSaveAndLoadSpawnEnv verifies SpawnEnv round-trips through Save/Load
-// distinctly from Env, and that a nil SpawnEnv (the legacy/no-per-spawn-env
-// shape) round-trips as nil rather than an empty map — Manager.Restart's
-// re-resolution logic branches on nil vs non-nil to detect legacy records.
+// TestSaveAndLoadSpawnEnv verifies SpawnEnv and InheritedEnv round-trip
+// through Save/Load distinctly from each other and from Env, and that a nil
+// SpawnEnv/InheritedEnv (the legacy/pre-these-fields shape) round-trips as
+// nil rather than an empty map — Manager.Restart's re-resolution logic
+// branches on nil vs non-nil to detect legacy records.
 func TestSaveAndLoadSpawnEnv(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "state"), 0750)
 
 	_ = Save(dir, Record{
-		Name:     "agent-with-spawn-env",
-		Env:      map[string]string{"FOO": "merged", "BAR": "merged"},
-		SpawnEnv: map[string]string{"FOO": "spawn-override"},
+		Name:         "agent-with-spawn-env",
+		Env:          map[string]string{"FOO": "merged", "BAR": "merged", "BAZ": "merged"},
+		SpawnEnv:     map[string]string{"FOO": "spawn-override"},
+		InheritedEnv: map[string]string{"BAZ": "inherited-raw"},
 	})
 	_ = Save(dir, Record{
 		Name: "agent-legacy",
 		Env:  map[string]string{"LEGACY": "value"},
-		// SpawnEnv intentionally omitted — simulates a pre-SpawnEnv record.
+		// SpawnEnv/InheritedEnv intentionally omitted — simulates a
+		// pre-these-fields record.
 	})
 
 	records, err := Load(FilePath(dir))
@@ -122,13 +125,19 @@ func TestSaveAndLoadSpawnEnv(t *testing.T) {
 	if withSpawnEnv.SpawnEnv["FOO"] != "spawn-override" {
 		t.Errorf("SpawnEnv[FOO] = %q, want %q", withSpawnEnv.SpawnEnv["FOO"], "spawn-override")
 	}
+	if withSpawnEnv.InheritedEnv["BAZ"] != "inherited-raw" {
+		t.Errorf("InheritedEnv[BAZ] = %q, want %q", withSpawnEnv.InheritedEnv["BAZ"], "inherited-raw")
+	}
 	if withSpawnEnv.Env["BAR"] != "merged" {
-		t.Errorf("Env[BAR] = %q, want %q (Env must round-trip independently of SpawnEnv)", withSpawnEnv.Env["BAR"], "merged")
+		t.Errorf("Env[BAR] = %q, want %q (Env must round-trip independently of SpawnEnv/InheritedEnv)", withSpawnEnv.Env["BAR"], "merged")
 	}
 
 	legacy := records["agent-legacy"]
 	if legacy.SpawnEnv != nil {
 		t.Errorf("legacy record's SpawnEnv = %v, want nil", legacy.SpawnEnv)
+	}
+	if legacy.InheritedEnv != nil {
+		t.Errorf("legacy record's InheritedEnv = %v, want nil", legacy.InheritedEnv)
 	}
 	if legacy.Env["LEGACY"] != "value" {
 		t.Errorf("legacy Env[LEGACY] = %q, want %q", legacy.Env["LEGACY"], "value")
