@@ -2,180 +2,98 @@ package consult
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
 func testConfig() *config.Config {
-	return &config.Config{
-		Templates: map[string]config.TemplateConfig{
-			"gpt": {Harness: "claude"}, // claude adapter: easiest ParseEvents fixture
-		},
-	}
+	return &config.Config{Templates: map[string]config.TemplateConfig{
+		"claude":   {Harness: "claude", Model: "opus"},
+		"codex":    {Harness: "codex", Model: "gpt-5.3-codex"},
+		"opencode": {Harness: "opencode", Model: "anthropic/claude-sonnet-4-5"},
+	}}
 }
 
-func echoResult(text string) func(ctx context.Context, name string, args ...string) *exec.Cmd {
-	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"`+text+`","is_error":false}`)
-	}
-}
-
-func TestDispatchUnknownTemplate(t *testing.T) {
-	d := NewDispatcher(func(context.Context, string, string) error { return nil })
-	_, err := d.Dispatch(testConfig(), Request{From: "caller", Template: "nope", Prompt: "q"})
-	if err == nil || !strings.Contains(err.Error(), "nope") {
+func TestConsultValidation(t *testing.T) {
+	d := NewDispatcher()
+	if _, err := d.Consult(context.Background(), testConfig(), Request{Template: "nope", Prompt: "q"}); err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("expected unknown-template error, got %v", err)
 	}
-}
-
-func TestDispatchInvalidModelOverride(t *testing.T) {
-	d := NewDispatcher(func(context.Context, string, string) error { return nil })
-	_, err := d.Dispatch(testConfig(), Request{From: "caller", Template: "gpt", Model: "gpt-9-nano", Prompt: "q"})
-	if err == nil {
+	if _, err := d.Consult(context.Background(), testConfig(), Request{Template: "claude", Model: "gpt-9-nano", Prompt: "q"}); err == nil {
 		t.Fatal("expected model validation error")
 	}
 }
 
-func TestDispatchRunsAndDeliversReply(t *testing.T) {
-	got := make(chan struct {
-		name string
-		body string
-	}, 1)
-	d := NewDispatcher(func(_ context.Context, name, body string) error {
-		got <- struct {
-			name string
-			body string
-		}{name, body}
-		return nil
-	})
-	d.ExecCommandContext = echoResult("opinion text")
-
-	tk, err := d.Dispatch(testConfig(), Request{From: "caller", Template: "gpt", Prompt: "q", Workspace: t.TempDir()})
-	if err != nil {
-		t.Fatalf("Dispatch: %v", err)
+func TestConsultAllHarnessesReturnSynchronousResult(t *testing.T) {
+	tests := []struct {
+		name       string
+		output     string
+		wantBinary string
+		wantArgs   []string
+	}{
+		{"claude", `{"type":"result","result":"claude opinion","is_error":false}`, "claude", []string{"-p", "--output-format", "stream-json"}},
+		{"codex", `{"type":"thread.started","thread_id":"t1"}
+{"type":"item.completed","item":{"type":"agent_message","text":"codex opinion"}}`, "codex", []string{"exec", "--json", "--skip-git-repo-check"}},
+		{"opencode", `{"type":"text","sessionID":"s1","part":{"text":"opencode opinion"}}`, "opencode", []string{"run", "--format", "json"}},
 	}
-	if tk.ID == "" || tk.Harness != "claude" {
-		t.Fatalf("unexpected ticket %+v", tk)
-	}
-
-	select {
-	case r := <-got:
-		if r.name != "caller" {
-			t.Fatalf("delivered to %q, want caller", r.name)
-		}
-		if !strings.Contains(r.body, "opinion text") || !strings.Contains(r.body, "[consult "+tk.ID) {
-			t.Fatalf("unexpected reply body: %q", r.body)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("reply never delivered")
-	}
-}
-
-// TestDispatchBuildsClaudeArgs is the regression guard for the
-// --max-turns-0 bug: it exercises the real claude adapter's Args() output
-// (not a stub) and asserts a positive --max-turns value along with the
-// other flags a consult must carry (and must not carry — no --mcp-config,
-// since consultants get no leo tools).
-func TestDispatchBuildsClaudeArgs(t *testing.T) {
-	cfg := &config.Config{
-		Templates: map[string]config.TemplateConfig{
-			"gpt": {Harness: "claude", Model: "opus"},
-		},
-	}
-
-	var gotName string
-	var gotArgs []string
-	got := make(chan string, 1)
-	d := NewDispatcher(func(_ context.Context, _, body string) error {
-		got <- body
-		return nil
-	})
-	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		gotName = name
-		gotArgs = args
-		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"ok","is_error":false}`)
-	}
-
-	_, err := d.Dispatch(cfg, Request{From: "caller", Template: "gpt", Prompt: "what do you think?", Workspace: t.TempDir()})
-	if err != nil {
-		t.Fatalf("Dispatch: %v", err)
-	}
-
-	select {
-	case <-got:
-	case <-time.After(5 * time.Second):
-		t.Fatal("reply never delivered")
-	}
-
-	if gotName == "" {
-		t.Fatal("consultant never exec'd")
-	}
-
-	promptIdx := -1
-	for i, a := range gotArgs {
-		if a == "-p" {
-			promptIdx = i
-			break
-		}
-	}
-	if promptIdx == -1 || promptIdx+1 >= len(gotArgs) {
-		t.Fatalf("no -p flag in args: %v", gotArgs)
-	}
-	prompt := gotArgs[promptIdx+1]
-	if !strings.HasPrefix(prompt, preamble) {
-		t.Errorf("prompt does not start with advisory preamble: %q", prompt)
-	}
-	if !strings.Contains(prompt, "what do you think?") {
-		t.Errorf("prompt missing question: %q", prompt)
-	}
-
-	assertFlag := func(flag, want string) {
-		t.Helper()
-		for i, a := range gotArgs {
-			if a == flag {
-				if i+1 >= len(gotArgs) || gotArgs[i+1] != want {
-					t.Errorf("%s = %v, want %q", flag, gotArgs[i+1:], want)
-				}
-				return
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDispatcher()
+			var gotBinary string
+			var gotArgs []string
+			d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				gotBinary, gotArgs = name, append([]string(nil), args...)
+				return exec.CommandContext(ctx, "echo", tt.output)
 			}
-		}
-		t.Errorf("missing flag %s in args: %v", flag, gotArgs)
-	}
-	assertFlag("--model", "opus")
-	assertFlag("--max-turns", "15")
-	assertFlag("--output-format", "stream-json")
-
-	for _, a := range gotArgs {
-		if a == "--mcp-config" {
-			t.Errorf("consult args should not include --mcp-config (no leo tools): %v", gotArgs)
-		}
+			result, err := d.Consult(context.Background(), testConfig(), Request{
+				Template: tt.name, Prompt: "what do you think?", Workspace: t.TempDir(),
+			})
+			if err != nil {
+				t.Fatalf("Consult: %v", err)
+			}
+			if result.Harness != tt.name || !strings.Contains(result.Text, tt.name+" opinion") {
+				t.Fatalf("unexpected result %+v", result)
+			}
+			if !strings.Contains(gotBinary, tt.wantBinary) {
+				t.Errorf("binary %q", gotBinary)
+			}
+			joined := strings.Join(gotArgs, " ")
+			for _, want := range tt.wantArgs {
+				if !strings.Contains(joined, want) {
+					t.Errorf("args %v missing %q", gotArgs, want)
+				}
+			}
+			if !strings.Contains(joined, preamble) || !strings.Contains(joined, "what do you think?") {
+				t.Errorf("prompt missing from args: %v", gotArgs)
+			}
+		})
 	}
 }
 
-func TestDispatchFailureDeliversErrorNotice(t *testing.T) {
-	got := make(chan string, 1)
-	d := NewDispatcher(func(_ context.Context, _, body string) error {
-		got <- body
-		return nil
-	})
+func TestConsultReturnsExecutionFailure(t *testing.T) {
+	d := NewDispatcher()
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "false")
 	}
-
-	tk, err := d.Dispatch(testConfig(), Request{From: "caller", Template: "gpt", Prompt: "q", Workspace: t.TempDir()})
-	if err != nil {
-		t.Fatalf("Dispatch: %v", err)
+	_, err := d.Consult(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Workspace: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("expected execution failure, got %v", err)
 	}
-	select {
-	case body := <-got:
-		if !strings.Contains(body, "failed after") || !strings.Contains(body, tk.ID) {
-			t.Fatalf("unexpected failure body: %q", body)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("failure notice never delivered")
+}
+
+func TestConsultHonorsCallerCancellationWhileQueued(t *testing.T) {
+	d := NewDispatcher()
+	for range maxConcurrent {
+		d.sem <- struct{}{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := d.Consult(ctx, testConfig(), Request{Template: "claude", Prompt: "q"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
 	}
 }

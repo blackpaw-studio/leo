@@ -121,9 +121,7 @@ type Server struct {
 	// falls back to today's tmux path either way.
 	resolveHandle func(name string) (harnessName string, h harness.SessionHandle, ok bool)
 
-	// consults dispatches one-off consultant subagents (leo_consult). Its
-	// reply path is s.deliverConsultReply; tests reach through it to stub
-	// the exec seam.
+	// consults runs synchronous one-off consultant subagents (leo_consult).
 	consults *consult.Dispatcher
 }
 
@@ -171,7 +169,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		resolveHandle:  opts.ResolveHandle,
 	}
 	s.fetchAgentListFn = s.fetchAgentList
-	s.consults = consult.NewDispatcher(s.deliverConsultReply)
+	s.consults = consult.NewDispatcher()
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)

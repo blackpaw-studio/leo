@@ -6,6 +6,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,10 @@ import (
 // from the local daemon. The daemon is trusted, so this is a safety net against
 // a runaway handler rather than an adversarial boundary.
 const maxDaemonResponseBytes = 10 << 20
+
+// consultHTTPTimeout is slightly longer than the daemon's ten-minute
+// consultant deadline so the daemon can return its structured timeout error.
+const consultHTTPTimeout = 11 * time.Minute
 
 // daemonClient calls the Leo daemon's TCP HTTP API on 127.0.0.1.
 type daemonClient struct {
@@ -52,6 +57,10 @@ type apiEnvelope struct {
 }
 
 func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error) {
+	return c.doContext(context.Background(), method, path, body)
+}
+
+func (c *daemonClient) doContext(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
 	var reqBody io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -60,7 +69,7 @@ func (c *daemonClient) do(method, path string, body any) (json.RawMessage, error
 		}
 		reqBody = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequest(method, c.baseURL+path, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -155,13 +164,13 @@ func (c *daemonClient) stopAgent(name string) (json.RawMessage, error) {
 	return c.do(http.MethodPost, "/api/agent/stop", map[string]string{"name": name})
 }
 
-// consult dispatches a one-off consultant subagent via the daemon. The
-// answer is delivered later as an injected message; the returned data
-// carries the consult id used in that reply's frame.
-func (c *daemonClient) consult(from, template, model, prompt string) (json.RawMessage, error) {
+// consult runs a one-off consultant via the daemon and waits for its answer.
+func (c *daemonClient) consult(ctx context.Context, from, template, model, prompt string) (json.RawMessage, error) {
 	body := map[string]string{"from": from, "template": template, "prompt": prompt}
 	if model != "" {
 		body["model"] = model
 	}
-	return c.do(http.MethodPost, "/api/consult", body)
+	client := *c
+	client.http = &http.Client{Timeout: consultHTTPTimeout}
+	return client.doContext(ctx, http.MethodPost, "/api/consult", body)
 }

@@ -2,10 +2,13 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"sync"
 )
 
 // Protocol version we negotiate with clients. Matches the spec revision
@@ -82,30 +85,94 @@ func runWith(in io.Reader, out io.Writer, reg *registry) error {
 	enc = json.NewEncoder(bw)
 	enc.SetEscapeHTML(false)
 
+	ctx, cancelAll := context.WithCancel(context.Background())
+	defer cancelAll()
+	var wg sync.WaitGroup
+	var writeMu sync.Mutex
+	var requestsMu sync.Mutex
+	requests := make(map[string]context.CancelFunc)
+	var writeErr error
+
+	writeResponse := func(resp jsonRPCMessage) {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if writeErr != nil {
+			return
+		}
+		if err := enc.Encode(resp); err != nil {
+			writeErr = fmt.Errorf("encode: %w", err)
+			return
+		}
+		if err := bw.Flush(); err != nil {
+			writeErr = fmt.Errorf("flush: %w", err)
+		}
+	}
+
 	for {
 		var msg jsonRPCMessage
 		if err := dec.Decode(&msg); err != nil {
 			if err == io.EOF {
-				return nil
+				cancelAll()
+				wg.Wait()
+				return writeErr
 			}
+			cancelAll()
+			wg.Wait()
 			return fmt.Errorf("decode: %w", err)
 		}
-		resp, send := dispatch(&msg, reg)
-		if !send {
+
+		if msg.Method == "notifications/cancelled" {
+			var params struct {
+				RequestID json.RawMessage `json:"requestId"`
+			}
+			if json.Unmarshal(msg.Params, &params) == nil {
+				requestsMu.Lock()
+				cancel := requests[requestKey(params.RequestID)]
+				requestsMu.Unlock()
+				if cancel != nil {
+					cancel()
+				}
+			}
 			continue
 		}
-		if err := enc.Encode(resp); err != nil {
-			return fmt.Errorf("encode: %w", err)
+
+		requestCtx, cancel := context.WithCancel(ctx)
+		key := requestKey(msg.ID)
+		if key != "" {
+			requestsMu.Lock()
+			requests[key] = cancel
+			requestsMu.Unlock()
 		}
-		if err := bw.Flush(); err != nil {
-			return fmt.Errorf("flush: %w", err)
-		}
+		wg.Add(1)
+		go func(msg jsonRPCMessage) {
+			defer wg.Done()
+			defer cancel()
+			if key != "" {
+				defer func() {
+					requestsMu.Lock()
+					delete(requests, key)
+					requestsMu.Unlock()
+				}()
+			}
+			resp, send := dispatch(requestCtx, &msg, reg)
+			if send {
+				writeResponse(resp)
+			}
+		}(msg)
 	}
+}
+
+func requestKey(id json.RawMessage) string {
+	var compact bytes.Buffer
+	if json.Compact(&compact, id) == nil {
+		return compact.String()
+	}
+	return string(id)
 }
 
 // dispatch handles a single inbound message. The second return reports
 // whether to send the response (false for notifications).
-func dispatch(msg *jsonRPCMessage, reg *registry) (jsonRPCMessage, bool) {
+func dispatch(ctx context.Context, msg *jsonRPCMessage, reg *registry) (jsonRPCMessage, bool) {
 	isNotification := len(msg.ID) == 0
 	resp := jsonRPCMessage{JSONRPC: "2.0", ID: msg.ID}
 
@@ -135,7 +202,7 @@ func dispatch(msg *jsonRPCMessage, reg *registry) (jsonRPCMessage, bool) {
 			resp.Error = &jsonRPCError{Code: codeInvalidRequest, Message: fmt.Sprintf("invalid params: %v", err)}
 			break
 		}
-		text, err := reg.call(params.Name, params.Arguments)
+		text, err := reg.callContext(ctx, params.Name, params.Arguments)
 		if err != nil {
 			// MCP convention: tool execution errors come back inside the
 			// result with isError=true (not as protocol-level errors), so

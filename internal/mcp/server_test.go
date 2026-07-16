@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeDaemon stands in for the Leo daemon's TCP listener and records the
@@ -18,6 +20,107 @@ type fakeDaemon struct {
 	calls   []recordedCall
 	srv     *httptest.Server
 	respond func(method, path string, body []byte) (int, string)
+}
+
+func TestRunWithDispatchesRequestsConcurrently(t *testing.T) {
+	reg := &registry{
+		handlers:           make(map[string]toolHandler),
+		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
+	}
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	reg.addContext(toolDef{Name: "slow"}, func(context.Context, map[string]any) (string, error) {
+		started <- struct{}{}
+		<-release
+		return "done", nil
+	})
+
+	reader, writer := io.Pipe()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- runWith(reader, &out, reg) }()
+	enc := json.NewEncoder(writer)
+	for id := 1; id <= 2; id++ {
+		if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": map[string]any{"name": "slow", "arguments": map[string]any{}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("second request did not start concurrently")
+		}
+	}
+	close(release)
+	_ = writer.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("runWith: %v", err)
+	}
+	if lines := strings.Count(strings.TrimSpace(out.String()), "\n") + 1; lines != 2 {
+		t.Fatalf("got %d responses: %s", lines, out.String())
+	}
+}
+
+func TestRunWithCancellationNotificationCancelsTool(t *testing.T) {
+	reg := &registry{
+		handlers:           make(map[string]toolHandler),
+		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
+	}
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	reg.addContext(toolDef{Name: "slow"}, func(ctx context.Context, _ map[string]any) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return "", ctx.Err()
+	})
+	reader, writer := io.Pipe()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- runWith(reader, &out, reg) }()
+	enc := json.NewEncoder(writer)
+	_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": map[string]any{"name": "slow", "arguments": map[string]any{}}})
+	<-started
+	_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/cancelled", "params": map[string]any{"requestId": 7}})
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("tool context was not cancelled")
+	}
+	_ = writer.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("runWith: %v", err)
+	}
+}
+
+func TestRunWithEOFCancelsInflightTool(t *testing.T) {
+	reg := &registry{
+		handlers:           make(map[string]toolHandler),
+		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
+	}
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	reg.addContext(toolDef{Name: "slow"}, func(ctx context.Context, _ map[string]any) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return "", ctx.Err()
+	})
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- runWith(reader, io.Discard, reg) }()
+	_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": map[string]any{"name": "slow", "arguments": map[string]any{}}})
+	<-started
+	_ = writer.Close()
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("stdin EOF did not cancel the in-flight tool")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("runWith: %v", err)
+	}
 }
 
 type recordedCall struct {
@@ -47,24 +150,29 @@ func (d *fakeDaemon) port() string {
 
 func (d *fakeDaemon) close() { d.srv.Close() }
 
-// runRequest pipes a single JSON-RPC request through the server and returns
-// the decoded response, dispatching against the supplied registry.
+// runRequest dispatches one request directly. Stream lifecycle behavior is
+// covered separately because EOF intentionally cancels in-flight requests.
 func runRequest(t *testing.T, reg *registry, req map[string]any) map[string]any {
 	t.Helper()
-	in := &bytes.Buffer{}
-	if err := json.NewEncoder(in).Encode(req); err != nil {
+	raw, err := json.Marshal(req)
+	if err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
-	out := &bytes.Buffer{}
-	if err := runWith(in, out, reg); err != nil {
-		t.Fatalf("runWith: %v", err)
+	var msg jsonRPCMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatalf("decode request: %v", err)
 	}
-	if out.Len() == 0 {
+	rpcResp, send := dispatch(context.Background(), &msg, reg)
+	if !send {
 		return nil
 	}
+	out, err := json.Marshal(rpcResp)
+	if err != nil {
+		t.Fatalf("encode response: %v", err)
+	}
 	var resp map[string]any
-	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v (raw: %s)", err, out.String())
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("decode response: %v (raw: %s)", err, out)
 	}
 	return resp
 }
@@ -391,13 +499,13 @@ func TestSendMessageRequiresMessage(t *testing.T) {
 	}
 }
 
-func TestLeoConsultDispatches(t *testing.T) {
+func TestLeoConsultReturnsResult(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]string
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		gotPath = method + " " + path
 		json.Unmarshal(body, &gotBody)
-		return 200, `{"ok":true,"data":{"id":"c-4f2a","harness":"codex","model":"gpt-5.6-sol"}}`
+		return 200, `{"ok":true,"data":{"harness":"codex","model":"gpt-5.6-sol","text":"review looks good"}}`
 	})
 	defer d.close()
 
@@ -418,7 +526,7 @@ func TestLeoConsultDispatches(t *testing.T) {
 	}
 	result := resp["result"].(map[string]any)
 	content := result["content"].([]any)[0].(map[string]any)
-	if !strings.Contains(content["text"].(string), "c-4f2a") {
+	if !strings.Contains(content["text"].(string), "review looks good") || !strings.Contains(content["text"].(string), "codex/gpt-5.6-sol") {
 		t.Fatalf("tool result %v", content)
 	}
 }
@@ -427,7 +535,7 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 	var gotBody map[string]string
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		json.Unmarshal(body, &gotBody)
-		return 200, `{"ok":true,"data":{"id":"c-4f2a","harness":"codex","model":"gpt-x"}}`
+		return 200, `{"ok":true,"data":{"harness":"codex","model":"gpt-x","text":"answer"}}`
 	})
 	defer d.close()
 
