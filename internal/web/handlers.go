@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -501,8 +502,50 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	}
 	go cmd.Wait() //nolint:errcheck
 
-	s.restartNeeded.Store(false)
+	s.serviceRestartNeeded.Store(false)
 	s.renderFlash(w, "success", "Service restarting...")
+}
+
+// handleAgentsRestart bounces every running agent in place (see
+// agent.Manager.RestartAll): running agents apply the current config,
+// suspended/stopped agents are skipped, and per-agent failures are isolated
+// so one bad respawn doesn't block the rest of the batch. Clears
+// agentsRestartNeeded on a batch with zero failures — even when some agents
+// were skipped, since skips are expected (suspended/stopped agents were
+// never going to pick up the change until resumed/reset anyway) — but leaves
+// it set if anything failed, so the operator knows to retry.
+func (s *Server) handleAgentsRestart(w http.ResponseWriter, r *http.Request) {
+	if s.agentSvc == nil {
+		s.renderFlash(w, "error", "Agent service not available")
+		return
+	}
+
+	result := s.agentSvc.RestartAll()
+
+	msg := fmt.Sprintf("Restarted %d agent(s)", len(result.Restarted))
+	if len(result.Skipped) > 0 {
+		msg += fmt.Sprintf(", skipped %d (suspended/stopped)", len(result.Skipped))
+	}
+	if len(result.Failed) > 0 {
+		msg += fmt.Sprintf(", %d failed: %v", len(result.Failed), firstRestartFailure(result.Failed))
+		s.renderFlash(w, "error", msg)
+		return
+	}
+
+	s.agentsRestartNeeded.Store(false)
+	s.renderFlash(w, "success", msg)
+}
+
+// firstRestartFailure returns the error for the alphabetically first failed
+// agent name, so repeated calls against the same failure set report the same
+// error rather than an arbitrary map-iteration order.
+func firstRestartFailure(failed map[string]error) error {
+	names := make([]string, 0, len(failed))
+	for name := range failed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return failed[names[0]]
 }
 
 func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {

@@ -5,13 +5,22 @@
         <span>{{.Status.TaskCount}} tasks</span>
         {{if .Status.NextRunName}}<span>next: <b>{{.Status.NextRunName}}</b> {{relativeTime .Status.NextRunTime}}</span>{{end}}
     </div>
-    {{if .RestartNeeded}}
+    {{if .ServiceRestartNeeded}}
     <div class="restart-banner" role="alert" aria-live="polite">
         <span class="restart-banner-msg">
             <span class="restart-banner-icon" aria-hidden="true">⚠</span>
-            <strong>Restart required</strong> &mdash; config changed. Running agents will not pick up changes until you restart.
+            <strong>Service restart required</strong> &mdash; web server settings only take effect when the service restarts.
         </span>
-        <button class="btn btn-sm restart-banner-btn" hx-post="/web/service/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart the Leo service? Running agents will be restarted.">Restart Now</button>
+        <button class="btn btn-sm restart-banner-btn" hx-post="/web/service/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart the leo service? Running agents are re-adopted, not restarted.">Restart Now</button>
+    </div>
+    {{end}}
+    {{if .AgentsRestartNeeded}}
+    <div class="restart-banner" role="alert" aria-live="polite">
+        <span class="restart-banner-msg">
+            <span class="restart-banner-icon" aria-hidden="true">⚠</span>
+            <strong>Config saved</strong> &mdash; new agents and task runs use it now. Running agents apply it when restarted.
+        </span>
+        <button class="btn btn-sm restart-banner-btn" hx-post="/web/agents/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart all running agents in place? Conversations are resumed; suspended and stopped agents are skipped.">Restart agents</button>
     </div>
     {{end}}
 </div>

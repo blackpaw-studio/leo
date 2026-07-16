@@ -5,7 +5,7 @@
     <span>
       <button class="btn" hx-post="/web/config/reload" hx-target="#flash-container">Reload config</button>
       <button class="btn danger" hx-post="/web/service/restart" hx-target="#flash-container"
-              hx-confirm="Restart the leo service? All supervised agents restart.">Restart service</button>
+              hx-confirm="Restart the leo service? Running agents keep their tmux sessions and are re-adopted; only the daemon restarts.">Restart service</button>
     </span>
   </div>
   {{if .Data.States}}
