@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/charmbracelet/bubbles/list"
 )
 
@@ -82,9 +83,13 @@ func rowKey(host, name string) string { return host + "/" + name }
 // validName reports whether a rename target is acceptable client-side.
 func validName(name string) bool { return nameRe.MatchString(name) }
 
-// sortAgents orders agents by name in place.
+// sortAgents orders agents by their display name in place — the leo- prefix
+// that a renamed agent's canonical name carries is a tmux implementation
+// detail, so "leo-vitals" must sort as "vitals", not under "l".
 func sortAgents(a []Agent) {
-	sort.Slice(a, func(i, j int) bool { return a[i].Name < a[j].Name })
+	sort.Slice(a, func(i, j int) bool {
+		return agent.DisplayName(a[i].Name) < agent.DisplayName(a[j].Name)
+	})
 }
 
 // columnWidths computes the NAME/TEMPLATE/HOST column widths from the
@@ -100,7 +105,7 @@ func columnWidths(hosts []string, byHost map[string][]Agent) (nameW, templateW, 
 			hostW = w
 		}
 		for _, a := range byHost[h] {
-			if w := utf8.RuneCountInString(a.Name); w > nameW {
+			if w := utf8.RuneCountInString(agent.DisplayName(a.Name)); w > nameW {
 				nameW = w
 			}
 			if w := utf8.RuneCountInString(dash(a.Template)); w > templateW {
@@ -162,10 +167,11 @@ func buildRows(byHost map[string][]Agent, byHostErr map[string]error, pending ma
 				g = spinnerFrames[frame%len(spinnerFrames)]
 			}
 			ac := a // stable pointer for the selected-row result
-			line := g + " " + cell(a.Name, nameW) + " " + cell(dash(a.Template), templateW) + " " + cell(h, hostW) + " " + ageLabel(a)
+			display := agent.DisplayName(a.Name)
+			line := g + " " + cell(display, nameW) + " " + cell(dash(a.Template), templateW) + " " + cell(h, hostW) + " " + ageLabel(a)
 			items = append(items, row{
 				line:   line,
-				filter: a.Name + " " + a.Template + " " + h,
+				filter: display + " " + a.Template + " " + h,
 				host:   h,
 				ag:     &ac,
 			})
