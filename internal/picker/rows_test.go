@@ -33,6 +33,41 @@ func TestSortAgentsByName(t *testing.T) {
 	}
 }
 
+func TestSortAgentsUsesDisplayName(t *testing.T) {
+	// A renamed agent's canonical name carries the leo- prefix; it must sort by
+	// the prefix-stripped display name, so "leo-vitals" lands under "v", not "l".
+	ags := []Agent{{Name: "leo-vitals"}, {Name: "alpha"}, {Name: "watchdog"}}
+	sortAgents(ags)
+	want := []string{"alpha", "leo-vitals", "watchdog"}
+	for i, a := range ags {
+		if a.Name != want[i] {
+			t.Fatalf("sorted[%d] = %q, want %q", i, a.Name, want[i])
+		}
+	}
+}
+
+func TestBuildRowsStripsLeoPrefixForDisplay(t *testing.T) {
+	byHost := map[string][]Agent{
+		LocalHost: {{Name: "leo-vitals", Template: "builder", Host: LocalHost, Status: "running"}},
+	}
+	_, items := buildRows(byHost, nil, map[string]struct{}{}, 0)
+	if len(items) != 1 {
+		t.Fatalf("want 1 row, got %d", len(items))
+	}
+	r := items[0].(row)
+	// The canonical name is preserved on the agent (dispatch/pending keys need
+	// it), but the rendered line and filter show the display form.
+	if r.ag.Name != "leo-vitals" {
+		t.Errorf("agent name = %q, want canonical %q preserved", r.ag.Name, "leo-vitals")
+	}
+	if contains(r.line, "leo-vitals") || !contains(r.line, "vitals") {
+		t.Errorf("row line = %q, want display name %q without leo- prefix", r.line, "vitals")
+	}
+	if r.filter != "vitals builder local" {
+		t.Errorf("filter = %q, want display-form filter", r.filter)
+	}
+}
+
 func TestBuildRowsIncludesAgentsAndErrorRows(t *testing.T) {
 	byHost := map[string][]Agent{
 		LocalHost: {{Name: "alpha", Template: "writer", Host: LocalHost, Status: "running"}},

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -343,7 +344,7 @@ func (m model) beginRename() (tea.Model, tea.Cmd) {
 	m.renaming = true
 	m.renameHost = r.host
 	m.renameOld = r.ag.Name
-	m.rename.SetValue(r.ag.Name)
+	m.rename.SetValue(agent.DisplayName(r.ag.Name))
 	m.rename.CursorEnd()
 	return m, m.rename.Focus()
 }
