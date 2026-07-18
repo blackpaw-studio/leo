@@ -185,6 +185,19 @@ const PackageManagerHomebrew = "homebrew"
 // any custom HOMEBREW_CELLAR.
 var homebrewCellarPattern = regexp.MustCompile(`/Cellar/leo/[^/]+/bin/leo$`)
 
+// PackageManagerHomebrewCask is the manager string returned by
+// PackageManagerInstall when the running binary lives inside a Homebrew
+// Caskroom staging directory.
+const PackageManagerHomebrewCask = "homebrew-cask"
+
+// homebrewCaskroomPattern matches a Homebrew cask's staged binary path:
+// "<prefix>/Caskroom/leo/<version>/leo" (the bin/ symlink resolves here via
+// EvalSymlinks). Anchored to the suffix for the same reason as
+// homebrewCellarPattern — a directory that merely contains "/Caskroom/leo/"
+// (e.g. a source checkout) shouldn't false-positive. The leading prefix is
+// free-form to cover all Homebrew roots.
+var homebrewCaskroomPattern = regexp.MustCompile(`/Caskroom/leo/[^/]+/leo$`)
+
 // PackageManagerInstall reports whether the running binary was installed by
 // a system package manager that owns its lifecycle. It returns the manager
 // name (e.g. PackageManagerHomebrew) and the resolved binary path, or
@@ -200,6 +213,9 @@ func PackageManagerInstall() (manager, path string) {
 	}
 	if homebrewCellarPattern.MatchString(resolved) {
 		return PackageManagerHomebrew, resolved
+	}
+	if homebrewCaskroomPattern.MatchString(resolved) {
+		return PackageManagerHomebrewCask, resolved
 	}
 	return "", ""
 }

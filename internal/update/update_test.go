@@ -726,6 +726,24 @@ func TestPackageManagerInstall(t *testing.T) {
 			wantManager: "",
 		},
 		{
+			name:        "arm homebrew caskroom",
+			binPath:     makeBinary("opt/homebrew/Caskroom/leo/0.10.0/leo"),
+			wantManager: PackageManagerHomebrewCask,
+		},
+		{
+			name:        "intel homebrew caskroom",
+			binPath:     makeBinary("usr/local/Caskroom/leo/0.10.0/leo"),
+			wantManager: PackageManagerHomebrewCask,
+		},
+		{
+			// Regression guard: a substring match would false-positive here
+			// because "/Caskroom/leo/" appears mid-path without the binary
+			// actually living in a versioned staging dir tail.
+			name:        "path contains Caskroom/leo but not the staged binary suffix",
+			binPath:     makeBinary("tmp/Caskroom/leo/source/cmd/leo/leo"),
+			wantManager: "",
+		},
+		{
 			name:        "osExecutable returns error",
 			execErr:     fmt.Errorf("no executable"),
 			wantManager: "",
