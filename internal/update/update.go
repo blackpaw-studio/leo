@@ -195,7 +195,9 @@ const PackageManagerHomebrewCask = "homebrew-cask"
 // EvalSymlinks). Anchored to the suffix for the same reason as
 // homebrewCellarPattern — a directory that merely contains "/Caskroom/leo/"
 // (e.g. a source checkout) shouldn't false-positive. The leading prefix is
-// free-form to cover all Homebrew roots.
+// free-form to cover all Homebrew roots. The "<version>/leo" suffix assumes
+// the release tarball keeps the binary at archive root (goreleaser archives
+// config), which is what the generated cask's `binary "leo"` stanza stages.
 var homebrewCaskroomPattern = regexp.MustCompile(`/Caskroom/leo/[^/]+/leo$`)
 
 // PackageManagerInstall reports whether the running binary was installed by
@@ -303,7 +305,6 @@ func DownloadAndReplaceWithOptions(version string, opts UpdateOptions) (string, 
 	// rather than silently installing.
 	if shouldVerifyAppleSignature(updateGOOS, version) {
 		if err := verifyAppleSignature(tmpPath); err != nil {
-			os.Remove(tmpPath)
 			return "", fmt.Errorf("verifying Apple code signature: %w", err)
 		}
 	}
