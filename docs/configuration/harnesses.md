@@ -202,6 +202,18 @@ headless: each firing spawns a fresh `codex exec --json
 
 Other things to know:
 
+- **Git metadata and `.agents` are re-opened in the sandbox.** Codex's
+  `workspace-write` sandbox deliberately keeps `.git`, `.agents`, and
+  `.codex` under each writable root read-only, which breaks unattended
+  commits (`git add` cannot create `.git/index.lock` — and in a linked git
+  worktree the real git dir lives outside the workspace entirely) and
+  project-skill creation. Since leo runs codex with approval policy `never`,
+  there is no escalation path, so leo grants these back explicitly: every
+  launch appends `-c sandbox_workspace_write.writable_roots=[…]` covering
+  the workspace's `.agents` dir plus the resolved git dir and git common
+  dir (worktree-aware). Inert unless `sandbox: workspace-write`. Note this
+  override replaces any `sandbox_workspace_write.writable_roots` set in
+  `~/.codex/config.toml`.
 - **No `approval:` key.** Headless `codex exec` has no approval flag at all —
   upstream removed it, and approval policy is hardcoded to `never`. Setting
   `harness_options.approval` is rejected: `option "approval" is not
