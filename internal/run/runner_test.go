@@ -1436,6 +1436,7 @@ func TestExecuteCommandInterruptReachesProcessSpawnedAfterTheSignal(t *testing.T
 
 	dir := t.TempDir()
 	readyFile := filepath.Join(dir, "trap-installed")
+	caughtEarlyFile := filepath.Join(dir, "caught-before-worker-spawned")
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		// The readiness marker is written only after the trap is installed, so
@@ -1446,10 +1447,21 @@ func TestExecuteCommandInterruptReachesProcessSpawnedAfterTheSignal(t *testing.T
 		// meant to pin.
 		//
 		// trap: survive the interrupt the way dash does while waiting on a
-		// foreground child. `sleep 0.5` is the window the signal lands in.
-		// `sleep 30` is the worker — spawned strictly after the signal, so it
-		// can only ever be reached by a *resent* one.
-		script := "trap 'caught=1' INT; : > '" + readyFile + "'; sleep 0.5; sleep 30"
+		// foreground child. The first sleep is the window the signal lands in;
+		// it is long so that a loaded runner cannot push the signal past it.
+		// The second sleep is the worker — spawned strictly after the signal,
+		// so it can only ever be reached by a *resent* one. Being interrupted
+		// cuts the first sleep short, so the generous window costs no runtime.
+		//
+		// The trap records *which phase* it fired in. Landing the signal in
+		// phase 2 would mean the worker already existed and got signaled
+		// directly — the test would then pass even with the fix reverted, so
+		// that case has to be detectable rather than silently green.
+		// Paths travel via the environment rather than being interpolated into
+		// the script, so nothing here depends on quoting a temp-dir path
+		// correctly inside an already-single-quoted trap body.
+		const script = `phase=1; trap '[ "$phase" = 1 ] && : > "$LEO_TEST_CAUGHT_EARLY"' INT; ` +
+			`: > "$LEO_TEST_READY"; sleep 3; phase=2; sleep 30`
 		return exec.Command("sh", "-c", script)
 	}
 
@@ -1463,7 +1475,11 @@ func TestExecuteCommandInterruptReachesProcessSpawnedAfterTheSignal(t *testing.T
 		// A non-empty channelInitPrefixes activates the io.Pipe stdout
 		// monitor, matching the configuration under which the hang was
 		// observed: cmd.Wait() cannot return until every pipe holder exits.
-		_, err := executeCommand(ctx, "claude", dir, nil, nil, nil, nil, []string{"plugin:doesnotmatter:"})
+		env := map[string]string{
+			"LEO_TEST_READY":        readyFile,
+			"LEO_TEST_CAUGHT_EARLY": caughtEarlyFile,
+		}
+		_, err := executeCommand(ctx, "claude", dir, nil, nil, nil, env, []string{"plugin:doesnotmatter:"})
 		resCh <- err
 	}()
 
@@ -1498,8 +1514,92 @@ func TestExecuteCommandInterruptReachesProcessSpawnedAfterTheSignal(t *testing.T
 		if elapsed := time.Since(start); elapsed >= 10*time.Second {
 			t.Errorf("executeCommand took %s to return, want < 10s — the process spawned after the interrupt was never signaled and ran to completion", elapsed)
 		}
+		// Guards against a vacuous pass: without this, a signal that arrived
+		// late enough to hit the worker directly would satisfy every
+		// assertion above while exercising none of the resend logic.
+		if _, err := os.Stat(caughtEarlyFile); err != nil {
+			t.Error("the interrupt did not land before the worker was spawned, so this run never exercised the resend path — the assertions above proved nothing")
+		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("executeCommand did not return after the interrupt — the forwarded signal never reached the process spawned after it")
+	}
+}
+
+// TestExecuteCommandInterruptEscalatesToSIGKILL pins the backstop half of the
+// interrupt fix: a child that simply refuses to die on SIGINT must still be
+// brought down, so an interrupt can never leave the caller blocked. Without
+// escalation the only thing ending this child is its own 30s sleep.
+//
+// `trap ” INT` sets SIG_IGN, which children inherit — so nothing in the
+// group can be killed by any number of resent SIGINTs, and only the SIGKILL
+// escalation can end it.
+func TestExecuteCommandInterruptEscalatesToSIGKILL(t *testing.T) {
+	origExec := execCommand
+	t.Cleanup(func() { execCommand = origExec })
+
+	origNotify := signalNotifyFn
+	t.Cleanup(func() { signalNotifyFn = origNotify })
+
+	// Shrink the grace period so the test doesn't wait out the production
+	// value. This is the knob interruptGracePeriod is a var for.
+	origGrace := interruptGracePeriod
+	interruptGracePeriod = 300 * time.Millisecond
+	t.Cleanup(func() { interruptGracePeriod = origGrace })
+
+	registered := make(chan chan<- os.Signal, 8)
+	signalNotifyFn = func(c chan<- os.Signal, sig ...os.Signal) {
+		registered <- c
+	}
+
+	dir := t.TempDir()
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		const script = `trap '' INT; : > "$LEO_TEST_READY"; sleep 30`
+		return exec.Command("sh", "-c", script)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	readyFile := filepath.Join(dir, "ignoring-sigint")
+	resCh := make(chan error, 1)
+	go func() {
+		env := map[string]string{"LEO_TEST_READY": readyFile}
+		_, err := executeCommand(ctx, "claude", dir, nil, nil, nil, env, nil)
+		resCh <- err
+	}()
+
+	var sigCh chan<- os.Signal
+	select {
+	case sigCh = <-registered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("signalNotifyFn was never invoked — executeCommand did not register a signal handler")
+	}
+
+	waitDeadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(readyFile); err == nil {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			t.Fatal("child never reported that it is ignoring SIGINT")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	sigCh <- syscall.SIGINT
+
+	start := time.Now()
+	select {
+	case err := <-resCh:
+		if !errors.Is(err, errInterrupted) {
+			t.Errorf("err = %v, want errInterrupted", err)
+		}
+		// Generous relative to the 300ms grace but far below the child's 30s
+		// sleep, so passing can only mean the escalation did the killing.
+		if elapsed := time.Since(start); elapsed >= 10*time.Second {
+			t.Errorf("executeCommand took %s to return, want < 10s — SIGKILL escalation did not fire", elapsed)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("executeCommand did not return — a child ignoring SIGINT was never escalated to SIGKILL")
 	}
 }
 
