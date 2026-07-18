@@ -32,7 +32,7 @@ Leo supervises long-running [Claude Code](https://docs.anthropic.com/en/docs/cla
 **Homebrew** (recommended):
 
 ```bash
-brew install blackpaw-studio/tap/leo
+brew install --cask blackpaw-studio/tap/leo
 ```
 
 **Shell installer:**
@@ -51,7 +51,7 @@ go install github.com/blackpaw-studio/leo/cmd/leo@latest
 
 > Leo runs on its own tmux socket (`-L leo`) so your personal `tmux ls` stays clean. Inspect Leo's sessions directly with `tmux -L leo ls`. See [tmux Config](docs/guides/tmux-config.md) for recommended settings.
 
-**Upgrading:** `leo update` replaces a tarball install in place and verifies the new release before swapping the binary. Homebrew users should run `brew upgrade blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands.
+**Upgrading:** `leo update` replaces a tarball install in place and verifies the new release before swapping the binary. Homebrew users should run `brew upgrade --cask blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands.
 
 <details>
 <summary><strong>Verified install</strong> (Sigstore cosign)</summary>

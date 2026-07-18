@@ -123,6 +123,14 @@ func newUpdateCmd() *cobra.Command {
 				warn.Println("  leo service restart    # reload the daemon and sync workspace files")
 				return nil
 
+			case mgr == update.PackageManagerHomebrewCask:
+				warn.Printf("leo is installed via Homebrew (%s).\n", mgrPath)
+				warn.Printf("Update available: %s → %s\n", Version, latest)
+				warn.Println("Upgrade with:")
+				warn.Println("  brew upgrade --cask blackpaw-studio/tap/leo")
+				warn.Println("  leo service restart    # reload the daemon and sync workspace files")
+				return nil
+
 			default:
 				info.Printf("Downloading leo %s...\n", latest)
 				opts := update.UpdateOptions{

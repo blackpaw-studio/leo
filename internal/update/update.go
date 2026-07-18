@@ -91,6 +91,13 @@ var (
 	// release version so the returned verifier can pin the SAN regex to
 	// that exact tag (see SignatureVerifierForVersion for rationale).
 	newSignatureVerifier = SignatureVerifierForVersion
+
+	// updateGOOS and updateGOARCH mirror runtime.GOOS/runtime.GOARCH but as
+	// package-level vars so tests can exercise cross-platform behavior (e.g.
+	// the darwin-only Apple codesign check) without needing to actually
+	// cross-compile or run on multiple OSes.
+	updateGOOS   = runtime.GOOS
+	updateGOARCH = runtime.GOARCH
 )
 
 // CheckLatestVersion returns the latest release tag from GitHub (e.g. "v0.5.2").
@@ -178,6 +185,21 @@ const PackageManagerHomebrew = "homebrew"
 // any custom HOMEBREW_CELLAR.
 var homebrewCellarPattern = regexp.MustCompile(`/Cellar/leo/[^/]+/bin/leo$`)
 
+// PackageManagerHomebrewCask is the manager string returned by
+// PackageManagerInstall when the running binary lives inside a Homebrew
+// Caskroom staging directory.
+const PackageManagerHomebrewCask = "homebrew-cask"
+
+// homebrewCaskroomPattern matches a Homebrew cask's staged binary path:
+// "<prefix>/Caskroom/leo/<version>/leo" (the bin/ symlink resolves here via
+// EvalSymlinks). Anchored to the suffix for the same reason as
+// homebrewCellarPattern — a directory that merely contains "/Caskroom/leo/"
+// (e.g. a source checkout) shouldn't false-positive. The leading prefix is
+// free-form to cover all Homebrew roots. The "<version>/leo" suffix assumes
+// the release tarball keeps the binary at archive root (goreleaser archives
+// config), which is what the generated cask's `binary "leo"` stanza stages.
+var homebrewCaskroomPattern = regexp.MustCompile(`/Caskroom/leo/[^/]+/leo$`)
+
 // PackageManagerInstall reports whether the running binary was installed by
 // a system package manager that owns its lifecycle. It returns the manager
 // name (e.g. PackageManagerHomebrew) and the resolved binary path, or
@@ -193,6 +215,9 @@ func PackageManagerInstall() (manager, path string) {
 	}
 	if homebrewCellarPattern.MatchString(resolved) {
 		return PackageManagerHomebrew, resolved
+	}
+	if homebrewCaskroomPattern.MatchString(resolved) {
+		return PackageManagerHomebrewCask, resolved
 	}
 	return "", ""
 }
@@ -224,7 +249,7 @@ func DownloadAndReplaceWithOptions(version string, opts UpdateOptions) (string, 
 	}
 
 	versionNum := strings.TrimPrefix(version, "v")
-	archiveName := fmt.Sprintf("leo_%s_%s_%s.tar.gz", versionNum, runtime.GOOS, runtime.GOARCH)
+	archiveName := fmt.Sprintf("leo_%s_%s_%s.tar.gz", versionNum, updateGOOS, updateGOARCH)
 
 	archiveBytes, err := downloadArchive(version, archiveName)
 	if err != nil {
@@ -272,6 +297,16 @@ func DownloadAndReplaceWithOptions(version string, opts UpdateOptions) (string, 
 	}
 	if err := os.Chmod(tmpPath, oldInfo.Mode()); err != nil {
 		return "", fmt.Errorf("setting permissions: %w", err)
+	}
+
+	// On macOS, releases from v0.10.0 onward are codesigned + notarized.
+	// Verify the extracted binary before swapping it in — a downloaded
+	// binary that fails Gatekeeper's signature check is worth aborting on
+	// rather than silently installing.
+	if shouldVerifyAppleSignature(updateGOOS, version) {
+		if err := verifyAppleSignature(tmpPath); err != nil {
+			return "", fmt.Errorf("verifying Apple code signature: %w", err)
+		}
 	}
 
 	// Atomic replace
