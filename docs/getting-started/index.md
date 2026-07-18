@@ -7,7 +7,7 @@ Get a personal AI assistant running in under 5 minutes.
 === "Homebrew"
 
     ```bash
-    brew install blackpaw-studio/tap/leo
+    brew install --cask blackpaw-studio/tap/leo
     ```
 
 === "Go"

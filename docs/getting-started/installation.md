@@ -7,13 +7,13 @@
     macOS and Linux:
 
     ```bash
-    brew install blackpaw-studio/tap/leo
+    brew install --cask blackpaw-studio/tap/leo
     ```
 
     **Upgrade:**
 
     ```bash
-    brew upgrade blackpaw-studio/tap/leo && leo service restart
+    brew upgrade --cask blackpaw-studio/tap/leo && leo service restart
     ```
 
     `leo update` detects the Homebrew install and prints these commands instead of trying to replace the Homebrew-managed binary.
