@@ -245,3 +245,54 @@ func TestValidateRepo(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveDisplayNameBeatsRepoShort pins the invariant the attach picker
+// advertises: the picker renders an agent by its DisplayName (PR #128), so
+// typing that display name must resolve to that exact agent — even when a
+// sibling worktree agent shares the same repo and would otherwise tie with it
+// at the repo-short tier.
+//
+// Regression: "leo attach vitals" reported the agent missing because
+// "leo-vitals" and "leo-vitals-enhancements" both reduced to repo-short
+// "vitals", making the query ambiguous.
+func TestResolveDisplayNameBeatsRepoShort(t *testing.T) {
+	mgr := newResolveManager(t,
+		map[string]ProcessState{
+			"leo-vitals":              {Status: "running"},
+			"leo-vitals-enhancements": {Status: "running"},
+		},
+		map[string]agentstore.Record{
+			"leo-vitals":              {Name: "leo-vitals", Repo: "evandcoleman/vitals"},
+			"leo-vitals-enhancements": {Name: "leo-vitals-enhancements", Repo: "evandcoleman/vitals"},
+		},
+	)
+	rec, err := mgr.Resolve("vitals")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rec.Name != "leo-vitals" {
+		t.Errorf("name = %q, want %q", rec.Name, "leo-vitals")
+	}
+}
+
+// TestResolveExactNameBeatsDisplayName guards the new tier's placement: a
+// bare-named agent ("vitals", as spawn stores it) and a renamed one
+// ("leo-vitals", as NormalizeAgentName rewrites it) can coexist, and both
+// answer to display name "vitals". The exact canonical name must win outright
+// rather than tying, so the query stays deterministic.
+func TestResolveExactNameBeatsDisplayName(t *testing.T) {
+	mgr := newResolveManager(t,
+		map[string]ProcessState{
+			"leo-vitals": {Status: "running"},
+			"vitals":     {Status: "running"},
+		},
+		nil,
+	)
+	rec, err := mgr.Resolve("vitals")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rec.Name != "vitals" {
+		t.Errorf("name = %q, want %q", rec.Name, "vitals")
+	}
+}

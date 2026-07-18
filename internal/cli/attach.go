@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -75,8 +77,20 @@ session as a native tab via tmux control mode.`,
 
 			// AgentSession is the authoritative presence check: the daemon only
 			// returns a session for agents the agentstore knows about.
+			//
+			// Only a genuine not-found collapses to the friendly message. Every
+			// other failure — most importantly *agent.ErrAmbiguous, which names
+			// the candidates the user must choose between — is propagated
+			// verbatim, since reporting it as "no agent named" sends the user
+			// looking for an agent that plainly exists.
 			session, err := lookupAgentSession(cmd.Context(), cfg.HomePath, name)
-			if err != nil || session == "" {
+			var notFound *agent.ErrNotFound
+			switch {
+			case errors.As(err, &notFound):
+				return fmt.Errorf("no agent named %q", name)
+			case err != nil:
+				return err
+			case session == "":
 				return fmt.Errorf("no agent named %q", name)
 			}
 
