@@ -93,7 +93,7 @@ The in-process cron scheduler runs tasks on a schedule. Each task reads a prompt
 === "Homebrew"
 
     ```bash
-    brew install blackpaw-studio/tap/leo
+    brew install --cask blackpaw-studio/tap/leo
     ```
 
 === "Install Script"
