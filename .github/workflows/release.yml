@@ -48,6 +48,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Apple codesign + notarization of the darwin binaries (quill,
+          # cross-platform — see the notarize block in .goreleaser.yaml).
+          # MACOS_SIGN_P12 is the base64-encoded Developer ID Application
+          # identity; MACOS_NOTARY_KEY is the base64-encoded App Store
+          # Connect API key (.p8). If the secrets are absent the notarize
+          # step is skipped rather than failing the release.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
 
       # Publish install.sh + its sha256 as release assets so users can
       # verify the bootstrap script before piping it to a shell.
