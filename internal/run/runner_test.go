@@ -1393,6 +1393,116 @@ func TestExecuteCommandKillsGrandchildOnChannelInitFailure(t *testing.T) {
 	}
 }
 
+// TestExecuteCommandInterruptReachesProcessSpawnedAfterTheSignal is the
+// regression test for the flake in
+// TestRunInterruptStopsImmediatelyWithoutRetryOrNotify.
+//
+// A forwarded SIGINT/SIGTERM used to be delivered to the child's process group
+// exactly once. kill() was already hardened against the "straggler" race with
+// a resend loop; the forwarding path was not, and that asymmetry was the bug.
+//
+// A single kill(-pgid) only reaches processes that exist in the group at that
+// instant, and the process that actually matters may not exist yet: the
+// interrupt lands microseconds after cmd.Start(), before the child has forked
+// the worker holding stdout. That is not hypothetical — `sh -c "sleep 30"`
+// under dash (Linux CI) *forks* its worker rather than exec'ing it, and dash
+// *catches* SIGINT and keeps waiting instead of dying. Observed on a
+// reproduced failure: kill(-pgid, SIGINT) returned success, yet both `sh` and
+// its `sleep` were still alive, the `sleep` still at SIG_DFL — proof it was
+// forked after the signal and never received one. It then ran to completion
+// holding the stdout pipe open, so cmd.Wait() blocked for the child's full
+// lifetime. macOS never reproduced it because its `sh` is bash, which execs
+// the worker instead of forking it, leaving no window.
+//
+// The fake child models that shape deterministically on every platform rather
+// than racing for it: it traps SIGINT (so it survives the signal, as dash
+// does) and only then spawns the long-lived worker that holds stdout — i.e.
+// the worker is guaranteed to be created *after* the signal was delivered.
+// With one-shot delivery, executeCommand blocks for the worker's full 30s.
+func TestExecuteCommandInterruptReachesProcessSpawnedAfterTheSignal(t *testing.T) {
+	origExec := execCommand
+	t.Cleanup(func() { execCommand = origExec })
+
+	origNotify := signalNotifyFn
+	t.Cleanup(func() { signalNotifyFn = origNotify })
+
+	// Buffered generously: a blocking stub would deadlock executeCommand
+	// before cmd.Wait() and turn any unexpected extra spawn into an opaque
+	// hang rather than a legible failure.
+	registered := make(chan chan<- os.Signal, 8)
+	signalNotifyFn = func(c chan<- os.Signal, sig ...os.Signal) {
+		registered <- c
+	}
+
+	dir := t.TempDir()
+	readyFile := filepath.Join(dir, "trap-installed")
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		// The readiness marker is written only after the trap is installed, so
+		// the test can guarantee the signal lands on a child that survives it.
+		// Without the handshake the RED state is itself a race: on macOS the
+		// interrupt beats the shell to installing its trap, the child dies on
+		// the spot, and the test passes vacuously against the very code it is
+		// meant to pin.
+		//
+		// trap: survive the interrupt the way dash does while waiting on a
+		// foreground child. `sleep 0.5` is the window the signal lands in.
+		// `sleep 30` is the worker — spawned strictly after the signal, so it
+		// can only ever be reached by a *resent* one.
+		script := "trap 'caught=1' INT; : > '" + readyFile + "'; sleep 0.5; sleep 30"
+		return exec.Command("sh", "-c", script)
+	}
+
+	// Long enough that the deadline can never be what ends the child — only
+	// the forwarded signal can.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	resCh := make(chan error, 1)
+	go func() {
+		// A non-empty channelInitPrefixes activates the io.Pipe stdout
+		// monitor, matching the configuration under which the hang was
+		// observed: cmd.Wait() cannot return until every pipe holder exits.
+		_, err := executeCommand(ctx, "claude", dir, nil, nil, nil, nil, []string{"plugin:doesnotmatter:"})
+		resCh <- err
+	}()
+
+	var sigCh chan<- os.Signal
+	select {
+	case sigCh = <-registered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("signalNotifyFn was never invoked — executeCommand did not register a signal handler")
+	}
+
+	waitDeadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(readyFile); err == nil {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			t.Fatal("child never reported its SIGINT trap as installed")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	sigCh <- syscall.SIGINT
+
+	start := time.Now()
+	select {
+	case err := <-resCh:
+		if !errors.Is(err, errInterrupted) {
+			t.Errorf("err = %v, want errInterrupted", err)
+		}
+		// The worker sleeps 30s. Returning anywhere near that means it was
+		// never signaled and simply ran to completion, so bound the return
+		// well under it — passing must mean the signal actually reached it.
+		if elapsed := time.Since(start); elapsed >= 10*time.Second {
+			t.Errorf("executeCommand took %s to return, want < 10s — the process spawned after the interrupt was never signaled and ran to completion", elapsed)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("executeCommand did not return after the interrupt — the forwarded signal never reached the process spawned after it")
+	}
+}
+
 // TestRunStaleSessionInAttemptRetryTimeoutReason is the regression test for
 // finding 3: the in-attempt stale-session retry (runTaskAttempt) shares the
 // same per-attempt context/deadline as the initial --resume spawn. If the
@@ -1546,7 +1656,13 @@ func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
 
 	// Captures the channel executeCommand registers via signalNotifyFn, so
 	// the test can push a fake signal into it once Run() is underway.
-	registered := make(chan chan<- os.Signal, 1)
+	//
+	// Buffered well beyond the one registration this test expects: the stub
+	// runs inside executeCommand *before* cmd.Wait(), so if a regression ever
+	// caused an extra spawn, a tight buffer would block there and strand Run()
+	// entirely — turning a clear "invocations = 2, want 1" failure into an
+	// opaque timeout that says nothing about the actual defect.
+	registered := make(chan chan<- os.Signal, 8)
 	signalNotifyFn = func(c chan<- os.Signal, sig ...os.Signal) {
 		registered <- c
 	}

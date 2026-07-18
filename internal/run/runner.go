@@ -60,6 +60,16 @@ const maxChannelInitAttempts = 2
 // retry-exhaustion path.
 var channelInitBackoff = 2 * time.Second
 
+// interruptResendInterval is how often a forwarded SIGINT/SIGTERM is re-sent
+// to the child's process group while waiting for the child to exit.
+const interruptResendInterval = 20 * time.Millisecond
+
+// interruptGracePeriod bounds how long a forwarded interrupt is given to bring
+// the child down on its own terms before executeCommand escalates to SIGKILL,
+// so an interrupt can never leave the caller blocked indefinitely. A
+// package-level var (not const) so tests can shrink it.
+var interruptGracePeriod = 2 * time.Second
+
 // notifyOutputSeparator prefixes the notify-on-fail child's captured output
 // when it is appended to the task's log file.
 const notifyOutputSeparator = "\n--- notify-on-fail output ---\n"
@@ -651,6 +661,40 @@ func executeCommand(ctx context.Context, binary, workDir string, args []string, 
 		}()
 	}
 
+	// forwardInterrupt delivers a forwarded SIGINT/SIGTERM to the child's
+	// process group and keeps re-sending it until the child is reaped,
+	// escalating to SIGKILL once the grace period expires.
+	//
+	// A single kill(-pgid) only reaches the processes in the group at that
+	// instant, and the one that actually matters may not exist yet: an
+	// interrupt arriving just after cmd.Start() lands before the child has
+	// forked the worker that holds stdout open. The parent may well survive it
+	// — a shell waiting on a foreground child *catches* SIGINT rather than
+	// dying — and then forks a worker that never receives anything, runs to
+	// completion holding the pipe, and blocks cmd.Wait() for its full
+	// lifetime. Re-sending closes that window; the SIGKILL escalation
+	// guarantees an interrupt can never hang the caller outright. This mirrors
+	// kill()'s resend loop, which exists for the very same race.
+	forwardInterrupt := func(sig syscall.Signal) {
+		signalGroup(sig)
+		go func() {
+			ticker := time.NewTicker(interruptResendInterval)
+			defer ticker.Stop()
+			escalate := time.After(interruptGracePeriod)
+			for {
+				select {
+				case <-done:
+					return
+				case <-escalate:
+					kill()
+					return
+				case <-ticker.C:
+					signalGroup(sig)
+				}
+			}
+		}()
+	}
+
 	// Monitor context in background; kill process if deadline expires.
 	go func() {
 		select {
@@ -672,6 +716,7 @@ func executeCommand(ctx context.Context, binary, workDir string, args []string, 
 	// signal that killed this child" from an ordinary child failure and
 	// return errInterrupted instead.
 	var interrupted atomic.Bool
+	var forwardOnce sync.Once
 	sigCh := make(chan os.Signal, 1)
 	signalNotifyFn(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -681,7 +726,17 @@ func executeCommand(ctx context.Context, binary, workDir string, args []string, 
 			case sig := <-sigCh:
 				if s, ok := sig.(syscall.Signal); ok {
 					interrupted.Store(true)
-					signalGroup(s)
+					// Only the first signal starts a resend loop; later ones
+					// are forwarded directly so repeated Ctrl-C can't stack
+					// redundant loops on top of the one already running.
+					started := false
+					forwardOnce.Do(func() {
+						started = true
+						forwardInterrupt(s)
+					})
+					if !started {
+						signalGroup(s)
+					}
 				}
 			case <-done:
 				return
