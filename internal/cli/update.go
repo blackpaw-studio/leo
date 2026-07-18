@@ -242,6 +242,14 @@ func maybeRestartDaemon() error {
 	if !daemon.IsRunning(cfg.HomePath) {
 		return nil
 	}
+	// Without a terminal there is nobody to answer the prompt, and the
+	// empty read would silently accept the "yes" default — restarting the
+	// daemon out from under an unattended update. Leave the restart to
+	// the operator instead.
+	if !prompt.IsInteractive() {
+		info.Println("\nDaemon is still running the previous binary. Restart it when ready with: leo service restart")
+		return nil
+	}
 	reader := bufio.NewReader(os.Stdin)
 	if !prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
 		return nil
