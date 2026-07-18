@@ -10,6 +10,7 @@ git tag v0.2.0 ──> GitHub Actions ──> CI (test + lint)
                                         ▼
                                     GoReleaser
                                     ├── Build binaries (darwin/linux × amd64/arm64)
+                                    ├── Sign + notarize darwin binaries (Apple)
                                     ├── Create GitHub Release with changelog
                                     └── Upload archives + checksums
 ```
@@ -96,9 +97,40 @@ make snapshot
 
 This creates a full build in `dist/` without pushing anything.
 
+## macOS Signing & Notarization
+
+The darwin binaries are codesigned with a Developer ID Application identity
+(hardened runtime + timestamp) and notarized by Apple during the release, via
+GoReleaser's built-in [quill](https://github.com/anchore/quill) support — it
+runs cross-platform on the ubuntu runner, no macOS machine involved.
+
+The `notarize` block in `.goreleaser.yaml` is gated on `MACOS_SIGN_P12` being
+set, so local snapshots and the prerelease/unstable workflows build unsigned
+(ad-hoc) binaries without needing any credentials.
+
+Plain Mach-O binaries cannot have a notarization ticket stapled (only apps,
+dmgs, and pkgs can), so Gatekeeper verifies notarization with an online check
+on first launch of a quarantined copy.
+
 ## Setup (Maintainers)
 
-`GITHUB_TOKEN` is provided automatically by GitHub Actions — no additional secrets are needed.
+`GITHUB_TOKEN` is provided automatically by GitHub Actions. The remaining
+secrets are configured on the repo:
+
+| Secret | Contents |
+|--------|----------|
+| `HOMEBREW_TAP_GITHUB_TOKEN` | Token with push access to `blackpaw-studio/homebrew-tap` |
+| `MACOS_SIGN_P12` | Base64-encoded Developer ID Application identity (cert + key) |
+| `MACOS_SIGN_PASSWORD` | Passphrase for the p12 |
+| `MACOS_NOTARY_ISSUER_ID` | App Store Connect API issuer UUID |
+| `MACOS_NOTARY_KEY_ID` | App Store Connect API key ID |
+| `MACOS_NOTARY_KEY` | Base64-encoded App Store Connect API key (`.p8`) |
+
+The signing identity and API key originals live in 1Password (Blackpaw Studio
+vault). The Developer ID certificate is effectively irreplaceable — Apple
+allows neither self-service revocation nor new Developer ID certs without
+Account Holder interaction, and the account is at its certificate cap — so
+treat the 1Password item as the source of truth and never delete it.
 
 ## Troubleshooting
 

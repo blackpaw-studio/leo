@@ -14,6 +14,23 @@ builds:
     env:
       - CGO_ENABLED=0
 
+# Sign + notarize the darwin binaries with Apple via quill (built into
+# goreleaser), so Gatekeeper accepts browser-downloaded copies. Runs
+# cross-platform — no macOS runner needed. Gated on the signing cert being
+# present in the environment so local/snapshot builds skip it cleanly.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      sign:
+        certificate: "{{.Env.MACOS_SIGN_P12}}"
+        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
+        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
+        key: "{{.Env.MACOS_NOTARY_KEY}}"
+        wait: true
+        timeout: 20m
+
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
