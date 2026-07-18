@@ -35,10 +35,14 @@ func (e *ErrNotFound) Error() string {
 //
 // Matching tiers (first non-empty tier wins):
 //  1. Exact full name (case-insensitive).
-//  2. Exact stored Repo (e.g. "owner/name").
-//  3. Repo short — the segment after "/" for "owner/name" repos, or the full
+//  2. Exact display name — the full name with the leo- prefix stripped. This is
+//     the name the attach picker and web UI render, so what the user sees is
+//     always resolvable; it must outrank the repo tiers, since a renamed agent
+//     and its worktree siblings share a repo and would otherwise tie.
+//  3. Exact stored Repo (e.g. "owner/name").
+//  4. Repo short — the segment after "/" for "owner/name" repos, or the full
 //     value for slashless repos.
-//  4. Suffix "-<query>" on the full name.
+//  5. Suffix "-<query>" on the full name.
 //
 // Only live agents participate; a stopped agent is never returned.
 func (m *Manager) Resolve(query string) (Record, error) {
@@ -78,10 +82,13 @@ func (m *Manager) Resolve(query string) (Record, error) {
 	q := strings.ToLower(query)
 	suffixProbe := "-" + q
 
-	var exactName, exactRepo, repoShort, suffix []row
+	var exactName, displayName, exactRepo, repoShort, suffix []row
 	for _, r := range rows {
 		if strings.EqualFold(r.name, query) {
 			exactName = append(exactName, r)
+		}
+		if strings.EqualFold(DisplayName(r.name), query) {
+			displayName = append(displayName, r)
 		}
 		if r.rec.Repo != "" && strings.EqualFold(r.rec.Repo, query) {
 			exactRepo = append(exactRepo, r)
@@ -94,7 +101,7 @@ func (m *Manager) Resolve(query string) (Record, error) {
 		}
 	}
 
-	for _, tier := range [][]row{exactName, exactRepo, repoShort, suffix} {
+	for _, tier := range [][]row{exactName, displayName, exactRepo, repoShort, suffix} {
 		switch len(tier) {
 		case 0:
 			continue

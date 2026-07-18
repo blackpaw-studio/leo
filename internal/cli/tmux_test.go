@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
@@ -126,8 +127,11 @@ func TestAttachAliasMissingReturnsError(t *testing.T) {
 	path := newAttachAliasTestConfig(t)
 	withStubExec(t)
 	withStubStdio(t)
+	// The daemon returns a typed *agent.ErrNotFound for a resolve miss (see
+	// daemon.AgentSession) — stub that shape, not a bare error, so the test
+	// exercises the real not-found branch rather than the catch-all.
 	stubAgentSession(t, func(workDir, name string) (string, error) {
-		return "", fmt.Errorf("not found")
+		return "", &agent.ErrNotFound{Query: name}
 	})
 
 	root := newRootCmd()
@@ -291,4 +295,33 @@ func containsAll(haystack, needles []string) bool {
 		}
 	}
 	return true
+}
+
+// TestAttachAliasSurfacesAmbiguousError verifies that `leo attach <name>`
+// propagates the daemon's typed resolve failure instead of flattening every
+// error into "no agent named". An ambiguous query carries the candidate names
+// the user needs to disambiguate; reporting it as "not found" sent the user
+// hunting for an agent that plainly existed.
+func TestAttachAliasSurfacesAmbiguousError(t *testing.T) {
+	path := newAttachAliasTestConfig(t)
+	withStubExec(t)
+	withStubStdio(t)
+	stubAgentSession(t, func(workDir, name string) (string, error) {
+		return "", &agent.ErrAmbiguous{
+			Query:   "vitals",
+			Matches: []string{"leo-vitals", "leo-vitals-enhancements"},
+		}
+	})
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "vitals", "--host", "localhost"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for ambiguous name")
+	}
+	for _, want := range []string{"ambiguous", "leo-vitals", "leo-vitals-enhancements"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err.Error(), want)
+		}
+	}
 }
