@@ -14,7 +14,7 @@ leo update --version main-<short-sha>
 
 ## Description
 
-Fetches the latest release from GitHub, verifies its cosign signature (keyless, via the public Sigstore transparency log), and swaps it in atomically. On macOS, releases from v0.10.0 onward are additionally verified against the Blackpaw Apple Developer ID code signature (`codesign`, pinned to the team ID) before the swap — an independent trust root on top of Sigstore. If Leo was installed via Homebrew, `leo update` delegates to `brew upgrade --cask leo` so your package manager stays in sync.
+Fetches the latest release from GitHub, verifies its cosign signature (keyless, via the public Sigstore transparency log), and swaps it in atomically. On macOS, releases from v0.10.1 onward are additionally verified against the Blackpaw Apple Developer ID code signature (`codesign`, pinned to the team ID) before the swap — an independent trust root on top of Sigstore. If Leo was installed via Homebrew, `leo update` delegates to `brew upgrade --cask leo` so your package manager stays in sync.
 
 Operational instructions/skills are served on demand via the `leo_skill` MCP tool rather than synced files, so they update automatically with the binary — no workspace re-sync or daemon restart required to pick them up.
 
