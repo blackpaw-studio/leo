@@ -15,10 +15,11 @@ func TestShouldVerifyAppleSignature(t *testing.T) {
 		version string
 		want    bool
 	}{
-		{"darwin at first signed release", "darwin", "v0.10.0", true},
+		{"darwin at first signed release", "darwin", "v0.10.1", true},
+		{"darwin at last unsigned release", "darwin", "v0.10.0", false},
 		{"darwin before first signed release", "darwin", "v0.9.5", false},
 		{"darwin well after first signed release", "darwin", "v1.2.3", true},
-		{"linux at first signed release", "linux", "v0.10.0", false},
+		{"linux at first signed release", "linux", "v0.10.1", false},
 		{"darwin dev build", "darwin", "dev", false},
 	}
 
@@ -37,10 +38,12 @@ func TestAppleSignatureExpected(t *testing.T) {
 		version string
 		want    bool
 	}{
-		{"v0.10.0", true},
+		{"v0.10.1", true},
+		{"v0.10.0", false},
+		{"v0.11.0", true},
 		{"v0.9.5", false},
 		{"v1.0.0", true},
-		{"0.10.0", true},
+		{"0.10.1", true},
 		{"dev", false},
 		{"", false},
 	}
@@ -105,14 +108,14 @@ func TestDownloadAndReplaceWithOptions_AppleSignatureVerification(t *testing.T) 
 		{
 			name:         "darwin signed-era version calls codesign",
 			goos:         "darwin",
-			version:      "v0.10.0",
+			version:      "v0.10.1",
 			wantCodesign: true,
 			wantReplaced: true,
 		},
 		{
 			name:         "linux skips codesign entirely",
 			goos:         "linux",
-			version:      "v0.10.0",
+			version:      "v0.10.1",
 			wantCodesign: false,
 			wantReplaced: true,
 		},
@@ -126,7 +129,7 @@ func TestDownloadAndReplaceWithOptions_AppleSignatureVerification(t *testing.T) 
 		{
 			name:         "darwin failing codesign aborts before replace",
 			goos:         "darwin",
-			version:      "v0.10.0",
+			version:      "v0.10.1",
 			codesignErr:  fmt.Errorf("exit status 1"),
 			wantCodesign: true,
 			wantErr:      true,

@@ -7,8 +7,8 @@ import (
 )
 
 // appleTeamID is Blackpaw Studio's Apple Developer Team ID. Darwin release
-// binaries starting with v0.10.0 are signed under this identity and
-// notarized by Apple.
+// binaries starting with v0.10.1 are signed under this identity and
+// notarized by Apple (v0.10.0 shipped before signing was added).
 const appleTeamID = "52M9C6892K"
 
 // appleCodesignRequirement is a codesign "designated requirement" string
@@ -45,7 +45,7 @@ func shouldVerifyAppleSignature(goos, version string) bool {
 }
 
 // appleSignatureExpected reports whether version is expected to carry an
-// Apple codesign signature — true for v0.10.0 and later, the first signed
+// Apple codesign signature — true for v0.10.1 and later, the first signed
 // release. "dev" and "" (unversioned/local builds) are never expected to be
 // signed.
 func appleSignatureExpected(version string) bool {
@@ -57,7 +57,7 @@ func appleSignatureExpected(version string) bool {
 	const (
 		firstSignedMajor = 0
 		firstSignedMinor = 10
-		firstSignedPatch = 0
+		firstSignedPatch = 1
 	)
 
 	parts := parseVersion(trimmed)
