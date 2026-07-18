@@ -15,7 +15,7 @@ const appleTeamID = "52M9C6892K"
 // pinning the check to our specific Developer ID Application certificate
 // (issued by Apple's own root, not just "any Apple-signed binary").
 var appleCodesignRequirement = fmt.Sprintf(
-	`anchor apple generic and certificate leaf[subject.OU] = "%s"`, appleTeamID,
+	`anchor apple generic and certificate leaf[subject.OU] = %q`, appleTeamID,
 )
 
 // runCodesign execs the real /usr/bin/codesign binary. Overridden in tests
