@@ -63,14 +63,18 @@ changelog:
       - "^test:"
       - "^chore:"
 
-brews:
+# Published as a cask, not a formula: goreleaser is phasing out `brews`,
+# and casks quarantine their downloads by default — so Gatekeeper actually
+# assesses the (signed + notarized) binary on install, which the old
+# formula path never did.
+homebrew_casks:
   - name: leo
     repository:
       owner: blackpaw-studio
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/blackpaw-studio/leo"
     description: "Supervise persistent Claude Code agents with scheduling and channel plugins"
     license: MIT
@@ -78,13 +82,13 @@ brews:
     commit_author:
       name: goreleaser-bot
       email: bot@blackpaw.studio
+    url:
+      verified: "github.com/blackpaw-studio/leo/releases/download"
     dependencies:
-      - name: tmux
+      - formula: tmux
     caveats: |
       leo requires the `claude` CLI at runtime. Install it from:
         https://docs.claude.com/claude-code
 
       On first run, configure leo with:
         leo setup
-    test: |
-      assert_match "leo #{version}", shell_output("#{bin}/leo version")
