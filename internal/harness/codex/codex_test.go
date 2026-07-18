@@ -96,12 +96,17 @@ func TestArgs(t *testing.T) {
 	tests := []struct {
 		name string
 		spec harness.LaunchSpec
-		want []string
+		// want returns the expected argv given the per-test temp workspace,
+		// so expectations track sandboxWritableRootsArgs' own (symlink-
+		// resolved) output rather than duplicating its logic with literals.
+		want func(ws string) []string
 	}{
 		{
 			name: "fresh minimal",
 			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "do it", Options: Options{}},
-			want: []string{"exec", "--json", "--skip-git-repo-check", "do it"},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check"}, ws, []string{"do it"})
+			},
 		},
 		{
 			name: "model, sandbox, resume",
@@ -110,9 +115,11 @@ func TestArgs(t *testing.T) {
 				Session: harness.SessionState{Mode: harness.SessionResume, ID: "tid-9"},
 				Options: Options{Sandbox: "workspace-write"},
 			},
-			want: []string{"exec", "--json", "--skip-git-repo-check",
-				"--model", "gpt-5.3-codex", "--sandbox", "workspace-write",
-				"resume", "tid-9", "again"},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check",
+					"--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
+					ws, []string{"resume", "tid-9", "again"})
+			},
 		},
 		{
 			name: "leo MCP bridge",
@@ -123,59 +130,82 @@ func TestArgs(t *testing.T) {
 					ApprovalMode: "approve",
 				},
 			}},
-			want: []string{"exec", "--json", "--skip-git-repo-check",
-				"-c", `mcp_servers.leo.command="leo"`,
-				"-c", `mcp_servers.leo.args=["mcp-server"]`,
-				"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN"]`,
-				"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`,
-				"p"},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check"}, ws, []string{
+					"-c", `mcp_servers.leo.command="leo"`,
+					"-c", `mcp_servers.leo.args=["mcp-server"]`,
+					"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN"]`,
+					"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`,
+					"p"})
+			},
 		},
 		{
 			name: "leo system context nudge",
 			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "p", SystemContext: "you're running under leo",
 				Options: Options{}},
-			want: []string{"exec", "--json", "--skip-git-repo-check",
-				"-c", `developer_instructions="you're running under leo"`,
-				"p"},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check",
+					"-c", `developer_instructions="you're running under leo"`},
+					ws, []string{"p"})
+			},
 		},
 		{
 			name: "empty system context omits developer_instructions",
 			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "p", SystemContext: "", Options: Options{}},
-			want: []string{"exec", "--json", "--skip-git-repo-check", "p"},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check"}, ws, []string{"p"})
+			},
 		},
 		{
 			name: "multi-line system context is toml-escaped",
 			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "p", SystemContext: "line one\nline two\ttabbed",
 				Options: Options{}},
-			want: []string{"exec", "--json", "--skip-git-repo-check",
-				"-c", `developer_instructions="line one\nline two\ttabbed"`,
-				"p"},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check",
+					"-c", `developer_instructions="line one\nline two\ttabbed"`},
+					ws, []string{"p"})
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Codex{}.Args(tt.spec)
+			ws := t.TempDir()
+			spec := tt.spec
+			spec.Workspace = ws
+			got, err := Codex{}.Args(spec)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("got %v\nwant %v", got, tt.want)
+			want := tt.want(ws)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got %v\nwant %v", got, want)
 			}
 		})
 	}
+}
+
+// withRoots splices sandboxWritableRootsArgs(ws) between before and after,
+// mirroring the insertion point Args() uses (after developer_instructions,
+// before the LeoMCP bridge / session args / prompt).
+func withRoots(before []string, ws string, after []string) []string {
+	want := append([]string{}, before...)
+	want = append(want, sandboxWritableRootsArgs(ws)...)
+	return append(want, after...)
 }
 
 func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 	tests := []struct {
 		name string
 		spec harness.LaunchSpec
-		want []string
+		want func(ws string) []string
 	}{
 		{
 			name: "KindAgent TUI argv",
 			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol",
 				Options: Options{Sandbox: "workspace-write"}},
-			want: []string{"-a", "never", "--model", "gpt-5.6-sol", "--sandbox", "workspace-write"},
+			want: func(ws string) []string {
+				return withRoots([]string{"-a", "never", "--model", "gpt-5.6-sol", "--sandbox", "workspace-write"}, ws, nil)
+			},
 		},
 		{
 			name: "KindAgent TUI argv with MCP bridge",
@@ -189,33 +219,43 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 					},
 				},
 			},
-			want: []string{"-a", "never", "--model", "gpt-5.3-codex",
-				"-c", `mcp_servers.leo.command="leo"`,
-				"-c", `mcp_servers.leo.args=["mcp-server"]`,
-				"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME"]`,
-				"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`},
+			want: func(ws string) []string {
+				return withRoots([]string{"-a", "never", "--model", "gpt-5.3-codex"}, ws, []string{
+					"-c", `mcp_servers.leo.command="leo"`,
+					"-c", `mcp_servers.leo.args=["mcp-server"]`,
+					"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME"]`,
+					"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`})
+			},
 		},
 		{
 			name: "KindAgent no model no sandbox",
 			spec: harness.LaunchSpec{Kind: harness.KindAgent, Options: Options{}},
-			want: []string{"-a", "never"},
+			want: func(ws string) []string {
+				return withRoots([]string{"-a", "never"}, ws, nil)
+			},
 		},
 		{
 			name: "KindAgent TUI argv with system context",
 			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol",
 				SystemContext: "you're running under leo", Options: Options{}},
-			want: []string{"-a", "never", "--model", "gpt-5.6-sol",
-				"-c", `developer_instructions="you're running under leo"`},
+			want: func(ws string) []string {
+				return withRoots([]string{"-a", "never", "--model", "gpt-5.6-sol",
+					"-c", `developer_instructions="you're running under leo"`}, ws, nil)
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Codex{}.Args(tt.spec)
+			ws := t.TempDir()
+			spec := tt.spec
+			spec.Workspace = ws
+			got, err := Codex{}.Args(spec)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("got %#v\nwant %#v", got, tt.want)
+			want := tt.want(ws)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got %#v\nwant %#v", got, want)
 			}
 			for _, tok := range got {
 				if tok == "exec" || tok == "--json" || tok == "resume" {
