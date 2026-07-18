@@ -91,6 +91,13 @@ var (
 	// release version so the returned verifier can pin the SAN regex to
 	// that exact tag (see SignatureVerifierForVersion for rationale).
 	newSignatureVerifier = SignatureVerifierForVersion
+
+	// updateGOOS and updateGOARCH mirror runtime.GOOS/runtime.GOARCH but as
+	// package-level vars so tests can exercise cross-platform behavior (e.g.
+	// the darwin-only Apple codesign check) without needing to actually
+	// cross-compile or run on multiple OSes.
+	updateGOOS   = runtime.GOOS
+	updateGOARCH = runtime.GOARCH
 )
 
 // CheckLatestVersion returns the latest release tag from GitHub (e.g. "v0.5.2").
@@ -224,7 +231,7 @@ func DownloadAndReplaceWithOptions(version string, opts UpdateOptions) (string, 
 	}
 
 	versionNum := strings.TrimPrefix(version, "v")
-	archiveName := fmt.Sprintf("leo_%s_%s_%s.tar.gz", versionNum, runtime.GOOS, runtime.GOARCH)
+	archiveName := fmt.Sprintf("leo_%s_%s_%s.tar.gz", versionNum, updateGOOS, updateGOARCH)
 
 	archiveBytes, err := downloadArchive(version, archiveName)
 	if err != nil {
@@ -272,6 +279,17 @@ func DownloadAndReplaceWithOptions(version string, opts UpdateOptions) (string, 
 	}
 	if err := os.Chmod(tmpPath, oldInfo.Mode()); err != nil {
 		return "", fmt.Errorf("setting permissions: %w", err)
+	}
+
+	// On macOS, releases from v0.10.0 onward are codesigned + notarized.
+	// Verify the extracted binary before swapping it in — a downloaded
+	// binary that fails Gatekeeper's signature check is worth aborting on
+	// rather than silently installing.
+	if shouldVerifyAppleSignature(updateGOOS, version) {
+		if err := verifyAppleSignature(tmpPath); err != nil {
+			os.Remove(tmpPath)
+			return "", fmt.Errorf("verifying Apple code signature: %w", err)
+		}
 	}
 
 	// Atomic replace
