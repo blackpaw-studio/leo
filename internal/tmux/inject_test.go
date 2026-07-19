@@ -424,7 +424,14 @@ func TestInjectPromptConfirmsPasteBeforeSubmitting(t *testing.T) {
 func TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately(t *testing.T) {
 	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
 	submitConfirmAttempts = 25
-	submitConfirmPoll = 200 * time.Millisecond // would be very slow if ever waited on
+	// A large poll interval, asserted against below by margin (elapsed must
+	// stay under half of it) rather than a tight absolute wall-clock bound —
+	// a tight bound (e.g. "<100ms") is indistinguishable from ordinary
+	// subprocess-exec overhead (this test now shells out to list-panes too)
+	// on a loaded/slow CI runner, which caused a real flake. Any accidental
+	// poll sleep here misses the margin by hundreds of ms; exec overhead
+	// (single-digit ms even under load) cannot.
+	submitConfirmPoll = 800 * time.Millisecond
 	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
 
 	var got [][]string
@@ -453,8 +460,13 @@ func TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately(t *testing.T) {
 	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Fatalf("expected no added latency on the synchronous-paste path, took %v", elapsed)
+	// Margin-based, not a tight absolute bound: any accidental confirm-loop
+	// poll sleep (submitConfirmPoll = 800ms) blows well past half a poll
+	// interval, while ordinary subprocess-exec overhead for this test's
+	// handful of tmux calls (a few ms each, even on a loaded CI runner)
+	// cannot.
+	if elapsed := time.Since(start); elapsed > submitConfirmPoll/2 {
+		t.Fatalf("expected no added latency on the synchronous-paste path, took %v (poll interval is %v)", elapsed, submitConfirmPoll)
 	}
 	if captureCalls != 2 {
 		t.Fatalf("expected exactly 2 capture-pane calls (1 readiness + 1 confirm), got %d: %#v", captureCalls, got)
