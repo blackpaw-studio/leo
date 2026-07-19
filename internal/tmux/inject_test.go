@@ -14,6 +14,17 @@ func paneWithInput(text string) string {
 	return "──────── border ────────\n❯ " + text + "\n──────── border ────────\n  [Sonnet 4.6] | high\n  Session: 6.0%\n"
 }
 
+// testResolvedPane is the pane ID most injection tests stub ResolvePane to
+// return, standing in for the concrete pane a real ResolvePane call would
+// find.
+const testResolvedPane = "%1"
+
+// isListPanes reports whether a recorded execCommand call (the args passed to
+// the closure, not including the binary name) is a list-panes invocation.
+func isListPanes(args []string) bool {
+	return len(args) >= 3 && args[2] == "list-panes"
+}
+
 // countSub counts recorded tmux calls whose subcommand (after "-L","leo") matches.
 func countSub(got [][]string, sub string) int {
 	n := 0
@@ -41,6 +52,9 @@ func TestInjectPromptCalls(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		// Warm path: claude is ready, so the readiness probe is echoed into the
 		// input box on the first capture. The pane also already carries the
 		// body, mirroring real claude's synchronous paste render, so phase
@@ -62,7 +76,7 @@ func TestInjectPromptCalls(t *testing.T) {
 		t.Fatalf("expected exactly 1 paste-buffer, got %d: %#v", n, got)
 	}
 	expectSet := []string{"tmux", "-L", "leo", "set-buffer", "-b", "leo-leo-agent-foo", "--", "hello\nworld"}
-	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo-leo-agent-foo", "-t", "=leo-agent-foo:", "-d"}
+	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo-leo-agent-foo", "-t", testResolvedPane, "-d"}
 	if c := firstSub(got, "set-buffer"); !reflect.DeepEqual(c, expectSet) {
 		t.Fatalf("set-buffer call wrong:\n got %#v\nwant %#v", c, expectSet)
 	}
@@ -71,7 +85,7 @@ func TestInjectPromptCalls(t *testing.T) {
 	}
 	// The submit Enter must be the final call.
 	last := got[len(got)-1]
-	expectEnter := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-agent-foo:", "Enter"}
+	expectEnter := []string{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "Enter"}
 	if !reflect.DeepEqual(last, expectEnter) {
 		t.Fatalf("last call must be submit Enter:\n got %#v\nwant %#v", last, expectEnter)
 	}
@@ -88,6 +102,9 @@ func TestInjectPromptProbesUntilReady(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
 			// First two probes dropped (box empty); third probe registers,
@@ -135,6 +152,9 @@ func TestInjectPromptFailsWhenNeverReady(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			return exec.Command("printf", "%s", paneWithInput("")) // box present, probe never lands
 		}
@@ -157,24 +177,23 @@ func TestInjectPromptFailsWhenNeverReady(t *testing.T) {
 // TestInjectPromptWaitsForLateSession proves the readiness probe tolerates a
 // session that does not exist yet — a just-resumed idle-suspended agent whose
 // tmux new-session lags the spawn call (which registers state + starts the
-// supervise goroutine asynchronously). The probe send-keys fails until the
-// session appears, then InjectPrompt proceeds to paste once and submit, rather
-// than aborting on the first failure (the live auto-wake "can't find session"
-// bug).
+// supervise goroutine asynchronously). ResolvePane's list-panes fails until
+// the session appears, then InjectPrompt proceeds to paste once and submit,
+// rather than aborting on the first failure (the live auto-wake "can't find
+// session" bug).
 func TestInjectPromptWaitsForLateSession(t *testing.T) {
 	var got [][]string
-	probeSendKeys := 0
+	listPanesCalls := 0
 	orig := execCommand
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
-		// Probe send-keys is "-L leo send-keys -t <pane> -l .".
-		if len(args) >= 7 && args[2] == "send-keys" && args[5] == "-l" && args[6] == inputProbe {
-			probeSendKeys++
-			if probeSendKeys < 3 {
+		if isListPanes(args) {
+			listPanesCalls++
+			if listPanesCalls < 3 {
 				return exec.Command("false") // session not created yet
 			}
-			return exec.Command("true")
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
 		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			// Ready once the session exists; the pane also carries the body
@@ -187,8 +206,8 @@ func TestInjectPromptWaitsForLateSession(t *testing.T) {
 	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", "body", 10, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt should tolerate a late-appearing session: %v", err)
 	}
-	if probeSendKeys < 3 {
-		t.Fatalf("expected the probe to retry past the missing-session window, got %d probe send-keys", probeSendKeys)
+	if listPanesCalls < 3 {
+		t.Fatalf("expected the probe to retry past the missing-session window, got %d list-panes calls", listPanesCalls)
 	}
 	if n := countSub(got, "paste-buffer"); n != 1 {
 		t.Fatalf("body must be pasted exactly once, got %d paste-buffer calls: %#v", n, got)
@@ -209,6 +228,9 @@ func TestInjectPromptFallsOpenWhenInputBoxUnrecognized(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			// Includes the body so phase 3's confirm loop breaks on its
 			// first capture rather than exhausting the full budget.
@@ -264,6 +286,9 @@ func TestInjectPromptTUICustomProfile(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			// Carries the body so phase 3's confirm loop breaks on its
 			// first capture instead of exhausting the full budget.
@@ -357,6 +382,9 @@ func TestInjectPromptConfirmsPasteBeforeSubmitting(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
 			if captureCalls == 1 {
@@ -405,6 +433,9 @@ func TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
 			if captureCalls == 1 {
@@ -450,6 +481,9 @@ func TestInjectPromptConfirmFallsThroughToEnterOnBudgetExpiry(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
 			if captureCalls == 1 {
@@ -496,6 +530,9 @@ func TestInjectPromptConfirmEmptyBodyUsesFixedDelay(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
 			return exec.Command("printf", "%s", paneWithInput(inputProbe))
@@ -547,6 +584,9 @@ func TestInjectPromptShortBodyUsesFixedDelayNotNeedleMatch(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
 			return exec.Command("printf", "%s", paneWithInput(inputProbe)+"ok\n")
@@ -592,6 +632,9 @@ func TestInjectPromptNeedleUsesFirstNonEmptyLine(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
 			if captureCalls == 1 {
@@ -619,26 +662,54 @@ func TestInjectPromptNeedleUsesFirstNonEmptyLine(t *testing.T) {
 }
 
 func TestAbortPromptCalls(t *testing.T) {
+	const resolvedPane = "%3"
 	var got [][]string
 	orig := execCommand
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(resolvedPane))
+		}
 		return exec.Command("true")
 	}
 	if err := AbortPrompt(context.Background(), "tmux", "leo-agent-foo"); err != nil {
 		t.Fatalf("AbortPrompt: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(got))
+	if len(got) != 3 {
+		t.Fatalf("expected 3 calls (resolve + 2 send-keys), got %d: %#v", len(got), got)
+	}
+	expectEscape := []string{"tmux", "-L", "leo", "send-keys", "-t", resolvedPane, "Escape"}
+	expectCtrlC := []string{"tmux", "-L", "leo", "send-keys", "-t", resolvedPane, "C-c"}
+	if !reflect.DeepEqual(got[1], expectEscape) {
+		t.Fatalf("Escape call wrong:\n got %#v\nwant %#v", got[1], expectEscape)
+	}
+	if !reflect.DeepEqual(got[2], expectCtrlC) {
+		t.Fatalf("C-c call wrong:\n got %#v\nwant %#v", got[2], expectCtrlC)
+	}
+}
+
+// TestAbortPromptFallsBackToPaneTargetWhenResolveFails proves the best-effort
+// abort path stays best-effort: when ResolvePane can't be resolved, it falls
+// back to PaneTarget's active-pane selector rather than erroring louder than
+// before ResolvePane existed.
+func TestAbortPromptFallsBackToPaneTargetWhenResolveFails(t *testing.T) {
+	var got [][]string
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	if err := AbortPrompt(context.Background(), "tmux", "leo-agent-foo"); err != nil {
+		t.Fatalf("AbortPrompt: %v", err)
 	}
 	expectEscape := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-agent-foo:", "Escape"}
-	expectCtrlC := []string{"tmux", "-L", "leo", "send-keys", "-t", "=leo-agent-foo:", "C-c"}
-	if !reflect.DeepEqual(got[0], expectEscape) {
-		t.Fatalf("Escape call wrong:\n got %#v\nwant %#v", got[0], expectEscape)
-	}
-	if !reflect.DeepEqual(got[1], expectCtrlC) {
-		t.Fatalf("C-c call wrong:\n got %#v\nwant %#v", got[1], expectCtrlC)
+	if !reflect.DeepEqual(got[1], expectEscape) {
+		t.Fatalf("Escape call wrong:\n got %#v\nwant %#v", got[1], expectEscape)
 	}
 }
 
@@ -688,6 +759,9 @@ func TestInjectPromptWaitsThroughMenu(t *testing.T) {
 	defer func() { execCommand = orig }()
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
 			// First two captures show a blocking menu; then the real input
