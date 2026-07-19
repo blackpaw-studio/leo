@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -169,11 +170,24 @@ func TestWebAgentSendKeysUsesResolvedPaneTarget(t *testing.T) {
 	}
 }
 
-// TestWebAgentInterruptUsesResolvedPaneTarget proves handleWebAgentInterrupt
-// targets the concrete pane list-panes reports for its Escape burst,
-// resolving once and reusing it rather than re-resolving per Escape.
+// TestWebAgentInterruptUsesResolvedPaneTarget proves handleWebAgentInterrupt's
+// immediate Escape burst (the 3 synchronous sends at request entry) targets
+// the concrete pane list-panes reports, resolving once and reusing it rather
+// than re-resolving per Escape. The background delayed burst is covered
+// separately by TestWebAgentInterruptDelayedSendsReResolvePane, since it must
+// NOT share this resolve-once posture — see that test.
 func TestWebAgentInterruptUsesResolvedPaneTarget(t *testing.T) {
 	s, _ := newTestServer(t)
+
+	// Disable the background delayed burst — this test only covers the 3
+	// immediate synchronous sends. Waiting for afterInterruptBurst (rather
+	// than just not caring) guarantees no goroutine survives past this test
+	// to race the next test's use of the shared interrupt-burst timing vars.
+	oldAttempts := interruptDelayedAttempts
+	interruptDelayedAttempts = 0
+	defer func() { interruptDelayedAttempts = oldAttempts }()
+	done := make(chan struct{})
+	s.afterInterruptBurst = func() { close(done) }
 
 	var calls [][]string
 	s.execCommand = func(name string, args ...string) *exec.Cmd {
@@ -191,8 +205,12 @@ func TestWebAgentInterruptUsesResolvedPaneTarget(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
-	// Give the background goroutine's delayed escapes no time to run —
-	// only the 3 immediate sends matter here (deterministic without sleeps).
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background delayed-burst goroutine never signaled completion")
+	}
+
 	listPanesCalls := 0
 	for _, c := range calls {
 		if isListPanesCall(c) {
@@ -204,6 +222,85 @@ func TestWebAgentInterruptUsesResolvedPaneTarget(t *testing.T) {
 		}
 	}
 	if listPanesCalls != 1 {
-		t.Fatalf("expected exactly 1 list-panes call (resolve once, reuse), got %d", listPanesCalls)
+		t.Fatalf("expected exactly 1 list-panes call (resolve once, reuse) for the immediate burst, got %d", listPanesCalls)
+	}
+}
+
+// TestWebAgentInterruptDelayedSendsReResolvePane proves the background
+// delayed-Escape burst re-resolves the pane before each send instead of
+// reusing the request-entry resolution — the fix for a crash-restart racing
+// an interrupt: if the tmux session is torn down and recreated during the
+// ~2.5s delayed-burst window, a baked-in pane ID would silently no-op for the
+// rest of the burst, where the old symbolic "=session:" target would have
+// tracked the live session.
+func TestWebAgentInterruptDelayedSendsReResolvePane(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	oldAttempts, oldPoll := interruptDelayedAttempts, interruptDelayedPoll
+	interruptDelayedAttempts = 1
+	interruptDelayedPoll = time.Millisecond
+	defer func() { interruptDelayedAttempts, interruptDelayedPoll = oldAttempts, oldPoll }()
+	done := make(chan struct{})
+	s.afterInterruptBurst = func() { close(done) }
+
+	const initialPane = "%5"
+	const laterPane = "%9"
+
+	var mu sync.Mutex
+	var calls [][]string
+	listPanesCalls := 0
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, args)
+		if isListPanesCall(args) {
+			listPanesCalls++
+			if listPanesCalls == 1 {
+				// The immediate (request-entry) resolution.
+				return exec.Command("printf", "%s", initialPane+"\n")
+			}
+			// The session was torn down and recreated — the delayed
+			// goroutine's re-resolve must pick up the new pane.
+			return exec.Command("printf", "%s", laterPane+"\n")
+		}
+		return exec.Command("true")
+	}
+
+	req := httptest.NewRequest("POST", "/web/agent/assistant/interrupt", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background delayed-burst goroutine never signaled completion")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if listPanesCalls < 2 {
+		t.Fatalf("expected the delayed goroutine to re-resolve the pane, got %d list-panes calls", listPanesCalls)
+	}
+	sawDelayedEscape := false
+	sawImmediateAtInitialPane := false
+	for _, c := range calls {
+		if isListPanesCall(c) {
+			continue
+		}
+		switch targetOf(c) {
+		case laterPane:
+			sawDelayedEscape = true
+		case initialPane:
+			sawImmediateAtInitialPane = true
+		}
+	}
+	if !sawDelayedEscape {
+		t.Fatalf("expected a delayed Escape targeting the re-resolved pane %q, got calls=%v", laterPane, calls)
+	}
+	if !sawImmediateAtInitialPane {
+		t.Fatalf("expected the immediate burst to still target the request-entry pane %q, got calls=%v", initialPane, calls)
 	}
 }

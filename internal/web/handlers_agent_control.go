@@ -15,6 +15,17 @@ import (
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
+// interruptDelayedAttempts / interruptDelayedPoll bound
+// handleWebAgentInterrupt's background delayed-Escape burst
+// (~interruptDelayedAttempts*interruptDelayedPoll ≈ 2.5s) so it keeps
+// catching state transitions for a few seconds after the immediate burst.
+// Package vars (not consts) so tests can shrink them to keep the delayed
+// burst fast.
+var (
+	interruptDelayedAttempts = 5
+	interruptDelayedPoll     = 500 * time.Millisecond
+)
+
 // handleWebAgentInterrupt sends a burst of Escape keys into an agent's tmux
 // session to interrupt whatever it's currently doing. Escapes are sent
 // immediately (to catch the common case) and then repeated in the
@@ -33,11 +44,20 @@ func (s *Server) handleWebAgentInterrupt(w http.ResponseWriter, r *http.Request)
 	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
 	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
 	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
-	// Also send delayed Escapes in background to catch tool completions
+	// Also send delayed Escapes in background to catch tool completions. This
+	// spans up to ~2.5s, long enough for a crash-restart to tear down and
+	// recreate the session mid-burst — re-resolve the pane before each
+	// delayed send rather than reusing the request-entry resolution, or a
+	// dead pane ID silently no-ops for the rest of the burst.
 	go func() {
-		for i := 0; i < 5; i++ {
-			time.Sleep(500 * time.Millisecond)
-			s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
+		for i := 0; i < interruptDelayedAttempts; i++ {
+			time.Sleep(interruptDelayedPoll)
+			delayedPane := s.resolvePaneTarget(tmuxPath, sessionName)
+			delayedArgs := tmux.Args("send-keys", "-t", delayedPane, "Escape")
+			s.execCommand(tmuxPath, delayedArgs...).Run() //nolint:errcheck
+		}
+		if s.afterInterruptBurst != nil {
+			s.afterInterruptBurst()
 		}
 	}()
 	s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
