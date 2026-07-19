@@ -57,12 +57,7 @@ func acceptDevChannelPrompt(ctx context.Context, tmuxPath, sessionName string, t
 			return fmt.Errorf("dev-channel prompt never appeared in session %q within %s", sessionName, timeout)
 		}
 
-		target, err := ResolvePane(ctx, tmuxPath, sessionName)
-		if err != nil {
-			// Best-effort: fall back to the active-pane target rather than
-			// erroring louder than before ResolvePane existed.
-			target = PaneTarget(sessionName)
-		}
+		target := ResolvePaneOrFallback(ctx, tmuxPath, sessionName)
 
 		pane, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", target)...).Output()
 		if err != nil {

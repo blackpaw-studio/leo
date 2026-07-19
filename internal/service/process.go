@@ -876,12 +876,7 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 // paneKey (harness.PaneCare.PaneKey) for the policy. Best-effort: capture/send
 // failures are ignored and retried on the next poll.
 func dismissStartupDialog(tmuxPath, sessionName, processName string, paneKey func(string) string) {
-	target, err := tmux.ResolvePane(context.Background(), tmuxPath, sessionName)
-	if err != nil {
-		// Best-effort: fall back to the active-pane target rather than
-		// erroring louder than before ResolvePane existed.
-		target = tmux.PaneTarget(sessionName)
-	}
+	target := tmux.ResolvePaneOrFallback(context.Background(), tmuxPath, sessionName)
 	out, err := exec.Command(tmuxPath, tmux.Args("capture-pane", "-t", target, "-p", "-S", "-10")...).Output()
 	if err != nil {
 		return

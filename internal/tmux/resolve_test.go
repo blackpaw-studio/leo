@@ -75,6 +75,38 @@ func TestResolvePaneGarbageLineErrors(t *testing.T) {
 	}
 }
 
+// TestLowestPaneIDReturnsLowestNumber proves LowestPaneID — the parsing core
+// ResolvePane delegates to — picks the lowest numeric pane id out of
+// unordered multi-line list-panes output. Exported so callers with their own
+// exec seam (e.g. package web, whose Server.execCommand doesn't take a
+// context) can run list-panes themselves and reuse this selection logic
+// instead of duplicating it.
+func TestLowestPaneIDReturnsLowestNumber(t *testing.T) {
+	got, err := LowestPaneID("%12\n%3\n%25\n")
+	if err != nil {
+		t.Fatalf("LowestPaneID: %v", err)
+	}
+	if want := "%3"; got != want {
+		t.Fatalf("LowestPaneID = %q, want %q", got, want)
+	}
+}
+
+// TestLowestPaneIDEmptyErrors proves an empty listing is an error rather than
+// a silently empty pane id.
+func TestLowestPaneIDEmptyErrors(t *testing.T) {
+	if _, err := LowestPaneID(""); err == nil {
+		t.Fatal("expected error for empty input, got nil")
+	}
+}
+
+// TestLowestPaneIDGarbageErrors proves an unparsable line is an error rather
+// than being silently skipped or accepted as a pane id.
+func TestLowestPaneIDGarbageErrors(t *testing.T) {
+	if _, err := LowestPaneID("not-a-pane-id\n"); err == nil {
+		t.Fatal("expected error for unparsable pane id line, got nil")
+	}
+}
+
 // TestResolvePaneCommandErrorPropagates proves a failing list-panes command
 // (e.g. the session doesn't exist) surfaces as an error rather than being
 // swallowed.

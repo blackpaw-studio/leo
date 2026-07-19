@@ -409,10 +409,7 @@ func classifyInput(pane string) InputState {
 // AbortPrompt cancels a mid-turn claude by sending Escape then Ctrl-C.
 // Best-effort; records the first error but continues with both keys.
 func AbortPrompt(ctx context.Context, tmuxPath, session string) error {
-	pane, err := ResolvePane(ctx, tmuxPath, session)
-	if err != nil {
-		pane = PaneTarget(session)
-	}
+	pane := ResolvePaneOrFallback(ctx, tmuxPath, session)
 	keys := []string{"Escape", "C-c"}
 	var firstErr error
 	for _, k := range keys {

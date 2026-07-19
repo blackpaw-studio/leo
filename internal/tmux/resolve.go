@@ -23,17 +23,45 @@ func ResolvePane(ctx context.Context, tmuxPath, session string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("tmux list-panes -t %q: %w", target, err)
 	}
+	pane, err := LowestPaneID(string(out))
+	if err != nil {
+		return "", fmt.Errorf("tmux list-panes -t %q: %w", target, err)
+	}
+	return pane, nil
+}
 
+// ResolvePaneOrFallback is ResolvePane for best-effort callers: it resolves
+// session's concrete pane, falling back to PaneTarget(session)'s active-pane
+// selector if resolution fails, rather than propagating an error. Use this
+// for sites that must stay best-effort (never error louder than before
+// ResolvePane existed) — e.g. dev-channel accept, startup-dialog dismiss,
+// abort.
+func ResolvePaneOrFallback(ctx context.Context, tmuxPath, session string) string {
+	if pane, err := ResolvePane(ctx, tmuxPath, session); err == nil {
+		return pane
+	}
+	return PaneTarget(session)
+}
+
+// LowestPaneID parses list-panes -F "#{pane_id}" output (one pane id per
+// line, e.g. "%12\n%3\n%25") and returns the lowest-numbered id — the
+// server-global, creation-ordered pane the harness was originally started
+// in. Exported so callers with their own exec seam that can't share
+// ResolvePane's internal one (e.g. package web, whose testable exec seam
+// takes no context.Context) can run list-panes themselves and reuse this
+// selection logic instead of duplicating it. Errors on empty input or an
+// unparsable line.
+func LowestPaneID(output string) (string, error) {
 	lowestID := ""
 	lowestNum := 0
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		num, err := strconv.Atoi(strings.TrimPrefix(line, "%"))
 		if !strings.HasPrefix(line, "%") || err != nil {
-			return "", fmt.Errorf("tmux list-panes -t %q: unparsable pane id %q", target, line)
+			return "", fmt.Errorf("unparsable pane id %q", line)
 		}
 		if lowestID == "" || num < lowestNum {
 			lowestID = line
@@ -41,7 +69,7 @@ func ResolvePane(ctx context.Context, tmuxPath, session string) (string, error) 
 		}
 	}
 	if lowestID == "" {
-		return "", fmt.Errorf("tmux list-panes -t %q: no panes found", target)
+		return "", fmt.Errorf("no panes found")
 	}
 	return lowestID, nil
 }
