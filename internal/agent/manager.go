@@ -1315,7 +1315,11 @@ func (m *Manager) Logs(name string, lines int) (string, error) {
 	}
 
 	session := m.SessionName(name)
-	subArgs := []string{"capture-pane", "-t", tmux.PaneTarget(session), "-p"}
+	// Best-effort: fall back to the active-pane target if the concrete pane
+	// can't be resolved, rather than erroring louder than before ResolvePane
+	// existed.
+	target := tmux.ResolvePaneOrFallback(context.Background(), tmuxPath, session)
+	subArgs := []string{"capture-pane", "-t", target, "-p"}
 	if lines > 0 {
 		subArgs = append(subArgs, "-S", fmt.Sprintf("-%d", lines))
 	} else {
