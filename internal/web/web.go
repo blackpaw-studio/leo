@@ -120,6 +120,15 @@ type Server struct {
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
 
+	// afterInterruptBurst, if non-nil, is invoked after
+	// handleWebAgentInterrupt's background delayed-Escape goroutine finishes
+	// all its attempts. nil in production (no-op); tests replace it with a
+	// channel send to deterministically wait for the goroutine instead of
+	// sleeping past its bounded (~interruptDelayedAttempts*interruptDelayedPoll)
+	// duration, so no goroutine survives past its own test and races the
+	// next test's use of the package-level interrupt-burst timing vars.
+	afterInterruptBurst func()
+
 	// injectPrompt delivers a message into a tmux session via the readiness-
 	// probing path (tmux.InjectPrompt). Tests replace this to verify the
 	// resumed-agent message delivery path without requiring a real tmux session.

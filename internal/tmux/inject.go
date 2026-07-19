@@ -183,8 +183,8 @@ func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttemp
 
 // injectPromptProfile is the profile-parameterized inner form.
 func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p Profile, maxAttempts int, poll time.Duration) error {
-	runKey := func(keys ...string) error {
-		args := append([]string{"send-keys", "-t", PaneTarget(session)}, keys...)
+	runKey := func(pane string, keys ...string) error {
+		args := append([]string{"send-keys", "-t", pane}, keys...)
 		cmd := execCommand(ctx, tmuxPath, Args(args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("tmux send-keys %v: %w: %s", keys, err, string(out))
@@ -192,20 +192,34 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 		return nil
 	}
 
-	// Phase 1: wait until claude is actually accepting input. Type one probe
-	// char, see whether it lands in the input box, then clear it. A single char
-	// is fully cleared by one Ctrl-U, so the probe never leaves residue.
+	// Phase 1: wait until claude is actually accepting input. Resolve the
+	// concrete pane the harness is running in (a split session can leave the
+	// active pane, which PaneTarget resolves to, pointed elsewhere), type one
+	// probe char, see whether it lands in the input box, then clear it. A
+	// single char is fully cleared by one Ctrl-U, so the probe never leaves
+	// residue.
 	ready := false
 	sawInputBox := false
+	pane := ""
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if err := runKey("-l", inputProbe); err != nil {
+		resolved, err := ResolvePane(ctx, tmuxPath, session)
+		if err != nil {
 			// The session may not exist yet — a just-resumed (idle-suspended)
 			// agent's tmux new-session lags the spawn call, which registers
-			// state and starts the supervise goroutine asynchronously — or this
-			// is a transient tmux error. Treat it as "not ready", wait, and
-			// retry within the readiness budget rather than aborting. A session
-			// that never appears falls through to Phase 2 below, which surfaces
-			// a real error.
+			// state and starts the supervise goroutine asynchronously — or
+			// this is a transient tmux error. Treat it as "not ready", wait,
+			// and retry within the readiness budget rather than aborting. A
+			// session that never appears falls through to Phase 2 below,
+			// which surfaces a real error.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(poll):
+			}
+			continue
+		}
+		pane = resolved
+		if err := runKey(pane, "-l", inputProbe); err != nil {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -218,8 +232,8 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 			return ctx.Err()
 		case <-time.After(poll):
 		}
-		st := paneInputState(ctx, tmuxPath, session, p)
-		if err := runKey("C-u"); err != nil {
+		st := paneInputStateAt(ctx, tmuxPath, pane, p)
+		if err := runKey(pane, "C-u"); err != nil {
 			return err
 		}
 		switch st {
@@ -241,13 +255,18 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 		return fmt.Errorf("session %q's TUI never started accepting input after %d attempts", session, maxAttempts)
 	}
 	// ready, or the pane format was never recognized (fall open rather than
-	// block, so this can't make an otherwise-working session worse).
+	// block, so this can't make an otherwise-working session worse). If the
+	// pane could never be resolved either, fall back to PaneTarget so this
+	// still behaves as it did before ResolvePane existed.
+	if pane == "" {
+		pane = PaneTarget(session)
+	}
 
 	// Phase 2: stage and paste the body exactly once.
 	buf := sessionBufferName(session)
 	for _, args := range [][]string{
 		Args("set-buffer", "-b", buf, "--", body),
-		Args("paste-buffer", "-b", buf, "-t", PaneTarget(session), "-d"),
+		Args("paste-buffer", "-b", buf, "-t", pane, "-d"),
 	} {
 		cmd := execCommand(ctx, tmuxPath, args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -266,7 +285,7 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 	needle := submitConfirmNeedle(body)
 	if len([]rune(needle)) >= submitNeedleMinRunes {
 		for attempt := 0; attempt < submitConfirmAttempts; attempt++ {
-			out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", PaneTarget(session))...).Output()
+			out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", pane)...).Output()
 			if err == nil && strings.Contains(string(out), needle) {
 				break
 			}
@@ -293,7 +312,7 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 		}
 	}
 
-	if err := runKey("Enter"); err != nil {
+	if err := runKey(pane, "Enter"); err != nil {
 		return err
 	}
 	return nil
@@ -338,11 +357,11 @@ func PaneInputHasContent(pane string) bool {
 	return classifyInput(pane) == InputHasContent
 }
 
-// paneInputState captures the session's visible pane and classifies its input
-// box using p's Classify. Read failures classify as InputUnknown so the
-// caller falls open.
-func paneInputState(ctx context.Context, tmuxPath, session string, p Profile) InputState {
-	out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", PaneTarget(session))...).Output()
+// paneInputStateAt captures pane's content and classifies its input box using
+// p's Classify. Read failures classify as InputUnknown so the caller falls
+// open.
+func paneInputStateAt(ctx context.Context, tmuxPath, pane string, p Profile) InputState {
+	out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", pane)...).Output()
 	if err != nil {
 		return InputUnknown
 	}
@@ -390,10 +409,11 @@ func classifyInput(pane string) InputState {
 // AbortPrompt cancels a mid-turn claude by sending Escape then Ctrl-C.
 // Best-effort; records the first error but continues with both keys.
 func AbortPrompt(ctx context.Context, tmuxPath, session string) error {
+	pane := ResolvePaneOrFallback(ctx, tmuxPath, session)
 	keys := []string{"Escape", "C-c"}
 	var firstErr error
 	for _, k := range keys {
-		cmd := execCommand(ctx, tmuxPath, Args("send-keys", "-t", PaneTarget(session), k)...)
+		cmd := execCommand(ctx, tmuxPath, Args("send-keys", "-t", pane, k)...)
 		if out, err := cmd.CombinedOutput(); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("tmux send-keys %s: %w: %s", k, err, string(out))
 		}

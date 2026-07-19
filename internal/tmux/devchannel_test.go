@@ -112,6 +112,99 @@ func TestAcceptDevChannelPromptTimeout(t *testing.T) {
 	}
 }
 
+// TestAcceptDevChannelPromptUsesResolvedPaneTarget proves the accepter
+// targets the concrete pane ResolvePane reports, not PaneTarget's
+// active-pane selector — so a split session doesn't misdirect the
+// dev-channel accept.
+func TestAcceptDevChannelPromptUsesResolvedPaneTarget(t *testing.T) {
+	const resolvedPane = "%17"
+	var got [][]string
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(resolvedPane))
+		}
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			return exec.Command("printf", "%s", devChannelPromptMarker+"\n")
+		}
+		return exec.Command("true")
+	}
+
+	if err := acceptDevChannelPrompt(context.Background(), "tmux", "leo-agent-foo", time.Second, time.Millisecond); err != nil {
+		t.Fatalf("acceptDevChannelPrompt: %v", err)
+	}
+
+	for _, sub := range []string{"capture-pane", "send-keys"} {
+		found := false
+		for _, c := range got {
+			if len(c) < 4 || c[3] != sub {
+				continue
+			}
+			found = true
+			target := ""
+			for i, a := range c {
+				if a == "-t" && i+1 < len(c) {
+					target = c[i+1]
+					break
+				}
+			}
+			if target != resolvedPane {
+				t.Fatalf("%s call targeted %q, want resolved pane %q: %#v", sub, target, resolvedPane, c)
+			}
+		}
+		if !found {
+			t.Fatalf("expected at least one %s call, got none: %#v", sub, got)
+		}
+	}
+}
+
+// TestAcceptDevChannelPromptFallsBackWhenResolveFails proves the accepter
+// stays best-effort: when ResolvePane can't be resolved, it falls back to
+// PaneTarget's active-pane selector rather than erroring louder than before
+// ResolvePane existed.
+func TestAcceptDevChannelPromptFallsBackWhenResolveFails(t *testing.T) {
+	var got [][]string
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("false")
+		}
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			return exec.Command("printf", "%s", devChannelPromptMarker+"\n")
+		}
+		return exec.Command("true")
+	}
+
+	if err := acceptDevChannelPrompt(context.Background(), "tmux", "leo-agent-foo", time.Second, time.Millisecond); err != nil {
+		t.Fatalf("acceptDevChannelPrompt: %v", err)
+	}
+
+	wantTarget := PaneTarget("leo-agent-foo")
+	found := false
+	for _, c := range got {
+		if len(c) >= 4 && c[3] == "send-keys" {
+			found = true
+			target := ""
+			for i, a := range c {
+				if a == "-t" && i+1 < len(c) {
+					target = c[i+1]
+					break
+				}
+			}
+			if target != wantTarget {
+				t.Fatalf("send-keys call targeted %q, want fallback %q: %#v", target, wantTarget, c)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a send-keys Enter call, got none")
+	}
+}
+
 func contains(haystack, needle string) bool {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {

@@ -876,7 +876,8 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 // paneKey (harness.PaneCare.PaneKey) for the policy. Best-effort: capture/send
 // failures are ignored and retried on the next poll.
 func dismissStartupDialog(tmuxPath, sessionName, processName string, paneKey func(string) string) {
-	out, err := exec.Command(tmuxPath, tmux.Args("capture-pane", "-t", tmux.PaneTarget(sessionName), "-p", "-S", "-10")...).Output()
+	target := tmux.ResolvePaneOrFallback(context.Background(), tmuxPath, sessionName)
+	out, err := exec.Command(tmuxPath, tmux.Args("capture-pane", "-t", target, "-p", "-S", "-10")...).Output()
 	if err != nil {
 		return
 	}
@@ -885,7 +886,7 @@ func dismissStartupDialog(tmuxPath, sessionName, processName string, paneKey fun
 		return
 	}
 	fmt.Fprintf(os.Stderr, "[%s] dismissing startup dialog with %s\n", processName, key)
-	exec.Command(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), key)...).Run() //nolint:errcheck
+	exec.Command(tmuxPath, tmux.Args("send-keys", "-t", target, key)...).Run() //nolint:errcheck
 }
 
 // recoverQuickExit consults the driver's ladder when it has one; the default
