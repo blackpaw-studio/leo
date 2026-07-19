@@ -27,7 +27,8 @@ func (s *Server) handleWebAgentInterrupt(w http.ResponseWriter, r *http.Request)
 	sessionName := agent.SessionName(name)
 
 	tmuxPath := findTmuxPath()
-	escArgs := tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "Escape")
+	pane := s.resolvePaneTarget(tmuxPath, sessionName)
+	escArgs := tmux.Args("send-keys", "-t", pane, "Escape")
 	// Send Escape immediately, then keep sending to catch state transitions.
 	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
 	s.execCommand(tmuxPath, escArgs...).Run() //nolint:errcheck
@@ -66,10 +67,11 @@ func (s *Server) handleWebAgentSendKeys(w http.ResponseWriter, r *http.Request) 
 	}
 
 	tmuxPath := findTmuxPath()
+	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 	for _, key := range req.Keys {
 		if needsCharSplit(key) {
 			for _, ch := range key {
-				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), string(ch))...).Run(); err != nil {
+				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, string(ch))...).Run(); err != nil {
 					writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
 					return
 				}
@@ -77,7 +79,7 @@ func (s *Server) handleWebAgentSendKeys(w http.ResponseWriter, r *http.Request) 
 			}
 			continue
 		}
-		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), key)...).Run(); err != nil {
+		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, key)...).Run(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
 			return
 		}
@@ -178,9 +180,10 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 	// Live (already-running) fast path: literal paste + readiness confirmation + Enter.
 	sessionName := agent.SessionName(name)
 	tmuxPath := findTmuxPath()
+	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 
 	// Literal paste of the message body.
-	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "-l", req.Text)...).Run(); err != nil {
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "-l", req.Text)...).Run(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send message failed: %v", err)})
 		return
 	}
@@ -192,10 +195,10 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 	// Confirming the text rendered forces Enter to arrive as a discrete
 	// keypress. Bounded, and falls open if the pane never confirms (busy
 	// mid-turn or unreadable) so a message is never silently dropped.
-	s.waitForInputContent(tmuxPath, sessionName)
+	s.waitForInputContent(tmuxPath, pane)
 
 	// Separate Enter to submit.
-	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(sessionName), "Enter")...).Run(); err != nil {
+	if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, "Enter")...).Run(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("submit message failed: %v", err)})
 		return
 	}
@@ -263,17 +266,34 @@ var (
 	messageInputPoll     = 50 * time.Millisecond
 )
 
-// waitForInputContent polls the session pane until the input box carries the
-// just-typed text, then returns. Falls open after the attempt budget so a busy
-// or unreadable pane never blocks (or drops) the submit.
-func (s *Server) waitForInputContent(tmuxPath, sessionName string) {
+// waitForInputContent polls pane until the input box carries the just-typed
+// text, then returns. Falls open after the attempt budget so a busy or
+// unreadable pane never blocks (or drops) the submit.
+func (s *Server) waitForInputContent(tmuxPath, pane string) {
 	for i := 0; i < messageInputAttempts; i++ {
-		out, err := s.execCommand(tmuxPath, tmux.Args("capture-pane", "-p", "-t", tmux.PaneTarget(sessionName))...).Output()
+		out, err := s.execCommand(tmuxPath, tmux.Args("capture-pane", "-p", "-t", pane)...).Output()
 		if err == nil && tmux.PaneInputHasContent(string(out)) {
 			return
 		}
 		time.Sleep(messageInputPoll)
 	}
+}
+
+// resolvePaneTarget resolves session's concrete pane via list-panes, falling
+// back to tmux.PaneTarget(session)'s active-pane selector if resolution
+// fails — best-effort, the same posture as internal/tmux's
+// devchannel/abort/dismiss-dialog paths. Routed through s.execCommand
+// (rather than tmux.ResolvePaneOrFallback, which uses tmux's own internal
+// exec seam keyed on context.Context) so tests can control tmux output
+// through the same seam the rest of this package already uses.
+func (s *Server) resolvePaneTarget(tmuxPath, session string) string {
+	out, err := s.execCommand(tmuxPath, tmux.Args("list-panes", "-t", tmux.PaneTarget(session), "-F", "#{pane_id}")...).Output()
+	if err == nil {
+		if pane, perr := tmux.LowestPaneID(string(out)); perr == nil {
+			return pane
+		}
+	}
+	return tmux.PaneTarget(session)
 }
 
 // needsCharSplit reports whether a send-keys arg is a multi-char literal

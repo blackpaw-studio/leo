@@ -51,10 +51,12 @@ func TestWebAgentMessageSendsLiteralThenEnter(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
-	first := strings.Join(calls[0], " ")
+	// calls[0] is the pane-resolution list-panes call; calls[1] is the
+	// literal send.
+	first := strings.Join(calls[1], " ")
 	if !strings.Contains(first, "send-keys") || !strings.Contains(first, "-l") ||
 		!strings.Contains(first, "leo-assistant") || !strings.Contains(first, "Enter the build status please") {
-		t.Errorf("first call should be literal send to leo-assistant; got %v", calls[0])
+		t.Errorf("second call should be literal send to leo-assistant; got %v", calls[1])
 	}
 	last := calls[len(calls)-1]
 	if last[len(last)-1] != "Enter" {
@@ -93,9 +95,10 @@ func TestWebAgentMessageConfirmsInputBeforeEnter(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 
-	// First call: literal text send.
-	if !argsContain(calls[0], "-l") || !argsContain(calls[0], "hello there") {
-		t.Errorf("first call should be literal text send; got %v", calls[0])
+	// calls[0] is the pane-resolution list-panes call; calls[1] is the
+	// literal text send.
+	if !argsContain(calls[1], "-l") || !argsContain(calls[1], "hello there") {
+		t.Errorf("second call should be literal text send; got %v", calls[1])
 	}
 	// Last call: Enter submit.
 	last := calls[len(calls)-1]
