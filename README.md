@@ -51,6 +51,8 @@ go install github.com/blackpaw-studio/leo/cmd/leo@latest
 
 > Leo runs on its own tmux socket (`-L leo`) so your personal `tmux ls` stays clean. Inspect Leo's sessions directly with `tmux -L leo ls`. See [tmux Config](docs/guides/tmux-config.md) for recommended settings.
 
+> **macOS Local Network privacy:** third-party tools spawned by an agent can be silently denied LAN access (connections fail with "no route to host") if macOS never got the chance to attribute the local-network operation to the signed `leo` binary and prompt for consent. Leo runs its tmux server in the foreground so agent processes inherit that consent grant once you've approved it. Run `leo doctor` to trigger the one-time Allow/Deny dialog and check the current grant state.
+
 **Upgrading:** `leo update` replaces a tarball install in place and verifies the new release before swapping the binary. Homebrew users should run `brew upgrade --cask blackpaw-studio/tap/leo && leo service restart` instead — `leo update` detects the Homebrew install and prints these commands.
 
 <details>
@@ -214,6 +216,7 @@ The token file is readable by any process running as the same Unix user — inte
 | `leo setup` | Interactive setup wizard |
 | `leo status` | Overall snapshot — service, agents, tasks, templates, web |
 | `leo validate` | Check config, prerequisites, workspace health |
+| `leo doctor` | Diagnose local network and daemon health (macOS Local Network privacy) |
 | `leo service start` / `stop` / `restart` / `logs` | Supervisor lifecycle |
 | `leo task …` | `list`, `add`, `remove`, `enable`, `disable`, `history`, `logs` |
 | `leo template …` | `list`, `show`, `remove` |
