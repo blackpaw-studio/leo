@@ -30,6 +30,7 @@ Leo provides commands for setup, agent supervision, task scheduling, template ma
 | Command | Description |
 |---------|-------------|
 | [`leo status`](status.md) | Overall status (service, agents, tasks, templates, web UI) |
+| [`leo doctor`](doctor.md) | Diagnose local network and daemon health (macOS Local Network privacy) |
 | [`leo logs`](logs.md) | Tail service or per-agent logs |
 
 ### Config
