@@ -491,6 +491,18 @@ func defaultSupervisedExec(claudePath string, homePath, configPath, webToken str
 		return err
 	}
 
+	// Ensure leo's dedicated tmux socket is backed by a foreground server
+	// leo itself started (rather than tmux's own auto-daemonized one), so
+	// agent sessions inherit macOS Local Network responsibility from the
+	// signed leo binary. Must run before RestoreAgents/any supervise loop
+	// issues a new-session. Fail-open: a daemonized fallback server is worse
+	// than a dead daemon, so a failure here only warns.
+	if err := tmux.EnsureForegroundServer(tmuxPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: foreground tmux server setup failed: %v\n", err)
+	} else {
+		go tmux.SuperviseForegroundServer(ctx, tmuxPath)
+	}
+
 	supervisor := NewSupervisor(ctx)
 	supervisor.tmuxPath = tmuxPath
 	supervisor.claudePath = claudePath
