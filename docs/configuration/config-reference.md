@@ -83,7 +83,18 @@ curl -H "Authorization: Bearer $(cat ~/.leo/state/api.token)" \
 
 Rotate the token by deleting `api.token` and restarting the daemon. Existing browser sessions remain valid until they expire (7 days).
 
-**Token scope.** The bearer token grants access to the full daemon API — including `/web/*` routes that can restart the service, mutate config, send keys to supervised agents, and write prompt files. Treat it like a root credential. Supervised Claude agents receive this token via `LEO_API_TOKEN` so the built-in MCP server can call `/api/*`; if you don't trust a channel plugin with full daemon access, don't install it as a supervised agent.
+**Token scope.** There are two tokens, with different privileges:
+
+| Token | File | Accepted on | Held by |
+|---|---|---|---|
+| Operator | `~/.leo/state/api.token` | everything — `/login`, the browser UI, `/api/*`, `/web/*` | you, your scripts, channel plugins |
+| Agent | `~/.leo/state/agent.token` | `/api/*` and `/web/agent/{name}/{message,send,interrupt}` only | every supervised agent, via `LEO_API_TOKEN` |
+
+The operator token grants access to the full daemon API — including routes that restart the service, mutate config, and write prompt files. Treat it like a root credential.
+
+Agents get the narrower token so a credential that escapes an agent — into a transcript, a log, a channel message — cannot be exchanged for a web session. It is rejected at `/login` and on the config editor, which renders template `env:` values in full. Rotate either by deleting its file and restarting the daemon.
+
+This bounds blast radius; it is not a sandbox. Agents run as your user and can read `~/.leo/leo.yaml` directly, so any credential in config is reachable by an agent that goes looking. Don't install a channel plugin you wouldn't trust with the contents of your config.
 
 ### Non-loopback access
 

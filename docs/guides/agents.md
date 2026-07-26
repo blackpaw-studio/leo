@@ -106,7 +106,9 @@ Both transports share the same `internal/agent` manager, so state stays consiste
 
 `GET /api/agent/list` and `GET /api/template/list` are what the `leo_list_agents` and `leo_list_templates` MCP tools serve to any agent that calls them, and `GET /task/list` is reachable by anything that can open the daemon socket. None of the three include env values: agent records carry no env at all, while template and task records carry `env_keys` (key names only). `leo template show` and `leo run --dry-run` mask credential-looking values the same way — read `leo.yaml` directly when you need a real value.
 
-This closes the listing routes specifically. It is not a general guarantee that an agent cannot reach a credential by other means: agents are spawned with `LEO_API_TOKEN`, which is also the web UI's login token, and the config editor renders env values in full.
+Agent env also travels to tmux as `new-session -e` argv rather than shell exports, so it no longer shows up in `pane_start_command` or `ps`, and the `LEO_API_TOKEN` agents hold is the narrower agent token — rejected at `/login` and on the config editor. See [Authentication](../configuration/config-reference.md#authentication).
+
+None of this is a sandbox. Agents run as your user, so anything in `~/.leo/leo.yaml` is reachable by an agent that goes looking, and `tmux show-environment` still reports session env. What these measures remove is the *incidental* copy — the one that lands in a transcript because a routine call returned it.
 
 ### Shorthand Names
 

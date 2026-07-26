@@ -233,11 +233,17 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	if err != nil {
 		return fmt.Errorf("preparing web api token: %w", err)
 	}
+	// Agents get their own, less privileged token — see web.EnsureAgentToken.
+	agentToken, err := web.EnsureAgentToken(cfg.StatePath())
+	if err != nil {
+		return fmt.Errorf("preparing agent api token: %w", err)
+	}
 
 	port := cfg.WebPort()
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
 		Port:          port,
 		APIToken:      apiToken,
+		AgentToken:    agentToken,
 		AllowedHosts:  cfg.Web.AllowedHosts,
 		LogPath:       s.logPath,
 		ResolveHandle: s.resolveHandle,
