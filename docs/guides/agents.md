@@ -102,6 +102,10 @@ On `/agents/spawn`, `branch` is optional — when present the daemon creates a w
 
 Both transports share the same `internal/agent` manager, so state stays consistent across CLI, web UI, and any channel plugin that invokes the HTTP API.
 
+### Listings never carry credentials
+
+`GET /api/agent/list` and `GET /api/template/list` are what the `leo_list_agents` and `leo_list_templates` MCP tools serve to any agent that calls them, so neither payload includes env values. Agent records carry no env at all; template records carry `env_keys` (key names only). `leo template show` masks credential-looking values the same way — read `leo.yaml` directly when you need a real value.
+
 ### Shorthand Names
 
 CLI, daemon API, and web handlers all resolve a shorthand query against live agents before performing an action. The resolver tries these tiers in order and picks the first unambiguous match:

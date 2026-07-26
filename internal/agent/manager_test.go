@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,18 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 )
+
+// TestRecordCarriesNoEnv guards a credential leak. Record is the payload of
+// GET /api/agent/list, which is what the leo_list_agents MCP tool serves to
+// every agent — so an Env field here deposits live agent credentials
+// (OP_SERVICE_ACCOUNT_TOKEN and friends) into any transcript that lists
+// agents. Nothing reads Record.Env; the agentstore record is where the
+// supervisor gets env from. Keep it off the public view.
+func TestRecordCarriesNoEnv(t *testing.T) {
+	if _, found := reflect.TypeOf(Record{}).FieldByName("Env"); found {
+		t.Error("agent.Record must not carry Env: it is served verbatim by leo_list_agents")
+	}
+}
 
 // --- ResolveWorkspace Tests ---
 

@@ -455,6 +455,23 @@ func gitTestEnv() []string {
 
 // initRemotelessRepo creates a real git repository at dir with one commit and
 // no remotes.
+// storedEnv returns the env persisted for an agent. Env assertions go through
+// the agentstore rather than the returned Record: the public Record carries no
+// env by design (see TestRecordCarriesNoEnv), and the persisted copy is what a
+// restart actually respawns from.
+func storedEnv(t *testing.T, home, name string) map[string]string {
+	t.Helper()
+	stored, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("agentstore.Load: %v", err)
+	}
+	rec, ok := stored[name]
+	if !ok {
+		t.Fatalf("agentstore missing record for %q", name)
+	}
+	return rec.Env
+}
+
 func initRemotelessRepo(t *testing.T, dir string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -532,10 +549,6 @@ func TestSpawnFromAgent_LocalRepoNoRemote(t *testing.T) {
 	if rec.Workspace != wantWorkspace {
 		t.Errorf("rec.Workspace = %q, want %q", rec.Workspace, wantWorkspace)
 	}
-	if rec.Env["FOO"] != "bar" {
-		t.Errorf("rec.Env[FOO] = %q, want bar (inherited)", rec.Env["FOO"])
-	}
-
 	if _, err := os.Stat(filepath.Join(rec.Workspace, ".git")); err != nil {
 		t.Errorf("worktree dir missing .git marker: %v", err)
 	}
@@ -605,11 +618,12 @@ func TestSpawnFromAgent_EnvOverridesInherited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if rec.Env["FOO"] != "override" {
-		t.Errorf("rec.Env[FOO] = %q, want override", rec.Env["FOO"])
+	env := storedEnv(t, home, rec.Name)
+	if env["FOO"] != "override" {
+		t.Errorf("stored Env[FOO] = %q, want override", env["FOO"])
 	}
-	if rec.Env["KEEP"] != "1" {
-		t.Errorf("rec.Env[KEEP] = %q, want 1", rec.Env["KEEP"])
+	if env["KEEP"] != "1" {
+		t.Errorf("stored Env[KEEP] = %q, want 1", env["KEEP"])
 	}
 }
 
@@ -716,14 +730,15 @@ func TestSpawnFromAgent_TemplateOverride(t *testing.T) {
 	if rec.Workspace != wantWorkspace {
 		t.Errorf("rec.Workspace = %q, want %q", rec.Workspace, wantWorkspace)
 	}
-	if _, ok := rec.Env["SRC_ONLY"]; ok {
-		t.Errorf("rec.Env should not inherit the source agent's env on override, got %+v", rec.Env)
+	env := storedEnv(t, home, rec.Name)
+	if _, ok := env["SRC_ONLY"]; ok {
+		t.Errorf("spawn should not inherit the source agent's env on override, got %+v", env)
 	}
-	if rec.Env["CLI_ENV"] != "y" {
-		t.Errorf("rec.Env[CLI_ENV] = %q, want y", rec.Env["CLI_ENV"])
+	if env["CLI_ENV"] != "y" {
+		t.Errorf("stored Env[CLI_ENV] = %q, want y", env["CLI_ENV"])
 	}
-	if rec.Env["TMPL_ENV"] != "x" {
-		t.Errorf("rec.Env[TMPL_ENV] = %q, want x (from override template)", rec.Env["TMPL_ENV"])
+	if env["TMPL_ENV"] != "x" {
+		t.Errorf("stored Env[TMPL_ENV] = %q, want x (from override template)", env["TMPL_ENV"])
 	}
 }
 

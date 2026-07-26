@@ -11,7 +11,12 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/redact"
 )
+
+// testSecretEnvValue is an obviously-fake credential planted in the template
+// fixture so the redaction guards below can assert it never reaches output.
+const testSecretEnvValue = "ops_totally_fake_token_do_not_use"
 
 // newTestConfigWithTemplates writes a minimal config containing templates and
 // wires up cfgFile so loadConfig/saveConfig target it.
@@ -23,7 +28,15 @@ func newTestConfigWithTemplates(t *testing.T) string {
 		HomePath: home,
 		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
 		Templates: map[string]config.TemplateConfig{
-			"coding":   {Model: "opus", HarnessOptions: map[string]any{"agent": "dev"}, Workspace: "/tmp/coding"},
+			"coding": {
+				Model:          "opus",
+				HarnessOptions: map[string]any{"agent": "dev"},
+				Workspace:      "/tmp/coding",
+				Env: map[string]string{
+					"OP_SERVICE_ACCOUNT_TOKEN": testSecretEnvValue,
+					"ANTHROPIC_BASE_URL":       "http://localhost:3325",
+				},
+			},
 			"research": {Model: "sonnet"},
 		},
 	}
@@ -195,6 +208,55 @@ func TestTemplateShow_PrintsTemplateFields(t *testing.T) {
 	for _, want := range []string{"Template: coding", "opus", "dev", "/tmp/coding"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+// TestTemplateShow_RedactsSecretEnvValues covers both the human and --json
+// renderings, literal and resolved: `leo template show` is a command agents
+// run, so a credential in a template's env would otherwise be copied straight
+// into a transcript. Non-secret env keys keep their values.
+func TestTemplateShow_RedactsSecretEnvValues(t *testing.T) {
+	newTestConfigWithTemplates(t)
+
+	for _, resolved := range []bool{false, true} {
+		out := captureStdout(t, func() {
+			cmd := newTemplateShowCmd()
+			if resolved {
+				if err := cmd.Flags().Set("resolved", "true"); err != nil {
+					t.Fatalf("set resolved: %v", err)
+				}
+			}
+			if err := cmd.RunE(cmd, []string{"coding"}); err != nil {
+				t.Fatalf("RunE (resolved=%v): %v", resolved, err)
+			}
+		})
+		if strings.Contains(out, testSecretEnvValue) {
+			t.Errorf("resolved=%v: show leaked a secret env value; got:\n%s", resolved, out)
+		}
+		if !strings.Contains(out, "OP_SERVICE_ACCOUNT_TOKEN="+redact.Mask) {
+			t.Errorf("resolved=%v: expected the masked key in output; got:\n%s", resolved, out)
+		}
+		if !strings.Contains(out, "ANTHROPIC_BASE_URL=http://localhost:3325") {
+			t.Errorf("resolved=%v: non-secret env value should survive; got:\n%s", resolved, out)
+		}
+	}
+}
+
+func TestTemplateShow_JSONRedactsSecretEnvValues(t *testing.T) {
+	newTestConfigWithTemplates(t)
+
+	for _, resolved := range []bool{false, true} {
+		p := runShowJSON(t, "coding", resolved)
+		env, ok := p["env"].(map[string]any)
+		if !ok {
+			t.Fatalf("resolved=%v: expected env object, got %T", resolved, p["env"])
+		}
+		if env["OP_SERVICE_ACCOUNT_TOKEN"] != redact.Mask {
+			t.Errorf("resolved=%v: env[OP_SERVICE_ACCOUNT_TOKEN] = %v, want %q", resolved, env["OP_SERVICE_ACCOUNT_TOKEN"], redact.Mask)
+		}
+		if env["ANTHROPIC_BASE_URL"] != "http://localhost:3325" {
+			t.Errorf("resolved=%v: non-secret env value should survive, got %v", resolved, env["ANTHROPIC_BASE_URL"])
 		}
 	}
 }

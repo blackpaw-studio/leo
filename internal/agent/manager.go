@@ -138,17 +138,22 @@ func pruneEnv(env, fresh map[string]string) map[string]string {
 
 // Record is the public view of an agent, merging persisted metadata with live state.
 // Branch + CanonicalPath are populated only for worktree agents.
+//
+// Deliberately carries no env: this struct is the payload of GET
+// /api/agent/list, which the leo_list_agents MCP tool hands to any agent that
+// asks. Agent env holds live credentials, and a listing call must not deposit
+// them into a transcript. The supervisor reads env from the agentstore record
+// (agentstore.Record.Env), which never crosses that boundary.
 type Record struct {
-	Name          string            `json:"name"`
-	Template      string            `json:"template,omitempty"`
-	Repo          string            `json:"repo,omitempty"`
-	Workspace     string            `json:"workspace,omitempty"`
-	Branch        string            `json:"branch,omitempty"`
-	CanonicalPath string            `json:"canonical_path,omitempty"`
-	Status        string            `json:"status,omitempty"`
-	StartedAt     time.Time         `json:"started_at,omitempty"`
-	Restarts      int               `json:"restarts,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
+	Name          string    `json:"name"`
+	Template      string    `json:"template,omitempty"`
+	Repo          string    `json:"repo,omitempty"`
+	Workspace     string    `json:"workspace,omitempty"`
+	Branch        string    `json:"branch,omitempty"`
+	CanonicalPath string    `json:"canonical_path,omitempty"`
+	Status        string    `json:"status,omitempty"`
+	StartedAt     time.Time `json:"started_at,omitempty"`
+	Restarts      int       `json:"restarts,omitempty"`
 }
 
 // PruneOptions tunes Manager.Prune.
@@ -381,7 +386,6 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		Workspace: workspace,
 		Status:    "starting",
 		StartedAt: time.Now(),
-		Env:       env,
 	}, nil
 }
 
@@ -673,7 +677,6 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		CanonicalPath: canonical,
 		Status:        "starting",
 		StartedAt:     time.Now(),
-		Env:           env,
 	}, nil
 }
 
@@ -737,7 +740,6 @@ func (m *Manager) List() []Record {
 				CanonicalPath: rec.CanonicalPath,
 				Status:        "suspended",
 				StartedAt:     rec.SpawnedAt,
-				Env:           rec.Env,
 			})
 			continue
 		}
@@ -753,7 +755,6 @@ func (m *Manager) List() []Record {
 			CanonicalPath: rec.CanonicalPath,
 			Status:        "stopped",
 			StartedAt:     rec.SpawnedAt,
-			Env:           rec.Env,
 		})
 	}
 	// Sort by name for a stable order: `out` is assembled by ranging over the
@@ -941,7 +942,6 @@ func (m *Manager) Resume(name string) (Record, error) {
 		CanonicalPath: rec.CanonicalPath,
 		Status:        "starting",
 		StartedAt:     time.Now(),
-		Env:           rec.Env,
 	}, nil
 }
 

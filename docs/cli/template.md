@@ -47,6 +47,8 @@ Template: coding
 
 Empty fields are omitted.
 
+Credential-looking env values (`*TOKEN*`, `*SECRET*`, `*KEY*`, `*PASSWORD*`, `*AUTH*`, `OP_*`, `AWS_*`, …) render as `<redacted>` in both the table and `--json` — agents run this command, and its output ends up in their transcripts. Read `leo.yaml` when you need the actual value.
+
 **Flags:**
 
 | Flag | Description |

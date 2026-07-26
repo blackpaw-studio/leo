@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -40,10 +41,17 @@ templates:
     max_turns: 200
     harness_options:
       permission_mode: bypassPermissions
+    env:
+      OP_SERVICE_ACCOUNT_TOKEN: ` + testSecretEnvValue + `
+      ANTHROPIC_BASE_URL: http://localhost:3325
   research:
     model: opus
     max_turns: 50
 `
+
+// testSecretEnvValue is an obviously-fake credential planted in the template
+// fixture so leak guards can assert it never reaches an API payload.
+const testSecretEnvValue = "ops_totally_fake_token_do_not_use"
 
 // mockAgentService implements AgentService for testing.
 type mockAgentService struct {
@@ -235,12 +243,66 @@ func TestAPITemplateList(t *testing.T) {
 		t.Fatalf("expected ok=true, got error: %s", resp.Error)
 	}
 
-	data, ok := resp.Data.(map[string]any)
+	data, ok := resp.Data.([]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", resp.Data)
+		t.Fatalf("expected array data, got %T", resp.Data)
 	}
 	if len(data) != 2 {
-		t.Errorf("expected 2 templates, got %d", len(data))
+		t.Fatalf("expected 2 templates, got %d", len(data))
+	}
+
+	// Sorted by name: coding, research.
+	first, ok := data[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object entries, got %T", data[0])
+	}
+	if first["name"] != "coding" {
+		t.Errorf("first template name = %v, want coding (sorted)", first["name"])
+	}
+	if first["model"] != "sonnet" {
+		t.Errorf("first template model = %v, want sonnet", first["model"])
+	}
+
+	// Env keys are useful for debugging; env values are credentials.
+	keys, ok := first["env_keys"].([]any)
+	if !ok {
+		t.Fatalf("expected env_keys array, got %T", first["env_keys"])
+	}
+	want := []any{"ANTHROPIC_BASE_URL", "OP_SERVICE_ACCOUNT_TOKEN"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("env_keys = %v, want %v", keys, want)
+	}
+	if _, leaked := first["env"]; leaked {
+		t.Error("template payload carries an env map; it must expose keys only")
+	}
+}
+
+// TestAPITemplateListOmitsEnvValues is the leak guard for the leo_list_templates
+// MCP tool: /api/template/list is what it serves, so any credential in a
+// template's env would land in the calling agent's context verbatim.
+func TestAPITemplateListOmitsEnvValues(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	req := httptest.NewRequest("GET", "/api/template/list", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if body := w.Body.String(); strings.Contains(body, testSecretEnvValue) {
+		t.Errorf("template list leaked a secret env value; body: %s", body)
+	}
+}
+
+// TestAPIAgentListOmitsEnv is the matching guard for leo_list_agents: the
+// agent listing must never carry env at all.
+func TestAPIAgentListOmitsEnv(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+
+	req := httptest.NewRequest("GET", "/api/agent/list", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if body := w.Body.String(); strings.Contains(body, `"env"`) {
+		t.Errorf("agent list carries an env field; body: %s", body)
 	}
 }
 
