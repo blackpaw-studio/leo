@@ -2,16 +2,20 @@ package service
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestBuildClaudeShellCmd(t *testing.T) {
-	baseArgs := []string{"--model", "sonnet"}
+// TestSessionEnvArgs covers the env that reaches a supervised process. Env is
+// passed as tmux `-e KEY=VALUE` argv elements rather than interpolated into
+// the shell command, so values never land in the session's start command —
+// see the sessionEnvArgs doc comment.
+func TestSessionEnvArgs(t *testing.T) {
+	const validToken = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	tests := []struct {
 		name        string
-		args        []string
 		spec        ProcessSpec
 		pathEnv     string
 		wantContain []string
@@ -20,7 +24,6 @@ func TestBuildClaudeShellCmd(t *testing.T) {
 	}{
 		{
 			name: "clean env map passes through",
-			args: baseArgs,
 			spec: ProcessSpec{
 				Name:    "alpha",
 				WebPort: "8370",
@@ -28,226 +31,125 @@ func TestBuildClaudeShellCmd(t *testing.T) {
 			},
 			pathEnv: "/usr/bin:/bin",
 			wantContain: []string{
-				"export FOO='bar';",
-				"export LEO_PROCESS_NAME='alpha';",
-				"export LEO_TMUX_PATH=",
-				"export LEO_WEB_PORT=8370;",
-				"export PATH='/usr/bin:/bin';",
-				"--model",
-				"sonnet",
+				"FOO=bar",
+				"LEO_PROCESS_NAME=alpha",
+				"LEO_WEB_PORT=8370",
+				"PATH=/usr/bin:/bin",
 			},
 		},
 		{
 			name: "malicious env key is dropped",
-			args: baseArgs,
 			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "8370",
+				Name: "alpha",
 				Env: map[string]string{
 					"GOOD":       "ok",
 					"X;rm -rf /": "y",
 				},
 			},
-			pathEnv: "/usr/bin",
-			wantContain: []string{
-				"export GOOD='ok';",
-			},
-			wantMissing: []string{
-				"X;rm -rf /",
-				"export X;rm",
-				"=y",
-			},
-			wantWarns: []string{
-				`dropping invalid env key "X;rm -rf /"`,
-			},
+			wantContain: []string{"GOOD=ok"},
+			wantMissing: []string{"X;rm -rf /=y"},
+			wantWarns:   []string{`dropping invalid env key "X;rm -rf /"`},
 		},
 		{
-			name: "malicious env value is quoted literally",
-			args: baseArgs,
+			name: "shell metacharacters in a value are inert",
 			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "8370",
-				Env:     map[string]string{"X": "$(whoami)"},
+				Name: "alpha",
+				Env:  map[string]string{"X": "$(whoami)"},
 			},
-			pathEnv: "/usr/bin",
-			wantContain: []string{
-				"export X='$(whoami)';",
-			},
-			wantMissing: []string{
-				// bare $(whoami) outside single quotes would be shell-expanded
-				" $(whoami) ",
-				"=$(whoami);",
-			},
+			// argv elements are not shell-parsed, so the value needs no
+			// quoting and arrives at the process byte-identical.
+			wantContain: []string{"X=$(whoami)"},
 		},
 		{
-			name: "value with single quote is escaped",
-			args: baseArgs,
+			name: "value with a single quote survives unmangled",
 			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "8370",
-				Env:     map[string]string{"X": "it's evil"},
+				Name: "alpha",
+				Env:  map[string]string{"X": "it's evil"},
 			},
-			pathEnv: "/usr/bin",
-			wantContain: []string{
-				`export X='it'\''s evil';`,
-			},
+			wantContain: []string{"X=it's evil"},
 		},
 		{
-			name: "invalid WebPort is rejected and export omitted",
-			args: baseArgs,
-			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "80; rm -rf",
-			},
-			pathEnv: "/usr/bin",
-			wantMissing: []string{
-				"LEO_WEB_PORT",
-				"80; rm -rf",
-				"rm -rf",
-			},
-			wantWarns: []string{
-				`dropping invalid LEO_WEB_PORT "80; rm -rf"`,
-			},
+			name:        "invalid WebPort is rejected",
+			spec:        ProcessSpec{Name: "alpha", WebPort: "80; rm -rf"},
+			wantMissing: []string{"LEO_WEB_PORT", "80; rm -rf"},
+			wantWarns:   []string{`dropping invalid LEO_WEB_PORT "80; rm -rf"`},
 		},
 		{
-			name: "empty WebPort simply omits the export with no warning",
-			args: baseArgs,
-			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "",
-			},
-			pathEnv: "/usr/bin",
-			wantMissing: []string{
-				"LEO_WEB_PORT",
-			},
+			name:        "empty WebPort is omitted without a warning",
+			spec:        ProcessSpec{Name: "alpha"},
+			wantMissing: []string{"LEO_WEB_PORT"},
 		},
 		{
-			name: "valid WebToken is exported as LEO_API_TOKEN",
-			args: baseArgs,
-			spec: ProcessSpec{
-				Name:     "alpha",
-				WebPort:  "8370",
-				WebToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			},
-			pathEnv: "/usr/bin",
-			wantContain: []string{
-				"export LEO_API_TOKEN='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';",
-			},
+			name:        "valid WebToken becomes LEO_API_TOKEN",
+			spec:        ProcessSpec{Name: "alpha", WebToken: validToken},
+			wantContain: []string{"LEO_API_TOKEN=" + validToken},
 		},
 		{
-			name: "malformed WebToken is dropped and warned",
-			args: baseArgs,
-			spec: ProcessSpec{
-				Name:     "alpha",
-				WebPort:  "8370",
-				WebToken: "short-not-hex",
-			},
-			pathEnv: "/usr/bin",
-			wantMissing: []string{
-				"LEO_API_TOKEN",
-				"short-not-hex",
-			},
-			wantWarns: []string{
-				"dropping malformed LEO_API_TOKEN",
-			},
+			name:        "malformed WebToken is dropped and warned",
+			spec:        ProcessSpec{Name: "alpha", WebToken: "short-not-hex"},
+			wantMissing: []string{"LEO_API_TOKEN", "short-not-hex"},
+			wantWarns:   []string{"dropping malformed LEO_API_TOKEN"},
 		},
 		{
-			name: "empty WebToken simply omits the export with no warning",
-			args: baseArgs,
-			spec: ProcessSpec{
-				Name:     "alpha",
-				WebPort:  "8370",
-				WebToken: "",
-			},
-			pathEnv: "/usr/bin",
-			wantMissing: []string{
-				"LEO_API_TOKEN",
-			},
+			// "PATH=" alone would match inside LEO_TMUX_PATH=…; the \x00 is
+			// the element separator used by the joined form below, so this
+			// asserts no arg *starts* with PATH=.
+			name:        "empty PATH is omitted",
+			spec:        ProcessSpec{Name: "alpha"},
+			pathEnv:     "",
+			wantMissing: []string{"\x00PATH="},
 		},
 		{
-			name: "empty PATH env omits PATH export",
-			args: baseArgs,
-			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "8370",
-			},
-			pathEnv: "",
-			wantMissing: []string{
-				"export PATH=",
-			},
-			wantContain: []string{
-				"export LEO_PROCESS_NAME='alpha';",
-				"export LEO_WEB_PORT=8370;",
-			},
+			name:        "keys with a leading digit are rejected",
+			spec:        ProcessSpec{Name: "alpha", Env: map[string]string{"1BAD": "oops", "OK": "fine"}},
+			wantContain: []string{"OK=fine"},
+			wantMissing: []string{"1BAD=oops"},
+			wantWarns:   []string{`dropping invalid env key "1BAD"`},
 		},
 		{
-			name: "claude path and args are shell-quoted",
-			args: []string{"--append-system-prompt", "hello $USER"},
-			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "8370",
-			},
-			pathEnv: "/usr/bin",
-			wantContain: []string{
-				"'--append-system-prompt'",
-				"'hello $USER'",
-			},
-			wantMissing: []string{
-				// unquoted $USER would be expanded
-				" hello $USER ",
-			},
+			name:        "empty key is rejected",
+			spec:        ProcessSpec{Name: "alpha", Env: map[string]string{"": "oops", "OK": "fine"}},
+			wantContain: []string{"OK=fine"},
+			wantMissing: []string{"=oops"},
+			wantWarns:   []string{`dropping invalid env key ""`},
 		},
 		{
-			name: "keys with leading digit are rejected",
-			args: baseArgs,
-			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "8370",
-				Env:     map[string]string{"1BAD": "oops", "OK": "fine"},
-			},
-			pathEnv:     "/usr/bin",
-			wantContain: []string{"export OK='fine';"},
-			wantMissing: []string{"export 1BAD"},
-			wantWarns: []string{
-				`dropping invalid env key "1BAD"`,
-			},
-		},
-		{
-			name: "empty key string is rejected",
-			args: baseArgs,
-			spec: ProcessSpec{
-				Name:    "alpha",
-				WebPort: "8370",
-				Env:     map[string]string{"": "oops", "OK": "fine"},
-			},
-			pathEnv:     "/usr/bin",
-			wantContain: []string{"export OK='fine';"},
-			wantMissing: []string{"export ='oops'"},
-			wantWarns: []string{
-				`dropping invalid env key ""`,
-			},
+			// Leo's own vars are authoritative: a process env that tries to
+			// shadow LEO_PROCESS_NAME must lose, as it did when leo's exports
+			// ran last in the old shell-string form.
+			name:        "leo vars win over a colliding process env key",
+			spec:        ProcessSpec{Name: "alpha", Env: map[string]string{"LEO_PROCESS_NAME": "impostor"}},
+			wantContain: []string{"LEO_PROCESS_NAME=alpha"},
+			wantMissing: []string{"LEO_PROCESS_NAME=impostor"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var warn bytes.Buffer
-			got := buildClaudeShellCmd("/usr/local/bin/claude", tt.args, "/usr/local/bin/tmux", tt.spec, tt.pathEnv, &warn)
+			got := sessionEnvArgs("/usr/local/bin/tmux", tt.spec, tt.pathEnv, &warn)
 
-			for _, sub := range tt.wantContain {
-				if !strings.Contains(got, sub) {
-					t.Errorf("cmd missing %q\nfull cmd: %s", sub, got)
+			// Every entry must be a "-e" flag followed by KEY=VALUE.
+			for i := 0; i < len(got); i += 2 {
+				if got[i] != "-e" {
+					t.Fatalf("arg %d = %q, want -e; full args: %v", i, got[i], got)
 				}
 			}
-			for _, sub := range tt.wantMissing {
-				if strings.Contains(got, sub) {
-					t.Errorf("cmd should not contain %q\nfull cmd: %s", sub, got)
+			joined := strings.Join(got, "\x00")
+			for _, want := range tt.wantContain {
+				if !slices.Contains(got, want) {
+					t.Errorf("env args missing %q; got %v", want, got)
+				}
+			}
+			for _, unwanted := range tt.wantMissing {
+				if strings.Contains(joined, unwanted) {
+					t.Errorf("env args should not contain %q; got %v", unwanted, got)
 				}
 			}
 			warnStr := warn.String()
 			for _, w := range tt.wantWarns {
 				if !strings.Contains(warnStr, w) {
-					t.Errorf("expected warning %q, got warnings: %q", w, warnStr)
+					t.Errorf("expected warning %q, got: %q", w, warnStr)
 				}
 			}
 			if len(tt.wantWarns) == 0 && warnStr != "" {
@@ -257,24 +159,58 @@ func TestBuildClaudeShellCmd(t *testing.T) {
 	}
 }
 
-func TestBuildClaudeShellCmd_DeterministicOrder(t *testing.T) {
-	// Maps have non-deterministic iteration order in Go. Make sure the
-	// helper produces a stable string across calls so logs and tests
-	// stay readable.
+// TestSessionEnvArgsDeterministicOrder keeps logs and tests readable: Go map
+// iteration is randomized, so the args must be sorted.
+func TestSessionEnvArgsDeterministicOrder(t *testing.T) {
 	spec := ProcessSpec{
 		Name:    "p",
 		WebPort: "8370",
-		Env: map[string]string{
-			"ZETA":  "z",
-			"ALPHA": "a",
-			"MIKE":  "m",
-		},
+		Env:     map[string]string{"ZETA": "z", "ALPHA": "a", "MIKE": "m"},
 	}
-	first := buildClaudeShellCmd("/c", nil, "/t", spec, "", nil)
+	first := sessionEnvArgs("/t", spec, "", nil)
 	for i := 0; i < 50; i++ {
-		if got := buildClaudeShellCmd("/c", nil, "/t", spec, "", nil); got != first {
-			t.Fatalf("output not deterministic\nfirst: %s\ngot:   %s", first, got)
+		if got := sessionEnvArgs("/t", spec, "", nil); !slices.Equal(got, first) {
+			t.Fatalf("output not deterministic\nfirst: %v\ngot:   %v", first, got)
 		}
+	}
+}
+
+// TestBuildClaudeShellCmdCarriesNoEnv is the leak guard. tmux persists a
+// pane's start command (`list-panes -F '#{pane_start_command}'`) and it shows
+// up in ps output, so any credential interpolated into this string is
+// readable for the life of the session by anything running as the same user.
+// Env belongs in sessionEnvArgs, never here.
+func TestBuildClaudeShellCmdCarriesNoEnv(t *testing.T) {
+	const secret = "ops_totally_fake_token_do_not_use"
+	spec := ProcessSpec{
+		Name:     "alpha",
+		WebPort:  "8370",
+		WebToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Env:      map[string]string{"OP_SERVICE_ACCOUNT_TOKEN": secret},
+	}
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--model", "sonnet"}, spec)
+
+	for _, unwanted := range []string{secret, "OP_SERVICE_ACCOUNT_TOKEN", "LEO_API_TOKEN", "export "} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("shell command contains %q; env must ride in tmux -e args\nfull cmd: %s", unwanted, got)
+		}
+	}
+	if !strings.Contains(got, "'--model'") || !strings.Contains(got, "'sonnet'") {
+		t.Errorf("shell command lost the claude args: %s", got)
+	}
+}
+
+func TestBuildClaudeShellCmd_ArgsAreShellQuoted(t *testing.T) {
+	spec := ProcessSpec{Name: "alpha"}
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--append-system-prompt", "hello $USER"}, spec)
+
+	for _, want := range []string{"'--append-system-prompt'", "'hello $USER'"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cmd missing %q\nfull cmd: %s", want, got)
+		}
+	}
+	if strings.Contains(got, " hello $USER ") {
+		t.Errorf("unquoted $USER would be shell-expanded\nfull cmd: %s", got)
 	}
 }
 
@@ -283,7 +219,7 @@ func TestBuildClaudeShellCmd_ExitCapture(t *testing.T) {
 		Name:     "assistant",
 		StateDir: "/var/leo/state",
 	}
-	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, "/t", spec, "", nil)
+	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, spec)
 
 	wantSubstrings := []string{
 		"2> '/var/leo/state/assistant-stderr.log'",
@@ -299,7 +235,7 @@ func TestBuildClaudeShellCmd_ExitCapture(t *testing.T) {
 
 func TestBuildClaudeShellCmd_NoExitCaptureWhenStateDirMissing(t *testing.T) {
 	spec := ProcessSpec{Name: "p"} // StateDir empty
-	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, "/t", spec, "", nil)
+	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, spec)
 	for _, sub := range []string{"-stderr.log", "-exit.code", "ec=$?"} {
 		if strings.Contains(got, sub) {
 			t.Errorf("cmd should not contain %q when StateDir is empty\nfull cmd: %s", sub, got)
@@ -307,14 +243,14 @@ func TestBuildClaudeShellCmd_NoExitCaptureWhenStateDirMissing(t *testing.T) {
 	}
 }
 
-func TestBuildClaudeShellCmd_NilWarnOut(t *testing.T) {
+func TestSessionEnvArgs_NilWarnOut(t *testing.T) {
 	// warnOut=nil must not panic even when there are invalid entries.
 	spec := ProcessSpec{
 		Name:    "p",
 		WebPort: "bad;port",
 		Env:     map[string]string{"bad key": "v"},
 	}
-	_ = buildClaudeShellCmd("/c", nil, "/t", spec, "", nil)
+	_ = sessionEnvArgs("/t", spec, "", nil)
 }
 
 func TestSupervisorEnvKeyPatternMatchesConfig(t *testing.T) {
