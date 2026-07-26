@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -84,19 +83,27 @@ type envPair struct {
 // claude process for a dry-run, redacting sensitive values. Sorted by key for
 // deterministic output.
 func taskDryRunEnv(task config.TaskConfig) []envPair {
-	var pairs []envPair
-
+	// Mirror run.Run's merge order: task.Env is the base layer and leo's own
+	// vars win on collision, so a task that sets LEO_CHANNELS in its env
+	// shows the value it will actually get — one entry, not two.
+	env := make(map[string]string, len(task.Env)+2)
 	for k, v := range task.Env {
-		pairs = append(pairs, envPair{key: k, display: redact.Value(k, v)})
+		env[k] = v
 	}
 	if len(task.Channels) > 0 {
-		pairs = append(pairs, envPair{key: "LEO_CHANNELS", display: redact.Value("LEO_CHANNELS", strings.Join(task.Channels, ","))})
+		env["LEO_CHANNELS"] = strings.Join(task.Channels, ",")
 	}
 	if len(task.DevChannels) > 0 {
-		pairs = append(pairs, envPair{key: "LEO_DEV_CHANNELS", display: redact.Value("LEO_DEV_CHANNELS", strings.Join(task.DevChannels, ","))})
+		env["LEO_DEV_CHANNELS"] = strings.Join(task.DevChannels, ",")
+	}
+	if len(env) == 0 {
+		return nil
 	}
 
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
+	pairs := make([]envPair, 0, len(env))
+	for _, k := range redact.Keys(env) {
+		pairs = append(pairs, envPair{key: k, display: redact.Value(k, env[k])})
+	}
 	return pairs
 }
 

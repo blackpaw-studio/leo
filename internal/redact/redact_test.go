@@ -23,6 +23,12 @@ func TestIsSecretKey(t *testing.T) {
 		{"PRIVATE_KEY", true},
 		{"op_service_account_token", true}, // case-insensitive
 		{"APIKeyName", true},               // mixed case, KEY embedded mid-word
+		{"DB_PASS", true},
+		{"SMTP_PWD", true},
+		{"SESSION_ID", true},
+		{"WEBHOOK_URL", true},
+		{"SENTRY_DSN", true},
+		{"REQUEST_SIGNATURE", true},
 		{"ANTHROPIC_BASE_URL", false},
 		{"BLACKPAW_TELEGRAM_RECEIVE", false},
 		{"PATH", false},
@@ -32,6 +38,27 @@ func TestIsSecretKey(t *testing.T) {
 	for _, tt := range tests {
 		if got := IsSecretKey(tt.key); got != tt.want {
 			t.Errorf("IsSecretKey(%q) = %v, want %v", tt.key, got, tt.want)
+		}
+	}
+}
+
+// TestValueMasksEmbeddedCredentials covers the case a key denylist cannot:
+// an innocuous key whose value is a URL with inline credentials.
+func TestValueMasksEmbeddedCredentials(t *testing.T) {
+	tests := []struct {
+		key, val string
+		masked   bool
+	}{
+		{"DATABASE_URL", "postgres://user:hunter2@db.internal:5432/app", true},
+		{"REDIS_URL", "redis://:hunter2@cache.internal:6379", true},
+		{"DATABASE_URL", "postgres://db.internal:5432/app", false}, // no credentials in it
+		{"ANTHROPIC_BASE_URL", "http://localhost:3325", false},
+		{"GREETING", "user:password@example", false}, // not a URL — no scheme
+	}
+	for _, tt := range tests {
+		got := Value(tt.key, tt.val)
+		if masked := got == Mask; masked != tt.masked {
+			t.Errorf("Value(%q, %q) = %q; masked=%v, want masked=%v", tt.key, tt.val, got, masked, tt.masked)
 		}
 	}
 }

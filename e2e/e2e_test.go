@@ -502,12 +502,23 @@ tasks:
 	if !resp.OK {
 		t.Fatalf("task/list not OK: %s", resp.Error)
 	}
-	var tasks map[string]config.TaskConfig
+	// The payload is a trimmed projection (name + schedule + env_keys, never
+	// env values) — see internal/daemon.taskListInfo.
+	var tasks []struct {
+		Name    string   `json:"name"`
+		EnvKeys []string `json:"env_keys"`
+	}
 	if err := json.Unmarshal(resp.Data, &tasks); err != nil {
 		t.Fatalf("unmarshaling task list: %v", err)
 	}
-	if _, ok := tasks["heartbeat"]; !ok {
-		t.Error("expected heartbeat task in list")
+	found := false
+	for _, task := range tasks {
+		if task.Name == "heartbeat" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected heartbeat task in list, got %+v", tasks)
 	}
 
 	// POST /task/add — add a "news" task.

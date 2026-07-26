@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,7 +26,14 @@ tasks:
     schedule: "0 * * * *"
     prompt_file: heartbeat.md
     enabled: true
+    env:
+      OP_SERVICE_ACCOUNT_TOKEN: ` + testSecretEnvValue + `
+      ANTHROPIC_BASE_URL: http://localhost:3325
 `
+
+// testSecretEnvValue is an obviously-fake credential planted in the task
+// fixture so the leak guard below can assert it never reaches a response.
+const testSecretEnvValue = "ops_totally_fake_token_do_not_use"
 
 func writeTestConfig(t *testing.T, dir string) string {
 	t.Helper()
@@ -413,13 +421,13 @@ func TestHandleTaskList(t *testing.T) {
 		t.Errorf("expected OK=true, got OK=false (error: %s)", result.Error)
 	}
 
-	var tasks map[string]config.TaskConfig
+	var tasks []taskListInfo
 	if err := json.Unmarshal(result.Data, &tasks); err != nil {
 		t.Fatalf("unmarshaling tasks: %v", err)
 	}
 
-	if _, ok := tasks["heartbeat"]; !ok {
-		t.Error("expected 'heartbeat' task in list response")
+	if len(tasks) != 1 || tasks[0].Name != "heartbeat" {
+		t.Errorf("expected 'heartbeat' task in list response, got %+v", tasks)
 	}
 }
 
@@ -799,5 +807,48 @@ func TestHandleTaskEnableMalformedJSON(t *testing.T) {
 	}
 	if result.OK {
 		t.Error("expected OK=false for malformed JSON")
+	}
+}
+
+// TestHandleTaskListOmitsEnvValues guards a credential leak: GET /task/list is
+// served on the daemon's Unix socket, which every agent can reach with a
+// one-line curl. Task env holds credentials, so the response carries a trimmed
+// projection (env key names only), never the values.
+func TestHandleTaskListOmitsEnvValues(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath)
+
+	resp, err := client.Get("http://localhost/task/list")
+	if err != nil {
+		t.Fatalf("GET /task/list: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	var body bytes.Buffer
+	if _, err := body.ReadFrom(resp.Body); err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+	if strings.Contains(body.String(), testSecretEnvValue) {
+		t.Errorf("task list leaked a secret env value; body: %s", body.String())
+	}
+
+	var envelope Response
+	if err := json.Unmarshal(body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decoding envelope: %v", err)
+	}
+	var tasks []taskListInfo
+	if err := json.Unmarshal(envelope.Data, &tasks); err != nil {
+		t.Fatalf("decoding tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("want 1 task, got %d: %+v", len(tasks), tasks)
+	}
+	if tasks[0].Name != "heartbeat" || tasks[0].Schedule != "0 * * * *" || !tasks[0].Enabled {
+		t.Errorf("task projection = %+v", tasks[0])
+	}
+	want := []string{"ANTHROPIC_BASE_URL", "OP_SERVICE_ACCOUNT_TOKEN"}
+	if !reflect.DeepEqual(tasks[0].EnvKeys, want) {
+		t.Errorf("env_keys = %v, want %v", tasks[0].EnvKeys, want)
 	}
 }

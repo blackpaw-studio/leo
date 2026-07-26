@@ -11,6 +11,7 @@
 package redact
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -24,11 +25,22 @@ var secretKeyFragments = []string{
 	"SECRET",
 	"PASSWORD",
 	"PASSWD",
+	"PASS", // DB_PASS
+	"PWD",  // SMTP_PWD
 	"CREDENTIAL",
 	"AUTH",
 	"COOKIE",
-	"KEY", // API_KEY, PRIVATE_KEY, ACCESS_KEY, SIGNING_KEY, …
+	"SESSION",   // session ids are bearer credentials
+	"SIGNATURE", // request-signing material
+	"DSN",       // SENTRY_DSN embeds a key
+	"WEBHOOK",   // webhook URLs are unguessable-by-design
+	"KEY",       // API_KEY, PRIVATE_KEY, ACCESS_KEY, SIGNING_KEY, …
 }
+
+// credentialedURL matches a URL whose authority carries inline credentials
+// (scheme://user:pass@host). Catches the case a key denylist cannot: an
+// innocuous name like DATABASE_URL or MONGO_URI holding a live password.
+var credentialedURL = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://[^/@\s]*:[^/@\s]*@`)
 
 // secretKeyPrefixes match whole credential namespaces, where even the
 // non-obvious keys are worth withholding.
@@ -54,11 +66,14 @@ func IsSecretKey(key string) bool {
 	return false
 }
 
-// Value returns val, or Mask when key names a credential. An empty value is
-// returned as-is: there is nothing to leak, and masking it would imply the
-// key is set to something.
+// Value returns val, or Mask when key names a credential or val is a URL with
+// inline credentials. An empty value is returned as-is: there is nothing to
+// leak, and masking it would imply the key is set to something.
 func Value(key, val string) string {
-	if val == "" || !IsSecretKey(key) {
+	if val == "" {
+		return val
+	}
+	if !IsSecretKey(key) && !credentialedURL.MatchString(val) {
 		return val
 	}
 	return Mask

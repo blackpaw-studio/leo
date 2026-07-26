@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/redact"
 )
 
 // decodeJSON decodes a JSON request body into v and writes an error response on failure.
@@ -134,6 +136,28 @@ func (s *Server) setTaskEnabled(w http.ResponseWriter, r *http.Request, enabled 
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
+// taskListInfo is the public view of a task on GET /task/list.
+//
+// It carries EnvKeys rather than the env map: this endpoint is served on the
+// daemon's Unix socket, which any agent can reach with a one-line curl, and
+// task env holds credentials. Key names describe what a task configures
+// without disclosing any of it. (The web UI's /api/task/list projects the
+// same way.)
+type taskListInfo struct {
+	Name       string   `json:"name"`
+	Schedule   string   `json:"schedule,omitempty"`
+	Timezone   string   `json:"timezone,omitempty"`
+	PromptFile string   `json:"prompt_file,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	Harness    string   `json:"harness,omitempty"`
+	Workspace  string   `json:"workspace,omitempty"`
+	Runtime    string   `json:"runtime,omitempty"`
+	Template   string   `json:"template,omitempty"`
+	Enabled    bool     `json:"enabled"`
+	Channels   []string `json:"channels,omitempty"`
+	EnvKeys    []string `json:"env_keys,omitempty"`
+}
+
 func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.Load(s.configPath)
 	if err != nil {
@@ -141,7 +165,27 @@ func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := json.Marshal(cfg.Tasks)
+	tasks := make([]taskListInfo, 0, len(cfg.Tasks))
+	for name, task := range cfg.Tasks {
+		tasks = append(tasks, taskListInfo{
+			Name:       name,
+			Schedule:   task.Schedule,
+			Timezone:   task.Timezone,
+			PromptFile: task.PromptFile,
+			Model:      task.Model,
+			Harness:    task.Harness,
+			Workspace:  task.Workspace,
+			Runtime:    task.Runtime,
+			Template:   task.Template,
+			Enabled:    task.Enabled,
+			Channels:   task.Channels,
+			EnvKeys:    redact.Keys(task.Env),
+		})
+	}
+	// Config maps iterate in random order; sort for a stable listing.
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Name < tasks[j].Name })
+
+	data, err := json.Marshal(tasks)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling tasks: %v", err))
 		return

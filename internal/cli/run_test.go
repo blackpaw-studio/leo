@@ -41,6 +41,18 @@ func TestTaskDryRunEnv(t *testing.T) {
 			},
 		},
 		{
+			// run.Run merges leo's vars over task.Env, so the dry run must
+			// show one LEO_CHANNELS entry carrying the winning value.
+			name: "task env colliding with LEO_CHANNELS yields one entry",
+			task: config.TaskConfig{
+				Channels: []string{"plugin:telegram@x"},
+				Env:      map[string]string{"LEO_CHANNELS": "shadowed"},
+			},
+			want: []envPair{
+				{key: "LEO_CHANNELS", display: "plugin:telegram@x"},
+			},
+		},
+		{
 			name: "channels and dev channels sorted",
 			task: config.TaskConfig{
 				Channels:    []string{"plugin:telegram@x"},

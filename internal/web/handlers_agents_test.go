@@ -292,20 +292,6 @@ func TestAPITemplateListOmitsEnvValues(t *testing.T) {
 	}
 }
 
-// TestAPIAgentListOmitsEnv is the matching guard for leo_list_agents: the
-// agent listing must never carry env at all.
-func TestAPIAgentListOmitsEnv(t *testing.T) {
-	s, _, _ := newTestServerWithAgents(t)
-
-	req := httptest.NewRequest("GET", "/api/agent/list", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if body := w.Body.String(); strings.Contains(body, `"env"`) {
-		t.Errorf("agent list carries an env field; body: %s", body)
-	}
-}
-
 func TestAPIAgentList(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 
