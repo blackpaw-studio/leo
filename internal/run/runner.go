@@ -952,9 +952,13 @@ func leoMCPEnv(cfg *config.Config, taskName string) map[string]string {
 	if !cfg.Web.Enabled {
 		return env
 	}
-	// api.token lives at <state>/api.token; see web.APITokenPath, which
-	// owns the canonical path (and file-creation logic) for this file.
-	data, err := os.ReadFile(web.APITokenPath(cfg.StatePath()))
+	// The agent token, not the operator's api.token: a task runs the same MCP
+	// server and channel plugins an agent does, so it gets the same narrow
+	// credential — accepted on /api/* and agent messaging, rejected at /login
+	// and on the config editor. See web.EnsureAgentToken. Read-only on
+	// purpose: the daemon mints the file, and a task that runs before it has
+	// simply goes without a token rather than creating one behind its back.
+	data, err := os.ReadFile(web.AgentTokenPath(cfg.StatePath()))
 	if err != nil {
 		return env
 	}

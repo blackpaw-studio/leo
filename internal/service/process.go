@@ -699,7 +699,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
 			// persists a pane's start command, so an interpolated credential
 			// stays readable for the life of the session. See sessionEnvArgs.
-			envArgs := sessionEnvArgs(tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
+			envArgs := sessionEnvArgs(tmuxPath, spec, os.Stderr)
 
 			// Kill any stale tmux session with our name
 			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
@@ -714,6 +714,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			newSessionArgs = append(newSessionArgs, claudeCmd)
 			createCmd := exec.CommandContext(ctx, tmuxPath, tmux.Args(newSessionArgs...)...)
 			createCmd.Dir = spec.WorkDir
+			// This is what gives the pane its PATH: tmux ignores `-e PATH=…`
+			// and takes PATH from the new-session client's environment. Do
+			// not trim this to a minimal env without moving PATH somewhere
+			// the pane actually sees it.
 			createCmd.Env = os.Environ()
 
 			if err := createCmd.Run(); err != nil {
@@ -1018,15 +1022,22 @@ func harnessBinaryPath(harnessName, claudePath string) string {
 }
 
 // sessionEnvArgs returns the `-e KEY=VALUE` args for tmux new-session,
-// carrying every env var the supervised process needs: the process's own
-// configured env, leo's control vars, and PATH.
+// carrying the process's own configured env plus leo's control vars.
+//
+// PATH is deliberately absent: tmux ignores `-e PATH=…` and derives the
+// pane's PATH from the environment of the client that issues new-session
+// (verified on tmux 3.6a, with and without a pre-existing server). The
+// supervisor's own createCmd.Env is what actually carries PATH — see the
+// spawn site. Listing PATH here would assert a guarantee tmux does not honour
+// and would hide a future regression behind a passing test.
 //
 // Env travels as argv rather than as `export K=V;` inside the shell command
 // on purpose. tmux keeps a pane's start command for the life of the session
 // (`list-panes -F '#{pane_start_command}'`, and it shows in ps), so anything
 // interpolated there is readable for hours by every process running as the
-// same user — including a 1Password service-account token. As argv to
-// new-session the value is consumed by tmux and never re-rendered.
+// same user — including a 1Password service-account token. As new-session
+// argv the value is exposed only in the short-lived tmux client's own argv:
+// hours of exposure become milliseconds.
 //
 // This is exposure reduction, not isolation: `tmux show-environment` still
 // reports session env to anyone who can reach the socket, and leo.yaml is
@@ -1036,13 +1047,23 @@ func harnessBinaryPath(harnessName, claudePath string) string {
 // Requires tmux 3.2+ (`-e` on new-session), matching leo's documented tmux
 // baseline. Keys are validated; leo's own vars win on collision, preserving
 // the precedence of the old export ordering.
-func sessionEnvArgs(tmuxPath string, spec ProcessSpec, pathEnv string, warnOut io.Writer) []string {
+func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []string {
 	env := make(map[string]string, len(spec.Env)+4)
 
 	for k, v := range spec.Env {
 		if !supervisorEnvKeyPattern.MatchString(k) {
 			if warnOut != nil {
 				fmt.Fprintf(warnOut, "[%s] warning: dropping invalid env key %q\n", spec.Name, k)
+			}
+			continue
+		}
+		if k == "PATH" {
+			// tmux ignores session-env PATH and uses the new-session client's
+			// instead, so emitting it would look effective without being so.
+			// (It never took effect before this either: leo's own PATH export
+			// ran last and overrode it.) Say so rather than failing silently.
+			if warnOut != nil {
+				fmt.Fprintf(warnOut, "[%s] warning: ignoring configured PATH — tmux takes the session's PATH from the daemon's environment\n", spec.Name)
 			}
 			continue
 		}
@@ -1066,10 +1087,6 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, pathEnv string, warnOut i
 			fmt.Fprintf(warnOut, "[%s] warning: dropping malformed LEO_API_TOKEN\n", spec.Name)
 		}
 	}
-	if pathEnv != "" {
-		env["PATH"] = pathEnv
-	}
-
 	keys := make([]string, 0, len(env))
 	for k := range env {
 		keys = append(keys, k)

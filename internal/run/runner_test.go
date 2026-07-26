@@ -802,7 +802,7 @@ func TestLeoMCPEnv(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: false}}
 		os.MkdirAll(cfg.StatePath(), 0750)
-		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123"), 0600)
+		os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok123"), 0600)
 
 		env := leoMCPEnv(cfg, "mytask")
 		if env["LEO_PROCESS_NAME"] != "task:mytask" {
@@ -827,7 +827,7 @@ func TestLeoMCPEnv(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 		os.MkdirAll(cfg.StatePath(), 0750)
-		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("   \n"), 0600)
+		os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("   \n"), 0600)
 
 		env := leoMCPEnv(cfg, "mytask")
 		if _, ok := env["LEO_API_TOKEN"]; ok {
@@ -839,7 +839,7 @@ func TestLeoMCPEnv(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true, Port: 9999}}
 		os.MkdirAll(cfg.StatePath(), 0750)
-		os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123\n"), 0600)
+		os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok123\n"), 0600)
 
 		env := leoMCPEnv(cfg, "mytask")
 		if env["LEO_PROCESS_NAME"] != "task:mytask" {
@@ -882,7 +882,7 @@ func TestBuildArgsIncludesLeoMCPWithToken(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true}}
 	os.MkdirAll(cfg.StatePath(), 0750)
-	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok123"), 0600)
+	os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok123"), 0600)
 
 	leoEnv := leoMCPEnv(cfg, "mytask")
 	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv)
@@ -918,7 +918,7 @@ func TestRunPassesLeoMCPEnvToExecuteCommand(t *testing.T) {
 		},
 	}
 	os.MkdirAll(cfg.StatePath(), 0750)
-	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok-xyz"), 0600)
+	os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok-xyz"), 0600)
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		// executeCommand sets cmd.Env after the seam returns the *exec.Cmd;
@@ -989,7 +989,7 @@ func TestRunInjectsTaskEnvWithLeoMCPPrecedence(t *testing.T) {
 		},
 	}
 	os.MkdirAll(cfg.StatePath(), 0750)
-	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok-xyz"), 0600)
+	os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok-xyz"), 0600)
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		return exec.Command("sh", "-c", "env")
@@ -1053,7 +1053,7 @@ func TestRunTaskEnvOverridesHarnessEnv(t *testing.T) {
 		},
 	}
 	os.MkdirAll(cfg.StatePath(), 0750)
-	os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte("tok-xyz"), 0600)
+	os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok-xyz"), 0600)
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		return exec.Command("sh", "-c", "env")
@@ -2066,5 +2066,33 @@ func TestRunCodexPersistsThreadID(t *testing.T) {
 	}
 	if sid != "tid-abc-123" {
 		t.Errorf("stored session id = %q, want %q", sid, "tid-abc-123")
+	}
+}
+
+// TestLeoMCPEnvUsesAgentToken guards the token split: a oneshot task runs the
+// same MCP server and the same channel plugins an agent does, so it must get
+// the narrow agent token — never the operator's api.token, which /login
+// accepts and which reaches the config editor.
+func TestLeoMCPEnvUsesAgentToken(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{HomePath: dir, Web: config.WebConfig{Enabled: true, Port: 9999}}
+	if err := os.MkdirAll(cfg.StatePath(), 0750); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	const operatorToken = "operator-token-must-not-leak"
+	if err := os.WriteFile(filepath.Join(cfg.StatePath(), "api.token"), []byte(operatorToken+"\n"), 0600); err != nil {
+		t.Fatalf("writing api.token: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("agent-token\n"), 0600); err != nil {
+		t.Fatalf("writing agent.token: %v", err)
+	}
+
+	env := leoMCPEnv(cfg, "mytask")
+
+	if env["LEO_API_TOKEN"] == operatorToken {
+		t.Error("task env carries the operator token; it must carry the agent token")
+	}
+	if env["LEO_API_TOKEN"] != "agent-token" {
+		t.Errorf("LEO_API_TOKEN = %q, want the agent token", env["LEO_API_TOKEN"])
 	}
 }

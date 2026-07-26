@@ -17,7 +17,6 @@ func TestSessionEnvArgs(t *testing.T) {
 	tests := []struct {
 		name        string
 		spec        ProcessSpec
-		pathEnv     string
 		wantContain []string
 		wantMissing []string
 		wantWarns   []string
@@ -29,12 +28,10 @@ func TestSessionEnvArgs(t *testing.T) {
 				WebPort: "8370",
 				Env:     map[string]string{"FOO": "bar"},
 			},
-			pathEnv: "/usr/bin:/bin",
 			wantContain: []string{
 				"FOO=bar",
 				"LEO_PROCESS_NAME=alpha",
 				"LEO_WEB_PORT=8370",
-				"PATH=/usr/bin:/bin",
 			},
 		},
 		{
@@ -91,13 +88,16 @@ func TestSessionEnvArgs(t *testing.T) {
 			wantWarns:   []string{"dropping malformed LEO_API_TOKEN"},
 		},
 		{
-			// "PATH=" alone would match inside LEO_TMUX_PATH=…; the \x00 is
-			// the element separator used by the joined form below, so this
-			// asserts no arg *starts* with PATH=.
-			name:        "empty PATH is omitted",
-			spec:        ProcessSpec{Name: "alpha"},
-			pathEnv:     "",
+			// tmux ignores `-e PATH=…` — the pane's PATH comes from the
+			// new-session client's environment — so listing it here would
+			// assert a guarantee tmux does not honour. "PATH=" alone would
+			// match inside LEO_TMUX_PATH=…; \x00 is the element separator
+			// used by the joined form below, so this asserts no arg *starts*
+			// with PATH=.
+			name:        "PATH is never passed as session env",
+			spec:        ProcessSpec{Name: "alpha", Env: map[string]string{"PATH": "/should/not/appear"}},
 			wantMissing: []string{"\x00PATH="},
+			wantWarns:   []string{"ignoring configured PATH"},
 		},
 		{
 			name:        "keys with a leading digit are rejected",
@@ -127,7 +127,7 @@ func TestSessionEnvArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var warn bytes.Buffer
-			got := sessionEnvArgs("/usr/local/bin/tmux", tt.spec, tt.pathEnv, &warn)
+			got := sessionEnvArgs("/usr/local/bin/tmux", tt.spec, &warn)
 
 			// Every entry must be a "-e" flag followed by KEY=VALUE.
 			for i := 0; i < len(got); i += 2 {
@@ -167,9 +167,9 @@ func TestSessionEnvArgsDeterministicOrder(t *testing.T) {
 		WebPort: "8370",
 		Env:     map[string]string{"ZETA": "z", "ALPHA": "a", "MIKE": "m"},
 	}
-	first := sessionEnvArgs("/t", spec, "", nil)
+	first := sessionEnvArgs("/t", spec, nil)
 	for i := 0; i < 50; i++ {
-		if got := sessionEnvArgs("/t", spec, "", nil); !slices.Equal(got, first) {
+		if got := sessionEnvArgs("/t", spec, nil); !slices.Equal(got, first) {
 			t.Fatalf("output not deterministic\nfirst: %v\ngot:   %v", first, got)
 		}
 	}
@@ -250,7 +250,7 @@ func TestSessionEnvArgs_NilWarnOut(t *testing.T) {
 		WebPort: "bad;port",
 		Env:     map[string]string{"bad key": "v"},
 	}
-	_ = sessionEnvArgs("/t", spec, "", nil)
+	_ = sessionEnvArgs("/t", spec, nil)
 }
 
 func TestSupervisorEnvKeyPatternMatchesConfig(t *testing.T) {

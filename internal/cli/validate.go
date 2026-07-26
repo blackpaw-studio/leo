@@ -110,7 +110,15 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 	}
 
 	if prereq.CheckTmux() {
-		add(SeverityInfo, "tmux", "installed")
+		// Leo passes agent env via `new-session -e`, which needs tmux 3.2+.
+		// On an older tmux every spawn fails and the supervisor retries
+		// forever, so flag it here rather than letting it look like agents
+		// mysteriously never start.
+		if raw, ok := prereq.TmuxVersion(); ok {
+			add(SeverityInfo, "tmux", "installed")
+		} else {
+			add(SeverityError, "tmux", fmt.Sprintf("%s is too old — leo needs tmux %d.%d+ to pass agent env securely", raw, prereq.MinTmuxMajor, prereq.MinTmuxMinor))
+		}
 	} else {
 		add(SeverityWarn, "tmux", "tmux not found (required for background service)")
 	}

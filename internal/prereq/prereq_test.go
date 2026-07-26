@@ -142,3 +142,33 @@ func TestFindOpenClawNotFound(t *testing.T) {
 		t.Errorf("FindOpenClaw() = %q, want empty", result)
 	}
 }
+
+// TestTmuxVersionAtLeast covers the version gate for `new-session -e`, which
+// leo relies on to keep credentials out of the pane's start command. Without
+// it an old tmux fails every spawn and the supervisor retries forever, which
+// looks like "agents silently never start".
+func TestTmuxVersionAtLeast(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want bool
+	}{
+		{"tmux 3.2", true},
+		{"tmux 3.2a", true},
+		{"tmux 3.6a", true},
+		{"tmux 4.0", true},
+		{"tmux 10.1", true},
+		{"tmux 3.1c", false},
+		{"tmux 3.0a", false},
+		{"tmux 2.8", false},
+		{"tmux next-3.4", true},
+		{"tmux master", true}, // unknown/dev build: assume capable
+		{"", true},            // unparseable: don't block on a guess
+		{"garbage 1", true},   // no X.Y to read: same policy
+		{"tmux 1.9a", false},  // parseable and genuinely too old
+	}
+	for _, tt := range tests {
+		if got := tmuxVersionAtLeast(tt.raw, 3, 2); got != tt.want {
+			t.Errorf("tmuxVersionAtLeast(%q, 3, 2) = %v, want %v", tt.raw, got, tt.want)
+		}
+	}
+}

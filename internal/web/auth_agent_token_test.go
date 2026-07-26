@@ -188,3 +188,42 @@ func TestEnsureAgentTokenIsDistinct(t *testing.T) {
 		t.Errorf("agent token file perm = %o, want %o", perm, apiTokenFileMode)
 	}
 }
+
+// TestAgentCallableBrowserPath pins the allowlist that decides which browser
+// routes the agent token may reach. This is the trickiest logic in the split:
+// too loose and an agent reaches the config editor, too tight and agent
+// messaging breaks.
+func TestAgentCallableBrowserPath(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		// The three routes the in-agent MCP server drives.
+		{"/web/agent/leo-coding-leo/message", true},
+		{"/web/agent/leo-coding-leo/send", true},
+		{"/web/agent/leo-coding-leo/interrupt", true},
+
+		// Everything else on the browser mux stays operator-only.
+		{"/web/agent/leo-coding-leo/stop", false},
+		{"/web/agent/leo-coding-leo/rename", false},
+		{"/web/agent/spawn", false},
+		{"/web/agents/restart", false},
+		{"/config/templates/coding", false},
+		{"/", false},
+
+		// Shapes that try to smuggle an allowed suffix past the check.
+		{"/web/agent/x/message/", false},
+		{"/web/agent/x/y/message", false},
+		{"/web/agent/x/message/../../../config/templates", false},
+		{"/web/agent//message", true}, // empty name: one separator, routes to a 404 handler, not a leak
+		{"/web/agent/message", false},
+		{"/webs/agent/x/message", false},
+		{"/web/agent/x/MESSAGE", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := agentCallableBrowserPath(tt.path); got != tt.want {
+			t.Errorf("agentCallableBrowserPath(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
