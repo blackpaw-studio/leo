@@ -83,31 +83,54 @@ func TestCheckBinary(t *testing.T) {
 }
 
 func TestCheckTmuxFound(t *testing.T) {
-	original := lookPath
-	defer func() { lookPath = original }()
+	original := locateTmux
+	defer func() { locateTmux = original }()
 
-	lookPath = func(file string) (string, error) {
-		if file == "tmux" {
-			return "/usr/bin/tmux", nil
-		}
-		return "", fmt.Errorf("not found")
-	}
+	locateTmux = func() (string, error) { return "/usr/bin/tmux", nil }
 
 	if !CheckTmux() {
 		t.Error("expected CheckTmux() = true when tmux found")
 	}
+	if got := TmuxPath(); got != "/usr/bin/tmux" {
+		t.Errorf("TmuxPath() = %q, want the located binary", got)
+	}
+}
+
+// TestTmuxVersionReportsTooOld covers the gate end-to-end: a located tmux
+// whose -V predates 3.2 must report not-ok so callers can refuse to proceed.
+func TestTmuxVersionReportsTooOld(t *testing.T) {
+	originalLocate, originalRun := locateTmux, runCommand
+	defer func() { locateTmux, runCommand = originalLocate, originalRun }()
+
+	locateTmux = func() (string, error) { return "/usr/bin/tmux", nil }
+	runCommand = func(path string, args ...string) ([]byte, error) {
+		return []byte("tmux 3.0a\n"), nil
+	}
+
+	raw, ok := TmuxVersion()
+	if ok {
+		t.Error("tmux 3.0a should not satisfy the 3.2 minimum")
+	}
+	if raw != "tmux 3.0a" {
+		t.Errorf("raw = %q, want the trimmed -V output for the error message", raw)
+	}
 }
 
 func TestCheckTmuxNotFound(t *testing.T) {
-	original := lookPath
-	defer func() { lookPath = original }()
+	// CheckTmux resolves through tmux.Locate so it inspects the same binary
+	// the supervisor runs; stub that seam, not prereq's own lookPath.
+	original := locateTmux
+	defer func() { locateTmux = original }()
 
-	lookPath = func(file string) (string, error) {
+	locateTmux = func() (string, error) {
 		return "", fmt.Errorf("not found")
 	}
 
 	if CheckTmux() {
 		t.Error("expected CheckTmux() = false when tmux not found")
+	}
+	if raw, ok := TmuxVersion(); raw != "" || !ok {
+		t.Errorf("TmuxVersion() with no tmux = (%q, %v), want (\"\", true) — absence is reported separately", raw, ok)
 	}
 }
 
@@ -140,5 +163,35 @@ func TestFindOpenClawNotFound(t *testing.T) {
 	result := FindOpenClaw()
 	if result != "" {
 		t.Errorf("FindOpenClaw() = %q, want empty", result)
+	}
+}
+
+// TestTmuxVersionAtLeast covers the version gate for `new-session -e`, which
+// leo relies on to keep credentials out of the pane's start command. Without
+// it an old tmux fails every spawn and the supervisor retries forever, which
+// looks like "agents silently never start".
+func TestTmuxVersionAtLeast(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want bool
+	}{
+		{"tmux 3.2", true},
+		{"tmux 3.2a", true},
+		{"tmux 3.6a", true},
+		{"tmux 4.0", true},
+		{"tmux 10.1", true},
+		{"tmux 3.1c", false},
+		{"tmux 3.0a", false},
+		{"tmux 2.8", false},
+		{"tmux next-3.4", true},
+		{"tmux master", true}, // unknown/dev build: assume capable
+		{"", true},            // unparseable: don't block on a guess
+		{"garbage 1", true},   // no X.Y to read: same policy
+		{"tmux 1.9a", false},  // parseable and genuinely too old
+	}
+	for _, tt := range tests {
+		if got := tmuxVersionAtLeast(tt.raw, 3, 2); got != tt.want {
+			t.Errorf("tmuxVersionAtLeast(%q, 3, 2) = %v, want %v", tt.raw, got, tt.want)
+		}
 	}
 }

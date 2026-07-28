@@ -47,7 +47,7 @@ curl -fsSL leo.blackpaw.studio/install | sh
 go install github.com/blackpaw-studio/leo/cmd/leo@latest
 ```
 
-**Prerequisites:** authenticated [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), `tmux` (3.2+ recommended — Leo uses `display-popup`). Channel plugins (e.g. `claude plugin install telegram@claude-plugins-official`) are optional.
+**Prerequisites:** authenticated [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), `tmux` 3.2+ (required — Leo passes agent env via `new-session -e`, added in 3.2, and uses `display-popup`). Channel plugins (e.g. `claude plugin install telegram@claude-plugins-official`) are optional.
 
 > Leo runs on its own tmux socket (`-L leo`) so your personal `tmux ls` stays clean. Inspect Leo's sessions directly with `tmux -L leo ls`. See [tmux Config](docs/guides/tmux-config.md) for recommended settings.
 

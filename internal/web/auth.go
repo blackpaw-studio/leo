@@ -26,10 +26,29 @@ const apiTokenFileMode os.FileMode = 0600
 // apiTokenFileName is the basename of the bearer-token file under the state directory.
 const apiTokenFileName = "api.token"
 
+// agentTokenFileName is the basename of the token handed to spawned agents.
+const agentTokenFileName = "agent.token"
+
 // APITokenPath returns the path to the API bearer-token file under stateDir.
 // State dir is typically <HomePath>/state.
 func APITokenPath(stateDir string) string {
 	return filepath.Join(stateDir, apiTokenFileName)
+}
+
+// AgentTokenPath returns the path to the agent bearer-token file under stateDir.
+func AgentTokenPath(stateDir string) string {
+	return filepath.Join(stateDir, agentTokenFileName)
+}
+
+// EnsureAgentToken makes sure the agent bearer token exists and returns it.
+// Same storage contract as EnsureAPIToken, different privileges: this is the
+// token exported to every supervised agent as LEO_API_TOKEN, and it is
+// accepted only on /api/* and the agent-messaging routes — never at /login,
+// and never on the browser UI, whose config editor renders env values in
+// full. Keeping it distinct bounds what a token that escapes an agent (into a
+// transcript, a log, a channel message) can be used for.
+func EnsureAgentToken(stateDir string) (string, error) {
+	return ensureToken(stateDir, AgentTokenPath(stateDir), ".agent.token.*", "agent token")
 }
 
 // EnsureAPIToken makes sure an API bearer token exists at APITokenPath(stateDir)
@@ -43,6 +62,19 @@ func APITokenPath(stateDir string) string {
 // rather than silently auto-chmod'ing. The caller should delete the file (or
 // fix its permissions) to unblock startup.
 func EnsureAPIToken(stateDir string) (string, error) {
+	return ensureToken(stateDir, APITokenPath(stateDir), ".api.token.*", "api token")
+}
+
+// ensureToken reads the token at path, or generates and writes one (32 random
+// bytes, hex-encoded) with mode 0600. An existing file's contents are returned
+// unchanged — callers must not rotate silently. stateDir is created with mode
+// 0700 if absent and tightened if looser.
+//
+// If the existing token file is not mode 0600, ensureToken refuses to start
+// rather than silently auto-chmod'ing: a loose token file is a state the
+// operator should notice (backup restore, sysadmin script, older Leo). Delete
+// the file or fix its permissions to unblock startup.
+func ensureToken(stateDir, path, tmpPattern, label string) (string, error) {
 	if stateDir == "" {
 		return "", fmt.Errorf("web: empty state dir")
 	}
@@ -57,37 +89,35 @@ func EnsureAPIToken(stateDir string) (string, error) {
 		fmt.Fprintf(os.Stderr, "warning: web: chmod state dir %q to %o failed: %v\n", stateDir, stateDirMode, err)
 	}
 
-	path := APITokenPath(stateDir)
-
 	// Fast path: existing token. os.Stat follows symlinks so an admin can
-	// point api.token at a keyring-managed file; the target itself must
+	// point the file at a keyring-managed target; the target itself must
 	// still be 0600.
 	if data, err := os.ReadFile(path); err == nil {
 		info, statErr := os.Stat(path)
 		if statErr != nil {
-			return "", fmt.Errorf("web: stat api token %q: %w", path, statErr)
+			return "", fmt.Errorf("web: stat %s %q: %w", label, path, statErr)
 		}
 		if perm := info.Mode().Perm(); perm != apiTokenFileMode {
-			return "", fmt.Errorf("web: api token file %q has perm %o, expected %o; fix or delete", path, perm, apiTokenFileMode)
+			return "", fmt.Errorf("web: %s file %q has perm %o, expected %o; fix or delete", label, path, perm, apiTokenFileMode)
 		}
 		tok := trimToken(data)
 		if tok == "" {
-			return "", fmt.Errorf("web: api token file %q is empty; delete it to regenerate", path)
+			return "", fmt.Errorf("web: %s file %q is empty; delete it to regenerate", label, path)
 		}
 		return tok, nil
 	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("web: reading api token %q: %w", path, err)
+		return "", fmt.Errorf("web: reading %s %q: %w", label, path, err)
 	}
 
 	// Generate a new token.
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("web: generating api token: %w", err)
+		return "", fmt.Errorf("web: generating %s: %w", label, err)
 	}
 	tok := hex.EncodeToString(buf)
 
 	// Write atomically-ish: write to a temp file, chmod, rename.
-	tmp, err := os.CreateTemp(stateDir, ".api.token.*")
+	tmp, err := os.CreateTemp(stateDir, tmpPattern)
 	if err != nil {
 		return "", fmt.Errorf("web: creating temp token file: %w", err)
 	}
@@ -245,15 +275,17 @@ func safeRedirect(p string) string {
 //   - everything else -> 401 with WWW-Authenticate: Bearer
 //
 // The Bearer path lets channel plugins and scripts authenticate without a
-// cookie; it compares constant-time against the server's apiToken.
-func sessionMiddleware(store *sessionStore, token string, next http.Handler) http.Handler {
+// cookie; it compares constant-time against any of the accepted tokens. Most
+// browser routes accept only the operator's token — the agent token is passed
+// in for the agent-messaging routes alone, so an agent cannot read the config
+// editor (which renders env values) with its own credentials.
+func sessionMiddleware(store *sessionStore, tokens []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(sessionCookieName); err == nil && store.validate(c.Value) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if bearer := extractBearer(r.Header.Get("Authorization")); bearer != "" && token != "" &&
-			subtle.ConstantTimeCompare([]byte(bearer), []byte(token)) == 1 {
+		if matchesAnyToken(extractBearer(r.Header.Get("Authorization")), tokens) {
 			next.ServeHTTP(w, r)
 			return
 		}

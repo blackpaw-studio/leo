@@ -169,10 +169,11 @@ func (m *Manager) hydrate(name string, state ProcessState, stored map[string]age
 	return r
 }
 
-// mergeStored copies persisted metadata (Template, Repo, Workspace, Env) onto
-// a Record identified by r.Name. Live state fields (Status, StartedAt,
+// mergeStored copies persisted metadata (Template, Repo, Workspace) onto a
+// Record identified by r.Name. Live state fields (Status, StartedAt,
 // Restarts) are left untouched. Shared between Manager.List and Manager.hydrate
-// so adding a new persisted field only needs one edit.
+// so adding a new persisted field only needs one edit. Persisted env is
+// deliberately not copied — see the Record doc comment.
 func mergeStored(r *Record, stored map[string]agentstore.Record) {
 	s, ok := stored[r.Name]
 	if !ok {
@@ -183,5 +184,4 @@ func mergeStored(r *Record, stored map[string]agentstore.Record) {
 	r.Workspace = s.Workspace
 	r.Branch = s.Branch
 	r.CanonicalPath = s.CanonicalPath
-	r.Env = s.Env
 }

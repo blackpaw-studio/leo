@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
@@ -33,7 +34,7 @@ func newEnvTestManager(t *testing.T, tmplName string, tmpl config.TemplateConfig
 // mergeEnv(tmpl.Env, spec.Env), silently dropping the harness overlay
 // entirely.
 func TestSpawnSharedOpencodeEnvOverlay(t *testing.T) {
-	mgr, sup, _ := newEnvTestManager(t, "coding", config.TemplateConfig{
+	mgr, sup, home := newEnvTestManager(t, "coding", config.TemplateConfig{
 		Workspace: t.TempDir(),
 		Harness:   "opencode",
 		Env:       map[string]string{"MY_VAR": "1"},
@@ -59,10 +60,15 @@ func TestSpawnSharedOpencodeEnvOverlay(t *testing.T) {
 		t.Fatalf("expected template env MY_VAR to survive the merge, got %v", env)
 	}
 
-	// rec.Env (the Manager's own return value) must also carry the overlay —
-	// it's what List()/Resolve() surface back to callers.
-	if rec.Env["OPENCODE_CONFIG_CONTENT"] == "" {
-		t.Errorf("Record.Env missing OPENCODE_CONFIG_CONTENT: %v", rec.Env)
+	// The persisted record must carry the overlay too — it is what a restart
+	// respawns from. (The public Record deliberately carries no env at all;
+	// see TestRecordCarriesNoEnv.)
+	stored, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("agentstore.Load: %v", err)
+	}
+	if stored[rec.Name].Env["OPENCODE_CONFIG_CONTENT"] == "" {
+		t.Errorf("persisted env missing OPENCODE_CONFIG_CONTENT: %v", stored[rec.Name].Env)
 	}
 }
 

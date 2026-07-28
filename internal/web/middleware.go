@@ -113,18 +113,75 @@ func checkOrigin(origin string, port int, allowed map[string]struct{}) error {
 	return nil
 }
 
+// agentCallableBrowserSuffixes are the /web/agent/{name}/… routes the in-agent
+// MCP server drives: leo_send_message posts /message, leo_interrupt posts
+// /interrupt, and key sends post /send. They live on the browser mux for the
+// UI's benefit, but agents legitimately need them.
+//
+// Everything else on that mux — the config editor above all, which renders
+// template env values in full — stays operator-only, so an agent cannot turn
+// its own token into a full UI session.
+var agentCallableBrowserSuffixes = []string{"/message", "/send", "/interrupt"}
+
+// agentCallableBrowserPath reports whether a browser-mux path is one the agent
+// token may reach.
+func agentCallableBrowserPath(path string) bool {
+	if !strings.HasPrefix(path, "/web/agent/") {
+		return false
+	}
+	for _, suffix := range agentCallableBrowserSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			// Reject a nested path pretending to be one of ours: the route
+			// shape is exactly /web/agent/<name>/<verb>.
+			rest := strings.TrimPrefix(path, "/web/agent/")
+			if strings.Count(rest, "/") == 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchesAnyToken reports whether got equals any of the accepted tokens,
+// comparing in constant time. Empty candidates never match.
+func matchesAnyToken(got string, accepted []string) bool {
+	if got == "" {
+		return false
+	}
+	ok := false
+	for _, tok := range accepted {
+		if tok == "" {
+			continue
+		}
+		// No early return: compare against every candidate so the work done
+		// does not depend on which token matched.
+		if subtle.ConstantTimeCompare([]byte(got), []byte(tok)) == 1 {
+			ok = true
+		}
+	}
+	return ok
+}
+
 // bearerAuthMiddleware gates requests on an Authorization: Bearer <token>
-// header. token must already be non-empty; callers are expected to short-
-// circuit and never install the middleware with an empty token. Comparison
-// uses constant-time equality.
-func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
-	if token == "" {
+// header, accepting any of the supplied tokens. At least one must be
+// non-empty; callers are expected to short-circuit rather than install the
+// middleware with nothing configured. Comparison uses constant-time equality.
+//
+// Multiple tokens exist because agents get their own, less privileged one —
+// see EnsureAgentToken.
+func bearerAuthMiddleware(tokens []string, next http.Handler) http.Handler {
+	configured := false
+	for _, tok := range tokens {
+		if tok != "" {
+			configured = true
+		}
+	}
+	if !configured {
 		// Safety valve: rather than silently disable auth, refuse to serve.
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "api token not configured", http.StatusInternalServerError)
 		})
 	}
-	expected := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := extractBearer(r.Header.Get("Authorization"))
 		if got == "" {
@@ -132,7 +189,7 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(got), expected) != 1 {
+		if !matchesAnyToken(got, tokens) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="leo"`)
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return

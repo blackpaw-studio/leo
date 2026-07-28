@@ -93,7 +93,8 @@ type Server struct {
 	// restart batch with no failures.
 	agentsRestartNeeded atomic.Bool
 	port                int           // port the listener is expected to bind on; used for Host/Origin checks
-	apiToken            string        // bearer token required on /api/* routes; empty disables API
+	apiToken            string        // operator bearer token: /api/*, browser routes, and /login
+	agentToken          string        // token exported to agents; /api/* and agent-messaging routes only
 	allowedHosts        []string      // extra hosts permitted beyond loopback (e.g. LAN IPs)
 	sessions            *sessionStore // in-memory browser sessions for cookie-based auth
 
@@ -153,8 +154,13 @@ type Server struct {
 //   - APIToken must be non-empty for /api/* routes to work. If empty, /api/*
 //     responds 500 to avoid accidentally serving the API unauthenticated.
 type Options struct {
-	Port         int
-	APIToken     string
+	Port     int
+	APIToken string
+	// AgentToken is the less-privileged token handed to spawned agents as
+	// LEO_API_TOKEN. Accepted on /api/* and the agent-messaging routes, and
+	// rejected at /login and on the rest of the browser UI. Empty means only
+	// APIToken is accepted anywhere (pre-split behaviour).
+	AgentToken   string
 	AllowedHosts []string
 	// LogPath is the absolute path to the service log, computed by
 	// service.LogPathFor(homePath) at the layer that can import
@@ -185,6 +191,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		leoPath:        leoPath,
 		port:           opts.Port,
 		apiToken:       opts.APIToken,
+		agentToken:     opts.AgentToken,
 		allowedHosts:   opts.AllowedHosts,
 		serviceLogPath: opts.LogPath,
 		execCommand:    exec.Command,
@@ -304,7 +311,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/task/list", s.handleAPITaskList)
 	apiMux.HandleFunc("POST /api/task/{name}/run", s.handleAPITaskRun)
 	apiMux.HandleFunc("POST /api/task/{name}/toggle", s.handleAPITaskToggle)
-	protectedAPI := bearerAuthMiddleware(s.apiToken, apiMux)
+	// /api/* is the agent-facing surface: both tokens work there.
+	protectedAPI := bearerAuthMiddleware([]string{s.apiToken, s.agentToken}, apiMux)
 
 	// Path-prefix dispatcher: /api/* is routed through bearer auth to apiMux;
 	// /login, /logout, and /static/* bypass session auth (otherwise the user
@@ -313,7 +321,13 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// a valid session cookie or a Bearer token. We don't register "/api/" on
 	// the main mux because that conflicts with "GET /" under the Go 1.22
 	// ServeMux precedence rules.
-	protectedBrowser := sessionMiddleware(s.sessions, s.apiToken, mux)
+	protectedBrowser := sessionMiddleware(s.sessions, []string{s.apiToken}, mux)
+	// The agent-messaging routes live on the browser mux but are called by
+	// the in-agent MCP server (leo_send_message, leo_interrupt, key sends),
+	// so they accept the agent token too. Everything else on this mux —
+	// notably the config editor, which renders env values in full — stays
+	// operator-only. See agentCallableBrowserPath.
+	agentCallable := sessionMiddleware(s.sessions, []string{s.apiToken, s.agentToken}, mux)
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/static/"):
@@ -322,6 +336,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 			mux.ServeHTTP(w, r)
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			protectedAPI.ServeHTTP(w, r)
+		case agentCallableBrowserPath(r.URL.Path):
+			agentCallable.ServeHTTP(w, r)
 		default:
 			protectedBrowser.ServeHTTP(w, r)
 		}

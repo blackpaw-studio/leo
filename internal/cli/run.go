@@ -2,18 +2,14 @@ package cli
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/run"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/spf13/cobra"
 )
-
-// redactedKeyTokens are substrings in env var keys that trigger value
-// redaction. Case-insensitive match.
-var redactedKeyTokens = []string{"SECRET", "TOKEN", "KEY", "PASSWORD"}
 
 func newRunCmd() *cobra.Command {
 	var dryRun bool
@@ -86,48 +82,29 @@ type envPair struct {
 // taskDryRunEnv returns the env vars that would be exported to the child
 // claude process for a dry-run, redacting sensitive values. Sorted by key for
 // deterministic output.
-//
-// TaskConfig does not yet have an Env field. When one is added, iterate it
-// here and route each entry through redactValue so keys matching the
-// redaction tokens (SECRET/TOKEN/KEY/PASSWORD) are masked:
-//
-//	for k, v := range task.Env {
-//	    pairs = append(pairs, envPair{key: k, display: redactValue(k, v)})
-//	}
 func taskDryRunEnv(task config.TaskConfig) []envPair {
-	var pairs []envPair
-
+	// Mirror run.Run's merge order: task.Env is the base layer and leo's own
+	// vars win on collision, so a task that sets LEO_CHANNELS in its env
+	// shows the value it will actually get — one entry, not two.
+	env := make(map[string]string, len(task.Env)+2)
+	for k, v := range task.Env {
+		env[k] = v
+	}
 	if len(task.Channels) > 0 {
-		pairs = append(pairs, envPair{key: "LEO_CHANNELS", display: redactValue("LEO_CHANNELS", strings.Join(task.Channels, ","))})
+		env["LEO_CHANNELS"] = strings.Join(task.Channels, ",")
 	}
 	if len(task.DevChannels) > 0 {
-		pairs = append(pairs, envPair{key: "LEO_DEV_CHANNELS", display: redactValue("LEO_DEV_CHANNELS", strings.Join(task.DevChannels, ","))})
+		env["LEO_DEV_CHANNELS"] = strings.Join(task.DevChannels, ",")
+	}
+	if len(env) == 0 {
+		return nil
 	}
 
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
+	pairs := make([]envPair, 0, len(env))
+	for _, k := range redact.Keys(env) {
+		pairs = append(pairs, envPair{key: k, display: redact.Value(k, env[k])})
+	}
 	return pairs
-}
-
-// shouldRedactEnvKey reports whether an env var value should be displayed as
-// <redacted> based on its key. Matches SECRET, TOKEN, KEY, PASSWORD as
-// case-insensitive substrings.
-func shouldRedactEnvKey(key string) bool {
-	upper := strings.ToUpper(key)
-	for _, tok := range redactedKeyTokens {
-		if strings.Contains(upper, tok) {
-			return true
-		}
-	}
-	return false
-}
-
-// redactValue returns the displayable value for an env var: <redacted> if the
-// key matches any redaction token, otherwise the original value.
-func redactValue(key, value string) string {
-	if shouldRedactEnvKey(key) {
-		return "<redacted>"
-	}
-	return value
 }
 
 func completeTaskNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {

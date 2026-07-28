@@ -706,3 +706,44 @@ func TestPromptClientHost_EOFStopsRetryLoop(t *testing.T) {
 		t.Fatal("promptClientHost did not return within 2s — retry loop is spinning on EOF")
 	}
 }
+
+// TestCheckPrerequisites_TmuxTooOld: setup is where a new user learns their
+// environment is wrong. An old tmux lacks `new-session -e`, which leo relies
+// on to keep agent credentials out of the pane's start command — without this
+// gate setup finishes clean and every agent spawn then fails forever in the
+// restart loop.
+func TestCheckPrerequisites_TmuxTooOld(t *testing.T) {
+	origClaude, origTmux, origVersion := checkClaudeFn, checkTmuxFn, tmuxVersionFn
+	t.Cleanup(func() {
+		checkClaudeFn, checkTmuxFn, tmuxVersionFn = origClaude, origTmux, origVersion
+	})
+
+	checkClaudeFn = func() prereq.BinaryResult { return prereq.BinaryResult{OK: true, Version: "claude 1.0.0"} }
+	checkTmuxFn = func() bool { return true }
+	tmuxVersionFn = func() (string, bool) { return "tmux 3.0a", false }
+
+	err := checkPrerequisites()
+	if err == nil {
+		t.Fatal("expected an error when tmux is too old")
+	}
+	if !strings.Contains(err.Error(), "3.0a") {
+		t.Errorf("error should name the offending version, got: %v", err)
+	}
+}
+
+// TestCheckPrerequisites_TmuxNewEnough is the companion: a supported tmux
+// must not block setup.
+func TestCheckPrerequisites_TmuxNewEnough(t *testing.T) {
+	origClaude, origTmux, origVersion := checkClaudeFn, checkTmuxFn, tmuxVersionFn
+	t.Cleanup(func() {
+		checkClaudeFn, checkTmuxFn, tmuxVersionFn = origClaude, origTmux, origVersion
+	})
+
+	checkClaudeFn = func() prereq.BinaryResult { return prereq.BinaryResult{OK: true, Version: "claude 1.0.0"} }
+	checkTmuxFn = func() bool { return true }
+	tmuxVersionFn = func() (string, bool) { return "tmux 3.6a", true }
+
+	if err := checkPrerequisites(); err != nil {
+		t.Errorf("supported tmux should pass prerequisites, got: %v", err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/prompt"
+	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/spf13/cobra"
 )
 
@@ -443,7 +444,7 @@ func literalTemplateJSON(name string, tmpl config.TemplateConfig) literalTemplat
 		MaxTurns:       tmpl.MaxTurns,
 		MCPConfig:      tmpl.MCPConfig,
 		AddDirs:        tmpl.AddDirs,
-		Env:            tmpl.Env,
+		Env:            redact.EnvMap(tmpl.Env),
 		HarnessOptions: tmpl.HarnessOptions,
 	}
 }
@@ -455,6 +456,9 @@ type effectiveTemplatePayload struct {
 }
 
 func effectiveTemplateJSON(name string, eff effectiveTemplate) effectiveTemplatePayload {
+	// Mask credentials on the way out; the caller's effectiveTemplate keeps
+	// its real values (nothing else consumes this payload).
+	eff.Env = redact.EnvMap(eff.Env)
 	return effectiveTemplatePayload{Name: name, effectiveTemplate: eff}
 }
 
@@ -491,18 +495,23 @@ func printTemplate(name string, tmpl config.TemplateConfig) {
 	if tmpl.MCPConfig != "" {
 		printField("MCP config", tmpl.MCPConfig)
 	}
-	if len(tmpl.Env) > 0 {
-		keys := make([]string, 0, len(tmpl.Env))
-		for k := range tmpl.Env {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		pairs := make([]string, 0, len(keys))
-		for _, k := range keys {
-			pairs = append(pairs, fmt.Sprintf("%s=%s", k, tmpl.Env[k]))
-		}
-		printField("Env", strings.Join(pairs, " "))
+	printEnvField(tmpl.Env)
+}
+
+// printEnvField renders an env map as sorted KEY=VALUE pairs with
+// credential-looking values masked. `leo template show` is a command agents
+// run, so an unmasked token here lands in a transcript; read leo.yaml
+// directly when the real value is needed.
+func printEnvField(env map[string]string) {
+	if len(env) == 0 {
+		return
 	}
+	keys := redact.Keys(env)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, redact.Value(k, env[k])))
+	}
+	printField("Env", strings.Join(pairs, " "))
 }
 
 // printResolvedTemplate renders the effective template config. Mirrors
@@ -537,18 +546,7 @@ func printResolvedTemplate(name string, eff effectiveTemplate) {
 	if eff.MCPConfig != "" {
 		printField("MCP config", eff.MCPConfig)
 	}
-	if len(eff.Env) > 0 {
-		keys := make([]string, 0, len(eff.Env))
-		for k := range eff.Env {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		pairs := make([]string, 0, len(keys))
-		for _, k := range keys {
-			pairs = append(pairs, fmt.Sprintf("%s=%s", k, eff.Env[k]))
-		}
-		printField("Env", strings.Join(pairs, " "))
-	}
+	printEnvField(eff.Env)
 }
 
 func printField(label, value string) {

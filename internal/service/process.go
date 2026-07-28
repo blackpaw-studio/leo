@@ -695,22 +695,31 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				id.setArgs(currentArgs)
 			}
 
-			claudeCmd := buildClaudeShellCmd(binPath, currentArgs, tmuxPath, spec, os.Getenv("PATH"), os.Stderr)
+			claudeCmd := buildClaudeShellCmd(binPath, currentArgs, spec, os.Getenv("PATH"))
+			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
+			// persists a pane's start command, so an interpolated credential
+			// stays readable for the life of the session. See sessionEnvArgs.
+			envArgs := sessionEnvArgs(tmuxPath, spec, os.Stderr)
 
 			// Kill any stale tmux session with our name
 			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
 
 			// Create a detached tmux session running claude
-			createCmd := exec.CommandContext(ctx, tmuxPath,
-				tmux.Args(
-					"new-session", "-d", "-s", sessionName,
-					"-c", spec.WorkDir,
-					"-x", "200", "-y", "50",
-					claudeCmd,
-				)...,
-			)
+			newSessionArgs := []string{
+				"new-session", "-d", "-s", sessionName,
+				"-c", spec.WorkDir,
+				"-x", "200", "-y", "50",
+			}
+			newSessionArgs = append(newSessionArgs, envArgs...)
+			newSessionArgs = append(newSessionArgs, claudeCmd)
+			createCmd := exec.CommandContext(ctx, tmuxPath, tmux.Args(newSessionArgs...)...)
 			createCmd.Dir = spec.WorkDir
 			createCmd.Env = os.Environ()
+			// Surface tmux's own diagnostics. Without this a spawn failure
+			// logs only "exit status 1" on every backoff — which is exactly
+			// what an unsupported `-e` on tmux < 3.2 looks like. The argv
+			// carries credentials; tmux's stderr does not.
+			createCmd.Stderr = os.Stderr
 
 			if err := createCmd.Run(); err != nil {
 				sv.setState(name, "restarting")
@@ -1013,7 +1022,88 @@ func harnessBinaryPath(harnessName, claudePath string) string {
 	return h.Binary()
 }
 
-func buildClaudeShellCmd(claudePath string, args []string, tmuxPath string, spec ProcessSpec, pathEnv string, warnOut io.Writer) string {
+// sessionEnvArgs returns the `-e KEY=VALUE` args for tmux new-session,
+// carrying the process's own configured env plus leo's control vars.
+//
+// PATH is deliberately absent: tmux ignores `-e PATH=…` entirely (verified on
+// tmux 3.6a, with and without a pre-existing server), so listing it here
+// would assert a guarantee tmux does not honour. PATH is exported inline in
+// the pane command instead — see buildClaudeShellCmd.
+//
+// Env travels as argv rather than as `export K=V;` inside the shell command
+// on purpose. tmux keeps a pane's start command for the life of the session
+// (`list-panes -F '#{pane_start_command}'`, and it shows in ps), so anything
+// interpolated there is readable for hours by every process running as the
+// same user — including a 1Password service-account token. As new-session
+// argv the value is exposed only in the short-lived tmux client's own argv:
+// hours of exposure become milliseconds.
+//
+// This is exposure reduction, not isolation: `tmux show-environment` still
+// reports session env to anyone who can reach the socket, and leo.yaml is
+// readable by every same-uid agent anyway. It removes the copy that leaks
+// incidentally.
+//
+// Requires tmux 3.2+ (`-e` on new-session), matching leo's documented tmux
+// baseline. Keys are validated; leo's own vars win on collision, preserving
+// the precedence of the old export ordering.
+func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []string {
+	env := make(map[string]string, len(spec.Env)+4)
+
+	for k, v := range spec.Env {
+		if !supervisorEnvKeyPattern.MatchString(k) {
+			if warnOut != nil {
+				fmt.Fprintf(warnOut, "[%s] warning: dropping invalid env key %q\n", spec.Name, k)
+			}
+			continue
+		}
+		if k == "PATH" {
+			// tmux ignores session-env PATH, and leo's own inline export runs
+			// after it would anyway — as it did before this change too, so a
+			// configured PATH has never taken effect. Say so rather than
+			// letting it look applied.
+			if warnOut != nil {
+				fmt.Fprintf(warnOut, "[%s] warning: ignoring configured PATH — leo exports the daemon's PATH into the session\n", spec.Name)
+			}
+			continue
+		}
+		env[k] = v
+	}
+
+	env["LEO_PROCESS_NAME"] = spec.Name
+	env["LEO_TMUX_PATH"] = tmuxPath
+	if spec.WebPort != "" {
+		if supervisorWebPortPattern.MatchString(spec.WebPort) {
+			env["LEO_WEB_PORT"] = spec.WebPort
+		} else if warnOut != nil {
+			fmt.Fprintf(warnOut, "[%s] warning: dropping invalid LEO_WEB_PORT %q\n", spec.Name, spec.WebPort)
+		}
+	}
+	if spec.WebToken != "" {
+		if supervisorWebTokenPattern.MatchString(spec.WebToken) {
+			env["LEO_API_TOKEN"] = spec.WebToken
+		} else if warnOut != nil {
+			// Do not echo the token itself; it is a secret even when malformed.
+			fmt.Fprintf(warnOut, "[%s] warning: dropping malformed LEO_API_TOKEN\n", spec.Name)
+		}
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	// Map iteration is randomized; sort so the args are stable across spawns.
+	sort.Strings(keys)
+
+	out := make([]string, 0, len(keys)*2)
+	for _, k := range keys {
+		out = append(out, "-e", k+"="+env[k])
+	}
+	return out
+}
+
+// buildClaudeShellCmd assembles the command tmux runs in the pane. It carries
+// no env except PATH — see sessionEnvArgs for why the rest moved out, and the
+// PATH export below for why that one stayed.
+func buildClaudeShellCmd(claudePath string, args []string, spec ProcessSpec, pathEnv string) string {
 	quoted := make([]string, 0, len(args)+1)
 	quoted = append(quoted, shellQuote(claudePath))
 	for _, arg := range args {
@@ -1032,49 +1122,18 @@ func buildClaudeShellCmd(claudePath string, args []string, tmuxPath string, spec
 			cmd, shellQuote(stderrPath), shellQuote(exitPath))
 	}
 
-	// Propagate PATH into the tmux session
+	// PATH stays inline, unlike the rest of the env. tmux runs this command
+	// through $SHELL -c, so the shell's rc files run first — zsh sources
+	// ~/.zshenv even non-interactively — and a PATH set there overrides the
+	// one the pane inherits from the new-session client. An inline export
+	// runs after rc files and wins, which is how leo's PATH has always
+	// reached agents. Keeping it here changes no security property: PATH is
+	// not a credential, and it was never the thing leaking from
+	// pane_start_command.
 	if pathEnv != "" {
 		cmd = fmt.Sprintf("export PATH=%s; %s", shellQuote(pathEnv), cmd)
 	}
 
-	// Inject Leo env vars for plugin control commands. Only include
-	// LEO_WEB_PORT when it passes the numeric gate; skip otherwise.
-	leoExports := fmt.Sprintf("export LEO_PROCESS_NAME=%s; export LEO_TMUX_PATH=%s;",
-		shellQuote(spec.Name), shellQuote(tmuxPath))
-	if spec.WebPort != "" {
-		if supervisorWebPortPattern.MatchString(spec.WebPort) {
-			leoExports += fmt.Sprintf(" export LEO_WEB_PORT=%s;", spec.WebPort)
-		} else if warnOut != nil {
-			fmt.Fprintf(warnOut, "[%s] warning: dropping invalid LEO_WEB_PORT %q\n", spec.Name, spec.WebPort)
-		}
-	}
-	if spec.WebToken != "" {
-		if supervisorWebTokenPattern.MatchString(spec.WebToken) {
-			leoExports += fmt.Sprintf(" export LEO_API_TOKEN=%s;", shellQuote(spec.WebToken))
-		} else if warnOut != nil {
-			// Do not echo the token itself; it is a secret even when malformed.
-			fmt.Fprintf(warnOut, "[%s] warning: dropping malformed LEO_API_TOKEN\n", spec.Name)
-		}
-	}
-	cmd = fmt.Sprintf("%s %s", leoExports, cmd)
-
-	// Add per-process env vars, validating each key. Iteration order is
-	// non-deterministic (Go map range); sort for stable output so tests
-	// and logs are predictable.
-	keys := make([]string, 0, len(spec.Env))
-	for k := range spec.Env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if !supervisorEnvKeyPattern.MatchString(k) {
-			if warnOut != nil {
-				fmt.Fprintf(warnOut, "[%s] warning: dropping invalid env key %q\n", spec.Name, k)
-			}
-			continue
-		}
-		cmd = fmt.Sprintf("export %s=%s; %s", k, shellQuote(spec.Env[k]), cmd)
-	}
 	return cmd
 }
 

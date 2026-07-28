@@ -62,12 +62,14 @@ func runService(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving config path: %w", err)
 	}
 
-	// Resolve the API bearer token once so every ephemeral agent gets
-	// LEO_API_TOKEN exported uniformly. An error here is non-fatal for the
-	// daemon itself, but the MCP server refuses to start without it, which
-	// is the behaviour we want rather than silently starting a broken
-	// session.
-	webToken, tokErr := web.EnsureAPIToken(cfg.StatePath())
+	// Resolve the agent bearer token once so every ephemeral agent gets
+	// LEO_API_TOKEN exported uniformly. This is deliberately NOT the
+	// operator's api.token: the agent token is rejected at /login and on the
+	// browser UI, so a token that escapes an agent cannot be traded for a web
+	// session. An error here is non-fatal for the daemon itself, but the MCP
+	// server refuses to start without it, which is the behaviour we want
+	// rather than silently starting a broken session.
+	webToken, tokErr := web.EnsureAgentToken(cfg.StatePath())
 	if tokErr != nil {
 		warn.Printf("  web api token unavailable: %v — MCP server will refuse to start; slash commands will be unavailable\n", tokErr)
 	}

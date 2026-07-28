@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"sort"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/redact"
 )
 
 // resolveAgentQuery resolves a shorthand query to the canonical agent name
@@ -202,6 +204,25 @@ func (s *Server) handleAPIAgentList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: s.agentSvc.List()})
 }
 
+// templateInfo is the trimmed public view of a template — enough to pick one
+// to spawn from, and nothing more.
+//
+// It deliberately carries EnvKeys rather than the env map: /api/template/list
+// is what the leo_list_templates MCP tool serves, so every value in this
+// payload lands in the calling agent's context (and its transcript, and any
+// summary it writes). Template env routinely holds live credentials. Key names
+// answer "what does this template configure?" without disclosing any of them.
+type templateInfo struct {
+	Name      string   `json:"name"`
+	Workspace string   `json:"workspace,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Harness   string   `json:"harness,omitempty"`
+	MaxTurns  int      `json:"max_turns,omitempty"`
+	Channels  []string `json:"channels,omitempty"`
+	AddDirs   []string `json:"add_dirs,omitempty"`
+	EnvKeys   []string `json:"env_keys,omitempty"`
+}
+
 // handleAPITemplateList returns all configured templates.
 // GET /api/template/list
 func (s *Server) handleAPITemplateList(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +231,25 @@ func (s *Server) handleAPITemplateList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: cfg.Templates})
+
+	templates := make([]templateInfo, 0, len(cfg.Templates))
+	for name, tmpl := range cfg.Templates {
+		templates = append(templates, templateInfo{
+			Name:      name,
+			Workspace: tmpl.Workspace,
+			Model:     tmpl.Model,
+			Harness:   tmpl.Harness,
+			MaxTurns:  tmpl.MaxTurns,
+			Channels:  tmpl.Channels,
+			AddDirs:   tmpl.AddDirs,
+			EnvKeys:   redact.Keys(tmpl.Env),
+		})
+	}
+	// Config maps iterate in random order; sort so the listing is stable
+	// across calls (and so tests can index it).
+	sort.Slice(templates, func(i, j int) bool { return templates[i].Name < templates[j].Name })
+
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: templates})
 }
 
 // handlePartialAgents renders the agents.html fragment. It's no longer a

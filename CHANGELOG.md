@@ -4,6 +4,44 @@ All notable user-visible changes to Leo are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **Env values no longer travel to agents through listings.** `leo_list_agents`
+  returned each agent's full env map verbatim, and `leo_list_templates` dumped
+  every template's config wholesale, so a routine listing call deposited live
+  credentials (1Password service-account tokens and friends) into the calling
+  agent's context and transcript. `GET /task/list` had the same problem. Agent
+  records now carry no env at all; template and task listings carry `env_keys`
+  (key names only). `leo template show` and `leo run --dry-run` mask
+  credential-looking values.
+- **Agent env is no longer part of the tmux start command.** It travels as
+  `new-session -e KEY=VALUE` instead of shell exports, so credentials stop
+  being readable for the life of a session via
+  `tmux list-panes -F '#{pane_start_command}'`.
+- **Agents get their own, less privileged token.** `LEO_API_TOKEN` was the
+  operator's `api.token`, which `/login` accepts and which reached the config
+  editor (where template env renders in full). Agents and scheduled tasks now
+  get `agent.token`, accepted only on `/api/*` and the agent-messaging routes.
+
+  None of this isolates agents from each other — they run as your user and can
+  read `leo.yaml` directly. It removes the incidental copies and bounds what a
+  leaked token is worth. Consider rotating any credential that has been in
+  agent env.
+
+### Changed
+
+- **tmux 3.2+ is now required** (it added `-e` on `new-session`). `leo setup`
+  refuses to complete and `leo validate` reports an error on older versions,
+  instead of letting every agent spawn fail silently in the restart loop.
+  Spawn failures now also surface tmux's own stderr rather than a bare
+  `exit status 1`.
+- A `PATH` key in a task's or template's `env:` is now dropped with a warning.
+  It never took effect — leo exports the daemon's PATH into the session after
+  it — so this only makes the existing behaviour visible.
+- `GET /api/template/list` returns a sorted array of trimmed records rather
+  than the raw templates map, and `GET /task/list` returns a trimmed
+  projection. Neither includes env values.
+
 ### Added
 
 - **PR prerelease builds.** Every PR from this repo now produces a
