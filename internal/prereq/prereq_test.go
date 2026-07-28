@@ -83,31 +83,54 @@ func TestCheckBinary(t *testing.T) {
 }
 
 func TestCheckTmuxFound(t *testing.T) {
-	original := lookPath
-	defer func() { lookPath = original }()
+	original := locateTmux
+	defer func() { locateTmux = original }()
 
-	lookPath = func(file string) (string, error) {
-		if file == "tmux" {
-			return "/usr/bin/tmux", nil
-		}
-		return "", fmt.Errorf("not found")
-	}
+	locateTmux = func() (string, error) { return "/usr/bin/tmux", nil }
 
 	if !CheckTmux() {
 		t.Error("expected CheckTmux() = true when tmux found")
 	}
+	if got := TmuxPath(); got != "/usr/bin/tmux" {
+		t.Errorf("TmuxPath() = %q, want the located binary", got)
+	}
+}
+
+// TestTmuxVersionReportsTooOld covers the gate end-to-end: a located tmux
+// whose -V predates 3.2 must report not-ok so callers can refuse to proceed.
+func TestTmuxVersionReportsTooOld(t *testing.T) {
+	originalLocate, originalRun := locateTmux, runCommand
+	defer func() { locateTmux, runCommand = originalLocate, originalRun }()
+
+	locateTmux = func() (string, error) { return "/usr/bin/tmux", nil }
+	runCommand = func(path string, args ...string) ([]byte, error) {
+		return []byte("tmux 3.0a\n"), nil
+	}
+
+	raw, ok := TmuxVersion()
+	if ok {
+		t.Error("tmux 3.0a should not satisfy the 3.2 minimum")
+	}
+	if raw != "tmux 3.0a" {
+		t.Errorf("raw = %q, want the trimmed -V output for the error message", raw)
+	}
 }
 
 func TestCheckTmuxNotFound(t *testing.T) {
-	original := lookPath
-	defer func() { lookPath = original }()
+	// CheckTmux resolves through tmux.Locate so it inspects the same binary
+	// the supervisor runs; stub that seam, not prereq's own lookPath.
+	original := locateTmux
+	defer func() { locateTmux = original }()
 
-	lookPath = func(file string) (string, error) {
+	locateTmux = func() (string, error) {
 		return "", fmt.Errorf("not found")
 	}
 
 	if CheckTmux() {
 		t.Error("expected CheckTmux() = false when tmux not found")
+	}
+	if raw, ok := TmuxVersion(); raw != "" || !ok {
+		t.Errorf("TmuxVersion() with no tmux = (%q, %v), want (\"\", true) — absence is reported separately", raw, ok)
 	}
 }
 

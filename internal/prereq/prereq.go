@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 var (
@@ -15,6 +17,7 @@ var (
 		return exec.Command(path, args...).Output()
 	}
 	userHomeDir = os.UserHomeDir
+	locateTmux  = tmux.Locate
 )
 
 // BinaryResult holds the result of checking for a harness CLI binary.
@@ -77,14 +80,16 @@ func tmuxVersionAtLeast(raw string, major, minor int) bool {
 	return gotMinor >= minor
 }
 
-// TmuxPath returns the first tmux binary leo can find, or "" if none.
+// TmuxPath returns the tmux binary leo will actually run, or "" if none.
+// Delegates to tmux.Locate so a version check here inspects the same binary
+// the supervisor spawns — a separate search order could otherwise validate
+// one tmux and run another.
 func TmuxPath() string {
-	for _, p := range []string{"tmux", "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"} {
-		if path, err := lookPath(p); err == nil && path != "" {
-			return path
-		}
+	path, err := locateTmux()
+	if err != nil {
+		return ""
 	}
-	return ""
+	return path
 }
 
 // CheckTmux checks if tmux is installed and reachable.

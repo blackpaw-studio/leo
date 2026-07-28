@@ -695,7 +695,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				id.setArgs(currentArgs)
 			}
 
-			claudeCmd := buildClaudeShellCmd(binPath, currentArgs, spec)
+			claudeCmd := buildClaudeShellCmd(binPath, currentArgs, spec, os.Getenv("PATH"))
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
 			// persists a pane's start command, so an interpolated credential
 			// stays readable for the life of the session. See sessionEnvArgs.
@@ -714,11 +714,12 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			newSessionArgs = append(newSessionArgs, claudeCmd)
 			createCmd := exec.CommandContext(ctx, tmuxPath, tmux.Args(newSessionArgs...)...)
 			createCmd.Dir = spec.WorkDir
-			// This is what gives the pane its PATH: tmux ignores `-e PATH=…`
-			// and takes PATH from the new-session client's environment. Do
-			// not trim this to a minimal env without moving PATH somewhere
-			// the pane actually sees it.
 			createCmd.Env = os.Environ()
+			// Surface tmux's own diagnostics. Without this a spawn failure
+			// logs only "exit status 1" on every backoff — which is exactly
+			// what an unsupported `-e` on tmux < 3.2 looks like. The argv
+			// carries credentials; tmux's stderr does not.
+			createCmd.Stderr = os.Stderr
 
 			if err := createCmd.Run(); err != nil {
 				sv.setState(name, "restarting")
@@ -1024,12 +1025,10 @@ func harnessBinaryPath(harnessName, claudePath string) string {
 // sessionEnvArgs returns the `-e KEY=VALUE` args for tmux new-session,
 // carrying the process's own configured env plus leo's control vars.
 //
-// PATH is deliberately absent: tmux ignores `-e PATH=…` and derives the
-// pane's PATH from the environment of the client that issues new-session
-// (verified on tmux 3.6a, with and without a pre-existing server). The
-// supervisor's own createCmd.Env is what actually carries PATH — see the
-// spawn site. Listing PATH here would assert a guarantee tmux does not honour
-// and would hide a future regression behind a passing test.
+// PATH is deliberately absent: tmux ignores `-e PATH=…` entirely (verified on
+// tmux 3.6a, with and without a pre-existing server), so listing it here
+// would assert a guarantee tmux does not honour. PATH is exported inline in
+// the pane command instead — see buildClaudeShellCmd.
 //
 // Env travels as argv rather than as `export K=V;` inside the shell command
 // on purpose. tmux keeps a pane's start command for the life of the session
@@ -1058,12 +1057,12 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 			continue
 		}
 		if k == "PATH" {
-			// tmux ignores session-env PATH and uses the new-session client's
-			// instead, so emitting it would look effective without being so.
-			// (It never took effect before this either: leo's own PATH export
-			// ran last and overrode it.) Say so rather than failing silently.
+			// tmux ignores session-env PATH, and leo's own inline export runs
+			// after it would anyway — as it did before this change too, so a
+			// configured PATH has never taken effect. Say so rather than
+			// letting it look applied.
 			if warnOut != nil {
-				fmt.Fprintf(warnOut, "[%s] warning: ignoring configured PATH — tmux takes the session's PATH from the daemon's environment\n", spec.Name)
+				fmt.Fprintf(warnOut, "[%s] warning: ignoring configured PATH — leo exports the daemon's PATH into the session\n", spec.Name)
 			}
 			continue
 		}
@@ -1102,8 +1101,9 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 }
 
 // buildClaudeShellCmd assembles the command tmux runs in the pane. It carries
-// no env — see sessionEnvArgs.
-func buildClaudeShellCmd(claudePath string, args []string, spec ProcessSpec) string {
+// no env except PATH — see sessionEnvArgs for why the rest moved out, and the
+// PATH export below for why that one stayed.
+func buildClaudeShellCmd(claudePath string, args []string, spec ProcessSpec, pathEnv string) string {
 	quoted := make([]string, 0, len(args)+1)
 	quoted = append(quoted, shellQuote(claudePath))
 	for _, arg := range args {
@@ -1120,6 +1120,18 @@ func buildClaudeShellCmd(claudePath string, args []string, spec ProcessSpec) str
 		exitPath := processExitCodePath(spec.StateDir, spec.Name)
 		cmd = fmt.Sprintf("%s 2> %s; ec=$?; echo \"$ec\" > %s",
 			cmd, shellQuote(stderrPath), shellQuote(exitPath))
+	}
+
+	// PATH stays inline, unlike the rest of the env. tmux runs this command
+	// through $SHELL -c, so the shell's rc files run first — zsh sources
+	// ~/.zshenv even non-interactively — and a PATH set there overrides the
+	// one the pane inherits from the new-session client. An inline export
+	// runs after rc files and wins, which is how leo's PATH has always
+	// reached agents. Keeping it here changes no security property: PATH is
+	// not a credential, and it was never the thing leaking from
+	// pane_start_command.
+	if pathEnv != "" {
+		cmd = fmt.Sprintf("export PATH=%s; %s", shellQuote(pathEnv), cmd)
 	}
 
 	return cmd

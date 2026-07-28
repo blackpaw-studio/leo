@@ -30,9 +30,14 @@ All notable user-visible changes to Leo are documented here.
 
 ### Changed
 
-- **tmux 3.2+ is now required** (it added `-e` on `new-session`). `leo validate`
-  reports an error on older versions instead of letting every agent spawn fail
-  silently.
+- **tmux 3.2+ is now required** (it added `-e` on `new-session`). `leo setup`
+  refuses to complete and `leo validate` reports an error on older versions,
+  instead of letting every agent spawn fail silently in the restart loop.
+  Spawn failures now also surface tmux's own stderr rather than a bare
+  `exit status 1`.
+- A `PATH` key in a task's or template's `env:` is now dropped with a warning.
+  It never took effect — leo exports the daemon's PATH into the session after
+  it — so this only makes the existing behaviour visible.
 - `GET /api/template/list` returns a sorted array of trimmed records rather
   than the raw templates map, and `GET /task/list` returns a trimmed
   projection. Neither includes env values.

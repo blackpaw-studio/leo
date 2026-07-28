@@ -115,7 +115,12 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 		// forever, so flag it here rather than letting it look like agents
 		// mysteriously never start.
 		if raw, ok := prereq.TmuxVersion(); ok {
-			add(SeverityInfo, "tmux", "installed")
+			// Report the version, not just "installed" — it is the first
+			// thing worth knowing when someone says agents never start.
+			if raw == "" {
+				raw = "installed"
+			}
+			add(SeverityInfo, "tmux", raw)
 		} else {
 			add(SeverityError, "tmux", fmt.Sprintf("%s is too old — leo needs tmux %d.%d+ to pass agent env securely", raw, prereq.MinTmuxMajor, prereq.MinTmuxMinor))
 		}

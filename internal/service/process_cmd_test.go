@@ -188,7 +188,7 @@ func TestBuildClaudeShellCmdCarriesNoEnv(t *testing.T) {
 		WebToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Env:      map[string]string{"OP_SERVICE_ACCOUNT_TOKEN": secret},
 	}
-	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--model", "sonnet"}, spec)
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--model", "sonnet"}, spec, "")
 
 	for _, unwanted := range []string{secret, "OP_SERVICE_ACCOUNT_TOKEN", "LEO_API_TOKEN", "export "} {
 		if strings.Contains(got, unwanted) {
@@ -200,9 +200,31 @@ func TestBuildClaudeShellCmdCarriesNoEnv(t *testing.T) {
 	}
 }
 
+// TestBuildClaudeShellCmdExportsPath pins PATH precedence. tmux runs the pane
+// command through $SHELL -c, so a PATH set in the user's shell rc (~/.zshenv,
+// which zsh sources for non-interactive shells too) runs BEFORE the command
+// and would otherwise win. The inline export runs after rc files, which is
+// how leo's PATH has always reached agents. PATH is not a credential, so it
+// stays in the command string even though env moved to tmux -e args.
+func TestBuildClaudeShellCmdExportsPath(t *testing.T) {
+	spec := ProcessSpec{Name: "alpha"}
+	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, spec, "/usr/bin:/bin")
+
+	if !strings.Contains(got, "export PATH='/usr/bin:/bin';") {
+		t.Errorf("cmd missing inline PATH export\nfull cmd: %s", got)
+	}
+	// The export must precede claude, or the rc-file PATH wins.
+	if strings.Index(got, "export PATH=") > strings.Index(got, "'/c'") {
+		t.Errorf("PATH export must come before the binary\nfull cmd: %s", got)
+	}
+	if empty := buildClaudeShellCmd("/c", nil, spec, ""); strings.Contains(empty, "export PATH=") {
+		t.Errorf("empty PATH should emit no export\nfull cmd: %s", empty)
+	}
+}
+
 func TestBuildClaudeShellCmd_ArgsAreShellQuoted(t *testing.T) {
 	spec := ProcessSpec{Name: "alpha"}
-	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--append-system-prompt", "hello $USER"}, spec)
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--append-system-prompt", "hello $USER"}, spec, "")
 
 	for _, want := range []string{"'--append-system-prompt'", "'hello $USER'"} {
 		if !strings.Contains(got, want) {
@@ -219,7 +241,7 @@ func TestBuildClaudeShellCmd_ExitCapture(t *testing.T) {
 		Name:     "assistant",
 		StateDir: "/var/leo/state",
 	}
-	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, spec)
+	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, spec, "")
 
 	wantSubstrings := []string{
 		"2> '/var/leo/state/assistant-stderr.log'",
@@ -235,7 +257,7 @@ func TestBuildClaudeShellCmd_ExitCapture(t *testing.T) {
 
 func TestBuildClaudeShellCmd_NoExitCaptureWhenStateDirMissing(t *testing.T) {
 	spec := ProcessSpec{Name: "p"} // StateDir empty
-	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, spec)
+	got := buildClaudeShellCmd("/c", []string{"--model", "sonnet"}, spec, "")
 	for _, sub := range []string{"-stderr.log", "-exit.code", "ec=$?"} {
 		if strings.Contains(got, sub) {
 			t.Errorf("cmd should not contain %q when StateDir is empty\nfull cmd: %s", sub, got)

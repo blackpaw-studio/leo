@@ -26,6 +26,7 @@ var (
 		return prereq.CheckBinary(claudeharness.Claude{}.Binary())
 	}
 	checkTmuxFn    = prereq.CheckTmux
+	tmuxVersionFn  = prereq.TmuxVersion
 	daemonStatusFn = service.DaemonStatus
 	newReaderFn    = prompt.NewReader
 	sshExecFn      = func(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -280,7 +281,27 @@ func checkPrerequisites() error {
 	prompt.Success.Printf("    claude CLI    ✓ %s\n", versionStr)
 
 	if checkTmuxFn() {
-		prompt.Success.Println("    tmux          ✓ installed")
+		// Version matters, not just presence: leo passes agent env via
+		// `new-session -e`, added in tmux 3.2. On an older tmux setup would
+		// otherwise finish clean and every agent spawn would then fail
+		// forever in the restart loop.
+		if raw, ok := tmuxVersionFn(); ok {
+			label := raw
+			if label == "" {
+				label = "installed"
+			}
+			prompt.Success.Printf("    tmux          ✓ %s\n", label)
+		} else {
+			prompt.Err.Printf("    tmux          ✗ %s is too old\n", raw)
+			fmt.Println()
+			fmt.Printf("  Leo needs tmux %d.%d or newer (it passes agent environment\n", prereq.MinTmuxMajor, prereq.MinTmuxMinor)
+			fmt.Println("  via 'new-session -e', which older tmux does not support). Upgrade:")
+			fmt.Println()
+			fmt.Println("    brew upgrade tmux")
+			fmt.Println()
+			fmt.Println("  Then run 'leo setup' again.")
+			return fmt.Errorf("tmux too old: %s", raw)
+		}
 	} else {
 		prompt.Err.Println("    tmux          ✗ not found")
 		fmt.Println()
