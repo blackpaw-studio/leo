@@ -63,6 +63,10 @@ func TestArgsRejectsUnknownKind(t *testing.T) {
 	}
 }
 
+// TestValidateModel: claude accepts aliases and full model IDs, and that set
+// moves server-side faster than leo ships, so validation is a format check
+// only. Anything without whitespace passes; the claude CLI is the authority
+// on whether the name resolves.
 func TestValidateModel(t *testing.T) {
 	tests := []struct {
 		model   string
@@ -70,16 +74,43 @@ func TestValidateModel(t *testing.T) {
 	}{
 		{"", false}, {"sonnet", false}, {"opus", false}, {"haiku", false},
 		{"sonnet[1m]", false}, {"opus[1m]", false},
-		{"gpt-5", true}, {"claude-3-opus", true},
+		// Aliases and full IDs released after any given leo build.
+		{"fable", false}, {"claude-fable-5", false}, {"claude-opus-5", false},
+		{"claude-sonnet-4-5-20250929", false},
+		// Third-party endpoints (ANTHROPIC_BASE_URL) name models freely.
+		{"qwen/qwen3.6-35b-a3b", false},
+		// Only shapes that can never be a model name are rejected.
+		{"claude opus", true}, {"opus\t1m", true},
 	}
 	for _, tt := range tests {
 		err := Claude{}.ValidateModel(tt.model)
 		if (err != nil) != tt.wantErr {
 			t.Errorf("ValidateModel(%q) err=%v, wantErr=%v", tt.model, err, tt.wantErr)
 		}
-		if tt.wantErr && err.Error() != fmt.Sprintf("%q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", tt.model) {
+		if tt.wantErr && err.Error() != fmt.Sprintf("%q is not valid (must not contain whitespace)", tt.model) {
 			t.Errorf("ValidateModel(%q) wrong message: %v", tt.model, err)
 		}
+	}
+}
+
+// TestSuggestedModels: the datalist is a hint, not a gate. It must stay
+// non-empty and every entry must pass ValidateModel.
+func TestSuggestedModels(t *testing.T) {
+	got := SuggestedModels()
+	if len(got) == 0 {
+		t.Fatal("SuggestedModels() is empty")
+	}
+	var hasFable bool
+	for _, m := range got {
+		if err := (Claude{}).ValidateModel(m); err != nil {
+			t.Errorf("SuggestedModels() offers %q but ValidateModel rejects it: %v", m, err)
+		}
+		if m == "fable" {
+			hasFable = true
+		}
+	}
+	if !hasFable {
+		t.Error("SuggestedModels() does not include \"fable\"")
 	}
 }
 

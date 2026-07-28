@@ -10,7 +10,7 @@ import (
 func TestValidateTemplateModel(t *testing.T) {
 	cfg := &Config{
 		Templates: map[string]TemplateConfig{
-			"coding": {Model: "invalid"},
+			"coding": {Model: "not a model"},
 		},
 	}
 	err := cfg.Validate()
@@ -234,7 +234,7 @@ templates:
 func TestValidateMultipleTemplateErrors(t *testing.T) {
 	cfg := &Config{
 		Templates: map[string]TemplateConfig{
-			"bad1": {Model: "invalid"},
+			"bad1": {Model: "not a model"},
 			"bad2": {HarnessOptions: map[string]any{"permission_mode": "wrong"}},
 		},
 	}

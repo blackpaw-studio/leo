@@ -10,7 +10,6 @@ package codex
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
@@ -28,10 +27,7 @@ func (Codex) Binary() string { return "codex" }
 // ValidateModel is a format check only: codex model names are validated
 // server-side (invalid ones fail the run with a model_not_found error).
 func (Codex) ValidateModel(model string) error {
-	if model == "" || !strings.ContainsAny(model, " \t") {
-		return nil
-	}
-	return fmt.Errorf("%q is not valid (must not contain whitespace)", model)
+	return harness.ValidateModelFormat(model)
 }
 
 func (Codex) SupportsChannels() bool { return false }

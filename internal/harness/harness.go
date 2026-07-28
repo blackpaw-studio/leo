@@ -7,7 +7,11 @@
 // before the spec reaches an adapter.
 package harness
 
-import "io"
+import (
+	"fmt"
+	"io"
+	"strings"
+)
 
 // Kind identifies which leo primitive a launch belongs to. Adapters may
 // emit different flags per kind (one-shot task runs vs interactive
@@ -65,6 +69,18 @@ type Result struct {
 	Text      string   // final result text
 	IsError   bool     // the stream carried a fatal error event/flag
 	Errors    []string // error messages accumulated from the stream
+}
+
+// ValidateModelFormat is the shared "shape check only" model validation used
+// by adapters whose model names are resolved server-side (claude, codex).
+// Those catalogs gain aliases and IDs faster than leo ships, so leo rejects
+// only what could never be a model name and lets the CLI report the rest.
+// Empty string is always valid (harness default).
+func ValidateModelFormat(model string) error {
+	if model == "" || !strings.ContainsAny(model, " \t") {
+		return nil
+	}
+	return fmt.Errorf("%q is not valid (must not contain whitespace)", model)
 }
 
 // Harness translates LaunchSpecs into concrete CLI invocations.

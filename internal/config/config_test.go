@@ -66,7 +66,7 @@ func TestValidate(t *testing.T) {
 
 	t.Run("invalid default model", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.Defaults.Model = "gpt-4"
+		cfg.Defaults.Model = "not a model" // whitespace is the only rejected shape
 		err := cfg.Validate()
 		if err == nil {
 			t.Fatal("expected error")
@@ -127,7 +127,7 @@ func TestValidate(t *testing.T) {
 		cfg.Tasks["heartbeat"] = TaskConfig{
 			Schedule:   "0 * * * *",
 			PromptFile: "HEARTBEAT.md",
-			Model:      "claude-3",
+			Model:      "not a model",
 		}
 		err := cfg.Validate()
 		if err == nil {

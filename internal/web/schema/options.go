@@ -71,15 +71,16 @@ func namedKeys(keys []string, emptyLabel string) []Option {
 }
 
 // ModelSuggestions returns datalist suggestions for the model input under
-// the given harness. Claude's authoritative list comes straight from the
-// adapter (no more keep-in-sync copy); other harnesses are free-form —
-// ValidateModel gates on save.
+// the given harness. Claude's list comes straight from the adapter (no more
+// keep-in-sync copy). Every harness's model field is free-form — a datalist
+// suggests, it does not constrain, which is what lets a user type a model
+// released after this leo build.
 func ModelSuggestions(harnessName string) []Option {
 	if harnessName != "claude" {
 		return nil
 	}
 	var opts []Option
-	for _, m := range claude.ValidModels() {
+	for _, m := range claude.SuggestedModels() {
 		opts = append(opts, Option{m, m})
 	}
 	return opts
