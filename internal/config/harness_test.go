@@ -386,15 +386,15 @@ func TestValidateChannelsUnsupportedHarness(t *testing.T) {
 	}
 }
 
-// TestValidateModelDelegation locks in today's exact defaults.model error
+// TestValidateModelDelegation locks in the scope-prefixed model error
 // wording: config.Validate() must delegate to the harness adapter's
-// ValidateModel and reproduce the pre-harness string byte-for-byte via
-// `fmt.Sprintf("%s.model %v", scope, err)`.
+// ValidateModel and wrap it via `fmt.Sprintf("%s.model %v", scope, err)`,
+// with no leading field path from the adapter itself.
 func TestValidateModelDelegation(t *testing.T) {
-	const want = `%s.model "gpt-5" is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])`
+	const want = `%s.model "not a model" is not valid (must not contain whitespace)`
 
 	t.Run("defaults", func(t *testing.T) {
-		cfg := &Config{Defaults: DefaultsConfig{Model: "gpt-5", MaxTurns: 15}, HomePath: "/tmp/leo"}
+		cfg := &Config{Defaults: DefaultsConfig{Model: "not a model", MaxTurns: 15}, HomePath: "/tmp/leo"}
 		err := cfg.Validate()
 		if err == nil {
 			t.Fatal("expected error")
@@ -412,7 +412,7 @@ func TestValidateModelDelegation(t *testing.T) {
 		{
 			"templates",
 			func(c *Config) {
-				c.Templates = map[string]TemplateConfig{"foo": {Model: "gpt-5"}}
+				c.Templates = map[string]TemplateConfig{"foo": {Model: "not a model"}}
 			},
 			fmt.Sprintf(want, "templates.foo"),
 		},
@@ -420,7 +420,7 @@ func TestValidateModelDelegation(t *testing.T) {
 			"tasks",
 			func(c *Config) {
 				c.Tasks = map[string]TaskConfig{"foo": {
-					Schedule: "0 * * * *", PromptFile: "p.md", Model: "gpt-5",
+					Schedule: "0 * * * *", PromptFile: "p.md", Model: "not a model",
 				}}
 			},
 			fmt.Sprintf(want, "tasks.foo"),

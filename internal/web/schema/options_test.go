@@ -89,40 +89,47 @@ func TestHarnessFieldRegisteredOnConfigSections(t *testing.T) {
 	}
 }
 
-// TestModelSuggestionsMatchConfigValidModels guards against ModelSuggestions
-// drifting from the model names the claude harness adapter actually accepts.
-// Model policy lives with the adapter (config delegates to
-// Harness.ValidateModel), so this test uses the adapter's exported
-// claudeharness.ValidModels() accessor plus the exported Config.Validate()
-// path, rather than reaching into internals.
-func TestModelSuggestionsMatchConfigValidModels(t *testing.T) {
+// TestModelSuggestionsMatchAdapter guards against ModelSuggestions drifting
+// from the claude adapter's suggestion list. The list is a datalist hint, not
+// an allowlist — config accepts any whitespace-free model name so a user can
+// type one released after this build — so the assertion is one-directional:
+// every suggestion must render, and each must survive Config.Validate().
+func TestModelSuggestionsMatchAdapter(t *testing.T) {
 	optValues := make(map[string]bool)
 	for _, opt := range ModelSuggestions("claude") {
 		optValues[opt.Value] = true
 	}
 
-	validModels := make(map[string]bool)
-	for _, name := range claudeharness.ValidModels() {
-		validModels[name] = true
+	suggested := claudeharness.SuggestedModels()
+	if len(suggested) == 0 {
+		t.Fatal("claudeharness.SuggestedModels() is empty")
 	}
-
-	// Forward: every model config accepts must be offered in the dropdown.
-	for name := range validModels {
+	for _, name := range suggested {
 		if !optValues[name] {
-			t.Errorf("config accepts model %q but modelOptions does not offer it — update internal/web/schema/options.go", name)
+			t.Errorf("adapter suggests model %q but modelOptions does not offer it — update internal/web/schema/options.go", name)
 		}
 	}
+	if len(optValues) != len(suggested) {
+		t.Errorf("modelOptions offers %d values, adapter suggests %d — they must match", len(optValues), len(suggested))
+	}
 
-	// Reverse: every option value must actually be accepted by config
-	// validation (double-checked via both the ValidModels() list and a real
-	// Validate() call, since Validate() is the behavior that matters).
+	// Every offered value must survive real config validation.
 	for name := range optValues {
-		if !validModels[name] {
-			t.Errorf("modelOptions offers %q but claudeharness.ValidModels() does not include it", name)
-		}
 		cfg := &config.Config{Defaults: config.DefaultsConfig{Model: name}}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("modelOptions offers %q but config.Validate() rejects it: %v", name, err)
+		}
+	}
+}
+
+// TestModelSuggestionsDoNotConstrain pins the point of the change: a model
+// name outside the suggestion list — a newer alias, a full model ID — must
+// still validate, because the datalist only suggests.
+func TestModelSuggestionsDoNotConstrain(t *testing.T) {
+	for _, name := range []string{"fable", "claude-fable-5", "claude-opus-5"} {
+		cfg := &config.Config{Defaults: config.DefaultsConfig{Model: name}}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("config.Validate() rejects model %q: %v", name, err)
 		}
 	}
 }

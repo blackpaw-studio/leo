@@ -176,9 +176,16 @@ Unknown keys are rejected.
 | `disallowed_tools` | list of strings | Tool blacklist, passed via `--disallowed-tools`. |
 | `append_system_prompt` | string | Extra text appended to the system prompt. |
 
-Model validation is also delegated to the adapter: for `claude`, `model:`
-must be one of `sonnet`, `opus`, `haiku`, `sonnet[1m]`, `opus[1m]` (empty is
-always valid — it means "let claude choose").
+Model validation is also delegated to the adapter. For `claude`, `model:` is
+a **format check only** — any whitespace-free string passes, and empty means
+"let claude choose". Claude Code resolves the name itself and accepts both
+aliases (`sonnet`, `opus`, `haiku`, `fable`, plus `[1m]` long-context
+variants where offered) and full model IDs (`claude-fable-5`). Leo does not
+keep an allowlist: it would reject models released after whichever leo build
+you happen to be running. An unknown model surfaces as a claude startup
+error, not a config error — note that for a supervised agent that means a
+restart-backoff loop rather than a message at save time, so check the model
+name if an agent won't stay up.
 
 `channels:` / `dev_channels:` remain top-level fields (not `harness_options`)
 but are only valid on a **channel-supporting** harness. `claude` is the only
@@ -438,15 +445,13 @@ of a named provider table, and there's no more `api_key_cmd`/`default_model`
 convenience layer; resolve secrets into `env:` values yourself (e.g. with a
 wrapper script or your shell's env before `leo` reads its own environment).
 
-**Model validation still applies.** `model:` is validated by the resolved
-harness regardless of `env:` overrides — for `claude` that means only
-`sonnet`, `opus`, `haiku`, `sonnet[1m]`, or `opus[1m]` pass validation
-(or leave `model:` unset). If your third-party endpoint expects a different
-model identifier, leave `model:` unset in `leo.yaml` and have the proxy on
-the other end of `ANTHROPIC_BASE_URL` remap the request, or set the desired
-model via an endpoint-specific env var your proxy reads instead of `--model`.
-This is a real behavior change from `providers:`, which allowed an arbitrary
-`default_model` string once a provider was set.
+**Model names pass through.** `model:` is validated by the resolved harness
+regardless of `env:` overrides, but for `claude` that check is format-only
+(no whitespace), so an endpoint-specific model identifier is accepted as-is
+and forwarded via `--model`. Leaving `model:` unset and letting the proxy on
+the other end of `ANTHROPIC_BASE_URL` pick a default also works. Whether the
+identifier resolves is between the CLI and your endpoint — leo does not
+second-guess it.
 
 ## Validation behavior
 
@@ -543,8 +548,8 @@ edit `harness:` and `harness_options:` directly — there is no separate
   backed by a `<datalist>` that leo refreshes via an out-of-band htmx swap
   whenever the harness dropdown changes (`harnessPartialData.ModelOpts` in
   `handleHarnessOptionsPartial`). `schema.ModelSuggestions` only populates
-  that datalist for `claude`, straight from `claude.ValidModels()` — codex
-  and opencode have no fixed model list, so their inputs instead show a
+  that datalist for `claude`, straight from `claude.SuggestedModels()` —
+  codex and opencode have no suggestion list, so their inputs instead show a
   placeholder format hint from `schema.ModelPlaceholder` ("e.g.
   gpt-5.3-codex" for codex, "provider/model, e.g.
   anthropic/claude-sonnet-5" for opencode). A stale datalist is harmless

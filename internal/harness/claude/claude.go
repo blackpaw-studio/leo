@@ -5,7 +5,6 @@ package claude
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
@@ -32,33 +31,29 @@ type Claude struct{}
 
 func init() { harness.Register(Claude{}) }
 
-// validModels is the hardcoded Claude Code model list, moved here from
-// internal/config so model policy lives with the adapter.
-var validModels = map[string]bool{
-	"sonnet": true, "opus": true, "haiku": true,
-	"sonnet[1m]": true, "opus[1m]": true,
+// suggestedModels seeds the web UI's model datalist. It is a convenience
+// hint, NOT an allowlist: `claude --model` also takes aliases released after
+// any given leo build, full model IDs ("claude-fable-5"), and whatever a
+// third-party ANTHROPIC_BASE_URL endpoint calls its models. Keep it sorted.
+var suggestedModels = []string{
+	"fable", "haiku", "opus", "opus[1m]", "sonnet", "sonnet[1m]",
 }
 
-// ValidModels returns the accepted model names, sorted.
-func ValidModels() []string {
-	names := make([]string, 0, len(validModels))
-	for name := range validModels {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+// SuggestedModels returns the datalist hints for the model input, sorted.
+func SuggestedModels() []string {
+	return append([]string(nil), suggestedModels...)
 }
 
 func (Claude) Name() string   { return "claude" }
 func (Claude) Binary() string { return "claude" }
 
-// ValidateModel reports whether model is acceptable for Claude Code. Empty
-// string is always valid (harness default).
+// ValidateModel is a format check only. Claude Code resolves model names
+// itself — aliases ("sonnet", "fable"), full IDs ("claude-fable-5"), and
+// whatever a third-party ANTHROPIC_BASE_URL endpoint serves — and reports an
+// unknown one at launch. An allowlist here would just reject models released
+// after the leo build the user happens to be running.
 func (Claude) ValidateModel(model string) error {
-	if model == "" || validModels[model] {
-		return nil
-	}
-	return fmt.Errorf("%q is not valid (use sonnet, opus, haiku, sonnet[1m], or opus[1m])", model)
+	return harness.ValidateModelFormat(model)
 }
 
 // SupportsChannels reports that Claude Code hosts channel plugins.

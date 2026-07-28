@@ -122,14 +122,14 @@ func TestDefaultsSaveRoundTrip(t *testing.T) {
 func TestDefaultsSaveRejectsBadModel(t *testing.T) {
 	s, dir := newTestServer(t)
 	form := url.Values{}
-	form.Set("model", "gpt-9000")
+	form.Set("model", "not a model")
 	w := postForm(t, s, "/web/config/defaults", form)
 	body := readBody(t, w)
 	if !strings.Contains(body, "flash-error") {
 		t.Errorf("want validation flash, got: %s", body)
 	}
 	cfg := reloadTestConfig(t, dir)
-	if cfg.Defaults.Model == "gpt-9000" {
+	if cfg.Defaults.Model == "not a model" {
 		t.Error("invalid model was persisted")
 	}
 }

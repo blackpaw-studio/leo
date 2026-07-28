@@ -637,7 +637,7 @@ func TestTemplateAdd_RejectsInvalidModel(t *testing.T) {
 
 	cmd := newTemplateAddCmd()
 	_ = cmd.Flags().Set("name", "bad")
-	_ = cmd.Flags().Set("model", "gpt-4") // not in validModels
+	_ = cmd.Flags().Set("model", "not a model") // whitespace fails the format check
 	err := cmd.RunE(cmd, nil)
 	if err == nil {
 		t.Fatal("expected validation error for unknown model")
