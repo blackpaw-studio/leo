@@ -49,6 +49,24 @@ func TestRenderEvent(t *testing.T) {
 			want: []harness.Event{{Kind: harness.EventError, Summary: "connection refused"}},
 		},
 		{
+			name: "a failed command reports through its exit code, not item.error",
+			line: `{"type":"item.completed","item":{"id":"i0","type":"command_execution","command":"go build ./...","exit_code":2,"aggregated_output":"consult.go:12: undefined: foo\nmore"}}`,
+			want: []harness.Event{{Kind: harness.EventError, Summary: "consult.go:12: undefined: foo"}},
+		},
+		{
+			name: "a failed command with no captured output still reports",
+			line: `{"type":"item.completed","item":{"id":"i0","type":"command_execution","exit_code":127}}`,
+			want: []harness.Event{{Kind: harness.EventError, Summary: "command exited 127"}},
+		},
+		{
+			name: "a successful command stays silent",
+			line: `{"type":"item.completed","item":{"id":"i0","type":"command_execution","exit_code":0}}`,
+		},
+		{
+			name: "an absent exit code is not read as success or failure",
+			line: `{"type":"item.completed","item":{"id":"i0","type":"command_execution"}}`,
+		},
+		{
 			name: "turn failure",
 			line: `{"type":"turn.failed","error":{"message":"model overloaded"}}`,
 			want: []harness.Event{{Kind: harness.EventError, Summary: "model overloaded"}},

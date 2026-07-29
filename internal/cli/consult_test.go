@@ -13,10 +13,14 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
-func rec(id string, status consult.Status, startedMinutes int) consult.Record {
+// rec builds a record started minutesAgo minutes back. Recency is relative
+// to now on purpose: an unfinished consult older than consult.StaleAfter is
+// treated as abandoned, so a fixture pinned to a fixed date would rot into
+// one the moment the wall clock moved past it.
+func rec(id string, status consult.Status, minutesAgo int) consult.Record {
 	return consult.Record{
 		ID: id, Caller: "leo", Template: "codex", Harness: "codex", Model: "gpt-5.3-codex",
-		Status: status, StartedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC).Add(time.Duration(startedMinutes) * time.Minute),
+		Status: status, StartedAt: time.Now().Add(-time.Duration(minutesAgo) * time.Minute),
 	}
 }
 
@@ -33,9 +37,9 @@ func writeTestRecord(t *testing.T, dir string, record consult.Record) {
 
 func TestResolveConsult(t *testing.T) {
 	records := []consult.Record{
-		rec("c-ffff0001", consult.StatusDone, 30),
-		rec("c-aaaa0002", consult.StatusRunning, 20),
-		rec("c-aaaa0003", consult.StatusDone, 10),
+		rec("c-ffff0001", consult.StatusDone, 1),
+		rec("c-aaaa0002", consult.StatusRunning, 2),
+		rec("c-aaaa0003", consult.StatusDone, 3),
 	}
 	tests := []struct {
 		name    string
@@ -70,8 +74,8 @@ func TestResolveConsult(t *testing.T) {
 
 func TestResolveConsultFallsBackToNewestWhenNoneRunning(t *testing.T) {
 	records := []consult.Record{
-		rec("c-newest", consult.StatusDone, 30),
-		rec("c-older", consult.StatusFailed, 10),
+		rec("c-newest", consult.StatusDone, 1),
+		rec("c-older", consult.StatusFailed, 2),
 	}
 	got, err := resolveConsult(records, "")
 	if err != nil {
@@ -248,9 +252,9 @@ func TestListRendersRunningConsultsFirst(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	writeTestRecord(t, dir, rec("c-finished1", consult.StatusDone, 30))
-	writeTestRecord(t, dir, rec("c-running01", consult.StatusRunning, 10))
-	writeTestRecord(t, dir, rec("c-queued001", consult.StatusQueued, 5))
+	writeTestRecord(t, dir, rec("c-finished1", consult.StatusDone, 3))
+	writeTestRecord(t, dir, rec("c-running01", consult.StatusRunning, 1))
+	writeTestRecord(t, dir, rec("c-queued001", consult.StatusQueued, 2))
 
 	var out bytes.Buffer
 	if err := listConsults(state, false, &out); err != nil {
@@ -309,5 +313,88 @@ func TestFormatOffset(t *testing.T) {
 		if got := formatOffset(tt.in); got != tt.want {
 			t.Errorf("formatOffset(%v) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestWatchReportsAnAbandonedConsult covers the record a SIGKILLed daemon
+// leaves behind: nothing will ever close it, so watch must not wait forever.
+func TestWatchReportsAnAbandonedConsult(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "consults")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stuck := rec("c-stuck0001", consult.StatusRunning, int((consult.StaleAfter+time.Minute)/time.Minute))
+	writeTestRecord(t, dir, stuck)
+	if err := os.WriteFile(filepath.Join(dir, stuck.ID+".ndjson"),
+		[]byte(`{"t":1.0,"raw":"started"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("seeding stream: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := watchConsult(t.Context(), state, "", &out); err != nil {
+		t.Fatalf("watchConsult: %v", err)
+	}
+	if !strings.Contains(out.String(), "abandoned") {
+		t.Errorf("want the consult reported as abandoned, got:\n%s", out.String())
+	}
+}
+
+// TestWatchStopsWhenTheRecordVanishes guards against polling a stale
+// in-memory copy forever when the record is pruned out from under us.
+func TestWatchStopsWhenTheRecordVanishes(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "consults")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	record := rec("c-vanish001", consult.StatusRunning, 0)
+	writeTestRecord(t, dir, record)
+	stream := filepath.Join(dir, record.ID+".ndjson")
+	if err := os.WriteFile(stream, []byte(`{"t":1.0,"raw":"working"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("seeding stream: %v", err)
+	}
+
+	restore := consultPollInterval
+	consultPollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { consultPollInterval = restore })
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = os.Remove(filepath.Join(dir, record.ID+".json"))
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		var out bytes.Buffer
+		done <- watchConsult(t.Context(), state, "c-vanish", &out)
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want an error once the record is gone")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch never returned; it is polling a stale record")
+	}
+}
+
+// TestListMarksAbandonedConsults: reporting "running" for a record nothing
+// will ever update is a lie that never expires.
+func TestListMarksAbandonedConsults(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "consults")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeTestRecord(t, dir, rec("c-stuck0001", consult.StatusRunning,
+		int((consult.StaleAfter+time.Minute)/time.Minute)))
+
+	var out bytes.Buffer
+	if err := listConsults(state, false, &out); err != nil {
+		t.Fatalf("listConsults: %v", err)
+	}
+	if !strings.Contains(out.String(), "abandoned") {
+		t.Errorf("want the stuck consult marked abandoned, got:\n%s", out.String())
 	}
 }

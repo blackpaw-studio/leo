@@ -100,7 +100,14 @@ Ctrl-C detaches; the consult keeps running.`,
 				}
 				return runRemoteGroup(res, "consult", extra)
 			}
-			return watchConsult(cmd.Context(), cfg.StatePath(), prefix, consultStdout)
+			// Detaching is a normal way to finish, not an error — today
+			// Ctrl-C kills the process outright, but this keeps the
+			// promise true if signal handling is ever wired up.
+			err = watchConsult(cmd.Context(), cfg.StatePath(), prefix, consultStdout)
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
 		},
 	}
 	addHostFlag(cmd, &host)
@@ -132,22 +139,32 @@ func listConsults(stateDir string, asJSON bool, out io.Writer) error {
 	for _, record := range ordered {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			record.ID, orDash(record.Caller), record.Template, record.Model,
-			formatOffset(record.Elapsed(now)), record.Status)
+			formatOffset(record.Elapsed(now)), displayStatus(record, now))
 	}
 	return w.Flush()
 }
 
-// inFlightFirst partitions records into unfinished then finished, keeping
-// the newest-first order Load supplies within each group.
+// displayStatus reports "abandoned" for a consult whose record stopped
+// being updated. Showing it as "running" would be a lie that never expires.
+func displayStatus(record consult.Record, now time.Time) string {
+	if record.Stale(now) {
+		return "abandoned"
+	}
+	return string(record.Status)
+}
+
+// inFlightFirst partitions records into still-running then settled,
+// keeping the newest-first order Load supplies within each group.
 func inFlightFirst(records []consult.Record) []consult.Record {
+	now := time.Now()
 	ordered := make([]consult.Record, 0, len(records))
 	for _, record := range records {
-		if !record.Status.Terminal() {
+		if !record.Settled(now) {
 			ordered = append(ordered, record)
 		}
 	}
 	for _, record := range records {
-		if record.Status.Terminal() {
+		if record.Settled(now) {
 			ordered = append(ordered, record)
 		}
 	}
@@ -185,9 +202,11 @@ func watchConsult(ctx context.Context, stateDir, prefix string, out io.Writer) e
 		// Read the status *before* draining. A consult only reaches a
 		// terminal status once its stream is fully written, so a terminal
 		// reading here guarantees the drain below sees everything.
-		current, err := currentRecord(stateDir, record.ID)
-		if err == nil {
-			record = current
+		record, err = consult.LoadOne(stateDir, record.ID)
+		if err != nil {
+			// The record is gone — pruned, or the state directory was
+			// cleared. Say so instead of polling a stale copy forever.
+			return err
 		}
 		events, err := tail.drain()
 		if err != nil {
@@ -196,11 +215,8 @@ func watchConsult(ctx context.Context, stateDir, prefix string, out io.Writer) e
 		for _, event := range events {
 			feed.emit(event)
 		}
-		if record.Status.Terminal() {
-			fmt.Fprintf(out, "[%s after %s]\n", record.Status, formatOffset(record.Elapsed(time.Now())))
-			if record.Error != "" {
-				fmt.Fprintln(out, record.Error)
-			}
+		if now := time.Now(); record.Settled(now) {
+			reportOutcome(out, record, now)
 			return nil
 		}
 		select {
@@ -208,6 +224,20 @@ func watchConsult(ctx context.Context, stateDir, prefix string, out io.Writer) e
 			return ctx.Err()
 		case <-time.After(consultPollInterval):
 		}
+	}
+}
+
+// reportOutcome closes out a feed. An abandoned consult is called out
+// rather than reported as still running: nothing will ever update it.
+func reportOutcome(out io.Writer, record consult.Record, now time.Time) {
+	if record.Stale(now) {
+		fmt.Fprintf(out, "[abandoned — no result after %s; the daemon likely died mid-consult]\n",
+			formatOffset(record.Elapsed(now)))
+		return
+	}
+	fmt.Fprintf(out, "[%s after %s]\n", record.Status, formatOffset(record.Elapsed(now)))
+	if record.Error != "" {
+		fmt.Fprintln(out, record.Error)
 	}
 }
 
@@ -219,8 +249,11 @@ func resolveConsult(records []consult.Record, prefix string) (consult.Record, er
 		return consult.Record{}, errors.New("no consults recorded yet")
 	}
 	if prefix == "" {
+		now := time.Now()
 		for _, record := range records {
-			if !record.Status.Terminal() {
+			// Settled, not merely terminal: an abandoned consult must not
+			// win over a real one just because nothing closed its record.
+			if !record.Settled(now) {
 				return record, nil
 			}
 		}
@@ -245,19 +278,6 @@ func resolveConsult(records []consult.Record, prefix string) (consult.Record, er
 		}
 		return consult.Record{}, fmt.Errorf("%q matches %d consults: %s", prefix, len(matches), strings.Join(ids, ", "))
 	}
-}
-
-func currentRecord(stateDir, id string) (consult.Record, error) {
-	records, err := consult.Load(stateDir)
-	if err != nil {
-		return consult.Record{}, err
-	}
-	for _, record := range records {
-		if record.ID == id {
-			return record, nil
-		}
-	}
-	return consult.Record{}, fmt.Errorf("consult %s is no longer recorded", id)
 }
 
 // rendererFor resolves a harness's live-feed renderer. A harness without

@@ -55,6 +55,27 @@ func (r Record) Elapsed(now time.Time) time.Duration {
 	return now.Sub(r.StartedAt)
 }
 
+// StaleAfter is how long past its own deadline a consult may sit
+// non-terminal before it is presumed abandoned. Nothing updates a record
+// once the daemon dies, and killing the daemon is routine — `leo update`
+// and `leo service restart` both SIGKILL it — so without this a consult in
+// flight at the wrong moment would stay "running" forever: a permanent
+// phantom in `leo consult list`, a `leo consult watch` that never returns,
+// and a retention budget that never reclaims the slot.
+const StaleAfter = RunTimeout + 2*time.Minute
+
+// Stale reports whether an unfinished consult has outlived any plausible
+// run and should be treated as abandoned.
+func (r Record) Stale(now time.Time) bool {
+	return !r.Status.Terminal() && now.Sub(r.StartedAt) > StaleAfter
+}
+
+// Settled reports whether a consult has stopped changing, whether it
+// finished or was abandoned. Callers waiting on a consult should stop here.
+func (r Record) Settled(now time.Time) bool {
+	return r.Status.Terminal() || r.Stale(now)
+}
+
 // streamEvent is one line of <id>.ndjson. Leo owns this framing rather than
 // teeing the harness output verbatim because timestamps have to survive
 // replay and no harness emits them. `jq .d` recovers the raw stream.

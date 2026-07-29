@@ -75,10 +75,11 @@ func NewDispatcher(rec Recorder) *Dispatcher {
 	}
 }
 
-// newID mints a consult id short enough to type and unique enough for the
-// handful of records retained.
+// newID mints a consult id short enough to read in a table and wide enough
+// that collisions across the handful of retained records are not a concern.
+// Callers abbreviate it to a unique prefix anyway.
 func newID() string {
-	var b [4]byte
+	var b [6]byte
 	_, _ = rand.Read(b[:])
 	return "c-" + hex.EncodeToString(b[:])
 }
@@ -133,7 +134,10 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 	}
 	handle, err := d.recorder.Open(rec)
 	if err != nil {
-		return Result{}, fmt.Errorf("recording consult: %w", err)
+		// Recording is best-effort. An unwritable state directory should
+		// cost visibility, not the answer the caller is waiting for.
+		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", rec.ID, err)
+		handle = nopHandle{}
 	}
 	fail := func(status Status, err error) (Result, error) {
 		finish(handle, rec.ID, status, err)
@@ -241,10 +245,13 @@ func (t *recordingTee) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Bytes returns a copy. Handing back the buffer's live slice under the
+// lock would be false comfort: the caller would read it unlocked, so the
+// very concurrency the mutex above guards against would still corrupt it.
 func (t *recordingTee) Bytes() []byte {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.buf.Bytes()
+	return bytes.Clone(t.buf.Bytes())
 }
 
 func mergedEnv(base []string, overlays ...map[string]string) []string {

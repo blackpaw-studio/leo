@@ -99,8 +99,8 @@ func TestConsultRecordsStreamAndStatusTransitions(t *testing.T) {
 	state := rec.waitOpened(t).snapshot()
 	opened := state.opened
 
-	if !strings.HasPrefix(opened.ID, "c-") || len(opened.ID) != 10 {
-		t.Errorf("id = %q, want c- plus 8 hex chars", opened.ID)
+	if !strings.HasPrefix(opened.ID, "c-") || len(opened.ID) != 14 {
+		t.Errorf("id = %q, want c- plus 12 hex chars", opened.ID)
 	}
 	if result.ID != opened.ID {
 		t.Errorf("result id = %q, want the recorded id %q", result.ID, opened.ID)

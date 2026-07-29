@@ -29,6 +29,11 @@ const (
 	// emits a newline cannot grow the buffer without bound. A tool result
 	// echoing a large file is legitimately big, so the cap is generous.
 	maxLineBytes = 8 << 20
+
+	// tmpReapAfter is how old an unrenamed record temp file must be before
+	// it is presumed abandoned. Another consult may be mid-rename, so only
+	// clearly stale ones are reaped.
+	tmpReapAfter = time.Minute
 )
 
 // Dir returns the directory holding consult records for a leo state dir.
@@ -43,7 +48,9 @@ func StreamPath(stateDir, id string) string {
 // record plus an <id>.ndjson event stream.
 type FileRecorder struct {
 	dir string
-	// Now supplies stream timestamps; replaced in tests.
+	// Now supplies stream timestamps and decides staleness; replaced in
+	// tests. It must be safe for concurrent use: every recording goroutine
+	// calls it, as does pruning.
 	Now func() time.Time
 	// mu serializes pruning against concurrent Opens — up to maxConcurrent
 	// consults start independently.
@@ -63,8 +70,11 @@ func (r *FileRecorder) Open(rec Record) (Handle, error) {
 	// Make room before adding, so the directory settles at RecordsKept.
 	r.prune(RecordsKept - 1)
 
+	// O_EXCL rather than O_TRUNC: on an id collision, fail loudly instead of
+	// silently truncating a live consult's stream. The caller degrades an
+	// Open failure to "not recorded", which is the better of the two.
 	path := filepath.Join(r.dir, rec.ID+".ndjson")
-	stream, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, filePerm)
+	stream, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, filePerm)
 	if err != nil {
 		return nil, fmt.Errorf("creating consult stream: %w", err)
 	}
@@ -76,28 +86,83 @@ func (r *FileRecorder) Open(rec Record) (Handle, error) {
 	return h, nil
 }
 
-// prune deletes the oldest finished consults until at most keep remain.
-// Consults that have not reached a terminal status are skipped: evicting a
-// running consult would delete the stream someone is watching.
+// prune bounds the consult directory: it reclaims garbage, then deletes
+// the oldest settled consults until at most keep remain.
+//
+// A consult still plausibly in flight is never evicted — that would delete
+// the stream someone is watching. "Plausibly" is doing real work: a record
+// abandoned by a killed daemon stays non-terminal forever, so staleness,
+// not just terminal status, decides.
 func (r *FileRecorder) prune(keep int) {
-	records, err := loadDir(r.dir)
+	entries, err := os.ReadDir(r.dir)
 	if err != nil {
 		return
 	}
-	finished := make([]Record, 0, len(records))
-	for _, rec := range records {
-		if rec.Status.Terminal() {
-			finished = append(finished, rec)
+	now := r.Now()
+
+	// Partition the directory before deleting anything.
+	records := make([]Record, 0, len(entries))
+	haveRecord := make(map[string]bool, len(entries))
+	var corrupt, streams, temps []string
+	for _, entry := range entries {
+		name := entry.Name()
+		switch {
+		case strings.HasSuffix(name, ".json.tmp"):
+			temps = append(temps, name)
+		case strings.HasSuffix(name, ".json"):
+			id := strings.TrimSuffix(name, ".json")
+			haveRecord[id] = true
+			rec, err := readRecord(filepath.Join(r.dir, name))
+			if err != nil {
+				// A record is published by rename, so it is never seen
+				// half-written. Unreadable means corrupt, and neither it
+				// nor its stream will ever be reclaimed otherwise.
+				corrupt = append(corrupt, id)
+				continue
+			}
+			records = append(records, rec)
+		case strings.HasSuffix(name, ".ndjson"):
+			streams = append(streams, strings.TrimSuffix(name, ".ndjson"))
 		}
 	}
-	if len(finished) <= keep {
+
+	for _, id := range corrupt {
+		r.remove(id)
+		haveRecord[id] = false
+	}
+	// A stream whose record is gone can never be found again. Open holds
+	// r.mu across creating both files, so this cannot race a starting
+	// consult.
+	for _, id := range streams {
+		if !haveRecord[id] {
+			_ = os.Remove(filepath.Join(r.dir, id+".ndjson"))
+		}
+	}
+	for _, name := range temps {
+		info, err := os.Stat(filepath.Join(r.dir, name))
+		if err == nil && now.Sub(info.ModTime()) > tmpReapAfter {
+			_ = os.Remove(filepath.Join(r.dir, name))
+		}
+	}
+
+	settled := make([]Record, 0, len(records))
+	for _, rec := range records {
+		if rec.Settled(now) {
+			settled = append(settled, rec)
+		}
+	}
+	if len(settled) <= keep {
 		return
 	}
-	// loadDir sorts newest first, so everything past the budget is oldest.
-	for _, rec := range finished[keep:] {
-		_ = os.Remove(filepath.Join(r.dir, rec.ID+".json"))
-		_ = os.Remove(filepath.Join(r.dir, rec.ID+".ndjson"))
+	sortNewestFirst(settled)
+	for _, rec := range settled[keep:] {
+		r.remove(rec.ID)
 	}
+}
+
+func (r *FileRecorder) remove(id string) {
+	_ = os.Remove(filepath.Join(r.dir, id+".json"))
+	_ = os.Remove(filepath.Join(r.dir, id+".ndjson"))
 }
 
 // fileHandle records one consult. Every method is mutex-guarded because the
@@ -107,10 +172,13 @@ type fileHandle struct {
 	dir string
 	now func() time.Time
 
-	mu       sync.Mutex
-	rec      Record
+	mu  sync.Mutex
+	rec Record
+	// pending holds a line still being reassembled. It is resliced forward
+	// rather than rewritten, so a single huge line arriving in pipe-sized
+	// chunks does not cost a copy per chunk.
+	pending  []byte
 	stream   *os.File
-	pending  bytes.Buffer
 	writeErr error
 	closed   bool
 }
@@ -124,21 +192,22 @@ func (h *fileHandle) Write(p []byte) (int, error) {
 	if h.closed {
 		return len(p), nil
 	}
-	h.pending.Write(p)
+	// A pipe hands over arbitrary chunks, not whole lines; whatever trails
+	// the last newline waits for the next write.
+	h.pending = append(h.pending, p...)
+	start := 0
 	for {
-		line, err := h.pending.ReadBytes('\n')
-		if err != nil {
-			// No delimiter yet — a pipe hands over arbitrary chunks, not
-			// whole lines. Hold the remainder for the next write.
-			h.pending.Reset()
-			h.pending.Write(line)
+		i := bytes.IndexByte(h.pending[start:], '\n')
+		if i < 0 {
 			break
 		}
-		h.emit(line)
+		h.emit(h.pending[start : start+i])
+		start += i + 1
 	}
-	if h.pending.Len() > maxLineBytes {
-		h.emit(h.pending.Bytes())
-		h.pending.Reset()
+	h.pending = h.pending[start:]
+	if len(h.pending) > maxLineBytes {
+		h.emit(h.pending)
+		h.pending = h.pending[:0]
 	}
 	return len(p), nil
 }
@@ -196,9 +265,9 @@ func (h *fileHandle) Close(s Status, cause error) error {
 		return nil
 	}
 	// A harness can die mid-line; keep what it managed to say.
-	if h.pending.Len() > 0 {
-		h.emit(h.pending.Bytes())
-		h.pending.Reset()
+	if len(h.pending) > 0 {
+		h.emit(h.pending)
+		h.pending = nil
 	}
 	h.closed = true
 	h.rec.Status = s
@@ -235,6 +304,34 @@ func writeRecord(dir string, rec Record) error {
 // hide the rest.
 func Load(stateDir string) ([]Record, error) { return loadDir(Dir(stateDir)) }
 
+// LoadOne reads a single consult record. Callers polling one consult use
+// this rather than Load, which decodes the whole directory.
+func LoadOne(stateDir, id string) (Record, error) {
+	if id == "" || strings.ContainsAny(id, `/\`) || id == "." || id == ".." {
+		return Record{}, fmt.Errorf("invalid consult id %q", id)
+	}
+	rec, err := readRecord(filepath.Join(Dir(stateDir), id+".json"))
+	if err != nil {
+		return Record{}, fmt.Errorf("reading consult %s: %w", id, err)
+	}
+	return rec, nil
+}
+
+func readRecord(path string) (Record, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Record{}, err
+	}
+	var rec Record
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return Record{}, err
+	}
+	if rec.ID == "" {
+		return Record{}, fmt.Errorf("record has no id")
+	}
+	return rec, nil
+}
+
 func loadDir(dir string) ([]Record, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -248,21 +345,21 @@ func loadDir(dir string) ([]Record, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		rec, err := readRecord(filepath.Join(dir, entry.Name()))
 		if err != nil {
-			continue
-		}
-		var rec Record
-		if err := json.Unmarshal(data, &rec); err != nil || rec.ID == "" {
 			continue
 		}
 		records = append(records, rec)
 	}
+	sortNewestFirst(records)
+	return records, nil
+}
+
+func sortNewestFirst(records []Record) {
 	slices.SortFunc(records, func(a, b Record) int {
 		if c := b.StartedAt.Compare(a.StartedAt); c != 0 {
 			return c
 		}
 		return strings.Compare(b.ID, a.ID)
 	})
-	return records, nil
 }

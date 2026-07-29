@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -25,6 +26,11 @@ type renderEvent struct {
 		Error   struct {
 			Message string `json:"message"`
 		} `json:"error"`
+		// A failed command reports itself through an exit code rather than
+		// the error field every other item type uses. Decoded as a pointer
+		// so an absent field stays silent instead of reading as success.
+		ExitCode         *int   `json:"exit_code"`
+		AggregatedOutput string `json:"aggregated_output"`
 	} `json:"item"`
 }
 
@@ -79,6 +85,15 @@ func completedItemEvent(evt renderEvent) []harness.Event {
 		return []harness.Event{{Kind: harness.EventText, Summary: evt.Item.Text}}
 	case "error":
 		return errorEvent(evt.Item.Message)
+	case "command_execution":
+		if evt.Item.ExitCode == nil || *evt.Item.ExitCode == 0 {
+			return nil
+		}
+		summary := harness.FirstLine(evt.Item.AggregatedOutput)
+		if summary == "" {
+			summary = fmt.Sprintf("command exited %d", *evt.Item.ExitCode)
+		}
+		return []harness.Event{{Kind: harness.EventError, Summary: summary}}
 	default:
 		return errorEvent(evt.Item.Error.Message)
 	}
