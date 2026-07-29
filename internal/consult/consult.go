@@ -5,10 +5,14 @@ package consult
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,9 +31,14 @@ type Request struct {
 	Model     string
 	Prompt    string
 	Workspace string
+	// Caller names the process that asked, for the consult record. Optional.
+	Caller string
 }
 
 type Result struct {
+	// ID identifies the consult's record and event stream, so a caller can
+	// point at it after the fact (`leo consult watch <id>`).
+	ID      string `json:"id"`
 	Harness string `json:"harness"`
 	Model   string `json:"model"`
 	Text    string `json:"text"`
@@ -48,11 +57,31 @@ func invalidf(format string, args ...any) error {
 
 type Dispatcher struct {
 	sem                chan struct{}
+	recorder           Recorder
 	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
-func NewDispatcher() *Dispatcher {
-	return &Dispatcher{sem: make(chan struct{}, maxConcurrent), ExecCommandContext: exec.CommandContext}
+// NewDispatcher builds a dispatcher recording through rec. A nil recorder
+// discards recordings, leaving behavior exactly as it was before consults
+// were observable.
+func NewDispatcher(rec Recorder) *Dispatcher {
+	if rec == nil {
+		rec = nopRecorder{}
+	}
+	return &Dispatcher{
+		sem:                make(chan struct{}, maxConcurrent),
+		recorder:           rec,
+		ExecCommandContext: exec.CommandContext,
+	}
+}
+
+// newID mints a consult id short enough to read in a table and wide enough
+// that collisions across the handful of retained records are not a concern.
+// Callers abbreviate it to a unique prefix anyway.
+func newID() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return "c-" + hex.EncodeToString(b[:])
 }
 
 // Consult validates and executes a consultant synchronously. The caller's
@@ -95,11 +124,34 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 		return Result{}, invalidf("building %s env: %v", h.Name(), err)
 	}
 
+	// Record before competing for a slot, so consults waiting behind the
+	// concurrency limit are visible too. Validation failures never ran and
+	// are deliberately not recorded.
+	rec := Record{
+		ID: newID(), Caller: req.Caller, Template: req.Template,
+		Harness: h.Name(), Model: model, Workspace: req.Workspace,
+		Prompt: req.Prompt, Status: StatusQueued, StartedAt: time.Now(),
+	}
+	handle, err := d.recorder.Open(rec)
+	if err != nil {
+		// Recording is best-effort. An unwritable state directory should
+		// cost visibility, not the answer the caller is waiting for.
+		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", rec.ID, err)
+		handle = nopHandle{}
+	}
+	fail := func(status Status, err error) (Result, error) {
+		finish(handle, rec.ID, status, err)
+		return Result{}, err
+	}
+
 	select {
 	case d.sem <- struct{}{}:
 		defer func() { <-d.sem }()
 	case <-ctx.Done():
-		return Result{}, ctx.Err()
+		return fail(StatusCanceled, ctx.Err())
+	}
+	if err := handle.SetStatus(StatusRunning); err != nil {
+		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", rec.ID, err)
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, RunTimeout)
@@ -120,32 +172,86 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 	}
 	cmd.WaitDelay = 10 * time.Second
 
-	out, runErr := cmd.CombinedOutput()
-	parsed, parseErr := h.ParseEvents(bytes.NewReader(out))
+	// The tee is assigned to both Stdout and Stderr as the *same* Writer
+	// value: os/exec only serializes concurrent writes to a shared output
+	// when the two are the same value, so this keeps the harness's combined
+	// output in order — the behavior CombinedOutput used to supply.
+	tee := &recordingTee{handle: handle}
+	cmd.Stdout, cmd.Stderr = tee, tee
+
+	runErr := cmd.Run()
+	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))
 	if runCtx.Err() != nil {
-		return Result{}, fmt.Errorf("consult %s/%s: %w", h.Name(), model, runCtx.Err())
+		status := StatusTimeout
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			status = StatusCanceled
+		}
+		return fail(status, fmt.Errorf("consult %s/%s: %w", h.Name(), model, runCtx.Err()))
 	}
 	if runErr != nil {
 		detail := runErr.Error()
 		if len(parsed.Errors) > 0 {
 			detail += ": " + parsed.Errors[0]
 		}
-		return Result{}, fmt.Errorf("consult %s/%s failed: %s", h.Name(), model, detail)
+		return fail(StatusFailed, fmt.Errorf("consult %s/%s failed: %s", h.Name(), model, detail))
 	}
 	if parseErr != nil {
-		return Result{}, fmt.Errorf("consult %s/%s returned unreadable output: %w", h.Name(), model, parseErr)
+		return fail(StatusFailed, fmt.Errorf("consult %s/%s returned unreadable output: %w", h.Name(), model, parseErr))
 	}
 	if parsed.IsError {
 		detail := "consultant reported an error"
 		if len(parsed.Errors) > 0 {
 			detail = strings.Join(parsed.Errors, "; ")
 		}
-		return Result{}, fmt.Errorf("consult %s/%s failed: %s", h.Name(), model, detail)
+		return fail(StatusFailed, fmt.Errorf("consult %s/%s failed: %s", h.Name(), model, detail))
 	}
 	if parsed.Text == "" {
-		return Result{}, fmt.Errorf("consult %s/%s produced no output", h.Name(), model)
+		return fail(StatusFailed, fmt.Errorf("consult %s/%s produced no output", h.Name(), model))
 	}
-	return Result{Harness: h.Name(), Model: model, Text: parsed.Text}, nil
+	finish(handle, rec.ID, StatusDone, nil)
+	return Result{ID: rec.ID, Harness: h.Name(), Model: model, Text: parsed.Text}, nil
+}
+
+// finish closes a recording. A recording failure is reported to the daemon
+// log rather than returned: it must not turn a good answer into an error,
+// nor mask the failure that actually ended the consult.
+func finish(handle Handle, id string, status Status, cause error) {
+	if err := handle.Close(status, cause); err != nil {
+		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", id, err)
+	}
+}
+
+// recordingTee fans the harness's output into an in-memory buffer, parsed
+// for the final result, and the consult's recording, read back live by
+// `leo consult watch`.
+//
+// The mutex is redundant while this value is assigned to both cmd.Stdout
+// and cmd.Stderr (os/exec then copies on a single goroutine) and is kept
+// deliberately: swapping in an io.MultiWriter here would otherwise
+// reintroduce a data race silently. See internal/run/runner.go's syncBuffer
+// for the case where exactly that happened.
+type recordingTee struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	handle Handle
+}
+
+func (t *recordingTee) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf.Write(p)
+	// Recording is best-effort; the handle reports failures from Close.
+	_, _ = t.handle.Write(p)
+	return len(p), nil
+}
+
+// Bytes returns a copy. Handing back the buffer's live slice under the
+// lock would be false comfort: the caller would read it unlocked, so the
+// very concurrency the mutex above guards against would still corrupt it.
+func (t *recordingTee) Bytes() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return bytes.Clone(t.buf.Bytes())
 }
 
 func mergedEnv(base []string, overlays ...map[string]string) []string {

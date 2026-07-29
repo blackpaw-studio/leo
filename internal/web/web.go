@@ -173,6 +173,10 @@ type Options struct {
 	// as claude (today's behavior). Wired from service boot the same way
 	// LogPath is — see internal/service/process.go.
 	ResolveHandle func(name string) (harnessName string, h harness.SessionHandle, ok bool)
+	// ConsultRecorder persists consult records and event streams so
+	// `leo consult list` / `leo consult watch` can see work in flight.
+	// Optional; nil discards recordings.
+	ConsultRecorder consult.Recorder
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is not available.
@@ -198,7 +202,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		resolveHandle:  opts.ResolveHandle,
 	}
 	s.fetchAgentListFn = s.fetchAgentList
-	s.consults = consult.NewDispatcher()
+	s.consults = consult.NewDispatcher(opts.ConsultRecorder)
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)

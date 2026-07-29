@@ -114,12 +114,18 @@ func buildSSHArgs(res config.HostResolution, tail ...string) []string {
 	return args
 }
 
-// runRemote executes `ssh <host> <leo_path> agent <subcmd args...>` forwarding
-// stdio. The remote binary path comes from HostConfig.LeoPath or defaults to
-// config.DefaultRemoteLeoPath — SSH's non-interactive shell typically doesn't
-// source .zshrc, so relying on bare "leo" in PATH is fragile.
+// runRemote executes `ssh <host> <leo_path> agent <subcmd args...>`.
 func runRemote(res config.HostResolution, subcmdArgs []string) error {
-	tail := append([]string{res.Host.RemoteLeoPath(), "agent"}, subcmdArgs...)
+	return runRemoteGroup(res, "agent", subcmdArgs)
+}
+
+// runRemoteGroup executes `ssh <host> <leo_path> <group> <subcmd args...>`
+// forwarding stdio. The remote binary path comes from HostConfig.LeoPath or
+// defaults to config.DefaultRemoteLeoPath — SSH's non-interactive shell
+// typically doesn't source .zshrc, so relying on bare "leo" in PATH is
+// fragile.
+func runRemoteGroup(res config.HostResolution, group string, subcmdArgs []string) error {
+	tail := append([]string{res.Host.RemoteLeoPath(), group}, subcmdArgs...)
 	args := buildSSHArgs(res, tail...)
 	cmd := agentExecCommand("ssh", args...)
 	cmd.Stdin = os.Stdin

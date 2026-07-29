@@ -19,7 +19,7 @@ func testConfig() *config.Config {
 }
 
 func TestConsultValidation(t *testing.T) {
-	d := NewDispatcher()
+	d := NewDispatcher(nil)
 	if _, err := d.Consult(context.Background(), testConfig(), Request{Template: "nope", Prompt: "q"}); err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("expected unknown-template error, got %v", err)
 	}
@@ -42,7 +42,7 @@ func TestConsultAllHarnessesReturnSynchronousResult(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := NewDispatcher()
+			d := NewDispatcher(nil)
 			var gotBinary string
 			var gotArgs []string
 			d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -75,7 +75,7 @@ func TestConsultAllHarnessesReturnSynchronousResult(t *testing.T) {
 }
 
 func TestConsultReturnsExecutionFailure(t *testing.T) {
-	d := NewDispatcher()
+	d := NewDispatcher(nil)
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "false")
 	}
@@ -86,7 +86,7 @@ func TestConsultReturnsExecutionFailure(t *testing.T) {
 }
 
 func TestConsultHonorsCallerCancellationWhileQueued(t *testing.T) {
-	d := NewDispatcher()
+	d := NewDispatcher(nil)
 	for range maxConcurrent {
 		d.sem <- struct{}{}
 	}

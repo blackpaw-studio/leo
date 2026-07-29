@@ -28,3 +28,57 @@ answer directly as the tool result.
 - Supervised agents contribute their workspace. Other Leo callers are also
   supported and run from the daemon's working directory when no workspace can
   be resolved.
+
+## Watching a consult
+
+Consults are started by agents, not by you, and a long one is otherwise a
+silent ten-minute gap. Every consult records what it does, so you can watch
+it work:
+
+```console
+$ leo consult list
+ID          CALLER   TEMPLATE  MODEL          ELAPSED  STATUS
+c-7f3a2b1e  leo      codex     gpt-5.3-codex  1:42     running
+c-3c9d10a4  olympus  local     qwen3.6-35b    4:11     done
+
+$ leo consult watch
+[consult c-7f3a2b1e · codex/gpt-5.3-codex · from leo · running]
+Review this design: …
+
+   0:01  read     internal/consult/consult.go
+   0:04  grep     CombinedOutput
+   0:09  text     The dispatcher discards everything but the final text.
+   0:11  bash     go test ./internal/consult/
+[done after 1:58]
+```
+
+- `leo consult watch` with no argument picks the newest running consult,
+  falling back to the most recent one. An id may be abbreviated to any
+  unique prefix.
+- Ctrl-C detaches. The consult keeps running; there is no way to cancel one
+  from the CLI.
+- Consults that are queued behind the concurrency limit appear in `list`
+  before they start, so a stalled call is distinguishable from a busy one.
+- Both commands accept `--host` and read the records on that host.
+
+The feed shows the consultant's own text, the tools it invokes, and its
+final answer. Successful tool *results* are omitted — the call already says
+what it did, and the bodies would bury everything else — but failures are
+shown. Add `--json` to `list` for the raw records.
+
+## Where recordings live
+
+Under `<state>/consults/`, two files per consult, both `0600` in a `0700`
+directory:
+
+- `<id>.json` — caller, template, harness, model, workspace, prompt,
+  status, and timing. Status runs `queued → running → done | failed |
+  timeout | canceled`.
+- `<id>.ndjson` — one line per harness event, `{"t": <seconds since start>,
+  "d": <the harness event verbatim>}`. Output that was not JSON — a
+  crashing harness, stderr chatter — is captured as `{"t": …, "raw": "…"}`
+  instead of being lost. `jq .d` recovers the untouched harness stream.
+
+The 20 most recent consults are kept; consults still in flight are never
+pruned. Recordings contain whatever the consultant read, the same trust
+boundary as task logs under `<state>/logs`.
