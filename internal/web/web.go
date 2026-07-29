@@ -224,11 +224,11 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 
 	// Full page — / redirects to the default section; every other section
 	// has its own route rendered through handlePage (handlers_pages.go).
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
+	//
+	// {$} keeps this exact: a bare "GET /" is a prefix pattern matching every
+	// path, which makes unknown routes report a misleading 405 instead of 404.
+	// See the unknown-route tests in web_test.go.
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/tasks", http.StatusSeeOther)
 	})
 	mux.HandleFunc("GET /tasks", s.handlePage("tasks", "Tasks", s.buildTasksData))
@@ -322,9 +322,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// /login, /logout, and /static/* bypass session auth (otherwise the user
 	// could never log in or load the login page's stylesheet). Everything
 	// else (browser UI) is wrapped in sessionMiddleware, which accepts either
-	// a valid session cookie or a Bearer token. We don't register "/api/" on
-	// the main mux because that conflicts with "GET /" under the Go 1.22
-	// ServeMux precedence rules.
+	// a valid session cookie or a Bearer token. /api/* lives on its own mux so
+	// bearerAuthMiddleware can wrap it independently of the browser mux's
+	// session middleware.
 	protectedBrowser := sessionMiddleware(s.sessions, []string{s.apiToken}, mux)
 	// The agent-messaging routes live on the browser mux but are called by
 	// the in-agent MCP server (leo_send_message, leo_interrupt, key sends),
