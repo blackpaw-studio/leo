@@ -50,7 +50,8 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.consults.Consult(r.Context(), cfg, consult.Request{
-		Template: req.Template, Model: req.Model, Prompt: req.Prompt, Workspace: workspace,
+		Template: req.Template, Model: req.Model, Prompt: req.Prompt,
+		Workspace: workspace, Caller: req.From,
 	})
 	if err != nil {
 		status := http.StatusBadGateway

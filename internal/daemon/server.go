@@ -14,6 +14,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -247,6 +248,8 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		AllowedHosts:  cfg.Web.AllowedHosts,
 		LogPath:       s.logPath,
 		ResolveHandle: s.resolveHandle,
+		// Consults record to <state>/consults for `leo consult watch`.
+		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),
 	})
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
