@@ -1,7 +1,7 @@
 # Consult observability — watch a consultant work
 
 **Date:** 2026-07-28
-**Status:** Draft
+**Status:** Implemented
 
 ## One sentence
 
@@ -131,7 +131,12 @@ older records and their `.ndjson` files, mirroring
    The tee appends raw bytes to an in-memory buffer and line-frames to the
    handle. Partial trailing lines are flushed on close.
 
-4. **Result is unchanged.** `ParseEvents` still runs over the in-memory
+4. **`Result` gains an `ID`.** The consult's id rides back on the result, so
+   the `/api/consult` response — and any caller holding it — can point at
+   the recording after the fact. The `leo_consult` tool's user-visible text
+   is unchanged.
+
+5. **Result text is otherwise unchanged.** `ParseEvents` still runs over the in-memory
    buffer, so the returned `Result` is byte-identical to today's. Every
    existing error branch additionally maps to a terminal status passed to
    `Handle.Close`: `context.DeadlineExceeded` → `timeout`,
@@ -146,15 +151,22 @@ renderer only:
 
 ```go
 type Event struct {
-    Kind    string // "text" | "tool" | "result" | "error"
-    Tool    string // tool name, for Kind == "tool"
-    Summary string // one-line rendering, or full text for "text"/"result"
+    Kind    EventKind // text | tool | result | error
+    Tool    string    // tool name, for EventTool
+    Summary string    // one line for tools and errors, full body otherwise
 }
 
-type EventStreamer interface {
-    StreamEvents(r io.Reader, fn func(Event)) error
+type EventRenderer interface {
+    RenderEvent(line []byte) []Event
 }
 ```
+
+> **Built as `RenderEvent`, not the `StreamEvents(io.Reader, func(Event))`
+> this spec first proposed.** Once the framing above was settled, the
+> reader-based signature no longer fit: the CLI already holds one decoded
+> event at a time and would have had to wrap each in a synthetic reader.
+> Returning a slice also handles a claude assistant message that interleaves
+> text and several tool calls on one line.
 
 Implemented for claude, codex, and opencode against their native JSON
 shapes; `internal/harness/claude/parse_test.go` already carries usable
@@ -189,12 +201,22 @@ Rendered output:
 
 ```
 $ leo consult watch
-[consult c-7f3a2b1e · codex/gpt-5.6-sol · from leo · running]
-  0:01  read   internal/consult/consult.go
-  0:04  grep   "CombinedOutput" (3 matches)
-  0:09  text   The dispatcher discards everything but the final text.
-  0:11  bash   go test ./internal/consult/  → ok
+[consult c-7f3a2b1e · codex/gpt-5.3-codex · from leo · running]
+Review this design: …
+
+   0:01  read     internal/consult/consult.go
+   0:04  grep     CombinedOutput
+   0:09  text     The dispatcher discards everything but the final text.
+   0:11  bash     go test ./internal/consult/
+[done after 1:58]
 ```
+
+> **Tool calls are not paired with their results.** An earlier draft of this
+> example showed `go test … → ok`. Pairing needs state across lines, and
+> `RenderEvent` is deliberately stateless. Successful tool results are
+> omitted entirely — the call already says what happened, and the bodies
+> would bury everything else — while failed ones render as their own error
+> rows.
 
 **Remote.** `runRemote` (`internal/cli/agent.go:121`) hardcodes `"agent"` in
 its argv tail. It gains a command-group parameter, with the existing
