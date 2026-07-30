@@ -79,17 +79,19 @@ func ServerRunning(tmuxPath string) bool {
 // momentary hiccup on leo's OWN (marked) server as "legacy → recycle" —
 // destroying every live agent session. The full dump exits 0 on any live
 // server regardless of whether the marker is present.
+// Key matching is delegated to optionValue, which anchors on the whole option
+// name. That matters here: @leo-foreground-owner (ownership.go) is a
+// superstring of this key, so a prefix match would let an owner stamp alone
+// report the server as marked — adopting a legacy daemonized server instead of
+// recycling it, which is the exact silent attribution loss this marker exists
+// to prevent.
 func markerState(tmuxPath string) (marked bool, ok bool) {
 	out, err := serverExecCommand(tmuxPath, Args("show-options", "-g")...).Output()
 	if err != nil {
 		return false, false
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), foregroundMarkerKey) {
-			return true, true
-		}
-	}
-	return false, true
+	_, found := optionValue(string(out), foregroundMarkerKey)
+	return found, true
 }
 
 // markForeground stamps the currently running server with leo's foreground
@@ -143,6 +145,16 @@ func StartForegroundServer(tmuxPath string) (*os.Process, error) {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 		return nil, err
+	}
+
+	// Record which leo process created this server, so a later adoption can
+	// report whether the process macOS attributed Local Network
+	// responsibility to is still alive (see ownership.go). Deliberately
+	// fail-open: the stamp is diagnostic metadata, and killing a working
+	// server over a missing diagnostic would be worse than the condition it
+	// helps diagnose.
+	if err := stampOwner(tmuxPath, os.Getpid()); err != nil {
+		fmt.Fprintf(os.Stderr, "tmux: could not record server ownership: %v\n", err)
 	}
 
 	// Release() detaches the process from Go's tracking without Wait()ing on
