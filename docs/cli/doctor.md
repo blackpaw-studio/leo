@@ -73,9 +73,24 @@ it there would turn "unknown" into a false `granted`.
 |-------|---------|
 | `granted` | The probe connection reached the target host (connected, or was actively refused) — the packet left the machine. |
 | `denied` | The probe failed with `EHOSTUNREACH`/"no route to host" — macOS blocked the packet before it left the machine. |
-| `denied (tmux tree)` | The in-tree probe was blocked while leo's own dial succeeded. Agents are cut off from the LAN even though leo looks healthy. `leo service restart` does **not** fix this — the tmux server survives a daemon restart by design; recycle it with `tmux -L leo kill-server` (terminating live agent sessions). |
+| `denied (tmux tree)` | The in-tree probe was blocked while leo's own dial succeeded. Agents are cut off from the LAN even though leo looks healthy. `leo service restart` does **not** fix this — the tmux server survives a daemon restart by design; repair it with [`leo service reparent`](service.md#leo-service-reparent) (terminating live agent sessions). |
 | `undetermined` | Inconclusive (timeout, DNS failure, gateway unreachable for other reasons, etc.). Re-run, or pass `--probe-host` with a host you know is reachable. |
 | `n/a` | Non-macOS platform; Local Network privacy doesn't apply. |
+
+## Who owns the tmux server
+
+`leo doctor` and `leo status` both report a `tmux tree` line:
+
+| Line | Meaning |
+|------|---------|
+| `server pid N, owned by live leo pid M` | The invariant holds: a live signed leo process created this server. |
+| `server pid N, adopted — creating leo process (pid M) has exited; Local Network attribution is no longer verifiable` | Expected after any daemon restart. Agents usually keep working, so this is reported as a fact rather than an alarm — it becomes actionable when the in-tree probe actually fails. |
+| `server pid N, owner unknown (predates ownership tracking)` | The server was created by a leo build without ownership stamping. Recycle it (`leo service reparent`) to get a verifiable answer. |
+| `no tmux server running on leo's socket` | Nothing to check; the daemon creates one at startup. |
+
+Identity is recorded as (pid, process start time), not pid alone: pid reuse on a
+long-uptime machine would otherwise make a recycled pid read as "still my
+child".
 
 ## Flags
 

@@ -63,6 +63,40 @@ Shows whether the daemon is currently running.
 
 Restarts the daemon.
 
+### `leo service reparent`
+
+Recycles leo's tmux server so the **currently running** daemon is its parent.
+
+Leo deliberately adopts a tmux server that outlived a previous daemon — that is
+what keeps agent sessions alive across `leo update` and `leo service restart`,
+neither of which recreates the server. On macOS the cost is that Local Network
+access for agent panes is attributed to the leo process that *created* the
+server; once that process has exited the grant can lapse, and third-party
+binaries under agents lose LAN access (`EHOSTUNREACH` on every LAN host) while
+leo's own checks still pass. [`leo doctor`](doctor.md) detects this by probing
+from inside the tmux tree, and `leo status` shows who owns the server.
+
+This is the repair, and it is deliberately manual: an automatic respawn would
+fire on every `leo update` and bounce every agent. It terminates every live
+agent session — workspaces, agent definitions, and session ids survive, but
+in-flight conversation context does not — then waits up to 30s for the daemon's
+supervise loop to start a fresh, owned server.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--yes` | Skip the confirmation prompt. |
+| `--force` | Recycle even when the server's owner is confirmed alive (otherwise it reports there is nothing to repair and exits). |
+
+```bash
+$ leo service reparent
+tmux tree: server pid 32086, adopted — creating leo process (pid 58688) has exited; Local Network attribution is no longer verifiable
+Recycle the tmux server? This terminates 15 live agent session(s) and 25 suspended one(s) will restart on next use [y/N]: y
+tmux server killed; waiting for the daemon to start a fresh one...
+new tmux server pid 41022, owned by live leo pid 33666
+```
+
 ### `leo service logs`
 
 Tail the daemon log file.

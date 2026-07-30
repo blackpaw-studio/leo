@@ -6,6 +6,7 @@ import (
 	"syscall"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
 )
 
@@ -114,14 +115,28 @@ func runDoctor(probeHost string, trigger bool) error {
 	}
 	info.Printf("  Triggered:    %v\n", status.Triggered)
 
+	tree := reportTmuxTree()
+	info.Printf("tmux tree:      %s\n", tree.Line)
+
 	if status.State == treeDeniedState {
 		warn.Println("\nAgents cannot reach the LAN even though leo itself can: the tmux server's")
 		warn.Println("Local Network attribution has lapsed. Note that 'leo service restart' does")
-		warn.Println("NOT fix this — the tmux server survives a daemon restart by design. Recycle")
-		warn.Println("it with 'tmux -L leo kill-server' (this terminates live agent sessions).")
+		warn.Println("NOT fix this — the tmux server survives a daemon restart by design.")
+		warn.Println("Repair it with 'leo service reparent' (terminates live agent sessions).")
 	}
 
 	return nil
+}
+
+// reportTmuxTree summarizes who owns leo's tmux server, tolerating a missing
+// tmux binary — doctor's job is to explain, not to abort.
+func reportTmuxTree() tmuxTreeReport {
+	tmuxPath, err := tmux.Locate()
+	if err != nil {
+		return tmuxTreeReport{Line: err.Error()}
+	}
+	own, ownErr := tmux.ServerOwnership(tmuxPath)
+	return describeTmuxTree(own, ownErr)
 }
 
 // classifyDial maps the outcome of a TCP dial attempt against a known

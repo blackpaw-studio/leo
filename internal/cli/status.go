@@ -285,6 +285,12 @@ func runStatus(ctx context.Context) error {
 		}
 	}
 
+	// tmux tree: who owns the server every agent session lives on. Shown
+	// because adoption across daemon restarts is silent, and on macOS a server
+	// whose creating process is gone can lose Local Network access for agents
+	// while everything else here still reads healthy (see `leo doctor`).
+	info.Printf("Tmux tree:  %s\n", reportTmuxTree().Line)
+
 	// Agents
 	info.Printf("Agents:     %d running, %d suspended (%d total)\n", report.Agents.Running, report.Agents.Suspended, report.Agents.Total)
 	for _, state := range report.AgentStates {
