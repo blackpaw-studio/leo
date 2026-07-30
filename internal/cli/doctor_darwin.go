@@ -8,12 +8,18 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 const (
 	doctorDialTimeout   = 3 * time.Second
 	doctorGwDialTimeout = 2 * time.Second
 	mdnsGroupAddr       = "224.0.0.251:5353"
+	// treeProbeTimeout bounds a single in-tree probe. Generous relative to the
+	// 3s connect timeout inside the probe command itself, to absorb session
+	// startup.
+	treeProbeTimeout = 10 * time.Second
 )
 
 // mdnsQuery is a minimal, well-formed mDNS query packet (a PTR query for
@@ -75,7 +81,7 @@ func checkLocalNetwork(probeHost string, trigger bool) LocalNetworkStatus {
 		status.ProbeResult = dialErr.Error()
 	}
 
-	status.State = classifyDial(dialErr, connected)
+	inProcessState := classifyDial(dialErr, connected)
 	status.Detail = detailPrefix
 	if mdnsDetail != "" {
 		status.Detail += "; " + mdnsDetail
@@ -83,11 +89,38 @@ func checkLocalNetwork(probeHost string, trigger bool) LocalNetworkStatus {
 
 	// mDNS "broken pipe" is a strong corroborating denial signal even when
 	// the TCP probe was inconclusive (e.g. a firewalled gateway timeout).
-	if status.State == "undetermined" && strings.Contains(mdnsDetail, "denied signal") {
-		status.State = "denied"
+	if inProcessState == "undetermined" && strings.Contains(mdnsDetail, "denied signal") {
+		inProcessState = "denied"
 	}
 
+	// Everything above measured THIS process, which is the signed leo binary
+	// holding its own grant — it cannot observe a broken tmux tree. Probe the
+	// tree too, and let it decide the verdict when it has one.
+	tree := probeTree(target)
+	status.TreeState = tree.State
+	status.TreeProbe = tree.Detail
+	status.TreeBinary = tree.Binary
+	status.State = combineLocalNetworkStates(tree.State, inProcessState)
+
 	return status
+}
+
+// probeTree runs the in-tree Local Network probe against target, resolving
+// tmux and wiring the real RunInServer. A missing tmux binary is reported as
+// "no verdict" rather than a failure — doctor's job is to explain, not to
+// abort.
+func probeTree(target string) treeProbeResult {
+	tmuxPath, err := tmux.Locate()
+	if err != nil {
+		return treeProbeResult{Detail: err.Error()}
+	}
+	deps := treeProbeDeps{
+		lookPath: exec.LookPath,
+		runInServer: func(path, shellCmd string) (string, error) {
+			return tmux.RunInServer(path, shellCmd, treeProbeTimeout)
+		},
+	}
+	return runTreeProbe(deps, tmuxPath, target)
 }
 
 func doctorDialTimeoutFor(probeHost string) time.Duration {
