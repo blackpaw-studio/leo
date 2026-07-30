@@ -51,6 +51,18 @@ All notable user-visible changes to Leo are documented here.
   sticky PR comment shows both forms plus a `gh run download` fallback.
   Artifacts are retained for 14 days; releases page is untouched.
 
+### Fixed
+
+- **Unknown web/API routes now return 404 instead of a misleading 405.** The
+  dashboard redirect was registered as `GET /`, which under Go's ServeMux is a
+  *prefix* pattern matching every path — so a POST to a route that did not
+  exist came back as `405 Method Not Allowed, Allow: GET`, reading as "right
+  path, wrong method" and sending at least one API client's debugging in the
+  wrong direction for days. Wrong-method calls on routes that *do* exist were
+  meanwhile flattened into a bogus 404. Both now report accurately, with a
+  correct `Allow` header on real 405s. Unauthenticated callers still cannot
+  tell an unknown path from a real one.
+
 ## [0.4.1] — 2026-04-20
 
 ### Removed
