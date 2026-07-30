@@ -813,3 +813,119 @@ func TestTaskPromptSave_NoFileSelected(t *testing.T) {
 		t.Errorf("response should contain 'No prompt file selected', got: %s", body)
 	}
 }
+
+// --- Unknown-route status codes ---
+//
+// `GET /` used to be registered as a *prefix* pattern, so it matched every
+// path. A request to an unregistered path with any other method therefore
+// matched that pattern by path but not by method, and Go's ServeMux answered
+// 405 Method Not Allowed with `Allow: GET` instead of 404. That cost real
+// debugging time: an out-of-repo API client kept POSTing to /web/process/{name}/send,
+// retired in b8e7618 when processes collapsed into agents, and the 405 read as
+// "the route exists but wants a different method" when the route was simply gone.
+//
+// The contract these tests pin down:
+//   - an unregistered path is a 404 regardless of method
+//   - a *registered* path called with the wrong method still gets a real 405
+//     with an accurate Allow header
+//   - auth still precedes routing, so an unauthenticated caller cannot probe
+//     which routes exist
+
+func TestRetiredRouteReturns404NotMethodNotAllowed(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	// /web/process/{name}/send was renamed to /web/agent/{name}/send when
+	// processes collapsed into agents.
+	req := httptest.NewRequest("POST", "/web/process/assistant/send", strings.NewReader(`{"keys":["hi","Enter"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for a retired route, got %d (Allow: %q); body: %s",
+			w.Code, w.Header().Get("Allow"), w.Body.String())
+	}
+}
+
+func TestUnknownPathReturns404ForEveryMethod(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	// HEAD is in the list on purpose: Go pairs HEAD with GET patterns
+	// automatically, so it is the one method the {$} anchor could plausibly
+	// have broken.
+	for _, method := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/no/such/route", nil)
+			w := httptest.NewRecorder()
+			s.httpServer.Handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusNotFound {
+				t.Errorf("expected 404, got %d (Allow: %q)", w.Code, w.Header().Get("Allow"))
+			}
+		})
+	}
+}
+
+// HEAD / must keep reaching the anchored root handler — Go's automatic
+// HEAD-with-GET pairing is a method-matching rule, independent of {$}, and this
+// pins that rather than assuming it.
+func TestHeadOnRootStillRedirects(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	req := httptest.NewRequest("HEAD", "/", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 for HEAD /, got %d", w.Code)
+	}
+}
+
+// The security-relevant half of the contract: an unauthenticated caller must
+// not be able to tell an unregistered path from a real one. If a future
+// refactor ever routes on the mux before sessionMiddleware — or adds a
+// catch-all NotFound above auth — unknown-path probing becomes a
+// route-existence oracle, and this test is what catches it.
+func TestUnauthenticatedUnknownPathDoesNotLeakRouteExistence(t *testing.T) {
+	s, _ := newRawTestServer(t)
+
+	t.Run("API-style POST gets 401, not 404", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/no/such/route", strings.NewReader("{}"))
+		req.Host = testHost
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		s.httpServer.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 for an unauthenticated unknown path, got %d", w.Code)
+		}
+	})
+
+	t.Run("browser-style GET is redirected to login, not 404", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/no/such/route", nil)
+		req.Host = testHost
+		req.Header.Set("Accept", "text/html")
+		w := httptest.NewRecorder()
+		s.httpServer.Handler.ServeHTTP(w, req)
+
+		if w.Code == http.StatusNotFound || w.Code == http.StatusMethodNotAllowed {
+			t.Errorf("unauthenticated GET leaked routing info: got %d", w.Code)
+		}
+	})
+}
+
+func TestWrongMethodOnRealRouteStillReturns405WithAllow(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	// /web/agent/{name}/message is registered POST-only.
+	req := httptest.NewRequest("GET", "/web/agent/assistant/message", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 for a wrong-method call on a real route, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if allow := w.Header().Get("Allow"); !strings.Contains(allow, "POST") {
+		t.Errorf("expected Allow header naming POST, got %q", allow)
+	}
+}
