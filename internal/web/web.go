@@ -21,6 +21,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -146,6 +147,62 @@ type Server struct {
 
 	// consults runs synchronous one-off consultant subagents (leo_consult).
 	consults *consult.Dispatcher
+
+	// activity is the read seam onto the activity tracker (internal/observe),
+	// wired via WithActivityProvider. nil is a supported default: every agent
+	// reports observe.ActivityUnknown in that case, so the observability API
+	// works before the tracker exists / when it's not configured.
+	activity observe.ActivityProvider
+
+	// events is the read seam onto the (not-yet-existing) event bus, wired via
+	// WithEventSource. nil is a supported default: GET /api/v1/events still
+	// serves hello + heartbeats, just no bus-published events.
+	events eventSource
+
+	// version is reported as Snapshot.LeoVersion. Wired via WithVersion;
+	// empty means the caller didn't provide one.
+	version string
+
+	// sseHeartbeat is the interval between SSE comment heartbeats on
+	// GET /api/v1/events. Defaults to defaultSSEHeartbeat; tests shrink it
+	// directly (same package) to avoid a 20s wait.
+	sseHeartbeat time.Duration
+}
+
+// eventSource is the narrow subscribe seam onto the event bus. Defined here
+// rather than depending on the bus's concrete type, which doesn't exist in
+// this package's dependency graph (internal/observe only defines the
+// Publisher side) — this keeps /api/v1/events buildable and testable ahead of
+// the bus landing. buffer is the subscriber's bounded channel size; a slow
+// consumer that fills it is expected to be dropped by the implementation
+// (the returned channel closes), not blocked on indefinitely.
+type eventSource interface {
+	Subscribe(buffer int) (<-chan observe.Event, func())
+}
+
+// Option configures optional Server dependencies that are not required for
+// the server's existing functionality to keep working unchanged. Passing no
+// options preserves pre-existing behavior for every current caller.
+type Option func(*Server)
+
+// WithActivityProvider wires the activity tracker's read seam so
+// GET /api/v1/state and GET /api/v1/events can report live agent activity.
+// Optional; omitting it makes every agent report observe.ActivityUnknown.
+func WithActivityProvider(p observe.ActivityProvider) Option {
+	return func(s *Server) { s.activity = p }
+}
+
+// WithEventSource wires the event bus that GET /api/v1/events streams from.
+// Optional; omitting it makes the stream serve only a hello event plus
+// heartbeats (no bus-published events).
+func WithEventSource(es eventSource) Option {
+	return func(s *Server) { s.events = es }
+}
+
+// WithVersion sets the Leo build version reported as Snapshot.LeoVersion by
+// GET /api/v1/state. Optional; omitting it reports an empty string.
+func WithVersion(v string) Option {
+	return func(s *Server) { s.version = v }
 }
 
 // Options bundles the knobs the web server needs that aren't part of the
@@ -179,8 +236,11 @@ type Options struct {
 	ConsultRecorder consult.Recorder
 }
 
-// New creates a new web UI server. agentSvc may be nil if agent spawning is not available.
-func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader, agentSvc AgentService, opts Options) *Server {
+// New creates a new web UI server. agentSvc may be nil if agent spawning is
+// not available. extra applies optional dependencies (activity provider,
+// event bus, version) via the functional-option pattern — every existing
+// caller passing none keeps its current behavior unchanged.
+func New(configPath string, processes ProcessStateProvider, scheduler SchedulerProvider, reloader ConfigReloader, agentSvc AgentService, opts Options, extra ...Option) *Server {
 	leoPath, err := exec.LookPath("leo")
 	if err != nil {
 		leoPath = "leo"
@@ -200,6 +260,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		serviceLogPath: opts.LogPath,
 		execCommand:    exec.Command,
 		resolveHandle:  opts.ResolveHandle,
+		sseHeartbeat:   defaultSSEHeartbeat,
+	}
+	for _, opt := range extra {
+		opt(s)
 	}
 	s.fetchAgentListFn = s.fetchAgentList
 	s.consults = consult.NewDispatcher(opts.ConsultRecorder)
@@ -315,6 +379,12 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/task/list", s.handleAPITaskList)
 	apiMux.HandleFunc("POST /api/task/{name}/run", s.handleAPITaskRun)
 	apiMux.HandleFunc("POST /api/task/{name}/toggle", s.handleAPITaskToggle)
+	// Observability API (docs/specs/2026-07-31-observability-api.md): read-only
+	// snapshot + SSE stream for external fleet watchers (The Den, leoterm, the
+	// macOS app). Lives on apiMux so it inherits bearer auth unchanged — no new
+	// auth mechanism, per the spec's Access section.
+	apiMux.HandleFunc("GET /api/v1/state", s.handleAPIState)
+	apiMux.HandleFunc("GET /api/v1/events", s.handleAPIEvents)
 	// /api/* is the agent-facing surface: both tokens work there.
 	protectedAPI := bearerAuthMiddleware([]string{s.apiToken, s.agentToken}, apiMux)
 

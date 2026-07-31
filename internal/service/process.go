@@ -24,6 +24,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -115,6 +116,10 @@ type Supervisor struct {
 	claudePath   string
 	homePath     string
 	configPath   string
+	// publisher announces agent lifecycle transitions on the observability
+	// event bus. nil (the default for every existing caller) makes publish a
+	// no-op — see SetPublisher.
+	publisher observe.Publisher
 }
 
 // NewSupervisor creates a new process supervisor. The context parameter is
@@ -152,10 +157,23 @@ func (s *Supervisor) States() map[string]daemon.ProcessStateInfo {
 
 func (s *Supervisor) setState(name, status string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if st, ok := s.states[name]; ok {
-		st.Status = status
+	st, ok := s.states[name]
+	if !ok {
+		s.mu.Unlock()
+		return
 	}
+	st.Status = status
+	restarts := st.Restarts
+	s.mu.Unlock()
+
+	s.publish(observe.Event{
+		Type: observe.EventAgentStateChanged,
+		Payload: &observe.AgentStateChangedPayload{
+			Agent:    name,
+			Status:   toObserveStatus(status),
+			Restarts: restarts,
+		},
+	})
 }
 
 func (s *Supervisor) initState(name string) {
@@ -176,11 +194,25 @@ func (s *Supervisor) initState(name string) {
 
 func (s *Supervisor) incrementRestarts(name string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if st, ok := s.states[name]; ok {
-		st.Restarts++
-		st.StartedAt = time.Now()
+	st, ok := s.states[name]
+	if !ok {
+		s.mu.Unlock()
+		return
 	}
+	st.Restarts++
+	st.StartedAt = time.Now()
+	restarts := st.Restarts
+	status := st.Status
+	s.mu.Unlock()
+
+	s.publish(observe.Event{
+		Type: observe.EventAgentStateChanged,
+		Payload: &observe.AgentStateChangedPayload{
+			Agent:    name,
+			Status:   toObserveStatus(status),
+			Restarts: restarts,
+		},
+	})
 }
 
 // ReserveAgent atomically claims a name so subsequent concurrent spawns hit a
@@ -234,7 +266,21 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	}
 	id := newProcIdentity(spec.Name, spec.ClaudeArgs)
 	s.identities[spec.Name] = id
+	spawnedAt := s.states[spec.Name].StartedAt
 	s.mu.Unlock()
+
+	s.publish(observe.Event{
+		Type: observe.EventAgentSpawned,
+		Payload: &observe.AgentSpawnedPayload{
+			Agent: observe.Agent{
+				Name:      spec.Name,
+				Workspace: spec.WorkDir,
+				Harness:   spec.Harness,
+				Status:    observe.StatusStarting,
+				StartedAt: spawnedAt,
+			},
+		},
+	})
 
 	procSpec := ProcessSpec{
 		Name:          spec.Name,
@@ -280,6 +326,11 @@ func (s *Supervisor) StopAgent(name string) error {
 	delete(s.cancels, name)
 	delete(s.identities, name)
 	s.mu.Unlock()
+
+	s.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: name},
+	})
 
 	return nil
 }
