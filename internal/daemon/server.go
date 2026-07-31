@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
@@ -70,6 +71,26 @@ type Server struct {
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
 	resolveHandle func(name string) (harnessName string, h harness.SessionHandle, ok bool)
+
+	// Observability dependencies, wired via SetObservability and threaded
+	// into web.New's extra Options by StartWeb. All are optional (nil-safe on
+	// the web side — see web.WithEventSource/WithActivityProvider/WithRunLog),
+	// so a daemon that never calls SetObservability boots unchanged.
+	observeBus      *observe.Bus
+	observeRunLog   *observe.RunLog
+	observeActivity observe.ActivityProvider
+	leoVersion      string
+}
+
+// SetObservability wires the observability event bus, run log, activity
+// tracker, and build version threaded into web.Options by StartWeb. Must be
+// called before StartWeb. All parameters are optional (nil/empty is safe);
+// service boot is the only caller today (see internal/service/process.go).
+func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, activity observe.ActivityProvider, version string) {
+	s.observeBus = bus
+	s.observeRunLog = runLog
+	s.observeActivity = activity
+	s.leoVersion = version
 }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
@@ -241,6 +262,19 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}
 
 	port := cfg.WebPort()
+	var observeOpts []web.Option
+	if s.observeBus != nil {
+		observeOpts = append(observeOpts, web.WithEventSource(s.observeBus))
+	}
+	if s.observeRunLog != nil {
+		observeOpts = append(observeOpts, web.WithRunLog(s.observeRunLog))
+	}
+	if s.observeActivity != nil {
+		observeOpts = append(observeOpts, web.WithActivityProvider(s.observeActivity))
+	}
+	if s.leoVersion != "" {
+		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))
+	}
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
 		Port:          port,
 		APIToken:      apiToken,
@@ -250,7 +284,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		ResolveHandle: s.resolveHandle,
 		// Consults record to <state>/consults for `leo consult watch`.
 		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),
-	})
+	}, observeOpts...)
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
 	if err := s.webServer.ListenAndServe(addr); err != nil {

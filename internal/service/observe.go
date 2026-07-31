@@ -30,6 +30,22 @@ func (s *Supervisor) publish(ev observe.Event) {
 	p.Publish(ev)
 }
 
+// SessionNames returns the current agent-name -> tmux-session-name mapping
+// for every live ephemeral agent, satisfying the accessor observe.NewTracker
+// needs to sweep tmux activity. Reads through the live procIdentity handles
+// (the same source RenameAgent keeps in sync) rather than deriving the
+// session name a second time, so the "leo-<name>" convention stays defined in
+// exactly one place (agent.SessionName, via procIdentity.SessionName).
+func (s *Supervisor) SessionNames() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]string, len(s.identities))
+	for name, id := range s.identities {
+		result[name] = id.SessionName()
+	}
+	return result
+}
+
 // spawnedAgentView builds the observe.Agent carried on an agent_spawned
 // event. Template/Repo/Branch come from the agentstore record for spec.Name
 // — agent.Manager persists that record BEFORE calling SpawnAgent (see its

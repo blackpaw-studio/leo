@@ -25,6 +25,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/run"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -507,18 +508,36 @@ func Status(workDir string) (string, error) {
 	return "stopped", nil
 }
 
+// RunSupervisedOptions bundles RunSupervised's parameters. Grouped into a
+// struct (rather than growing the positional-string signature further) once
+// Version was added — see RunSupervised's doc comment.
+type RunSupervisedOptions struct {
+	ClaudePath string
+	HomePath   string
+	ConfigPath string
+	// WebToken is the daemon's API bearer token, propagated to the
+	// agent.Manager and the RestoreAgents path so restored/respawned agents
+	// can authenticate against the daemon's web API.
+	WebToken string
+	// Version is the leo build version (internal/cli.Version, ldflags-
+	// injected). Threaded through to web.WithVersion so GET /api/v1/state
+	// can report Snapshot.LeoVersion. internal/cli owns Version and imports
+	// internal/web, so it can't be read back from here — the CLI passes it
+	// down explicitly instead. Empty is safe: the web layer just reports "".
+	Version string
+}
+
 // RunSupervised starts the leo daemon: the web UI, cron scheduler, and the
 // daemon IPC server, then restores + supervises ephemeral agents (each in
 // its own tmux session with a restart loop). It no longer starts any
 // config-declared "processes" — agents are the only supervised primitive.
-// webToken is the daemon's API bearer token, propagated to the agent.Manager and
-// the RestoreAgents path so restored/respawned agents can authenticate
-// against the daemon's web API.
-func RunSupervised(claudePath string, homePath, configPath, webToken string) error {
-	return supervisedExecFn(claudePath, homePath, configPath, webToken)
+func RunSupervised(opts RunSupervisedOptions) error {
+	return supervisedExecFn(opts)
 }
 
-func defaultSupervisedExec(claudePath string, homePath, configPath, webToken string) error {
+func defaultSupervisedExec(opts RunSupervisedOptions) error {
+	claudePath, homePath, configPath, webToken := opts.ClaudePath, opts.HomePath, opts.ConfigPath, opts.WebToken
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
@@ -554,9 +573,14 @@ func defaultSupervisedExec(claudePath string, homePath, configPath, webToken str
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 
+	bus, runLog, activityTracker := wireObservability(ctx, supervisor, tmuxPath)
+
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath, supervisor)
+	// Threaded into web.New's extra Options by StartWeb — see
+	// daemon.Server.SetObservability's doc comment.
+	srv.SetObservability(bus, runLog, activityTracker, opts.Version)
 	// SetLogPath before Start/StartWeb so the Service page's log tail knows
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
@@ -623,6 +647,33 @@ func defaultSupervisedExec(claudePath string, homePath, configPath, webToken str
 	// shutdown.
 	<-ctx.Done()
 	return nil
+}
+
+// wireObservability builds the observability event bus, run log, and
+// activity tracker, wires them as the Publisher for both the supervisor and
+// internal/run's task producers, and starts the tracker's sweep loop in a
+// goroutine tied to ctx (so it exits at shutdown rather than leaking).
+// Extracted from defaultSupervisedExec so this wiring — the thing most
+// likely to silently regress (an Option never passed, a goroutine never
+// started) — is directly callable from a test without booting the whole
+// daemon.
+func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) (*observe.Bus, *observe.RunLog, *observe.Tracker) {
+	// runLog forwards every event to bus (the HTTP layer's read seam) and
+	// additionally records task runs, so it is the single Publisher every
+	// producer (supervisor, run) is given — see internal/observe.RunLog's
+	// doc comment for why it wraps the bus rather than subscribing to it.
+	bus := observe.NewBus()
+	runLog := observe.NewRunLog(bus, 0)
+	sv.SetPublisher(runLog)
+	run.SetPublisher(runLog)
+
+	// sv.SessionNames is the narrow accessor onto the live agent-name ->
+	// tmux-session-name mapping the tracker sweeps (see its doc comment for
+	// why it isn't recomputed here).
+	tracker := observe.NewTracker(tmuxPath, sv.SessionNames, runLog)
+	go tracker.Start(ctx)
+
+	return bus, runLog, tracker
 }
 
 // driverFor resolves a spec's session driver. Empty harness means claude
