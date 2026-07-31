@@ -106,8 +106,12 @@ func TestClassifyQuietPastThresholdBecomesIdle(t *testing.T) {
 	if sample {
 		t.Fatalf("idle transition must not sample the pane")
 	}
-	if result.CurrentAction != action {
-		t.Fatalf("expected last known action to be retained")
+	// The action is only ever sampled while working; it must not survive
+	// into an idle reading, or a visualizer would render a stale
+	// "currently doing" indicator indefinitely for an agent that finished
+	// working long ago.
+	if result.CurrentAction != nil {
+		t.Fatalf("expected action cleared on transition to idle, got %+v", result.CurrentAction)
 	}
 }
 
@@ -164,6 +168,35 @@ func TestTrackerActivitiesReturnsDefensiveCopy(t *testing.T) {
 	// Assert
 	if copy2["den"].CurrentAction.Detail != "orig" {
 		t.Fatalf("expected internal state unaffected by mutation of returned copy, got %q", copy2["den"].CurrentAction.Detail)
+	}
+}
+
+// TestTrackerPublishDoesNotAliasCurrentAction guards against publish handing
+// a subscriber the same *Action the tracker stores: mutating the source
+// action after publish must never be observable on the delivered payload.
+func TestTrackerPublishDoesNotAliasCurrentAction(t *testing.T) {
+	// Arrange
+	pub := &recordingPublisher{}
+	tr := NewTracker("", func() map[string]string { return nil }, pub)
+	action := &Action{Kind: ActionKindPane, Detail: "orig"}
+
+	// Act
+	tr.publish("den", AgentActivity{Activity: ActivityWorking, CurrentAction: action})
+	action.Detail = "mutated"
+
+	// Assert
+	if len(pub.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(pub.events))
+	}
+	payload, ok := pub.events[0].Payload.(*AgentActivityPayload)
+	if !ok {
+		t.Fatalf("expected AgentActivityPayload, got %T", pub.events[0].Payload)
+	}
+	if payload.CurrentAction == action {
+		t.Fatal("payload.CurrentAction must not alias the source *Action")
+	}
+	if payload.CurrentAction.Detail != "orig" {
+		t.Fatalf("expected published action unaffected by later mutation, got %q", payload.CurrentAction.Detail)
 	}
 }
 
@@ -234,6 +267,40 @@ func TestTrackerSweepDoesNotPublishWhenNothingChanged(t *testing.T) {
 	// Assert
 	if len(pub.events) != 0 {
 		t.Fatalf("expected no publish when activity is unchanged, got %d events", len(pub.events))
+	}
+}
+
+// TestTrackerSweepForgetsAgentRemovedFromSessionMap guards the second half
+// of finding #4: when RenameAgent re-keys the supervisor's identity map, the
+// old name simply stops appearing in sessionNames() the next sweep. The
+// tracker must forget it entirely rather than continuing to report a
+// reading for a name that no longer exists — a stale name must never emit
+// activity after it's gone.
+func TestTrackerSweepForgetsAgentRemovedFromSessionMap(t *testing.T) {
+	// Arrange
+	origList := listSessionActivityFn
+	t.Cleanup(func() { listSessionActivityFn = origList })
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	listSessionActivityFn = func(ctx context.Context, tmuxPath string) (map[string]tmux.SessionActivity, error) {
+		return map[string]tmux.SessionActivity{"leo-den": {LastActivity: base}}, nil
+	}
+
+	names := map[string]string{"den": "leo-den"}
+	sessions := func() map[string]string { return names }
+	tr := NewTracker("tmux", sessions, nil, WithClock(func() time.Time { return base }))
+	tr.sweep(context.Background())
+	if _, ok := tr.Activities()["den"]; !ok {
+		t.Fatal("expected den present after first sweep")
+	}
+
+	// Act: "den" renamed away — sessionNames() no longer reports it at all
+	// (mirrors service.Supervisor.SessionNames after RenameAgent re-keys).
+	names = map[string]string{}
+	tr.sweep(context.Background())
+
+	// Assert
+	if _, ok := tr.Activities()["den"]; ok {
+		t.Fatal("expected den forgotten once it disappears from sessionNames()")
 	}
 }
 

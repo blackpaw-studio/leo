@@ -171,7 +171,7 @@ func (s *Supervisor) setState(name, status string) {
 		Type: observe.EventAgentStateChanged,
 		Payload: &observe.AgentStateChangedPayload{
 			Agent:    name,
-			Status:   toObserveStatus(status),
+			Status:   observe.MapStatus(status),
 			Restarts: restarts,
 		},
 	})
@@ -210,7 +210,7 @@ func (s *Supervisor) incrementRestarts(name string) {
 		Type: observe.EventAgentStateChanged,
 		Payload: &observe.AgentStateChangedPayload{
 			Agent:    name,
-			Status:   toObserveStatus(status),
+			Status:   observe.MapStatus(status),
 			Restarts: restarts,
 		},
 	})
@@ -270,12 +270,28 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	spawnedAt := s.states[spec.Name].StartedAt
 	s.mu.Unlock()
 
-	s.publish(observe.Event{
-		Type: observe.EventAgentSpawned,
-		Payload: &observe.AgentSpawnedPayload{
-			Agent: s.spawnedAgentView(spec, spawnedAt),
-		},
-	})
+	// A resumed agent (agent.SpawnRequest.Resumed) already exists from a
+	// consumer's point of view — SuspendAgent announced it going to sleep,
+	// not leaving — so this respawn is a state transition back, not a new
+	// agent appearing. Publishing agent_spawned here would make a
+	// stream-only consumer treat a resume as a brand-new agent (wrong) and
+	// leave it with no way to tell "suspended" from "gone" (see SuspendAgent).
+	if spec.Resumed {
+		s.publish(observe.Event{
+			Type: observe.EventAgentStateChanged,
+			Payload: &observe.AgentStateChangedPayload{
+				Agent:  spec.Name,
+				Status: observe.StatusStarting,
+			},
+		})
+	} else {
+		s.publish(observe.Event{
+			Type: observe.EventAgentSpawned,
+			Payload: &observe.AgentSpawnedPayload{
+				Agent: s.spawnedAgentView(spec, spawnedAt),
+			},
+		})
+	}
 
 	procSpec := ProcessSpec{
 		Name:          spec.Name,
@@ -293,8 +309,45 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	return nil
 }
 
-// StopAgent stops an ephemeral process and cleans up its tmux session.
+// StopAgent stops an ephemeral process and cleans up its tmux session,
+// announcing the agent as gone (observe.EventAgentStopped). Use SuspendAgent
+// instead when the agent is expected to come back — see its doc comment.
 func (s *Supervisor) StopAgent(name string) error {
+	if err := s.stopAgentProcess(name); err != nil {
+		return err
+	}
+	s.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: name},
+	})
+	return nil
+}
+
+// SuspendAgent stops an ephemeral process and cleans up its tmux session
+// exactly like StopAgent, but announces the transition as
+// observe.EventAgentStateChanged{Status: "suspended"} rather than
+// observe.EventAgentStopped. A suspended agent is coming back (see
+// agent.SpawnRequest.Resumed, published by SpawnAgent as the matching
+// transition back) — a consumer must be able to tell that apart from an
+// agent that left supervision for good.
+func (s *Supervisor) SuspendAgent(name string) error {
+	if err := s.stopAgentProcess(name); err != nil {
+		return err
+	}
+	s.publish(observe.Event{
+		Type: observe.EventAgentStateChanged,
+		Payload: &observe.AgentStateChangedPayload{
+			Agent:  name,
+			Status: observe.StatusSuspended,
+		},
+	})
+	return nil
+}
+
+// stopAgentProcess cancels the ephemeral process's context, kills its tmux
+// session, and removes it from every live-state map. Shared by StopAgent and
+// SuspendAgent, which differ only in which event they publish afterward.
+func (s *Supervisor) stopAgentProcess(name string) error {
 	s.mu.Lock()
 	st, exists := s.states[name]
 	if !exists {
@@ -322,11 +375,6 @@ func (s *Supervisor) StopAgent(name string) error {
 	delete(s.identities, name)
 	s.mu.Unlock()
 
-	s.publish(observe.Event{
-		Type:    observe.EventAgentStopped,
-		Payload: &observe.AgentStoppedPayload{Agent: name},
-	})
-
 	return nil
 }
 
@@ -337,26 +385,31 @@ func (s *Supervisor) StopAgent(name string) error {
 // do not race the goroutine's create window.
 func (s *Supervisor) RenameAgent(oldName, newName string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	st, ok := s.states[oldName]
 	if !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q not found", oldName)
 	}
 	if !st.Ephemeral {
+		s.mu.Unlock()
 		return fmt.Errorf("%q is not an ephemeral agent", oldName)
 	}
 	if st.Status != "running" {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q is %s, not running; retry once it settles", oldName, st.Status)
 	}
 	if _, exists := s.states[newName]; exists {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q already exists", newName)
 	}
 	if _, reserved := s.reservations[newName]; reserved {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q is reserved", newName)
 	}
 	id, ok := s.identities[oldName]
 	if !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q has no identity handle", oldName)
 	}
 
@@ -366,6 +419,7 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 	id.mu.Lock()
 	if err := tmuxRenameSession(s.tmuxPath, agent.SessionName(oldName), agent.SessionName(newName)); err != nil {
 		id.mu.Unlock()
+		s.mu.Unlock()
 		return fmt.Errorf("renaming tmux session: %w", err)
 	}
 	id.renameLocked(newName)
@@ -378,6 +432,36 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 	delete(s.states, oldName)
 	delete(s.cancels, oldName)
 	delete(s.identities, oldName)
+	restarts := st.Restarts
+	startedAt := st.StartedAt
+	s.mu.Unlock()
+
+	// Announce the rename as the old name leaving and the new name
+	// appearing, in that order, so a consumer's view transitions cleanly
+	// rather than momentarily holding both names live. Without this, a
+	// stream-only consumer keeps the old name forever as a frozen ghost and
+	// never learns the new one exists — RenameAgent used to re-key its
+	// internal maps in complete silence.
+	//
+	// The agentstore record is re-keyed by the caller (agent.Manager.Rename)
+	// only *after* this returns, so it is still filed under oldName here —
+	// Template/Repo/Branch/Model are left zero-valued rather than guessed,
+	// matching spawnedAgentView's own degrade-gracefully contract.
+	s.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: oldName},
+	})
+	s.publish(observe.Event{
+		Type: observe.EventAgentSpawned,
+		Payload: &observe.AgentSpawnedPayload{
+			Agent: observe.Agent{
+				Name:      newName,
+				Status:    observe.StatusRunning,
+				Restarts:  restarts,
+				StartedAt: startedAt,
+			},
+		},
+	})
 	return nil
 }
 

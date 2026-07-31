@@ -278,3 +278,91 @@ func TestStopAgentPublishesAgentStopped(t *testing.T) {
 		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }
+
+// TestSuspendAgentPublishesAgentStateChangedSuspended guards finding #3: a
+// stream-only consumer must be able to tell "suspended" (coming back) apart
+// from "gone" (observe.EventAgentStopped). SuspendAgent must publish
+// agent_state_changed{status:"suspended"}, not agent_stopped.
+func TestSuspendAgentPublishesAgentStateChangedSuspended(t *testing.T) {
+	// Arrange
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sv := NewSupervisor(ctx)
+	sv.tmuxPath = "false"
+	pub := &recordingPublisher{}
+	sv.SetPublisher(pub)
+	sv.mu.Lock()
+	sv.states["agent-a"] = &ProcessState{Name: "agent-a", Status: "running", Ephemeral: true}
+	sv.cancels["agent-a"] = func() {}
+	sv.mu.Unlock()
+
+	// Act
+	if err := sv.SuspendAgent("agent-a"); err != nil {
+		t.Fatalf("SuspendAgent: %v", err)
+	}
+
+	// Assert
+	if len(pub.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(pub.events))
+	}
+	ev := pub.events[0]
+	if ev.Type != observe.EventAgentStateChanged {
+		t.Fatalf("expected EventAgentStateChanged, got %s", ev.Type)
+	}
+	payload, ok := ev.Payload.(*observe.AgentStateChangedPayload)
+	if !ok {
+		t.Fatalf("expected AgentStateChangedPayload, got %T", ev.Payload)
+	}
+	if payload.Agent != "agent-a" || payload.Status != observe.StatusSuspended {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+
+	// The agent must actually be gone from live state, exactly like StopAgent.
+	if _, ok := sv.EphemeralAgents()["agent-a"]; ok {
+		t.Fatal("expected agent removed from live state after suspend")
+	}
+}
+
+// TestSpawnAgentResumedPublishesAgentStateChanged guards finding #3's other
+// half: resuming a suspended agent must surface as a state transition
+// (agent_state_changed), not as a brand-new agent appearing
+// (agent_spawned) — a consumer that saw the suspend already knows about
+// this agent.
+func TestSpawnAgentResumedPublishesAgentStateChanged(t *testing.T) {
+	// Arrange
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sv := NewSupervisor(ctx)
+	sv.tmuxPath = "false"
+	sv.claudePath = "false"
+	sv.homePath = t.TempDir()
+	pub := &recordingPublisher{}
+	sv.SetPublisher(pub)
+
+	// Act
+	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{
+		Name:    "agent-a",
+		WorkDir: "/tmp/agent-a",
+		Harness: "claude",
+		Resumed: true,
+	}); err != nil {
+		t.Fatalf("SpawnAgent: %v", err)
+	}
+
+	// Assert
+	events := pub.Events()
+	if len(events) == 0 {
+		t.Fatalf("expected at least 1 event, got 0")
+	}
+	ev := events[0]
+	if ev.Type != observe.EventAgentStateChanged {
+		t.Fatalf("expected EventAgentStateChanged for a resumed spawn, got %s", ev.Type)
+	}
+	payload, ok := ev.Payload.(*observe.AgentStateChangedPayload)
+	if !ok {
+		t.Fatalf("expected AgentStateChangedPayload, got %T", ev.Payload)
+	}
+	if payload.Agent != "agent-a" || payload.Status != observe.StatusStarting {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}

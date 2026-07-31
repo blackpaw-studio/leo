@@ -178,6 +178,34 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	meta := runMeta{Workspace: cfg.TaskWorkspace(task), Model: cfg.TaskModel(task), Harness: h.Name()}
 	runID, runStartedAt := publishTaskRunStarted(taskName, meta)
 
+	// finishRun publishes the terminal event and records history for this
+	// firing; finished guards it so it only ever fires once. A deferred call
+	// (below) guarantees a terminal event on every exit path out of Run past
+	// this point — including one this function doesn't explicitly handle
+	// today — rather than requiring every future early return to remember to
+	// call it itself. Without this, a run that started but never finished
+	// (e.g. assemblePrompt failing) reports a phantom in-flight run on every
+	// snapshot until 50 newer runs evict it, and stream consumers wait
+	// forever for a finish event that will never arrive.
+	finished := false
+	finishRun := func(success bool, reason, logFile string) {
+		finished = true
+		_, durationMS := publishTaskRunFinished(runID, taskName, runStartedAt, success, reason, meta)
+		exitCode := 0
+		if !success {
+			exitCode = 1
+		}
+		hist := history.NewStore(cfg.HomePath)
+		if histErr := hist.RecordTimed(taskName, exitCode, reason, logFile, runStartedAt, durationMS); histErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
+		}
+	}
+	defer func() {
+		if !finished {
+			finishRun(false, history.ReasonFailure, "")
+		}
+	}()
+
 	// leoEnv rides along on every claude invocation for this task (main
 	// attempts and the notify-on-fail child alike) — the leo MCP server is
 	// always wired into the args by buildArgs now; see leoMCPEnv.
@@ -305,11 +333,9 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		logFile = ""
 	}
 
-	// Record execution history
-	exitCode := 0
+	// Determine the history/event reason for this firing.
 	reason := history.ReasonSuccess
 	if lastErr != nil {
-		exitCode = 1
 		switch {
 		// Derived from lastErr (not a flag captured mid-attempt) so an
 		// in-attempt stale-session retry (runTaskAttempt) that itself hits
@@ -327,11 +353,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 			reason = history.ReasonFailure
 		}
 	}
-	_, durationMS := publishTaskRunFinished(runID, taskName, runStartedAt, lastErr == nil, reason, meta)
-	hist := history.NewStore(cfg.HomePath)
-	if histErr := hist.RecordTimed(taskName, exitCode, reason, logFile, runStartedAt, durationMS); histErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
-	}
+	finishRun(lastErr == nil, reason, logFile)
 
 	// Send failure notification if configured (via child claude invocation).
 	// Skipped when interrupted: the user asked the task to stop, so firing a

@@ -173,6 +173,11 @@ type Server struct {
 	// GET /api/v1/events. Defaults to defaultSSEHeartbeat; tests shrink it
 	// directly (same package) to avoid a 20s wait.
 	sseHeartbeat time.Duration
+
+	// sseWriteTimeout bounds each individual write on GET /api/v1/events
+	// (hello, heartbeat, and event frames). Defaults to
+	// defaultSSEWriteTimeout; tests shrink it directly (same package).
+	sseWriteTimeout time.Duration
 }
 
 // eventSource is the narrow subscribe seam onto the event bus. Defined here
@@ -268,20 +273,21 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	}
 
 	s := &Server{
-		configPath:     configPath,
-		processes:      processes,
-		scheduler:      scheduler,
-		reloader:       reloader,
-		agentSvc:       agentSvc,
-		leoPath:        leoPath,
-		port:           opts.Port,
-		apiToken:       opts.APIToken,
-		agentToken:     opts.AgentToken,
-		allowedHosts:   opts.AllowedHosts,
-		serviceLogPath: opts.LogPath,
-		execCommand:    exec.Command,
-		resolveHandle:  opts.ResolveHandle,
-		sseHeartbeat:   defaultSSEHeartbeat,
+		configPath:      configPath,
+		processes:       processes,
+		scheduler:       scheduler,
+		reloader:        reloader,
+		agentSvc:        agentSvc,
+		leoPath:         leoPath,
+		port:            opts.Port,
+		apiToken:        opts.APIToken,
+		agentToken:      opts.AgentToken,
+		allowedHosts:    opts.AllowedHosts,
+		serviceLogPath:  opts.LogPath,
+		execCommand:     exec.Command,
+		resolveHandle:   opts.ResolveHandle,
+		sseHeartbeat:    defaultSSEHeartbeat,
+		sseWriteTimeout: defaultSSEWriteTimeout,
 	}
 	for _, opt := range extra {
 		opt(s)

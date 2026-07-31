@@ -292,6 +292,13 @@ func (s *tmuxAgentSupervisor) StopAgent(name string) error {
 	return exec.Command(s.tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
 }
 
+// SuspendAgent mirrors StopAgent for this test double: it has no need to
+// distinguish "suspended" from "gone" (see service.Supervisor.SuspendAgent),
+// since nothing here exercises Manager.Suspend/Resume.
+func (s *tmuxAgentSupervisor) SuspendAgent(name string) error {
+	return s.StopAgent(name)
+}
+
 func (s *tmuxAgentSupervisor) RenameAgent(old, new string) error {
 	return fmt.Errorf("tmuxAgentSupervisor: RenameAgent not supported by this e2e test double")
 }

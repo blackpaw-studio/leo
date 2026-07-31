@@ -80,20 +80,3 @@ func (s *Supervisor) spawnedAgentView(spec daemon.AgentSpawnSpec, spawnedAt time
 
 	return a
 }
-
-// toObserveStatus maps the supervisor's internal status vocabulary onto the
-// wire contract's lifecycle enum. "restarting" — a purely internal
-// crash-loop-backoff state — folds into "starting", the closest lifecycle
-// equivalent a consumer can act on.
-func toObserveStatus(status string) observe.Status {
-	switch status {
-	case "running":
-		return observe.StatusRunning
-	case "starting", "restarting":
-		return observe.StatusStarting
-	case "stopped":
-		return observe.StatusStopped
-	default:
-		return observe.Status(status)
-	}
-}

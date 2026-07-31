@@ -46,6 +46,12 @@ type Supervisor interface {
 	ReleaseAgent(name string)
 	SpawnAgent(spec SpawnRequest) error
 	StopAgent(name string) error
+	// SuspendAgent stops name's process/tmux session exactly like StopAgent,
+	// but announces the transition as observe.EventAgentStateChanged with
+	// status "suspended" rather than observe.EventAgentStopped — a suspended
+	// agent is coming back (see SpawnRequest.Resumed), not gone, and a
+	// consumer needs to be able to tell those apart.
+	SuspendAgent(name string) error
 	RenameAgent(old, new string) error
 	EphemeralAgents() map[string]ProcessState
 }
@@ -857,7 +863,7 @@ func (m *Manager) Suspend(name string) error {
 		return fmt.Errorf("marking agent suspended: %w", err)
 	}
 
-	if err := m.sup.StopAgent(name); err != nil {
+	if err := m.sup.SuspendAgent(name); err != nil {
 		rec.Suspended = false
 		if rbErr := agentstore.Save(cfg.HomePath, rec); rbErr != nil {
 			log.Printf("agent %q: stop failed (%v) AND suspend-flag rollback failed (%v)", name, err, rbErr)
@@ -923,6 +929,7 @@ func (m *Manager) Resume(name string) (Record, error) {
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
 		Harness:    rec.Harness,
+		Resumed:    true,
 	}); err != nil {
 		return Record{}, fmt.Errorf("respawning suspended agent: %w", err)
 	}

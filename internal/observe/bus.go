@@ -53,6 +53,13 @@ type Bus struct {
 	seq    uint64
 	nextID int
 	subs   map[int]*subscriber
+
+	// sendMu serializes the stamp+fan-out portion of Publish across
+	// concurrent publishers, so delivery order always matches seq order —
+	// see Publish's doc comment. It cannot be mu: drop (called from within
+	// the send loop for a full subscriber) re-acquires mu, and a publisher
+	// calling drop while itself holding mu would deadlock.
+	sendMu sync.Mutex
 }
 
 // NewBus creates an empty event bus.
@@ -64,7 +71,19 @@ func NewBus() *Bus {
 // current time, then delivers it to every subscriber. Delivery never blocks:
 // a subscriber whose buffered channel is full (or already closed) is
 // unsubscribed instead of stalling the publisher.
+//
+// sendMu is held for the whole seq-assignment+stamp+deliver body, so
+// concurrent Publish calls run to completion one at a time, in the order
+// they acquire sendMu — which is also, necessarily, seq order, since seq is
+// assigned inside the same critical section. Without this (assigning seq
+// under mu but stamping/sending unlocked), a publisher that got seq N could
+// be preempted before stamping/sending, letting a publisher that got seq N+1
+// deliver first — seq would jump backwards for subscribers, defeating its
+// purpose as a gap-detection signal.
 func (b *Bus) Publish(ev Event) {
+	b.sendMu.Lock()
+	defer b.sendMu.Unlock()
+
 	b.mu.Lock()
 	b.seq++
 	seq := b.seq
@@ -77,6 +96,10 @@ func (b *Bus) Publish(ev Event) {
 	}
 	b.mu.Unlock()
 
+	if publishTestHook != nil {
+		publishTestHook(seq)
+	}
+
 	ev.Payload.stamp(seq, at)
 
 	for i, s := range subs {
@@ -85,6 +108,12 @@ func (b *Bus) Publish(ev Event) {
 		}
 	}
 }
+
+// publishTestHook, when non-nil, is invoked with the just-assigned seq right
+// after mu is released but while sendMu is still held. It exists solely so
+// tests can deterministically force the delivery-ordering race window this
+// method closes; production code never sets it.
+var publishTestHook func(seq uint64)
 
 // Subscribe registers a new subscriber with the given channel buffer size and
 // returns the receive-only channel plus an unsubscribe function. The

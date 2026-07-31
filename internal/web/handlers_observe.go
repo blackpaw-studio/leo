@@ -19,6 +19,14 @@ import (
 // GET /api/v1/events, keeping idle proxies from closing the connection.
 const defaultSSEHeartbeat = 20 * time.Second
 
+// defaultSSEWriteTimeout bounds each individual write on GET /api/v1/events.
+// A client that holds the connection open but stops reading (zero TCP
+// window) would otherwise block the handler goroutine inside that write
+// forever — r.Context() never fires because the connection itself never
+// closes. Producers are unaffected: the bus already drops a subscriber once
+// its buffer fills, so this bounds a goroutine leak only, not delivery.
+const defaultSSEWriteTimeout = 30 * time.Second
+
 // sseSubscriberBuffer is the bounded channel size requested from the event
 // source. The bus (once it exists) is responsible for dropping a subscriber
 // that can't keep up rather than blocking or growing this without bound.
@@ -152,7 +160,7 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities
 		Repo:      rec.Repo,
 		Workspace: rec.Workspace,
 		Branch:    rec.Branch,
-		Status:    mapStatus(rawStatus),
+		Status:    observe.MapStatus(rawStatus),
 		Restarts:  restarts,
 		StartedAt: startedAt,
 		Activity:  observe.ActivityUnknown,
@@ -175,18 +183,6 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities
 	}
 
 	return a
-}
-
-// mapStatus maps a raw supervisor/record status string onto one of the four
-// observe.Status constants. Anything unrecognized becomes observe.StatusStopped
-// so the API never emits a status a consumer wasn't told to expect.
-func mapStatus(raw string) observe.Status {
-	switch observe.Status(raw) {
-	case observe.StatusStarting, observe.StatusRunning, observe.StatusSuspended, observe.StatusStopped:
-		return observe.Status(raw)
-	default:
-		return observe.StatusStopped
-	}
 }
 
 // buildTask maps one configured task to its observe.Task view.
@@ -340,15 +336,28 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	// Long-lived response: disable the server's WriteTimeout for this
-	// connection, mirroring internal/daemon/server.go's long-poll handler.
-	if rc := http.NewResponseController(w); rc != nil {
-		_ = rc.SetWriteDeadline(time.Time{})
+	// The connection itself is long-lived (no overall deadline), but every
+	// individual write gets its own bounded deadline via setWriteDeadline
+	// below — clearing the deadline entirely here (as a prior version did)
+	// let a stalled client (one that stops reading, e.g. a full TCP receive
+	// window) block this goroutine inside a write forever, since
+	// r.Context() only fires when the connection itself closes.
+	rc := http.NewResponseController(w)
+	writeTimeout := s.sseWriteTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = defaultSSEWriteTimeout
+	}
+	setWriteDeadline := func() {
+		if rc != nil {
+			_ = rc.SetWriteDeadline(time.Now().Add(writeTimeout))
+		}
 	}
 
+	setWriteDeadline()
 	w.WriteHeader(http.StatusOK)
 
 	hello := observe.HelloPayload{Version: observe.SnapshotVersion, ServerTime: time.Now()}
+	setWriteDeadline()
 	if err := writeSSEEvent(w, string(observe.EventHello), hello); err != nil {
 		return
 	}
@@ -373,6 +382,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
+			setWriteDeadline()
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
 				return
 			}
@@ -387,6 +397,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 				// client reconnects rather than spinning on a closed channel.
 				return
 			}
+			setWriteDeadline()
 			if err := writeSSEEvent(w, string(ev.Type), ev.Payload); err != nil {
 				return
 			}

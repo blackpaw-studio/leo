@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,6 +119,27 @@ func TestBuildSnapshotStatusMappingUnrecognizedBecomesStopped(t *testing.T) {
 	}
 	if snap.Agents[0].Status != observe.StatusStopped {
 		t.Errorf("status = %q, want %q", snap.Agents[0].Status, observe.StatusStopped)
+	}
+}
+
+// TestBuildSnapshotStatusMappingRestartingBecomesStarting guards against the
+// snapshot path (buildAgent -> observe.MapStatus) and the event-stream path
+// (service.toObserveStatus, since folded into observe.MapStatus too)
+// disagreeing on "restarting": both must report "starting", the spec-mandated
+// value, never "stopped".
+func TestBuildSnapshotStatusMappingRestartingBecomesStarting(t *testing.T) {
+	in := snapshotInput{
+		Records: []agent.Record{
+			{Name: "agent-a", Status: "restarting"},
+		},
+		Now: time.Now(),
+	}
+	snap := buildSnapshot(in)
+	if len(snap.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(snap.Agents))
+	}
+	if snap.Agents[0].Status != observe.StatusStarting {
+		t.Errorf("status = %q, want %q", snap.Agents[0].Status, observe.StatusStarting)
 	}
 }
 
@@ -490,6 +513,88 @@ func TestHandleAPIEventsHeartbeat(t *testing.T) {
 	event, data := readSSEFrame(t, r)
 	if event != "" || data != ": ping" {
 		t.Fatalf("expected heartbeat comment, got event=%q data=%q", event, data)
+	}
+}
+
+// deadlineWriterRecorder is a minimal http.ResponseWriter that also
+// implements the underlying SetWriteDeadline method http.ResponseController
+// looks for, letting TestHandleAPIEventsSetsBoundedWriteDeadlinePerWrite
+// observe every deadline handleAPIEvents sets without needing a real TCP
+// connection to stall.
+type deadlineWriterRecorder struct {
+	mu        sync.Mutex
+	header    http.Header
+	body      bytes.Buffer
+	deadlines []time.Time
+}
+
+func (w *deadlineWriterRecorder) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *deadlineWriterRecorder) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.Write(p)
+}
+
+func (w *deadlineWriterRecorder) WriteHeader(int) {}
+
+func (w *deadlineWriterRecorder) Flush() {}
+
+func (w *deadlineWriterRecorder) SetWriteDeadline(deadline time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.deadlines = append(w.deadlines, deadline)
+	return nil
+}
+
+func (w *deadlineWriterRecorder) Deadlines() []time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]time.Time, len(w.deadlines))
+	copy(out, w.deadlines)
+	return out
+}
+
+// TestHandleAPIEventsSetsBoundedWriteDeadlinePerWrite guards finding #6: the
+// handler used to clear the write deadline entirely (time.Time{}) once at
+// connect, so a client that stalls mid-stream (stops reading, e.g. a full
+// TCP receive window) would block the handler goroutine inside a write
+// forever — a goroutine leak, since r.Context() never fires for a
+// connection that never closes. Every write must instead get its own
+// bounded, non-zero deadline.
+func TestHandleAPIEventsSetsBoundedWriteDeadlinePerWrite(t *testing.T) {
+	src := newFakeEventSource()
+	s, _ := newTestServerWithObserveDeps(t, nil, src)
+	s.sseHeartbeat = 5 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("GET", "/api/v1/events", nil).WithContext(ctx)
+
+	w := &deadlineWriterRecorder{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.handleAPIEvents(w, req)
+	}()
+
+	// Let the hello write and at least one heartbeat write happen.
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	<-done
+
+	deadlines := w.Deadlines()
+	if len(deadlines) < 2 {
+		t.Fatalf("expected multiple SetWriteDeadline calls (one per write), got %d", len(deadlines))
+	}
+	for i, d := range deadlines {
+		if d.IsZero() {
+			t.Fatalf("write deadline #%d must never be cleared entirely (zero time), got %v", i, d)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,4 +158,34 @@ func TestRunPublishesFailedWithReasonOnError(t *testing.T) {
 	if failed.Run.Error == "" {
 		t.Fatal("expected a non-empty failure reason")
 	}
+}
+
+// noopPublisher is a Publish target with no shared mutable state, so a race
+// test can hammer it from many goroutines without needing its own locking.
+type noopPublisher struct{}
+
+func (noopPublisher) Publish(observe.Event) {}
+
+// TestSetPublisherConcurrentAccessIsRaceFree guards internal/run's publisher
+// seam: it is a package global (cron and the daemon boot sequence can both
+// call SetPublisher/publishEvent from independent goroutines), so reads and
+// writes must be synchronized rather than relying on boot ordering. Run with
+// `go test -race` to catch a regression back to an unguarded plain global.
+func TestSetPublisherConcurrentAccessIsRaceFree(t *testing.T) {
+	t.Cleanup(func() { SetPublisher(nil) })
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			SetPublisher(noopPublisher{})
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			publishEvent(observe.Event{Type: observe.EventTaskRunStarted, Payload: &observe.TaskRunPayload{}})
+		}()
+	}
+	wg.Wait()
 }

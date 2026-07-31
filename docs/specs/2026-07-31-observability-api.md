@@ -199,6 +199,14 @@ Event types:
 `agent_suspended` / `agent_resumed` are represented as `agent_state_changed` with the
 new `status`; consumers key off `status`, not distinct event names.
 
+Renaming a running agent (`leo agent rename`) is represented as `agent_stopped` for the
+old name followed by `agent_spawned` for the new one, in that order, rather than a
+dedicated rename event — a consumer that only tracks agents by name doesn't need a new
+event type to stay correct, it just sees the old name leave and the new one appear. The
+`agent_spawned` payload's `template`/`repo`/`branch`/`model` are empty at this point (the
+agentstore record is re-keyed to the new name only after the rename completes), degrading
+the same way a spawn does when those sources aren't available yet — see the note above.
+
 Slow consumers are dropped rather than buffered without bound: each subscriber gets a
 bounded channel, and a subscriber that fills it is disconnected (it will reconnect and
 resnapshot).

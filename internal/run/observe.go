@@ -2,28 +2,44 @@ package run
 
 import (
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
-// publisher announces task run events on the observability event bus.
-// Optional: unset (nil, the default) makes publishEvent a safe no-op, so
-// existing Run/Preview callers are unaffected.
-var publisher observe.Publisher
+// publisherMu guards publisher. SetPublisher is called once at daemon boot
+// (and again by cron/task-runner goroutines that fire independently of that
+// boot sequence), and publishEvent is read from those same goroutines — a
+// plain package global read/written without synchronization is a data race
+// by the Go memory model, safe only by accident of boot ordering.
+var (
+	publisherMu sync.RWMutex
+	// publisher announces task run events on the observability event bus.
+	// Optional: unset (nil, the default) makes publishEvent a safe no-op, so
+	// existing Run/Preview callers are unaffected.
+	publisher observe.Publisher
+)
 
 // runNow is injectable so tests get deterministic run IDs and durations.
 var runNow = time.Now
 
 // SetPublisher wires an observe.Publisher into the task runner.
-func SetPublisher(p observe.Publisher) { publisher = p }
+func SetPublisher(p observe.Publisher) {
+	publisherMu.Lock()
+	defer publisherMu.Unlock()
+	publisher = p
+}
 
 // publishEvent is a nil-safe no-op when no publisher has been configured.
 func publishEvent(ev observe.Event) {
-	if publisher == nil {
+	publisherMu.RLock()
+	p := publisher
+	publisherMu.RUnlock()
+	if p == nil {
 		return
 	}
-	publisher.Publish(ev)
+	p.Publish(ev)
 }
 
 // newRunID builds a stable, deterministic-in-tests run ID: the task name plus

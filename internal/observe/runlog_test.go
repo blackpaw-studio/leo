@@ -103,16 +103,33 @@ func TestRunLogForwardsEventsToWrappedPublisher(t *testing.T) {
 	}
 }
 
+// TestRunLogRecentReturnsDefensiveCopies mutates the *pointer* fields
+// (EndedAt, DurationMS), not just a value field — Recent's old
+// implementation copied the TaskRun struct but left EndedAt/DurationMS
+// aliasing the log's own state, so a caller could mutate the log through
+// its return value despite Task (a plain string field) being safely copied
+// all along.
 func TestRunLogRecentReturnsDefensiveCopies(t *testing.T) {
 	log := NewRunLog(nil, 0)
-	log.Publish(Event{Type: EventTaskRunStarted, Payload: startedPayload("r1", "task-a", time.Now())})
+	started := time.Now()
+	ended := started.Add(time.Second)
+	log.Publish(Event{Type: EventTaskRunStarted, Payload: startedPayload("r1", "task-a", started)})
+	log.Publish(Event{Type: EventTaskRunSucceeded, Payload: finishedPayload("r1", "task-a", started, ended, RunSucceeded, "")})
 
 	recent := log.Recent(10)
 	recent[0].Task = "mutated"
+	*recent[0].EndedAt = ended.Add(time.Hour)
+	*recent[0].DurationMS = 999999
 
 	again := log.Recent(10)
 	if again[0].Task != "task-a" {
-		t.Fatalf("expected internal state unaffected by caller mutation, got %q", again[0].Task)
+		t.Fatalf("expected internal state unaffected by caller mutation of Task, got %q", again[0].Task)
+	}
+	if !again[0].EndedAt.Equal(ended) {
+		t.Fatalf("expected internal state unaffected by caller mutation of EndedAt, got %v, want %v", again[0].EndedAt, ended)
+	}
+	if *again[0].DurationMS != *finishedPayload("r1", "task-a", started, ended, RunSucceeded, "").Run.DurationMS {
+		t.Fatalf("expected internal state unaffected by caller mutation of DurationMS, got %d", *again[0].DurationMS)
 	}
 }
 

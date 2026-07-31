@@ -65,6 +65,10 @@ func (l *RunLog) record(run TaskRun) {
 
 // Recent returns up to n runs, newest first, as defensive copies safe for
 // the caller to mutate or retain. n <= 0 returns every run currently held.
+//
+// The copy is deep, not just a slice copy: TaskRun.EndedAt and .DurationMS
+// are pointer fields that would otherwise alias the internal state, letting
+// a caller silently mutate the log through its return value.
 func (l *RunLog) Recent(n int) []TaskRun {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -73,6 +77,22 @@ func (l *RunLog) Recent(n int) []TaskRun {
 		n = len(l.runs)
 	}
 	out := make([]TaskRun, n)
-	copy(out, l.runs[:n])
+	for i := range out {
+		out[i] = cloneTaskRun(l.runs[i])
+	}
 	return out
+}
+
+// cloneTaskRun returns a copy of run whose pointer fields (EndedAt,
+// DurationMS) are independent allocations, not shared with run's own.
+func cloneTaskRun(run TaskRun) TaskRun {
+	if run.EndedAt != nil {
+		ended := *run.EndedAt
+		run.EndedAt = &ended
+	}
+	if run.DurationMS != nil {
+		duration := *run.DurationMS
+		run.DurationMS = &duration
+	}
+	return run
 }

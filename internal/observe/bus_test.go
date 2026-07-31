@@ -113,6 +113,63 @@ func TestBusSlowSubscriberIsDroppedNotBlocked(t *testing.T) {
 	}
 }
 
+// TestBusPublishDeliveryIsMonotonicUnderConcurrentPublishers forces the exact
+// race window Publish must close: one publisher is stalled right after its
+// seq is assigned (but before it stamps/delivers), while a second publisher
+// races to completion behind it. Without a dedicated send lock held across
+// that whole window, the second publisher's higher seq is delivered first —
+// a subscriber would see seq go backwards.
+func TestBusPublishDeliveryIsMonotonicUnderConcurrentPublishers(t *testing.T) {
+	// Arrange
+	b := NewBus()
+	ch, unsub := b.Subscribe(4)
+	defer unsub()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	origHook := publishTestHook
+	t.Cleanup(func() { publishTestHook = origHook })
+	publishTestHook = func(seq uint64) {
+		if seq == 1 {
+			close(started)
+			<-release
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		b.Publish(Event{Type: EventAgentStopped, Payload: &AgentStoppedPayload{Agent: "first"}})
+	}()
+	go func() {
+		defer wg.Done()
+		<-started
+		second := make(chan struct{})
+		go func() {
+			b.Publish(Event{Type: EventAgentStopped, Payload: &AgentStoppedPayload{Agent: "second"}})
+			close(second)
+		}()
+		// Give the second publisher a real chance to race ahead of the
+		// stalled first one before letting the first proceed.
+		time.Sleep(20 * time.Millisecond)
+		close(release)
+		<-second
+	}()
+	wg.Wait()
+
+	// Act
+	firstDelivered := <-ch
+	secondDelivered := <-ch
+
+	// Assert
+	fp := firstDelivered.Payload.(*AgentStoppedPayload)
+	sp := secondDelivered.Payload.(*AgentStoppedPayload)
+	if fp.Seq != 1 || sp.Seq != 2 {
+		t.Fatalf("expected delivery order seq 1 then 2, got %d then %d", fp.Seq, sp.Seq)
+	}
+}
+
 func TestBusConcurrentPublishAndSubscribeIsRaceFree(t *testing.T) {
 	// Arrange
 	b := NewBus()

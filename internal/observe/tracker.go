@@ -172,7 +172,11 @@ func (t *Tracker) classify(now time.Time, hadPrev bool, prev AgentActivity, sess
 		return AgentActivity{Activity: ActivityWorking, LastActivityAt: sess.LastActivity}, true
 	}
 	if now.Sub(prev.LastActivityAt) >= t.idleThreshold {
-		return AgentActivity{Activity: ActivityIdle, LastActivityAt: prev.LastActivityAt, CurrentAction: prev.CurrentAction}, false
+		// The action is only ever sampled while working (see sweep's
+		// toSample pass), so it must not survive the transition to idle —
+		// otherwise an agent that finished working long ago would report a
+		// stale "currently doing" indefinitely.
+		return AgentActivity{Activity: ActivityIdle, LastActivityAt: prev.LastActivityAt}, false
 	}
 	return AgentActivity{Activity: ActivityWorking, LastActivityAt: prev.LastActivityAt, CurrentAction: prev.CurrentAction}, false
 }
@@ -184,17 +188,25 @@ type changedActivity struct {
 	reading AgentActivity
 }
 
-// publish is a nil-safe no-op when the tracker has no publisher.
+// publish is a nil-safe no-op when the tracker has no publisher. The
+// CurrentAction handed to the publisher is a copy, not the *Action stored in
+// t.activities — a subscriber must never be able to mutate the tracker's own
+// state through the pointer on a delivered event.
 func (t *Tracker) publish(agentName string, a AgentActivity) {
 	if t.publisher == nil {
 		return
+	}
+	var action *Action
+	if a.CurrentAction != nil {
+		cp := *a.CurrentAction
+		action = &cp
 	}
 	t.publisher.Publish(Event{
 		Type: EventAgentActivity,
 		Payload: &AgentActivityPayload{
 			Agent:         agentName,
 			Activity:      a.Activity,
-			CurrentAction: a.CurrentAction,
+			CurrentAction: action,
 		},
 	})
 }
