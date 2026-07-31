@@ -159,6 +159,12 @@ type Server struct {
 	// serves hello + heartbeats, just no bus-published events.
 	events eventSource
 
+	// runLog is the read seam onto the run log (internal/observe.RunLog),
+	// wired via WithRunLog. nil is a supported default: recent_runs is then
+	// built from task history alone, so in-flight runs simply don't appear
+	// (matching behavior before the run log existed) rather than erroring.
+	runLog runProvider
+
 	// version is reported as Snapshot.LeoVersion. Wired via WithVersion;
 	// empty means the caller didn't provide one.
 	version string
@@ -180,6 +186,13 @@ type eventSource interface {
 	Subscribe(buffer int) (<-chan observe.Event, func())
 }
 
+// runProvider is the narrow read seam onto the run log (internal/observe's
+// RunLog satisfies it structurally). Defined here rather than depending on
+// RunLog's concrete type, mirroring eventSource above.
+type runProvider interface {
+	Recent(n int) []observe.TaskRun
+}
+
 // Option configures optional Server dependencies that are not required for
 // the server's existing functionality to keep working unchanged. Passing no
 // options preserves pre-existing behavior for every current caller.
@@ -197,6 +210,14 @@ func WithActivityProvider(p observe.ActivityProvider) Option {
 // heartbeats (no bus-published events).
 func WithEventSource(es eventSource) Option {
 	return func(s *Server) { s.events = es }
+}
+
+// WithRunLog wires the run log GET /api/v1/state reads recent_runs from.
+// Optional; omitting it makes recent_runs built from task history alone
+// (no in-flight runs, and less honest completed-run timing on entries
+// recorded before the run log existed).
+func WithRunLog(rl runProvider) Option {
+	return func(s *Server) { s.runLog = rl }
 }
 
 // WithVersion sets the Leo build version reported as Snapshot.LeoVersion by

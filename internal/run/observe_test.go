@@ -90,6 +90,15 @@ func TestRunPublishesStartedThenSucceeded(t *testing.T) {
 	if started.Run.ID == "" {
 		t.Fatal("expected a non-empty run ID")
 	}
+	if started.Run.Model != "sonnet" {
+		t.Fatalf("expected Model %q resolved from defaults, got %q", "sonnet", started.Run.Model)
+	}
+	if started.Run.Harness != "claude" {
+		t.Fatalf("expected Harness %q (default), got %q", "claude", started.Run.Harness)
+	}
+	if started.Run.Workspace == "" {
+		t.Fatal("expected a non-empty resolved Workspace")
+	}
 
 	succeeded, ok := pub.events[1].Payload.(*observe.TaskRunPayload)
 	if !ok || pub.events[1].Type != observe.EventTaskRunSucceeded {
@@ -109,6 +118,9 @@ func TestRunPublishesStartedThenSucceeded(t *testing.T) {
 	}
 	if succeeded.Run.Error != "" {
 		t.Fatalf("expected no error on a succeeded run, got %q", succeeded.Run.Error)
+	}
+	if succeeded.Run.Model != started.Run.Model || succeeded.Run.Harness != started.Run.Harness || succeeded.Run.Workspace != started.Run.Workspace {
+		t.Fatalf("expected finished run to carry the same resolved Workspace/Model/Harness as started: started=%+v succeeded=%+v", started.Run, succeeded.Run)
 	}
 }
 

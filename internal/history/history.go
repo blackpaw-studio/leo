@@ -20,12 +20,19 @@ const (
 )
 
 // Entry records the result of a single task execution.
+//
+// StartedAt and DurationMS are additive fields: entries recorded before they
+// existed simply decode with them zero-valued, which callers must treat as
+// "unknown", never as "started and ended at RunAt" — see buildRecentRuns in
+// internal/web for how the observability snapshot honors that distinction.
 type Entry struct {
-	Task     string    `json:"task"`
-	ExitCode int       `json:"exit_code"`
-	Reason   string    `json:"reason,omitempty"`
-	RunAt    time.Time `json:"run_at"`
-	LogFile  string    `json:"log_file,omitempty"`
+	Task       string    `json:"task"`
+	ExitCode   int       `json:"exit_code"`
+	Reason     string    `json:"reason,omitempty"`
+	RunAt      time.Time `json:"run_at"`
+	LogFile    string    `json:"log_file,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
 }
 
 // Store persists task execution history to a JSON file.
@@ -58,15 +65,29 @@ func (s *Store) LogPath(e Entry) string {
 
 // Record saves a task execution result, prepending to the list and trimming
 // to maxHistoryPerTask entries. Old log files are deleted when entries are pruned.
+//
+// It carries no timing information (StartedAt/DurationMS stay zero-valued) —
+// use RecordTimed when the caller knows when the run started.
 func (s *Store) Record(task string, exitCode int, reason string, logFile string) error {
+	return s.RecordTimed(task, exitCode, reason, logFile, time.Time{}, 0)
+}
+
+// RecordTimed is Record plus the run's start time and duration, so a
+// completed run's honest timing survives a daemon restart (durability the
+// in-memory observe.RunLog can't offer on its own). startedAt zero means
+// "unknown" and durationMS 0 has the same meaning when startedAt is zero;
+// callers that don't know either should just call Record.
+func (s *Store) RecordTimed(task string, exitCode int, reason, logFile string, startedAt time.Time, durationMS int64) error {
 	entries := s.load()
 
 	entry := Entry{
-		Task:     task,
-		ExitCode: exitCode,
-		Reason:   reason,
-		RunAt:    time.Now(),
-		LogFile:  logFile,
+		Task:       task,
+		ExitCode:   exitCode,
+		Reason:     reason,
+		RunAt:      time.Now(),
+		LogFile:    logFile,
+		StartedAt:  startedAt,
+		DurationMS: durationMS,
 	}
 
 	// Prepend new entry

@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
@@ -156,6 +159,87 @@ func TestSpawnAgentPublishesAgentSpawned(t *testing.T) {
 	}
 	if payload.Agent.Status != observe.StatusStarting {
 		t.Fatalf("expected starting status, got %s", payload.Agent.Status)
+	}
+}
+
+// TestSpawnAgentPublishesAgentSpawnedWithTemplateFields verifies that
+// agent_spawned is populated from the agentstore record (saved by
+// agent.Manager before SpawnAgent is called) and the defaults->template
+// model cascade, not left blank — see docs/specs/2026-07-31-observability-api.md's
+// note on agent_spawned completeness.
+func TestSpawnAgentPublishesAgentSpawnedWithTemplateFields(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sv := NewSupervisor(ctx)
+	sv.tmuxPath = "false"
+	sv.claudePath = "false"
+	home := t.TempDir()
+	sv.homePath = home
+
+	if err := agentstore.Save(home, agentstore.Record{
+		Name:      "agent-a",
+		Template:  "coding",
+		Repo:      "org/repo",
+		Branch:    "feature",
+		Workspace: "/tmp/agent-a",
+	}); err != nil {
+		t.Fatalf("seeding agentstore: %v", err)
+	}
+
+	cfgPath := filepath.Join(home, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte("templates:\n  coding:\n    model: opus\n"), 0600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	sv.configPath = cfgPath
+
+	pub := &recordingPublisher{}
+	sv.SetPublisher(pub)
+
+	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "agent-a", WorkDir: "/tmp/agent-a", Harness: "claude"}); err != nil {
+		t.Fatalf("SpawnAgent: %v", err)
+	}
+
+	events := pub.Events()
+	if len(events) == 0 {
+		t.Fatal("expected at least 1 event")
+	}
+	payload, ok := events[0].Payload.(*observe.AgentSpawnedPayload)
+	if !ok {
+		t.Fatalf("expected AgentSpawnedPayload, got %T", events[0].Payload)
+	}
+	if payload.Agent.Template != "coding" || payload.Agent.Repo != "org/repo" || payload.Agent.Branch != "feature" {
+		t.Fatalf("unexpected agent payload: %+v", payload.Agent)
+	}
+	if payload.Agent.Model != "opus" {
+		t.Fatalf("expected Model %q resolved via config cascade, got %q", "opus", payload.Agent.Model)
+	}
+}
+
+// TestSpawnAgentPublishesAgentSpawnedGracefullyWithoutRecordOrConfig ensures
+// a missing agentstore record or config (e.g. the no-context/name-collision
+// tests below) doesn't panic or error SpawnAgent — the extra lookups must
+// degrade to zero-valued fields, not fail the spawn.
+func TestSpawnAgentPublishesAgentSpawnedGracefullyWithoutRecordOrConfig(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sv := NewSupervisor(ctx)
+	sv.tmuxPath = "false"
+	sv.claudePath = "false"
+	sv.homePath = t.TempDir()
+	pub := &recordingPublisher{}
+	sv.SetPublisher(pub)
+
+	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "agent-a", WorkDir: "/tmp/agent-a", Harness: "claude"}); err != nil {
+		t.Fatalf("SpawnAgent: %v", err)
+	}
+
+	events := pub.Events()
+	payload, ok := events[0].Payload.(*observe.AgentSpawnedPayload)
+	if !ok {
+		t.Fatalf("expected AgentSpawnedPayload, got %T", events[0].Payload)
+	}
+	if payload.Agent.Template != "" || payload.Agent.Repo != "" || payload.Agent.Branch != "" || payload.Agent.Model != "" {
+		t.Fatalf("expected zero-valued optional fields absent a record/config, got %+v", payload.Agent)
 	}
 }
 

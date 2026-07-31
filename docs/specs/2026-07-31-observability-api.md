@@ -67,7 +67,9 @@ envelope.
 ```
 
 - `status` — lifecycle, from the agent record: `starting` | `running` | `suspended` |
-  `stopped`.
+  `stopped`. These four values are exhaustive on the wire — an internal-only
+  crash-loop-backoff state (`restarting`) folds into `starting`, the closest lifecycle
+  equivalent a consumer can act on, so a consumer never has to recognize a fifth value.
 - `activity` — live work state, from the activity tracker: `working` | `idle` |
   `unknown`. Orthogonal to `status`: a `running` agent may be `idle`. Non-running agents
   report `unknown`.
@@ -85,6 +87,15 @@ envelope.
     Escape it before rendering, never parse it or branch on its contents, and handle it
     being absent or garbage.
 - `model` / `harness` — resolved values after the defaults→template→agent cascade.
+
+`agent_spawned`'s embedded `Agent` (see the event table below) is populated the same way,
+sourced from the agentstore record and the same model cascade — `template`, `repo`, and
+`branch` come from the agentstore record for that agent name (persisted before spawn, so
+it's reliably present), and `model` from resolving that record's `template` through
+config. A record or config that can't be loaded at spawn time (e.g. no config file present)
+degrades those fields to empty/zero rather than guessing — a consumer that needs them
+reliably should treat `agent_spawned` as a hint and fall back to `GET /api/v1/state` if
+any of `template`/`repo`/`branch`/`model` come back empty for an agent it cares about.
 
 ### Agent retention
 
@@ -133,6 +144,29 @@ because the run producer already holds them and the join is not always available
 can be renamed, disabled, or deleted while one of its runs is still in flight, and a
 `task_run_*` event can reach a consumer before it has ever fetched a snapshot. Carrying
 them makes a run self-describing.
+
+Both `oneshot` and `persistent` tasks publish the full `task_run_started` /
+`_succeeded` / `_failed` sequence with identical fields — a persistent task's firing is
+just as visible as a fresh `claude -p` invocation. The one semantic difference: a
+persistent task's `error` on a failed run is a free-form diagnostic string (e.g.
+`"enqueue: ..."`, `"rejected: ..."`, `"await: ..."`, `"task: ..."`) describing which stage
+of session-router dispatch failed, rather than the oneshot path's `history` reason
+vocabulary (`timeout`, `channel-init`, etc.) — both are just display text for `error`,
+never something a consumer should parse or branch on.
+
+`recent_runs` is assembled by merging two sources, newest first, deduplicated by `id`,
+capped at `MaxRecentRuns`:
+
+- **The run log** — a bounded, in-memory record of runs as they pass through the event
+  publisher. It is the only source that knows about a currently-`running` firing, and it
+  carries the honest wall-clock timing the producer itself measured.
+- **Task history** (durable, on disk) — tops up older completed runs the run log has
+  already evicted or never saw (e.g. right after a daemon restart, when the run log starts
+  empty). History entries recorded before a run's start time and duration were tracked
+  have neither: `started_at` falls back to the entry's completion timestamp (the only one
+  those old entries have) as a best-effort value, since the field is mandatory, but
+  `ended_at` and `duration_ms` are omitted rather than fabricated — a completed run must
+  never report `started_at == ended_at` as a stand-in for "we don't actually know".
 
 ## `GET /api/v1/events`
 

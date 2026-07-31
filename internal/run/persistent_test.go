@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -123,7 +125,7 @@ func TestPersistentFailureEnqueuesFollowUpWhenNotifyOnFail(t *testing.T) {
 			},
 		},
 	}
-	handlePersistentFailure(cfg, "t1", "test-failure-reason")
+	handlePersistentFailure(cfg, "t1", "test-failure-reason", "run-1", time.Now(), runMeta{})
 
 	if len(followUpPrompts) != 1 {
 		t.Fatalf("expected 1 follow-up enqueue, got %d", len(followUpPrompts))
@@ -156,7 +158,7 @@ func TestPersistentFailureDoesNotNotifyWithoutFlag(t *testing.T) {
 			},
 		},
 	}
-	handlePersistentFailure(cfg, "t1", "reason")
+	handlePersistentFailure(cfg, "t1", "reason", "run-1", time.Now(), runMeta{})
 	if called {
 		t.Fatalf("expected no follow-up when NotifyOnFail is false")
 	}
@@ -179,7 +181,7 @@ func TestPersistentFailureDoesNotNotifyWithoutChannels(t *testing.T) {
 			},
 		},
 	}
-	handlePersistentFailure(cfg, "t1", "reason")
+	handlePersistentFailure(cfg, "t1", "reason", "run-1", time.Now(), runMeta{})
 	if called {
 		t.Fatalf("expected no follow-up when channels are empty")
 	}
@@ -393,6 +395,110 @@ func TestRunPersistentAgentTaskPersistsSessionIDToAgentstore(t *testing.T) {
 		t.Fatalf("checking session store: %v", err)
 	} else if found {
 		t.Error("persistent task invocations must not write to the generic session store")
+	}
+}
+
+// TestRunPersistentPublishesStartedThenSucceeded verifies that persistent
+// task firings — dispatched through the daemon's session router rather than
+// the oneshot claude -p path — are just as visible to the observability API:
+// the same task_run_started/succeeded events Run() publishes, carrying the
+// resolved Workspace/Model/Harness for this firing.
+func TestRunPersistentPublishesStartedThenSucceeded(t *testing.T) {
+	home := shortTempDir(t)
+	ws := filepath.Join(home, "ws")
+	promptFile := writePromptFile(t, ws)
+	newTestDaemon(t, home, fakeEnsurer(func(context.Context, daemon.EnsureSpec) error { return nil }))
+
+	pub := &recordingPublisher{}
+	SetPublisher(pub)
+	t.Cleanup(func() { SetPublisher(nil) })
+
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+		Tasks: map[string]config.TaskConfig{
+			"nightly": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Template: "worker"},
+		},
+		Templates: map[string]config.TemplateConfig{
+			"worker": {Workspace: ws},
+		},
+	}
+
+	if err := runPersistent(cfg, "nightly"); err != nil {
+		t.Fatalf("runPersistent: %v", err)
+	}
+
+	if len(pub.events) != 2 {
+		t.Fatalf("expected 2 events, got %d: %+v", len(pub.events), pub.events)
+	}
+	started, ok := pub.events[0].Payload.(*observe.TaskRunPayload)
+	if !ok || pub.events[0].Type != observe.EventTaskRunStarted {
+		t.Fatalf("expected first event to be EventTaskRunStarted, got %s (%T)", pub.events[0].Type, pub.events[0].Payload)
+	}
+	if started.Run.Task != "nightly" || started.Run.Status != observe.RunRunning {
+		t.Fatalf("unexpected started payload: %+v", started.Run)
+	}
+	if started.Run.Model != "sonnet" {
+		t.Fatalf("expected Model %q, got %q", "sonnet", started.Run.Model)
+	}
+	if started.Run.Workspace != ws {
+		t.Fatalf("expected Workspace %q, got %q", ws, started.Run.Workspace)
+	}
+
+	succeeded, ok := pub.events[1].Payload.(*observe.TaskRunPayload)
+	if !ok || pub.events[1].Type != observe.EventTaskRunSucceeded {
+		t.Fatalf("expected second event to be EventTaskRunSucceeded, got %s (%T)", pub.events[1].Type, pub.events[1].Payload)
+	}
+	if succeeded.Run.ID != started.Run.ID {
+		t.Fatalf("expected succeeded run ID %q to match started run ID %q", succeeded.Run.ID, started.Run.ID)
+	}
+	if succeeded.Run.EndedAt == nil || succeeded.Run.DurationMS == nil {
+		t.Fatalf("expected EndedAt/DurationMS set on a finished persistent run: %+v", succeeded.Run)
+	}
+}
+
+// TestRunPersistentPublishesFailedOnEnqueueRejection verifies the failure
+// path — enqueue rejected before ever reaching the agent — still publishes a
+// started/failed pair rather than leaving the API blind to a firing that
+// never got to run.
+func TestRunPersistentPublishesFailedOnEnqueueRejection(t *testing.T) {
+	home := shortTempDir(t)
+	ws := filepath.Join(home, "ws")
+	promptFile := writePromptFile(t, ws)
+	// No daemon started: EnqueueTask will fail to dial the socket, which
+	// runPersistent treats as an enqueue error and routes into
+	// handlePersistentFailure.
+
+	pub := &recordingPublisher{}
+	SetPublisher(pub)
+	t.Cleanup(func() { SetPublisher(nil) })
+
+	cfg := &config.Config{
+		HomePath: home,
+		Tasks: map[string]config.TaskConfig{
+			"nightly": {Runtime: "persistent", Workspace: ws, PromptFile: promptFile, Template: "worker"},
+		},
+		Templates: map[string]config.TemplateConfig{
+			"worker": {Workspace: ws},
+		},
+	}
+
+	if err := runPersistent(cfg, "nightly"); err == nil {
+		t.Fatal("expected runPersistent to return an error when enqueue fails")
+	}
+
+	if len(pub.events) != 2 {
+		t.Fatalf("expected 2 events, got %d: %+v", len(pub.events), pub.events)
+	}
+	if pub.events[0].Type != observe.EventTaskRunStarted {
+		t.Fatalf("expected first event EventTaskRunStarted, got %s", pub.events[0].Type)
+	}
+	failed, ok := pub.events[1].Payload.(*observe.TaskRunPayload)
+	if !ok || pub.events[1].Type != observe.EventTaskRunFailed {
+		t.Fatalf("expected EventTaskRunFailed, got %s (%T)", pub.events[1].Type, pub.events[1].Payload)
+	}
+	if failed.Run.Status != observe.RunFailed || failed.Run.Error == "" {
+		t.Fatalf("expected a failed run with a non-empty error, got %+v", failed.Run)
 	}
 }
 

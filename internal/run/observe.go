@@ -33,9 +33,19 @@ func newRunID(taskName string, startedAt time.Time) string {
 	return taskName + "-" + strconv.FormatInt(startedAt.UnixNano(), 10)
 }
 
+// runMeta carries the values actually resolved for one task firing —
+// workspace, model, and harness — so every run event is self-describing.
+// TaskRun deliberately denormalizes these rather than leaving them as a join
+// through Snapshot.Tasks: see the doc comment on observe.TaskRun.
+type runMeta struct {
+	Workspace string
+	Model     string
+	Harness   string
+}
+
 // publishTaskRunStarted announces a task firing and returns the run's stable
 // ID and start time so the caller can report the matching finish event.
-func publishTaskRunStarted(taskName string) (id string, startedAt time.Time) {
+func publishTaskRunStarted(taskName string, meta runMeta) (id string, startedAt time.Time) {
 	startedAt = runNow()
 	id = newRunID(taskName, startedAt)
 	publishEvent(observe.Event{
@@ -46,19 +56,26 @@ func publishTaskRunStarted(taskName string) (id string, startedAt time.Time) {
 				Task:      taskName,
 				Status:    observe.RunRunning,
 				StartedAt: startedAt,
+				Workspace: meta.Workspace,
+				Model:     meta.Model,
+				Harness:   meta.Harness,
 			},
 		},
 	})
 	return id, startedAt
 }
 
-// publishTaskRunFinished announces a task firing's outcome. reason is the
-// history package's reason vocabulary (history.ReasonSuccess and friends);
-// anything but success maps to observe.RunFailed, carrying reason verbatim in
-// TaskRun.Error.
-func publishTaskRunFinished(id, taskName string, startedAt time.Time, success bool, reason string) {
-	endedAt := runNow()
-	durationMS := endedAt.Sub(startedAt).Milliseconds()
+// publishTaskRunFinished announces a task firing's outcome and returns the
+// end time and duration it computed, so the caller can record identical
+// timing to history rather than taking a second, slightly different runNow()
+// reading of its own. reason is the history package's reason vocabulary
+// (history.ReasonSuccess and friends); anything but success maps to
+// observe.RunFailed, carrying reason verbatim in TaskRun.Error. meta should
+// be the same value passed to publishTaskRunStarted for this run, so the
+// finish event carries identical Workspace/Model/Harness.
+func publishTaskRunFinished(id, taskName string, startedAt time.Time, success bool, reason string, meta runMeta) (endedAt time.Time, durationMS int64) {
+	endedAt = runNow()
+	durationMS = endedAt.Sub(startedAt).Milliseconds()
 
 	status := observe.RunSucceeded
 	errText := ""
@@ -80,7 +97,11 @@ func publishTaskRunFinished(id, taskName string, startedAt time.Time, success bo
 				EndedAt:    &endedAt,
 				DurationMS: &durationMS,
 				Error:      errText,
+				Workspace:  meta.Workspace,
+				Model:      meta.Model,
+				Harness:    meta.Harness,
 			},
 		},
 	})
+	return endedAt, durationMS
 }

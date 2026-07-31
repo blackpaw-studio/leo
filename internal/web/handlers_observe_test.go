@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -247,6 +248,104 @@ func TestBuildSnapshotRecentRunsNewestFirstAndCapped(t *testing.T) {
 	failed := snap.RecentRuns[2]
 	if failed.Status != observe.RunFailed || failed.Error == "" {
 		t.Errorf("failed run = %+v, want non-empty error", failed)
+	}
+}
+
+// fakeRunProvider is a test double for the runProvider seam.
+type fakeRunProvider struct {
+	runs []observe.TaskRun
+}
+
+func (f *fakeRunProvider) Recent(n int) []observe.TaskRun {
+	if n <= 0 || n > len(f.runs) {
+		return f.runs
+	}
+	return f.runs[:n]
+}
+
+func TestBuildSnapshotIncludesInFlightRunFromRunLog(t *testing.T) {
+	now := time.Now()
+	in := snapshotInput{
+		Now: now,
+		RunLog: &fakeRunProvider{runs: []observe.TaskRun{
+			{ID: "task-a-1", Task: "task-a", Status: observe.RunRunning, StartedAt: now},
+		}},
+	}
+	snap := buildSnapshot(in)
+	if len(snap.RecentRuns) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(snap.RecentRuns))
+	}
+	if snap.RecentRuns[0].Status != observe.RunRunning {
+		t.Errorf("status = %q, want running", snap.RecentRuns[0].Status)
+	}
+	if snap.RecentRuns[0].EndedAt != nil {
+		t.Errorf("expected nil EndedAt for an in-flight run, got %v", snap.RecentRuns[0].EndedAt)
+	}
+}
+
+func TestBuildSnapshotRunLogDedupesAgainstHistory(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-time.Minute)
+	ended := now
+	duration := ended.Sub(started).Milliseconds()
+
+	// Same firing recorded in both sources — the run log's copy (with honest
+	// timing) must win, and it must not appear twice.
+	entries := map[string][]history.Entry{
+		"task-a": {{Task: "task-a", ExitCode: 0, Reason: history.ReasonSuccess, RunAt: ended, StartedAt: started, DurationMS: duration}},
+	}
+	in := snapshotInput{
+		Now:     now,
+		History: entries,
+		RunLog: &fakeRunProvider{runs: []observe.TaskRun{
+			{ID: fmt.Sprintf("task-a-%d", started.UnixNano()), Task: "task-a", Status: observe.RunSucceeded, StartedAt: started, EndedAt: &ended, DurationMS: &duration},
+		}},
+	}
+	snap := buildSnapshot(in)
+	if len(snap.RecentRuns) != 1 {
+		t.Fatalf("expected 1 deduplicated run, got %d: %+v", len(snap.RecentRuns), snap.RecentRuns)
+	}
+}
+
+func TestBuildSnapshotOmitsEndedAtForLegacyHistoryEntryWithoutTiming(t *testing.T) {
+	now := time.Now()
+	entries := map[string][]history.Entry{
+		"task-a": {{Task: "task-a", ExitCode: 0, Reason: history.ReasonSuccess, RunAt: now}},
+	}
+	in := snapshotInput{Now: now, History: entries}
+	snap := buildSnapshot(in)
+	if len(snap.RecentRuns) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(snap.RecentRuns))
+	}
+	run := snap.RecentRuns[0]
+	if run.EndedAt != nil {
+		t.Errorf("expected nil EndedAt for a legacy entry with no timing info, got %v", run.EndedAt)
+	}
+	if run.DurationMS != nil {
+		t.Errorf("expected nil DurationMS for a legacy entry with no timing info, got %v", run.DurationMS)
+	}
+	if run.StartedAt.IsZero() {
+		t.Error("expected a best-effort StartedAt (RunAt) even for a legacy entry")
+	}
+}
+
+func TestBuildSnapshotHistoryEntryWithTimingReportsHonestDuration(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-2 * time.Second)
+	entries := map[string][]history.Entry{
+		"task-a": {{Task: "task-a", ExitCode: 0, Reason: history.ReasonSuccess, RunAt: now, StartedAt: started, DurationMS: 2000}},
+	}
+	in := snapshotInput{Now: now, History: entries}
+	snap := buildSnapshot(in)
+	run := snap.RecentRuns[0]
+	if !run.StartedAt.Equal(started) {
+		t.Errorf("StartedAt = %v, want %v", run.StartedAt, started)
+	}
+	if run.EndedAt == nil || !run.EndedAt.Equal(now) {
+		t.Errorf("EndedAt = %v, want %v", run.EndedAt, now)
+	}
+	if run.DurationMS == nil || *run.DurationMS != 2000 {
+		t.Errorf("DurationMS = %v, want 2000", run.DurationMS)
 	}
 }
 

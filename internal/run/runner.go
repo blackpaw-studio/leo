@@ -175,7 +175,8 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	}
 	defer releaseTaskLock(lockPath)
 
-	runID, runStartedAt := publishTaskRunStarted(taskName)
+	meta := runMeta{Workspace: cfg.TaskWorkspace(task), Model: cfg.TaskModel(task), Harness: h.Name()}
+	runID, runStartedAt := publishTaskRunStarted(taskName, meta)
 
 	// leoEnv rides along on every claude invocation for this task (main
 	// attempts and the notify-on-fail child alike) — the leo MCP server is
@@ -206,7 +207,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 	}
 
 	timeout := cfg.TaskTimeout(task)
-	taskWorkspace := cfg.TaskWorkspace(task)
+	taskWorkspace := meta.Workspace
 
 	maxAttempts := task.Retries + 1
 	var lastErr error
@@ -326,11 +327,11 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 			reason = history.ReasonFailure
 		}
 	}
+	_, durationMS := publishTaskRunFinished(runID, taskName, runStartedAt, lastErr == nil, reason, meta)
 	hist := history.NewStore(cfg.HomePath)
-	if histErr := hist.Record(taskName, exitCode, reason, logFile); histErr != nil {
+	if histErr := hist.RecordTimed(taskName, exitCode, reason, logFile, runStartedAt, durationMS); histErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to record history: %v\n", histErr)
 	}
-	publishTaskRunFinished(runID, taskName, runStartedAt, lastErr == nil, reason)
 
 	// Send failure notification if configured (via child claude invocation).
 	// Skipped when interrupted: the user asked the task to stop, so firing a

@@ -272,13 +272,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	s.publish(observe.Event{
 		Type: observe.EventAgentSpawned,
 		Payload: &observe.AgentSpawnedPayload{
-			Agent: observe.Agent{
-				Name:      spec.Name,
-				Workspace: spec.WorkDir,
-				Harness:   spec.Harness,
-				Status:    observe.StatusStarting,
-				StartedAt: spawnedAt,
-			},
+			Agent: s.spawnedAgentView(spec, spawnedAt),
 		},
 	})
 

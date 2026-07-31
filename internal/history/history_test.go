@@ -88,6 +88,79 @@ func TestRecordTrimsToMax(t *testing.T) {
 	}
 }
 
+func TestRecordTimedStoresStartedAtAndDuration(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	started := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	if err := store.RecordTimed("task1", 0, ReasonSuccess, "", started, 1500); err != nil {
+		t.Fatalf("RecordTimed() error: %v", err)
+	}
+
+	entry := store.Get("task1")
+	if entry == nil {
+		t.Fatal("Get() returned nil")
+	}
+	if !entry.StartedAt.Equal(started) {
+		t.Errorf("StartedAt = %v, want %v", entry.StartedAt, started)
+	}
+	if entry.DurationMS != 1500 {
+		t.Errorf("DurationMS = %d, want 1500", entry.DurationMS)
+	}
+	if entry.RunAt.IsZero() {
+		t.Error("RunAt should still be set (finish timestamp)")
+	}
+}
+
+func TestRecordLeavesTimingZeroValued(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	if err := store.Record("task1", 0, ReasonSuccess, ""); err != nil {
+		t.Fatalf("Record() error: %v", err)
+	}
+
+	entry := store.Get("task1")
+	if entry == nil {
+		t.Fatal("Get() returned nil")
+	}
+	if !entry.StartedAt.IsZero() {
+		t.Errorf("expected zero StartedAt from plain Record(), got %v", entry.StartedAt)
+	}
+	if entry.DurationMS != 0 {
+		t.Errorf("expected zero DurationMS from plain Record(), got %d", entry.DurationMS)
+	}
+}
+
+func TestDecodeLegacyEntryWithoutTimingFields(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+
+	// Legacy entries have no started_at/duration_ms keys at all.
+	legacy := map[string][]Entry{
+		"task1": {{Task: "task1", ExitCode: 0, RunAt: time.Now()}},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "task-history.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(dir)
+	entry := store.Get("task1")
+	if entry == nil {
+		t.Fatal("Get() returned nil")
+	}
+	if !entry.StartedAt.IsZero() || entry.DurationMS != 0 {
+		t.Fatalf("expected zero-valued timing fields decoding a legacy entry, got StartedAt=%v DurationMS=%d", entry.StartedAt, entry.DurationMS)
+	}
+}
+
 func TestGetMissing(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)

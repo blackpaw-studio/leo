@@ -1,6 +1,13 @@
 package service
 
-import "github.com/blackpaw-studio/leo/internal/observe"
+import (
+	"time"
+
+	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/observe"
+)
 
 // SetPublisher wires an observe.Publisher into the supervisor so agent
 // lifecycle transitions are announced on the event bus. Optional: an unset
@@ -21,6 +28,41 @@ func (s *Supervisor) publish(ev observe.Event) {
 		return
 	}
 	p.Publish(ev)
+}
+
+// spawnedAgentView builds the observe.Agent carried on an agent_spawned
+// event. Template/Repo/Branch come from the agentstore record for spec.Name
+// — agent.Manager persists that record BEFORE calling SpawnAgent (see its
+// doc comment), so it is reliably present by the time we publish here — and
+// Model comes from the defaults->template->agent cascade via s.configPath.
+// Both lookups degrade to zero-valued fields (never guessed) if the record
+// or config isn't available, e.g. in tests that construct a bare Supervisor.
+func (s *Supervisor) spawnedAgentView(spec daemon.AgentSpawnSpec, spawnedAt time.Time) observe.Agent {
+	a := observe.Agent{
+		Name:      spec.Name,
+		Workspace: spec.WorkDir,
+		Harness:   spec.Harness,
+		Status:    observe.StatusStarting,
+		StartedAt: spawnedAt,
+	}
+
+	if records, err := agentstore.Load(agentstore.FilePath(s.homePath)); err == nil {
+		if rec, ok := records[spec.Name]; ok {
+			a.Template = rec.Template
+			a.Repo = rec.Repo
+			a.Branch = rec.Branch
+		}
+	}
+
+	if a.Template != "" && s.configPath != "" {
+		if cfg, err := config.Load(s.configPath); err == nil {
+			if tmpl, ok := cfg.Templates[a.Template]; ok {
+				a.Model = cfg.TemplateModel(tmpl)
+			}
+		}
+	}
+
+	return a
 }
 
 // toObserveStatus maps the supervisor's internal status vocabulary onto the

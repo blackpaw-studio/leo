@@ -55,6 +55,7 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 		CronEntries:   cronEntries,
 		History:       s.loadHistory(cfg).All(),
 		Activity:      s.activity,
+		RunLog:        s.runLog,
 		LeoVersion:    s.version,
 		Now:           time.Now(),
 	})
@@ -73,8 +74,15 @@ type snapshotInput struct {
 	CronEntries   []cron.EntryInfo
 	History       map[string][]history.Entry
 	Activity      observe.ActivityProvider
-	LeoVersion    string
-	Now           time.Time
+	// RunLog is the run log's read seam (observe.RunLog satisfies it). It
+	// alone knows about in-flight runs, so it takes priority over History
+	// for the runs it holds; History only tops up older completed runs the
+	// (bounded, in-memory) run log has already evicted or never saw (e.g.
+	// after a daemon restart). nil is a supported default — recent_runs is
+	// then built from History alone, as before RunLog existed.
+	RunLog     runProvider
+	LeoVersion string
+	Now        time.Time
 }
 
 // buildSnapshot assembles an observe.Snapshot from raw state. It is pure
@@ -106,13 +114,18 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 		sort.Slice(tasks, func(i, j int) bool { return tasks[i].Name < tasks[j].Name })
 	}
 
+	var liveRuns []observe.TaskRun
+	if in.RunLog != nil {
+		liveRuns = in.RunLog.Recent(observe.MaxRecentRuns)
+	}
+
 	return observe.Snapshot{
 		Version:    observe.SnapshotVersion,
 		ServerTime: in.Now,
 		LeoVersion: in.LeoVersion,
 		Agents:     agents,
 		Tasks:      tasks,
-		RecentRuns: buildRecentRuns(in.History),
+		RecentRuns: buildRecentRuns(in.History, liveRuns),
 	}
 }
 
@@ -213,33 +226,85 @@ func lastRunAt(entries []history.Entry) time.Time {
 	return entries[0].RunAt
 }
 
-// buildRecentRuns flattens every task's history into observe.TaskRun,
-// newest first, capped at observe.MaxRecentRuns.
-//
-// history.Entry only records a single timestamp for a completed run (no
-// separate start time or duration), so StartedAt and EndedAt are both set to
-// it and DurationMS is left unset — the best fidelity the existing history
-// store can offer without touching internal/run.
-func buildRecentRuns(hist map[string][]history.Entry) []observe.TaskRun {
-	var runs []observe.TaskRun
+// buildRecentRuns merges the run log's live view (live, newest first —
+// the only source that knows about a currently-running firing) with
+// history-derived runs, newest first overall, deduplicated by ID, and capped
+// at observe.MaxRecentRuns. The run log wins on a duplicate ID: it carries
+// honest in-process timing, whereas a history entry can only ever describe a
+// firing that already finished.
+func buildRecentRuns(hist map[string][]history.Entry, live []observe.TaskRun) []observe.TaskRun {
+	runs := make([]observe.TaskRun, len(live))
+	copy(runs, live)
+
+	seen := make(map[string]bool, len(live))
+	for _, r := range live {
+		seen[r.ID] = true
+	}
+
 	for _, entries := range hist {
 		for _, e := range entries {
-			ended := e.RunAt
-			runs = append(runs, observe.TaskRun{
-				ID:        fmt.Sprintf("%s-%d", e.Task, e.RunAt.UnixNano()),
-				Task:      e.Task,
-				Status:    runStatus(e),
-				StartedAt: e.RunAt,
-				EndedAt:   &ended,
-				Error:     runError(e),
-			})
+			run := historyEntryToRun(e)
+			if seen[run.ID] {
+				continue
+			}
+			seen[run.ID] = true
+			runs = append(runs, run)
 		}
 	}
+
 	sort.Slice(runs, func(i, j int) bool { return runs[i].StartedAt.After(runs[j].StartedAt) })
 	if len(runs) > observe.MaxRecentRuns {
 		runs = runs[:observe.MaxRecentRuns]
 	}
 	return runs
+}
+
+// historyEntryToRun converts one history.Entry to an observe.TaskRun.
+//
+// When the entry carries StartedAt (recorded by internal/run since
+// RecordTimed), EndedAt/DurationMS are derived honestly from it. Legacy
+// entries recorded before those fields existed have no StartedAt — RunAt
+// (the only timestamp they carry, stamped at completion) becomes the
+// best-effort StartedAt since TaskRun.StartedAt is mandatory, but EndedAt and
+// DurationMS are left nil rather than fabricating started_at == ended_at.
+func historyEntryToRun(e history.Entry) observe.TaskRun {
+	run := observe.TaskRun{
+		ID:     historyRunID(e),
+		Task:   e.Task,
+		Status: runStatus(e),
+		Error:  runError(e),
+	}
+
+	if e.StartedAt.IsZero() {
+		run.StartedAt = e.RunAt
+		return run
+	}
+
+	run.StartedAt = e.StartedAt
+	ended := e.RunAt
+	run.EndedAt = &ended
+
+	durationMS := e.DurationMS
+	if durationMS == 0 {
+		durationMS = ended.Sub(e.StartedAt).Milliseconds()
+	}
+	run.DurationMS = &durationMS
+	return run
+}
+
+// historyRunID derives the same ID format internal/run's producers use
+// (taskName + "-" + startTime.UnixNano()) whenever a StartedAt is known, so a
+// history-derived run correctly dedupes against the run log's copy of the
+// same firing. Legacy entries with no StartedAt fall back to RunAt — they
+// can never collide with a live run log entry anyway, since the run log is
+// wiped on every daemon restart and legacy entries by definition predate this
+// field.
+func historyRunID(e history.Entry) string {
+	t := e.StartedAt
+	if t.IsZero() {
+		t = e.RunAt
+	}
+	return fmt.Sprintf("%s-%d", e.Task, t.UnixNano())
 }
 
 func runStatus(e history.Entry) observe.RunStatus {
