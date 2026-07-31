@@ -26,16 +26,25 @@ events. Every event carries enough state to be applied without a refetch.
 
 ## `GET /api/v1/state`
 
+Wrapped in the existing `apiResponse` envelope (`{ok, data, error}`) used by every other
+`/api` route:
+
 ```json
 {
-  "version": 1,
-  "server_time": "2026-07-31T18:40:06-04:00",
-  "leo_version": "0.10.3",
-  "agents": [ /* Agent */ ],
-  "tasks":  [ /* Task */ ],
-  "recent_runs": [ /* TaskRun */ ]
+  "ok": true,
+  "data": {
+    "version": 1,
+    "server_time": "2026-07-31T18:40:06-04:00",
+    "leo_version": "0.10.3",
+    "agents": [ /* Agent */ ],
+    "tasks":  [ /* Task */ ],
+    "recent_runs": [ /* TaskRun */ ]
+  }
 }
 ```
+
+`GET /api/v1/events` is the one exception: SSE frames are written directly, with no
+envelope.
 
 ### Agent
 
@@ -53,7 +62,7 @@ events. Every event carries enough state to be applied without a refetch.
   "restarts": 0,
   "started_at": "2026-07-31T18:42:33-04:00",
   "last_activity_at": "2026-07-31T18:44:01-04:00",
-  "current_action": { "kind": "tool", "tool": "Bash", "detail": "go test ./..." }
+  "current_action": { "kind": "pane", "detail": "Running go test ./..." }
 }
 ```
 
@@ -62,10 +71,31 @@ events. Every event carries enough state to be applied without a refetch.
 - `activity` — live work state, from the activity tracker: `working` | `idle` |
   `unknown`. Orthogonal to `status`: a `running` agent may be `idle`. Non-running agents
   report `unknown`.
-- `current_action` — best-effort description of what the agent is doing right now, or
-  `null`. `kind` is `tool` | `thinking` | `unknown`. `detail` is truncated to 120 chars
-  and must be treated as untrusted display text by consumers.
+- `last_activity_at` — when the agent's tmux session last produced output or received
+  input.
+- `current_action` — best-effort, human-readable hint at what the agent is doing, or
+  `null`. `kind` is `pane`: the last non-empty line of the agent's tmux pane, with ANSI
+  and control characters stripped and truncated to 120 characters. It is whatever the
+  harness happens to be rendering — **untrusted display text**, never a stable field to
+  parse. Only sampled for agents that are currently `working`.
 - `model` / `harness` — resolved values after the defaults→template→agent cascade.
+
+### How activity is derived
+
+`tmux.ListSessionActivity` already reports `session_activity` (an epoch that advances on
+pane output, injected input, and interactive typing) plus attached-client count for every
+session in one `list-sessions` call. The tracker sweeps on a ticker (~2s):
+
+- session_activity advanced since the previous sweep → `working`, and `last_activity_at`
+  moves.
+- no advance for longer than the idle threshold (15s) → `idle`.
+- no tmux session, or agent not running → `unknown`.
+
+One tmux call per sweep covers the whole fleet; a `capture-pane` is issued only for
+agents that just advanced, so idle agents cost nothing. Deriving activity from tmux rather
+than from Claude's session JSONL keeps this harness-agnostic — it works identically for
+claude, codex, and opencode — and avoids coupling Leo to another tool's private on-disk
+format.
 
 ### Task
 
@@ -116,15 +146,22 @@ resnapshot).
 
 ## Access
 
-Served on the web listener, subject to the same `web.allowed_hosts` gating as the UI —
-same trust domain (LAN), no separate auth. Because consumers are browser apps served from
-a different origin, both endpoints send permissive CORS headers for `GET` only. This is
-acceptable precisely because the API is read-only; it must never be extended with
-mutating routes under the same CORS policy.
+Both routes register on the existing `apiMux` and inherit its conventions unchanged:
+bearer-token auth (`Authorization: Bearer <token>`) plus the global host/origin gating.
+No new auth mechanism, no new middleware.
+
+**Consumers are server-side, not browsers.** Leo adds no CORS headers and no exemption to
+`hostOriginMiddleware`. A browser-direct consumer would force two bad outcomes — the
+bearer token shipped into page source where any viewer can read it, and `EventSource`
+cannot set an `Authorization` header at all. So a web consumer like The Den ships a thin
+server that holds the token, consumes this API server-side, and re-exposes what its own
+browser client needs on its own origin. That keeps the token server-side and leaves Leo's
+security posture untouched.
 
 ## Testing
 
-- Activity tracker: unit tests over the pane-hash state machine and the JSONL parser with
-  fixture input, using the existing exec seams — no live tmux.
-- Endpoints: `httptest` snapshot shape, SSE framing, heartbeat, slow-consumer drop, and
-  host gating.
+- Activity tracker: unit tests over the working/idle state machine and the pane-line
+  sanitizer, driving the existing `activityExecCommand` seam with fixture output — no
+  live tmux.
+- Event bus: subscribe/publish fan-out, unsubscribe, and slow-consumer drop.
+- Endpoints: `httptest` snapshot shape, SSE framing, heartbeat, and auth rejection.
