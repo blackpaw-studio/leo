@@ -74,11 +74,29 @@ envelope.
 - `last_activity_at` — when the agent's tmux session last produced output or received
   input.
 - `current_action` — best-effort, human-readable hint at what the agent is doing, or
-  `null`. `kind` is `pane`: the last non-empty line of the agent's tmux pane, with ANSI
-  and control characters stripped and truncated to 120 characters. It is whatever the
-  harness happens to be rendering — **untrusted display text**, never a stable field to
-  parse. Only sampled for agents that are currently `working`.
+  `null`. Only sampled for agents that are currently `working`.
+  - `kind` describes where `detail` came from. **`pane` is the only kind Leo emits
+    today**: the last non-empty line of the agent's tmux pane, with ANSI and control
+    characters stripped, truncated to 120 characters. The field exists so a future
+    structured source can be added without reshaping the object, so consumers must
+    **render an unknown kind by falling back to displaying `detail` as plain text**
+    rather than dropping the action.
+  - `detail` is whatever the harness happens to be rendering: **untrusted display text**.
+    Escape it before rendering, never parse it or branch on its contents, and handle it
+    being absent or garbage.
 - `model` / `harness` — resolved values after the defaults→template→agent cascade.
+
+### Agent retention
+
+`agents` lists **every agent Leo knows about, including stopped ones**. There is no
+time-based aging out: an agent stays in the snapshot until it is explicitly removed from
+the agent store (`leo agent reset`/remove), so a long-stopped agent keeps appearing
+indefinitely with `status: "stopped"` and `activity: "unknown"`. Consumers that only care
+about live agents must filter by `status` themselves.
+
+Consequently, an agent disappearing from the snapshot means it was deleted, not that it
+merely stopped — those are different situations and consumers should treat them
+differently.
 
 ### How activity is derived
 
@@ -109,6 +127,13 @@ A single firing: `id`, `task`, `status` (`running` | `succeeded` | `failed`),
 `started_at`, `ended_at` (null while running), `duration_ms`, `error` (null unless
 failed). `recent_runs` is capped (default 50, newest first).
 
+A run also carries `workspace`, `model`, and `harness` — the values resolved for that
+firing. They are deliberately denormalized rather than left as a join through `tasks[]`,
+because the run producer already holds them and the join is not always available: a task
+can be renamed, disabled, or deleted while one of its runs is still in flight, and a
+`task_run_*` event can reach a consumer before it has ever fetched a snapshot. Carrying
+them makes a run self-describing.
+
 ## `GET /api/v1/events`
 
 `text/event-stream`. Each message is a named SSE event with a JSON payload:
@@ -116,7 +141,7 @@ failed). `recent_runs` is capped (default 50, newest first).
 ```
 event: agent_activity
 data: {"seq":184,"at":"2026-07-31T18:44:01-04:00","agent":"den","activity":"working",
-       "current_action":{"kind":"tool","tool":"Bash","detail":"go test ./..."}}
+       "current_action":{"kind":"pane","detail":"Running go test ./..."}}
 ```
 
 Every payload carries a monotonic `seq` and an `at` timestamp. On connect the server

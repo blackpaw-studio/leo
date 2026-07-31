@@ -37,6 +37,10 @@ type Meta struct {
 }
 
 // Payload is one event's body. Implementations embed Meta, which supplies stamp.
+//
+// Because stamp has a pointer receiver, only the *pointer* to a payload satisfies this
+// interface: publish &AgentActivityPayload{...}, never AgentActivityPayload{...}. That is
+// deliberate — the bus stamps the payload in place, so it must not receive a copy.
 type Payload interface {
 	stamp(seq uint64, at time.Time)
 }

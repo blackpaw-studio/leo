@@ -72,6 +72,10 @@ type Agent struct {
 // ActionKind names the provenance of an Action's detail, so consumers can tell how much
 // to trust it. Only ActionKindPane exists today; the field exists so a future structured
 // source can be added without changing the shape.
+//
+// Consumers must treat an unrecognized kind as displayable: fall back to showing Detail
+// as plain text rather than dropping the action, so adding a kind never blanks out an
+// older consumer's display.
 type ActionKind string
 
 // ActionKindPane marks detail scraped from the agent's tmux pane.
@@ -115,6 +119,12 @@ const (
 )
 
 // TaskRun is one firing of a task.
+//
+// Workspace, Model, and Harness are denormalized onto the run rather than left as a join
+// through Snapshot.Tasks: the producer already holds the values it resolved for this
+// firing, and the join is not reliably available to a consumer — a task can be renamed or
+// deleted while a run is in flight, and a task_run_* event can arrive before the consumer
+// has ever fetched a snapshot.
 type TaskRun struct {
 	ID         string     `json:"id"`
 	Task       string     `json:"task"`
@@ -123,6 +133,9 @@ type TaskRun struct {
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
 	DurationMS *int64     `json:"duration_ms,omitempty"`
 	Error      string     `json:"error,omitempty"`
+	Workspace  string     `json:"workspace,omitempty"`
+	Model      string     `json:"model,omitempty"`
+	Harness    string     `json:"harness,omitempty"`
 }
 
 // MaxRecentRuns caps Snapshot.RecentRuns, newest first.
