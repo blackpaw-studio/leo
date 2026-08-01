@@ -198,15 +198,105 @@ func TestBusConcurrentPublishAndSubscribeIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
-// TestHelloSeqSubscribeRaceWindow provokes the exact window a hello frame
-// must not have: a Publish landing between registering a subscriber and
-// reading "the last seq before it" must never be able to bump that seq past
-// what the subscriber will actually have delivered to it as its first event.
-// Subscribe returning the starting seq atomically with registration (both
-// under one acquisition of the bus's lock) is what closes this window; a
-// version that read the sequence via a separate call after Subscribe
-// returned could race a concurrent Publish and over-report.
+// TestHelloSeqSubscribeRaceWindow deterministically exercises a Subscribe
+// call that lands while a Publish is in flight but has not yet delivered:
+// using publishTestHook, it pauses a Publish right after it has bumped seq
+// and snapshotted subscribers (which does not yet include the one about to
+// subscribe) but before it stamps or delivers its event, subscribes during
+// that pause, then lets the paused publish finish. It proves that event is
+// correctly excluded from delivery even though its seq was already counted,
+// and that the very next published event is exactly helloSeq+1 — on every
+// run, not just probabilistically.
+//
+// Note this does not reproduce the literal historical bug Subscribe's own
+// doc comment warns about (reading the starting seq via a second, separate
+// lock acquisition after registration): publishTestHook only fires inside
+// Publish, after Publish's own critical section has already released the
+// bus's lock, so it cannot force a fresh Publish to start and fully
+// complete strictly between a Subscribe's register step and its (would-be)
+// separate read step — there is no test seam inside Subscribe itself to
+// pause at that point, and the current implementation has no such window to
+// pause in (registration and the seq read happen under one lock
+// acquisition). Reinstating the old two-lock composition and rerunning the
+// prior 500-iteration unsynchronized version of this test confirms that
+// composition is still broken (3/3 failures under -race); what closes that
+// window is Subscribe's atomicity itself, per its doc comment, not this
+// test.
 func TestHelloSeqSubscribeRaceWindow(t *testing.T) {
+	b := NewBus()
+
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	origHook := publishTestHook
+	publishTestHook = func(uint64) {
+		once.Do(func() {
+			close(reached)
+			<-release
+		})
+	}
+	t.Cleanup(func() { publishTestHook = origHook })
+
+	publishDone := make(chan struct{})
+	go func() {
+		defer close(publishDone)
+		b.Publish(Event{Type: EventAgentStopped, Payload: &AgentStoppedPayload{Agent: "x"}})
+	}()
+
+	select {
+	case <-reached:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for in-flight publish to reach the seq-assignment hook")
+	}
+
+	// The in-flight publish above has already bumped b.seq and snapshotted
+	// its subscriber list (which does not include us yet) but has not
+	// stamped or delivered its event. Subscribing here is exactly the
+	// window under test.
+	ch, unsub, helloSeq := b.Subscribe(4)
+	t.Cleanup(unsub)
+
+	close(release)
+	select {
+	case <-publishDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the paused publish to complete")
+	}
+
+	// The in-flight publish's event predates our subscription and must not
+	// be delivered to us, even though its seq was already counted.
+	select {
+	case ev := <-ch:
+		t.Fatalf("unexpectedly received the in-flight publish's event: %+v", ev)
+	default:
+	}
+
+	b.Publish(Event{Type: EventAgentStopped, Payload: &AgentStoppedPayload{Agent: "x"}})
+
+	select {
+	case ev := <-ch:
+		payload, ok := ev.Payload.(*AgentStoppedPayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want *AgentStoppedPayload", ev.Payload)
+		}
+		if payload.Seq != helloSeq+1 {
+			t.Fatalf("first delivered seq = %d, want helloSeq+1 = %d", payload.Seq, helloSeq+1)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the post-subscribe event")
+	}
+}
+
+// TestHelloSeqUnderConcurrentPublishers is the regression guard for the
+// historical two-lock composition: registering a subscriber and then reading
+// the starting sequence through a separate call, which let a concurrent
+// Publish bump that sequence past what the subscriber would actually receive.
+//
+// Unlike TestHelloSeqSubscribeRaceWindow, which proves the invariant
+// deterministically but cannot express that interleaving, this one hammers
+// the window with real concurrency. It is probabilistic, but reliably caught
+// the defect under -race, which is how this package's tests always run.
+func TestHelloSeqUnderConcurrentPublishers(t *testing.T) {
 	b := NewBus()
 	stop := make(chan struct{})
 	go func() {
@@ -225,12 +315,17 @@ func TestHelloSeqSubscribeRaceWindow(t *testing.T) {
 		ch, unsub, helloSeq := b.Subscribe(4)
 		select {
 		case ev := <-ch:
-			got := ev.Payload.(*AgentStoppedPayload).Seq
-			if got != helloSeq+1 {
+			payload, ok := ev.Payload.(*AgentStoppedPayload)
+			if !ok {
 				unsub()
-				t.Fatalf("iteration %d: first delivered seq = %d, want helloSeq+1 = %d", i, got, helloSeq+1)
+				t.Fatalf("iteration %d: unexpected payload type %T", i, ev.Payload)
+			}
+			if payload.Seq != helloSeq+1 {
+				unsub()
+				t.Fatalf("iteration %d: first delivered seq = %d, want helloSeq+1 = %d", i, payload.Seq, helloSeq+1)
 			}
 		case <-time.After(time.Second):
+			unsub()
 			t.Fatalf("iteration %d: timed out waiting for an event", i)
 		}
 		unsub()

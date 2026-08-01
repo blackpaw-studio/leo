@@ -30,24 +30,28 @@ func TestObserveTrackerCapturesPaneActionFromRealTmux(t *testing.T) {
 	const agentName = "e2epanecapture"
 	sessionName := agent.SessionName(agentName)
 
-	t.Cleanup(func() {
-		_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
-	})
 	if hasTmuxSession(tmuxPath, sessionName) {
 		t.Fatalf("precondition failed: session %q already exists", sessionName)
 	}
 
 	const knownText = "OBSERVE-PANE-CAPTURE-FIXTURE"
-	// A short-lived shell that prints known text once and then idles, so the
-	// pane has stable, capturable content for the sweep to sample. $1 (not a
-	// literal %s) is how sh -c substitutes the trailing positional arg.
+	// A shell that reprints the known text once per second, bounded to 30
+	// iterations, so the pane keeps advancing tmux's session_activity (which
+	// only has one-second granularity — see internal/tmux/activity.go)
+	// across every sweep instead of going stale after a single print. The
+	// bound guarantees the session self-terminates even if cleanup is
+	// somehow skipped. $1 (not a literal %s) is how sh -c substitutes the
+	// trailing positional arg.
 	newSession := exec.Command(tmuxPath, tmux.Args(
 		"new-session", "-d", "-s", sessionName,
-		"sh", "-c", `printf '%s\n' "$1"; sleep 30`, "_", knownText,
+		"sh", "-c", `i=0; while [ "$i" -lt 30 ]; do printf '%s\n' "$1"; sleep 1; i=$((i + 1)); done`, "_", knownText,
 	)...)
 	if out, err := newSession.CombinedOutput(); err != nil {
 		t.Fatalf("tmux new-session: %v: %s", err, out)
 	}
+	t.Cleanup(func() {
+		_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
+	})
 
 	tr := observe.NewTracker(tmuxPath, func() map[string]string {
 		return map[string]string{agentName: sessionName}
