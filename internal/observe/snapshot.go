@@ -138,8 +138,40 @@ type TaskRun struct {
 	Harness    string     `json:"harness,omitempty"`
 }
 
+// ClampRunFields truncates run's untrusted string fields (ID, Task,
+// Workspace, Model, Harness, Error) to their respective Max*Len caps,
+// returning a copy. It is the daemon's POST /observe/task-run handler's
+// only line of defense against a producer that sends a field far larger
+// than any legitimate value could be — see the Max* constants' doc comment.
+func ClampRunFields(run TaskRun) TaskRun {
+	run.ID = truncateRunes(run.ID, MaxObserveRunIDLen)
+	run.Task = truncateRunes(run.Task, MaxObserveRunTaskLen)
+	run.Workspace = truncateRunes(run.Workspace, MaxObserveRunWorkspaceLen)
+	run.Model = truncateRunes(run.Model, MaxObserveRunModelLen)
+	run.Harness = truncateRunes(run.Harness, MaxObserveRunHarnessLen)
+	run.Error = truncateRunes(run.Error, MaxObserveRunErrorLen)
+	return run
+}
+
 // MaxRecentRuns caps Snapshot.RecentRuns, newest first.
 const MaxRecentRuns = 50
+
+// Field length caps enforced by the daemon's POST /observe/task-run handler
+// before a task-run event from a `leo run` subprocess is recorded and
+// rebroadcast. Unlike every other field in this package, these values
+// originate from an external process over IPC rather than from Leo's own
+// in-process producers, so they get the same untrusted-input discipline
+// Action.Detail already has (see MaxActionDetail): a misbehaving or
+// malicious producer must not be able to inflate what RunLog retains or what
+// every SSE subscriber receives.
+const (
+	MaxObserveRunIDLen        = 200
+	MaxObserveRunTaskLen      = 200
+	MaxObserveRunWorkspaceLen = 1024
+	MaxObserveRunModelLen     = 200
+	MaxObserveRunHarnessLen   = 200
+	MaxObserveRunErrorLen     = 4096
+)
 
 // AgentActivity is the tracker's per-agent reading, keyed by agent name.
 type AgentActivity struct {

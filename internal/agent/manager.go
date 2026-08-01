@@ -1283,6 +1283,14 @@ func (m *Manager) Prune(ctx context.Context, name string, opts PruneOptions) err
 	}
 
 	agentstore.Remove(cfg.HomePath, name)
+	// Prune only ever reaches here for a not-live agent (the EphemeralAgents
+	// check above already rejected a live one), verbatim the rationale
+	// announceStoppedIfNotLive documents for Stop: nothing else along this
+	// path calls sup.StopAgent, so nothing else would announce the removal.
+	m.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: name},
+	})
 	return nil
 }
 
@@ -1429,24 +1437,32 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		return Record{}, fmt.Errorf("%w: %q", ErrAgentNameTaken, newName)
 	}
 
+	persistRename := func() error {
+		return agentstore.Rename(cfg.HomePath, oldName, newName, func(r agentstore.Record) agentstore.Record {
+			r.Name = newName
+			r.ClaudeArgs = rewriteNameArg(r.ClaudeArgs, newName)
+			return r
+		})
+	}
+
 	if _, live := m.sup.EphemeralAgents()[oldName]; live {
 		if err := m.sup.RenameAgent(oldName, newName); err != nil {
 			return Record{}, fmt.Errorf("renaming running agent: %w", err)
 		}
+		if err := persistRename(); err != nil {
+			return Record{}, fmt.Errorf("persisting rename: %w", err)
+		}
 	} else {
-		// Not live: sup.RenameAgent is never called, so the announce it would
-		// otherwise make (agent_stopped(oldName) then agent_spawned(newName))
-		// happens here instead — see the finding this closes: a stopped
-		// agent's rename used to re-key the store in complete silence.
+		// Not live: sup.RenameAgent (and its announce) never runs, so this
+		// path announces on its own — but only AFTER persistRename succeeds.
+		// Announcing first would tell every stream consumer the rename
+		// happened even if the store write then failed, leaving the agent
+		// under its old name with no compensating event to undo the
+		// announce. See the finding this closes.
+		if err := persistRename(); err != nil {
+			return Record{}, fmt.Errorf("persisting rename: %w", err)
+		}
 		m.announceRename(cfg, rec, oldName, newName)
-	}
-
-	if err := agentstore.Rename(cfg.HomePath, oldName, newName, func(r agentstore.Record) agentstore.Record {
-		r.Name = newName
-		r.ClaudeArgs = rewriteNameArg(r.ClaudeArgs, newName)
-		return r
-	}); err != nil {
-		return Record{}, fmt.Errorf("persisting rename: %w", err)
 	}
 
 	rec.Name = newName

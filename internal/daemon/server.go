@@ -517,13 +517,27 @@ type observeTaskRunReq struct {
 	Run  observe.TaskRun `json:"run"`
 }
 
-// validObserveTaskRunTypes is the set of event types PublishTaskRun is
-// allowed to relay into the daemon's RunLog.
-var validObserveTaskRunTypes = map[string]bool{
-	string(observe.EventTaskRunStarted):   true,
-	string(observe.EventTaskRunSucceeded): true,
-	string(observe.EventTaskRunFailed):    true,
+// observeTaskRunStatusForType maps each valid event Type to the Status the
+// server assigns the run — the two can never disagree, because the client's
+// own Run.Status is ignored entirely and overwritten with this value. This
+// closes the gap where a caller could post task_run_started with no (or a
+// bogus) status and have it land verbatim in the RunLog, breaking the wire
+// contract's guarantee that Status is always one of exactly three values.
+var observeTaskRunStatusForType = map[string]observe.RunStatus{
+	string(observe.EventTaskRunStarted):   observe.RunRunning,
+	string(observe.EventTaskRunSucceeded): observe.RunSucceeded,
+	string(observe.EventTaskRunFailed):    observe.RunFailed,
 }
+
+// maxObserveTaskRunBodyBytes bounds the request body for POST
+// /observe/task-run. Unlike the web (TCP) listener, the socket mux this route
+// lives on has no body-size middleware, and this route's input is unusually
+// dangerous to leave unbounded: it is retained (up to observe.MaxRecentRuns
+// entries in the RunLog) and rebroadcast to every SSE subscriber, rather than
+// discarded after one use like most handlers' inputs. Generous relative to
+// the per-field caps below (which do the real work of bounding what's kept)
+// so a legitimate request is never at risk of tripping this first.
+const maxObserveTaskRunBodyBytes int64 = 64 << 10 // 64 KiB
 
 // handleObserveTaskRun relays a task-run event from a `leo run` subprocess
 // into the daemon's RunLog, so it is recorded and fanned out to /api/v1/state
@@ -531,15 +545,29 @@ var validObserveTaskRunTypes = map[string]bool{
 // RunLog (daemon started without SetObservability) makes this a safe no-op —
 // the caller (PublishTaskRun) treats any response as best-effort anyway.
 func (s *Server) handleObserveTaskRun(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxObserveTaskRunBodyBytes)
+
 	var req observeTaskRunReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
 		return
 	}
-	if !validObserveTaskRunTypes[req.Type] {
+	status, ok := observeTaskRunStatusForType[req.Type]
+	if !ok {
 		writeError(w, http.StatusBadRequest, "unsupported event type: "+req.Type)
 		return
 	}
+	if req.Run.ID == "" || req.Run.Task == "" {
+		// RunLog.record matches by ID, so an empty ID would collapse every
+		// ID-less run into one slot, silently overwriting one another; an
+		// empty Task breaks any consumer that displays or groups by it.
+		writeError(w, http.StatusBadRequest, "run.id and run.task are required")
+		return
+	}
+
+	req.Run.Status = status
+	req.Run = observe.ClampRunFields(req.Run)
+
 	if s.observeRunLog != nil {
 		s.observeRunLog.Publish(observe.Event{
 			Type:    observe.EventType(req.Type),

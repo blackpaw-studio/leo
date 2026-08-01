@@ -25,7 +25,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
-	"github.com/blackpaw-studio/leo/internal/run"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -751,22 +750,28 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 }
 
 // wireObservability builds the observability event bus, run log, and
-// activity tracker, wires them as the Publisher for both the supervisor and
-// internal/run's task producers, and starts the tracker's sweep loop in a
-// goroutine tied to ctx (so it exits at shutdown rather than leaking).
-// Extracted from defaultSupervisedExec so this wiring — the thing most
-// likely to silently regress (an Option never passed, a goroutine never
-// started) — is directly callable from a test without booting the whole
-// daemon.
+// activity tracker, wires the run log as the Publisher for the supervisor,
+// and starts the tracker's sweep loop in a goroutine tied to ctx (so it
+// exits at shutdown rather than leaking). Extracted from
+// defaultSupervisedExec so this wiring — the thing most likely to silently
+// regress (an Option never passed, a goroutine never started) — is directly
+// callable from a test without booting the whole daemon.
+//
+// internal/run's producers are NOT wired here: every task execution is a
+// `leo run` subprocess, a different OS process from the daemon, so a
+// run.SetPublisher call made in this process could never be observed by
+// run.publishEvent in that one. That producer instead reports over the IPC
+// socket via daemon.ObservePublisher, wired per-invocation in
+// internal/cli/run.go — see handleObserveTaskRun in internal/daemon/server.go
+// for the daemon-side end of that path.
 func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) (*observe.Bus, *observe.RunLog, *observe.Tracker) {
 	// runLog forwards every event to bus (the HTTP layer's read seam) and
-	// additionally records task runs, so it is the single Publisher every
-	// producer (supervisor, run) is given — see internal/observe.RunLog's
-	// doc comment for why it wraps the bus rather than subscribing to it.
+	// additionally records task runs, so it is the single Publisher the
+	// supervisor is given — see internal/observe.RunLog's doc comment for why
+	// it wraps the bus rather than subscribing to it.
 	bus := observe.NewBus()
 	runLog := observe.NewRunLog(bus, 0)
 	sv.SetPublisher(runLog)
-	run.SetPublisher(runLog)
 
 	// sv.SessionNames is the narrow accessor onto the live agent-name ->
 	// tmux-session-name mapping the tracker sweeps (see its doc comment for

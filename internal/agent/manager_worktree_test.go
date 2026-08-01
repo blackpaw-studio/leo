@@ -13,6 +13,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // capturingSupervisor records calls so tests can assert ordering + rollback.
@@ -364,6 +365,48 @@ func TestPruneWorktreeHappyPath(t *testing.T) {
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
 	if _, ok := stored[rec.Name]; ok {
 		t.Errorf("agentstore record should be gone after prune")
+	}
+}
+
+// TestPrunePublishesAgentStopped is the regression test for finding #6's
+// second half: Prune only ever runs against a not-live agent (the
+// EphemeralAgents check above rejects a live one with ErrAgentStillRunning),
+// which is verbatim the rationale announceStoppedIfNotLive documents for
+// Stop — yet Prune called agentstore.Remove with no publish at all, so a
+// pruned agent vanished from the snapshot with no compensating event for a
+// stream-only consumer.
+func TestPrunePublishesAgentStopped(t *testing.T) {
+	mgr, _, _ := newWorktreeTestManager(t, "leo")
+	installFakeGit(t, map[string]git.BranchStatus{})
+	pub := &recordingObservePublisher{}
+	mgr.SetPublisher(pub)
+
+	rec, err := mgr.Spawn(context.Background(), SpawnSpec{
+		Template: "coding",
+		Repo:     "blackpaw-studio/leo",
+		Branch:   "feat/prune-publish",
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if err := mgr.Stop(rec.Name); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	pub.events = nil // only interested in what Prune itself publishes
+
+	if err := mgr.Prune(context.Background(), rec.Name, PruneOptions{}); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	if len(pub.events) != 1 {
+		t.Fatalf("expected exactly 1 published event from Prune, got %d: %+v", len(pub.events), pub.events)
+	}
+	stopped, ok := pub.events[0].Payload.(*observe.AgentStoppedPayload)
+	if !ok || pub.events[0].Type != observe.EventAgentStopped {
+		t.Fatalf("expected AgentStopped, got %s (%T)", pub.events[0].Type, pub.events[0].Payload)
+	}
+	if stopped.Agent != rec.Name {
+		t.Fatalf("expected agent %q, got %q", rec.Name, stopped.Agent)
 	}
 }
 

@@ -1,11 +1,55 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/redact"
+	"github.com/blackpaw-studio/leo/internal/run"
 )
+
+// TestRunCommandWiresObservePublisher is the regression test for finding #3:
+// internal/cli/run.go's run.SetPublisher(daemon.NewObservePublisher(...))
+// call is the entire fix for "a `leo run` subprocess has no in-process
+// handle on the daemon's RunLog" — deleting that one line left the rest of
+// the observability suite green. This drives the actual `leo run <task>`
+// command path (newRunCmd's RunE), not a hand-copied reproduction of its
+// SetPublisher call, and asserts the seam it's supposed to wire —
+// run.CurrentPublisher() — really reflects an ObservePublisher pointed at
+// this config's HomePath afterward.
+//
+// The task name deliberately does not exist in cfg.Tasks: RunE calls
+// run.SetPublisher before run.Run, and run.Run fails fast in resolveTask for
+// an unknown task, so this observes the wiring without needing a working
+// harness binary or a live daemon.
+func TestRunCommandWiresObservePublisher(t *testing.T) {
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte("defaults:\n  model: sonnet\n"), 0600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	origCfgFile := cfgFile
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = origCfgFile })
+	t.Cleanup(func() { run.SetPublisher(nil) })
+
+	cmd := newRunCmd()
+	_ = cmd.RunE(cmd, []string{"no-such-task"}) // expected to error; only the wiring matters
+
+	pub := run.CurrentPublisher()
+	observePub, ok := pub.(*daemon.ObservePublisher)
+	if !ok {
+		t.Fatalf("expected run.CurrentPublisher() to be a *daemon.ObservePublisher, got %T", pub)
+	}
+	want := daemon.NewObservePublisher(home)
+	if observePub == nil || *observePub != *want {
+		t.Fatalf("ObservePublisher not pointed at HomePath %q: got %+v", home, observePub)
+	}
+}
 
 // TestTaskDryRunEnv verifies the env pairs returned for a task, sorted by key.
 // Channels-only tasks populate LEO_CHANNELS; dev_channels populate LEO_DEV_CHANNELS.

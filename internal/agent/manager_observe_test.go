@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
@@ -152,6 +155,57 @@ func TestRenameStoppedAgentPublishesStoppedThenSpawned(t *testing.T) {
 	}
 	if spawned.Agent.Branch != "feature" {
 		t.Fatalf("expected spawned agent to carry Branch %q from the stored record, got %q", "feature", spawned.Agent.Branch)
+	}
+}
+
+// TestRenameStoppedAgentDoesNotAnnounceWhenPersistFails is the regression
+// test for finding #5: the stopped-agent rename path used to announce
+// agent_stopped/agent_spawned BEFORE agentstore.Rename ran, so a persist
+// failure left every stream consumer believing the rename happened while the
+// agent, in truth, still exists under its old name with no compensating
+// event. Reproduced with a read-only agents.json: the load inside
+// agentstore.Rename still succeeds (read access is untouched), but the
+// write that persists the re-key fails, so Rename must return an error and
+// publish nothing at all.
+func TestRenameStoppedAgentDoesNotAnnounceWhenPersistFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file-mode-based read-only simulation is POSIX-specific")
+	}
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-stopped",
+		Branch:     "feature",
+		Stopped:    true,
+		ClaudeArgs: []string{"--name", "leo-stopped"},
+	})
+	storePath := agentstore.FilePath(home)
+	if err := os.Chmod(storePath, 0o400); err != nil {
+		t.Fatalf("chmod store read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(storePath, 0o600) })
+
+	sup := &fakeSupervisor{ephemeral: map[string]ProcessState{}} // not live
+	m := newTestManager(t, home, sup)
+	pub := &recordingObservePublisher{}
+	m.SetPublisher(pub)
+
+	if _, err := m.Rename("leo-stopped", "leo-revived"); err == nil {
+		t.Fatal("expected Rename to fail against a read-only store")
+	}
+
+	if len(pub.events) != 0 {
+		t.Fatalf("expected no events published when persisting the rename failed, got %+v", pub.events)
+	}
+
+	recs, err := agentstore.Load(filepath.Clean(storePath))
+	if err != nil {
+		t.Fatalf("loading store after failed rename: %v", err)
+	}
+	if _, ok := recs["leo-stopped"]; !ok {
+		t.Fatal("expected the agent to still exist under its old name after a failed rename")
+	}
+	if _, ok := recs["leo-revived"]; ok {
+		t.Fatal("store must not show the new name when the rename never persisted")
 	}
 }
 

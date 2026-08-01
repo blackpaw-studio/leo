@@ -168,6 +168,35 @@ capped at `MaxRecentRuns`:
   `ended_at` and `duration_ms` are omitted rather than fabricated — a completed run must
   never report `started_at == ended_at` as a stand-in for "we don't actually know".
 
+### Task-run ingress (internal, not part of this API)
+
+`recent_runs`/`task_run_*` events reach the daemon two ways: in-process (the
+supervisor/session router publish directly), and over IPC from a `leo run`
+subprocess via `POST /observe/task-run` on the daemon's existing 0600 Unix
+socket — a different listener from `/api/v1`, with no bearer-token auth (the
+socket's filesystem permissions are the access control) and not reachable
+from the TCP web listener. It exists solely so a subprocess with no
+in-process handle on the daemon's RunLog can still announce a run.
+
+The daemon does not trust this input verbatim:
+
+- `Run.Status` is never taken from the request — it is derived server-side
+  from `Type` (a 1:1 mapping), so a run's status can never disagree with the
+  event type a consumer receives it under.
+- `Run.ID` and `Run.Task` are required; either being empty is rejected with
+  400 rather than forwarded (an empty ID would otherwise collapse every
+  such run into a single RunLog slot, since records are matched by ID).
+- The request body is capped at 64 KiB (`http.MaxBytesReader`), and
+  `Run.ID`/`Run.Task`/`Run.Model`/`Run.Harness` are truncated to 200
+  characters, `Run.Workspace` to 1024, and `Run.Error` to 4096 — the same
+  untrusted-display-text discipline `current_action.detail` already gets,
+  since this input is retained (up to `MaxRecentRuns` entries) and rebroadcast
+  to every `/api/v1/events` subscriber, not discarded after one use.
+- A rejected or truncated event is invisible to the task that produced it:
+  `PublishTaskRun` treats every response as best-effort, so observability
+  being unavailable, rejecting, or truncating never fails or slows a `leo run`
+  invocation.
+
 ## `GET /api/v1/events`
 
 `text/event-stream`. Each message is a named SSE event with a JSON payload:

@@ -31,6 +31,17 @@ func SetPublisher(p observe.Publisher) {
 	publisher = p
 }
 
+// CurrentPublisher returns the Publisher SetPublisher last installed, or nil
+// if none has been set. It exists so a test can assert that a given seam
+// (e.g. internal/cli/run.go's per-invocation SetPublisher call) actually ran,
+// rather than only exercising the seam's target in isolation — see
+// internal/cli/run_test.go for the regression this closes.
+func CurrentPublisher() observe.Publisher {
+	publisherMu.RLock()
+	defer publisherMu.RUnlock()
+	return publisher
+}
+
 // publishEvent is a nil-safe no-op when no publisher has been configured.
 func publishEvent(ev observe.Event) {
 	publisherMu.RLock()
