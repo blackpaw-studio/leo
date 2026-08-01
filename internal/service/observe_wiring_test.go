@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +18,21 @@ import (
 	"github.com/blackpaw-studio/leo/internal/run"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
+
+// freeTCPPort asks the OS for an unused loopback port, releasing it
+// immediately so the caller can bind it. A hardcoded test port risks
+// colliding with another test or a real process on the machine running the
+// suite; this trades that for a (much smaller) bind-time TOCTOU window,
+// which is the standard tradeoff for tests that need a real listener.
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a free port: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
 
 // TestObservabilityWiringEndToEnd builds the same bus + run log + activity
 // tracker + web.New wiring RunSupervised assembles in production (see
@@ -49,14 +66,14 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 		t.Fatalf("writing config: %v", err)
 	}
 
-	const testPort = 18371
+	testPort := freeTCPPort(t)
 	const apiToken = "test-token-0123456789abcdef0123456789abcdef"
 	webSrv := web.New(cfgPath, nil, nil, nil, nil, web.Options{
 		Port:     testPort,
 		APIToken: apiToken,
 	}, web.WithEventSource(bus), web.WithActivityProvider(tracker), web.WithRunLog(runLog), web.WithVersion("v-wiring-test"))
 
-	addr := "127.0.0.1:18371"
+	addr := fmt.Sprintf("127.0.0.1:%d", testPort)
 	if err := webSrv.ListenAndServe(addr); err != nil {
 		t.Fatalf("ListenAndServe: %v", err)
 	}
@@ -96,8 +113,14 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 		t.Fatalf("SpawnAgent: %v", err)
 	}
 
-	// --- A task-run event, published the same way internal/run's producers
-	// do (through the Publisher set by run.SetPublisher). ---
+	// --- A task-run event, injected directly into the run log to exercise
+	// the daemon-side HTTP/SSE wiring (buildSnapshot, the bus) in isolation
+	// from the producer side. The producer side — a `leo run` subprocess
+	// reporting over IPC via daemon.ObservePublisher — is NOT exercised by
+	// calling runLog.Publish directly here; that path is covered end-to-end
+	// by TestTaskRunObservabilityReachesDaemonOverIPC below, which drives a
+	// real daemon.Server + PublishTaskRun round-trip the way run.Run's
+	// subprocess-side publisher actually does. ---
 	startedAt := time.Now()
 	runLog.Publish(observe.Event{
 		Type: observe.EventTaskRunStarted,

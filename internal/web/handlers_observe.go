@@ -326,8 +326,7 @@ func runError(e history.Entry) string {
 // written directly, per the wire contract.
 // GET /api/v1/events
 func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
@@ -342,15 +341,29 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	// let a stalled client (one that stops reading, e.g. a full TCP receive
 	// window) block this goroutine inside a write forever, since
 	// r.Context() only fires when the connection itself closes.
+	//
+	// http.NewResponseController never returns nil, so — unlike the http.Flusher
+	// type assertion above — there is no "unsupported" case to guard here.
 	rc := http.NewResponseController(w)
 	writeTimeout := s.sseWriteTimeout
 	if writeTimeout <= 0 {
 		writeTimeout = defaultSSEWriteTimeout
 	}
 	setWriteDeadline := func() {
-		if rc != nil {
-			_ = rc.SetWriteDeadline(time.Now().Add(writeTimeout))
-		}
+		_ = rc.SetWriteDeadline(time.Now().Add(writeTimeout))
+	}
+
+	// Subscribe before writing anything a client can observe (headers
+	// included): a subscriber registered only after the first response byte
+	// reaches the client races a publisher that fires the instant it sees
+	// the connection open — the response controller's Do() can return once
+	// headers land, a few instructions before Subscribe would otherwise run,
+	// so a fast publish immediately after connecting could be dropped.
+	var events <-chan observe.Event
+	if s.events != nil {
+		var unsubscribe func()
+		events, unsubscribe = s.events.Subscribe(sseSubscriberBuffer)
+		defer unsubscribe()
 	}
 
 	setWriteDeadline()
@@ -361,13 +374,8 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	if err := writeSSEEvent(w, string(observe.EventHello), hello); err != nil {
 		return
 	}
-	flusher.Flush()
-
-	var events <-chan observe.Event
-	if s.events != nil {
-		var unsubscribe func()
-		events, unsubscribe = s.events.Subscribe(sseSubscriberBuffer)
-		defer unsubscribe()
+	if err := rc.Flush(); err != nil {
+		return
 	}
 
 	heartbeat := s.sseHeartbeat
@@ -386,7 +394,9 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
 				return
 			}
-			flusher.Flush()
+			if err := rc.Flush(); err != nil {
+				return
+			}
 		case ev, ok := <-events:
 			// events is nil when s.events is unset: a nil channel receive
 			// never fires, so this case is simply inert (hello + heartbeats
@@ -401,7 +411,9 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			if err := writeSSEEvent(w, string(ev.Type), ev.Payload); err != nil {
 				return
 			}
-			flusher.Flush()
+			if err := rc.Flush(); err != nil {
+				return
+			}
 		}
 	}
 }

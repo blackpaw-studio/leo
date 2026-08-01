@@ -270,12 +270,16 @@ func TestTrackerSweepDoesNotPublishWhenNothingChanged(t *testing.T) {
 	}
 }
 
-// TestTrackerSweepForgetsAgentRemovedFromSessionMap guards the second half
-// of finding #4: when RenameAgent re-keys the supervisor's identity map, the
-// old name simply stops appearing in sessionNames() the next sweep. The
-// tracker must forget it entirely rather than continuing to report a
-// reading for a name that no longer exists — a stale name must never emit
-// activity after it's gone.
+// TestTrackerSweepForgetsAgentRemovedFromSessionMap documents sweep's
+// wholesale-replace behavior (`t.activities = next` in sweep, rebuilt fresh
+// from sessionNames() every pass) rather than guarding any specific past
+// fix: when RenameAgent re-keys the supervisor's identity map, the old name
+// simply stops appearing in sessionNames() the next sweep, and because sweep
+// never carries forward entries outside the current sessionNames() set, the
+// old name is forgotten automatically. This test passes identically whether
+// or not the incremental-update change it once referenced ever touched this
+// path — it would only fail if sweep were rewritten to merge into the
+// previous map instead of replacing it.
 func TestTrackerSweepForgetsAgentRemovedFromSessionMap(t *testing.T) {
 	// Arrange
 	origList := listSessionActivityFn

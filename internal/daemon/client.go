@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 // SockPath returns the daemon socket path for a workspace.
@@ -245,6 +247,55 @@ func ReportTask(ctx context.Context, workDir, invocationID, sessionID, finalMess
 func ReportTaskHTTP(ctx context.Context, baseURL, invocationID, sessionID, finalMessage, sessionName string) error {
 	_ = sessionName
 	return reportTask(ctx, &http.Client{Timeout: 30 * time.Second}, baseURL, invocationID, sessionID, finalMessage)
+}
+
+// observeTaskRunPublishTimeout bounds a single PublishTaskRun round-trip.
+// Task-run observability must never delay or fail a run because the daemon
+// is slow or unreachable, so this is intentionally short relative to task
+// timeouts (which run in minutes).
+const observeTaskRunPublishTimeout = 2 * time.Second
+
+// PublishTaskRun reports a task-run event to the daemon over the workspace's
+// Unix socket, so it lands in the daemon's observe.RunLog — the only place
+// internal/run's producers (a `leo run` subprocess, which never runs inside
+// the daemon's own process) can announce a run from. The caller must treat
+// any returned error as non-fatal: a manual `leo run` with no daemon running
+// must still execute the task normally. See internal/run's Publisher wiring
+// in internal/cli/run.go for the non-fatal wrapper.
+func PublishTaskRun(ctx context.Context, workDir string, eventType observe.EventType, run observe.TaskRun) error {
+	ctx, cancel := context.WithTimeout(ctx, observeTaskRunPublishTimeout)
+	defer cancel()
+
+	cli := newUnixClient(SockPath(workDir))
+	return publishTaskRun(ctx, cli, "http://daemon", eventType, run)
+}
+
+// PublishTaskRunHTTP is the test-friendly variant that talks to baseURL via
+// a plain HTTP client, with no timeout override beyond the caller's ctx.
+func PublishTaskRunHTTP(ctx context.Context, baseURL string, eventType observe.EventType, run observe.TaskRun) error {
+	return publishTaskRun(ctx, &http.Client{Timeout: observeTaskRunPublishTimeout}, baseURL, eventType, run)
+}
+
+func publishTaskRun(ctx context.Context, cli *http.Client, baseURL string, eventType observe.EventType, run observe.TaskRun) error {
+	body := observeTaskRunReq{Type: string(eventType), Run: run}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshaling task-run event: %w", err)
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/observe/task-run", bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("creating task-run publish request: %w", err)
+	}
+	hreq.Header.Set("Content-Type", "application/json")
+	resp, err := cli.Do(hreq)
+	if err != nil {
+		return fmt.Errorf("posting task-run event: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("publish task-run: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func reportTask(ctx context.Context, cli *http.Client, baseURL, invocationID, sessionID, finalMessage string) error {

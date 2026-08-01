@@ -133,6 +133,45 @@ func TestRunLogRecentReturnsDefensiveCopies(t *testing.T) {
 	}
 }
 
+// TestRunLogPublishCopiesPointerFieldsOnRecord is the write-side counterpart
+// to TestRunLogRecentReturnsDefensiveCopies: record() used to store the
+// TaskRun's EndedAt/DurationMS pointers as-is, aliasing whatever the
+// publisher's own payload pointed to. A publisher (or a slow/buggy
+// subscriber sharing the same *TaskRunPayload) mutating its own copy after
+// Publish returns must never be able to reach back into the log's internal
+// state through those pointers.
+func TestRunLogPublishCopiesPointerFieldsOnRecord(t *testing.T) {
+	log := NewRunLog(nil, 0)
+	started := time.Now()
+	ended := started.Add(time.Second)
+	durationMS := int64(1000)
+	payload := &TaskRunPayload{Run: TaskRun{
+		ID: "r1", Task: "task-a", Status: RunSucceeded, StartedAt: started,
+		EndedAt: &ended, DurationMS: &durationMS,
+	}}
+	log.Publish(Event{Type: EventTaskRunSucceeded, Payload: payload})
+
+	// Capture the pre-mutation values before mutating through the shared
+	// pointers below — EndedAt/DurationMS on payload.Run alias started's own
+	// `ended`/`durationMS` locals (both took their address directly), so
+	// mutating through the pointer changes those locals too; comparing
+	// against a snapshot avoids the test corrupting its own expectation.
+	wantEnded := ended
+	wantDuration := durationMS
+
+	// Mutate the publisher's own payload after Publish returns.
+	*payload.Run.EndedAt = ended.Add(time.Hour)
+	*payload.Run.DurationMS = 999999
+
+	recent := log.Recent(10)
+	if !recent[0].EndedAt.Equal(wantEnded) {
+		t.Fatalf("expected internal state unaffected by publisher-side mutation via shared pointer, got %v want %v", recent[0].EndedAt, wantEnded)
+	}
+	if *recent[0].DurationMS != wantDuration {
+		t.Fatalf("expected internal DurationMS unaffected by publisher-side mutation, got %d want %d", *recent[0].DurationMS, wantDuration)
+	}
+}
+
 func TestRunLogRecentZeroOrNegativeReturnsAll(t *testing.T) {
 	log := NewRunLog(nil, 0)
 	log.Publish(Event{Type: EventTaskRunStarted, Payload: startedPayload("r1", "task-a", time.Now())})

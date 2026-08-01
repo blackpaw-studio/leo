@@ -45,8 +45,14 @@ func (l *RunLog) Publish(ev Event) {
 }
 
 // record inserts or updates run by ID, keeping runs newest-first and
-// trimming to capacity.
+// trimming to capacity. run is deep-copied before being stored — symmetric
+// with Recent's deep copy on read — so a publisher (or another subscriber
+// sharing the same *TaskRunPayload) mutating its own copy's EndedAt/
+// DurationMS pointees after Publish returns can never reach into the log's
+// internal state through them.
 func (l *RunLog) record(run TaskRun) {
+	run = cloneTaskRun(run)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

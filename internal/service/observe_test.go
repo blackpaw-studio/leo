@@ -323,6 +323,38 @@ func TestSuspendAgentPublishesAgentStateChangedSuspended(t *testing.T) {
 	}
 }
 
+// TestSuspendAgentPreservesRestartCount is the regression test for nit #6:
+// SuspendAgent used to hardcode Restarts: 0 in its published payload,
+// clobbering the real count for an agent that crash-looped before being
+// suspended. The value must be read from the live state before it's deleted.
+func TestSuspendAgentPreservesRestartCount(t *testing.T) {
+	// Arrange
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sv := NewSupervisor(ctx)
+	sv.tmuxPath = "false"
+	pub := &recordingPublisher{}
+	sv.SetPublisher(pub)
+	sv.mu.Lock()
+	sv.states["agent-a"] = &ProcessState{Name: "agent-a", Status: "running", Ephemeral: true, Restarts: 7}
+	sv.cancels["agent-a"] = func() {}
+	sv.mu.Unlock()
+
+	// Act
+	if err := sv.SuspendAgent("agent-a"); err != nil {
+		t.Fatalf("SuspendAgent: %v", err)
+	}
+
+	// Assert
+	payload, ok := pub.events[0].Payload.(*observe.AgentStateChangedPayload)
+	if !ok {
+		t.Fatalf("expected AgentStateChangedPayload, got %T", pub.events[0].Payload)
+	}
+	if payload.Restarts != 7 {
+		t.Fatalf("expected Restarts 7 to survive suspend, got %d", payload.Restarts)
+	}
+}
+
 // TestSpawnAgentResumedPublishesAgentStateChanged guards finding #3's other
 // half: resuming a suspended agent must surface as a state transition
 // (agent_state_changed), not as a brand-new agent appearing

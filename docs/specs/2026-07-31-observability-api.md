@@ -206,6 +206,19 @@ event type to stay correct, it just sees the old name leave and the new one appe
 `agent_spawned` payload's `template`/`repo`/`branch`/`model` are empty at this point (the
 agentstore record is re-keyed to the new name only after the rename completes), degrading
 the same way a spawn does when those sources aren't available yet — see the note above.
+`workspace` and `harness` are also empty here — the supervisor's in-memory process state
+carries neither, and reloading the (still-under-the-old-name) agentstore record to fill
+them in isn't worth the extra I/O on this already-degraded, best-effort payload. A
+consumer that needs any of `template`/`repo`/`branch`/`model`/`workspace`/`harness`
+reliably should treat every field on a rename's `agent_spawned` as a hint and fall back to
+`GET /api/v1/state` — the same fallback the spawn note above already establishes.
+
+Renaming a *stopped* agent publishes the same `agent_stopped`/`agent_spawned` pair, but
+sourced from the agentstore record directly (rather than the supervisor's in-memory
+state), so `template`/`repo`/`branch`/`workspace`/`model`/`harness` are populated exactly
+as they would be for a live agent in `GET /api/v1/state` — the record hasn't been
+re-keyed away from the source data yet at publish time the way the live-rename path's
+process state has.
 
 Slow consumers are dropped rather than buffered without bound: each subscriber gets a
 bounded channel, and a subscriber that fills it is disconnected (it will reconnect and

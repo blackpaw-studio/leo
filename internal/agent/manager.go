@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -69,6 +70,28 @@ type Manager struct {
 	// SpawnRequest so the supervisor can export LEO_API_TOKEN for the
 	// agent's MCP server.
 	webToken string
+	// publisher announces the lifecycle transitions Manager itself decides
+	// never to forward to sup (a stopped/suspended agent has no live process
+	// for sup.StopAgent/RenameAgent to act on, so those calls — and their
+	// publishes — are skipped entirely on that path; see Stop and Rename).
+	// Optional: nil (the default) makes publish a safe no-op, matching
+	// service.Supervisor's own publisher seam.
+	publisher observe.Publisher
+}
+
+// SetPublisher wires an observe.Publisher into the Manager, for lifecycle
+// transitions that happen purely against the agentstore (no live sup call).
+// Optional; daemon boot is the only production caller.
+func (m *Manager) SetPublisher(p observe.Publisher) {
+	m.publisher = p
+}
+
+// publish is a nil-safe no-op when no publisher has been configured.
+func (m *Manager) publish(ev observe.Event) {
+	if m.publisher == nil {
+		return
+	}
+	m.publisher.Publish(ev)
 }
 
 // New constructs a Manager. tmuxPath is used for Logs (tmux capture-pane); pass the
@@ -828,10 +851,28 @@ func (m *Manager) Stop(name string) error {
 		if saveErr := agentstore.Save(cfg.HomePath, rec); saveErr != nil {
 			log.Printf("agent %q stopped but marking Stopped=true failed: %v — agent may be resurrected on daemon restart", name, saveErr)
 		}
+		m.announceStoppedIfNotLive(live, name)
 		return nil
 	}
 	agentstore.Remove(cfg.HomePath, name)
+	m.announceStoppedIfNotLive(live, name)
 	return nil
+}
+
+// announceStoppedIfNotLive publishes agent_stopped for a Stop that was
+// satisfied purely against the agentstore (the agent was suspended or
+// otherwise not live, so sup.StopAgent — and the publish inside it — was
+// never called; see Stop's doc comment). When live is true, sup.StopAgent
+// already published this event, so this is a deliberate no-op to avoid a
+// duplicate.
+func (m *Manager) announceStoppedIfNotLive(live bool, name string) {
+	if live {
+		return
+	}
+	m.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: name},
+	})
 }
 
 // Suspend stops a running ephemeral agent's process and tmux session while
@@ -1392,6 +1433,12 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		if err := m.sup.RenameAgent(oldName, newName); err != nil {
 			return Record{}, fmt.Errorf("renaming running agent: %w", err)
 		}
+	} else {
+		// Not live: sup.RenameAgent is never called, so the announce it would
+		// otherwise make (agent_stopped(oldName) then agent_spawned(newName))
+		// happens here instead — see the finding this closes: a stopped
+		// agent's rename used to re-key the store in complete silence.
+		m.announceRename(cfg, rec, oldName, newName)
 	}
 
 	if err := agentstore.Rename(cfg.HomePath, oldName, newName, func(r agentstore.Record) agentstore.Record {
@@ -1404,6 +1451,38 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 
 	rec.Name = newName
 	return rec, nil
+}
+
+// announceRename publishes the same agent_stopped-then-agent_spawned
+// sequence service.Supervisor.RenameAgent publishes for a live rename,
+// for the not-live path where that call never happens. Unlike the live
+// path (which zeroes Template/Repo/Branch/Model because the agentstore
+// record isn't re-keyed yet when it publishes), rec here already carries
+// them from the stored record, so the spawned view is fully populated.
+func (m *Manager) announceRename(cfg *config.Config, rec Record, oldName, newName string) {
+	m.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: oldName},
+	})
+
+	agent := observe.Agent{
+		Name:      newName,
+		Template:  rec.Template,
+		Repo:      rec.Repo,
+		Workspace: rec.Workspace,
+		Branch:    rec.Branch,
+		Status:    observe.StatusStopped,
+	}
+	if cfg != nil && rec.Template != "" {
+		if tmpl, ok := cfg.Templates[rec.Template]; ok {
+			agent.Model = cfg.TemplateModel(tmpl)
+			agent.Harness = cfg.TemplateHarness(tmpl)
+		}
+	}
+	m.publish(observe.Event{
+		Type:    observe.EventAgentSpawned,
+		Payload: &observe.AgentSpawnedPayload{Agent: agent},
+	})
 }
 
 // resolveStored finds a persisted (possibly stopped) agent by exact name when

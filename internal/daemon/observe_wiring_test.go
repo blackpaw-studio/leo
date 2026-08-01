@@ -3,6 +3,8 @@ package daemon
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +16,21 @@ import (
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
+// freeTCPPort asks the OS for an unused loopback port, releasing it
+// immediately so the caller can bind it. A hardcoded test port risks
+// colliding with another test or a real process on the machine running the
+// suite; this trades that for a (much smaller) bind-time TOCTOU window,
+// which is the standard tradeoff for tests that need a real listener.
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a free port: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
 // TestStartWebForwardsObservabilityOptions verifies that SetObservability's
 // dependencies actually reach web.New via StartWeb's extra Options — the
 // specific bug class this test exists to catch is "SetObservability was
@@ -22,8 +39,8 @@ import (
 func TestStartWebForwardsObservabilityOptions(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
-	cfgYAML := "defaults:\n  model: sonnet\nweb:\n  enabled: true\n  port: " +
-		"18372\n"
+	testPort := freeTCPPort(t)
+	cfgYAML := fmt.Sprintf("defaults:\n  model: sonnet\nweb:\n  enabled: true\n  port: %d\n", testPort)
 	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0600); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}
@@ -51,7 +68,7 @@ func TestStartWebForwardsObservabilityOptions(t *testing.T) {
 		t.Fatalf("reading api token: %v", err)
 	}
 	token := strings.TrimSpace(string(apiToken))
-	addr := "127.0.0.1:18372"
+	addr := fmt.Sprintf("127.0.0.1:%d", testPort)
 	baseURL := "http://" + addr
 
 	// Publish a run event before subscribing isn't needed for /state (RunLog

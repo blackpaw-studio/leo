@@ -331,14 +331,25 @@ func (s *Supervisor) StopAgent(name string) error {
 // transition back) — a consumer must be able to tell that apart from an
 // agent that left supervision for good.
 func (s *Supervisor) SuspendAgent(name string) error {
+	// Read Restarts before stopAgentProcess deletes the state entry — a
+	// crash-looped agent's real count would otherwise be silently clobbered
+	// to 0 in the published payload.
+	s.mu.RLock()
+	restarts := 0
+	if st, ok := s.states[name]; ok {
+		restarts = st.Restarts
+	}
+	s.mu.RUnlock()
+
 	if err := s.stopAgentProcess(name); err != nil {
 		return err
 	}
 	s.publish(observe.Event{
 		Type: observe.EventAgentStateChanged,
 		Payload: &observe.AgentStateChangedPayload{
-			Agent:  name,
-			Status: observe.StatusSuspended,
+			Agent:    name,
+			Status:   observe.StatusSuspended,
+			Restarts: restarts,
 		},
 	})
 	return nil
@@ -689,6 +700,12 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// Build the agent.Manager shared by web, daemon, and CLI handlers.
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
+		// runLog is the same Publisher wired into the supervisor (SetPublisher
+		// above) — see agent.Manager.SetPublisher's doc comment for why the
+		// manager needs its own seam: a stop/rename against a non-live agent
+		// never reaches sup.StopAgent/RenameAgent, so it never reaches the
+		// supervisor's own publish calls either.
+		agentMgr.SetPublisher(runLog)
 		srv.SetAgentManager(agentMgr)
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets

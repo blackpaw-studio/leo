@@ -132,6 +132,13 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
 	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
 
+	// Task-run observability: a `leo run` subprocess (cron, web run-now, or
+	// manual invocation) has no in-process access to the daemon's RunLog, so
+	// it reports task_run_* events here instead. See wireObservability and
+	// internal/run.SetPublisher's doc comments for why the daemon-side
+	// producer path (Supervisor) differs from this subprocess-side one.
+	mux.HandleFunc("POST /observe/task-run", s.handleObserveTaskRun)
+
 	// Persistent-task prompt delivery (ensure-exists into agent tmux sessions).
 	mux.HandleFunc("POST /task/enqueue", s.handleTaskEnqueue)
 	mux.HandleFunc("GET /task/await", s.handleTaskAwait)
@@ -499,6 +506,47 @@ func (s *Server) handleTaskReport(w http.ResponseWriter, r *http.Request) {
 		FinalMessage: req.FinalMessage,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// observeTaskRunReq is the wire body for POST /observe/task-run. Type must be
+// one of the observe.EventTaskRun* constants; anything else is rejected
+// rather than forwarded, since this route's only purpose is relaying the
+// three task-run event types a subprocess producer can emit.
+type observeTaskRunReq struct {
+	Type string          `json:"type"`
+	Run  observe.TaskRun `json:"run"`
+}
+
+// validObserveTaskRunTypes is the set of event types PublishTaskRun is
+// allowed to relay into the daemon's RunLog.
+var validObserveTaskRunTypes = map[string]bool{
+	string(observe.EventTaskRunStarted):   true,
+	string(observe.EventTaskRunSucceeded): true,
+	string(observe.EventTaskRunFailed):    true,
+}
+
+// handleObserveTaskRun relays a task-run event from a `leo run` subprocess
+// into the daemon's RunLog, so it is recorded and fanned out to /api/v1/state
+// and /api/v1/events exactly as if it had been published in-process. A nil
+// RunLog (daemon started without SetObservability) makes this a safe no-op —
+// the caller (PublishTaskRun) treats any response as best-effort anyway.
+func (s *Server) handleObserveTaskRun(w http.ResponseWriter, r *http.Request) {
+	var req observeTaskRunReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if !validObserveTaskRunTypes[req.Type] {
+		writeError(w, http.StatusBadRequest, "unsupported event type: "+req.Type)
+		return
+	}
+	if s.observeRunLog != nil {
+		s.observeRunLog.Publish(observe.Event{
+			Type:    observe.EventType(req.Type),
+			Payload: &observe.TaskRunPayload{Run: req.Run},
+		})
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

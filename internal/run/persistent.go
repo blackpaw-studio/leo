@@ -95,14 +95,33 @@ func runPersistent(cfg *config.Config, taskName string) error {
 	meta := runMeta{Workspace: cfg.TaskWorkspace(task), Model: cfg.TaskModel(task), Harness: cfg.TaskHarness(task)}
 	runID, runStartedAt := publishTaskRunStarted(taskName, meta)
 
+	// finished guards the deferred fallback below so every one of this
+	// function's five return paths (all of which already call
+	// handlePersistentFailure or publish success below) never double-fires a
+	// terminal event. Mirrors internal/run.Run's finishRun/defer structure —
+	// see its doc comment for why a started-but-never-finished run is a real
+	// bug class: it reports a phantom in-flight run until the run log evicts
+	// it, and a stream consumer waits forever for an event that never comes.
+	// Latent today (every existing return path remembers to set finished),
+	// but this removes the fragility of relying on that discipline holding
+	// for every future edit.
+	finished := false
+	defer func() {
+		if !finished {
+			recordPersistentFailure(cfg, taskName, "internal: runPersistent returned without a terminal event", runID, runStartedAt, meta)
+		}
+	}()
+
 	target, err := resolveDeliveryTarget(cfg, taskName)
 	if err != nil {
+		finished = true
 		handlePersistentFailure(cfg, taskName, err.Error(), runID, runStartedAt, meta)
 		return err
 	}
 	body, err := assemblePrompt(cfg, task)
 	if err != nil {
 		wrapped := fmt.Errorf("assembling prompt: %w", err)
+		finished = true
 		handlePersistentFailure(cfg, taskName, wrapped.Error(), runID, runStartedAt, meta)
 		return wrapped
 	}
@@ -128,20 +147,24 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		Ensure:       target.ensure,
 	})
 	if err != nil {
+		finished = true
 		handlePersistentFailure(cfg, taskName, fmt.Sprintf("enqueue: %v", err), runID, runStartedAt, meta)
 		return fmt.Errorf("enqueue: %w", err)
 	}
 	if !enq.Accepted {
+		finished = true
 		handlePersistentFailure(cfg, taskName, "rejected: "+enq.Reason, runID, runStartedAt, meta)
 		return fmt.Errorf("enqueue rejected: %s", enq.Reason)
 	}
 
 	aw, err := daemon.AwaitTask(ctx, cfg.HomePath, enq.InvocationID)
 	if err != nil {
+		finished = true
 		handlePersistentFailure(cfg, taskName, fmt.Sprintf("await: %v", err), runID, runStartedAt, meta)
 		return fmt.Errorf("await: %w", err)
 	}
 	if !aw.OK {
+		finished = true
 		handlePersistentFailure(cfg, taskName, "task: "+aw.Err, runID, runStartedAt, meta)
 		return fmt.Errorf("task failed: %s", aw.Err)
 	}
@@ -159,6 +182,7 @@ func runPersistent(cfg *config.Config, taskName string) error {
 			fmt.Printf("warning: failed to persist session id: %v\n", err)
 		}
 	}
+	finished = true
 	_, durationMS := publishTaskRunFinished(runID, taskName, runStartedAt, true, history.ReasonSuccess, meta)
 	hist := history.NewStore(cfg.HomePath)
 	if err := hist.RecordTimed(taskName, 0, history.ReasonSuccess, "", runStartedAt, durationMS); err != nil {
