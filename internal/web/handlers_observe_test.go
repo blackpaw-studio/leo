@@ -34,6 +34,7 @@ func (f *fakeActivityProvider) Activities() map[string]observe.AgentActivity {
 type fakeEventSource struct {
 	ch           chan observe.Event
 	unsubscribed chan struct{}
+	seq          uint64
 }
 
 func newFakeEventSource() *fakeEventSource {
@@ -43,13 +44,16 @@ func newFakeEventSource() *fakeEventSource {
 	}
 }
 
-func (f *fakeEventSource) Subscribe(buffer int) (<-chan observe.Event, func()) {
+// Subscribe returns the fake's channel and unsubscribe func alongside its
+// canned sequence number, letting tests assert handleAPIEvents stamps hello
+// with whatever the event source reports as its last-assigned sequence.
+func (f *fakeEventSource) Subscribe(buffer int) (<-chan observe.Event, func(), uint64) {
 	return f.ch, func() {
 		select {
 		case f.unsubscribed <- struct{}{}:
 		default:
 		}
-	}
+	}, f.seq
 }
 
 // --- GET /api/v1/state ---
@@ -475,6 +479,100 @@ func TestHandleAPIEventsSendsHelloOnConnect(t *testing.T) {
 	}
 }
 
+// TestHandleAPIEventsHelloCarriesRealTimestamp guards against hello.At being
+// left at its zero value: handleAPIEvents used to build HelloPayload without
+// going through Bus.Publish, so the embedded observe.Meta (Seq, At) never got
+// stamped and At shipped as "0001-01-01T00:00:00Z" on the wire.
+func TestHandleAPIEventsHelloCarriesRealTimestamp(t *testing.T) {
+	s, _ := newTestServerWithObserveDeps(t, nil, nil)
+	before := time.Now().Add(-time.Second)
+	_, resp, r := startSSERequest(t, s)
+	defer resp.Body.Close() //nolint:bodyclose // already deferred via t.Cleanup in startSSERequest; explicit close here satisfies the linter
+	after := time.Now().Add(time.Second)
+
+	_, data := readSSEFrame(t, r)
+	var payload observe.HelloPayload
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		t.Fatalf("decoding hello payload: %v", err)
+	}
+	if payload.At.IsZero() {
+		t.Fatal("hello.at is zero, want a real timestamp")
+	}
+	if payload.At.Before(before) || payload.At.After(after) {
+		t.Errorf("hello.at = %v, want between %v and %v", payload.At, before, after)
+	}
+}
+
+// TestHandleAPIEventsHelloReflectsEventSourceSeq guards against hello.seq
+// shipping as 0 on a daemon that has been running (and publishing) for a
+// while: a consumer would read hello.seq as "nothing published yet" and see
+// the next real event's much higher seq as a huge gap, triggering exactly
+// the spurious resnapshot the monotonic-sequence work exists to prevent.
+func TestHandleAPIEventsHelloReflectsEventSourceSeq(t *testing.T) {
+	src := newFakeEventSource()
+	src.seq = 4212
+	s, _ := newTestServerWithObserveDeps(t, nil, src)
+	_, resp, r := startSSERequest(t, s)
+	defer resp.Body.Close() //nolint:bodyclose // already deferred via t.Cleanup in startSSERequest; explicit close here satisfies the linter
+
+	_, data := readSSEFrame(t, r)
+	var payload observe.HelloPayload
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		t.Fatalf("decoding hello payload: %v", err)
+	}
+	if payload.Seq != 4212 {
+		t.Errorf("hello.seq = %d, want 4212", payload.Seq)
+	}
+}
+
+// TestHandleAPIEventsHelloOnRealBusReflectsPublishedEvents exercises the real
+// observe.Bus (not the fake) to confirm handleAPIEvents reads its actual
+// current sequence rather than a fake's canned value.
+func TestHandleAPIEventsHelloOnRealBusReflectsPublishedEvents(t *testing.T) {
+	bus := observe.NewBus()
+	for i := 0; i < 3; i++ {
+		bus.Publish(observe.Event{
+			Type:    observe.EventAgentStopped,
+			Payload: &observe.AgentStoppedPayload{Agent: "leo-coding-leo"},
+		})
+	}
+
+	s, _ := newTestServerWithObserveDeps(t, nil, bus)
+	_, resp, r := startSSERequest(t, s)
+	defer resp.Body.Close() //nolint:bodyclose // already deferred via t.Cleanup in startSSERequest; explicit close here satisfies the linter
+
+	_, data := readSSEFrame(t, r)
+	var payload observe.HelloPayload
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		t.Fatalf("decoding hello payload: %v", err)
+	}
+	if payload.Seq != 3 {
+		t.Errorf("hello.seq = %d, want 3", payload.Seq)
+	}
+}
+
+// TestHandleAPIEventsHelloWithNoEventSourceStillHasRealTimestamp locks in the
+// documented "no bus wired" fallback: seq 0 is a defensible default (there is
+// genuinely no bus to report a sequence for), but the timestamp must still be
+// real rather than the zero value.
+func TestHandleAPIEventsHelloWithNoEventSourceStillHasRealTimestamp(t *testing.T) {
+	s, _ := newTestServerWithObserveDeps(t, nil, nil)
+	_, resp, r := startSSERequest(t, s)
+	defer resp.Body.Close() //nolint:bodyclose // already deferred via t.Cleanup in startSSERequest; explicit close here satisfies the linter
+
+	_, data := readSSEFrame(t, r)
+	var payload observe.HelloPayload
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		t.Fatalf("decoding hello payload: %v", err)
+	}
+	if payload.Seq != 0 {
+		t.Errorf("hello.seq = %d, want 0 (no event source wired)", payload.Seq)
+	}
+	if payload.At.IsZero() {
+		t.Fatal("hello.at is zero, want a real timestamp")
+	}
+}
+
 func TestHandleAPIEventsStreamsPublishedEvents(t *testing.T) {
 	src := newFakeEventSource()
 	s, _ := newTestServerWithObserveDeps(t, nil, src)
@@ -631,8 +729,10 @@ func TestHandleAPIEventsUnsubscribesOnDisconnect(t *testing.T) {
 
 // newTestServerWithObserveDeps builds a server via newTestServer and rewires
 // its handler with the given activity/event dependencies, since New() only
-// accepts options at construction time.
-func newTestServerWithObserveDeps(t *testing.T, activity observe.ActivityProvider, events *fakeEventSource) (*Server, string) {
+// accepts options at construction time. events accepts any eventSource
+// implementation — the fake or a real *observe.Bus — so tests can exercise
+// either.
+func newTestServerWithObserveDeps(t *testing.T, activity observe.ActivityProvider, events eventSource) (*Server, string) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "leo-web-observe-test-*")
 	if err != nil {

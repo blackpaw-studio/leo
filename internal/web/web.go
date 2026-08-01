@@ -188,7 +188,14 @@ type Server struct {
 // consumer that fills it is expected to be dropped by the implementation
 // (the returned channel closes), not blocked on indefinitely.
 type eventSource interface {
-	Subscribe(buffer int) (<-chan observe.Event, func())
+	// Subscribe registers a new subscriber and returns its channel, an
+	// unsubscribe function, and the sequence number of the last event
+	// published before this subscriber was registered (0 if none yet) — all
+	// atomically, so the stream's opening hello frame can report a real
+	// starting point with the guarantee that the first event this
+	// subscriber actually receives is exactly that seq+1. See
+	// observe.Bus.Subscribe's doc comment.
+	Subscribe(buffer int) (<-chan observe.Event, func(), uint64)
 }
 
 // runProvider is the narrow read seam onto the run log (internal/observe's

@@ -124,10 +124,6 @@ tasks:
 		return exec.Command(tmuxPath, tmux.Args("send-keys", "-t", tmux.PaneTarget(session), "Escape")...).Run()
 	})
 
-	t.Cleanup(func() {
-		_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
-	})
-
 	// Precondition: the target agent's tmux session does not exist yet.
 	if hasTmuxSession(tmuxPath, sessionName) {
 		t.Fatalf("precondition failed: session %q already exists", sessionName)
@@ -139,10 +135,16 @@ tasks:
 	}
 
 	// The ensure-exists path must have spawned a real tmux session for the
-	// target agent — this is the genuinely new machinery under test.
+	// target agent — this is the genuinely new machinery under test. Only
+	// now that the test has actually created the session do we register the
+	// cleanup that kills it, so a failed precondition (a real agent already
+	// occupying this session name) can never be torn down by this test.
 	if !hasTmuxSession(tmuxPath, sessionName) {
 		t.Fatalf("expected tmux session %q to exist after ensure-exists spawn", sessionName)
 	}
+	t.Cleanup(func() {
+		_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
+	})
 
 	// The prompt must have genuinely reached the spawned process, not a stub
 	// standing in for it.
