@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -46,6 +47,12 @@ type Supervisor interface {
 	ReleaseAgent(name string)
 	SpawnAgent(spec SpawnRequest) error
 	StopAgent(name string) error
+	// SuspendAgent stops name's process/tmux session exactly like StopAgent,
+	// but announces the transition as observe.EventAgentStateChanged with
+	// status "suspended" rather than observe.EventAgentStopped — a suspended
+	// agent is coming back (see SpawnRequest.Resumed), not gone, and a
+	// consumer needs to be able to tell those apart.
+	SuspendAgent(name string) error
 	RenameAgent(old, new string) error
 	EphemeralAgents() map[string]ProcessState
 }
@@ -63,6 +70,28 @@ type Manager struct {
 	// SpawnRequest so the supervisor can export LEO_API_TOKEN for the
 	// agent's MCP server.
 	webToken string
+	// publisher announces the lifecycle transitions Manager itself decides
+	// never to forward to sup (a stopped/suspended agent has no live process
+	// for sup.StopAgent/RenameAgent to act on, so those calls — and their
+	// publishes — are skipped entirely on that path; see Stop and Rename).
+	// Optional: nil (the default) makes publish a safe no-op, matching
+	// service.Supervisor's own publisher seam.
+	publisher observe.Publisher
+}
+
+// SetPublisher wires an observe.Publisher into the Manager, for lifecycle
+// transitions that happen purely against the agentstore (no live sup call).
+// Optional; daemon boot is the only production caller.
+func (m *Manager) SetPublisher(p observe.Publisher) {
+	m.publisher = p
+}
+
+// publish is a nil-safe no-op when no publisher has been configured.
+func (m *Manager) publish(ev observe.Event) {
+	if m.publisher == nil {
+		return
+	}
+	m.publisher.Publish(ev)
 }
 
 // New constructs a Manager. tmuxPath is used for Logs (tmux capture-pane); pass the
@@ -822,10 +851,28 @@ func (m *Manager) Stop(name string) error {
 		if saveErr := agentstore.Save(cfg.HomePath, rec); saveErr != nil {
 			log.Printf("agent %q stopped but marking Stopped=true failed: %v — agent may be resurrected on daemon restart", name, saveErr)
 		}
+		m.announceStoppedIfNotLive(live, name)
 		return nil
 	}
 	agentstore.Remove(cfg.HomePath, name)
+	m.announceStoppedIfNotLive(live, name)
 	return nil
+}
+
+// announceStoppedIfNotLive publishes agent_stopped for a Stop that was
+// satisfied purely against the agentstore (the agent was suspended or
+// otherwise not live, so sup.StopAgent — and the publish inside it — was
+// never called; see Stop's doc comment). When live is true, sup.StopAgent
+// already published this event, so this is a deliberate no-op to avoid a
+// duplicate.
+func (m *Manager) announceStoppedIfNotLive(live bool, name string) {
+	if live {
+		return
+	}
+	m.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: name},
+	})
 }
 
 // Suspend stops a running ephemeral agent's process and tmux session while
@@ -857,7 +904,7 @@ func (m *Manager) Suspend(name string) error {
 		return fmt.Errorf("marking agent suspended: %w", err)
 	}
 
-	if err := m.sup.StopAgent(name); err != nil {
+	if err := m.sup.SuspendAgent(name); err != nil {
 		rec.Suspended = false
 		if rbErr := agentstore.Save(cfg.HomePath, rec); rbErr != nil {
 			log.Printf("agent %q: stop failed (%v) AND suspend-flag rollback failed (%v)", name, err, rbErr)
@@ -923,6 +970,7 @@ func (m *Manager) Resume(name string) (Record, error) {
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
 		Harness:    rec.Harness,
+		Resumed:    true,
 	}); err != nil {
 		return Record{}, fmt.Errorf("respawning suspended agent: %w", err)
 	}
@@ -1235,6 +1283,14 @@ func (m *Manager) Prune(ctx context.Context, name string, opts PruneOptions) err
 	}
 
 	agentstore.Remove(cfg.HomePath, name)
+	// Prune only ever reaches here for a not-live agent (the EphemeralAgents
+	// check above already rejected a live one), verbatim the rationale
+	// announceStoppedIfNotLive documents for Stop: nothing else along this
+	// path calls sup.StopAgent, so nothing else would announce the removal.
+	m.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: name},
+	})
 	return nil
 }
 
@@ -1381,22 +1437,68 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		return Record{}, fmt.Errorf("%w: %q", ErrAgentNameTaken, newName)
 	}
 
+	persistRename := func() error {
+		return agentstore.Rename(cfg.HomePath, oldName, newName, func(r agentstore.Record) agentstore.Record {
+			r.Name = newName
+			r.ClaudeArgs = rewriteNameArg(r.ClaudeArgs, newName)
+			return r
+		})
+	}
+
 	if _, live := m.sup.EphemeralAgents()[oldName]; live {
 		if err := m.sup.RenameAgent(oldName, newName); err != nil {
 			return Record{}, fmt.Errorf("renaming running agent: %w", err)
 		}
-	}
-
-	if err := agentstore.Rename(cfg.HomePath, oldName, newName, func(r agentstore.Record) agentstore.Record {
-		r.Name = newName
-		r.ClaudeArgs = rewriteNameArg(r.ClaudeArgs, newName)
-		return r
-	}); err != nil {
-		return Record{}, fmt.Errorf("persisting rename: %w", err)
+		if err := persistRename(); err != nil {
+			return Record{}, fmt.Errorf("persisting rename: %w", err)
+		}
+	} else {
+		// Not live: sup.RenameAgent (and its announce) never runs, so this
+		// path announces on its own — but only AFTER persistRename succeeds.
+		// Announcing first would tell every stream consumer the rename
+		// happened even if the store write then failed, leaving the agent
+		// under its old name with no compensating event to undo the
+		// announce. See the finding this closes.
+		if err := persistRename(); err != nil {
+			return Record{}, fmt.Errorf("persisting rename: %w", err)
+		}
+		m.announceRename(cfg, rec, oldName, newName)
 	}
 
 	rec.Name = newName
 	return rec, nil
+}
+
+// announceRename publishes the same agent_stopped-then-agent_spawned
+// sequence service.Supervisor.RenameAgent publishes for a live rename,
+// for the not-live path where that call never happens. Unlike the live
+// path (which zeroes Template/Repo/Branch/Model because the agentstore
+// record isn't re-keyed yet when it publishes), rec here already carries
+// them from the stored record, so the spawned view is fully populated.
+func (m *Manager) announceRename(cfg *config.Config, rec Record, oldName, newName string) {
+	m.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: oldName},
+	})
+
+	agent := observe.Agent{
+		Name:      newName,
+		Template:  rec.Template,
+		Repo:      rec.Repo,
+		Workspace: rec.Workspace,
+		Branch:    rec.Branch,
+		Status:    observe.StatusStopped,
+	}
+	if cfg != nil && rec.Template != "" {
+		if tmpl, ok := cfg.Templates[rec.Template]; ok {
+			agent.Model = cfg.TemplateModel(tmpl)
+			agent.Harness = cfg.TemplateHarness(tmpl)
+		}
+	}
+	m.publish(observe.Event{
+		Type:    observe.EventAgentSpawned,
+		Payload: &observe.AgentSpawnedPayload{Agent: agent},
+	})
 }
 
 // resolveStored finds a persisted (possibly stopped) agent by exact name when

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/redact"
 	"github.com/blackpaw-studio/leo/internal/run"
 	"github.com/blackpaw-studio/leo/internal/session"
@@ -63,6 +64,11 @@ func newRunCmd() *cobra.Command {
 				return nil
 			}
 
+			// Report task_run_* events to this workspace's daemon over IPC —
+			// this subprocess has no direct handle on the daemon's RunLog. See
+			// daemon.ObservePublisher's doc comment for the non-fatal contract:
+			// a daemon that isn't running must never break or slow this run.
+			run.SetPublisher(daemon.NewObservePublisher(cfg.HomePath))
 			return run.Run(cfg, taskName, sessions)
 		},
 	}

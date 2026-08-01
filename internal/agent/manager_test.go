@@ -625,8 +625,8 @@ func TestSuspendMarksRecordAndStops(t *testing.T) {
 		t.Fatalf("suspend: %v", err)
 	}
 
-	if len(sup.stopCalls) == 0 || sup.stopCalls[0] != "leo-x" {
-		t.Fatal("StopAgent was not called")
+	if len(sup.suspendCalls) == 0 || sup.suspendCalls[0] != "leo-x" {
+		t.Fatal("SuspendAgent was not called")
 	}
 	recs, _ := agentstore.Load(agentstore.FilePath(home))
 	if !recs["leo-x"].Suspended {

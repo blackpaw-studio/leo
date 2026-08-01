@@ -76,7 +76,13 @@ func runService(cmd *cobra.Command, args []string) error {
 	}
 
 	info.Printf("Starting supervised mode...\n")
-	return service.RunSupervised(claudePath, cfg.HomePath, cfgPath, webToken)
+	return service.RunSupervised(service.RunSupervisedOptions{
+		ClaudePath: claudePath,
+		HomePath:   cfg.HomePath,
+		ConfigPath: cfgPath,
+		WebToken:   webToken,
+		Version:    Version,
+	})
 }
 
 func newServiceStartCmd() *cobra.Command {

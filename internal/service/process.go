@@ -24,6 +24,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -115,6 +116,10 @@ type Supervisor struct {
 	claudePath   string
 	homePath     string
 	configPath   string
+	// publisher announces agent lifecycle transitions on the observability
+	// event bus. nil (the default for every existing caller) makes publish a
+	// no-op — see SetPublisher.
+	publisher observe.Publisher
 }
 
 // NewSupervisor creates a new process supervisor. The context parameter is
@@ -152,10 +157,23 @@ func (s *Supervisor) States() map[string]daemon.ProcessStateInfo {
 
 func (s *Supervisor) setState(name, status string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if st, ok := s.states[name]; ok {
-		st.Status = status
+	st, ok := s.states[name]
+	if !ok {
+		s.mu.Unlock()
+		return
 	}
+	st.Status = status
+	restarts := st.Restarts
+	s.mu.Unlock()
+
+	s.publish(observe.Event{
+		Type: observe.EventAgentStateChanged,
+		Payload: &observe.AgentStateChangedPayload{
+			Agent:    name,
+			Status:   observe.MapStatus(status),
+			Restarts: restarts,
+		},
+	})
 }
 
 func (s *Supervisor) initState(name string) {
@@ -176,11 +194,25 @@ func (s *Supervisor) initState(name string) {
 
 func (s *Supervisor) incrementRestarts(name string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if st, ok := s.states[name]; ok {
-		st.Restarts++
-		st.StartedAt = time.Now()
+	st, ok := s.states[name]
+	if !ok {
+		s.mu.Unlock()
+		return
 	}
+	st.Restarts++
+	st.StartedAt = time.Now()
+	restarts := st.Restarts
+	status := st.Status
+	s.mu.Unlock()
+
+	s.publish(observe.Event{
+		Type: observe.EventAgentStateChanged,
+		Payload: &observe.AgentStateChangedPayload{
+			Agent:    name,
+			Status:   observe.MapStatus(status),
+			Restarts: restarts,
+		},
+	})
 }
 
 // ReserveAgent atomically claims a name so subsequent concurrent spawns hit a
@@ -234,7 +266,31 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	}
 	id := newProcIdentity(spec.Name, spec.ClaudeArgs)
 	s.identities[spec.Name] = id
+	spawnedAt := s.states[spec.Name].StartedAt
 	s.mu.Unlock()
+
+	// A resumed agent (agent.SpawnRequest.Resumed) already exists from a
+	// consumer's point of view — SuspendAgent announced it going to sleep,
+	// not leaving — so this respawn is a state transition back, not a new
+	// agent appearing. Publishing agent_spawned here would make a
+	// stream-only consumer treat a resume as a brand-new agent (wrong) and
+	// leave it with no way to tell "suspended" from "gone" (see SuspendAgent).
+	if spec.Resumed {
+		s.publish(observe.Event{
+			Type: observe.EventAgentStateChanged,
+			Payload: &observe.AgentStateChangedPayload{
+				Agent:  spec.Name,
+				Status: observe.StatusStarting,
+			},
+		})
+	} else {
+		s.publish(observe.Event{
+			Type: observe.EventAgentSpawned,
+			Payload: &observe.AgentSpawnedPayload{
+				Agent: s.spawnedAgentView(spec, spawnedAt),
+			},
+		})
+	}
 
 	procSpec := ProcessSpec{
 		Name:          spec.Name,
@@ -252,8 +308,56 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	return nil
 }
 
-// StopAgent stops an ephemeral process and cleans up its tmux session.
+// StopAgent stops an ephemeral process and cleans up its tmux session,
+// announcing the agent as gone (observe.EventAgentStopped). Use SuspendAgent
+// instead when the agent is expected to come back — see its doc comment.
 func (s *Supervisor) StopAgent(name string) error {
+	if err := s.stopAgentProcess(name); err != nil {
+		return err
+	}
+	s.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: name},
+	})
+	return nil
+}
+
+// SuspendAgent stops an ephemeral process and cleans up its tmux session
+// exactly like StopAgent, but announces the transition as
+// observe.EventAgentStateChanged{Status: "suspended"} rather than
+// observe.EventAgentStopped. A suspended agent is coming back (see
+// agent.SpawnRequest.Resumed, published by SpawnAgent as the matching
+// transition back) — a consumer must be able to tell that apart from an
+// agent that left supervision for good.
+func (s *Supervisor) SuspendAgent(name string) error {
+	// Read Restarts before stopAgentProcess deletes the state entry — a
+	// crash-looped agent's real count would otherwise be silently clobbered
+	// to 0 in the published payload.
+	s.mu.RLock()
+	restarts := 0
+	if st, ok := s.states[name]; ok {
+		restarts = st.Restarts
+	}
+	s.mu.RUnlock()
+
+	if err := s.stopAgentProcess(name); err != nil {
+		return err
+	}
+	s.publish(observe.Event{
+		Type: observe.EventAgentStateChanged,
+		Payload: &observe.AgentStateChangedPayload{
+			Agent:    name,
+			Status:   observe.StatusSuspended,
+			Restarts: restarts,
+		},
+	})
+	return nil
+}
+
+// stopAgentProcess cancels the ephemeral process's context, kills its tmux
+// session, and removes it from every live-state map. Shared by StopAgent and
+// SuspendAgent, which differ only in which event they publish afterward.
+func (s *Supervisor) stopAgentProcess(name string) error {
 	s.mu.Lock()
 	st, exists := s.states[name]
 	if !exists {
@@ -291,26 +395,31 @@ func (s *Supervisor) StopAgent(name string) error {
 // do not race the goroutine's create window.
 func (s *Supervisor) RenameAgent(oldName, newName string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	st, ok := s.states[oldName]
 	if !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q not found", oldName)
 	}
 	if !st.Ephemeral {
+		s.mu.Unlock()
 		return fmt.Errorf("%q is not an ephemeral agent", oldName)
 	}
 	if st.Status != "running" {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q is %s, not running; retry once it settles", oldName, st.Status)
 	}
 	if _, exists := s.states[newName]; exists {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q already exists", newName)
 	}
 	if _, reserved := s.reservations[newName]; reserved {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q is reserved", newName)
 	}
 	id, ok := s.identities[oldName]
 	if !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("agent %q has no identity handle", oldName)
 	}
 
@@ -320,6 +429,7 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 	id.mu.Lock()
 	if err := tmuxRenameSession(s.tmuxPath, agent.SessionName(oldName), agent.SessionName(newName)); err != nil {
 		id.mu.Unlock()
+		s.mu.Unlock()
 		return fmt.Errorf("renaming tmux session: %w", err)
 	}
 	id.renameLocked(newName)
@@ -332,6 +442,36 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 	delete(s.states, oldName)
 	delete(s.cancels, oldName)
 	delete(s.identities, oldName)
+	restarts := st.Restarts
+	startedAt := st.StartedAt
+	s.mu.Unlock()
+
+	// Announce the rename as the old name leaving and the new name
+	// appearing, in that order, so a consumer's view transitions cleanly
+	// rather than momentarily holding both names live. Without this, a
+	// stream-only consumer keeps the old name forever as a frozen ghost and
+	// never learns the new one exists — RenameAgent used to re-key its
+	// internal maps in complete silence.
+	//
+	// The agentstore record is re-keyed by the caller (agent.Manager.Rename)
+	// only *after* this returns, so it is still filed under oldName here —
+	// Template/Repo/Branch/Model are left zero-valued rather than guessed,
+	// matching spawnedAgentView's own degrade-gracefully contract.
+	s.publish(observe.Event{
+		Type:    observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{Agent: oldName},
+	})
+	s.publish(observe.Event{
+		Type: observe.EventAgentSpawned,
+		Payload: &observe.AgentSpawnedPayload{
+			Agent: observe.Agent{
+				Name:      newName,
+				Status:    observe.StatusRunning,
+				Restarts:  restarts,
+				StartedAt: startedAt,
+			},
+		},
+	})
 	return nil
 }
 
@@ -462,18 +602,36 @@ func Status(workDir string) (string, error) {
 	return "stopped", nil
 }
 
+// RunSupervisedOptions bundles RunSupervised's parameters. Grouped into a
+// struct (rather than growing the positional-string signature further) once
+// Version was added — see RunSupervised's doc comment.
+type RunSupervisedOptions struct {
+	ClaudePath string
+	HomePath   string
+	ConfigPath string
+	// WebToken is the daemon's API bearer token, propagated to the
+	// agent.Manager and the RestoreAgents path so restored/respawned agents
+	// can authenticate against the daemon's web API.
+	WebToken string
+	// Version is the leo build version (internal/cli.Version, ldflags-
+	// injected). Threaded through to web.WithVersion so GET /api/v1/state
+	// can report Snapshot.LeoVersion. internal/cli owns Version and imports
+	// internal/web, so it can't be read back from here — the CLI passes it
+	// down explicitly instead. Empty is safe: the web layer just reports "".
+	Version string
+}
+
 // RunSupervised starts the leo daemon: the web UI, cron scheduler, and the
 // daemon IPC server, then restores + supervises ephemeral agents (each in
 // its own tmux session with a restart loop). It no longer starts any
 // config-declared "processes" — agents are the only supervised primitive.
-// webToken is the daemon's API bearer token, propagated to the agent.Manager and
-// the RestoreAgents path so restored/respawned agents can authenticate
-// against the daemon's web API.
-func RunSupervised(claudePath string, homePath, configPath, webToken string) error {
-	return supervisedExecFn(claudePath, homePath, configPath, webToken)
+func RunSupervised(opts RunSupervisedOptions) error {
+	return supervisedExecFn(opts)
 }
 
-func defaultSupervisedExec(claudePath string, homePath, configPath, webToken string) error {
+func defaultSupervisedExec(opts RunSupervisedOptions) error {
+	claudePath, homePath, configPath, webToken := opts.ClaudePath, opts.HomePath, opts.ConfigPath, opts.WebToken
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
@@ -509,9 +667,14 @@ func defaultSupervisedExec(claudePath string, homePath, configPath, webToken str
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 
+	bus, runLog, activityTracker := wireObservability(ctx, supervisor, tmuxPath)
+
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath, supervisor)
+	// Threaded into web.New's extra Options by StartWeb — see
+	// daemon.Server.SetObservability's doc comment.
+	srv.SetObservability(bus, runLog, activityTracker, opts.Version)
 	// SetLogPath before Start/StartWeb so the Service page's log tail knows
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
@@ -536,6 +699,12 @@ func defaultSupervisedExec(claudePath string, homePath, configPath, webToken str
 		// Build the agent.Manager shared by web, daemon, and CLI handlers.
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
+		// runLog is the same Publisher wired into the supervisor (SetPublisher
+		// above) — see agent.Manager.SetPublisher's doc comment for why the
+		// manager needs its own seam: a stop/rename against a non-live agent
+		// never reaches sup.StopAgent/RenameAgent, so it never reaches the
+		// supervisor's own publish calls either.
+		agentMgr.SetPublisher(runLog)
 		srv.SetAgentManager(agentMgr)
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets
@@ -578,6 +747,39 @@ func defaultSupervisedExec(claudePath string, homePath, configPath, webToken str
 	// shutdown.
 	<-ctx.Done()
 	return nil
+}
+
+// wireObservability builds the observability event bus, run log, and
+// activity tracker, wires the run log as the Publisher for the supervisor,
+// and starts the tracker's sweep loop in a goroutine tied to ctx (so it
+// exits at shutdown rather than leaking). Extracted from
+// defaultSupervisedExec so this wiring — the thing most likely to silently
+// regress (an Option never passed, a goroutine never started) — is directly
+// callable from a test without booting the whole daemon.
+//
+// internal/run's producers are NOT wired here: every task execution is a
+// `leo run` subprocess, a different OS process from the daemon, so a
+// run.SetPublisher call made in this process could never be observed by
+// run.publishEvent in that one. That producer instead reports over the IPC
+// socket via daemon.ObservePublisher, wired per-invocation in
+// internal/cli/run.go — see handleObserveTaskRun in internal/daemon/server.go
+// for the daemon-side end of that path.
+func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) (*observe.Bus, *observe.RunLog, *observe.Tracker) {
+	// runLog forwards every event to bus (the HTTP layer's read seam) and
+	// additionally records task runs, so it is the single Publisher the
+	// supervisor is given — see internal/observe.RunLog's doc comment for why
+	// it wraps the bus rather than subscribing to it.
+	bus := observe.NewBus()
+	runLog := observe.NewRunLog(bus, 0)
+	sv.SetPublisher(runLog)
+
+	// sv.SessionNames is the narrow accessor onto the live agent-name ->
+	// tmux-session-name mapping the tracker sweeps (see its doc comment for
+	// why it isn't recomputed here).
+	tracker := observe.NewTracker(tmuxPath, sv.SessionNames, runLog)
+	go tracker.Start(ctx)
+
+	return bus, runLog, tracker
 }
 
 // driverFor resolves a spec's session driver. Empty harness means claude

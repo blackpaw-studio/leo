@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
@@ -70,6 +71,26 @@ type Server struct {
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
 	resolveHandle func(name string) (harnessName string, h harness.SessionHandle, ok bool)
+
+	// Observability dependencies, wired via SetObservability and threaded
+	// into web.New's extra Options by StartWeb. All are optional (nil-safe on
+	// the web side — see web.WithEventSource/WithActivityProvider/WithRunLog),
+	// so a daemon that never calls SetObservability boots unchanged.
+	observeBus      *observe.Bus
+	observeRunLog   *observe.RunLog
+	observeActivity observe.ActivityProvider
+	leoVersion      string
+}
+
+// SetObservability wires the observability event bus, run log, activity
+// tracker, and build version threaded into web.Options by StartWeb. Must be
+// called before StartWeb. All parameters are optional (nil/empty is safe);
+// service boot is the only caller today (see internal/service/process.go).
+func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, activity observe.ActivityProvider, version string) {
+	s.observeBus = bus
+	s.observeRunLog = runLog
+	s.observeActivity = activity
+	s.leoVersion = version
 }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
@@ -110,6 +131,13 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("POST /task/disable", s.handleTaskDisable)
 	mux.HandleFunc("GET /task/list", s.handleTaskList)
 	mux.HandleFunc("POST /config/reload", s.handleConfigReload)
+
+	// Task-run observability: a `leo run` subprocess (cron, web run-now, or
+	// manual invocation) has no in-process access to the daemon's RunLog, so
+	// it reports task_run_* events here instead. See wireObservability and
+	// internal/run.SetPublisher's doc comments for why the daemon-side
+	// producer path (Supervisor) differs from this subprocess-side one.
+	mux.HandleFunc("POST /observe/task-run", s.handleObserveTaskRun)
 
 	// Persistent-task prompt delivery (ensure-exists into agent tmux sessions).
 	mux.HandleFunc("POST /task/enqueue", s.handleTaskEnqueue)
@@ -241,6 +269,19 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}
 
 	port := cfg.WebPort()
+	var observeOpts []web.Option
+	if s.observeBus != nil {
+		observeOpts = append(observeOpts, web.WithEventSource(s.observeBus))
+	}
+	if s.observeRunLog != nil {
+		observeOpts = append(observeOpts, web.WithRunLog(s.observeRunLog))
+	}
+	if s.observeActivity != nil {
+		observeOpts = append(observeOpts, web.WithActivityProvider(s.observeActivity))
+	}
+	if s.leoVersion != "" {
+		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))
+	}
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
 		Port:          port,
 		APIToken:      apiToken,
@@ -250,7 +291,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		ResolveHandle: s.resolveHandle,
 		// Consults record to <state>/consults for `leo consult watch`.
 		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),
-	})
+	}, observeOpts...)
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)
 	if err := s.webServer.ListenAndServe(addr); err != nil {
@@ -465,6 +506,75 @@ func (s *Server) handleTaskReport(w http.ResponseWriter, r *http.Request) {
 		FinalMessage: req.FinalMessage,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// observeTaskRunReq is the wire body for POST /observe/task-run. Type must be
+// one of the observe.EventTaskRun* constants; anything else is rejected
+// rather than forwarded, since this route's only purpose is relaying the
+// three task-run event types a subprocess producer can emit.
+type observeTaskRunReq struct {
+	Type string          `json:"type"`
+	Run  observe.TaskRun `json:"run"`
+}
+
+// observeTaskRunStatusForType maps each valid event Type to the Status the
+// server assigns the run — the two can never disagree, because the client's
+// own Run.Status is ignored entirely and overwritten with this value. This
+// closes the gap where a caller could post task_run_started with no (or a
+// bogus) status and have it land verbatim in the RunLog, breaking the wire
+// contract's guarantee that Status is always one of exactly three values.
+var observeTaskRunStatusForType = map[string]observe.RunStatus{
+	string(observe.EventTaskRunStarted):   observe.RunRunning,
+	string(observe.EventTaskRunSucceeded): observe.RunSucceeded,
+	string(observe.EventTaskRunFailed):    observe.RunFailed,
+}
+
+// maxObserveTaskRunBodyBytes bounds the request body for POST
+// /observe/task-run. Unlike the web (TCP) listener, the socket mux this route
+// lives on has no body-size middleware, and this route's input is unusually
+// dangerous to leave unbounded: it is retained (up to observe.MaxRecentRuns
+// entries in the RunLog) and rebroadcast to every SSE subscriber, rather than
+// discarded after one use like most handlers' inputs. Generous relative to
+// the per-field caps below (which do the real work of bounding what's kept)
+// so a legitimate request is never at risk of tripping this first.
+const maxObserveTaskRunBodyBytes int64 = 64 << 10 // 64 KiB
+
+// handleObserveTaskRun relays a task-run event from a `leo run` subprocess
+// into the daemon's RunLog, so it is recorded and fanned out to /api/v1/state
+// and /api/v1/events exactly as if it had been published in-process. A nil
+// RunLog (daemon started without SetObservability) makes this a safe no-op —
+// the caller (PublishTaskRun) treats any response as best-effort anyway.
+func (s *Server) handleObserveTaskRun(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxObserveTaskRunBodyBytes)
+
+	var req observeTaskRunReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	status, ok := observeTaskRunStatusForType[req.Type]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unsupported event type: "+req.Type)
+		return
+	}
+	if req.Run.ID == "" || req.Run.Task == "" {
+		// RunLog.record matches by ID, so an empty ID would collapse every
+		// ID-less run into one slot, silently overwriting one another; an
+		// empty Task breaks any consumer that displays or groups by it.
+		writeError(w, http.StatusBadRequest, "run.id and run.task are required")
+		return
+	}
+
+	req.Run.Status = status
+	req.Run = observe.ClampRunFields(req.Run)
+
+	if s.observeRunLog != nil {
+		s.observeRunLog.Publish(observe.Event{
+			Type:    observe.EventType(req.Type),
+			Payload: &observe.TaskRunPayload{Run: req.Run},
+		})
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

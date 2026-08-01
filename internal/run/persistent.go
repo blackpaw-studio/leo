@@ -91,13 +91,39 @@ func runPersistent(cfg *config.Config, taskName string) error {
 	if err != nil {
 		return err
 	}
+
+	meta := runMeta{Workspace: cfg.TaskWorkspace(task), Model: cfg.TaskModel(task), Harness: cfg.TaskHarness(task)}
+	runID, runStartedAt := publishTaskRunStarted(taskName, meta)
+
+	// finished guards the deferred fallback below so every one of this
+	// function's five return paths (all of which already call
+	// handlePersistentFailure or publish success below) never double-fires a
+	// terminal event. Mirrors internal/run.Run's finishRun/defer structure —
+	// see its doc comment for why a started-but-never-finished run is a real
+	// bug class: it reports a phantom in-flight run until the run log evicts
+	// it, and a stream consumer waits forever for an event that never comes.
+	// Latent today (every existing return path remembers to set finished),
+	// but this removes the fragility of relying on that discipline holding
+	// for every future edit.
+	finished := false
+	defer func() {
+		if !finished {
+			recordPersistentFailure(cfg, taskName, "internal: runPersistent returned without a terminal event", runID, runStartedAt, meta)
+		}
+	}()
+
 	target, err := resolveDeliveryTarget(cfg, taskName)
 	if err != nil {
+		finished = true
+		handlePersistentFailure(cfg, taskName, err.Error(), runID, runStartedAt, meta)
 		return err
 	}
 	body, err := assemblePrompt(cfg, task)
 	if err != nil {
-		return fmt.Errorf("assembling prompt: %w", err)
+		wrapped := fmt.Errorf("assembling prompt: %w", err)
+		finished = true
+		handlePersistentFailure(cfg, taskName, wrapped.Error(), runID, runStartedAt, meta)
+		return wrapped
 	}
 	invID := newInvocationID16()
 	wrapped := promptForPersistent(cfg, task, invID, body)
@@ -121,21 +147,25 @@ func runPersistent(cfg *config.Config, taskName string) error {
 		Ensure:       target.ensure,
 	})
 	if err != nil {
-		handlePersistentFailure(cfg, taskName, fmt.Sprintf("enqueue: %v", err))
+		finished = true
+		handlePersistentFailure(cfg, taskName, fmt.Sprintf("enqueue: %v", err), runID, runStartedAt, meta)
 		return fmt.Errorf("enqueue: %w", err)
 	}
 	if !enq.Accepted {
-		handlePersistentFailure(cfg, taskName, "rejected: "+enq.Reason)
+		finished = true
+		handlePersistentFailure(cfg, taskName, "rejected: "+enq.Reason, runID, runStartedAt, meta)
 		return fmt.Errorf("enqueue rejected: %s", enq.Reason)
 	}
 
 	aw, err := daemon.AwaitTask(ctx, cfg.HomePath, enq.InvocationID)
 	if err != nil {
-		handlePersistentFailure(cfg, taskName, fmt.Sprintf("await: %v", err))
+		finished = true
+		handlePersistentFailure(cfg, taskName, fmt.Sprintf("await: %v", err), runID, runStartedAt, meta)
 		return fmt.Errorf("await: %w", err)
 	}
 	if !aw.OK {
-		handlePersistentFailure(cfg, taskName, "task: "+aw.Err)
+		finished = true
+		handlePersistentFailure(cfg, taskName, "task: "+aw.Err, runID, runStartedAt, meta)
 		return fmt.Errorf("task failed: %s", aw.Err)
 	}
 
@@ -152,8 +182,10 @@ func runPersistent(cfg *config.Config, taskName string) error {
 			fmt.Printf("warning: failed to persist session id: %v\n", err)
 		}
 	}
+	finished = true
+	_, durationMS := publishTaskRunFinished(runID, taskName, runStartedAt, true, history.ReasonSuccess, meta)
 	hist := history.NewStore(cfg.HomePath)
-	if err := hist.Record(taskName, 0, history.ReasonSuccess, ""); err != nil {
+	if err := hist.RecordTimed(taskName, 0, history.ReasonSuccess, "", runStartedAt, durationMS); err != nil {
 		fmt.Printf("warning: failed to record history: %v\n", err)
 	}
 	return nil
@@ -165,11 +197,15 @@ var enqueueFollowUp = func(ctx context.Context, homePath string, req daemon.Enqu
 	_, _ = daemon.EnqueueTask(ctx, homePath, req)
 }
 
-// handlePersistentFailure records a failed history entry and, when the task
-// has notify_on_fail set with non-empty channels, enqueues a brief follow-up
-// failure notice into the same persistent session.
-func handlePersistentFailure(cfg *config.Config, taskName, reason string) {
-	recordPersistentFailure(cfg, taskName, reason)
+// handlePersistentFailure publishes the run's failed event, records a failed
+// history entry, and — when the task has notify_on_fail set with non-empty
+// channels — enqueues a brief follow-up failure notice into the same
+// persistent session. runID/startedAt/meta must be the values
+// publishTaskRunStarted returned for this firing, so the failed event
+// correlates with its started event and carries the same resolved
+// Workspace/Model/Harness.
+func handlePersistentFailure(cfg *config.Config, taskName, reason, runID string, startedAt time.Time, meta runMeta) {
+	recordPersistentFailure(cfg, taskName, reason, runID, startedAt, meta)
 
 	task, ok := cfg.Tasks[taskName]
 	if !ok {
@@ -208,12 +244,14 @@ func handlePersistentFailure(cfg *config.Config, taskName, reason string) {
 	// subprocess exits without blocking on the notice either way.
 }
 
-// recordPersistentFailure writes a failed entry to the history store. Errors
-// from the store are swallowed (with a warning) because the task itself has
-// already failed and we don't want to mask that error.
-func recordPersistentFailure(cfg *config.Config, taskName, reason string) {
+// recordPersistentFailure publishes the run's failed event and writes a
+// failed entry to the history store. History errors are swallowed (with a
+// warning) because the task itself has already failed and we don't want to
+// mask that error.
+func recordPersistentFailure(cfg *config.Config, taskName, reason, runID string, startedAt time.Time, meta runMeta) {
+	_, durationMS := publishTaskRunFinished(runID, taskName, startedAt, false, reason, meta)
 	hist := history.NewStore(cfg.HomePath)
-	if err := hist.Record(taskName, 1, reason, ""); err != nil {
+	if err := hist.RecordTimed(taskName, 1, reason, "", startedAt, durationMS); err != nil {
 		fmt.Printf("warning: failed to record history: %v\n", err)
 	}
 }

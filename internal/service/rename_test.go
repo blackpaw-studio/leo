@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
 func newTestSupervisor(t *testing.T, name string) *Supervisor {
@@ -79,6 +81,43 @@ func TestRenameAgent_Rejections(t *testing.T) {
 	// no entry in s6.identities
 	if err := s6.RenameAgent("leo-noid", "leo-ok"); err == nil {
 		t.Fatal("expected missing-identity rejection")
+	}
+}
+
+// TestRenameAgent_PublishesStoppedThenSpawned guards finding #4: a rename
+// used to re-key its maps in complete silence, leaving a stream-only
+// consumer with the old name as a frozen ghost forever and no way to learn
+// the new name exists.
+func TestRenameAgent_PublishesStoppedThenSpawned(t *testing.T) {
+	origRename := tmuxRenameSession
+	tmuxRenameSession = func(tmuxPath, old, new string) error { return nil }
+	defer func() { tmuxRenameSession = origRename }()
+
+	s := newTestSupervisor(t, "leo-old")
+	pub := &recordingPublisher{}
+	s.SetPublisher(pub)
+
+	if err := s.RenameAgent("leo-old", "leo-new"); err != nil {
+		t.Fatalf("RenameAgent: %v", err)
+	}
+
+	events := pub.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d: %+v", len(events), events)
+	}
+	if events[0].Type != observe.EventAgentStopped {
+		t.Fatalf("expected first event EventAgentStopped, got %s", events[0].Type)
+	}
+	stopped, ok := events[0].Payload.(*observe.AgentStoppedPayload)
+	if !ok || stopped.Agent != "leo-old" {
+		t.Fatalf("unexpected stopped payload: %+v", events[0].Payload)
+	}
+	if events[1].Type != observe.EventAgentSpawned {
+		t.Fatalf("expected second event EventAgentSpawned, got %s", events[1].Type)
+	}
+	spawned, ok := events[1].Payload.(*observe.AgentSpawnedPayload)
+	if !ok || spawned.Agent.Name != "leo-new" {
+		t.Fatalf("unexpected spawned payload: %+v", events[1].Payload)
 	}
 }
 

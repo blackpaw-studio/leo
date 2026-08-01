@@ -484,34 +484,37 @@ func TestRunSupervisedDelegates(t *testing.T) {
 	origFn := supervisedExecFn
 	defer func() { supervisedExecFn = origFn }()
 
-	var calledPath string
-	var calledHomePath string
-	var calledConfigPath string
-	var calledToken string
-	supervisedExecFn = func(claudePath string, homePath, configPath, webToken string) error {
-		calledPath = claudePath
-		calledHomePath = homePath
-		calledConfigPath = configPath
-		calledToken = webToken
+	var calledOpts RunSupervisedOptions
+	supervisedExecFn = func(opts RunSupervisedOptions) error {
+		calledOpts = opts
 		return nil
 	}
 
 	const wantToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err := RunSupervised("/usr/bin/claude", "/home/.leo", "/home/.leo/leo.yaml", wantToken)
+	err := RunSupervised(RunSupervisedOptions{
+		ClaudePath: "/usr/bin/claude",
+		HomePath:   "/home/.leo",
+		ConfigPath: "/home/.leo/leo.yaml",
+		WebToken:   wantToken,
+		Version:    "v-test",
+	})
 	if err != nil {
 		t.Fatalf("RunSupervised() error: %v", err)
 	}
-	if calledPath != "/usr/bin/claude" {
-		t.Errorf("path = %q, want /usr/bin/claude", calledPath)
+	if calledOpts.ClaudePath != "/usr/bin/claude" {
+		t.Errorf("path = %q, want /usr/bin/claude", calledOpts.ClaudePath)
 	}
-	if calledHomePath != "/home/.leo" {
-		t.Errorf("homePath = %q, want /home/.leo", calledHomePath)
+	if calledOpts.HomePath != "/home/.leo" {
+		t.Errorf("homePath = %q, want /home/.leo", calledOpts.HomePath)
 	}
-	if calledConfigPath != "/home/.leo/leo.yaml" {
-		t.Errorf("configPath = %q, want /home/.leo/leo.yaml", calledConfigPath)
+	if calledOpts.ConfigPath != "/home/.leo/leo.yaml" {
+		t.Errorf("configPath = %q, want /home/.leo/leo.yaml", calledOpts.ConfigPath)
 	}
-	if calledToken != wantToken {
-		t.Errorf("webToken = %q, want %q", calledToken, wantToken)
+	if calledOpts.WebToken != wantToken {
+		t.Errorf("webToken = %q, want %q", calledOpts.WebToken, wantToken)
+	}
+	if calledOpts.Version != "v-test" {
+		t.Errorf("version = %q, want v-test", calledOpts.Version)
 	}
 }
 

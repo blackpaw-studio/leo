@@ -32,6 +32,13 @@ type SpawnRequest struct {
 	// Start call) rather than passing it as a trailing positional claude arg.
 	// Empty for claude, which keeps the prompt in ClaudeArgs.
 	OpeningPrompt string
+	// Resumed is set by Manager.Resume to mark this spawn as reviving a
+	// suspended agent rather than creating a new one. The supervisor uses it
+	// to announce the transition as observe.EventAgentStateChanged (status
+	// "starting") instead of observe.EventAgentSpawned — a consumer that saw
+	// this agent suspend already knows about it and needs a state
+	// transition, not a "new agent appeared" event.
+	Resumed bool
 }
 
 // ProcessState is the live supervisor view of a single agent/process.

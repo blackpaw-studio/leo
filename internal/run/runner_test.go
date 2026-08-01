@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -472,9 +473,17 @@ func TestRunCommandError(t *testing.T) {
 	}
 }
 
+// TestRunMissingPromptFile guards finding #2: a failure between
+// publishTaskRunStarted and the main attempt loop (here, assemblePrompt)
+// must still publish a terminal event and record history — otherwise the run
+// log reports a phantom in-flight run forever and stream consumers wait for
+// an event that never comes.
 func TestRunMissingPromptFile(t *testing.T) {
 	orig := execCommand
-	defer func() { execCommand = orig }()
+	defer func() {
+		execCommand = orig
+		SetPublisher(nil)
+	}()
 
 	dir := t.TempDir()
 
@@ -486,12 +495,38 @@ func TestRunMissingPromptFile(t *testing.T) {
 		},
 	}
 
+	pub := &recordingPublisher{}
+	SetPublisher(pub)
+
 	err := Run(cfg, "mytask", nil)
 	if err == nil {
 		t.Fatal("Run() should return error for missing prompt file")
 	}
 	if !strings.Contains(err.Error(), "assembling prompt") {
 		t.Errorf("error = %q, want to contain 'assembling prompt'", err.Error())
+	}
+
+	if len(pub.events) != 2 {
+		t.Fatalf("expected a started+failed event pair, got %d: %+v", len(pub.events), pub.events)
+	}
+	if pub.events[0].Type != observe.EventTaskRunStarted {
+		t.Fatalf("expected first event to be EventTaskRunStarted, got %s", pub.events[0].Type)
+	}
+	failed, ok := pub.events[1].Payload.(*observe.TaskRunPayload)
+	if !ok || pub.events[1].Type != observe.EventTaskRunFailed {
+		t.Fatalf("expected a terminal EventTaskRunFailed event, got %s (%T)", pub.events[1].Type, pub.events[1].Payload)
+	}
+	if failed.Run.Status != observe.RunFailed {
+		t.Fatalf("expected RunFailed, got %s", failed.Run.Status)
+	}
+
+	hist := history.NewStore(dir)
+	entries := hist.GetAll("mytask")
+	if len(entries) != 1 {
+		t.Fatalf("expected a history record for the aborted run, got %d entries", len(entries))
+	}
+	if entries[0].ExitCode == 0 {
+		t.Fatalf("expected a nonzero exit code recorded, got %d", entries[0].ExitCode)
 	}
 }
 
