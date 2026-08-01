@@ -116,10 +116,20 @@ func (b *Bus) Publish(ev Event) {
 var publishTestHook func(seq uint64)
 
 // Subscribe registers a new subscriber with the given channel buffer size and
-// returns the receive-only channel plus an unsubscribe function. The
-// unsubscribe function closes the channel and is safe to call more than
-// once.
-func (b *Bus) Subscribe(buffer int) (<-chan Event, func()) {
+// returns the receive-only channel, an unsubscribe function, and the
+// sequence number of the last event published before this subscriber was
+// registered (0 if none have been published yet). The unsubscribe function
+// closes the channel and is safe to call more than once.
+//
+// Registration and reading that starting sequence happen under one
+// acquisition of mu, so no Publish can land between them: every event
+// assigned a seq after this call is guaranteed to reach this subscriber, and
+// no event counted in the returned seq was ever missed. That makes the
+// returned seq safe to use verbatim as a "hello" frame's starting point — the
+// first event this subscriber actually receives is guaranteed to be
+// seq+1, with no window in which an event is both counted and never
+// delivered. See the eventSource interface in internal/web.
+func (b *Bus) Subscribe(buffer int) (<-chan Event, func(), uint64) {
 	if buffer < 0 {
 		buffer = 0
 	}
@@ -129,13 +139,14 @@ func (b *Bus) Subscribe(buffer int) (<-chan Event, func()) {
 	id := b.nextID
 	b.nextID++
 	b.subs[id] = s
+	seq := b.seq
 	b.mu.Unlock()
 
 	var once sync.Once
 	unsub := func() {
 		once.Do(func() { b.drop(id) })
 	}
-	return s.ch, unsub
+	return s.ch, unsub, seq
 }
 
 // drop removes and closes the subscriber if it is still registered. Safe to

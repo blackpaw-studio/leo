@@ -208,9 +208,13 @@ data: {"seq":184,"at":"2026-07-31T18:44:01-04:00","agent":"den","activity":"work
 ```
 
 Every payload carries a monotonic `seq` and an `at` timestamp. On connect the server
-sends a `hello` event with the current `seq`; a consumer whose stream drops should
-reconnect and refetch the snapshot rather than trying to replay gaps (no event history is
-retained). A comment heartbeat is sent every 20s so idle proxies don't close the stream.
+sends a `hello` event whose `seq` is the sequence number of the last event already
+published — i.e. the first event a consumer receives afterwards is guaranteed to be
+`hello.seq + 1`, with no gap — and whose `at` is a real timestamp, never the zero value. If no
+event bus is wired at all, `hello.seq` is `0` (there is nothing to report a sequence for),
+but `at` is still a real timestamp. A consumer whose stream drops should reconnect and
+refetch the snapshot rather than trying to replay gaps (no event history is retained). A
+comment heartbeat is sent every 20s so idle proxies don't close the stream.
 
 Event types:
 

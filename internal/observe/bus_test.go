@@ -18,7 +18,7 @@ func TestBusPublishStampsSeqAndTime(t *testing.T) {
 	fixed := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	withFixedBusClock(t, fixed)
 	b := NewBus()
-	ch, unsub := b.Subscribe(4)
+	ch, unsub, _ := b.Subscribe(4)
 	defer unsub()
 
 	// Act
@@ -41,8 +41,8 @@ func TestBusPublishStampsSeqAndTime(t *testing.T) {
 func TestBusFansOutToAllSubscribers(t *testing.T) {
 	// Arrange
 	b := NewBus()
-	chA, unsubA := b.Subscribe(4)
-	chB, unsubB := b.Subscribe(4)
+	chA, unsubA, _ := b.Subscribe(4)
+	chB, unsubB, _ := b.Subscribe(4)
 	defer unsubA()
 	defer unsubB()
 
@@ -60,7 +60,7 @@ func TestBusFansOutToAllSubscribers(t *testing.T) {
 func TestBusUnsubscribeStopsDelivery(t *testing.T) {
 	// Arrange
 	b := NewBus()
-	ch, unsub := b.Subscribe(4)
+	ch, unsub, _ := b.Subscribe(4)
 
 	// Act
 	unsub()
@@ -76,7 +76,7 @@ func TestBusUnsubscribeStopsDelivery(t *testing.T) {
 func TestBusUnsubscribeIsSafeToCallTwice(t *testing.T) {
 	// Arrange
 	b := NewBus()
-	_, unsub := b.Subscribe(1)
+	_, unsub, _ := b.Subscribe(1)
 
 	// Act + Assert: must not panic on double-close.
 	unsub()
@@ -86,7 +86,7 @@ func TestBusUnsubscribeIsSafeToCallTwice(t *testing.T) {
 func TestBusSlowSubscriberIsDroppedNotBlocked(t *testing.T) {
 	// Arrange
 	b := NewBus()
-	ch, _ := b.Subscribe(1) // unbuffered beyond 1 slot
+	ch, _, _ := b.Subscribe(1) // unbuffered beyond 1 slot
 
 	// Act: fill the buffer, then publish again without draining. The
 	// publisher must return promptly rather than blocking.
@@ -122,7 +122,7 @@ func TestBusSlowSubscriberIsDroppedNotBlocked(t *testing.T) {
 func TestBusPublishDeliveryIsMonotonicUnderConcurrentPublishers(t *testing.T) {
 	// Arrange
 	b := NewBus()
-	ch, unsub := b.Subscribe(4)
+	ch, unsub, _ := b.Subscribe(4)
 	defer unsub()
 
 	started := make(chan struct{})
@@ -180,7 +180,7 @@ func TestBusConcurrentPublishAndSubscribeIsRaceFree(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ch, unsub := b.Subscribe(2)
+			ch, unsub, _ := b.Subscribe(2)
 			defer unsub()
 			select {
 			case <-ch:
@@ -196,4 +196,43 @@ func TestBusConcurrentPublishAndSubscribeIsRaceFree(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestHelloSeqSubscribeRaceWindow provokes the exact window a hello frame
+// must not have: a Publish landing between registering a subscriber and
+// reading "the last seq before it" must never be able to bump that seq past
+// what the subscriber will actually have delivered to it as its first event.
+// Subscribe returning the starting seq atomically with registration (both
+// under one acquisition of the bus's lock) is what closes this window; a
+// version that read the sequence via a separate call after Subscribe
+// returned could race a concurrent Publish and over-report.
+func TestHelloSeqSubscribeRaceWindow(t *testing.T) {
+	b := NewBus()
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				b.Publish(Event{Type: EventAgentStopped, Payload: &AgentStoppedPayload{Agent: "x"}})
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stop) })
+
+	for i := 0; i < 500; i++ {
+		ch, unsub, helloSeq := b.Subscribe(4)
+		select {
+		case ev := <-ch:
+			got := ev.Payload.(*AgentStoppedPayload).Seq
+			if got != helloSeq+1 {
+				unsub()
+				t.Fatalf("iteration %d: first delivered seq = %d, want helloSeq+1 = %d", i, got, helloSeq+1)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("iteration %d: timed out waiting for an event", i)
+		}
+		unsub()
+	}
 }

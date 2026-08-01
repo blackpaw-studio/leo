@@ -21,7 +21,11 @@ var ansiEscapeRegexp = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
 // pane has no non-empty content — never a stable field to parse, per
 // docs/specs/2026-07-31-observability-api.md.
 func capturePaneAction(ctx context.Context, tmuxPath, sessionName string) *Action {
-	out, err := captureExecCommand(ctx, tmuxPath, tmux.Args("capture-pane", "-t", tmux.Target(sessionName), "-p")...).Output()
+	// capture-pane takes a target-PANE, not a target-SESSION: PaneTarget
+	// appends the trailing ":" tmux needs to parse "=name" as a pane spec
+	// (current window, active pane). tmux.Target's bare "=name" fails to
+	// resolve here even though it is correct for has-session/kill-session.
+	out, err := captureExecCommand(ctx, tmuxPath, tmux.Args("capture-pane", "-t", tmux.PaneTarget(sessionName), "-p")...).Output()
 	if err != nil {
 		return nil
 	}

@@ -360,16 +360,26 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	// headers land, a few instructions before Subscribe would otherwise run,
 	// so a fast publish immediately after connecting could be dropped.
 	var events <-chan observe.Event
+	var helloSeq uint64
 	if s.events != nil {
 		var unsubscribe func()
-		events, unsubscribe = s.events.Subscribe(sseSubscriberBuffer)
+		// Subscribe atomically returns the starting seq alongside
+		// registration, so there is no window in which a concurrent Publish
+		// can be counted in helloSeq without also being delivered to this
+		// subscriber. See observe.Bus.Subscribe's doc comment.
+		events, unsubscribe, helloSeq = s.events.Subscribe(sseSubscriberBuffer)
 		defer unsubscribe()
 	}
 
 	setWriteDeadline()
 	w.WriteHeader(http.StatusOK)
 
-	hello := observe.HelloPayload{Version: observe.SnapshotVersion, ServerTime: time.Now()}
+	now := time.Now()
+	hello := observe.HelloPayload{
+		Meta:       observe.Meta{Seq: helloSeq, At: now},
+		Version:    observe.SnapshotVersion,
+		ServerTime: now,
+	}
 	setWriteDeadline()
 	if err := writeSSEEvent(w, string(observe.EventHello), hello); err != nil {
 		return
