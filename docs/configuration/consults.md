@@ -27,8 +27,12 @@ answer directly as the tool result.
   modifying files. This is not enforced; configured template permissions
   still apply.
 - One-shot only: no session is retained and no follow-up conversation exists.
-- Calls time out after 10 minutes. At most four run concurrently; additional
-  calls wait and remain cancellable by their callers.
+- Calls time out after 30 minutes. At most four run concurrently; additional
+  calls wait and remain cancellable by their callers. Leo owns that deadline:
+  every coding agent it launches is handed a longer per-tool MCP ceiling
+  (32 minutes) through its harness's own knob, so a long consult is never cut
+  short by the caller's harness — see
+  [Harnesses](harnesses.md#leo-mcp-tool-timeouts).
 - Supervised agents contribute their workspace. Other Leo callers are also
   supported and run from the daemon's working directory when no workspace can
   be resolved.
@@ -36,7 +40,7 @@ answer directly as the tool result.
 ## Watching a consult
 
 Consults are started by agents, not by you, and a long one is otherwise a
-silent ten-minute gap. Every consult records what it does, so you can watch
+silent half-hour gap. Every consult records what it does, so you can watch
 it work:
 
 ```console

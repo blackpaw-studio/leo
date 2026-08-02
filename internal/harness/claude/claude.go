@@ -5,6 +5,8 @@ package claude
 
 import (
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
@@ -24,6 +26,10 @@ type Options struct {
 	AppendSystemPrompt string
 	MCPConfigPath      string   // user MCP config; empty when absent or serverless
 	LeoMCPArgs         []string // precomputed leomcp.AppendArg(nil, cfg); nil when gated off
+	// LeoMCPToolTimeout is leo's per-tool MCP ceiling (leomcp.ToolTimeout).
+	// Applied only when the leo bridge is actually wired (LeoMCPArgs
+	// non-empty), since Claude Code's knob is process-global.
+	LeoMCPToolTimeout time.Duration
 }
 
 // Claude is the Claude Code adapter.
@@ -61,12 +67,27 @@ func (Claude) SupportsChannels() bool { return true }
 
 // Env returns claude-specific spawn env. One-shot task runs set the CLI
 // entrypoint marker (moved here from the task runner); interactive kinds
-// export their env at tmux launch instead.
+// export their env at tmux launch instead. A wired leo MCP bridge also
+// raises MCP_TOOL_TIMEOUT to leo's own ceiling, so a long leo_consult isn't
+// cut short by Claude Code's default per-tool deadline. That knob has no
+// per-server form, so it lifts the ceiling for every MCP server in the
+// process — hence the gate on the bridge actually being present.
 func (Claude) Env(spec harness.LaunchSpec) (map[string]string, error) {
-	if spec.Kind == harness.KindTask {
-		return map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}, nil
+	opts, ok := spec.Options.(Options)
+	if !ok {
+		return nil, fmt.Errorf("claude: spec.Options is %T, want claude.Options", spec.Options)
 	}
-	return nil, nil
+	env := map[string]string{}
+	if spec.Kind == harness.KindTask {
+		env["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+	}
+	if len(opts.LeoMCPArgs) > 0 && opts.LeoMCPToolTimeout > 0 {
+		env["MCP_TOOL_TIMEOUT"] = strconv.FormatInt(opts.LeoMCPToolTimeout.Milliseconds(), 10)
+	}
+	if len(env) == 0 {
+		return nil, nil
+	}
+	return env, nil
 }
 
 // SupportsKind: claude runs every leo primitive.

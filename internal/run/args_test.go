@@ -2,11 +2,13 @@ package run
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 // leoSkillNudgeText mirrors leomcp's unconditional leo_skill guidance
@@ -208,6 +210,9 @@ func TestBuildArgsCodexWithLeoMCP(t *testing.T) {
 		`-c mcp_servers.leo.args=["mcp-server"]`,
 		`-c mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN"]`,
 		`-c mcp_servers.leo.default_tools_approval_mode="approve"`,
+		// leo's ceiling overrides codex's much shorter per-tool default, so
+		// a long leo_consult isn't truncated harness-side.
+		fmt.Sprintf(`-c mcp_servers.leo.tool_timeout_sec=%d`, int(leomcp.ToolTimeout.Seconds())),
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("argv missing %q; got %v", want, args)
@@ -255,6 +260,7 @@ func TestBuildArgsOpencode(t *testing.T) {
 		MCP struct {
 			Leo struct {
 				Environment map[string]string `json:"environment"`
+				Timeout     int64             `json:"timeout"`
 			} `json:"leo"`
 		} `json:"mcp"`
 	}
@@ -263,6 +269,9 @@ func TestBuildArgsOpencode(t *testing.T) {
 	}
 	if parsed.MCP.Leo.Environment["LEO_API_TOKEN"] != "tok-abc" {
 		t.Errorf("mcp.leo.environment.LEO_API_TOKEN = %q, want %q", parsed.MCP.Leo.Environment["LEO_API_TOKEN"], "tok-abc")
+	}
+	if parsed.MCP.Leo.Timeout != leomcp.ToolTimeout.Milliseconds() {
+		t.Errorf("mcp.leo.timeout = %d, want %d", parsed.MCP.Leo.Timeout, leomcp.ToolTimeout.Milliseconds())
 	}
 }
 

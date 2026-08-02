@@ -1052,6 +1052,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		}
 		opts.MCPConfigPath = mcpConfig
 		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+		opts.LeoMCPToolTimeout = leomcp.ToolTimeout
 		spec.Options = opts
 	case codexharness.Options:
 		opts.LeoMCP = &codexharness.LeoMCPBridge{
@@ -1059,12 +1060,14 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 			Args:         []string{"mcp-server"},
 			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
 			ApprovalMode: "approve",
+			ToolTimeout:  leomcp.ToolTimeout,
 		}
 		spec.Options = opts
 	case opencodeharness.Options:
 		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-			Command: []string{"leo", "mcp-server"},
-			Env:     leoEnv,
+			Command:     []string{"leo", "mcp-server"},
+			Env:         leoEnv,
+			ToolTimeout: leomcp.ToolTimeout,
 		}
 		spec.Options = opts
 	default:

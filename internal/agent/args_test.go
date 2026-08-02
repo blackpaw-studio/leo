@@ -2,6 +2,7 @@ package agent
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
 	opencodeharness "github.com/blackpaw-studio/leo/internal/harness/opencode"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 // hasFlagValue reports whether args contains `flag` immediately followed by a
@@ -28,13 +30,19 @@ func TestBuildTemplateArgsWiresLeoMCPWhenWebEnabled(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
 	tmpl := config.TemplateConfig{}
 
-	args, _ := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "")
+	args, env := BuildTemplateArgs(cfg, tmpl, "agent-x", "/tmp/ws", "", "")
 
 	if !hasFlagValue(args, "--mcp-config", "leo-mcp.json") {
 		t.Errorf("expected --mcp-config pointing at leo-mcp.json; got %v", args)
 	}
 	if !hasFlagValue(args, "--append-system-prompt", "leo_send_message") {
 		t.Errorf("expected awareness line in --append-system-prompt; got %v", args)
+	}
+	// Claude Code's per-tool MCP deadline is process-global; a wired leo
+	// bridge raises it past leo's own consult deadline.
+	wantTimeout := strconv.FormatInt(leomcp.ToolTimeout.Milliseconds(), 10)
+	if env["MCP_TOOL_TIMEOUT"] != wantTimeout {
+		t.Errorf("MCP_TOOL_TIMEOUT = %q, want %q (env %v)", env["MCP_TOOL_TIMEOUT"], wantTimeout, env)
 	}
 }
 
@@ -242,6 +250,9 @@ func TestResolveTemplateLaunchCodexFillsLeoMCPBridge(t *testing.T) {
 	if opts.LeoMCP.ApprovalMode != "approve" {
 		t.Errorf("LeoMCP.ApprovalMode = %q, want approve", opts.LeoMCP.ApprovalMode)
 	}
+	if opts.LeoMCP.ToolTimeout != leomcp.ToolTimeout {
+		t.Errorf("LeoMCP.ToolTimeout = %s, want %s", opts.LeoMCP.ToolTimeout, leomcp.ToolTimeout)
+	}
 
 	// Args() renders the codex TUI launch argv for KindAgent: the leo MCP
 	// bridge config lands in the launch argv via -c mcp_servers.leo.*
@@ -335,6 +346,9 @@ func TestResolveTemplateLaunchOpencodeFillsLeoMCPBridge(t *testing.T) {
 	}
 	if !reflect.DeepEqual(opts.LeoMCP.Env, wantEnv) {
 		t.Errorf("LeoMCP.Env = %v, want %v", opts.LeoMCP.Env, wantEnv)
+	}
+	if opts.LeoMCP.ToolTimeout != leomcp.ToolTimeout {
+		t.Errorf("LeoMCP.ToolTimeout = %s, want %s", opts.LeoMCP.ToolTimeout, leomcp.ToolTimeout)
 	}
 
 	// Args() renders the interactive TUI argv for KindAgent (tmuxtui driver).

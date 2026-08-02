@@ -90,6 +90,7 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		}
 		opts.MCPConfigPath = mcpConfig
 		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+		opts.LeoMCPToolTimeout = leomcp.ToolTimeout
 		spec.Options = opts
 	case codexharness.Options:
 		opts.LeoMCP = &codexharness.LeoMCPBridge{
@@ -97,6 +98,7 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 			Args:         []string{"mcp-server"},
 			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
 			ApprovalMode: "approve",
+			ToolTimeout:  leomcp.ToolTimeout,
 		}
 		spec.Options = opts
 	case opencodeharness.Options:
@@ -107,6 +109,7 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 				"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
 				"LEO_API_TOKEN":    webToken,
 			},
+			ToolTimeout: leomcp.ToolTimeout,
 		}
 		spec.Options = opts
 	default:

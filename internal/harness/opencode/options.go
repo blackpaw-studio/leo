@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -24,10 +25,13 @@ type Options struct {
 
 // LeoMCPBridge describes the leo MCP server entry injected into the
 // per-spawn OPENCODE_CONFIG_CONTENT overlay (deep-merged over the user's
-// own opencode config; no file mutation).
+// own opencode config; no file mutation). ToolTimeout overrides opencode's
+// own per-server MCP deadline, which would otherwise truncate long-running
+// leo tools like leo_consult; zero leaves opencode's default in place.
 type LeoMCPBridge struct {
-	Command []string
-	Env     map[string]string
+	Command     []string
+	Env         map[string]string
+	ToolTimeout time.Duration
 }
 
 // DecodeOptions strictly decodes a harness_options map into Options. Keys
@@ -108,14 +112,17 @@ func (Opencode) Env(spec harness.LaunchSpec) (map[string]string, error) {
 	if opts.LeoMCP != nil || len(opts.Permission) > 0 {
 		cfg := map[string]any{}
 		if opts.LeoMCP != nil {
-			cfg["mcp"] = map[string]any{
-				"leo": map[string]any{
-					"type":        "local",
-					"command":     opts.LeoMCP.Command,
-					"enabled":     true,
-					"environment": opts.LeoMCP.Env,
-				},
+			leo := map[string]any{
+				"type":        "local",
+				"command":     opts.LeoMCP.Command,
+				"enabled":     true,
+				"environment": opts.LeoMCP.Env,
 			}
+			if opts.LeoMCP.ToolTimeout > 0 {
+				// opencode's per-server timeout is milliseconds.
+				leo["timeout"] = opts.LeoMCP.ToolTimeout.Milliseconds()
+			}
+			cfg["mcp"] = map[string]any{"leo": leo}
 		}
 		if len(opts.Permission) > 0 {
 			cfg["permission"] = opts.Permission
