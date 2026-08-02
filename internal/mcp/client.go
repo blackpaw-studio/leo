@@ -13,6 +13,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/consult"
 )
 
 // maxDaemonResponseBytes caps how much response body the MCP client will read
@@ -20,9 +22,10 @@ import (
 // a runaway handler rather than an adversarial boundary.
 const maxDaemonResponseBytes = 10 << 20
 
-// consultHTTPTimeout is slightly longer than the daemon's ten-minute
-// consultant deadline so the daemon can return its structured timeout error.
-const consultHTTPTimeout = 11 * time.Minute
+// consultHTTPTimeout is slightly longer than the daemon's own consultant
+// deadline so the daemon can return its structured timeout error. Derived
+// from that deadline rather than restated, so the two can't drift apart.
+const consultHTTPTimeout = consult.RunTimeout + time.Minute
 
 // daemonClient calls the Leo daemon's TCP HTTP API on 127.0.0.1.
 type daemonClient struct {

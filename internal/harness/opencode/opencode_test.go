@@ -3,7 +3,9 @@ package opencode
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/harness/tmuxtui"
@@ -206,8 +208,9 @@ func TestEnvBuildsConfigContent(t *testing.T) {
 	spec := harness.LaunchSpec{Kind: harness.KindTask, Options: Options{
 		Permission: map[string]any{"bash": "deny"},
 		LeoMCP: &LeoMCPBridge{
-			Command: []string{"leo", "mcp-server"},
-			Env:     map[string]string{"LEO_PROCESS_NAME": "task:t", "LEO_WEB_PORT": "8080", "LEO_API_TOKEN": "tok"},
+			Command:     []string{"leo", "mcp-server"},
+			Env:         map[string]string{"LEO_PROCESS_NAME": "task:t", "LEO_WEB_PORT": "8080", "LEO_API_TOKEN": "tok"},
+			ToolTimeout: 32 * time.Minute,
 		},
 	}}
 	env, err := Opencode{}.Env(spec)
@@ -221,6 +224,7 @@ func TestEnvBuildsConfigContent(t *testing.T) {
 			Command     []string          `json:"command"`
 			Enabled     bool              `json:"enabled"`
 			Environment map[string]string `json:"environment"`
+			Timeout     int64             `json:"timeout"`
 		} `json:"mcp"`
 		Permission map[string]any `json:"permission"`
 	}
@@ -230,6 +234,10 @@ func TestEnvBuildsConfigContent(t *testing.T) {
 	leo := cfg.MCP["leo"]
 	if leo.Type != "local" || !leo.Enabled || !reflect.DeepEqual(leo.Command, []string{"leo", "mcp-server"}) {
 		t.Errorf("mcp.leo = %+v", leo)
+	}
+	// opencode's per-server timeout is milliseconds.
+	if leo.Timeout != (32 * time.Minute).Milliseconds() {
+		t.Errorf("mcp.leo.timeout = %d, want %d", leo.Timeout, (32 * time.Minute).Milliseconds())
 	}
 	if leo.Environment["LEO_API_TOKEN"] != "tok" {
 		t.Errorf("environment = %+v", leo.Environment)
@@ -275,6 +283,10 @@ func TestEnvLeoMCPOnly(t *testing.T) {
 	}
 	if _, ok := cfg["mcp"]; !ok {
 		t.Errorf("expected mcp key, got %v", cfg)
+	}
+	// A zero ToolTimeout leaves opencode's own default in place.
+	if strings.Contains(raw, "timeout") {
+		t.Errorf("expected no timeout key without a ToolTimeout, got %s", raw)
 	}
 	if _, ok := cfg["permission"]; ok {
 		t.Errorf("expected no permission key, got %v", cfg)

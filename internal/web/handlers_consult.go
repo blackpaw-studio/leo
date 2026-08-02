@@ -16,7 +16,7 @@ import (
 // POST /api/consult {"from":"...", "template":"...", "model":"...", "prompt":"..."}
 func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 	// Consults legitimately outlive the server-wide 30-second WriteTimeout.
-	// The consultant's own ten-minute deadline remains authoritative.
+	// The consultant's own deadline (consult.RunTimeout) stays authoritative.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
 	var req struct {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -124,14 +125,39 @@ func TestClaudeEnv(t *testing.T) {
 	tests := []struct {
 		name string
 		kind harness.Kind
+		opts Options
 		want map[string]string
 	}{
-		{"task", harness.KindTask, map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}},
-		{"agent", harness.KindAgent, nil},
+		{"task", harness.KindTask, Options{}, map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli"}},
+		{"agent", harness.KindAgent, Options{}, nil},
+		{
+			// The leo MCP server hosts tools (leo_consult) that legitimately
+			// outrun Claude Code's default per-tool MCP deadline, so a wired
+			// bridge raises the ceiling. The knob is process-global — Claude
+			// Code has no per-server form.
+			name: "agent with leo MCP bridge raises the tool ceiling",
+			kind: harness.KindAgent,
+			opts: Options{LeoMCPArgs: []string{"--mcp-config", "/leo/state/leo-mcp.json"}, LeoMCPToolTimeout: 32 * time.Minute},
+			want: map[string]string{"MCP_TOOL_TIMEOUT": "1920000"},
+		},
+		{
+			name: "task with leo MCP bridge keeps the entrypoint marker",
+			kind: harness.KindTask,
+			opts: Options{LeoMCPArgs: []string{"--mcp-config", "/leo/state/leo-mcp.json"}, LeoMCPToolTimeout: 32 * time.Minute},
+			want: map[string]string{"CLAUDE_CODE_ENTRYPOINT": "cli", "MCP_TOOL_TIMEOUT": "1920000"},
+		},
+		{
+			// No bridge wired (e.g. a consultant subprocess): leave Claude
+			// Code's own default alone rather than raising it globally.
+			name: "no bridge leaves the ceiling untouched",
+			kind: harness.KindAgent,
+			opts: Options{LeoMCPToolTimeout: 32 * time.Minute},
+			want: nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Claude{}.Env(harness.LaunchSpec{Kind: tt.kind})
+			got, err := Claude{}.Env(harness.LaunchSpec{Kind: tt.kind, Options: tt.opts})
 			if err != nil {
 				t.Fatalf("Env(%v): unexpected error %v", tt.kind, err)
 			}
@@ -139,6 +165,14 @@ func TestClaudeEnv(t *testing.T) {
 				t.Errorf("Env(%v) = %v, want %v", tt.kind, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestClaudeEnvRejectsForeignOptions mirrors Args: a spec carrying another
+// adapter's options is a wiring bug, not something to silently ignore.
+func TestClaudeEnvRejectsForeignOptions(t *testing.T) {
+	if _, err := (Claude{}).Env(harness.LaunchSpec{Kind: harness.KindTask, Options: struct{}{}}); err == nil {
+		t.Fatal("Env with foreign options: want error, got nil")
 	}
 }
 

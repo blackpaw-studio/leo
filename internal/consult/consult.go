@@ -22,7 +22,12 @@ import (
 )
 
 const (
-	RunTimeout    = 10 * time.Minute
+	// RunTimeout is the authoritative deadline for one consult. A consult is
+	// a full agent run, so this is generous; it stays a hard cap only so a
+	// wedged harness process can't hold one of maxConcurrent slots forever.
+	// Harness-side MCP tool ceilings are derived from it (leomcp.ToolTimeout)
+	// so leo, not the coding agent, is what times a consult out.
+	RunTimeout    = 30 * time.Minute
 	maxConcurrent = 4
 	preamble      = "You are a one-off consultant: another agent is asking for your independent opinion. Analyze and answer directly and completely in your final message. Do not modify any files or take actions beyond reading. The question follows."
 )

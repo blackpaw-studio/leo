@@ -319,6 +319,31 @@ Other things to know:
 - **Messaging** goes through `leo_send_message`, same as codex —
   `SupportsChannels() == false`.
 
+## Leo MCP tool timeouts
+
+Every harness enforces its own per-tool MCP deadline, and every one of them is
+shorter than the work some leo tools legitimately do — `leo_consult` runs a
+full agent and may take tens of minutes. Left alone, the coding agent kills
+the call and reports a generic harness timeout, hiding leo's own structured
+one.
+
+So leo owns the deadline and tells each harness about it. The ceiling
+(`leomcp.ToolTimeout`, currently **32 minutes** — the consult run deadline
+plus margin) is handed to whichever adapter is launching, and each renders it
+through its native knob:
+
+| Harness  | Knob                                | Scope       |
+| -------- | ----------------------------------- | ----------- |
+| claude   | `MCP_TOOL_TIMEOUT` env (ms)         | **process-global** — no per-server form exists, so this lifts the ceiling for every MCP server in that agent |
+| codex    | `-c mcp_servers.leo.tool_timeout_sec` | leo's server only |
+| opencode | `mcp.leo.timeout` (ms) in `OPENCODE_CONFIG_CONTENT` | leo's server only |
+
+Neither the ceiling nor the consult deadline is user-configurable; both are
+constants, ordered so that leo's deadline always expires first and the caller
+gets leo's error rather than the harness's. Nothing is set when the leo MCP
+bridge isn't wired (a consultant subprocess, for instance) — the harness's own
+default stands.
+
 ## Cross-harness model cascade
 
 `defaults.model` **does not** cascade to a task whose resolved harness

@@ -3,6 +3,7 @@ package codex
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -128,6 +129,7 @@ func TestArgs(t *testing.T) {
 					Command: "leo", Args: []string{"mcp-server"},
 					EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
 					ApprovalMode: "approve",
+					ToolTimeout:  32 * time.Minute,
 				},
 			}},
 			want: func(ws string) []string {
@@ -135,6 +137,26 @@ func TestArgs(t *testing.T) {
 					"-c", `mcp_servers.leo.command="leo"`,
 					"-c", `mcp_servers.leo.args=["mcp-server"]`,
 					"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME","LEO_WEB_PORT","LEO_API_TOKEN"]`,
+					"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`,
+					"-c", `mcp_servers.leo.tool_timeout_sec=1920`,
+					"p"})
+			},
+		},
+		{
+			// A zero ToolTimeout leaves codex's own default in place rather
+			// than rendering a nonsense `tool_timeout_sec=0`.
+			name: "leo MCP bridge without tool timeout",
+			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "p", Options: Options{
+				LeoMCP: &LeoMCPBridge{
+					Command: "leo", Args: []string{"mcp-server"},
+					ApprovalMode: "approve",
+				},
+			}},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check"}, ws, []string{
+					"-c", `mcp_servers.leo.command="leo"`,
+					"-c", `mcp_servers.leo.args=["mcp-server"]`,
+					"-c", `mcp_servers.leo.env_vars=[]`,
 					"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`,
 					"p"})
 			},
@@ -216,6 +238,7 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 						Command: "leo", Args: []string{"mcp-server"},
 						EnvVars:      []string{"LEO_PROCESS_NAME"},
 						ApprovalMode: "approve",
+						ToolTimeout:  32 * time.Minute,
 					},
 				},
 			},
@@ -224,7 +247,8 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 					"-c", `mcp_servers.leo.command="leo"`,
 					"-c", `mcp_servers.leo.args=["mcp-server"]`,
 					"-c", `mcp_servers.leo.env_vars=["LEO_PROCESS_NAME"]`,
-					"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`})
+					"-c", `mcp_servers.leo.default_tools_approval_mode="approve"`,
+					"-c", `mcp_servers.leo.tool_timeout_sec=1920`})
 			},
 		},
 		{

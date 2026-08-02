@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -26,25 +27,34 @@ type Options struct {
 // overrides that register leo's MCP server for one codex run. EnvVars is a
 // parent-env whitelist (values stay out of ps-visible argv); ApprovalMode
 // "approve" is required or headless exec auto-cancels every MCP tool call.
+// ToolTimeout overrides codex's own (much shorter) per-tool MCP deadline,
+// which would otherwise truncate long-running leo tools like leo_consult;
+// zero leaves codex's default in place.
 type LeoMCPBridge struct {
 	Command      string
 	Args         []string
 	EnvVars      []string
 	ApprovalMode string
+	ToolTimeout  time.Duration
 }
 
 // configArgs renders the bridge as repeated -c key=value overrides using
-// TOML value syntax (strings quoted, arrays bracketed).
+// TOML value syntax (strings quoted, arrays bracketed, durations as integer
+// seconds).
 func (b *LeoMCPBridge) configArgs() []string {
 	if b == nil {
 		return nil
 	}
-	return []string{
+	args := []string{
 		"-c", fmt.Sprintf("mcp_servers.leo.command=%s", tomlString(b.Command)),
 		"-c", fmt.Sprintf("mcp_servers.leo.args=%s", tomlStringArray(b.Args)),
 		"-c", fmt.Sprintf("mcp_servers.leo.env_vars=%s", tomlStringArray(b.EnvVars)),
 		"-c", fmt.Sprintf("mcp_servers.leo.default_tools_approval_mode=%s", tomlString(b.ApprovalMode)),
 	}
+	if b.ToolTimeout > 0 {
+		args = append(args, "-c", fmt.Sprintf("mcp_servers.leo.tool_timeout_sec=%d", int64(b.ToolTimeout.Seconds())))
+	}
+	return args
 }
 
 // tomlString renders s as a TOML basic string, escaping backslashes, quotes,
