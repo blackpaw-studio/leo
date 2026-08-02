@@ -211,7 +211,7 @@ func newRegistry(client *daemonClient, processName string) *registry {
 
 	r.add(toolDef{
 		Name:        "leo_send_message",
-		Description: "Send a text message to another Leo agent or process. It arrives in the recipient's Claude prompt as a new turn, prefixed with your name. Use leo_list_agents to discover running agents. 'to' is the target's name; 'message' is the text.",
+		Description: "Send a text message to another *running* Leo agent or process (see leo_list_agents). It arrives in the recipient's prompt as a new turn, prefixed with your name, and returns immediately without their reply. 'to' is the target's name; 'message' is the text. NOT for asking a different model a question — to consult a model by name (\"consult fable\", \"ask codex\"), use leo_consult instead; those names are templates, not agents.",
 		InputSchema: objectSchema(map[string]any{
 			"to":      map[string]any{"type": "string", "description": "Target agent/process name (as shown by leo_list_agents or leo status)."},
 			"message": map[string]any{"type": "string", "description": "The message body to deliver."},
@@ -238,7 +238,9 @@ func newRegistry(client *daemonClient, processName string) *registry {
 	r.addContext(toolDef{
 		Name: "leo_consult",
 		Description: "Run a one-off consultant subagent for a second opinion from another model. " +
-			"Pick a template (see leo_list_templates) — it determines the harness and model; `model` optionally overrides the template's model. " +
+			"Use this whenever you are asked to consult, ask, check with, or get a second opinion from another model by name — \"consult fable\", \"ask codex about this\", \"what does opus think\". " +
+			"Those names are templates (see leo_list_templates), not running agents, so leo_send_message is the wrong tool for them. " +
+			"The template determines the harness and model; `model` optionally overrides the template's model. " +
 			"The prompt must be self-contained: the consultant sees none of your conversation, only files in your workspace. " +
 			"Waits for and returns the consultant's answer directly. For a council, call this concurrently with different templates and reconcile the returned answers.",
 		InputSchema: objectSchema(map[string]any{

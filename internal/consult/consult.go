@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -75,6 +76,21 @@ func NewDispatcher(rec Recorder) *Dispatcher {
 	}
 }
 
+// templateNames returns the configured template names, sorted, for use in
+// error messages. Returns "(none configured)" when the config has no
+// templates so the message never trails off into nothing.
+func templateNames(cfg *config.Config) string {
+	if len(cfg.Templates) == 0 {
+		return "(none configured)"
+	}
+	names := make([]string, 0, len(cfg.Templates))
+	for name := range cfg.Templates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
 // newID mints a consult id short enough to read in a table and wide enough
 // that collisions across the handful of retained records are not a concern.
 // Callers abbreviate it to a unique prefix anyway.
@@ -89,7 +105,9 @@ func newID() string {
 func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
 	tmpl, ok := cfg.Templates[req.Template]
 	if !ok {
-		return Result{}, invalidf("unknown template %q", req.Template)
+		// List the valid names so a caller that guessed a model name instead
+		// of a template ("opus") can retry without a second tool call.
+		return Result{}, invalidf("unknown template %q; available templates: %s", req.Template, templateNames(cfg))
 	}
 	h, err := harness.Get(cfg.TemplateHarness(tmpl))
 	if err != nil {

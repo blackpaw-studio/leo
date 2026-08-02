@@ -8,6 +8,10 @@ answer directly as the tool result.
 ## Usage
 
 - `leo_consult(template: "codex", prompt: "Review this design: …")`
+- `template` names a template, not a running agent — "consult fable" means
+  the `fable` template, not an agent called fable. Asking an agent to
+  consult a model is `leo_consult`; handing work to a running agent is
+  `leo_send_message`. An unknown template comes back with the valid names.
 - Optional `model` overrides the template's model and is validated by that
   template's harness.
 - The call waits for the consultant to finish, like a normal subagent tool.

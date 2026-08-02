@@ -28,6 +28,22 @@ func TestConsultValidation(t *testing.T) {
 	}
 }
 
+// TestConsultUnknownTemplateListsAvailable keeps the unknown-template error
+// self-correcting: a caller that guessed a model name ("opus") instead of a
+// template must be able to retry without a second tool call.
+func TestConsultUnknownTemplateListsAvailable(t *testing.T) {
+	d := NewDispatcher(nil)
+	_, err := d.Consult(context.Background(), testConfig(), Request{Template: "opus", Prompt: "q"})
+	if err == nil {
+		t.Fatal("expected unknown-template error")
+	}
+	for _, want := range []string{"claude", "codex", "opencode"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should list available template %q", err, want)
+		}
+	}
+}
+
 func TestConsultAllHarnessesReturnSynchronousResult(t *testing.T) {
 	tests := []struct {
 		name       string
