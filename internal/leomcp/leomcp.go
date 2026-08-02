@@ -81,11 +81,18 @@ const leoSkillNudgeText = "When you need to operate Leo — schedule or trigger 
 // cfg.Web.Enabled.
 const leoMessagingNudgeText = "You're running under Leo. Message other agents or the user with the `leo_send_message` tool (use `leo_list_agents` to see who's running)."
 
+// leoConsultNudgeText disambiguates the two tools operators most often
+// conflate. "Consult fable" names a template (a model), not a running agent,
+// so without this the nearest-neighbour choice is leo_send_message aimed at
+// whichever agent happens to look similar. Daemon-backed like messaging, so
+// it ships under the same cfg.Web.Enabled gate.
+const leoConsultNudgeText = "When asked to consult, ask, or get a second opinion from another model by name (\"consult fable\", \"ask codex\", \"what does opus think\"), use the `leo_consult` tool with that name as its `template` — those names come from `leo_list_templates` and are models, not running agents, so `leo_send_message` is the wrong tool for them."
+
 // LeoNudge returns Leo's built-in harness-neutral system-prompt addendum.
 // The leo_skill guidance is always included since the leo_skill tool is
-// always available; the messaging guidance is included only when the
-// daemon's web listener is enabled (cfg.Web.Enabled), since that's what
-// daemon-backed messaging tools require. Returns "" only when cfg is nil.
+// always available; the messaging and consult guidance is included only when
+// the daemon's web listener is enabled (cfg.Web.Enabled), since that's what
+// those daemon-backed tools require. Returns "" only when cfg is nil.
 // Callers set harness.LaunchSpec.SystemContext to this value; each adapter
 // renders it via its own native channel.
 func LeoNudge(cfg *config.Config) string {
@@ -93,7 +100,7 @@ func LeoNudge(cfg *config.Config) string {
 		return ""
 	}
 	if cfg.Web.Enabled {
-		return leoMessagingNudgeText + " " + leoSkillNudgeText
+		return leoMessagingNudgeText + " " + leoConsultNudgeText + " " + leoSkillNudgeText
 	}
 	return leoSkillNudgeText
 }

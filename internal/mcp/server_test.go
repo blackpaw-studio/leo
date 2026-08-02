@@ -553,6 +553,27 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 	}
 }
 
+// TestConsultAndMessageDescriptionsCrossReference guards the copy that keeps
+// "consult fable" from being mis-routed to leo_send_message: each tool must
+// name the other so the model can tell a template from a running agent.
+func TestConsultAndMessageDescriptionsCrossReference(t *testing.T) {
+	reg := newRegistry(newDaemonClient("0", ""), "assistant")
+	desc := make(map[string]string)
+	for _, d := range reg.list() {
+		desc[d.Name] = d.Description
+	}
+
+	consult := strings.ToLower(desc["leo_consult"])
+	for _, want := range []string{"second opinion", "leo_send_message"} {
+		if !strings.Contains(consult, want) {
+			t.Errorf("leo_consult description missing %q; got %q", want, desc["leo_consult"])
+		}
+	}
+	if !strings.Contains(desc["leo_send_message"], "leo_consult") {
+		t.Errorf("leo_send_message description should point at leo_consult; got %q", desc["leo_send_message"])
+	}
+}
+
 func TestSkillToolWithNoArgsListsCatalog(t *testing.T) {
 	reg := newRegistry(newDaemonClient("0", ""), "primary")
 	out, err := reg.call("leo_skill", json.RawMessage(`{}`))

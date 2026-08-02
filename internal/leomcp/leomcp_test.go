@@ -173,7 +173,7 @@ func TestLeoNudge(t *testing.T) {
 	}{
 		{"nil cfg", nil, true, nil},
 		{"web disabled", disabled, false, []string{"leo_skill"}},
-		{"web enabled", enabled, false, []string{"leo_send_message", "leo_skill"}},
+		{"web enabled", enabled, false, []string{"leo_send_message", "leo_consult", "leo_skill"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -189,8 +189,12 @@ func TestLeoNudge(t *testing.T) {
 					t.Errorf("result missing %q; got %q", sub, got)
 				}
 			}
-			if tt.name == "web disabled" && strings.Contains(got, "leo_send_message") {
-				t.Errorf("web-disabled nudge should not mention leo_send_message; got %q", got)
+			if tt.name == "web disabled" {
+				for _, sub := range []string{"leo_send_message", "leo_consult"} {
+					if strings.Contains(got, sub) {
+						t.Errorf("web-disabled nudge should not mention %s; got %q", sub, got)
+					}
+				}
 			}
 		})
 	}
