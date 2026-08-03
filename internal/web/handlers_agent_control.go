@@ -201,16 +201,23 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 			const wakeDeliverTimeout = 3 * time.Minute
 			sessionName := agent.SessionName(rec.Name)
 			body := req.Text
+			from := req.From
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), wakeDeliverTimeout)
 				defer cancel()
 				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
 					log.Printf("web: async message delivery after resume of %q failed: %v", sessionName, err)
+					return
 				}
+				// Announced from inside the goroutine, once delivery actually
+				// succeeded — not at 202-accept time. The 202 only means the
+				// message was queued; this cold-boot path can still fail
+				// minutes later, and announcing early would tell a consumer
+				// two agents were talking when nothing was ever delivered.
+				// Every delivery path therefore announces on delivery, never
+				// on acceptance.
+				s.publishAgentMessage(from, name)
 			}()
-			// Announced at accept time, matching the 202: delivery itself
-			// completes asynchronously above.
-			s.publishAgentMessage(req.From, name)
 			writeJSON(w, http.StatusAccepted, apiResponse{OK: true})
 			return
 		}

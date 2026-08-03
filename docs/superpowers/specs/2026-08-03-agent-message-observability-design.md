@@ -61,8 +61,20 @@ type AgentMessagePayload struct {
 the web UI). Consumers wanting agent-to-agent activity require both fields;
 Den does. Leo does not invent a sender.
 
-Published by the web handler once a message is accepted for delivery, so a
-rejected message (unknown target, delivery failure) emits nothing.
+**Published on delivery, never on acceptance.** All three delivery paths
+(non-claude driver, suspended-resume, live tmux) announce only after the
+message actually landed; an unknown target or a failed send emits nothing.
+
+The suspended-resume path is the one that makes this distinction matter, and
+code review is what surfaced it: it answers HTTP 202 and then delivers from a
+background goroutine that can still fail minutes later (a cold-booting claude
+that never becomes ready). Announcing at accept time would report two agents
+talking when nothing was ever delivered — stranding kiosk characters in a
+conference room for a conversation that did not happen. So that path publishes
+from inside the goroutine, after `injectPrompt` returns nil.
+
+There is deliberately no retraction event: nothing is announced until it is
+true.
 
 ### Snapshot
 
@@ -108,9 +120,12 @@ gating as the rest of `/api/v1`.
 - `MessageLog`: records only message payloads, forwards everything, newest-last
   ordering, capacity trim, age filtering on read, and concurrent publish under
   `-race`.
-- Handler: publishes on accepted delivery with both names; publishes with `from`
-  omitted when unset; publishes nothing when delivery is rejected; **never
-  includes message text in the payload**.
+- Handler, through the real handler rather than the publish helper alone:
+  publishes once on a successful send; publishes nothing when the send fails,
+  when the target is unknown, or when async delivery fails after the 202; and
+  **never includes message text in the payload**. Both no-publish guards are
+  mutation-checked — reintroducing the accept-time publish, or publishing on a
+  failed send, must make these tests fail.
 - MCP: `leo_send_message` sends its process name as `from`, and the delivered
   text is byte-identical to today.
 - Snapshot: `recent_messages` present and bounded; empty (not null) with no log.
