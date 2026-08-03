@@ -1166,10 +1166,11 @@ func (m *Manager) Restart(name string) error {
 // exist yet at spawn time must still be able to win here), then rec.SpawnEnv
 // (the caller's explicit --env overrides) always winning on top. Legacy
 // records (both SpawnEnv and InheritedEnv nil, Env non-nil — written before
-// either field existed) still get re-resolved args, but keep their stored Env
-// unchanged: leo has no record of which layer produced which key, so
-// reconstructing it here could silently drop caller-supplied env instead of
-// just leaving it as-is.
+// either field existed) still get re-resolved args, and keep every stored env
+// key except those the current harness env owns: leo has no record of which
+// layer produced which key, so it layers the stored env over a freshly
+// computed harness env rather than reconstructing it — caller-supplied env is
+// never dropped, while harness-owned keys stay current.
 func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken string) (args []string, env map[string]string) {
 	fallback := func() ([]string, map[string]string) { return rec.ClaudeArgs, rec.Env }
 
@@ -1200,10 +1201,22 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 		return fallback()
 	}
 
-	newEnv := rec.Env
+	var newEnv map[string]string
 	if rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.Env == nil {
 		inherited := pruneEnv(rec.InheritedEnv, newHarnessEnv)
 		newEnv = mergeEnv(mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), inherited), rec.SpawnEnv)
+	} else {
+		// Legacy record: leo can't tell which layer produced which stored key,
+		// so it layers rather than reconstructs. Every stored key survives
+		// except the ones the CURRENT harness env owns — those are stale by
+		// definition (they were computed at spawn time, possibly by an older
+		// leo), so today's value wins, exactly as it does for InheritedEnv
+		// above. Keeping the stored env wholesale instead would freeze the
+		// harness env forever: a var introduced by an upgrade could never
+		// reach the agent, making restart a silent no-op for env-delivered
+		// fixes and leaving reset — which discards the conversation — as the
+		// only way in.
+		newEnv = mergeEnv(newHarnessEnv, pruneEnv(rec.Env, newHarnessEnv))
 	}
 
 	return newArgs, newEnv
