@@ -13,7 +13,7 @@ import (
 func twoStale() []agent.StaleAgent {
 	return []agent.StaleAgent{
 		{Name: "chronicle", EnvAdded: []string{"MCP_TOOL_TIMEOUT"}},
-		{Name: "assistant", ArgsBefore: []string{"--model", "sonnet"}, ArgsAfter: []string{"--model", "opus"}},
+		{Name: "assistant", ArgsChanged: []string{"--model sonnet -> opus"}},
 	}
 }
 

@@ -55,17 +55,27 @@ agent with a record: dry-run, diff, and on drift emit
 
 ```go
 type StaleAgent struct {
-    Name       string   `json:"name"`
-    ArgsBefore []string `json:"args_before,omitempty"` // session tokens stripped
-    ArgsAfter  []string `json:"args_after,omitempty"`
-    EnvAdded   []string `json:"env_added,omitempty"`   // KEY NAMES ONLY
-    EnvChanged []string `json:"env_changed,omitempty"`
-    EnvRemoved []string `json:"env_removed,omitempty"`
+    Name        string   `json:"name"`
+    ArgsChanged []string `json:"args_changed,omitempty"` // per-flag, redacted
+    EnvAdded    []string `json:"env_added,omitempty"`    // KEY NAMES ONLY
+    EnvChanged  []string `json:"env_changed,omitempty"`
+    EnvRemoved  []string `json:"env_removed,omitempty"`
 }
 ```
 
-**Env values are never carried.** `rec.Env` holds live credentials, and
-`agent.Record` already omits env for exactly this reason. Key names only.
+**No free-form value is ever carried.** `rec.Env` holds live credentials, and
+`agent.Record` already omits env for exactly this reason — so env drift is key
+names only.
+
+The same applies to argv, which this spec originally left implicit and code
+review caught: an agent's entire `--append-system-prompt` lives in
+`ClaudeArgs`, so shipping a raw argv delta would echo it over the API and onto
+the terminal. Argv drift is therefore summarized per flag, with values echoed
+only when short and single-line (`--model sonnet -> opus`) and otherwise
+elided (`--append-system-prompt changed`, `+--model (set)`). Positional tokens
+— which is where an opening prompt lands — are counted, never printed.
+Redaction happens in `internal/agent`, so nothing raw crosses the package
+boundary in the first place.
 
 ### `GET /agents/stale` (daemon IPC)
 

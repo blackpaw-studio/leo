@@ -61,8 +61,8 @@ func TestStaleAgentsReportsEnvDrift(t *testing.T) {
 	if !slices.Contains(got.EnvAdded, "MCP_TOOL_TIMEOUT") {
 		t.Errorf("EnvAdded = %v, want it to contain MCP_TOOL_TIMEOUT", got.EnvAdded)
 	}
-	if len(got.ArgsBefore) != 0 || len(got.ArgsAfter) != 0 {
-		t.Errorf("expected no args drift, got before=%v after=%v", got.ArgsBefore, got.ArgsAfter)
+	if len(got.ArgsChanged) != 0 {
+		t.Errorf("expected no args drift, got %v", got.ArgsChanged)
 	}
 }
 
@@ -98,11 +98,8 @@ func TestStaleAgentsReportsArgsDrift(t *testing.T) {
 	if len(stale) != 1 {
 		t.Fatalf("StaleAgents() = %+v, want one drifted agent", stale)
 	}
-	if !slices.Contains(stale[0].ArgsAfter, "opus") {
-		t.Errorf("ArgsAfter = %v, want the current template's model", stale[0].ArgsAfter)
-	}
-	if !slices.Contains(stale[0].ArgsBefore, "sonnet") {
-		t.Errorf("ArgsBefore = %v, want the stored model", stale[0].ArgsBefore)
+	if !slices.Contains(stale[0].ArgsChanged, "--model sonnet -> opus") {
+		t.Errorf("ArgsChanged = %v, want the model transition", stale[0].ArgsChanged)
 	}
 }
 
@@ -220,5 +217,76 @@ func TestStaleAgentReportShape(t *testing.T) {
 	want := StaleAgent{Name: "a", EnvAdded: []string{"K"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal("StaleAgent is not comparable by value")
+	}
+}
+
+// TestStaleAgentsRedactsFreeFormArgValues is the argv half of the credential
+// boundary. An agent's whole --append-system-prompt lands in ClaudeArgs, so a
+// drift report must name the flag and say it changed rather than echoing the
+// text — this report is served over the daemon API and printed to a terminal.
+func TestStaleAgentsRedactsFreeFormArgValues(t *testing.T) {
+	longPrompt := "SECRET-PROMPT-BODY " + strings.Repeat("x", 200)
+	m := staleFixture(t, config.TemplateConfig{Model: "opus"}, func(r *agentstore.Record, curArgs []string, curEnv map[string]string) {
+		r.ClaudeArgs = append(slices.Clone(curArgs), "--append-system-prompt", longPrompt)
+		r.Env = curEnv
+	})
+
+	stale := m.StaleAgents()
+	if len(stale) != 1 {
+		t.Fatalf("StaleAgents() = %+v, want one drifted agent", stale)
+	}
+	joined := strings.Join(stale[0].ArgsChanged, " | ")
+	if strings.Contains(joined, "SECRET-PROMPT-BODY") || strings.Contains(joined, longPrompt) {
+		t.Fatalf("free-form arg value leaked into the report: %q", joined)
+	}
+	if !strings.Contains(joined, "--append-system-prompt") {
+		t.Errorf("expected the flag to be named: %q", joined)
+	}
+}
+
+// TestSummarizeArgsDelta covers the delta shapes directly, including the
+// multi-line value case a system prompt hits.
+func TestSummarizeArgsDelta(t *testing.T) {
+	tests := []struct {
+		name          string
+		before, after []string
+		want          []string
+	}{
+		{"value change", []string{"--model", "sonnet"}, []string{"--model", "opus"}, []string{"--model sonnet -> opus"}},
+		{"flag added", []string{}, []string{"--remote-control"}, []string{"+--remote-control"}},
+		{"flag removed", []string{"--remote-control"}, []string{}, []string{"---remote-control"}},
+		{"flag added with value", []string{}, []string{"--model", "opus"}, []string{"+--model opus"}},
+		{
+			"long value elided",
+			[]string{"--append-system-prompt", strings.Repeat("a", 100)},
+			[]string{"--append-system-prompt", strings.Repeat("b", 100)},
+			[]string{"--append-system-prompt changed"},
+		},
+		{
+			"multi-line value elided",
+			[]string{"--append-system-prompt", "one\ntwo"},
+			[]string{"--append-system-prompt", "three\nfour"},
+			[]string{"--append-system-prompt changed"},
+		},
+		{
+			"long value added is not echoed",
+			[]string{},
+			[]string{"--append-system-prompt", strings.Repeat("a", 100)},
+			[]string{"+--append-system-prompt (set)"},
+		},
+		{
+			"positional count only, never content",
+			[]string{"--model", "opus"},
+			[]string{"--model", "opus", "some secret opening prompt"},
+			[]string{"positional args 0 -> 1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := summarizeArgsDelta(tt.before, tt.after)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("summarizeArgsDelta() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -25,9 +25,11 @@ import (
 func maybeRestartStaleAgents(ctx context.Context, homePath string) {
 	stale, err := daemon.AgentStale(ctx, homePath)
 	if err != nil {
-		// An older daemon has no /agents/stale route; there is nothing useful
-		// to say to the operator about that, so stay quiet unless it's a real
-		// failure worth seeing.
+		// Always surfaced, deliberately. The daemon was just restarted onto
+		// this binary, so it serves /agents/stale by definition — an error
+		// here means the check genuinely failed (daemon didn't come back,
+		// socket unreachable), and silently skipping it would leave the
+		// operator believing their agents were checked when they weren't.
 		warn.Printf("Could not check agents for pending changes: %v\n", err)
 		return
 	}
@@ -103,15 +105,16 @@ func staleHeadcount(stale, totalRunning int) string {
 	return fmt.Sprintf("%d %s", stale, noun)
 }
 
-// describeDrift summarizes one agent's drift for the prompt: env key names
-// (never values — StaleAgent carries none) and the argv delta.
+// describeDrift summarizes one agent's drift for the prompt. Both halves
+// arrive pre-redacted from internal/agent — env as key names, argv as a
+// per-flag summary with free-form values elided — so this only formats.
 func describeDrift(s agent.StaleAgent) string {
 	var parts []string
 	if keys := envDriftKeys(s); keys != "" {
 		parts = append(parts, "env: "+keys)
 	}
-	if len(s.ArgsAfter) > 0 || len(s.ArgsBefore) > 0 {
-		parts = append(parts, "args: "+argsDelta(s.ArgsBefore, s.ArgsAfter))
+	if len(s.ArgsChanged) > 0 {
+		parts = append(parts, "args: "+strings.Join(s.ArgsChanged, ", "))
 	}
 	if len(parts) == 0 {
 		return "config changed"
@@ -131,38 +134,4 @@ func envDriftKeys(s agent.StaleAgent) string {
 		keys = append(keys, "-"+k)
 	}
 	return strings.Join(keys, " ")
-}
-
-// argsDelta renders only the tokens that actually differ, so a one-flag change
-// doesn't print two full command lines.
-func argsDelta(before, after []string) string {
-	removed := tokenDiff(before, after)
-	added := tokenDiff(after, before)
-	switch {
-	case len(removed) == 0 && len(added) == 0:
-		return "reordered"
-	case len(removed) == 0:
-		return "+" + strings.Join(added, " ")
-	case len(added) == 0:
-		return "-" + strings.Join(removed, " ")
-	default:
-		return strings.Join(removed, " ") + " -> " + strings.Join(added, " ")
-	}
-}
-
-// tokenDiff returns the tokens in a that are absent from b.
-func tokenDiff(a, b []string) []string {
-	inB := make(map[string]int, len(b))
-	for _, t := range b {
-		inB[t]++
-	}
-	var out []string
-	for _, t := range a {
-		if inB[t] > 0 {
-			inB[t]--
-			continue
-		}
-		out = append(out, t)
-	}
-	return out
 }

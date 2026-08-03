@@ -36,7 +36,7 @@ Restart them now? [Y/n]
 ```
 
 - "Would change if restarted" is measured, not guessed: leo re-resolves each agent from the current config and diffs the result against its stored record, so `leo.yaml` and template edits are reported alongside binary upgrades, and an agent whose wiring is already current is never listed.
-- Env drift shows key **names** only (`+` added, `~` changed, `-` removed) — never values, since an agent's env holds live credentials.
+- Nothing free-form is printed. Env drift shows key **names** only (`+` added, `~` changed, `-` removed), since an agent's env holds live credentials; argv drift is summarized per flag, echoing a value only when it's short and single-line (`--model sonnet -> opus`) and eliding it otherwise (`--append-system-prompt changed`).
 - Restarting preserves the conversation (it resumes, like [`leo agent restart`](agent.md)), but interrupts whatever turn the agent is mid-way through.
 - Agents whose template was deleted, or whose harness changed, are never listed — leo cannot re-resolve them, so a restart would not change anything.
 - With no drift, nothing is printed.

@@ -1022,7 +1022,7 @@ func TestAgentStaleHandler(t *testing.T) {
 	mgr := &fakeAgentManager{
 		stale: []agent.StaleAgent{
 			{Name: "leo-a", EnvAdded: []string{"MCP_TOOL_TIMEOUT"}},
-			{Name: "leo-b", ArgsBefore: []string{"--model", "sonnet"}, ArgsAfter: []string{"--model", "opus"}},
+			{Name: "leo-b", ArgsChanged: []string{"--model sonnet -> opus"}},
 		},
 	}
 	_, client := startTestServerWithAgent(t, mgr)
@@ -1054,8 +1054,8 @@ func TestAgentStaleHandler(t *testing.T) {
 	if len(out[0].EnvAdded) != 1 || out[0].EnvAdded[0] != "MCP_TOOL_TIMEOUT" {
 		t.Errorf("EnvAdded = %v", out[0].EnvAdded)
 	}
-	if out[1].ArgsAfter[1] != "opus" {
-		t.Errorf("ArgsAfter = %v", out[1].ArgsAfter)
+	if len(out[1].ArgsChanged) != 1 || out[1].ArgsChanged[0] != "--model sonnet -> opus" {
+		t.Errorf("ArgsChanged = %v", out[1].ArgsChanged)
 	}
 }
 
