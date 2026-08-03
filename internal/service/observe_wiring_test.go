@@ -58,7 +58,7 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 	// bus/runLog/tracker/SetPublisher calls inline) is what makes this test
 	// catch a regression in the wiring itself, not just in a hand-copied
 	// reproduction of it.
-	bus, runLog, tracker := wireObservability(ctx, sv, fakeTmux)
+	bus, runLog, messageLog, tracker := wireObservability(ctx, sv, fakeTmux)
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
@@ -71,7 +71,8 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 	webSrv := web.New(cfgPath, nil, nil, nil, nil, web.Options{
 		Port:     testPort,
 		APIToken: apiToken,
-	}, web.WithEventSource(bus), web.WithActivityProvider(tracker), web.WithRunLog(runLog), web.WithVersion("v-wiring-test"))
+	}, web.WithEventSource(bus), web.WithActivityProvider(tracker), web.WithRunLog(runLog),
+		web.WithMessageLog(messageLog), web.WithPublisher(messageLog), web.WithVersion("v-wiring-test"))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", testPort)
 	if err := webSrv.ListenAndServe(addr); err != nil {
@@ -134,6 +135,16 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 		},
 	})
 
+	// --- An agent-to-agent message, published through messageLog exactly as
+	// the web layer's publishAgentMessage does. It must reach BOTH the
+	// snapshot (messageLog recorded it) and the SSE stream (messageLog
+	// forwarded it down the chain to the bus) — the two halves of the
+	// message-log wiring the kiosk depends on. ---
+	messageLog.Publish(observe.Event{
+		Type:    observe.EventAgentMessage,
+		Payload: &observe.AgentMessagePayload{From: "wiring-sender", To: "wiring-agent"},
+	})
+
 	// --- GET /api/v1/state must reflect the run log entry and the version. ---
 	req, err := http.NewRequest("GET", baseURL+"/api/v1/state", nil)
 	if err != nil {
@@ -153,8 +164,9 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 	var stateResp struct {
 		OK   bool `json:"ok"`
 		Data struct {
-			LeoVersion string            `json:"leo_version"`
-			RecentRuns []observe.TaskRun `json:"recent_runs"`
+			LeoVersion     string                 `json:"leo_version"`
+			RecentRuns     []observe.TaskRun      `json:"recent_runs"`
+			RecentMessages []observe.AgentMessage `json:"recent_messages"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&stateResp); err != nil {
@@ -175,6 +187,15 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 	if !foundRun {
 		t.Errorf("recent_runs %+v missing wiring-task-1 — RunLog wasn't wired through (WithRunLog or SetPublisher)", stateResp.Data.RecentRuns)
 	}
+	foundMessage := false
+	for _, m := range stateResp.Data.RecentMessages {
+		if m.From == "wiring-sender" && m.To == "wiring-agent" {
+			foundMessage = true
+		}
+	}
+	if !foundMessage {
+		t.Errorf("recent_messages %+v missing the published pair — MessageLog wasn't wired through (WithMessageLog)", stateResp.Data.RecentMessages)
+	}
 
 	// --- The SSE stream (opened before SpawnAgent, above) must carry the
 	// agent_spawned event it published, plus an agent_activity event once
@@ -182,8 +203,9 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 	// publisher reaches the bus. ---
 	seenAgentSpawned := false
 	seenAgentActivity := false
+	seenAgentMessage := false
 	deadline := time.After(10 * time.Second)
-	for !seenAgentSpawned || !seenAgentActivity {
+	for !seenAgentSpawned || !seenAgentActivity || !seenAgentMessage {
 		type frame struct{ event, data string }
 		frameCh := make(chan frame, 1)
 		go func() {
@@ -199,9 +221,15 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 				}
 			case string(observe.EventAgentActivity):
 				seenAgentActivity = true
+			case string(observe.EventAgentMessage):
+				// The pair must ride the stream; the body never does.
+				if !strings.Contains(f.data, `"wiring-sender"`) || !strings.Contains(f.data, `"wiring-agent"`) {
+					t.Errorf("agent_message frame missing the pair: %s", f.data)
+				}
+				seenAgentMessage = true
 			}
 		case <-deadline:
-			t.Fatalf("timed out waiting for events (agent_spawned=%v activity=%v)", seenAgentSpawned, seenAgentActivity)
+			t.Fatalf("timed out waiting for events (agent_spawned=%v activity=%v agent_message=%v)", seenAgentSpawned, seenAgentActivity, seenAgentMessage)
 		}
 	}
 }

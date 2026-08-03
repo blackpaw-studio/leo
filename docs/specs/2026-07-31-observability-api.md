@@ -38,7 +38,8 @@ Wrapped in the existing `apiResponse` envelope (`{ok, data, error}`) used by eve
     "leo_version": "0.10.3",
     "agents": [ /* Agent */ ],
     "tasks":  [ /* Task */ ],
-    "recent_runs": [ /* TaskRun */ ]
+    "recent_runs": [ /* TaskRun */ ],
+    "recent_messages": [ /* AgentMessage */ ]
   }
 }
 ```
@@ -168,6 +169,27 @@ capped at `MaxRecentRuns`:
   `ended_at` and `duration_ms` are omitted rather than fabricated — a completed run must
   never report `started_at == ended_at` as a stand-in for "we don't actually know".
 
+### AgentMessage
+
+```json
+{ "from": "chronicle", "to": "plex", "at": "2026-08-03T19:47:10-04:00" }
+```
+
+One agent-to-agent message: who, to whom, when. **Never the message content** — this API
+reports that two agents are talking, never what about. `recent_messages` is capped
+(default 50, oldest first) and drops entries older than 10 minutes, so a consumer
+connecting mid-conversation can seed the pairs it missed instead of waiting for the next
+message. Consumers wanting a live signal use the `agent_message` event; `recent_messages`
+exists for load and reconnect.
+
+`from` is **omitted** when the sender is not an agent — a human messaging from the web UI
+has no agent identity, and leo does not invent one. A consumer that wants agent-to-agent
+activity specifically should require both `from` and `to`.
+
+`from` is **self-asserted** by the sending agent: it is the sender's own process name,
+passed through as a field, not an authenticated identity. It is fine for display and
+animation; it must not be used for authorization or attribution.
+
 ### Task-run ingress (internal, not part of this API)
 
 `recent_runs`/`task_run_*` events reach the daemon two ways: in-process (the
@@ -228,9 +250,14 @@ Event types:
 | `task_run_started` | `TaskRun` |
 | `task_run_succeeded` | `TaskRun` |
 | `task_run_failed` | `TaskRun` (with `error`) |
+| `agent_message` | `from` (omitted if not an agent), `to` |
 
 `agent_suspended` / `agent_resumed` are represented as `agent_state_changed` with the
 new `status`; consumers key off `status`, not distinct event names.
+
+`agent_message` announces that one agent messaged another, and carries **the pair only** —
+there is no field for the message body and none may be added. See AgentMessage below for
+the `from` and trust semantics, which apply identically to the event.
 
 Renaming a running agent (`leo agent rename`) is represented as `agent_stopped` for the
 old name followed by `agent_spawned` for the new one, in that order, rather than a

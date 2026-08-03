@@ -158,8 +158,17 @@ func (c *daemonClient) listAgents() (json.RawMessage, error) {
 	return c.do(http.MethodGet, "/api/agent/list", nil)
 }
 
-func (c *daemonClient) sendMessage(target, text string) error {
-	_, err := c.do(http.MethodPost, "/web/agent/"+target+"/message", map[string]any{"text": text})
+// sendMessage delivers text to target. from is the sending process's own
+// name, sent as a structural field so the daemon can report agent-to-agent
+// activity on the observability API without inspecting the message body; it
+// is self-asserted and must not be treated as an authenticated identity.
+// Empty from is omitted, leaving the daemon to report an unknown sender.
+func (c *daemonClient) sendMessage(target, from, text string) error {
+	body := map[string]any{"text": text}
+	if from != "" {
+		body["from"] = from
+	}
+	_, err := c.do(http.MethodPost, "/web/agent/"+target+"/message", body)
 	return err
 }
 

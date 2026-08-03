@@ -124,7 +124,7 @@ func TestDaemonClientSendMessage(t *testing.T) {
 	port := strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
 
 	c := newDaemonClient(port, "")
-	if err := c.sendMessage("worker-1", "build is green"); err != nil {
+	if err := c.sendMessage("worker-1", "sender-proc", "build is green"); err != nil {
 		t.Fatalf("sendMessage: %v", err)
 	}
 	if gotPath != "/web/agent/worker-1/message" {

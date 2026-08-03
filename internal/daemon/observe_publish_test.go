@@ -22,7 +22,7 @@ func TestPublishTaskRunReachesDaemonRunLog(t *testing.T) {
 	s := New(SockPath(workDir), "/tmp/leo.yaml", nil)
 	bus := observe.NewBus()
 	runLog := observe.NewRunLog(bus, 0)
-	s.SetObservability(bus, runLog, nil, "v-test")
+	s.SetObservability(bus, runLog, nil, nil, "v-test")
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}

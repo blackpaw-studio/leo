@@ -667,14 +667,14 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 
-	bus, runLog, activityTracker := wireObservability(ctx, supervisor, tmuxPath)
+	bus, runLog, messageLog, activityTracker := wireObservability(ctx, supervisor, tmuxPath)
 
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath, supervisor)
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.
-	srv.SetObservability(bus, runLog, activityTracker, opts.Version)
+	srv.SetObservability(bus, runLog, messageLog, activityTracker, opts.Version)
 	// SetLogPath before Start/StartWeb so the Service page's log tail knows
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
@@ -764,13 +764,19 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 // socket via daemon.ObservePublisher, wired per-invocation in
 // internal/cli/run.go — see handleObserveTaskRun in internal/daemon/server.go
 // for the daemon-side end of that path.
-func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) (*observe.Bus, *observe.RunLog, *observe.Tracker) {
+func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) (*observe.Bus, *observe.RunLog, *observe.MessageLog, *observe.Tracker) {
 	// runLog forwards every event to bus (the HTTP layer's read seam) and
 	// additionally records task runs, so it is the single Publisher the
 	// supervisor is given — see internal/observe.RunLog's doc comment for why
 	// it wraps the bus rather than subscribing to it.
 	bus := observe.NewBus()
 	runLog := observe.NewRunLog(bus, 0)
+	// messageLog wraps runLog for the same reason runLog wraps bus: recording
+	// must be synchronous with publish, since a dropped subscriber would make
+	// the snapshot's recent_messages silently incomplete. The web layer
+	// publishes agent-to-agent messages through it; the supervisor keeps
+	// publishing through runLog, which no message event ever reaches.
+	messageLog := observe.NewMessageLog(runLog, 0)
 	sv.SetPublisher(runLog)
 
 	// sv.SessionNames is the narrow accessor onto the live agent-name ->
@@ -779,7 +785,7 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) (*o
 	tracker := observe.NewTracker(tmuxPath, sv.SessionNames, runLog)
 	go tracker.Start(ctx)
 
-	return bus, runLog, tracker
+	return bus, runLog, messageLog, tracker
 }
 
 // driverFor resolves a spec's session driver. Empty harness means claude

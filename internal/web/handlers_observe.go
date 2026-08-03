@@ -64,6 +64,7 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 		History:       s.loadHistory(cfg).All(),
 		Activity:      s.activity,
 		RunLog:        s.runLog,
+		MessageLog:    s.messageLog,
 		LeoVersion:    s.version,
 		Now:           time.Now(),
 	})
@@ -88,7 +89,10 @@ type snapshotInput struct {
 	// (bounded, in-memory) run log has already evicted or never saw (e.g.
 	// after a daemon restart). nil is a supported default — recent_runs is
 	// then built from History alone, as before RunLog existed.
-	RunLog     runProvider
+	RunLog runProvider
+	// MessageLog is the agent-message log's read seam (observe.MessageLog
+	// satisfies it). Optional: nil yields an empty recent_messages.
+	MessageLog messageProvider
 	LeoVersion string
 	Now        time.Time
 }
@@ -127,13 +131,20 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 		liveRuns = in.RunLog.Recent(observe.MaxRecentRuns)
 	}
 
+	// Empty, never null: consumers range over this without a nil check.
+	recentMessages := []observe.AgentMessage{}
+	if in.MessageLog != nil {
+		recentMessages = in.MessageLog.Recent(observe.MaxRecentMessages, in.Now)
+	}
+
 	return observe.Snapshot{
-		Version:    observe.SnapshotVersion,
-		ServerTime: in.Now,
-		LeoVersion: in.LeoVersion,
-		Agents:     agents,
-		Tasks:      tasks,
-		RecentRuns: buildRecentRuns(in.History, liveRuns),
+		Version:        observe.SnapshotVersion,
+		ServerTime:     in.Now,
+		LeoVersion:     in.LeoVersion,
+		Agents:         agents,
+		Tasks:          tasks,
+		RecentRuns:     buildRecentRuns(in.History, liveRuns),
+		RecentMessages: recentMessages,
 	}
 }
 

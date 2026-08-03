@@ -165,6 +165,17 @@ type Server struct {
 	// (matching behavior before the run log existed) rather than erroring.
 	runLog runProvider
 
+	// publisher is the write seam onto the event bus, wired via
+	// WithPublisher. Only agent-to-agent message routing publishes from the
+	// web layer; everything else publishes from the supervisor. nil is a
+	// supported default, making publishAgentMessage a no-op.
+	publisher observe.Publisher
+
+	// messageLog is the read seam onto the agent-message log
+	// (internal/observe.MessageLog), wired via WithMessageLog. nil is a
+	// supported default: recent_messages is then empty, as with runLog.
+	messageLog messageProvider
+
 	// version is reported as Snapshot.LeoVersion. Wired via WithVersion;
 	// empty means the caller didn't provide one.
 	version string
@@ -205,6 +216,14 @@ type runProvider interface {
 	Recent(n int) []observe.TaskRun
 }
 
+// messageProvider is the narrow read seam onto the agent-message log
+// (internal/observe's MessageLog satisfies it structurally), mirroring
+// runProvider above. now is passed in rather than read inside so the age
+// window stays testable without a clock seam.
+type messageProvider interface {
+	Recent(n int, now time.Time) []observe.AgentMessage
+}
+
 // Option configures optional Server dependencies that are not required for
 // the server's existing functionality to keep working unchanged. Passing no
 // options preserves pre-existing behavior for every current caller.
@@ -230,6 +249,19 @@ func WithEventSource(es eventSource) Option {
 // recorded before the run log existed).
 func WithRunLog(rl runProvider) Option {
 	return func(s *Server) { s.runLog = rl }
+}
+
+// WithMessageLog wires the agent-message log GET /api/v1/state reads
+// recent_messages from. Optional; omitting it makes recent_messages empty.
+func WithMessageLog(ml messageProvider) Option {
+	return func(s *Server) { s.messageLog = ml }
+}
+
+// WithPublisher wires the event bus the web layer publishes agent-to-agent
+// message activity to. Optional; omitting it silently skips those events,
+// leaving every other observability signal unaffected.
+func WithPublisher(p observe.Publisher) Option {
+	return func(s *Server) { s.publisher = p }
 }
 
 // WithVersion sets the Leo build version reported as Snapshot.LeoVersion by
