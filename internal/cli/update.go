@@ -259,5 +259,12 @@ func maybeRestartDaemon() error {
 		return fmt.Errorf("restarting daemon: %w", err)
 	}
 	success.Println("Daemon restarted")
+
+	// Only now, with the new binary serving, is it worth asking which agents
+	// are still running the old wiring: restoring the daemon respawns agents
+	// from their stored args/env, so "daemon restarted" does not mean the
+	// update reached them. The drift check itself runs inside the daemon, so
+	// asking a pre-restart daemon would answer with the old binary's logic.
+	maybeRestartStaleAgents(context.Background(), cfg.HomePath)
 	return nil
 }

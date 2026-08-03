@@ -18,6 +18,32 @@ Fetches the latest release from GitHub, verifies its cosign signature (keyless, 
 
 Operational instructions/skills are served on demand via the `leo_skill` MCP tool rather than synced files, so they update automatically with the binary — no workspace re-sync or daemon restart required to pick them up.
 
+## Restart prompts
+
+After the swap, `leo update` offers to restart the daemon so the new binary actually serves requests.
+
+Restarting the daemon is not enough on its own: restoring agents respawns them from the args and env stored in their records, so a change delivered through either — a new harness env var, an edited template — does not reach a running agent by itself. Once the daemon is back, `leo update` therefore asks it which running agents would actually change if restarted, and offers to bounce exactly those:
+
+```
+Daemon restarted
+
+3 of 9 running agents would pick up changes:
+  assistant                args: sonnet -> opus
+  chronicle                env: +MCP_TOOL_TIMEOUT
+  plex                     env: +MCP_TOOL_TIMEOUT ~OPENCODE_CONFIG_CONTENT
+
+Restart them now? [Y/n]
+```
+
+- "Would change if restarted" is measured, not guessed: leo re-resolves each agent from the current config and diffs the result against its stored record, so `leo.yaml` and template edits are reported alongside binary upgrades, and an agent whose wiring is already current is never listed.
+- Env drift shows key **names** only (`+` added, `~` changed, `-` removed) — never values, since an agent's env holds live credentials.
+- Restarting preserves the conversation (it resumes, like [`leo agent restart`](agent.md)), but interrupts whatever turn the agent is mid-way through.
+- Agents whose template was deleted, or whose harness changed, are never listed — leo cannot re-resolve them, so a restart would not change anything.
+- With no drift, nothing is printed.
+- Non-interactively, the agents are listed with the remedy (`leo agent restart --all`) and nothing is bounced.
+
+Suspended agents need no prompt: resuming one re-resolves its wiring the same way, so it wakes up current.
+
 ## Flags
 
 | Flag | Description |

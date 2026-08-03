@@ -159,6 +159,24 @@ func AgentRestart(ctx context.Context, workDir, name string) error {
 	return nil
 }
 
+// AgentStale sends GET /agents/stale, returning the running agents whose
+// wiring would change if they were restarted. `leo update` uses it to decide
+// whether to offer a restart after swapping the binary.
+func AgentStale(ctx context.Context, workDir string) ([]agent.StaleAgent, error) {
+	resp, err := Send(ctx, workDir, "GET", "/agents/stale", nil)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+	var out []agent.StaleAgent
+	if err := json.Unmarshal(resp.Data, &out); err != nil {
+		return nil, fmt.Errorf("decoding stale-agent response: %w", err)
+	}
+	return out, nil
+}
+
 // AgentRestartAllResult is the client-side decoding of AgentRestartAllResponse,
 // with Failed reconstructed as plain errors instead of strings.
 type AgentRestartAllResult struct {

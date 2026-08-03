@@ -223,6 +223,8 @@ Suspend a running agent: kills the process/tmux session but preserves the worksp
 
 Resume a suspended agent, rejoining its prior conversation via `--resume`. Takes the canonical name only — shorthand resolution only matches live agents, and a suspended agent isn't one.
 
+Like `restart`, resume re-applies today's defaults + template config (and the current binary's harness env) before resuming, so an agent suspended across an upgrade or a config edit wakes up current rather than replaying the wiring it was spawned with. Agents with no template, a deleted template, or a changed harness keep their stored args.
+
 ### `leo agent reset <name>`
 
 Reset an agent to a brand-new conversation: stops any live process/tmux session, clears the stored claude session id, and respawns fresh from the agent's template. Accepts shorthand. Unlike `resume`, which rejoins the prior conversation, `reset` deliberately discards it — use this when an agent's context has gotten stuck or corrupted (a common case: a long-lived agent backing a `runtime: persistent` task whose conversation has filled up). See [Persistent Tasks → `leo agent reset`](../configuration/persistent-tasks.md#leo-agent-reset).
