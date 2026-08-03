@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,14 +25,29 @@ func rec(id string, status consult.Status, minutesAgo int) consult.Record {
 	}
 }
 
+// writeTestRecord seeds a consult record the way production does: write a temp
+// file, then rename it into place.
+//
+// The rename is load-bearing, not ceremony. os.WriteFile truncates before
+// writing, so writing straight to the final path leaves a window where a
+// concurrent reader — watchConsult polls every consultPollInterval — sees an
+// empty or half-written file and fails to decode it. That is what
+// consult.writeRecord avoids with tmp+rename, and a helper that skips it makes
+// tests race against a hazard production doesn't have. It cost one macOS CI
+// run: "reading consult c-live0001: unexpected end of JSON input".
 func writeTestRecord(t *testing.T, dir string, record consult.Record) {
 	t.Helper()
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		t.Fatalf("encoding record: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, record.ID+".json"), data, 0o600); err != nil {
+	final := filepath.Join(dir, record.ID+".json")
+	tmp := final + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		t.Fatalf("writing record: %v", err)
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		t.Fatalf("publishing record: %v", err)
 	}
 }
 
@@ -396,5 +412,66 @@ func TestListMarksAbandonedConsults(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "abandoned") {
 		t.Errorf("want the stuck consult marked abandoned, got:\n%s", out.String())
+	}
+}
+
+// TestWriteTestRecordIsAtomic guards the test helper itself against the flake
+// that took down a macOS CI run: TestWatchFollowsUntilTheConsultFinishes
+// failed with "reading consult c-live0001: unexpected end of JSON input".
+//
+// Production writes a record via tmp file + rename (consult.writeRecord), so a
+// concurrent reader can never observe a partial file. This helper used a plain
+// os.WriteFile straight to the final path, and os.WriteFile truncates before
+// writing — leaving a window where a poller (watchConsult reads every
+// consultPollInterval) sees an empty or half-written file and fails to decode
+// it. Rare, timing-dependent, and entirely an artifact of the helper being
+// unfaithful to the code it stands in for.
+//
+// Hammering it concurrently makes that window reliably observable: this test
+// fails against a plain-WriteFile helper and passes against an atomic one.
+func TestWriteTestRecordIsAtomic(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "consults")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	record := rec("c-atomic01", consult.StatusRunning, 0)
+	// A large payload widens the write window enough to catch the tear
+	// quickly; the bug exists at any size.
+	record.Prompt = strings.Repeat("x", 128*1024)
+	writeTestRecord(t, dir, record)
+
+	stop := make(chan struct{})
+	errs := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := consult.LoadOne(state, record.ID); err != nil {
+				select {
+				case errs <- err:
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 200; i++ {
+		writeTestRecord(t, dir, record)
+	}
+	close(stop)
+	wg.Wait()
+
+	select {
+	case err := <-errs:
+		t.Fatalf("concurrent reader saw a torn record: %v", err)
+	default:
 	}
 }
