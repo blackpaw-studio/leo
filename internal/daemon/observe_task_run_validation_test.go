@@ -31,7 +31,7 @@ func TestHandleObserveTaskRunDerivesStatusFromType(t *testing.T) {
 	bus := observe.NewBus()
 	runLog := observe.NewRunLog(bus, 0)
 	s := New(SockPath(workDir), "/tmp/leo.yaml", nil)
-	s.SetObservability(bus, runLog, nil, "v-test")
+	s.SetObservability(bus, runLog, nil, nil, "v-test")
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestHandleObserveTaskRunRejectsMissingIDOrTask(t *testing.T) {
 	bus := observe.NewBus()
 	runLog := observe.NewRunLog(bus, 0)
 	s := New(SockPath(workDir), "/tmp/leo.yaml", nil)
-	s.SetObservability(bus, runLog, nil, "v-test")
+	s.SetObservability(bus, runLog, nil, nil, "v-test")
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestHandleObserveTaskRunCapsFieldLengths(t *testing.T) {
 	bus := observe.NewBus()
 	runLog := observe.NewRunLog(bus, 0)
 	s := New(SockPath(workDir), "/tmp/leo.yaml", nil)
-	s.SetObservability(bus, runLog, nil, "v-test")
+	s.SetObservability(bus, runLog, nil, nil, "v-test")
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestHandleObserveTaskRunRejectsOversizedBody(t *testing.T) {
 	bus := observe.NewBus()
 	runLog := observe.NewRunLog(bus, 0)
 	s := New(SockPath(workDir), "/tmp/leo.yaml", nil)
-	s.SetObservability(bus, runLog, nil, "v-test")
+	s.SetObservability(bus, runLog, nil, nil, "v-test")
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

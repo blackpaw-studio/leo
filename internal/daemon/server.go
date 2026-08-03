@@ -79,19 +79,21 @@ type Server struct {
 	// into web.New's extra Options by StartWeb. All are optional (nil-safe on
 	// the web side — see web.WithEventSource/WithActivityProvider/WithRunLog),
 	// so a daemon that never calls SetObservability boots unchanged.
-	observeBus      *observe.Bus
-	observeRunLog   *observe.RunLog
-	observeActivity observe.ActivityProvider
-	leoVersion      string
+	observeBus        *observe.Bus
+	observeRunLog     *observe.RunLog
+	observeMessageLog *observe.MessageLog
+	observeActivity   observe.ActivityProvider
+	leoVersion        string
 }
 
 // SetObservability wires the observability event bus, run log, activity
 // tracker, and build version threaded into web.Options by StartWeb. Must be
 // called before StartWeb. All parameters are optional (nil/empty is safe);
 // service boot is the only caller today (see internal/service/process.go).
-func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, activity observe.ActivityProvider, version string) {
+func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, messageLog *observe.MessageLog, activity observe.ActivityProvider, version string) {
 	s.observeBus = bus
 	s.observeRunLog = runLog
+	s.observeMessageLog = messageLog
 	s.observeActivity = activity
 	s.leoVersion = version
 }
@@ -279,6 +281,15 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}
 	if s.observeRunLog != nil {
 		observeOpts = append(observeOpts, web.WithRunLog(s.observeRunLog))
+	}
+	if s.observeMessageLog != nil {
+		// Read seam for recent_messages, plus the write seam the web layer
+		// publishes agent-to-agent activity through. The message log wraps
+		// the rest of the chain, so publishing through it records first and
+		// then forwards to the bus.
+		observeOpts = append(observeOpts,
+			web.WithMessageLog(s.observeMessageLog),
+			web.WithPublisher(s.observeMessageLog))
 	}
 	if s.observeActivity != nil {
 		observeOpts = append(observeOpts, web.WithActivityProvider(s.observeActivity))

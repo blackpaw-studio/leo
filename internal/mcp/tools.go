@@ -229,7 +229,7 @@ func newRegistry(client *daemonClient, processName string) *registry {
 			return "", fmt.Errorf("cannot send a message to yourself (%q)", processName)
 		}
 		body := fmt.Sprintf(msgPrefixFormat, processName, message)
-		if err := client.sendMessage(to, body); err != nil {
+		if err := client.sendMessage(to, processName, body); err != nil {
 			return "", err
 		}
 		return "Sent message to " + to, nil

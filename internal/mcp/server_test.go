@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -646,5 +647,35 @@ func TestSkillToolUnknownNameListsValidNames(t *testing.T) {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error should list valid names, missing %q; got %v", name, err)
 		}
+	}
+}
+
+// TestSendMessageSendsSenderIdentityStructurally: the observability API needs
+// to know WHO sent a message without inspecting content, so leo_send_message
+// carries its process name as a real `from` field. The delivered text must be
+// unchanged — recipients still see the prefix.
+func TestSendMessageSendsSenderIdentityStructurally(t *testing.T) {
+	daemon := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		return http.StatusOK, `{"ok":true,"data":{}}`
+	})
+	defer daemon.close()
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "sender-proc")
+
+	if _, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1","message":"ping"}`)); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+
+	var sent struct {
+		Text string `json:"text"`
+		From string `json:"from"`
+	}
+	if err := json.Unmarshal([]byte(daemon.calls[0].Body), &sent); err != nil {
+		t.Fatalf("decoding delivered body: %v", err)
+	}
+	if sent.From != "sender-proc" {
+		t.Errorf("from = %q, want the sending process name", sent.From)
+	}
+	if want := fmt.Sprintf(msgPrefixFormat, "sender-proc", "ping"); sent.Text != want {
+		t.Errorf("delivered text = %q, want %q (text must not change)", sent.Text, want)
 	}
 }

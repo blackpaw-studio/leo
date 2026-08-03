@@ -52,7 +52,7 @@ func TestStartWebForwardsObservabilityOptions(t *testing.T) {
 
 	bus := observe.NewBus()
 	runLog := observe.NewRunLog(bus, 0)
-	s.SetObservability(bus, runLog, nil, "v-daemon-wiring-test")
+	s.SetObservability(bus, runLog, nil, nil, "v-daemon-wiring-test")
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {

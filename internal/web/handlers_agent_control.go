@@ -12,6 +12,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -108,6 +109,24 @@ func (s *Server) handleWebAgentSendKeys(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
 
+// publishAgentMessage announces that from messaged to, as a pair of names and
+// nothing else — the routed body never reaches the event (see
+// observe.AgentMessagePayload). from is empty when the sender is not an agent
+// (a human using the web UI); leo does not invent a sender, and the field is
+// omitted on the wire so consumers can require it.
+//
+// Called only once a message has been accepted for delivery, so a rejected
+// send announces nothing. A nil publisher makes this a no-op.
+func (s *Server) publishAgentMessage(from, to string) {
+	if s.publisher == nil {
+		return
+	}
+	s.publisher.Publish(observe.Event{
+		Type:    observe.EventAgentMessage,
+		Payload: &observe.AgentMessagePayload{From: from, To: to},
+	})
+}
+
 // handleWebAgentMessage delivers a free-text message into an agent's live
 // Claude prompt and submits it. Unlike handleWebAgentSendKeys (which types
 // char-by-char to drive slash-command menus), this sends the body verbatim
@@ -120,6 +139,10 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Text string `json:"text"`
+		// From identifies the sending agent. Supplied by the leo_send_message
+		// MCP tool from its own LEO_PROCESS_NAME; absent when a human sends
+		// from the web UI. Self-asserted — display only, never authorization.
+		From string `json:"from"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -138,7 +161,9 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 	// immediately — it never touches tmux, and never suspends (sweep skips
 	// non-claude records), so there is no resume branch to consider for it.
 	if harnessName, handle, ok := s.resolveMessageTarget(name); ok && harnessName != "" && harnessName != "claude" {
-		s.dispatchNonClaudeMessage(w, harnessName, handle, req.Text)
+		if s.dispatchNonClaudeMessage(w, harnessName, handle, req.Text) {
+			s.publishAgentMessage(req.From, name)
+		}
 		return
 	}
 
@@ -176,12 +201,22 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 			const wakeDeliverTimeout = 3 * time.Minute
 			sessionName := agent.SessionName(rec.Name)
 			body := req.Text
+			from := req.From
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), wakeDeliverTimeout)
 				defer cancel()
 				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
 					log.Printf("web: async message delivery after resume of %q failed: %v", sessionName, err)
+					return
 				}
+				// Announced from inside the goroutine, once delivery actually
+				// succeeded — not at 202-accept time. The 202 only means the
+				// message was queued; this cold-boot path can still fail
+				// minutes later, and announcing early would tell a consumer
+				// two agents were talking when nothing was ever delivered.
+				// Every delivery path therefore announces on delivery, never
+				// on acceptance.
+				s.publishAgentMessage(from, name)
 			}()
 			writeJSON(w, http.StatusAccepted, apiResponse{OK: true})
 			return
@@ -223,6 +258,7 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.publishAgentMessage(req.From, name)
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
 
@@ -256,24 +292,28 @@ const nonClaudeInjectTimeout = 5 * time.Minute
 // SessionDriver's Inject and never touches tmux. Used by
 // handleWebAgentMessage once the target's harness has been resolved to
 // something other than claude.
-func (s *Server) dispatchNonClaudeMessage(w http.ResponseWriter, harnessName string, h harness.SessionHandle, text string) {
+// dispatchNonClaudeMessage delivers via the target's SessionDriver, writing
+// the HTTP response itself. It reports whether the message was delivered, so
+// the caller can announce it — a failed send must announce nothing.
+func (s *Server) dispatchNonClaudeMessage(w http.ResponseWriter, harnessName string, h harness.SessionHandle, text string) bool {
 	hd, err := harness.Get(harnessName)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("resolving harness %q: %v", harnessName, err)})
-		return
+		return false
 	}
 	drv := hd.Driver()
 	if drv == nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("harness %q has no session driver", harnessName)})
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), nonClaudeInjectTimeout)
 	defer cancel()
 	if _, err := drv.Inject(ctx, h, text); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("delivering message: %v", err)})
-		return
+		return false
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+	return true
 }
 
 // messageInputAttempts / messageInputPoll bound how long

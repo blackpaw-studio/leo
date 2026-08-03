@@ -22,6 +22,11 @@ type Snapshot struct {
 	Agents     []Agent   `json:"agents"`
 	Tasks      []Task    `json:"tasks"`
 	RecentRuns []TaskRun `json:"recent_runs"`
+	// RecentMessages are recent agent-to-agent message pairs (names and
+	// timestamps only, never content), so a consumer connecting mid-
+	// conversation can seed what it missed rather than waiting for the next
+	// message. Bounded by MaxRecentMessages and RecentMessageWindow.
+	RecentMessages []AgentMessage `json:"recent_messages"`
 }
 
 // Status is an agent's lifecycle state, mirroring the supervisor's own vocabulary.

@@ -48,10 +48,10 @@ func TestTaskRunObservabilityReachesDaemonOverIPC(t *testing.T) {
 	sv.tmuxPath = fakeTmux
 	sv.homePath = homePath
 
-	bus, runLog, _ := wireObservability(ctx, sv, fakeTmux)
+	bus, runLog, messageLog, _ := wireObservability(ctx, sv, fakeTmux)
 
 	srv := daemon.New(daemon.SockPath(homePath), filepath.Join(homePath, "leo.yaml"), nil)
-	srv.SetObservability(bus, runLog, nil, "v-ipc-test")
+	srv.SetObservability(bus, runLog, messageLog, nil, "v-ipc-test")
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}

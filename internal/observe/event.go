@@ -23,6 +23,9 @@ const (
 	EventTaskRunSucceeded EventType = "task_run_succeeded"
 	// EventTaskRunFailed announces a task firing that errored, timed out, or was killed.
 	EventTaskRunFailed EventType = "task_run_failed"
+	// EventAgentMessage announces one agent-to-agent message being routed, as a pair of
+	// names only. Never carries the message body.
+	EventAgentMessage EventType = "agent_message"
 )
 
 // Meta is the sequence number and timestamp carried by every event payload. The bus
@@ -98,6 +101,22 @@ type AgentStoppedPayload struct {
 type TaskRunPayload struct {
 	Meta
 	Run TaskRun `json:"run"`
+}
+
+// AgentMessagePayload reports that one agent messaged another: the pair, and nothing
+// else. There is deliberately no field for the message body, and none may be added — a
+// consumer of this stream is told THAT two agents are talking, never what about.
+//
+// From is empty when the sender is not an agent (a human messaging from the web UI);
+// leo does not invent a sender. Consumers wanting agent-to-agent activity should require
+// both names.
+//
+// From is self-asserted by the calling agent and is not an authenticated identity. It is
+// fine for display; it must not be used for authorization or attribution.
+type AgentMessagePayload struct {
+	Meta
+	From string `json:"from,omitempty"`
+	To   string `json:"to"`
 }
 
 // Publisher is the seam producers publish through — the supervisor for agent events, the
