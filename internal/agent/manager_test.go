@@ -1326,12 +1326,15 @@ func TestRestartSpawnEnvOverlayWinsOverFreshHarnessEnv(t *testing.T) {
 	}
 }
 
-// TestRestartLegacyRecordKeepsStoredEnvButReResolvesArgs verifies a legacy
-// record (SpawnEnv nil, written before the field existed) still gets its
-// args re-resolved, but keeps its stored Env untouched — leo can't tell
-// which layer produced which key, so reconstructing it here could silently
-// drop caller-supplied env.
-func TestRestartLegacyRecordKeepsStoredEnvButReResolvesArgs(t *testing.T) {
+// TestRestartLegacyRecordKeepsCallerEnvAndReResolvesArgs verifies a legacy
+// record (SpawnEnv nil, written before the field existed) gets its args
+// re-resolved while its caller-supplied env survives: leo can't tell which
+// layer produced which stored key, so it layers rather than reconstructs and
+// never silently drops env. LEGACY_KEY here is not harness-owned; the other
+// half of the contract — harness-owned keys taking today's value — is covered
+// by TestRestartLegacyRecordPicksUpNewHarnessEnv and
+// TestRestartLegacyRecordFreshHarnessEnvBeatsStaleCopy below.
+func TestRestartLegacyRecordKeepsCallerEnvAndReResolvesArgs(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		HomePath: home,

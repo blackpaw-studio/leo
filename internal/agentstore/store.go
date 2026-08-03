@@ -80,8 +80,10 @@ type Record struct {
 	// mergeEnv(mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), prunedInherited),
 	// rec.SpawnEnv) without clobbering caller-supplied overrides. Nil for
 	// records written before this field existed (a legacy record with a nil
-	// SpawnEnv AND a nil InheritedEnv keeps its stored Env unchanged on
-	// restart rather than silently dropping env that can't be reconstructed).
+	// SpawnEnv AND a nil InheritedEnv keeps every stored Env key on restart
+	// except those the current harness env owns — env that can't be
+	// reconstructed is layered over a fresh harness env rather than dropped,
+	// so harness-owned keys stay current while caller-supplied ones survive).
 	SpawnEnv map[string]string `json:"spawn_env,omitempty"`
 
 	// InheritedEnv is the worktree/from-agent spawn's inherited env layer —
