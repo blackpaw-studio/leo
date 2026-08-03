@@ -24,6 +24,7 @@ type fakeAgentManager struct {
 	resetErr   error
 	restartErr error
 	restartAll agent.RestartResult
+	stale      []agent.StaleAgent
 	pruneErr   error
 	logsErr    error
 	logsOut    string
@@ -36,6 +37,7 @@ type fakeAgentManager struct {
 	lastReset        string
 	lastRestart      string
 	restartAllCalled bool
+	staleCalled      bool
 	lastPrune        struct {
 		name string
 		opts agent.PruneOptions
@@ -107,6 +109,11 @@ func (f *fakeAgentManager) Restart(name string) error {
 func (f *fakeAgentManager) RestartAll() agent.RestartResult {
 	f.restartAllCalled = true
 	return f.restartAll
+}
+
+func (f *fakeAgentManager) StaleAgents() []agent.StaleAgent {
+	f.staleCalled = true
+	return f.stale
 }
 
 func (f *fakeAgentManager) Prune(_ context.Context, name string, opts agent.PruneOptions) error {
@@ -1006,6 +1013,91 @@ func TestAgentRestartAllHandler(t *testing.T) {
 	}
 	if out.Failed["leo-c"] != "boom" {
 		t.Errorf("Failed[leo-c] = %q, want boom", out.Failed["leo-c"])
+	}
+}
+
+// TestAgentStaleHandler covers GET /agents/stale, which `leo update` calls
+// after a binary swap to decide which agents to offer a restart for.
+func TestAgentStaleHandler(t *testing.T) {
+	mgr := &fakeAgentManager{
+		stale: []agent.StaleAgent{
+			{Name: "leo-a", EnvAdded: []string{"MCP_TOOL_TIMEOUT"}},
+			{Name: "leo-b", ArgsBefore: []string{"--model", "sonnet"}, ArgsAfter: []string{"--model", "opus"}},
+		},
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("GET", "http://localhost/agents/stale", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if !mgr.staleCalled {
+		t.Fatal("StaleAgents was not called")
+	}
+
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var out []agent.StaleAgent
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	if len(out) != 2 || out[0].Name != "leo-a" {
+		t.Fatalf("stale = %+v, want two entries starting with leo-a", out)
+	}
+	if len(out[0].EnvAdded) != 1 || out[0].EnvAdded[0] != "MCP_TOOL_TIMEOUT" {
+		t.Errorf("EnvAdded = %v", out[0].EnvAdded)
+	}
+	if out[1].ArgsAfter[1] != "opus" {
+		t.Errorf("ArgsAfter = %v", out[1].ArgsAfter)
+	}
+}
+
+// TestAgentStaleHandlerEmpty: no drift serializes as an empty list, not null,
+// so the CLI can range over it without a nil check.
+func TestAgentStaleHandlerEmpty(t *testing.T) {
+	_, client := startTestServerWithAgent(t, &fakeAgentManager{})
+
+	req, _ := http.NewRequest("GET", "http://localhost/agents/stale", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var out []agent.StaleAgent
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		t.Fatalf("decode data: %v (raw %s)", err, env.Data)
+	}
+	if len(out) != 0 {
+		t.Fatalf("want no stale agents, got %+v", out)
+	}
+}
+
+func TestAgentStaleHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	req, _ := http.NewRequest("GET", "http://localhost/agents/stale", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
 	}
 }
 

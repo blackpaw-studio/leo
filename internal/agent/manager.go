@@ -957,16 +957,22 @@ func (m *Manager) Resume(name string) (Record, error) {
 			resumeID = latestID
 		}
 	}
-	args := rec.ClaudeArgs
+	// Re-resolve against current config for the same reason Restart does:
+	// waking an agent that has been suspended across an upgrade or a template
+	// edit must apply today's wiring, not replay what was frozen at spawn.
+	// resolveRestartArgs falls back to the stored args/env whenever it can't
+	// re-resolve (ad-hoc agent, deleted template, changed harness).
+	resolvedArgs, resolvedEnv := resolveRestartArgs(cfg, rec, m.webToken)
+	args := resolvedArgs
 	if isClaude {
-		args = ResumeArgs(rec.ClaudeArgs, resumeID)
+		args = ResumeArgs(resolvedArgs, resumeID)
 	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       rec.Name,
 		ClaudeArgs: args,
 		WorkDir:    rec.Workspace,
-		Env:        rec.Env,
+		Env:        resolvedEnv,
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
 		Harness:    rec.Harness,
@@ -977,6 +983,11 @@ func (m *Manager) Resume(name string) (Record, error) {
 
 	rec.Suspended = false
 	rec.SessionID = resumeID
+	// Persist the re-resolved wiring, same as Restart: leaving the record
+	// describing wiring the agent is no longer running would make StaleAgents
+	// report it as drifted after every update, forever.
+	rec.ClaudeArgs = args
+	rec.Env = resolvedEnv
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		log.Printf("agent %q resumed but agentstore.Save failed: %v — flag may persist until next save", rec.Name, err)
 	}

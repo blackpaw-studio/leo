@@ -708,6 +708,91 @@ func TestResumeRespawnsWithResumeAndClearsFlag(t *testing.T) {
 	}
 }
 
+// TestResumeReResolvesArgsAndEnv: waking a suspended agent must apply today's
+// template config and harness env, not replay the wiring frozen at spawn.
+// Resume used to hand the stored ClaudeArgs/Env straight back to the
+// supervisor, so a suspended agent came back stale after every upgrade — the
+// same freeze that made restart a no-op for env-delivered fixes.
+func TestResumeReResolvesArgsAndEnv(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath:  home,
+		Templates: map[string]config.TemplateConfig{"coding": {Model: "opus"}},
+	}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+		Env:        map[string]string{"LEGACY_KEY": "v"},
+		Suspended:  true,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if _, err := m.Resume("leo-x"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	got := sup.spawnCall.ClaudeArgs
+	if !containsPair(got, "--model", "opus") {
+		t.Errorf("args not re-resolved to the current template model: %v", got)
+	}
+	// Resume's own mechanic still holds: --resume, never --session-id.
+	if !containsPair(got, "--resume", "sid") || containsFlag(got, "--session-id") {
+		t.Errorf("resume session args wrong: %v", got)
+	}
+	want := strconv.FormatInt(leomcp.ToolTimeout.Milliseconds(), 10)
+	if sup.spawnCall.Env["MCP_TOOL_TIMEOUT"] != want {
+		t.Errorf("harness env not refreshed on resume: %v", sup.spawnCall.Env)
+	}
+	if sup.spawnCall.Env["LEGACY_KEY"] != "v" {
+		t.Errorf("caller-supplied env dropped on resume: %v", sup.spawnCall.Env)
+	}
+
+	// The re-resolved wiring must be persisted, exactly as Restart persists
+	// it. Otherwise the record keeps describing the stale wiring the agent is
+	// no longer running, and StaleAgents would report the same agent as
+	// drifted after every update, forever.
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	saved := recs["leo-x"]
+	if saved.Env["MCP_TOOL_TIMEOUT"] != want {
+		t.Errorf("resumed record did not persist the refreshed env: %v", saved.Env)
+	}
+	if !containsPair(saved.ClaudeArgs, "--model", "opus") {
+		t.Errorf("resumed record did not persist the re-resolved args: %v", saved.ClaudeArgs)
+	}
+}
+
+// TestResumeKeepsStoredArgsWhenNotReResolvable: an ad-hoc agent (no template)
+// has nothing to re-resolve from, so resume must fall back to its stored
+// wiring rather than spawning it bare.
+func TestResumeKeepsStoredArgsWhenNotReResolvable(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+		Env:        map[string]string{"ONLY": "stored"},
+		Suspended:  true,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if _, err := m.Resume("leo-x"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if !containsPair(sup.spawnCall.ClaudeArgs, "--model", "sonnet") {
+		t.Errorf("stored args not preserved: %v", sup.spawnCall.ClaudeArgs)
+	}
+	if sup.spawnCall.Env["ONLY"] != "stored" {
+		t.Errorf("stored env not preserved: %v", sup.spawnCall.Env)
+	}
+}
+
 // --- Reset ---
 
 // TestResetStopsClearsAndRespawns asserts Reset's stop -> clear -> start

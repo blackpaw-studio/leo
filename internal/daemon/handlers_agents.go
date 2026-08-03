@@ -209,6 +209,30 @@ func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
+// handleAgentStale reports which running agents would change if restarted,
+// via GET /agents/stale. `leo update` calls it after swapping the binary to
+// decide whether to offer a restart, and for which agents.
+//
+// The payload carries env KEY NAMES only, never values — see agent.StaleAgent.
+func (s *Server) handleAgentStale(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	stale := s.agentMgr.StaleAgents()
+	if stale == nil {
+		// Serialize as [] rather than null so callers can range without a
+		// nil check.
+		stale = []agent.StaleAgent{}
+	}
+	data, err := json.Marshal(stale)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling stale-agent response: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
 // handleAgentRestartAll bounces every currently-running agent via POST
 // /agents/restart, skipping suspended/stopped agents. Per-agent failures are
 // reported in the response rather than aborting the batch.
