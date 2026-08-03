@@ -43,6 +43,9 @@ type AgentManager interface {
 	Reset(name string) error
 	Restart(name string) error
 	RestartAll() agent.RestartResult
+	// StaleAgents reports running agents whose wiring would change if they
+	// were restarted — what `leo update` offers to bounce after a binary swap.
+	StaleAgents() []agent.StaleAgent
 	Prune(ctx context.Context, name string, opts agent.PruneOptions) error
 	List() []agent.Record
 	Logs(name string, lines int) (string, error)
@@ -150,6 +153,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /agents/list", s.handleAgentList)
 	mux.HandleFunc("GET /agents/resolve", s.handleAgentResolve)
 	mux.HandleFunc("POST /agents/restart", s.handleAgentRestartAll)
+	mux.HandleFunc("GET /agents/stale", s.handleAgentStale)
 	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
 	mux.HandleFunc("POST /agents/{name}/suspend", s.handleAgentSuspend)
 	mux.HandleFunc("POST /agents/{name}/resume", s.handleAgentResume)
