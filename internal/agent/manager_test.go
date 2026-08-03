@@ -7,12 +7,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 // TestRecordCarriesNoEnv guards a credential leak. Record is the payload of
@@ -1324,12 +1326,15 @@ func TestRestartSpawnEnvOverlayWinsOverFreshHarnessEnv(t *testing.T) {
 	}
 }
 
-// TestRestartLegacyRecordKeepsStoredEnvButReResolvesArgs verifies a legacy
-// record (SpawnEnv nil, written before the field existed) still gets its
-// args re-resolved, but keeps its stored Env untouched — leo can't tell
-// which layer produced which key, so reconstructing it here could silently
-// drop caller-supplied env.
-func TestRestartLegacyRecordKeepsStoredEnvButReResolvesArgs(t *testing.T) {
+// TestRestartLegacyRecordKeepsCallerEnvAndReResolvesArgs verifies a legacy
+// record (SpawnEnv nil, written before the field existed) gets its args
+// re-resolved while its caller-supplied env survives: leo can't tell which
+// layer produced which stored key, so it layers rather than reconstructs and
+// never silently drops env. LEGACY_KEY here is not harness-owned; the other
+// half of the contract — harness-owned keys taking today's value — is covered
+// by TestRestartLegacyRecordPicksUpNewHarnessEnv and
+// TestRestartLegacyRecordFreshHarnessEnvBeatsStaleCopy below.
+func TestRestartLegacyRecordKeepsCallerEnvAndReResolvesArgs(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		HomePath: home,
@@ -1362,6 +1367,83 @@ func TestRestartLegacyRecordKeepsStoredEnvButReResolvesArgs(t *testing.T) {
 	}
 	if sup.spawnCall.Env["LEGACY_KEY"] != "legacy-value" {
 		t.Fatalf("expected legacy Env to survive unchanged, got: %v", sup.spawnCall.Env)
+	}
+}
+
+// TestRestartLegacyRecordPicksUpNewHarnessEnv covers the other half of the
+// legacy-record contract: keeping stored env must not mean freezing the
+// harness env. A harness env var introduced by a leo upgrade (here
+// MCP_TOOL_TIMEOUT) has to reach the agent on restart, or `leo agent restart`
+// silently no-ops for every env-delivered fix and the only remedy left is a
+// full reset — which throws away the conversation restart exists to keep.
+func TestRestartLegacyRecordPicksUpNewHarnessEnv(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath:  home,
+		Templates: map[string]config.TemplateConfig{"coding": {Model: "opus"}},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+		Env:        map[string]string{"LEGACY_KEY": "legacy-value"},
+		SpawnEnv:   nil, // legacy: predates SpawnEnv
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	want := strconv.FormatInt(leomcp.ToolTimeout.Milliseconds(), 10)
+	if got := sup.spawnCall.Env["MCP_TOOL_TIMEOUT"]; got != want {
+		t.Errorf("MCP_TOOL_TIMEOUT = %q, want %q (env %v)", got, want, sup.spawnCall.Env)
+	}
+	// Layering, not reconstructing: the caller's own key still survives.
+	if sup.spawnCall.Env["LEGACY_KEY"] != "legacy-value" {
+		t.Errorf("legacy env key was dropped: %v", sup.spawnCall.Env)
+	}
+}
+
+// TestRestartLegacyRecordFreshHarnessEnvBeatsStaleCopy pins the precedence
+// within a legacy record: a harness-owned key stored at spawn time is stale
+// by definition, so today's harness value must win over the record's copy.
+// User-supplied keys the harness does not own are untouched (covered above).
+func TestRestartLegacyRecordFreshHarnessEnvBeatsStaleCopy(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath:  home,
+		Templates: map[string]config.TemplateConfig{"coding": {Model: "opus"}},
+	}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Workspace:  "/w",
+		SessionID:  "sid",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid"},
+		Env:        map[string]string{"MCP_TOOL_TIMEOUT": "1", "LEGACY_KEY": "legacy-value"},
+		SpawnEnv:   nil,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	want := strconv.FormatInt(leomcp.ToolTimeout.Milliseconds(), 10)
+	if got := sup.spawnCall.Env["MCP_TOOL_TIMEOUT"]; got != want {
+		t.Errorf("stale harness value survived: MCP_TOOL_TIMEOUT = %q, want %q", got, want)
+	}
+	if sup.spawnCall.Env["LEGACY_KEY"] != "legacy-value" {
+		t.Errorf("legacy env key was dropped: %v", sup.spawnCall.Env)
 	}
 }
 
