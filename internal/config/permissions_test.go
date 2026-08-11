@@ -206,3 +206,46 @@ func TestRenameTemplateCascadesIntoOwnPermissions(t *testing.T) {
 		t.Errorf("config must stay valid after a rename: %v", err)
 	}
 }
+
+// A malformed glob is accepted by the matcher (which swallows the error so a
+// bad pattern can never widen access at runtime) and then matches nothing but
+// its own literal — a tighter restriction than written, reported nowhere.
+// Config load is the place to catch it.
+func TestValidateRejectsMalformedGlobs(t *testing.T) {
+	for _, tc := range []struct {
+		field string
+		perms leotools.Permissions
+	}{
+		{"can_message", leotools.Permissions{CanMessage: []string{"team-[a"}}},
+		{"can_spawn", leotools.Permissions{CanSpawn: []string{"codex["}}},
+		{"can_consult", leotools.Permissions{CanConsult: []string{"fable[abc"}}},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			err := permCfg(tc.perms).Validate()
+			if err == nil {
+				t.Fatal("expected a malformed glob to be rejected")
+			}
+			if !strings.Contains(err.Error(), "glob") {
+				t.Errorf("error should say the pattern is a bad glob: %v", err)
+			}
+		})
+	}
+
+	// A reversed range is malformed too, but path.Match only reports it when
+	// matching scans that far, so validation cannot see it. It fails closed
+	// at runtime (matching nothing but its literal), so this documents the
+	// known limit rather than asserting a guarantee leo does not make.
+	if err := permCfg(leotools.Permissions{CanSpawn: []string{"codex[z-a]"}}).Validate(); err != nil {
+		t.Logf("reversed ranges are now caught too; tighten ValidPattern's doc: %v", err)
+	}
+
+	// Well-formed globs still pass, including on can_message, whose entries
+	// are never checked for existence.
+	ok := leotools.Permissions{
+		CanMessage: []string{"scout-*", "agent-?", "team-[abc]"},
+		CanSpawn:   []string{"worker-*"},
+	}
+	if err := permCfg(ok).Validate(); err != nil {
+		t.Errorf("valid globs must pass: %v", err)
+	}
+}

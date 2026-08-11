@@ -45,6 +45,19 @@ The new agent is named <agent>-<branch-slug> and its worktree lives under
   leo agent worktree chronicle hotfix --base v1.2.0 --prompt "fix the crash"`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Gate before the remote dispatch below, or a restricted agent
+			// could spawn on another host instead. With --template this
+			// builds from an arbitrary template, so the allowlist applies;
+			// without it the new agent inherits the source template and
+			// therefore its permissions, which rules out escalation.
+			if err := gateCommand(cmd, "leo_spawn_agent"); err != nil {
+				return err
+			}
+			if template != "" {
+				if err := gateSpawnTemplate(cmd, template); err != nil {
+					return err
+				}
+			}
 			sourceAgent, branch := args[0], args[1]
 			env, err := parseEnvPairs(envPairs)
 			if err != nil {

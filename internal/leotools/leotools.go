@@ -131,6 +131,22 @@ func allows(list []string, value string) bool {
 	return false
 }
 
+// ValidPattern reports whether entry looks like a usable path.Match pattern.
+// A malformed one is swallowed by allows (so a bad pattern can never widen
+// access at call time) and then silently matches nothing but its own literal
+// — tighter than the operator wrote, and reported nowhere at runtime. Config
+// validation uses this to reject it up front instead.
+//
+// This is best-effort, not a full parse: path.Match has no compile step and
+// only reports a bad construct when matching actually scans it, so an
+// unterminated class ("team-[a") is caught while a reversed range
+// ("team-[z-a]") is not. Both fail closed at runtime — matching less than
+// intended, never more — so the gap costs a clear error message, not safety.
+func ValidPattern(entry string) bool {
+	_, err := path.Match(entry, "")
+	return err == nil
+}
+
 // HasGlob reports whether entry contains path.Match metacharacters. Config
 // validation uses it to decide which allowlist entries can be checked against
 // defined template names and which must be accepted as patterns.

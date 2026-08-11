@@ -230,3 +230,101 @@ func TestResolveRestartArgsAppliesCurrentPermissions(t *testing.T) {
 		t.Errorf("restart must apply current config, got %+v", got)
 	}
 }
+
+// Reset is the heavier hammer — it discards the conversation entirely — so an
+// operator has every reason to expect it to pick up current config. It
+// respawns from the stored record, which means stale permissions ride along
+// unless they are re-resolved, exactly as they would on restart.
+func TestResetReResolvesPermissions(t *testing.T) {
+	tests := []struct {
+		name     string
+		template config.TemplateConfig
+		stored   string
+		want     string // "" means the variable must be absent
+	}{
+		{
+			name:     "restriction removed from config is dropped",
+			template: config.TemplateConfig{},
+			stored:   `{"deny_tools":["leo_spawn_agent"]}`,
+			want:     "",
+		},
+		{
+			name:     "restriction added to config is applied",
+			template: config.TemplateConfig{Permissions: leotools.Permissions{CanMessage: []string{"rocket"}}},
+			stored:   "",
+			want:     `{"can_message":["rocket"]}`,
+		},
+		{
+			name:     "restriction changed in config wins over the stored one",
+			template: config.TemplateConfig{Permissions: leotools.Permissions{CanMessage: []string{"rocket"}}},
+			stored:   `{"can_message":["anyone"]}`,
+			want:     `{"can_message":["rocket"]}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			cfg := &config.Config{
+				HomePath:  home,
+				Templates: map[string]config.TemplateConfig{"scout": tc.template},
+			}
+			sup := &capturingSupervisor{
+				agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+			}
+			env := map[string]string{"KEEP": "1"}
+			if tc.stored != "" {
+				env[permissionsEnvVar] = tc.stored
+			}
+			if err := agentstore.Save(home, agentstore.Record{
+				Name: "leo-x", Template: "scout", Workspace: "/w", Env: env,
+			}); err != nil {
+				t.Fatalf("save: %v", err)
+			}
+
+			m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+			if err := m.Reset("leo-x"); err != nil {
+				t.Fatalf("reset: %v", err)
+			}
+			if sup.spawnCall == nil {
+				t.Fatal("reset did not respawn")
+			}
+
+			got, ok := sup.spawnCall.Env[permissionsEnvVar]
+			if tc.want == "" {
+				if ok {
+					t.Errorf("stale %s survived reset as %q", permissionsEnvVar, got)
+				}
+			} else if got != tc.want {
+				t.Errorf("%s = %q, want %q", permissionsEnvVar, got, tc.want)
+			}
+			if sup.spawnCall.Env["KEEP"] != "1" {
+				t.Errorf("unrelated env must survive: %v", sup.spawnCall.Env)
+			}
+		})
+	}
+}
+
+// A record whose template is gone from config has no policy to re-resolve
+// against, so reset must leave its stored env alone rather than silently
+// lifting the restriction — matching what restart does in the same situation.
+func TestResetLeavesEnvAloneWhenTemplateMissing(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home, Templates: map[string]config.TemplateConfig{}}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	stored := `{"deny_tools":["leo_spawn_agent"]}`
+	if err := agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "gone", Workspace: "/w",
+		Env: map[string]string{permissionsEnvVar: stored},
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Reset("leo-x"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if got := sup.spawnCall.Env[permissionsEnvVar]; got != stored {
+		t.Errorf("%s = %q, want the stored value %q preserved", permissionsEnvVar, got, stored)
+	}
+}

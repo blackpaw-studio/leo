@@ -34,12 +34,21 @@ Permissions are applied in two places, from one policy:
 | CLI command | Governed by |
 |-------------|-------------|
 | `leo agent spawn` | `leo_spawn_agent` + `can_spawn` |
+| `leo agent worktree` | `leo_spawn_agent`, plus `can_spawn` when `--template` is given |
 | `leo agent stop` / `suspend` / `reset` / `restart` / `rename` / `prune` | `leo_stop_agent` |
 | `leo run <task>` | `leo_run_task` |
 | `leo task enable` / `disable` | `leo_toggle_task` |
+| `leo service stop` / `restart` / `reparent` | `leo_stop_agent` |
 
 Lifecycle commands with no exact tool equivalent map to `leo_stop_agent`:
-denying "stop other agents" plainly means to deny disrupting them.
+denying "stop other agents" plainly means to deny disrupting them. The
+`leo service` entries are there for the same reason — `stop` and `reparent`
+take down *every* live agent session, discarding in-flight context, which is
+the withheld capability at greater scale.
+
+`leo agent worktree` spawns from the source agent's template by default, and
+that new agent inherits the source template's permissions, so escalation is
+only possible via `--template` — which is why the allowlist applies there.
 
 ### The agent is told, not just refused
 
@@ -119,9 +128,22 @@ Allowlist entries match exactly, or as a glob (`*`, `?`, `[...]`), so generated
 agent names stay addressable — `scout-*` covers `scout-leo` and
 `scout-olympus`. Matching is case-sensitive.
 
-`leo_send_message` accepts shorthand agent names that the daemon resolves, but
-the permission check runs on the literal argument. An allowlist of `[rocket]`
-rejects `to: "rock"`. Fail-closed, with the allowed targets in the error.
+`leo_send_message` accepts shorthand agent names that the daemon resolves, and
+the permission check runs on the **literal argument**, before that resolution.
+Two consequences worth knowing:
+
+- An allowlist of `[rocket]` rejects `to: "rock"`, even though the daemon
+  would have resolved it. Fail-closed, with the allowed targets in the error.
+- An entry authorizes **whatever that string resolves to at send time**, not a
+  fixed agent. `can_message: [olympus]` permits messaging whichever live agent
+  `olympus` resolves to — an exact name, a display name, a repo short, or an
+  `-olympus` suffix. That is the same resolution you would get typing it
+  yourself, so write entries the way you would address the agent. Ambiguous
+  queries are rejected by the daemon rather than delivered to a guess.
+
+Matching here is case-sensitive while the daemon's resolver is not, so
+`[Rocket]` will not authorize `to: "rocket"`. Write entries in the case the
+agent will use.
 
 ### `leo_skill` cannot be denied
 
@@ -157,8 +179,11 @@ the set it started with until it is restarted:
 leo agent restart scout
 ```
 
-A restart re-resolves permissions from current config in both directions — a
-restriction you added is applied, and one you removed is dropped.
+`leo agent restart` and `leo agent reset` both re-resolve permissions from
+current config in both directions — a restriction you added is applied, and
+one you removed is dropped. An agent whose template no longer exists in config
+keeps whatever it started with: there is no policy left to resolve against,
+and silently lifting the restriction would be the wrong guess.
 
 ## Scope
 

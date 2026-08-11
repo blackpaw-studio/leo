@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 	"github.com/spf13/cobra"
 )
 
@@ -137,6 +141,10 @@ func TestShippedCommandsAreGated(t *testing.T) {
 		args []string
 	}{
 		{path: []string{"agent", "spawn"}, deny: "leo_spawn_agent", args: []string{"scout"}},
+		// agent worktree is a second spawn route, in its own file — it was
+		// missed the first time precisely because it does not live in
+		// agent.go. TestEverySpawnRouteIsGated below stops that recurring.
+		{path: []string{"agent", "worktree"}, deny: "leo_spawn_agent", args: []string{"scout", "feat/x"}},
 		{path: []string{"agent", "stop"}, deny: "leo_stop_agent", args: []string{"scout"}},
 		{path: []string{"agent", "suspend"}, deny: "leo_stop_agent", args: []string{"scout"}},
 		{path: []string{"agent", "reset"}, deny: "leo_stop_agent", args: []string{"scout"}},
@@ -146,6 +154,11 @@ func TestShippedCommandsAreGated(t *testing.T) {
 		{path: []string{"run"}, deny: "leo_run_task", args: []string{"nightly"}},
 		{path: []string{"task", "enable"}, deny: "leo_toggle_task", args: []string{"nightly"}},
 		{path: []string{"task", "disable"}, deny: "leo_toggle_task", args: []string{"nightly"}},
+		// These do not target one agent, they take out every live session at
+		// once — the same capability leo_stop_agent withholds, at more scale.
+		{path: []string{"service", "stop"}, deny: "leo_stop_agent", args: nil},
+		{path: []string{"service", "restart"}, deny: "leo_stop_agent", args: nil},
+		{path: []string{"service", "reparent"}, deny: "leo_stop_agent", args: nil},
 	}
 
 	for _, tc := range tests {
@@ -162,5 +175,100 @@ func TestShippedCommandsAreGated(t *testing.T) {
 				t.Errorf("leo %s failed for some other reason, so the gate may not be wired: %v", name, err)
 			}
 		})
+	}
+}
+
+// The first pass at the CLI gate missed `leo agent worktree` because it lives
+// in its own file and the search only covered agent.go. This test looks at
+// what the commands *do* rather than where they are written: any CLI command
+// that reaches a spawn or lifecycle endpoint on the daemon must be gated, so
+// a new one cannot be added without either gating it or failing here.
+func TestEverySpawnRouteIsGated(t *testing.T) {
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+
+	// daemon calls that create or disrupt an agent, and the tool each is
+	// expected to be governed by.
+	governed := map[string]string{
+		"daemon.AgentSpawnRequest": "leo_spawn_agent",
+		"daemon.AgentStop":         "leo_stop_agent",
+		"daemon.AgentReset":        "leo_stop_agent",
+		"daemon.AgentRestart":      "leo_stop_agent",
+		"daemon.AgentSuspend":      "leo_stop_agent",
+		"daemon.AgentRename":       "leo_stop_agent",
+		"daemon.AgentPruneRequest": "leo_stop_agent",
+	}
+
+	for _, src := range sources {
+		if strings.HasSuffix(src, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatalf("read %s: %v", src, err)
+		}
+		text := string(body)
+
+		for call, tool := range governed {
+			if !strings.Contains(text, call) {
+				continue
+			}
+			// update_stale.go restarts agents on the operator's behalf after
+			// a leo upgrade; it is not agent-reachable command surface.
+			if src == "update_stale.go" {
+				continue
+			}
+			if !strings.Contains(text, "gateCommand(cmd, \""+tool+"\")") &&
+				!strings.Contains(text, "gateSpawnTemplate(cmd,") {
+				t.Errorf("%s calls %s but has no %s gate — every agent-reachable route to that capability must be gated",
+					src, call, tool)
+			}
+		}
+	}
+}
+
+// Permission allowlists reference templates by name and Validate() requires
+// those references to resolve, so removing a referenced template writes a
+// config that every subsequent leo command then refuses to load — leaving
+// hand-editing leo.yaml as the only way out. saveConfig must not write a
+// config leo cannot read back.
+func TestSaveConfigRefusesToBrickTheConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "leo.yaml")
+
+	valid := &config.Config{
+		HomePath: dir,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]config.TemplateConfig{
+			"codex": {},
+			"scout": {Permissions: leotools.Permissions{CanSpawn: []string{"codex"}}},
+		},
+	}
+	if err := config.Save(path, valid); err != nil {
+		t.Fatalf("seed save: %v", err)
+	}
+
+	prev := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = prev })
+
+	// Removing codex leaves scout referencing a template that no longer exists.
+	broken := *valid
+	broken.Templates = map[string]config.TemplateConfig{
+		"scout": valid.Templates["scout"],
+	}
+	if err := saveConfig(&broken); err == nil {
+		t.Fatal("saveConfig wrote a config that cannot be loaded back")
+	}
+
+	// The on-disk config must be untouched by the refused write.
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config on disk is no longer loadable: %v", err)
+	}
+	if _, ok := reloaded.Templates["codex"]; !ok {
+		t.Error("refused save must leave the previous config in place")
 	}
 }

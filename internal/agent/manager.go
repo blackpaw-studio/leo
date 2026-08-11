@@ -1055,11 +1055,22 @@ func (m *Manager) Reset(name string) error {
 		storedSessionID = sessionID
 	}
 
+	// Reset respawns from the stored record, so permissions would otherwise
+	// ride along stale — the same trap resolveRestartArgs avoids. Reset is the
+	// heavier hammer (it discards the conversation), so an operator has every
+	// reason to expect it to pick up current config. A record whose template
+	// is gone has no policy to resolve against; leave its env untouched rather
+	// than silently lifting the restriction, matching restart's fallback.
+	resetEnv := rec.Env
+	if tmpl, ok := cfg.Templates[rec.Template]; ok {
+		resetEnv = applyPermissions(rec.Env, tmpl)
+	}
+
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       rec.Name,
 		ClaudeArgs: args,
 		WorkDir:    rec.Workspace,
-		Env:        rec.Env,
+		Env:        resetEnv,
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
 		Harness:    rec.Harness,
@@ -1068,6 +1079,7 @@ func (m *Manager) Reset(name string) error {
 	}
 
 	rec.ClaudeArgs = args
+	rec.Env = resetEnv
 	rec.SessionID = storedSessionID
 	rec.NoResume = false
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {

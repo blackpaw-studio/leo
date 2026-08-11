@@ -879,6 +879,23 @@ func validatePermissions(name string, p leotools.Permissions, templates map[stri
 		}
 	}
 
+	// Patterns are checked on every list, including can_message: a malformed
+	// glob is accepted by the matcher and then silently matches nothing but
+	// its own literal, which is a tighter restriction than the operator wrote
+	// and is reported nowhere at runtime.
+	checkPatterns := func(field string, list []string) {
+		for i, entry := range list {
+			if leotools.HasGlob(entry) && !leotools.ValidPattern(entry) {
+				errs = append(errs, fmt.Sprintf(
+					"templates.%s.permissions.%s[%d] %q is not a valid glob pattern",
+					name, field, i, entry))
+			}
+		}
+	}
+	checkPatterns("can_message", p.CanMessage)
+	checkPatterns("can_spawn", p.CanSpawn)
+	checkPatterns("can_consult", p.CanConsult)
+
 	checkTemplates := func(field string, list []string) {
 		for i, entry := range list {
 			if leotools.HasGlob(entry) {
