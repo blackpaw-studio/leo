@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
 // Kind is the form-control type used to render and parse a field.
@@ -39,6 +40,10 @@ const (
 	SectionClientHost Section = "client_host"
 	SectionWeb        Section = "web"
 	SectionClient     Section = "client"
+	// SectionPermissions is the nested templates.*.permissions struct. It is
+	// rendered as an extra field group inside the template form rather than
+	// as a page of its own — see handleTemplateEditPage.
+	SectionPermissions Section = "permissions"
 )
 
 // AllSections returns every section in stable order.
@@ -46,7 +51,7 @@ func AllSections() []Section {
 	return []Section{
 		SectionDefaults, SectionTask, SectionTemplate,
 		SectionClientHost, SectionWeb,
-		SectionClient,
+		SectionClient, SectionPermissions,
 	}
 }
 
@@ -65,6 +70,8 @@ func StructFor(s Section) reflect.Type {
 		return reflect.TypeOf(config.WebConfig{})
 	case SectionClient:
 		return reflect.TypeOf(config.ClientConfig{})
+	case SectionPermissions:
+		return reflect.TypeOf(leotools.Permissions{})
 	}
 	panic("schema: unknown section " + string(s))
 }

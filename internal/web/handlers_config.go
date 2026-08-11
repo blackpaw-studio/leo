@@ -8,6 +8,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 	"github.com/blackpaw-studio/leo/internal/web/schema"
 )
 
@@ -104,6 +105,20 @@ func (s *Server) buildFormWithHarness(section schema.Section, target any, cfg *c
 		}
 	}
 	return fd
+}
+
+// permissionFields renders the templates.*.permissions sub-struct as field
+// views for the template form. Scope/ScopeName are stamped to match the
+// enclosing form's fields so element ids stay unique across templates.
+func (s *Server) permissionFields(perms *leotools.Permissions, cfg *config.Config, name string) []fieldView {
+	fd := s.buildForm(schema.SectionPermissions, perms, cfg, "")
+	scope := scopeSuffix(schema.SectionTemplate, name)
+	for i := range fd.Fields {
+		fd.Fields[i].Section = schema.SectionPermissions
+		fd.Fields[i].Scope = scope
+		fd.Fields[i].ScopeName = name
+	}
+	return fd.Fields
 }
 
 // harnessView resolves a form target's own options map, effective harness,
@@ -269,7 +284,10 @@ func (s *Server) handleConfigTemplateSave(w http.ResponseWriter, r *http.Request
 				return err
 			}
 			t.HarnessOptions = opts
-			return nil
+			// The permissions sub-struct parses from the same submitted form
+			// under its own section; its keys never collide with a template
+			// field, so ordering between the two Apply passes is irrelevant.
+			return schema.Apply(&t.Permissions, schema.SectionPermissions, form)
 		},
 		fmt.Sprintf("Template %q saved", name), &s.agentsRestartNeeded)
 }
