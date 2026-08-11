@@ -91,6 +91,11 @@ in `deny_tools` is a config error.
 - `can_message` is **not** validated. Agent names are generated at spawn time,
   so there is nothing to check them against.
 
+Because those references are checked, a template named in another template's
+`can_spawn`/`can_consult` cannot be deleted until the reference is removed —
+the same rule a persistent task's `template:` already follows. Renaming is
+handled for you: the new name is cascaded into every allowlist that named it.
+
 ## Applying a change
 
 Permissions are resolved from config and handed to the agent's MCP server in
@@ -126,6 +131,6 @@ same token.
 
 ## Web UI
 
-The four lists are editable on a template's config page under **Permissions**,
-inside the Advanced section. Each is a comma-separated list; clearing a field
-lifts that restriction.
+The four lists are editable on a template's config page, inside the
+**Advanced** section — *Deny tools*, *Can message*, *Can spawn*, *Can consult*.
+Each is a comma-separated list; clearing a field lifts that restriction.

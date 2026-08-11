@@ -434,9 +434,6 @@ func (r *registry) callContext(ctx context.Context, name string, raw json.RawMes
 	}
 	h, ok := r.handlers[name]
 	if !ok {
-		if r.denied[name] {
-			return "", fmt.Errorf("tool %q is not permitted for this agent", name)
-		}
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
 	args := map[string]any{}

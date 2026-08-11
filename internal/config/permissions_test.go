@@ -149,3 +149,60 @@ templates:
 		t.Errorf("empty permissions must be omitted on save:\n%s", out)
 	}
 }
+
+// Permission allowlists reference templates by name, so a rename has to
+// cascade into them the way it already does into tasks. Without that, the
+// rename validates against a name that no longer exists and is rejected —
+// with an error naming a template the operator never touched.
+func TestRenameTemplateCascadesIntoPermissions(t *testing.T) {
+	cfg := &Config{
+		Defaults: DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]TemplateConfig{
+			"codex": {},
+			"scout": {Permissions: leotools.Permissions{
+				CanSpawn:   []string{"codex", "worker-*"},
+				CanConsult: []string{"codex"},
+			}},
+		},
+	}
+
+	if err := RenameTemplate(cfg, "codex", "codex2"); err != nil {
+		t.Fatalf("RenameTemplate: %v", err)
+	}
+
+	perms := cfg.Templates["scout"].Permissions
+	if len(perms.CanSpawn) != 2 || perms.CanSpawn[0] != "codex2" {
+		t.Errorf("can_spawn did not follow the rename: %v", perms.CanSpawn)
+	}
+	if perms.CanSpawn[1] != "worker-*" {
+		t.Errorf("glob entries must be left alone: %v", perms.CanSpawn)
+	}
+	if len(perms.CanConsult) != 1 || perms.CanConsult[0] != "codex2" {
+		t.Errorf("can_consult did not follow the rename: %v", perms.CanConsult)
+	}
+
+	// The whole point: the renamed config must still validate.
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("config must stay valid after a rename: %v", err)
+	}
+}
+
+// A template that only references itself must survive its own rename.
+func TestRenameTemplateCascadesIntoOwnPermissions(t *testing.T) {
+	cfg := &Config{
+		Defaults: DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]TemplateConfig{
+			"scout": {Permissions: leotools.Permissions{CanSpawn: []string{"scout"}}},
+		},
+	}
+
+	if err := RenameTemplate(cfg, "scout", "scout2"); err != nil {
+		t.Fatalf("RenameTemplate: %v", err)
+	}
+	if got := cfg.Templates["scout2"].Permissions.CanSpawn; len(got) != 1 || got[0] != "scout2" {
+		t.Errorf("a self-reference must follow the rename: %v", got)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("config must stay valid after a rename: %v", err)
+	}
+}

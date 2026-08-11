@@ -116,17 +116,20 @@ var registry = map[Section][]Field{
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},
 	}...)...),
 
-	// Rendered inside the template form as its own group. Every list is
-	// comma-separated; an empty list means unrestricted, so denying a tool
-	// outright is how you take a capability away completely.
+	// Rendered inside the template form's Advanced section, alongside the
+	// other advanced template fields — the advanced <details> emits no group
+	// labels, so Group matches theirs rather than naming a heading that never
+	// renders. Every list is comma-separated; an empty list means
+	// unrestricted, so denying a tool outright is how you take a capability
+	// away completely.
 	SectionPermissions: {
-		{Key: "deny_tools", Label: "Deny tools", Group: "Permissions", Advanced: true,
+		{Key: "deny_tools", Label: "Deny tools", Group: "Advanced", Advanced: true,
 			Help: "Leo MCP tools this template's agents cannot use, e.g. leo_spawn_agent"},
-		{Key: "can_message", Label: "Can message", Group: "Permissions", Advanced: true,
+		{Key: "can_message", Label: "Can message", Group: "Advanced", Advanced: true,
 			Help: "Agents this template may message; supports globs (scout-*). Empty means any"},
-		{Key: "can_spawn", Label: "Can spawn", Group: "Permissions", Advanced: true,
+		{Key: "can_spawn", Label: "Can spawn", Group: "Advanced", Advanced: true,
 			Help: "Templates this template may spawn. Empty means any"},
-		{Key: "can_consult", Label: "Can consult", Group: "Permissions", Advanced: true,
+		{Key: "can_consult", Label: "Can consult", Group: "Advanced", Advanced: true,
 			Help: "Templates this template may consult. Empty means any"},
 	},
 

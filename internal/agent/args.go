@@ -198,6 +198,14 @@ func permissionsEnv(tmpl config.TemplateConfig) map[string]string {
 // restriction the operator removed would silently outlive the edit: the agent
 // would keep running restricted while the config says otherwise. Normalizing
 // after every merge makes that impossible regardless of layer order.
+//
+// This governs the env leo composes, not the environment the agent inherits
+// from the process tree. An unrestricted template omits the key rather than
+// clearing it, so a LEO_PERMISSIONS exported into a foreground `leo service`
+// shell would reach every agent it starts and no restart would clear it. The
+// supervised path is safe (env.Capture() is an allowlist), so this only bites
+// while hand-running a daemon with the variable already exported — but if
+// agents ever appear restricted with no config to match, look here first.
 func applyPermissions(env map[string]string, tmpl config.TemplateConfig) map[string]string {
 	out := make(map[string]string, len(env)+1)
 	for k, v := range env {
