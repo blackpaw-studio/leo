@@ -41,15 +41,21 @@ forth expensive: each return to a template starts from nothing.
 ### CLI
 
 ```
-leo agent switch <name> <template> [--json] [--host <host>]
+leo agent set-template <name> <template> [--json] [--host <host>]
 ```
 
 ```
-$ leo agent switch leo-coding-owner-fetch codex
-switched leo-coding-owner-fetch: coding → codex (claude → codex), new session
-$ leo agent switch leo-coding-owner-fetch coding
-switched leo-coding-owner-fetch: codex → coding (codex → claude), resumed session
+$ leo agent set-template leo-coding-owner-fetch codex
+leo-coding-owner-fetch: coding → codex (claude → codex)
+respawned on a new session
+
+$ leo agent set-template leo-coding-owner-fetch coding
+leo-coding-owner-fetch: codex → coding (codex → claude)
+respawned, resumed this template's previous session
 ```
+
+The command reads lighter than it acts — it stops and respawns the agent — so
+the output always states what happened to the process and the session.
 
 Name resolution matches `stop`/`reset`/`restart` (`daemon.AgentResolve`, so
 shorthand works). Template names complete via the existing template completion
@@ -67,9 +73,14 @@ helper. `--json` emits:
 }
 ```
 
+Internally the operation is `SwitchTemplate` (manager, daemon route, picker
+backend): the CLI verb names the intent, the code names the behavior, since a
+Go method called `SetTemplate` that stops and respawns a process would be a lie.
+
 ### Picker (`leo attach`)
 
-A new `t` binding on the agent list opens a template menu over the current row:
+A new `t` binding on the agent list (footer: `t template`) opens a template
+menu over the current row:
 arrow keys to move, `enter` to confirm, `esc` to cancel. The agent's current
 template is marked and selecting it is a no-op. This follows the existing modal
 pattern in `internal/picker/model.go` (`renaming` + `textinput`, `confirming`
@@ -185,12 +196,12 @@ a switch launches the target template, so it is governed by the same
 | `internal/agentstore/store.go` | `Record.SessionsByTemplate map[string]string`, `Record.SessionPinned bool`. Both omitempty; absent on legacy records means "no archive, no pin". |
 | `internal/agent/manager.go` | `Manager.SwitchTemplate(name, template) (SwitchResult, error)`. Honor + clear `SessionPinned` in `Restart`/`Resume`. |
 | `internal/service` (restore path) | Honor + clear `SessionPinned` in `RestoreAgents`' jsonl scan. |
-| `internal/daemon` | `/agents/switch` handler + `daemon.AgentSwitchTemplate` client func, following the `AgentRestart` pattern. |
-| `internal/cli/agent.go` | `newAgentSwitchCmd`, wired in `newAgentCmd`; remote passthrough via `runRemote`; `gateSpawnTemplate`. |
+| `internal/daemon` | `/agents/set-template` handler + `daemon.AgentSwitchTemplate` client func, following the `AgentRestart` pattern. |
+| `internal/cli/agent.go` | `newAgentSetTemplateCmd`, wired in `newAgentCmd`; remote passthrough via `runRemote`; `gateSpawnTemplate`. |
 | `internal/picker/keys.go` | `Switch` binding on `t`, added to short/full help. |
 | `internal/picker/picker.go` | `Backend.Templates(ctx) ([]string, error)`, `Backend.SwitchTemplate(ctx, name, template) error`. |
 | `internal/picker/backend_local.go` | New methods; templates come from an injected `templates func() ([]string, error)` seam supplied by the CLI layer (which holds the config), mirroring how `sshArgs` is injected for SSH. |
-| `internal/picker/backend_ssh.go` | `leo template list --json` and `leo agent switch <name> <template>`, both shell-quoted per the existing SSH argv rules. |
+| `internal/picker/backend_ssh.go` | `leo template list --json` and `leo agent set-template <name> <template>`, both shell-quoted per the existing SSH argv rules. |
 | `internal/picker/model.go` | `switching` modal state + template list, `actionSwitchTemplate` action kind. |
 | `docs/cli/agent.md`, `docs/cli/attach.md`, `docs/guides/agents.md` | Document the verb, the key, and the per-template session model. |
 
