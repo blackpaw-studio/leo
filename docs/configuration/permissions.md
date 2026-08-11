@@ -18,11 +18,35 @@ templates:
 `permissions` is optional, and so is every key inside it. A template without
 one behaves exactly as it did before this feature existed.
 
+## Both doors: MCP tools and the `leo` CLI
+
+Permissions are applied in two places, from one policy:
+
+- The agent's **`leo` MCP server**, which omits denied tools and checks the
+  allowlists before calling the daemon.
+- The **`leo` CLI**, which every agent can run from a shell. This matters more
+  than it looks: `leo_skill` points agents at the CLI for several of these
+  operations, so shelling out is the path a *cooperative* agent takes by
+  default, not an evasion route a hostile one has to go looking for. Denying
+  `leo_spawn_agent` without gating `leo agent spawn` would not reduce spawning
+  at all — it would just move it.
+
+| CLI command | Governed by |
+|-------------|-------------|
+| `leo agent spawn` | `leo_spawn_agent` + `can_spawn` |
+| `leo agent stop` / `suspend` / `reset` / `restart` / `rename` / `prune` | `leo_stop_agent` |
+| `leo run <task>` | `leo_run_task` |
+| `leo task enable` / `disable` | `leo_toggle_task` |
+
+Lifecycle commands with no exact tool equivalent map to `leo_stop_agent`:
+denying "stop other agents" plainly means to deny disrupting them.
+
 ## A guardrail, not a security boundary
 
-Permissions are enforced inside the agent's own `leo mcp-server` process. Every
-agent runs as the same user and holds the same daemon token, so an agent that
-means to get around them can call the daemon's HTTP API directly.
+Both checks read the policy from an environment variable in the agent's own
+process, and every agent runs as the same user holding the same daemon token.
+An agent that means to get around them can clear the variable, call the
+daemon's HTTP API directly, or drive another agent's tmux session.
 
 Use them to shape what an agent reaches for — to stop a reporting template from
 spinning up fleets, or keep a noisy worker from paging every other agent. Do
@@ -123,6 +147,10 @@ They do **not** apply to:
   own launch spec. Note that `can_consult` still governs *which* templates an
   agent may consult — it is the consultant's own tool surface that is
   unrestricted.
+
+`leo agent list`, `logs`, and `attach` are read-only and ungated, as are the
+config-editing commands (`leo task add`/`remove`) — those have no tool
+equivalent and are operator surface, not agent surface.
 
 There is also no inbound policy: `can_message` controls who an agent may
 message, not who may message it. Enforcing that would require the daemon to

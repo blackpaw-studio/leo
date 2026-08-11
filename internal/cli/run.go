@@ -22,6 +22,9 @@ func newRunCmd() *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_run_task"); err != nil {
+				return err
+			}
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
