@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -96,7 +97,7 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		opts.LeoMCP = &codexharness.LeoMCPBridge{
 			Command:      "leo",
 			Args:         []string{"mcp-server"},
-			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
+			EnvVars:      leoMCPEnvVars(tmpl),
 			ApprovalMode: "approve",
 			ToolTimeout:  leomcp.ToolTimeout,
 		}
@@ -104,11 +105,11 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 	case opencodeharness.Options:
 		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
 			Command: []string{"leo", "mcp-server"},
-			Env: map[string]string{
+			Env: mergeEnv(map[string]string{
 				"LEO_PROCESS_NAME": agentName,
 				"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
 				"LEO_API_TOKEN":    webToken,
-			},
+			}, permissionsEnv(tmpl)),
 			ToolTimeout: leomcp.ToolTimeout,
 		}
 		spec.Options = opts
@@ -153,7 +154,72 @@ func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName
 	env, err := h.Env(spec)
 	if err != nil {
 		log.Printf("[agent:%s] building %s env: %v", agentName, h.Name(), err)
-		return args, nil
+		return args, permissionsEnv(tmpl)
 	}
-	return args, env
+	return args, mergeEnv(env, permissionsEnv(tmpl))
+}
+
+// permissionsEnvVar carries the template's permission set to the leo MCP
+// server running inside the agent. Unset for unrestricted templates, so their
+// environment is byte-for-byte what it was before permissions existed.
+const permissionsEnvVar = "LEO_PERMISSIONS"
+
+// permissionsEnv renders tmpl's permissions as the single-entry env overlay
+// the leo MCP server reads at startup, or nil when the template places no
+// restriction.
+//
+// This is the one injection seam for permissions: every spawn, resume, and
+// restart path merges the env BuildTemplateArgs returns as its base layer, so
+// folding the payload in here covers all of them — and means a restart
+// re-resolves permissions from current config, which is how a config edit
+// takes effect.
+func permissionsEnv(tmpl config.TemplateConfig) map[string]string {
+	if tmpl.Permissions.IsZero() {
+		return nil
+	}
+	payload, err := json.Marshal(tmpl.Permissions)
+	if err != nil {
+		// Unreachable for a struct of string slices, but failing open would
+		// silently hand the agent the full tool surface. Drop the overlay and
+		// say so; the MCP server then runs unrestricted, which the log makes
+		// visible rather than silent.
+		log.Printf("[agent] marshaling permissions: %v", err)
+		return nil
+	}
+	return map[string]string{permissionsEnvVar: string(payload)}
+}
+
+// applyPermissions returns a copy of env whose LEO_PERMISSIONS matches tmpl
+// exactly: present when the template restricts, absent when it does not.
+//
+// Leo owns this variable — config is its only source. Env layers that persist
+// across a restart (a record's stored Env, an inherited parent env, an
+// explicit --env override) must never introduce or preserve it, or a
+// restriction the operator removed would silently outlive the edit: the agent
+// would keep running restricted while the config says otherwise. Normalizing
+// after every merge makes that impossible regardless of layer order.
+func applyPermissions(env map[string]string, tmpl config.TemplateConfig) map[string]string {
+	out := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		if k == permissionsEnvVar {
+			continue
+		}
+		out[k] = v
+	}
+	for k, v := range permissionsEnv(tmpl) {
+		out[k] = v
+	}
+	return out
+}
+
+// leoMCPEnvVars returns the env-var *names* the codex bridge forwards into
+// the leo MCP server. codex forwards by name rather than value, so a variable
+// missing from this list never reaches the server no matter what the process
+// environment holds.
+func leoMCPEnvVars(tmpl config.TemplateConfig) []string {
+	names := []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"}
+	if !tmpl.Permissions.IsZero() {
+		names = append(names, permissionsEnvVar)
+	}
+	return names
 }
