@@ -12,7 +12,7 @@ leo attach [name] [--host <host>] [--cc]
 
 Leo resolves `<name>` against the set of running agents (spawned via `leo agent spawn` or a template) and attaches to its tmux session. If no agent matches, Leo returns an error.
 
-Omitting the name opens a full-screen, fuzzy-filterable picker over every agent — local and every configured remote host — in every state, with in-place lifecycle actions (attach, suspend, resume, stop, rename). See [`leo agent attach`](agent.md#leo-agent-attach-name) for the full key list.
+Omitting the name opens a full-screen, fuzzy-filterable picker over every agent — local and every configured remote host — in every state, with in-place lifecycle actions (attach, suspend, resume, stop, rename, set template). See [`leo agent attach`](agent.md#leo-agent-attach-name) for the full key list.
 
 When `--host` targets a remote, Leo delegates the whole resolution to the server by shelling `ssh -t <host> leo attach <name>` — the client does not need to know the remote's agent list.
 

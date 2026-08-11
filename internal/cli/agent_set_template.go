@@ -80,7 +80,7 @@ agents backing a 'runtime: persistent' task, are refused.`,
 				enc.SetIndent("", "  ")
 				return enc.Encode(result)
 			}
-			fmt.Fprint(agentStdout, formatSwitchResult(result))
+			fmt.Fprintln(agentStdout, formatSwitchResult(result))
 			return nil
 		},
 	}
@@ -89,12 +89,13 @@ agents backing a 'runtime: persistent' task, are refused.`,
 	return cmd
 }
 
-// formatSwitchResult renders the human summary. "set-template" reads lighter
-// than the command acts — it bounces the process and swaps the live
-// conversation — so the output always states what happened to both.
+// formatSwitchResult renders the human summary, without a trailing newline.
+// "set-template" reads lighter than the command acts — it bounces the process
+// and swaps the live conversation — so the output always states what happened
+// to both.
 func formatSwitchResult(r agent.SwitchResult) string {
 	if r.Unchanged {
-		return fmt.Sprintf("%s is already on template %s; nothing changed\n", r.Name, r.ToTemplate)
+		return fmt.Sprintf("%s is already on template %s; nothing changed", r.Name, r.ToTemplate)
 	}
 
 	line := fmt.Sprintf("%s: %s → %s", r.Name, r.FromTemplate, r.ToTemplate)
@@ -113,7 +114,7 @@ func formatSwitchResult(r agent.SwitchResult) string {
 	default:
 		outcome = "respawned on a new session"
 	}
-	return line + "\n" + outcome + "\n"
+	return line + "\n" + outcome
 }
 
 // completeAgentThenTemplate completes agent names in the first position and

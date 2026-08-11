@@ -182,7 +182,8 @@ picker over every agent — local and every configured remote host — in every
 state (running, starting, suspended, stopped). Beyond attaching, the picker
 doubles as a lifecycle surface: **Enter** attach (a suspended agent is resumed
 first), **s** suspend, **u** resume, **x** stop (with confirmation), **r**
-rename, **/** filter, **q** quit. The picker always opens when no name is
+rename, **t** set template (arrow keys to choose, Enter to confirm, Esc to
+cancel), **/** filter, **q** quit. The picker always opens when no name is
 given — there is no longer a single-candidate auto-attach shortcut.
 
 Pass `--cc` to open the session in tmux control mode (`-CC`), which iTerm2
@@ -232,6 +233,32 @@ Reset an agent to a brand-new conversation: stops any live process/tmux session,
 ```bash
 leo agent reset leo-coding-owner-fetch
 ```
+
+### `leo agent set-template <name> <template>`
+
+Re-point a running or suspended agent at a different template, keeping its name, workspace, and git worktree. Its harness, model, permissions, env, and the rest of its wiring are rebuilt from the target template. Accepts shorthand.
+
+```bash
+leo agent set-template leo-coding-owner-fetch codex
+```
+
+**Conversations are per template.** Switching away files the agent's current session under the template being left; switching back hands that conversation to it again. A template this agent has not run before starts fresh. The archive is keyed by template name, not harness, so two claude templates (a `coding` and a `review`, say) keep separate conversations.
+
+```bash
+leo agent set-template fetch codex     # coding → codex, new session
+leo agent set-template fetch coding    # codex → coding, resumes where coding left off
+```
+
+The command reads lighter than it acts — a running agent is stopped and respawned — so its output always states what happened to the process and to the session. Pass `--json` for the machine-readable form (`from_template`, `to_template`, `from_harness`, `to_harness`, `resumed`, `status`).
+
+A suspended agent is re-pointed in place, with no process to bounce; it comes up on the new template at its next resume.
+
+Notes and limits:
+
+- **The name is left alone**, even when it embeds the old template (`leo-coding-owner-fetch` running codex). Stable names keep tmux sessions, channel routing, and scripts working — rename it yourself with `leo agent rename` if you want it to match.
+- **The target template's `workspace` is ignored.** The agent stays in the project it is working in, which is also what keeps its archived sessions valid.
+- **Stopped agents are refused**, as are agents backing a `runtime: persistent` task — those bind to their agent by name, so switching one would redirect a scheduled task's prompts into a template it was never configured for. Change `tasks.<name>.template` instead.
+- **Permissions:** a switch launches the target template, so it needs both `leo_stop_agent` and the `can_spawn` allowlist entry for that template. See [Permissions](../configuration/permissions.md).
 
 ### `leo agent prune <name>`
 

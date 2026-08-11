@@ -145,6 +145,20 @@ The daemon also exposes `GET /agents/resolve?q=<query>` over the Unix socket for
 
 Stopping a shared-workspace agent kills its tmux session and removes it from the agent store. Stopping a worktree agent kills the session but keeps the record and the worktree on disk so you can reattach or inspect the branch — use `leo agent prune <name>` or `leo agent stop <name> --prune` to tear everything down.
 
+### Switching templates
+
+An agent can be re-pointed at a different template without losing the project it is working in:
+
+```bash
+leo agent set-template leo-coding-owner-fetch codex
+```
+
+The agent keeps its name, workspace, and worktree; everything else — harness, model, permissions, env — is rebuilt from the target template. In `leo attach`'s picker, **t** opens the same chooser over the selected agent.
+
+Conversations are per template. The session the agent had on the template it leaves is archived on its record, and switching back hands it over again; a template it has never run starts fresh. Because the archive is keyed by template name rather than harness, a `coding` and a `review` template both on claude keep separate conversations — switching between them is a way to keep two threads on one project, not just a way to change harness.
+
+Two things a switch deliberately does not do: rename the agent (stable names keep tmux sessions, channel routing, and scripts working) and move it to the target template's `workspace`. Agents backing a `runtime: persistent` task are refused, since those bind to their agent by name — change `tasks.<name>.template` instead.
+
 ## Session Naming
 
 Agents are named based on the template and repo. A repo-less spawn is the one exception — the name is just the template name, with no `leo-` prefix or repo segment:
