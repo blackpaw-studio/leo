@@ -397,3 +397,61 @@ func TestResumeHonorsAndClearsSessionPinned(t *testing.T) {
 		t.Error("SessionPinned must be cleared once consumed")
 	}
 }
+
+// A suspended agent that never had a session on the template it is leaving must
+// still get back the session archived for the template it is arriving at. The
+// two are independent: what the departing template was doing says nothing about
+// whether the arriving one has a conversation waiting.
+func TestSwitchTemplateSuspendedRestoresArchivedSessionRegardlessOfDepartingOne(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "codex", Harness: "codex", Workspace: "/w",
+		SessionID:          "", // codex never reported a session id
+		SessionsByTemplate: map[string]string{"coding": "codings-session"},
+		Suspended:          true,
+		ClaudeArgs:         []string{"--model", "sonnet"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	res, err := m.SwitchTemplate("leo-x", "coding")
+	if err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	if !res.Resumed {
+		t.Error("Resumed = false, want true — coding has an archived session")
+	}
+	rec := loadRec(t, home, "leo-x")
+	if rec.SessionID != "codings-session" {
+		t.Errorf("SessionID = %q, want codings-session", rec.SessionID)
+	}
+	if !containsPair(rec.ClaudeArgs, "--resume", "codings-session") {
+		t.Errorf("stored args = %v, want --resume codings-session so the next resume rejoins it", rec.ClaudeArgs)
+	}
+}
+
+// The mirror case: with nothing archived for the arriving template, a suspended
+// agent must not be left holding a --session-id for a conversation that was
+// never created — Resume would try to rejoin a session that does not exist.
+func TestSwitchTemplateSuspendedDoesNotPersistAMintedSession(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "codex", Harness: "codex", Workspace: "/w",
+		SessionID: "codex-rollout", Suspended: true,
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "coding"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	rec := loadRec(t, home, "leo-x")
+	if rec.SessionID != "" {
+		t.Errorf("SessionID = %q, want empty — nothing was archived for coding and no session has been created yet", rec.SessionID)
+	}
+	if containsFlag(rec.ClaudeArgs, "--session-id") || containsFlag(rec.ClaudeArgs, "--resume") {
+		t.Errorf("stored args = %v, want no session-selection flag", rec.ClaudeArgs)
+	}
+}

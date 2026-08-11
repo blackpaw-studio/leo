@@ -103,7 +103,11 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	}
 
 	next := withTemplate(rec, template, normalizeHarness(cfg.TemplateHarness(tmpl)))
-	resumeID := next.SessionID
+	// archived is what the arriving template left behind, before any minting
+	// below — the difference between "rejoin that conversation" and "there
+	// isn't one yet".
+	archived := next.SessionID
+	resumeID := archived
 	isClaude := next.Harness == "claude"
 
 	args, env, built := resolveTemplateWiring(cfg, next, tmpl, m.webToken)
@@ -128,14 +132,15 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	next.Env = env
 
 	if status == "suspended" {
-		// Nothing to bounce. The minted claude session id is not stored: the
-		// agent will not launch until Resume runs, and Resume rebuilds args
-		// from the record, so persisting an id for a session that was never
-		// created would hand Resume a --resume for a conversation that does
-		// not exist.
-		if isClaude && rec.SessionID == "" {
-			next.SessionID = ""
-			next.ClaudeArgs = ResumeArgs(args, "")
+		// Nothing to bounce, and no minted session id to keep: the agent will
+		// not launch until Resume runs, and Resume rebuilds its args from the
+		// record, so storing an id for a session nothing has created yet would
+		// hand it a --resume for a conversation that does not exist. Fall back
+		// to exactly what the arriving template had archived — which may be a
+		// real session to rejoin, or nothing at all.
+		next.SessionID = archived
+		if isClaude {
+			next.ClaudeArgs = ResumeArgs(args, archived)
 		}
 		if err := agentstore.Save(cfg.HomePath, next); err != nil {
 			return SwitchResult{}, fmt.Errorf("saving switched agent record: %w", err)
