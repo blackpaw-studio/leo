@@ -251,6 +251,7 @@ templates:
 | `add_dirs` | list | No | -- | Additional directories. |
 | `env` | map | No | -- | Environment variables. |
 | `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are suspended. Empty inherits the default. |
+| `permissions` | map | No | -- | Narrows the leo MCP tool surface for agents spawned from this template (`deny_tools`) and which agents/templates they may message, spawn, or consult (`can_message`, `can_spawn`, `can_consult`). See [Permissions](permissions.md). |
 
 When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, or `leo agent spawn coding --repo owner/repo`), Leo clones the repo into `<workspace>/<repo>` using `gh`. The agent session is named `leo-<template>-<owner>-<repo>`. A repo is optional — `leo agent spawn coding` with no repo runs the template as-is directly in `workspace`, and the agent is named after the template (`coding` in this example).
 

@@ -54,7 +54,7 @@ configures it through a strictly validated `harness_options:` map. See
 
 ### `templates`
 
-Named blueprints for on-demand ephemeral agents, spawned via `leo agent spawn` or the web UI. Each template specifies its own workspace, channels, model, and settings. Templates also back **persistent tasks** (`runtime: persistent`) — a task can target a template's agent instead of spawning `claude -p` per firing. See the [Agent guide](../guides/agents.md) and [Persistent Tasks](persistent-tasks.md).
+Named blueprints for on-demand ephemeral agents, spawned via `leo agent spawn` or the web UI. Each template specifies its own workspace, channels, model, and settings. Templates also back **persistent tasks** (`runtime: persistent`) — a task can target a template's agent instead of spawning `claude -p` per firing. A template can also narrow the leo MCP tools its agents get, and which agents they may message, spawn, or consult — see [Permissions](permissions.md). See the [Agent guide](../guides/agents.md) and [Persistent Tasks](persistent-tasks.md).
 
 ### `tasks`
 

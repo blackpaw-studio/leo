@@ -86,6 +86,7 @@ nav:
       - Persistent Tasks: configuration/persistent-tasks.md
       - Harnesses: configuration/harnesses.md
       - Consults: configuration/consults.md
+      - Permissions: configuration/permissions.md
   - CLI Reference:
       - cli/index.md
       - leo setup: cli/setup.md
