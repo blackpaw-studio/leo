@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"sync"
+
+	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
 // Protocol version we negotiate with clients. Matches the spec revision
@@ -59,18 +61,29 @@ func Run() error {
 // rather than erroring, so the MCP server still starts when the web listener
 // is disabled. LEO_PROCESS_NAME may be empty in local-only mode since no
 // registered tool in that mode uses it.
+//
+// LEO_PERMISSIONS carries the spawning template's permission set; it is unset
+// for unrestricted templates. A malformed value degrades to local-only mode:
+// running unrestricted would be the one outcome the operator definitely did
+// not ask for, and the stderr warning plus the missing tools make it obvious.
 func registryFromEnv() *registry {
 	processName := os.Getenv("LEO_PROCESS_NAME")
 	port := os.Getenv("LEO_WEB_PORT")
 	token := os.Getenv("LEO_API_TOKEN")
 
+	perms, ok := parsePermissions(os.Getenv("LEO_PERMISSIONS"))
+	if !ok {
+		fmt.Fprintln(os.Stderr, "leo mcp-server: malformed LEO_PERMISSIONS; falling back to local-only mode")
+		return newRegistry(nil, processName, leotools.Permissions{})
+	}
+
 	if port == "" || token == "" {
 		fmt.Fprintln(os.Stderr, "leo mcp-server: local-only mode (daemon listener unavailable)")
-		return newRegistry(nil, processName)
+		return newRegistry(nil, processName, perms)
 	}
 
 	fmt.Fprintln(os.Stderr, "leo mcp-server: full mode (daemon listener available)")
-	return newRegistry(newDaemonClient(port, token), processName)
+	return newRegistry(newDaemonClient(port, token), processName, perms)
 }
 
 func runWith(in io.Reader, out io.Writer, reg *registry) error {

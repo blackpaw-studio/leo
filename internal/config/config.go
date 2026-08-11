@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 	"gopkg.in/yaml.v3"
 )
 
@@ -217,6 +218,13 @@ type TemplateConfig struct {
 	IdleSuspendAfter string         `yaml:"idle_suspend_after,omitempty"`
 	Harness          string         `yaml:"harness,omitempty"`
 	HarnessOptions   map[string]any `yaml:"harness_options,omitempty"`
+	// Permissions constrains the leo MCP tool surface agents spawned from
+	// this template see, and which agents/templates they may message, spawn,
+	// or consult. The zero value is unrestricted — exactly the behavior
+	// templates had before this field existed. Enforced inside the agent's
+	// own MCP server, so it is a guardrail rather than a security boundary;
+	// see docs/configuration/permissions.md.
+	Permissions leotools.Permissions `yaml:"permissions,omitempty"`
 }
 
 // IsClientOnly reports whether the config is a client-only install: one
@@ -455,6 +463,7 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("templates.%s.idle_suspend_after %q must be a positive duration", name, tmpl.IdleSuspendAfter))
 			}
 		}
+		errs = append(errs, validatePermissions(name, tmpl.Permissions, c.Templates)...)
 	}
 
 	for name, task := range c.Tasks {
@@ -843,4 +852,64 @@ func isValidHostOrIP(h string) bool {
 		}
 	}
 	return true
+}
+
+// validatePermissions checks one template's permissions block and returns the
+// error strings it produces (empty when valid).
+//
+// deny_tools entries must name real tools: a typo there would silently leave
+// the tool available, which is the opposite of what the operator asked for.
+// can_spawn/can_consult entries name templates, so literal entries are checked
+// against the defined set; glob patterns are accepted unchecked since they are
+// meant to match names that may not exist yet. can_message is deliberately not
+// validated — agent names are generated at spawn time.
+func validatePermissions(name string, p leotools.Permissions, templates map[string]TemplateConfig) []string {
+	var errs []string
+
+	for i, tool := range p.DenyTools {
+		switch {
+		case tool == leotools.SkillTool:
+			errs = append(errs, fmt.Sprintf(
+				"templates.%s.permissions.deny_tools[%d]: %s cannot be denied — every agent's system context tells it to call %s to operate Leo",
+				name, i, leotools.SkillTool, leotools.SkillTool))
+		case !leotools.IsKnownTool(tool):
+			errs = append(errs, fmt.Sprintf(
+				"templates.%s.permissions.deny_tools[%d] %q is not a leo tool; valid tools: %s",
+				name, i, tool, strings.Join(leotools.Names, ", ")))
+		}
+	}
+
+	// Patterns are checked on every list, including can_message: a malformed
+	// glob is accepted by the matcher and then silently matches nothing but
+	// its own literal, which is a tighter restriction than the operator wrote
+	// and is reported nowhere at runtime.
+	checkPatterns := func(field string, list []string) {
+		for i, entry := range list {
+			if leotools.HasGlob(entry) && !leotools.ValidPattern(entry) {
+				errs = append(errs, fmt.Sprintf(
+					"templates.%s.permissions.%s[%d] %q is not a valid glob pattern",
+					name, field, i, entry))
+			}
+		}
+	}
+	checkPatterns("can_message", p.CanMessage)
+	checkPatterns("can_spawn", p.CanSpawn)
+	checkPatterns("can_consult", p.CanConsult)
+
+	checkTemplates := func(field string, list []string) {
+		for i, entry := range list {
+			if leotools.HasGlob(entry) {
+				continue
+			}
+			if _, ok := templates[entry]; !ok {
+				errs = append(errs, fmt.Sprintf(
+					"templates.%s.permissions.%s[%d] %q is not a defined template",
+					name, field, i, entry))
+			}
+		}
+	}
+	checkTemplates("can_spawn", p.CanSpawn)
+	checkTemplates("can_consult", p.CanConsult)
+
+	return errs
 }

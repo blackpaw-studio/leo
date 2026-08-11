@@ -33,9 +33,14 @@ var Excluded = map[Section][]string{
 		"allowed_tools", "disallowed_tools", "append_system_prompt"},
 	SectionTask: {"harness_options", "provider",
 		"permission_mode", "allowed_tools", "disallowed_tools", "append_system_prompt"},
+	// permissions is a nested struct, not a flat field: it is rendered from
+	// SectionPermissions as an extra field group inside the template form
+	// (see handleTemplateEditPage), the same excluded-with-its-own-UI pattern
+	// harness_options uses.
 	SectionTemplate: {"harness_options", "provider",
 		"permission_mode", "remote_control", "agent",
-		"allowed_tools", "disallowed_tools", "append_system_prompt"},
+		"allowed_tools", "disallowed_tools", "append_system_prompt",
+		"permissions"},
 }
 
 // --- Shared field builders -------------------------------------------------
@@ -110,6 +115,23 @@ var registry = map[Section][]Field{
 		{Key: "idle_suspend_after", Label: "Idle suspend after", Kind: KindDuration, Group: "Advanced", Advanced: true,
 			Help: "Auto-suspend idle ephemeral agents, e.g. \"2h\"; empty disables"},
 	}...)...),
+
+	// Rendered inside the template form's Advanced section, alongside the
+	// other advanced template fields — the advanced <details> emits no group
+	// labels, so Group matches theirs rather than naming a heading that never
+	// renders. Every list is comma-separated; an empty list means
+	// unrestricted, so denying a tool outright is how you take a capability
+	// away completely.
+	SectionPermissions: {
+		{Key: "deny_tools", Label: "Deny tools", Group: "Advanced", Advanced: true,
+			Help: "Leo MCP tools this template's agents cannot use, e.g. leo_spawn_agent"},
+		{Key: "can_message", Label: "Can message", Group: "Advanced", Advanced: true,
+			Help: "Agents this template may message; supports globs (scout-*). Empty means any"},
+		{Key: "can_spawn", Label: "Can spawn", Group: "Advanced", Advanced: true,
+			Help: "Templates this template may spawn. Empty means any"},
+		{Key: "can_consult", Label: "Can consult", Group: "Advanced", Advanced: true,
+			Help: "Templates this template may consult. Empty means any"},
+	},
 
 	SectionClientHost: {
 		{Key: "ssh", Label: "SSH", Group: "General", Help: "user@host"},

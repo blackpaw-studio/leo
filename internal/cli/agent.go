@@ -218,6 +218,9 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
   leo agent spawn mcp-node leo --attach-existing`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateSpawnTemplate(cmd, args[0]); err != nil {
+				return err
+			}
 			template := args[0]
 			if len(args) == 2 {
 				if repo != "" {
@@ -763,6 +766,9 @@ remove the worktree and agentstore record in one step.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			name := args[0]
 			if (force || deleteBranch) && !prune {
 				return fmt.Errorf("--force and --delete-branch require --prune")
@@ -860,6 +866,9 @@ idle-suspend is enabled via --idle-suspend or idle_suspend_after config).`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			name := args[0]
 			cfg, res, err := dispatch(host)
 			if err != nil {
@@ -936,6 +945,9 @@ an agent's context has gotten stuck or corrupted.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			name := args[0]
 			cfg, res, err := dispatch(host)
 			if err != nil {
@@ -1009,6 +1021,9 @@ Pass a single agent name, or --all to bounce every currently-running agent
 		},
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			cfg, res, err := dispatch(host)
 			if err != nil {
 				return err
@@ -1122,6 +1137,9 @@ a leo- prefixed slug (lowercase, a-z 0-9 and dashes only).`,
 		Args:              cobra.ExactArgs(2),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			name, newName := args[0], args[1]
 			cfg, res, err := dispatch(host)
 			if err != nil {
@@ -1170,6 +1188,9 @@ delete the local branch after the worktree is gone.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			name := args[0]
 			cfg, res, err := dispatch(host)
 			if err != nil {

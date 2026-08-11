@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
 // fakeDaemon stands in for the Leo daemon's TCP listener and records the
@@ -179,7 +181,7 @@ func runRequest(t *testing.T, reg *registry, req map[string]any) map[string]any 
 }
 
 func TestInitializeReturnsServerInfo(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "test-process")
+	reg := newRegistry(newDaemonClient("0", ""), "test-process", leotools.Permissions{})
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -200,7 +202,7 @@ func TestInitializeReturnsServerInfo(t *testing.T) {
 }
 
 func TestNotificationProducesNoResponse(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "test-process")
+	reg := newRegistry(newDaemonClient("0", ""), "test-process", leotools.Permissions{})
 	in := &bytes.Buffer{}
 	json.NewEncoder(in).Encode(map[string]any{
 		"jsonrpc": "2.0",
@@ -216,7 +218,7 @@ func TestNotificationProducesNoResponse(t *testing.T) {
 }
 
 func TestToolsListContainsCanonicalCommands(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "test-process")
+	reg := newRegistry(newDaemonClient("0", ""), "test-process", leotools.Permissions{})
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      2,
@@ -247,7 +249,7 @@ func TestToolCallClearSendsKeystrokes(t *testing.T) {
 		return http.StatusOK, `{"ok":true}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary", leotools.Permissions{})
 
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
@@ -289,7 +291,7 @@ func TestToolCallSpawnAgentRoundtrips(t *testing.T) {
 		return http.StatusOK, `{"ok":true,"data":{"name":"agent-1","workspace":"/tmp/a"}}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary", leotools.Permissions{})
 
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
@@ -318,7 +320,7 @@ func TestToolCallSpawnAgentWithoutRepoSucceeds(t *testing.T) {
 		return http.StatusOK, `{"ok":true,"data":{"name":"assistant","workspace":"/tmp/assistant"}}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary", leotools.Permissions{})
 
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
@@ -347,7 +349,7 @@ func TestToolCallReturnsIsErrorOnDaemonFailure(t *testing.T) {
 		return http.StatusOK, `{"ok":false,"error":"task not found"}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary", leotools.Permissions{})
 
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
@@ -369,7 +371,7 @@ func TestToolCallReturnsIsErrorOnDaemonFailure(t *testing.T) {
 }
 
 func TestToolCallMissingRequiredArgFails(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "primary")
+	reg := newRegistry(newDaemonClient("0", ""), "primary", leotools.Permissions{})
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      6,
@@ -386,7 +388,7 @@ func TestToolCallMissingRequiredArgFails(t *testing.T) {
 }
 
 func TestUnknownMethodReturnsMethodNotFound(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "primary")
+	reg := newRegistry(newDaemonClient("0", ""), "primary", leotools.Permissions{})
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      7,
@@ -453,7 +455,7 @@ func TestSendMessageDeliversWithSenderPrefix(t *testing.T) {
 		return http.StatusOK, `{"ok":true,"data":{}}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port(), ""), "sender-proc")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "sender-proc", leotools.Permissions{})
 
 	out, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1","message":"ping"}`))
 	if err != nil {
@@ -479,7 +481,7 @@ func TestSendMessageDeliversWithSenderPrefix(t *testing.T) {
 }
 
 func TestSendMessageRejectsSelf(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "self-proc")
+	reg := newRegistry(newDaemonClient("0", ""), "self-proc", leotools.Permissions{})
 	_, err := reg.call("leo_send_message", json.RawMessage(`{"to":"self-proc","message":"hi"}`))
 	if err == nil {
 		t.Fatal("expected error when messaging self")
@@ -490,7 +492,7 @@ func TestSendMessageRejectsSelf(t *testing.T) {
 }
 
 func TestSendMessageRequiresMessage(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "self-proc")
+	reg := newRegistry(newDaemonClient("0", ""), "self-proc", leotools.Permissions{})
 	_, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1"}`))
 	if err == nil {
 		t.Fatal("expected error when message missing")
@@ -510,7 +512,7 @@ func TestLeoConsultReturnsResult(t *testing.T) {
 	})
 	defer d.close()
 
-	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant")
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
@@ -540,7 +542,7 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 	})
 	defer d.close()
 
-	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant")
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
 	runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
@@ -558,7 +560,7 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 // "consult fable" from being mis-routed to leo_send_message: each tool must
 // name the other so the model can tell a template from a running agent.
 func TestConsultAndMessageDescriptionsCrossReference(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "assistant")
+	reg := newRegistry(newDaemonClient("0", ""), "assistant", leotools.Permissions{})
 	desc := make(map[string]string)
 	for _, d := range reg.list() {
 		desc[d.Name] = d.Description
@@ -576,7 +578,7 @@ func TestConsultAndMessageDescriptionsCrossReference(t *testing.T) {
 }
 
 func TestSkillToolWithNoArgsListsCatalog(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "primary")
+	reg := newRegistry(newDaemonClient("0", ""), "primary", leotools.Permissions{})
 	out, err := reg.call("leo_skill", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("call: %v", err)
@@ -589,7 +591,7 @@ func TestSkillToolWithNoArgsListsCatalog(t *testing.T) {
 }
 
 func TestSkillToolByNameReturnsFullContent(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "primary")
+	reg := newRegistry(newDaemonClient("0", ""), "primary", leotools.Permissions{})
 
 	for _, name := range []string{"managing-tasks", "managing-tasks.md"} {
 		t.Run(name, func(t *testing.T) {
@@ -605,7 +607,7 @@ func TestSkillToolByNameReturnsFullContent(t *testing.T) {
 }
 
 func TestLocalOnlyRegistryOmitsDaemonTools(t *testing.T) {
-	reg := newRegistry(nil, "")
+	reg := newRegistry(nil, "", leotools.Permissions{})
 	resp := runRequest(t, reg, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      8,
@@ -627,7 +629,7 @@ func TestLocalOnlyRegistryOmitsDaemonTools(t *testing.T) {
 }
 
 func TestLocalOnlyRegistryCanCallSkillTool(t *testing.T) {
-	reg := newRegistry(nil, "")
+	reg := newRegistry(nil, "", leotools.Permissions{})
 	out, err := reg.call("leo_skill", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("call: %v", err)
@@ -638,7 +640,7 @@ func TestLocalOnlyRegistryCanCallSkillTool(t *testing.T) {
 }
 
 func TestSkillToolUnknownNameListsValidNames(t *testing.T) {
-	reg := newRegistry(newDaemonClient("0", ""), "primary")
+	reg := newRegistry(newDaemonClient("0", ""), "primary", leotools.Permissions{})
 	_, err := reg.call("leo_skill", json.RawMessage(`{"name":"nonexistent"}`))
 	if err == nil {
 		t.Fatal("expected error for unknown skill name")
@@ -659,7 +661,7 @@ func TestSendMessageSendsSenderIdentityStructurally(t *testing.T) {
 		return http.StatusOK, `{"ok":true,"data":{}}`
 	})
 	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port(), ""), "sender-proc")
+	reg := newRegistry(newDaemonClient(daemon.port(), ""), "sender-proc", leotools.Permissions{})
 
 	if _, err := reg.call("leo_send_message", json.RawMessage(`{"to":"worker-1","message":"ping"}`)); err != nil {
 		t.Fatalf("call: %v", err)

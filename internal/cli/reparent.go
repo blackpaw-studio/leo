@@ -196,6 +196,9 @@ does not), then waits for the daemon to start a fresh, owned server.`,
 		Example: `  leo service reparent
   leo service reparent --yes`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			cfg, err := loadConfig()
 			if err != nil {
 				return err

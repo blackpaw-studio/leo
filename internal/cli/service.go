@@ -161,6 +161,9 @@ installed OS service (launchd/systemd).`,
 		Example: `  leo service stop
   leo service stop --daemon`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
@@ -192,6 +195,9 @@ func newServiceRestartCmd() *cobra.Command {
 		Use:   "restart",
 		Short: "Restart daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
 			cfg, err := loadConfig()
 			if err != nil {
 				return err

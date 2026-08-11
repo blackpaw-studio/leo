@@ -439,6 +439,11 @@ func (s *Server) handleTemplateEditPage(w http.ResponseWriter, r *http.Request) 
 
 	form := s.buildFormWithHarness(schema.SectionTemplate, &tmpl, cfg, "/web/config/template/"+url.PathEscape(name), name)
 	form.DeleteURL = "/web/template/" + url.PathEscape(name)
+	// permissions is a nested struct the flat registry can't reach, so its
+	// fields are built from their own section and appended as one more group.
+	// Their yaml keys don't collide with any template key, so both sections
+	// can parse the same submitted form independently on save.
+	form.Fields = append(form.Fields, s.permissionFields(&tmpl.Permissions, cfg, name)...)
 
 	pd := pageData{
 		Page:  "template_edit",

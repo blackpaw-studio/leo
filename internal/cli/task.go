@@ -410,6 +410,9 @@ func newTaskEnableCmd() *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_toggle_task"); err != nil {
+				return err
+			}
 			return setTaskEnabled(cmd.Context(), args[0], true)
 		},
 	}
@@ -422,6 +425,9 @@ func newTaskDisableCmd() *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeTaskNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_toggle_task"); err != nil {
+				return err
+			}
 			return setTaskEnabled(cmd.Context(), args[0], false)
 		},
 	}

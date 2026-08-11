@@ -354,7 +354,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		openingPrompt = spec.Prompt
 	}
 	webPort := strconv.Itoa(cfg.WebPort())
-	env := mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env)
+	env := applyPermissions(mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env), tmpl)
 
 	idleStr := ""
 	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
@@ -630,7 +630,7 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 	// spawnShared's layering (mergeEnv(harnessEnv, tmpl.Env) as the base,
 	// caller env as the top overlay).
 	inherited := pruneEnv(p.inheritEnv, harnessEnv)
-	env := mergeEnv(mergeEnv(mergeEnv(harnessEnv, tmpl.Env), inherited), spec.Env)
+	env := applyPermissions(mergeEnv(mergeEnv(mergeEnv(harnessEnv, tmpl.Env), inherited), spec.Env), tmpl)
 
 	// rollbackWorktree removes the worktree created above so disk state stays
 	// consistent with the supervisor whenever a step after worktree creation
@@ -1055,11 +1055,22 @@ func (m *Manager) Reset(name string) error {
 		storedSessionID = sessionID
 	}
 
+	// Reset respawns from the stored record, so permissions would otherwise
+	// ride along stale — the same trap resolveRestartArgs avoids. Reset is the
+	// heavier hammer (it discards the conversation), so an operator has every
+	// reason to expect it to pick up current config. A record whose template
+	// is gone has no policy to resolve against; leave its env untouched rather
+	// than silently lifting the restriction, matching restart's fallback.
+	resetEnv := rec.Env
+	if tmpl, ok := cfg.Templates[rec.Template]; ok {
+		resetEnv = applyPermissions(rec.Env, tmpl)
+	}
+
 	if err := m.sup.SpawnAgent(SpawnRequest{
 		Name:       rec.Name,
 		ClaudeArgs: args,
 		WorkDir:    rec.Workspace,
-		Env:        rec.Env,
+		Env:        resetEnv,
 		WebPort:    rec.WebPort,
 		WebToken:   m.webToken,
 		Harness:    rec.Harness,
@@ -1068,6 +1079,7 @@ func (m *Manager) Reset(name string) error {
 	}
 
 	rec.ClaudeArgs = args
+	rec.Env = resetEnv
 	rec.SessionID = storedSessionID
 	rec.NoResume = false
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
@@ -1182,6 +1194,11 @@ func (m *Manager) Restart(name string) error {
 // layer produced which key, so it layers the stored env over a freshly
 // computed harness env rather than reconstructing it — caller-supplied env is
 // never dropped, while harness-owned keys stay current.
+//
+// LEO_PERMISSIONS is the one exception to "caller-supplied env is never
+// dropped": leo derives it from the template on every launch and normalizes
+// it after the merge (see applyPermissions), so a restriction removed from
+// config cannot survive in a stored layer.
 func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken string) (args []string, env map[string]string) {
 	fallback := func() ([]string, map[string]string) { return rec.ClaudeArgs, rec.Env }
 
@@ -1215,7 +1232,7 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 	var newEnv map[string]string
 	if rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.Env == nil {
 		inherited := pruneEnv(rec.InheritedEnv, newHarnessEnv)
-		newEnv = mergeEnv(mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), inherited), rec.SpawnEnv)
+		newEnv = applyPermissions(mergeEnv(mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), inherited), rec.SpawnEnv), tmpl)
 	} else {
 		// Legacy record: leo can't tell which layer produced which stored key,
 		// so it layers rather than reconstructs. Every stored key survives
@@ -1227,7 +1244,7 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 		// reach the agent, making restart a silent no-op for env-delivered
 		// fixes and leaving reset — which discards the conversation — as the
 		// only way in.
-		newEnv = mergeEnv(newHarnessEnv, pruneEnv(rec.Env, newHarnessEnv))
+		newEnv = applyPermissions(mergeEnv(newHarnessEnv, pruneEnv(rec.Env, newHarnessEnv)), tmpl)
 	}
 
 	return newArgs, newEnv

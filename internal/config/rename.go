@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // RenameTemplate re-keys a template from oldName to newName within cfg and
 // rewrites every task that targets the old name, so no reference is left
@@ -31,5 +34,42 @@ func RenameTemplate(cfg *Config, oldName, newName string) error {
 			cfg.Tasks[name] = task
 		}
 	}
+
+	// Permission allowlists reference templates by name too, and Validate()
+	// requires their literal entries to resolve. Skipping this would make a
+	// rename fail against a name that no longer exists, reporting a template
+	// the operator never touched. Runs after the re-key above so a template
+	// referencing itself follows its own rename.
+	for name, tmpl := range cfg.Templates {
+		spawn := renameEntries(tmpl.Permissions.CanSpawn, oldName, newName)
+		consult := renameEntries(tmpl.Permissions.CanConsult, oldName, newName)
+		if spawn == nil && consult == nil {
+			continue
+		}
+		if spawn != nil {
+			tmpl.Permissions.CanSpawn = spawn
+		}
+		if consult != nil {
+			tmpl.Permissions.CanConsult = consult
+		}
+		cfg.Templates[name] = tmpl
+	}
 	return nil
+}
+
+// renameEntries returns a copy of list with every exact oldName replaced by
+// newName, or nil when nothing matched. Glob entries are left alone: they name
+// a pattern rather than a specific template, so a rename has nothing to
+// rewrite in them.
+func renameEntries(list []string, oldName, newName string) []string {
+	if !slices.Contains(list, oldName) {
+		return nil
+	}
+	out := slices.Clone(list)
+	for i, entry := range out {
+		if entry == oldName {
+			out[i] = newName
+		}
+	}
+	return out
 }
