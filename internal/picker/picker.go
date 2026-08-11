@@ -35,6 +35,12 @@ type Backend interface {
 	Stop(ctx context.Context, name string) error
 	Suspend(ctx context.Context, name string) error
 	Resume(ctx context.Context, name string) error
+	// Templates lists the template names configured on this host — the menu
+	// the picker offers when re-pointing an agent at another template.
+	Templates(ctx context.Context) ([]string, error)
+	// SwitchTemplate re-points an agent at another template, keeping its
+	// workspace and swapping which per-template conversation is live.
+	SwitchTemplate(ctx context.Context, name, template string) error
 }
 
 // Result carries the picker outcome. Agent is nil when the user quit without

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -74,6 +75,18 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 	return attachPickedAgent(ctx, cfg, *result.Agent, opts)
 }
 
+// localTemplateNames lists the local host's configured templates for the
+// picker's template menu, sorted so the menu order is stable across openings
+// (config.Templates is a map, whose range order is not).
+func localTemplateNames(cfg *config.Config) ([]string, error) {
+	names := make([]string, 0, len(cfg.Templates))
+	for name := range cfg.Templates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 // buildPickerBackends assembles one backend per host: the local daemon under
 // picker.LocalHost (only when includeLocal is true — the caller sets this to
 // false when the local daemon probe failed but remote hosts are configured,
@@ -82,7 +95,9 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 func buildPickerBackends(cfg *config.Config, includeLocal bool) map[string]picker.Backend {
 	backends := map[string]picker.Backend{}
 	if includeLocal {
-		backends[picker.LocalHost] = picker.NewLocalBackend(cfg.HomePath)
+		backends[picker.LocalHost] = picker.NewLocalBackend(cfg.HomePath, func() ([]string, error) {
+			return localTemplateNames(cfg)
+		})
 	}
 	for name := range cfg.Client.Hosts {
 		res, err := cfg.ResolveHost(name)

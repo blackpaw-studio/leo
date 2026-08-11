@@ -11,10 +11,24 @@ import (
 
 // fakeBackend records calls so tests can assert an action was dispatched.
 type fakeBackend struct {
-	agents    []Agent
-	calls     []string
-	renameOld string
-	renameNew string
+	agents       []Agent
+	calls        []string
+	renameOld    string
+	renameNew    string
+	templates    []string
+	templatesErr error
+}
+
+func (f *fakeBackend) Templates(context.Context) ([]string, error) {
+	if f.templatesErr != nil {
+		return nil, f.templatesErr
+	}
+	return f.templates, nil
+}
+
+func (f *fakeBackend) SwitchTemplate(_ context.Context, name, template string) error {
+	f.calls = append(f.calls, "set-template:"+name+"->"+template)
+	return nil
 }
 
 func (f *fakeBackend) List(context.Context) ([]Agent, error) {

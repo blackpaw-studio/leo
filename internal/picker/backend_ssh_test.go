@@ -108,3 +108,45 @@ func TestSSHBackendRenameQuotesBothNames(t *testing.T) {
 		t.Fatalf("rename must quote both names; argv: %s", joined)
 	}
 }
+
+// The remote argv is asserted exactly, not just for substrings: ssh flattens
+// everything after the host into one string the remote login shell re-parses,
+// so an unquoted name or template is a live shell-expansion bug that a mocked
+// exec seam would otherwise hide.
+func TestSSHBackendSwitchTemplateArgv(t *testing.T) {
+	var captured []string
+	b := newTestSSHBackend(fakeExec(&captured, "", 0))
+
+	if err := b.SwitchTemplate(context.Background(), "leo-coding-owner-fetch", "codex"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	want := []string{"ssh", "user@hestia", "$HOME/.local/bin/leo", "agent", "set-template", "'leo-coding-owner-fetch'", "'codex'"}
+	if strings.Join(captured, " ") != strings.Join(want, " ") {
+		t.Fatalf("argv =\n  %v\nwant\n  %v", captured, want)
+	}
+}
+
+func TestSSHBackendTemplatesArgvAndParse(t *testing.T) {
+	var captured []string
+	jsonOut := `[{"name":"coding","model":"sonnet"},{"name":"codex"},{"name":""}]`
+	b := newTestSSHBackend(fakeExec(&captured, jsonOut, 0))
+
+	names, err := b.Templates(context.Background())
+	if err != nil {
+		t.Fatalf("Templates: %v", err)
+	}
+	want := []string{"ssh", "user@hestia", "$HOME/.local/bin/leo", "template", "list", "--json"}
+	if strings.Join(captured, " ") != strings.Join(want, " ") {
+		t.Fatalf("argv =\n  %v\nwant\n  %v", captured, want)
+	}
+	if len(names) != 2 || names[0] != "coding" || names[1] != "codex" {
+		t.Fatalf("names = %v, want [coding codex] with the empty entry dropped", names)
+	}
+}
+
+func TestSSHBackendTemplatesSurfacesFailure(t *testing.T) {
+	b := newTestSSHBackend(fakeExec(nil, "", 1))
+	if _, err := b.Templates(context.Background()); err == nil {
+		t.Fatal("a failing remote command must surface as an error, not an empty menu")
+	}
+}

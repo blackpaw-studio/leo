@@ -117,6 +117,35 @@ func (b *SSHBackend) Resume(ctx context.Context, name string) error {
 	return err
 }
 
+// Templates fetches the remote's configured template names via
+// `leo template list --json`. Only the name field is decoded — the menu shows
+// names, and pinning the rest of that payload's shape here would couple the
+// picker to a CLI struct it cannot import.
+func (b *SSHBackend) Templates(ctx context.Context) ([]string, error) {
+	out, err := b.run(ctx, b.leoPath, "template", "list", "--json")
+	if err != nil {
+		return nil, fmt.Errorf("listing templates on %s: %w", b.host, err)
+	}
+	var entries []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(out, &entries); err != nil {
+		return nil, fmt.Errorf("decoding templates from %s: %w", b.host, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.Name != "" {
+			names = append(names, e.Name)
+		}
+	}
+	return names, nil
+}
+
+func (b *SSHBackend) SwitchTemplate(ctx context.Context, name, template string) error {
+	_, err := b.run(ctx, b.leoPath, "agent", "set-template", shellQuoteArg(name), shellQuoteArg(template))
+	return err
+}
+
 // run executes `ssh <args...> <tail...>` and returns stdout, wrapping stderr on
 // failure.
 func (b *SSHBackend) run(ctx context.Context, tail ...string) ([]byte, error) {

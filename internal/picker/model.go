@@ -36,7 +36,8 @@ const (
 	actionResume
 	actionStop
 	actionRename
-	actionResumeAttach // resume a suspended agent, then quit and attach
+	actionResumeAttach   // resume a suspended agent, then quit and attach
+	actionSwitchTemplate // re-point an agent at another template
 )
 
 // rowsMsg carries the result of a host's List call.
@@ -56,6 +57,24 @@ type actionMsg struct {
 
 // tickMsg advances the spinner.
 type tickMsg struct{}
+
+// templatesMsg carries a host's template names for an open template menu.
+type templatesMsg struct {
+	host  string
+	names []string
+	err   error
+}
+
+// templateMenu is the open template chooser: which agent it acts on, what that
+// agent runs today, and the options loaded from that agent's host. options is
+// nil while the host is still being asked.
+type templateMenu struct {
+	host    string
+	agent   string
+	current string
+	options []string
+	cursor  int
+}
 
 // confirmState holds the target of a pending stop confirmation.
 type confirmState struct {
@@ -85,6 +104,8 @@ type model struct {
 	frame     int
 
 	confirming *confirmState
+	templates  *templateMenu
+	switchTo   string
 	renaming   bool
 	rename     textinput.Model
 	renameHost string
@@ -146,6 +167,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionMsg:
 		return m.onActionDone(msg)
 
+	case templatesMsg:
+		return m.onTemplatesLoaded(msg)
+
 	case tickMsg:
 		if len(m.pending) == 0 {
 			return m, nil // stop animating when nothing is in flight
@@ -165,6 +189,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.confirming != nil {
 			return m.updateConfirm(msg)
+		}
+		if m.templates != nil {
+			return m.updateTemplateMenu(msg)
 		}
 		return m.updateKey(msg)
 	}
@@ -199,6 +226,8 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.beginConfirm()
 	case key.Matches(msg, m.keys.Rename):
 		return m.beginRename()
+	case key.Matches(msg, m.keys.Template):
+		return m.beginTemplateMenu()
 	}
 
 	var cmd tea.Cmd
@@ -262,14 +291,17 @@ func (m model) dispatch(host, name string, kind actionKind) (tea.Model, tea.Cmd)
 	for k := range m.pending {
 		newPending[k] = struct{}{}
 	}
-	var newName string
-	if kind == actionRename {
-		newName = strings.TrimSpace(m.rename.Value())
+	var arg string
+	switch kind {
+	case actionRename:
+		arg = strings.TrimSpace(m.rename.Value())
+	case actionSwitchTemplate:
+		arg = m.switchTo
 	}
 	newPending[rowKey(host, name)] = struct{}{}
 	m.pending = newPending
 
-	cmds := []tea.Cmd{actionCmd(m.ctx, host, b, kind, name, newName), m.rebuild()}
+	cmds := []tea.Cmd{actionCmd(m.ctx, host, b, kind, name, arg), m.rebuild()}
 	if startTick {
 		cmds = append(cmds, tickCmd())
 	}
@@ -383,9 +415,15 @@ func (m model) View() string {
 	var b strings.Builder
 	b.WriteString(m.styles.header.Render(m.header))
 	b.WriteString("\n")
-	b.WriteString(m.list.View())
+	if m.templates != nil {
+		b.WriteString(m.templateMenuView())
+	} else {
+		b.WriteString(m.list.View())
+	}
 	b.WriteString("\n")
 	switch {
+	case m.templates != nil:
+		b.WriteString(m.styles.prompt.Render("set template for " + m.templates.agent + " — enter to confirm, esc to cancel"))
 	case m.renaming:
 		b.WriteString(m.styles.prompt.Render("rename "+m.renameOld+" to: ") + m.rename.View())
 	case m.confirming != nil:
@@ -413,7 +451,7 @@ func loadCmd(ctx context.Context, host string, b Backend) tea.Cmd {
 }
 
 // actionCmd runs one lifecycle action with a per-host timeout.
-func actionCmd(ctx context.Context, host string, b Backend, kind actionKind, name, newName string) tea.Cmd {
+func actionCmd(ctx context.Context, host string, b Backend, kind actionKind, name, arg string) tea.Cmd {
 	return func() tea.Msg {
 		cctx, cancel := context.WithTimeout(ctx, hostTimeout)
 		defer cancel()
@@ -426,7 +464,9 @@ func actionCmd(ctx context.Context, host string, b Backend, kind actionKind, nam
 		case actionStop:
 			err = b.Stop(cctx, name)
 		case actionRename:
-			err = b.Rename(cctx, name, newName)
+			err = b.Rename(cctx, name, arg)
+		case actionSwitchTemplate:
+			err = b.SwitchTemplate(cctx, name, arg)
 		}
 		return actionMsg{host: host, name: name, kind: kind, err: err}
 	}
@@ -446,6 +486,8 @@ func verbLabel(k actionKind) string {
 		return "stop"
 	case actionRename:
 		return "rename"
+	case actionSwitchTemplate:
+		return "set-template"
 	default:
 		return "action"
 	}
