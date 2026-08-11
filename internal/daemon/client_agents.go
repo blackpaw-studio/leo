@@ -159,6 +159,27 @@ func AgentRestart(ctx context.Context, workDir, name string) error {
 	return nil
 }
 
+// AgentSwitchTemplate sends POST /agents/{name}/set-template?template=... to
+// the daemon, re-pointing the agent at another template: its wiring is rebuilt
+// from that template and the conversation it last had there is restored (or a
+// fresh one started). Backs `leo agent set-template`. On resolve failures it
+// returns typed *agent.ErrNotFound or *agent.ErrAmbiguous.
+func AgentSwitchTemplate(ctx context.Context, workDir, name, template string) (agent.SwitchResult, error) {
+	path := "/agents/" + url.PathEscape(name) + "/set-template?template=" + url.QueryEscape(template)
+	resp, err := Send(ctx, workDir, "POST", path, nil)
+	if err != nil {
+		return agent.SwitchResult{}, err
+	}
+	if !resp.OK {
+		return agent.SwitchResult{}, responseError(resp, name)
+	}
+	var out agent.SwitchResult
+	if err := json.Unmarshal(resp.Data, &out); err != nil {
+		return agent.SwitchResult{}, fmt.Errorf("decoding set-template response: %w", err)
+	}
+	return out, nil
+}
+
 // AgentStale sends GET /agents/stale, returning the running agents whose
 // wiring would change if they were restarted. `leo update` uses it to decide
 // whether to offer a restart after swapping the binary.

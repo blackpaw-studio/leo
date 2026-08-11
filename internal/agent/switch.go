@@ -14,21 +14,21 @@ import (
 // two things a user cares about: which blueprint the agent now runs, and what
 // happened to the conversation.
 type SwitchResult struct {
-	Name         string
-	FromTemplate string
-	ToTemplate   string
-	FromHarness  string
-	ToHarness    string
+	Name         string `json:"name"`
+	FromTemplate string `json:"from_template"`
+	ToTemplate   string `json:"to_template"`
+	FromHarness  string `json:"from_harness"`
+	ToHarness    string `json:"to_harness"`
 	// Resumed is true when the target template had an archived session that
 	// was handed back, false when it starts a fresh conversation.
-	Resumed bool
+	Resumed bool `json:"resumed"`
 	// Status is the agent's state, "running" or "suspended" — a suspended
 	// agent is re-pointed in place and comes up on the new template at its
 	// next resume.
-	Status string
+	Status string `json:"status"`
 	// Unchanged marks a no-op: the agent was already on the target template,
 	// so nothing was stopped, respawned, or archived.
-	Unchanged bool
+	Unchanged bool `json:"unchanged,omitempty"`
 }
 
 // normalizeHarness maps the empty harness to "claude". Records and templates
