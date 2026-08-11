@@ -41,6 +41,32 @@ Permissions are applied in two places, from one policy:
 Lifecycle commands with no exact tool equivalent map to `leo_stop_agent`:
 denying "stop other agents" plainly means to deny disrupting them.
 
+### The agent is told, not just refused
+
+`leo_skill` documents several of these capabilities through more than one
+route — the `leo` CLI *and* the daemon's HTTP API both spawn agents. A
+restricted agent reading those instructions cold would try one and be refused,
+so every skill it loads is prefixed with a short notice naming what its
+template withholds:
+
+```
+> **Permissions notice.** This agent's template withholds some Leo capabilities:
+>
+> - denied tools: leo_spawn_agent, leo_stop_agent
+> - may only spawn templates: codex
+>
+> Anything below that uses a withheld capability will be refused — through
+> the leo MCP tools and the `leo` CLI alike. The other routes documented
+> here reach the same capabilities and are withheld too: do not fall back
+> to the daemon's HTTP API, another agent's tmux session, or editing
+> leo.yaml to work around this. Ask the operator instead.
+```
+
+The wording is deliberate. It says the capability is *withheld* rather than
+that every route is blocked, because only the MCP tools and the CLI actually
+enforce it — for the HTTP API and tmux, instruction is the only lever there
+is. An unrestricted agent's skills are unchanged.
+
 ## A guardrail, not a security boundary
 
 Both checks read the policy from an environment variable in the agent's own

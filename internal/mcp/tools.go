@@ -76,7 +76,9 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		InputSchema: objectSchema(map[string]any{
 			"name": map[string]any{"type": "string", "description": "Skill name (with or without .md), e.g. \"managing-tasks\". Omit to list all available skills."},
 		}),
-	}, handleLeoSkill)
+	}, func(args map[string]any) (string, error) {
+		return handleLeoSkill(args, perms)
+	})
 
 	if client == nil {
 		return r
@@ -342,12 +344,63 @@ func parsePermissions(raw string) (leotools.Permissions, bool) {
 // handleLeoSkill is the leo_skill tool handler. It is pure-local: it reads
 // embedded skill templates in-process and never touches the daemon client,
 // so it ignores the process-scoped args every other handler closes over.
-func handleLeoSkill(args map[string]any) (string, error) {
+//
+// A restricted agent gets a permission notice ahead of the content. The
+// skills document several capabilities through more than one route — the
+// `leo` CLI and the daemon's HTTP API both spawn agents — so an agent reading
+// them cold would try one, burn a turn, and be refused. Telling it up front
+// is cheaper than letting it find out.
+func handleLeoSkill(args map[string]any, perms leotools.Permissions) (string, error) {
 	name, _ := args["name"].(string)
-	if name == "" {
-		return renderSkillCatalog()
+
+	body, err := func() (string, error) {
+		if name == "" {
+			return renderSkillCatalog()
+		}
+		return readNamedSkill(templates.NormalizeSkillName(name))
+	}()
+	if err != nil {
+		return "", err
 	}
-	return readNamedSkill(templates.NormalizeSkillName(name))
+	return permissionNotice(perms) + body, nil
+}
+
+// permissionNotice renders the banner prepended to skill content for a
+// restricted agent, or "" when the template restricts nothing.
+//
+// It says the capability is *withheld* rather than that every route is
+// blocked, because that is what is actually true: the leo MCP tools and the
+// leo CLI enforce this, while the daemon's HTTP API and another agent's tmux
+// session do not. For those, instruction is the only lever there is — so the
+// notice names them explicitly instead of implying they are closed.
+func permissionNotice(perms leotools.Permissions) string {
+	if perms.IsZero() {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("> **Permissions notice.** This agent's template withholds some Leo capabilities:\n>\n")
+	if len(perms.DenyTools) > 0 {
+		fmt.Fprintf(&b, "> - denied tools: %s\n", strings.Join(perms.DenyTools, ", "))
+	}
+	for _, list := range []struct {
+		label   string
+		entries []string
+	}{
+		{"may only spawn templates", perms.CanSpawn},
+		{"may only message", perms.CanMessage},
+		{"may only consult templates", perms.CanConsult},
+	} {
+		if len(list.entries) > 0 {
+			fmt.Fprintf(&b, "> - %s: %s\n", list.label, strings.Join(list.entries, ", "))
+		}
+	}
+	b.WriteString(">\n> Anything below that uses a withheld capability will be refused — through\n")
+	b.WriteString("> the leo MCP tools and the `leo` CLI alike. The other routes documented\n")
+	b.WriteString("> here reach the same capabilities and are withheld too: do not fall back\n")
+	b.WriteString("> to the daemon's HTTP API, another agent's tmux session, or editing\n")
+	b.WriteString("> leo.yaml to work around this. Ask the operator instead.\n\n")
+	return b.String()
 }
 
 // renderSkillCatalog builds the "no arguments" listing of all skills.
