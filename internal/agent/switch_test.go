@@ -1,0 +1,399 @@
+package agent
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/session"
+)
+
+// switchCfg builds a config with a claude template ("coding"), a second claude
+// template ("review"), and a codex template ("codex") — the three shapes a
+// switch has to handle: same-harness, cross-harness, and back.
+func switchCfg(home string) *config.Config {
+	return &config.Config{
+		HomePath: home,
+		Templates: map[string]config.TemplateConfig{
+			"coding": {Model: "sonnet"},
+			"review": {Model: "opus"},
+			"codex":  {Harness: "codex"},
+		},
+	}
+}
+
+func loadRec(t *testing.T, home, name string) agentstore.Record {
+	t.Helper()
+	recs, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("loading agentstore: %v", err)
+	}
+	rec, ok := recs[name]
+	if !ok {
+		t.Fatalf("no record for %q", name)
+	}
+	return rec
+}
+
+// TestSwitchTemplateRunningStopsAndRespawns: the core contract. A running
+// agent is stopped and respawned on the target template, with the record
+// re-pointed at that template's harness and wiring.
+func TestSwitchTemplateRunningStopsAndRespawns(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Harness:    "claude",
+		Workspace:  "/w",
+		SessionID:  "coding-session",
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "coding-session"},
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	res, err := m.SwitchTemplate("leo-x", "codex")
+	if err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+
+	if res.FromTemplate != "coding" || res.ToTemplate != "codex" {
+		t.Errorf("templates = %q → %q, want coding → codex", res.FromTemplate, res.ToTemplate)
+	}
+	if res.FromHarness != "claude" || res.ToHarness != "codex" {
+		t.Errorf("harnesses = %q → %q, want claude → codex", res.FromHarness, res.ToHarness)
+	}
+	if res.Resumed {
+		t.Error("Resumed = true, want false — codex has no archived session yet")
+	}
+	if len(sup.stopCalls) != 1 || sup.stopCalls[0] != "leo-x" {
+		t.Errorf("stopCalls = %v, want one stop of leo-x", sup.stopCalls)
+	}
+	if sup.spawnCall == nil {
+		t.Fatal("SpawnAgent was not called")
+	}
+	if sup.spawnCall.Harness != "codex" {
+		t.Errorf("spawned Harness = %q, want codex", sup.spawnCall.Harness)
+	}
+	// The old template's claude wiring must not survive into a codex spawn.
+	if containsFlag(sup.spawnCall.ClaudeArgs, "--session-id") {
+		t.Errorf("codex spawn carried claude's --session-id: %v", sup.spawnCall.ClaudeArgs)
+	}
+
+	rec := loadRec(t, home, "leo-x")
+	if rec.Template != "codex" || rec.Harness != "codex" {
+		t.Errorf("record = template %q harness %q, want codex/codex", rec.Template, rec.Harness)
+	}
+	if rec.SessionsByTemplate["coding"] != "coding-session" {
+		t.Errorf("archive[coding] = %q, want coding-session", rec.SessionsByTemplate["coding"])
+	}
+	if !rec.SessionPinned {
+		t.Error("SessionPinned = false, want true so the next resume ignores the other template's transcript")
+	}
+	if rec.Workspace != "/w" {
+		t.Errorf("Workspace = %q, want /w — a switch never relocates the agent", rec.Workspace)
+	}
+}
+
+// TestSwitchTemplateRoundTripRestoresSession is the feature's whole point:
+// A → B → A hands A back its own conversation.
+func TestSwitchTemplateRoundTripRestoresSession(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:       "leo-x",
+		Template:   "coding",
+		Harness:    "claude",
+		Workspace:  "/w",
+		SessionID:  "coding-session",
+		ClaudeArgs: []string{"--model", "sonnet"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "codex"); err != nil {
+		t.Fatalf("switch to codex: %v", err)
+	}
+	// Pretend codex discovered its own session id post-hoc, as its driver does.
+	rec := loadRec(t, home, "leo-x")
+	rec.SessionID = "codex-rollout"
+	_ = agentstore.Save(home, rec)
+
+	res, err := m.SwitchTemplate("leo-x", "coding")
+	if err != nil {
+		t.Fatalf("switch back to coding: %v", err)
+	}
+	if !res.Resumed {
+		t.Error("Resumed = false, want true — coding's archived session should come back")
+	}
+
+	rec = loadRec(t, home, "leo-x")
+	if rec.SessionID != "coding-session" {
+		t.Errorf("SessionID = %q, want coding-session restored from the archive", rec.SessionID)
+	}
+	if rec.SessionsByTemplate["codex"] != "codex-rollout" {
+		t.Errorf("archive[codex] = %q, want codex-rollout", rec.SessionsByTemplate["codex"])
+	}
+	if _, still := rec.SessionsByTemplate["coding"]; still {
+		t.Error("coding must be popped out of the archive once it is the active template")
+	}
+	if !containsPair(sup.spawnCall.ClaudeArgs, "--resume", "coding-session") {
+		t.Errorf("claude args = %v, want --resume coding-session", sup.spawnCall.ClaudeArgs)
+	}
+}
+
+// TestSwitchTemplateFirstVisitMintsClaudeSession: with nothing archived for the
+// target, claude gets a brand-new --session-id (matching a fresh spawn), while
+// a non-claude target is left empty for its driver's post-hoc discovery.
+func TestSwitchTemplateFirstVisitMintsClaudeSession(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "codex", Harness: "codex", Workspace: "/w", SessionID: "codex-rollout",
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "review"); err != nil {
+		t.Fatalf("switch: %v", err)
+	}
+	args := sup.spawnCall.ClaudeArgs
+	if !containsFlag(args, "--session-id") {
+		t.Errorf("args = %v, want a freshly minted --session-id for a first visit to a claude template", args)
+	}
+	if containsFlag(args, "--resume") {
+		t.Errorf("args = %v, must not resume anything on a first visit", args)
+	}
+	rec := loadRec(t, home, "leo-x")
+	if rec.SessionID == "" || rec.SessionID == "codex-rollout" {
+		t.Errorf("SessionID = %q, want the newly minted claude session id", rec.SessionID)
+	}
+}
+
+// TestSwitchTemplateSuspendedRewritesRecordOnly: a suspended agent has no
+// process to bounce. The switch rewrites its record so the next resume comes up
+// on the new template.
+func TestSwitchTemplateSuspendedRewritesRecordOnly(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: "/w",
+		SessionID: "coding-session", Suspended: true,
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	res, err := m.SwitchTemplate("leo-x", "codex")
+	if err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	if res.Status != "suspended" {
+		t.Errorf("Status = %q, want suspended", res.Status)
+	}
+	if sup.spawnCall != nil || len(sup.stopCalls) != 0 {
+		t.Errorf("suspended switch touched the supervisor: spawn=%v stops=%v", sup.spawnCall, sup.stopCalls)
+	}
+	rec := loadRec(t, home, "leo-x")
+	if !rec.Suspended {
+		t.Error("Suspended flag must survive a switch")
+	}
+	if rec.Template != "codex" || rec.SessionsByTemplate["coding"] != "coding-session" {
+		t.Errorf("record not re-pointed: template=%q archive=%v", rec.Template, rec.SessionsByTemplate)
+	}
+}
+
+func TestSwitchTemplateGuards(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	cfg.Tasks = map[string]config.TaskConfig{
+		"nightly": {Runtime: "persistent", Template: "review", Schedule: "0 3 * * *"},
+	}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{
+		"leo-x":  {Name: "leo-x", Status: "running"},
+		"review": {Name: "review", Status: "running"},
+	}}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-x", Template: "coding", Harness: "claude", Workspace: "/w"})
+	_ = agentstore.Save(home, agentstore.Record{Name: "review", Template: "review", Harness: "claude", Workspace: "/w"})
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-stopped", Template: "coding", Harness: "claude", Workspace: "/w", Stopped: true})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	t.Run("unknown template", func(t *testing.T) {
+		if _, err := m.SwitchTemplate("leo-x", "nope"); err == nil {
+			t.Fatal("switching to an undefined template must error")
+		}
+	})
+	t.Run("unknown agent", func(t *testing.T) {
+		if _, err := m.SwitchTemplate("ghost", "codex"); err == nil {
+			t.Fatal("switching an agent with no record must error")
+		}
+	})
+	t.Run("stopped agent", func(t *testing.T) {
+		if _, err := m.SwitchTemplate("leo-stopped", "codex"); err == nil {
+			t.Fatal("switching a stopped agent must error")
+		}
+	})
+	t.Run("same template is a no-op", func(t *testing.T) {
+		res, err := m.SwitchTemplate("leo-x", "coding")
+		if err != nil {
+			t.Fatalf("same-template switch should not error: %v", err)
+		}
+		if !res.Unchanged {
+			t.Error("Unchanged = false, want true")
+		}
+		if len(sup.stopCalls) != 0 {
+			t.Errorf("same-template switch bounced the agent: %v", sup.stopCalls)
+		}
+	})
+	t.Run("persistent task target", func(t *testing.T) {
+		if _, err := m.SwitchTemplate("review", "codex"); err == nil {
+			t.Fatal("switching an agent that backs a persistent task must error")
+		}
+	})
+}
+
+// TestSwitchTemplateReResolvesEnvFromNewTemplate: the target template's env and
+// permissions apply, not the departing template's.
+func TestSwitchTemplateReResolvesEnvFromNewTemplate(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	cfg.Templates["review"] = config.TemplateConfig{
+		Model: "opus",
+		Env:   map[string]string{"REVIEW_ONLY": "1"},
+	}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: "/w",
+		Env:      map[string]string{"CODING_ONLY": "1"},
+		SpawnEnv: map[string]string{"CALLER": "keepme"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "review"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	env := sup.spawnCall.Env
+	if env["REVIEW_ONLY"] != "1" {
+		t.Errorf("env missing the new template's REVIEW_ONLY: %v", env)
+	}
+	if _, leaked := env["CODING_ONLY"]; leaked {
+		t.Errorf("env leaked the departing template's CODING_ONLY: %v", env)
+	}
+	if env["CALLER"] != "keepme" {
+		t.Errorf("caller-supplied SpawnEnv must survive a switch: %v", env)
+	}
+}
+
+// TestSwitchTemplateFailsWhenTargetWiringUnbuildable: if the target template
+// cannot produce launch args, the switch must fail loudly rather than fall back
+// to the departing template's args — which would respawn the agent under the
+// wrong wiring while the record claims the new template.
+func TestSwitchTemplateFailsWhenTargetWiringUnbuildable(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	// A harness with no registered adapter: config validation would normally
+	// reject it, but the manager must not respawn the agent on the departing
+	// template's args when the target cannot produce any.
+	cfg.Templates["broken"] = config.TemplateConfig{Harness: "no-such-harness"}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: "/w",
+		ClaudeArgs: []string{"--model", "sonnet"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "broken"); err == nil {
+		t.Fatal("expected an error when the target template's wiring cannot be built")
+	}
+	rec := loadRec(t, home, "leo-x")
+	if rec.Template != "coding" {
+		t.Errorf("record moved to %q despite a failed switch, want coding", rec.Template)
+	}
+}
+
+// TestRestartHonorsAndClearsSessionPinned: a pinned record must resume exactly
+// the archived session, ignoring the newest transcript in the workspace — which
+// after a switch belongs to the OTHER template. The flag is one-shot.
+func TestRestartHonorsAndClearsSessionPinned(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "agent-ws")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	projDir := filepath.Join(userHome, ".claude", "projects", session.ProjectSlug(workspace))
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+	// The other template's transcript, newest in the workspace.
+	if err := os.WriteFile(filepath.Join(projDir, "other-template-session.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: workspace,
+		SessionID: "mine", SessionPinned: true, ClaudeArgs: []string{"--model", "sonnet"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if !containsPair(sup.spawnCall.ClaudeArgs, "--resume", "mine") {
+		t.Errorf("args = %v, want --resume mine (the pinned session), not the newest jsonl", sup.spawnCall.ClaudeArgs)
+	}
+	rec := loadRec(t, home, "leo-x")
+	if rec.SessionPinned {
+		t.Error("SessionPinned must be cleared once consumed")
+	}
+	if rec.SessionID != "mine" {
+		t.Errorf("SessionID = %q, want mine", rec.SessionID)
+	}
+}
+
+// TestResumeHonorsAndClearsSessionPinned: same contract on the suspend/resume
+// path, which is how a switched-while-suspended agent comes back.
+func TestResumeHonorsAndClearsSessionPinned(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "agent-ws")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	projDir := filepath.Join(userHome, ".claude", "projects", session.ProjectSlug(workspace))
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+	if err := os.WriteFile(filepath.Join(projDir, "other-template-session.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: workspace,
+		SessionID: "mine", SessionPinned: true, Suspended: true, ClaudeArgs: []string{"--model", "sonnet"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.Resume("leo-x"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !containsPair(sup.spawnCall.ClaudeArgs, "--resume", "mine") {
+		t.Errorf("args = %v, want --resume mine (the pinned session)", sup.spawnCall.ClaudeArgs)
+	}
+	if loadRec(t, home, "leo-x").SessionPinned {
+		t.Error("SessionPinned must be cleared once consumed")
+	}
+}
