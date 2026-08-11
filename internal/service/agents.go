@@ -100,6 +100,18 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			if err := agentstore.Save(homePath, updated); err != nil {
 				fmt.Fprintf(os.Stderr, "restore: agent %q could not clear NoResume flag: %v\n", name, err)
 			}
+		case rec.SessionPinned:
+			// A template switch pinned this record to the session it restored
+			// for the arriving template. Take it verbatim: the jsonl scan
+			// below is workspace-wide and template-blind, so right after a
+			// switch it would hand back the transcript of the template just
+			// left and quietly undo the swap. One-shot, like NoResume.
+			resumeID = rec.SessionID
+			updated := rec
+			updated.SessionPinned = false
+			if err := agentstore.Save(homePath, updated); err != nil {
+				fmt.Fprintf(os.Stderr, "restore: agent %q could not clear SessionPinned flag: %v\n", name, err)
+			}
 		default:
 			// Prefer the newest jsonl in claude's project directory for this
 			// workspace over the stored SessionID — catches sessions created
@@ -131,7 +143,7 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 		if rec.Harness == "" || rec.Harness == "claude" {
 			args = agent.ResumeArgs(rec.ClaudeArgs, resumeID)
 		}
-		if resumeID == "" && !rec.NoResume {
+		if resumeID == "" && !rec.NoResume && !rec.SessionPinned {
 			fmt.Fprintf(os.Stderr, "restore: agent %q has no session_id (legacy record) — respawning with a fresh claude session\n", name)
 		}
 
