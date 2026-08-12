@@ -35,7 +35,7 @@ func TestResolveTaskTargetImplicitCarriesRuntimeFields(t *testing.T) {
 		Runtime:        "persistent",
 		Workspace:      "/tw",
 		Harness:        "codex",
-		HarnessOptions: map[string]any{"sandbox": "workspace-write"},
+		HarnessOptions: map[string]any{"permission_mode": "workspace-write"},
 		Env:            map[string]string{"K": "V"},
 	}}}
 	name, tmpl, implicit, err := cfg.ResolveTaskTarget("digest")
@@ -48,7 +48,7 @@ func TestResolveTaskTargetImplicitCarriesRuntimeFields(t *testing.T) {
 	if tmpl.Harness != "codex" {
 		t.Fatalf("expected harness carried, got %q", tmpl.Harness)
 	}
-	if tmpl.HarnessOptions["sandbox"] != "workspace-write" {
+	if tmpl.HarnessOptions["permission_mode"] != "workspace-write" {
 		t.Fatalf("expected harness_options carried, got %+v", tmpl.HarnessOptions)
 	}
 	if tmpl.Env["K"] != "V" {

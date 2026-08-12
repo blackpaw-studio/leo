@@ -161,7 +161,7 @@ func TestBuildArgsCodex(t *testing.T) {
 		Tasks: map[string]config.TaskConfig{
 			"mytask": {
 				Workspace:      "/tmp/ws",
-				HarnessOptions: map[string]any{"sandbox": "workspace-write"},
+				HarnessOptions: map[string]any{"permission_mode": "workspace-write"},
 			},
 		},
 	}

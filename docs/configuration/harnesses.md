@@ -200,12 +200,13 @@ resident TUI in tmux, described in
 [Session driver semantics](#session-driver-semantics) above. One-shot
 scheduled tasks (`leo run <task>` without `runtime: persistent`) stay
 headless: each firing spawns a fresh `codex exec --json
---skip-git-repo-check [--model …] [--sandbox …] [-c mcp_servers.leo.*…]
+--skip-git-repo-check [--model …] [--sandbox … | --approve-for-me]
+[-c mcp_servers.leo.*…]
 <message>` and leo parses the JSON event stream.
 
 | Key | Type | Meaning |
 |---|---|---|
-| `sandbox` | string | One of `read-only` (codex's own default when unset), `workspace-write`, `danger-full-access`. Passed as `--sandbox`. |
+| `permission_mode` | string | One of `read-only` (codex's own default when unset), `workspace-write`, `danger-full-access`, `approve-for-me`. The first three are passed as `--sandbox`; `approve-for-me` is passed as `--approve-for-me` instead. Shares its name with claude's `permission_mode` but not its values. The defaults cascade never merges harness_options across harnesses (see [Merge rules](#merge-rules)), and the two value sets are disjoint, so a stale claude value left behind by a hand-edited `harness:` flip is rejected at validation rather than silently applied. |
 
 Other things to know:
 
@@ -214,18 +215,41 @@ Other things to know:
   `.codex` under each writable root read-only, which breaks unattended
   commits (`git add` cannot create `.git/index.lock` — and in a linked git
   worktree the real git dir lives outside the workspace entirely) and
-  project-skill creation. Since leo runs codex with approval policy `never`,
-  there is no escalation path, so leo grants these back explicitly: every
+  project-skill creation. Under the default approval policy `never` there is
+  no escalation path at all, so leo grants these back explicitly: every
   launch appends `-c sandbox_workspace_write.writable_roots=[…]` covering
   the workspace's `.agents` dir plus the resolved git dir and git common
-  dir (worktree-aware). Inert unless `sandbox: workspace-write`. Note this
-  override replaces any `sandbox_workspace_write.writable_roots` set in
-  `~/.codex/config.toml`.
-- **No `approval:` key.** Headless `codex exec` has no approval flag at all —
-  upstream removed it, and approval policy is hardcoded to `never`. Setting
-  `harness_options.approval` is rejected: `option "approval" is not
-  supported: codex exec always runs non-interactively (approval policy
-  "never")`.
+  dir (worktree-aware). Inert unless the effective sandbox is
+  `workspace-write` — which covers both `permission_mode: workspace-write`
+  and `permission_mode: approve-for-me`. Note this override replaces any
+  `sandbox_workspace_write.writable_roots` set in `~/.codex/config.toml`.
+- **`permission_mode: approve-for-me` is the one non-`never` approval mode.**
+  Codex's `--approve-for-me` is a self-contained preset: it implies the
+  `workspace-write` sandbox, sets approval policy `on-request`, and routes
+  every escalation to codex's *automatic* approval reviewer
+  (`approvals_reviewer = "auto_review"`) rather than to a human. Codex's own
+  CLI rejects `--approve-for-me` alongside either `--sandbox` or
+  `--ask-for-approval`, which is why leo models all four values as one
+  mutually-exclusive `permission_mode` enum instead of separate sandbox and
+  approval knobs — and why leo drops its usual `-a never` pinning for this
+  value only.
+
+  It stays safe for unattended use: when the reviewer *denies* an escalation,
+  the denial is returned to the model as a developer message ("Auto-reviewer
+  denied the action … stop and request user input"), so the turn ends with
+  the agent asking a question in-band. It does **not** raise a blocking TUI
+  modal, so it cannot strand the readiness probe or swallow injected
+  messages. Reviewer timeouts and a per-turn escalation cap behave the same
+  way. Note the reviewer is a model making a judgement call, so this is a
+  weaker boundary than a sandbox — prefer `workspace-write` unless an agent
+  genuinely needs to escalate.
+
+- **No `approval:` key.** Approval policy is not independently settable:
+  headless `codex exec` has no approval flag at all, and the TUI is pinned to
+  `-a never` for unattended parity. Setting `harness_options.approval` is
+  rejected: `option "approval" is not supported: use "permission_mode:
+  approve-for-me" for auto-reviewed approvals, or leave unset for approval
+  policy "never" (unattended sessions)`.
 - **No `append_system_prompt`.** Codex's equivalent mechanism is a workspace
   `AGENTS.md` file, not a CLI flag. Setting the key is rejected: `option
   "append_system_prompt" is not supported: codex has no append-system-prompt
@@ -371,7 +395,7 @@ tasks:
     harness: codex
     model: gpt-5.3-codex
     harness_options:
-      sandbox: workspace-write
+      permission_mode: workspace-write
     env:
       CODEX_API_KEY: ${CODEX_API_KEY}
     enabled: true
@@ -559,8 +583,9 @@ edit `harness:` and `harness_options:` directly — there is no separate
   claude exposes `permission_mode` (enum), `bypass_permissions` (bool),
   `remote_control` (bool), `agent` (string, agent-list source),
   `allowed_tools` / `disallowed_tools` (string lists), and
-  `append_system_prompt` (text); codex exposes `sandbox` (enum:
-  `read-only`/`workspace-write`/`danger-full-access`); opencode exposes a
+  `append_system_prompt` (text); codex exposes `permission_mode` (enum:
+  `read-only`/`workspace-write`/`danger-full-access`/`approve-for-me`);
+  opencode exposes a
   single `permission` field (YAML map).
 - **Opencode's `permission` field** is the one `OptionYAMLMap` field in the
   registry today — it renders as a YAML textarea (`rows="4"`, monospace) so

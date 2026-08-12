@@ -72,11 +72,24 @@ func TestHarnessOptionsPartialRendersSelectedHarness(t *testing.T) {
 
 	// Different harness → blank slate for that harness's fields.
 	body = getBody(t, s, "/web/partials/harness-options?section=task&scope=b&harness=codex")
-	if !strings.Contains(body, `name="harness_options.sandbox"`) {
-		t.Errorf("codex partial missing sandbox field: %s", body)
+	if !strings.Contains(body, `name="harness_options.permission_mode"`) {
+		t.Errorf("codex partial missing permission_mode field: %s", body)
 	}
-	if strings.Contains(body, "permission_mode") {
+	// claude and codex both expose a permission_mode key, so a bare
+	// substring can no longer tell the two schemas apart. Assert instead on
+	// a claude-only field, plus the blank-slate invariant scoped to the
+	// shared key: enum <option>s are rendered from the selected harness's
+	// schema, so a leaked claude value shows up not as a stray option but as
+	// the empty option losing its `selected`.
+	if strings.Contains(body, "harness_options.bypass_permissions") {
 		t.Errorf("codex partial leaked claude fields: %s", body)
+	}
+	sel := regexp.MustCompile(`(?s)<select id="ho-permission_mode-task-b".*?</select>`).FindString(body)
+	if sel == "" {
+		t.Fatalf("codex partial has no permission_mode select: %s", body)
+	}
+	if !strings.Contains(sel, `value="" selected`) {
+		t.Errorf("codex partial did not blank-slate permission_mode across the harness switch: %s", sel)
 	}
 }
 
@@ -180,7 +193,7 @@ func TestHarnessOptionsPartialEmptyHarnessMeansInherit(t *testing.T) {
 		Tasks: map[string]config.TaskConfig{"n": {Schedule: "@daily", PromptFile: "p.md"}}}
 	s := seedHarnessTestServer(t, cfg)
 	body := getBody(t, s, "/web/partials/harness-options?section=task&scope=n&harness=")
-	if !strings.Contains(body, `name="harness_options.sandbox"`) {
+	if !strings.Contains(body, `name="harness_options.permission_mode"`) {
 		t.Errorf("inherit resolution failed — want codex fields, got: %s", body)
 	}
 }
