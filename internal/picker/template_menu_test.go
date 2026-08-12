@@ -216,20 +216,51 @@ func TestTemplateMenuKeepsLayoutHeightStable(t *testing.T) {
 	}
 }
 
-// The picker is a second door onto the same action, so it has to honor the same
-// can_spawn allowlist the CLI verb enforces — otherwise a template forbidden
-// from spawning codex could reach codex by pressing t.
-func TestTemplateMenuHonorsTheSwitchGate(t *testing.T) {
+// The picker is a second door onto the same action, so it honors the same
+// can_spawn allowlist the CLI verb enforces. The check lives in the model and
+// runs BEFORE any backend call — a remote backend shells out to a leo that
+// cannot see this process's permissions, so a per-backend check would leave
+// remote rows wide open.
+func TestTemplateMenuGateBlocksBeforeAnyBackendCall(t *testing.T) {
 	b := &fakeBackend{
 		agents:    []Agent{{Name: "leo-coding-fetch", Template: "coding", Host: LocalHost, Status: "running"}},
 		templates: []string{"coding", "codex"},
-		switchErr: errors.New("not permitted to spawn template \"codex\""),
 	}
 	m := menuModel(t, b)
+	m.canSwitch = func(template string) error {
+		return errors.New("not permitted to spawn template " + template)
+	}
 	m, _ = drive(t, m, keyMsg("j"))
 	m, _ = drive(t, m, keyMsg("enter"))
 
+	if len(b.calls) != 0 {
+		t.Errorf("a refused switch still reached the backend: %v", b.calls)
+	}
 	if !m.status.isErr || !strings.Contains(m.status.text, "not permitted") {
 		t.Errorf("status = %+v, want the refusal surfaced to the user", m.status)
+	}
+}
+
+// The same gate has to let a permitted template through, or the check is just
+// a switch that is always off.
+func TestTemplateMenuGateAllowsPermittedTemplates(t *testing.T) {
+	b := &fakeBackend{
+		agents:    []Agent{{Name: "leo-coding-fetch", Template: "coding", Host: LocalHost, Status: "running"}},
+		templates: []string{"coding", "codex"},
+	}
+	m := menuModel(t, b)
+	var asked string
+	m.canSwitch = func(template string) error {
+		asked = template
+		return nil
+	}
+	m, _ = drive(t, m, keyMsg("j"))
+	m, _ = drive(t, m, keyMsg("enter"))
+
+	if asked != "codex" {
+		t.Errorf("gate consulted for %q, want codex", asked)
+	}
+	if len(b.calls) != 1 || b.calls[0] != "set-template:leo-coding-fetch->codex" {
+		t.Errorf("calls = %v, want the switch dispatched", b.calls)
 	}
 }

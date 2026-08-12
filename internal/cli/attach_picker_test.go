@@ -54,7 +54,7 @@ func stubPickerRun(t *testing.T) *map[string]picker.Backend {
 	t.Helper()
 	var captured map[string]picker.Backend
 	old := pickerRunFn
-	pickerRunFn = func(ctx context.Context, backends map[string]picker.Backend) (picker.Result, error) {
+	pickerRunFn = func(ctx context.Context, backends map[string]picker.Backend, _ func(string) error) (picker.Result, error) {
 		captured = backends
 		return picker.Result{}, nil
 	}

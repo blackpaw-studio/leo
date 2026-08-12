@@ -65,7 +65,11 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 	}
 
 	backends := buildPickerBackends(cfg, localErr == nil)
-	result, err := pickerRunFn(ctx, backends)
+	// The gate rides with the picker, not with a backend: it encodes THIS
+	// process's permissions, and a remote leo cannot see them.
+	result, err := pickerRunFn(ctx, backends, func(template string) error {
+		return gateTemplateSwitch("leo attach: set template", template)
+	})
 	if err != nil {
 		return fmt.Errorf("picker: %w", err)
 	}
@@ -95,11 +99,8 @@ func localTemplateNames(cfg *config.Config) ([]string, error) {
 func buildPickerBackends(cfg *config.Config, includeLocal bool) map[string]picker.Backend {
 	backends := map[string]picker.Backend{}
 	if includeLocal {
-		backends[picker.LocalHost] = picker.NewLocalBackend(cfg.HomePath, picker.LocalPolicy{
-			Templates: func() ([]string, error) { return localTemplateNames(cfg) },
-			CanSwitchTo: func(template string) error {
-				return gateTemplateSwitch("leo attach: set template", template)
-			},
+		backends[picker.LocalHost] = picker.NewLocalBackend(cfg.HomePath, func() ([]string, error) {
+			return localTemplateNames(cfg)
 		})
 	}
 	for name := range cfg.Client.Hosts {

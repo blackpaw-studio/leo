@@ -87,6 +87,15 @@ func (m model) updateTemplateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = statusLine{text: menu.agent + " is already on " + chosen, isErr: false}
 			return m, nil
 		}
+		// Checked here, before any backend call, so the same policy covers
+		// local and remote rows alike — a remote leo never sees this process's
+		// permissions, so it cannot enforce them on our behalf.
+		if m.canSwitch != nil {
+			if err := m.canSwitch(chosen); err != nil {
+				m.status = statusLine{text: err.Error(), isErr: true}
+				return m, nil
+			}
+		}
 		m.switchTo = chosen
 		return m.dispatch(menu.host, menu.agent, actionSwitchTemplate)
 	}

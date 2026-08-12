@@ -106,6 +106,9 @@ type model struct {
 	confirming *confirmState
 	templates  *templateMenu
 	switchTo   string
+	// canSwitch gates the template menu's dispatch; nil means unrestricted.
+	// See Run.
+	canSwitch  func(template string) error
 	renaming   bool
 	rename     textinput.Model
 	renameHost string

@@ -186,6 +186,11 @@ that template's `can_spawn` entry; gating only the former would let a template
 denied `codex` reach it by switching an agent into it, and gating only the CLI
 would leave the same hole open behind the `t` key.
 
+In the picker the check lives in the **model**, before any backend call, not in
+a backend. Permissions describe *this* process; a remote row shells out to a
+`leo` that never sees this agent's `LEO_PERMISSIONS`, so a per-backend check
+would enforce the policy locally and skip it remotely.
+
 ### Interaction with existing verbs
 
 - `leo agent reset` clears only the **active** template's session. The archive is
@@ -206,7 +211,8 @@ would leave the same hole open behind the `t` key.
 | `internal/cli/agent.go` | `newAgentSetTemplateCmd`, wired in `newAgentCmd`; remote passthrough via `runRemote`; `gateSpawnTemplate`. |
 | `internal/picker/keys.go` | `Switch` binding on `t`, added to short/full help. |
 | `internal/picker/picker.go` | `Backend.Templates(ctx) ([]string, error)`, `Backend.SwitchTemplate(ctx, name, template) error`. |
-| `internal/picker/backend_local.go` | New methods, plus a `LocalPolicy{Templates, CanSwitchTo}` injected by the CLI layer (which holds the config and this process's permissions), mirroring how `sshArgs` is injected for SSH. |
+| `internal/picker/backend_local.go` | New methods; template names come from a func injected by the CLI layer (which holds the config), mirroring how `sshArgs` is injected for SSH. |
+| `internal/picker/picker.go` | `Run` takes the switch gate, applied in the model so local and remote rows are covered by one check. |
 | `internal/picker/backend_ssh.go` | `leo template list --json` and `leo agent set-template <name> <template>`, both shell-quoted per the existing SSH argv rules. |
 | `internal/picker/model.go` | `switching` modal state + template list, `actionSwitchTemplate` action kind. |
 | `docs/cli/agent.md`, `docs/cli/attach.md`, `docs/guides/agents.md` | Document the verb, the key, and the per-template session model. |
