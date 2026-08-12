@@ -106,10 +106,12 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	// resumeIDFor, not rec.SessionID: a /clear starts a session the store never
 	// saw, and the archive has to file away the conversation the agent is
 	// actually in or switching back resurrects a dead thread.
-	next := withTemplate(rec, template, normalizeHarness(cfg.TemplateHarness(tmpl)), ResumeIDFor(rec), time.Now())
-	// archived is what the arriving template left behind, before any minting
-	// below — the difference between "rejoin that conversation" and "there
-	// isn't one yet".
+	// resumeIDFor, not rec.SessionID: a /clear starts a session the store never
+	// saw, and the archive has to file away the conversation the agent is
+	// actually in or switching back resurrects a dead thread.
+	next := withTemplate(rec, template, normalizeHarness(cfg.TemplateHarness(tmpl)), ResumeIDFor(rec))
+	// archived is what the arriving template left behind — the difference
+	// between "rejoin that conversation" and "there isn't one yet".
 	archived := next.SessionID
 	resumeID := archived
 	isClaude := next.Harness == "claude"
@@ -124,6 +126,9 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 		next.IdleSuspendAfter = d.String()
 	}
 
+	// Resolve the new wiring BEFORE stopping anything: a template that cannot
+	// produce launch args must fail the switch with the agent still running,
+	// not leave it dead on a template it never reached.
 	args, env, built := resolveTemplateWiring(cfg, next, tmpl, m.webToken, rebuildEnvFromTemplate)
 	if !built {
 		return SwitchResult{}, fmt.Errorf("building %s wiring for template %q failed (agent left on %q; see the daemon log)", next.Harness, template, rec.Template)
@@ -140,7 +145,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 		}
 	}
 	// Non-claude harnesses take no session flag here: their driver's
-	// SessionArgsRefresher reads the id off the record at launch, and an empty
+	// SessionArgsRefresher reads the id off the RECORD at launch, and an empty
 	// id re-arms post-hoc discovery for a fresh conversation.
 	next.ClaudeArgs = args
 	next.Env = env
@@ -156,6 +161,7 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 		if isClaude {
 			next.ClaudeArgs = ResumeArgs(args, archived)
 		}
+		next.SessionPinnedAt = pin(time.Now())
 		if err := agentstore.Save(cfg.HomePath, next); err != nil {
 			return SwitchResult{}, fmt.Errorf("saving switched agent record: %w", err)
 		}
@@ -165,12 +171,19 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	if err := m.sup.StopAgent(name); err != nil {
 		return SwitchResult{}, fmt.Errorf("stopping agent for template switch: %w", err)
 	}
+	// Stamped after the stop, not before: the departing process can still be
+	// flushing its transcript on the way down, and a pin predating that write
+	// would let ResumeIDFor prefer the conversation just switched away from.
+	next.SessionPinnedAt = pin(time.Now())
+
 	// Persist before the respawn so a racing RestoreAgents brings the agent up
-	// on the new template, not the departing one. SessionID stays empty until
-	// the spawn succeeds: a minted --session-id names a session that does not
-	// exist yet, and a restore that tried to --resume it would crash-loop.
+	// on the new template, not the departing one — and with the ARCHIVED id,
+	// because a non-claude harness's driver reads the session to resume off
+	// this record at launch. A minted claude id is held back until the spawn
+	// succeeds: it names a session that does not exist yet, and a restore that
+	// tried to --resume it would crash-loop.
 	pending := next
-	pending.SessionID = ""
+	pending.SessionID = archived
 	if err := agentstore.Save(cfg.HomePath, pending); err != nil {
 		return SwitchResult{}, fmt.Errorf("saving switched agent record: %w", err)
 	}
@@ -184,7 +197,18 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 		WebToken:   m.webToken,
 		Harness:    next.Harness,
 	}); err != nil {
-		return SwitchResult{}, fmt.Errorf("respawning %q on template %q: %w (re-run the switch to retry)", name, template, err)
+		// The agent is stopped and the arriving template's session has already
+		// been popped out of the archive, so it survives only on the record.
+		// Mark it suspended: that is the one state a down agent can come back
+		// from with its conversation (Resume), and re-running the switch could
+		// not, since it refuses an agent that is neither running nor suspended.
+		down := next
+		down.SessionID = archived
+		down.Suspended = true
+		if saveErr := agentstore.Save(cfg.HomePath, down); saveErr != nil {
+			log.Printf("agent %q: could not mark suspended after a failed switch: %v", name, saveErr)
+		}
+		return SwitchResult{}, fmt.Errorf("respawning %q on template %q: %w (the agent is suspended on %s — 'leo agent resume %s' brings it back)", name, template, err, template, name)
 	}
 
 	next.SessionID = resumeID
@@ -194,18 +218,19 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	return switchResult(rec, next, status), nil
 }
 
+// pin returns a pointer to t for agentstore.Record.SessionPinnedAt, whose nil
+// means "never switched".
+func pin(t time.Time) *time.Time { return &t }
+
 // withTemplate returns a copy of rec re-pointed at template/harness, with the
 // session archive rotated: departingSession is filed under the template being
 // left and the arriving template's id is popped back out. rec is never mutated.
 //
-// SessionPinnedAt is stamped with now so the restored id survives the
-// newest-transcript preference in Restart/Resume/RestoreAgents, which is
-// workspace-wide and template-blind and would otherwise resume the departing
-// template's conversation and quietly undo the swap. It is a timestamp rather
-// than a flag so the protection expires on its own once the arriving template
-// writes a transcript of its own — see ResumeIDFor. NoResume is cleared because
-// it describes a quick-exit on the template being left behind.
-func withTemplate(rec agentstore.Record, template, harness, departingSession string, now time.Time) agentstore.Record {
+// The caller stamps SessionPinnedAt afterwards — after stopping a running
+// agent, so the pin postdates any transcript the departing process flushes on
+// its way down. NoResume is cleared because it describes a quick-exit on the
+// template being left behind.
+func withTemplate(rec agentstore.Record, template, harness, departingSession string) agentstore.Record {
 	archive := maps.Clone(rec.SessionsByTemplate)
 	if archive == nil {
 		archive = map[string]string{}
@@ -222,7 +247,6 @@ func withTemplate(rec agentstore.Record, template, harness, departingSession str
 	next.Template = template
 	next.Harness = harness
 	next.SessionID = restored
-	next.SessionPinnedAt = &now
 	next.NoResume = false
 	next.SessionsByTemplate = archive
 	if len(archive) == 0 {

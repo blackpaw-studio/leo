@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -623,5 +624,119 @@ func TestSwitchTemplateReResolvesIdleSuspend(t *testing.T) {
 	// stores it (see spawnShared).
 	if got := loadRec(t, home, "leo-x").IdleSuspendAfter; got != "30m0s" {
 		t.Errorf("IdleSuspendAfter = %q, want 30m0s from the arriving template", got)
+	}
+}
+
+// The supervisor reads the agent's session id off the agentstore record when it
+// launches a non-claude harness (RefreshSessionArgs, internal/service/process.go),
+// so the record has to already name the archived session at the moment
+// SpawnAgent is called. Clearing it across the spawn meant codex and opencode
+// silently started a brand-new conversation, and post-hoc discovery then
+// overwrote the id — leaving the archived one unreachable, since the switch had
+// already popped it out of SessionsByTemplate.
+func TestSwitchTemplateHandsTheSupervisorTheArchivedSession(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+
+	var sessionAtSpawn string
+	sup.onSpawn = func(SpawnRequest) {
+		recs, _ := agentstore.Load(agentstore.FilePath(home))
+		sessionAtSpawn = recs["leo-x"].SessionID
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: "/w",
+		SessionID:          "codings-session",
+		SessionsByTemplate: map[string]string{"codex": "codex-rollout"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "codex"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	if sessionAtSpawn != "codex-rollout" {
+		t.Errorf("record held SessionID %q when the supervisor launched, want codex-rollout", sessionAtSpawn)
+	}
+}
+
+// A respawn that fails must not take the arriving template's archived session
+// with it: the switch has already popped that id out of the archive, so if the
+// record does not carry it the conversation is gone for good. The agent is left
+// suspended so the documented recovery actually works — it is not live, so a
+// retry of the switch (or a restart) cannot touch it.
+func TestSwitchTemplateFailedRespawnKeepsTheSessionAndStaysRecoverable(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{
+		agents:   map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}},
+		spawnErr: errors.New("tmux: no server running"),
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: "/w",
+		SessionID:          "codings-session",
+		SessionsByTemplate: map[string]string{"codex": "codex-rollout"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "codex"); err == nil {
+		t.Fatal("expected the spawn failure to surface")
+	}
+
+	rec := loadRec(t, home, "leo-x")
+	if rec.SessionID != "codex-rollout" {
+		t.Errorf("SessionID = %q after a failed respawn, want codex-rollout — otherwise that conversation is unreachable", rec.SessionID)
+	}
+	if !rec.Suspended {
+		t.Error("a failed respawn must leave the agent suspended, or nothing can bring it back but reset")
+	}
+	if rec.SessionsByTemplate["coding"] != "codings-session" {
+		t.Errorf("archive = %v, want the departing session still filed", rec.SessionsByTemplate)
+	}
+
+	// The documented recovery path has to actually work once whatever broke the
+	// spawn (here: no tmux server) is fixed, and it has to come back on the
+	// archived conversation. codex takes its resume token from the record at
+	// launch rather than from argv, so that is what the assertion reads.
+	sup.spawnErr = nil
+	var sessionAtRespawn string
+	sup.onSpawn = func(SpawnRequest) {
+		recs, _ := agentstore.Load(agentstore.FilePath(home))
+		sessionAtRespawn = recs["leo-x"].SessionID
+	}
+	if _, err := m.Resume("leo-x"); err != nil {
+		t.Fatalf("resume after a failed switch: %v", err)
+	}
+	if sessionAtRespawn != "codex-rollout" {
+		t.Errorf("record held SessionID %q when the supervisor relaunched, want codex-rollout", sessionAtRespawn)
+	}
+}
+
+// The pin has to be stamped after the departing process is gone. Stamped
+// before, a claude flushing its transcript on the way down lands an mtime after
+// the pin, and ResumeIDFor would then prefer the conversation the user just
+// switched away from — the precise thing the pin exists to prevent.
+func TestSwitchTemplateStampsThePinAfterStopping(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	var stoppedAt time.Time
+	sup.onStop = func(string) {
+		time.Sleep(2 * time.Millisecond) // the departing process's last writes
+		stoppedAt = time.Now()
+	}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: "/w", SessionID: "codings-session",
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "codex"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	pinnedAt := loadRec(t, home, "leo-x").SessionPinnedAt
+	if pinnedAt == nil {
+		t.Fatal("no pin recorded")
+	}
+	if pinnedAt.Before(stoppedAt) {
+		t.Errorf("pin stamped at %v, before the departing process stopped at %v", pinnedAt, stoppedAt)
 	}
 }
