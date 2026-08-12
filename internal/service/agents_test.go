@@ -755,21 +755,27 @@ func TestRestoreAgentsHonorsSessionPinned(t *testing.T) {
 		t.Fatalf("mkdir proj: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
-	// The departing template's transcript — newest in the workspace, and the
-	// one LatestSession would hand back if the pin were ignored.
-	if err := os.WriteFile(filepath.Join(projDir, "other-template.jsonl"), []byte("{}\n"), 0o600); err != nil {
+	// The departing template's transcript: newest in the workspace, but written
+	// BEFORE the switch, so the pin outranks it.
+	otherTemplate := filepath.Join(projDir, "other-template.jsonl")
+	if err := os.WriteFile(otherTemplate, []byte("{}\n"), 0o600); err != nil {
 		t.Fatalf("write jsonl: %v", err)
 	}
+	beforeSwitch := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(otherTemplate, beforeSwitch, beforeSwitch); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	switchedAt := time.Now().Add(-time.Hour)
 
 	rec := agentstore.Record{
-		Name:          "leo-coding-switched",
-		Template:      "review",
-		Workspace:     workspace,
-		ClaudeArgs:    []string{"--model", "opus"},
-		SessionID:     "reviews-own-session",
-		SessionPinned: true,
-		WebPort:       "8370",
-		SpawnedAt:     time.Now(),
+		Name:            "leo-coding-switched",
+		Template:        "review",
+		Workspace:       workspace,
+		ClaudeArgs:      []string{"--model", "opus"},
+		SessionID:       "reviews-own-session",
+		SessionPinnedAt: &switchedAt,
+		WebPort:         "8370",
+		SpawnedAt:       time.Now(),
 	}
 	if err := agentstore.Save(home, rec); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -793,8 +799,8 @@ func TestRestoreAgentsHonorsSessionPinned(t *testing.T) {
 
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
 	after := stored[rec.Name]
-	if after.SessionPinned {
-		t.Error("SessionPinned should be cleared after consumption")
+	if after.SessionPinnedAt != nil {
+		t.Error("the switch pin should be cleared once consumed")
 	}
 	if after.SessionID != "reviews-own-session" {
 		t.Errorf("SessionID = %q, want reviews-own-session", after.SessionID)

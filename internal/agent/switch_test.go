@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -22,6 +23,22 @@ func switchCfg(home string) *config.Config {
 			"codex":  {Harness: "codex"},
 		},
 	}
+}
+
+// writeTranscriptBeforeSwitch plants a claude transcript dated two hours ago and
+// returns a switch time one hour ago, so the transcript belongs to the template
+// the agent left rather than the one it arrived at.
+func writeTranscriptBeforeSwitch(t *testing.T, projDir, name string) time.Time {
+	t.Helper()
+	path := filepath.Join(projDir, name)
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	return time.Now().Add(-time.Hour)
 }
 
 func loadRec(t *testing.T, home, name string) agentstore.Record {
@@ -89,8 +106,8 @@ func TestSwitchTemplateRunningStopsAndRespawns(t *testing.T) {
 	if rec.SessionsByTemplate["coding"] != "coding-session" {
 		t.Errorf("archive[coding] = %q, want coding-session", rec.SessionsByTemplate["coding"])
 	}
-	if !rec.SessionPinned {
-		t.Error("SessionPinned = false, want true so the next resume ignores the other template's transcript")
+	if rec.SessionPinnedAt == nil {
+		t.Error("no switch pin recorded — the next resume would take the other template's transcript")
 	}
 	if rec.Workspace != "/w" {
 		t.Errorf("Workspace = %q, want /w — a switch never relocates the agent", rec.Workspace)
@@ -330,16 +347,15 @@ func TestRestartHonorsAndClearsSessionPinned(t *testing.T) {
 		t.Fatalf("mkdir proj: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
-	// The other template's transcript, newest in the workspace.
-	if err := os.WriteFile(filepath.Join(projDir, "other-template-session.jsonl"), []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write jsonl: %v", err)
-	}
+	// The other template's transcript: newest in the workspace, but written
+	// before the switch, so the pin outranks it.
+	switchedAt := writeTranscriptBeforeSwitch(t, projDir, "other-template-session.jsonl")
 
 	cfg := switchCfg(home)
 	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
 	_ = agentstore.Save(home, agentstore.Record{
 		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: workspace,
-		SessionID: "mine", SessionPinned: true, ClaudeArgs: []string{"--model", "sonnet"},
+		SessionID: "mine", SessionPinnedAt: &switchedAt, ClaudeArgs: []string{"--model", "sonnet"},
 	})
 	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
 
@@ -350,8 +366,8 @@ func TestRestartHonorsAndClearsSessionPinned(t *testing.T) {
 		t.Errorf("args = %v, want --resume mine (the pinned session), not the newest jsonl", sup.spawnCall.ClaudeArgs)
 	}
 	rec := loadRec(t, home, "leo-x")
-	if rec.SessionPinned {
-		t.Error("SessionPinned must be cleared once consumed")
+	if rec.SessionPinnedAt != nil {
+		t.Error("the switch pin must be cleared once consumed")
 	}
 	if rec.SessionID != "mine" {
 		t.Errorf("SessionID = %q, want mine", rec.SessionID)
@@ -375,15 +391,13 @@ func TestResumeHonorsAndClearsSessionPinned(t *testing.T) {
 		t.Fatalf("mkdir proj: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
-	if err := os.WriteFile(filepath.Join(projDir, "other-template-session.jsonl"), []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write jsonl: %v", err)
-	}
+	switchedAt := writeTranscriptBeforeSwitch(t, projDir, "other-template-session.jsonl")
 
 	cfg := switchCfg(home)
 	sup := &capturingSupervisor{}
 	_ = agentstore.Save(home, agentstore.Record{
 		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: workspace,
-		SessionID: "mine", SessionPinned: true, Suspended: true, ClaudeArgs: []string{"--model", "sonnet"},
+		SessionID: "mine", SessionPinnedAt: &switchedAt, Suspended: true, ClaudeArgs: []string{"--model", "sonnet"},
 	})
 	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
 
@@ -393,8 +407,8 @@ func TestResumeHonorsAndClearsSessionPinned(t *testing.T) {
 	if !containsPair(sup.spawnCall.ClaudeArgs, "--resume", "mine") {
 		t.Errorf("args = %v, want --resume mine (the pinned session)", sup.spawnCall.ClaudeArgs)
 	}
-	if loadRec(t, home, "leo-x").SessionPinned {
-		t.Error("SessionPinned must be cleared once consumed")
+	if loadRec(t, home, "leo-x").SessionPinnedAt != nil {
+		t.Error("the switch pin must be cleared once consumed")
 	}
 }
 
@@ -453,5 +467,161 @@ func TestSwitchTemplateSuspendedDoesNotPersistAMintedSession(t *testing.T) {
 	}
 	if containsFlag(rec.ClaudeArgs, "--session-id") || containsFlag(rec.ClaudeArgs, "--resume") {
 		t.Errorf("stored args = %v, want no session-selection flag", rec.ClaudeArgs)
+	}
+}
+
+// The arriving template's env must replace the departing template's, on an
+// ordinary agent — one spawned with no --env, so the record carries neither
+// SpawnEnv nor InheritedEnv. That is the common shape, and it is exactly the
+// shape that took resolveTemplateWiring's preserve-what-we-cannot-attribute
+// branch: correct for a restart onto the SAME template, wrong for a switch,
+// where it layered the departing template's env (proxy endpoints, auth tokens)
+// on top of the new one and dropped the new one's own keys entirely.
+func TestSwitchTemplateRebuildsEnvOnAnOrdinaryAgent(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	cfg.Templates["proxied"] = config.TemplateConfig{
+		Env: map[string]string{"ANTHROPIC_BASE_URL": "https://proxy", "ANTHROPIC_AUTH_TOKEN": "secret"},
+	}
+	cfg.Templates["plain"] = config.TemplateConfig{
+		Env: map[string]string{"PLAIN_ONLY": "1"},
+	}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "proxied", Harness: "claude", Workspace: "/w",
+		// No SpawnEnv, no InheritedEnv: a plain `leo agent spawn proxied`.
+		Env: map[string]string{"ANTHROPIC_BASE_URL": "https://proxy", "ANTHROPIC_AUTH_TOKEN": "secret"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "plain"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	env := sup.spawnCall.Env
+	if env["PLAIN_ONLY"] != "1" {
+		t.Errorf("arriving template's env missing: %v", env)
+	}
+	for _, leaked := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"} {
+		if _, present := env[leaked]; present {
+			t.Errorf("departing template's %s followed the agent onto the new template: %v", leaked, env)
+		}
+	}
+}
+
+// Archiving must file away the session the agent is actually in, not the id the
+// store last wrote down. A /clear starts a session leo never saw; switching away
+// after one used to archive the pre-/clear conversation, so switching back
+// resurrected the wrong thread and orphaned the real one.
+func TestSwitchTemplateArchivesThePostClearSession(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "agent-ws")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	projDir := filepath.Join(userHome, ".claude", "projects", session.ProjectSlug(workspace))
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+	if err := os.WriteFile(filepath.Join(projDir, "after-clear.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: workspace,
+		SessionID: "before-clear",
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "codex"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	if got := loadRec(t, home, "leo-x").SessionsByTemplate["coding"]; got != "after-clear" {
+		t.Errorf("archive[coding] = %q, want after-clear — the conversation the agent was actually in", got)
+	}
+}
+
+// The pin exists to stop the newest-transcript preference from handing back the
+// DEPARTING template's conversation in the window before the arriving one has
+// written anything. It must not outlive that window: once a transcript exists
+// that postdates the switch, it belongs to the template the agent is on now —
+// including a /clear session started hours later — and it wins.
+func TestResumeIDForPinExpiresOnceTheNewTemplateWrites(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	workspace := filepath.Join(t.TempDir(), "agent-ws")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	projDir := filepath.Join(userHome, ".claude", "projects", session.ProjectSlug(workspace))
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+
+	transcript := filepath.Join(projDir, "written-after-the-switch.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	switchedAt := time.Now().Add(-time.Hour)
+	rec := agentstore.Record{
+		Name: "leo-x", Template: "coding", Harness: "claude", Workspace: workspace,
+		SessionID: "restored-at-switch-time", SessionPinnedAt: &switchedAt,
+	}
+	if got := ResumeIDFor(rec); got != "written-after-the-switch" {
+		t.Errorf("ResumeIDFor = %q, want written-after-the-switch (the transcript postdates the switch)", got)
+	}
+
+	// The same record, with the only transcript predating the switch: that one
+	// belongs to the template just left, so the pin still wins.
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(transcript, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	if got := ResumeIDFor(rec); got != "restored-at-switch-time" {
+		t.Errorf("ResumeIDFor = %q, want the pinned id when the only transcript predates the switch", got)
+	}
+}
+
+// Idle-suspend is template-cascade config, so the record's stored interval
+// describes the template the agent left. Left alone, an agent switched off a
+// template with idle_suspend_after would keep suspending on that schedule
+// forever — the sweep reads the interval straight off the record — and one
+// switched onto such a template would never start.
+func TestSwitchTemplateReResolvesIdleSuspend(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	cfg.Templates["napper"] = config.TemplateConfig{IdleSuspendAfter: "30m"}
+	cfg.Templates["always-on"] = config.TemplateConfig{}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "napper", Harness: "claude", Workspace: "/w",
+		IdleSuspendAfter: "30m",
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "always-on"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	if got := loadRec(t, home, "leo-x").IdleSuspendAfter; got != "" {
+		t.Errorf("IdleSuspendAfter = %q, want empty — always-on sets no idle suspend", got)
+	}
+
+	if _, err := m.SwitchTemplate("leo-x", "napper"); err != nil {
+		t.Fatalf("SwitchTemplate back: %v", err)
+	}
+	// Normalized through time.Duration.String(), exactly as a fresh spawn
+	// stores it (see spawnShared).
+	if got := loadRec(t, home, "leo-x").IdleSuspendAfter; got != "30m0s" {
+		t.Errorf("IdleSuspendAfter = %q, want 30m0s from the arriving template", got)
 	}
 }

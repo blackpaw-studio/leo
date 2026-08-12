@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -102,7 +103,10 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 			name, task, task)
 	}
 
-	next := withTemplate(rec, template, normalizeHarness(cfg.TemplateHarness(tmpl)))
+	// resumeIDFor, not rec.SessionID: a /clear starts a session the store never
+	// saw, and the archive has to file away the conversation the agent is
+	// actually in or switching back resurrects a dead thread.
+	next := withTemplate(rec, template, normalizeHarness(cfg.TemplateHarness(tmpl)), ResumeIDFor(rec), time.Now())
 	// archived is what the arriving template left behind, before any minting
 	// below — the difference between "rejoin that conversation" and "there
 	// isn't one yet".
@@ -110,7 +114,17 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	resumeID := archived
 	isClaude := next.Harness == "claude"
 
-	args, env, built := resolveTemplateWiring(cfg, next, tmpl, m.webToken)
+	// Idle-suspend cascades from the arriving template like the rest of the
+	// wiring; the stored interval describes the one being left. A per-spawn
+	// --idle-suspend override cannot be told apart from a resolved value on
+	// the record, so it does not survive a switch — the same trade the env
+	// rebuild makes.
+	next.IdleSuspendAfter = ""
+	if d := cfg.ResolveIdleSuspend(tmpl, ""); d > 0 {
+		next.IdleSuspendAfter = d.String()
+	}
+
+	args, env, built := resolveTemplateWiring(cfg, next, tmpl, m.webToken, rebuildEnvFromTemplate)
 	if !built {
 		return SwitchResult{}, fmt.Errorf("building %s wiring for template %q failed (agent left on %q; see the daemon log)", next.Harness, template, rec.Template)
 	}
@@ -181,23 +195,25 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 }
 
 // withTemplate returns a copy of rec re-pointed at template/harness, with the
-// session archive rotated: the departing template's live session id is filed
-// away and the arriving template's is popped back out. rec is never mutated.
+// session archive rotated: departingSession is filed under the template being
+// left and the arriving template's id is popped back out. rec is never mutated.
 //
-// SessionPinned is set so the next resume takes the restored id verbatim: the
-// newest-transcript preference in Restart/Resume/RestoreAgents is workspace-wide
-// and template-blind, so left alone it would resume the departing template's
-// conversation and quietly undo the swap. NoResume is cleared because it
-// describes a quick-exit on the template being left behind.
-func withTemplate(rec agentstore.Record, template, harness string) agentstore.Record {
+// SessionPinnedAt is stamped with now so the restored id survives the
+// newest-transcript preference in Restart/Resume/RestoreAgents, which is
+// workspace-wide and template-blind and would otherwise resume the departing
+// template's conversation and quietly undo the swap. It is a timestamp rather
+// than a flag so the protection expires on its own once the arriving template
+// writes a transcript of its own — see ResumeIDFor. NoResume is cleared because
+// it describes a quick-exit on the template being left behind.
+func withTemplate(rec agentstore.Record, template, harness, departingSession string, now time.Time) agentstore.Record {
 	archive := maps.Clone(rec.SessionsByTemplate)
 	if archive == nil {
 		archive = map[string]string{}
 	}
 	// An agent with no template (a from-agent spawn that inherited none) has
 	// no key to file its session under; it is dropped rather than misfiled.
-	if rec.Template != "" && rec.SessionID != "" {
-		archive[rec.Template] = rec.SessionID
+	if rec.Template != "" && departingSession != "" {
+		archive[rec.Template] = departingSession
 	}
 	restored := archive[template]
 	delete(archive, template)
@@ -206,7 +222,7 @@ func withTemplate(rec agentstore.Record, template, harness string) agentstore.Re
 	next.Template = template
 	next.Harness = harness
 	next.SessionID = restored
-	next.SessionPinned = true
+	next.SessionPinnedAt = &now
 	next.NoResume = false
 	next.SessionsByTemplate = archive
 	if len(archive) == 0 {

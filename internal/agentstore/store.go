@@ -99,15 +99,20 @@ type Record struct {
 	// that have never switched.
 	SessionsByTemplate map[string]string `json:"sessions_by_template,omitempty"`
 
-	// SessionPinned suppresses the newest-jsonl preference for exactly one
-	// resume. Restart/Resume/RestoreAgents normally prefer the most recently
-	// modified transcript in the workspace over the stored SessionID, to catch
-	// a /clear session the store never saw — but that scan is workspace-wide
-	// and template-blind, so right after a template switch it would resume the
-	// PREVIOUS template's conversation and defeat SessionsByTemplate. Set by
-	// Manager.SwitchTemplate, then honored and cleared by whichever resume
-	// path runs next (a one-shot flag, like NoResume).
-	SessionPinned bool `json:"session_pinned,omitempty"`
+	// SessionPinnedAt is when a template switch handed this record its current
+	// SessionID, and nil on a record that has not switched.
+	//
+	// Restart/Resume/RestoreAgents normally prefer the most recently modified
+	// transcript in the workspace over the stored SessionID, to catch a /clear
+	// session the store never saw. That scan is workspace-wide and
+	// template-blind, so right after a switch it would resume the PREVIOUS
+	// template's conversation and defeat SessionsByTemplate. The pin suppresses
+	// it — but only for transcripts that predate the switch: anything written
+	// since belongs to the template the agent is on now, so a /clear an hour
+	// later still wins. Without that bound the pin would sit set until the next
+	// restart, however many days away, and silently abandon the newer session
+	// when it finally fired. See agent.ResumeIDFor.
+	SessionPinnedAt *time.Time `json:"session_pinned_at,omitempty"`
 
 	// InheritedEnv is the worktree/from-agent spawn's inherited env layer —
 	// e.g. a spawnFromAgent's source-agent env — stored RAW, before the

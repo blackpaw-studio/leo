@@ -10,7 +10,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/git"
-	"github.com/blackpaw-studio/leo/internal/session"
 )
 
 // agentSpawner is the minimal supervisor surface RestoreAgents needs.
@@ -97,44 +96,30 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			updated := rec
 			updated.NoResume = false
 			updated.SessionID = ""
+			// Drop the switch pin too: it guards a session this path is
+			// discarding, and a pin left behind would suppress the transcript
+			// scan on the NEXT restore, starting a brand-new conversation
+			// instead of picking up the one the agent actually ran.
+			updated.SessionPinnedAt = nil
 			if err := agentstore.Save(homePath, updated); err != nil {
 				fmt.Fprintf(os.Stderr, "restore: agent %q could not clear NoResume flag: %v\n", name, err)
-			}
-		case rec.SessionPinned:
-			// A template switch pinned this record to the session it restored
-			// for the arriving template. Take it verbatim: the jsonl scan
-			// below is workspace-wide and template-blind, so right after a
-			// switch it would hand back the transcript of the template just
-			// left and quietly undo the swap. One-shot, like NoResume.
-			resumeID = rec.SessionID
-			updated := rec
-			updated.SessionPinned = false
-			if err := agentstore.Save(homePath, updated); err != nil {
-				fmt.Fprintf(os.Stderr, "restore: agent %q could not clear SessionPinned flag: %v\n", name, err)
 			}
 		default:
 			// Prefer the newest jsonl in claude's project directory for this
 			// workspace over the stored SessionID — catches sessions created
-			// via /clear that agentstore never saw. maxAge=0 disables the
-			// staleness drop; agents are short-lived and the newest jsonl is
-			// virtually always the one we want. This jsonl scan is a
-			// claude-specific resume mechanic; non-claude records keep their
-			// stored SessionID untouched here — the supervisor's
-			// SessionArgsRefresher is responsible for injecting resume tokens
-			// into their args at spawn time, so restore must not pre-inject
-			// them itself.
-			resumeID = rec.SessionID
-			isClaude := rec.Harness == "" || rec.Harness == "claude"
-			if isClaude {
-				if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
-					if latestID != rec.SessionID {
-						updated := rec
-						updated.SessionID = latestID
-						if err := agentstore.Save(homePath, updated); err != nil {
-							fmt.Fprintf(os.Stderr, "restore: agent %q could not persist latest session id: %v\n", name, err)
-						}
-					}
-					resumeID = latestID
+			// via /clear that agentstore never saw — while honoring a template
+			// switch's pin for transcripts that predate it. This jsonl scan is
+			// a claude-specific resume mechanic; non-claude records keep their
+			// stored SessionID untouched, since the supervisor's
+			// SessionArgsRefresher injects their resume tokens at spawn time
+			// and restore must not pre-inject them itself. See agent.ResumeIDFor.
+			resumeID = agent.ResumeIDFor(rec)
+			if resumeID != rec.SessionID || rec.SessionPinnedAt != nil {
+				updated := rec
+				updated.SessionID = resumeID
+				updated.SessionPinnedAt = nil
+				if err := agentstore.Save(homePath, updated); err != nil {
+					fmt.Fprintf(os.Stderr, "restore: agent %q could not persist resolved session id: %v\n", name, err)
 				}
 			}
 		}
@@ -143,7 +128,7 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 		if rec.Harness == "" || rec.Harness == "claude" {
 			args = agent.ResumeArgs(rec.ClaudeArgs, resumeID)
 		}
-		if resumeID == "" && !rec.NoResume && !rec.SessionPinned {
+		if resumeID == "" && !rec.NoResume && rec.SessionPinnedAt == nil {
 			fmt.Fprintf(os.Stderr, "restore: agent %q has no session_id (legacy record) — respawning with a fresh claude session\n", name)
 		}
 

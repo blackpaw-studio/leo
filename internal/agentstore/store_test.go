@@ -269,6 +269,7 @@ func TestRecordRoundTripPreservesSuspendFields(t *testing.T) {
 func TestSaveAndLoadPerTemplateSessions(t *testing.T) {
 	dir := t.TempDir()
 
+	pinnedAt := time.Now().UTC().Truncate(time.Second)
 	rec := Record{
 		Name:      "agent-coding-leo",
 		Template:  "coding",
@@ -278,7 +279,7 @@ func TestSaveAndLoadPerTemplateSessions(t *testing.T) {
 			"codex":  "codex-rollout-id",
 			"review": "review-session-id",
 		},
-		SessionPinned: true,
+		SessionPinnedAt: &pinnedAt,
 	}
 	if err := Save(dir, rec); err != nil {
 		t.Fatalf("Save() error: %v", err)
@@ -298,8 +299,8 @@ func TestSaveAndLoadPerTemplateSessions(t *testing.T) {
 	if got.SessionsByTemplate["review"] != "review-session-id" {
 		t.Errorf("SessionsByTemplate[review] = %q, want %q", got.SessionsByTemplate["review"], "review-session-id")
 	}
-	if !got.SessionPinned {
-		t.Error("SessionPinned = false after round trip, want true")
+	if got.SessionPinnedAt == nil || !got.SessionPinnedAt.Equal(pinnedAt) {
+		t.Errorf("SessionPinnedAt = %v after round trip, want %v", got.SessionPinnedAt, pinnedAt)
 	}
 	if got.SessionID != "live-session" {
 		t.Errorf("SessionID = %q, want %q (the active template's session stays out of the archive)", got.SessionID, "live-session")
@@ -329,7 +330,7 @@ func TestLegacyRecordHasNoArchive(t *testing.T) {
 	if len(rec.SessionsByTemplate) != 0 {
 		t.Errorf("SessionsByTemplate = %v, want empty for a legacy record", rec.SessionsByTemplate)
 	}
-	if rec.SessionPinned {
-		t.Error("SessionPinned = true for a legacy record, want false")
+	if rec.SessionPinnedAt != nil {
+		t.Errorf("SessionPinnedAt = %v for a legacy record, want nil", rec.SessionPinnedAt)
 	}
 }

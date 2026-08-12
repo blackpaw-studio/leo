@@ -27,28 +27,31 @@ func ResumeArgs(args []string, sessionID string) []string {
 	return append(cleaned, "--resume", sessionID)
 }
 
-// resumeIDFor picks the session id a restart or resume should rejoin.
+// ResumeIDFor picks the session id a restart, resume, or daemon-restart restore
+// should rejoin.
 //
 // For claude, the newest transcript in the agent's workspace is preferred over
 // the stored id — that catches a session created by /clear that agentstore
 // never saw. That scan is workspace-wide and template-blind, though, so a
-// record whose SessionPinned flag is set (see agentstore.Record.SessionPinned,
-// set by Manager.SwitchTemplate) takes its stored id verbatim instead: after a
-// template switch the newest transcript belongs to the template just left, and
-// preferring it would silently undo the swap. The pin is one-shot — callers
-// clear it on the record they save.
+// record pinned by a template switch (agentstore.Record.SessionPinnedAt) keeps
+// its stored id against any transcript written BEFORE the switch: those belong
+// to the template just left, and preferring one would silently undo the swap.
+// Transcripts written after the switch belong to the template the agent is on
+// now and win as usual, which is what keeps the pin from going stale between a
+// switch and a restart days later.
 //
 // Non-claude harnesses have no jsonl to scan: their driver injects resume
 // tokens from the stored id at launch, so the stored id is always the answer.
-func resumeIDFor(rec agentstore.Record) string {
+func ResumeIDFor(rec agentstore.Record) string {
 	if rec.Harness != "" && rec.Harness != "claude" {
 		return rec.SessionID
 	}
-	if rec.SessionPinned {
+	latestID, latestAt, err := session.LatestSession(rec.Workspace, 0)
+	if err != nil || latestID == "" {
 		return rec.SessionID
 	}
-	if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
-		return latestID
+	if rec.SessionPinnedAt != nil && !latestAt.After(*rec.SessionPinnedAt) {
+		return rec.SessionID
 	}
-	return rec.SessionID
+	return latestID
 }
