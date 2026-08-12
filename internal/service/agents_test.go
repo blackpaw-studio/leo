@@ -732,3 +732,77 @@ func TestRestoreAgentsHonorsNoResume(t *testing.T) {
 		t.Errorf("SessionID should be cleared alongside NoResume; got %q", after.SessionID)
 	}
 }
+
+// A template switch pins the record to the session it just restored for the
+// arriving template. RestoreAgents must resume that id verbatim rather than the
+// newest jsonl in the workspace — which, right after a switch between two
+// claude templates, belongs to the template just left. The pin is one-shot, so
+// it must also be cleared once consumed.
+func TestRestoreAgentsHonorsSessionPinned(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "agent-ws")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
+	projDir := filepath.Join(userHome, ".claude", "projects", session.ProjectSlug(workspace))
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir proj: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(projDir) })
+	// The departing template's transcript: newest in the workspace, but written
+	// BEFORE the switch, so the pin outranks it.
+	otherTemplate := filepath.Join(projDir, "other-template.jsonl")
+	if err := os.WriteFile(otherTemplate, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+	beforeSwitch := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(otherTemplate, beforeSwitch, beforeSwitch); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	switchedAt := time.Now().Add(-time.Hour)
+
+	rec := agentstore.Record{
+		Name:            "leo-coding-switched",
+		Template:        "review",
+		Workspace:       workspace,
+		ClaudeArgs:      []string{"--model", "opus"},
+		SessionID:       "reviews-own-session",
+		SessionPinnedAt: &switchedAt,
+		WebPort:         "8370",
+		SpawnedAt:       time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	if restored := RestoreAgents(home, "", "", spawner); restored != 1 {
+		t.Fatalf("expected 1 restored, got %d", restored)
+	}
+
+	got := spawner.calls[0].ClaudeArgs
+	var resumed string
+	for i, a := range got {
+		if a == "--resume" && i+1 < len(got) {
+			resumed = got[i+1]
+		}
+	}
+	if resumed != "reviews-own-session" {
+		t.Fatalf("resumed %q, want reviews-own-session (the pinned id, not the newest jsonl); args %v", resumed, got)
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	after := stored[rec.Name]
+	if after.SessionPinnedAt != nil {
+		t.Error("the switch pin should be cleared once consumed")
+	}
+	if after.SessionID != "reviews-own-session" {
+		t.Errorf("SessionID = %q, want reviews-own-session", after.SessionID)
+	}
+}

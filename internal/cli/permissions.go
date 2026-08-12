@@ -38,11 +38,13 @@ func permissionsFromEnv() (leotools.Permissions, bool) {
 }
 
 // malformedPermissionsError is returned when LEO_PERMISSIONS cannot be parsed.
+// label names the refusing surface — a command path, or a description of the
+// picker action that triggered it.
 // Leo writes that payload itself, so a malformed one means it has lost track
 // of what this agent may do; refusing is the only safe reading, since the
 // alternative silently restores full access.
-func malformedPermissionsError(cmd *cobra.Command) error {
-	return fmt.Errorf("%s: refusing to run — LEO_PERMISSIONS is set but malformed, so this agent's permissions cannot be determined", cmd.CommandPath())
+func malformedPermissionsError(label string) error {
+	return fmt.Errorf("%s: refusing to run — LEO_PERMISSIONS is set but malformed, so this agent's permissions cannot be determined", label)
 }
 
 // gateCommand refuses a CLI command whose leo MCP tool equivalent this
@@ -53,12 +55,19 @@ func malformedPermissionsError(cmd *cobra.Command) error {
 // agent reset/prune/restart/rename/suspend are governed by leo_stop_agent,
 // since denying "stop other agents" plainly means to deny disrupting them.
 func gateCommand(cmd *cobra.Command, tool string) error {
+	return gateToolFor(cmd.CommandPath(), tool)
+}
+
+// gateToolFor is gateCommand keyed on a caller-supplied label instead of a
+// cobra command, for surfaces that have no command to name — the attach
+// picker's in-place actions run inside `leo attach`, not as their own verb.
+func gateToolFor(label, tool string) error {
 	perms, ok := permissionsFromEnv()
 	if !ok {
-		return malformedPermissionsError(cmd)
+		return malformedPermissionsError(label)
 	}
 	if perms.DeniesTool(tool) {
-		return fmt.Errorf("%s is not permitted for this agent (its template denies %s)", cmd.CommandPath(), tool)
+		return fmt.Errorf("%s is not permitted for this agent (its template denies %s)", label, tool)
 	}
 	return nil
 }
@@ -67,16 +76,34 @@ func gateCommand(cmd *cobra.Command, tool string) error {
 // allowlist to a `leo agent spawn` invocation. A denied tool outranks the
 // allowlist: it removes the capability outright.
 func gateSpawnTemplate(cmd *cobra.Command, template string) error {
-	if err := gateCommand(cmd, "leo_spawn_agent"); err != nil {
+	return gateSpawnTemplateFor(cmd.CommandPath(), template)
+}
+
+// gateSpawnTemplateFor is gateSpawnTemplate keyed on a label — see gateToolFor.
+func gateSpawnTemplateFor(label, template string) error {
+	if err := gateToolFor(label, "leo_spawn_agent"); err != nil {
 		return err
 	}
 	perms, ok := permissionsFromEnv()
 	if !ok {
-		return malformedPermissionsError(cmd)
+		return malformedPermissionsError(label)
 	}
 	if !perms.AllowsSpawn(template) {
 		return fmt.Errorf("%s: not permitted to spawn template %q; allowed templates: %s",
-			cmd.CommandPath(), template, strings.Join(perms.CanSpawn, ", "))
+			label, template, strings.Join(perms.CanSpawn, ", "))
 	}
 	return nil
+}
+
+// gateTemplateSwitch is the permission check for re-pointing an agent at
+// another template, applied at both doors: `leo agent set-template` and the
+// attach picker's template menu. A switch stops the agent and launches the
+// target template, so it needs the disruption permission AND that template's
+// can_spawn entry — gating only the former would let a template denied `codex`
+// reach it by switching an agent into it.
+func gateTemplateSwitch(label, template string) error {
+	if err := gateToolFor(label, "leo_stop_agent"); err != nil {
+		return err
+	}
+	return gateSpawnTemplateFor(label, template)
 }

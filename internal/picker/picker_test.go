@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+func (staticBackend) Templates(context.Context) ([]string, error)          { return nil, nil }
+func (staticBackend) SwitchTemplate(context.Context, string, string) error { return nil }
+
 func TestAgentZeroValue(t *testing.T) {
 	a := Agent{Name: "x", Host: LocalHost, Status: "running", StartedAt: time.Now()}
 	if a.AttachOnly {

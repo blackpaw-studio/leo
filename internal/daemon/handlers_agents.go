@@ -209,6 +209,44 @@ func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
+// handleAgentSetTemplate re-points an agent at a different template via POST
+// /agents/{name}/set-template. The server resolves the query to a canonical
+// agent (same resolution as stop/reset/restart), then swaps the agent's
+// template — stopping and respawning it when live, rewriting the record when
+// suspended — and returns the switch result so the caller can report which
+// conversation came back.
+func (s *Server) handleAgentSetTemplate(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	query := r.PathValue("name")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	template := r.URL.Query().Get("template")
+	if template == "" {
+		writeError(w, http.StatusBadRequest, "template is required")
+		return
+	}
+	rec, ok := s.resolveAgentOrError(w, query)
+	if !ok {
+		return
+	}
+	result, err := s.agentMgr.SwitchTemplate(rec.Name, template)
+	if err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling switch result: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
 // handleAgentStale reports which running agents would change if restarted,
 // via GET /agents/stale. `leo update` calls it after swapping the binary to
 // decide whether to offer a restart, and for which agents.

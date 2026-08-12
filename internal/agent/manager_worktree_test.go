@@ -26,6 +26,14 @@ type capturingSupervisor struct {
 	suspendCalls []string
 	stopErr      error // when non-nil, StopAgent/SuspendAgent return this error
 	releaseCalls []string
+	// onSpawn/onStop run inside SpawnAgent/StopAgent so a test can observe the
+	// world as the real supervisor sees it at that instant — in particular the
+	// on-disk agentstore record, which the live supervisor reads at launch to
+	// build a non-claude harness's resume token (see RefreshSessionArgs in
+	// internal/service/process.go). Assertions made only after the call
+	// returns cannot catch a record that was wrong while it mattered.
+	onSpawn func(SpawnRequest)
+	onStop  func(string)
 	// callOrder records "stop:<name>" / "spawn:<name>" in invocation order,
 	// letting tests assert cross-method sequencing (e.g. Reset's
 	// stop-then-clear-then-spawn contract) that the per-method call slices
@@ -56,6 +64,9 @@ func (s *capturingSupervisor) SpawnAgent(req SpawnRequest) error {
 	spec := req
 	s.spawnCall = &spec
 	s.callOrder = append(s.callOrder, "spawn:"+req.Name)
+	if s.onSpawn != nil {
+		s.onSpawn(req)
+	}
 	if s.spawnErr != nil {
 		return s.spawnErr
 	}
@@ -70,6 +81,9 @@ func (s *capturingSupervisor) SpawnAgent(req SpawnRequest) error {
 func (s *capturingSupervisor) StopAgent(name string) error {
 	s.stopCalls = append(s.stopCalls, name)
 	s.callOrder = append(s.callOrder, "stop:"+name)
+	if s.onStop != nil {
+		s.onStop(name)
+	}
 	if s.stopErr != nil {
 		return s.stopErr
 	}

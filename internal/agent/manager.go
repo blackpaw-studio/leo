@@ -949,14 +949,10 @@ func (m *Manager) Resume(name string) (Record, error) {
 
 	// The jsonl scan is a claude-specific resume mechanic (claude's own
 	// on-disk session transcripts); non-claude records resume with their
-	// stored args/SessionID unchanged.
-	resumeID := rec.SessionID
+	// stored args/SessionID unchanged. A pinned record skips the scan
+	// entirely — see resumeIDFor.
+	resumeID := ResumeIDFor(rec)
 	isClaude := rec.Harness == "" || rec.Harness == "claude"
-	if isClaude {
-		if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
-			resumeID = latestID
-		}
-	}
 	// Re-resolve against current config for the same reason Restart does:
 	// waking an agent that has been suspended across an upgrade or a template
 	// edit must apply today's wiring, not replay what was frozen at spawn.
@@ -983,6 +979,7 @@ func (m *Manager) Resume(name string) (Record, error) {
 
 	rec.Suspended = false
 	rec.SessionID = resumeID
+	rec.SessionPinnedAt = nil
 	// Persist the re-resolved wiring, same as Restart: leaving the record
 	// describing wiring the agent is no longer running would make StaleAgents
 	// report it as drifted after every update, forever.
@@ -1037,6 +1034,10 @@ func (m *Manager) Reset(name string) error {
 	rec.SessionID = ""
 	rec.NoResume = true
 	rec.Suspended = false
+	// A reset discards the conversation, so the switch pin protecting it has
+	// nothing left to protect — leaving it set would suppress the transcript
+	// scan on some later resume for no reason.
+	rec.SessionPinnedAt = nil
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		return fmt.Errorf("clearing agent session state: %w", err)
 	}
@@ -1132,14 +1133,10 @@ func (m *Manager) Restart(name string) error {
 
 	// Claude-specific resume mechanic, matching Resume: prefer the newest
 	// on-disk jsonl transcript over the stored SessionID so a /clear session
-	// the store never saw is still picked up.
-	resumeID := rec.SessionID
+	// the store never saw is still picked up, unless the record is pinned to
+	// a template's own session — see resumeIDFor.
+	resumeID := ResumeIDFor(rec)
 	isClaude := rec.Harness == "" || rec.Harness == "claude"
-	if isClaude {
-		if latestID, _, err := session.LatestSession(rec.Workspace, 0); err == nil && latestID != "" {
-			resumeID = latestID
-		}
-	}
 
 	args, env := resolveRestartArgs(cfg, rec, m.webToken)
 	if isClaude {
@@ -1161,6 +1158,7 @@ func (m *Manager) Restart(name string) error {
 	rec.ClaudeArgs = args
 	rec.Env = env
 	rec.SessionID = resumeID
+	rec.SessionPinnedAt = nil
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		log.Printf("agent %q restarted but agentstore.Save failed: %v — stored SessionID may lag until next save", name, err)
 	}
@@ -1209,28 +1207,68 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 	if !ok {
 		return fallback()
 	}
-	normalizeHarness := func(h string) string {
-		if h == "" {
-			return "claude"
-		}
-		return h
-	}
 	if normalizeHarness(cfg.TemplateHarness(tmpl)) != normalizeHarness(rec.Harness) {
 		return fallback()
 	}
 
-	// Empty prompt: restart resumes an existing conversation, it never
-	// re-sends an opening prompt. No --session-id is appended here (that's
-	// first-spawn-only) — Restart's caller applies --resume itself.
-	newArgs, newHarnessEnv := BuildTemplateArgs(cfg, tmpl, rec.Name, rec.Workspace, "", webToken)
-	if newArgs == nil {
+	newArgs, newEnv, ok := resolveTemplateWiring(cfg, rec, tmpl, webToken, keepUnattributedEnv)
+	if !ok {
 		// BuildTemplateArgs already logged the failure; keep the agent alive
 		// on its last-known-good args rather than respawning it broken.
 		return fallback()
 	}
+	return newArgs, newEnv
+}
+
+// envPolicy decides what resolveTemplateWiring does with a record whose stored
+// env cannot be split back into layers — the shape of every agent spawned
+// before SpawnEnv/InheritedEnv existed, and of every ordinary spawn made with
+// no --env overrides.
+type envPolicy int
+
+const (
+	// keepUnattributedEnv layers the stored env over a freshly computed
+	// harness env, so caller-supplied keys survive a restart or resume. Safe
+	// there because the template is not changing: the stored env came from
+	// this same template.
+	keepUnattributedEnv envPolicy = iota
+	// rebuildEnvFromTemplate discards the stored env and rebuilds from the
+	// template being resolved. Required when the TEMPLATE changes: keeping it
+	// would carry the departing template's env — proxy endpoints, auth tokens,
+	// per-template flags — onto a template that never asked for it, while the
+	// arriving template's own env never arrived at all. Caller-supplied
+	// SpawnEnv and inherited env still layer on top; only the unattributable
+	// blob is dropped.
+	rebuildEnvFromTemplate
+)
+
+// resolveTemplateWiring rebuilds rec's launch args and env from tmpl as a fresh
+// spawn would, minus any session-selection flag — callers apply --resume or a
+// minted --session-id themselves. ok is false when the harness refused to build
+// args (already logged), which each caller answers differently: restart/resume
+// keep the agent on its last-known-good wiring, while SwitchTemplate fails the
+// switch outright, since falling back there would respawn the agent on the
+// DEPARTING template's args while the record claims the new one.
+//
+// policy decides the fate of stored env keys leo cannot attribute to a layer;
+// see envPolicy.
+//
+// Env is layered exactly like a fresh spawn (see spawnShared/spawnWorktreeCore):
+// harness env and template env as the base, then rec.InheritedEnv re-pruned
+// against the CURRENT harness env (not the stale spawn-time pruning — a harness
+// env key that didn't exist yet at spawn time must still be able to win here),
+// then rec.SpawnEnv (the caller's explicit --env overrides) always winning on
+// top, with applyPermissions normalizing LEO_PERMISSIONS from tmpl.
+func resolveTemplateWiring(cfg *config.Config, rec agentstore.Record, tmpl config.TemplateConfig, webToken string, policy envPolicy) ([]string, map[string]string, bool) {
+	// Empty prompt: these paths rejoin or restart an existing agent, they
+	// never re-send an opening prompt.
+	newArgs, newHarnessEnv := BuildTemplateArgs(cfg, tmpl, rec.Name, rec.Workspace, "", webToken)
+	if newArgs == nil {
+		return nil, nil, false
+	}
 
 	var newEnv map[string]string
-	if rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.Env == nil {
+	if policy == rebuildEnvFromTemplate || rec.SpawnEnv != nil || rec.InheritedEnv != nil || rec.Env == nil {
 		inherited := pruneEnv(rec.InheritedEnv, newHarnessEnv)
 		newEnv = applyPermissions(mergeEnv(mergeEnv(mergeEnv(newHarnessEnv, tmpl.Env), inherited), rec.SpawnEnv), tmpl)
 	} else {
@@ -1247,7 +1285,7 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 		newEnv = applyPermissions(mergeEnv(newHarnessEnv, pruneEnv(rec.Env, newHarnessEnv)), tmpl)
 	}
 
-	return newArgs, newEnv
+	return newArgs, newEnv, true
 }
 
 // RestartResult summarizes the outcome of a RestartAll batch: which agents

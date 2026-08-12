@@ -259,3 +259,78 @@ func TestRecordRoundTripPreservesSuspendFields(t *testing.T) {
 		t.Fatalf("round-trip lost fields: %+v", rec)
 	}
 }
+
+// TestSaveAndLoadPerTemplateSessions verifies the per-template session archive
+// and the one-shot pin survive a save/load round trip. The archive is what
+// makes `leo agent set-template` able to hand a template back its own
+// conversation after the agent has been away on another template, so a field
+// that silently failed to persist would look exactly like "no prior session"
+// — a fresh conversation instead of the one the user expected back.
+func TestSaveAndLoadPerTemplateSessions(t *testing.T) {
+	dir := t.TempDir()
+
+	pinnedAt := time.Now().UTC().Truncate(time.Second)
+	rec := Record{
+		Name:      "agent-coding-leo",
+		Template:  "coding",
+		Workspace: "/tmp/workspace",
+		SessionID: "live-session",
+		SessionsByTemplate: map[string]string{
+			"codex":  "codex-rollout-id",
+			"review": "review-session-id",
+		},
+		SessionPinnedAt: &pinnedAt,
+	}
+	if err := Save(dir, rec); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	records, err := Load(FilePath(dir))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	got, ok := records["agent-coding-leo"]
+	if !ok {
+		t.Fatal("record not found after save")
+	}
+	if got.SessionsByTemplate["codex"] != "codex-rollout-id" {
+		t.Errorf("SessionsByTemplate[codex] = %q, want %q", got.SessionsByTemplate["codex"], "codex-rollout-id")
+	}
+	if got.SessionsByTemplate["review"] != "review-session-id" {
+		t.Errorf("SessionsByTemplate[review] = %q, want %q", got.SessionsByTemplate["review"], "review-session-id")
+	}
+	if got.SessionPinnedAt == nil || !got.SessionPinnedAt.Equal(pinnedAt) {
+		t.Errorf("SessionPinnedAt = %v after round trip, want %v", got.SessionPinnedAt, pinnedAt)
+	}
+	if got.SessionID != "live-session" {
+		t.Errorf("SessionID = %q, want %q (the active template's session stays out of the archive)", got.SessionID, "live-session")
+	}
+}
+
+// TestLegacyRecordHasNoArchive pins the zero-value contract for records
+// written before this feature: absent JSON keys must read back as an empty
+// archive and an unpinned session, so an upgraded leo treats an untouched
+// agent exactly as it did before.
+func TestLegacyRecordHasNoArchive(t *testing.T) {
+	dir := t.TempDir()
+	path := FilePath(dir)
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy := `{"legacy-agent":{"name":"legacy-agent","template":"coding","workspace":"/tmp/ws","session_id":"abc"}}`
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatalf("seeding legacy file: %v", err)
+	}
+
+	records, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	rec := records["legacy-agent"]
+	if len(rec.SessionsByTemplate) != 0 {
+		t.Errorf("SessionsByTemplate = %v, want empty for a legacy record", rec.SessionsByTemplate)
+	}
+	if rec.SessionPinnedAt != nil {
+		t.Errorf("SessionPinnedAt = %v for a legacy record, want nil", rec.SessionPinnedAt)
+	}
+}

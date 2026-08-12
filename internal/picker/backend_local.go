@@ -2,6 +2,7 @@ package picker
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/daemon"
@@ -18,17 +19,26 @@ type LocalBackend struct {
 	suspend  func(ctx context.Context, workDir, name string) error
 	resume   func(ctx context.Context, workDir, name string) (agent.Record, error)
 	rename   func(ctx context.Context, workDir, query, newName string) (agent.Record, error)
+	switchTo func(ctx context.Context, workDir, name, template string) (agent.SwitchResult, error)
+	// templates lists the local host's configured template names for the
+	// template menu. Injected by the CLI layer, which already holds the loaded
+	// config — the picker has only a leo home path, and re-reading leo.yaml
+	// here would duplicate config-resolution rules the CLI has applied. Nil
+	// makes the menu report that templates are unavailable.
+	templates func() ([]string, error)
 }
 
 // NewLocalBackend builds a local backend bound to the given leo home.
-func NewLocalBackend(homePath string) *LocalBackend {
+func NewLocalBackend(homePath string, templates func() ([]string, error)) *LocalBackend {
 	return &LocalBackend{
-		homePath: homePath,
-		list:     daemon.AgentList,
-		stop:     daemon.AgentStop,
-		suspend:  daemon.AgentSuspend,
-		resume:   daemon.AgentResume,
-		rename:   daemon.AgentRename,
+		homePath:  homePath,
+		list:      daemon.AgentList,
+		stop:      daemon.AgentStop,
+		suspend:   daemon.AgentSuspend,
+		resume:    daemon.AgentResume,
+		rename:    daemon.AgentRename,
+		switchTo:  daemon.AgentSwitchTemplate,
+		templates: templates,
 	}
 }
 
@@ -65,5 +75,17 @@ func (b *LocalBackend) Suspend(ctx context.Context, name string) error {
 
 func (b *LocalBackend) Resume(ctx context.Context, name string) error {
 	_, err := b.resume(ctx, b.homePath, name)
+	return err
+}
+
+func (b *LocalBackend) Templates(context.Context) ([]string, error) {
+	if b.templates == nil {
+		return nil, fmt.Errorf("templates are unavailable for this host")
+	}
+	return b.templates()
+}
+
+func (b *LocalBackend) SwitchTemplate(ctx context.Context, name, template string) error {
+	_, err := b.switchTo(ctx, b.homePath, name, template)
 	return err
 }

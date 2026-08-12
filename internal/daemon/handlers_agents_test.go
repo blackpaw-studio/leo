@@ -15,6 +15,8 @@ import (
 
 // fakeAgentManager is a minimal AgentManager for daemon endpoint tests.
 type fakeAgentManager struct {
+	lastSwitch [2]string
+	switchErr  error
 	records    []agent.Record
 	spawnErr   error
 	stopErr    error
@@ -104,6 +106,17 @@ func (f *fakeAgentManager) Reset(name string) error {
 func (f *fakeAgentManager) Restart(name string) error {
 	f.lastRestart = name
 	return f.restartErr
+}
+
+func (f *fakeAgentManager) SwitchTemplate(name, template string) (agent.SwitchResult, error) {
+	f.lastSwitch = [2]string{name, template}
+	if f.switchErr != nil {
+		return agent.SwitchResult{}, f.switchErr
+	}
+	return agent.SwitchResult{
+		Name: name, FromTemplate: "coding", ToTemplate: template,
+		FromHarness: "claude", ToHarness: "codex", Status: "running",
+	}, nil
 }
 
 func (f *fakeAgentManager) RestartAll() agent.RestartResult {
@@ -1207,5 +1220,75 @@ func TestAgentPruneHandlerErrorCodes(t *testing.T) {
 				t.Errorf("%s: env.OK should be false on error", tc.name)
 			}
 		})
+	}
+}
+
+// The set-template route resolves the name like the other lifecycle routes
+// (shorthand resolution itself lives in the manager), forwards the template
+// from the query string, and returns the switch result so the CLI can report
+// which conversation came back.
+func TestAgentSetTemplateHandler(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "leo-coding-owner-fetch"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/leo-coding-owner-fetch/set-template?template=codex", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastSwitch != [2]string{"leo-coding-owner-fetch", "codex"} {
+		t.Fatalf("manager called with %v, want the canonical name and the requested template", mgr.lastSwitch)
+	}
+
+	var body Response
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var result agent.SwitchResult
+	if err := json.Unmarshal(body.Data, &result); err != nil {
+		t.Fatalf("decode switch result: %v", err)
+	}
+	if result.ToTemplate != "codex" || result.ToHarness != "codex" {
+		t.Errorf("result = %+v, want the target template and harness", result)
+	}
+}
+
+func TestAgentSetTemplateHandlerRequiresTemplate(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/set-template", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 when no template is given, got %d", resp.StatusCode)
+	}
+	if mgr.lastSwitch != [2]string{} {
+		t.Errorf("manager was called despite a missing template: %v", mgr.lastSwitch)
+	}
+}
+
+func TestAgentSetTemplateHandlerError(t *testing.T) {
+	mgr := &fakeAgentManager{
+		records:   []agent.Record{{Name: "foo"}},
+		switchErr: errors.New("no template \"ghost\" in config"),
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/set-template?template=ghost", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", resp.StatusCode)
 	}
 }
