@@ -206,7 +206,7 @@ headless: each firing spawns a fresh `codex exec --json
 
 | Key | Type | Meaning |
 |---|---|---|
-| `permission_mode` | string | One of `read-only` (codex's own default when unset), `workspace-write`, `danger-full-access`, `approve-for-me`. The first three are passed as `--sandbox`; `approve-for-me` is passed as `--approve-for-me` instead. Shares its name with claude's `permission_mode` but not its values — harness_options never merge across harnesses (see [`scopeHarnessOptions`](#harness_options)), so a claude value cannot leak into a codex scope. |
+| `permission_mode` | string | One of `read-only` (codex's own default when unset), `workspace-write`, `danger-full-access`, `approve-for-me`. The first three are passed as `--sandbox`; `approve-for-me` is passed as `--approve-for-me` instead. Shares its name with claude's `permission_mode` but not its values. The defaults cascade never merges harness_options across harnesses (see [Merge rules](#merge-rules)), and the two value sets are disjoint, so a stale claude value left behind by a hand-edited `harness:` flip is rejected at validation rather than silently applied. |
 
 Other things to know:
 
