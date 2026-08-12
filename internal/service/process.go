@@ -155,10 +155,47 @@ func (s *Supervisor) States() map[string]daemon.ProcessStateInfo {
 	return result
 }
 
-func (s *Supervisor) setState(name, status string) {
+// isStaleLocked reports whether id has been superseded as the live identity
+// for name. s.mu must already be held, so the check and the mutation it guards
+// happen in one critical section — a check-then-act split would leave exactly
+// the window this guard exists to close.
+//
+// Every supervisor map is keyed by agent NAME, but a name outlives a single
+// supervise goroutine: stop-then-respawn (leo agent restart/reset/set-template,
+// or an idle-suspend followed by an auto-resume) cancels the old goroutine and
+// immediately registers a new generation under the same name. The old goroutine
+// is typically parked in waitForSessionEnd at that moment and only notices the
+// cancellation up to sessionPollInterval later, by which time every name-keyed
+// write it makes lands on its successor. Comparing identity pointers is what
+// separates the two generations.
+//
+// A name with no registered identity is not stale: superviseProcess is callable
+// outside SpawnAgent (tests, any future non-agent spec), and those callers have
+// no successor to protect. That fallback is safe here because the only
+// state-bearing map, s.states, is deleted in the same critical section as
+// s.identities — a name with no identity has no state left to stomp either.
+func (s *Supervisor) isStaleLocked(name string, id *procIdentity) bool {
+	cur, ok := s.identities[name]
+	return ok && cur != id
+}
+
+// shuttingDown reports whether the whole daemon is going down, i.e. the
+// parent context every supervised process derives from has been cancelled.
+// s.ctx is set once at construction and never written again, so this needs no
+// lock.
+func (s *Supervisor) shuttingDown() bool {
+	return s.ctx != nil && s.ctx.Err() != nil
+}
+
+// setState updates name's status, but only while id is still the live
+// generation for that name — see isStaleLocked. A stale goroutine's final
+// setState(name, "stopped") would otherwise mark its successor's running
+// agent as stopped everywhere the daemon reports status (the attach picker,
+// `leo agent list`, the web UI, /api/v1/state).
+func (s *Supervisor) setState(name string, id *procIdentity, status string) {
 	s.mu.Lock()
 	st, ok := s.states[name]
-	if !ok {
+	if !ok || s.isStaleLocked(name, id) {
 		s.mu.Unlock()
 		return
 	}
@@ -192,10 +229,13 @@ func (s *Supervisor) initState(name string) {
 	}
 }
 
-func (s *Supervisor) incrementRestarts(name string) {
+// incrementRestarts bumps name's restart counter, subject to the same
+// generation guard as setState: a stale goroutine must not inflate its
+// successor's restart count.
+func (s *Supervisor) incrementRestarts(name string, id *procIdentity) {
 	s.mu.Lock()
 	st, ok := s.states[name]
-	if !ok {
+	if !ok || s.isStaleLocked(name, id) {
 		s.mu.Unlock()
 		return
 	}
@@ -871,7 +911,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		sessionName := id.SessionName()
 		currentArgs := id.Args()
 
-		sv.setState(name, "running")
+		sv.setState(name, id, "running")
 
 		// Clear any prior exit.code so a shell SIGKILL mid-run doesn't leave
 		// the previous iteration's code on disk to be misattributed here.
@@ -930,11 +970,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			createCmd.Stderr = os.Stderr
 
 			if err := createCmd.Run(); err != nil {
-				sv.setState(name, "restarting")
+				sv.setState(name, id, "restarting")
 				fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", name, err, backoff)
 				select {
 				case <-ctx.Done():
-					sv.setState(name, "stopped")
+					sv.setState(name, id, "stopped")
 					return
 				case <-time.After(backoff):
 				}
@@ -978,8 +1018,8 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}(startHandle)
 		}
 
-		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey) {
-			sv.setState(name, "stopped")
+		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey, sv.shuttingDown) {
+			sv.setState(name, id, "stopped")
 			return
 		}
 
@@ -988,13 +1028,13 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// Check if we were signaled to stop
 		select {
 		case <-ctx.Done():
-			sv.setState(name, "stopped")
+			sv.setState(name, id, "stopped")
 			return
 		default:
 		}
 
-		sv.setState(name, "restarting")
-		sv.incrementRestarts(name)
+		sv.setState(name, id, "restarting")
+		sv.incrementRestarts(name, id)
 
 		// A very-quick exit means this iteration's session-selection flag is
 		// unusable. Degrade in two steps so we recover the conversation when
@@ -1059,7 +1099,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		// --resume but doesn't change backoff — it's purely a session fix.
 		select {
 		case <-ctx.Done():
-			sv.setState(name, "stopped")
+			sv.setState(name, id, "stopped")
 			return
 		case <-time.After(backoff):
 		}
@@ -1073,13 +1113,23 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 // paneKey decides how to clear a blocking startup/announcement dialog seen in
 // a captured pane (see harness.PaneCare). nil means the driver has no pane
 // care to offer, so dismissal is skipped entirely.
-func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time, paneKey func(string) string) bool {
+//
+// shuttingDown separates the two reasons this context can be cancelled.
+// Daemon shutdown is the only one that makes tearing the session down this
+// goroutine's job; a per-agent cancel comes from stopAgentProcess, which
+// already killed the session itself and may since have handed the name to a
+// successor whose freshly created session must not be killed. Unlike a
+// name-keyed ownership lookup, the shutdown condition is monotonic — once
+// true it stays true — so checking it and acting on it cannot race.
+func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, spec ProcessSpec, startTime time.Time, paneKey func(string) string, shuttingDown func() bool) bool {
 	_ = spec      // kept in signature for future lifecycle hooks
 	_ = startTime // kept in signature for future lifecycle hooks
 	for {
 		select {
 		case <-ctx.Done():
-			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(id.SessionName()))...).Run()
+			if shuttingDown() {
+				exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(id.SessionName()))...).Run()
+			}
 			return true
 		case <-time.After(sessionPollInterval):
 		}

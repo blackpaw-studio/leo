@@ -44,7 +44,9 @@ func TestWaitForSessionEnd_FollowsLiveRename(t *testing.T) {
 	defer cancel()
 
 	done := make(chan bool, 1)
-	go func() { done <- waitForSessionEnd(ctx, "tmux", id, ProcessSpec{}, time.Now(), nil) }()
+	go func() {
+		done <- waitForSessionEnd(ctx, "tmux", id, ProcessSpec{}, time.Now(), nil, func() bool { return true })
+	}()
 
 	// waitForQuery blocks until the watcher polls the given session name (or the
 	// test times out), draining intervening polls deterministically.
@@ -116,7 +118,9 @@ func TestWaitForSessionEnd_ContextCancelReturnsTrue(t *testing.T) {
 	id := newProcIdentity("leo-x", []string{"--name", "leo-x"})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan bool, 1)
-	go func() { done <- waitForSessionEnd(ctx, "false", id, ProcessSpec{}, time.Now(), nil) }()
+	go func() {
+		done <- waitForSessionEnd(ctx, "false", id, ProcessSpec{}, time.Now(), nil, func() bool { return true })
+	}()
 	cancel()
 	select {
 	case v := <-done:
