@@ -30,6 +30,25 @@ All notable user-visible changes to Leo are documented here.
 
 ### Changed
 
+- **BREAKING: the codex harness option `sandbox` is now `permission_mode`.**
+  Configs carrying `harness_options.sandbox` under a codex-harness scope fail
+  validation with an explicit "renamed to" error — and because validation runs
+  on every config load, that takes down the CLI *and* the daemon until the key
+  is renamed. There is no automatic migration. Rename it before upgrading:
+
+  ```yaml
+  templates:
+    codex:
+      harness: codex
+      harness_options:
+        sandbox: workspace-write        # old
+        permission_mode: workspace-write  # new
+  ```
+
+  The three existing values (`read-only`, `workspace-write`,
+  `danger-full-access`) are unchanged and still passed as `--sandbox`. The key
+  was renamed because the new fourth value is not a sandbox setting — see
+  Added, below.
 - **tmux 3.2+ is now required** (it added `-e` on `new-session`). `leo setup`
   refuses to complete and `leo validate` reports an error on older versions,
   instead of letting every agent spawn fail silently in the restart loop.
@@ -44,6 +63,16 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **`permission_mode: approve-for-me` for the codex harness.** Codex's
+  `--approve-for-me` preset: it implies the `workspace-write` sandbox, sets
+  approval policy `on-request`, and routes each escalation to codex's
+  *automatic* approval reviewer rather than to a human — so leo drops its usual
+  `-a never` pinning for this value only. It stays safe unattended: a denied
+  escalation comes back to the model as a developer message and the turn ends
+  with the agent asking in-band, rather than raising a blocking TUI modal that
+  could strand the readiness probe. The reviewer is a model making a judgement
+  call, so it is a weaker boundary than a sandbox — prefer `workspace-write`
+  unless an agent genuinely needs to escalate.
 - **PR prerelease builds.** Every PR from this repo now produces a
   cosign-signed installable binary as a workflow artifact. Install with
   `leo update --pr <n>` for the latest passing run on a PR, or
