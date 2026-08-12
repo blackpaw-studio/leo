@@ -110,16 +110,29 @@ func TestArgs(t *testing.T) {
 			},
 		},
 		{
-			name: "model, sandbox, resume",
+			name: "model, permission_mode, resume",
 			spec: harness.LaunchSpec{
 				Kind: harness.KindTask, Prompt: "again", Model: "gpt-5.3-codex",
 				Session: harness.SessionState{Mode: harness.SessionResume, ID: "tid-9"},
-				Options: Options{Sandbox: "workspace-write"},
+				Options: Options{PermissionMode: "workspace-write"},
 			},
 			want: func(ws string) []string {
 				return withRoots([]string{"exec", "--json", "--skip-git-repo-check",
 					"--model", "gpt-5.3-codex", "--sandbox", "workspace-write"},
 					ws, []string{"resume", "tid-9", "again"})
+			},
+		},
+		{
+			// --approve-for-me is a self-contained preset: codex's own CLI
+			// rejects it alongside --sandbox, so Args must emit it alone.
+			name: "permission_mode approve-for-me omits --sandbox",
+			spec: harness.LaunchSpec{
+				Kind: harness.KindTask, Prompt: "go", Model: "gpt-5.6-sol",
+				Options: Options{PermissionMode: "approve-for-me"},
+			},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check",
+					"--model", "gpt-5.6-sol", "--approve-for-me"}, ws, []string{"go"})
 			},
 		},
 		{
@@ -224,7 +237,7 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 		{
 			name: "KindAgent TUI argv",
 			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol",
-				Options: Options{Sandbox: "workspace-write"}},
+				Options: Options{PermissionMode: "workspace-write"}},
 			want: func(ws string) []string {
 				return withRoots([]string{"-a", "never", "--model", "gpt-5.6-sol", "--sandbox", "workspace-write"}, ws, nil)
 			},
@@ -252,7 +265,17 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 			},
 		},
 		{
-			name: "KindAgent no model no sandbox",
+			// codex rejects --approve-for-me alongside either -a or -s, so
+			// the TUI argv must drop the usual `-a never` pinning too.
+			name: "KindAgent approve-for-me omits -a and --sandbox",
+			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol",
+				Options: Options{PermissionMode: "approve-for-me"}},
+			want: func(ws string) []string {
+				return withRoots([]string{"--approve-for-me", "--model", "gpt-5.6-sol"}, ws, nil)
+			},
+		},
+		{
+			name: "KindAgent no model no permission_mode",
 			spec: harness.LaunchSpec{Kind: harness.KindAgent, Options: Options{}},
 			want: func(ws string) []string {
 				return withRoots([]string{"-a", "never"}, ws, nil)

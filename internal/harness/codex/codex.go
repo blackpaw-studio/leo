@@ -2,10 +2,11 @@
 // CLI. Scheduled tasks run one-shot (codex exec --json); supervised
 // processes, ephemeral agents, and persistent sessions all drive the
 // interactive codex TUI supervised in a leo tmux session (parity with
-// claude), via the shared tmuxtui.Driver. Both launch shapes always run with
+// claude), via the shared tmuxtui.Driver. Both launch shapes default to
 // approval policy "never" (headless exec has no other option; the TUI is
-// pinned to it for unattended parity), so the only permission knob is the
-// sandbox.
+// pinned to it for unattended parity). The single permission knob is
+// `permission_mode`, whose approve-for-me value opts out of that pinning in
+// favour of codex's automatic approval reviewer — see approvalPolicyArgs.
 package codex
 
 import (
@@ -85,9 +86,7 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		if spec.Model != "" {
 			args = append(args, "--model", spec.Model)
 		}
-		if opts.Sandbox != "" {
-			args = append(args, "--sandbox", opts.Sandbox)
-		}
+		args = append(args, execPermissionArgs(opts.PermissionMode)...)
 		args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 		args = append(args, sandboxWritableRootsArgs(spec.Workspace)...)
 		args = append(args, opts.LeoMCP.configArgs()...)
@@ -95,18 +94,14 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		return append(args, spec.Prompt), nil
 	}
 
-	// Interactive TUI argv. -a never keeps an unattended TUI from ever
-	// blocking on an approval prompt (parity with headless exec, which
-	// always ran approval policy "never"). Resume tokens are added by
-	// the supervisor via RefreshSessionArgs once a session id is
-	// discovered; the opening prompt is injected by the driver's Start.
-	args := []string{"-a", "never"}
+	// Interactive TUI argv. Resume tokens are added by the supervisor via
+	// RefreshSessionArgs once a session id is discovered; the opening
+	// prompt is injected by the driver's Start.
+	args := approvalPolicyArgs(opts.PermissionMode)
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
-	if opts.Sandbox != "" {
-		args = append(args, "--sandbox", opts.Sandbox)
-	}
+	args = append(args, sandboxArgs(opts.PermissionMode)...)
 	args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 	args = append(args, sandboxWritableRootsArgs(spec.Workspace)...)
 	return append(args, opts.LeoMCP.configArgs()...), nil
@@ -122,4 +117,36 @@ func developerInstructionsArgs(systemContext string) []string {
 		return nil
 	}
 	return []string{"-c", "developer_instructions=" + tomlString(systemContext)}
+}
+
+// sandboxArgs renders the --sandbox flag. An unset preset leaves codex on
+// its default (read-only); approve-for-me contributes nothing here because it
+// already implies workspace-write and codex's CLI rejects the two flags
+// together.
+func sandboxArgs(mode string) []string {
+	if mode == "" || mode == permissionModeApproveForMe {
+		return nil
+	}
+	return []string{"--sandbox", mode}
+}
+
+// approvalPolicyArgs opens the interactive argv with an approval policy.
+// `-a never` keeps an unattended TUI from ever blocking on a human approval
+// prompt; approve-for-me is equally non-blocking — its automatic reviewer
+// answers escalations itself — and codex rejects the two flags together.
+func approvalPolicyArgs(mode string) []string {
+	if mode == permissionModeApproveForMe {
+		return []string{"--approve-for-me"}
+	}
+	return []string{"-a", "never"}
+}
+
+// execPermissionArgs renders the whole preset for headless exec, which has no
+// --ask-for-approval flag at all (it is always "never"), so the preset
+// reduces to a single flag.
+func execPermissionArgs(mode string) []string {
+	if mode == permissionModeApproveForMe {
+		return []string{"--approve-for-me"}
+	}
+	return sandboxArgs(mode)
 }

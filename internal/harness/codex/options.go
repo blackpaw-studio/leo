@@ -10,17 +10,27 @@ import (
 )
 
 // harness_options keys accepted by the codex adapter.
-var optionKeys = []string{"sandbox"}
+var optionKeys = []string{"permission_mode"}
 
-var validSandboxes = map[string]bool{
+// permissionModeApproveForMe routes escalations through codex's automatic
+// approval reviewer instead of a human. It is a self-contained preset —
+// codex's CLI rejects --approve-for-me alongside either --sandbox or
+// --ask-for-approval — which is why permission_mode is one enum rather than a
+// sandbox knob plus an approval knob.
+const permissionModeApproveForMe = "approve-for-me"
+
+var validPermissionModes = map[string]bool{
 	"read-only": true, "workspace-write": true, "danger-full-access": true,
+	permissionModeApproveForMe: true,
 }
+
+const validPermissionModesHelp = "use read-only, workspace-write, danger-full-access, or approve-for-me"
 
 // Options carries the codex-specific knobs. LeoMCP is runtime-only, filled
 // by the task runner when leo's MCP server is wired in.
 type Options struct {
-	Sandbox string // "" = codex default (read-only)
-	LeoMCP  *LeoMCPBridge
+	PermissionMode string // "" = codex default (read-only, approval policy never)
+	LeoMCP         *LeoMCPBridge
 }
 
 // LeoMCPBridge describes the per-invocation `-c mcp_servers.leo.*` config
@@ -95,17 +105,19 @@ func (Codex) DecodeOptions(raw map[string]any) (any, error) {
 		val := raw[key]
 		var err error
 		switch key {
-		case "sandbox":
+		case "permission_mode":
 			var s string
 			if s, err = stringOption(key, val); err == nil {
-				if s != "" && !validSandboxes[s] {
-					err = fmt.Errorf("sandbox %q is not valid (use read-only, workspace-write, or danger-full-access)", s)
+				if s != "" && !validPermissionModes[s] {
+					err = fmt.Errorf("permission_mode %q is not valid (%s)", s, validPermissionModesHelp)
 				} else {
-					o.Sandbox = s
+					o.PermissionMode = s
 				}
 			}
+		case "sandbox":
+			err = fmt.Errorf("option %q is not supported: renamed to %q (%s)", key, "permission_mode", validPermissionModesHelp)
 		case "approval":
-			err = fmt.Errorf("option %q is not supported: leo always launches codex with approval policy %q (unattended sessions)", key, "never")
+			err = fmt.Errorf("option %q is not supported: use %q for auto-reviewed approvals, or leave unset for approval policy %q (unattended sessions)", key, "permission_mode: approve-for-me", "never")
 		case "append_system_prompt":
 			err = fmt.Errorf("option %q is not supported: codex has no append-system-prompt equivalent (use the workspace AGENTS.md)", key)
 		default:
@@ -122,9 +134,11 @@ func (Codex) DecodeOptions(raw map[string]any) (any, error) {
 // mirror optionKeys; TestOptionsSchemaMatchesDecodeOptions locks the two.
 func (Codex) OptionsSchema() []harness.OptionField {
 	return []harness.OptionField{
-		{Key: "sandbox", Label: "Sandbox", Type: harness.OptionEnum,
-			EnumValues: []string{"read-only", "workspace-write", "danger-full-access"},
-			Help:       "codex exec sandbox policy (default read-only)"},
+		{Key: "permission_mode", Label: "Permission mode", Type: harness.OptionEnum,
+			EnumValues: []string{"read-only", "workspace-write", "danger-full-access", permissionModeApproveForMe},
+			Help: "codex permission preset (default read-only). approve-for-me runs " +
+				"workspace-write and routes escalations through codex's automatic " +
+				"approval reviewer instead of blocking on a human"},
 	}
 }
 

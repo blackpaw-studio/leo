@@ -453,7 +453,7 @@ func TestValidateKindSupportHappyPath(t *testing.T) {
 				Schedule: "0 * * * *", PromptFile: "p.md",
 				Harness:        "codex",
 				Model:          "gpt-5.3-codex",
-				HarnessOptions: map[string]any{"sandbox": "workspace-write"},
+				HarnessOptions: map[string]any{"permission_mode": "workspace-write"},
 			}},
 		}
 		if err := cfg.Validate(); err != nil {

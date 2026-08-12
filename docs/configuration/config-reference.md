@@ -13,7 +13,7 @@ Settings inherited by all tasks and templates unless overridden.
 | `model` | string | No | Default model, validated by the resolved harness (`claude` and `codex`: any non-whitespace string — the CLI resolves aliases like `sonnet`/`fable` and full IDs like `claude-fable-5` itself; `opencode`: must be `provider/model`). Defaults to `sonnet`. Does **not** cascade to a scope whose resolved `harness` differs from `defaults.harness` — see [Harnesses → Cross-harness model cascade](harnesses.md#cross-harness-model-cascade). |
 | `max_turns` | int | No | Default maximum agent turns per execution. Defaults to `15`. Ignored by `codex` and `opencode` (no per-turn cap upstream). |
 | `harness` | string | No | Adapter name for this scope and everything that cascades from it. One of `claude`, `codex`, `opencode`. Defaults to `claude`. All three run every leo primitive (tasks, ephemeral agents, persistent tasks) — see [Harnesses](harnesses.md). |
-| `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `sandbox`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
+| `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `permission_mode`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
 | `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is suspended. Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
 
 Custom Anthropic-compatible endpoints (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …) are configured via each scope's own `env:` map (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`) — see [Harnesses → providers is gone](harnesses.md#providers-is-gone).
@@ -41,7 +41,7 @@ all rejected at config load and before every web-UI save. Full behavior
 
 | Key | Type | Meaning |
 |---|---|---|
-| `sandbox` | string | `read-only` (codex default), `workspace-write`, or `danger-full-access`. |
+| `permission_mode` | string | `read-only` (codex default), `workspace-write`, `danger-full-access`, or `approve-for-me` (workspace-write, with escalations routed to codex's automatic approval reviewer rather than a human). |
 
 **`opencode`** (1 key):
 
@@ -207,7 +207,7 @@ tasks:
 | `prompt_file` | string | Yes | -- | Path to prompt file, relative to workspace. |
 | `model` | string | No | `defaults.model` | Model override, validated by the resolved harness. Does not fall back to `defaults.model` when this task's harness differs from `defaults.harness` — see [Cross-harness model cascade](harnesses.md#cross-harness-model-cascade). |
 | `harness` | string | No | `defaults.harness` | Adapter override for this task. `claude`, `codex`, and `opencode` all support one-shot and `runtime: persistent` tasks (persistent tasks deliver into agents, which all three harnesses support). See [Harnesses](harnesses.md). |
-| `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `bypass_permissions` at task scope is honored (not defaults-only). For `codex`: `sandbox`. For `opencode`: `permission`. See [Harnesses](harnesses.md). |
+| `harness_options` | map | No | merged with `defaults.harness_options` (same harness only) | Adapter-specific options — for `claude`: `permission_mode`, `bypass_permissions`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. `bypass_permissions` at task scope is honored (not defaults-only). For `codex`: `permission_mode`. For `opencode`: `permission`. See [Harnesses](harnesses.md). |
 | `max_turns` | int | No | `defaults.max_turns` | Max turns override. Ignored by `codex`/`opencode`. |
 | `timeout` | string | No | `30m` | Max duration before kill (e.g., `30m`, `1h`). |
 | `retries` | int | No | `0` | Retry attempts on failure. |

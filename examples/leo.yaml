@@ -145,9 +145,10 @@ tasks:
 
   # A codex-backed task, to illustrate a non-claude harness. codex has no
   # channel-plugin concept — it messages out via leo's leo_send_message
-  # MCP tool instead — so no `channels` here. `sandbox` is the only codex
-  # harness_options key: read-only (default), workspace-write, or
-  # danger-full-access.
+  # MCP tool instead — so no `channels` here. `permission_mode` is the only codex
+  # harness_options key: read-only (default), workspace-write,
+  # danger-full-access, or approve-for-me (workspace-write with escalations
+  # routed through codex's automatic approval reviewer instead of a human).
   dependency-audit:
     enabled: false
     schedule: "0 6 * * 1"        # weekly, Monday 6am
@@ -156,7 +157,7 @@ tasks:
     harness: codex
     model: gpt-5.3-codex
     harness_options:
-      sandbox: workspace-write
+      permission_mode: workspace-write
     timeout: 15m
 
 # ---------------------------------------------------------------------------

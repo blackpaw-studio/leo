@@ -907,7 +907,7 @@ func TestSaveTaskWithHarnessOptions(t *testing.T) {
 
 	form := taskFormBase(t, s, "b")
 	form.Set("harness", "codex")
-	form.Set("harness_options.sandbox", "workspace-write")
+	form.Set("harness_options.permission_mode", "workspace-write")
 	w := postForm(t, s, "/web/config/task/b", form)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save: %d, body=%s", w.Code, readBody(t, w))
@@ -918,7 +918,7 @@ func TestSaveTaskWithHarnessOptions(t *testing.T) {
 	if task.Harness != "codex" {
 		t.Errorf("Harness = %q, want codex", task.Harness)
 	}
-	if got := task.HarnessOptions["sandbox"]; got != "workspace-write" {
+	if got := task.HarnessOptions["permission_mode"]; got != "workspace-write" {
 		t.Errorf("HarnessOptions = %#v", task.HarnessOptions)
 	}
 }
@@ -935,13 +935,13 @@ func TestSaveRejectsBadHarnessOptionAndWritesNothing(t *testing.T) {
 
 	form := taskFormBase(t, s, "b")
 	form.Set("harness", "codex")
-	form.Set("harness_options.sandbox", "bogus")
+	form.Set("harness_options.permission_mode", "bogus")
 	w := postForm(t, s, "/web/config/task/b", form)
 	body := readBody(t, w)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save: %d, body=%s", w.Code, body)
 	}
-	if !strings.Contains(body, "sandbox") || !strings.Contains(body, "not valid") {
+	if !strings.Contains(body, "permission_mode") || !strings.Contains(body, "not valid") {
 		t.Errorf("flash does not carry the adapter's key-named error: %s", body)
 	}
 	if after := readFile(t, cfgPath); after != before {

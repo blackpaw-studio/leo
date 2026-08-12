@@ -72,11 +72,18 @@ func TestHarnessOptionsPartialRendersSelectedHarness(t *testing.T) {
 
 	// Different harness → blank slate for that harness's fields.
 	body = getBody(t, s, "/web/partials/harness-options?section=task&scope=b&harness=codex")
-	if !strings.Contains(body, `name="harness_options.sandbox"`) {
-		t.Errorf("codex partial missing sandbox field: %s", body)
+	if !strings.Contains(body, `name="harness_options.permission_mode"`) {
+		t.Errorf("codex partial missing permission_mode field: %s", body)
 	}
-	if strings.Contains(body, "permission_mode") {
+	// claude and codex both expose a permission_mode key, so a bare
+	// substring can no longer tell the two schemas apart: assert on a
+	// claude-only field, and on the stored claude value not surviving the
+	// harness switch into codex's differently-valued enum.
+	if strings.Contains(body, "harness_options.bypass_permissions") {
 		t.Errorf("codex partial leaked claude fields: %s", body)
+	}
+	if strings.Contains(body, `value="plan"`) {
+		t.Errorf("codex partial carried claude's stored permission_mode value: %s", body)
 	}
 }
 
@@ -180,7 +187,7 @@ func TestHarnessOptionsPartialEmptyHarnessMeansInherit(t *testing.T) {
 		Tasks: map[string]config.TaskConfig{"n": {Schedule: "@daily", PromptFile: "p.md"}}}
 	s := seedHarnessTestServer(t, cfg)
 	body := getBody(t, s, "/web/partials/harness-options?section=task&scope=n&harness=")
-	if !strings.Contains(body, `name="harness_options.sandbox"`) {
+	if !strings.Contains(body, `name="harness_options.permission_mode"`) {
 		t.Errorf("inherit resolution failed — want codex fields, got: %s", body)
 	}
 }
