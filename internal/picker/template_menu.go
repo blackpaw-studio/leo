@@ -94,10 +94,13 @@ func (m model) updateTemplateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // templateMenuView renders the chooser in place of the agent list, padded to
-// the list's height so the footer does not jump as the menu opens and closes.
+// the height of the list's RENDERED view so the footer does not jump as the
+// menu opens and closes. Measuring the render rather than m.list.Height() is
+// what makes that hold: once there are enough agents to paginate, the list
+// draws its pagination line beyond its content height.
 func (m model) templateMenuView() string {
 	menu := m.templates
-	height := m.list.Height()
+	height := strings.Count(m.list.View(), "\n") + 1
 
 	lines := make([]string, 0, height)
 	if len(menu.options) == 0 {

@@ -257,6 +257,7 @@ Notes and limits:
 
 - **The name is left alone**, even when it embeds the old template (`leo-coding-owner-fetch` running codex). Stable names keep tmux sessions, channel routing, and scripts working — rename it yourself with `leo agent rename` if you want it to match.
 - **The target template's `workspace` is ignored.** The agent stays in the project it is working in, which is also what keeps its archived sessions valid.
+- **`idle_suspend_after` comes from the new template**, like the rest of the wiring — a per-spawn `--idle-suspend` override does not survive a switch.
 - **Stopped agents are refused**, as are agents backing a `runtime: persistent` task — those bind to their agent by name, so switching one would redirect a scheduled task's prompts into a template it was never configured for. Change `tasks.<name>.template` instead.
 - **Permissions:** a switch launches the target template, so it needs both `leo_stop_agent` and the `can_spawn` allowlist entry for that template. See [Permissions](../configuration/permissions.md).
 

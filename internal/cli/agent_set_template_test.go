@@ -139,3 +139,59 @@ func TestFormatSwitchResultOmitsUnchangedHarness(t *testing.T) {
 		t.Errorf("output should not restate an unchanged harness: %q", got)
 	}
 }
+
+// Both doors onto a template switch — the verb and the attach picker's menu —
+// go through gateTemplateSwitch, so the policy is asserted once, here.
+func TestGateTemplateSwitch(t *testing.T) {
+	tests := []struct {
+		name        string
+		permissions string
+		template    string
+		wantErr     string
+	}{
+		{name: "unrestricted", permissions: "", template: "codex"},
+		{name: "allowed by can_spawn", permissions: `{"can_spawn":["codex","review"]}`, template: "codex"},
+		{
+			name:        "outside can_spawn",
+			permissions: `{"can_spawn":["review"]}`,
+			template:    "codex",
+			wantErr:     "not permitted to spawn template",
+		},
+		{
+			name:        "stop denied",
+			permissions: `{"deny_tools":["leo_stop_agent"]}`,
+			template:    "codex",
+			wantErr:     "denies leo_stop_agent",
+		},
+		{
+			name:        "spawn denied outright",
+			permissions: `{"deny_tools":["leo_spawn_agent"]}`,
+			template:    "codex",
+			wantErr:     "denies leo_spawn_agent",
+		},
+		{
+			name:        "malformed payload refuses",
+			permissions: `{not json`,
+			template:    "codex",
+			wantErr:     "malformed",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LEO_PERMISSIONS", tc.permissions)
+			err := gateTemplateSwitch("leo attach: set template", tc.template)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected refusal: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected a refusal containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want it to mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}

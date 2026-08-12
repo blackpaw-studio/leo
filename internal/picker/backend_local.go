@@ -20,27 +20,36 @@ type LocalBackend struct {
 	resume   func(ctx context.Context, workDir, name string) (agent.Record, error)
 	rename   func(ctx context.Context, workDir, query, newName string) (agent.Record, error)
 	switchTo func(ctx context.Context, workDir, name, template string) (agent.SwitchResult, error)
-	// templates lists the local host's configured templates. Injected by the
-	// CLI layer, which already holds the loaded config — the picker has only
-	// a leo home path, and re-reading leo.yaml here would duplicate the
-	// config-resolution rules the CLI has already applied.
-	templates func() ([]string, error)
+	policy   LocalPolicy
 }
 
-// NewLocalBackend builds a local backend bound to the given leo home.
-// templates supplies the configured template names for the template menu; pass
-// nil on a host where they cannot be resolved, and the menu reports that
-// instead of offering an empty list.
-func NewLocalBackend(homePath string, templates func() ([]string, error)) *LocalBackend {
+// LocalPolicy carries the host-side policy the picker cannot resolve on its
+// own: which templates exist, and whether this process may switch an agent onto
+// one. Both are supplied by the CLI layer, which holds the loaded config and
+// this process's permissions — the picker has only a leo home path.
+type LocalPolicy struct {
+	// Templates lists the configured template names for the template menu.
+	Templates func() ([]string, error)
+	// CanSwitchTo refuses a switch this process is not permitted to make,
+	// mirroring `leo agent set-template`'s gate so pressing t in the picker
+	// cannot reach a template the CLI verb would refuse. A nil func means no
+	// restriction, matching how an unset LEO_PERMISSIONS reads elsewhere.
+	CanSwitchTo func(template string) error
+}
+
+// NewLocalBackend builds a local backend bound to the given leo home. A zero
+// LocalPolicy leaves the template menu unavailable and unrestricted; the CLI
+// always supplies a real one.
+func NewLocalBackend(homePath string, policy LocalPolicy) *LocalBackend {
 	return &LocalBackend{
-		homePath:  homePath,
-		list:      daemon.AgentList,
-		stop:      daemon.AgentStop,
-		suspend:   daemon.AgentSuspend,
-		resume:    daemon.AgentResume,
-		rename:    daemon.AgentRename,
-		switchTo:  daemon.AgentSwitchTemplate,
-		templates: templates,
+		homePath: homePath,
+		list:     daemon.AgentList,
+		stop:     daemon.AgentStop,
+		suspend:  daemon.AgentSuspend,
+		resume:   daemon.AgentResume,
+		rename:   daemon.AgentRename,
+		switchTo: daemon.AgentSwitchTemplate,
+		policy:   policy,
 	}
 }
 
@@ -81,13 +90,18 @@ func (b *LocalBackend) Resume(ctx context.Context, name string) error {
 }
 
 func (b *LocalBackend) Templates(context.Context) ([]string, error) {
-	if b.templates == nil {
+	if b.policy.Templates == nil {
 		return nil, fmt.Errorf("templates are unavailable for this host")
 	}
-	return b.templates()
+	return b.policy.Templates()
 }
 
 func (b *LocalBackend) SwitchTemplate(ctx context.Context, name, template string) error {
+	if b.policy.CanSwitchTo != nil {
+		if err := b.policy.CanSwitchTo(template); err != nil {
+			return err
+		}
+	}
 	_, err := b.switchTo(ctx, b.homePath, name, template)
 	return err
 }

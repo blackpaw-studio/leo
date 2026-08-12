@@ -17,6 +17,7 @@ type fakeBackend struct {
 	renameNew    string
 	templates    []string
 	templatesErr error
+	switchErr    error
 }
 
 func (f *fakeBackend) Templates(context.Context) ([]string, error) {
@@ -28,7 +29,7 @@ func (f *fakeBackend) Templates(context.Context) ([]string, error) {
 
 func (f *fakeBackend) SwitchTemplate(_ context.Context, name, template string) error {
 	f.calls = append(f.calls, "set-template:"+name+"->"+template)
-	return nil
+	return f.switchErr
 }
 
 func (f *fakeBackend) List(context.Context) ([]Agent, error) {

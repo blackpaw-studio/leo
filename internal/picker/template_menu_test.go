@@ -3,6 +3,7 @@ package picker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -166,17 +167,32 @@ func TestTemplateMenuKeepsLayoutHeightStable(t *testing.T) {
 		long = append(long, "template-"+string(rune('a'+i%26))+string(rune('0'+i/26)))
 	}
 
+	// Enough agents to make the list paginate, which adds a rendered line
+	// beyond its content height.
+	manyAgents := make([]Agent, 0, 50)
+	for i := 0; i < 50; i++ {
+		manyAgents = append(manyAgents, Agent{
+			Name: fmt.Sprintf("leo-a%02d", i), Template: "coding", Host: LocalHost, Status: "running",
+		})
+	}
+
 	tests := []struct {
 		name      string
 		templates []string
+		agents    []Agent
 	}{
 		{name: "fewer templates than rows", templates: []string{"coding", "codex", "review"}},
 		{name: "more templates than rows", templates: long},
+		{name: "paginated agent list", templates: []string{"coding", "codex"}, agents: manyAgents},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			agents := tc.agents
+			if agents == nil {
+				agents = []Agent{{Name: "leo-coding-fetch", Template: tc.templates[0], Host: LocalHost, Status: "running"}}
+			}
 			b := &fakeBackend{
-				agents:    []Agent{{Name: "leo-coding-fetch", Template: tc.templates[0], Host: LocalHost, Status: "running"}},
+				agents:    agents,
 				templates: tc.templates,
 			}
 			base := newModel(context.Background(), map[string]Backend{LocalHost: b})
@@ -197,5 +213,23 @@ func TestTemplateMenuKeepsLayoutHeightStable(t *testing.T) {
 				t.Errorf("view height after scrolling to the end = %d lines, want %d", got, listHeight)
 			}
 		})
+	}
+}
+
+// The picker is a second door onto the same action, so it has to honor the same
+// can_spawn allowlist the CLI verb enforces — otherwise a template forbidden
+// from spawning codex could reach codex by pressing t.
+func TestTemplateMenuHonorsTheSwitchGate(t *testing.T) {
+	b := &fakeBackend{
+		agents:    []Agent{{Name: "leo-coding-fetch", Template: "coding", Host: LocalHost, Status: "running"}},
+		templates: []string{"coding", "codex"},
+		switchErr: errors.New("not permitted to spawn template \"codex\""),
+	}
+	m := menuModel(t, b)
+	m, _ = drive(t, m, keyMsg("j"))
+	m, _ = drive(t, m, keyMsg("enter"))
+
+	if !m.status.isErr || !strings.Contains(m.status.text, "not permitted") {
+		t.Errorf("status = %+v, want the refusal surfaced to the user", m.status)
 	}
 }

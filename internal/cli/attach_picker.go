@@ -95,8 +95,11 @@ func localTemplateNames(cfg *config.Config) ([]string, error) {
 func buildPickerBackends(cfg *config.Config, includeLocal bool) map[string]picker.Backend {
 	backends := map[string]picker.Backend{}
 	if includeLocal {
-		backends[picker.LocalHost] = picker.NewLocalBackend(cfg.HomePath, func() ([]string, error) {
-			return localTemplateNames(cfg)
+		backends[picker.LocalHost] = picker.NewLocalBackend(cfg.HomePath, picker.LocalPolicy{
+			Templates: func() ([]string, error) { return localTemplateNames(cfg) },
+			CanSwitchTo: func(template string) error {
+				return gateTemplateSwitch("leo attach: set template", template)
+			},
 		})
 	}
 	for name := range cfg.Client.Hosts {

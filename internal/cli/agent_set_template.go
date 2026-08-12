@@ -10,12 +10,8 @@ import (
 )
 
 // newAgentSetTemplateCmd registers `leo agent set-template <name> <template>`.
-//
-// Permission gating is deliberately doubled up: a switch stops the agent and
-// launches it on another template, so it needs both the disruption permission
-// every bounce needs (leo_stop_agent) and the spawn permission for the TARGET
-// template. Gating only the former would let a template restricted from
-// spawning `codex` reach codex anyway by switching an agent into it.
+// Permissions come from gateTemplateSwitch, shared with the attach picker's
+// template menu so both doors onto the action enforce the same policy.
 func newAgentSetTemplateCmd() *cobra.Command {
 	var host string
 	var asJSON bool
@@ -48,10 +44,7 @@ agents backing a 'runtime: persistent' task, are refused.`,
 		ValidArgsFunction: completeAgentThenTemplate,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, template := args[0], args[1]
-			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
-				return err
-			}
-			if err := gateSpawnTemplate(cmd, template); err != nil {
+			if err := gateTemplateSwitch(cmd.CommandPath(), template); err != nil {
 				return err
 			}
 			cfg, res, err := dispatch(host)

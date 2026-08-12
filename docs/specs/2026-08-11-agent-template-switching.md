@@ -135,15 +135,18 @@ sessions the store never saw. That heuristic is workspace-wide and
 template-blind: after switching between two claude templates it would resume the
 *other* template's conversation, defeating the archive.
 
-The record therefore gains `session_pinned` (bool), set by a switch and consumed
-— honored, then cleared — by the next `Resume`/`Restart`/`RestoreAgents`. While
-set, those paths use `rec.SessionID` verbatim and skip the jsonl scan. This
-mirrors the existing one-shot `NoResume` flag.
+The record therefore gains `session_pinned_at` (timestamp), stamped by a switch
+and cleared by the next `Resume`/`Restart`/`RestoreAgents`. While set, those
+paths keep `rec.SessionID` against any transcript **written before the switch** —
+those belong to the template just left. Transcripts written after it belong to
+the template the agent is on now and win as usual, so a `/clear` an hour later
+is still picked up.
 
-Known narrow cost: if the user runs `/clear` inside the agent immediately after a
-switch and then restarts before the switch's pin is consumed, that restart
-resumes the pre-`/clear` session. Blast radius is one restart, since the pin
-clears on first use.
+A plain boolean would have been wrong here: nothing consumes the pin until the
+next restart, which can be days away, so a bare flag would sit set and then
+resurrect a stale session the moment it finally fired. The timestamp bounds the
+protection to the window it is actually for. All three sites read it through one
+helper, `agent.ResumeIDFor`.
 
 ### Re-resolution
 
@@ -157,7 +160,7 @@ env, re-pruned `InheritedEnv`, then `SpawnEnv` winning on top, with
 ### Preserved
 
 `Name`, `Workspace`, `Branch`, `CanonicalPath`, `Repo`, `WebPort`, `SpawnEnv`,
-`InheritedEnv`, `IdleSuspendAfter`. The target template's `workspace` is ignored:
+`InheritedEnv`. The target template's `workspace` is ignored:
 the agent stays in the project it is working in, which also keeps archived
 sessions valid (sessions are per-workspace).
 
@@ -176,9 +179,12 @@ The persistent-task guard exists because those tasks bind by agent *name*
 task's prompts into a template it was never configured for — including into a
 harness that cannot deliver its `channels`.
 
-Permission gating reuses `gateSpawnTemplate` (`internal/cli/permissions.go:69`):
-a switch launches the target template, so it is governed by the same
-`can_spawn` allowlist as `leo agent spawn`.
+Permission gating goes through one shared helper, `gateTemplateSwitch`, applied
+at **both** doors — the CLI verb and the picker's template menu. A switch stops
+the agent and launches the target template, so it needs `leo_stop_agent` and
+that template's `can_spawn` entry; gating only the former would let a template
+denied `codex` reach it by switching an agent into it, and gating only the CLI
+would leave the same hole open behind the `t` key.
 
 ### Interaction with existing verbs
 
@@ -193,14 +199,14 @@ a switch launches the target template, so it is governed by the same
 
 | Layer | Change |
 | --- | --- |
-| `internal/agentstore/store.go` | `Record.SessionsByTemplate map[string]string`, `Record.SessionPinned bool`. Both omitempty; absent on legacy records means "no archive, no pin". |
-| `internal/agent/manager.go` | `Manager.SwitchTemplate(name, template) (SwitchResult, error)`. Honor + clear `SessionPinned` in `Restart`/`Resume`. |
-| `internal/service` (restore path) | Honor + clear `SessionPinned` in `RestoreAgents`' jsonl scan. |
+| `internal/agentstore/store.go` | `Record.SessionsByTemplate map[string]string`, `Record.SessionPinnedAt *time.Time`. Both omitempty; absent on legacy records means "no archive, no pin". |
+| `internal/agent/manager.go` | `Manager.SwitchTemplate` (in `switch.go`); `resolveTemplateWiring` extracted from `resolveRestartArgs` with an `envPolicy`; `agent.ResumeIDFor` centralizes the pin for all three resume paths. |
+| `internal/service` (restore path) | `RestoreAgents` resolves through `agent.ResumeIDFor` and clears the pin, including on the `NoResume` branch. |
 | `internal/daemon` | `/agents/set-template` handler + `daemon.AgentSwitchTemplate` client func, following the `AgentRestart` pattern. |
 | `internal/cli/agent.go` | `newAgentSetTemplateCmd`, wired in `newAgentCmd`; remote passthrough via `runRemote`; `gateSpawnTemplate`. |
 | `internal/picker/keys.go` | `Switch` binding on `t`, added to short/full help. |
 | `internal/picker/picker.go` | `Backend.Templates(ctx) ([]string, error)`, `Backend.SwitchTemplate(ctx, name, template) error`. |
-| `internal/picker/backend_local.go` | New methods; templates come from an injected `templates func() ([]string, error)` seam supplied by the CLI layer (which holds the config), mirroring how `sshArgs` is injected for SSH. |
+| `internal/picker/backend_local.go` | New methods, plus a `LocalPolicy{Templates, CanSwitchTo}` injected by the CLI layer (which holds the config and this process's permissions), mirroring how `sshArgs` is injected for SSH. |
 | `internal/picker/backend_ssh.go` | `leo template list --json` and `leo agent set-template <name> <template>`, both shell-quoted per the existing SSH argv rules. |
 | `internal/picker/model.go` | `switching` modal state + template list, `actionSwitchTemplate` action kind. |
 | `docs/cli/agent.md`, `docs/cli/attach.md`, `docs/guides/agents.md` | Document the verb, the key, and the per-template session model. |
