@@ -192,3 +192,86 @@ func TestStaleGenerationNeitherMutatesNorPublishes(t *testing.T) {
 		t.Errorf("stale generation published %d event(s), want 0", len(pub.events))
 	}
 }
+
+// stopAgentProcess is the only thing that tears an agent's tmux session down
+// on a stop/suspend — the supervise goroutine deliberately no longer kills on
+// a per-agent cancel (see TestStaleSuperviseGoroutineDoesNotStompSuccessor).
+// So a kill that silently fails would strand a live claude: leo drops every
+// trace of the agent while the session keeps running and answering on its
+// channels. The kill must be verified and retried.
+func TestStopAgentProcessRetriesKillUntilSessionIsGone(t *testing.T) {
+	origHas := tmuxHasSession
+	defer func() { tmuxHasSession = origHas }()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux-args.log")
+	tmuxStub := stubLiveTmux(t, dir, logPath)
+
+	tests := []struct {
+		name        string
+		alive       func(calls int) bool
+		wantKills   int
+		wantWarning bool
+	}{
+		{
+			name:      "kill succeeds first time",
+			alive:     func(int) bool { return false },
+			wantKills: 1,
+		},
+		{
+			name:      "session survives the first kill",
+			alive:     func(calls int) bool { return calls < 2 },
+			wantKills: 2,
+		},
+		{
+			name:        "session never dies",
+			alive:       func(int) bool { return true },
+			wantKills:   killSessionAttempts,
+			wantWarning: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(logPath, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			tmuxHasSession = func(_, _ string) bool {
+				calls++
+				return tc.alive(calls)
+			}
+
+			sv := NewSupervisor(context.Background())
+			sv.tmuxPath = tmuxStub
+			sv.mu.Lock()
+			sv.states["doomed"] = &ProcessState{Name: "doomed", Status: "running", Ephemeral: true}
+			sv.mu.Unlock()
+
+			var warnings strings.Builder
+			stopWarnLog = &warnings
+			defer func() { stopWarnLog = os.Stderr }()
+
+			if err := sv.stopAgentProcess("doomed"); err != nil {
+				t.Fatalf("stopAgentProcess: %v", err)
+			}
+
+			logged, _ := os.ReadFile(logPath)
+			if got := strings.Count(string(logged), "kill-session"); got != tc.wantKills {
+				t.Errorf("kill-session attempts = %d, want %d; tmux calls:\n%s", got, tc.wantKills, logged)
+			}
+			if warned := strings.Contains(warnings.String(), "doomed"); warned != tc.wantWarning {
+				t.Errorf("warned = %v, want %v (log: %q)", warned, tc.wantWarning, warnings.String())
+			}
+
+			// The agent must leave the live-state maps either way: a wedged
+			// tmux cannot be allowed to make an agent unmanageable.
+			sv.mu.RLock()
+			_, stillTracked := sv.states["doomed"]
+			sv.mu.RUnlock()
+			if stillTracked {
+				t.Error("agent still tracked after stop")
+			}
+		})
+	}
+}

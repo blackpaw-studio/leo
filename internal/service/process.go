@@ -394,6 +394,48 @@ func (s *Supervisor) SuspendAgent(name string) error {
 	return nil
 }
 
+const (
+	// killSessionAttempts is how many times killSession issues kill-session
+	// before giving up and warning. tmux kills are synchronous, so a survivor
+	// means something structural (a wedged server) rather than slowness — a
+	// couple of retries is the useful range, not a long poll.
+	killSessionAttempts = 3
+	// killSessionRetryDelay spaces those attempts out just enough for a busy
+	// tmux server to finish whatever blocked the first one.
+	killSessionRetryDelay = 250 * time.Millisecond
+)
+
+// stopWarnLog is where killSession's give-up warning goes. A package var so
+// tests can capture it.
+var stopWarnLog io.Writer = os.Stderr
+
+// killSession kills sessionName and verifies it is gone, retrying up to
+// killSessionAttempts times. tmux's own exit status is not a reliable signal
+// (killing an already-dead session is an error too), so success is defined by
+// the session no longer existing. A survivor is logged rather than returned:
+// the caller must finish tearing its bookkeeping down either way, since a
+// wedged tmux server must not leave an agent permanently unmanageable.
+//
+// Log-only is deliberate. Returning an error here would have to travel through
+// StopAgent/SuspendAgent, whose callers (agent.Manager's Stop/Suspend/Reset/
+// Restart, the template switch) all read a non-nil error as "teardown failed"
+// and skip the record cleanup or respawn that follows — trading a rare,
+// already-degraded tmux state for a common-path regression. The daemon log is
+// where a wedged-tmux anomaly belongs.
+func killSession(tmuxPath, sessionName, agentName string) {
+	for attempt := 1; attempt <= killSessionAttempts; attempt++ {
+		exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run() //nolint:errcheck
+		if !tmuxHasSession(tmuxPath, sessionName) {
+			return
+		}
+		if attempt < killSessionAttempts {
+			time.Sleep(killSessionRetryDelay)
+		}
+	}
+	fmt.Fprintf(stopWarnLog, "warning: agent %q stopped but its tmux session %q survived %d kill attempts — it may still be running; kill it manually\n",
+		agentName, sessionName, killSessionAttempts)
+}
+
 // stopAgentProcess cancels the ephemeral process's context, kills its tmux
 // session, and removes it from every live-state map. Shared by StopAgent and
 // SuspendAgent, which differ only in which event they publish afterward.
@@ -415,9 +457,13 @@ func (s *Supervisor) stopAgentProcess(name string) error {
 		cancel()
 	}
 
-	// Kill the tmux session directly
-	sessionName := agent.SessionName(name)
-	exec.Command(s.tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run() //nolint:errcheck
+	// Kill the tmux session, and make sure it actually died. This is the only
+	// teardown there is: the supervise goroutine no longer kills on a
+	// per-agent cancel (see waitForSessionEnd's shuttingDown guard), so a kill
+	// that silently failed here would strand a live harness process — leo
+	// forgets the agent entirely while its session keeps running and answering
+	// on its channels.
+	killSession(s.tmuxPath, agent.SessionName(name), name)
 
 	s.mu.Lock()
 	delete(s.states, name)
