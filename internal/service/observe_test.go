@@ -44,7 +44,7 @@ func TestSetStateWithNoPublisherDoesNotPanic(t *testing.T) {
 	sv.mu.Unlock()
 
 	// Act + Assert: no publisher configured must be a safe no-op.
-	sv.setState("agent-a", "running")
+	sv.setState("agent-a", nil, "running")
 }
 
 func TestSetStatePublishesAgentStateChanged(t *testing.T) {
@@ -57,7 +57,7 @@ func TestSetStatePublishesAgentStateChanged(t *testing.T) {
 	sv.mu.Unlock()
 
 	// Act
-	sv.setState("agent-a", "running")
+	sv.setState("agent-a", nil, "running")
 
 	// Assert
 	if len(pub.events) != 1 {
@@ -84,7 +84,7 @@ func TestSetStateForUnknownAgentDoesNotPublish(t *testing.T) {
 
 	// Act: setState on a name never registered in s.states is a no-op today —
 	// it must stay that way for events too.
-	sv.setState("ghost", "running")
+	sv.setState("ghost", nil, "running")
 
 	// Assert
 	if len(pub.events) != 0 {
@@ -102,7 +102,7 @@ func TestIncrementRestartsPublishesAgentStateChanged(t *testing.T) {
 	sv.mu.Unlock()
 
 	// Act
-	sv.incrementRestarts("agent-a")
+	sv.incrementRestarts("agent-a", nil)
 
 	// Assert
 	if len(pub.events) != 1 {
