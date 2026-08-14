@@ -101,7 +101,10 @@ with **403 — the same status a scope denial returns**:
 - `web.bind` defaults to `127.0.0.1`, so nothing outside the host can connect.
   A container needs an address it can route to.
 - `web.allowed_hosts` must list the host or IP the client connects to, or the
-  Host check rejects the request *before the token is looked at*.
+  Host check rejects the request *before the token is looked at*. The `Host`
+  header must also carry a port matching the listener — `Host: leo:8370` passes
+  where a bare `Host: leo` does not, so a reverse proxy that rewrites or drops
+  the port will be refused.
 
 ```yaml
 web:
@@ -113,7 +116,29 @@ web:
 
 `leo client add` prints a reminder when the current config would not be
 reachable. If a client is getting 403 on a target you know is allowed, check
-these before suspecting the token.
+these before suspecting the token — the response body tells the two apart:
+
+```
+HTTP/1.1 403 Forbidden          HTTP/1.1 403 Forbidden
+forbidden host                  {"ok":false,"error":"client \"docker-scout\" is not
+                                 permitted to message \"olympus\""}
+   ^ Host/bind problem              ^ genuine scope denial
+```
+
+## Verified end to end
+
+The boundary was exercised from a real Docker container against a live daemon
+(`--add-host=host.docker.internal:host-gateway`, `web.bind: 0.0.0.0`,
+`allowed_hosts: [host.docker.internal]`):
+
+| Request from the container | Result |
+|---|---|
+| `POST /web/agent/rocket/message` (allowed) | reaches the handler |
+| `POST /web/agent/olympus/message` | 403 |
+| `POST /web/agent/rocket/interrupt` | 403 |
+| `POST /api/agent/spawn`, `GET /api/agent/list`, `GET /api/v1/state` | 403 |
+| `GET /` | 403 |
+| `from: rocket#ses_x` (forged) / `from` absent | 400 |
 
 ## Worked example
 
