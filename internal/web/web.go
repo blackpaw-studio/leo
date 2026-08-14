@@ -93,11 +93,12 @@ type Server struct {
 	// immediately — see applySection). Cleared by handleAgentsRestart on a
 	// restart batch with no failures.
 	agentsRestartNeeded atomic.Bool
-	port                int           // port the listener is expected to bind on; used for Host/Origin checks
-	apiToken            string        // operator bearer token: /api/*, browser routes, and /login
-	agentToken          string        // token exported to agents; /api/* and agent-messaging routes only
-	allowedHosts        []string      // extra hosts permitted beyond loopback (e.g. LAN IPs)
-	sessions            *sessionStore // in-memory browser sessions for cookie-based auth
+	port                int            // port the listener is expected to bind on; used for Host/Origin checks
+	apiToken            string         // operator bearer token: /api/*, browser routes, and /login
+	agentToken          string         // token exported to agents; /api/* and agent-messaging routes only
+	clients             []ClientPolicy // external API clients; scoped to one message route each
+	allowedHosts        []string       // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	sessions            *sessionStore  // in-memory browser sessions for cookie-based auth
 
 	// serviceLogPath is the absolute path to the service log tailed by the
 	// Service page's log viewer. Computed by service.LogPathFor(homePath) —
@@ -282,7 +283,13 @@ type Options struct {
 	// LEO_API_TOKEN. Accepted on /api/* and the agent-messaging routes, and
 	// rejected at /login and on the rest of the browser UI. Empty means only
 	// APIToken is accepted anywhere (pre-split behaviour).
-	AgentToken   string
+	AgentToken string
+	// Clients are external, unsupervised API clients (e.g. an opencode
+	// container) that hold a bearer token of their own. Each is default-deny:
+	// it may POST to /web/agent/<target>/message for the targets its policy
+	// names, and nothing else. Empty means no client tokens are accepted,
+	// which is the behavior before this existed.
+	Clients      []ClientPolicy
 	AllowedHosts []string
 	// LogPath is the absolute path to the service log, computed by
 	// service.LogPathFor(homePath) at the layer that can import
@@ -321,6 +328,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		port:            opts.Port,
 		apiToken:        opts.APIToken,
 		agentToken:      opts.AgentToken,
+		clients:         validClients(opts.Clients, opts.APIToken, opts.AgentToken),
 		allowedHosts:    opts.AllowedHosts,
 		serviceLogPath:  opts.LogPath,
 		execCommand:     exec.Command,
@@ -469,6 +477,13 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// operator-only. See agentCallableBrowserPath.
 	agentCallable := sessionMiddleware(s.sessions, []string{s.apiToken, s.agentToken}, mux)
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A client token is resolved first and never falls through: its
+		// bearer is outside Leo's trust boundary, so it must not reach the
+		// middleware that serves the operator and Leo's own agents.
+		if policy, ok := s.lookupClient(extractBearer(r.Header.Get("Authorization"))); ok {
+			s.serveClient(w, r, policy, mux)
+			return
+		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/static/"):
 			mux.ServeHTTP(w, r)

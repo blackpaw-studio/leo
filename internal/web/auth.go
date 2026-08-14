@@ -51,6 +51,25 @@ func EnsureAgentToken(stateDir string) (string, error) {
 	return ensureToken(stateDir, AgentTokenPath(stateDir), ".agent.token.*", "agent token")
 }
 
+// EnsureClientToken makes sure the token for an external API client exists and
+// returns it. Same storage contract as the other two (0600, never rotated
+// silently), in its own directory so one client's token can be revoked by
+// deleting one file. Unlike them it is scoped at request time: see
+// ClientPolicy.
+func EnsureClientToken(stateDir, name string) (string, error) {
+	// Re-checked here, not only in Config.Validate: this path is reached from
+	// the daemon's config.Load, which does not validate, and the name is
+	// concatenated into a filesystem path.
+	if !ValidClientName(name) {
+		return "", fmt.Errorf("web: invalid api client name %q", name)
+	}
+	dir := filepath.Join(stateDir, "clients")
+	if err := os.MkdirAll(dir, stateDirMode); err != nil {
+		return "", fmt.Errorf("web: creating client token dir %q: %w", dir, err)
+	}
+	return ensureToken(dir, filepath.Join(dir, name+".token"), "."+name+".token.*", "client token "+name)
+}
+
 // EnsureAPIToken makes sure an API bearer token exists at APITokenPath(stateDir)
 // and returns its contents. If the file is missing it generates a fresh token
 // (32 random bytes, hex-encoded = 64 hex chars) and writes it with mode 0600.

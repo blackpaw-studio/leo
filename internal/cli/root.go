@@ -50,6 +50,7 @@ func newRootCmd() *cobra.Command {
 		newAgentCmd(),
 		newConsultCmd(),
 		newHostCmd(),
+		newAPIClientCmd(),
 		newAttachCmd(),
 		newCronCmd(),
 		newTaskCmd(),

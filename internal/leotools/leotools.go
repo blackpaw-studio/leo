@@ -23,6 +23,14 @@ import (
 // template able to deny it could only produce a confusing dead end.
 const SkillTool = "leo_skill"
 
+// MessagePrefixFormat is the wire format prepended to a delivered message, so
+// the receiving agent sees who sent it. Leo types the message body verbatim
+// into the target's pane and does not add this itself, so every sender applies
+// it: internal/mcp for Leo's own agents, and internal/web for an external API
+// client (which cannot be trusted to do it honestly, so the daemon rewrites it
+// there — see web.serveClient).
+const MessagePrefixFormat = "[message from %s] %s"
+
 // Names is the canonical, ordered list of the tool names Leo's MCP server
 // registers. It is the source of truth for config validation;
 // internal/mcp's registry test asserts the two match exactly in both
