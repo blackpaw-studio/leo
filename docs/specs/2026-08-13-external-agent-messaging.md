@@ -19,11 +19,19 @@ newest" — the container may have a human switching between sessions.
 - `leo mcp-server` in the container. opencode's MCP client passes no session identity
   (`tools/call` = `{name, arguments}`, verified), so it cannot address replies.
 
+## Scope
+
+Only one of the three pieces below ships in Leo: `api_clients`. The
+container-side plugin and the reply skill are an **example integration** kept
+outside this repo — they track opencode's unversioned API, which is not
+something Leo should carry. They are documented here because they are what
+proved the design, and because the pattern generalizes to any external agent.
+
 ## Design
 
 Three pieces, each independently shippable.
 
-### 1. Container: an opencode plugin (one tool)
+### 1. Container: an opencode plugin (one tool) — *not shipped in Leo*
 
 A plugin defines a single tool, e.g. `message_leo(text)`. Plugin tools receive
 `ToolContext = {sessionID, messageID, agent, directory, worktree, ...}`, so the
@@ -40,7 +48,7 @@ Authorization: Bearer <client token>
 
 The tool surface is one tool by construction — nothing else to deny.
 
-### 2. Leo agent: a skill (reply path)
+### 2. Leo agent: a skill (reply path) — *not shipped in Leo*
 
 The target agent's template gets a skill: parse the `#ses_…` reply address out of the
 incoming message, then
@@ -58,7 +66,7 @@ Cold start (Leo speaks first, no captured address): the container creates a pinn
 "channel" session at boot via `POST /session` and exposes its id; the skill uses that
 as the default target.
 
-### 3. Leo: scoped API clients (the boundary)
+### 3. Leo: scoped API clients (the boundary) — **the part that ships**
 
 Without this the plugin's token is fleet-wide: any agent, plus all of `/api/*`.
 
@@ -99,13 +107,21 @@ token file is rotated or re-keyed (live agents hold `agent.token` in their proce
 
 1. Plugin + skill against the existing agent token — proves the round trip.
 2. Scoped client tokens.
-3. Swap the plugin's token. The plugin does not change: same URL, same payload.
+3. Swap the plugin's token.
+
+A later round found the plugin **requires** an `api_clients` token rather than
+merely preferring one: the daemon stamps the sender identity (and with it the
+reply address) only for scoped clients, so an unscoped token delivers a message
+the recipient cannot answer.
 
 ## Risks
 
 - The container must be reachable from Leo (inbound port) for the reply path. Fine on
   one host; a NAT'd container would need Leo to subscribe to the container's `/event`
   stream instead, which is a larger design.
-- The plugin is a TypeScript component living outside the Leo repo.
+- The plugin is a TypeScript component living outside the Leo repo — chosen
+  deliberately over vendoring it, so Leo carries no knowledge of opencode's
+  API. The cost is that the two can drift; the mitigation is that Leo's side of
+  the contract is just "POST a message with a `from`", which is stable.
 - opencode API surface is unversioned and has a live/vestigial route split; the skill
   and plugin should pin the routes verified here.

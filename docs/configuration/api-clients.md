@@ -140,8 +140,24 @@ The boundary was exercised from a real Docker container against a live daemon
 | `GET /` | 403 |
 | `from: rocket#ses_x` (forged) / `from` absent | 400 |
 
-## Worked example
+## Two-way messaging
 
-A containerized opencode agent that messages one Leo agent and receives replies
-in the session that sent them: see `contrib/opencode-leo-plugin/` and
-[the design spec](../specs/2026-08-13-external-agent-messaging.md).
+Leo delivers *into* the client's message; it does not deliver *to* the client.
+Replies are the client's own problem, and the usual shape is:
+
+1. The external agent includes an address it can be reached at — its own
+   session id, a callback URL, a queue name — in the `from` suffix.
+2. The Leo agent reads that address out of the delivered
+   `[message from <client>#<address>]` prefix and answers over whatever
+   transport the client speaks.
+
+That keeps Leo out of the business of knowing how any particular external agent
+receives things. If you want a Leo agent to answer automatically, give it a
+skill describing that transport.
+
+A worked example — a containerized opencode agent whose plugin sends the
+session id as the address, with the Leo agent replying via opencode's
+`POST /session/<id>/prompt_async` — is written up in
+[the design spec](../specs/2026-08-13-external-agent-messaging.md). The
+container-side glue is deliberately not shipped here: it tracks another tool's
+unversioned API, and Leo should not carry that.
