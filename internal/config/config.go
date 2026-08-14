@@ -58,11 +58,16 @@ func ValidateAddDir(dir string) error {
 }
 
 type Config struct {
-	Defaults  DefaultsConfig            `yaml:"defaults"`
-	Web       WebConfig                 `yaml:"web,omitempty"`
-	Client    ClientConfig              `yaml:"client,omitempty"`
-	Tasks     map[string]TaskConfig     `yaml:"tasks"`
-	Templates map[string]TemplateConfig `yaml:"templates,omitempty"`
+	Defaults DefaultsConfig `yaml:"defaults"`
+	Web      WebConfig      `yaml:"web,omitempty"`
+	Client   ClientConfig   `yaml:"client,omitempty"`
+	// APIClients are external agents Leo does not supervise (e.g. an opencode
+	// container) that hold a bearer token of their own. Distinct from
+	// `client`, which configures this machine's CLI as an SSH client of a
+	// remote leo host.
+	APIClients map[string]APIClientConfig `yaml:"api_clients,omitempty"`
+	Tasks      map[string]TaskConfig      `yaml:"tasks"`
+	Templates  map[string]TemplateConfig  `yaml:"templates,omitempty"`
 	// Providers was removed with the harness abstraction. The field survives
 	// only so Validate() can emit a precise removal error (yaml.v3 silently
 	// ignores unknown keys).
@@ -393,6 +398,8 @@ func (c *Config) Validate() error {
 	if len(c.Providers) > 0 {
 		errs = append(errs, "providers: this section has been removed — see docs/configuration/harnesses.md")
 	}
+
+	errs = append(errs, validateAPIClients(c.APIClients)...)
 
 	if c.Web.Port != 0 && (c.Web.Port < 1 || c.Web.Port > 65535) {
 		errs = append(errs, fmt.Sprintf("web.port %d is out of range (1-65535)", c.Web.Port))

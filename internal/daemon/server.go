@@ -278,6 +278,24 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		return fmt.Errorf("preparing agent api token: %w", err)
 	}
 
+	// External API clients (api_clients) each get their own scoped token.
+	// A client whose token cannot be prepared is dropped with a warning
+	// rather than taking the whole daemon down: the fleet must keep running
+	// when one container's credential is unreadable.
+	var clients []web.ClientPolicy
+	for name, client := range cfg.APIClients {
+		token, tokenErr := web.EnsureClientToken(cfg.StatePath(), name)
+		if tokenErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: api client %q disabled: %v\n", name, tokenErr)
+			continue
+		}
+		clients = append(clients, web.ClientPolicy{
+			Name:       name,
+			Token:      token,
+			CanMessage: client.CanMessage,
+		})
+	}
+
 	port := cfg.WebPort()
 	var observeOpts []web.Option
 	if s.observeBus != nil {
@@ -305,6 +323,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		Port:          port,
 		APIToken:      apiToken,
 		AgentToken:    agentToken,
+		Clients:       clients,
 		AllowedHosts:  cfg.Web.AllowedHosts,
 		LogPath:       s.logPath,
 		ResolveHandle: s.resolveHandle,
