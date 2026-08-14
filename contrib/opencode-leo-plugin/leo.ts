@@ -35,14 +35,27 @@ const MESSAGE_PREFIX = (from: string, text: string) => `[message from ${from}] $
  * Generous relative to Leo's fast path (a live claude target is typed into its
  * pane in ~2s) because a suspended target is resumed first. A timeout here
  * means "no answer yet", never "not delivered" — see the error text below.
+ * Override with LEO_TIMEOUT_MS.
  */
-const SEND_TIMEOUT_MS = 60_000
+const DEFAULT_TIMEOUT_MS = 60_000
+
+/**
+ * sanitizeBody keeps the delivered line unambiguous. Leo types the body
+ * verbatim into the target's pane and the reply address is parsed back out of
+ * the prefix, so text from this container cannot be trusted to be inert: an
+ * embedded newline would submit the turn early, and a second "[message from
+ * ...]" would forge a sender and misdirect the Leo agent's reply.
+ */
+function sanitizeBody(text: string): string {
+  return text.replace(/\r?\n/g, " ").replace(/\[message from/gi, "[message-from")
+}
 
 type LeoConfig = {
   readonly url: string
   readonly token: string
   readonly target: string
   readonly clientName: string
+  readonly timeoutMs: number
 }
 
 type ConfigError = { readonly error: string }
@@ -59,7 +72,9 @@ function safeBaseUrl(raw: string): string | ConfigError {
   try {
     parsed = new URL(raw.trim())
   } catch {
-    return { error: `LEO_URL is not a valid URL: ${raw.trim().slice(0, 60)}` }
+    // Deliberately does not echo the value: an unparseable LEO_URL may still
+    // contain credentials, and this string reaches the model.
+    return { error: "LEO_URL is not a valid URL" }
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return { error: `LEO_URL must be http or https, got ${parsed.protocol}` }
@@ -74,18 +89,26 @@ function safeBaseUrl(raw: string): string | ConfigError {
  * silently fails to appear is far harder to diagnose than one that says exactly
  * what is wrong.
  */
-function readConfig(env: Record<string, string | undefined>): LeoConfig | ConfigError {
+export function readConfig(env: Record<string, string | undefined>): LeoConfig | ConfigError {
   const missing = REQUIRED_ENV.filter((key) => !env[key]?.trim())
   if (missing.length > 0) {
     return { error: `missing ${missing.join(", ")}` }
   }
   const url = safeBaseUrl(env.LEO_URL!)
   if (typeof url !== "string") return url
+
+  const rawTimeout = env.LEO_TIMEOUT_MS?.trim()
+  const timeoutMs = rawTimeout ? Number(rawTimeout) : DEFAULT_TIMEOUT_MS
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return { error: "LEO_TIMEOUT_MS must be a positive number of milliseconds" }
+  }
+
   return {
     url,
     token: env.LEO_TOKEN!.trim(),
     target: env.LEO_TARGET!.trim(),
     clientName: env.LEO_CLIENT_NAME!.trim(),
+    timeoutMs,
   }
 }
 
@@ -120,7 +143,7 @@ export const LeoMessaging: Plugin = async () => {
           // interrupted; the timeout bounds a daemon that accepts the
           // connection and then stalls. Tolerate a missing context.abort
           // rather than throwing a TypeError out of AbortSignal.any.
-          const timeout = AbortSignal.timeout(SEND_TIMEOUT_MS)
+          const timeout = AbortSignal.timeout(config.timeoutMs)
           const signal = AbortSignal.any([context.abort, timeout].filter(Boolean) as AbortSignal[])
 
           let response: Response
@@ -131,14 +154,14 @@ export const LeoMessaging: Plugin = async () => {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${config.token}`,
               },
-              body: JSON.stringify({ text: MESSAGE_PREFIX(from, text), from }),
+              body: JSON.stringify({ text: MESSAGE_PREFIX(from, sanitizeBody(text)), from }),
               signal,
             })
           } catch (err) {
             if (context.abort?.aborted) throw new Error("send cancelled")
             if (timeout.aborted) {
               throw new Error(
-                `no response from Leo within ${SEND_TIMEOUT_MS / 1000}s. The message may already ` +
+                `no response from Leo within ${config.timeoutMs / 1000}s. The message may already ` +
                   "have been delivered — do not resend it; report the timeout instead.",
               )
             }

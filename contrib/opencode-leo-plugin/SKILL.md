@@ -31,7 +31,14 @@ command or inject shell:
 
 ```bash
 SES=ses_00274ca11ffecQRpxqfQFjKbAk
-REPLY="Which 3? Paste the failing test names."
+
+# Quoted heredoc: nothing inside is expanded, so $, backticks and quotes in your
+# reply are just characters. Never write REPLY="...your text..." — a reply that
+# happens to contain $(...) or a quote would run on this machine.
+REPLY=$(cat <<'LEOEOF'
+Which 3? Paste the failing test names.
+LEOEOF
+)
 
 jq -n --arg t "$REPLY" '{parts:[{type:"text",text:$t}]}' \
   | curl -sS --fail-with-body -X POST \
@@ -40,8 +47,10 @@ jq -n --arg t "$REPLY" '{parts:[{type:"text",text:$t}]}' \
   && echo "delivered"
 ```
 
-`--fail-with-body` makes curl exit non-zero on 4xx/5xx — without it curl exits 0
-on a 404 and you will read an error body as success.
+`jq` builds the JSON so quotes and newlines can't break it; the quoted heredoc
+stops the shell touching the text before jq sees it. `--fail-with-body` makes
+curl exit non-zero on 4xx/5xx — without it curl exits 0 on a 404 and you will
+read an error body as success.
 
 The message appears as a new turn in that session and the agent answers there.
 Its answer comes back to you as another Leo message, not as this command's
@@ -49,8 +58,9 @@ output — this is message passing, not a request/response call.
 
 ## Starting a conversation
 
-No reply address means no session to answer. Use the pinned channel session,
-same command shape with `$CONTAINER_CHANNEL_SESSION` in place of `$SES`.
+No reply address means no session to answer. Use the pinned channel session —
+same command shape, with `$CONTAINER_CHANNEL_SESSION` in place of `$SES`, and
+the same quoted heredoc for the text.
 
 ## Rules that are not optional
 
@@ -60,8 +70,10 @@ same command shape with `$CONTAINER_CHANNEL_SESSION` in place of `$SES`.
 - **Never use `opencode run --attach --continue`.** It targets "the server's last
   session", which is a race with whatever the container's user is doing, and it
   returns no output anyway.
-- **Always build the body with `jq`**, never by interpolating text into a quoted
-  JSON string.
+- **Always build the body with `jq`, and always put the text in a quoted
+  heredoc.** Never interpolate message text into a shell string — neither
+  `'{"text":"..."}'` nor `REPLY="..."`. Both let the container's text run
+  commands here.
 - **Post one message at a time** to a given session. Do not fan out concurrent
   posts into the same session.
 
