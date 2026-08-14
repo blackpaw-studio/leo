@@ -13,7 +13,8 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
  * call, so the originating session travels with the message and the reply
  * lands there even if the user has since switched sessions.
  *
- * Config comes from the environment (all required):
+ * Config comes from the environment, read once when the plugin loads (a token
+ * rotation therefore needs an opencode restart, not just a new env value):
  *   LEO_URL          base URL of the Leo daemon, e.g. http://host.docker.internal:8370
  *   LEO_TOKEN        bearer token; scope it to this client via `api_clients` in leo.yaml
  *   LEO_TARGET       name of the Leo agent this container may message
@@ -22,6 +23,21 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 
 const REQUIRED_ENV = ["LEO_URL", "LEO_TOKEN", "LEO_TARGET", "LEO_CLIENT_NAME"] as const
 
+/**
+ * Leo's own wire format for a delivered message (internal/mcp/tools.go:15).
+ * The daemon pastes `text` verbatim and uses `from` only for observability, so
+ * the prefix — and with it the reply address — has to be built here or the
+ * receiving agent never learns which session to answer.
+ */
+const MESSAGE_PREFIX = (from: string, text: string) => `[message from ${from}] ${text}`
+
+/**
+ * Generous relative to Leo's fast path (a live claude target is typed into its
+ * pane in ~2s) because a suspended target is resumed first. A timeout here
+ * means "no answer yet", never "not delivered" — see the error text below.
+ */
+const SEND_TIMEOUT_MS = 60_000
+
 type LeoConfig = {
   readonly url: string
   readonly token: string
@@ -29,29 +45,52 @@ type LeoConfig = {
   readonly clientName: string
 }
 
+type ConfigError = { readonly error: string }
+
+const isError = (c: LeoConfig | ConfigError): c is ConfigError => "error" in c
+
 /**
- * readConfig returns the config, or the list of missing variables. Missing
- * config is reported through the tool result rather than by refusing to load:
- * a tool that silently fails to appear is far harder to diagnose than one that
- * says exactly which variable is unset.
+ * safeBaseUrl returns scheme://host(/path) with any userinfo removed, so a
+ * `LEO_URL` written as http://user:pass@host can never surface credentials in
+ * an error string handed back to the model.
  */
-function readConfig(env: Record<string, string | undefined>): LeoConfig | { missing: string[] } {
+function safeBaseUrl(raw: string): string | ConfigError {
+  let parsed: URL
+  try {
+    parsed = new URL(raw.trim())
+  } catch {
+    return { error: `LEO_URL is not a valid URL: ${raw.trim().slice(0, 60)}` }
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { error: `LEO_URL must be http or https, got ${parsed.protocol}` }
+  }
+  const path = parsed.pathname.replace(/\/+$/, "")
+  return `${parsed.protocol}//${parsed.host}${path}`
+}
+
+/**
+ * readConfig returns the config or a single human-readable error. Bad config is
+ * reported through the tool result rather than by refusing to load: a tool that
+ * silently fails to appear is far harder to diagnose than one that says exactly
+ * what is wrong.
+ */
+function readConfig(env: Record<string, string | undefined>): LeoConfig | ConfigError {
   const missing = REQUIRED_ENV.filter((key) => !env[key]?.trim())
-  if (missing.length > 0) return { missing: [...missing] }
+  if (missing.length > 0) {
+    return { error: `missing ${missing.join(", ")}` }
+  }
+  const url = safeBaseUrl(env.LEO_URL!)
+  if (typeof url !== "string") return url
   return {
-    url: env.LEO_URL!.trim().replace(/\/+$/, ""),
+    url,
     token: env.LEO_TOKEN!.trim(),
     target: env.LEO_TARGET!.trim(),
     clientName: env.LEO_CLIENT_NAME!.trim(),
   }
 }
 
-/** replyAddress is the `from` Leo records: identity plus the session to answer. */
-function replyAddress(clientName: string, sessionID: string): string {
-  return `${clientName}#${sessionID}`
-}
-
-const SEND_TIMEOUT_MS = 15_000
+/** replyAddress is the identity Leo shows the agent: who, and which session to answer. */
+const replyAddress = (clientName: string, sessionID: string) => `${clientName}#${sessionID}`
 
 export const LeoMessaging: Plugin = async () => {
   const config = readConfig(process.env)
@@ -60,29 +99,29 @@ export const LeoMessaging: Plugin = async () => {
     tool: {
       message_leo: tool({
         description:
-          `Send a message to the Leo agent "${"missing" in config ? "(unconfigured)" : config.target}". ` +
-          "It arrives as a new turn on their side, prefixed with your name. Returns as soon as it is " +
-          "delivered — their reply comes back later as a new message in this session, not as this " +
-          "tool's result. Use it to report progress, ask a question, or hand off work.",
+          `Send a message to the Leo agent "${isError(config) ? "(unconfigured)" : config.target}". ` +
+          "It arrives as a new turn on their side, tagged with your name and session. Returns as soon " +
+          "as it is delivered — any reply comes back later as a new message in this session, not as " +
+          "this tool's result. Use it to report progress, ask a question, or hand off work.",
         args: {
           text: tool.schema.string().min(1).describe("The message body to deliver."),
         },
         async execute({ text }, context) {
-          if ("missing" in config) {
+          if (isError(config)) {
             throw new Error(
-              `leo plugin is not configured: missing ${config.missing.join(", ")}. ` +
-                "Ask the operator to set them on the container.",
+              `leo plugin is not configured: ${config.error}. Ask the operator to fix the container's environment.`,
             )
           }
 
           const from = replyAddress(config.clientName, context.sessionID)
           const endpoint = `${config.url}/web/agent/${encodeURIComponent(config.target)}/message`
 
-          // context.abort lets opencode cancel an in-flight send when the turn
-          // is interrupted; the timeout bounds a daemon that accepts the
-          // connection and then stalls.
+          // context.abort cancels an in-flight send when the turn is
+          // interrupted; the timeout bounds a daemon that accepts the
+          // connection and then stalls. Tolerate a missing context.abort
+          // rather than throwing a TypeError out of AbortSignal.any.
           const timeout = AbortSignal.timeout(SEND_TIMEOUT_MS)
-          const signal = AbortSignal.any([context.abort, timeout])
+          const signal = AbortSignal.any([context.abort, timeout].filter(Boolean) as AbortSignal[])
 
           let response: Response
           try {
@@ -92,24 +131,34 @@ export const LeoMessaging: Plugin = async () => {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${config.token}`,
               },
-              body: JSON.stringify({ text, from }),
+              body: JSON.stringify({ text: MESSAGE_PREFIX(from, text), from }),
               signal,
             })
           } catch (err) {
-            const reason = timeout.aborted ? `timed out after ${SEND_TIMEOUT_MS}ms` : String(err)
-            throw new Error(`could not reach Leo at ${config.url}: ${reason}`)
+            if (context.abort?.aborted) throw new Error("send cancelled")
+            if (timeout.aborted) {
+              throw new Error(
+                `no response from Leo within ${SEND_TIMEOUT_MS / 1000}s. The message may already ` +
+                  "have been delivered — do not resend it; report the timeout instead.",
+              )
+            }
+            throw new Error(`could not reach Leo at ${config.url}: ${String(err)}`)
           }
 
           if (!response.ok) {
-            const detail = (await response.text().catch(() => "")).slice(0, 400)
+            // Leo's error bodies name other agents ("no such agent %q; running:
+            // a, b, c"). This container is only entitled to know about its own
+            // target, so the body goes to the operator's logs, not the model.
+            const detail = await response.text().catch(() => "")
+            console.error(`[leo] ${response.status} from ${endpoint}: ${detail.slice(0, 400)}`)
             throw new Error(
-              `Leo rejected the message (HTTP ${response.status})${detail ? `: ${detail}` : ""}`,
+              `Leo rejected the message (HTTP ${response.status}). The operator can see why in the container logs.`,
             )
           }
 
           return {
             title: `→ ${config.target}`,
-            output: `Delivered to ${config.target}. They will reply into this session (${context.sessionID}).`,
+            output: `Delivered to ${config.target}. They may reply later into this session (${context.sessionID}).`,
             metadata: { target: config.target, from },
           }
         },

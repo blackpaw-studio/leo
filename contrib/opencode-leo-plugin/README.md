@@ -38,8 +38,13 @@ Environment — all four required:
 The agent gets exactly one tool, `message_leo(text)`. There is nothing else to
 deny — the restriction is structural rather than a guardrail.
 
-Run opencode headless: `opencode serve --port 4096 --hostname 0.0.0.0`. A TUI is
-not required — prompts posted to a session execute with no client attached.
+Run opencode headless: `opencode serve --port 4096`. A TUI is not required —
+prompts posted to a session execute with no client attached.
+
+The server has no authentication of its own, and anything that can reach it can
+post a prompt into any session. Publish the port only to Leo's host (a Docker
+`ports:` binding on `127.0.0.1`, or a private network) — never to a LAN
+interface via `--hostname 0.0.0.0`.
 
 ## Leo side
 
@@ -60,3 +65,7 @@ Copy `SKILL.md` into the target agent's workspace as
   means "the server's last session" — both unusable for addressed replies.
 - End to end: a tool call in session A reported `from: <client>#<A>` while a
   newer session B existed; the reply posted to A landed in A, and B stayed empty.
+- Leo pastes the message body verbatim and uses `from` only for observability,
+  so the plugin prepends Leo's own `[message from <name>] ` prefix
+  (`internal/mcp/tools.go:15`) — that prefix is how the reply address reaches
+  the receiving agent.

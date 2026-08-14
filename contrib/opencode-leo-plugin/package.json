@@ -1,0 +1,12 @@
+{
+  "name": "opencode-leo-plugin",
+  "private": true,
+  "type": "module",
+  "description": "opencode plugin giving an unsupervised opencode agent one tool: message a single Leo agent, with the originating session as the reply address.",
+  "scripts": {
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.17.7"
+  }
+}
