@@ -31,12 +31,19 @@ Environment — all four required:
 | Variable | Meaning |
 |---|---|
 | `LEO_URL` | Leo daemon base URL, e.g. `http://host.docker.internal:8370` |
-| `LEO_TOKEN` | bearer token; scope it via `api_clients` in `leo.yaml` |
+| `LEO_TOKEN` | token from `leo client add` — **must** be an `api_clients` token, not `agent.token` |
 | `LEO_TARGET` | the one Leo agent this container may message |
 | `LEO_CLIENT_NAME` | this container's identity, matching its `api_clients` entry |
 
 The agent gets exactly one tool, `message_leo(text)`. There is nothing else to
 deny — the restriction is structural rather than a guardrail.
+
+The plugin sends the message text raw. The daemon stamps the sender identity on
+it (`[message from docker-scout#ses_…] `), sanitizes the body, and only does so
+for `api_clients` tokens — which is why an unscoped token is not merely
+over-privileged here but *wrong*: the reply address would never reach the
+receiving agent. One owner for the wire format, and it is the side that does not
+trust the other.
 
 Run opencode headless: `opencode serve --port 4096`. A TUI is not required —
 prompts posted to a session execute with no client attached.
@@ -66,6 +73,6 @@ Copy `SKILL.md` into the target agent's workspace as
 - End to end: a tool call in session A reported `from: <client>#<A>` while a
   newer session B existed; the reply posted to A landed in A, and B stayed empty.
 - Leo pastes the message body verbatim and uses `from` only for observability,
-  so the plugin prepends Leo's own `[message from <name>] ` prefix
-  (`internal/mcp/tools.go:15`) — that prefix is how the reply address reaches
-  the receiving agent.
+  so the reply address reaches the receiving agent through the
+  `[message from <name>] ` prefix (`leotools.MessagePrefixFormat`). The daemon
+  applies it for `api_clients` callers; the plugin must not, or it lands twice.

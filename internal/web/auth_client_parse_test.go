@@ -148,6 +148,34 @@ func captureClientBody(t *testing.T, s *Server, path, body string) map[string]st
 	return captured
 }
 
+// TestDeliveredTextHasExactlyOnePrefix pins the whole delivered string for a
+// payload shaped the way contrib/opencode-leo-plugin actually sends one.
+//
+// Both sides of this seam used to stamp the prefix — the plugin in TypeScript,
+// the daemon in Go — and every test asserted only its own half, so delivered
+// messages read "[message from x] [message-from x] body" and nothing caught
+// it. Assert the finished article, not each side's contribution.
+func TestDeliveredTextHasExactlyOnePrefix(t *testing.T) {
+	s := newClientTokenServer(t)
+	body, err := json.Marshal(map[string]string{
+		"text": "build finished, 3 tests failing",
+		"from": "docker-scout#ses_real",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	got := captureClientBody(t, s, "/web/agent/leo-coding-leo/message", string(body))["text"]
+
+	const want = "[message from docker-scout#ses_real] build finished, 3 tests failing"
+	if got != want {
+		t.Errorf("delivered text\n got: %q\nwant: %q", got, want)
+	}
+	if strings.Count(got, "message from") != 1 || strings.Contains(got, "message-from") {
+		t.Errorf("prefix applied more than once: %q", got)
+	}
+}
+
 // TestClientSessionSuffixIsBounded keeps an unbounded, arbitrary-byte identity
 // out of what Leo records and shows.
 func TestClientSessionSuffixIsBounded(t *testing.T) {

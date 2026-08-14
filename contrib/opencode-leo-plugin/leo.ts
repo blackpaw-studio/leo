@@ -16,20 +16,14 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
  * Config comes from the environment, read once when the plugin loads (a token
  * rotation therefore needs an opencode restart, not just a new env value):
  *   LEO_URL          base URL of the Leo daemon, e.g. http://host.docker.internal:8370
- *   LEO_TOKEN        bearer token; scope it to this client via `api_clients` in leo.yaml
+ *   LEO_TOKEN        bearer token from `leo client add` — it MUST be an api_clients
+ *                    token, not agent.token: the daemon stamps the sender identity
+ *                    (and with it the reply address) only for scoped clients
  *   LEO_TARGET       name of the Leo agent this container may message
  *   LEO_CLIENT_NAME  this container's identity, matching its `api_clients` entry
  */
 
 const REQUIRED_ENV = ["LEO_URL", "LEO_TOKEN", "LEO_TARGET", "LEO_CLIENT_NAME"] as const
-
-/**
- * Leo's own wire format for a delivered message (internal/mcp/tools.go:15).
- * The daemon pastes `text` verbatim and uses `from` only for observability, so
- * the prefix — and with it the reply address — has to be built here or the
- * receiving agent never learns which session to answer.
- */
-const MESSAGE_PREFIX = (from: string, text: string) => `[message from ${from}] ${text}`
 
 /**
  * Generous relative to Leo's fast path (a live claude target is typed into its
@@ -38,17 +32,6 @@ const MESSAGE_PREFIX = (from: string, text: string) => `[message from ${from}] $
  * Override with LEO_TIMEOUT_MS.
  */
 const DEFAULT_TIMEOUT_MS = 60_000
-
-/**
- * sanitizeBody keeps the delivered line unambiguous. Leo types the body
- * verbatim into the target's pane and the reply address is parsed back out of
- * the prefix, so text from this container cannot be trusted to be inert: an
- * embedded newline would submit the turn early, and a second "[message from
- * ...]" would forge a sender and misdirect the Leo agent's reply.
- */
-function sanitizeBody(text: string): string {
-  return text.replace(/\r?\n/g, " ").replace(/\[message from/gi, "[message-from")
-}
 
 type LeoConfig = {
   readonly url: string
@@ -154,7 +137,11 @@ export const LeoMessaging: Plugin = async () => {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${config.token}`,
               },
-              body: JSON.stringify({ text: MESSAGE_PREFIX(from, sanitizeBody(text)), from }),
+              // Raw text: the daemon stamps "[message from <from>] " on it and
+              // sanitizes the body itself (web.serveClient). Prefixing here too
+              // would double it — the protocol has exactly one owner, and it is
+              // the side that does not trust the other.
+              body: JSON.stringify({ text, from }),
               signal,
             })
           } catch (err) {

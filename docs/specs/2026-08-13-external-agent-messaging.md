@@ -29,7 +29,8 @@ A plugin defines a single tool, e.g. `message_leo(text)`. Plugin tools receive
 `ToolContext = {sessionID, messageID, agent, directory, worktree, ...}`, so the
 handler knows its own session id per call — the only non-heuristic route.
 
-The handler POSTs to Leo:
+The handler POSTs the raw text to Leo (the daemon stamps the sender identity —
+prefixing on both sides would double it):
 
 ```
 POST http://<leo-host>:8370/web/agent/<target>/message
