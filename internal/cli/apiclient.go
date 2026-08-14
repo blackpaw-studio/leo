@@ -68,12 +68,35 @@ func newAPIClientAddCmd() *cobra.Command {
 			fmt.Printf("  token: %s\n\n", token)
 			fmt.Printf("Stored at %s (mode 0600).\n", config.APIClientTokenPath(cfg.HomePath, name))
 			fmt.Println("Restart the daemon for it to take effect: leo service restart")
+			printReachabilityHint(cfg)
 			return nil
 		},
 	}
 	cmd.Flags().StringSliceVar(&canMessage, "can-message", nil,
 		"agent names this client may message; globs allowed (repeatable)")
 	return cmd
+}
+
+// printReachabilityHint names the two settings a container has to get past
+// before its token is even consulted. Both failures return 403, the same
+// status a scope denial returns, so an operator who misses this reads a
+// Host-check rejection as a broken token.
+func printReachabilityHint(cfg *config.Config) {
+	bind := cfg.WebBind()
+	if bind == "127.0.0.1" || bind == "::1" {
+		fmt.Println()
+		fmt.Printf("Note: web.bind is %s, so only this machine can reach the daemon.\n", bind)
+		fmt.Println("A container needs web.bind set to an address it can route to, and that")
+		fmt.Println("host or IP listed in web.allowed_hosts — otherwise the Host check")
+		fmt.Println("returns 403 before the token is looked at.")
+		return
+	}
+	if len(cfg.Web.AllowedHosts) == 0 {
+		fmt.Println()
+		fmt.Printf("Note: web.bind is %s but web.allowed_hosts is empty; requests whose Host\n", bind)
+		fmt.Println("header is not localhost:<port> will be refused with 403 before the token")
+		fmt.Println("is looked at. Add the host or IP the client will connect to.")
+	}
 }
 
 func newAPIClientListCmd() *cobra.Command {
@@ -133,7 +156,9 @@ func newAPIClientRemoveCmd() *cobra.Command {
 				return fmt.Errorf("removing %s: %w", tokenPath, err)
 			}
 			fmt.Printf("Removed API client %q and its token.\n", name)
-			fmt.Println("Restart the daemon for it to take effect: leo service restart")
+			fmt.Println()
+			fmt.Println("NOT YET REVOKED: the running daemon holds the old token in memory and")
+			fmt.Println("will keep accepting it until you restart it — leo service restart")
 			return nil
 		},
 	}

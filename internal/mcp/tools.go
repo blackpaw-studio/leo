@@ -12,7 +12,7 @@ import (
 
 // msgPrefixFormat is the wire format prepended to a delivered message so the
 // recipient can identify the sender. Keep in sync with any consumer that parses it.
-const msgPrefixFormat = "[message from %s] %s"
+const msgPrefixFormat = leotools.MessagePrefixFormat
 
 // toolDef is the MCP wire shape for a tool.
 type toolDef struct {

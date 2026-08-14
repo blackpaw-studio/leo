@@ -57,6 +57,12 @@ func EnsureAgentToken(stateDir string) (string, error) {
 // deleting one file. Unlike them it is scoped at request time: see
 // ClientPolicy.
 func EnsureClientToken(stateDir, name string) (string, error) {
+	// Re-checked here, not only in Config.Validate: this path is reached from
+	// the daemon's config.Load, which does not validate, and the name is
+	// concatenated into a filesystem path.
+	if !ValidClientName(name) {
+		return "", fmt.Errorf("web: invalid api client name %q", name)
+	}
 	dir := filepath.Join(stateDir, "clients")
 	if err := os.MkdirAll(dir, stateDirMode); err != nil {
 		return "", fmt.Errorf("web: creating client token dir %q: %w", dir, err)
