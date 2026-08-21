@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"time"
 
@@ -26,9 +28,17 @@ type agentSpawner interface {
 // Skip rules:
 //   - Worktree record with a missing workspace directory: drop it, nothing
 //     to reattach to.
-//   - Record marked Stopped=true: the user stopped it explicitly; keep the
-//     record (worktree agents need it for `leo agent prune`) but do not
-//     resurrect the agent.
+//   - Record marked Stopped=true with an empty StoppedReason: the user
+//     stopped it explicitly; keep the record (worktree agents need it for
+//     `leo agent prune`) but do not resurrect the agent.
+//   - Record marked Stopped=true with a non-empty StoppedReason: the SYSTEM
+//     stopped it after a failed boot-time restore (missing workspace, spawn
+//     failure — see markFailedRestore). This is retried on every subsequent
+//     boot rather than permanently skipped, so a transient failure (a late
+//     NAS mount, a tmux hiccup) self-heals once the underlying condition
+//     clears instead of requiring an operator to run `leo agent restart` by
+//     hand for every affected agent. A repeat failure simply re-marks the
+//     record via markFailedRestore, same as the first time.
 //
 // For every other record the function rewrites the stored claude args to
 // strip any prior `--session-id` / `--resume` flag and append `--resume
@@ -52,24 +62,46 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 		isWorktree := rec.Branch != ""
 		if isWorktree {
 			canonicals[rec.CanonicalPath] = struct{}{}
-			if _, err := os.Stat(rec.Workspace); err != nil {
-				// Worktree directory gone — nothing to reattach to.
-				// Drop the record; git's own metadata is cleaned up by
-				// the `git worktree prune` pass below.
-				fmt.Fprintf(os.Stderr, "restore: dropping worktree record %q (workspace missing: %s)\n", name, rec.Workspace)
-				agentstore.Remove(homePath, name)
-				continue
-			}
+		}
+
+		if isWorktree && workspaceMissing(name, rec.Workspace) {
+			// Worktree directory gone — nothing to reattach to.
+			// Drop the record; git's own metadata is cleaned up by
+			// the `git worktree prune` pass below.
+			fmt.Fprintf(os.Stderr, "restore: dropping worktree record %q (workspace missing: %s)\n", name, rec.Workspace)
+			agentstore.Remove(homePath, name)
+			continue
 		}
 
 		if rec.Stopped {
-			// User stopped this agent explicitly. Skip respawn.
-			continue
+			if !rec.IsFailedRestore() {
+				// User stopped this agent explicitly. Skip respawn.
+				continue
+			}
+			// System-marked failed restore (see markFailedRestore): fall
+			// through and retry the spawn below. A repeat failure simply
+			// re-marks the record, same as the first failure.
 		}
 
 		if rec.Suspended {
 			// Daemon idle-suspended this agent. Keep the record; auto-wake on
 			// the next incoming message resumes it. Do not resurrect at boot.
+			// This guard MUST run before the missing-workspace check below —
+			// a suspended shared-workspace agent whose workspace is
+			// transiently missing at boot (e.g. a late NAS mount) must stay
+			// Suspended, not get flipped into Stopped by markFailedRestore.
+			continue
+		}
+
+		if !isWorktree && workspaceMissing(name, rec.Workspace) {
+			// Shared-workspace record whose workspace directory is gone
+			// (e.g. an unmounted NAS at boot time). Keep the record — it is
+			// the agent's only surviving identity (template, repo, session
+			// id, env) — but mark it stopped-by-the-system so it is visible
+			// and recoverable (`leo agent restart`) instead of resurrecting
+			// a doomed tmux session against a missing directory.
+			fmt.Fprintf(os.Stderr, "restore: agent %q workspace missing (%s) — leaving stopped, not spawning\n", name, rec.Workspace)
+			markFailedRestore(homePath, rec, fmt.Sprintf("workspace missing: %s", rec.Workspace))
 			continue
 		}
 
@@ -145,15 +177,84 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 		if err := sv.SpawnAgent(spec); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to restore agent %q: %v\n", name, err)
 			if !isWorktree {
-				agentstore.Remove(homePath, name)
+				// Keep the record instead of deleting it: a transient
+				// boot-time spawn failure (tmux server hiccup, etc.) must
+				// not permanently destroy the agent's identity. Mark it
+				// stopped-by-the-system so it is visible and recoverable via
+				// `leo agent restart`.
+				markFailedRestore(homePath, rec, fmt.Sprintf("restore spawn failed: %v", err))
 			}
 			continue
+		}
+		if rec.Stopped {
+			// A retried failed-restore record that just came back healthy —
+			// clear the system-stopped markers so it stops being flagged as
+			// stuck/recoverable now that it is genuinely running again.
+			clearFailedRestore(homePath, rec)
 		}
 		restored++
 	}
 
 	pruneCanonicalWorktrees(canonicals)
 	return restored
+}
+
+// workspaceMissing reports whether rec's workspace directory is confirmed
+// gone (fs.ErrNotExist). Any other stat error — EACCES, EIO, a hung or
+// timed-out NFS mount — is NOT treated as missing: doing so would condemn a
+// healthy-but-transiently-unreachable workspace to Stopped state on every
+// boot. Such errors are logged and treated as "present" so the caller falls
+// through to its normal spawn attempt, same as before this check existed.
+func workspaceMissing(name, workspace string) bool {
+	_, err := os.Stat(workspace)
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	fmt.Fprintf(os.Stderr, "restore: agent %q workspace stat failed (%v) — treating as present\n", name, err)
+	return false
+}
+
+// markFailedRestore persists rec with Stopped=true and StoppedReason set to
+// reason, so a shared-workspace agent that failed to come back at boot stays
+// visible (Manager.List) and recoverable (`leo agent restart`) instead of
+// being deleted outright. Save failures are logged, not fatal — the caller
+// has already decided not to spawn this record either way.
+func markFailedRestore(homePath string, rec agentstore.Record, reason string) {
+	if rec.Stopped && rec.StoppedReason == reason && !rec.Suspended {
+		// Already marked with this exact reason (e.g. a persistently broken
+		// workspace re-failing on every boot) — the record on disk already
+		// matches; skip the redundant Save. Caller has already logged the
+		// condition to stderr, so the operator still sees it every boot.
+		return
+	}
+	updated := rec
+	updated.Stopped = true
+	updated.StoppedReason = reason
+	// Defense in depth: a record must never be simultaneously Suspended and
+	// Stopped. Callers are expected to have already skipped Suspended
+	// records (see the guard ordering in RestoreAgents), but clear it here
+	// too so no future call site can accidentally corrupt a suspended
+	// record via this path.
+	updated.Suspended = false
+	if err := agentstore.Save(homePath, updated); err != nil {
+		fmt.Fprintf(os.Stderr, "restore: agent %q could not persist failed-restore state: %v\n", rec.Name, err)
+	}
+}
+
+// clearFailedRestore clears Stopped/StoppedReason on a record whose retried
+// boot-time spawn just succeeded, mirroring the clear Manager.Restart does
+// for the same recovery path. Save failures are logged, not fatal — the
+// spawn already succeeded either way.
+func clearFailedRestore(homePath string, rec agentstore.Record) {
+	updated := rec
+	updated.Stopped = false
+	updated.StoppedReason = ""
+	if err := agentstore.Save(homePath, updated); err != nil {
+		fmt.Fprintf(os.Stderr, "restore: agent %q could not clear failed-restore state: %v\n", rec.Name, err)
+	}
 }
 
 // pruneCanonicalWorktrees runs `git worktree prune` against each unique

@@ -1047,12 +1047,13 @@ Pass a single agent name, or --all to bounce every currently-running agent
 
 			if !all {
 				name := args[0]
-				// Resolve shorthand to canonical name (same resolution as stop/reset).
-				resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
+				// AgentRestart resolves shorthand server-side (with a store
+				// fallback for a record stopped by a failed boot-time
+				// restore that a plain resolve excludes) and echoes back the
+				// canonical record, so no separate pre-resolve call is
+				// needed here.
+				resolved, err := daemon.AgentRestart(cmd.Context(), cfg.HomePath, name)
 				if err != nil {
-					return fmt.Errorf("resolving agent: %w", err)
-				}
-				if err := daemon.AgentRestart(cmd.Context(), cfg.HomePath, resolved.Name); err != nil {
 					return fmt.Errorf("restarting agent: %w", err)
 				}
 				if asJSON {

@@ -146,17 +146,25 @@ func AgentReset(ctx context.Context, workDir, name string) error {
 
 // AgentRestart sends POST /agents/{name}/restart to the daemon. The agent's
 // process/tmux session is stopped and respawned with --resume so the prior
-// conversation continues (unlike AgentReset, which starts fresh). On resolve
-// failures it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous.
-func AgentRestart(ctx context.Context, workDir, name string) error {
+// conversation continues (unlike AgentReset, which starts fresh). name may be
+// a shorthand — the server resolves it (with a store fallback for a record
+// stopped by a failed boot-time restore that plain Resolve excludes) and
+// echoes the canonical record back, so callers do not need their own
+// pre-resolve step. On resolve failures it returns typed *agent.ErrNotFound
+// or *agent.ErrAmbiguous.
+func AgentRestart(ctx context.Context, workDir, name string) (agent.Record, error) {
 	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/restart", nil)
 	if err != nil {
-		return err
+		return agent.Record{}, err
 	}
 	if !resp.OK {
-		return responseError(resp, name)
+		return agent.Record{}, responseError(resp, name)
 	}
-	return nil
+	var rec agent.Record
+	if err := json.Unmarshal(resp.Data, &rec); err != nil {
+		return agent.Record{}, fmt.Errorf("decoding restart response: %w", err)
+	}
+	return rec, nil
 }
 
 // AgentSwitchTemplate sends POST /agents/{name}/set-template?template=... to

@@ -54,6 +54,15 @@ type AgentManager interface {
 	Logs(name string, lines int) (string, error)
 	SessionName(name string) string
 	Resolve(query string) (agent.Record, error)
+	// ResolveRecoverable is an exact-name store fallback for both restart and
+	// stop: Resolve deliberately excludes every stopped record, but a
+	// shared-workspace agent left Stopped+StoppedReason by a failed
+	// boot-time restore (see internal/service/agents.go RestoreAgents) must
+	// still be reachable via `leo agent restart <name>` (to respawn it) and
+	// `leo agent stop <name>` (to delete an unrecoverable one). Returns
+	// ok=false for anything else — including a user-stopped record with no
+	// reason.
+	ResolveRecoverable(query string) (agent.Record, bool)
 	Rename(query, newName string) (agent.Record, error)
 	// ResolveHandle resolves an agent name to its harness name and the
 	// SessionHandle a SessionDriver needs to act on it. ok=false means "not

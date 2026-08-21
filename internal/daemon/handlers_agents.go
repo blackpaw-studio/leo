@@ -17,6 +17,16 @@ import (
 // readable Code and (for ambiguous) the candidate Matches so clients can
 // reconstruct typed errors. Returns the canonical Record and true on success.
 func (s *Server) resolveAgentOrError(w http.ResponseWriter, query string) (agent.Record, bool) {
+	return s.resolveAgentOrErrorWithFallback(w, query, nil)
+}
+
+// resolveAgentOrErrorWithFallback is resolveAgentOrError plus an optional
+// store fallback tried when Resolve reports not-found — used by
+// handleAgentRestart and handleAgentStop so a record Resolve deliberately
+// excludes (a stopped agent) can still be reached by name when the caller's
+// own logic says it's recoverable. A nil fallback makes this identical to
+// resolveAgentOrError.
+func (s *Server) resolveAgentOrErrorWithFallback(w http.ResponseWriter, query string, fallback func(string) (agent.Record, bool)) (agent.Record, bool) {
 	rec, err := s.agentMgr.Resolve(query)
 	if err == nil {
 		return rec, true
@@ -25,6 +35,11 @@ func (s *Server) resolveAgentOrError(w http.ResponseWriter, query string) (agent
 	var amb *agent.ErrAmbiguous
 	switch {
 	case errors.As(err, &nf):
+		if fallback != nil {
+			if fb, ok := fallback(query); ok {
+				return fb, true
+			}
+		}
 		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeNotFound})
 	case errors.As(err, &amb):
 		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAmbiguous, Matches: amb.Matches})
@@ -91,7 +106,12 @@ func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAgentStop stops an agent by name or shorthand (repo, repo-short,
-// suffix). The server resolves the query to a canonical agent before stopping.
+// suffix). The server resolves the query to a canonical agent before
+// stopping. Like handleAgentRestart, falls back to ResolveRecoverable when
+// Resolve reports not-found — otherwise a failed-restore record (Stopped +
+// StoppedReason, no live process to kill) would be permanently unreachable
+// via `leo agent stop`, since Resolve deliberately excludes every stopped
+// record.
 func (s *Server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 	if s.agentMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
@@ -102,7 +122,7 @@ func (s *Server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent name is required")
 		return
 	}
-	rec, ok := s.resolveAgentOrError(w, query)
+	rec, ok := s.resolveAgentOrErrorWithFallback(w, query, s.agentMgr.ResolveRecoverable)
 	if !ok {
 		return
 	}
@@ -198,7 +218,7 @@ func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent name is required")
 		return
 	}
-	rec, ok := s.resolveAgentOrError(w, query)
+	rec, ok := s.resolveAgentOrErrorWithFallback(w, query, s.agentMgr.ResolveRecoverable)
 	if !ok {
 		return
 	}
@@ -206,7 +226,16 @@ func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 		writeAgentError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, Response{OK: true})
+	// Echo the canonical name back so a caller that resolved a shorthand or
+	// went through the ResolveRecoverable fallback (Resolve itself
+	// excludes stopped records) can report which agent actually came back,
+	// without a separate pre-resolve call of its own.
+	data, err := json.Marshal(rec)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling record: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
 // handleAgentSetTemplate re-points an agent at a different template via POST
@@ -527,7 +556,10 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 // with stable machine-readable Code fields so the CLI client can reconstruct
 // errors.Is matches on the other side of the socket.
 func writeAgentError(w http.ResponseWriter, err error) {
+	var nf *agent.ErrNotFound
 	switch {
+	case errors.As(err, &nf):
+		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeNotFound})
 	case errors.Is(err, agent.ErrWorktreeRequiresSlash):
 		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeWorktreeRequireSep})
 	case errors.Is(err, agent.ErrAgentStillRunning):
@@ -548,6 +580,10 @@ func writeAgentError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceNotGitRepo})
 	case errors.Is(err, agent.ErrAgentSuspended):
 		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentSuspended})
+	case errors.Is(err, agent.ErrAgentNotSuspended):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentNotSuspended})
+	case errors.Is(err, agent.ErrAgentNotRunning):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentNotRunning})
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}

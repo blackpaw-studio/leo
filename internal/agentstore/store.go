@@ -44,6 +44,18 @@ type Record struct {
 	SpawnedAt     time.Time         `json:"spawned_at"`
 	Stopped       bool              `json:"stopped,omitempty"`
 
+	// StoppedReason records WHY the system (not the user) marked this record
+	// Stopped — e.g. a missing shared-workspace directory or a SpawnAgent
+	// failure encountered while restoring agents at daemon boot. Empty when
+	// Stopped was set by a user-initiated `leo agent stop` (or is unset).
+	// Manager.List uses a non-empty StoppedReason to decide whether a
+	// shared-workspace record stopped by a failed restore should still be
+	// visible ("stopped") instead of dropping out of the list the way a
+	// deliberately-stopped shared agent does (Stop deletes those records
+	// outright, so they never reach List's stopped branch at all). Restart's
+	// store fallback keys off the same field to know a record is recoverable.
+	StoppedReason string `json:"stopped_reason,omitempty"`
+
 	// Suspended marks an agent that the daemon idle-suspended: its process and
 	// tmux session were killed to free resources, but the record (and
 	// SessionID) is preserved so the conversation auto-resumes on the next
@@ -123,6 +135,16 @@ type Record struct {
 	// by a stale inherited value. Empty/nil for shared spawns (no inheritance
 	// concept) and legacy records written before this field existed.
 	InheritedEnv map[string]string `json:"inherited_env,omitempty"`
+}
+
+// IsFailedRestore reports whether this record was stopped by the system after
+// a failed restore, not by the user: StoppedReason non-empty means
+// system-marked (auto-retried at boot, recoverable via restart, removable via
+// stop); empty means user-stopped. Stopped alone is not enough — a
+// user-initiated `leo agent stop` also sets Stopped, but leaves StoppedReason
+// empty.
+func (r Record) IsFailedRestore() bool {
+	return r.Stopped && r.StoppedReason != ""
 }
 
 // FilePath returns the path to agents.json in the state directory.

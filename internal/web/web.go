@@ -58,12 +58,21 @@ type AgentService interface {
 	Stop(name string) error
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)
+	// ResolveRecoverable is an exact-name store fallback tried when Resolve
+	// reports not-found: Resolve deliberately excludes every stopped record,
+	// but a shared-workspace agent left Stopped+StoppedReason by a failed
+	// boot-time restore (see internal/service/agents.go RestoreAgents) must
+	// still be reachable via the web UI's stop action, or it becomes a
+	// permanent, undeletable entry in the agents list. Returns ok=false for
+	// anything else — including a user-stopped record with no reason.
+	ResolveRecoverable(query string) (agent.Record, bool)
 	Rename(query, newName string) (agent.Record, error)
 	Suspend(name string) error
 	Resume(name string) (agent.Record, error)
-	// RestartAll bounces every live agent in place (skipping suspended/
-	// stopped ones), re-applying current config for template-spawned agents.
-	// Backs POST /web/agents/restart.
+	// RestartAll bounces every live agent in place, plus every recoverable
+	// failed-restore record (skipping genuinely suspended/user-stopped
+	// ones), re-applying current config for template-spawned agents. Backs
+	// POST /web/agents/restart.
 	RestartAll() agent.RestartResult
 	// ResolveHandle resolves an agent name to its harness name and the
 	// SessionHandle a SessionDriver needs to deliver a message to it.

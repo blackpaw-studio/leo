@@ -183,6 +183,13 @@ type Record struct {
 	Status        string    `json:"status,omitempty"`
 	StartedAt     time.Time `json:"started_at,omitempty"`
 	Restarts      int       `json:"restarts,omitempty"`
+	// StoppedReason mirrors agentstore.Record.StoppedReason: non-empty only
+	// for a Status=="stopped" record the SYSTEM left behind after a failed
+	// boot-time restore (see internal/service/agents.go markFailedRestore).
+	// Empty for a live/suspended record or a genuinely user-stopped one.
+	// RestartAll uses this to decide which "stopped" records are actually
+	// recoverable and should be retried rather than permanently skipped.
+	StoppedReason string `json:"stopped_reason,omitempty"`
 }
 
 // PruneOptions tunes Manager.Prune.
@@ -763,7 +770,16 @@ func (m *Manager) List() []Record {
 			out = append(out, hydrateSuspended(name, stored))
 			continue
 		}
-		if rec.Branch == "" {
+		// A shared-workspace record normally has no stopped representation:
+		// Manager.Stop deletes it outright, so under ordinary operation only
+		// worktree records (Branch != "") ever reach this branch. The
+		// exception is a shared record RestoreAgents left behind after a
+		// failed boot-time restore (missing workspace, spawn failure) — it
+		// sets Stopped=true and a non-empty StoppedReason specifically so the
+		// agent stays visible and recoverable via `leo agent restart`, rather
+		// than silently disappearing. Only that system-stopped case unlocks
+		// the branch-less path here; nothing else should.
+		if rec.Branch == "" && rec.StoppedReason == "" {
 			continue
 		}
 		out = append(out, Record{
@@ -775,6 +791,7 @@ func (m *Manager) List() []Record {
 			CanonicalPath: rec.CanonicalPath,
 			Status:        "stopped",
 			StartedAt:     rec.SpawnedAt,
+			StoppedReason: rec.StoppedReason,
 		})
 	}
 	// Sort by name for a stable order: `out` is assembled by ranging over the
@@ -785,11 +802,14 @@ func (m *Manager) List() []Record {
 }
 
 // Stop kills the agent's tmux session. For shared-workspace agents the
-// agentstore record is also removed (nothing to clean up later). For worktree
-// agents the record is preserved with Stopped=true so Prune can find the
-// checkout while RestoreAgents knows not to resurrect the agent on daemon
-// restart; operators can always call Prune explicitly to drop the worktree
-// and record in one step.
+// agentstore record is also removed (nothing to clean up later) — this
+// includes a shared-workspace record RestoreAgents already left Stopped
+// after a failed boot-time restore (Branch is still empty for those, so they
+// take the same removal path; not-live means StopAgent is simply never
+// called, see below). For worktree agents the record is preserved with
+// Stopped=true so Prune can find the checkout while RestoreAgents knows not
+// to resurrect the agent on daemon restart; operators can always call Prune
+// explicitly to drop the worktree and record in one step.
 //
 // Stop also terminates a suspended agent: a suspended (or otherwise dead) agent
 // has no supervised process, so StopAgent would return "not found". We only
@@ -873,9 +893,6 @@ func (m *Manager) announceStoppedIfNotLive(live bool, name string) {
 // record never claims "suspended" while the process is still running. Returns
 // an error when the agent is not currently running or has no persisted record.
 func (m *Manager) Suspend(name string) error {
-	if _, ok := m.sup.EphemeralAgents()[name]; !ok {
-		return fmt.Errorf("agent %q is not running", name)
-	}
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -884,8 +901,22 @@ func (m *Manager) Suspend(name string) error {
 	if err != nil {
 		return fmt.Errorf("loading agentstore: %w", err)
 	}
-	rec, ok := stored[name]
-	if !ok {
+	rec, storedOK := stored[name]
+	_, live := m.sup.EphemeralAgents()[name]
+
+	if !storedOK && !live {
+		// Neither a persisted record nor a live process — this name is
+		// genuinely unknown, not just "not running".
+		return &ErrNotFound{Query: name}
+	}
+	if storedOK && rec.Suspended {
+		// Already suspended: an ordinary no-op request, not a server error.
+		return fmt.Errorf("%w: %q", ErrAgentSuspended, name)
+	}
+	if !live {
+		return fmt.Errorf("%w: %q", ErrAgentNotRunning, name)
+	}
+	if !storedOK {
 		return fmt.Errorf("no agentstore record for %q (cannot suspend an unpersisted agent)", name)
 	}
 
@@ -934,8 +965,11 @@ func (m *Manager) Resume(name string) (Record, error) {
 		return Record{}, fmt.Errorf("loading agentstore: %w", err)
 	}
 	rec, ok := stored[name]
-	if !ok || !rec.Suspended {
-		return Record{}, fmt.Errorf("agent %q is not suspended", name)
+	if !ok {
+		return Record{}, &ErrNotFound{Query: name}
+	}
+	if !rec.Suspended {
+		return Record{}, fmt.Errorf("%w: %q", ErrAgentNotSuspended, name)
 	}
 
 	// The jsonl scan is a claude-specific resume mechanic (claude's own
@@ -969,6 +1003,14 @@ func (m *Manager) Resume(name string) (Record, error) {
 	}
 
 	rec.Suspended = false
+	// Mirror Restart (see below, ~line 1189): clear Stopped/StoppedReason too,
+	// so a record can never carry both flags after a successful resume. Left
+	// unset, a record that had picked up Stopped=true (e.g. a boot-time
+	// markFailedRestore) would still hit RestoreAgents' `if rec.Stopped {
+	// continue }` guard on the NEXT daemon boot and silently never respawn a
+	// perfectly healthy, just-resumed agent.
+	rec.Stopped = false
+	rec.StoppedReason = ""
 	rec.SessionID = resumeID
 	rec.SessionPinnedAt = nil
 	// Persist the re-resolved wiring, same as Restart: leaving the record
@@ -1102,11 +1144,11 @@ func (m *Manager) Reset(name string) error {
 // back to the stored args/env unchanged, since re-resolving those safely
 // isn't possible.
 func (m *Manager) Restart(name string) error {
-	if _, ok := m.sup.EphemeralAgents()[name]; !ok {
+	_, live := m.sup.EphemeralAgents()[name]
+	if !live {
 		if m.Suspended(name) {
 			return fmt.Errorf("%w: %q; resume it first", ErrAgentSuspended, name)
 		}
-		return fmt.Errorf("agent %q is not running", name)
 	}
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -1118,11 +1160,31 @@ func (m *Manager) Restart(name string) error {
 	}
 	rec, ok := stored[name]
 	if !ok {
+		if !live {
+			return fmt.Errorf("agent %q is not running", name)
+		}
 		return fmt.Errorf("no agentstore record for %q (cannot restart an unpersisted agent)", name)
 	}
 
-	if err := m.sup.StopAgent(name); err != nil {
-		return fmt.Errorf("stopping agent for restart: %w", err)
+	// A not-live record is only restartable when it was stopped BY THE
+	// SYSTEM after a failed boot-time restore (RestoreAgents sets Stopped
+	// plus a StoppedReason — see internal/service/agents.go) — this is the
+	// recovery path for that record, spawning it fresh instead of erroring
+	// "not running" like a genuinely inactive agent. A user-stopped record
+	// (Stopped with no reason) or one Resolve simply couldn't find still
+	// hits the not-running error above/below; Resolve deliberately excludes
+	// every stopped record, live or not, so this check re-derives
+	// "recoverable" straight from the stored fields rather than trusting the
+	// caller's resolution.
+	recoverable := rec.IsFailedRestore()
+	if !live && !recoverable {
+		return fmt.Errorf("agent %q is not running", name)
+	}
+
+	if live {
+		if err := m.sup.StopAgent(name); err != nil {
+			return fmt.Errorf("stopping agent for restart: %w", err)
+		}
 	}
 
 	// Claude-specific resume mechanic, matching Resume: prefer the newest
@@ -1153,6 +1215,11 @@ func (m *Manager) Restart(name string) error {
 	rec.Env = env
 	rec.SessionID = resumeID
 	rec.SessionPinnedAt = nil
+	// Clear a failed-restore's system-stopped markers now that the recovery
+	// spawn above succeeded. A no-op for the ordinary live-restart path,
+	// where both fields are already zero.
+	rec.Stopped = false
+	rec.StoppedReason = ""
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		log.Printf("agent %q restarted but agentstore.Save failed: %v — stored SessionID may lag until next save", name, err)
 	}
@@ -1293,17 +1360,33 @@ type RestartResult struct {
 	Failed    map[string]error
 }
 
-// RestartAll bounces every live agent (see Restart), skipping only the
-// intentionally-down ones: records whose Status is "suspended" or "stopped".
-// Everything else the supervisor still holds live — including "starting" and
-// "restarting" (crash-loop backoff) agents — is bounced; restarting a
-// backing-off agent simply short-circuits its crash loop with a fresh spawn.
+// RestartAll bounces every live agent (see Restart), plus every recoverable
+// failed-restore record (Status=="stopped" with a non-empty StoppedReason —
+// see markFailedRestore), skipping only the genuinely intentionally-down
+// ones: suspended agents, and stopped records the user stopped themselves
+// (Status=="stopped" with an empty StoppedReason). Everything else the
+// supervisor still holds live — including "starting" and "restarting"
+// (crash-loop backoff) agents — is bounced; restarting a backing-off agent
+// simply short-circuits its crash loop with a fresh spawn.
+//
+// Including recoverable stopped records here matters at fleet scale: without
+// it, a NAS mount that comes back late strands every affected shared agent in
+// Stopped state with no batch recovery path — an operator would need to run
+// `leo agent restart <name>` once per agent instead of a single "restart all"
+// click in the web UI. Restart itself already knows how to recover such a
+// record (see its recoverable-record handling); RestartAll only had to stop
+// skipping it.
+//
 // Failures are isolated per-agent so one bad respawn doesn't block the rest of
 // the batch.
 func (m *Manager) RestartAll() RestartResult {
 	result := RestartResult{Failed: map[string]error{}}
 	for _, rec := range m.List() {
-		if rec.Status == "suspended" || rec.Status == "stopped" {
+		if rec.Status == "suspended" {
+			result.Skipped = append(result.Skipped, rec.Name)
+			continue
+		}
+		if rec.Status == "stopped" && rec.StoppedReason == "" {
 			result.Skipped = append(result.Skipped, rec.Name)
 			continue
 		}
@@ -1402,8 +1485,19 @@ func (m *Manager) handleForRecord(homePath string, rec agentstore.Record) harnes
 // harness.SessionHandle a SessionDriver needs to deliver a message to it.
 // Implements the web package's agent-side handle resolver seam (mirrors the
 // process-side resolver wired at service boot): ok=false means "not an
-// ephemeral agent" (unknown name, or no agentstore record yet), in which
-// case the caller falls back to today's tmux behavior.
+// ephemeral agent" (unknown name, no agentstore record yet, or a Stopped
+// record — see below), in which case the caller falls back to today's tmux
+// behavior.
+//
+// A Stopped record (live-user-stopped, or a failed-restore record RestoreAgents
+// kept around — see markFailedRestore) has no tmux session to deliver into.
+// The claude message path never hits this problem: it validates the target
+// against live process states (handleWebAgentMessage's `states` check), which
+// a Stopped record never appears in, so it falls through to a clean "no such
+// agent" 404 instead. A non-claude (codex/opencode) target skips that check
+// entirely and dispatches straight off ResolveHandle's ok=true, so without
+// this guard a Stopped non-claude record would inject into a dead tmux
+// session instead of getting the same clean not-found.
 func (m *Manager) ResolveHandle(name string) (string, harness.SessionHandle, bool) {
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -1414,7 +1508,7 @@ func (m *Manager) ResolveHandle(name string) (string, harness.SessionHandle, boo
 		return "", harness.SessionHandle{}, false
 	}
 	rec, ok := records[name]
-	if !ok {
+	if !ok || rec.Stopped {
 		return "", harness.SessionHandle{}, false
 	}
 	harnessName := rec.Harness
@@ -1583,25 +1677,11 @@ func (m *Manager) announceRename(cfg *config.Config, rec Record, oldName, newNam
 // form, so both "leo-foo" and "foo" locate the same record. Returns false when
 // the store is unreadable or no exact match exists.
 func (m *Manager) resolveStored(query string) (Record, bool) {
-	cfg, err := m.cfgLoader()
-	if err != nil {
+	stored, ok := m.loadStoreForFallback()
+	if !ok {
 		return Record{}, false
 	}
-	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
-	// A missing store file means nothing is persisted yet — treat as no match,
-	// not a hard failure. A real load error (parse, permission) is also treated
-	// as "not found" here so Rename surfaces the original resolve error rather
-	// than an opaque store error; loadLocked returns a non-nil empty map on
-	// error so the lookup below simply finds nothing.
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return Record{}, false
-	}
-
-	candidates := []string{strings.TrimSpace(query)}
-	if norm, err := NormalizeAgentName(query); err == nil {
-		candidates = append(candidates, norm)
-	}
-	for _, name := range candidates {
+	for _, name := range exactNameCandidates(query) {
 		if _, ok := stored[name]; ok {
 			r := Record{Name: name}
 			mergeStored(&r, stored)
@@ -1609,6 +1689,66 @@ func (m *Manager) resolveStored(query string) (Record, bool) {
 		}
 	}
 	return Record{}, false
+}
+
+// ResolveRecoverable is an exact-name store fallback for callers that need to
+// reach a record Resolve deliberately excludes (see Resolve's doc comment): a
+// shared-workspace agent RestoreAgents left behind after a failed boot-time
+// restore (Stopped=true, StoppedReason set — see internal/service/agents.go).
+// Used by both `leo agent restart <name>` (the record needs to be
+// respawnable) and `leo agent stop <name>` (the record needs to be
+// deletable, since its workspace may be gone for good — see
+// handleAgentStop). Without this fallback such a record is a permanently
+// undeletable, unrestartable entry in `leo agent list`. Mirrors
+// resolveStored's candidate matching but additionally requires the record to
+// actually be recoverable, so a user-stopped record (Stopped with no reason)
+// or a live agent name typo'd into this path still reports no match.
+func (m *Manager) ResolveRecoverable(query string) (Record, bool) {
+	stored, ok := m.loadStoreForFallback()
+	if !ok {
+		return Record{}, false
+	}
+	for _, name := range exactNameCandidates(query) {
+		rec, ok := stored[name]
+		if !ok || !rec.IsFailedRestore() {
+			continue
+		}
+		r := Record{Name: name, Status: "stopped"}
+		mergeStored(&r, stored)
+		return r, true
+	}
+	return Record{}, false
+}
+
+// loadStoreForFallback loads the agentstore for an exact-name fallback
+// lookup (resolveStored, ResolveRecoverable). A missing store file
+// means nothing is persisted yet — treat as no match, not a hard failure. A
+// real load error (parse, permission) is also treated as "not found" here so
+// callers surface their original resolve error rather than an opaque store
+// error; loadLocked returns a non-nil empty map on error so the lookup
+// simply finds nothing.
+func (m *Manager) loadStoreForFallback() (map[string]agentstore.Record, bool) {
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return nil, false
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, false
+	}
+	return stored, true
+}
+
+// exactNameCandidates returns the raw query and its normalized form (when
+// valid) as exact-match candidates for a store lookup — shared by
+// resolveStored and ResolveRecoverable so both "leo-foo" and "foo"
+// locate the same record.
+func exactNameCandidates(query string) []string {
+	candidates := []string{strings.TrimSpace(query)}
+	if norm, err := NormalizeAgentName(query); err == nil {
+		candidates = append(candidates, norm)
+	}
+	return candidates
 }
 
 // rewriteNameArg returns a copy of args with the value following --name replaced
