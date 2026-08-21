@@ -45,4 +45,12 @@ var (
 	// source agent's workspace is not a git repository — there is nothing to
 	// add a worktree to.
 	ErrSourceNotGitRepo = errors.New("source agent's workspace is not a git repository")
+
+	// ErrAgentSuspended is returned by Manager.Restart and Manager.Logs when
+	// the resolved agent has no live supervisor state because it is
+	// suspended. Resolve deliberately matches suspended agents (see its doc
+	// comment), so these operations — which require a live process — must
+	// reject with a typed error the caller can map to a 4xx telling the
+	// operator to resume the agent first, rather than a bare 500.
+	ErrAgentSuspended = errors.New("agent is suspended")
 )

@@ -760,16 +760,7 @@ func (m *Manager) List() []Record {
 			continue
 		}
 		if rec.Suspended {
-			out = append(out, Record{
-				Name:          name,
-				Template:      rec.Template,
-				Repo:          rec.Repo,
-				Workspace:     rec.Workspace,
-				Branch:        rec.Branch,
-				CanonicalPath: rec.CanonicalPath,
-				Status:        "suspended",
-				StartedAt:     rec.SpawnedAt,
-			})
+			out = append(out, hydrateSuspended(name, stored))
 			continue
 		}
 		if rec.Branch == "" {
@@ -1112,6 +1103,9 @@ func (m *Manager) Reset(name string) error {
 // isn't possible.
 func (m *Manager) Restart(name string) error {
 	if _, ok := m.sup.EphemeralAgents()[name]; !ok {
+		if m.Suspended(name) {
+			return fmt.Errorf("%w: %q; resume it first", ErrAgentSuspended, name)
+		}
 		return fmt.Errorf("agent %q is not running", name)
 	}
 	cfg, err := m.cfgLoader()
@@ -1437,6 +1431,9 @@ func (m *Manager) ResolveHandle(name string) (string, harness.SessionHandle, boo
 func (m *Manager) Logs(name string, lines int) (string, error) {
 	live := m.sup.EphemeralAgents()
 	if _, ok := live[name]; !ok {
+		if m.Suspended(name) {
+			return "", fmt.Errorf("%w: %q; resume it first", ErrAgentSuspended, name)
+		}
 		return "", fmt.Errorf("agent %q not running", name)
 	}
 
@@ -1476,9 +1473,10 @@ func (m *Manager) Logs(name string, lines int) (string, error) {
 func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 	rec, err := m.Resolve(query)
 	if err != nil {
-		// Resolve only matches live agents. A stopped worktree agent is kept
-		// in the store with Stopped=true, so fall back to an exact agentstore
-		// lookup (raw and normalized) before surfacing the resolve error.
+		// Resolve matches live and suspended agents but never a stopped one.
+		// A stopped worktree agent is kept in the store with Stopped=true, so
+		// fall back to an exact agentstore lookup (raw and normalized) before
+		// surfacing the resolve error.
 		fallback, ok := m.resolveStored(query)
 		if !ok {
 			return Record{}, err

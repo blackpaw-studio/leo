@@ -276,6 +276,108 @@ func TestResolveDisplayNameBeatsRepoShort(t *testing.T) {
 	}
 }
 
+// TestResolveSuspendedByExactName pins the fix for a suspended agent (present
+// only in the agentstore after a daemon restart, absent from the live
+// supervisor map) resolving by its exact name, with Status "suspended" and
+// persisted metadata merged.
+func TestResolveSuspendedByExactName(t *testing.T) {
+	mgr := newResolveManager(t,
+		map[string]ProcessState{},
+		map[string]agentstore.Record{
+			"leo-coding-acme-widget": {
+				Name:      "leo-coding-acme-widget",
+				Template:  "coding",
+				Repo:      "acme/widget",
+				Workspace: filepath.Join("/tmp", "widget"),
+				Suspended: true,
+			},
+		},
+	)
+	rec, err := mgr.Resolve("leo-coding-acme-widget")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rec.Status != "suspended" {
+		t.Errorf("status = %q, want suspended", rec.Status)
+	}
+	if rec.Template != "coding" || rec.Repo != "acme/widget" || rec.Workspace != filepath.Join("/tmp", "widget") {
+		t.Errorf("hydrate = %+v", rec)
+	}
+}
+
+// TestResolveSuspendedByDisplayName and repo-short prove the matching tiers
+// apply uniformly to suspended rows, not just the exact-name tier.
+func TestResolveSuspendedByDisplayName(t *testing.T) {
+	mgr := newResolveManager(t,
+		map[string]ProcessState{},
+		map[string]agentstore.Record{
+			"leo-widget": {Name: "leo-widget", Repo: "acme/widget", Suspended: true},
+		},
+	)
+	rec, err := mgr.Resolve("widget")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rec.Name != "leo-widget" || rec.Status != "suspended" {
+		t.Errorf("rec = %+v", rec)
+	}
+}
+
+func TestResolveSuspendedByRepoShort(t *testing.T) {
+	mgr := newResolveManager(t,
+		map[string]ProcessState{},
+		map[string]agentstore.Record{
+			"leo-coding-acme-widget": {Name: "leo-coding-acme-widget", Repo: "acme/widget", Suspended: true},
+		},
+	)
+	rec, err := mgr.Resolve("widget")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rec.Name != "leo-coding-acme-widget" || rec.Status != "suspended" {
+		t.Errorf("rec = %+v", rec)
+	}
+}
+
+// TestResolveStoppedNotFound pins the deliberate exclusion: a stopped (not
+// suspended) agentstore record must never be returned by Resolve — Rename and
+// Prune have their own exact-name store fallbacks for that case.
+func TestResolveStoppedNotFound(t *testing.T) {
+	mgr := newResolveManager(t,
+		map[string]ProcessState{},
+		map[string]agentstore.Record{
+			"leo-coding-acme-widget": {Name: "leo-coding-acme-widget", Repo: "acme/widget", Stopped: true, Branch: "feature/x"},
+		},
+	)
+	_, err := mgr.Resolve("leo-coding-acme-widget")
+	var nf *ErrNotFound
+	if !errors.As(err, &nf) {
+		t.Fatalf("want ErrNotFound, got %T: %v", err, err)
+	}
+}
+
+// TestResolveAmbiguousLiveAndSuspended proves a tier tie between a live agent
+// and a suspended one is still ambiguous, not silently resolved by liveness.
+func TestResolveAmbiguousLiveAndSuspended(t *testing.T) {
+	mgr := newResolveManager(t,
+		map[string]ProcessState{"leo-coding-acme-leo": {Status: "running"}},
+		map[string]agentstore.Record{
+			"leo-coding-acme-leo":  {Name: "leo-coding-acme-leo", Repo: "acme/leo"},
+			"leo-coding-other-leo": {Name: "leo-coding-other-leo", Repo: "other/leo", Suspended: true},
+		},
+	)
+	_, err := mgr.Resolve("leo")
+	var amb *ErrAmbiguous
+	if !errors.As(err, &amb) {
+		t.Fatalf("want ErrAmbiguous, got %T: %v", err, err)
+	}
+	sort.Strings(amb.Matches)
+	want := []string{"leo-coding-acme-leo", "leo-coding-other-leo"}
+	if len(amb.Matches) != 2 || amb.Matches[0] != want[0] || amb.Matches[1] != want[1] {
+		t.Errorf("matches = %v, want %v", amb.Matches, want)
+	}
+}
+
 // TestResolveExactNameBeatsDisplayName guards the new tier's placement: a
 // bare-named agent ("vitals", as spawn stores it) and a renamed one
 // ("leo-vitals", as NormalizeAgentName rewrites it) can coexist, and both

@@ -797,8 +797,8 @@ remove the worktree and agentstore record in one step.`,
 
 			// Resolve shorthand locally first so the prune step can use the
 			// canonical name (Prune does not go through Resolve because the
-			// agent is stopped by then and the resolver only matches live
-			// agents).
+			// agent is stopped by then and the resolver matches live and
+			// suspended agents, but never a stopped one).
 			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
 			if err != nil {
 				return fmt.Errorf("resolving agent: %w", err)

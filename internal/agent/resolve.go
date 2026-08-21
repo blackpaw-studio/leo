@@ -44,7 +44,11 @@ func (e *ErrNotFound) Error() string {
 //     value for slashless repos.
 //  5. Suffix "-<query>" on the full name.
 //
-// Only live agents participate; a stopped agent is never returned.
+// Live agents and suspended agents (agentstore records with Suspended==true)
+// both participate; a suspended agent survives a daemon restart only in the
+// store, so excluding it would make every suspended agent unreachable by any
+// command routed through Resolve. A stopped agent is never returned — Rename
+// and Prune have their own exact-name store fallbacks for that case.
 func (m *Manager) Resolve(query string) (Record, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -52,9 +56,6 @@ func (m *Manager) Resolve(query string) (Record, error) {
 	}
 
 	live := m.sup.EphemeralAgents()
-	if len(live) == 0 {
-		return Record{}, &ErrNotFound{Query: query}
-	}
 
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -69,13 +70,27 @@ func (m *Manager) Resolve(query string) (Record, error) {
 		return Record{}, fmt.Errorf("loading agentstore: %w", err)
 	}
 
-	type row struct {
-		name string
-		rec  agentstore.Record
+	if len(live) == 0 && len(stored) == 0 {
+		return Record{}, &ErrNotFound{Query: query}
 	}
-	rows := make([]row, 0, len(live))
+
+	type row struct {
+		name      string
+		rec       agentstore.Record
+		suspended bool
+	}
+	rows := make([]row, 0, len(live)+len(stored))
 	for name := range live {
 		rows = append(rows, row{name: name, rec: stored[name]})
+	}
+	for name, rec := range stored {
+		if _, alive := live[name]; alive {
+			continue
+		}
+		if !rec.Suspended {
+			continue
+		}
+		rows = append(rows, row{name: name, rec: rec, suspended: true})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
 
@@ -106,7 +121,11 @@ func (m *Manager) Resolve(query string) (Record, error) {
 		case 0:
 			continue
 		case 1:
-			return m.hydrate(tier[0].name, live[tier[0].name], stored), nil
+			r := tier[0]
+			if r.suspended {
+				return hydrateSuspended(r.name, stored), nil
+			}
+			return m.hydrate(r.name, live[r.name], stored), nil
 		default:
 			names := make([]string, 0, len(tier))
 			for _, r := range tier {
@@ -156,6 +175,25 @@ func ValidateRepo(repo string) error {
 		}
 	}
 	return nil
+}
+
+// hydrateSuspended builds the Record for a suspended-only agent — one that
+// exists in the agentstore with Suspended==true but has no live supervisor
+// state (e.g. after a daemon restart, per internal/service/agents.go). Its
+// shape must match Manager.List's suspended branch exactly so callers see one
+// consistent Record regardless of which method produced it.
+func hydrateSuspended(name string, stored map[string]agentstore.Record) Record {
+	rec := stored[name]
+	return Record{
+		Name:          name,
+		Template:      rec.Template,
+		Repo:          rec.Repo,
+		Workspace:     rec.Workspace,
+		Branch:        rec.Branch,
+		CanonicalPath: rec.CanonicalPath,
+		Status:        "suspended",
+		StartedAt:     rec.SpawnedAt,
+	}
 }
 
 func (m *Manager) hydrate(name string, state ProcessState, stored map[string]agentstore.Record) Record {

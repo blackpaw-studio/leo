@@ -27,6 +27,7 @@ const (
 	ErrorCodeWorktreeRequireSep  = "worktree_requires_slash"
 	ErrorCodeSourceAgentNotFound = "source_agent_not_found"
 	ErrorCodeSourceNotGitRepo    = "source_not_git_repo"
+	ErrorCodeAgentSuspended      = "agent_suspended"
 )
 
 // TaskAddRequest is the body for POST /task/add.
