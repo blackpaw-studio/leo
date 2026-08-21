@@ -79,6 +79,11 @@ type mockAgentService struct {
 	resumeResult agent.Record
 	resumeErr    error
 
+	// wakeableNames backs Wakeable: names present (with a true value) report
+	// a dormant, auto-wakeable record. Absent/false names report not
+	// wakeable — the safe default for an unknown or genuinely-stopped name.
+	wakeableNames map[string]bool
+
 	restartAllCalled bool
 	restartAllResult agent.RestartResult
 
@@ -129,7 +134,12 @@ func (m *mockAgentService) Spawn(_ context.Context, spec agent.SpawnSpec) (agent
 	return agent.Record{Name: name, Template: spec.Template, Status: "starting"}, nil
 }
 
-func (m *mockAgentService) Stop(name string) error {
+func (m *mockAgentService) Stop(name string, opts agent.StopOptions) error {
+	if opts.WakeOnMessage {
+		m.suspendCalled = true
+		m.suspendName = name
+		return m.suspendErr
+	}
 	m.stopCalled = true
 	m.stopName = name
 	return m.stopErr
@@ -169,22 +179,14 @@ func (m *mockAgentService) ResolveRecoverable(query string) (agent.Record, bool)
 	return rec, ok
 }
 
-func (m *mockAgentService) Suspend(name string) error {
-	m.suspendCalled = true
-	m.suspendName = name
-	return m.suspendErr
+func (m *mockAgentService) Wakeable(name string) bool {
+	return m.wakeableNames[name]
 }
 
-func (m *mockAgentService) Resume(name string) (agent.Record, error) {
+func (m *mockAgentService) Start(name string) error {
 	m.resumeCalled = true
 	m.resumeName = name
-	if m.resumeErr != nil {
-		return agent.Record{}, m.resumeErr
-	}
-	if m.resumeResult.Name != "" {
-		return m.resumeResult, nil
-	}
-	return agent.Record{Name: name, Status: "starting"}, nil
+	return m.resumeErr
 }
 
 func (m *mockAgentService) RestartAll() agent.RestartResult {

@@ -316,7 +316,7 @@ func TestStopPreservesWorktreeRecord(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	if err := mgr.Stop(rec.Name); err != nil {
+	if err := mgr.Stop(rec.Name, StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 
@@ -333,7 +333,11 @@ func TestStopPreservesWorktreeRecord(t *testing.T) {
 	}
 }
 
-func TestStopRemovesSharedRecord(t *testing.T) {
+// TestStopKeepsSharedRecord is the regression guard for the whole
+// one-dormant-state change: Manager.Stop must NEVER delete a shared-workspace
+// agent's record — that is the inversion this change makes, replacing the old
+// behavior where a shared-workspace Stop was really a Delete in disguise.
+func TestStopKeepsSharedRecord(t *testing.T) {
 	mgr, _, home := newWorktreeTestManager(t, "leo")
 	installFakeGit(t, nil)
 
@@ -345,16 +349,20 @@ func TestStopRemovesSharedRecord(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	if err := mgr.Stop(rec.Name); err != nil {
+	if err := mgr.Stop(rec.Name, StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
-	if _, ok := stored[rec.Name]; ok {
-		t.Errorf("shared-workspace record should be removed on Stop")
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatal("shared-workspace record must survive Stop")
+	}
+	if !got.Stopped {
+		t.Errorf("stopped shared record should have Stopped=true; got %+v", got)
 	}
 }
 
-func TestPruneWorktreeHappyPath(t *testing.T) {
+func TestDeleteWorktreeHappyPath(t *testing.T) {
 	mgr, _, home := newWorktreeTestManager(t, "leo")
 	fake := installFakeGit(t, map[string]git.BranchStatus{})
 
@@ -366,19 +374,19 @@ func TestPruneWorktreeHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if err := mgr.Stop(rec.Name); err != nil {
+	if err := mgr.Stop(rec.Name, StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	if err := mgr.Prune(context.Background(), rec.Name, PruneOptions{}); err != nil {
-		t.Fatalf("Prune: %v", err)
+	if err := mgr.Delete(context.Background(), rec.Name, DeleteOptions{}); err != nil {
+		t.Fatalf("Delete: %v", err)
 	}
 	if len(fake.removeCalled) != 1 {
 		t.Fatalf("expected 1 worktree remove, got %v", fake.removeCalled)
 	}
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
 	if _, ok := stored[rec.Name]; ok {
-		t.Errorf("agentstore record should be gone after prune")
+		t.Errorf("agentstore record should be gone after delete")
 	}
 }
 
@@ -389,7 +397,7 @@ func TestPruneWorktreeHappyPath(t *testing.T) {
 // Stop — yet Prune called agentstore.Remove with no publish at all, so a
 // pruned agent vanished from the snapshot with no compensating event for a
 // stream-only consumer.
-func TestPrunePublishesAgentStopped(t *testing.T) {
+func TestDeletePublishesAgentStopped(t *testing.T) {
 	mgr, _, _ := newWorktreeTestManager(t, "leo")
 	installFakeGit(t, map[string]git.BranchStatus{})
 	pub := &recordingObservePublisher{}
@@ -403,17 +411,17 @@ func TestPrunePublishesAgentStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if err := mgr.Stop(rec.Name); err != nil {
+	if err := mgr.Stop(rec.Name, StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	pub.events = nil // only interested in what Prune itself publishes
+	pub.events = nil // only interested in what Delete itself publishes
 
-	if err := mgr.Prune(context.Background(), rec.Name, PruneOptions{}); err != nil {
-		t.Fatalf("Prune: %v", err)
+	if err := mgr.Delete(context.Background(), rec.Name, DeleteOptions{}); err != nil {
+		t.Fatalf("Delete: %v", err)
 	}
 
 	if len(pub.events) != 1 {
-		t.Fatalf("expected exactly 1 published event from Prune, got %d: %+v", len(pub.events), pub.events)
+		t.Fatalf("expected exactly 1 published event from Delete, got %d: %+v", len(pub.events), pub.events)
 	}
 	stopped, ok := pub.events[0].Payload.(*observe.AgentStoppedPayload)
 	if !ok || pub.events[0].Type != observe.EventAgentStopped {
@@ -424,7 +432,7 @@ func TestPrunePublishesAgentStopped(t *testing.T) {
 	}
 }
 
-func TestPruneRejectsRunningAgent(t *testing.T) {
+func TestDeleteRejectsRunningAgent(t *testing.T) {
 	mgr, _, _ := newWorktreeTestManager(t, "leo")
 	installFakeGit(t, map[string]git.BranchStatus{})
 
@@ -437,14 +445,18 @@ func TestPruneRejectsRunningAgent(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	err = mgr.Prune(context.Background(), rec.Name, PruneOptions{})
+	err = mgr.Delete(context.Background(), rec.Name, DeleteOptions{})
 	if !errors.Is(err, ErrAgentStillRunning) {
 		t.Fatalf("want ErrAgentStillRunning, got %v", err)
 	}
 }
 
-func TestPruneRejectsSharedAgent(t *testing.T) {
-	mgr, _, _ := newWorktreeTestManager(t, "leo")
+// TestDeleteAcceptsSharedAgent replaces the old TestPruneRejectsSharedAgent:
+// Delete (unlike the old Prune) accepts a shared-workspace agent — there is
+// nothing on disk to remove beyond the record itself, and the record is the
+// only thing Delete is guaranteed to remove.
+func TestDeleteAcceptsSharedAgent(t *testing.T) {
+	mgr, _, home := newWorktreeTestManager(t, "leo")
 	installFakeGit(t, nil)
 
 	rec, err := mgr.Spawn(context.Background(), SpawnSpec{
@@ -454,16 +466,16 @@ func TestPruneRejectsSharedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if err := mgr.Stop(rec.Name); err != nil {
+	if err := mgr.Stop(rec.Name, StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	err = mgr.Prune(context.Background(), rec.Name, PruneOptions{})
-	// Shared-workspace agents don't survive Stop, so the agentstore lookup
-	// fails with the generic "no record" error — not ErrNotWorktreeAgent
-	// (which only fires for records present but without a Branch).
-	if err == nil {
-		t.Fatal("expected error")
+	if err := mgr.Delete(context.Background(), rec.Name, DeleteOptions{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := stored[rec.Name]; ok {
+		t.Error("shared-workspace record should be gone after Delete")
 	}
 }
 
@@ -479,7 +491,7 @@ func TestListIncludesStoppedWorktreeAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if err := mgr.Stop(rec.Name); err != nil {
+	if err := mgr.Stop(rec.Name, StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 

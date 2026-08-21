@@ -19,9 +19,9 @@ var (
 	// combo from the CLI).
 	ErrAgentStillRunning = errors.New("agent is still running; stop it first")
 
-	// ErrNotWorktreeAgent is returned by Prune when the agent was spawned
-	// without --worktree. There is nothing to prune — the canonical clone is
-	// shared and must not be deleted.
+	// ErrNotWorktreeAgent is unused by Manager.Delete (which now accepts
+	// shared-workspace agents too) but kept for callers/wire compatibility
+	// that still match on it.
 	ErrNotWorktreeAgent = errors.New("agent has no worktree to prune")
 
 	// ErrAgentNameTaken is returned by Manager.Rename when the target name
@@ -46,25 +46,26 @@ var (
 	// add a worktree to.
 	ErrSourceNotGitRepo = errors.New("source agent's workspace is not a git repository")
 
-	// ErrAgentSuspended is returned by Manager.Restart and Manager.Logs when
-	// the resolved agent has no live supervisor state because it is
-	// suspended. Resolve deliberately matches suspended agents (see its doc
-	// comment), so these operations — which require a live process — must
-	// reject with a typed error the caller can map to a 4xx telling the
-	// operator to resume the agent first, rather than a bare 500.
-	ErrAgentSuspended = errors.New("agent is suspended")
+	// ErrAgentStopped is returned by Manager.Restart and Manager.Logs when the
+	// resolved agent has no live supervisor state because it is dormant
+	// (stopped). These operations require a live process, so they reject
+	// with a typed error the caller can map to a 4xx telling the operator to
+	// start the agent first, rather than a bare 500.
+	ErrAgentStopped = errors.New("agent is stopped")
 
-	// ErrAgentNotSuspended is returned by Manager.Resume when the resolved
-	// agent record exists but is not suspended (it is running, or stopped).
-	// Callers map it to a 4xx telling the operator there is nothing to
-	// resume, rather than a bare 500.
-	ErrAgentNotSuspended = errors.New("agent is not suspended")
+	// ErrAgentNotStopped is returned by Manager.Start when the resolved agent
+	// record exists but is not dormant (it is already running). Callers map
+	// it to a 4xx telling the operator there is nothing to start, rather
+	// than a bare 500.
+	ErrAgentNotStopped = errors.New("agent is not stopped")
 
-	// ErrAgentNotRunning is returned by Manager.Suspend when a persisted
-	// record exists for the name but has no live supervisor state (e.g. a
-	// stopped agent). Every other Suspend failure mode already has a typed
-	// error mapped to a 4xx by the caller; this one used to fall through to
-	// a bare fmt.Errorf, surfacing as an opaque 500 instead of the 4xx
-	// "there's nothing to suspend" its sibling errors get.
+	// ErrAgentAlreadyRunning is returned by Manager.Start when the target
+	// agent is currently live. Callers map it to a 4xx (409) telling the
+	// operator the agent is already up rather than a bare 500.
+	ErrAgentAlreadyRunning = errors.New("agent is already running")
+
+	// ErrAgentNotRunning is returned when a persisted record exists for the
+	// name but has no live supervisor state (e.g. a stopped agent) and the
+	// requested operation requires a live process.
 	ErrAgentNotRunning = errors.New("agent is not running")
 )

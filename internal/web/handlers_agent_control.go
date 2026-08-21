@@ -168,30 +168,25 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate the target against running sessions (agents). If the agent is
-	// not live but is a suspended agent, resume it first and deliver via the
-	// readiness-probing path (InjectPrompt) — a just-resumed claude takes
+	// not live but is dormant with WakeOnMessage=true (idle-swept, or a
+	// suspend-style manual stop), start it first and deliver via the
+	// readiness-probing path (InjectPrompt) — a just-started claude takes
 	// tens of seconds to boot before its input box accepts input, so the 2s
-	// fast-path below would silently drop the message.
+	// fast-path below would silently drop the message. A dormant agent with
+	// WakeOnMessage=false (a plain operator-initiated stop) must NOT be woken
+	// this way — that is the whole point of the flag — so it falls through to
+	// the same "no such agent" response an unknown name gets.
 	//
-	// NOTE: a concurrent sweep suspend can race here and make the live send-keys
+	// NOTE: a concurrent idle sweep can race here and make the live send-keys
 	// path 500; the sender retries and auto-wakes again.
 	states := s.processes.States()
 	if _, ok := states[name]; !ok {
-		if s.agentSvc != nil {
-			rec, err := s.agentSvc.Resume(name)
-			if err != nil {
-				// Not a suspended agent — unknown target.
-				names := make([]string, 0, len(states))
-				for n := range states {
-					names = append(names, n)
-				}
-				sort.Strings(names)
-				writeJSON(w, http.StatusNotFound, apiResponse{
-					Error: fmt.Sprintf("no such agent %q; running: %s", name, strings.Join(names, ", ")),
-				})
+		if s.agentSvc != nil && s.agentSvc.Wakeable(name) {
+			if err := s.agentSvc.Start(name); err != nil {
+				writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("starting agent: %v", err)})
 				return
 			}
-			// Resumed successfully. A cold-booting claude can take ~60s to load
+			// Started successfully. A cold-booting claude can take ~60s to load
 			// plugins/MCP before its input box accepts input — longer than the
 			// server's WriteTimeout — and the readiness-probing injector blocks
 			// for that whole window. Deliver asynchronously on a detached context
@@ -199,14 +194,17 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 			// now, so the caller isn't held on the connection and won't
 			// false-timeout and retry into a duplicate message.
 			const wakeDeliverTimeout = 3 * time.Minute
-			sessionName := agent.SessionName(rec.Name)
+			sessionName := agent.SessionName(name)
 			body := req.Text
 			from := req.From
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), wakeDeliverTimeout)
 				defer cancel()
 				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
-					log.Printf("web: async message delivery after resume of %q failed: %v", sessionName, err)
+					// #nosec G706 -- name matched an existing agentstore record
+					// (Wakeable returned true), so it is a validated identifier,
+					// not raw request input; no control chars can reach the log.
+					log.Printf("web: async message delivery after start of %q failed: %v", sessionName, err)
 					return
 				}
 				// Announced from inside the goroutine, once delivery actually

@@ -28,14 +28,38 @@ type LocalBackend struct {
 	templates func() ([]string, error)
 }
 
+// localStop calls daemon.AgentStop with WakeOnMessage=false — an operator
+// (or picker) initiated stop is never auto-wakeable, matching the daemon's
+// one-dormant-state contract.
+func localStop(ctx context.Context, workDir, name string) error {
+	return daemon.AgentStop(ctx, workDir, name, false)
+}
+
+// localSuspend calls daemon.AgentStop with WakeOnMessage=true, preserving the
+// picker's "suspend" affordance (dormant, but auto-wakeable on the next
+// message) now that Suspend and Stop share one dormant state.
+func localSuspend(ctx context.Context, workDir, name string) error {
+	return daemon.AgentStop(ctx, workDir, name, true)
+}
+
+// localResume calls daemon.AgentStart, adapting its error-only signature to
+// the (agent.Record, error) shape the picker's Backend interface still
+// expects.
+func localResume(ctx context.Context, workDir, name string) (agent.Record, error) {
+	if err := daemon.AgentStart(ctx, workDir, name); err != nil {
+		return agent.Record{}, err
+	}
+	return agent.Record{Name: name, Status: "starting"}, nil
+}
+
 // NewLocalBackend builds a local backend bound to the given leo home.
 func NewLocalBackend(homePath string, templates func() ([]string, error)) *LocalBackend {
 	return &LocalBackend{
 		homePath:  homePath,
 		list:      daemon.AgentList,
-		stop:      daemon.AgentStop,
-		suspend:   daemon.AgentSuspend,
-		resume:    daemon.AgentResume,
+		stop:      localStop,
+		suspend:   localSuspend,
+		resume:    localResume,
 		rename:    daemon.AgentRename,
 		switchTo:  daemon.AgentSwitchTemplate,
 		templates: templates,

@@ -19,29 +19,29 @@ type recordingObservePublisher struct {
 
 func (r *recordingObservePublisher) Publish(ev observe.Event) { r.events = append(r.events, ev) }
 
-// TestStopSuspendedAgentPublishesAgentStopped is the regression test for
+// TestStopDormantAgentPublishesAgentStopped is the regression test for
 // finding #2: Manager.Stop only calls sup.StopAgent (which publishes
-// agent_stopped) when the agent is live. A suspended agent is stopped purely
-// via the agentstore, so — before this fix — nothing announced the
-// transition, leaving a consumer that had received agent_state_changed{
-// suspended} believing the agent was still around forever.
-func TestStopSuspendedAgentPublishesAgentStopped(t *testing.T) {
+// agent_stopped) when the agent is live. An already-dormant agent is stopped
+// purely via the agentstore, so — before this fix — nothing announced the
+// transition.
+func TestStopDormantAgentPublishesAgentStopped(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{HomePath: home}
-	sup := &capturingSupervisor{} // no live agents — the agent is suspended
+	sup := &capturingSupervisor{} // no live agents — the agent is already dormant
 	_ = agentstore.Save(home, agentstore.Record{
-		Name:      "leo-x",
-		Workspace: "/w",
-		Branch:    "feat/x",
-		SessionID: "sid",
-		Suspended: true,
+		Name:          "leo-x",
+		Workspace:     "/w",
+		Branch:        "feat/x",
+		SessionID:     "sid",
+		Stopped:       true,
+		WakeOnMessage: true,
 	})
 
 	pub := &recordingObservePublisher{}
 	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
 	m.SetPublisher(pub)
 
-	if err := m.Stop("leo-x"); err != nil {
+	if err := m.Stop("leo-x", StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 
@@ -57,26 +57,27 @@ func TestStopSuspendedAgentPublishesAgentStopped(t *testing.T) {
 	}
 }
 
-// TestStopSharedAgentPublishesAgentStoppedBeforeRemoval covers the
-// shared-workspace variant of finding #2: agentstore.Remove makes the agent
-// vanish from the snapshot entirely, so the event is the only signal a
-// stream-only consumer ever gets that it's gone.
-func TestStopSharedAgentPublishesAgentStoppedBeforeRemoval(t *testing.T) {
+// TestStopSharedAgentPublishesAgentStoppedAndKeepsRecord covers the
+// shared-workspace variant: Stop no longer deletes the record (the central
+// inversion of this change), but it must still publish exactly once so a
+// stream-only consumer sees the transition.
+func TestStopSharedAgentPublishesAgentStoppedAndKeepsRecord(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{HomePath: home}
 	sup := &capturingSupervisor{} // not live
 	_ = agentstore.Save(home, agentstore.Record{
-		Name:      "leo-shared",
-		Workspace: "/w",
-		Suspended: true,
-		// Branch empty => shared workspace => Stop removes the record.
+		Name:          "leo-shared",
+		Workspace:     "/w",
+		Stopped:       true,
+		WakeOnMessage: true,
+		// Branch empty => shared workspace.
 	})
 
 	pub := &recordingObservePublisher{}
 	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
 	m.SetPublisher(pub)
 
-	if err := m.Stop("leo-shared"); err != nil {
+	if err := m.Stop("leo-shared", StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 
@@ -85,6 +86,10 @@ func TestStopSharedAgentPublishesAgentStoppedBeforeRemoval(t *testing.T) {
 	}
 	if pub.events[0].Type != observe.EventAgentStopped {
 		t.Fatalf("expected AgentStopped, got %s", pub.events[0].Type)
+	}
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := recs["leo-shared"]; !ok {
+		t.Fatal("shared-workspace record must survive Stop")
 	}
 }
 
@@ -102,7 +107,7 @@ func TestStopLiveAgentDoesNotDoublePublish(t *testing.T) {
 	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
 	m.SetPublisher(pub)
 
-	if err := m.Stop("leo-live"); err != nil {
+	if err := m.Stop("leo-live", StopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 

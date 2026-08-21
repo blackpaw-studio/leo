@@ -47,12 +47,6 @@ type Supervisor interface {
 	ReleaseAgent(name string)
 	SpawnAgent(spec SpawnRequest) error
 	StopAgent(name string) error
-	// SuspendAgent stops name's process/tmux session exactly like StopAgent,
-	// but announces the transition as observe.EventAgentStateChanged with
-	// status "suspended" rather than observe.EventAgentStopped — a suspended
-	// agent is coming back (see SpawnRequest.Resumed), not gone, and a
-	// consumer needs to be able to tell those apart.
-	SuspendAgent(name string) error
 	RenameAgent(old, new string) error
 	EphemeralAgents() map[string]ProcessState
 }
@@ -192,14 +186,24 @@ type Record struct {
 	StoppedReason string `json:"stopped_reason,omitempty"`
 }
 
-// PruneOptions tunes Manager.Prune.
-type PruneOptions struct {
+// DeleteOptions tunes Manager.Delete.
+type DeleteOptions struct {
 	// Force removes the worktree even when dirty, and deletes the branch even
 	// when it is not fully merged.
 	Force bool
 	// DeleteBranch removes the local branch after the worktree is gone. No-op
 	// for worktrees whose branch was the repo's default.
 	DeleteBranch bool
+}
+
+// StopOptions tunes Manager.Stop.
+type StopOptions struct {
+	// WakeOnMessage carries intent, not state: true lets a subsequent inbound
+	// message (routed channel message, or a persistent task's ensure-exists
+	// delivery) auto-start the agent again; false leaves it dormant until an
+	// operator runs Start explicitly. The idle sweep passes true; an
+	// operator-initiated stop passes false.
+	WakeOnMessage bool
 }
 
 // Spawn resolves a template + repo into a running agent.
@@ -292,12 +296,11 @@ func (m *Manager) Live(name string) bool {
 	return info.Status == "running" || info.Status == "starting"
 }
 
-// Suspended reports whether name has a persisted agentstore record marked
-// Suspended (and is not currently live). Config/store load failures are
-// treated as "not suspended" — the caller (the ensure-exists path) falls
-// through to spawning fresh, which is the safe default when state can't be
-// read.
-func (m *Manager) Suspended(name string) bool {
+// Stopped reports whether name has a persisted agentstore record marked
+// Stopped (dormant) and is not currently live. Config/store load failures are
+// treated as "not stopped" — callers fall through to their own not-found/spawn
+// handling, which is the safe default when state can't be read.
+func (m *Manager) Stopped(name string) bool {
 	if m.Live(name) {
 		return false
 	}
@@ -310,7 +313,30 @@ func (m *Manager) Suspended(name string) bool {
 		return false
 	}
 	rec, ok := stored[name]
-	return ok && rec.Suspended
+	return ok && rec.Stopped
+}
+
+// Wakeable reports whether name has a persisted, dormant agentstore record
+// with WakeOnMessage=true — the one signal that permits an inbound message
+// (routed channel message, or a persistent task's ensure-exists delivery) to
+// auto-start it via Start. A record that is dormant but WakeOnMessage=false
+// (an operator-initiated stop) must never be woken this way; callers needing
+// that distinction should also check Stopped. Config/store load failures are
+// treated as "not wakeable" — the safe default when state can't be read.
+func (m *Manager) Wakeable(name string) bool {
+	if m.Live(name) {
+		return false
+	}
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return false
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return false
+	}
+	rec, ok := stored[name]
+	return ok && rec.Stopped && rec.WakeOnMessage
 }
 
 // spawnShared is the non-worktree flow. Workspace resolution may do a network
@@ -734,9 +760,10 @@ func (m *Manager) reserveUniqueName(name string) (string, error) {
 }
 
 // List returns ephemeral agents merged with persisted metadata. Running agents
-// always appear; stopped worktree agents also appear (with status "stopped")
-// so operators can see candidates for pruning. Shared-workspace agents drop
-// out of the list once stopped, matching pre-worktree behavior.
+// always appear; every dormant record also appears with status "stopped" —
+// unlike the pre-one-dormant-state behavior, a stopped shared-workspace agent
+// stays visible (and deletable) exactly like a stopped worktree agent, since
+// Stop no longer deletes its record.
 func (m *Manager) List() []Record {
 	live := m.sup.EphemeralAgents()
 
@@ -766,22 +793,6 @@ func (m *Manager) List() []Record {
 		if _, alive := seen[name]; alive {
 			continue
 		}
-		if rec.Suspended {
-			out = append(out, hydrateSuspended(name, stored))
-			continue
-		}
-		// A shared-workspace record normally has no stopped representation:
-		// Manager.Stop deletes it outright, so under ordinary operation only
-		// worktree records (Branch != "") ever reach this branch. The
-		// exception is a shared record RestoreAgents left behind after a
-		// failed boot-time restore (missing workspace, spawn failure) — it
-		// sets Stopped=true and a non-empty StoppedReason specifically so the
-		// agent stays visible and recoverable via `leo agent restart`, rather
-		// than silently disappearing. Only that system-stopped case unlocks
-		// the branch-less path here; nothing else should.
-		if rec.Branch == "" && rec.StoppedReason == "" {
-			continue
-		}
 		out = append(out, Record{
 			Name:          name,
 			Template:      rec.Template,
@@ -801,23 +812,20 @@ func (m *Manager) List() []Record {
 	return out
 }
 
-// Stop kills the agent's tmux session. For shared-workspace agents the
-// agentstore record is also removed (nothing to clean up later) — this
-// includes a shared-workspace record RestoreAgents already left Stopped
-// after a failed boot-time restore (Branch is still empty for those, so they
-// take the same removal path; not-live means StopAgent is simply never
-// called, see below). For worktree agents the record is preserved with
-// Stopped=true so Prune can find the checkout while RestoreAgents knows not
-// to resurrect the agent on daemon restart; operators can always call Prune
-// explicitly to drop the worktree and record in one step.
+// Stop kills the agent's tmux session and marks it dormant. The record —
+// whatever its workspace type, shared or worktree — is ALWAYS kept, with
+// Stopped=true and WakeOnMessage set from opts; this is the inversion of the
+// old behavior that deleted a shared-workspace agent's record outright.
+// Deletion is a separate, explicit act (see Delete).
 //
-// Stop also terminates a suspended agent: a suspended (or otherwise dead) agent
-// has no supervised process, so StopAgent would return "not found". We only
-// call StopAgent when the agent is actually live and otherwise fall straight
-// through to record cleanup, clearing Suspended so the agent shows as stopped
-// and never auto-resumes. A name that is neither live nor persisted is a real
-// "not found".
-func (m *Manager) Stop(name string) error {
+// Stop is idempotent: calling it again on an already-dormant agent just
+// updates WakeOnMessage to the newly requested value.
+//
+// A dormant (or otherwise dead) agent has no supervised process, so StopAgent
+// would return "not found". Stop only calls StopAgent when the agent is
+// actually live and otherwise falls straight through to the record update. A
+// name that is neither live nor persisted is a real "not found".
+func (m *Manager) Stop(name string, opts StopOptions) error {
 	_, live := m.sup.EphemeralAgents()[name]
 	if live {
 		if err := m.sup.StopAgent(name); err != nil {
@@ -827,9 +835,9 @@ func (m *Manager) Stop(name string) error {
 
 	// Config/store failures are swallowed only when the process was live: it's
 	// already been killed, so cleanup is best-effort (a parse error leaves the
-	// record for Prune to surface). When the agent is NOT live, the record
-	// lookup is the whole operation — a failure there must be reported, not
-	// silently treated as success.
+	// record for a later Stop/Delete to surface). When the agent is NOT live,
+	// the record lookup is the whole operation — a failure there must be
+	// reported, not silently treated as success.
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		if live {
@@ -852,20 +860,14 @@ func (m *Manager) Stop(name string) error {
 			return fmt.Errorf("agent %q not found", name)
 		}
 		// Live but record-less (a legitimate shared, unpersisted agent) — the
-		// process is already killed; nothing left to clean up.
-		agentstore.Remove(cfg.HomePath, name)
+		// process is already killed and there is no record to mark dormant.
 		return nil
 	}
-	if rec.Branch != "" {
-		rec.Stopped = true
-		rec.Suspended = false
-		if saveErr := agentstore.Save(cfg.HomePath, rec); saveErr != nil {
-			log.Printf("agent %q stopped but marking Stopped=true failed: %v — agent may be resurrected on daemon restart", name, saveErr)
-		}
-		m.announceStoppedIfNotLive(live, name)
-		return nil
+	rec.Stopped = true
+	rec.WakeOnMessage = opts.WakeOnMessage
+	if saveErr := agentstore.Save(cfg.HomePath, rec); saveErr != nil {
+		log.Printf("agent %q stopped but marking Stopped=true failed: %v — agent may be resurrected on daemon restart", name, saveErr)
 	}
-	agentstore.Remove(cfg.HomePath, name)
 	m.announceStoppedIfNotLive(live, name)
 	return nil
 }
@@ -886,13 +888,22 @@ func (m *Manager) announceStoppedIfNotLive(live bool, name string) {
 	})
 }
 
-// Suspend stops a running ephemeral agent's process and tmux session while
-// preserving its agentstore record (Suspended=true) and SessionID, so the
-// conversation auto-resumes on the next incoming message. The record is marked
-// before the process is stopped; a failed stop rolls the flag back so the
-// record never claims "suspended" while the process is still running. Returns
-// an error when the agent is not currently running or has no persisted record.
-func (m *Manager) Suspend(name string) error {
+// Start clears an agent's dormant flags and respawns it, rejoining its prior
+// claude session via --resume. Returns ErrAgentAlreadyRunning if the agent is
+// currently live, and ErrAgentNotStopped if it has a persisted record that is
+// not dormant. Errors with ErrNotFound when name has no persisted record.
+//
+// Mirrors RestoreAgents' resume logic: prefer the newest jsonl in the
+// workspace over the stored SessionID (catches /clear sessions the store never
+// saw), then spawn with ResumeArgs and clear Stopped/StoppedReason/
+// WakeOnMessage. The stored ClaudeArgs are left untouched (still carrying
+// --session-id); a future restore rebuilds resume args from them + the
+// SessionID, matching existing behavior.
+func (m *Manager) Start(name string) error {
+	if _, live := m.sup.EphemeralAgents()[name]; live {
+		return fmt.Errorf("%w: %q", ErrAgentAlreadyRunning, name)
+	}
+
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -901,75 +912,12 @@ func (m *Manager) Suspend(name string) error {
 	if err != nil {
 		return fmt.Errorf("loading agentstore: %w", err)
 	}
-	rec, storedOK := stored[name]
-	_, live := m.sup.EphemeralAgents()[name]
-
-	if !storedOK && !live {
-		// Neither a persisted record nor a live process — this name is
-		// genuinely unknown, not just "not running".
-		return &ErrNotFound{Query: name}
-	}
-	if storedOK && rec.Suspended {
-		// Already suspended: an ordinary no-op request, not a server error.
-		return fmt.Errorf("%w: %q", ErrAgentSuspended, name)
-	}
-	if !live {
-		return fmt.Errorf("%w: %q", ErrAgentNotRunning, name)
-	}
-	if !storedOK {
-		return fmt.Errorf("no agentstore record for %q (cannot suspend an unpersisted agent)", name)
-	}
-
-	rec.Suspended = true
-	rec.NoResume = false
-	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
-		return fmt.Errorf("marking agent suspended: %w", err)
-	}
-
-	if err := m.sup.SuspendAgent(name); err != nil {
-		rec.Suspended = false
-		if rbErr := agentstore.Save(cfg.HomePath, rec); rbErr != nil {
-			log.Printf("agent %q: stop failed (%v) AND suspend-flag rollback failed (%v)", name, err, rbErr)
-		}
-		return fmt.Errorf("stopping agent for suspend: %w", err)
-	}
-	return nil
-}
-
-// Resume restarts a suspended ephemeral agent, rejoining its prior claude
-// session via --resume. If the agent is already running it is a no-op that
-// returns the live record. Errors when name has no suspended record.
-//
-// Mirrors RestoreAgents' resume logic: prefer the newest jsonl in the
-// workspace over the stored SessionID (catches /clear sessions the store never
-// saw), then spawn with ResumeArgs and clear the Suspended flag. The stored
-// ClaudeArgs are left untouched (still carrying --session-id); a future restore
-// rebuilds resume args from them + the SessionID, matching existing behavior.
-func (m *Manager) Resume(name string) (Record, error) {
-	if st, ok := m.sup.EphemeralAgents()[name]; ok {
-		r := Record{Name: name, Status: st.Status, StartedAt: st.StartedAt, Restarts: st.Restarts}
-		if cfg, err := m.cfgLoader(); err == nil {
-			if stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath)); err == nil {
-				mergeStored(&r, stored)
-			}
-		}
-		return r, nil
-	}
-
-	cfg, err := m.cfgLoader()
-	if err != nil {
-		return Record{}, fmt.Errorf("loading config: %w", err)
-	}
-	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
-	if err != nil {
-		return Record{}, fmt.Errorf("loading agentstore: %w", err)
-	}
 	rec, ok := stored[name]
 	if !ok {
-		return Record{}, &ErrNotFound{Query: name}
+		return &ErrNotFound{Query: name}
 	}
-	if !rec.Suspended {
-		return Record{}, fmt.Errorf("%w: %q", ErrAgentNotSuspended, name)
+	if !rec.Stopped {
+		return fmt.Errorf("%w: %q", ErrAgentNotStopped, name)
 	}
 
 	// The jsonl scan is a claude-specific resume mechanic (claude's own
@@ -979,7 +927,7 @@ func (m *Manager) Resume(name string) (Record, error) {
 	resumeID := ResumeIDFor(rec)
 	isClaude := rec.Harness == "" || rec.Harness == "claude"
 	// Re-resolve against current config for the same reason Restart does:
-	// waking an agent that has been suspended across an upgrade or a template
+	// waking an agent that has been stopped across an upgrade or a template
 	// edit must apply today's wiring, not replay what was frozen at spawn.
 	// resolveRestartArgs falls back to the stored args/env whenever it can't
 	// re-resolve (ad-hoc agent, deleted template, changed harness).
@@ -999,18 +947,12 @@ func (m *Manager) Resume(name string) (Record, error) {
 		Harness:    rec.Harness,
 		Resumed:    true,
 	}); err != nil {
-		return Record{}, fmt.Errorf("respawning suspended agent: %w", err)
+		return fmt.Errorf("respawning stopped agent: %w", err)
 	}
 
-	rec.Suspended = false
-	// Mirror Restart (see below, ~line 1189): clear Stopped/StoppedReason too,
-	// so a record can never carry both flags after a successful resume. Left
-	// unset, a record that had picked up Stopped=true (e.g. a boot-time
-	// markFailedRestore) would still hit RestoreAgents' `if rec.Stopped {
-	// continue }` guard on the NEXT daemon boot and silently never respawn a
-	// perfectly healthy, just-resumed agent.
 	rec.Stopped = false
 	rec.StoppedReason = ""
+	rec.WakeOnMessage = false
 	rec.SessionID = resumeID
 	rec.SessionPinnedAt = nil
 	// Persist the re-resolved wiring, same as Restart: leaving the record
@@ -1019,19 +961,10 @@ func (m *Manager) Resume(name string) (Record, error) {
 	rec.ClaudeArgs = args
 	rec.Env = resolvedEnv
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
-		log.Printf("agent %q resumed but agentstore.Save failed: %v — flag may persist until next save", rec.Name, err)
+		log.Printf("agent %q started but agentstore.Save failed: %v — flag may persist until next save", rec.Name, err)
 	}
 
-	return Record{
-		Name:          rec.Name,
-		Template:      rec.Template,
-		Repo:          rec.Repo,
-		Workspace:     rec.Workspace,
-		Branch:        rec.Branch,
-		CanonicalPath: rec.CanonicalPath,
-		Status:        "starting",
-		StartedAt:     time.Now(),
-	}, nil
+	return nil
 }
 
 // Reset forces an agent back to a brand-new conversation: it stops any live
@@ -1041,7 +974,7 @@ func (m *Manager) Resume(name string) (Record, error) {
 // spawn-a-new-session logic Spawn/spawnShared uses, not Resume's --resume
 // path. Errors when name has no persisted agentstore record. If the respawn
 // itself fails, the record is left in that already-cleared interim state
-// (SessionID="", NoResume=true, Suspended=false) rather than rolled back;
+// (SessionID="", NoResume=true) rather than rolled back;
 // re-running Reset on the same name recovers, since the agent is no longer
 // live so the stop is skipped and only the spawn is retried.
 func (m *Manager) Reset(name string) error {
@@ -1066,7 +999,6 @@ func (m *Manager) Reset(name string) error {
 
 	rec.SessionID = ""
 	rec.NoResume = true
-	rec.Suspended = false
 	// A reset discards the conversation, so the switch pin protecting it has
 	// nothing left to protect — leaving it set would suppress the transcript
 	// scan on some later resume for no reason.
@@ -1124,9 +1056,9 @@ func (m *Manager) Reset(name string) error {
 
 // Restart bounces a currently-running agent's tmux session while preserving
 // its conversation: it stops the live process, then respawns with --resume
-// (the same jsonl-preferring resume logic as Resume), leaving Suspended and
-// NoResume untouched — unlike Suspend/Reset, Restart never marks the record
-// suspended and never starts a fresh session. Errors when name has no live
+// (the same jsonl-preferring resume logic as Start), leaving Stopped and
+// NoResume untouched — unlike Stop/Reset, Restart never marks the record
+// dormant and never starts a fresh session. Errors when name has no live
 // process (suspended/stopped/unknown agents are not restartable — callers
 // driving --all should treat that as a skip, not a failure). If the respawn
 // fails after the stop succeeds, the record is left exactly as before (still
@@ -1145,11 +1077,6 @@ func (m *Manager) Reset(name string) error {
 // isn't possible.
 func (m *Manager) Restart(name string) error {
 	_, live := m.sup.EphemeralAgents()[name]
-	if !live {
-		if m.Suspended(name) {
-			return fmt.Errorf("%w: %q; resume it first", ErrAgentSuspended, name)
-		}
-	}
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -1170,14 +1097,17 @@ func (m *Manager) Restart(name string) error {
 	// SYSTEM after a failed boot-time restore (RestoreAgents sets Stopped
 	// plus a StoppedReason — see internal/service/agents.go) — this is the
 	// recovery path for that record, spawning it fresh instead of erroring
-	// "not running" like a genuinely inactive agent. A user-stopped record
-	// (Stopped with no reason) or one Resolve simply couldn't find still
-	// hits the not-running error above/below; Resolve deliberately excludes
-	// every stopped record, live or not, so this check re-derives
-	// "recoverable" straight from the stored fields rather than trusting the
-	// caller's resolution.
+	// "stopped" like a genuinely dormant agent. A user- or sweep-stopped
+	// record (Stopped with no reason) or one Resolve simply couldn't find
+	// still hits the errors below; Resolve deliberately excludes every
+	// stopped record, live or not, so this check re-derives "recoverable"
+	// straight from the stored fields rather than trusting the caller's
+	// resolution.
 	recoverable := rec.IsFailedRestore()
 	if !live && !recoverable {
+		if rec.Stopped {
+			return fmt.Errorf("%w: %q; start it first", ErrAgentStopped, name)
+		}
 		return fmt.Errorf("agent %q is not running", name)
 	}
 
@@ -1363,7 +1293,7 @@ type RestartResult struct {
 // RestartAll bounces every live agent (see Restart), plus every recoverable
 // failed-restore record (Status=="stopped" with a non-empty StoppedReason —
 // see markFailedRestore), skipping only the genuinely intentionally-down
-// ones: suspended agents, and stopped records the user stopped themselves
+// ones: stopped records the user (or the idle sweep) stopped themselves
 // (Status=="stopped" with an empty StoppedReason). Everything else the
 // supervisor still holds live — including "starting" and "restarting"
 // (crash-loop backoff) agents — is bounced; restarting a backing-off agent
@@ -1382,10 +1312,6 @@ type RestartResult struct {
 func (m *Manager) RestartAll() RestartResult {
 	result := RestartResult{Failed: map[string]error{}}
 	for _, rec := range m.List() {
-		if rec.Status == "suspended" {
-			result.Skipped = append(result.Skipped, rec.Name)
-			continue
-		}
 		if rec.Status == "stopped" && rec.StoppedReason == "" {
 			result.Skipped = append(result.Skipped, rec.Name)
 			continue
@@ -1399,12 +1325,14 @@ func (m *Manager) RestartAll() RestartResult {
 	return result
 }
 
-// Prune removes the on-disk worktree and agentstore record for a stopped
-// worktree agent. Returns ErrAgentStillRunning if the agent has a live tmux
-// session, ErrNotWorktreeAgent for shared-workspace agents, and
-// ErrWorktreeDirty / ErrBranchNotMerged from the git layer when --force is
-// required to proceed.
-func (m *Manager) Prune(ctx context.Context, name string, opts PruneOptions) error {
+// Delete removes the agentstore record for name — the only thing that ever
+// removes a record — plus its on-disk worktree and branch when it has one.
+// Unlike the old Prune, Delete accepts a shared-workspace agent (nothing on
+// disk to remove beyond the record itself); it still refuses a live agent
+// with ErrAgentStillRunning, since deletion is a two-step act on anything
+// currently doing work — stop it first. ErrWorktreeDirty / ErrBranchNotMerged
+// surface from the git layer when --force is required to proceed.
+func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) error {
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -1418,9 +1346,6 @@ func (m *Manager) Prune(ctx context.Context, name string, opts PruneOptions) err
 	if !ok {
 		return fmt.Errorf("no agentstore record for %q", name)
 	}
-	if rec.Branch == "" || rec.CanonicalPath == "" {
-		return ErrNotWorktreeAgent
-	}
 
 	if live := m.sup.EphemeralAgents(); live != nil {
 		if _, alive := live[name]; alive {
@@ -1428,18 +1353,20 @@ func (m *Manager) Prune(ctx context.Context, name string, opts PruneOptions) err
 		}
 	}
 
-	if err := git.RemoveWorktree(ctx, rec.CanonicalPath, rec.Workspace, opts.Force); err != nil {
-		return err
-	}
-
-	if opts.DeleteBranch {
-		if err := git.DeleteBranch(ctx, rec.CanonicalPath, rec.Branch, opts.Force); err != nil {
+	isWorktree := rec.Branch != "" && rec.CanonicalPath != ""
+	if isWorktree {
+		if err := git.RemoveWorktree(ctx, rec.CanonicalPath, rec.Workspace, opts.Force); err != nil {
 			return err
+		}
+		if opts.DeleteBranch {
+			if err := git.DeleteBranch(ctx, rec.CanonicalPath, rec.Branch, opts.Force); err != nil {
+				return err
+			}
 		}
 	}
 
 	agentstore.Remove(cfg.HomePath, name)
-	// Prune only ever reaches here for a not-live agent (the EphemeralAgents
+	// Delete only ever reaches here for a not-live agent (the EphemeralAgents
 	// check above already rejected a live one), verbatim the rationale
 	// announceStoppedIfNotLive documents for Stop: nothing else along this
 	// path calls sup.StopAgent, so nothing else would announce the removal.
@@ -1525,8 +1452,8 @@ func (m *Manager) ResolveHandle(name string) (string, harness.SessionHandle, boo
 func (m *Manager) Logs(name string, lines int) (string, error) {
 	live := m.sup.EphemeralAgents()
 	if _, ok := live[name]; !ok {
-		if m.Suspended(name) {
-			return "", fmt.Errorf("%w: %q; resume it first", ErrAgentSuspended, name)
+		if m.Stopped(name) {
+			return "", fmt.Errorf("%w: %q; start it first", ErrAgentStopped, name)
 		}
 		return "", fmt.Errorf("agent %q not running", name)
 	}

@@ -111,7 +111,7 @@ func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 // Resolve reports not-found — otherwise a failed-restore record (Stopped +
 // StoppedReason, no live process to kill) would be permanently unreachable
 // via `leo agent stop`, since Resolve deliberately excludes every stopped
-// record.
+// record. The agent always stays dormant (record kept) — see agent.Manager.Stop.
 func (s *Server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 	if s.agentMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
@@ -122,41 +122,27 @@ func (s *Server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent name is required")
 		return
 	}
+	var req AgentStopRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
+			return
+		}
+	}
 	rec, ok := s.resolveAgentOrErrorWithFallback(w, query, s.agentMgr.ResolveRecoverable)
 	if !ok {
 		return
 	}
-	if err := s.agentMgr.Stop(rec.Name); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, Response{OK: true})
-}
-
-// handleAgentSuspend suspends an agent by name via POST /agents/{name}/suspend.
-// The agent process and tmux session are killed; the record is preserved so
-// the conversation can be auto-resumed on the next incoming message.
-func (s *Server) handleAgentSuspend(w http.ResponseWriter, r *http.Request) {
-	if s.agentMgr == nil {
-		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
-		return
-	}
-	name := r.PathValue("name")
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "agent name is required")
-		return
-	}
-	if err := s.agentMgr.Suspend(name); err != nil {
+	if err := s.agentMgr.Stop(rec.Name, agent.StopOptions{WakeOnMessage: req.WakeOnMessage}); err != nil {
 		writeAgentError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
-// handleAgentResume resumes a suspended agent by name via POST /agents/{name}/resume.
+// handleAgentStart starts a dormant agent by name via POST /agents/{name}/start.
 // The agent is re-spawned with --resume so the prior conversation continues.
-// Returns the agent record on success.
-func (s *Server) handleAgentResume(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 	if s.agentMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
 		return
@@ -166,17 +152,11 @@ func (s *Server) handleAgentResume(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent name is required")
 		return
 	}
-	rec, err := s.agentMgr.Resume(name)
-	if err != nil {
+	if err := s.agentMgr.Start(name); err != nil {
 		writeAgentError(w, err)
 		return
 	}
-	data, err := json.Marshal(rec)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling record: %v", err))
-		return
-	}
-	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+	writeJSON(w, http.StatusOK, Response{OK: true})
 }
 
 // handleAgentReset resets an agent by name or shorthand via POST
@@ -471,11 +451,12 @@ func (s *Server) handleAgentResolve(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
-// handleAgentPrune removes the worktree and agentstore record for a stopped
-// worktree agent. No-op (surfaced as 400) for shared-workspace agents. The
-// `name` path segment must be an exact agent name because shorthand resolution
-// only matches live agents and a prunable agent has already been stopped.
-func (s *Server) handleAgentPrune(w http.ResponseWriter, r *http.Request) {
+// handleAgentDelete removes the agentstore record — plus the worktree and
+// branch when the agent has one — via DELETE /agents/{name}. Refuses a live
+// agent. The `name` path segment must be an exact agent name because
+// shorthand resolution only matches live agents and a deletable agent has
+// already been stopped.
+func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 	if s.agentMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
 		return
@@ -486,7 +467,7 @@ func (s *Server) handleAgentPrune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req AgentPruneRequest
+	var req AgentDeleteRequest
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err))
@@ -494,7 +475,7 @@ func (s *Server) handleAgentPrune(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.agentMgr.Prune(r.Context(), name, agent.PruneOptions{
+	if err := s.agentMgr.Delete(r.Context(), name, agent.DeleteOptions{
 		Force:        req.Force,
 		DeleteBranch: req.DeleteBranch,
 	}); err != nil {
@@ -578,10 +559,12 @@ func writeAgentError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceAgentNotFound})
 	case errors.Is(err, agent.ErrSourceNotGitRepo):
 		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceNotGitRepo})
-	case errors.Is(err, agent.ErrAgentSuspended):
-		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentSuspended})
-	case errors.Is(err, agent.ErrAgentNotSuspended):
-		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentNotSuspended})
+	case errors.Is(err, agent.ErrAgentStopped):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentStopped})
+	case errors.Is(err, agent.ErrAgentNotStopped):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentNotStopped})
+	case errors.Is(err, agent.ErrAgentAlreadyRunning):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentAlreadyRunning})
 	case errors.Is(err, agent.ErrAgentNotRunning):
 		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentNotRunning})
 	default:

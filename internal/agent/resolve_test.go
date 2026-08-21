@@ -276,11 +276,12 @@ func TestResolveDisplayNameBeatsRepoShort(t *testing.T) {
 	}
 }
 
-// TestResolveSuspendedByExactName pins the fix for a suspended agent (present
-// only in the agentstore after a daemon restart, absent from the live
-// supervisor map) resolving by its exact name, with Status "suspended" and
-// persisted metadata merged.
-func TestResolveSuspendedByExactName(t *testing.T) {
+// TestResolveStoppedByExactNameNotFound pins the deliberate exclusion: a
+// dormant (Stopped) agent — present only in the agentstore, absent from the
+// live supervisor map — is never returned by Resolve, by exact name or any
+// other tier. Rename and Delete have their own exact-name store fallbacks for
+// that case.
+func TestResolveStoppedByExactNameNotFound(t *testing.T) {
 	mgr := newResolveManager(t,
 		map[string]ProcessState{},
 		map[string]agentstore.Record{
@@ -289,59 +290,34 @@ func TestResolveSuspendedByExactName(t *testing.T) {
 				Template:  "coding",
 				Repo:      "acme/widget",
 				Workspace: filepath.Join("/tmp", "widget"),
-				Suspended: true,
+				Stopped:   true,
 			},
 		},
 	)
-	rec, err := mgr.Resolve("leo-coding-acme-widget")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if rec.Status != "suspended" {
-		t.Errorf("status = %q, want suspended", rec.Status)
-	}
-	if rec.Template != "coding" || rec.Repo != "acme/widget" || rec.Workspace != filepath.Join("/tmp", "widget") {
-		t.Errorf("hydrate = %+v", rec)
+	_, err := mgr.Resolve("leo-coding-acme-widget")
+	var nf *ErrNotFound
+	if !errors.As(err, &nf) {
+		t.Fatalf("want ErrNotFound, got %T: %v", err, err)
 	}
 }
 
-// TestResolveSuspendedByDisplayName and repo-short prove the matching tiers
-// apply uniformly to suspended rows, not just the exact-name tier.
-func TestResolveSuspendedByDisplayName(t *testing.T) {
+// TestResolveStoppedByDisplayNameOrRepoShortNotFound proves the exclusion
+// applies uniformly across every matching tier, not just exact name.
+func TestResolveStoppedByDisplayNameOrRepoShortNotFound(t *testing.T) {
 	mgr := newResolveManager(t,
 		map[string]ProcessState{},
 		map[string]agentstore.Record{
-			"leo-widget": {Name: "leo-widget", Repo: "acme/widget", Suspended: true},
+			"leo-widget": {Name: "leo-widget", Repo: "acme/widget", Stopped: true},
 		},
 	)
-	rec, err := mgr.Resolve("widget")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if rec.Name != "leo-widget" || rec.Status != "suspended" {
-		t.Errorf("rec = %+v", rec)
+	if _, err := mgr.Resolve("widget"); !errors.As(err, new(*ErrNotFound)) {
+		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
 
-func TestResolveSuspendedByRepoShort(t *testing.T) {
-	mgr := newResolveManager(t,
-		map[string]ProcessState{},
-		map[string]agentstore.Record{
-			"leo-coding-acme-widget": {Name: "leo-coding-acme-widget", Repo: "acme/widget", Suspended: true},
-		},
-	)
-	rec, err := mgr.Resolve("widget")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if rec.Name != "leo-coding-acme-widget" || rec.Status != "suspended" {
-		t.Errorf("rec = %+v", rec)
-	}
-}
-
-// TestResolveStoppedNotFound pins the deliberate exclusion: a stopped (not
-// suspended) agentstore record must never be returned by Resolve — Rename and
-// Prune have their own exact-name store fallbacks for that case.
+// TestResolveStoppedNotFound pins the deliberate exclusion: a dormant
+// (Stopped) agentstore record must never be returned by Resolve — Rename and
+// Delete have their own exact-name store fallbacks for that case.
 func TestResolveStoppedNotFound(t *testing.T) {
 	mgr := newResolveManager(t,
 		map[string]ProcessState{},
@@ -356,25 +332,24 @@ func TestResolveStoppedNotFound(t *testing.T) {
 	}
 }
 
-// TestResolveAmbiguousLiveAndSuspended proves a tier tie between a live agent
-// and a suspended one is still ambiguous, not silently resolved by liveness.
-func TestResolveAmbiguousLiveAndSuspended(t *testing.T) {
+// TestResolveIgnoresStoppedSiblingNoAmbiguity proves a tier tie between a
+// live agent and a dormant (Stopped) one is resolved unambiguously to the
+// live agent — the dormant sibling never participates in Resolve at all, so
+// there is nothing to be ambiguous about.
+func TestResolveIgnoresStoppedSiblingNoAmbiguity(t *testing.T) {
 	mgr := newResolveManager(t,
 		map[string]ProcessState{"leo-coding-acme-leo": {Status: "running"}},
 		map[string]agentstore.Record{
 			"leo-coding-acme-leo":  {Name: "leo-coding-acme-leo", Repo: "acme/leo"},
-			"leo-coding-other-leo": {Name: "leo-coding-other-leo", Repo: "other/leo", Suspended: true},
+			"leo-coding-other-leo": {Name: "leo-coding-other-leo", Repo: "other/leo", Stopped: true},
 		},
 	)
-	_, err := mgr.Resolve("leo")
-	var amb *ErrAmbiguous
-	if !errors.As(err, &amb) {
-		t.Fatalf("want ErrAmbiguous, got %T: %v", err, err)
+	rec, err := mgr.Resolve("leo")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
 	}
-	sort.Strings(amb.Matches)
-	want := []string{"leo-coding-acme-leo", "leo-coding-other-leo"}
-	if len(amb.Matches) != 2 || amb.Matches[0] != want[0] || amb.Matches[1] != want[1] {
-		t.Errorf("matches = %v, want %v", amb.Matches, want)
+	if rec.Name != "leo-coding-acme-leo" {
+		t.Errorf("rec.Name = %q, want leo-coding-acme-leo (the only live match)", rec.Name)
 	}
 }
 

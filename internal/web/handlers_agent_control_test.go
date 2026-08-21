@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -239,18 +238,19 @@ func TestWebAgentMessageLeoPrefixedTargetUsesSingleLeoPrefix(t *testing.T) {
 
 // TestWebAgentMessageAutoWakesSuspendedAgent verifies that when a message is
 // targeted at a name that is NOT in the live process states but IS a
-// suspended agent, handleWebAgentMessage calls Resume and then delivers via
-// the readiness-probing InjectPrompt path — NOT the 2s fast-path send-keys.
+// dormant, wakeable (WakeOnMessage=true) agent, handleWebAgentMessage calls
+// Start and then delivers via the readiness-probing InjectPrompt path — NOT
+// the 2s fast-path send-keys.
 //
-// A just-resumed claude takes tens of seconds to boot before its input box
+// A just-started claude takes tens of seconds to boot before its input box
 // accepts input. Falling through to send-keys (which only waits ~2s) would
 // silently drop the first post-wake message.
 func TestWebAgentMessageAutoWakesSuspendedAgent(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
 
-	// "suspended-worker" is NOT in live states — it must be resumed then
+	// "suspended-worker" is NOT in live states — it must be started then
 	// delivered via injectPrompt (readiness-probing), not the fast-path.
-	svc.resumeResult = agent.Record{Name: "suspended-worker", Status: "starting"}
+	svc.wakeableNames = map[string]bool{"suspended-worker": true}
 
 	// Capture what injectPrompt was called with. Delivery is asynchronous (the
 	// handler resumes, then injects in a goroutine so a ~60s cold boot doesn't
@@ -281,12 +281,12 @@ func TestWebAgentMessageAutoWakesSuspendedAgent(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 
-	// Resume must have been called for the suspended agent (synchronous).
+	// Start must have been called for the wakeable agent (synchronous).
 	if !svc.resumeCalled {
-		t.Fatal("expected Resume to be called for suspended agent")
+		t.Fatal("expected Start to be called for a wakeable agent")
 	}
 	if svc.resumeName != "suspended-worker" {
-		t.Errorf("expected Resume called with 'suspended-worker', got %q", svc.resumeName)
+		t.Errorf("expected Start called with 'suspended-worker', got %q", svc.resumeName)
 	}
 
 	// The readiness-probing injector must be called (asynchronously) with the
@@ -315,13 +315,11 @@ func TestWebAgentMessageAutoWakesSuspendedAgent(t *testing.T) {
 }
 
 // TestWebAgentMessageUnknownTargetWithAgentServiceStill404 verifies that a
-// name that is neither live NOR a suspended agent returns 404, even when
-// agentSvc is set (Resume returns an error for truly unknown names).
+// name that is neither live NOR wakeable returns 404, and Start is never
+// attempted for it — Wakeable already reports false for a name with no
+// dormant record.
 func TestWebAgentMessageUnknownTargetWithAgentServiceStill404(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
-
-	// Make Resume fail — name is not suspended, so it's unknown.
-	svc.resumeErr = fmt.Errorf("agent %q is not suspended", "ghost")
 
 	body := strings.NewReader(`{"text":"hello"}`)
 	req := httptest.NewRequest("POST", "/web/agent/ghost/message", body)
@@ -332,12 +330,38 @@ func TestWebAgentMessageUnknownTargetWithAgentServiceStill404(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
 	}
-	if !svc.resumeCalled {
-		t.Fatal("expected Resume to be attempted for unknown target")
+	if svc.resumeCalled {
+		t.Fatal("Start must not be attempted for an unknown, non-wakeable target")
 	}
 	body2 := w.Body.String()
 	if !strings.Contains(body2, "ghost") {
 		t.Errorf("404 body should mention the unknown name; got %s", body2)
+	}
+}
+
+// TestWebAgentMessageDoesNotWakeManuallyStoppedAgent is the load-bearing
+// auto-wake guard on the channel path: a dormant agent with
+// WakeOnMessage=false (an operator-initiated stop, not the idle sweep) must
+// NOT be woken by an inbound message — Wakeable reports false for it even
+// though a record exists, and the handler must fall through to the same 404
+// an unknown name gets, never calling Start.
+func TestWebAgentMessageDoesNotWakeManuallyStoppedAgent(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	// A record exists (tracked via ResolveRecoverable/records in other tests),
+	// but it is NOT wakeable — the manual-stop case.
+	svc.wakeableNames = map[string]bool{"stopped-worker": false}
+
+	body := strings.NewReader(`{"text":"hello"}`)
+	req := httptest.NewRequest("POST", "/web/agent/stopped-worker/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
+	}
+	if svc.resumeCalled {
+		t.Fatal("Start must never be called for a manually stopped (non-wakeable) agent")
 	}
 }
 

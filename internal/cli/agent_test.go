@@ -864,58 +864,6 @@ func TestAgentSpawnRemoteForwardsWorktreeFlags(t *testing.T) {
 	}
 }
 
-func TestAgentPruneRemoteDispatches(t *testing.T) {
-	path := newAgentCLITestConfig(t)
-	stub := withStubExec(t)
-	withStubStdio(t)
-
-	root := newRootCmd()
-	root.SetArgs([]string{"--config", path, "agent", "prune", "leo-coding-owner-bar-feat-x", "--force", "--delete-branch"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	if len(stub.calls) != 1 {
-		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
-	}
-	joined := strings.Join(stub.calls[0], " ")
-	for _, want := range []string{"agent", "prune", "leo-coding-owner-bar-feat-x", "--force", "--delete-branch"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("ssh call missing %q: %s", want, joined)
-		}
-	}
-}
-
-func TestAgentStopForceRequiresPrune(t *testing.T) {
-	path := newAgentCLITestConfig(t)
-	withStubExec(t)
-	withStubStdio(t)
-
-	root := newRootCmd()
-	root.SetArgs([]string{"--config", path, "agent", "stop", "foo", "--force", "--host", "localhost"})
-	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "--force and --delete-branch require --prune") {
-		t.Fatalf("expected --force requires --prune error, got %v", err)
-	}
-}
-
-func TestAgentStopRemoteForwardsPruneFlags(t *testing.T) {
-	path := newAgentCLITestConfig(t)
-	stub := withStubExec(t)
-	withStubStdio(t)
-
-	root := newRootCmd()
-	root.SetArgs([]string{"--config", path, "agent", "stop", "leo-foo", "--prune", "--force", "--delete-branch"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	joined := strings.Join(stub.calls[0], " ")
-	for _, want := range []string{"agent", "stop", "leo-foo", "--prune", "--force", "--delete-branch"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("ssh call missing %q: %s", want, joined)
-		}
-	}
-}
-
 func TestAgentRenameRemoteDispatches(t *testing.T) {
 	path := newAgentCLITestConfig(t)
 	stub := withStubExec(t)
@@ -983,19 +931,20 @@ func TestCompleteAgentNamesSkipsAfterFirstArg(t *testing.T) {
 	}
 }
 
-// TestAgentCmdRegistersSuspendResume verifies that 'suspend' and 'resume' are
-// registered as subcommands of 'agent'.
-func TestAgentCmdRegistersSuspendResume(t *testing.T) {
+// TestAgentCmdDoesNotRegisterSuspendResumePrune locks the removal of the
+// suspend/resume/prune verbs: 'stop' is the only dormancy transition now
+// (WakeOnMessage carries the old suspend-vs-stop distinction), and delete is
+// phase-2 CLI UX not yet added.
+func TestAgentCmdDoesNotRegisterSuspendResumePrune(t *testing.T) {
 	cmd := newAgentCmd()
 	names := make(map[string]bool)
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = true
 	}
-	if !names["suspend"] {
-		t.Error("expected 'suspend' subcommand to be registered under agent")
-	}
-	if !names["resume"] {
-		t.Error("expected 'resume' subcommand to be registered under agent")
+	for _, removed := range []string{"suspend", "resume", "prune"} {
+		if names[removed] {
+			t.Errorf("expected %q subcommand to be removed from agent", removed)
+		}
 	}
 }
 

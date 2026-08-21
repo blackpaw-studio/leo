@@ -3,6 +3,7 @@ package agentstore
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -244,9 +245,9 @@ func TestSaveCreatesStateDir(t *testing.T) {
 	}
 }
 
-func TestRecordRoundTripPreservesSuspendFields(t *testing.T) {
+func TestRecordRoundTripPreservesWakeOnMessage(t *testing.T) {
 	home := t.TempDir()
-	in := Record{Name: "leo-x", Workspace: "/w", Suspended: true, IdleSuspendAfter: "24h0m0s"}
+	in := Record{Name: "leo-x", Workspace: "/w", Stopped: true, WakeOnMessage: true, IdleSuspendAfter: "24h0m0s"}
 	if err := Save(home, in); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -255,8 +256,93 @@ func TestRecordRoundTripPreservesSuspendFields(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	rec := got["leo-x"]
-	if !rec.Suspended || rec.IdleSuspendAfter != "24h0m0s" {
+	if !rec.Stopped || !rec.WakeOnMessage || rec.IdleSuspendAfter != "24h0m0s" {
 		t.Fatalf("round-trip lost fields: %+v", rec)
+	}
+}
+
+// TestLoadMigratesSuspendedToStoppedWakeable covers the one-way migration: a
+// record written by a pre-one-dormant-state binary with `suspended: true`
+// becomes `stopped: true, wake_on_message: true` on load — a suspended agent
+// always allowed auto-wake, matching old Suspend/ensure-exists behavior.
+func TestLoadMigratesSuspendedToStoppedWakeable(t *testing.T) {
+	home := t.TempDir()
+	path := FilePath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	raw := `{"leo-x": {"name": "leo-x", "workspace": "/w", "suspended": true}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	rec, ok := got["leo-x"]
+	if !ok {
+		t.Fatalf("expected record leo-x, got %+v", got)
+	}
+	if !rec.Stopped || !rec.WakeOnMessage {
+		t.Fatalf("expected migrated record Stopped=true WakeOnMessage=true, got %+v", rec)
+	}
+}
+
+// TestLoadStoppedRecordWithNoSuspendedKeyStaysNotWakeable covers the other
+// migration branch: a `stopped: true` record with no legacy `suspended` key
+// keeps WakeOnMessage at its zero value (false) — it must not be treated as
+// auto-wakeable just because it is dormant.
+func TestLoadStoppedRecordWithNoSuspendedKeyStaysNotWakeable(t *testing.T) {
+	home := t.TempDir()
+	path := FilePath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	raw := `{"leo-x": {"name": "leo-x", "workspace": "/w", "stopped": true}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	rec := got["leo-x"]
+	if !rec.Stopped || rec.WakeOnMessage {
+		t.Fatalf("expected Stopped=true WakeOnMessage=false, got %+v", rec)
+	}
+}
+
+// TestSaveDropsLegacySuspendedKey covers the "dropped on next save" half of
+// the migration: once a migrated record is saved again, the raw JSON on disk
+// no longer carries a `suspended` key at all (Record has no field to encode
+// it into).
+func TestSaveDropsLegacySuspendedKey(t *testing.T) {
+	home := t.TempDir()
+	path := FilePath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	raw := `{"leo-x": {"name": "leo-x", "workspace": "/w", "suspended": true}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	records, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := Save(home, records["leo-x"]); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(data), "suspended") {
+		t.Fatalf("expected \"suspended\" key to be dropped after save, got: %s", data)
 	}
 }
 

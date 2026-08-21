@@ -128,7 +128,7 @@ func (s *Server) handleAPIAgentStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, apiResponse{Error: err.Error()})
 		return
 	}
-	if err := s.agentSvc.Stop(rec.Name); err != nil {
+	if err := s.agentSvc.Stop(rec.Name, agent.StopOptions{}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return
 	}
@@ -164,7 +164,7 @@ func (s *Server) handleAPIAgentSuspend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, apiResponse{Error: err.Error()})
 		return
 	}
-	if err := s.agentSvc.Suspend(rec.Name); err != nil {
+	if err := s.agentSvc.Stop(rec.Name, agent.StopOptions{WakeOnMessage: true}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return
 	}
@@ -172,12 +172,12 @@ func (s *Server) handleAPIAgentSuspend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
 
-// handleAPIAgentResume resumes a suspended agent via JSON.
+// handleAPIAgentResume starts a dormant agent via JSON.
 // POST /api/agent/resume  {name: "agent-name"}
 //
 // Unlike stop/suspend this does NOT resolve shorthand: Manager.Resolve matches
-// live agents only, and a suspended agent is not live. Callers pass the exact
-// agent name; Resume looks it up in the agentstore itself.
+// live agents only, and a dormant agent is not live. Callers pass the exact
+// agent name; Start looks it up in the agentstore itself.
 func (s *Server) handleAPIAgentResume(w http.ResponseWriter, r *http.Request) {
 	if s.agentSvc == nil {
 		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
@@ -196,15 +196,14 @@ func (s *Server) handleAPIAgentResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := s.agentSvc.Resume(req.Name)
-	if err != nil {
+	if err := s.agentSvc.Start(req.Name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]string{
-		"name":   rec.Name,
-		"status": rec.Status,
+		"name":   req.Name,
+		"status": "starting",
 	}})
 }
 
@@ -332,7 +331,7 @@ func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to find agent: %v", err))
 		return
 	}
-	if err := s.agentSvc.Stop(rec.Name); err != nil {
+	if err := s.agentSvc.Stop(rec.Name, agent.StopOptions{}); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to stop agent: %v", err))
 		return
 	}
@@ -357,7 +356,7 @@ func (s *Server) handleWebAgentSuspend(w http.ResponseWriter, r *http.Request) {
 		s.renderFlashToContainer(w, "error", "Agent service not available")
 		return
 	}
-	if err := s.agentSvc.Suspend(name); err != nil {
+	if err := s.agentSvc.Stop(name, agent.StopOptions{WakeOnMessage: true}); err != nil {
 		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to suspend agent: %v", err))
 		return
 	}
@@ -374,7 +373,7 @@ func (s *Server) handleWebAgentResume(w http.ResponseWriter, r *http.Request) {
 		s.renderFlashToContainer(w, "error", "Agent service not available")
 		return
 	}
-	if _, err := s.agentSvc.Resume(name); err != nil {
+	if err := s.agentSvc.Start(name); err != nil {
 		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to resume agent: %v", err))
 		return
 	}

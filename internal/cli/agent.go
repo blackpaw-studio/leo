@@ -62,13 +62,10 @@ so remote calls use your existing SSH setup.`,
 		newAgentWorktreeCmd(),
 		newAgentAttachCmd(),
 		newAgentStopCmd(),
-		newAgentSuspendCmd(),
-		newAgentResumeCmd(),
 		newAgentResetCmd(),
 		newAgentRestartCmd(),
 		newAgentSetTemplateCmd(),
 		newAgentRenameCmd(),
-		newAgentPruneCmd(),
 		newAgentLogsCmd(),
 		newAgentSessionNameCmd(),
 	)
@@ -752,18 +749,13 @@ or any unambiguous suffix.`,
 
 func newAgentStopCmd() *cobra.Command {
 	var host string
-	var prune, force, deleteBranch, asJSON bool
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "stop <name>",
 		Short: "Stop a running agent",
-		Long: `Stop a running agent's tmux session. Worktree agents preserve their
-on-disk worktree so you can reattach or inspect state; pass --prune to also
-remove the worktree and agentstore record in one step.`,
-		Example: `  # Stop an agent but keep its worktree on disk
-  leo agent stop leo-mcp-node-owner-fetch
-
-  # Stop and clean up worktree + local branch
-  leo agent stop leo-mcp-node-owner-fetch --prune --delete-branch`,
+		Long: `Stop a running agent's tmux session. The agent stays dormant — its
+record (and worktree, if it has one) is kept so it can be started again later.`,
+		Example:           `  leo agent stop leo-mcp-node-owner-fetch`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -771,163 +763,40 @@ remove the worktree and agentstore record in one step.`,
 				return err
 			}
 			name := args[0]
-			if (force || deleteBranch) && !prune {
-				return fmt.Errorf("--force and --delete-branch require --prune")
-			}
 			cfg, res, err := dispatch(host)
 			if err != nil {
 				return err
 			}
 			if !res.Localhost {
 				extra := []string{"stop", name}
-				if prune {
-					extra = append(extra, "--prune")
-				}
-				if force {
-					extra = append(extra, "--force")
-				}
-				if deleteBranch {
-					extra = append(extra, "--delete-branch")
-				}
 				if asJSON {
 					extra = append(extra, "--json")
 				}
 				return runRemote(res, extra)
 			}
 
-			// Resolve shorthand locally first so the prune step can use the
-			// canonical name (Prune does not go through Resolve because the
-			// agent is stopped by then and the resolver matches live and
-			// suspended agents, but never a stopped one).
 			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
 			if err != nil {
 				return fmt.Errorf("resolving agent: %w", err)
 			}
 			canonical := resolved.Name
 
-			if err := daemon.AgentStop(cmd.Context(), cfg.HomePath, canonical); err != nil {
+			if err := daemon.AgentStop(cmd.Context(), cfg.HomePath, canonical, false); err != nil {
 				return fmt.Errorf("stopping agent: %w", err)
 			}
 			result := agentStopResult{Name: canonical, Stopped: true}
-
-			// Confirm the stop before attempting prune so a later prune error
-			// (which returns below) doesn't swallow the fact that the agent was
-			// stopped. JSON callers get the combined object instead.
-			if !asJSON {
-				fmt.Fprintf(agentStdout, "stopped %s\n", canonical)
-			}
-
-			if prune {
-				if err := daemon.AgentPrune(cmd.Context(), cfg.HomePath, canonical, daemon.AgentPruneRequest{
-					Force:        force,
-					DeleteBranch: deleteBranch,
-				}); err != nil {
-					if !errors.Is(err, agent.ErrNotWorktreeAgent) {
-						return fmt.Errorf("pruning worktree: %w", err)
-					}
-					// Stop already cleared a shared-workspace record; nothing to
-					// prune. Treat as a no-op rather than an error so --prune is
-					// safe to default-on in scripts.
-				} else {
-					result.Pruned = true
-				}
-			}
 
 			if asJSON {
 				enc := json.NewEncoder(agentStdout)
 				enc.SetIndent("", "  ")
 				return enc.Encode(result)
 			}
-			if result.Pruned {
-				fmt.Fprintf(agentStdout, "pruned worktree for %s\n", canonical)
-			}
+			fmt.Fprintf(agentStdout, "stopped %s\n", canonical)
 			return nil
 		},
 	}
 	addHostFlag(cmd, &host)
 	cmd.Flags().BoolVar(&asJSON, "json", false, "output the stop result as JSON")
-	cmd.Flags().BoolVar(&prune, "prune", false, "also remove the worktree and agentstore record (worktree agents only)")
-	cmd.Flags().BoolVar(&force, "force", false, "with --prune: remove even when the worktree is dirty")
-	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "with --prune: delete the local branch after removing the worktree")
-	return cmd
-}
-
-// --- suspend ---
-
-func newAgentSuspendCmd() *cobra.Command {
-	var host string
-	cmd := &cobra.Command{
-		Use:   "suspend <name>",
-		Short: "Suspend a running agent (preserves session for auto-resume)",
-		Long: `Suspend a running agent by killing its process and tmux session while
-preserving the agentstore record and SessionID. The agent can be restarted
-with 'leo agent resume' or auto-woken on the next incoming message (if
-idle-suspend is enabled via --idle-suspend or idle_suspend_after config).`,
-		Example:           `  leo agent suspend leo-coding-owner-fetch`,
-		Args:              cobra.ExactArgs(1),
-		ValidArgsFunction: completeAgentNames,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
-				return err
-			}
-			name := args[0]
-			cfg, res, err := dispatch(host)
-			if err != nil {
-				return err
-			}
-			if !res.Localhost {
-				return runRemote(res, []string{"suspend", name})
-			}
-			// Resolve shorthand to canonical name (suspend operates on a live agent).
-			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
-			if err != nil {
-				return fmt.Errorf("resolving agent: %w", err)
-			}
-			if err := daemon.AgentSuspend(cmd.Context(), cfg.HomePath, resolved.Name); err != nil {
-				return fmt.Errorf("suspending agent: %w", err)
-			}
-			fmt.Fprintf(agentStdout, "suspended %s\n", resolved.Name)
-			return nil
-		},
-	}
-	addHostFlag(cmd, &host)
-	return cmd
-}
-
-// --- resume ---
-
-func newAgentResumeCmd() *cobra.Command {
-	var host string
-	cmd := &cobra.Command{
-		Use:   "resume <name>",
-		Short: "Resume a suspended agent",
-		Long: `Resume a suspended agent by respawning its claude process with --resume,
-rejoining the prior conversation session. The name must match the stored
-agentstore record exactly (suspended agents are not live, so shorthand
-resolution is not available).`,
-		Example: `  leo agent resume leo-coding-owner-fetch`,
-		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			cfg, res, err := dispatch(host)
-			if err != nil {
-				return err
-			}
-			if !res.Localhost {
-				return runRemote(res, []string{"resume", name})
-			}
-			// Do NOT call AgentResolve here: suspended agents are not live and
-			// the resolver only matches live agents. Pass the raw name directly.
-			rec, err := daemon.AgentResume(cmd.Context(), cfg.HomePath, name)
-			if err != nil {
-				return fmt.Errorf("resuming agent: %w", err)
-			}
-			fmt.Fprintf(agentStdout, "resumed %s (status: %s)\n", rec.Name, rec.Status)
-			fmt.Fprintf(agentStdout, "attach with: leo agent attach %s\n", rec.Name)
-			return nil
-		},
-	}
-	addHostFlag(cmd, &host)
 	return cmd
 }
 
@@ -1162,75 +1031,10 @@ a leo- prefixed slug (lowercase, a-z 0-9 and dashes only).`,
 	return cmd
 }
 
-// --- prune ---
-
 // agentStopResult is the JSON shape for `leo agent stop --json`.
 type agentStopResult struct {
 	Name    string `json:"name"`
 	Stopped bool   `json:"stopped"`
-	Pruned  bool   `json:"pruned"`
-}
-
-// agentPruneResult is the JSON shape for `leo agent prune --json`.
-type agentPruneResult struct {
-	Name   string `json:"name"`
-	Pruned bool   `json:"pruned"`
-}
-
-func newAgentPruneCmd() *cobra.Command {
-	var host string
-	var force, deleteBranch, asJSON bool
-	cmd := &cobra.Command{
-		Use:   "prune <name>",
-		Short: "Remove a stopped worktree agent's worktree and record",
-		Long: `Remove the on-disk worktree and agentstore record for a worktree agent
-that has already been stopped. No-op for shared-workspace agents. Pass
---force to override the dirty-worktree check, or --delete-branch to also
-delete the local branch after the worktree is gone.`,
-		Args:              cobra.ExactArgs(1),
-		ValidArgsFunction: completeAgentNames,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
-				return err
-			}
-			name := args[0]
-			cfg, res, err := dispatch(host)
-			if err != nil {
-				return err
-			}
-			if !res.Localhost {
-				extra := []string{"prune", name}
-				if force {
-					extra = append(extra, "--force")
-				}
-				if deleteBranch {
-					extra = append(extra, "--delete-branch")
-				}
-				if asJSON {
-					extra = append(extra, "--json")
-				}
-				return runRemote(res, extra)
-			}
-			if err := daemon.AgentPrune(cmd.Context(), cfg.HomePath, name, daemon.AgentPruneRequest{
-				Force:        force,
-				DeleteBranch: deleteBranch,
-			}); err != nil {
-				return fmt.Errorf("pruning agent: %w", err)
-			}
-			if asJSON {
-				enc := json.NewEncoder(agentStdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(agentPruneResult{Name: name, Pruned: true})
-			}
-			fmt.Fprintf(agentStdout, "pruned %s\n", name)
-			return nil
-		},
-	}
-	addHostFlag(cmd, &host)
-	cmd.Flags().BoolVar(&asJSON, "json", false, "output the prune result as JSON")
-	cmd.Flags().BoolVar(&force, "force", false, "remove even when the worktree is dirty or the branch is unmerged")
-	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "delete the local branch after the worktree is removed")
-	return cmd
 }
 
 // --- logs ---

@@ -55,7 +55,6 @@ type ConfigReloader interface {
 // daemon socket, and the CLI. A nil AgentService disables agent UI features.
 type AgentService interface {
 	Spawn(ctx context.Context, spec agent.SpawnSpec) (agent.Record, error)
-	Stop(name string) error
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)
 	// ResolveRecoverable is an exact-name store fallback tried when Resolve
@@ -67,8 +66,14 @@ type AgentService interface {
 	// anything else — including a user-stopped record with no reason.
 	ResolveRecoverable(query string) (agent.Record, bool)
 	Rename(query, newName string) (agent.Record, error)
-	Suspend(name string) error
-	Resume(name string) (agent.Record, error)
+	Stop(name string, opts agent.StopOptions) error
+	// Wakeable reports whether name has a persisted, dormant record with
+	// WakeOnMessage=true — the only dormant agents an inbound message is
+	// allowed to auto-start.
+	Wakeable(name string) bool
+	// Start clears a dormant agent's flags and respawns it, rejoining its
+	// prior session.
+	Start(name string) error
 	// RestartAll bounces every live agent in place, plus every recoverable
 	// failed-restore record (skipping genuinely suspended/user-stopped
 	// ones), re-applying current config for template-spawned agents. Backs

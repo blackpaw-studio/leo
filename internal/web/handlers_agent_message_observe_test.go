@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/observe"
 )
 
@@ -215,7 +214,7 @@ func TestHandlerPublishesOnlyAfterAsyncDeliverySucceeds(t *testing.T) {
 			s, _, svc := newTestServerWithAgents(t)
 			pub := &recordingPublisher{}
 			s.publisher = pub
-			svc.resumeResult = agent.Record{Name: "suspended-worker", Status: "starting"}
+			svc.wakeableNames = map[string]bool{"suspended-worker": true}
 
 			done := make(chan struct{})
 			s.injectPrompt = func(ctx context.Context, session, body string) error {
