@@ -644,6 +644,28 @@ func TestSuspendMarksRecordAndStops(t *testing.T) {
 	}
 }
 
+// TestSuspendStoredNotLiveReturnsTypedError locks the fix for a reviewer-
+// caught inconsistency: a persisted-but-not-live agent (e.g. already
+// stopped) used to fall through Suspend's checks into a bare fmt.Errorf,
+// surfacing as an opaque 500 at the daemon/web layer while every other
+// Suspend failure mode (unknown name, already suspended) already had a typed
+// sentinel mapped to a 4xx.
+func TestSuspendStoredNotLiveReturnsTypedError(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{}}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-stored-not-live", Workspace: "/w", SessionID: "sid"})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	err := m.Suspend("leo-stored-not-live")
+	if err == nil {
+		t.Fatal("expected an error suspending a persisted-but-not-live agent")
+	}
+	if !errors.Is(err, ErrAgentNotRunning) {
+		t.Fatalf("expected errors.Is(err, ErrAgentNotRunning), got %v (%T)", err, err)
+	}
+}
+
 func TestSuspendRollsBackFlagOnStopFailure(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{HomePath: home}
@@ -705,6 +727,45 @@ func TestResumeRespawnsWithResumeAndClearsFlag(t *testing.T) {
 	// resuming a non-suspended/unknown agent errors
 	if _, err := m.Resume("ghost"); err == nil {
 		t.Fatal("resuming unknown agent should error")
+	}
+}
+
+// TestResumeClearsStoppedFlags locks defense-in-depth for a reviewer-caught
+// defect: Resume cleared Suspended on success but left Stopped/StoppedReason
+// untouched (unlike Restart, which clears both). A record that somehow
+// carries both flags — e.g. a boot-time markFailedRestore raced with a
+// pre-existing Suspended=true — must have both cleared by a successful
+// Resume, or the NEXT daemon boot's `if rec.Stopped { continue }` guard
+// silently drops a perfectly healthy agent.
+func TestResumeClearsStoppedFlags(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:          "leo-both",
+		Workspace:     "/w",
+		SessionID:     "sid",
+		ClaudeArgs:    []string{"--model", "sonnet", "--session-id", "sid"},
+		Suspended:     true,
+		Stopped:       true,
+		StoppedReason: "workspace missing: /w",
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if _, err := m.Resume("leo-both"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	got := recs["leo-both"]
+	if got.Suspended {
+		t.Error("Suspended flag not cleared after resume")
+	}
+	if got.Stopped {
+		t.Error("Stopped flag not cleared after resume — a subsequent RestoreAgents would silently skip this agent")
+	}
+	if got.StoppedReason != "" {
+		t.Errorf("StoppedReason = %q, want empty after resume", got.StoppedReason)
 	}
 }
 
@@ -1062,6 +1123,46 @@ func TestRestartNotRunningErrors(t *testing.T) {
 	}
 }
 
+// TestRestartRecoversFailedRestoreRecord verifies Restart's store fallback:
+// a shared-workspace agent RestoreAgents left behind after a failed boot-time
+// restore (Stopped=true, StoppedReason set, not live) must be spawned fresh
+// and have Stopped/StoppedReason cleared — StopAgent is never called since
+// there is nothing live to stop.
+func TestRestartRecoversFailedRestoreRecord(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{} // nothing live
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:          "leo-x",
+		Workspace:     "/w",
+		SessionID:     "sid",
+		ClaudeArgs:    []string{"--model", "sonnet", "--session-id", "sid"},
+		Stopped:       true,
+		StoppedReason: "workspace missing: /w",
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if err := m.Restart("leo-x"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	if len(sup.stopCalls) != 0 {
+		t.Fatalf("StopAgent must not be called for a non-live record, got %v", sup.stopCalls)
+	}
+	if sup.spawnCall == nil {
+		t.Fatal("SpawnAgent was not called")
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	rec := recs["leo-x"]
+	if rec.Stopped {
+		t.Error("Stopped should be cleared after a successful recovery restart")
+	}
+	if rec.StoppedReason != "" {
+		t.Errorf("StoppedReason should be cleared after a successful recovery restart, got %q", rec.StoppedReason)
+	}
+}
+
 // TestRestartStopFailureAbortsBeforeSpawn verifies a StopAgent failure stops
 // Restart before any respawn is attempted, and the record is left untouched.
 func TestRestartStopFailureAbortsBeforeSpawn(t *testing.T) {
@@ -1150,6 +1251,62 @@ func TestRestartAllBouncesLiveNonRunningStatuses(t *testing.T) {
 	}
 	if len(result.Failed) != 0 {
 		t.Fatalf("Failed = %v, want none", result.Failed)
+	}
+}
+
+// TestRestartAllIncludesFailedRestoreButSkipsUserStopped locks the fix for a
+// fleet-scale recovery gap: RestartAll used to skip EVERY "stopped" record,
+// including a shared-workspace agent the system left Stopped+StoppedReason
+// after a failed boot-time restore (see markFailedRestore) — the only batch
+// recovery control the web UI exposes. Such a record must now be retried
+// alongside the live agents, while a genuinely user-stopped record
+// (StoppedReason empty) must still be skipped.
+func TestRestartAllIncludesFailedRestoreButSkipsUserStopped(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{
+		agents: map[string]ProcessState{
+			"leo-a": {Name: "leo-a", Status: "running"},
+		},
+	}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-a", Workspace: "/w"})
+	// A user-stopped WORKTREE record: List() only surfaces a "stopped"
+	// shared-workspace record when StoppedReason is set (a genuinely
+	// user-stopped shared record is deleted outright by Stop, not kept — see
+	// Manager.List's doc comment), so a worktree record is what actually
+	// exercises the "stopped, must be skipped" branch here.
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-user-stopped", Workspace: "/w", Branch: "feat", Stopped: true,
+	})
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-failed-restore", Workspace: t.TempDir(),
+		Stopped: true, StoppedReason: "workspace missing: /w",
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	result := m.RestartAll()
+
+	if len(result.Restarted) != 2 {
+		t.Fatalf("Restarted = %v, want leo-a and leo-failed-restore both bounced", result.Restarted)
+	}
+	restartedSet := map[string]bool{}
+	for _, n := range result.Restarted {
+		restartedSet[n] = true
+	}
+	if !restartedSet["leo-failed-restore"] {
+		t.Errorf("expected leo-failed-restore to be restarted, got Restarted=%v", result.Restarted)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0] != "leo-user-stopped" {
+		t.Fatalf("Skipped = %v, want only [leo-user-stopped]", result.Skipped)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v, want none", result.Failed)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(home))
+	if got := recs["leo-failed-restore"]; got.Stopped || got.StoppedReason != "" {
+		t.Errorf("expected Stopped/StoppedReason cleared after successful recovery restart, got Stopped=%v StoppedReason=%q", got.Stopped, got.StoppedReason)
 	}
 }
 
@@ -1644,6 +1801,39 @@ func TestListSurfacesSuspendedAgents(t *testing.T) {
 	}
 	if statuses["leo-wt"] != "suspended" {
 		t.Fatalf("worktree suspended agent missing/wrong: %v", statuses)
+	}
+}
+
+// TestListSharedStoppedRecord locks Manager.List's gate on StoppedReason for
+// a branch-less (shared-workspace) record: one stopped by a failed restore
+// (StoppedReason set) must still appear as "stopped" — it is the agent's
+// only surviving identity and must stay reachable via `leo agent restart` —
+// while a plain Stopped=true record with no reason (not something Stop
+// itself ever produces for a shared agent, but defensively covered here)
+// still drops out of the list exactly like today.
+func TestListSharedStoppedRecord(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{} // no live agents
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-failed-restore", Workspace: "/w", Stopped: true, StoppedReason: "workspace missing: /w",
+	})
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-stopped-no-reason", Workspace: "/w2", Stopped: true,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	got := m.List()
+
+	statuses := map[string]string{}
+	for _, r := range got {
+		statuses[r.Name] = r.Status
+	}
+	if statuses["leo-failed-restore"] != "stopped" {
+		t.Fatalf("shared record stopped by a failed restore missing/wrong: %v", statuses)
+	}
+	if _, ok := statuses["leo-stopped-no-reason"]; ok {
+		t.Fatalf("shared stopped record with no StoppedReason should drop out of List, got %v", statuses)
 	}
 }
 

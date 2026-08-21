@@ -28,6 +28,8 @@ const (
 	ErrorCodeSourceAgentNotFound = "source_agent_not_found"
 	ErrorCodeSourceNotGitRepo    = "source_not_git_repo"
 	ErrorCodeAgentSuspended      = "agent_suspended"
+	ErrorCodeAgentNotSuspended   = "agent_not_suspended"
+	ErrorCodeAgentNotRunning     = "agent_not_running"
 )
 
 // TaskAddRequest is the body for POST /task/add.

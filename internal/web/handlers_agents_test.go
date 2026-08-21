@@ -84,6 +84,11 @@ type mockAgentService struct {
 
 	records []agent.Record
 
+	// recoverable backs ResolveRecoverable for tests exercising the
+	// failed-restore stop fallback: keyed by agent name, maps to the record
+	// to return. A missing key means ok=false.
+	recoverable map[string]agent.Record
+
 	// handles backs ResolveHandle for tests exercising non-claude message
 	// dispatch: keyed by agent name, maps to (harnessName, SessionHandle).
 	// A missing key means ok=false — the caller falls back to tmux/claude.
@@ -157,6 +162,11 @@ func (m *mockAgentService) Resolve(query string) (agent.Record, error) {
 		}
 	}
 	return agent.Record{}, &agent.ErrNotFound{Query: query}
+}
+
+func (m *mockAgentService) ResolveRecoverable(query string) (agent.Record, bool) {
+	rec, ok := m.recoverable[query]
+	return rec, ok
 }
 
 func (m *mockAgentService) Suspend(name string) error {
@@ -752,6 +762,53 @@ func TestWebAgentSuspendError(t *testing.T) {
 	}
 	if strings.Contains(body, `id="agents-content"`) {
 		t.Errorf("error response must not re-render the agents tab, got %q", body)
+	}
+}
+
+// TestWebAgentStopRecoversFailedRestoreRecord verifies handleWebAgentStop
+// falls back to ResolveRecoverable when Resolve reports not-found — a
+// shared-workspace agent RestoreAgents left Stopped+StoppedReason after a
+// failed boot-time restore has no live process to kill, but must still be
+// removable from the web UI, or it becomes a permanent, undeletable entry.
+func TestWebAgentStopRecoversFailedRestoreRecord(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = nil // Resolve finds nothing — forces the fallback path.
+	svc.recoverable = map[string]agent.Record{
+		"leo-coding-doomed": {Name: "leo-coding-doomed", Status: "stopped"},
+	}
+
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-doomed/stop", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.stopCalled {
+		t.Fatal("expected Stop to be called")
+	}
+	if svc.stopName != "leo-coding-doomed" {
+		t.Errorf("Stop called with %q, want the fallback's canonical name", svc.stopName)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestWebAgentStopNotFoundWithoutFallback verifies a genuinely unknown agent
+// still reports an error when the store fallback also finds nothing — the
+// fallback must not mask a real not-found.
+func TestWebAgentStopNotFoundWithoutFallback(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = nil
+
+	req := httptest.NewRequest("POST", "/web/agent/leo-ghost/stop", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if svc.stopCalled {
+		t.Error("Stop must not be called for an unresolvable agent")
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "flash-error") {
+		t.Errorf("expected flash markup in body, got %q", body)
 	}
 }
 

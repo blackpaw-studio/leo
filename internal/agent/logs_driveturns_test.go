@@ -54,6 +54,31 @@ func TestResolveHandleUnknownAgent(t *testing.T) {
 	}
 }
 
+// TestResolveHandleStoppedRecordReportsUnknown locks the fix for a reviewer-
+// caught defect: ResolveHandle used to ignore Stopped entirely, so a
+// non-claude (codex/opencode) record left Stopped — either by a user `leo
+// agent stop` or by a failed boot-time restore (see markFailedRestore) —
+// still reported ok=true. handleWebAgentMessage would then dispatch straight
+// into a tmux session that no longer exists instead of falling through to a
+// clean "no such agent" 404, the way the claude message path already does
+// for the same record via its live-states check.
+func TestResolveHandleStoppedRecordReportsUnknown(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:          "leo-codex-doomed",
+		Harness:       "codex",
+		Workspace:     "/tmp/codex-doomed",
+		ClaudeArgs:    []string{"exec", "hello"},
+		Stopped:       true,
+		StoppedReason: "workspace missing: /tmp/codex-doomed",
+	})
+	m := newTestManager(t, home, &fakeSupervisor{})
+
+	if _, _, ok := m.ResolveHandle("leo-codex-doomed"); ok {
+		t.Fatal("expected ok=false for a Stopped record — nothing live to deliver into")
+	}
+}
+
 // TestLogsClaudeAgentUsesTmuxPath verifies a claude (or pre-Harness-field)
 // record goes straight to the tmux capture-pane path — it fails fast here
 // because there is no real tmux session at the given (bogus) path.

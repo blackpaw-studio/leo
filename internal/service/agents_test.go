@@ -419,7 +419,12 @@ func TestRestoreAgentsLegacyRecordRespawnsWithoutResume(t *testing.T) {
 	}
 }
 
-func TestRestoreAgentsRemovesFailedSharedRecord(t *testing.T) {
+// TestRestoreAgentsKeepsFailedSharedRecord locks the current behavior: a
+// shared-workspace record whose respawn fails at boot must NOT be deleted (a
+// transient failure would otherwise permanently destroy the agent's
+// identity). It is kept with Stopped=true and a non-empty StoppedReason so
+// it stays visible (Manager.List) and recoverable (`leo agent restart`).
+func TestRestoreAgentsKeepsFailedSharedRecord(t *testing.T) {
 	home := t.TempDir()
 	rec := agentstore.Record{
 		Name:       "leo-coding-doomed",
@@ -440,8 +445,350 @@ func TestRestoreAgentsRemovesFailedSharedRecord(t *testing.T) {
 		t.Fatalf("expected 0 restored, got %d", restored)
 	}
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
-	if _, ok := stored[rec.Name]; ok {
-		t.Fatalf("shared record whose respawn failed should be removed; got %+v", stored)
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("shared record whose respawn failed should survive restore; got %+v", stored)
+	}
+	if !got.Stopped {
+		t.Error("expected Stopped=true after a failed restore spawn")
+	}
+	if got.StoppedReason == "" {
+		t.Error("expected a non-empty StoppedReason after a failed restore spawn")
+	}
+}
+
+// TestRestoreAgentsKeepsSharedRecordWithMissingWorkspace locks the fix for a
+// defect where a shared-workspace record's missing-workspace check was
+// gated behind isWorktree, so a non-worktree record with a gone directory
+// (e.g. an unmounted NAS at boot) went straight into a doomed tmux spawn
+// instead of being caught here. It must now be kept with Stopped=true and a
+// non-empty StoppedReason, and SpawnAgent must never be called for it.
+func TestRestoreAgentsKeepsSharedRecordWithMissingWorkspace(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:       "leo-coding-missing-ws",
+		Template:   "coding",
+		Workspace:  filepath.Join(t.TempDir(), "does-not-exist"),
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-y"},
+		SessionID:  "sid-y",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 0 {
+		t.Fatalf("expected 0 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("expected 0 SpawnAgent calls for a missing-workspace shared record, got %d", len(spawner.calls))
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("shared record with missing workspace should survive restore; got %+v", stored)
+	}
+	if !got.Stopped {
+		t.Error("expected Stopped=true for a missing-workspace shared record")
+	}
+	if got.StoppedReason == "" {
+		t.Error("expected a non-empty StoppedReason for a missing-workspace shared record")
+	}
+}
+
+// TestRestoreAgentsSuspendedSurvivesMissingWorkspace locks the fix for a
+// reviewer-caught defect: the non-worktree missing-workspace branch used to
+// run BEFORE the Suspended guard, so a suspended shared-workspace agent whose
+// workspace was transiently missing at boot (e.g. a late NAS mount) got
+// markFailedRestore'd into Stopped=true — corrupting a healthy suspended
+// record into a state that later manager.go bugs could turn into a silently
+// lost agent. The Suspended guard must win: record left untouched, no spawn.
+func TestRestoreAgentsSuspendedSurvivesMissingWorkspace(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:      "leo-susp-missing-ws",
+		Workspace: filepath.Join(t.TempDir(), "does-not-exist"),
+		SessionID: "sid-susp",
+		Suspended: true,
+		SpawnedAt: time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 0 {
+		t.Fatalf("expected 0 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("expected 0 SpawnAgent calls for a suspended record, got %d", len(spawner.calls))
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("suspended record should survive restore; got %+v", stored)
+	}
+	if !got.Suspended {
+		t.Error("expected Suspended=true to remain set")
+	}
+	if got.Stopped {
+		t.Error("suspended record must NOT be marked Stopped by the missing-workspace path")
+	}
+	if got.StoppedReason != "" {
+		t.Errorf("StoppedReason = %q, want empty", got.StoppedReason)
+	}
+}
+
+// TestRestoreAgentsStoppedSurvivesMissingWorkspaceUnmodified is the Stopped
+// analog of the above: a user-stopped non-worktree record (Stopped with an
+// empty StoppedReason) with a missing workspace must not be re-marked or
+// mutated by the missing-workspace branch, and must never be retried.
+func TestRestoreAgentsStoppedSurvivesMissingWorkspaceUnmodified(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:      "leo-stopped-missing-ws",
+		Workspace: filepath.Join(t.TempDir(), "does-not-exist"),
+		SessionID: "sid-stopped",
+		Stopped:   true,
+		SpawnedAt: time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 0 {
+		t.Fatalf("expected 0 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("expected 0 SpawnAgent calls for a user-stopped record, got %d", len(spawner.calls))
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("stopped record should survive restore; got %+v", stored)
+	}
+	if got.StoppedReason != "" {
+		t.Errorf("StoppedReason = %q, want unchanged empty", got.StoppedReason)
+	}
+	if got.Suspended {
+		t.Error("stopped record must not gain Suspended=true")
+	}
+}
+
+// TestRestoreAgentsRetriesFailedRestoreRecord locks the fix for a fleet-scale
+// recovery gap: a record the system marked Stopped+StoppedReason after a
+// prior failed boot-time restore (e.g. a NAS mount that was late once, but is
+// mounted now) must be retried on the NEXT restore rather than permanently
+// skipped — otherwise a transient outage requires an operator to run `leo
+// agent restart` by hand for every affected agent, forever. A user-stopped
+// record (StoppedReason empty) is the control: it must NOT be retried,
+// exercised by TestRestoreAgentsStoppedSurvivesMissingWorkspaceUnmodified
+// above.
+func TestRestoreAgentsRetriesFailedRestoreRecord(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir() // present now — the transient condition cleared
+	rec := agentstore.Record{
+		Name:          "leo-coding-recovered",
+		Template:      "coding",
+		Workspace:     workspace,
+		ClaudeArgs:    []string{"--model", "sonnet", "--session-id", "sid-z"},
+		SessionID:     "sid-z",
+		WebPort:       "8370",
+		Stopped:       true,
+		StoppedReason: "workspace missing: " + workspace,
+		SpawnedAt:     time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 1 {
+		t.Fatalf("expected 1 restored (retry succeeded), got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call (retry), got %d", len(spawner.calls))
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("recovered record should survive restore; got %+v", stored)
+	}
+	if got.Stopped {
+		t.Error("Stopped should be cleared after a successful retry")
+	}
+	if got.StoppedReason != "" {
+		t.Errorf("StoppedReason = %q, want empty after a successful retry", got.StoppedReason)
+	}
+}
+
+// TestRestoreAgentsRetryReMarksOnRepeatFailure covers the "still broken"
+// half of the retry contract: a failed-restore record retried into ANOTHER
+// spawn failure must be re-marked Stopped+StoppedReason (not silently
+// dropped, not left in some half-cleared state).
+func TestRestoreAgentsRetryReMarksOnRepeatFailure(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	rec := agentstore.Record{
+		Name:          "leo-coding-still-broken",
+		Template:      "coding",
+		Workspace:     workspace,
+		ClaudeArgs:    []string{"--model", "sonnet", "--session-id", "sid-w"},
+		SessionID:     "sid-w",
+		WebPort:       "8370",
+		Stopped:       true,
+		StoppedReason: "restore spawn failed: supervisor rejected spawn",
+		SpawnedAt:     time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{nextErr: fmt.Errorf("supervisor rejected spawn again")}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 0 {
+		t.Fatalf("expected 0 restored, got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call (retry attempt), got %d", len(spawner.calls))
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("record should survive restore; got %+v", stored)
+	}
+	if !got.Stopped || got.StoppedReason == "" {
+		t.Errorf("expected re-marked Stopped+StoppedReason after a repeat failure, got Stopped=%v StoppedReason=%q", got.Stopped, got.StoppedReason)
+	}
+}
+
+// TestRestoreAgentsRepeatFailureSameReasonSkipsWrite covers a persistently
+// broken agent (e.g. a dead NAS mount): every boot re-derives the identical
+// "workspace missing: <path>" reason, and markFailedRestore must not perform
+// a pointless agentstore.Save when the on-disk record already matches byte
+// for byte. Verified via agents.json's mtime, since the record's content is
+// identical either way — a content diff alone can't distinguish "skipped"
+// from "wrote the same bytes".
+func TestRestoreAgentsRepeatFailureSameReasonSkipsWrite(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "gone") // never created — always missing
+	reason := "workspace missing: " + workspace
+	rec := agentstore.Record{
+		Name:          "leo-coding-perpetually-broken",
+		Template:      "coding",
+		Workspace:     workspace,
+		ClaudeArgs:    []string{"--model", "sonnet", "--session-id", "sid-p"},
+		SessionID:     "sid-p",
+		WebPort:       "8370",
+		Stopped:       true,
+		StoppedReason: reason,
+		SpawnedAt:     time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	path := agentstore.FilePath(home)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+	// Give the filesystem clock room to distinguish "wrote again" from "left
+	// alone" — a same-timestamp write would otherwise pass this test by
+	// accident.
+	time.Sleep(10 * time.Millisecond)
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 0 {
+		t.Fatalf("expected 0 restored (still broken), got %d", restored)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("expected 0 SpawnAgent calls (workspace still missing), got %d", len(spawner.calls))
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("agents.json was rewritten for an unchanged failure reason: before=%v after=%v", before.ModTime(), after.ModTime())
+	}
+
+	stored, _ := agentstore.Load(path)
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("record should survive restore; got %+v", stored)
+	}
+	if !got.Stopped || got.StoppedReason != reason {
+		t.Errorf("expected unchanged Stopped=true StoppedReason=%q, got Stopped=%v StoppedReason=%q", reason, got.Stopped, got.StoppedReason)
+	}
+}
+
+// TestRestoreAgentsNonENOENTStatErrorDoesNotMarkRecord locks the fix for a
+// reviewer-caught defect: any os.Stat error on rec.Workspace (permission
+// denied, I/O error, a hung/timed-out mount) used to be treated identically
+// to "does not exist", condemning a healthy-but-transiently-unreachable
+// workspace to Stopped state. Only a confirmed fs.ErrNotExist may mark the
+// record; any other stat error must fall through to a normal spawn attempt.
+func TestRestoreAgentsNonENOENTStatErrorDoesNotMarkRecord(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permission bits; cannot force EACCES")
+	}
+	home := t.TempDir()
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "unreadable-child")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Deny traversal into parent so stat(workspace) fails with EACCES, not
+	// ENOENT — the directory genuinely exists, it just can't be statted.
+	if err := os.Chmod(parent, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o755) }) //nolint:errcheck
+
+	rec := agentstore.Record{
+		Name:       "leo-coding-eacces",
+		Template:   "coding",
+		Workspace:  workspace,
+		ClaudeArgs: []string{"--model", "sonnet", "--session-id", "sid-eacces"},
+		SessionID:  "sid-eacces",
+		WebPort:    "8370",
+		SpawnedAt:  time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	spawner := &fakeAgentSpawner{}
+	restored := RestoreAgents(home, "", "", spawner)
+	if restored != 1 {
+		t.Fatalf("expected 1 restored (stat error must not block spawn), got %d", restored)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("expected 1 SpawnAgent call, got %d", len(spawner.calls))
+	}
+
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	got, ok := stored[rec.Name]
+	if !ok {
+		t.Fatalf("record should survive restore; got %+v", stored)
+	}
+	if got.Stopped {
+		t.Error("a non-ENOENT stat error must NOT mark the record Stopped")
 	}
 }
 

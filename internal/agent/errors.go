@@ -53,4 +53,18 @@ var (
 	// reject with a typed error the caller can map to a 4xx telling the
 	// operator to resume the agent first, rather than a bare 500.
 	ErrAgentSuspended = errors.New("agent is suspended")
+
+	// ErrAgentNotSuspended is returned by Manager.Resume when the resolved
+	// agent record exists but is not suspended (it is running, or stopped).
+	// Callers map it to a 4xx telling the operator there is nothing to
+	// resume, rather than a bare 500.
+	ErrAgentNotSuspended = errors.New("agent is not suspended")
+
+	// ErrAgentNotRunning is returned by Manager.Suspend when a persisted
+	// record exists for the name but has no live supervisor state (e.g. a
+	// stopped agent). Every other Suspend failure mode already has a typed
+	// error mapped to a 4xx by the caller; this one used to fall through to
+	// a bare fmt.Errorf, surfacing as an opaque 500 instead of the 4xx
+	// "there's nothing to suspend" its sibling errors get.
+	ErrAgentNotRunning = errors.New("agent is not running")
 )

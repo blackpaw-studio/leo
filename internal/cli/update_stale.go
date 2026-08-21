@@ -46,7 +46,8 @@ func maybeRestartStaleAgents(ctx context.Context, homePath string) {
 
 	reader := bufio.NewReader(os.Stdin)
 	if err := promptStaleAgentRestart(stale, running, os.Stdout, reader, prompt.IsInteractive(), func(name string) error {
-		return daemon.AgentRestart(ctx, homePath, name)
+		_, err := daemon.AgentRestart(ctx, homePath, name)
+		return err
 	}); err != nil {
 		warn.Printf("Restarting agents: %v\n", err)
 	}
