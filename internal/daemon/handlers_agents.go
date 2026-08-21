@@ -329,7 +329,7 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	output, err := s.agentMgr.Logs(rec.Name, lines)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeAgentError(w, err)
 		return
 	}
 	data, err := json.Marshal(AgentLogsResponse{Output: output})
@@ -546,6 +546,8 @@ func writeAgentError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceAgentNotFound})
 	case errors.Is(err, agent.ErrSourceNotGitRepo):
 		writeJSON(w, http.StatusBadRequest, Response{OK: false, Error: err.Error(), Code: ErrorCodeSourceNotGitRepo})
+	case errors.Is(err, agent.ErrAgentSuspended):
+		writeJSON(w, http.StatusConflict, Response{OK: false, Error: err.Error(), Code: ErrorCodeAgentSuspended})
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}

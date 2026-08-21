@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
@@ -604,6 +606,63 @@ func TestAgentLogsHandlerSupervisorError(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", resp.StatusCode)
+	}
+}
+
+// TestAgentRestartHandlerSuspended reproduces the finding-2 regression: once
+// Manager.Resolve started matching suspended agents, restarting one no longer
+// dies at 404 — it resolves, then Manager.Restart itself rejects a
+// not-currently-running agent. That must surface as a 4xx telling the caller
+// to resume first, not a bare 500.
+func TestAgentRestartHandlerSuspended(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "suspended"}}
+	mgr.restartErr = fmt.Errorf("%w: agent %q is suspended", agent.ErrAgentSuspended, "leo-coding-acme-widget")
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Post("http://localhost/agents/widget/restart", "application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409, got %d", resp.StatusCode)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Code != ErrorCodeAgentSuspended {
+		t.Errorf("code = %q, want %q", env.Code, ErrorCodeAgentSuspended)
+	}
+	if !strings.Contains(env.Error, "leo-coding-acme-widget") || !strings.Contains(env.Error, "suspended") {
+		t.Errorf("error message = %q, want it to name the agent and say it is suspended", env.Error)
+	}
+}
+
+// TestAgentLogsHandlerSuspended is the Logs analogue of
+// TestAgentRestartHandlerSuspended — see its comment.
+func TestAgentLogsHandlerSuspended(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "suspended"}}
+	mgr.logsErr = fmt.Errorf("%w: agent %q is suspended", agent.ErrAgentSuspended, "leo-coding-acme-widget")
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/widget/logs")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409, got %d", resp.StatusCode)
+	}
+	var env Response
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Code != ErrorCodeAgentSuspended {
+		t.Errorf("code = %q, want %q", env.Code, ErrorCodeAgentSuspended)
+	}
+	if !strings.Contains(env.Error, "leo-coding-acme-widget") || !strings.Contains(env.Error, "suspended") {
+		t.Errorf("error message = %q, want it to name the agent and say it is suspended", env.Error)
 	}
 }
 
