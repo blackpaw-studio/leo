@@ -76,6 +76,42 @@ func TestSetStatePublishesAgentStateChanged(t *testing.T) {
 	}
 }
 
+// TestSetStateCrashStopCarriesWakeOnMessageFalse pins the pairing invariant
+// for setState's crash-driven "stopped" transition: it has no wake-on-message
+// concept of its own (that only exists on the dormancy path through
+// agent.Manager.Stop / Supervisor.StopAgent), so the emitted payload must
+// always carry wake_on_message:false alongside status:"stopped" — never a
+// zero-valued field that happens to read false, but the value AgentDormancy
+// actually computes.
+func TestSetStateCrashStopCarriesWakeOnMessageFalse(t *testing.T) {
+	// Arrange
+	sv := NewSupervisor(context.Background())
+	pub := &recordingPublisher{}
+	sv.SetPublisher(pub)
+	sv.mu.Lock()
+	sv.states["agent-a"] = &ProcessState{Name: "agent-a", Status: "running"}
+	sv.mu.Unlock()
+
+	// Act: a crash-driven stop, as superviseProcess emits after retries are
+	// exhausted.
+	sv.setState("agent-a", nil, "stopped")
+
+	// Assert
+	if len(pub.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(pub.events))
+	}
+	payload, ok := pub.events[0].Payload.(*observe.AgentStateChangedPayload)
+	if !ok {
+		t.Fatalf("expected AgentStateChangedPayload, got %T", pub.events[0].Payload)
+	}
+	if payload.Status != observe.StatusStopped {
+		t.Fatalf("expected status stopped, got %s", payload.Status)
+	}
+	if payload.WakeOnMessage != false {
+		t.Fatalf("expected wake_on_message=false for a crash-driven stop, got %v", payload.WakeOnMessage)
+	}
+}
+
 func TestSetStateForUnknownAgentDoesNotPublish(t *testing.T) {
 	// Arrange
 	sv := NewSupervisor(context.Background())

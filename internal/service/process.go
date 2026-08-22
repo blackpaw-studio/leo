@@ -203,12 +203,14 @@ func (s *Supervisor) setState(name string, id *procIdentity, status string) {
 	restarts := st.Restarts
 	s.mu.Unlock()
 
+	wireStatus, wake := observe.AgentDormancy(status, false)
 	s.publish(observe.Event{
 		Type: observe.EventAgentStateChanged,
 		Payload: &observe.AgentStateChangedPayload{
-			Agent:    name,
-			Status:   observe.MapStatus(status),
-			Restarts: restarts,
+			Agent:         name,
+			Status:        wireStatus,
+			Restarts:      restarts,
+			WakeOnMessage: wake,
 		},
 	})
 }
@@ -245,12 +247,14 @@ func (s *Supervisor) incrementRestarts(name string, id *procIdentity) {
 	status := st.Status
 	s.mu.Unlock()
 
+	wireStatus, wake := observe.AgentDormancy(status, false)
 	s.publish(observe.Event{
 		Type: observe.EventAgentStateChanged,
 		Payload: &observe.AgentStateChangedPayload{
-			Agent:    name,
-			Status:   observe.MapStatus(status),
-			Restarts: restarts,
+			Agent:         name,
+			Status:        wireStatus,
+			Restarts:      restarts,
+			WakeOnMessage: wake,
 		},
 	})
 }

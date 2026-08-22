@@ -264,8 +264,18 @@ Event types:
 A resume is represented as `agent_state_changed` with the new `status`; consumers key
 off `status`, not a distinct event name. `agent_stopped`'s `wake_on_message` carries the
 same meaning as the snapshot Agent's field above: `true` only for an idle-sweep park,
-`false` for every other departure (a manual stop with no wake requested, a deleted
-agent, or a rename's old name disappearing).
+`false` for every other departure — a manual stop with no wake requested, a deleted
+agent, a rename's old name disappearing, or a transient kill ahead of an immediate
+respawn (`leo agent reset`, `leo agent restart`, and `leo agent set-template` all issue
+`StopAgent(name, false)` before respawning under the same name).
+
+At the instant `agent_stopped` lands, no field distinguishes "about to respawn" from
+"parked indefinitely" — both look identical on the wire (`wake_on_message:false`). A
+consumer that needs to tell them apart must wait for the follow-up event: a genuine
+departure has none, while reset/restart/set-template are followed shortly by
+`agent_spawned` (or `agent_state_changed` with `status:"starting"`) for the same agent
+name. Treating a bare `agent_stopped` as a permanent departure without waiting for that
+follow-up will misreport routine restarts as agents leaving.
 
 `agent_message` announces that one agent messaged another, and carries **the pair only** —
 there is no field for the message body and none may be added. See AgentMessage below for
