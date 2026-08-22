@@ -31,7 +31,7 @@ func (e *ErrNotFound) Error() string {
 	return fmt.Sprintf("no agent matches %q", e.Query)
 }
 
-// Resolve looks up a running agent by a flexible identifier.
+// Resolve looks up an agent — live or dormant — by a flexible identifier.
 //
 // Matching tiers (first non-empty tier wins):
 //  1. Exact full name (case-insensitive).
@@ -44,8 +44,13 @@ func (e *ErrNotFound) Error() string {
 //     value for slashless repos.
 //  5. Suffix "-<query>" on the full name.
 //
-// A dormant (Stopped) agent is never returned here — Rename and Delete have
-// their own exact-name store fallbacks for that case.
+// Every dormant (Stopped) agentstore record participates in every tier
+// exactly like a live agent — regardless of WakeOnMessage or whether
+// StoppedReason is set. Resolution is deliberately broad; operations that
+// need a live process (Restart, Logs, …) reject with the typed
+// ErrAgentStopped instead of narrowing what Resolve returns. Rename's
+// exact-name store fallback predates this and is now redundant but kept for
+// callers that still use it directly.
 func (m *Manager) Resolve(query string) (Record, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -75,8 +80,18 @@ func (m *Manager) Resolve(query string) (Record, error) {
 		name string
 		rec  agentstore.Record
 	}
-	rows := make([]row, 0, len(live))
+	// The candidate set is every name known either to the live supervisor or
+	// the agentstore — a dormant record with no live counterpart must still
+	// produce a row, or shorthand/fuzzy matching against it silently fails.
+	names := make(map[string]struct{}, len(live)+len(stored))
 	for name := range live {
+		names[name] = struct{}{}
+	}
+	for name := range stored {
+		names[name] = struct{}{}
+	}
+	rows := make([]row, 0, len(names))
+	for name := range names {
 		rows = append(rows, row{name: name, rec: stored[name]})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
@@ -109,7 +124,8 @@ func (m *Manager) Resolve(query string) (Record, error) {
 			continue
 		case 1:
 			r := tier[0]
-			return m.hydrate(r.name, live[r.name], stored), nil
+			state, isLive := live[r.name]
+			return m.hydrate(r.name, state, isLive, stored), nil
 		default:
 			names := make([]string, 0, len(tier))
 			for _, r := range tier {
@@ -161,12 +177,23 @@ func ValidateRepo(repo string) error {
 	return nil
 }
 
-func (m *Manager) hydrate(name string, state ProcessState, stored map[string]agentstore.Record) Record {
-	r := Record{
-		Name:      name,
-		Status:    state.Status,
-		StartedAt: state.StartedAt,
-		Restarts:  state.Restarts,
+// hydrate builds a Record for a resolved row. A live row carries the
+// supervisor's process state (Status/StartedAt/Restarts); a dormant row has
+// no live process, so it mirrors List's dormant-row treatment: Status
+// "stopped", StartedAt from the stored SpawnedAt, and StoppedReason surfaced
+// so callers can tell a failed-restore record from a manual stop.
+func (m *Manager) hydrate(name string, state ProcessState, live bool, stored map[string]agentstore.Record) Record {
+	r := Record{Name: name}
+	if live {
+		r.Status = state.Status
+		r.StartedAt = state.StartedAt
+		r.Restarts = state.Restarts
+	} else {
+		r.Status = "stopped"
+		if rec, ok := stored[name]; ok {
+			r.StartedAt = rec.SpawnedAt
+			r.StoppedReason = rec.StoppedReason
+		}
 	}
 	mergeStored(&r, stored)
 	return r

@@ -57,14 +57,6 @@ type AgentService interface {
 	Spawn(ctx context.Context, spec agent.SpawnSpec) (agent.Record, error)
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)
-	// ResolveRecoverable is an exact-name store fallback tried when Resolve
-	// reports not-found: Resolve deliberately excludes every stopped record,
-	// but a shared-workspace agent left Stopped+StoppedReason by a failed
-	// boot-time restore (see internal/service/agents.go RestoreAgents) must
-	// still be reachable via the web UI's stop action, or it becomes a
-	// permanent, undeletable entry in the agents list. Returns ok=false for
-	// anything else — including a user-stopped record with no reason.
-	ResolveRecoverable(query string) (agent.Record, bool)
 	Rename(query, newName string) (agent.Record, error)
 	Stop(name string, opts agent.StopOptions) error
 	// Wakeable reports whether name has a persisted, dormant record with

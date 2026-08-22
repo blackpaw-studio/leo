@@ -900,6 +900,15 @@ func (m *Manager) announceStoppedIfNotLive(live bool, name string) {
 // --session-id); a future restore rebuilds resume args from them + the
 // SessionID, matching existing behavior.
 func (m *Manager) Start(name string) error {
+	// Resolve first so shorthand/fuzzy queries reach a dormant record — Start
+	// used to require the exact stored name, which silently broke `leo agent
+	// start <shorthand>` once Resolve stopped matching dormant agents.
+	resolved, err := m.Resolve(name)
+	if err != nil {
+		return err
+	}
+	name = resolved.Name
+
 	if _, live := m.sup.EphemeralAgents()[name]; live {
 		return fmt.Errorf("%w: %q", ErrAgentAlreadyRunning, name)
 	}
@@ -1333,6 +1342,14 @@ func (m *Manager) RestartAll() RestartResult {
 // currently doing work — stop it first. ErrWorktreeDirty / ErrBranchNotMerged
 // surface from the git layer when --force is required to proceed.
 func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) error {
+	// Resolve first so shorthand/fuzzy queries reach a dormant record — see
+	// Start's identical rationale.
+	resolved, err := m.Resolve(name)
+	if err != nil {
+		return err
+	}
+	name = resolved.Name
+
 	cfg, err := m.cfgLoader()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -1618,42 +1635,12 @@ func (m *Manager) resolveStored(query string) (Record, bool) {
 	return Record{}, false
 }
 
-// ResolveRecoverable is an exact-name store fallback for callers that need to
-// reach a record Resolve deliberately excludes (see Resolve's doc comment): a
-// shared-workspace agent RestoreAgents left behind after a failed boot-time
-// restore (Stopped=true, StoppedReason set — see internal/service/agents.go).
-// Used by both `leo agent restart <name>` (the record needs to be
-// respawnable) and `leo agent stop <name>` (the record needs to be
-// deletable, since its workspace may be gone for good — see
-// handleAgentStop). Without this fallback such a record is a permanently
-// undeletable, unrestartable entry in `leo agent list`. Mirrors
-// resolveStored's candidate matching but additionally requires the record to
-// actually be recoverable, so a user-stopped record (Stopped with no reason)
-// or a live agent name typo'd into this path still reports no match.
-func (m *Manager) ResolveRecoverable(query string) (Record, bool) {
-	stored, ok := m.loadStoreForFallback()
-	if !ok {
-		return Record{}, false
-	}
-	for _, name := range exactNameCandidates(query) {
-		rec, ok := stored[name]
-		if !ok || !rec.IsFailedRestore() {
-			continue
-		}
-		r := Record{Name: name, Status: "stopped"}
-		mergeStored(&r, stored)
-		return r, true
-	}
-	return Record{}, false
-}
-
 // loadStoreForFallback loads the agentstore for an exact-name fallback
-// lookup (resolveStored, ResolveRecoverable). A missing store file
-// means nothing is persisted yet — treat as no match, not a hard failure. A
-// real load error (parse, permission) is also treated as "not found" here so
-// callers surface their original resolve error rather than an opaque store
-// error; loadLocked returns a non-nil empty map on error so the lookup
-// simply finds nothing.
+// lookup (resolveStored). A missing store file means nothing is persisted
+// yet — treat as no match, not a hard failure. A real load error (parse,
+// permission) is also treated as "not found" here so callers surface their
+// original resolve error rather than an opaque store error; loadLocked
+// returns a non-nil empty map on error so the lookup simply finds nothing.
 func (m *Manager) loadStoreForFallback() (map[string]agentstore.Record, bool) {
 	cfg, err := m.cfgLoader()
 	if err != nil {
@@ -1667,9 +1654,8 @@ func (m *Manager) loadStoreForFallback() (map[string]agentstore.Record, bool) {
 }
 
 // exactNameCandidates returns the raw query and its normalized form (when
-// valid) as exact-match candidates for a store lookup — shared by
-// resolveStored and ResolveRecoverable so both "leo-foo" and "foo"
-// locate the same record.
+// valid) as exact-match candidates for a store lookup — used by
+// resolveStored so both "leo-foo" and "foo" locate the same record.
 func exactNameCandidates(query string) []string {
 	candidates := []string{strings.TrimSpace(query)}
 	if norm, err := NormalizeAgentName(query); err == nil {

@@ -347,8 +347,8 @@ func TestWebAgentMessageUnknownTargetWithAgentServiceStill404(t *testing.T) {
 // an unknown name gets, never calling Start.
 func TestWebAgentMessageDoesNotWakeManuallyStoppedAgent(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
-	// A record exists (tracked via ResolveRecoverable/records in other tests),
-	// but it is NOT wakeable — the manual-stop case.
+	// A record exists (tracked via records in other tests), but it is NOT
+	// wakeable — the manual-stop case.
 	svc.wakeableNames = map[string]bool{"stopped-worker": false}
 
 	body := strings.NewReader(`{"text":"hello"}`)

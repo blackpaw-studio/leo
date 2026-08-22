@@ -190,11 +190,12 @@ func TestSwitchTemplateFirstVisitMintsClaudeSession(t *testing.T) {
 	}
 }
 
-// TestSwitchTemplateRefusesDormantAgent: a dormant (Stopped) agent has no
-// process to bounce, and there is no longer a "safe to rewrite in place"
-// dormant sub-state now that Suspended and Stopped are one flag — the switch
-// must be refused, leaving the record untouched, until the agent is started.
-func TestSwitchTemplateRefusesDormantAgent(t *testing.T) {
+// TestSwitchTemplateDormantRewritesRecordOnly: a dormant (Stopped) agent has
+// no process to bounce. The switch rewrites its record in place — no start
+// required — so the next Start comes up on the new template. Every dormant
+// record is fully intact now (Stop always keeps the record and its
+// SessionID), which is exactly what makes rewriting one safe.
+func TestSwitchTemplateDormantRewritesRecordOnly(t *testing.T) {
 	home := t.TempDir()
 	cfg := switchCfg(home)
 	sup := &capturingSupervisor{}
@@ -204,15 +205,84 @@ func TestSwitchTemplateRefusesDormantAgent(t *testing.T) {
 	})
 	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
 
-	if _, err := m.SwitchTemplate("leo-x", "codex"); err == nil {
-		t.Fatal("switching a dormant agent's template must error")
+	res, err := m.SwitchTemplate("leo-x", "codex")
+	if err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	if res.Status != "stopped" {
+		t.Errorf("Status = %q, want stopped", res.Status)
 	}
 	if sup.spawnCall != nil || len(sup.stopCalls) != 0 {
-		t.Errorf("refused switch touched the supervisor: spawn=%v stops=%v", sup.spawnCall, sup.stopCalls)
+		t.Errorf("dormant switch touched the supervisor: spawn=%v stops=%v", sup.spawnCall, sup.stopCalls)
 	}
 	rec := loadRec(t, home, "leo-x")
-	if rec.Template != "coding" {
-		t.Errorf("record must not be re-pointed by a refused switch, got template=%q", rec.Template)
+	if !rec.Stopped {
+		t.Error("Stopped flag must survive a switch")
+	}
+	if !rec.WakeOnMessage {
+		t.Error("WakeOnMessage must survive a switch unchanged")
+	}
+	if rec.Template != "codex" || rec.SessionsByTemplate["coding"] != "coding-session" {
+		t.Errorf("record not re-pointed: template=%q archive=%v", rec.Template, rec.SessionsByTemplate)
+	}
+}
+
+// TestSwitchTemplateDormantRestoresArchivedSessionRegardlessOfDepartingOne
+// mirrors the running-agent archive contract for a dormant agent: the
+// arriving template's own archived session is restored even though the
+// departing template never reported one of its own.
+func TestSwitchTemplateDormantRestoresArchivedSessionRegardlessOfDepartingOne(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "codex", Harness: "codex", Workspace: "/w",
+		SessionID:          "", // codex never reported a session id
+		SessionsByTemplate: map[string]string{"coding": "codings-session"},
+		Stopped:            true,
+		ClaudeArgs:         []string{"--model", "sonnet"},
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	res, err := m.SwitchTemplate("leo-x", "coding")
+	if err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	if !res.Resumed {
+		t.Error("Resumed = false, want true — coding has an archived session")
+	}
+	rec := loadRec(t, home, "leo-x")
+	if rec.SessionID != "codings-session" {
+		t.Errorf("SessionID = %q, want codings-session", rec.SessionID)
+	}
+	if !containsPair(rec.ClaudeArgs, "--resume", "codings-session") {
+		t.Errorf("stored args = %v, want --resume codings-session so the next start rejoins it", rec.ClaudeArgs)
+	}
+}
+
+// The mirror case: with nothing archived for the arriving template, a
+// dormant agent must not be left holding a --session-id for a conversation
+// that was never created — Start would try to rejoin a session that does not
+// exist.
+func TestSwitchTemplateDormantDoesNotPersistAMintedSession(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name: "leo-x", Template: "codex", Harness: "codex", Workspace: "/w",
+		SessionID: "codex-rollout", Stopped: true,
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	if _, err := m.SwitchTemplate("leo-x", "coding"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+	rec := loadRec(t, home, "leo-x")
+	if rec.SessionID != "" {
+		t.Errorf("SessionID = %q, want empty — nothing was archived for coding and no session has been created yet", rec.SessionID)
+	}
+	if containsFlag(rec.ClaudeArgs, "--session-id") || containsFlag(rec.ClaudeArgs, "--resume") {
+		t.Errorf("stored args = %v, want no session-selection flag", rec.ClaudeArgs)
 	}
 }
 
@@ -241,9 +311,13 @@ func TestSwitchTemplateGuards(t *testing.T) {
 			t.Fatal("switching an agent with no record must error")
 		}
 	})
-	t.Run("stopped agent", func(t *testing.T) {
-		if _, err := m.SwitchTemplate("leo-stopped", "codex"); err == nil {
-			t.Fatal("switching a stopped agent must error")
+	t.Run("stopped agent switches in place", func(t *testing.T) {
+		res, err := m.SwitchTemplate("leo-stopped", "codex")
+		if err != nil {
+			t.Fatalf("switching a stopped agent must succeed: %v", err)
+		}
+		if res.Status != "stopped" {
+			t.Errorf("Status = %q, want stopped", res.Status)
 		}
 	})
 	t.Run("same template is a no-op", func(t *testing.T) {

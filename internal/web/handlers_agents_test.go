@@ -89,11 +89,6 @@ type mockAgentService struct {
 
 	records []agent.Record
 
-	// recoverable backs ResolveRecoverable for tests exercising the
-	// failed-restore stop fallback: keyed by agent name, maps to the record
-	// to return. A missing key means ok=false.
-	recoverable map[string]agent.Record
-
 	// handles backs ResolveHandle for tests exercising non-claude message
 	// dispatch: keyed by agent name, maps to (harnessName, SessionHandle).
 	// A missing key means ok=false — the caller falls back to tmux/claude.
@@ -172,11 +167,6 @@ func (m *mockAgentService) Resolve(query string) (agent.Record, error) {
 		}
 	}
 	return agent.Record{}, &agent.ErrNotFound{Query: query}
-}
-
-func (m *mockAgentService) ResolveRecoverable(query string) (agent.Record, bool) {
-	rec, ok := m.recoverable[query]
-	return rec, ok
 }
 
 func (m *mockAgentService) Wakeable(name string) bool {
@@ -767,17 +757,14 @@ func TestWebAgentSuspendError(t *testing.T) {
 	}
 }
 
-// TestWebAgentStopRecoversFailedRestoreRecord verifies handleWebAgentStop
-// falls back to ResolveRecoverable when Resolve reports not-found — a
-// shared-workspace agent RestoreAgents left Stopped+StoppedReason after a
-// failed boot-time restore has no live process to kill, but must still be
-// removable from the web UI, or it becomes a permanent, undeletable entry.
-func TestWebAgentStopRecoversFailedRestoreRecord(t *testing.T) {
+// TestWebAgentStopReachesFailedRestoreRecord verifies handleWebAgentStop
+// reaches a failed-restore record directly through Resolve, which matches
+// every dormant record (including one RestoreAgents left Stopped+
+// StoppedReason after a failed boot-time restore, with no live process to
+// kill) exactly like a live one — no separate fallback needed.
+func TestWebAgentStopReachesFailedRestoreRecord(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
-	svc.records = nil // Resolve finds nothing — forces the fallback path.
-	svc.recoverable = map[string]agent.Record{
-		"leo-coding-doomed": {Name: "leo-coding-doomed", Status: "stopped"},
-	}
+	svc.records = []agent.Record{{Name: "leo-coding-doomed", Status: "stopped"}}
 
 	req := httptest.NewRequest("POST", "/web/agent/leo-coding-doomed/stop", nil)
 	w := httptest.NewRecorder()
@@ -787,7 +774,7 @@ func TestWebAgentStopRecoversFailedRestoreRecord(t *testing.T) {
 		t.Fatal("expected Stop to be called")
 	}
 	if svc.stopName != "leo-coding-doomed" {
-		t.Errorf("Stop called with %q, want the fallback's canonical name", svc.stopName)
+		t.Errorf("Stop called with %q, want the resolved canonical name", svc.stopName)
 	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -795,8 +782,7 @@ func TestWebAgentStopRecoversFailedRestoreRecord(t *testing.T) {
 }
 
 // TestWebAgentStopNotFoundWithoutFallback verifies a genuinely unknown agent
-// still reports an error when the store fallback also finds nothing — the
-// fallback must not mask a real not-found.
+// still reports an error.
 func TestWebAgentStopNotFoundWithoutFallback(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
 	svc.records = nil

@@ -784,6 +784,54 @@ func TestStartRespawnsWithResumeAndClearsFlags(t *testing.T) {
 	}
 }
 
+// TestManuallyStoppedAgentResolvableByShorthandAcrossRoutes is the regression
+// guard for the whole resolver fix: a manually-stopped agent (Stopped=true,
+// StoppedReason empty — an operator ran `leo agent stop`, not a
+// failed-restore or an idle-sweep suspend — WakeOnMessage=false) must be
+// reachable by shorthand through Resolve (what the stop and start daemon
+// routes pre-resolve with) and through Start/Delete's own internal
+// resolution. That exact record shape was unreachable by both the old
+// live-only Resolve and the narrower ResolveRecoverable before this fix.
+func TestManuallyStoppedAgentResolvableByShorthandAcrossRoutes(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:          "leo-coding-acme-widget",
+		Repo:          "acme/widget",
+		Workspace:     "/w",
+		SessionID:     "sid",
+		Stopped:       true,
+		StoppedReason: "",
+		WakeOnMessage: false,
+	})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	// The stop route: daemon/web resolve the shorthand before calling Stop.
+	if rec, err := m.Resolve("widget"); err != nil {
+		t.Fatalf("Resolve(shorthand) for stop route: %v", err)
+	} else if rec.Name != "leo-coding-acme-widget" {
+		t.Fatalf("Resolve(shorthand) name = %q", rec.Name)
+	}
+
+	// The start route: Start itself resolves the shorthand.
+	if err := m.Start("widget"); err != nil {
+		t.Fatalf("Start(shorthand): %v", err)
+	}
+	if err := m.Stop("leo-coding-acme-widget", StopOptions{}); err != nil {
+		t.Fatalf("re-stopping for the delete route: %v", err)
+	}
+
+	// The delete route: Delete itself resolves the shorthand.
+	if err := m.Delete(context.Background(), "widget", DeleteOptions{}); err != nil {
+		t.Fatalf("Delete(shorthand): %v", err)
+	}
+	stored, _ := agentstore.Load(agentstore.FilePath(home))
+	if _, ok := stored["leo-coding-acme-widget"]; ok {
+		t.Error("record should be gone after Delete(shorthand)")
+	}
+}
+
 // TestStartNotStoppedErrors verifies Start refuses a persisted record that is
 // not dormant (e.g. a live-but-record-stale mismatch, or a plain live agent
 // whose record forgot to set Stopped).

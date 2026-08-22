@@ -14,18 +14,11 @@ import (
 )
 
 // resolveAgentQuery resolves a shorthand query to the canonical agent name
-// using the configured AgentService. Returns a classified HTTP status so
-// callers can respond consistently (404 not found, 409 ambiguous, 500 other).
+// using the configured AgentService. Resolve itself matches dormant agents
+// exactly like live ones, so no separate fallback is needed here. Returns a
+// classified HTTP status so callers can respond consistently (404 not found,
+// 409 ambiguous, 500 other).
 func resolveAgentQuery(svc AgentService, query string) (agent.Record, int, error) {
-	return resolveAgentQueryWithFallback(svc, query, nil)
-}
-
-// resolveAgentQueryWithFallback is resolveAgentQuery plus an optional store
-// fallback tried when Resolve reports not-found — used by handleWebAgentStop
-// so a record Resolve deliberately excludes (a failed-restore agent kept
-// Stopped by RestoreAgents) can still be reached by name. A nil fallback
-// makes this identical to resolveAgentQuery.
-func resolveAgentQueryWithFallback(svc AgentService, query string, fallback func(string) (agent.Record, bool)) (agent.Record, int, error) {
 	rec, err := svc.Resolve(query)
 	if err == nil {
 		return rec, http.StatusOK, nil
@@ -34,11 +27,6 @@ func resolveAgentQueryWithFallback(svc AgentService, query string, fallback func
 	var amb *agent.ErrAmbiguous
 	switch {
 	case errors.As(err, &nf):
-		if fallback != nil {
-			if fb, ok := fallback(query); ok {
-				return fb, http.StatusOK, nil
-			}
-		}
 		return agent.Record{}, http.StatusNotFound, err
 	case errors.As(err, &amb):
 		return agent.Record{}, http.StatusConflict, err
@@ -315,10 +303,10 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Agent %q spawned — connect via Claude web or app", agent.DisplayName(rec.Name)))
 }
 
-// handleWebAgentStop stops an agent via the web UI (form post). Falls back to
-// ResolveRecoverable when Resolve reports not-found, so a failed-restore
-// record (kept Stopped by RestoreAgents, no live process to kill) can still
-// be removed from the web UI rather than being a permanently stuck entry.
+// handleWebAgentStop stops an agent via the web UI (form post). Resolve
+// matches dormant agents (including a failed-restore record kept Stopped by
+// RestoreAgents) exactly like live ones, so it can still be removed from the
+// web UI rather than being a permanently stuck entry.
 func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if s.agentSvc == nil {
@@ -326,7 +314,7 @@ func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, _, err := resolveAgentQueryWithFallback(s.agentSvc, name, s.agentSvc.ResolveRecoverable)
+	rec, _, err := resolveAgentQuery(s.agentSvc, name)
 	if err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Failed to find agent: %v", err))
 		return

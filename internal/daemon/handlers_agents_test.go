@@ -488,20 +488,10 @@ type resolveFakeAgentManager struct {
 	fakeAgentManager
 	resolveOut agent.Record
 	resolveErr error
-
-	// stoppedForRestartOut/OK back ResolveRecoverable — the store
-	// fallback handleAgentRestart uses when Resolve excludes a record
-	// stopped by a failed boot-time restore.
-	stoppedForRestartOut agent.Record
-	stoppedForRestartOK  bool
 }
 
 func (r *resolveFakeAgentManager) Resolve(string) (agent.Record, error) {
 	return r.resolveOut, r.resolveErr
-}
-
-func (r *resolveFakeAgentManager) ResolveRecoverable(string) (agent.Record, bool) {
-	return r.stoppedForRestartOut, r.stoppedForRestartOK
 }
 
 func TestAgentResolveHandlerSuccess(t *testing.T) {
@@ -647,16 +637,14 @@ func TestAgentRestartHandlerStopped(t *testing.T) {
 	}
 }
 
-// TestAgentRestartHandlerRecoversFailedRestoreRecord verifies handleAgentRestart
-// falls back to ResolveRecoverable when Resolve reports not-found —
-// Resolve deliberately excludes every stopped record, so a shared-workspace
-// agent RestoreAgents left behind after a failed boot-time restore would
-// otherwise be permanently unreachable via `leo agent restart <name>`.
-func TestAgentRestartHandlerRecoversFailedRestoreRecord(t *testing.T) {
+// TestAgentRestartHandlerReachesFailedRestoreRecord verifies handleAgentRestart
+// reaches a failed-restore record directly through Resolve, which matches
+// every dormant record exactly like a live one — a shared-workspace agent
+// RestoreAgents left behind after a failed boot-time restore is reachable via
+// `leo agent restart <name>` with no separate fallback needed.
+func TestAgentRestartHandlerReachesFailedRestoreRecord(t *testing.T) {
 	mgr := &resolveFakeAgentManager{
-		resolveErr:           &agent.ErrNotFound{Query: "widget"},
-		stoppedForRestartOK:  true,
-		stoppedForRestartOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"},
+		resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"},
 	}
 	_, client := startTestServerWithAgent(t, mgr)
 
@@ -669,13 +657,12 @@ func TestAgentRestartHandlerRecoversFailedRestoreRecord(t *testing.T) {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
 	if mgr.lastRestart != "leo-coding-acme-widget" {
-		t.Errorf("Restart called with %q, want the fallback's canonical name", mgr.lastRestart)
+		t.Errorf("Restart called with %q, want the resolved canonical name", mgr.lastRestart)
 	}
 }
 
 // TestAgentRestartHandlerNotFoundWithoutFallback verifies a genuinely unknown
-// agent still 404s when the store fallback also finds nothing — the fallback
-// must not mask a real not-found.
+// agent still 404s.
 func TestAgentRestartHandlerNotFoundWithoutFallback(t *testing.T) {
 	mgr := &resolveFakeAgentManager{resolveErr: &agent.ErrNotFound{Query: "ghost"}}
 	_, client := startTestServerWithAgent(t, mgr)
@@ -690,18 +677,15 @@ func TestAgentRestartHandlerNotFoundWithoutFallback(t *testing.T) {
 	}
 }
 
-// TestAgentStopHandlerRecoversFailedRestoreRecord is the Stop analogue of
-// TestAgentRestartHandlerRecoversFailedRestoreRecord: a shared-workspace
-// agent RestoreAgents left Stopped+StoppedReason after a failed boot-time
-// restore has no live process to kill, but must still be removable via
-// `leo agent stop <name>` — otherwise a permanently unrecoverable workspace
-// (e.g. a deleted NAS share) becomes an undeletable entry in `leo agent
-// list` forever, with no path except hand-editing agents.json.
-func TestAgentStopHandlerRecoversFailedRestoreRecord(t *testing.T) {
+// TestAgentStopHandlerReachesFailedRestoreRecord is the Stop analogue of
+// TestAgentRestartHandlerReachesFailedRestoreRecord: a shared-workspace agent
+// RestoreAgents left Stopped+StoppedReason after a failed boot-time restore
+// has no live process to kill, but is still removable via `leo agent stop
+// <name>` — Resolve reaches it directly, so it never becomes an undeletable
+// entry in `leo agent list`.
+func TestAgentStopHandlerReachesFailedRestoreRecord(t *testing.T) {
 	mgr := &resolveFakeAgentManager{
-		resolveErr:           &agent.ErrNotFound{Query: "widget"},
-		stoppedForRestartOK:  true,
-		stoppedForRestartOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"},
+		resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"},
 	}
 	_, client := startTestServerWithAgent(t, mgr)
 
@@ -714,12 +698,12 @@ func TestAgentStopHandlerRecoversFailedRestoreRecord(t *testing.T) {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
 	if mgr.lastStop != "leo-coding-acme-widget" {
-		t.Errorf("Stop called with %q, want the fallback's canonical name", mgr.lastStop)
+		t.Errorf("Stop called with %q, want the resolved canonical name", mgr.lastStop)
 	}
 }
 
 // TestAgentStopHandlerNotFoundWithoutFallback verifies a genuinely unknown
-// agent still 404s when the store fallback also finds nothing.
+// agent still 404s.
 func TestAgentStopHandlerNotFoundWithoutFallback(t *testing.T) {
 	mgr := &resolveFakeAgentManager{resolveErr: &agent.ErrNotFound{Query: "ghost"}}
 	_, client := startTestServerWithAgent(t, mgr)
