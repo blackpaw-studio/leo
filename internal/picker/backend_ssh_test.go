@@ -33,7 +33,7 @@ func newTestSSHBackend(exec func(string, ...string) *exec.Cmd) *SSHBackend {
 
 func TestSSHBackendListParsesJSON(t *testing.T) {
 	jsonOut := `[{"name":"rocket","template":"assistant","status":"running"},` +
-		`{"name":"blog","status":"suspended"}]`
+		`{"name":"blog","status":"stopped"}]`
 	b := newTestSSHBackend(fakeExec(nil, jsonOut, 0))
 
 	ags, err := b.List(context.Background())
@@ -46,7 +46,7 @@ func TestSSHBackendListParsesJSON(t *testing.T) {
 	if ags[0].Name != "rocket" || ags[0].Host != "hestia" || ags[0].Template != "assistant" {
 		t.Fatalf("agent[0] = %+v", ags[0])
 	}
-	if ags[1].Status != "suspended" {
+	if ags[1].Status != "stopped" {
 		t.Fatalf("agent[1].Status = %q", ags[1].Status)
 	}
 }

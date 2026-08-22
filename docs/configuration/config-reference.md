@@ -14,7 +14,7 @@ Settings inherited by all tasks and templates unless overridden.
 | `max_turns` | int | No | Default maximum agent turns per execution. Defaults to `15`. Ignored by `codex` and `opencode` (no per-turn cap upstream). |
 | `harness` | string | No | Adapter name for this scope and everything that cascades from it. One of `claude`, `codex`, `opencode`. Defaults to `claude`. All three run every leo primitive (tasks, ephemeral agents, persistent tasks) — see [Harnesses](harnesses.md). |
 | `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `permission_mode`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
-| `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is suspended. Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
+| `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is auto-stopped (dormant, auto-wakes on the next message). Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
 
 Custom Anthropic-compatible endpoints (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …) are configured via each scope's own `env:` map (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`) — see [Harnesses → providers is gone](harnesses.md#providers-is-gone).
 
@@ -250,7 +250,7 @@ templates:
 | `mcp_config` | string | No | -- | Path to MCP config file. |
 | `add_dirs` | list | No | -- | Additional directories. |
 | `env` | map | No | -- | Environment variables. |
-| `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are suspended. Empty inherits the default. |
+| `idle_suspend_after` | string | No | `defaults.idle_suspend_after` | Idle interval (Go duration) before agents from this template are auto-stopped (dormant, auto-wakes on the next message). Empty inherits the default. |
 | `permissions` | map | No | -- | Narrows the leo MCP tool surface for agents spawned from this template (`deny_tools`) and which agents/templates they may message, spawn, or consult (`can_message`, `can_spawn`, `can_consult`). See [Permissions](permissions.md). |
 
 When dispatching with a repo (`/agent coding owner/repo` via a channel plugin, or `leo agent spawn coding --repo owner/repo`), Leo clones the repo into `<workspace>/<repo>` using `gh`. The agent session is named `leo-<template>-<owner>-<repo>`. A repo is optional — `leo agent spawn coding` with no repo runs the template as-is directly in `workspace`, and the agent is named after the template (`coding` in this example).
@@ -259,9 +259,12 @@ Templates also back **persistent tasks** (`runtime: persistent`): a task with `t
 
 ## Idle-suspend
 
-Ephemeral agents can be **suspended** after a period of inactivity to free local
-resources (the claude process and tmux session are killed) while preserving the
-workspace and conversation. Off by default — enable it by setting an interval:
+Ephemeral agents can be **auto-stopped** after a period of inactivity to free
+local resources (the claude process and tmux session are killed) while
+preserving the record, workspace, and stored conversation — an agent that goes
+dormant this way is no different from a manually stopped one, except that it
+auto-wakes on the next message. Off by default — enable it by setting an
+interval:
 
 ```yaml
 defaults:
@@ -280,19 +283,24 @@ stamped onto the agent at spawn time. Behavior:
 - **Activity** is measured by the agent's tmux `session_activity` — injected
   prompts, interactive typing in an attached pane, and the agent's own output
   all count.
-- An agent with a **client attached** is never suspended, even past the
+- An agent with a **client attached** is never auto-stopped, even past the
   interval (so reading scrollback won't yank the session out from under you).
-- A suspended agent shows as `suspended` in `leo agent list`. It **auto-resumes**
-  on the next incoming message (e.g. `leo_send_message`), rejoining its prior
-  conversation via `--resume`. You can also resume or suspend manually:
+- An idle-stopped agent shows as `stopped` in `leo agent list`, same as any
+  other dormant agent. It **auto-wakes** on the next incoming message (e.g.
+  `leo_send_message`), rejoining its prior conversation via `--resume`. You can
+  also start or stop it manually:
 
   ```bash
-  leo agent suspend <name>
-  leo agent resume <name>
+  leo agent stop <name>
+  leo agent start <name>
   ```
 
-- Suspended agents stay suspended across daemon restarts (they are not
-  resurrected at boot), and their worktrees are never pruned.
+  A manual `leo agent stop` does **not** auto-wake — that behavior is specific
+  to the idle sweep. Start it explicitly when you're ready to resume it.
+
+- Dormant agents stay dormant across daemon restarts (they are not
+  resurrected at boot), and their worktrees are never removed — only
+  `leo agent delete` removes a record or worktree.
 
 ## State directory
 

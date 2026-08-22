@@ -18,7 +18,7 @@ func newAgentSetTemplateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set-template <name> <template>",
 		Short: "Point an agent at a different template, keeping its workspace",
-		Long: `Re-point a running or suspended agent at a different template. The agent
+		Long: `Re-point a running or dormant (stopped) agent at a different template. The agent
 keeps its name, workspace, and git worktree; its harness, model, permissions,
 env, and other wiring are rebuilt from the target template.
 
@@ -32,9 +32,10 @@ The agent's name is left alone, even when it embeds the old template name, so
 tmux sessions, channel routing, and anything else holding the name keep
 working. Rename it yourself with 'leo agent rename' if you want it to match.
 
-A running agent is stopped and respawned. A suspended agent is re-pointed in
-place and comes up on the new template at its next resume. Stopped agents, and
-agents backing a 'runtime: persistent' task, are refused.`,
+A running agent is stopped and respawned. A dormant (stopped) agent is
+re-pointed in place and comes up on the new template the next time it starts.
+Agents with no persisted record, and agents backing a 'runtime: persistent'
+task, are refused.`,
 		Example: `  # Try this project under codex, keeping the workspace
   leo agent set-template leo-coding-owner-fetch codex
 
@@ -98,12 +99,12 @@ func formatSwitchResult(r agent.SwitchResult) string {
 
 	var outcome string
 	switch {
-	case r.Status == "suspended" && r.Resumed:
-		outcome = "still suspended; resumes this template's previous session when it wakes"
-	case r.Status == "suspended":
-		outcome = "still suspended; starts a new session when it wakes"
+	case r.Status == "stopped" && r.Resumed:
+		outcome = "still stopped; picks its previous session back up on next start"
+	case r.Status == "stopped":
+		outcome = "still stopped; starts a new session on next start"
 	case r.Resumed:
-		outcome = "respawned, resumed this template's previous session"
+		outcome = "respawned, rejoined this template's previous session"
 	default:
 		outcome = "respawned on a new session"
 	}

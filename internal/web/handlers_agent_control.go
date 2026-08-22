@@ -155,11 +155,12 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the target's harness FIRST, before any tmux-touching logic.
 	// Claude targets (harnessName == "" from an unresolved/claude target)
-	// fall straight through to the existing fast-path / suspended-resume
-	// logic below, byte-identical to before this change. A resolved
+	// fall straight through to the existing fast-path / dormant-wake-then-
+	// deliver logic below, byte-identical to before this change. A resolved
 	// non-claude target is routed to its SessionDriver and returns
-	// immediately — it never touches tmux, and never suspends (sweep skips
-	// non-claude records), so there is no resume branch to consider for it.
+	// immediately — it never touches tmux, and never goes dormant (sweep
+	// skips non-claude records), so there is no wake-then-deliver branch to
+	// consider for it.
 	if harnessName, handle, ok := s.resolveMessageTarget(name); ok && harnessName != "" && harnessName != "claude" {
 		if s.dispatchNonClaudeMessage(w, harnessName, handle, req.Text) {
 			s.publishAgentMessage(req.From, name)
@@ -168,10 +169,10 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate the target against running sessions (agents). If the agent is
-	// not live but is dormant with WakeOnMessage=true (idle-swept, or a
-	// suspend-style manual stop), start it first and deliver via the
-	// readiness-probing path (InjectPrompt) — a just-started claude takes
-	// tens of seconds to boot before its input box accepts input, so the 2s
+	// not live but is dormant with WakeOnMessage=true (idle-swept), start it
+	// first and deliver via the readiness-probing path (InjectPrompt) — a
+	// just-started claude takes tens of seconds to boot before its input box
+	// accepts input, so the 2s
 	// fast-path below would silently drop the message. A dormant agent with
 	// WakeOnMessage=false (a plain operator-initiated stop) must NOT be woken
 	// this way — that is the whole point of the flag — so it falls through to

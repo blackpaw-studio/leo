@@ -436,6 +436,33 @@ func (s *Server) handleAgentResolve(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
 }
 
+// handleAgentDeletePlan reports what DELETE /agents/{name} would remove,
+// without removing anything, via GET /agents/{name}/delete-plan. The `name`
+// path segment accepts shorthand, resolved exactly like handleAgentDelete.
+func (s *Server) handleAgentDeletePlan(w http.ResponseWriter, r *http.Request) {
+	if s.agentMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent manager not attached")
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+
+	plan, err := s.agentMgr.DeletePlan(name)
+	if err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling delete plan: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, Response{OK: true, Data: data})
+}
+
 // handleAgentDelete removes the agentstore record — plus the worktree and
 // branch when the agent has one — via DELETE /agents/{name}. Refuses a live
 // agent. The `name` path segment accepts shorthand: Manager.Delete resolves

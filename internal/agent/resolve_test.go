@@ -18,8 +18,7 @@ type stubSupervisor struct {
 func (s *stubSupervisor) ReserveAgent(string) error                { return nil }
 func (s *stubSupervisor) ReleaseAgent(string)                      {}
 func (s *stubSupervisor) SpawnAgent(SpawnRequest) error            { return nil }
-func (s *stubSupervisor) StopAgent(string) error                   { return nil }
-func (s *stubSupervisor) SuspendAgent(string) error                { return nil }
+func (s *stubSupervisor) StopAgent(string, bool) error             { return nil }
 func (s *stubSupervisor) RenameAgent(string, string) error         { return nil }
 func (s *stubSupervisor) EphemeralAgents() map[string]ProcessState { return s.agents }
 

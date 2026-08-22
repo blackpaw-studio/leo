@@ -197,7 +197,7 @@ func TestHandlerPublishesOnSuccessfulSend(t *testing.T) {
 	}
 }
 
-// TestHandlerPublishesOnlyAfterAsyncDeliverySucceeds: the suspended-resume
+// TestHandlerPublishesOnlyAfterAsyncDeliverySucceeds: the dormant-then-start
 // path answers 202 before delivering. Announcing at accept time would report a
 // conversation that never happened when the cold-boot injection later fails.
 func TestHandlerPublishesOnlyAfterAsyncDeliverySucceeds(t *testing.T) {
@@ -214,7 +214,7 @@ func TestHandlerPublishesOnlyAfterAsyncDeliverySucceeds(t *testing.T) {
 			s, _, svc := newTestServerWithAgents(t)
 			pub := &recordingPublisher{}
 			s.publisher = pub
-			svc.wakeableNames = map[string]bool{"suspended-worker": true}
+			svc.wakeableNames = map[string]bool{"dormant-worker": true}
 
 			done := make(chan struct{})
 			s.injectPrompt = func(ctx context.Context, session, body string) error {
@@ -224,7 +224,7 @@ func TestHandlerPublishesOnlyAfterAsyncDeliverySucceeds(t *testing.T) {
 			s.execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("true") }
 
 			body := strings.NewReader(`{"text":"wake up","from":"chronicle"}`)
-			req := httptest.NewRequest("POST", "/web/agent/suspended-worker/message", body)
+			req := httptest.NewRequest("POST", "/web/agent/dormant-worker/message", body)
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 			s.httpServer.Handler.ServeHTTP(w, req)

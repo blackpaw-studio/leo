@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -32,9 +33,19 @@ type Agent struct {
 type Backend interface {
 	List(ctx context.Context) ([]Agent, error)
 	Rename(ctx context.Context, oldName, newName string) error
+	// Stop makes an agent dormant with WakeOnMessage=false — a picker-initiated
+	// stop is always operator intent, never auto-wakeable. Reversible via Start.
 	Stop(ctx context.Context, name string) error
-	Suspend(ctx context.Context, name string) error
-	Resume(ctx context.Context, name string) error
+	// Start clears a dormant agent's flags and respawns it, resuming its prior
+	// conversation.
+	Start(ctx context.Context, name string) error
+	// DeletePlan reports what Delete would remove, for the confirm dialog —
+	// the single source of truth for "does this agent have a worktree" (see
+	// agent.Manager.DeletePlan). It performs no mutation.
+	DeletePlan(ctx context.Context, name string) (agent.DeletePlan, error)
+	// Delete permanently removes the agent's record — plus its worktree and,
+	// when deleteBranch is true, its branch. Refuses a live agent.
+	Delete(ctx context.Context, name string, deleteBranch bool) error
 	// Templates lists the template names configured on this host — the menu
 	// the picker offers when re-pointing an agent at another template.
 	Templates(ctx context.Context) ([]string, error)

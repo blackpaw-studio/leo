@@ -87,7 +87,7 @@ type reparentDeps struct {
 	serverRunning func(tmuxPath string) bool
 	ownership     func(tmuxPath string) (tmux.Ownership, error)
 	killServer    func(tmuxPath string) error
-	counts        func() (running, suspended int)
+	counts        func() (running, dormant int)
 	confirm       func(message string) bool
 	waitForOwner  func(tmuxPath string) (tmux.Ownership, bool)
 	out           io.Writer
@@ -133,10 +133,10 @@ func reparentServer(deps reparentDeps) error {
 		return nil
 	}
 
-	running, suspended := deps.counts()
+	running, dormant := deps.counts()
 	if !deps.assumeYes {
-		msg := fmt.Sprintf("Recycle the tmux server? This terminates %d live agent session(s) "+
-			"and %d suspended one(s) will restart on next use", running, suspended)
+		msg := fmt.Sprintf("Recycle the tmux server? This terminates %d live agent session(s); "+
+			"%d already-dormant agent(s) are unaffected", running, dormant)
 		if !deps.confirm(msg) {
 			fmt.Fprintln(deps.out, "Aborted.")
 			return nil
@@ -226,9 +226,9 @@ does not), then waits for the daemon to start a fresh, owned server.`,
 	return cmd
 }
 
-// agentSessionCounts reports live and suspended agent counts for the
+// agentSessionCounts reports live and dormant (stopped) agent counts for the
 // confirmation prompt, reusing the status report the daemon already exposes.
 func agentSessionCounts(ctx context.Context) (int, int) {
 	report := buildStatusReport(ctx)
-	return report.Agents.Running, report.Agents.Suspended
+	return report.Agents.Running, report.Agents.Stopped
 }

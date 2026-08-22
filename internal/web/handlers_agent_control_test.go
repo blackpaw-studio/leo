@@ -248,12 +248,12 @@ func TestWebAgentMessageLeoPrefixedTargetUsesSingleLeoPrefix(t *testing.T) {
 func TestWebAgentMessageAutoWakesSuspendedAgent(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
 
-	// "suspended-worker" is NOT in live states — it must be started then
+	// "dormant-worker" is NOT in live states — it must be started then
 	// delivered via injectPrompt (readiness-probing), not the fast-path.
-	svc.wakeableNames = map[string]bool{"suspended-worker": true}
+	svc.wakeableNames = map[string]bool{"dormant-worker": true}
 
 	// Capture what injectPrompt was called with. Delivery is asynchronous (the
-	// handler resumes, then injects in a goroutine so a ~60s cold boot doesn't
+	// handler starts it, then injects in a goroutine so a ~60s cold boot doesn't
 	// exceed the HTTP write timeout), so hand the values back over a channel and
 	// wait for them rather than reading shared vars (which would race).
 	type injectArgs struct{ session, body string }
@@ -271,7 +271,7 @@ func TestWebAgentMessageAutoWakesSuspendedAgent(t *testing.T) {
 	}
 
 	reqBody := strings.NewReader(`{"text":"wake up and do the thing"}`)
-	req := httptest.NewRequest("POST", "/web/agent/suspended-worker/message", reqBody)
+	req := httptest.NewRequest("POST", "/web/agent/dormant-worker/message", reqBody)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
@@ -282,11 +282,11 @@ func TestWebAgentMessageAutoWakesSuspendedAgent(t *testing.T) {
 	}
 
 	// Start must have been called for the wakeable agent (synchronous).
-	if !svc.resumeCalled {
+	if !svc.startCalled {
 		t.Fatal("expected Start to be called for a wakeable agent")
 	}
-	if svc.resumeName != "suspended-worker" {
-		t.Errorf("expected Start called with 'suspended-worker', got %q", svc.resumeName)
+	if svc.startName != "dormant-worker" {
+		t.Errorf("expected Start called with 'dormant-worker', got %q", svc.startName)
 	}
 
 	// The readiness-probing injector must be called (asynchronously) with the
@@ -297,7 +297,7 @@ func TestWebAgentMessageAutoWakesSuspendedAgent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("injectPrompt was not called within timeout (async delivery)")
 	}
-	wantSession := agent.SessionName("suspended-worker")
+	wantSession := agent.SessionName("dormant-worker")
 	if got.session != wantSession {
 		t.Errorf("injectPrompt session = %q, want %q", got.session, wantSession)
 	}
@@ -305,11 +305,11 @@ func TestWebAgentMessageAutoWakesSuspendedAgent(t *testing.T) {
 		t.Errorf("injectPrompt body = %q, want %q", got.body, "wake up and do the thing")
 	}
 
-	// The fast send-keys path must NOT have been used for the resumed case —
+	// The fast send-keys path must NOT have been used for the just-started case —
 	// it would silently drop the message before claude finishes booting.
 	for _, call := range execCalls {
 		if argsContain(call, "send-keys") && argsContain(call, "-l") {
-			t.Errorf("fast-path send-keys must not fire for a just-resumed agent; got call=%v", call)
+			t.Errorf("fast-path send-keys must not fire for a just-started agent; got call=%v", call)
 		}
 	}
 }
@@ -330,7 +330,7 @@ func TestWebAgentMessageUnknownTargetWithAgentServiceStill404(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
 	}
-	if svc.resumeCalled {
+	if svc.startCalled {
 		t.Fatal("Start must not be attempted for an unknown, non-wakeable target")
 	}
 	body2 := w.Body.String()
@@ -360,7 +360,7 @@ func TestWebAgentMessageDoesNotWakeManuallyStoppedAgent(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body = %s", w.Code, w.Body.String())
 	}
-	if svc.resumeCalled {
+	if svc.startCalled {
 		t.Fatal("Start must never be called for a manually stopped (non-wakeable) agent")
 	}
 }

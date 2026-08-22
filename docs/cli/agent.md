@@ -13,15 +13,14 @@ leo agent spawn <template> --repo <owner/repo> --worktree <branch> # spawn into 
 leo agent worktree <agent> <branch>                                # spawn a worktree agent branched off an existing agent
 leo agent attach <name>                                            # attach to the agent's tmux session
 leo agent session-name <query>                                     # print the tmux session name
-leo agent stop <name> [--prune]                                    # stop a running agent (optionally remove worktree)
-leo agent suspend <name>                                           # suspend a running agent (idle-suspend, manual)
-leo agent resume <name>                                            # resume a suspended agent, rejoining its prior conversation
+leo agent stop <name>                                              # stop a running agent — always dormant, never deletes anything
+leo agent start <name>                                             # start a dormant agent, rejoining its prior conversation
 leo agent reset <name>                                             # stop, clear stored session id, and respawn fresh
-leo agent prune <name>                                             # remove a stopped worktree agent's on-disk state
+leo agent delete <name> [--delete-branch]                          # delete a stopped agent's record (and worktree/branch)
 leo agent logs <name> [-n LINES] [-f]                              # tail the agent's pane output
 ```
 
-`<name>` for `attach`, `stop`, `suspend`, `reset`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `resume` and `prune` take the canonical name only — the shorthand resolver only matches *live* agents, and both a suspended agent (`resume`'s target) and a stopped worktree agent (`prune`'s target) are not live. `session-name` is the explicit resolver.
+`<name>` for `attach`, `stop`, `reset`, and `logs` accepts shorthand — see [Shorthand Resolution](#shorthand-resolution) below. `start` and `delete` take the canonical name only — the shorthand resolver only matches *live* agents, and both a dormant agent (`start`'s target) and a stopped agent (`delete`'s target) are not live. `session-name` is the explicit resolver.
 
 ## Flags
 
@@ -112,7 +111,7 @@ leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/new --base mai
 - If the branch exists locally or on `origin`, Leo attaches to it. Otherwise Leo creates a new branch off `--base`, defaulting to origin's default branch.
 - The worktree lives at `<baseWorkspace>/.worktrees/<repo-short>/<branch-slug>/`. See [workspace structure](../configuration/workspace-structure.md) for the full layout.
 - The agent name includes the branch slug: `leo-<template>-<owner>-<repo>-<branch-slug>`.
-- `leo agent list` shows a `BRANCH` column for worktree agents; stopped worktree agents stay in the list until you `prune` them.
+- `leo agent list` shows a `BRANCH` column for worktree agents; stopped worktree agents stay in the list until you `delete` them.
 
 #### Collision Prompt
 
@@ -156,7 +155,7 @@ Flags:
 - `--env KEY=VALUE` — extra env var (repeatable); overrides an inherited value on collision
 - `--json` — emit the spawned `AgentRecord` as JSON
 
-Clean up the same way as any worktree agent: `leo agent stop <name> --prune`.
+Clean up the same way as any worktree agent: stop it, then `leo agent delete <name> --delete-branch`.
 
 ```bash
 # chronicle is a running agent with a git workspace; branch it onto an a11y pass
@@ -164,7 +163,8 @@ leo agent worktree chronicle a11y
 # spawned chronicle-a11y (branch: a11y, worktree: ~/.leo/workspace/.worktrees/chronicle/a11y)
 # attach with: leo agent attach chronicle-a11y
 
-leo agent stop chronicle-a11y --prune   # done — tear down the checkout
+leo agent stop chronicle-a11y
+leo agent delete chronicle-a11y --delete-branch   # done — tear down the checkout
 ```
 
 ### `leo agent attach <name>`
@@ -179,12 +179,14 @@ sessions never mix with your personal tmux server.
 
 Running `leo attach` without a name opens a full-screen, fuzzy-filterable
 picker over every agent — local and every configured remote host — in every
-state (running, starting, suspended, stopped). Beyond attaching, the picker
-doubles as a lifecycle surface: **Enter** attach (a suspended agent is resumed
-first), **s** suspend, **u** resume, **x** stop (with confirmation), **r**
-rename, **t** set template (arrow keys to choose, Enter to confirm, Esc to
-cancel), **/** filter, **q** quit. The picker always opens when no name is
-given — there is no longer a single-candidate auto-attach shortcut.
+state (running, starting, stopped/dormant). Beyond attaching, the picker
+doubles as a lifecycle surface: **Enter** attach (a dormant agent is started
+first), **s** stop, **u** start, **D** delete (with confirmation naming
+exactly what will be removed), **r** rename, **t** set template (arrow keys
+to choose, Enter to confirm, Esc to cancel), **/** filter, **q** quit. `x` is
+deliberately unbound, so old `x`-then-confirm muscle memory does nothing. The
+picker always opens when no name is given — there is no longer a
+single-candidate auto-attach shortcut.
 
 Pass `--cc` to open the session in tmux control mode (`-CC`), which iTerm2
 and WezTerm pick up as a native tab. Control mode is refused cleanly from
@@ -205,30 +207,23 @@ tmux attach -t "$(leo agent session-name leo)"
 
 ### `leo agent stop <name>`
 
-Stop a running agent. Kills the tmux session and deregisters from the supervisor. Accepts shorthand.
+Stop a running agent: kills the process/tmux session but always leaves a recoverable, dormant agent behind — the record, stored claude session id, and (for worktree agents) the on-disk worktree are all preserved, regardless of workspace type. Accepts shorthand. A stopped agent shows as `stopped` in `leo agent list`.
 
-- Shared-workspace agents: the record is removed; the workspace stays on disk.
-- Worktree agents: the record is preserved so you can reattach or inspect the branch. Pass `--prune` to also remove the worktree and record in a single round trip.
+Stop never deletes anything. Idle auto-stop (see [Config Reference → Idle-suspend](../configuration/config-reference.md#idle-suspend)) uses the same dormant state but marks the agent to auto-wake on the next incoming message; a manually stopped agent does not auto-wake and must be started explicitly.
 
-Flags (only meaningful with `--prune`, and only for worktree agents):
+- `--json` — emit the result as JSON
 
-- `--prune` — also remove the on-disk worktree and agentstore record
-- `--force` — with `--prune`, remove even when the worktree is dirty
-- `--delete-branch` — with `--prune`, delete the local branch after the worktree is gone
+To remove an agent's record (and, for worktree agents, its worktree/branch), stop it first and then run `leo agent delete`.
 
-### `leo agent suspend <name>`
+### `leo agent start <name>`
 
-Suspend a running agent: kills the process/tmux session but preserves the workspace and stored claude session id. Accepts shorthand. A suspended agent shows as `suspended` in `leo agent list` and auto-resumes on the next incoming message. See [Config Reference → Idle-suspend](../configuration/config-reference.md#idle-suspend).
+Start a dormant (stopped) agent, rejoining its prior conversation via `--resume`. Takes the canonical name only — shorthand resolution only matches live agents, and a dormant agent isn't one.
 
-### `leo agent resume <name>`
-
-Resume a suspended agent, rejoining its prior conversation via `--resume`. Takes the canonical name only — shorthand resolution only matches live agents, and a suspended agent isn't one.
-
-Like `restart`, resume re-applies today's defaults + template config (and the current binary's harness env) before resuming, so an agent suspended across an upgrade or a config edit wakes up current rather than replaying the wiring it was spawned with. Agents with no template, a deleted template, or a changed harness keep their stored args.
+Like `restart`, start re-applies today's defaults + template config (and the current binary's harness env) before resuming, so an agent stopped across an upgrade or a config edit wakes up current rather than replaying the wiring it was spawned with. Agents with no template, a deleted template, or a changed harness keep their stored args. Starting an already-running agent returns an error rather than doing anything.
 
 ### `leo agent reset <name>`
 
-Reset an agent to a brand-new conversation: stops any live process/tmux session, clears the stored claude session id, and respawns fresh from the agent's template. Accepts shorthand. Unlike `resume`, which rejoins the prior conversation, `reset` deliberately discards it — use this when an agent's context has gotten stuck or corrupted (a common case: a long-lived agent backing a `runtime: persistent` task whose conversation has filled up). See [Persistent Tasks → `leo agent reset`](../configuration/persistent-tasks.md#leo-agent-reset).
+Reset an agent to a brand-new conversation: stops any live process/tmux session, clears the stored claude session id, and respawns fresh from the agent's template. Accepts shorthand. Unlike `start`, which rejoins the prior conversation, `reset` deliberately discards it — use this when an agent's context has gotten stuck or corrupted (a common case: a long-lived agent backing a `runtime: persistent` task whose conversation has filled up). See [Persistent Tasks → `leo agent reset`](../configuration/persistent-tasks.md#leo-agent-reset).
 
 ```bash
 leo agent reset leo-coding-owner-fetch
@@ -236,7 +231,7 @@ leo agent reset leo-coding-owner-fetch
 
 ### `leo agent set-template <name> <template>`
 
-Re-point a running or suspended agent at a different template, keeping its name, workspace, and git worktree. Its harness, model, permissions, env, and the rest of its wiring are rebuilt from the target template. Accepts shorthand.
+Re-point a running or dormant (stopped) agent at a different template, keeping its name, workspace, and git worktree. Its harness, model, permissions, env, and the rest of its wiring are rebuilt from the target template. Accepts shorthand.
 
 ```bash
 leo agent set-template leo-coding-owner-fetch codex
@@ -251,42 +246,38 @@ leo agent set-template fetch coding    # codex → coding, resumes where coding 
 
 The command reads lighter than it acts — a running agent is stopped and respawned — so its output always states what happened to the process and to the session. Pass `--json` for the machine-readable form (`from_template`, `to_template`, `from_harness`, `to_harness`, `resumed`, `status`).
 
-A suspended agent is re-pointed in place, with no process to bounce; it comes up on the new template at its next resume.
+A dormant agent is re-pointed in place, with no process to bounce; it comes up on the new template at its next start.
 
 Notes and limits:
 
 - **The name is left alone**, even when it embeds the old template (`leo-coding-owner-fetch` running codex). Stable names keep tmux sessions, channel routing, and scripts working — rename it yourself with `leo agent rename` if you want it to match.
 - **The target template's `workspace` is ignored.** The agent stays in the project it is working in, which is also what keeps its archived sessions valid.
 - **`idle_suspend_after` comes from the new template**, like the rest of the wiring — a per-spawn `--idle-suspend` override does not survive a switch.
-- **Stopped agents are refused**, as are agents backing a `runtime: persistent` task — those bind to their agent by name, so switching one would redirect a scheduled task's prompts into a template it was never configured for. Change `tasks.<name>.template` instead.
+- Agents backing a `runtime: persistent` task are refused — those bind to their agent by name, so switching one would redirect a scheduled task's prompts into a template it was never configured for. Change `tasks.<name>.template` instead.
 - **Permissions:** a switch launches the target template, so it needs both `leo_stop_agent` and the `can_spawn` allowlist entry for that template. See [Permissions](../configuration/permissions.md).
 
-### `leo agent prune <name>`
+### `leo agent delete <name>`
 
-Remove the on-disk worktree and agentstore record for a worktree agent that has already been stopped. No-op (returns an error) for shared-workspace agents. Takes the canonical agent name — shorthand resolution only matches live agents, so `prune` requires the full name you saw in the last `leo agent list`. Use `leo agent stop --prune` instead when the agent is still running and you want shorthand.
+Delete a stopped agent: removes its agentstore record, and for a worktree agent, its on-disk worktree too. Refuses a live agent — stop it first. Accepts shared-workspace agents as well as worktree agents (there is no lifecycle command left that can't act on a shared agent). Takes the canonical agent name — shorthand resolution only matches live agents, so `delete` requires the full name you saw in the last `leo agent list`.
+
+Without `--yes`, prompts with the same confirmation text the attach picker uses, naming exactly what will be removed.
 
 ```bash
-leo agent prune leo-coding-blackpaw-studio-leo-feat-cache
-leo agent prune feat-cache --delete-branch
+leo agent delete leo-coding-blackpaw-studio-leo-feat-cache
+leo agent delete feat-cache --delete-branch
 ```
 
 Flags:
 
-- `--force` — remove even when the worktree has uncommitted changes, or the branch is unmerged
-- `--delete-branch` — delete the local branch after the worktree is gone
+- `--delete-branch` — delete the local branch after the worktree is gone (worktree agents only)
+- `--yes` — skip the confirmation prompt
 
 Typical flow:
 
 ```bash
 leo agent stop feat-cache        # stop, leave worktree for inspection
 # … review the branch, push a PR, merge …
-leo agent prune feat-cache --delete-branch
-```
-
-Or in one step:
-
-```bash
-leo agent stop feat-cache --prune --delete-branch
+leo agent delete feat-cache --delete-branch
 ```
 
 ### `leo agent logs <name>`

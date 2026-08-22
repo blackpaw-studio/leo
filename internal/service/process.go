@@ -310,11 +310,11 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	s.mu.Unlock()
 
 	// A resumed agent (agent.SpawnRequest.Resumed) already exists from a
-	// consumer's point of view — SuspendAgent announced it going to sleep,
-	// not leaving — so this respawn is a state transition back, not a new
-	// agent appearing. Publishing agent_spawned here would make a
-	// stream-only consumer treat a resume as a brand-new agent (wrong) and
-	// leave it with no way to tell "suspended" from "gone" (see SuspendAgent).
+	// consumer's point of view — Manager.Stop announced it going dormant via
+	// EventAgentStopped, not leaving for good — so this respawn is a state
+	// transition back, not a new agent appearing. Publishing agent_spawned
+	// here would make a stream-only consumer treat a resume as a brand-new
+	// agent (wrong).
 	if spec.Resumed {
 		s.publish(observe.Event{
 			Type: observe.EventAgentStateChanged,
@@ -349,46 +349,21 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 }
 
 // StopAgent stops an ephemeral process and cleans up its tmux session,
-// announcing the agent as gone (observe.EventAgentStopped). Use SuspendAgent
-// instead when the agent is expected to come back — see its doc comment.
-func (s *Supervisor) StopAgent(name string) error {
+// announcing the agent as gone (observe.EventAgentStopped). wakeOnMessage is
+// forwarded verbatim onto the published payload's WakeOnMessage field — the
+// caller (agent.Manager.Stop) is the one place that knows whether this stop
+// is a dormancy transition an inbound message may reverse, or a transient
+// kill ahead of a reset/restart/switch respawn, so it decides the value;
+// this method never infers it.
+func (s *Supervisor) StopAgent(name string, wakeOnMessage bool) error {
 	if err := s.stopAgentProcess(name); err != nil {
 		return err
 	}
 	s.publish(observe.Event{
-		Type:    observe.EventAgentStopped,
-		Payload: &observe.AgentStoppedPayload{Agent: name},
-	})
-	return nil
-}
-
-// SuspendAgent stops an ephemeral process and cleans up its tmux session
-// exactly like StopAgent, but announces the transition as
-// observe.EventAgentStateChanged{Status: "suspended"} rather than
-// observe.EventAgentStopped. A suspended agent is coming back (see
-// agent.SpawnRequest.Resumed, published by SpawnAgent as the matching
-// transition back) — a consumer must be able to tell that apart from an
-// agent that left supervision for good.
-func (s *Supervisor) SuspendAgent(name string) error {
-	// Read Restarts before stopAgentProcess deletes the state entry — a
-	// crash-looped agent's real count would otherwise be silently clobbered
-	// to 0 in the published payload.
-	s.mu.RLock()
-	restarts := 0
-	if st, ok := s.states[name]; ok {
-		restarts = st.Restarts
-	}
-	s.mu.RUnlock()
-
-	if err := s.stopAgentProcess(name); err != nil {
-		return err
-	}
-	s.publish(observe.Event{
-		Type: observe.EventAgentStateChanged,
-		Payload: &observe.AgentStateChangedPayload{
-			Agent:    name,
-			Status:   observe.StatusSuspended,
-			Restarts: restarts,
+		Type: observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{
+			Agent:         name,
+			WakeOnMessage: wakeOnMessage,
 		},
 	})
 	return nil
@@ -417,8 +392,8 @@ var stopWarnLog io.Writer = os.Stderr
 // wedged tmux server must not leave an agent permanently unmanageable.
 //
 // Log-only is deliberate. Returning an error here would have to travel through
-// StopAgent/SuspendAgent, whose callers (agent.Manager's Stop/Suspend/Reset/
-// Restart, the template switch) all read a non-nil error as "teardown failed"
+// StopAgent, whose callers (agent.Manager's Stop/Reset/Restart, the template
+// switch) all read a non-nil error as "teardown failed"
 // and skip the record cleanup or respawn that follows — trading a rare,
 // already-degraded tmux state for a common-path regression. The daemon log is
 // where a wedged-tmux anomaly belongs.
@@ -437,8 +412,7 @@ func killSession(tmuxPath, sessionName, agentName string) {
 }
 
 // stopAgentProcess cancels the ephemeral process's context, kills its tmux
-// session, and removes it from every live-state map. Shared by StopAgent and
-// SuspendAgent, which differ only in which event they publish afterward.
+// session, and removes it from every live-state map. StopAgent's sole helper.
 func (s *Supervisor) stopAgentProcess(name string) error {
 	s.mu.Lock()
 	st, exists := s.states[name]
@@ -795,11 +769,12 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets
 		// before injection. agentMgr already satisfies daemon.EnsureAgentManager
-		// (Live/Suspended/Resume/SpawnFromTemplate).
+		// (Live/Stopped/Wakeable/Start/SpawnFromTemplate).
 		srv.SetEnsurer(daemon.NewAgentEnsurer(agentMgr))
 
-		// Idle-suspend sweep: suspends ephemeral agents that have gone idle
-		// past their configured interval (see Manager.Suspend). Runs for the
+		// Idle sweep: stops ephemeral agents that have gone idle past their
+		// configured interval, marked WakeOnMessage=true so an inbound
+		// message can auto-resume them (see Manager.Stop). Runs for the
 		// daemon's lifetime; ctx cancellation stops it.
 		go runIdleSweep(ctx, supervisor, agentMgr, tmuxPath, homePath)
 

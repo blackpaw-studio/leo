@@ -175,17 +175,60 @@ func TestBuildSnapshotFallsBackToRecordWhenNoLiveState(t *testing.T) {
 	started := time.Now().Add(-2 * time.Hour)
 	in := snapshotInput{
 		Records: []agent.Record{
-			{Name: "agent-a", Status: "suspended", Restarts: 1, StartedAt: started},
+			{Name: "agent-a", Status: "stopped", Restarts: 1, StartedAt: started},
 		},
 		Now: time.Now(),
 	}
 	snap := buildSnapshot(in)
 	got := snap.Agents[0]
-	if got.Status != observe.StatusSuspended {
-		t.Errorf("status = %q, want suspended", got.Status)
+	if got.Status != observe.StatusStopped {
+		t.Errorf("status = %q, want stopped", got.Status)
 	}
 	if got.Restarts != 1 {
 		t.Errorf("restarts = %d, want 1", got.Restarts)
+	}
+}
+
+// TestBuildSnapshotWakeOnMessage locks in the wire shape a dormant agent
+// reports: Status and WakeOnMessage must always agree, whether the agent
+// went dormant via the idle sweep (wake_on_message: true) or a manual stop
+// (wake_on_message: false) — and a stale WakeOnMessage=true on a record that
+// isn't actually stopped must never leak onto the wire.
+func TestBuildSnapshotWakeOnMessage(t *testing.T) {
+	cases := []struct {
+		name       string
+		rec        agent.Record
+		wantStatus observe.Status
+		wantWake   bool
+	}{
+		{
+			name:       "idle-swept dormant agent",
+			rec:        agent.Record{Name: "agent-a", Status: "stopped", WakeOnMessage: true},
+			wantStatus: observe.StatusStopped,
+			wantWake:   true,
+		},
+		{
+			name:       "manually stopped agent",
+			rec:        agent.Record{Name: "agent-a", Status: "stopped", WakeOnMessage: false},
+			wantStatus: observe.StatusStopped,
+			wantWake:   false,
+		},
+		{
+			name:       "running agent with a stale WakeOnMessage flag never reports it",
+			rec:        agent.Record{Name: "agent-a", Status: "running", WakeOnMessage: true},
+			wantStatus: observe.StatusRunning,
+			wantWake:   false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := buildSnapshot(snapshotInput{Records: []agent.Record{tc.rec}, Now: time.Now()})
+			got := snap.Agents[0]
+			if got.Status != tc.wantStatus || got.WakeOnMessage != tc.wantWake {
+				t.Errorf("got (status=%q, wake=%v), want (status=%q, wake=%v)",
+					got.Status, got.WakeOnMessage, tc.wantStatus, tc.wantWake)
+			}
+		})
 	}
 }
 

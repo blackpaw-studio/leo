@@ -204,7 +204,7 @@ func watchConsult(ctx context.Context, stateDir, prefix string, out io.Writer) e
 		// reading here guarantees the drain below sees everything.
 		record, err = consult.LoadOne(stateDir, record.ID)
 		if err != nil {
-			// The record is gone — pruned, or the state directory was
+			// The record is gone — removed, or the state directory was
 			// cleared. Say so instead of polling a stale copy forever.
 			return err
 		}

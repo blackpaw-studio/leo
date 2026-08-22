@@ -53,6 +53,10 @@ type AgentManager interface {
 	// Delete removes the agentstore record for name — plus its worktree and
 	// branch when it has one. Refuses a live agent.
 	Delete(ctx context.Context, name string, opts agent.DeleteOptions) error
+	// DeletePlan resolves name and reports what Delete would remove, without
+	// removing anything — the shared seam CLI/picker/web format their delete
+	// confirmation from.
+	DeletePlan(name string) (agent.DeletePlan, error)
 	List() []agent.Record
 	Logs(name string, lines int) (string, error)
 	SessionName(name string) string
@@ -168,6 +172,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("POST /agents/{name}/restart", s.handleAgentRestart)
 	mux.HandleFunc("POST /agents/{name}/set-template", s.handleAgentSetTemplate)
 	mux.HandleFunc("DELETE /agents/{name}", s.handleAgentDelete)
+	mux.HandleFunc("GET /agents/{name}/delete-plan", s.handleAgentDeletePlan)
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)

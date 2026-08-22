@@ -1009,7 +1009,7 @@ func TestAgentListJSONUsesSeam(t *testing.T) {
 	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
 		return []agent.Record{
 			{Name: "alpha", Template: "writer", Status: "running"},
-			{Name: "beta", Status: "suspended"},
+			{Name: "beta", Status: "stopped"},
 		}, nil
 	}
 	t.Cleanup(func() { agentListFn = oldList })
@@ -1029,7 +1029,7 @@ func TestAgentListJSONUsesSeam(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("output is not a JSON array of records: %v\noutput: %s", err, buf.String())
 	}
-	if len(got) != 2 || got[0].Name != "alpha" || got[1].Status != "suspended" {
+	if len(got) != 2 || got[0].Name != "alpha" || got[1].Status != "stopped" {
 		t.Fatalf("unexpected decoded records: %+v", got)
 	}
 }

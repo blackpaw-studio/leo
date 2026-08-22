@@ -12,12 +12,17 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 )
 
-// Status glyphs.
+// Status glyphs. glyphDormant is the single dormant-state glyph — it used to
+// be split between glyphSuspended ("◌") and glyphStopped ("✖") before the two
+// dormancy states collapsed into one (see
+// docs/specs/2026-08-21-one-dormant-state.md).
 const (
-	glyphRunning   = "●"
-	glyphStarting  = "⟳"
-	glyphSuspended = "◌"
-	glyphStopped   = "✖"
+	glyphRunning  = "●"
+	glyphStarting = "⟳"
+	glyphDormant  = "◌"
+	// glyphError marks a synthetic row for a host whose List call failed — not
+	// a per-agent status, so it keeps its own glyph distinct from glyphDormant.
+	glyphError = "✖"
 )
 
 // spinnerFrames animates a pending (in-flight action) row.
@@ -63,17 +68,15 @@ type row struct {
 func (r row) FilterValue() string { return r.filter }
 
 // glyph maps a status string to its display glyph. Unknown statuses render as
-// stopped so a row is never blank.
+// dormant so a row is never blank.
 func glyph(status string) string {
 	switch status {
 	case "running":
 		return glyphRunning
 	case "starting", "restarting":
 		return glyphStarting
-	case "suspended":
-		return glyphSuspended
 	default:
-		return glyphStopped
+		return glyphDormant
 	}
 }
 
@@ -152,7 +155,7 @@ func buildRows(byHost map[string][]Agent, byHostErr map[string]error, pending ma
 	for _, h := range hosts {
 		if err := byHostErr[h]; err != nil {
 			items = append(items, row{
-				line:   glyphStopped + " " + cell(h, nameW) + " error: " + err.Error(),
+				line:   glyphError + " " + cell(h, nameW) + " error: " + err.Error(),
 				filter: h,
 				host:   h,
 			})
@@ -221,17 +224,17 @@ func dash(s string) string {
 	return s
 }
 
-// ageLabel renders the right-hand column: uptime for live agents, a
-// "suspended … ago" hint for suspended agents, and a plain label otherwise.
+// ageLabel renders the right-hand column: uptime for live agents, and a
+// "dormant … ago" hint for the single dormant state otherwise (folding what
+// used to be two separate dormancy labels — see
+// docs/specs/2026-08-21-one-dormant-state.md).
 func ageLabel(a Agent) string {
-	switch a.Status {
-	case "stopped":
-		return "stopped"
-	case "suspended":
+	switch {
+	case dormant(a.Status):
 		if a.StartedAt.IsZero() {
-			return "suspended"
+			return "dormant"
 		}
-		return "suspended " + humanDuration(time.Since(a.StartedAt)) + " ago"
+		return "dormant " + humanDuration(time.Since(a.StartedAt)) + " ago"
 	default:
 		if a.StartedAt.IsZero() {
 			return a.Status

@@ -62,6 +62,9 @@ so remote calls use your existing SSH setup.`,
 		newAgentWorktreeCmd(),
 		newAgentAttachCmd(),
 		newAgentStopCmd(),
+		newAgentStartCmd(),
+		newAgentDeleteCmd(),
+		newAgentDeletePlanCmd(),
 		newAgentResetCmd(),
 		newAgentRestartCmd(),
 		newAgentSetTemplateCmd(),
@@ -745,6 +748,43 @@ or any unambiguous suffix.`,
 	return cmd
 }
 
+// --- delete-plan ---
+
+// newAgentDeletePlanCmd is a scripting/plumbing subcommand: it prints what
+// `leo agent delete` would remove, as JSON, without removing anything. It
+// backs the attach picker's remote (SSH) backend, which needs this fact to
+// render an accurate delete confirmation without a second daemon endpoint of
+// its own — the local picker backend and the CLI's own delete prompt both
+// call the daemon's delete-plan endpoint directly instead.
+func newAgentDeletePlanCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:    "delete-plan <name>",
+		Short:  "Print what 'leo agent delete' would remove, as JSON",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				return runRemote(res, []string{"delete-plan", name})
+			}
+			plan, err := daemon.AgentDeletePlan(cmd.Context(), cfg.HomePath, name)
+			if err != nil {
+				return fmt.Errorf("planning delete: %w", err)
+			}
+			enc := json.NewEncoder(agentStdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(plan)
+		},
+	}
+	addHostFlag(cmd, &host)
+	return cmd
+}
+
 // --- stop ---
 
 func newAgentStopCmd() *cobra.Command {
@@ -800,6 +840,151 @@ record (and worktree, if it has one) is kept so it can be started again later.`,
 	return cmd
 }
 
+// --- start ---
+
+func newAgentStartCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:   "start <name>",
+		Short: "Start a dormant (stopped) agent",
+		Long: `Start a dormant agent, clearing its stopped flags and respawning it with
+--resume so the prior conversation continues. Accepts shorthand — the same
+resolution stop/rename/restart use.`,
+		Example:           `  leo agent start pretty-sky`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
+			name := args[0]
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				return runRemote(res, []string{"start", name})
+			}
+
+			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
+			if err != nil {
+				return fmt.Errorf("resolving agent: %w", err)
+			}
+			if err := daemon.AgentStart(cmd.Context(), cfg.HomePath, resolved.Name); err != nil {
+				return fmt.Errorf("starting agent: %w", err)
+			}
+			fmt.Fprintf(agentStdout, "started %s\n", resolved.Name)
+			return nil
+		},
+	}
+	addHostFlag(cmd, &host)
+	return cmd
+}
+
+// --- delete ---
+
+func newAgentDeleteCmd() *cobra.Command {
+	var host string
+	var deleteBranch, force, assumeYes, asJSON bool
+	cmd := &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Delete a dormant agent's record (and worktree/branch, if it has one)",
+		Long: `Permanently remove an agent's persisted record — plus its git worktree
+(and, with --delete-branch, its branch) for a worktree agent. Deletion is the
+only thing that removes a record; stopping never does. Refuses a live agent —
+stop it first with 'leo agent stop'.
+
+Without --yes, prompts for confirmation naming exactly what will be removed.
+The prompt is skipped in non-interactive runs (no TTY); in that case the
+command errors unless --yes is set.`,
+		Example: `  # Delete a shared-workspace agent (no worktree)
+  leo agent delete rocket
+
+  # Delete a worktree agent and its branch, skipping the confirmation prompt
+  leo agent delete pretty-sky --delete-branch --yes
+
+  # Force past a dirty worktree or an unmerged branch
+  leo agent delete pretty-sky --delete-branch --force`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAgentNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
+				return err
+			}
+			name := args[0]
+			cfg, res, err := dispatch(host)
+			if err != nil {
+				return err
+			}
+			if !res.Localhost {
+				extra := []string{"delete", name}
+				if deleteBranch {
+					extra = append(extra, "--delete-branch")
+				}
+				if force {
+					extra = append(extra, "--force")
+				}
+				if assumeYes {
+					extra = append(extra, "--yes")
+				}
+				if asJSON {
+					extra = append(extra, "--json")
+				}
+				return runRemote(res, extra)
+			}
+
+			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
+			if err != nil {
+				return fmt.Errorf("resolving agent: %w", err)
+			}
+			canonical := resolved.Name
+
+			if !assumeYes {
+				plan, err := daemon.AgentDeletePlan(cmd.Context(), cfg.HomePath, canonical)
+				if err != nil {
+					return fmt.Errorf("planning delete: %w", err)
+				}
+				if !agentIsTTY() {
+					return fmt.Errorf("refusing to delete %s without confirmation: pass --yes to skip the prompt when stdin is not a TTY", canonical)
+				}
+				reader := bufio.NewReader(agentStdin)
+				label := fmt.Sprintf("delete %s? %s", agent.DisplayName(canonical), plan.ConfirmText(deleteBranch))
+				if !prompt.YesNo(reader, label, false) {
+					fmt.Fprintln(agentStdout, "Aborted.")
+					return nil
+				}
+			}
+
+			if err := daemon.AgentDelete(cmd.Context(), cfg.HomePath, canonical, daemon.AgentDeleteRequest{
+				Force:        force,
+				DeleteBranch: deleteBranch,
+			}); err != nil {
+				return fmt.Errorf("deleting agent: %w", err)
+			}
+			result := agentDeleteResult{Name: canonical, Deleted: true}
+			if asJSON {
+				enc := json.NewEncoder(agentStdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
+			}
+			fmt.Fprintf(agentStdout, "deleted %s\n", canonical)
+			return nil
+		},
+	}
+	addHostFlag(cmd, &host)
+	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "also delete the local branch (worktree agents only)")
+	cmd.Flags().BoolVar(&force, "force", false, "remove even when the worktree is dirty or the branch is unmerged")
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the confirmation prompt")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "output the delete result as JSON")
+	return cmd
+}
+
+// agentDeleteResult is the JSON shape for `leo agent delete --json`.
+type agentDeleteResult struct {
+	Name    string `json:"name"`
+	Deleted bool   `json:"deleted"`
+}
+
 // --- reset ---
 
 func newAgentResetCmd() *cobra.Command {
@@ -808,7 +993,7 @@ func newAgentResetCmd() *cobra.Command {
 		Use:   "reset <name>",
 		Short: "Reset an agent to a brand-new conversation",
 		Long: `Reset an agent by stopping its process/tmux session, clearing its stored
-claude session id, and respawning it fresh. Unlike 'leo agent resume', which
+claude session id, and respawning it fresh. Unlike 'leo agent start', which
 rejoins the prior conversation, reset starts a brand-new one — use this when
 an agent's context has gotten stuck or corrupted.`,
 		Example:           `  leo agent reset leo-coding-owner-fetch`,
@@ -826,7 +1011,7 @@ an agent's context has gotten stuck or corrupted.`,
 			if !res.Localhost {
 				return runRemote(res, []string{"reset", name})
 			}
-			// Resolve shorthand to canonical name (same resolution as stop/suspend).
+			// Resolve shorthand to canonical name (same resolution as stop/start).
 			resolved, err := daemon.AgentResolve(cmd.Context(), cfg.HomePath, name)
 			if err != nil {
 				return fmt.Errorf("resolving agent: %w", err)
@@ -871,7 +1056,7 @@ template was deleted, and agents whose effective harness changed keep their
 original args.
 
 Pass a single agent name, or --all to bounce every currently-running agent
-(suspended and stopped agents are skipped, not restarted).`,
+(stopped agents are skipped, not restarted).`,
 		Example: `  # Bounce one agent
   leo agent restart leo-coding-owner-fetch
 
@@ -988,7 +1173,7 @@ Pass a single agent name, or --all to bounce every currently-running agent
 		},
 	}
 	addHostFlag(cmd, &host)
-	cmd.Flags().BoolVar(&all, "all", false, "restart every currently-running agent (skips suspended/stopped agents)")
+	cmd.Flags().BoolVar(&all, "all", false, "restart every currently-running agent (skips stopped agents)")
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the confirmation prompt when using --all")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "output the restart result as JSON")
 	return cmd

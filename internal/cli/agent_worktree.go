@@ -37,7 +37,7 @@ the override template's own env plus --env.
 
 The new agent is named <agent>-<branch-slug> and its worktree lives under
 <workspace>/.worktrees/<agent>/<branch-slug>. Clean up with
-'leo agent stop <name> --prune'.`,
+'leo agent stop <name>' followed by 'leo agent delete <name> --delete-branch'.`,
 		Example: `  # Branch the chronicle agent onto an a11y worktree
   leo agent worktree chronicle a11y
 

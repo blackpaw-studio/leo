@@ -64,7 +64,7 @@ User (channel) --> Channel plugin --> claude --> Agent
 User (channel) <-- Channel plugin <-- claude <----+
 ```
 
-`leo service start` boots the daemon, which supervises every configured agent — including the ones backing `runtime: persistent` tasks. Rather than spawning a session at boot, a persistent task's target agent is spawned or resumed on its first firing (an "ensure-exists" step), then reused across subsequent firings: a long-running Claude process with its own workspace, model, and channel plugin list, restarted on crash with exponential backoff.
+`leo service start` boots the daemon, which supervises every configured agent — including the ones backing `runtime: persistent` tasks. Rather than spawning a session at boot, a persistent task's target agent is spawned or started on its first firing (an "ensure-exists" step), then reused across subsequent firings: a long-running Claude process with its own workspace, model, and channel plugin list, restarted on crash with exponential backoff.
 
 ### Agent Templates
 

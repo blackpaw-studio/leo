@@ -46,7 +46,12 @@ type Supervisor interface {
 	ReserveAgent(name string) error
 	ReleaseAgent(name string)
 	SpawnAgent(spec SpawnRequest) error
-	StopAgent(name string) error
+	// StopAgent stops name's live process. wakeOnMessage is forwarded onto
+	// the published observe.AgentStoppedPayload verbatim — true only when
+	// this stop is a dormancy transition an inbound message may reverse
+	// (Manager.Stop's live path); every transient kill ahead of a
+	// respawn (Reset, Restart, template switch) passes false.
+	StopAgent(name string, wakeOnMessage bool) error
 	RenameAgent(old, new string) error
 	EphemeralAgents() map[string]ProcessState
 }
@@ -184,6 +189,11 @@ type Record struct {
 	// RestartAll uses this to decide which "stopped" records are actually
 	// recoverable and should be retried rather than permanently skipped.
 	StoppedReason string `json:"stopped_reason,omitempty"`
+	// WakeOnMessage mirrors agentstore.Record.WakeOnMessage: only meaningful
+	// when Status=="stopped". true means an inbound message may auto-start
+	// this agent again (an idle sweep, or a manual stop that requested it);
+	// false means it stays dormant until an operator runs Start explicitly.
+	WakeOnMessage bool `json:"wake_on_message,omitempty"`
 }
 
 // DeleteOptions tunes Manager.Delete.
@@ -803,6 +813,7 @@ func (m *Manager) List() []Record {
 			Status:        "stopped",
 			StartedAt:     rec.SpawnedAt,
 			StoppedReason: rec.StoppedReason,
+			WakeOnMessage: rec.WakeOnMessage,
 		})
 	}
 	// Sort by name for a stable order: `out` is assembled by ranging over the
@@ -828,7 +839,7 @@ func (m *Manager) List() []Record {
 func (m *Manager) Stop(name string, opts StopOptions) error {
 	_, live := m.sup.EphemeralAgents()[name]
 	if live {
-		if err := m.sup.StopAgent(name); err != nil {
+		if err := m.sup.StopAgent(name, opts.WakeOnMessage); err != nil {
 			return err
 		}
 	}
@@ -868,23 +879,26 @@ func (m *Manager) Stop(name string, opts StopOptions) error {
 	if saveErr := agentstore.Save(cfg.HomePath, rec); saveErr != nil {
 		log.Printf("agent %q stopped but marking Stopped=true failed: %v — agent may be resurrected on daemon restart", name, saveErr)
 	}
-	m.announceStoppedIfNotLive(live, name)
+	m.announceStoppedIfNotLive(live, name, opts.WakeOnMessage)
 	return nil
 }
 
 // announceStoppedIfNotLive publishes agent_stopped for a Stop that was
-// satisfied purely against the agentstore (the agent was suspended or
+// satisfied purely against the agentstore (the agent was already dormant or
 // otherwise not live, so sup.StopAgent — and the publish inside it — was
 // never called; see Stop's doc comment). When live is true, sup.StopAgent
-// already published this event, so this is a deliberate no-op to avoid a
-// duplicate.
-func (m *Manager) announceStoppedIfNotLive(live bool, name string) {
+// already published this event (with the same wakeOnMessage value), so this
+// is a deliberate no-op to avoid a duplicate.
+func (m *Manager) announceStoppedIfNotLive(live bool, name string, wakeOnMessage bool) {
 	if live {
 		return
 	}
 	m.publish(observe.Event{
-		Type:    observe.EventAgentStopped,
-		Payload: &observe.AgentStoppedPayload{Agent: name},
+		Type: observe.EventAgentStopped,
+		Payload: &observe.AgentStoppedPayload{
+			Agent:         name,
+			WakeOnMessage: wakeOnMessage,
+		},
 	})
 }
 
@@ -1001,7 +1015,9 @@ func (m *Manager) Reset(name string) error {
 	}
 
 	if _, live := m.sup.EphemeralAgents()[name]; live {
-		if err := m.sup.StopAgent(name); err != nil {
+		// Not a dormancy transition — the record below is respawned, not
+		// left stopped, so this kill never carries WakeOnMessage.
+		if err := m.sup.StopAgent(name, false); err != nil {
 			return fmt.Errorf("stopping agent for reset: %w", err)
 		}
 	}
@@ -1121,7 +1137,9 @@ func (m *Manager) Restart(name string) error {
 	}
 
 	if live {
-		if err := m.sup.StopAgent(name); err != nil {
+		// Not a dormancy transition — the agent is respawned immediately
+		// below, so this kill never carries WakeOnMessage.
+		if err := m.sup.StopAgent(name, false); err != nil {
 			return fmt.Errorf("stopping agent for restart: %w", err)
 		}
 	}
@@ -1341,6 +1359,74 @@ func (m *Manager) RestartAll() RestartResult {
 // with ErrAgentStillRunning, since deletion is a two-step act on anything
 // currently doing work — stop it first. ErrWorktreeDirty / ErrBranchNotMerged
 // surface from the git layer when --force is required to proceed.
+//
+// DeletePlan describes what Delete would remove for a resolved name, without
+// removing anything. It is the single source of truth for the "does this
+// agent have a worktree" test so the CLI, picker, and web UI can each render
+// an accurate confirmation without duplicating Delete's own isWorktree check.
+type DeletePlan struct {
+	// Name is the canonical agent name (query resolved).
+	Name string `json:"name"`
+	// HasWorktree mirrors Delete's isWorktree test: true when the agent has a
+	// dedicated git worktree (Branch and CanonicalPath both set).
+	HasWorktree bool `json:"has_worktree"`
+	// Branch is the worktree's branch name; empty for a shared-workspace agent.
+	Branch string `json:"branch,omitempty"`
+	// WorktreePath is the agent's own workspace directory (the worktree
+	// checkout Delete would remove); empty for a shared-workspace agent.
+	WorktreePath string `json:"worktree_path,omitempty"`
+}
+
+// DeletePlan resolves name (shorthand or canonical, live or dormant) and
+// reports what Manager.Delete would remove — it performs no mutation. Callers
+// use it to render a confirmation before calling Delete for real.
+func (m *Manager) DeletePlan(name string) (DeletePlan, error) {
+	resolved, err := m.Resolve(name)
+	if err != nil {
+		return DeletePlan{}, err
+	}
+
+	cfg, err := m.cfgLoader()
+	if err != nil {
+		return DeletePlan{}, fmt.Errorf("loading config: %w", err)
+	}
+	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
+	if err != nil {
+		return DeletePlan{}, fmt.Errorf("loading agentstore: %w", err)
+	}
+	rec, ok := stored[resolved.Name]
+	if !ok {
+		return DeletePlan{}, fmt.Errorf("no agentstore record for %q", resolved.Name)
+	}
+
+	isWorktree := rec.Branch != "" && rec.CanonicalPath != ""
+	plan := DeletePlan{Name: rec.Name, HasWorktree: isWorktree}
+	if isWorktree {
+		plan.Branch = rec.Branch
+		plan.WorktreePath = rec.Workspace
+	}
+	return plan, nil
+}
+
+// ConfirmText renders the single line of "what will be removed" text shared
+// by the CLI's delete prompt and the picker's confirm dialog, e.g.:
+//
+//	removes worktree + branch feat/foo
+//	removes the worktree (branch feat/foo kept)
+//	removes the agent record only
+//
+// deleteBranch mirrors the DeleteOptions.DeleteBranch the caller intends to
+// pass to Delete, so the text always matches what will actually happen.
+func (p DeletePlan) ConfirmText(deleteBranch bool) string {
+	if !p.HasWorktree {
+		return "removes the agent record only"
+	}
+	if deleteBranch {
+		return fmt.Sprintf("removes worktree + branch %s", p.Branch)
+	}
+	return fmt.Sprintf("removes the worktree (branch %s kept)", p.Branch)
+}
+
 func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) error {
 	// Resolve first so shorthand/fuzzy queries reach a dormant record — see
 	// Start's identical rationale.
@@ -1602,8 +1688,8 @@ func (m *Manager) announceRename(cfg *config.Config, rec Record, oldName, newNam
 		Repo:      rec.Repo,
 		Workspace: rec.Workspace,
 		Branch:    rec.Branch,
-		Status:    observe.StatusStopped,
 	}
+	agent.Status, agent.WakeOnMessage = observe.AgentDormancy("stopped", rec.WakeOnMessage)
 	if cfg != nil && rec.Template != "" {
 		if tmpl, ok := cfg.Templates[rec.Template]; ok {
 			agent.Model = cfg.TemplateModel(tmpl)

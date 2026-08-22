@@ -17,11 +17,25 @@ func MapStatus(raw string) Status {
 		return StatusRunning
 	case "starting", "restarting":
 		return StatusStarting
-	case "suspended":
-		return StatusSuspended
 	case "stopped":
 		return StatusStopped
 	default:
 		return StatusStopped
 	}
+}
+
+// AgentDormancy maps a raw supervisor/agentstore status string and a
+// wake-on-message intent onto the wire Status/WakeOnMessage pair, enforcing
+// the one invariant that pair must hold: WakeOnMessage can only be true
+// alongside StatusStopped. This mirrors the internal agentstore
+// Stopped/WakeOnMessage pair, where WakeOnMessage is meaningless (and left
+// false) unless Stopped is true.
+//
+// Every emitter that produces an observe.Agent or an
+// AgentStateChangedPayload must set both fields through this function
+// rather than assigning Status and WakeOnMessage independently — that is
+// what keeps the two from ever disagreeing on the wire.
+func AgentDormancy(raw string, wakeOnMessage bool) (Status, bool) {
+	status := MapStatus(raw)
+	return status, status == StatusStopped && wakeOnMessage
 }

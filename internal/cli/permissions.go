@@ -52,7 +52,7 @@ func malformedPermissionsError(label string) error {
 // error so the operator knows which deny_tools entry to change.
 //
 // Commands with no exact tool equivalent are mapped to the closest one:
-// agent reset/prune/restart/rename/suspend are governed by leo_stop_agent,
+// agent reset/restart/rename/start/delete are governed by leo_stop_agent,
 // since denying "stop other agents" plainly means to deny disrupting them.
 func gateCommand(cmd *cobra.Command, tool string) error {
 	return gateToolFor(cmd.CommandPath(), tool)

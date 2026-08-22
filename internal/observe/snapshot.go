@@ -33,10 +33,9 @@ type Snapshot struct {
 type Status string
 
 const (
-	StatusStarting  Status = "starting"
-	StatusRunning   Status = "running"
-	StatusSuspended Status = "suspended"
-	StatusStopped   Status = "stopped"
+	StatusStarting Status = "starting"
+	StatusRunning  Status = "running"
+	StatusStopped  Status = "stopped"
 )
 
 // Activity is an agent's live work state, derived from tmux session activity. It is
@@ -67,6 +66,15 @@ type Agent struct {
 	Status   Status   `json:"status"`
 	Activity Activity `json:"activity"`
 	Restarts int      `json:"restarts"`
+	// WakeOnMessage is only meaningful when Status is StatusStopped: true
+	// means the agent was idle-swept and an inbound message auto-wakes it;
+	// false means either it is not dormant at all, or it was dormant by a
+	// manual stop and stays that way until an operator restarts it
+	// explicitly. Always present (no omitempty) so a consumer can read the
+	// manually-stopped case as an explicit false rather than an absent
+	// field. Set only via AgentDormancy, which enforces this pairing —
+	// never assign Status and WakeOnMessage independently.
+	WakeOnMessage bool `json:"wake_on_message"`
 
 	StartedAt      time.Time  `json:"started_at"`
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`

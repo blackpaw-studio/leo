@@ -65,7 +65,8 @@ Pass `--worktree <branch>` to isolate the agent in its own git worktree off the 
 ```bash
 leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
 leo agent spawn coding --repo blackpaw-studio/leo --worktree fix/bug --base main
-leo agent stop feat-cache --prune --delete-branch   # stop and clean up in one step
+leo agent stop feat-cache
+leo agent delete feat-cache --delete-branch   # stop, then clean up
 ```
 
 Worktree agents run in parallel on the same repo without fighting over `.git/HEAD` — every branch gets its own checkout under `<baseWorkspace>/.worktrees/<repo-short>/<branch-slug>/`. The agent name includes the branch slug, and `leo agent list` shows a `BRANCH` column for worktree agents. See the [`leo agent` reference](../cli/agent.md#worktree-spawns) for the full flag set.
@@ -79,7 +80,7 @@ leo agent worktree chronicle a11y                                          # chr
 leo agent worktree chronicle hotfix --base v1.2.0 --prompt "fix the crash"
 ```
 
-This works for any agent whose workspace is a git repo, no `owner/repo` needed — the source agent's template and env are inherited by default, and its workspace (or canonical repo, if the source is itself a worktree agent — pass `--base <its-branch>` to fork from that branch) becomes the new agent's git canonical. Pass `--template <name>` to run the same source repo under a different template — the git canonical stays tied to the source agent, but the override template must already exist in config and none of the source agent's env carries over (only the override template's own env plus `--env`). Remoteless repos skip the fetch step and branch off `HEAD` instead of origin's default branch. Naming and cleanup match ordinary worktree agents: `<agent>-<branch-slug>`, and `leo agent stop <name> --prune` tears it down. See the [`leo agent worktree` reference](../cli/agent.md#leo-agent-worktree-agent-branch) for the full flag set.
+This works for any agent whose workspace is a git repo, no `owner/repo` needed — the source agent's template and env are inherited by default, and its workspace (or canonical repo, if the source is itself a worktree agent — pass `--base <its-branch>` to fork from that branch) becomes the new agent's git canonical. Pass `--template <name>` to run the same source repo under a different template — the git canonical stays tied to the source agent, but the override template must already exist in config and none of the source agent's env carries over (only the override template's own env plus `--env`). Remoteless repos skip the fetch step and branch off `HEAD` instead of origin's default branch. Naming and cleanup match ordinary worktree agents: `<agent>-<branch-slug>` — stop it, then `leo agent delete <name> --delete-branch` tears it down. See the [`leo agent worktree` reference](../cli/agent.md#leo-agent-worktree-agent-branch) for the full flag set.
 
 ### From the JSON API
 
@@ -89,7 +90,8 @@ The daemon exposes both a Unix-socket API (used by the CLI) and an HTTP API on t
 POST /agents/spawn        {"template": "coding", "repo": "owner/repo", "branch": "feat/x"}  (daemon socket; "repo" is optional)
 GET  /agents/list                                                                            (daemon socket)
 POST /agents/{name}/stop                                                                     (daemon socket)
-POST /agents/{name}/prune {"force": false, "delete_branch": false}                           (daemon socket)
+POST /agents/{name}/start                                                                    (daemon socket)
+DELETE /agents/{name} {"force": false, "delete_branch": false}                               (daemon socket)
 GET  /agents/{name}/logs?lines=N                                                             (daemon socket)
 GET  /agents/{name}/session                                                                  (daemon socket)
 
@@ -98,7 +100,7 @@ POST /api/agent/stop      {"name": "leo-coding-owner-repo"}              (web HT
 GET  /api/agent/list                                                      (web HTTP)
 ```
 
-On `/agents/spawn`, `branch` is optional — when present the daemon creates a worktree and the response includes `branch` and `canonical_path`. `/agents/{name}/prune` removes a stopped worktree agent's checkout and record; it returns typed error codes (`worktree_dirty`, `branch_not_merged`, `agent_still_running`, `not_worktree_agent`) so clients can dispatch on `errors.Is`.
+On `/agents/spawn`, `branch` is optional — when present the daemon creates a worktree and the response includes `branch` and `canonical_path`. `DELETE /agents/{name}` removes a stopped agent's record — and, for a worktree agent, its checkout too; it returns typed error codes (`worktree_dirty`, `branch_not_merged`, `agent_still_running`) so clients can dispatch on `errors.Is`.
 
 Both transports share the same `internal/agent` manager, so state stays consistent across CLI, web UI, and any channel plugin that invokes the HTTP API.
 
@@ -140,10 +142,20 @@ The daemon also exposes `GET /agents/resolve?q=<query>` over the Unix socket for
 
 - **Channel plugin:** tap the stop button next to an agent (if the plugin exposes one)
 - **Web UI:** stop button in the agent panel
-- **CLI:** `leo agent stop <name>` (add `--prune` to also delete a worktree agent's checkout)
+- **CLI:** `leo agent stop <name>`
 - **API:** `POST /api/agent/stop {"name": "..."}`
 
-Stopping a shared-workspace agent kills its tmux session and removes it from the agent store. Stopping a worktree agent kills the session but keeps the record and the worktree on disk so you can reattach or inspect the branch — use `leo agent prune <name>` or `leo agent stop <name> --prune` to tear everything down.
+Stopping any agent — shared-workspace or worktree — kills its tmux session but always keeps the record, the stored claude session id, and (for a worktree agent) the on-disk worktree. Stop never deletes anything; the agent goes dormant and can be reattached (`leo agent start` or just `leo agent attach`, which starts it first) or inspected later.
+
+To remove an agent for good — its record, and a worktree agent's checkout and branch — stop it, then run `leo agent delete <name>` (`--delete-branch` to also drop the branch). `delete` refuses a live agent.
+
+### Deleting
+
+- **CLI:** `leo agent delete <name>` (`--delete-branch` for worktree agents, `--yes` to skip the confirmation prompt)
+- **Attach picker:** `D`, with a confirm naming exactly what will be removed
+- **API:** `DELETE /agents/{name}`
+
+There is no MCP tool for deletion — agents cannot delete agents. Deleting is a human-operator action only. See [Permissions](../configuration/permissions.md).
 
 ### Switching templates
 
@@ -178,7 +190,7 @@ If a name collides with an existing agent, Leo appends `-2`, `-3`, etc.
 
 ## Persistence
 
-Agent records are stored in `~/.leo/state/agents.json`. When the daemon restarts, it checks if each agent's tmux session is still alive and re-registers surviving sessions with the supervisor. Dead shared-workspace sessions are cleaned up automatically; dead worktree sessions keep their record so you can `leo agent prune` the checkout. Restore also runs `git worktree prune` against each canonical clone so git's admin metadata stays consistent with the filesystem.
+Agent records are stored in `~/.leo/state/agents.json`. When the daemon restarts, it checks if each agent's tmux session is still alive and re-registers surviving sessions with the supervisor. A dormant (stopped) agent is skipped at restore — it stays dormant until started or, for a failed-restore record, retried — and its worktree, if it has one, stays on disk so you can `leo agent delete` it later. Restore also runs `git worktree prune` against each canonical clone so git's admin metadata stays consistent with the filesystem.
 
 ## Supervisor Behavior
 

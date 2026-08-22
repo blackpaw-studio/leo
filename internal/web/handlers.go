@@ -508,12 +508,12 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentsRestart bounces every running agent in place (see
 // agent.Manager.RestartAll): running agents apply the current config,
-// suspended/stopped agents are skipped, and per-agent failures are isolated
+// dormant (stopped) agents are skipped, and per-agent failures are isolated
 // so one bad respawn doesn't block the rest of the batch. Clears
 // agentsRestartNeeded on a batch with zero failures — even when some agents
-// were skipped, since skips are expected (suspended/stopped agents were
-// never going to pick up the change until resumed/reset anyway) — but leaves
-// it set if anything failed, so the operator knows to retry.
+// were skipped, since skips are expected (dormant agents were never going to
+// pick up the change until started/reset anyway) — but leaves it set if
+// anything failed, so the operator knows to retry.
 func (s *Server) handleAgentsRestart(w http.ResponseWriter, r *http.Request) {
 	if s.agentSvc == nil {
 		s.renderFlash(w, "error", "Agent service not available")
@@ -524,7 +524,7 @@ func (s *Server) handleAgentsRestart(w http.ResponseWriter, r *http.Request) {
 
 	msg := fmt.Sprintf("Restarted %d agent(s)", len(result.Restarted))
 	if len(result.Skipped) > 0 {
-		msg += fmt.Sprintf(", skipped %d (suspended/stopped)", len(result.Skipped))
+		msg += fmt.Sprintf(", skipped %d (dormant)", len(result.Skipped))
 	}
 	if len(result.Failed) > 0 {
 		msg += fmt.Sprintf(", %d failed: %v", len(result.Failed), firstRestartFailure(result.Failed))
@@ -816,7 +816,7 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleTemplateRename re-keys a template and cascades the new name to every
 // task that referenced it (via config.RenameTemplate) and to persisted agent
-// records' template pointers. Running/suspended agents keep their spawn-time
+// records' template pointers. Running/dormant agents keep their spawn-time
 // identity (name + tmux session); only the Record.Template pointer moves.
 //
 // On success it HX-Redirects to the renamed template's edit page — the current

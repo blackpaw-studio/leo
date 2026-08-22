@@ -23,8 +23,7 @@ type capturingSupervisor struct {
 	spawnCall    *SpawnRequest
 	spawnErr     error
 	stopCalls    []string
-	suspendCalls []string
-	stopErr      error // when non-nil, StopAgent/SuspendAgent return this error
+	stopErr      error // when non-nil, StopAgent returns this error
 	releaseCalls []string
 	// onSpawn/onStop run inside SpawnAgent/StopAgent so a test can observe the
 	// world as the real supervisor sees it at that instant — in particular the
@@ -78,22 +77,12 @@ func (s *capturingSupervisor) SpawnAgent(req SpawnRequest) error {
 	return nil
 }
 
-func (s *capturingSupervisor) StopAgent(name string) error {
+func (s *capturingSupervisor) StopAgent(name string, wakeOnMessage bool) error {
 	s.stopCalls = append(s.stopCalls, name)
 	s.callOrder = append(s.callOrder, "stop:"+name)
 	if s.onStop != nil {
 		s.onStop(name)
 	}
-	if s.stopErr != nil {
-		return s.stopErr
-	}
-	delete(s.agents, name)
-	return nil
-}
-
-func (s *capturingSupervisor) SuspendAgent(name string) error {
-	s.suspendCalls = append(s.suspendCalls, name)
-	s.callOrder = append(s.callOrder, "suspend:"+name)
 	if s.stopErr != nil {
 		return s.stopErr
 	}
@@ -476,6 +465,84 @@ func TestDeleteAcceptsSharedAgent(t *testing.T) {
 	stored, _ := agentstore.Load(agentstore.FilePath(home))
 	if _, ok := stored[rec.Name]; ok {
 		t.Error("shared-workspace record should be gone after Delete")
+	}
+}
+
+// TestDeletePlanWorktreeAgent is the regression guard for the shared seam the
+// CLI, picker, and web UI all format their confirm text from: a worktree
+// agent's plan must carry HasWorktree=true plus the branch/path Delete would
+// actually remove.
+func TestDeletePlanWorktreeAgent(t *testing.T) {
+	mgr, _, _ := newWorktreeTestManager(t, "leo")
+	installFakeGit(t, map[string]git.BranchStatus{})
+
+	rec, err := mgr.Spawn(context.Background(), SpawnSpec{
+		Template: "coding",
+		Repo:     "blackpaw-studio/leo",
+		Branch:   "feat/plan-worktree",
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if err := mgr.Stop(rec.Name, StopOptions{}); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	plan, err := mgr.DeletePlan(rec.Name)
+	if err != nil {
+		t.Fatalf("DeletePlan: %v", err)
+	}
+	if !plan.HasWorktree {
+		t.Fatalf("expected HasWorktree=true, got %+v", plan)
+	}
+	if plan.Branch != "feat/plan-worktree" {
+		t.Errorf("expected branch feat/plan-worktree, got %q", plan.Branch)
+	}
+	if plan.WorktreePath == "" {
+		t.Errorf("expected non-empty WorktreePath")
+	}
+	if plan.Name != rec.Name {
+		t.Errorf("expected resolved name %q, got %q", rec.Name, plan.Name)
+	}
+
+	if got := plan.ConfirmText(true); got != "removes worktree + branch feat/plan-worktree" {
+		t.Errorf("ConfirmText(true) = %q", got)
+	}
+	if got := plan.ConfirmText(false); got != "removes the worktree (branch feat/plan-worktree kept)" {
+		t.Errorf("ConfirmText(false) = %q", got)
+	}
+}
+
+// TestDeletePlanSharedAgent covers the other half: a shared-workspace agent
+// has nothing on disk beyond its record, so the plan must say so and
+// ConfirmText must never mention a worktree it doesn't have.
+func TestDeletePlanSharedAgent(t *testing.T) {
+	mgr, _, _ := newWorktreeTestManager(t, "leo")
+	installFakeGit(t, nil)
+
+	rec, err := mgr.Spawn(context.Background(), SpawnSpec{
+		Template: "coding",
+		Repo:     "blackpaw-studio/leo",
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if err := mgr.Stop(rec.Name, StopOptions{}); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	plan, err := mgr.DeletePlan(rec.Name)
+	if err != nil {
+		t.Fatalf("DeletePlan: %v", err)
+	}
+	if plan.HasWorktree {
+		t.Fatalf("expected HasWorktree=false for a shared agent, got %+v", plan)
+	}
+	if plan.Branch != "" || plan.WorktreePath != "" {
+		t.Errorf("expected no branch/path for a shared agent, got %+v", plan)
+	}
+	if got := plan.ConfirmText(true); got != "removes the agent record only" {
+		t.Errorf("ConfirmText = %q", got)
 	}
 }
 

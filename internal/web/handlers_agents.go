@@ -90,8 +90,13 @@ func (s *Server) handleAPIAgentSpawn(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
-// handleAPIAgentStop stops a running ephemeral agent.
-// POST /api/agent/stop  {name: "agent-coding-leo"}
+// handleAPIAgentStop stops a running ephemeral agent, making it dormant.
+// POST /api/agent/stop  {name: "agent-coding-leo", wake_on_message: false}
+//
+// wake_on_message carries intent, not state: true lets a subsequent inbound
+// message auto-start the agent again (mirroring the idle sweep's own stop);
+// false (the default, and what every user-facing surface passes) leaves it
+// dormant until an operator calls /api/agent/start explicitly.
 func (s *Server) handleAPIAgentStop(w http.ResponseWriter, r *http.Request) {
 	if s.agentSvc == nil {
 		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
@@ -99,7 +104,8 @@ func (s *Server) handleAPIAgentStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name string `json:"name"`
+		Name          string `json:"name"`
+		WakeOnMessage bool   `json:"wake_on_message,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -116,7 +122,7 @@ func (s *Server) handleAPIAgentStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, apiResponse{Error: err.Error()})
 		return
 	}
-	if err := s.agentSvc.Stop(rec.Name, agent.StopOptions{}); err != nil {
+	if err := s.agentSvc.Stop(rec.Name, agent.StopOptions{WakeOnMessage: req.WakeOnMessage}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return
 	}
@@ -124,49 +130,14 @@ func (s *Server) handleAPIAgentStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
 
-// handleAPIAgentSuspend suspends a running agent via JSON.
-// POST /api/agent/suspend  {name: "agent-name"}
+// handleAPIAgentStart starts a dormant agent via JSON, rejoining its prior
+// session.
+// POST /api/agent/start  {name: "agent-name"}
 //
-// A running agent resolves normally, so shorthand queries work here just like
-// stop. (Resume, by contrast, cannot resolve — see handleAPIAgentResume.)
-func (s *Server) handleAPIAgentSuspend(w http.ResponseWriter, r *http.Request) {
-	if s.agentSvc == nil {
-		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
-		return
-	}
-
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
-		return
-	}
-	if req.Name == "" {
-		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "name is required"})
-		return
-	}
-
-	rec, status, err := resolveAgentQuery(s.agentSvc, req.Name)
-	if err != nil {
-		writeJSON(w, status, apiResponse{Error: err.Error()})
-		return
-	}
-	if err := s.agentSvc.Stop(rec.Name, agent.StopOptions{WakeOnMessage: true}); err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, apiResponse{OK: true})
-}
-
-// handleAPIAgentResume starts a dormant agent via JSON.
-// POST /api/agent/resume  {name: "agent-name"}
-//
-// Unlike stop/suspend this does NOT resolve shorthand: Manager.Resolve matches
-// live agents only, and a dormant agent is not live. Callers pass the exact
-// agent name; Start looks it up in the agentstore itself.
-func (s *Server) handleAPIAgentResume(w http.ResponseWriter, r *http.Request) {
+// Unlike stop this does NOT resolve shorthand: Manager.Resolve matches live
+// agents only, and a dormant agent is not live. Callers pass the exact agent
+// name; Start looks it up in the agentstore itself.
+func (s *Server) handleAPIAgentStart(w http.ResponseWriter, r *http.Request) {
 	if s.agentSvc == nil {
 		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: "agent service not available"})
 		return
@@ -303,66 +274,71 @@ func (s *Server) handleWebAgentSpawn(w http.ResponseWriter, r *http.Request) {
 	s.renderFlash(w, "success", fmt.Sprintf("Agent %q spawned — connect via Claude web or app", agent.DisplayName(rec.Name)))
 }
 
-// handleWebAgentStop stops an agent via the web UI (form post). Resolve
-// matches dormant agents (including a failed-restore record kept Stopped by
-// RestoreAgents) exactly like live ones, so it can still be removed from the
-// web UI rather than being a permanently stuck entry.
+// handleWebAgentStop stops an agent via the web UI (form post), making it
+// dormant with WakeOnMessage=false (an operator-initiated stop is never
+// auto-wakeable), then re-renders the agents partial so the card flips from
+// its Stop button to Start/Delete. No confirmation is required — stop is
+// reversible via Start, unlike Delete. Resolve matches dormant agents
+// (including a failed-restore record kept Stopped by RestoreAgents) exactly
+// like live ones, so it can still be acted on from the web UI rather than
+// being a permanently stuck entry.
 func (s *Server) handleWebAgentStop(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if s.agentSvc == nil {
-		s.renderFlash(w, "error", "Agent service not available")
-		return
-	}
-
-	rec, _, err := resolveAgentQuery(s.agentSvc, name)
-	if err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to find agent: %v", err))
-		return
-	}
-	if err := s.agentSvc.Stop(rec.Name, agent.StopOptions{}); err != nil {
-		s.renderFlash(w, "error", fmt.Sprintf("Failed to stop agent: %v", err))
-		return
-	}
-
-	s.renderFlash(w, "success", fmt.Sprintf("Agent %q stopped", agent.DisplayName(rec.Name)))
-}
-
-// handleWebAgentSuspend suspends a running agent via the web UI (form post),
-// then re-renders the agents partial so the status flips to "suspended" and the
-// action becomes Resume. Both this and handleWebAgentResume take the canonical
-// name straight from the path — the agents template only ever posts {{.Name}},
-// and unlike stop/rename we cannot round-trip through resolveAgentQuery for the
-// resume case (Manager.Resolve matches live agents only, and a suspended agent
-// is not live). The Suspend/Resume methods look up the agentstore themselves.
-//
-// On success the button's hx-target (#agents-content, outerHTML swap) receives
-// the re-rendered list; the error path retargets to #flash-container, mirroring
-// handleWebAgentRename's swap strategy.
-func (s *Server) handleWebAgentSuspend(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if s.agentSvc == nil {
 		s.renderFlashToContainer(w, "error", "Agent service not available")
 		return
 	}
-	if err := s.agentSvc.Stop(name, agent.StopOptions{WakeOnMessage: true}); err != nil {
-		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to suspend agent: %v", err))
+
+	rec, _, err := resolveAgentQuery(s.agentSvc, name)
+	if err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to find agent: %v", err))
 		return
 	}
-	// Re-render so the suspended agent shows its new status and Resume button.
+	if err := s.agentSvc.Stop(rec.Name, agent.StopOptions{}); err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to stop agent: %v", err))
+		return
+	}
+
 	s.handlePartialAgents(w, r)
 }
 
-// handleWebAgentResume resumes a suspended agent via the web UI (form post),
-// rejoining its prior session, then re-renders the agents partial so the status
-// flips back to running. See handleWebAgentSuspend for the name/swap rationale.
-func (s *Server) handleWebAgentResume(w http.ResponseWriter, r *http.Request) {
+// handleWebAgentStart starts a dormant agent via the web UI (form post),
+// rejoining its prior session, then re-renders the agents partial so the
+// status flips back to running. Takes the canonical name straight from the
+// path — the agents template only ever posts {{.Name}}, and unlike stop/
+// rename we cannot round-trip through resolveAgentQuery here (Manager.Resolve
+// matches live agents only, and a dormant agent is not live). Start looks up
+// the agentstore itself.
+//
+// On success the button's hx-target (#agents-content, outerHTML swap)
+// receives the re-rendered list; the error path retargets to
+// #flash-container, mirroring handleWebAgentRename's swap strategy.
+func (s *Server) handleWebAgentStart(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if s.agentSvc == nil {
 		s.renderFlashToContainer(w, "error", "Agent service not available")
 		return
 	}
 	if err := s.agentSvc.Start(name); err != nil {
-		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to resume agent: %v", err))
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to start agent: %v", err))
+		return
+	}
+	s.handlePartialAgents(w, r)
+}
+
+// handleWebAgentDelete permanently removes an agent's record — plus its
+// worktree and branch when it has one — via the web UI (htmx hx-delete).
+// Refuses a live agent with the same "stop it first" message the CLI and
+// picker give; the button's hx-confirm (see deleteConfirmText) already told
+// the operator what would be removed before this request ever fired.
+func (s *Server) handleWebAgentDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if s.agentSvc == nil {
+		s.renderFlashToContainer(w, "error", "Agent service not available")
+		return
+	}
+	if err := s.agentSvc.Delete(r.Context(), name, agent.DeleteOptions{DeleteBranch: true}); err != nil {
+		s.renderFlashToContainer(w, "error", fmt.Sprintf("Failed to delete agent: %v", err))
 		return
 	}
 	s.handlePartialAgents(w, r)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/agent"
 )
 
 func (staticBackend) Templates(context.Context) ([]string, error)          { return nil, nil }
@@ -26,8 +28,11 @@ type staticBackend struct{ agents []Agent }
 func (s staticBackend) List(context.Context) ([]Agent, error)      { return s.agents, nil }
 func (staticBackend) Rename(context.Context, string, string) error { return nil }
 func (staticBackend) Stop(context.Context, string) error           { return nil }
-func (staticBackend) Suspend(context.Context, string) error        { return nil }
-func (staticBackend) Resume(context.Context, string) error         { return nil }
+func (staticBackend) Start(context.Context, string) error          { return nil }
+func (staticBackend) DeletePlan(context.Context, string) (agent.DeletePlan, error) {
+	return agent.DeletePlan{}, nil
+}
+func (staticBackend) Delete(context.Context, string, bool) error { return nil }
 
 func TestBackendInterfaceSatisfied(t *testing.T) {
 	var _ Backend = staticBackend{}

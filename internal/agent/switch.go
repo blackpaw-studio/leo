@@ -178,7 +178,10 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 		return switchResult(rec, next, status), nil
 	}
 
-	if err := m.sup.StopAgent(name); err != nil {
+	// Not a dormancy transition — the switch immediately spawns the arriving
+	// template below (or marks the record dormant itself on a failed
+	// respawn, further down), so this kill never carries WakeOnMessage.
+	if err := m.sup.StopAgent(name, false); err != nil {
 		return SwitchResult{}, fmt.Errorf("stopping agent for template switch: %w", err)
 	}
 	// Stamped after the stop, not before: the departing process can still be

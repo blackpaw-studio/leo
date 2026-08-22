@@ -92,7 +92,7 @@ supervise loop to start a fresh, owned server.
 ```bash
 $ leo service reparent
 tmux tree: server pid 32086, adopted — creating leo process (pid 58688) has exited; Local Network attribution is no longer verifiable
-Recycle the tmux server? This terminates 15 live agent session(s) and 25 suspended one(s) will restart on next use [y/N]: y
+Recycle the tmux server? This terminates 15 live agent session(s) and 25 dormant one(s) will restart on next use [y/N]: y
 tmux server killed; waiting for the daemon to start a fresh one...
 new tmux server pid 41022, owned by live leo pid 33666
 ```

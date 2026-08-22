@@ -70,14 +70,14 @@ type mockAgentService struct {
 	renameResult  agent.Record
 	renameErr     error
 
-	suspendCalled bool
-	suspendName   string
-	suspendErr    error
+	wakeCalled bool
+	wakeName   string
+	wakeErr    error
 
-	resumeCalled bool
-	resumeName   string
-	resumeResult agent.Record
-	resumeErr    error
+	startCalled bool
+	startName   string
+	startResult agent.Record
+	startErr    error
 
 	// wakeableNames backs Wakeable: names present (with a true value) report
 	// a dormant, auto-wakeable record. Absent/false names report not
@@ -86,6 +86,16 @@ type mockAgentService struct {
 
 	restartAllCalled bool
 	restartAllResult agent.RestartResult
+
+	deleteCalled bool
+	deleteName   string
+	deleteOpts   agent.DeleteOptions
+	deleteErr    error
+
+	deletePlanCalled bool
+	deletePlanName   string
+	deletePlanResult agent.DeletePlan
+	deletePlanErr    error
 
 	records []agent.Record
 
@@ -131,9 +141,9 @@ func (m *mockAgentService) Spawn(_ context.Context, spec agent.SpawnSpec) (agent
 
 func (m *mockAgentService) Stop(name string, opts agent.StopOptions) error {
 	if opts.WakeOnMessage {
-		m.suspendCalled = true
-		m.suspendName = name
-		return m.suspendErr
+		m.wakeCalled = true
+		m.wakeName = name
+		return m.wakeErr
 	}
 	m.stopCalled = true
 	m.stopName = name
@@ -174,14 +184,30 @@ func (m *mockAgentService) Wakeable(name string) bool {
 }
 
 func (m *mockAgentService) Start(name string) error {
-	m.resumeCalled = true
-	m.resumeName = name
-	return m.resumeErr
+	m.startCalled = true
+	m.startName = name
+	return m.startErr
 }
 
 func (m *mockAgentService) RestartAll() agent.RestartResult {
 	m.restartAllCalled = true
 	return m.restartAllResult
+}
+
+func (m *mockAgentService) Delete(_ context.Context, name string, opts agent.DeleteOptions) error {
+	m.deleteCalled = true
+	m.deleteName = name
+	m.deleteOpts = opts
+	return m.deleteErr
+}
+
+func (m *mockAgentService) DeletePlan(name string) (agent.DeletePlan, error) {
+	m.deletePlanCalled = true
+	m.deletePlanName = name
+	if m.deletePlanErr != nil {
+		return agent.DeletePlan{}, m.deletePlanErr
+	}
+	return m.deletePlanResult, nil
 }
 
 func newTestServerWithAgents(t *testing.T) (*Server, string, *mockAgentService) {
@@ -466,11 +492,15 @@ func TestAPIAgentStopMissingName(t *testing.T) {
 	}
 }
 
-func TestAPIAgentSuspend(t *testing.T) {
+// TestAPIAgentStopWithWakeOnMessage covers the wake_on_message body flag that
+// replaced the old separate endpoint for an auto-wakeable dormant stop: true
+// still leaves the agent dormant, but marks it auto-wakeable on the next
+// inbound message.
+func TestAPIAgentStopWithWakeOnMessage(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
 
-	body := `{"name":"leo-coding-leo"}`
-	req := httptest.NewRequest("POST", "/api/agent/suspend", strings.NewReader(body))
+	body := `{"name":"leo-coding-leo","wake_on_message":true}`
+	req := httptest.NewRequest("POST", "/api/agent/stop", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
@@ -478,36 +508,23 @@ func TestAPIAgentSuspend(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if !svc.suspendCalled {
-		t.Fatal("expected Suspend to be called")
+	if !svc.wakeCalled {
+		t.Fatal("expected Stop to be called with WakeOnMessage=true")
 	}
-	if svc.suspendName != "leo-coding-leo" {
-		t.Errorf("expected suspend name 'leo-coding-leo', got %q", svc.suspendName)
-	}
-}
-
-func TestAPIAgentSuspendMissingName(t *testing.T) {
-	s, _, _ := newTestServerWithAgents(t)
-
-	req := httptest.NewRequest("POST", "/api/agent/suspend", strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", w.Code)
+	if svc.wakeName != "leo-coding-leo" {
+		t.Errorf("expected wake name 'leo-coding-leo', got %q", svc.wakeName)
 	}
 }
 
-// TestAPIAgentResume passes a name that is NOT among the live records to prove
-// the handler forwards it to Resume verbatim rather than round-tripping through
-// resolveAgentQuery (which only matches live agents and would 404 a suspended
-// one).
-func TestAPIAgentResume(t *testing.T) {
+// TestAPIAgentStart passes a name that is NOT among the live records to prove
+// the handler forwards it to Start verbatim rather than round-tripping
+// through resolveAgentQuery (which only matches live agents and would 404 a
+// dormant one).
+func TestAPIAgentStart(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
 
-	body := `{"name":"suspended-worker"}`
-	req := httptest.NewRequest("POST", "/api/agent/resume", strings.NewReader(body))
+	body := `{"name":"dormant-worker"}`
+	req := httptest.NewRequest("POST", "/api/agent/start", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
@@ -515,18 +532,18 @@ func TestAPIAgentResume(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if !svc.resumeCalled {
-		t.Fatal("expected Resume to be called")
+	if !svc.startCalled {
+		t.Fatal("expected Start to be called")
 	}
-	if svc.resumeName != "suspended-worker" {
-		t.Errorf("expected resume name 'suspended-worker' passed verbatim, got %q", svc.resumeName)
+	if svc.startName != "dormant-worker" {
+		t.Errorf("expected start name 'dormant-worker' passed verbatim, got %q", svc.startName)
 	}
 }
 
-func TestAPIAgentResumeMissingName(t *testing.T) {
+func TestAPIAgentStartMissingName(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 
-	req := httptest.NewRequest("POST", "/api/agent/resume", strings.NewReader(`{}`))
+	req := httptest.NewRequest("POST", "/api/agent/start", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
@@ -688,25 +705,26 @@ func TestWebAgentRenameSuccess(t *testing.T) {
 	}
 }
 
-// --- Web form suspend/resume tests ---
+// --- Web form stop/start/delete tests ---
 
-// TestWebAgentSuspendSuccess drives the FORM handler with a running agent and
-// asserts Suspend is called and the agents partial is re-rendered in place (so
-// the flipped status and Resume button show), with no flash retarget.
-func TestWebAgentSuspendSuccess(t *testing.T) {
+// TestWebAgentStopSuccess drives the FORM handler with a running agent and
+// asserts Stop is called (WakeOnMessage=false — an operator-initiated stop is
+// never auto-wakeable) and the agents partial is re-rendered in place, with
+// no confirm required (stop is reversible) and no flash retarget.
+func TestWebAgentStopSuccess(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
-	// After suspend the list reflects the new suspended status.
-	svc.records = []agent.Record{{Name: "leo-coding-leo", Status: "suspended", StartedAt: time.Now()}}
+	// After stop the list reflects the new dormant status.
+	svc.records = []agent.Record{{Name: "leo-coding-leo", Status: "stopped", StartedAt: time.Now()}}
 
-	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/suspend", nil)
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/stop", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
-	if !svc.suspendCalled {
-		t.Fatal("expected Suspend to be called")
+	if !svc.stopCalled {
+		t.Fatal("expected Stop to be called")
 	}
-	if svc.suspendName != "leo-coding-leo" {
-		t.Errorf("expected Suspend called with canonical name, got %q", svc.suspendName)
+	if svc.stopName != "leo-coding-leo" {
+		t.Errorf("expected Stop called with canonical name, got %q", svc.stopName)
 	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -719,41 +737,15 @@ func TestWebAgentSuspendSuccess(t *testing.T) {
 	if !strings.Contains(body, `id="agents-content"`) {
 		t.Errorf("expected agents partial re-render, got %q", body)
 	}
-	// A suspended agent must offer Resume (to wake) and Stop (to terminate),
-	// but not Suspend.
-	if !strings.Contains(body, "/web/agent/leo-coding-leo/resume") {
-		t.Errorf("expected Resume action for suspended agent, got %q", body)
+	// A dormant agent must offer Start and Delete, not Stop.
+	if !strings.Contains(body, "/web/agent/leo-coding-leo/start") {
+		t.Errorf("expected Start action for a dormant agent, got %q", body)
 	}
-	if !strings.Contains(body, "/web/agent/leo-coding-leo/stop") {
-		t.Errorf("expected Stop action for suspended agent, got %q", body)
+	if !strings.Contains(body, `hx-delete="/web/agent/leo-coding-leo"`) {
+		t.Errorf("expected Delete action for a dormant agent, got %q", body)
 	}
-	if strings.Contains(body, "/web/agent/leo-coding-leo/suspend") {
-		t.Errorf("suspended agent must not show a Suspend button, got %q", body)
-	}
-}
-
-// TestWebAgentSuspendError asserts a failing Suspend retargets its error flash
-// to the shared #flash-container rather than outerHTML-swapping the agents tab.
-func TestWebAgentSuspendError(t *testing.T) {
-	s, _, svc := newTestServerWithAgents(t)
-	svc.suspendErr = fmt.Errorf("agent %q is not running", "leo-coding-leo")
-
-	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/suspend", nil)
-	w := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(w, req)
-
-	if !svc.suspendCalled {
-		t.Fatal("expected Suspend to be called")
-	}
-	if got := w.Header().Get("HX-Retarget"); got != "#flash-container" {
-		t.Errorf("expected HX-Retarget '#flash-container', got %q", got)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "flash-error") {
-		t.Errorf("expected flash markup in body, got %q", body)
-	}
-	if strings.Contains(body, `id="agents-content"`) {
-		t.Errorf("error response must not re-render the agents tab, got %q", body)
+	if strings.Contains(body, "/web/agent/leo-coding-leo/stop") {
+		t.Errorf("dormant agent must not show a Stop button, got %q", body)
 	}
 }
 
@@ -800,23 +792,23 @@ func TestWebAgentStopNotFoundWithoutFallback(t *testing.T) {
 	}
 }
 
-// TestWebAgentResumeSuccess drives the FORM handler with a suspended agent and
-// asserts Resume is called with the canonical name (Resolve is skipped because
-// suspended agents are not live) and the partial is re-rendered in place.
-func TestWebAgentResumeSuccess(t *testing.T) {
+// TestWebAgentStartSuccess drives the FORM handler with a dormant agent and
+// asserts Start is called with the canonical name (Resolve is skipped because
+// a dormant agent is not live) and the partial is re-rendered in place.
+func TestWebAgentStartSuccess(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
-	svc.resumeResult = agent.Record{Name: "leo-coding-leo", Status: "running"}
+	svc.startResult = agent.Record{Name: "leo-coding-leo", Status: "running"}
 	svc.records = []agent.Record{{Name: "leo-coding-leo", Status: "running", StartedAt: time.Now()}}
 
-	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/resume", nil)
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/start", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
-	if !svc.resumeCalled {
-		t.Fatal("expected Resume to be called")
+	if !svc.startCalled {
+		t.Fatal("expected Start to be called")
 	}
-	if svc.resumeName != "leo-coding-leo" {
-		t.Errorf("expected Resume called with canonical name, got %q", svc.resumeName)
+	if svc.startName != "leo-coding-leo" {
+		t.Errorf("expected Start called with canonical name, got %q", svc.startName)
 	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -828,29 +820,102 @@ func TestWebAgentResumeSuccess(t *testing.T) {
 	if !strings.Contains(body, `id="agents-content"`) {
 		t.Errorf("expected agents partial re-render, got %q", body)
 	}
-	// A running agent offers Suspend + Stop, not Resume.
-	if !strings.Contains(body, "/web/agent/leo-coding-leo/suspend") {
-		t.Errorf("expected Suspend action for running agent, got %q", body)
+	// A running agent offers Stop, not Start/Delete.
+	if !strings.Contains(body, "/web/agent/leo-coding-leo/stop") {
+		t.Errorf("expected Stop action for running agent, got %q", body)
 	}
 }
 
-// TestWebAgentResumeError asserts a failing Resume retargets its error flash to
+// TestWebAgentStartError asserts a failing Start retargets its error flash to
 // the shared #flash-container and leaves the agents tab intact.
-func TestWebAgentResumeError(t *testing.T) {
+func TestWebAgentStartError(t *testing.T) {
 	s, _, svc := newTestServerWithAgents(t)
-	svc.resumeErr = fmt.Errorf("no suspended agent %q", "leo-coding-leo")
+	svc.startErr = fmt.Errorf("no dormant agent %q", "leo-coding-leo")
 
-	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/resume", nil)
+	req := httptest.NewRequest("POST", "/web/agent/leo-coding-leo/start", nil)
 	w := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(w, req)
 
-	if !svc.resumeCalled {
-		t.Fatal("expected Resume to be called")
+	if !svc.startCalled {
+		t.Fatal("expected Start to be called")
 	}
 	if got := w.Header().Get("HX-Retarget"); got != "#flash-container" {
 		t.Errorf("expected HX-Retarget '#flash-container', got %q", got)
 	}
 	if strings.Contains(w.Body.String(), `id="agents-content"`) {
 		t.Errorf("error response must not re-render the agents tab")
+	}
+}
+
+// TestWebAgentDeleteSuccess drives the DELETE form handler and asserts Delete
+// is called with DeleteBranch always true (matching the picker's convention),
+// re-rendering the agents partial with no retarget.
+func TestWebAgentDeleteSuccess(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = nil // deleted — the record is gone from the re-rendered list
+
+	req := httptest.NewRequest("DELETE", "/web/agent/leo-coding-leo", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.deleteCalled {
+		t.Fatal("expected Delete to be called")
+	}
+	if svc.deleteName != "leo-coding-leo" {
+		t.Errorf("expected Delete called with %q, got %q", "leo-coding-leo", svc.deleteName)
+	}
+	if !svc.deleteOpts.DeleteBranch {
+		t.Errorf("expected DeleteBranch=true, got %+v", svc.deleteOpts)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("HX-Retarget"); got != "" {
+		t.Errorf("success path must not set HX-Retarget, got %q", got)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `id="agents-content"`) {
+		t.Errorf("expected agents partial re-render, got %q", body)
+	}
+}
+
+// TestWebAgentDeleteError asserts a failing Delete (e.g. the agent is still
+// live) retargets its error flash to #flash-container and leaves the agents
+// tab intact — mirroring the CLI/picker's "stop it first" refusal.
+func TestWebAgentDeleteError(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.deleteErr = agent.ErrAgentStillRunning
+
+	req := httptest.NewRequest("DELETE", "/web/agent/leo-coding-leo", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if !svc.deleteCalled {
+		t.Fatal("expected Delete to be called")
+	}
+	if got := w.Header().Get("HX-Retarget"); got != "#flash-container" {
+		t.Errorf("expected HX-Retarget '#flash-container', got %q", got)
+	}
+	if strings.Contains(w.Body.String(), `id="agents-content"`) {
+		t.Errorf("error response must not re-render the agents tab")
+	}
+}
+
+// TestDeleteConfirmTextTemplateFunc covers the deleteConfirmText helper the
+// agents.html delete button's hx-confirm renders, reusing agent.DeletePlan's
+// own ConfirmText so the web UI, CLI, and picker describe a delete
+// identically.
+func TestDeleteConfirmTextTemplateFunc(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = []agent.Record{{Name: "leo-pretty-sky", Branch: "feat/foo", Status: "stopped"}}
+
+	req := httptest.NewRequest("GET", "/agents", nil)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	// html/template escapes "+" as "&#43;" in attribute context.
+	if !strings.Contains(body, "delete pretty-sky? removes worktree &#43; branch feat/foo") {
+		t.Errorf("expected worktree delete confirm text, got %q", body)
 	}
 }

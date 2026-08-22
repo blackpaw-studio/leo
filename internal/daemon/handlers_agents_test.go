@@ -33,6 +33,10 @@ type fakeAgentManager struct {
 	logsOut    string
 	renameErr  error
 
+	deletePlan     agent.DeletePlan
+	deletePlanErr  error
+	lastDeletePlan string
+
 	lastSpawn        agent.SpawnSpec
 	lastStop         string
 	lastSuspend      string
@@ -133,6 +137,11 @@ func (f *fakeAgentManager) Delete(_ context.Context, name string, opts agent.Del
 	f.lastPrune.name = name
 	f.lastPrune.opts = opts
 	return f.pruneErr
+}
+
+func (f *fakeAgentManager) DeletePlan(name string) (agent.DeletePlan, error) {
+	f.lastDeletePlan = name
+	return f.deletePlan, f.deletePlanErr
 }
 
 func (f *fakeAgentManager) List() []agent.Record {
@@ -858,6 +867,67 @@ func TestAgentDeleteHandlerNoManager(t *testing.T) {
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+// --- delete-plan handler coverage ---
+
+func TestAgentDeletePlanHandlerSuccess(t *testing.T) {
+	mgr := &fakeAgentManager{
+		deletePlan: agent.DeletePlan{Name: "leo-worktree", HasWorktree: true, Branch: "feat/foo", WorktreePath: "/tmp/x"},
+	}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/leo-worktree/delete-plan")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastDeletePlan != "leo-worktree" {
+		t.Errorf("lastDeletePlan = %q, want leo-worktree", mgr.lastDeletePlan)
+	}
+	var out struct {
+		OK   bool             `json:"ok"`
+		Data agent.DeletePlan `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Data.HasWorktree || out.Data.Branch != "feat/foo" {
+		t.Errorf("decoded plan = %+v", out.Data)
+	}
+}
+
+func TestAgentDeletePlanHandlerNotFound(t *testing.T) {
+	mgr := &fakeAgentManager{deletePlanErr: &agent.ErrNotFound{Query: "ghost"}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/ghost/delete-plan")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentDeletePlanHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	resp, err := client.Get("http://localhost/agents/leo-worktree/delete-plan")
+	if err != nil {
+		t.Fatalf("get: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {

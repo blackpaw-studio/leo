@@ -68,6 +68,25 @@ func AgentDelete(ctx context.Context, workDir, name string, req AgentDeleteReque
 	return nil
 }
 
+// AgentDeletePlan sends GET /agents/{name}/delete-plan to the daemon,
+// returning what AgentDelete would remove without removing anything. name may
+// be a shorthand — the server resolves it. On resolve failures it returns
+// typed *agent.ErrNotFound or *agent.ErrAmbiguous.
+func AgentDeletePlan(ctx context.Context, workDir, name string) (agent.DeletePlan, error) {
+	resp, err := Send(ctx, workDir, "GET", "/agents/"+url.PathEscape(name)+"/delete-plan", nil)
+	if err != nil {
+		return agent.DeletePlan{}, err
+	}
+	if !resp.OK {
+		return agent.DeletePlan{}, responseError(resp, name)
+	}
+	var plan agent.DeletePlan
+	if err := json.Unmarshal(resp.Data, &plan); err != nil {
+		return agent.DeletePlan{}, fmt.Errorf("decoding delete plan response: %w", err)
+	}
+	return plan, nil
+}
+
 // AgentList sends GET /agents/list to the daemon.
 func AgentList(ctx context.Context, workDir string) ([]agent.Record, error) {
 	resp, err := Send(ctx, workDir, "GET", "/agents/list", nil)

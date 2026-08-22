@@ -84,7 +84,7 @@ func TestSpawnAgentSetsEphemeralState(t *testing.T) {
 
 func TestStopAgentNotFound(t *testing.T) {
 	sv := NewSupervisor(context.Background())
-	err := sv.StopAgent("nonexistent")
+	err := sv.StopAgent("nonexistent", false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent agent")
 	}
@@ -96,7 +96,7 @@ func TestStopAgentRejectsNonEphemeral(t *testing.T) {
 	sv.states["static-proc"] = &ProcessState{Name: "static-proc", Status: "running", Ephemeral: false}
 	sv.mu.Unlock()
 
-	err := sv.StopAgent("static-proc")
+	err := sv.StopAgent("static-proc", false)
 	if err == nil {
 		t.Fatal("expected error for non-ephemeral process")
 	}
@@ -117,7 +117,7 @@ func TestStopAgentRemovesState(t *testing.T) {
 	sv.cancels["eph-agent"] = cancelFn
 	sv.mu.Unlock()
 
-	err := sv.StopAgent("eph-agent")
+	err := sv.StopAgent("eph-agent", false)
 	if err != nil {
 		t.Fatalf("StopAgent() error: %v", err)
 	}
