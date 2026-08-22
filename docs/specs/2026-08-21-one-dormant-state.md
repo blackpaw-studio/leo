@@ -118,8 +118,8 @@ as it does today. `IsFailedRestore` keeps its current definition.
 
 **CLI** (`internal/cli/agent.go`) — `newAgentSuspendCmd` (`:857`),
 `newAgentResumeCmd` (`:899`), and `newAgentPruneCmd` (`:1180`) are removed.
-`newAgentStopCmd` (`:753`) keeps `--force`/`--json`, loses `--prune` and
-`--delete-branch`. New `newAgentStartCmd` and `newAgentDeleteCmd`; delete carries
+`newAgentStopCmd` (`:753`) keeps `--json` and loses `--prune` and
+`--delete-branch`; the old `prune` override semantics move to `delete --force`. New `newAgentStartCmd` and `newAgentDeleteCmd`; delete carries
 `--delete-branch` and `--yes`, and without `--yes` prompts with the same text the
 picker uses. `leo agent status` (`internal/cli/status.go:58`) drops its
 `suspended` counter into the stopped one.
@@ -165,9 +165,7 @@ and gains `Start`/`Delete`; `ResolveRecoverable` is unchanged.
 
 **Docs** — `docs/configuration/config-reference.md`,
 `docs/configuration/persistent-tasks.md`, `docs/configuration/permissions.md`,
-and any agent-lifecycle page lose the suspended/stopped distinction. The
-`config-reference.md` claim that stop "kills workspace and conversation" was
-already wrong and goes away with it.
+and any agent-lifecycle page lose the suspended/stopped distinction.
 
 ## Testing
 
