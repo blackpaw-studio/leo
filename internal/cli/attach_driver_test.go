@@ -114,11 +114,13 @@ func TestAttachViaDriverEmptyTmuxSessionErrors(t *testing.T) {
 // stderr warning before falling back to the tmux attach path, so a user
 // landing in the raw serve pane has a clue why.
 //
-// The subsequent daemon.AgentSession lookup (attachLocal's tmux fallback) has
-// no test seam and will fail fast against the non-existent socket under
-// t.TempDir() — that's fine, we only assert the warning fired before that,
-// not that the whole fallback chain succeeds end-to-end.
+// The attach-spec lookup runs AFTER the session lookup/ensureAgentRunning
+// (see TestAttachLocalDormantNonClaudeAgentRoutesToDriverAfterStart for why),
+// so the session lookup is stubbed live here to reach the attach-spec call.
 func TestAttachLocalWarnsOnAttachSpecLookupFailure(t *testing.T) {
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{Session: "leo-scratch", Name: name}, nil
+	})
 	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
 		return daemon.AgentAttachSpecResponse{}, fmt.Errorf("daemon unreachable")
 	})
@@ -129,6 +131,73 @@ func TestAttachLocalWarnsOnAttachSpecLookupFailure(t *testing.T) {
 	warning := errBuf.String()
 	if !strings.Contains(warning, "warning:") || !strings.Contains(warning, "daemon unreachable") {
 		t.Fatalf("expected a warning mentioning the lookup error, got %q", warning)
+	}
+}
+
+// TestAttachLocalDormantNonClaudeAgentRoutesToDriverAfterStart verifies
+// attachLocal re-checks driver routing AFTER starting a dormant agent,
+// matching attach.go's order. Before the fix, the attach-spec lookup ran
+// first — a dormant agent's ResolveHandle bails (internal/agent/manager.go),
+// so the harness would come back empty and a just-started non-claude agent
+// would incorrectly fall through to a raw tmux attach instead of its driver.
+func TestAttachLocalDormantNonClaudeAgentRoutesToDriverAfterStart(t *testing.T) {
+	drv := registerFakeCLITurnsHarness()
+	drv.err = nil
+
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{Session: "leo-fallback", Name: name, Stopped: true}, nil
+	})
+	withStubStdio(t)
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	oldIn := agentStdin
+	agentStdin = strings.NewReader("y\n")
+	t.Cleanup(func() { agentStdin = oldIn })
+
+	called := stubAgentStart(t, nil)
+	stubAgentSessionReady(t, true)
+
+	// The attach-spec stub only reports the driver harness once the agent has
+	// actually been started — mirroring ResolveHandle's real behavior, which
+	// bails on a still-dormant record (internal/agent/manager.go). If
+	// attachLocal looks this up BEFORE starting, it sees the claude/empty
+	// fallback and never reaches the driver's session below.
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		if !*called {
+			return daemon.AgentAttachSpecResponse{Name: name}, nil // claude/unresolved
+		}
+		drv.spec = harness.AttachSpec{TmuxSession: "leo-driver-session"}
+		return daemon.AgentAttachSpecResponse{
+			Name:        name,
+			Harness:     fakeCLITurnsHarnessName,
+			TmuxSession: "leo-driver-session",
+		}, nil
+	})
+
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	var execedArgv []string
+	oldExec := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv = argv
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = oldExec })
+
+	if err := attachLocal(context.Background(), &cobra.Command{}, t.TempDir(), "scratch", attachOptions{}); err != nil {
+		t.Fatalf("attachLocal: %v", err)
+	}
+	if !*called {
+		t.Fatal("expected AgentStart to fire after confirming the prompt")
+	}
+	joined := strings.Join(execedArgv, " ")
+	if !strings.Contains(joined, "leo-driver-session") {
+		t.Fatalf("expected the driver's tmux session (looked up post-start) in argv, got %v", execedArgv)
+	}
+	if strings.Contains(joined, "leo-fallback") {
+		t.Fatalf("attach used the pre-start fallback session instead of the driver's, argv = %v", execedArgv)
 	}
 }
 
@@ -406,5 +475,75 @@ func TestAttachPickedAgentClaudeAgentKeepsTmuxPath(t *testing.T) {
 	}
 	if execedArgv0 != "/usr/bin/tmux" {
 		t.Fatalf("expected the tmux attach path for a claude agent, got argv0=%q", execedArgv0)
+	}
+}
+
+// TestAttachPickedAgentDormantAgentPromptsAndStarts verifies attachPickedAgent
+// (the picker's post-selection dispatch) prompts to start a dormant local
+// agent before attaching, same as the two cobra-command doors — the picker
+// has no cobra.Command to gate through, so this exercises the
+// ensureAgentRunningForPicker/gateToolFor path (internal/cli/permissions.go).
+func TestAttachPickedAgentDormantAgentPromptsAndStarts(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home, Defaults: config.DefaultsConfig{Model: "sonnet"}}
+
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: name}, nil // claude
+	})
+	withStubStdio(t)
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	oldIn := agentStdin
+	agentStdin = strings.NewReader("y\n")
+	t.Cleanup(func() { agentStdin = oldIn })
+
+	called := stubAgentStart(t, nil)
+	stubAgentSessionReady(t, true)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	var execedArgv []string
+	oldExec := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv = argv
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = oldExec })
+
+	err := attachPickedAgent(context.Background(), cfg, picker.Agent{Host: picker.LocalHost, Name: "scratch", Status: "stopped"}, attachOptions{})
+	if err != nil {
+		t.Fatalf("attachPickedAgent: %v", err)
+	}
+	if !*called {
+		t.Fatal("expected AgentStart to fire after confirming the prompt")
+	}
+	if len(execedArgv) == 0 || !strings.Contains(strings.Join(execedArgv, " "), "leo-scratch") {
+		t.Fatalf("expected attach to proceed to the tmux session, argv = %v", execedArgv)
+	}
+}
+
+// TestAttachPickedAgentDormantAgentNonTTYErrors verifies a non-interactive
+// picker dispatch (e.g. driven by a test harness or a non-terminal caller)
+// on a dormant agent fails fast instead of hanging on an unanswerable prompt.
+func TestAttachPickedAgentDormantAgentNonTTYErrors(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home, Defaults: config.DefaultsConfig{Model: "sonnet"}}
+	withStubStdio(t)
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return false }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	called := stubAgentStart(t, nil)
+
+	err := attachPickedAgent(context.Background(), cfg, picker.Agent{Host: picker.LocalHost, Name: "scratch", Status: "stopped"}, attachOptions{})
+	if err == nil {
+		t.Fatal("expected an error for a dormant agent off a TTY")
+	}
+	if !strings.Contains(err.Error(), "leo agent start") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if *called {
+		t.Fatal("AgentStart should not fire without confirmation")
 	}
 }

@@ -125,6 +125,22 @@ func buildPickerBackends(cfg *config.Config, includeLocal bool) map[string]picke
 // over SSH so it does its own resolution and driver routing.
 func attachPickedAgent(ctx context.Context, cfg *config.Config, a picker.Agent, opts attachOptions) error {
 	if a.Host == picker.LocalHost {
+		// Dormant agents have no tmux session to attach to yet — prompt to
+		// start (or fail fast off a TTY) before anything else, same as the
+		// two cobra-command attach doors. The picker has no cobra.Command to
+		// gate through (its in-place actions run inside `leo attach` itself),
+		// so it uses ensureAgentRunningForPicker's label-based gate instead
+		// — see that function's doc comment. Running this before
+		// attachChosenSession also means its attach-spec lookup happens
+		// AFTER a just-started agent's ResolveHandle can actually resolve,
+		// matching attachLocal's fix for the same ordering trap.
+		ok, err := ensureAgentRunningForPicker(ctx, "leo attach: start agent", cfg.HomePath, a.Name, a.Status == "stopped")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
 		choice := attachChoice{
 			label:   a.Name,
 			session: agent.SessionName(a.Name),
