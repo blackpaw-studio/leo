@@ -8,10 +8,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/picker"
+	"github.com/spf13/cobra"
 )
 
 // fakeCLITurnsDriver is a minimal harness.SessionDriver whose Attach returns
@@ -122,11 +124,76 @@ func TestAttachLocalWarnsOnAttachSpecLookupFailure(t *testing.T) {
 	})
 	_, errBuf := withStubStdio(t)
 
-	_ = attachLocal(context.Background(), t.TempDir(), "scratch", attachOptions{}) //nolint:errcheck
+	_ = attachLocal(context.Background(), &cobra.Command{}, t.TempDir(), "scratch", attachOptions{}) //nolint:errcheck
 
 	warning := errBuf.String()
 	if !strings.Contains(warning, "warning:") || !strings.Contains(warning, "daemon unreachable") {
 		t.Fatalf("expected a warning mentioning the lookup error, got %q", warning)
+	}
+}
+
+// TestAttachLocalDormantAgentPromptsAndStarts verifies `leo agent attach`
+// (attachLocal) prompts to start a dormant agent, then proceeds with the
+// tmux attach once confirmed — attachLocal's share of ensureAgentRunning,
+// exercised independently of the top-level `leo attach` door.
+func TestAttachLocalDormantAgentPromptsAndStarts(t *testing.T) {
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: name}, nil // claude
+	})
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{Session: "leo-scratch", Name: "scratch", Stopped: true}, nil
+	})
+	withStubStdio(t)
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	oldIn := agentStdin
+	agentStdin = strings.NewReader("y\n")
+	t.Cleanup(func() { agentStdin = oldIn })
+
+	called := stubAgentStart(t, nil)
+	stubAgentSessionReady(t, true)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	var execedArgv []string
+	oldExec := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv = argv
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = oldExec })
+
+	if err := attachLocal(context.Background(), &cobra.Command{}, t.TempDir(), "scratch", attachOptions{}); err != nil {
+		t.Fatalf("attachLocal: %v", err)
+	}
+	if !*called {
+		t.Fatal("expected AgentStart to fire after confirming the prompt")
+	}
+	if len(execedArgv) == 0 || !strings.Contains(strings.Join(execedArgv, " "), "leo-scratch") {
+		t.Fatalf("expected attach to proceed to the tmux session, argv = %v", execedArgv)
+	}
+}
+
+// TestAttachLocalMissingAgentReturnsError verifies attachLocal surfaces a
+// clear error when the query matches no agent at all — the explore pass
+// found no existing test for this path (only the top-level `leo attach`
+// door had one).
+func TestAttachLocalMissingAgentReturnsError(t *testing.T) {
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{}, fmt.Errorf("not found")
+	})
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{}, &agent.ErrNotFound{Query: name}
+	})
+	withStubStdio(t)
+
+	err := attachLocal(context.Background(), &cobra.Command{}, t.TempDir(), "nope", attachOptions{})
+	if err == nil {
+		t.Fatal("expected an error for a missing agent")
+	}
+	if !strings.Contains(err.Error(), "nope") {
+		t.Errorf("expected error to reference the query %q, got %v", "nope", err)
 	}
 }
 

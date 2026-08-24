@@ -26,7 +26,9 @@ func toAttachSpec(spec daemon.AgentAttachSpecResponse) harness.AttachSpec {
 }
 
 // Testability seam — tests override this to simulate the daemon's view of
-// running agents without spinning up a real socket.
+// running agents without spinning up a real socket. Shared by both attach
+// doors (leo attach and attachLocal, used by `leo agent attach`) so the
+// dormant-agent prompt behaves identically from either entry point.
 var lookupAgentSession = daemon.AgentSession
 
 // newAttachCmd registers a top-level `leo attach <name>` shortcut for
@@ -90,8 +92,18 @@ session as a native tab via tmux control mode.`,
 				return fmt.Errorf("no agent named %q", name)
 			case err != nil:
 				return err
-			case session == "":
+			case session.Session == "":
 				return fmt.Errorf("no agent named %q", name)
+			}
+
+			// Dormant agents have no tmux session to attach to yet — prompt to
+			// start (or fail fast off a TTY) before doing anything else.
+			ok, err := ensureAgentRunning(cmd.Context(), cmd, cfg.HomePath, session.Name, session.Stopped)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
 			}
 
 			// Non-claude routing (attachLocal): ask the daemon for the agent's
@@ -100,7 +112,7 @@ session as a native tab via tmux control mode.`,
 			if spec, err := agentAttachSpecFn(cmd.Context(), cfg.HomePath, name); err == nil && spec.Harness != "" && spec.Harness != "claude" {
 				return attachViaDriver(res, toAttachSpec(spec), opts)
 			}
-			return attachTmuxSession(res, session, opts)
+			return attachTmuxSession(res, session.Session, opts)
 		},
 	}
 	addHostFlag(cmd, &host)
