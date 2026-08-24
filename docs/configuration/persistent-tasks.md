@@ -28,7 +28,7 @@ With no `template:` field, the target is **implicit**: an agent named `morning` 
 - Spawns the agent the first time the task fires (not at `leo service` boot — see [Ensure-exists](#ensure-exists)).
 - Writes a leo-managed Stop hook into `~/work/morning/.claude/settings.local.json`.
 - On each cron firing, pastes the prompt into the agent's tmux session and waits for the hook to report completion.
-- Persists the discovered claude session id onto the agent record, so a restart or resume rejoins the same conversation.
+- Persists the discovered claude session id onto the agent record, so a restart or start rejoins the same conversation.
 
 ## Explicit binding — sharing a template across tasks
 
@@ -65,18 +65,18 @@ Task `channels:` must be a subset of the resolved template's `channels:` — val
 Unlike the old dedicated-session model, persistent-task agents are **not** started at `leo service` boot. Instead, each firing runs an ensure-exists step before delivery:
 
 1. **Running** — the agent is already live: inject directly.
-2. **Suspended** — the agent has a persisted-but-stopped record (see [Idle-suspend](#idle-suspend-interaction)): resume it, rejoining the prior conversation, then inject.
+2. **Dormant (stopped)** — the agent has a persisted-but-stopped record, whether from idle auto-stop or a manual `leo agent stop` (see [Idle-suspend](#idle-suspend-interaction)): start it, rejoining the prior conversation, then inject.
 3. **Missing** — no record at all: spawn it fresh from the resolved template (explicit or synthesized-implicit), then inject.
 
-A spawn or resume failure fails the task the same way an injection failure does — `notify_on_fail` fires and the run is recorded as a failure in history. **Caveat:** if the ensure step itself failed (the agent couldn't be spawned or resumed at all), the follow-up failure notice can't be delivered *into* that same agent either — it goes through the identical ensure-exists path and will fail the same way. The failure is still recorded in `leo task logs`/history; it just won't reach you via the task's channels in that specific case. A subsequent successful firing (once whatever broke the spawn is fixed) resumes normal delivery, including any queued notices.
+A spawn or start failure fails the task the same way an injection failure does — `notify_on_fail` fires and the run is recorded as a failure in history. **Caveat:** if the ensure step itself failed (the agent couldn't be spawned or started at all), the follow-up failure notice can't be delivered *into* that same agent either — it goes through the identical ensure-exists path and will fail the same way. The failure is still recorded in `leo task logs`/history; it just won't reach you via the task's channels in that specific case. A subsequent successful firing (once whatever broke the spawn is fixed) resumes normal delivery, including any queued notices.
 
 ## Idle-suspend interaction
 
-Persistent-task agents are ordinary agents, so [idle-suspend](config-reference.md#idle-suspend) applies to them the same way it applies to anything spawned via `leo agent spawn`: set `idle_suspend_after` on the template (explicit binding) or on the task itself (implicit binding, since it synthesizes its own template) and the agent is suspended — process and tmux killed, conversation preserved — after a period of no activity.
+Persistent-task agents are ordinary agents, so [idle-suspend](config-reference.md#idle-suspend) applies to them the same way it applies to anything spawned via `leo agent spawn`: set `idle_suspend_after` on the template (explicit binding) or on the task itself (implicit binding, since it synthesizes its own template) and the agent goes dormant — process and tmux killed, record and conversation preserved — after a period of no activity.
 
-This composes cleanly with scheduling: a daily task's agent can suspend between firings and the next firing's ensure-exists step resumes it automatically. There's no need to keep an agent warm 24/7 just because a task targets it once a day.
+This composes cleanly with scheduling: a daily task's agent can go dormant between firings and the next firing's ensure-exists step starts it automatically, because idle auto-stop marks it to auto-wake on the next message (unlike a manual `leo agent stop`, which does not). There's no need to keep an agent warm 24/7 just because a task targets it once a day.
 
-An agent with a client attached (`leo agent attach`) is never suspended, matching normal idle-suspend behavior.
+An agent with a client attached (`leo agent attach`) is never idle-stopped, matching normal idle-suspend behavior.
 
 ## Queueing
 
@@ -110,7 +110,7 @@ If a task has `notify_on_fail: true` and fails (timeout, queue full, ensure-exis
 leo agent reset <name>
 ```
 
-Kills the agent's tmux session, clears its stored claude session id, and respawns it fresh — starting a brand-new conversation rather than resuming the old one. Use this when a long-lived persistent-task agent's context has filled up or gotten stuck; there's no auto-compaction. Unlike `leo agent resume`, which rejoins the prior conversation, `reset` deliberately discards it.
+Kills the agent's tmux session, clears its stored claude session id, and respawns it fresh — starting a brand-new conversation rather than resuming the old one. Use this when a long-lived persistent-task agent's context has filled up or gotten stuck; there's no auto-compaction. Unlike `leo agent start`, which rejoins the prior conversation, `reset` deliberately discards it.
 
 ```bash
 leo agent reset daily

@@ -156,7 +156,7 @@ func newServiceStopCmd() *cobra.Command {
 		Short: "Stop background service",
 		Long: `Stop the background supervisor and tear down every supervised tmux
 session. Per-process session IDs are preserved so a subsequent start will
-resume where each process left off. Pass --daemon to also remove the
+pick up where each process left off. Pass --daemon to also remove the
 installed OS service (launchd/systemd).`,
 		Example: `  leo service stop
   leo service stop --daemon`,

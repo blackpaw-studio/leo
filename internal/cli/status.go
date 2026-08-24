@@ -17,8 +17,10 @@ import (
 )
 
 // badAgentStates are daemon-reported statuses we consider unhealthy.
+// "stopped" is deliberately excluded: it is now the single dormant state
+// reached by both a manual stop and the idle sweep, not a failure signal —
+// see docs/specs/2026-08-21-one-dormant-state.md.
 var badAgentStates = map[string]bool{
-	"stopped":    true,
 	"crashed":    true,
 	"exited":     true,
 	"failed":     true,
@@ -52,11 +54,13 @@ type StatusWeb struct {
 }
 
 // StatusAgentsSummary holds live ephemeral-agent counts, reported by the
-// daemon (empty/zero when the daemon isn't running).
+// daemon (empty/zero when the daemon isn't running). Stopped folds what used
+// to be two separate dormancy counters into one (see
+// docs/specs/2026-08-21-one-dormant-state.md).
 type StatusAgentsSummary struct {
-	Running   int `json:"running"`
-	Suspended int `json:"suspended"`
-	Total     int `json:"total"`
+	Running int `json:"running"`
+	Stopped int `json:"stopped"`
+	Total   int `json:"total"`
 }
 
 // StatusAgentState mirrors agent.Record but trims fields for the status
@@ -157,8 +161,8 @@ func buildStatusReport(ctx context.Context) StatusReport {
 				switch rec.Status {
 				case "running":
 					report.Agents.Running++
-				case "suspended":
-					report.Agents.Suspended++
+				case "stopped":
+					report.Agents.Stopped++
 				}
 				if badAgentStates[rec.Status] {
 					report.BadAgents = append(report.BadAgents, rec.Name)
@@ -292,7 +296,7 @@ func runStatus(ctx context.Context) error {
 	info.Printf("Tmux tree:  %s\n", reportTmuxTree().Line)
 
 	// Agents
-	info.Printf("Agents:     %d running, %d suspended (%d total)\n", report.Agents.Running, report.Agents.Suspended, report.Agents.Total)
+	info.Printf("Agents:     %d running, %d stopped (%d total)\n", report.Agents.Running, report.Agents.Stopped, report.Agents.Total)
 	for _, state := range report.AgentStates {
 		uptime := ""
 		if !state.StartedAt.IsZero() {

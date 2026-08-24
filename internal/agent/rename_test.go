@@ -20,8 +20,7 @@ type fakeSupervisor struct {
 func (f *fakeSupervisor) ReserveAgent(string) error     { return nil }
 func (f *fakeSupervisor) ReleaseAgent(string)           {}
 func (f *fakeSupervisor) SpawnAgent(SpawnRequest) error { return nil }
-func (f *fakeSupervisor) StopAgent(string) error        { return nil }
-func (f *fakeSupervisor) SuspendAgent(string) error     { return nil }
+func (f *fakeSupervisor) StopAgent(string, bool) error  { return nil }
 func (f *fakeSupervisor) EphemeralAgents() map[string]ProcessState {
 	return f.ephemeral
 }

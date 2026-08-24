@@ -30,11 +30,16 @@ type EnsureSpec struct {
 type EnsureAgentManager interface {
 	// Live reports whether name is a currently running (supervised) agent.
 	Live(name string) bool
-	// Suspended reports whether name has a persisted-but-stopped record that
-	// can be resumed.
-	Suspended(name string) bool
-	// Resume restarts a suspended agent, rejoining its prior session.
-	Resume(name string) (agent.Record, error)
+	// Stopped reports whether name has a persisted, dormant record — of any
+	// WakeOnMessage value.
+	Stopped(name string) bool
+	// Wakeable reports whether name has a persisted, dormant record with
+	// WakeOnMessage=true — the only dormant agents an inbound message is
+	// allowed to auto-start.
+	Wakeable(name string) bool
+	// Start clears a dormant agent's flags and respawns it, rejoining its
+	// prior session.
+	Start(name string) error
 	// SpawnFromTemplate spawns a repo-less agent named `name` directly from
 	// an already-resolved TemplateConfig.
 	SpawnFromTemplate(ctx context.Context, name string, tmpl config.TemplateConfig) (agent.Record, error)
@@ -58,18 +63,24 @@ func NewAgentEnsurer(mgr EnsureAgentManager) AgentEnsurer {
 	return &managerEnsurer{mgr: mgr}
 }
 
-// Ensure guarantees spec.Name is injectable: a no-op when already live,
-// Resume when suspended, and a spawn from spec.Template when there is no
-// record at all.
+// Ensure guarantees spec.Name is injectable: a no-op when already live, Start
+// when dormant with WakeOnMessage=true, and a spawn from spec.Template when
+// there is no record at all. A dormant record with WakeOnMessage=false (an
+// operator-initiated stop) is deliberately refused rather than woken or
+// respawned over — the whole point of WakeOnMessage is that an inbound
+// message must not resurrect an agent someone shut down on purpose.
 func (e *managerEnsurer) Ensure(ctx context.Context, spec EnsureSpec) error {
 	if e.mgr.Live(spec.Name) {
 		return nil
 	}
-	if e.mgr.Suspended(spec.Name) {
-		if _, err := e.mgr.Resume(spec.Name); err != nil {
-			return fmt.Errorf("resuming agent %q: %w", spec.Name, err)
+	if e.mgr.Wakeable(spec.Name) {
+		if err := e.mgr.Start(spec.Name); err != nil {
+			return fmt.Errorf("starting agent %q: %w", spec.Name, err)
 		}
 		return nil
+	}
+	if e.mgr.Stopped(spec.Name) {
+		return fmt.Errorf("agent %q is stopped and not configured to wake on message; start it explicitly first", spec.Name)
 	}
 	rec, err := e.mgr.SpawnFromTemplate(ctx, spec.Name, spec.Template)
 	if err != nil {

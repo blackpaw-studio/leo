@@ -6,18 +6,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 // fakeBackend records calls so tests can assert an action was dispatched.
 type fakeBackend struct {
-	agents       []Agent
-	calls        []string
-	renameOld    string
-	renameNew    string
-	templates    []string
-	templatesErr error
-	switchErr    error
+	agents        []Agent
+	calls         []string
+	renameOld     string
+	renameNew     string
+	templates     []string
+	templatesErr  error
+	switchErr     error
+	deletePlan    agent.DeletePlan
+	deletePlanErr error
 }
 
 func (f *fakeBackend) Templates(context.Context) ([]string, error) {
@@ -44,12 +47,23 @@ func (f *fakeBackend) Stop(_ context.Context, name string) error {
 	f.calls = append(f.calls, "stop:"+name)
 	return nil
 }
-func (f *fakeBackend) Suspend(_ context.Context, name string) error {
-	f.calls = append(f.calls, "suspend:"+name)
+func (f *fakeBackend) Start(_ context.Context, name string) error {
+	f.calls = append(f.calls, "start:"+name)
 	return nil
 }
-func (f *fakeBackend) Resume(_ context.Context, name string) error {
-	f.calls = append(f.calls, "resume:"+name)
+func (f *fakeBackend) DeletePlan(_ context.Context, name string) (agent.DeletePlan, error) {
+	f.calls = append(f.calls, "delete-plan:"+name)
+	if f.deletePlanErr != nil {
+		return agent.DeletePlan{}, f.deletePlanErr
+	}
+	return f.deletePlan, nil
+}
+func (f *fakeBackend) Delete(_ context.Context, name string, deleteBranch bool) error {
+	call := "delete:" + name
+	if deleteBranch {
+		call += ":branch"
+	}
+	f.calls = append(f.calls, call)
 	return nil
 }
 
@@ -171,7 +185,10 @@ func TestFilterNarrowsRows(t *testing.T) {
 	}
 }
 
-func TestSuspendKeyDispatchesSuspend(t *testing.T) {
+// TestStopKeyDispatchesStopImmediately is the regression guard for stop
+// losing its confirmation: stop is reversible now (Start brings the agent
+// back), so 's' must fire Stop directly with no y/n gate.
+func TestStopKeyDispatchesStopImmediately(t *testing.T) {
 	fb := &fakeBackend{}
 	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
 	m = sized(m)
@@ -179,31 +196,98 @@ func TestSuspendKeyDispatchesSuspend(t *testing.T) {
 
 	_, _ = drive(t, m, keyRunes("s"))
 
-	if len(fb.calls) != 1 || fb.calls[0] != "suspend:alpha" {
-		t.Fatalf("calls = %v, want [suspend:alpha]", fb.calls)
+	if len(fb.calls) != 1 || fb.calls[0] != "stop:alpha" {
+		t.Fatalf("calls = %v, want [stop:alpha]", fb.calls)
 	}
 }
 
-func TestStopRequiresConfirm(t *testing.T) {
+// TestStartKeyDispatchesStart covers the 'u' binding against a dormant row.
+func TestStartKeyDispatchesStart(t *testing.T) {
+	fb := &fakeBackend{}
+	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
+	m = sized(m)
+	m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: "stopped"}}, nil)
+
+	_, _ = drive(t, m, keyRunes("u"))
+
+	if len(fb.calls) != 1 || fb.calls[0] != "start:alpha" {
+		t.Fatalf("calls = %v, want [start:alpha]", fb.calls)
+	}
+}
+
+// TestDeleteKeyArmsConfirmThenDeletes is the regression guard for D: it must
+// fetch the DeletePlan, arm a y/n confirm naming exactly what will be
+// removed, and only call Delete after 'y'.
+func TestDeleteKeyArmsConfirmThenDeletes(t *testing.T) {
+	fb := &fakeBackend{deletePlan: agent.DeletePlan{Name: "leo-pretty-sky", HasWorktree: true, Branch: "feat/foo"}}
+	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
+	m = sized(m)
+	m = loaded(m, LocalHost, []Agent{{Name: "leo-pretty-sky", Host: LocalHost, Status: "stopped"}}, nil)
+
+	// D fetches the plan (async) and arms the confirm — drive to let the
+	// deletePlanMsg round-trip complete.
+	m, _ = drive(t, m, keyRunes("D"))
+	if m.confirming == nil {
+		t.Fatalf("D should arm confirm once the plan resolves")
+	}
+	if m.confirming.message != "delete pretty-sky? removes worktree + branch feat/foo (y/n)" {
+		t.Fatalf("confirm message = %q", m.confirming.message)
+	}
+	for _, call := range fb.calls {
+		if call == "delete:leo-pretty-sky:branch" || call == "delete:leo-pretty-sky" {
+			t.Fatalf("Delete must not fire before confirm; calls = %v", fb.calls)
+		}
+	}
+
+	m, _ = drive(t, m, keyRunes("y"))
+	if len(fb.calls) == 0 || fb.calls[len(fb.calls)-1] != "delete:leo-pretty-sky:branch" {
+		t.Fatalf("calls = %v, want trailing delete:leo-pretty-sky:branch", fb.calls)
+	}
+}
+
+// TestDeleteKeySharedAgentConfirmText covers the non-worktree confirm copy.
+func TestDeleteKeySharedAgentConfirmText(t *testing.T) {
+	fb := &fakeBackend{deletePlan: agent.DeletePlan{Name: "rocket", HasWorktree: false}}
+	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
+	m = sized(m)
+	m = loaded(m, LocalHost, []Agent{{Name: "rocket", Host: LocalHost, Status: "stopped"}}, nil)
+
+	m, _ = drive(t, m, keyRunes("D"))
+	if m.confirming == nil {
+		t.Fatalf("D should arm confirm once the plan resolves")
+	}
+	if m.confirming.message != "delete rocket? removes the agent record only (y/n)" {
+		t.Fatalf("confirm message = %q", m.confirming.message)
+	}
+
+	m, _ = drive(t, m, keyRunes("n"))
+	if m.confirming != nil {
+		t.Fatalf("n should dismiss the confirm")
+	}
+	for _, call := range fb.calls {
+		if call == "delete:rocket" {
+			t.Fatalf("Delete must not fire after n; calls = %v", fb.calls)
+		}
+	}
+}
+
+// TestXKeyIsInert is the regression guard for the old stop-then-confirm
+// muscle memory: x used to arm a confirm (with y finishing the stop). It must
+// now do nothing at all, since a stray "x" "y" from habit must never delete
+// or stop an agent.
+func TestXKeyIsInert(t *testing.T) {
 	fb := &fakeBackend{}
 	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
 	m = sized(m)
 	m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: "running"}}, nil)
 
-	// x arms the confirm prompt but does NOT call Stop yet.
-	next, _ := m.Update(keyRunes("x"))
-	m = next.(model)
-	if m.confirming == nil {
-		t.Fatalf("x should arm confirm")
+	m, _ = drive(t, m, keyRunes("x"))
+	if m.confirming != nil {
+		t.Fatalf("x must not arm any confirm")
 	}
-	if len(fb.calls) != 0 {
-		t.Fatalf("Stop must not fire before confirm; calls = %v", fb.calls)
-	}
-
-	// y confirms and dispatches Stop.
 	m, _ = drive(t, m, keyRunes("y"))
-	if len(fb.calls) != 1 || fb.calls[0] != "stop:alpha" {
-		t.Fatalf("calls = %v, want [stop:alpha]", fb.calls)
+	if len(fb.calls) != 0 {
+		t.Fatalf("x-then-y must not dispatch anything; calls = %v", fb.calls)
 	}
 }
 
@@ -229,19 +313,22 @@ func TestRenameRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEnterOnSuspendedResumesThenAttaches(t *testing.T) {
+// TestEnterOnDormantStartsThenAttaches is the regression guard for enter's
+// generalized dormant handling: any dormant status starts the agent first,
+// then attaches.
+func TestEnterOnDormantStartsThenAttaches(t *testing.T) {
 	fb := &fakeBackend{}
 	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
 	m = sized(m)
-	m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: "suspended"}}, nil)
+	m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: "stopped"}}, nil)
 
 	m, quit := drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 
-	if len(fb.calls) != 1 || fb.calls[0] != "resume:alpha" {
-		t.Fatalf("calls = %v, want [resume:alpha]", fb.calls)
+	if len(fb.calls) != 1 || fb.calls[0] != "start:alpha" {
+		t.Fatalf("calls = %v, want [start:alpha]", fb.calls)
 	}
 	if !quit {
-		t.Fatalf("resume-then-attach should quit the program")
+		t.Fatalf("start-then-attach should quit the program")
 	}
 	if m.result.Agent == nil || m.result.Agent.Name != "alpha" {
 		t.Fatalf("result = %+v, want alpha selected", m.result)

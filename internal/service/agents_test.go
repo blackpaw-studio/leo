@@ -84,7 +84,7 @@ func TestSpawnAgentSetsEphemeralState(t *testing.T) {
 
 func TestStopAgentNotFound(t *testing.T) {
 	sv := NewSupervisor(context.Background())
-	err := sv.StopAgent("nonexistent")
+	err := sv.StopAgent("nonexistent", false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent agent")
 	}
@@ -96,7 +96,7 @@ func TestStopAgentRejectsNonEphemeral(t *testing.T) {
 	sv.states["static-proc"] = &ProcessState{Name: "static-proc", Status: "running", Ephemeral: false}
 	sv.mu.Unlock()
 
-	err := sv.StopAgent("static-proc")
+	err := sv.StopAgent("static-proc", false)
 	if err == nil {
 		t.Fatal("expected error for non-ephemeral process")
 	}
@@ -117,7 +117,7 @@ func TestStopAgentRemovesState(t *testing.T) {
 	sv.cancels["eph-agent"] = cancelFn
 	sv.mu.Unlock()
 
-	err := sv.StopAgent("eph-agent")
+	err := sv.StopAgent("eph-agent", false)
 	if err != nil {
 		t.Fatalf("StopAgent() error: %v", err)
 	}
@@ -500,87 +500,51 @@ func TestRestoreAgentsKeepsSharedRecordWithMissingWorkspace(t *testing.T) {
 	}
 }
 
-// TestRestoreAgentsSuspendedSurvivesMissingWorkspace locks the fix for a
-// reviewer-caught defect: the non-worktree missing-workspace branch used to
-// run BEFORE the Suspended guard, so a suspended shared-workspace agent whose
-// workspace was transiently missing at boot (e.g. a late NAS mount) got
-// markFailedRestore'd into Stopped=true — corrupting a healthy suspended
-// record into a state that later manager.go bugs could turn into a silently
-// lost agent. The Suspended guard must win: record left untouched, no spawn.
-func TestRestoreAgentsSuspendedSurvivesMissingWorkspace(t *testing.T) {
-	home := t.TempDir()
-	rec := agentstore.Record{
-		Name:      "leo-susp-missing-ws",
-		Workspace: filepath.Join(t.TempDir(), "does-not-exist"),
-		SessionID: "sid-susp",
-		Suspended: true,
-		SpawnedAt: time.Now(),
-	}
-	if err := agentstore.Save(home, rec); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
-	if restored != 0 {
-		t.Fatalf("expected 0 restored, got %d", restored)
-	}
-	if len(spawner.calls) != 0 {
-		t.Fatalf("expected 0 SpawnAgent calls for a suspended record, got %d", len(spawner.calls))
-	}
-
-	stored, _ := agentstore.Load(agentstore.FilePath(home))
-	got, ok := stored[rec.Name]
-	if !ok {
-		t.Fatalf("suspended record should survive restore; got %+v", stored)
-	}
-	if !got.Suspended {
-		t.Error("expected Suspended=true to remain set")
-	}
-	if got.Stopped {
-		t.Error("suspended record must NOT be marked Stopped by the missing-workspace path")
-	}
-	if got.StoppedReason != "" {
-		t.Errorf("StoppedReason = %q, want empty", got.StoppedReason)
-	}
-}
-
-// TestRestoreAgentsStoppedSurvivesMissingWorkspaceUnmodified is the Stopped
-// analog of the above: a user-stopped non-worktree record (Stopped with an
-// empty StoppedReason) with a missing workspace must not be re-marked or
-// mutated by the missing-workspace branch, and must never be retried.
+// TestRestoreAgentsStoppedSurvivesMissingWorkspaceUnmodified covers both
+// dormant flavors — a plain user stop and an idle-sweep stop (WakeOnMessage
+// true or false, StoppedReason always empty) — of a non-worktree record with
+// a missing workspace: the missing-workspace branch must not re-mark or
+// mutate either, and neither is ever retried. This also locks the fix for a
+// reviewer-caught defect: the missing-workspace branch used to run BEFORE the
+// Stopped guard, so a dormant shared-workspace agent whose workspace was
+// transiently missing at boot (e.g. a late NAS mount) got markFailedRestore'd,
+// corrupting a healthy dormant record into a state that could turn into a
+// silently lost agent.
 func TestRestoreAgentsStoppedSurvivesMissingWorkspaceUnmodified(t *testing.T) {
-	home := t.TempDir()
-	rec := agentstore.Record{
-		Name:      "leo-stopped-missing-ws",
-		Workspace: filepath.Join(t.TempDir(), "does-not-exist"),
-		SessionID: "sid-stopped",
-		Stopped:   true,
-		SpawnedAt: time.Now(),
-	}
-	if err := agentstore.Save(home, rec); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	for _, wake := range []bool{false, true} {
+		rec := agentstore.Record{
+			Name:          "leo-stopped-missing-ws",
+			Workspace:     filepath.Join(t.TempDir(), "does-not-exist"),
+			SessionID:     "sid-stopped",
+			Stopped:       true,
+			WakeOnMessage: wake,
+			SpawnedAt:     time.Now(),
+		}
+		home := t.TempDir()
+		if err := agentstore.Save(home, rec); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
 
-	spawner := &fakeAgentSpawner{}
-	restored := RestoreAgents(home, "", "", spawner)
-	if restored != 0 {
-		t.Fatalf("expected 0 restored, got %d", restored)
-	}
-	if len(spawner.calls) != 0 {
-		t.Fatalf("expected 0 SpawnAgent calls for a user-stopped record, got %d", len(spawner.calls))
-	}
+		spawner := &fakeAgentSpawner{}
+		restored := RestoreAgents(home, "", "", spawner)
+		if restored != 0 {
+			t.Fatalf("wake=%v: expected 0 restored, got %d", wake, restored)
+		}
+		if len(spawner.calls) != 0 {
+			t.Fatalf("wake=%v: expected 0 SpawnAgent calls for a dormant record, got %d", wake, len(spawner.calls))
+		}
 
-	stored, _ := agentstore.Load(agentstore.FilePath(home))
-	got, ok := stored[rec.Name]
-	if !ok {
-		t.Fatalf("stopped record should survive restore; got %+v", stored)
-	}
-	if got.StoppedReason != "" {
-		t.Errorf("StoppedReason = %q, want unchanged empty", got.StoppedReason)
-	}
-	if got.Suspended {
-		t.Error("stopped record must not gain Suspended=true")
+		stored, _ := agentstore.Load(agentstore.FilePath(home))
+		got, ok := stored[rec.Name]
+		if !ok {
+			t.Fatalf("wake=%v: dormant record should survive restore; got %+v", wake, stored)
+		}
+		if got.StoppedReason != "" {
+			t.Errorf("wake=%v: StoppedReason = %q, want unchanged empty", wake, got.StoppedReason)
+		}
+		if got.WakeOnMessage != wake {
+			t.Errorf("wake=%v: WakeOnMessage = %v, want unchanged", wake, got.WakeOnMessage)
+		}
 	}
 }
 
@@ -978,7 +942,7 @@ func TestRestoreAgentsPrefersLatestJSONLAfterClear(t *testing.T) {
 	}
 }
 
-func TestRestoreAgentsSkipsSuspended(t *testing.T) {
+func TestRestoreAgentsSkipsStopped(t *testing.T) {
 	home := t.TempDir()
 	liveRec := agentstore.Record{
 		Name:      "leo-live",
@@ -986,18 +950,19 @@ func TestRestoreAgentsSkipsSuspended(t *testing.T) {
 		SessionID: "a",
 		SpawnedAt: time.Now(),
 	}
-	suspRec := agentstore.Record{
-		Name:      "leo-susp",
-		Workspace: home,
-		SessionID: "b",
-		Suspended: true,
-		SpawnedAt: time.Now(),
+	stoppedRec := agentstore.Record{
+		Name:          "leo-stopped",
+		Workspace:     home,
+		SessionID:     "b",
+		Stopped:       true,
+		WakeOnMessage: true,
+		SpawnedAt:     time.Now(),
 	}
 	if err := agentstore.Save(home, liveRec); err != nil {
 		t.Fatalf("seed live: %v", err)
 	}
-	if err := agentstore.Save(home, suspRec); err != nil {
-		t.Fatalf("seed susp: %v", err)
+	if err := agentstore.Save(home, stoppedRec); err != nil {
+		t.Fatalf("seed stopped: %v", err)
 	}
 
 	spawner := &fakeAgentSpawner{}
@@ -1007,11 +972,11 @@ func TestRestoreAgentsSkipsSuspended(t *testing.T) {
 	for _, c := range spawner.calls {
 		spawned[c.Name] = true
 	}
-	if spawned["leo-susp"] {
-		t.Fatal("suspended agent must not be respawned at boot")
+	if spawned["leo-stopped"] {
+		t.Fatal("stopped agent must not be respawned at boot, even with WakeOnMessage=true")
 	}
 	if !spawned["leo-live"] {
-		t.Fatal("non-suspended agent should be restored")
+		t.Fatal("non-stopped agent should be restored")
 	}
 }
 

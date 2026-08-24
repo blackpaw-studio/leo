@@ -171,11 +171,11 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities
 		Repo:      rec.Repo,
 		Workspace: rec.Workspace,
 		Branch:    rec.Branch,
-		Status:    observe.MapStatus(rawStatus),
 		Restarts:  restarts,
 		StartedAt: startedAt,
 		Activity:  observe.ActivityUnknown,
 	}
+	a.Status, a.WakeOnMessage = observe.AgentDormancy(rawStatus, rec.WakeOnMessage)
 
 	if cfg != nil && rec.Template != "" {
 		if tmpl, ok := cfg.Templates[rec.Template]; ok {

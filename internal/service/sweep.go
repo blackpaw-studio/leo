@@ -32,8 +32,9 @@ func runIdleSweep(ctx context.Context, sup *Supervisor, mgr *agent.Manager, tmux
 }
 
 // sweepIdleAgents runs a single sweep pass: for each live ephemeral agent with a
-// configured idle interval, suspend it if its tmux session has been inactive
-// long enough and no client is attached.
+// configured idle interval, stop it (with WakeOnMessage=true, so an inbound
+// message auto-starts it again) if its tmux session has been inactive long
+// enough and no client is attached.
 func sweepIdleAgents(ctx context.Context, sup *Supervisor, mgr *agent.Manager, tmuxPath, homePath string) {
 	records, err := agentstore.Load(agentstore.FilePath(homePath))
 	if err != nil || len(records) == 0 {
@@ -58,10 +59,10 @@ func sweepIdleAgents(ctx context.Context, sup *Supervisor, mgr *agent.Manager, t
 			continue // no tmux session metadata — leave it alone
 		}
 		if shouldSuspend(now, act, idle) {
-			if err := mgr.Suspend(name); err != nil {
-				fmt.Fprintf(os.Stderr, "idle-sweep: suspend %q failed: %v\n", name, err)
+			if err := mgr.Stop(name, agent.StopOptions{WakeOnMessage: true}); err != nil {
+				fmt.Fprintf(os.Stderr, "idle-sweep: stop %q failed: %v\n", name, err)
 			} else {
-				fmt.Fprintf(os.Stdout, "idle-sweep: suspended %q (idle >= %s)\n", name, idle)
+				fmt.Fprintf(os.Stdout, "idle-sweep: stopped %q (idle >= %s)\n", name, idle)
 			}
 		}
 	}

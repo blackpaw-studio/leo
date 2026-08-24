@@ -11,9 +11,8 @@ func TestGlyphByStatus(t *testing.T) {
 		"running":    glyphRunning,
 		"starting":   glyphStarting,
 		"restarting": glyphStarting,
-		"suspended":  glyphSuspended,
-		"stopped":    glyphStopped,
-		"weird":      glyphStopped, // unknown → stopped glyph
+		"stopped":    glyphDormant,
+		"weird":      glyphDormant, // unknown → dormant glyph
 	}
 	for status, want := range cases {
 		if got := glyph(status); got != want {
@@ -71,7 +70,7 @@ func TestBuildRowsStripsLeoPrefixForDisplay(t *testing.T) {
 func TestBuildRowsIncludesAgentsAndErrorRows(t *testing.T) {
 	byHost := map[string][]Agent{
 		LocalHost: {{Name: "alpha", Template: "writer", Host: LocalHost, Status: "running"}},
-		"hestia":  {{Name: "rocket", Host: "hestia", Status: "suspended"}},
+		"hestia":  {{Name: "rocket", Host: "hestia", Status: "stopped"}},
 	}
 	byHostErr := map[string]error{"down": errBoom}
 	header, items := buildRows(byHost, byHostErr, map[string]struct{}{}, 0)

@@ -13,13 +13,14 @@ import (
 // by List are canonical, so lifecycle calls pass them straight through (no
 // shorthand resolution needed).
 type LocalBackend struct {
-	homePath string
-	list     func(ctx context.Context, workDir string) ([]agent.Record, error)
-	stop     func(ctx context.Context, workDir, name string) error
-	suspend  func(ctx context.Context, workDir, name string) error
-	resume   func(ctx context.Context, workDir, name string) (agent.Record, error)
-	rename   func(ctx context.Context, workDir, query, newName string) (agent.Record, error)
-	switchTo func(ctx context.Context, workDir, name, template string) (agent.SwitchResult, error)
+	homePath   string
+	list       func(ctx context.Context, workDir string) ([]agent.Record, error)
+	stop       func(ctx context.Context, workDir, name string) error
+	start      func(ctx context.Context, workDir, name string) error
+	deletePlan func(ctx context.Context, workDir, name string) (agent.DeletePlan, error)
+	delete     func(ctx context.Context, workDir, name string, req daemon.AgentDeleteRequest) error
+	rename     func(ctx context.Context, workDir, query, newName string) (agent.Record, error)
+	switchTo   func(ctx context.Context, workDir, name, template string) (agent.SwitchResult, error)
 	// templates lists the local host's configured template names for the
 	// template menu. Injected by the CLI layer, which already holds the loaded
 	// config — the picker has only a leo home path, and re-reading leo.yaml
@@ -28,17 +29,25 @@ type LocalBackend struct {
 	templates func() ([]string, error)
 }
 
+// localStop calls daemon.AgentStop with WakeOnMessage=false — an operator
+// (or picker) initiated stop is never auto-wakeable, matching the daemon's
+// one-dormant-state contract.
+func localStop(ctx context.Context, workDir, name string) error {
+	return daemon.AgentStop(ctx, workDir, name, false)
+}
+
 // NewLocalBackend builds a local backend bound to the given leo home.
 func NewLocalBackend(homePath string, templates func() ([]string, error)) *LocalBackend {
 	return &LocalBackend{
-		homePath:  homePath,
-		list:      daemon.AgentList,
-		stop:      daemon.AgentStop,
-		suspend:   daemon.AgentSuspend,
-		resume:    daemon.AgentResume,
-		rename:    daemon.AgentRename,
-		switchTo:  daemon.AgentSwitchTemplate,
-		templates: templates,
+		homePath:   homePath,
+		list:       daemon.AgentList,
+		stop:       localStop,
+		start:      daemon.AgentStart,
+		deletePlan: daemon.AgentDeletePlan,
+		delete:     daemon.AgentDelete,
+		rename:     daemon.AgentRename,
+		switchTo:   daemon.AgentSwitchTemplate,
+		templates:  templates,
 	}
 }
 
@@ -69,13 +78,16 @@ func (b *LocalBackend) Stop(ctx context.Context, name string) error {
 	return b.stop(ctx, b.homePath, name)
 }
 
-func (b *LocalBackend) Suspend(ctx context.Context, name string) error {
-	return b.suspend(ctx, b.homePath, name)
+func (b *LocalBackend) Start(ctx context.Context, name string) error {
+	return b.start(ctx, b.homePath, name)
 }
 
-func (b *LocalBackend) Resume(ctx context.Context, name string) error {
-	_, err := b.resume(ctx, b.homePath, name)
-	return err
+func (b *LocalBackend) DeletePlan(ctx context.Context, name string) (agent.DeletePlan, error) {
+	return b.deletePlan(ctx, b.homePath, name)
+}
+
+func (b *LocalBackend) Delete(ctx context.Context, name string, deleteBranch bool) error {
+	return b.delete(ctx, b.homePath, name, daemon.AgentDeleteRequest{DeleteBranch: deleteBranch})
 }
 
 func (b *LocalBackend) Templates(context.Context) ([]string, error) {

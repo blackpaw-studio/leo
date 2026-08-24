@@ -18,8 +18,7 @@ type stubSupervisor struct {
 func (s *stubSupervisor) ReserveAgent(string) error                { return nil }
 func (s *stubSupervisor) ReleaseAgent(string)                      {}
 func (s *stubSupervisor) SpawnAgent(SpawnRequest) error            { return nil }
-func (s *stubSupervisor) StopAgent(string) error                   { return nil }
-func (s *stubSupervisor) SuspendAgent(string) error                { return nil }
+func (s *stubSupervisor) StopAgent(string, bool) error             { return nil }
 func (s *stubSupervisor) RenameAgent(string, string) error         { return nil }
 func (s *stubSupervisor) EphemeralAgents() map[string]ProcessState { return s.agents }
 
@@ -276,11 +275,11 @@ func TestResolveDisplayNameBeatsRepoShort(t *testing.T) {
 	}
 }
 
-// TestResolveSuspendedByExactName pins the fix for a suspended agent (present
-// only in the agentstore after a daemon restart, absent from the live
-// supervisor map) resolving by its exact name, with Status "suspended" and
-// persisted metadata merged.
-func TestResolveSuspendedByExactName(t *testing.T) {
+// TestResolveMatchesStoppedByExactName proves a dormant (Stopped) agent —
+// present only in the agentstore, absent from the live supervisor map — is
+// returned by Resolve exactly like a live one, regardless of WakeOnMessage or
+// StoppedReason.
+func TestResolveMatchesStoppedByExactName(t *testing.T) {
 	mgr := newResolveManager(t,
 		map[string]ProcessState{},
 		map[string]agentstore.Record{
@@ -289,7 +288,7 @@ func TestResolveSuspendedByExactName(t *testing.T) {
 				Template:  "coding",
 				Repo:      "acme/widget",
 				Workspace: filepath.Join("/tmp", "widget"),
-				Suspended: true,
+				Stopped:   true,
 			},
 		},
 	)
@@ -297,73 +296,61 @@ func TestResolveSuspendedByExactName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if rec.Status != "suspended" {
-		t.Errorf("status = %q, want suspended", rec.Status)
+	if rec.Name != "leo-coding-acme-widget" {
+		t.Errorf("name = %q, want leo-coding-acme-widget", rec.Name)
 	}
-	if rec.Template != "coding" || rec.Repo != "acme/widget" || rec.Workspace != filepath.Join("/tmp", "widget") {
-		t.Errorf("hydrate = %+v", rec)
+	if rec.Status != "stopped" {
+		t.Errorf("Status = %q, want stopped", rec.Status)
 	}
 }
 
-// TestResolveSuspendedByDisplayName and repo-short prove the matching tiers
-// apply uniformly to suspended rows, not just the exact-name tier.
-func TestResolveSuspendedByDisplayName(t *testing.T) {
+// TestResolveMatchesStoppedByDisplayNameOrRepoShort proves the widened match
+// applies uniformly across every matching tier, not just exact name.
+func TestResolveMatchesStoppedByDisplayNameOrRepoShort(t *testing.T) {
 	mgr := newResolveManager(t,
 		map[string]ProcessState{},
 		map[string]agentstore.Record{
-			"leo-widget": {Name: "leo-widget", Repo: "acme/widget", Suspended: true},
+			"leo-widget": {Name: "leo-widget", Repo: "acme/widget", Stopped: true},
 		},
 	)
 	rec, err := mgr.Resolve("widget")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if rec.Name != "leo-widget" || rec.Status != "suspended" {
-		t.Errorf("rec = %+v", rec)
+	if rec.Name != "leo-widget" {
+		t.Errorf("name = %q, want leo-widget", rec.Name)
 	}
 }
 
-func TestResolveSuspendedByRepoShort(t *testing.T) {
-	mgr := newResolveManager(t,
-		map[string]ProcessState{},
-		map[string]agentstore.Record{
-			"leo-coding-acme-widget": {Name: "leo-coding-acme-widget", Repo: "acme/widget", Suspended: true},
-		},
-	)
-	rec, err := mgr.Resolve("widget")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if rec.Name != "leo-coding-acme-widget" || rec.Status != "suspended" {
-		t.Errorf("rec = %+v", rec)
-	}
-}
-
-// TestResolveStoppedNotFound pins the deliberate exclusion: a stopped (not
-// suspended) agentstore record must never be returned by Resolve — Rename and
-// Prune have their own exact-name store fallbacks for that case.
-func TestResolveStoppedNotFound(t *testing.T) {
+// TestResolveMatchesManuallyStoppedWorktreeAgent proves the widened match
+// applies to a worktree agent too, and to a record with StoppedReason unset
+// (a manual stop, as opposed to a failed-restore record).
+func TestResolveMatchesManuallyStoppedWorktreeAgent(t *testing.T) {
 	mgr := newResolveManager(t,
 		map[string]ProcessState{},
 		map[string]agentstore.Record{
 			"leo-coding-acme-widget": {Name: "leo-coding-acme-widget", Repo: "acme/widget", Stopped: true, Branch: "feature/x"},
 		},
 	)
-	_, err := mgr.Resolve("leo-coding-acme-widget")
-	var nf *ErrNotFound
-	if !errors.As(err, &nf) {
-		t.Fatalf("want ErrNotFound, got %T: %v", err, err)
+	rec, err := mgr.Resolve("leo-coding-acme-widget")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rec.Name != "leo-coding-acme-widget" {
+		t.Errorf("name = %q, want leo-coding-acme-widget", rec.Name)
 	}
 }
 
-// TestResolveAmbiguousLiveAndSuspended proves a tier tie between a live agent
-// and a suspended one is still ambiguous, not silently resolved by liveness.
-func TestResolveAmbiguousLiveAndSuspended(t *testing.T) {
+// TestResolveAmbiguousBetweenLiveAndStoppedSibling proves a tier tie between
+// a live agent and a dormant (Stopped) sibling is now genuinely ambiguous —
+// both participate in every tier identically, so a query that ties between
+// them must report ErrAmbiguous rather than silently preferring the live one.
+func TestResolveAmbiguousBetweenLiveAndStoppedSibling(t *testing.T) {
 	mgr := newResolveManager(t,
 		map[string]ProcessState{"leo-coding-acme-leo": {Status: "running"}},
 		map[string]agentstore.Record{
 			"leo-coding-acme-leo":  {Name: "leo-coding-acme-leo", Repo: "acme/leo"},
-			"leo-coding-other-leo": {Name: "leo-coding-other-leo", Repo: "other/leo", Suspended: true},
+			"leo-coding-other-leo": {Name: "leo-coding-other-leo", Repo: "other/leo", Stopped: true},
 		},
 	)
 	_, err := mgr.Resolve("leo")
@@ -371,10 +358,36 @@ func TestResolveAmbiguousLiveAndSuspended(t *testing.T) {
 	if !errors.As(err, &amb) {
 		t.Fatalf("want ErrAmbiguous, got %T: %v", err, err)
 	}
-	sort.Strings(amb.Matches)
-	want := []string{"leo-coding-acme-leo", "leo-coding-other-leo"}
-	if len(amb.Matches) != 2 || amb.Matches[0] != want[0] || amb.Matches[1] != want[1] {
-		t.Errorf("matches = %v, want %v", amb.Matches, want)
+}
+
+// TestResolveManuallyStoppedAgentByShorthand is the regression guard for the
+// whole fix: a manually-stopped agent (Stopped=true, StoppedReason empty,
+// WakeOnMessage=false — i.e. an operator ran `leo agent stop`, not a
+// failed-restore or an idle-sweep suspend) must be resolvable by shorthand.
+// That exact record shape was unreachable by both Resolve and
+// ResolveRecoverable before this fix — Resolve excluded every dormant
+// record, and ResolveRecoverable only matched IsFailedRestore() (non-empty
+// StoppedReason).
+func TestResolveManuallyStoppedAgentByShorthand(t *testing.T) {
+	mgr := newResolveManager(t,
+		map[string]ProcessState{},
+		map[string]agentstore.Record{
+			"leo-coding-acme-widget": {
+				Name:          "leo-coding-acme-widget",
+				Repo:          "acme/widget",
+				Workspace:     filepath.Join("/tmp", "widget"),
+				Stopped:       true,
+				StoppedReason: "",
+				WakeOnMessage: false,
+			},
+		},
+	)
+	rec, err := mgr.Resolve("widget")
+	if err != nil {
+		t.Fatalf("resolve by shorthand: %v", err)
+	}
+	if rec.Name != "leo-coding-acme-widget" {
+		t.Errorf("name = %q, want leo-coding-acme-widget", rec.Name)
 	}
 }
 

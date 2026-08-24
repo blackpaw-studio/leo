@@ -92,20 +92,20 @@ func TestFormatSwitchResult(t *testing.T) {
 			want: []string{"leo-x: coding → codex", "(claude → codex)", "respawned on a new session"},
 		},
 		{
-			name: "same harness resumed",
+			name: "same harness rejoined",
 			result: agent.SwitchResult{
 				Name: "leo-x", FromTemplate: "coding", ToTemplate: "review",
 				FromHarness: "claude", ToHarness: "claude", Status: "running", Resumed: true,
 			},
-			want: []string{"leo-x: coding → review", "respawned, resumed this template's previous session"},
+			want: []string{"leo-x: coding → review", "respawned, rejoined this template's previous session"},
 		},
 		{
-			name: "suspended agent",
+			name: "stopped (dormant) agent",
 			result: agent.SwitchResult{
 				Name: "leo-x", FromTemplate: "coding", ToTemplate: "codex",
-				FromHarness: "claude", ToHarness: "codex", Status: "suspended",
+				FromHarness: "claude", ToHarness: "codex", Status: "stopped",
 			},
-			want: []string{"still suspended", "starts a new session when it wakes"},
+			want: []string{"still stopped", "starts a new session on next start"},
 		},
 		{
 			name: "no-op",

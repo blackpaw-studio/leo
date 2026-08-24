@@ -61,16 +61,25 @@ envelope.
   "model": "fable",
   "harness": "claude",
   "restarts": 0,
+  "wake_on_message": false,
   "started_at": "2026-07-31T18:42:33-04:00",
   "last_activity_at": "2026-07-31T18:44:01-04:00",
   "current_action": { "kind": "pane", "detail": "Running go test ./..." }
 }
 ```
 
-- `status` — lifecycle, from the agent record: `starting` | `running` | `suspended` |
-  `stopped`. These four values are exhaustive on the wire — an internal-only
-  crash-loop-backoff state (`restarting`) folds into `starting`, the closest lifecycle
-  equivalent a consumer can act on, so a consumer never has to recognize a fifth value.
+- `status` — lifecycle, from the agent record: `starting` | `running` | `stopped`. These
+  three values are exhaustive on the wire — an internal-only crash-loop-backoff state
+  (`restarting`) folds into `starting`, the closest lifecycle equivalent a consumer can
+  act on, so a consumer never has to recognize a fourth value. Leo has only one dormant
+  state; a suspended-then-resumable agent and a deliberately-stopped one both report
+  `stopped` — see `wake_on_message` to tell them apart.
+- `wake_on_message` — always present, meaningful only when `status` is `stopped`: `true`
+  means the agent was parked by the idle sweep and an inbound message auto-starts it
+  again; `false` means it is either not dormant at all, or was stopped deliberately (by an
+  operator, or by the daemon after a failed restore) and stays down until explicitly
+  started. `status` and `wake_on_message` are always set together and can never disagree —
+  `wake_on_message` is never `true` for a non-`stopped` agent.
 - `activity` — live work state, from the activity tracker: `working` | `idle` |
   `unknown`. Orthogonal to `status`: a `running` agent may be `idle`. Non-running agents
   report `unknown`.
@@ -244,16 +253,29 @@ Event types:
 |---|---|
 | `hello` | `version`, `server_time` |
 | `agent_spawned` | full `Agent` object |
-| `agent_state_changed` | `agent`, `status`, `restarts` |
+| `agent_state_changed` | `agent`, `status`, `restarts`, `wake_on_message` |
 | `agent_activity` | `agent`, `activity`, `current_action` |
-| `agent_stopped` | `agent` |
+| `agent_stopped` | `agent`, `wake_on_message` |
 | `task_run_started` | `TaskRun` |
 | `task_run_succeeded` | `TaskRun` |
 | `task_run_failed` | `TaskRun` (with `error`) |
 | `agent_message` | `from` (omitted if not an agent), `to` |
 
-`agent_suspended` / `agent_resumed` are represented as `agent_state_changed` with the
-new `status`; consumers key off `status`, not distinct event names.
+A resume is represented as `agent_state_changed` with the new `status`; consumers key
+off `status`, not a distinct event name. `agent_stopped`'s `wake_on_message` carries the
+same meaning as the snapshot Agent's field above: `true` only for an idle-sweep park,
+`false` for every other departure — a manual stop with no wake requested, a deleted
+agent, a rename's old name disappearing, or a transient kill ahead of an immediate
+respawn (`leo agent reset`, `leo agent restart`, and `leo agent set-template` all issue
+`StopAgent(name, false)` before respawning under the same name).
+
+At the instant `agent_stopped` lands, no field distinguishes "about to respawn" from
+"parked indefinitely" — both look identical on the wire (`wake_on_message:false`). A
+consumer that needs to tell them apart must wait for the follow-up event: a genuine
+departure has none, while reset/restart/set-template are followed shortly by
+`agent_spawned` (or `agent_state_changed` with `status:"starting"`) for the same agent
+name. Treating a bare `agent_stopped` as a permanent departure without waiting for that
+follow-up will misreport routine restarts as agents leaving.
 
 `agent_message` announces that one agent messaged another, and carries **the pair only** —
 there is no field for the message body and none may be added. See AgentMessage below for

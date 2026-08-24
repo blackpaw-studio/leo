@@ -51,12 +51,13 @@
                     <input type="text" name="new_name" placeholder="new name" aria-label="Rename {{displayName .Name}}" autocomplete="off">
                     <button type="submit" class="btn btn-sm">Rename</button>
                 </form>
-                {{if eq .Status "suspended"}}
-                <button class="btn btn-sm hot" hx-post="/web/agent/{{.Name}}/resume" hx-target="#agents-content" hx-swap="outerHTML" hx-confirm="Resume agent {{displayName .Name}}?">Resume</button>
-                {{else if eq .Status "running"}}
-                <button class="btn btn-sm" hx-post="/web/agent/{{.Name}}/suspend" hx-target="#agents-content" hx-swap="outerHTML" hx-confirm="Suspend agent {{displayName .Name}}?">Suspend</button>
+                {{if eq .Status "stopped"}}
+                <button class="btn btn-sm hot" hx-post="/web/agent/{{.Name}}/start" hx-target="#agents-content" hx-swap="outerHTML">Start</button>
+                <button class="btn btn-sm btn-danger" hx-delete="/web/agent/{{.Name}}" hx-target="#agents-content" hx-swap="outerHTML"
+                        hx-confirm="{{deleteConfirmText .Name .Branch}}">Delete</button>
+                {{else}}
+                <button class="btn btn-sm" hx-post="/web/agent/{{.Name}}/stop" hx-target="#agents-content" hx-swap="outerHTML">Stop</button>
                 {{end}}
-                <button class="btn btn-sm btn-danger" hx-post="/web/agent/{{.Name}}/stop" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Stop agent {{displayName .Name}}?">Stop</button>
             </div>
         </div>
         {{else}}

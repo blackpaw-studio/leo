@@ -73,13 +73,17 @@ type AgentSpawnedPayload struct {
 	Agent Agent `json:"agent"`
 }
 
-// AgentStateChangedPayload reports lifecycle movement. Suspend and resume arrive here as
-// a new Status rather than as distinct event types, so consumers branch on Status alone.
+// AgentStateChangedPayload reports lifecycle movement. Resume arrives here as
+// a new Status rather than as a distinct event type, so consumers branch on Status alone.
 type AgentStateChangedPayload struct {
 	Meta
 	Agent    string `json:"agent"`
 	Status   Status `json:"status"`
 	Restarts int    `json:"restarts"`
+	// WakeOnMessage mirrors Agent.WakeOnMessage: only meaningful when Status
+	// is StatusStopped, always present, always set alongside Status via
+	// AgentDormancy so the two can never disagree.
+	WakeOnMessage bool `json:"wake_on_message"`
 }
 
 // AgentActivityPayload reports the tracker's latest reading for one agent.
@@ -94,6 +98,13 @@ type AgentActivityPayload struct {
 type AgentStoppedPayload struct {
 	Meta
 	Agent string `json:"agent"`
+	// WakeOnMessage is true only when this stop is a dormancy transition an
+	// inbound message may reverse (an idle sweep, or a manual stop with
+	// wake-on-message requested); false for a transient kill ahead of an
+	// immediate respawn (Reset, Restart, template switch) or a permanent
+	// departure (Delete, rename). Always present, matching Agent.WakeOnMessage
+	// and AgentStateChangedPayload.WakeOnMessage's never-disagree contract.
+	WakeOnMessage bool `json:"wake_on_message"`
 }
 
 // TaskRunPayload carries a task firing. It serves the started, succeeded, and failed

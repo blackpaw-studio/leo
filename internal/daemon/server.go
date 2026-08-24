@@ -37,9 +37,10 @@ type ProcessStateInfo = agent.ProcessState
 // lifecycle. It is satisfied by *agent.Manager.
 type AgentManager interface {
 	Spawn(ctx context.Context, spec agent.SpawnSpec) (agent.Record, error)
-	Stop(name string) error
-	Suspend(name string) error
-	Resume(name string) (agent.Record, error)
+	Stop(name string, opts agent.StopOptions) error
+	// Start clears a dormant agent's Stopped/StoppedReason/WakeOnMessage flags
+	// and respawns it, resuming its prior claude session.
+	Start(name string) error
 	Reset(name string) error
 	Restart(name string) error
 	// SwitchTemplate re-points an agent at a different template, swapping its
@@ -49,20 +50,17 @@ type AgentManager interface {
 	// StaleAgents reports running agents whose wiring would change if they
 	// were restarted — what `leo update` offers to bounce after a binary swap.
 	StaleAgents() []agent.StaleAgent
-	Prune(ctx context.Context, name string, opts agent.PruneOptions) error
+	// Delete removes the agentstore record for name — plus its worktree and
+	// branch when it has one. Refuses a live agent.
+	Delete(ctx context.Context, name string, opts agent.DeleteOptions) error
+	// DeletePlan resolves name and reports what Delete would remove, without
+	// removing anything — the shared seam CLI/picker/web format their delete
+	// confirmation from.
+	DeletePlan(name string) (agent.DeletePlan, error)
 	List() []agent.Record
 	Logs(name string, lines int) (string, error)
 	SessionName(name string) string
 	Resolve(query string) (agent.Record, error)
-	// ResolveRecoverable is an exact-name store fallback for both restart and
-	// stop: Resolve deliberately excludes every stopped record, but a
-	// shared-workspace agent left Stopped+StoppedReason by a failed
-	// boot-time restore (see internal/service/agents.go RestoreAgents) must
-	// still be reachable via `leo agent restart <name>` (to respawn it) and
-	// `leo agent stop <name>` (to delete an unrecoverable one). Returns
-	// ok=false for anything else — including a user-stopped record with no
-	// reason.
-	ResolveRecoverable(query string) (agent.Record, bool)
 	Rename(query, newName string) (agent.Record, error)
 	// ResolveHandle resolves an agent name to its harness name and the
 	// SessionHandle a SessionDriver needs to act on it. ok=false means "not
@@ -169,12 +167,12 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("POST /agents/restart", s.handleAgentRestartAll)
 	mux.HandleFunc("GET /agents/stale", s.handleAgentStale)
 	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
-	mux.HandleFunc("POST /agents/{name}/suspend", s.handleAgentSuspend)
-	mux.HandleFunc("POST /agents/{name}/resume", s.handleAgentResume)
+	mux.HandleFunc("POST /agents/{name}/start", s.handleAgentStart)
 	mux.HandleFunc("POST /agents/{name}/reset", s.handleAgentReset)
 	mux.HandleFunc("POST /agents/{name}/restart", s.handleAgentRestart)
 	mux.HandleFunc("POST /agents/{name}/set-template", s.handleAgentSetTemplate)
-	mux.HandleFunc("POST /agents/{name}/prune", s.handleAgentPrune)
+	mux.HandleFunc("DELETE /agents/{name}", s.handleAgentDelete)
+	mux.HandleFunc("GET /agents/{name}/delete-plan", s.handleAgentDeletePlan)
 	mux.HandleFunc("POST /agents/{name}/rename", s.handleAgentRename)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)

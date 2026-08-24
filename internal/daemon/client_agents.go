@@ -54,11 +54,11 @@ func AgentSpawn(ctx context.Context, workDir string, req AgentSpawnRequest) (age
 	return rec, nil
 }
 
-// AgentPrune sends POST /agents/{name}/prune to the daemon. On typed failures
+// AgentDelete sends DELETE /agents/{name} to the daemon. On typed failures
 // (ErrWorktreeDirty, ErrBranchNotMerged, ErrAgentStillRunning, ...) it returns
 // a wrapped error that callers can match with errors.Is.
-func AgentPrune(ctx context.Context, workDir, name string, req AgentPruneRequest) error {
-	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/prune", req)
+func AgentDelete(ctx context.Context, workDir, name string, req AgentDeleteRequest) error {
+	resp, err := Send(ctx, workDir, "DELETE", "/agents/"+url.PathEscape(name), req)
 	if err != nil {
 		return err
 	}
@@ -66,6 +66,25 @@ func AgentPrune(ctx context.Context, workDir, name string, req AgentPruneRequest
 		return responseError(resp, name)
 	}
 	return nil
+}
+
+// AgentDeletePlan sends GET /agents/{name}/delete-plan to the daemon,
+// returning what AgentDelete would remove without removing anything. name may
+// be a shorthand — the server resolves it. On resolve failures it returns
+// typed *agent.ErrNotFound or *agent.ErrAmbiguous.
+func AgentDeletePlan(ctx context.Context, workDir, name string) (agent.DeletePlan, error) {
+	resp, err := Send(ctx, workDir, "GET", "/agents/"+url.PathEscape(name)+"/delete-plan", nil)
+	if err != nil {
+		return agent.DeletePlan{}, err
+	}
+	if !resp.OK {
+		return agent.DeletePlan{}, responseError(resp, name)
+	}
+	var plan agent.DeletePlan
+	if err := json.Unmarshal(resp.Data, &plan); err != nil {
+		return agent.DeletePlan{}, fmt.Errorf("decoding delete plan response: %w", err)
+	}
+	return plan, nil
 }
 
 // AgentList sends GET /agents/list to the daemon.
@@ -84,11 +103,14 @@ func AgentList(ctx context.Context, workDir string) ([]agent.Record, error) {
 	return records, nil
 }
 
-// AgentStop sends POST /agents/{name}/stop to the daemon. On resolve failures
-// it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous so callers can
-// branch with errors.As.
-func AgentStop(ctx context.Context, workDir, name string) error {
-	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/stop", nil)
+// AgentStop sends POST /agents/{name}/stop to the daemon. wakeOnMessage
+// carries intent, not state: true lets a subsequent inbound message auto-start
+// the agent again (the idle sweep's stop); false (an operator-initiated stop)
+// leaves it dormant until an operator runs `leo agent start` explicitly. On
+// resolve failures it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous
+// so callers can branch with errors.As.
+func AgentStop(ctx context.Context, workDir, name string, wakeOnMessage bool) error {
+	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/stop", AgentStopRequest{WakeOnMessage: wakeOnMessage})
 	if err != nil {
 		return err
 	}
@@ -98,11 +120,10 @@ func AgentStop(ctx context.Context, workDir, name string) error {
 	return nil
 }
 
-// AgentSuspend sends POST /agents/{name}/suspend to the daemon. The agent
-// process and tmux session are killed while the conversation record is preserved
-// for later auto-resume.
-func AgentSuspend(ctx context.Context, workDir, name string) error {
-	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/suspend", nil)
+// AgentStart sends POST /agents/{name}/start to the daemon. The dormant agent
+// is re-spawned with --resume so the prior conversation continues.
+func AgentStart(ctx context.Context, workDir, name string) error {
+	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/start", nil)
 	if err != nil {
 		return err
 	}
@@ -110,24 +131,6 @@ func AgentSuspend(ctx context.Context, workDir, name string) error {
 		return responseError(resp, name)
 	}
 	return nil
-}
-
-// AgentResume sends POST /agents/{name}/resume to the daemon. The suspended
-// agent is re-spawned with --resume so the prior conversation continues.
-// Returns the updated agent record on success.
-func AgentResume(ctx context.Context, workDir, name string) (agent.Record, error) {
-	resp, err := Send(ctx, workDir, "POST", "/agents/"+url.PathEscape(name)+"/resume", nil)
-	if err != nil {
-		return agent.Record{}, err
-	}
-	if !resp.OK {
-		return agent.Record{}, responseError(resp, name)
-	}
-	var rec agent.Record
-	if err := json.Unmarshal(resp.Data, &rec); err != nil {
-		return agent.Record{}, fmt.Errorf("decoding resume response: %w", err)
-	}
-	return rec, nil
 }
 
 // AgentReset sends POST /agents/{name}/reset to the daemon. The agent's

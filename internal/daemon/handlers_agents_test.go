@@ -24,7 +24,6 @@ type fakeAgentManager struct {
 	stopErr    error
 	suspendErr error
 	resumeErr  error
-	resumeRec  agent.Record
 	resetErr   error
 	restartErr error
 	restartAll agent.RestartResult
@@ -33,6 +32,10 @@ type fakeAgentManager struct {
 	logsErr    error
 	logsOut    string
 	renameErr  error
+
+	deletePlan     agent.DeletePlan
+	deletePlanErr  error
+	lastDeletePlan string
 
 	lastSpawn        agent.SpawnSpec
 	lastStop         string
@@ -44,9 +47,10 @@ type fakeAgentManager struct {
 	staleCalled      bool
 	lastPrune        struct {
 		name string
-		opts agent.PruneOptions
+		opts agent.DeleteOptions
 	}
-	lastLogs struct {
+	lastStopOpts agent.StopOptions
+	lastLogs     struct {
 		name  string
 		lines int
 	}
@@ -79,25 +83,19 @@ func (f *fakeAgentManager) Spawn(_ context.Context, spec agent.SpawnSpec) (agent
 	return agent.Record{Name: "leo-" + spec.Template + "-" + spec.Repo, Template: spec.Template}, nil
 }
 
-func (f *fakeAgentManager) Stop(name string) error {
+func (f *fakeAgentManager) Stop(name string, opts agent.StopOptions) error {
 	f.lastStop = name
+	f.lastStopOpts = opts
+	if opts.WakeOnMessage {
+		f.lastSuspend = name
+		return f.suspendErr
+	}
 	return f.stopErr
 }
 
-func (f *fakeAgentManager) Suspend(name string) error {
-	f.lastSuspend = name
-	return f.suspendErr
-}
-
-func (f *fakeAgentManager) Resume(name string) (agent.Record, error) {
+func (f *fakeAgentManager) Start(name string) error {
 	f.lastResume = name
-	if f.resumeErr != nil {
-		return agent.Record{}, f.resumeErr
-	}
-	if f.resumeRec.Name != "" {
-		return f.resumeRec, nil
-	}
-	return agent.Record{Name: name}, nil
+	return f.resumeErr
 }
 
 func (f *fakeAgentManager) Reset(name string) error {
@@ -135,10 +133,15 @@ func (f *fakeAgentManager) StaleAgents() []agent.StaleAgent {
 	return f.stale
 }
 
-func (f *fakeAgentManager) Prune(_ context.Context, name string, opts agent.PruneOptions) error {
+func (f *fakeAgentManager) Delete(_ context.Context, name string, opts agent.DeleteOptions) error {
 	f.lastPrune.name = name
 	f.lastPrune.opts = opts
 	return f.pruneErr
+}
+
+func (f *fakeAgentManager) DeletePlan(name string) (agent.DeletePlan, error) {
+	f.lastDeletePlan = name
+	return f.deletePlan, f.deletePlanErr
 }
 
 func (f *fakeAgentManager) List() []agent.Record {
@@ -494,20 +497,10 @@ type resolveFakeAgentManager struct {
 	fakeAgentManager
 	resolveOut agent.Record
 	resolveErr error
-
-	// stoppedForRestartOut/OK back ResolveRecoverable — the store
-	// fallback handleAgentRestart uses when Resolve excludes a record
-	// stopped by a failed boot-time restore.
-	stoppedForRestartOut agent.Record
-	stoppedForRestartOK  bool
 }
 
 func (r *resolveFakeAgentManager) Resolve(string) (agent.Record, error) {
 	return r.resolveOut, r.resolveErr
-}
-
-func (r *resolveFakeAgentManager) ResolveRecoverable(string) (agent.Record, bool) {
-	return r.stoppedForRestartOut, r.stoppedForRestartOK
 }
 
 func TestAgentResolveHandlerSuccess(t *testing.T) {
@@ -623,14 +616,14 @@ func TestAgentLogsHandlerSupervisorError(t *testing.T) {
 	}
 }
 
-// TestAgentRestartHandlerSuspended reproduces the finding-2 regression: once
-// Manager.Resolve started matching suspended agents, restarting one no longer
-// dies at 404 — it resolves, then Manager.Restart itself rejects a
+// TestAgentRestartHandlerStopped reproduces the finding-2 regression: once
+// Manager.Resolve started matching live agents only, restarting a dormant one
+// no longer dies at 404 — it resolves, then Manager.Restart itself rejects a
 // not-currently-running agent. That must surface as a 4xx telling the caller
-// to resume first, not a bare 500.
-func TestAgentRestartHandlerSuspended(t *testing.T) {
-	mgr := &resolveFakeAgentManager{resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "suspended"}}
-	mgr.restartErr = fmt.Errorf("%w: agent %q is suspended", agent.ErrAgentSuspended, "leo-coding-acme-widget")
+// to start it first, not a bare 500.
+func TestAgentRestartHandlerStopped(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"}}
+	mgr.restartErr = fmt.Errorf("%w: agent %q is stopped", agent.ErrAgentStopped, "leo-coding-acme-widget")
 	_, client := startTestServerWithAgent(t, mgr)
 
 	resp, err := client.Post("http://localhost/agents/widget/restart", "application/json", nil)
@@ -645,24 +638,22 @@ func TestAgentRestartHandlerSuspended(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if env.Code != ErrorCodeAgentSuspended {
-		t.Errorf("code = %q, want %q", env.Code, ErrorCodeAgentSuspended)
+	if env.Code != ErrorCodeAgentStopped {
+		t.Errorf("code = %q, want %q", env.Code, ErrorCodeAgentStopped)
 	}
-	if !strings.Contains(env.Error, "leo-coding-acme-widget") || !strings.Contains(env.Error, "suspended") {
-		t.Errorf("error message = %q, want it to name the agent and say it is suspended", env.Error)
+	if !strings.Contains(env.Error, "leo-coding-acme-widget") || !strings.Contains(env.Error, "stopped") {
+		t.Errorf("error message = %q, want it to name the agent and say it is stopped", env.Error)
 	}
 }
 
-// TestAgentRestartHandlerRecoversFailedRestoreRecord verifies handleAgentRestart
-// falls back to ResolveRecoverable when Resolve reports not-found —
-// Resolve deliberately excludes every stopped record, so a shared-workspace
-// agent RestoreAgents left behind after a failed boot-time restore would
-// otherwise be permanently unreachable via `leo agent restart <name>`.
-func TestAgentRestartHandlerRecoversFailedRestoreRecord(t *testing.T) {
+// TestAgentRestartHandlerReachesFailedRestoreRecord verifies handleAgentRestart
+// reaches a failed-restore record directly through Resolve, which matches
+// every dormant record exactly like a live one — a shared-workspace agent
+// RestoreAgents left behind after a failed boot-time restore is reachable via
+// `leo agent restart <name>` with no separate fallback needed.
+func TestAgentRestartHandlerReachesFailedRestoreRecord(t *testing.T) {
 	mgr := &resolveFakeAgentManager{
-		resolveErr:           &agent.ErrNotFound{Query: "widget"},
-		stoppedForRestartOK:  true,
-		stoppedForRestartOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"},
+		resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"},
 	}
 	_, client := startTestServerWithAgent(t, mgr)
 
@@ -675,13 +666,12 @@ func TestAgentRestartHandlerRecoversFailedRestoreRecord(t *testing.T) {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
 	if mgr.lastRestart != "leo-coding-acme-widget" {
-		t.Errorf("Restart called with %q, want the fallback's canonical name", mgr.lastRestart)
+		t.Errorf("Restart called with %q, want the resolved canonical name", mgr.lastRestart)
 	}
 }
 
 // TestAgentRestartHandlerNotFoundWithoutFallback verifies a genuinely unknown
-// agent still 404s when the store fallback also finds nothing — the fallback
-// must not mask a real not-found.
+// agent still 404s.
 func TestAgentRestartHandlerNotFoundWithoutFallback(t *testing.T) {
 	mgr := &resolveFakeAgentManager{resolveErr: &agent.ErrNotFound{Query: "ghost"}}
 	_, client := startTestServerWithAgent(t, mgr)
@@ -696,18 +686,15 @@ func TestAgentRestartHandlerNotFoundWithoutFallback(t *testing.T) {
 	}
 }
 
-// TestAgentStopHandlerRecoversFailedRestoreRecord is the Stop analogue of
-// TestAgentRestartHandlerRecoversFailedRestoreRecord: a shared-workspace
-// agent RestoreAgents left Stopped+StoppedReason after a failed boot-time
-// restore has no live process to kill, but must still be removable via
-// `leo agent stop <name>` — otherwise a permanently unrecoverable workspace
-// (e.g. a deleted NAS share) becomes an undeletable entry in `leo agent
-// list` forever, with no path except hand-editing agents.json.
-func TestAgentStopHandlerRecoversFailedRestoreRecord(t *testing.T) {
+// TestAgentStopHandlerReachesFailedRestoreRecord is the Stop analogue of
+// TestAgentRestartHandlerReachesFailedRestoreRecord: a shared-workspace agent
+// RestoreAgents left Stopped+StoppedReason after a failed boot-time restore
+// has no live process to kill, but is still removable via `leo agent stop
+// <name>` — Resolve reaches it directly, so it never becomes an undeletable
+// entry in `leo agent list`.
+func TestAgentStopHandlerReachesFailedRestoreRecord(t *testing.T) {
 	mgr := &resolveFakeAgentManager{
-		resolveErr:           &agent.ErrNotFound{Query: "widget"},
-		stoppedForRestartOK:  true,
-		stoppedForRestartOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"},
+		resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"},
 	}
 	_, client := startTestServerWithAgent(t, mgr)
 
@@ -720,12 +707,12 @@ func TestAgentStopHandlerRecoversFailedRestoreRecord(t *testing.T) {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
 	if mgr.lastStop != "leo-coding-acme-widget" {
-		t.Errorf("Stop called with %q, want the fallback's canonical name", mgr.lastStop)
+		t.Errorf("Stop called with %q, want the resolved canonical name", mgr.lastStop)
 	}
 }
 
 // TestAgentStopHandlerNotFoundWithoutFallback verifies a genuinely unknown
-// agent still 404s when the store fallback also finds nothing.
+// agent still 404s.
 func TestAgentStopHandlerNotFoundWithoutFallback(t *testing.T) {
 	mgr := &resolveFakeAgentManager{resolveErr: &agent.ErrNotFound{Query: "ghost"}}
 	_, client := startTestServerWithAgent(t, mgr)
@@ -740,11 +727,11 @@ func TestAgentStopHandlerNotFoundWithoutFallback(t *testing.T) {
 	}
 }
 
-// TestAgentLogsHandlerSuspended is the Logs analogue of
-// TestAgentRestartHandlerSuspended — see its comment.
-func TestAgentLogsHandlerSuspended(t *testing.T) {
-	mgr := &resolveFakeAgentManager{resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "suspended"}}
-	mgr.logsErr = fmt.Errorf("%w: agent %q is suspended", agent.ErrAgentSuspended, "leo-coding-acme-widget")
+// TestAgentLogsHandlerStopped is the Logs analogue of
+// TestAgentRestartHandlerStopped — see its comment.
+func TestAgentLogsHandlerStopped(t *testing.T) {
+	mgr := &resolveFakeAgentManager{resolveOut: agent.Record{Name: "leo-coding-acme-widget", Status: "stopped"}}
+	mgr.logsErr = fmt.Errorf("%w: agent %q is stopped", agent.ErrAgentStopped, "leo-coding-acme-widget")
 	_, client := startTestServerWithAgent(t, mgr)
 
 	resp, err := client.Get("http://localhost/agents/widget/logs")
@@ -759,11 +746,11 @@ func TestAgentLogsHandlerSuspended(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if env.Code != ErrorCodeAgentSuspended {
-		t.Errorf("code = %q, want %q", env.Code, ErrorCodeAgentSuspended)
+	if env.Code != ErrorCodeAgentStopped {
+		t.Errorf("code = %q, want %q", env.Code, ErrorCodeAgentStopped)
 	}
-	if !strings.Contains(env.Error, "leo-coding-acme-widget") || !strings.Contains(env.Error, "suspended") {
-		t.Errorf("error message = %q, want it to name the agent and say it is suspended", env.Error)
+	if !strings.Contains(env.Error, "leo-coding-acme-widget") || !strings.Contains(env.Error, "stopped") {
+		t.Errorf("error message = %q, want it to name the agent and say it is stopped", env.Error)
 	}
 }
 
@@ -810,16 +797,18 @@ func TestAgentSpawnHandlerSupervisorError(t *testing.T) {
 	}
 }
 
-// --- prune handler coverage ---
+// --- delete handler coverage ---
 
-func TestAgentPruneHandlerSuccess(t *testing.T) {
+func TestAgentDeleteHandlerSuccess(t *testing.T) {
 	mgr := &fakeAgentManager{}
 	_, client := startTestServerWithAgent(t, mgr)
 
-	body, _ := json.Marshal(AgentPruneRequest{Force: true, DeleteBranch: true})
-	resp, err := client.Post("http://localhost/agents/leo-worktree/prune", "application/json", bytes.NewReader(body))
+	body, _ := json.Marshal(AgentDeleteRequest{Force: true, DeleteBranch: true})
+	req, _ := http.NewRequest("DELETE", "http://localhost/agents/leo-worktree", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("post: %v", err)
+		t.Fatalf("delete: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -833,15 +822,15 @@ func TestAgentPruneHandlerSuccess(t *testing.T) {
 	}
 }
 
-func TestAgentPruneHandlerNoBody(t *testing.T) {
+func TestAgentDeleteHandlerNoBody(t *testing.T) {
 	// No body should default to the safest options (all false) and still succeed.
 	mgr := &fakeAgentManager{}
 	_, client := startTestServerWithAgent(t, mgr)
 
-	req, _ := http.NewRequest("POST", "http://localhost/agents/leo-worktree/prune", nil)
+	req, _ := http.NewRequest("DELETE", "http://localhost/agents/leo-worktree", nil)
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("post: %v", err)
+		t.Fatalf("delete: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -852,13 +841,15 @@ func TestAgentPruneHandlerNoBody(t *testing.T) {
 	}
 }
 
-func TestAgentPruneHandlerInvalidJSON(t *testing.T) {
+func TestAgentDeleteHandlerInvalidJSON(t *testing.T) {
 	mgr := &fakeAgentManager{}
 	_, client := startTestServerWithAgent(t, mgr)
 
-	resp, err := client.Post("http://localhost/agents/leo-worktree/prune", "application/json", bytes.NewReader([]byte("{not-json")))
+	req, _ := http.NewRequest("DELETE", "http://localhost/agents/leo-worktree", bytes.NewReader([]byte("{not-json")))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("post: %v", err)
+		t.Fatalf("delete: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -866,15 +857,16 @@ func TestAgentPruneHandlerInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestAgentPruneHandlerNoManager(t *testing.T) {
+func TestAgentDeleteHandlerNoManager(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	cfgPath := writeTestConfig(t, dir)
 	_, client := startTestServer(t, cfgPath) // no SetAgentManager
 
-	resp, err := client.Post("http://localhost/agents/leo-worktree/prune", "application/json", bytes.NewReader([]byte("{}")))
+	req, _ := http.NewRequest("DELETE", "http://localhost/agents/leo-worktree", bytes.NewReader([]byte("{}")))
+	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("post: %v", err)
+		t.Fatalf("delete: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
@@ -882,13 +874,76 @@ func TestAgentPruneHandlerNoManager(t *testing.T) {
 	}
 }
 
-// --- suspend/resume handler coverage ---
+// --- delete-plan handler coverage ---
 
-func TestAgentSuspendHandler(t *testing.T) {
-	mgr := &fakeAgentManager{}
+func TestAgentDeletePlanHandlerSuccess(t *testing.T) {
+	mgr := &fakeAgentManager{
+		deletePlan: agent.DeletePlan{Name: "leo-worktree", HasWorktree: true, Branch: "feat/foo", WorktreePath: "/tmp/x"},
+	}
 	_, client := startTestServerWithAgent(t, mgr)
 
-	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/suspend", nil)
+	resp, err := client.Get("http://localhost/agents/leo-worktree/delete-plan")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if mgr.lastDeletePlan != "leo-worktree" {
+		t.Errorf("lastDeletePlan = %q, want leo-worktree", mgr.lastDeletePlan)
+	}
+	var out struct {
+		OK   bool             `json:"ok"`
+		Data agent.DeletePlan `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Data.HasWorktree || out.Data.Branch != "feat/foo" {
+		t.Errorf("decoded plan = %+v", out.Data)
+	}
+}
+
+func TestAgentDeletePlanHandlerNotFound(t *testing.T) {
+	mgr := &fakeAgentManager{deletePlanErr: &agent.ErrNotFound{Query: "ghost"}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/ghost/delete-plan")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentDeletePlanHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	resp, err := client.Get("http://localhost/agents/leo-worktree/delete-plan")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+}
+
+// --- stop(wake_on_message)/start handler coverage ---
+
+func TestAgentStopHandlerWakeOnMessage(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	body, _ := json.Marshal(AgentStopRequest{WakeOnMessage: true})
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/stop", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -897,8 +952,8 @@ func TestAgentSuspendHandler(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	if mgr.lastSuspend != "foo" {
-		t.Errorf("lastSuspend = %q, want foo", mgr.lastSuspend)
+	if mgr.lastStop != "foo" || !mgr.lastStopOpts.WakeOnMessage {
+		t.Errorf("lastStop = %q lastStopOpts = %+v, want foo/WakeOnMessage=true", mgr.lastStop, mgr.lastStopOpts)
 	}
 	var env Response
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
@@ -909,22 +964,21 @@ func TestAgentSuspendHandler(t *testing.T) {
 	}
 }
 
-func TestAgentSuspendHandlerError(t *testing.T) {
+func TestAgentStopHandlerError(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      error
 		wantCode int
 	}{
-		{"already suspended", fmt.Errorf("%w: %q", agent.ErrAgentSuspended, "foo"), http.StatusConflict},
+		{"already stopped", fmt.Errorf("%w: %q", agent.ErrAgentStopped, "foo"), http.StatusConflict},
 		{"stored but not running", fmt.Errorf("%w: %q", agent.ErrAgentNotRunning, "foo"), http.StatusConflict},
-		{"unknown agent", &agent.ErrNotFound{Query: "foo"}, http.StatusNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := &fakeAgentManager{suspendErr: tt.err}
+			mgr := &fakeAgentManager{stopErr: tt.err, records: []agent.Record{{Name: "foo"}}}
 			_, client := startTestServerWithAgent(t, mgr)
 
-			req, _ := http.NewRequest("POST", "http://localhost/agents/foo/suspend", nil)
+			req, _ := http.NewRequest("POST", "http://localhost/agents/foo/stop", nil)
 			resp, err := client.Do(req)
 			if err != nil {
 				t.Fatalf("post: %v", err)
@@ -937,28 +991,11 @@ func TestAgentSuspendHandlerError(t *testing.T) {
 	}
 }
 
-func TestAgentSuspendHandlerNoManager(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	cfgPath := writeTestConfig(t, dir)
-	_, client := startTestServer(t, cfgPath) // no SetAgentManager
-
-	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/suspend", nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("want 503, got %d", resp.StatusCode)
-	}
-}
-
-func TestAgentResumeHandler(t *testing.T) {
-	mgr := &fakeAgentManager{resumeRec: agent.Record{Name: "foo", Template: "coding"}}
+func TestAgentStartHandler(t *testing.T) {
+	mgr := &fakeAgentManager{}
 	_, client := startTestServerWithAgent(t, mgr)
 
-	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/resume", nil)
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/start", nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -977,22 +1014,16 @@ func TestAgentResumeHandler(t *testing.T) {
 	if !env.OK {
 		t.Errorf("env.OK = false, want true")
 	}
-	var rec agent.Record
-	if err := json.Unmarshal(env.Data, &rec); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if rec.Name != "foo" || rec.Template != "coding" {
-		t.Errorf("record = %+v, want Name=foo Template=coding", rec)
-	}
 }
 
-func TestAgentResumeHandlerError(t *testing.T) {
+func TestAgentStartHandlerError(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      error
 		wantCode int
 	}{
-		{"not suspended", fmt.Errorf("%w: %q", agent.ErrAgentNotSuspended, "foo"), http.StatusConflict},
+		{"not stopped", fmt.Errorf("%w: %q", agent.ErrAgentNotStopped, "foo"), http.StatusConflict},
+		{"already running", fmt.Errorf("%w: %q", agent.ErrAgentAlreadyRunning, "foo"), http.StatusConflict},
 		{"unknown agent", &agent.ErrNotFound{Query: "foo"}, http.StatusNotFound},
 	}
 	for _, tt := range tests {
@@ -1000,7 +1031,7 @@ func TestAgentResumeHandlerError(t *testing.T) {
 			mgr := &fakeAgentManager{resumeErr: tt.err}
 			_, client := startTestServerWithAgent(t, mgr)
 
-			req, _ := http.NewRequest("POST", "http://localhost/agents/foo/resume", nil)
+			req, _ := http.NewRequest("POST", "http://localhost/agents/foo/start", nil)
 			resp, err := client.Do(req)
 			if err != nil {
 				t.Fatalf("post: %v", err)
@@ -1010,6 +1041,23 @@ func TestAgentResumeHandlerError(t *testing.T) {
 				t.Fatalf("want %d, got %d", tt.wantCode, resp.StatusCode)
 			}
 		})
+	}
+}
+
+func TestAgentStartHandlerNoManager(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	cfgPath := writeTestConfig(t, dir)
+	_, client := startTestServer(t, cfgPath) // no SetAgentManager
+
+	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/start", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
 	}
 }
 
@@ -1316,23 +1364,6 @@ func TestAgentRestartAllHandlerNoManager(t *testing.T) {
 	}
 }
 
-func TestAgentResumeHandlerNoManager(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "leo-agent-daemon-*")
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	cfgPath := writeTestConfig(t, dir)
-	_, client := startTestServer(t, cfgPath) // no SetAgentManager
-
-	req, _ := http.NewRequest("POST", "http://localhost/agents/foo/resume", nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("want 503, got %d", resp.StatusCode)
-	}
-}
-
 // TestAgentSpawnForwardsIdleSuspend verifies that idle_suspend is threaded
 // through the spawn request into the SpawnSpec.
 func TestAgentSpawnForwardsIdleSuspend(t *testing.T) {
@@ -1360,7 +1391,7 @@ func TestAgentSpawnForwardsIdleSuspend(t *testing.T) {
 // TestAgentPruneHandlerErrorCodes verifies that each typed error from the
 // agent package maps to the stable (status, code) pair the CLI client relies
 // on for errors.Is dispatch.
-func TestAgentPruneHandlerErrorCodes(t *testing.T) {
+func TestAgentDeleteHandlerErrorCodes(t *testing.T) {
 	cases := []struct {
 		name       string
 		err        error
@@ -1382,10 +1413,12 @@ func TestAgentPruneHandlerErrorCodes(t *testing.T) {
 			mgr := &fakeAgentManager{pruneErr: tc.err}
 			_, client := startTestServerWithAgent(t, mgr)
 
-			body, _ := json.Marshal(AgentPruneRequest{})
-			resp, err := client.Post("http://localhost/agents/leo-worktree/prune", "application/json", bytes.NewReader(body))
+			body, _ := json.Marshal(AgentDeleteRequest{})
+			req, _ := http.NewRequest("DELETE", "http://localhost/agents/leo-worktree", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
 			if err != nil {
-				t.Fatalf("post: %v", err)
+				t.Fatalf("delete: %v", err)
 			}
 			defer resp.Body.Close()
 			if resp.StatusCode != tc.wantStatus {

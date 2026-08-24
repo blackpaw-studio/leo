@@ -23,9 +23,10 @@ type SwitchResult struct {
 	// Resumed is true when the target template had an archived session that
 	// was handed back, false when it starts a fresh conversation.
 	Resumed bool `json:"resumed"`
-	// Status is the agent's state, "running" or "suspended" — a suspended
-	// agent is re-pointed in place and comes up on the new template at its
-	// next resume.
+	// Status is the agent's state after the switch: "running" for a live
+	// agent that was stopped and respawned on the new template, "stopped"
+	// for a dormant agent whose record was rewritten in place with no
+	// respawn.
 	Status string `json:"status"`
 	// Unchanged marks a no-op: the agent was already on the target template,
 	// so nothing was stopped, respawned, or archived.
@@ -53,10 +54,13 @@ func normalizeHarness(h string) string {
 // conversations.
 //
 // A running agent is stopped and respawned on the new template's wiring. A
-// suspended agent is rewritten in place — there is no process to bounce, and
-// its next resume comes up on the new template. Stopped agents, agents with no
-// record, undefined templates, and agents backing a `runtime: persistent` task
-// are all refused (see the guards below).
+// dormant (stopped) agent is rewritten in place — there is no process to
+// bounce, and it comes up on the new template the next time it is started.
+// Every dormant record is fully intact (Stop always keeps the record and its
+// SessionID now, whatever the workspace type), so there is nothing left that
+// makes rewriting one unsafe. Agents with no record, undefined templates, and
+// agents backing a `runtime: persistent` task are all refused too (see the
+// guards below).
 //
 // The record is saved before the respawn so a daemon restart racing this call
 // sees the new template rather than the old one, which does mean a failed
@@ -82,12 +86,14 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 
 	_, live := m.sup.EphemeralAgents()[name]
 	status := "running"
-	switch {
-	case live:
-	case rec.Suspended:
-		status = "suspended"
-	default:
-		return SwitchResult{}, fmt.Errorf("agent %q is not running (only running or suspended agents can switch template)", name)
+	if !live {
+		// Not live and not dormant either: a crashed-without-cleanup record
+		// this manager has no lifecycle verb for yet. Refuse rather than
+		// silently rewriting a record no supervisor is tracking.
+		if !rec.Stopped {
+			return SwitchResult{}, fmt.Errorf("agent %q is neither running nor stopped (its record may be stale)", name)
+		}
+		status = "stopped"
 	}
 
 	if rec.Template == template {
@@ -150,25 +156,32 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	next.ClaudeArgs = args
 	next.Env = env
 
-	if status == "suspended" {
+	if status == "stopped" {
 		// Nothing to bounce, and no minted session id to keep: the agent will
-		// not launch until Resume runs, and Resume rebuilds its args from the
+		// not launch until Start runs, and Start rebuilds its args from the
 		// record, so storing an id for a session nothing has created yet would
 		// hand it a --resume for a conversation that does not exist. Fall back
 		// to exactly what the arriving template had archived — which may be a
-		// real session to rejoin, or nothing at all.
+		// real session to rejoin, or nothing at all. Stopped and WakeOnMessage
+		// carry over unchanged: the switch is a pure rewrite, not a dormancy
+		// transition.
 		next.SessionID = archived
 		if isClaude {
 			next.ClaudeArgs = ResumeArgs(args, archived)
 		}
 		next.SessionPinnedAt = pin(time.Now())
+		next.Stopped = rec.Stopped
+		next.WakeOnMessage = rec.WakeOnMessage
 		if err := agentstore.Save(cfg.HomePath, next); err != nil {
 			return SwitchResult{}, fmt.Errorf("saving switched agent record: %w", err)
 		}
 		return switchResult(rec, next, status), nil
 	}
 
-	if err := m.sup.StopAgent(name); err != nil {
+	// Not a dormancy transition — the switch immediately spawns the arriving
+	// template below (or marks the record dormant itself on a failed
+	// respawn, further down), so this kill never carries WakeOnMessage.
+	if err := m.sup.StopAgent(name, false); err != nil {
 		return SwitchResult{}, fmt.Errorf("stopping agent for template switch: %w", err)
 	}
 	// Stamped after the stop, not before: the departing process can still be
@@ -199,16 +212,18 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	}); err != nil {
 		// The agent is stopped and the arriving template's session has already
 		// been popped out of the archive, so it survives only on the record.
-		// Mark it suspended: that is the one state a down agent can come back
-		// from with its conversation (Resume), and re-running the switch could
-		// not, since it refuses an agent that is neither running nor suspended.
+		// Mark it dormant (not wakeable): that is the one state a down agent
+		// can come back from with its conversation (Start), and re-running
+		// the switch could not, since it refuses an agent that is neither
+		// running nor stopped.
 		down := next
 		down.SessionID = archived
-		down.Suspended = true
+		down.Stopped = true
+		down.WakeOnMessage = false
 		if saveErr := agentstore.Save(cfg.HomePath, down); saveErr != nil {
-			log.Printf("agent %q: could not mark suspended after a failed switch: %v", name, saveErr)
+			log.Printf("agent %q: could not mark stopped after a failed switch: %v", name, saveErr)
 		}
-		return SwitchResult{}, fmt.Errorf("respawning %q on template %q: %w (the agent is suspended on %s — 'leo agent resume %s' brings it back)", name, template, err, template, name)
+		return SwitchResult{}, fmt.Errorf("respawning %q on template %q: %w (the agent is stopped on %s — 'leo agent start %s' brings it back)", name, template, err, template, name)
 	}
 
 	next.SessionID = resumeID

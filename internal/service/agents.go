@@ -28,9 +28,11 @@ type agentSpawner interface {
 // Skip rules:
 //   - Worktree record with a missing workspace directory: drop it, nothing
 //     to reattach to.
-//   - Record marked Stopped=true with an empty StoppedReason: the user
-//     stopped it explicitly; keep the record (worktree agents need it for
-//     `leo agent prune`) but do not resurrect the agent.
+//   - Record marked Stopped=true with an empty StoppedReason: dormant —
+//     either the user stopped it explicitly, or the idle sweep did (either
+//     way, WakeOnMessage decides whether a later message wakes it, not
+//     RestoreAgents). Keep the record (needed for `leo agent start`/`delete`)
+//     but do not resurrect the agent at boot.
 //   - Record marked Stopped=true with a non-empty StoppedReason: the SYSTEM
 //     stopped it after a failed boot-time restore (missing workspace, spawn
 //     failure — see markFailedRestore). This is retried on every subsequent
@@ -75,22 +77,17 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 
 		if rec.Stopped {
 			if !rec.IsFailedRestore() {
-				// User stopped this agent explicitly. Skip respawn.
+				// Dormant (user- or idle-sweep-stopped). Skip respawn — this
+				// guard MUST run before the missing-workspace check below, or
+				// a dormant shared-workspace agent whose workspace is
+				// transiently missing at boot (e.g. a late NAS mount) would
+				// get re-marked via markFailedRestore instead of staying
+				// exactly as dormant as it already was.
 				continue
 			}
 			// System-marked failed restore (see markFailedRestore): fall
 			// through and retry the spawn below. A repeat failure simply
 			// re-marks the record, same as the first failure.
-		}
-
-		if rec.Suspended {
-			// Daemon idle-suspended this agent. Keep the record; auto-wake on
-			// the next incoming message resumes it. Do not resurrect at boot.
-			// This guard MUST run before the missing-workspace check below —
-			// a suspended shared-workspace agent whose workspace is
-			// transiently missing at boot (e.g. a late NAS mount) must stay
-			// Suspended, not get flipped into Stopped by markFailedRestore.
-			continue
 		}
 
 		if !isWorktree && workspaceMissing(name, rec.Workspace) {
@@ -223,7 +220,7 @@ func workspaceMissing(name, workspace string) bool {
 // being deleted outright. Save failures are logged, not fatal — the caller
 // has already decided not to spawn this record either way.
 func markFailedRestore(homePath string, rec agentstore.Record, reason string) {
-	if rec.Stopped && rec.StoppedReason == reason && !rec.Suspended {
+	if rec.Stopped && rec.StoppedReason == reason {
 		// Already marked with this exact reason (e.g. a persistently broken
 		// workspace re-failing on every boot) — the record on disk already
 		// matches; skip the redundant Save. Caller has already logged the
@@ -233,12 +230,6 @@ func markFailedRestore(homePath string, rec agentstore.Record, reason string) {
 	updated := rec
 	updated.Stopped = true
 	updated.StoppedReason = reason
-	// Defense in depth: a record must never be simultaneously Suspended and
-	// Stopped. Callers are expected to have already skipped Suspended
-	// records (see the guard ordering in RestoreAgents), but clear it here
-	// too so no future call site can accidentally corrupt a suspended
-	// record via this path.
-	updated.Suspended = false
 	if err := agentstore.Save(homePath, updated); err != nil {
 		fmt.Fprintf(os.Stderr, "restore: agent %q could not persist failed-restore state: %v\n", rec.Name, err)
 	}

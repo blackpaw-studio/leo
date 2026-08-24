@@ -282,7 +282,7 @@ func (s *tmuxAgentSupervisor) SpawnAgent(spec agent.SpawnRequest) error {
 	return nil
 }
 
-func (s *tmuxAgentSupervisor) StopAgent(name string) error {
+func (s *tmuxAgentSupervisor) StopAgent(name string, wakeOnMessage bool) error {
 	s.mu.Lock()
 	_, ok := s.states[name]
 	delete(s.states, name)
@@ -292,13 +292,6 @@ func (s *tmuxAgentSupervisor) StopAgent(name string) error {
 	}
 	sessionName := agent.SessionName(name)
 	return exec.Command(s.tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
-}
-
-// SuspendAgent mirrors StopAgent for this test double: it has no need to
-// distinguish "suspended" from "gone" (see service.Supervisor.SuspendAgent),
-// since nothing here exercises Manager.Suspend/Resume.
-func (s *tmuxAgentSupervisor) SuspendAgent(name string) error {
-	return s.StopAgent(name)
 }
 
 func (s *tmuxAgentSupervisor) RenameAgent(old, new string) error {

@@ -20,7 +20,7 @@
             <span class="restart-banner-icon" aria-hidden="true">⚠</span>
             <strong>Config saved</strong> &mdash; new agents and task runs use it now. Running agents apply it when restarted.
         </span>
-        <button class="btn btn-sm restart-banner-btn" hx-post="/web/agents/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart all running agents in place? Conversations are resumed; suspended and stopped agents are skipped.">Restart agents</button>
+        <button class="btn btn-sm restart-banner-btn" hx-post="/web/agents/restart" hx-target="#flash-container" hx-swap="innerHTML" hx-confirm="Restart all running agents in place? Conversations carry over; dormant agents are skipped.">Restart agents</button>
     </div>
     {{end}}
 </div>

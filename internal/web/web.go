@@ -55,25 +55,29 @@ type ConfigReloader interface {
 // daemon socket, and the CLI. A nil AgentService disables agent UI features.
 type AgentService interface {
 	Spawn(ctx context.Context, spec agent.SpawnSpec) (agent.Record, error)
-	Stop(name string) error
 	List() []agent.Record
 	Resolve(query string) (agent.Record, error)
-	// ResolveRecoverable is an exact-name store fallback tried when Resolve
-	// reports not-found: Resolve deliberately excludes every stopped record,
-	// but a shared-workspace agent left Stopped+StoppedReason by a failed
-	// boot-time restore (see internal/service/agents.go RestoreAgents) must
-	// still be reachable via the web UI's stop action, or it becomes a
-	// permanent, undeletable entry in the agents list. Returns ok=false for
-	// anything else — including a user-stopped record with no reason.
-	ResolveRecoverable(query string) (agent.Record, bool)
 	Rename(query, newName string) (agent.Record, error)
-	Suspend(name string) error
-	Resume(name string) (agent.Record, error)
+	Stop(name string, opts agent.StopOptions) error
+	// Wakeable reports whether name has a persisted, dormant record with
+	// WakeOnMessage=true — the only dormant agents an inbound message is
+	// allowed to auto-start.
+	Wakeable(name string) bool
+	// Start clears a dormant agent's flags and respawns it, rejoining its
+	// prior session.
+	Start(name string) error
 	// RestartAll bounces every live agent in place, plus every recoverable
-	// failed-restore record (skipping genuinely suspended/user-stopped
+	// failed-restore record (skipping genuinely dormant, operator-stopped
 	// ones), re-applying current config for template-spawned agents. Backs
 	// POST /web/agents/restart.
 	RestartAll() agent.RestartResult
+	// Delete removes the agentstore record for name — plus its worktree and
+	// branch when it has one. Refuses a live agent.
+	Delete(ctx context.Context, name string, opts agent.DeleteOptions) error
+	// DeletePlan resolves name and reports what Delete would remove, without
+	// removing anything — the shared seam the delete confirm dialog renders
+	// its text from.
+	DeletePlan(name string) (agent.DeletePlan, error)
 	// ResolveHandle resolves an agent name to its harness name and the
 	// SessionHandle a SessionDriver needs to deliver a message to it.
 	// ok=false means "not an ephemeral agent" (unknown name, or no
@@ -143,7 +147,7 @@ type Server struct {
 
 	// injectPrompt delivers a message into a tmux session via the readiness-
 	// probing path (tmux.InjectPrompt). Tests replace this to verify the
-	// resumed-agent message delivery path without requiring a real tmux session.
+	// started-agent message delivery path without requiring a real tmux session.
 	injectPrompt func(ctx context.Context, session, body string) error
 
 	// resolveHandle resolves a config-defined *process* name to its harness
@@ -440,8 +444,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// routed — see handlers_agents.go.
 	mux.HandleFunc("POST /web/agent/spawn", s.handleWebAgentSpawn)
 	mux.HandleFunc("POST /web/agent/{name}/stop", s.handleWebAgentStop)
-	mux.HandleFunc("POST /web/agent/{name}/suspend", s.handleWebAgentSuspend)
-	mux.HandleFunc("POST /web/agent/{name}/resume", s.handleWebAgentResume)
+	mux.HandleFunc("POST /web/agent/{name}/start", s.handleWebAgentStart)
+	mux.HandleFunc("DELETE /web/agent/{name}", s.handleWebAgentDelete)
 	mux.HandleFunc("POST /web/agent/{name}/rename", s.handleWebAgentRename)
 	mux.HandleFunc("POST /web/agent/{name}/send", s.handleWebAgentSendKeys)
 	mux.HandleFunc("POST /web/agent/{name}/interrupt", s.handleWebAgentInterrupt)
@@ -453,8 +457,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("POST /api/agent/spawn", s.handleAPIAgentSpawn)
 	apiMux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
-	apiMux.HandleFunc("POST /api/agent/suspend", s.handleAPIAgentSuspend)
-	apiMux.HandleFunc("POST /api/agent/resume", s.handleAPIAgentResume)
+	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
 	apiMux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
@@ -604,6 +607,17 @@ func (s *Server) parseTemplates() {
 		},
 		"kindName":    kindName,
 		"optTypeName": optTypeName,
+		// deleteConfirmText renders the delete button's hx-confirm text from
+		// the same agent.DeletePlan.ConfirmText the CLI and picker use, so all
+		// three surfaces describe a delete identically. branch is the row's
+		// agentData.Branch — non-empty exactly when the agent has a worktree
+		// (see agent.Manager.DeletePlan's isWorktree test), which is enough to
+		// reconstruct the plan without a second round trip per row. The web
+		// UI always offers to remove the branch too, matching the picker.
+		"deleteConfirmText": func(name, branch string) string {
+			plan := agent.DeletePlan{Name: name, HasWorktree: branch != "", Branch: branch}
+			return fmt.Sprintf("delete %s? %s", agent.DisplayName(name), plan.ConfirmText(true))
+		},
 		"truncate": func(s string, maxLen int) string {
 			runes := []rune(s)
 			if len(runes) <= maxLen {

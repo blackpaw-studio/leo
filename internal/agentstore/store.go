@@ -25,11 +25,11 @@ var storeMu sync.Mutex
 // RestoreAgents rewrites the agent's claude args to pass `--resume <SessionID>`
 // so conversation context is preserved across restarts.
 //
-// Stopped is set by Manager.Stop for worktree agents — the record is kept so
-// `leo agent prune` can find the checkout, but RestoreAgents skips records
-// marked Stopped so a user-stopped agent is not resurrected on daemon restart.
-// Shared-workspace agents delete the record on stop, so Stopped only applies
-// to worktree agents in practice.
+// Stopped is the single dormant flag: Manager.Stop always keeps the record
+// (and SessionID) regardless of workspace type, and RestoreAgents skips
+// records marked Stopped unless IsFailedRestore reports the system (not the
+// user) put them there. Deletion is the only thing that removes a record —
+// see Manager.Delete.
 type Record struct {
 	Name          string            `json:"name"`
 	Template      string            `json:"template"`
@@ -56,13 +56,14 @@ type Record struct {
 	// store fallback keys off the same field to know a record is recoverable.
 	StoppedReason string `json:"stopped_reason,omitempty"`
 
-	// Suspended marks an agent that the daemon idle-suspended: its process and
-	// tmux session were killed to free resources, but the record (and
-	// SessionID) is preserved so the conversation auto-resumes on the next
-	// incoming message. Distinct from Stopped (user-initiated, terminal):
-	// RestoreAgents skips Suspended records (no boot-time respawn) and Prune
-	// keys off Stopped, so suspended worktrees are never pruned.
-	Suspended bool `json:"suspended,omitempty"`
+	// WakeOnMessage carries the INTENT behind a Stopped=true record, not a
+	// separate state: true means an inbound message (a routed channel message
+	// or a persistent task's ensure-exists delivery) is allowed to auto-start
+	// this agent again; false means it stays dormant until an operator runs
+	// Start explicitly. The idle sweep stops agents with WakeOnMessage=true;
+	// an operator-initiated stop sets it false. Start clears both Stopped and
+	// this flag. Meaningless (and always false) when Stopped is false.
+	WakeOnMessage bool `json:"wake_on_message,omitempty"`
 
 	// IdleSuspendAfter is the resolved idle interval (a Go duration string)
 	// stamped at spawn time from the config cascade. The idle sweep reads this
@@ -179,8 +180,23 @@ func Load(path string) (map[string]Record, error) {
 	return loadLocked(path)
 }
 
+// legacyProbe decodes only the fields a pre-migration record might carry, so
+// loadLocked can detect them without Record itself keeping dead fields around.
+type legacyProbe struct {
+	Suspended bool `json:"suspended"`
+}
+
 // loadLocked performs the read without acquiring storeMu. Callers that already
 // hold the lock (Save, Remove) use this to avoid a re-entrant lock acquisition.
+//
+// One-way migration: a record written by a pre-one-dormant-state binary may
+// carry `suspended: true`. Record has no Suspended field to unmarshal it into,
+// so it's recovered via a second decode into legacyProbe and translated to
+// `Stopped: true, WakeOnMessage: true` — a suspended agent always allowed
+// auto-wake on the next message, matching Suspend's old behavior. A record
+// with `stopped: true` and no `suspended` key is left with WakeOnMessage
+// false, its zero value. The `suspended` key itself is silently dropped the
+// next time this record is saved, since Record no longer has a field for it.
 func loadLocked(path string) (map[string]Record, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -189,6 +205,18 @@ func loadLocked(path string) (map[string]Record, error) {
 	var records map[string]Record
 	if err := json.Unmarshal(data, &records); err != nil {
 		return make(map[string]Record), err
+	}
+	var probes map[string]legacyProbe
+	if err := json.Unmarshal(data, &probes); err == nil {
+		for name, probe := range probes {
+			if !probe.Suspended {
+				continue
+			}
+			rec := records[name]
+			rec.Stopped = true
+			rec.WakeOnMessage = true
+			records[name] = rec
+		}
 	}
 	return records, nil
 }

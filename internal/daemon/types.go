@@ -27,8 +27,9 @@ const (
 	ErrorCodeWorktreeRequireSep  = "worktree_requires_slash"
 	ErrorCodeSourceAgentNotFound = "source_agent_not_found"
 	ErrorCodeSourceNotGitRepo    = "source_not_git_repo"
-	ErrorCodeAgentSuspended      = "agent_suspended"
-	ErrorCodeAgentNotSuspended   = "agent_not_suspended"
+	ErrorCodeAgentStopped        = "agent_stopped"
+	ErrorCodeAgentNotStopped     = "agent_not_stopped"
+	ErrorCodeAgentAlreadyRunning = "agent_already_running"
 	ErrorCodeAgentNotRunning     = "agent_not_running"
 )
 
@@ -77,14 +78,23 @@ type AgentSpawnRequest struct {
 	IdleSuspend string `json:"idle_suspend,omitempty"`
 }
 
-// AgentPruneRequest is the body for POST /agents/{name}/prune. Prune is a
-// no-op on shared-workspace agents; it removes the on-disk worktree and
-// agentstore record for worktree agents that have already been stopped.
-type AgentPruneRequest struct {
+// AgentDeleteRequest is the body for DELETE /agents/{name}. It removes the
+// agentstore record — plus the on-disk worktree and branch when the agent has
+// one. Refuses a live agent; stop it first.
+type AgentDeleteRequest struct {
 	// Force lifts the dirty-worktree and unmerged-branch safety checks.
 	Force bool `json:"force,omitempty"`
 	// DeleteBranch removes the local branch after the worktree is gone.
 	DeleteBranch bool `json:"delete_branch,omitempty"`
+}
+
+// AgentStopRequest is the body for POST /agents/{name}/stop.
+type AgentStopRequest struct {
+	// WakeOnMessage carries intent, not state: true lets a subsequent inbound
+	// message auto-start the agent again; false (the default — an
+	// operator-initiated stop) leaves it dormant until an operator runs
+	// `leo agent start` explicitly. The idle sweep sends true.
+	WakeOnMessage bool `json:"wake_on_message,omitempty"`
 }
 
 // AgentLogsResponse is the payload for GET /agents/{name}/logs.

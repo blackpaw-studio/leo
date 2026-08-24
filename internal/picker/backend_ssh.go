@@ -107,13 +107,33 @@ func (b *SSHBackend) Stop(ctx context.Context, name string) error {
 	return err
 }
 
-func (b *SSHBackend) Suspend(ctx context.Context, name string) error {
-	_, err := b.run(ctx, b.leoPath, "agent", "suspend", shellQuoteArg(name))
+func (b *SSHBackend) Start(ctx context.Context, name string) error {
+	_, err := b.run(ctx, b.leoPath, "agent", "start", shellQuoteArg(name))
 	return err
 }
 
-func (b *SSHBackend) Resume(ctx context.Context, name string) error {
-	_, err := b.run(ctx, b.leoPath, "agent", "resume", shellQuoteArg(name))
+// DeletePlan shells `leo agent delete-plan <name>` on the remote — the
+// hidden plumbing subcommand that prints agent.DeletePlan as JSON — so the
+// remote picker row can render the same confirm text as the local backend
+// without a bespoke second protocol over SSH.
+func (b *SSHBackend) DeletePlan(ctx context.Context, name string) (agent.DeletePlan, error) {
+	out, err := b.run(ctx, b.leoPath, "agent", "delete-plan", shellQuoteArg(name))
+	if err != nil {
+		return agent.DeletePlan{}, fmt.Errorf("planning delete on %s: %w", b.host, err)
+	}
+	var plan agent.DeletePlan
+	if err := json.Unmarshal(out, &plan); err != nil {
+		return agent.DeletePlan{}, fmt.Errorf("decoding delete plan from %s: %w", b.host, err)
+	}
+	return plan, nil
+}
+
+func (b *SSHBackend) Delete(ctx context.Context, name string, deleteBranch bool) error {
+	args := []string{b.leoPath, "agent", "delete", shellQuoteArg(name), "--yes"}
+	if deleteBranch {
+		args = append(args, "--delete-branch")
+	}
+	_, err := b.run(ctx, args...)
 	return err
 }
 

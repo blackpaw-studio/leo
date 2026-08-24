@@ -138,7 +138,8 @@ leo agent spawn coding --repo blackpaw-studio/leo --worktree feat/cache
 leo agent attach demo                                     # full tmux attach
 leo attach                                                # no name → interactive picker
 leo attach demo --cc                                      # iTerm2 / WezTerm native tab via tmux control mode
-leo agent stop feat-cache --prune --delete-branch          # stop + clean worktree
+leo agent stop feat-cache                                 # stop — always dormant, never deletes
+leo agent delete feat-cache --delete-branch               # clean up the worktree + branch
 ```
 
 A repo-less spawn (like `assistant` above) is how you run a long-lived, always-on assistant — it just keeps running, restarts on crash, and comes back after `leo service restart`.

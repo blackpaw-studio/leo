@@ -12,27 +12,26 @@ import (
 // fakeEnsureMgr is a tiny fake satisfying EnsureAgentManager, capturing calls
 // for assertion instead of touching a real supervisor/agentstore.
 type fakeEnsureMgr struct {
-	live      map[string]bool
-	suspended map[string]bool
-	resumed   []string
-	spawned   []string
-	resumeErr error
-	spawnErr  error
+	live     map[string]bool
+	wakeable map[string]bool
+	stopped  map[string]bool
+	started  []string
+	spawned  []string
+	startErr error
+	spawnErr error
 	// spawnName, when set, is returned as the spawned Record.Name instead of
 	// the requested name — simulating a reservation collision that suffixed
 	// the name (e.g. "foo" -> "foo-2").
 	spawnName string
 }
 
-func (f *fakeEnsureMgr) Live(name string) bool      { return f.live[name] }
-func (f *fakeEnsureMgr) Suspended(name string) bool { return f.suspended[name] }
+func (f *fakeEnsureMgr) Live(name string) bool     { return f.live[name] }
+func (f *fakeEnsureMgr) Wakeable(name string) bool { return f.wakeable[name] }
+func (f *fakeEnsureMgr) Stopped(name string) bool  { return f.stopped[name] }
 
-func (f *fakeEnsureMgr) Resume(name string) (agent.Record, error) {
-	f.resumed = append(f.resumed, name)
-	if f.resumeErr != nil {
-		return agent.Record{}, f.resumeErr
-	}
-	return agent.Record{Name: name}, nil
+func (f *fakeEnsureMgr) Start(name string) error {
+	f.started = append(f.started, name)
+	return f.startErr
 }
 
 func (f *fakeEnsureMgr) SpawnFromTemplate(_ context.Context, name string, _ config.TemplateConfig) (agent.Record, error) {
@@ -53,26 +52,46 @@ func TestEnsureRunningIsNoop(t *testing.T) {
 	if err := e.Ensure(context.Background(), EnsureSpec{Name: "foo"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(f.resumed) != 0 {
-		t.Fatalf("expected no Resume calls, got %v", f.resumed)
+	if len(f.started) != 0 {
+		t.Fatalf("expected no Start calls, got %v", f.started)
 	}
 	if len(f.spawned) != 0 {
 		t.Fatalf("expected no Spawn calls, got %v", f.spawned)
 	}
 }
 
-func TestEnsureSuspendedResumes(t *testing.T) {
-	f := &fakeEnsureMgr{suspended: map[string]bool{"foo": true}}
+func TestEnsureWakeableStarts(t *testing.T) {
+	f := &fakeEnsureMgr{wakeable: map[string]bool{"foo": true}}
 	e := NewAgentEnsurer(f)
 
 	if err := e.Ensure(context.Background(), EnsureSpec{Name: "foo"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(f.resumed) != 1 || f.resumed[0] != "foo" {
-		t.Fatalf("expected Resume(foo) once, got %v", f.resumed)
+	if len(f.started) != 1 || f.started[0] != "foo" {
+		t.Fatalf("expected Start(foo) once, got %v", f.started)
 	}
 	if len(f.spawned) != 0 {
 		t.Fatalf("expected no Spawn calls, got %v", f.spawned)
+	}
+}
+
+// TestEnsureStoppedNotWakeableRefuses is the load-bearing auto-wake guard on
+// the persistent-task injection path: a dormant record with WakeOnMessage=
+// false (Stopped=true, Wakeable=false — an operator-initiated stop) must be
+// refused, never started and never respawned over.
+func TestEnsureStoppedNotWakeableRefuses(t *testing.T) {
+	f := &fakeEnsureMgr{stopped: map[string]bool{"foo": true}}
+	e := NewAgentEnsurer(f)
+
+	err := e.Ensure(context.Background(), EnsureSpec{Name: "foo"})
+	if err == nil {
+		t.Fatal("expected an error for a stopped, non-wakeable agent")
+	}
+	if len(f.started) != 0 {
+		t.Fatalf("expected no Start calls, got %v", f.started)
+	}
+	if len(f.spawned) != 0 {
+		t.Fatalf("expected no Spawn calls (must not respawn over a manually stopped agent), got %v", f.spawned)
 	}
 }
 
@@ -87,8 +106,8 @@ func TestEnsureMissingSpawns(t *testing.T) {
 	if len(f.spawned) != 1 || f.spawned[0] != "foo" {
 		t.Fatalf("expected SpawnFromTemplate(foo) once, got %v", f.spawned)
 	}
-	if len(f.resumed) != 0 {
-		t.Fatalf("expected no Resume calls, got %v", f.resumed)
+	if len(f.started) != 0 {
+		t.Fatalf("expected no Start calls, got %v", f.started)
 	}
 }
 
@@ -119,9 +138,9 @@ func TestEnsureSpawnNameCollisionFails(t *testing.T) {
 	}
 }
 
-func TestEnsureResumeFailurePropagates(t *testing.T) {
+func TestEnsureStartFailurePropagates(t *testing.T) {
 	wantErr := errors.New("boom")
-	f := &fakeEnsureMgr{suspended: map[string]bool{"foo": true}, resumeErr: wantErr}
+	f := &fakeEnsureMgr{wakeable: map[string]bool{"foo": true}, startErr: wantErr}
 	e := NewAgentEnsurer(f)
 
 	err := e.Ensure(context.Background(), EnsureSpec{Name: "foo"})

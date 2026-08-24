@@ -32,11 +32,11 @@ const (
 type actionKind int
 
 const (
-	actionSuspend actionKind = iota
-	actionResume
-	actionStop
+	actionStop actionKind = iota
+	actionStart
+	actionDelete
 	actionRename
-	actionResumeAttach   // resume a suspended agent, then quit and attach
+	actionStartAttach    // start a dormant agent, then quit and attach
 	actionSwitchTemplate // re-point an agent at another template
 )
 
@@ -65,6 +65,15 @@ type templatesMsg struct {
 	err   error
 }
 
+// deletePlanMsg carries the result of fetching a DeletePlan before arming the
+// delete confirmation.
+type deletePlanMsg struct {
+	host string
+	name string
+	plan agent.DeletePlan
+	err  error
+}
+
 // templateMenu is the open template chooser: which agent it acts on, what that
 // agent runs today, and the options loaded from that agent's host. options is
 // nil while the host is still being asked.
@@ -76,10 +85,14 @@ type templateMenu struct {
 	cursor  int
 }
 
-// confirmState holds the target of a pending stop confirmation.
+// confirmState holds the target of a pending delete confirmation, plus the
+// message to render (built from the DeletePlan) and whether the eventual
+// Delete call should also remove the branch.
 type confirmState struct {
-	host string
-	name string
+	host         string
+	name         string
+	message      string
+	deleteBranch bool
 }
 
 // statusLine is the transient status-bar message.
@@ -104,8 +117,12 @@ type model struct {
 	frame     int
 
 	confirming *confirmState
-	templates  *templateMenu
-	switchTo   string
+	// deleteBranch carries the pending confirmed delete's branch-removal
+	// choice across the gate (m.confirming is cleared before dispatch fires,
+	// mirroring how switchTo survives m.templates being cleared below).
+	deleteBranch bool
+	templates    *templateMenu
+	switchTo     string
 	// canSwitch gates the template menu's dispatch; nil means unrestricted.
 	// See Run.
 	canSwitch  func(template string) error
@@ -173,6 +190,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case templatesMsg:
 		return m.onTemplatesLoaded(msg)
 
+	case deletePlanMsg:
+		return m.onDeletePlanLoaded(msg)
+
 	case tickMsg:
 		if len(m.pending) == 0 {
 			return m, nil // stop animating when nothing is in flight
@@ -221,12 +241,12 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Attach):
 		return m.enterSelected()
-	case key.Matches(msg, m.keys.Suspend):
-		return m.startAction(actionSuspend)
-	case key.Matches(msg, m.keys.Resume):
-		return m.startAction(actionResume)
 	case key.Matches(msg, m.keys.Stop):
-		return m.beginConfirm()
+		return m.startAction(actionStop)
+	case key.Matches(msg, m.keys.Start):
+		return m.startAction(actionStart)
+	case key.Matches(msg, m.keys.Delete):
+		return m.beginDelete()
 	case key.Matches(msg, m.keys.Rename):
 		return m.beginRename()
 	case key.Matches(msg, m.keys.Template):
@@ -247,24 +267,34 @@ func (m model) selectedRow() (row, bool) {
 	return r, ok
 }
 
-// enterSelected implements Enter semantics: running/starting attach immediately;
-// suspended resumes first then attaches; stopped shows a hint.
+// dormant reports whether status is the single dormant state — anything that
+// is not running/starting/restarting.
+func dormant(status string) bool {
+	switch status {
+	case "running", "starting", "restarting":
+		return false
+	default:
+		return true
+	}
+}
+
+// enterSelected implements Enter semantics: a live agent attaches immediately;
+// any dormant agent is started first, then attached.
 func (m model) enterSelected() (tea.Model, tea.Cmd) {
 	r, ok := m.selectedRow()
 	if !ok || r.ag == nil {
 		return m, nil
 	}
-	switch r.ag.Status {
-	case "suspended":
-		return m.dispatch(r.host, r.ag.Name, actionResumeAttach)
-	case "stopped":
-		m.status = statusLine{text: "stopped — press u to resume", isErr: true}
-		return m, nil
-	default: // running / starting / restarting
-		agentCopy := *r.ag
-		m.result = Result{Agent: &agentCopy}
-		return m, tea.Quit
+	if dormant(r.ag.Status) {
+		if r.ag.AttachOnly {
+			m.status = statusLine{text: "remote fallback row — lifecycle actions unavailable", isErr: true}
+			return m, nil
+		}
+		return m.dispatch(r.host, r.ag.Name, actionStartAttach)
 	}
+	agentCopy := *r.ag
+	m.result = Result{Agent: &agentCopy}
+	return m, tea.Quit
 }
 
 // startAction dispatches a lifecycle action against the selected row.
@@ -300,6 +330,10 @@ func (m model) dispatch(host, name string, kind actionKind) (tea.Model, tea.Cmd)
 		arg = strings.TrimSpace(m.rename.Value())
 	case actionSwitchTemplate:
 		arg = m.switchTo
+	case actionDelete:
+		if m.deleteBranch {
+			arg = "delete-branch"
+		}
 	}
 	newPending[rowKey(host, name)] = struct{}{}
 	m.pending = newPending
@@ -311,7 +345,7 @@ func (m model) dispatch(host, name string, kind actionKind) (tea.Model, tea.Cmd)
 	return m, tea.Batch(cmds...)
 }
 
-// onActionDone clears the pending marker and either quits-and-attaches (resume
+// onActionDone clears the pending marker and either quits-and-attaches (start
 // attach), or shows the result and reloads that host.
 func (m model) onActionDone(msg actionMsg) (tea.Model, tea.Cmd) {
 	newPending := make(map[string]struct{}, len(m.pending))
@@ -322,7 +356,7 @@ func (m model) onActionDone(msg actionMsg) (tea.Model, tea.Cmd) {
 	}
 	m.pending = newPending
 
-	if msg.kind == actionResumeAttach && msg.err == nil {
+	if msg.kind == actionStartAttach && msg.err == nil {
 		// Template/StartedAt are intentionally left zero: the attach path only
 		// consumes Name+Host, and this Agent is synthesized here rather than
 		// refetched from the backend.
@@ -339,8 +373,9 @@ func (m model) onActionDone(msg actionMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.rebuild(), loadCmd(m.ctx, msg.host, m.backends[msg.host]))
 }
 
-// beginConfirm arms the inline stop confirmation for the selected row.
-func (m model) beginConfirm() (tea.Model, tea.Cmd) {
+// beginDelete kicks off the DeletePlan fetch for the selected row; the
+// confirmation itself is armed once that resolves (onDeletePlanLoaded).
+func (m model) beginDelete() (tea.Model, tea.Cmd) {
 	r, ok := m.selectedRow()
 	if !ok || r.ag == nil {
 		return m, nil
@@ -349,7 +384,35 @@ func (m model) beginConfirm() (tea.Model, tea.Cmd) {
 		m.status = statusLine{text: "remote fallback row — lifecycle actions unavailable", isErr: true}
 		return m, nil
 	}
-	m.confirming = &confirmState{host: r.host, name: r.ag.Name}
+	b, ok := m.backends[r.host]
+	if !ok {
+		m.status = statusLine{text: "unknown host " + r.host, isErr: true}
+		return m, nil
+	}
+	host, name := r.host, r.ag.Name
+	return m, func() tea.Msg {
+		cctx, cancel := context.WithTimeout(m.ctx, hostTimeout)
+		defer cancel()
+		plan, err := b.DeletePlan(cctx, name)
+		return deletePlanMsg{host: host, name: name, plan: plan, err: err}
+	}
+}
+
+// onDeletePlanLoaded arms the confirm dialog once the plan resolves, or shows
+// an error if it couldn't be fetched. A worktree agent's confirm always asks
+// to delete the branch too (deleteBranch=true) — the picker offers no
+// separate toggle for that, matching the spec's example confirm text.
+func (m model) onDeletePlanLoaded(msg deletePlanMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.status = statusLine{text: "delete " + msg.name + ": " + msg.err.Error(), isErr: true}
+		return m, nil
+	}
+	m.confirming = &confirmState{
+		host:         msg.host,
+		name:         msg.name,
+		message:      fmt.Sprintf("delete %s? %s (y/n)", agent.DisplayName(msg.name), msg.plan.ConfirmText(true)),
+		deleteBranch: msg.plan.HasWorktree,
+	}
 	return m, nil
 }
 
@@ -358,7 +421,8 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		c := m.confirming
 		m.confirming = nil
-		return m.dispatch(c.host, c.name, actionStop)
+		m.deleteBranch = c.deleteBranch
+		return m.dispatch(c.host, c.name, actionDelete)
 	case "n", "N", "esc", "ctrl+c":
 		m.confirming = nil
 		return m, nil
@@ -430,7 +494,7 @@ func (m model) View() string {
 	case m.renaming:
 		b.WriteString(m.styles.prompt.Render("rename "+m.renameOld+" to: ") + m.rename.View())
 	case m.confirming != nil:
-		b.WriteString(m.styles.statusErr.Render(fmt.Sprintf("stop %s? (y/n)", m.confirming.name)))
+		b.WriteString(m.styles.statusErr.Render(m.confirming.message))
 	case m.status.text != "":
 		st := m.styles.statusOK
 		if m.status.isErr {
@@ -460,12 +524,12 @@ func actionCmd(ctx context.Context, host string, b Backend, kind actionKind, nam
 		defer cancel()
 		var err error
 		switch kind {
-		case actionSuspend:
-			err = b.Suspend(cctx, name)
-		case actionResume, actionResumeAttach:
-			err = b.Resume(cctx, name)
 		case actionStop:
 			err = b.Stop(cctx, name)
+		case actionStart, actionStartAttach:
+			err = b.Start(cctx, name)
+		case actionDelete:
+			err = b.Delete(cctx, name, arg == "delete-branch")
 		case actionRename:
 			err = b.Rename(cctx, name, arg)
 		case actionSwitchTemplate:
@@ -481,12 +545,12 @@ func tickCmd() tea.Cmd {
 
 func verbLabel(k actionKind) string {
 	switch k {
-	case actionSuspend:
-		return "suspend"
-	case actionResume, actionResumeAttach:
-		return "resume"
 	case actionStop:
 		return "stop"
+	case actionStart, actionStartAttach:
+		return "start"
+	case actionDelete:
+		return "delete"
 	case actionRename:
 		return "rename"
 	case actionSwitchTemplate:

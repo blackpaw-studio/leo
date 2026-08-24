@@ -357,7 +357,7 @@ func TestWatchReportsAnAbandonedConsult(t *testing.T) {
 }
 
 // TestWatchStopsWhenTheRecordVanishes guards against polling a stale
-// in-memory copy forever when the record is pruned out from under us.
+// in-memory copy forever when the record is removed out from under us.
 func TestWatchStopsWhenTheRecordVanishes(t *testing.T) {
 	state := t.TempDir()
 	dir := filepath.Join(state, "consults")

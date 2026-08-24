@@ -35,7 +35,7 @@ Permissions are applied in two places, from one policy:
 |-------------|-------------|
 | `leo agent spawn` | `leo_spawn_agent` + `can_spawn` |
 | `leo agent worktree` | `leo_spawn_agent`, plus `can_spawn` when `--template` is given |
-| `leo agent stop` / `suspend` / `reset` / `restart` / `rename` / `prune` | `leo_stop_agent` |
+| `leo agent stop` / `start` / `reset` / `restart` / `rename` | `leo_stop_agent` |
 | `leo run <task>` | `leo_run_task` |
 | `leo task enable` / `disable` | `leo_toggle_task` |
 | `leo service stop` / `restart` / `reparent` | `leo_stop_agent` |
@@ -45,6 +45,12 @@ denying "stop other agents" plainly means to deny disrupting them. The
 `leo service` entries are there for the same reason — `stop` and `reparent`
 take down *every* live agent session, discarding in-flight context, which is
 the withheld capability at greater scale.
+
+`leo agent delete` is deliberately absent from this table. There is no
+`leo_stop_agent`-equivalent MCP tool for deletion, by design — agents cannot
+delete agents, themselves or otherwise. Deleting an agent record (and, for
+worktree agents, its checkout) is a human-operator action only, whatever a
+template's permissions allow.
 
 `leo agent worktree` spawns from the source agent's template by default, and
 that new agent inherits the source template's permissions, so escalation is

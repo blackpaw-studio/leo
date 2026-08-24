@@ -76,6 +76,42 @@ func TestSetStatePublishesAgentStateChanged(t *testing.T) {
 	}
 }
 
+// TestSetStateCrashStopCarriesWakeOnMessageFalse pins the pairing invariant
+// for setState's crash-driven "stopped" transition: it has no wake-on-message
+// concept of its own (that only exists on the dormancy path through
+// agent.Manager.Stop / Supervisor.StopAgent), so the emitted payload must
+// always carry wake_on_message:false alongside status:"stopped" — never a
+// zero-valued field that happens to read false, but the value AgentDormancy
+// actually computes.
+func TestSetStateCrashStopCarriesWakeOnMessageFalse(t *testing.T) {
+	// Arrange
+	sv := NewSupervisor(context.Background())
+	pub := &recordingPublisher{}
+	sv.SetPublisher(pub)
+	sv.mu.Lock()
+	sv.states["agent-a"] = &ProcessState{Name: "agent-a", Status: "running"}
+	sv.mu.Unlock()
+
+	// Act: a crash-driven stop, as superviseProcess emits after retries are
+	// exhausted.
+	sv.setState("agent-a", nil, "stopped")
+
+	// Assert
+	if len(pub.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(pub.events))
+	}
+	payload, ok := pub.events[0].Payload.(*observe.AgentStateChangedPayload)
+	if !ok {
+		t.Fatalf("expected AgentStateChangedPayload, got %T", pub.events[0].Payload)
+	}
+	if payload.Status != observe.StatusStopped {
+		t.Fatalf("expected status stopped, got %s", payload.Status)
+	}
+	if payload.WakeOnMessage != false {
+		t.Fatalf("expected wake_on_message=false for a crash-driven stop, got %v", payload.WakeOnMessage)
+	}
+}
+
 func TestSetStateForUnknownAgentDoesNotPublish(t *testing.T) {
 	// Arrange
 	sv := NewSupervisor(context.Background())
@@ -243,123 +279,62 @@ func TestSpawnAgentPublishesAgentSpawnedGracefullyWithoutRecordOrConfig(t *testi
 	}
 }
 
+// TestStopAgentPublishesAgentStopped covers both values of wakeOnMessage,
+// since agent.Manager.Stop's live path forwards its opts.WakeOnMessage
+// straight through to StopAgent — the published payload must carry
+// whichever value the caller passed, verbatim.
 func TestStopAgentPublishesAgentStopped(t *testing.T) {
-	// Arrange
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sv := NewSupervisor(ctx)
-	sv.tmuxPath = "false"
-	pub := &recordingPublisher{}
-	sv.SetPublisher(pub)
-	sv.mu.Lock()
-	sv.states["agent-a"] = &ProcessState{Name: "agent-a", Status: "running", Ephemeral: true}
-	cancelFn := func() {}
-	sv.cancels["agent-a"] = cancelFn
-	sv.mu.Unlock()
+	cases := []struct {
+		name          string
+		wakeOnMessage bool
+	}{
+		{"manual stop, no wake", false},
+		{"idle-swept stop, wakeable", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Arrange
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sv := NewSupervisor(ctx)
+			sv.tmuxPath = "false"
+			pub := &recordingPublisher{}
+			sv.SetPublisher(pub)
+			sv.mu.Lock()
+			sv.states["agent-a"] = &ProcessState{Name: "agent-a", Status: "running", Ephemeral: true}
+			cancelFn := func() {}
+			sv.cancels["agent-a"] = cancelFn
+			sv.mu.Unlock()
 
-	// Act
-	if err := sv.StopAgent("agent-a"); err != nil {
-		t.Fatalf("StopAgent: %v", err)
-	}
+			// Act
+			if err := sv.StopAgent("agent-a", tc.wakeOnMessage); err != nil {
+				t.Fatalf("StopAgent: %v", err)
+			}
 
-	// Assert
-	if len(pub.events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(pub.events))
-	}
-	ev := pub.events[0]
-	if ev.Type != observe.EventAgentStopped {
-		t.Fatalf("expected EventAgentStopped, got %s", ev.Type)
-	}
-	payload, ok := ev.Payload.(*observe.AgentStoppedPayload)
-	if !ok {
-		t.Fatalf("expected AgentStoppedPayload, got %T", ev.Payload)
-	}
-	if payload.Agent != "agent-a" {
-		t.Fatalf("unexpected payload: %+v", payload)
-	}
-}
-
-// TestSuspendAgentPublishesAgentStateChangedSuspended guards finding #3: a
-// stream-only consumer must be able to tell "suspended" (coming back) apart
-// from "gone" (observe.EventAgentStopped). SuspendAgent must publish
-// agent_state_changed{status:"suspended"}, not agent_stopped.
-func TestSuspendAgentPublishesAgentStateChangedSuspended(t *testing.T) {
-	// Arrange
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sv := NewSupervisor(ctx)
-	sv.tmuxPath = "false"
-	pub := &recordingPublisher{}
-	sv.SetPublisher(pub)
-	sv.mu.Lock()
-	sv.states["agent-a"] = &ProcessState{Name: "agent-a", Status: "running", Ephemeral: true}
-	sv.cancels["agent-a"] = func() {}
-	sv.mu.Unlock()
-
-	// Act
-	if err := sv.SuspendAgent("agent-a"); err != nil {
-		t.Fatalf("SuspendAgent: %v", err)
-	}
-
-	// Assert
-	if len(pub.events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(pub.events))
-	}
-	ev := pub.events[0]
-	if ev.Type != observe.EventAgentStateChanged {
-		t.Fatalf("expected EventAgentStateChanged, got %s", ev.Type)
-	}
-	payload, ok := ev.Payload.(*observe.AgentStateChangedPayload)
-	if !ok {
-		t.Fatalf("expected AgentStateChangedPayload, got %T", ev.Payload)
-	}
-	if payload.Agent != "agent-a" || payload.Status != observe.StatusSuspended {
-		t.Fatalf("unexpected payload: %+v", payload)
-	}
-
-	// The agent must actually be gone from live state, exactly like StopAgent.
-	if _, ok := sv.EphemeralAgents()["agent-a"]; ok {
-		t.Fatal("expected agent removed from live state after suspend")
-	}
-}
-
-// TestSuspendAgentPreservesRestartCount is the regression test for nit #6:
-// SuspendAgent used to hardcode Restarts: 0 in its published payload,
-// clobbering the real count for an agent that crash-looped before being
-// suspended. The value must be read from the live state before it's deleted.
-func TestSuspendAgentPreservesRestartCount(t *testing.T) {
-	// Arrange
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sv := NewSupervisor(ctx)
-	sv.tmuxPath = "false"
-	pub := &recordingPublisher{}
-	sv.SetPublisher(pub)
-	sv.mu.Lock()
-	sv.states["agent-a"] = &ProcessState{Name: "agent-a", Status: "running", Ephemeral: true, Restarts: 7}
-	sv.cancels["agent-a"] = func() {}
-	sv.mu.Unlock()
-
-	// Act
-	if err := sv.SuspendAgent("agent-a"); err != nil {
-		t.Fatalf("SuspendAgent: %v", err)
-	}
-
-	// Assert
-	payload, ok := pub.events[0].Payload.(*observe.AgentStateChangedPayload)
-	if !ok {
-		t.Fatalf("expected AgentStateChangedPayload, got %T", pub.events[0].Payload)
-	}
-	if payload.Restarts != 7 {
-		t.Fatalf("expected Restarts 7 to survive suspend, got %d", payload.Restarts)
+			// Assert
+			if len(pub.events) != 1 {
+				t.Fatalf("expected 1 event, got %d", len(pub.events))
+			}
+			ev := pub.events[0]
+			if ev.Type != observe.EventAgentStopped {
+				t.Fatalf("expected EventAgentStopped, got %s", ev.Type)
+			}
+			payload, ok := ev.Payload.(*observe.AgentStoppedPayload)
+			if !ok {
+				t.Fatalf("expected AgentStoppedPayload, got %T", ev.Payload)
+			}
+			if payload.Agent != "agent-a" || payload.WakeOnMessage != tc.wakeOnMessage {
+				t.Fatalf("unexpected payload: %+v", payload)
+			}
+		})
 	}
 }
 
 // TestSpawnAgentResumedPublishesAgentStateChanged guards finding #3's other
-// half: resuming a suspended agent must surface as a state transition
+// half: resuming a dormant agent must surface as a state transition
 // (agent_state_changed), not as a brand-new agent appearing
-// (agent_spawned) — a consumer that saw the suspend already knows about
-// this agent.
+// (agent_spawned) — a consumer that saw the earlier agent_stopped already
+// knows about this agent.
 func TestSpawnAgentResumedPublishesAgentStateChanged(t *testing.T) {
 	// Arrange
 	ctx, cancel := context.WithCancel(context.Background())

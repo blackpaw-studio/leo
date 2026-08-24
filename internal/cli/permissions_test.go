@@ -59,7 +59,7 @@ func TestGateCommandDeniedTool(t *testing.T) {
 func TestGateCommandCoversLifecycleCommands(t *testing.T) {
 	t.Setenv("LEO_PERMISSIONS", `{"deny_tools":["leo_stop_agent"]}`)
 
-	for _, name := range []string{"stop", "reset", "prune", "restart", "rename", "suspend"} {
+	for _, name := range []string{"stop", "reset", "restart", "rename", "start", "delete"} {
 		if err := gateCommand(cmdFor("agent", name), "leo_stop_agent"); err == nil {
 			t.Errorf("leo agent %s should be refused when leo_stop_agent is denied", name)
 		}
@@ -146,11 +146,11 @@ func TestShippedCommandsAreGated(t *testing.T) {
 		// agent.go. TestEverySpawnRouteIsGated below stops that recurring.
 		{path: []string{"agent", "worktree"}, deny: "leo_spawn_agent", args: []string{"scout", "feat/x"}},
 		{path: []string{"agent", "stop"}, deny: "leo_stop_agent", args: []string{"scout"}},
-		{path: []string{"agent", "suspend"}, deny: "leo_stop_agent", args: []string{"scout"}},
 		{path: []string{"agent", "reset"}, deny: "leo_stop_agent", args: []string{"scout"}},
 		{path: []string{"agent", "restart"}, deny: "leo_stop_agent", args: []string{"scout"}},
 		{path: []string{"agent", "rename"}, deny: "leo_stop_agent", args: []string{"scout", "scout2"}},
-		{path: []string{"agent", "prune"}, deny: "leo_stop_agent", args: []string{"scout"}},
+		{path: []string{"agent", "start"}, deny: "leo_stop_agent", args: []string{"scout"}},
+		{path: []string{"agent", "delete"}, deny: "leo_stop_agent", args: []string{"scout"}},
 		{path: []string{"run"}, deny: "leo_run_task", args: []string{"nightly"}},
 		{path: []string{"task", "enable"}, deny: "leo_toggle_task", args: []string{"nightly"}},
 		{path: []string{"task", "disable"}, deny: "leo_toggle_task", args: []string{"nightly"}},
@@ -196,9 +196,9 @@ func TestEverySpawnRouteIsGated(t *testing.T) {
 		"daemon.AgentStop":         "leo_stop_agent",
 		"daemon.AgentReset":        "leo_stop_agent",
 		"daemon.AgentRestart":      "leo_stop_agent",
-		"daemon.AgentSuspend":      "leo_stop_agent",
 		"daemon.AgentRename":       "leo_stop_agent",
-		"daemon.AgentPruneRequest": "leo_stop_agent",
+		"daemon.AgentStart":        "leo_stop_agent",
+		"daemon.AgentDelete":       "leo_stop_agent",
 	}
 
 	for _, src := range sources {

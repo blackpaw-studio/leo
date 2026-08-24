@@ -61,8 +61,8 @@ specifics:
   stored id).
 
 `idle_suspend_after` now works identically across all three harnesses — every
-harness has a resident tmux TUI that can be suspended (tmux session killed)
-and resumed (relaunched with the stored session id), so the idle sweep no
+harness has a resident tmux TUI that can go dormant (tmux session killed) and
+start again (relaunched with the stored session id), so the idle sweep no
 longer skips codex/opencode. This applies equally to a persistent task's
 target agent — see [Persistent Tasks → Idle-suspend interaction](persistent-tasks.md#idle-suspend-interaction).
 
