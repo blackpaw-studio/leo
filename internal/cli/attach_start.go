@@ -26,7 +26,9 @@ var (
 	agentSessionReadyFn = defaultAgentSessionReady
 )
 
-const (
+// agentStartPollInterval/agentStartTimeout are vars, not consts, so tests can
+// shrink them to exercise the timeout path without a real multi-second wait.
+var (
 	// agentStartPollInterval is how often ensureAgentRunning re-checks
 	// whether the respawned agent's tmux session has appeared.
 	agentStartPollInterval = 200 * time.Millisecond
@@ -50,30 +52,54 @@ func defaultAgentSessionReady(name string) bool {
 	return cmd.Run() == nil
 }
 
-// ensureAgentRunning is the single decision point both attach doors (`leo
-// attach` and `leo agent attach`) call after resolving a name to a session.
-// stopped comes from the daemon's AgentSessionResponse — already paid for by
-// the caller's lookup — so this never re-resolves the agent itself.
+// ensureAgentRunning is the entry point for the two cobra-command attach
+// doors (`leo attach` and `leo agent attach`) — it gates through the
+// invoking command. The attach picker has no cobra.Command to name (its
+// in-place actions run inside `leo attach` itself, same as
+// gateTemplateSwitch's picker callers) and uses ensureAgentRunningForPicker
+// instead; both share ensureAgentRunningGated below so the prompt/start/wait
+// behavior is identical from every door.
+//
+// The literal gateCommand(cmd, "leo_stop_agent") call below is required, not
+// just documentation: TestEverySpawnRouteIsGated (permissions_test.go)
+// statically scans every source file that mentions daemon.AgentStart (via
+// agentStartFn above) for this exact substring.
+func ensureAgentRunning(ctx context.Context, cmd *cobra.Command, homePath, name string, stopped bool) (bool, error) {
+	return ensureAgentRunningGated(ctx, func() error { return gateCommand(cmd, "leo_stop_agent") }, homePath, name, stopped)
+}
+
+// ensureAgentRunningForPicker is the attach picker's entry point — see
+// ensureAgentRunning's doc comment for why it needs a separate one.
+func ensureAgentRunningForPicker(ctx context.Context, label, homePath, name string, stopped bool) (bool, error) {
+	return ensureAgentRunningGated(ctx, func() error { return gateToolFor(label, "leo_stop_agent") }, homePath, name, stopped)
+}
+
+// ensureAgentRunningGated is the shared decision point every attach door
+// calls after resolving a name to a session. stopped comes from the
+// daemon's AgentSessionResponse — already paid for by the caller's lookup —
+// so this never re-resolves the agent itself.
 //
 // A live agent (stopped == false) is a no-op: returns (true, nil)
-// immediately so the prompt never appears on the hot path.
+// immediately so neither the gate nor the prompt is ever consulted on the
+// hot path.
 //
-// A dormant agent prompts on a TTY (mirroring resolveSpawnCollision's
-// cancel-on-decline convention: declining is not an error, it's a quiet
-// return to the shell) or fails fast with the exact command to run when
-// stdin isn't interactive, since blocking on an unanswerable prompt would
-// just hang a script.
+// A dormant agent is gated FIRST — before any prompt — so a user whose
+// leo_stop_agent is denied is refused immediately instead of being walked
+// through a Y/n prompt only to be refused after answering. It then prompts
+// on a TTY (mirroring resolveSpawnCollision's cancel-on-decline convention:
+// declining is not an error, it's a quiet return to the shell) or fails fast
+// with the exact command to run when stdin isn't interactive, since blocking
+// on an unanswerable prompt would just hang a script.
 //
 // Returns (false, nil) when the user declined — callers must treat that as
 // "stop here, no error" rather than short-circuiting into an attach.
-//
-// cmd is only used to gate the actual start against leo_stop_agent — the
-// same capability `leo agent start` requires, since re-spawning a dormant
-// agent from attach is the identical disruption. Live-agent attach never
-// reaches the gate check, so it stays ungated exactly as before.
-func ensureAgentRunning(ctx context.Context, cmd *cobra.Command, homePath, name string, stopped bool) (bool, error) {
+func ensureAgentRunningGated(ctx context.Context, gate func() error, homePath, name string, stopped bool) (bool, error) {
 	if !stopped {
 		return true, nil
+	}
+
+	if err := gate(); err != nil {
+		return false, err
 	}
 
 	if !agentIsTTY() {
@@ -96,21 +122,21 @@ func ensureAgentRunning(ctx context.Context, cmd *cobra.Command, homePath, name 
 		return false, nil
 	}
 
-	if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
-		return false, err
-	}
 	if err := agentStartFn(ctx, homePath, name); err != nil {
 		return false, fmt.Errorf("starting agent %q: %w", name, err)
 	}
-	if err := waitForAgentSession(name); err != nil {
+	if err := waitForAgentSession(ctx, name); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 // waitForAgentSession polls agentSessionReadyFn until the agent's tmux
-// session exists or agentStartTimeout elapses.
-func waitForAgentSession(name string) error {
+// session exists, ctx is cancelled, or agentStartTimeout elapses. ctx
+// cancellation returns ctx.Err() immediately rather than continuing to poll
+// out the full timeout — an attach command whose context was cancelled
+// (parent command interrupted, test deadline, etc.) should stop promptly.
+func waitForAgentSession(ctx context.Context, name string) error {
 	deadline := time.Now().Add(agentStartTimeout)
 	for {
 		if agentSessionReadyFn(name) {
@@ -119,6 +145,10 @@ func waitForAgentSession(name string) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("agent %q did not become ready within %s", name, agentStartTimeout)
 		}
-		time.Sleep(agentStartPollInterval)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(agentStartPollInterval):
+		}
 	}
 }
