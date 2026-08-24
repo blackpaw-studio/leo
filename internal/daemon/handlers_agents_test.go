@@ -477,6 +477,50 @@ func TestAgentSessionHandler(t *testing.T) {
 	}
 }
 
+// TestAgentSessionHandlerReportsStoppedForDormantRecord verifies the session
+// endpoint surfaces Stopped == true for a dormant (Status == "stopped")
+// record, so attach callers can prompt to start it instead of handing back a
+// tmux session name that doesn't exist yet.
+func TestAgentSessionHandlerReportsStoppedForDormantRecord(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo", Status: "stopped"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/foo/session")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var env Response
+	json.NewDecoder(resp.Body).Decode(&env) //nolint:errcheck
+	var out AgentSessionResponse
+	json.Unmarshal(env.Data, &out) //nolint:errcheck
+	if !out.Stopped {
+		t.Errorf("Stopped = false, want true for a dormant record")
+	}
+}
+
+// TestAgentSessionHandlerReportsNotStoppedForLiveRecord is the counterpart to
+// the dormant case above — a live agent's Status is never "stopped", so
+// Stopped must come back false and the existing tmux-attach path stays
+// untouched.
+func TestAgentSessionHandlerReportsNotStoppedForLiveRecord(t *testing.T) {
+	mgr := &fakeAgentManager{records: []agent.Record{{Name: "foo", Status: "running"}}}
+	_, client := startTestServerWithAgent(t, mgr)
+
+	resp, err := client.Get("http://localhost/agents/foo/session")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var env Response
+	json.NewDecoder(resp.Body).Decode(&env) //nolint:errcheck
+	var out AgentSessionResponse
+	json.Unmarshal(env.Data, &out) //nolint:errcheck
+	if out.Stopped {
+		t.Errorf("Stopped = true, want false for a live record")
+	}
+}
+
 func TestAgentSessionNotFound(t *testing.T) {
 	mgr := &fakeAgentManager{records: []agent.Record{}}
 	_, client := startTestServerWithAgent(t, mgr)

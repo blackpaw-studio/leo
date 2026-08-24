@@ -261,22 +261,24 @@ func AgentLogs(ctx context.Context, workDir, name string, lines int) (string, er
 	return logs.Output, nil
 }
 
-// AgentSession sends GET /agents/{name}/session to the daemon, returning the tmux session name.
-// The `name` may be a shorthand query; the server resolves it before responding.
-// On resolve failures it returns typed *agent.ErrNotFound or *agent.ErrAmbiguous.
-func AgentSession(ctx context.Context, workDir, name string) (string, error) {
+// AgentSession sends GET /agents/{name}/session to the daemon, returning the
+// full response (tmux session name, canonical name, and whether the resolved
+// agent is dormant). The `name` may be a shorthand query; the server resolves
+// it before responding. On resolve failures it returns typed
+// *agent.ErrNotFound or *agent.ErrAmbiguous.
+func AgentSession(ctx context.Context, workDir, name string) (AgentSessionResponse, error) {
 	resp, err := Send(ctx, workDir, "GET", "/agents/"+url.PathEscape(name)+"/session", nil)
 	if err != nil {
-		return "", err
+		return AgentSessionResponse{}, err
 	}
 	if !resp.OK {
-		return "", responseError(resp, name)
+		return AgentSessionResponse{}, responseError(resp, name)
 	}
 	var s AgentSessionResponse
 	if err := json.Unmarshal(resp.Data, &s); err != nil {
-		return "", fmt.Errorf("decoding session response: %w", err)
+		return AgentSessionResponse{}, fmt.Errorf("decoding session response: %w", err)
 	}
-	return s.Session, nil
+	return s, nil
 }
 
 // AgentAttachSpec sends GET /agents/{name}/attach-spec to the daemon,
