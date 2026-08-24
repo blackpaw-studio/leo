@@ -52,32 +52,11 @@ func defaultAgentSessionReady(name string) bool {
 	return cmd.Run() == nil
 }
 
-// ensureAgentRunning is the entry point for the two cobra-command attach
-// doors (`leo attach` and `leo agent attach`) — it gates through the
-// invoking command. The attach picker has no cobra.Command to name (its
-// in-place actions run inside `leo attach` itself, same as
-// gateTemplateSwitch's picker callers) and uses ensureAgentRunningForPicker
-// instead; both share ensureAgentRunningGated below so the prompt/start/wait
-// behavior is identical from every door.
-//
-// The literal gateCommand(cmd, "leo_stop_agent") call below is required, not
-// just documentation: TestEverySpawnRouteIsGated (permissions_test.go)
-// statically scans every source file that mentions daemon.AgentStart (via
-// agentStartFn above) for this exact substring.
-func ensureAgentRunning(ctx context.Context, cmd *cobra.Command, homePath, name string, stopped bool) (bool, error) {
-	return ensureAgentRunningGated(ctx, func() error { return gateCommand(cmd, "leo_stop_agent") }, homePath, name, stopped)
-}
-
-// ensureAgentRunningForPicker is the attach picker's entry point — see
-// ensureAgentRunning's doc comment for why it needs a separate one.
-func ensureAgentRunningForPicker(ctx context.Context, label, homePath, name string, stopped bool) (bool, error) {
-	return ensureAgentRunningGated(ctx, func() error { return gateToolFor(label, "leo_stop_agent") }, homePath, name, stopped)
-}
-
-// ensureAgentRunningGated is the shared decision point every attach door
-// calls after resolving a name to a session. stopped comes from the
-// daemon's AgentSessionResponse — already paid for by the caller's lookup —
-// so this never re-resolves the agent itself.
+// ensureAgentRunning is the shared decision point both cobra-command attach
+// doors (`leo attach` and `leo agent attach`) call after resolving a name to
+// a session. stopped comes from the daemon's AgentSessionResponse — already
+// paid for by the caller's lookup — so this never re-resolves the agent
+// itself.
 //
 // A live agent (stopped == false) is a no-op: returns (true, nil)
 // immediately so neither the gate nor the prompt is ever consulted on the
@@ -93,12 +72,17 @@ func ensureAgentRunningForPicker(ctx context.Context, label, homePath, name stri
 //
 // Returns (false, nil) when the user declined — callers must treat that as
 // "stop here, no error" rather than short-circuiting into an attach.
-func ensureAgentRunningGated(ctx context.Context, gate func() error, homePath, name string, stopped bool) (bool, error) {
+//
+// The gateCommand call below is required, not just documentation:
+// TestEverySpawnRouteIsGated (permissions_test.go) statically scans every
+// source file that mentions daemon.AgentStart (via agentStartFn above) for
+// the literal substring gateCommand(cmd, "leo_stop_agent").
+func ensureAgentRunning(ctx context.Context, cmd *cobra.Command, homePath, name string, stopped bool) (bool, error) {
 	if !stopped {
 		return true, nil
 	}
 
-	if err := gate(); err != nil {
+	if err := gateCommand(cmd, "leo_stop_agent"); err != nil {
 		return false, err
 	}
 
