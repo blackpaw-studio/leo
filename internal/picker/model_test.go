@@ -3,6 +3,7 @@ package picker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -343,6 +344,161 @@ func TestEnterOnRunningSelectsAndQuits(t *testing.T) {
 	m, quit := drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if !quit || m.result.Agent == nil || m.result.Agent.Name != "alpha" {
 		t.Fatalf("running Enter should quit with result; quit=%v result=%+v", quit, m.result)
+	}
+}
+
+// TestLifecycleGateBlocksBeforeAnyBackendCall is the parity regression guard
+// for the picker's five lifecycle actions (stop/start/delete/rename/start-
+// attach): a refusing CanLifecycle gate must stop dispatch before the backend
+// is ever called, and surface the refusal as an error status line — exactly
+// like the existing template-switch gate.
+func TestLifecycleGateBlocksBeforeAnyBackendCall(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		key    string
+		setup  func(t *testing.T, m model) model // extra steps before the gated key, e.g. arming delete confirm
+	}{
+		{name: "stop", status: "running", key: "s"},
+		{name: "start", status: "stopped", key: "u"},
+		{name: "rename", status: "running", key: "enter-rename"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fb := &fakeBackend{}
+			m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
+			m = sized(m)
+			m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: tc.status}}, nil)
+			m.canLifecycle = func(verb string) error {
+				return errors.New("not permitted: " + verb)
+			}
+
+			switch tc.key {
+			case "enter-rename":
+				next, _ := m.Update(keyRunes("r"))
+				m = next.(model)
+				m.rename.SetValue("beta")
+				m, _ = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+			default:
+				m, _ = drive(t, m, keyRunes(tc.key))
+			}
+
+			if len(fb.calls) != 0 {
+				t.Fatalf("a refused %s still reached the backend: %v", tc.name, fb.calls)
+			}
+			if !m.status.isErr || !contains(m.status.text, "not permitted") {
+				t.Fatalf("status = %+v, want the refusal surfaced", m.status)
+			}
+		})
+	}
+}
+
+// TestLifecycleGateBlocksDelete covers delete specifically, since it requires
+// arming the confirm dialog first (a DeletePlan round-trip) before the gate
+// is consulted on 'y'.
+func TestLifecycleGateBlocksDelete(t *testing.T) {
+	fb := &fakeBackend{deletePlan: agent.DeletePlan{Name: "alpha"}}
+	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
+	m = sized(m)
+	m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: "stopped"}}, nil)
+	m.canLifecycle = func(verb string) error {
+		return errors.New("not permitted: " + verb)
+	}
+
+	m, _ = drive(t, m, keyRunes("D"))
+	if m.confirming == nil {
+		t.Fatalf("D should still arm the confirm dialog")
+	}
+	m, _ = drive(t, m, keyRunes("y"))
+
+	// beginDelete's DeletePlan fetch is not gated (it mutates nothing), but
+	// the actual Delete call must never fire.
+	for _, call := range fb.calls {
+		if strings.HasPrefix(call, "delete:") {
+			t.Fatalf("a refused delete still reached the backend: %v", fb.calls)
+		}
+	}
+	if !m.status.isErr || !contains(m.status.text, "not permitted") {
+		t.Fatalf("status = %+v, want the refusal surfaced", m.status)
+	}
+}
+
+// TestLifecycleGateBlocksStartAttach covers enter-on-dormant, which dispatches
+// actionStartAttach rather than actionStart.
+func TestLifecycleGateBlocksStartAttach(t *testing.T) {
+	fb := &fakeBackend{}
+	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
+	m = sized(m)
+	m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: "stopped"}}, nil)
+	m.canLifecycle = func(verb string) error {
+		return errors.New("not permitted: " + verb)
+	}
+
+	m, quit := drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(fb.calls) != 0 {
+		t.Fatalf("a refused start-attach still reached the backend: %v", fb.calls)
+	}
+	if quit {
+		t.Fatalf("a refused start-attach must not quit the picker")
+	}
+	if !m.status.isErr || !contains(m.status.text, "not permitted") {
+		t.Fatalf("status = %+v, want the refusal surfaced", m.status)
+	}
+}
+
+// TestLifecycleGateAllowsPermittedActions guards against gating everything
+// into uselessness: a permitting gate must still let each action reach the
+// backend.
+func TestLifecycleGateAllowsPermittedActions(t *testing.T) {
+	fb := &fakeBackend{}
+	m := newModel(context.Background(), map[string]Backend{LocalHost: fb})
+	m = sized(m)
+	m = loaded(m, LocalHost, []Agent{{Name: "alpha", Host: LocalHost, Status: "running"}}, nil)
+	var asked []string
+	m.canLifecycle = func(verb string) error {
+		asked = append(asked, verb)
+		return nil
+	}
+
+	_, _ = drive(t, m, keyRunes("s"))
+
+	if len(fb.calls) != 1 || fb.calls[0] != "stop:alpha" {
+		t.Fatalf("calls = %v, want [stop:alpha]", fb.calls)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("gate consulted %d times, want 1", len(asked))
+	}
+}
+
+// TestLifecycleGateDoesNotBlockTemplateSwitch is the parity regression test:
+// `leo agent set-template` is governed by gateTemplateSwitch alone, NOT
+// leo_stop_agent, so a refusing CanLifecycle gate must never block a template
+// switch — only CanSwitchTemplate governs that action.
+func TestLifecycleGateDoesNotBlockTemplateSwitch(t *testing.T) {
+	b := &fakeBackend{
+		agents:    []Agent{{Name: "leo-coding-fetch", Template: "coding", Host: LocalHost, Status: "running"}},
+		templates: []string{"coding", "codex"},
+	}
+	m := menuModel(t, b)
+	m.canLifecycle = func(verb string) error {
+		return errors.New("not permitted: " + verb)
+	}
+
+	m, _ = drive(t, m, keyMsg("j"))
+	m, _ = drive(t, m, keyMsg("enter"))
+
+	if m.templates != nil {
+		t.Error("menu should close once a template is confirmed")
+	}
+	var found bool
+	for _, c := range b.calls {
+		if c == "set-template:leo-coding-fetch->codex" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("calls = %v, want a set-template dispatch for codex despite the refusing lifecycle gate", b.calls)
 	}
 }
 

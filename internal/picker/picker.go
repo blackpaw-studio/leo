@@ -61,19 +61,31 @@ type Result struct {
 	Agent *Agent
 }
 
+// Gates carries the permission checks Run consults before dispatching an
+// action, mirroring the same checks the equivalent CLI verbs apply. Both are
+// checked in the model rather than in a Backend because permissions belong to
+// THIS process: a remote backend shells out to a leo that cannot see this
+// agent's LEO_PERMISSIONS, so a per-backend check would leave remote rows
+// open. A nil func means no restriction.
+type Gates struct {
+	// CanSwitchTemplate refuses a template this process may not switch an
+	// agent onto, mirroring `leo agent set-template`'s permission gate.
+	CanSwitchTemplate func(template string) error
+	// CanLifecycle refuses one of the picker's stop/start/delete/rename/
+	// start-attach actions, mirroring `leo agent stop|start|delete|rename`'s
+	// leo_stop_agent gate. verb is one of "stop", "start", "delete",
+	// "rename" (see verbLabel) — NOT consulted for a template switch, which
+	// CanSwitchTemplate governs on its own.
+	CanLifecycle func(verb string) error
+}
+
 // Run starts the picker over the given backends (keyed by host name) and blocks
 // until the user attaches or quits. Attach happens in the caller AFTER Run
 // returns, so tmux inherits a clean terminal.
-//
-// canSwitchTemplate refuses a template this process may not switch an agent
-// onto, mirroring `leo agent set-template`'s permission gate. It is checked in
-// the model rather than in a Backend because permissions belong to THIS
-// process: a remote backend shells out to a leo that cannot see this agent's
-// LEO_PERMISSIONS, so a per-backend check would leave remote rows open. Pass
-// nil for no restriction.
-func Run(ctx context.Context, backends map[string]Backend, canSwitchTemplate func(template string) error) (Result, error) {
+func Run(ctx context.Context, backends map[string]Backend, gates Gates) (Result, error) {
 	m := newModel(ctx, backends)
-	m.canSwitch = canSwitchTemplate
+	m.canSwitch = gates.CanSwitchTemplate
+	m.canLifecycle = gates.CanLifecycle
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 	final, err := p.Run()
 	if err != nil {

@@ -65,10 +65,15 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 	}
 
 	backends := buildPickerBackends(cfg, localErr == nil)
-	// The gate rides with the picker, not with a backend: it encodes THIS
+	// The gates ride with the picker, not with a backend: they encode THIS
 	// process's permissions, and a remote leo cannot see them.
-	result, err := pickerRunFn(ctx, backends, func(template string) error {
-		return gateTemplateSwitch("leo attach: set template", template)
+	result, err := pickerRunFn(ctx, backends, picker.Gates{
+		CanSwitchTemplate: func(template string) error {
+			return gateTemplateSwitch("leo attach: set template", template)
+		},
+		CanLifecycle: func(verb string) error {
+			return gateToolFor("leo attach: "+verb+" agent", "leo_stop_agent")
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("picker: %w", err)
