@@ -125,11 +125,16 @@ type model struct {
 	switchTo     string
 	// canSwitch gates the template menu's dispatch; nil means unrestricted.
 	// See Run.
-	canSwitch  func(template string) error
-	renaming   bool
-	rename     textinput.Model
-	renameHost string
-	renameOld  string
+	canSwitch func(template string) error
+	// canLifecycle gates the five lifecycle actions (stop/start/delete/rename/
+	// start-attach) dispatched via dispatch; nil means unrestricted. It does
+	// NOT gate actionSwitchTemplate — that stays governed by canSwitch alone,
+	// matching `leo agent set-template`'s permission model. See Run.
+	canLifecycle func(verb string) error
+	renaming     bool
+	rename       textinput.Model
+	renameHost   string
+	renameOld    string
 
 	status statusLine
 	result Result
@@ -317,6 +322,21 @@ func (m model) dispatch(host, name string, kind actionKind) (tea.Model, tea.Cmd)
 	if !ok {
 		m.status = statusLine{text: "unknown host " + host, isErr: true}
 		return m, nil
+	}
+	// Gate the five lifecycle actions on leo_stop_agent, mirroring the CLI
+	// verbs (agent stop/start/delete/rename/reset/restart all gate the same
+	// way). actionSwitchTemplate is deliberately excluded: `leo agent
+	// set-template` is governed by gateTemplateSwitch alone, and this
+	// chokepoint must not silently add a second requirement to it. Checked
+	// here — the single funnel every action passes through — so a future
+	// action added to startAction/enterSelected cannot forget to gate, and so
+	// the check covers remote rows too: a remote leo cannot see this
+	// process's permissions.
+	if kind != actionSwitchTemplate && m.canLifecycle != nil {
+		if err := m.canLifecycle(verbLabel(kind)); err != nil {
+			m.status = statusLine{text: err.Error(), isErr: true}
+			return m, nil
+		}
 	}
 	startTick := len(m.pending) == 0
 
