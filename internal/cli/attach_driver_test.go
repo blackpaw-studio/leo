@@ -126,6 +126,17 @@ func TestAttachLocalWarnsOnAttachSpecLookupFailure(t *testing.T) {
 	})
 	_, errBuf := withStubStdio(t)
 
+	// The warning branch falls through to a real tmux attach (session
+	// "leo-scratch" resolved above) — stub tmux lookup/env/exec so this
+	// exercises the syscall.Exec branch deterministically instead of really
+	// exec'ing tmux (which replaces the test binary) or depending on the
+	// ambient $TMUX the developer's shell happens to have.
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	oldExec := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error { return nil }
+	t.Cleanup(func() { agentSyscallExec = oldExec })
+
 	_ = attachLocal(context.Background(), &cobra.Command{}, t.TempDir(), "scratch", attachOptions{}) //nolint:errcheck
 
 	warning := errBuf.String()
