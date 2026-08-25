@@ -10,6 +10,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
 // --- top-level `leo attach` alias ---
@@ -70,11 +71,29 @@ func stubOutsideTmux(t *testing.T) {
 }
 
 // stubAgentSession replaces lookupAgentSession for the duration of the test.
-// Pass a function that returns (session, err) for a given name.
+// Pass a function that returns (session, err) for a given name — wrapped into
+// a live (Stopped == false) AgentSessionResponse. Tests exercising the
+// dormant-agent attach-start prompt need Stopped == true and use
+// stubAgentSessionFull instead, which gives full control over the response.
 func stubAgentSession(t *testing.T, fn func(workDir, name string) (string, error)) {
 	t.Helper()
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		session, err := fn(workDir, name)
+		if err != nil {
+			return daemon.AgentSessionResponse{}, err
+		}
+		return daemon.AgentSessionResponse{Session: session, Name: name}, nil
+	})
+}
+
+// stubAgentSessionFull replaces lookupAgentSession with full control over the
+// daemon response (including Stopped), for tests exercising the dormant-agent
+// attach-start prompt. stubAgentSession is a thin wrapper over this for tests
+// that only care about the session string.
+func stubAgentSessionFull(t *testing.T, fn func(workDir, name string) (daemon.AgentSessionResponse, error)) {
+	t.Helper()
 	old := lookupAgentSession
-	lookupAgentSession = func(_ context.Context, workDir, name string) (string, error) {
+	lookupAgentSession = func(_ context.Context, workDir, name string) (daemon.AgentSessionResponse, error) {
 		return fn(workDir, name)
 	}
 	t.Cleanup(func() { lookupAgentSession = old })
@@ -118,6 +137,116 @@ func TestAttachAliasResolvesToAgent(t *testing.T) {
 	// argv is ["tmux", "-L", "leo", "attach", "-t", "=leo-scratch"]
 	if len(execedArgv) != 6 || execedArgv[5] != "=leo-scratch" {
 		t.Errorf("unexpected tmux argv: %v", execedArgv)
+	}
+}
+
+// TestAttachAliasDormantAgentPromptsAndStarts verifies `leo attach` on a
+// dormant agent prompts to start it, then proceeds with the tmux attach once
+// confirmed — the top-level door's share of ensureAgentRunning.
+func TestAttachAliasDormantAgentPromptsAndStarts(t *testing.T) {
+	path := newAttachAliasTestConfig(t)
+	withStubStdio(t)
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{Session: "leo-scratch", Name: "scratch", Stopped: true}, nil
+	})
+	stubAgentAttachSpecFn(t, func(workDir, name string) (daemon.AgentAttachSpecResponse, error) {
+		return daemon.AgentAttachSpecResponse{Name: name}, nil // claude
+	})
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	oldIn := agentStdin
+	agentStdin = strings.NewReader("y\n")
+	t.Cleanup(func() { agentStdin = oldIn })
+
+	called := stubAgentStart(t, nil)
+	stubAgentSessionReady(t, true)
+	stubTmuxLookPath(t, "/usr/bin/tmux", nil)
+	stubOutsideTmux(t)
+	var execedArgv []string
+	oldExec := agentSyscallExec
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execedArgv = argv
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = oldExec })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "scratch", "--host", "localhost"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !*called {
+		t.Fatal("expected AgentStart to fire after confirming the prompt")
+	}
+	if len(execedArgv) == 0 || !strings.Contains(strings.Join(execedArgv, " "), "leo-scratch") {
+		t.Fatalf("expected attach to proceed to the tmux session, argv = %v", execedArgv)
+	}
+}
+
+// TestAttachAliasDormantAgentDeclinePrompt verifies declining the prompt
+// returns cleanly without starting the agent or attaching.
+func TestAttachAliasDormantAgentDeclinePrompt(t *testing.T) {
+	path := newAttachAliasTestConfig(t)
+	withStubStdio(t)
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{Session: "leo-scratch", Name: "scratch", Stopped: true}, nil
+	})
+
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return true }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	oldIn := agentStdin
+	agentStdin = strings.NewReader("n\n")
+	t.Cleanup(func() { agentStdin = oldIn })
+
+	called := stubAgentStart(t, nil)
+	oldExec := agentSyscallExec
+	execed := false
+	agentSyscallExec = func(argv0 string, argv []string, envv []string) error {
+		execed = true
+		return nil
+	}
+	t.Cleanup(func() { agentSyscallExec = oldExec })
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "scratch", "--host", "localhost"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if *called {
+		t.Fatal("AgentStart should not fire after declining")
+	}
+	if execed {
+		t.Fatal("attach should not proceed after declining")
+	}
+}
+
+// TestAttachAliasDormantAgentNonTTYErrors verifies a non-interactive `leo
+// attach` on a dormant agent fails fast with the exact command to run.
+func TestAttachAliasDormantAgentNonTTYErrors(t *testing.T) {
+	path := newAttachAliasTestConfig(t)
+	withStubStdio(t)
+	stubAgentSessionFull(t, func(workDir, name string) (daemon.AgentSessionResponse, error) {
+		return daemon.AgentSessionResponse{Session: "leo-scratch", Name: "scratch", Stopped: true}, nil
+	})
+	oldTTY := agentIsTTY
+	agentIsTTY = func() bool { return false }
+	t.Cleanup(func() { agentIsTTY = oldTTY })
+	called := stubAgentStart(t, nil)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", path, "attach", "scratch", "--host", "localhost"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected an error for a dormant agent off a TTY")
+	}
+	if !strings.Contains(err.Error(), "leo agent start") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if *called {
+		t.Fatal("AgentStart should not fire without confirmation")
 	}
 }
 

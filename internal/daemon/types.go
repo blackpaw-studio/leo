@@ -106,9 +106,16 @@ type AgentLogsResponse struct {
 // Name is the canonical agent name the query resolved to; may differ from the
 // request path when the server accepts shorthand. Always populated so clients
 // can distinguish "resolved to empty" from "field not sent by old server".
+//
+// Stopped mirrors the resolved record's dormant state (Status == "stopped").
+// Session is always the agent's stable tmux session name regardless of
+// Stopped — it's a naming convention, not a liveness check — so a caller
+// that sees Stopped must start the agent before that session actually
+// exists, rather than trusting Session's presence as proof it's attachable.
 type AgentSessionResponse struct {
 	Session string `json:"session"`
 	Name    string `json:"name"`
+	Stopped bool   `json:"stopped,omitempty"`
 }
 
 // AgentResolveResponse is the payload for GET /agents/resolve?q=<query>.

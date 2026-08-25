@@ -309,7 +309,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 					}
 					switch choice {
 					case spawnAttachExisting:
-						return attachLocal(cmd.Context(), cfg.HomePath, matches[0].Name, attachOptions{})
+						return attachLocal(cmd.Context(), cmd, cfg.HomePath, matches[0].Name, attachOptions{})
 					case spawnUseCanonicalRepo:
 						repo = matches[0].Repo
 					case spawnFreshTemplate:
@@ -338,7 +338,7 @@ unless --attach-existing or --reuse-owner is set. Flags override the prompt:
 					}
 					switch choice {
 					case spawnAttachExisting:
-						return attachLocal(cmd.Context(), cfg.HomePath, matches[0].Name, attachOptions{})
+						return attachLocal(cmd.Context(), cmd, cfg.HomePath, matches[0].Name, attachOptions{})
 					case spawnFreshTemplate:
 						// fall through — reserveUniqueName suffixes the name.
 					}
@@ -603,14 +603,37 @@ func resolveExactCollision(match agent.Record, template string, attachExisting b
 // of attach (socket selector, nested-tmux popup, --cc) stays in one place.
 // Shared between `leo agent attach` and the spawn collision prompt's
 // "attach-existing" branch.
-func attachLocal(ctx context.Context, homePath, query string, opts attachOptions) error {
+func attachLocal(ctx context.Context, cmd *cobra.Command, homePath, query string, opts attachOptions) error {
+	session, err := lookupAgentSession(ctx, homePath, query)
+	if err != nil {
+		return fmt.Errorf("looking up session: %w", err)
+	}
+
+	// Dormant agents have no tmux session to attach to yet — prompt to start
+	// (or fail fast off a TTY) before doing anything else, and BEFORE the
+	// attach-spec lookup below. Shares ensureAgentRunning with the top-level
+	// `leo attach` door so the prompt behaves identically from either entry
+	// point.
+	ok, err := ensureAgentRunning(ctx, cmd, homePath, session.Name, session.Stopped)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
 	// Non-claude agents have no tmux session to attach to — route through
 	// their SessionDriver's AttachSpec instead. attach-spec returns an empty
 	// Harness for claude agents (the overwhelming majority), so this call is
-	// on the hot path; keep it a single fast round-trip. A lookup failure
-	// silently fell through to the tmux attach below with no clue for the
-	// user why they landed in the raw serve pane — warn on stderr instead of
-	// swallowing the error, while still keeping the fallback itself.
+	// on the hot path; keep it a single fast round-trip. Looked up AFTER
+	// ensureAgentRunning: ResolveHandle bails on a still-dormant record
+	// (internal/agent/manager.go), so querying it before a start would
+	// always see the empty/claude fallback for an agent that just needed
+	// starting — matching attach.go's door, which has the same ordering. A
+	// lookup failure silently fell through to the tmux attach below with no
+	// clue for the user why they landed in the raw serve pane — warn on
+	// stderr instead of swallowing the error, while still keeping the
+	// fallback itself.
 	if spec, err := agentAttachSpecFn(ctx, homePath, query); err == nil {
 		if spec.Harness != "" && spec.Harness != "claude" {
 			res := config.HostResolution{Localhost: true}
@@ -620,11 +643,7 @@ func attachLocal(ctx context.Context, homePath, query string, opts attachOptions
 		fmt.Fprintf(agentStderr, "warning: driver attach lookup failed (%v); falling back to tmux attach\n", err)
 	}
 
-	session, err := daemon.AgentSession(ctx, homePath, query)
-	if err != nil {
-		return fmt.Errorf("looking up session: %w", err)
-	}
-	return attachTmuxSession(config.HostResolution{Localhost: true}, session, opts)
+	return attachTmuxSession(config.HostResolution{Localhost: true}, session.Session, opts)
 }
 
 // --- attach ---
@@ -684,7 +703,7 @@ as a native tab via tmux control mode.`,
 				return runRemoteAttach(res, "agent", "attach", name)
 			}
 
-			return attachLocal(cmd.Context(), cfg.HomePath, name, attachOptions{cc: cc})
+			return attachLocal(cmd.Context(), cmd, cfg.HomePath, name, attachOptions{cc: cc})
 		},
 	}
 	addHostFlag(cmd, &host)

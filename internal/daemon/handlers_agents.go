@@ -356,6 +356,7 @@ func (s *Server) handleAgentSession(w http.ResponseWriter, r *http.Request) {
 	data, err := json.Marshal(AgentSessionResponse{
 		Session: s.agentMgr.SessionName(rec.Name),
 		Name:    rec.Name,
+		Stopped: rec.Status == "stopped",
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("marshaling session: %v", err))
