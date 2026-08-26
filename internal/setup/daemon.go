@@ -32,7 +32,7 @@ func installDaemon(workspace, cfgPath string) {
 	if err := installDaemonFn(sc); err != nil {
 		prompt.Warn.Printf("  Failed to install daemon: %v\n", err)
 	} else {
-		status, _ := daemonStatusFn()
+		status, _ := daemonStatusFn(workspace)
 		prompt.Success.Printf("  Chat daemon installed (%s).\n", status)
 		prompt.Info.Printf("  Logs: %s\n", sc.LogPath)
 	}

@@ -131,7 +131,7 @@ func buildStatusReport(ctx context.Context) StatusReport {
 	svcStatus, _ := service.Status(cfg.HomePath)
 	report.Service = svcStatus
 
-	daemonStatus, _ := service.DaemonStatus()
+	daemonStatus, _ := service.DaemonStatus(cfg.HomePath)
 	report.Daemon = daemonStatus
 
 	if cfg.Web.Enabled {

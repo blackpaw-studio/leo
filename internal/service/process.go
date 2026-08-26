@@ -35,6 +35,7 @@ var (
 	readFile         = os.ReadFile
 	writeFile        = os.WriteFile
 	removeFile       = os.Remove
+	renameFile       = os.Rename
 	mkdirAll         = os.MkdirAll
 	openLogFile      = defaultOpenLogFile
 	supervisedExecFn = defaultSupervisedExec

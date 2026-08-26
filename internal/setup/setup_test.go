@@ -355,7 +355,7 @@ func TestInstallDaemon_Success(t *testing.T) {
 	osExecutableFn = func() (string, error) { return "/usr/local/bin/leo", nil }
 	envCaptureFn = func(extraKeys ...string) map[string]string { return map[string]string{"PATH": "/usr/bin"} }
 	installDaemonFn = func(sc service.ServiceConfig) error { return nil }
-	daemonStatusFn = func() (string, error) { return "running", nil }
+	daemonStatusFn = func(string) (string, error) { return "running", nil }
 
 	installDaemon("/tmp/workspace", "/tmp/workspace/leo.yaml")
 }
@@ -397,7 +397,7 @@ func TestInstallDaemon_NoExecutable(t *testing.T) {
 		capturedSC = sc
 		return nil
 	}
-	daemonStatusFn = func() (string, error) { return "running", nil }
+	daemonStatusFn = func(string) (string, error) { return "running", nil }
 
 	installDaemon("/tmp/ws", "/tmp/ws/leo.yaml")
 	if capturedSC.LeoPath != "leo" {

@@ -239,7 +239,7 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 
 func promptDaemonInstall(reader *bufio.Reader, workspace, cfgPath string) {
 	fmt.Println()
-	daemonStatus, daemonErr := daemonStatusFn()
+	daemonStatus, daemonErr := daemonStatusFn(workspace)
 	if daemonErr != nil {
 		prompt.Warn.Printf("  Could not check daemon status: %v\n", daemonErr)
 	}
