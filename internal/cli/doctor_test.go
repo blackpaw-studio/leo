@@ -3,9 +3,43 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/fatih/color"
 )
+
+// captureColorOutput redirects the prompt package's color.Output (what
+// success/warn/info actually write to — see internal/prompt/prompt.go)
+// to an in-memory pipe for the duration of fn, and returns everything
+// written. color.Output is read fresh on every Printf/Println call, so
+// reassigning it (unlike os.Stdout) reliably captures output written
+// through *color.Color values created before this call.
+func captureColorOutput(t *testing.T, fn func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := color.Output
+	color.Output = w
+	defer func() { color.Output = orig }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe writer: %v", err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured output: %v", err)
+	}
+	return string(out)
+}
 
 func TestClassifyDial(t *testing.T) {
 	tests := []struct {
@@ -62,54 +96,100 @@ func TestClassifyDial(t *testing.T) {
 	}
 }
 
-func TestCheckServiceDriftFnReportsDrift(t *testing.T) {
+// TestReportServiceHealthDriftDetected drives reportServiceHealth (the
+// function runDoctor actually calls) end to end with the drift seam
+// stubbed, and asserts both on the printed output and on the exact home
+// argument the seam receives — unlike calling the seam directly, this
+// exercises the real wiring in doctor.go.
+func TestReportServiceHealthDriftDetected(t *testing.T) {
 	origDrift := checkServiceDriftFn
-	defer func() { checkServiceDriftFn = origDrift }()
+	origCollision := checkLegacyLabelCollisionFn
+	defer func() {
+		checkServiceDriftFn = origDrift
+		checkLegacyLabelCollisionFn = origCollision
+	}()
 
-	checkServiceDriftFn = func(home string) (bool, string, error) {
-		return true, "launchd job is loaded but its plist is missing", nil
+	const wantHome = "/tmp/does-not-matter"
+	var gotHome string
+	checkServiceDriftFn = func(home string) (bool, string) {
+		gotHome = home
+		return true, "launchd job is loaded but its plist is missing"
 	}
+	checkLegacyLabelCollisionFn = func(home string) (bool, string) { return false, "" }
 
-	drifted, detail, err := checkServiceDriftFn("/tmp/does-not-matter")
-	if err != nil {
-		t.Fatalf("checkServiceDriftFn() error: %v", err)
+	output := captureColorOutput(t, func() {
+		reportServiceHealth(wantHome)
+	})
+
+	if gotHome != wantHome {
+		t.Errorf("checkServiceDriftFn received home = %q, want %q", gotHome, wantHome)
 	}
-	if !drifted {
-		t.Fatal("expected drift to be reported")
-	}
-	if detail == "" {
-		t.Error("expected a non-empty detail")
+	if !doctorContainsAll(output, "drift detected", "plist is missing") {
+		t.Errorf("output = %q, want it to mention the drift and its detail", output)
 	}
 }
 
-func TestCheckServiceDriftFnHealthyIsSilent(t *testing.T) {
+// TestReportServiceHealthHealthyIsSilent verifies the "don't add noise
+// on the common path" requirement: when nothing is wrong, neither the
+// drift nor the legacy-collision line is printed.
+func TestReportServiceHealthHealthyIsSilent(t *testing.T) {
 	origDrift := checkServiceDriftFn
-	defer func() { checkServiceDriftFn = origDrift }()
+	origCollision := checkLegacyLabelCollisionFn
+	defer func() {
+		checkServiceDriftFn = origDrift
+		checkLegacyLabelCollisionFn = origCollision
+	}()
 
-	checkServiceDriftFn = func(home string) (bool, string, error) { return false, "", nil }
+	checkServiceDriftFn = func(home string) (bool, string) { return false, "" }
+	checkLegacyLabelCollisionFn = func(home string) (bool, string) { return false, "" }
 
-	drifted, _, err := checkServiceDriftFn("/tmp/does-not-matter")
-	if err != nil {
-		t.Fatalf("checkServiceDriftFn() error: %v", err)
-	}
-	if drifted {
-		t.Error("expected no drift for the healthy case")
+	output := captureColorOutput(t, func() {
+		reportServiceHealth("/tmp/does-not-matter")
+	})
+
+	if doctorContainsAll(output, "drift") || doctorContainsAll(output, "collision") {
+		t.Errorf("expected no drift/collision noise for the healthy case, got: %q", output)
 	}
 }
 
-func TestCheckServiceDriftFnNotLoadedIsNotAFalseAlarm(t *testing.T) {
+// TestReportServiceHealthLegacyCollisionDetected exercises the fourth
+// review finding's wiring: a legacy base-label collision is reported
+// distinctly from drift.
+func TestReportServiceHealthLegacyCollisionDetected(t *testing.T) {
 	origDrift := checkServiceDriftFn
-	defer func() { checkServiceDriftFn = origDrift }()
+	origCollision := checkLegacyLabelCollisionFn
+	defer func() {
+		checkServiceDriftFn = origDrift
+		checkLegacyLabelCollisionFn = origCollision
+	}()
 
-	checkServiceDriftFn = func(home string) (bool, string, error) { return false, "", nil }
+	const wantHome = "/tmp/second-checkout/.leo"
+	var gotHome string
+	checkServiceDriftFn = func(home string) (bool, string) { return false, "" }
+	checkLegacyLabelCollisionFn = func(home string) (bool, string) {
+		gotHome = home
+		return true, "a legacy launchd job \"com.blackpaw.leo\" is already registered for this leo home"
+	}
 
-	drifted, detail, err := checkServiceDriftFn("/tmp/does-not-matter")
-	if err != nil {
-		t.Fatalf("checkServiceDriftFn() error: %v", err)
+	output := captureColorOutput(t, func() {
+		reportServiceHealth(wantHome)
+	})
+
+	if gotHome != wantHome {
+		t.Errorf("checkLegacyLabelCollisionFn received home = %q, want %q", gotHome, wantHome)
 	}
-	if drifted {
-		t.Errorf("expected not-loaded to be reported healthy, got detail: %q", detail)
+	if !doctorContainsAll(output, "legacy registration collision", "com.blackpaw.leo") {
+		t.Errorf("output = %q, want it to mention the legacy collision and its detail", output)
 	}
+}
+
+func doctorContainsAll(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestNewDoctorCmd(t *testing.T) {

@@ -18,6 +18,13 @@ import (
 // every branch without a real launchd/systemd.
 var checkServiceDriftFn = service.DriftDetected
 
+// checkLegacyLabelCollisionFn reports whether a legacy, pre-home-scoping
+// autostart registration (the shared base label/unit name every install
+// used before this change) is already serving this same home from a
+// non-default install path — see service.LegacyBaseLabelCollision. A
+// seam so tests can drive it without a real launchd/systemd.
+var checkLegacyLabelCollisionFn = service.LegacyBaseLabelCollision
+
 // LocalNetworkStatus is the structured result of the macOS Local Network
 // privacy check performed by checkLocalNetwork. It's shared by the
 // darwin and non-darwin implementations so `leo doctor` can render a
@@ -88,19 +95,7 @@ func runDoctor(probeHost string, trigger bool) error {
 	if err != nil {
 		warn.Printf("Config: %s\n", err)
 	} else {
-		if daemon.IsRunning(cfg.HomePath) {
-			success.Println("Daemon:         running")
-		} else {
-			info.Println("Daemon:         not running")
-		}
-
-		// Only surface autostart drift as a problem; a healthy result stays
-		// silent so this check doesn't add noise on the common path.
-		if drifted, detail, driftErr := checkServiceDriftFn(cfg.HomePath); driftErr == nil && drifted {
-			warn.Println("Autostart:      drift detected")
-			warn.Printf("  %s\n", detail)
-			warn.Println("  Fix: reinstall with 'leo service start --daemon'")
-		}
+		reportServiceHealth(cfg.HomePath)
 	}
 
 	status := checkLocalNetwork(probeHost, trigger)
@@ -142,6 +137,36 @@ func runDoctor(probeHost string, trigger bool) error {
 	}
 
 	return nil
+}
+
+// reportServiceHealth prints the daemon-running line plus the two
+// autostart-registration checks (drift, legacy label collision) for
+// home. Split out of runDoctor so it's independently testable without
+// triggering runDoctor's real network probing (checkLocalNetwork does a
+// live TCP dial and, with --trigger, mDNS multicast sends that can raise
+// the macOS consent dialog — neither belongs in a unit test).
+func reportServiceHealth(home string) {
+	if daemon.IsRunning(home) {
+		success.Println("Daemon:         running")
+	} else {
+		info.Println("Daemon:         not running")
+	}
+
+	// Only surface autostart drift as a problem; a healthy result stays
+	// silent so this check doesn't add noise on the common path.
+	if drifted, detail := checkServiceDriftFn(home); drifted {
+		warn.Println("Autostart:      drift detected")
+		warn.Printf("  %s\n", detail)
+		warn.Println("  Fix: reinstall with 'leo service start --daemon'")
+	}
+
+	// A legacy pre-scoping registration is a distinct problem from drift:
+	// it means TWO registrations may now be supervising this home. Report
+	// it; never remediate it automatically here.
+	if collided, detail := checkLegacyLabelCollisionFn(home); collided {
+		warn.Println("Autostart:      legacy registration collision")
+		warn.Printf("  %s\n", detail)
+	}
 }
 
 // reportTmuxTree summarizes who owns leo's tmux server, tolerating a missing
