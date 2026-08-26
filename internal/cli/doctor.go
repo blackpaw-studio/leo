@@ -6,9 +6,17 @@ import (
 	"syscall"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
 )
+
+// checkServiceDriftFn reports OS-service drift for a leo home: the
+// autostart registration (launchd job / systemd unit) is loaded and
+// running right now, but its backing file has vanished from disk, so it
+// will NOT survive the next logout/reboot. A seam so tests can drive
+// every branch without a real launchd/systemd.
+var checkServiceDriftFn = service.DriftDetected
 
 // LocalNetworkStatus is the structured result of the macOS Local Network
 // privacy check performed by checkLocalNetwork. It's shared by the
@@ -84,6 +92,14 @@ func runDoctor(probeHost string, trigger bool) error {
 			success.Println("Daemon:         running")
 		} else {
 			info.Println("Daemon:         not running")
+		}
+
+		// Only surface autostart drift as a problem; a healthy result stays
+		// silent so this check doesn't add noise on the common path.
+		if drifted, detail, driftErr := checkServiceDriftFn(cfg.HomePath); driftErr == nil && drifted {
+			warn.Println("Autostart:      drift detected")
+			warn.Printf("  %s\n", detail)
+			warn.Println("  Fix: reinstall with 'leo service start --daemon'")
 		}
 	}
 

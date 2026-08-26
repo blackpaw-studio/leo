@@ -62,6 +62,56 @@ func TestClassifyDial(t *testing.T) {
 	}
 }
 
+func TestCheckServiceDriftFnReportsDrift(t *testing.T) {
+	origDrift := checkServiceDriftFn
+	defer func() { checkServiceDriftFn = origDrift }()
+
+	checkServiceDriftFn = func(home string) (bool, string, error) {
+		return true, "launchd job is loaded but its plist is missing", nil
+	}
+
+	drifted, detail, err := checkServiceDriftFn("/tmp/does-not-matter")
+	if err != nil {
+		t.Fatalf("checkServiceDriftFn() error: %v", err)
+	}
+	if !drifted {
+		t.Fatal("expected drift to be reported")
+	}
+	if detail == "" {
+		t.Error("expected a non-empty detail")
+	}
+}
+
+func TestCheckServiceDriftFnHealthyIsSilent(t *testing.T) {
+	origDrift := checkServiceDriftFn
+	defer func() { checkServiceDriftFn = origDrift }()
+
+	checkServiceDriftFn = func(home string) (bool, string, error) { return false, "", nil }
+
+	drifted, _, err := checkServiceDriftFn("/tmp/does-not-matter")
+	if err != nil {
+		t.Fatalf("checkServiceDriftFn() error: %v", err)
+	}
+	if drifted {
+		t.Error("expected no drift for the healthy case")
+	}
+}
+
+func TestCheckServiceDriftFnNotLoadedIsNotAFalseAlarm(t *testing.T) {
+	origDrift := checkServiceDriftFn
+	defer func() { checkServiceDriftFn = origDrift }()
+
+	checkServiceDriftFn = func(home string) (bool, string, error) { return false, "", nil }
+
+	drifted, detail, err := checkServiceDriftFn("/tmp/does-not-matter")
+	if err != nil {
+		t.Fatalf("checkServiceDriftFn() error: %v", err)
+	}
+	if drifted {
+		t.Errorf("expected not-loaded to be reported healthy, got detail: %q", detail)
+	}
+}
+
 func TestNewDoctorCmd(t *testing.T) {
 	cmd := newDoctorCmd()
 
