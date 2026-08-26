@@ -42,6 +42,37 @@ var (
 	supervisedExecFn = defaultSupervisedExec
 )
 
+// newTempFileAlongside creates a uniquely-named, empty temp file in the
+// same directory as path (so a later rename stays on one filesystem),
+// chmod'd to perm, and returns its name. The caller is responsible for
+// writing content to it and either renaming it into place or removing
+// it on failure. Shared by darwin's plist install and Linux's unit
+// install — the two were byte-identical apart from the name.
+//
+// The explicit Chmod matters: os.CreateTemp always creates with 0600
+// regardless of any perm the caller might assume, and os.WriteFile does
+// not change the mode of a file that already exists. Without it, writing
+// the plist/unit content into this temp file and renaming it into place
+// would silently downgrade permissions on every reinstall.
+func newTempFileAlongside(path string, perm os.FileMode) (string, error) {
+	f, err := createTempFile(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		_ = removeFile(name)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = removeFile(name)
+		return "", err
+	}
+	return name, nil
+}
+
 // sessionPollInterval is how often waitForSessionEnd checks the tmux session.
 // A package var (not a const) so tests can shorten it.
 var sessionPollInterval = 5 * time.Second

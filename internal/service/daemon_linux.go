@@ -123,7 +123,7 @@ func InstallDaemon(sc ServiceConfig) error {
 	// mid-write failure would leave a truncated/empty unit file on disk
 	// while systemd still has the old one loaded — the same drift the
 	// temp+rename pattern exists to prevent on darwin.
-	tmpPath, err := newTempUnitPath(path)
+	tmpPath, err := newTempFileAlongside(path, 0644)
 	if err != nil {
 		return fmt.Errorf("creating temp unit file: %w", err)
 	}
@@ -145,19 +145,6 @@ func InstallDaemon(sc ServiceConfig) error {
 	}
 
 	return nil
-}
-
-// newTempUnitPath creates a uniquely-named, empty temp file alongside
-// path (same directory, so the later rename stays on one filesystem) and
-// returns its name.
-func newTempUnitPath(path string) (string, error) {
-	f, err := createTempFile(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return "", err
-	}
-	name := f.Name()
-	_ = f.Close()
-	return name, nil
 }
 
 // RemoveDaemon stops and removes the systemd user service for home.
@@ -258,18 +245,7 @@ func legacyBaseUnitCollision(home, computedName string) (bool, string) {
 		return false, ""
 	}
 
-	userHome, err := userHomeDirFn()
-	if err != nil {
-		return false, ""
-	}
-	baseUnitPath := filepath.Join(userHome, ".config", "systemd", "user", unitNameBase)
-
-	data, err := readFile(baseUnitPath)
-	if err != nil {
-		return false, ""
-	}
-
-	workDir, ok := extractUnitWorkingDirectory(string(data))
+	workDir, ok := legacyBaseWorkingDirectory()
 	if !ok || resolveHomePath(workDir) != resolveHomePath(home) {
 		return false, ""
 	}
@@ -281,16 +257,75 @@ func legacyBaseUnitCollision(home, computedName string) (bool, string) {
 		unitNameBase, home, computedName, unitNameBase)
 }
 
+// legacyBaseWorkingDirectory resolves the working directory of a legacy
+// leo.service registration. systemd is consulted first via `systemctl
+// show`, mirroring DaemonStatus/DriftDetected's use of `is-active` as
+// source of truth: a unit can be active with its file already deleted
+// from disk, which is exactly the failure state this detector exists to
+// catch. No regex needed — `show -p WorkingDirectory` prints exactly one
+// "WorkingDirectory=<value>" line, empty when the unit doesn't exist or
+// the property isn't set. The unit file is only a fallback for when
+// systemd has no record of the legacy unit at all.
+func legacyBaseWorkingDirectory() (string, bool) {
+	if output, err := runCommand("systemctl", "--user", "show", unitNameBase, "-p", "WorkingDirectory"); err == nil {
+		if wd, ok := parseSystemctlShowWorkingDirectory(output); ok {
+			return wd, true
+		}
+	}
+
+	userHome, err := userHomeDirFn()
+	if err != nil {
+		return "", false
+	}
+	baseUnitPath := filepath.Join(userHome, ".config", "systemd", "user", unitNameBase)
+
+	data, err := readFile(baseUnitPath)
+	if err != nil {
+		return "", false
+	}
+
+	return extractUnitWorkingDirectory(string(data))
+}
+
+// parseSystemctlShowWorkingDirectory parses `systemctl show -p
+// WorkingDirectory` output. `systemctl show` exits 0 and prints
+// "WorkingDirectory=" (empty value) even for a unit that doesn't exist,
+// so an empty value is deliberately reported as "not found" (false),
+// never as an empty-but-present home — see extractUnitWorkingDirectory's
+// doc comment for why that distinction matters.
+func parseSystemctlShowWorkingDirectory(output string) (string, bool) {
+	const prefix = "WorkingDirectory="
+	trimmed := strings.TrimSpace(output)
+	if !strings.HasPrefix(trimmed, prefix) {
+		return "", false
+	}
+	wd := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	if wd == "" {
+		return "", false
+	}
+	return wd, true
+}
+
 // unitWorkingDirectoryRe matches the value of a systemd unit file's
 // WorkingDirectory= directive.
 var unitWorkingDirectoryRe = regexp.MustCompile(`(?m)^WorkingDirectory=(.*)$`)
 
+// extractUnitWorkingDirectory returns the WorkingDirectory value from a
+// systemd unit file. An empty value is deliberately reported as "not
+// found" (false), not as an empty-but-present home: resolveHomePath("")
+// resolves to the current working directory via filepath.Abs, and
+// comparing THAT against a candidate non-default home could produce a
+// false collision warning if they happened to match.
 func extractUnitWorkingDirectory(unitFile string) (string, bool) {
 	m := unitWorkingDirectoryRe.FindStringSubmatch(unitFile)
 	if m == nil {
 		return "", false
 	}
-	return strings.TrimSpace(m[1]), true
+	wd := strings.TrimSpace(m[1])
+	if wd == "" {
+		return "", false
+	}
+	return wd, true
 }
 
 func defaultRunCommand(name string, args ...string) (string, error) {

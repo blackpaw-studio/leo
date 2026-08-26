@@ -374,6 +374,18 @@ func TestBootoutClassification(t *testing.T) {
 			wantBenign: true,
 		},
 		{
+			// Exit code 113 is not 3, so this case is decided ENTIRELY by
+			// the output-text match — deleting that branch (leaving only
+			// the exit-code-3 fallback) would flip this from benign to
+			// not-benign and fail. Guards against the classification
+			// silently degrading to "exit code 3 only".
+			name: "not loaded — Could not find, non-3 exit code",
+			script: "#!/bin/sh\n" +
+				"echo 'Could not find service' 1>&2\n" +
+				"exit 113\n",
+			wantBenign: true,
+		},
+		{
 			name: "genuine failure — I/O error, exit 5",
 			script: "#!/bin/sh\n" +
 				"echo 'Boot-out failed: 5: Input/output error' 1>&2\n" +
@@ -491,6 +503,65 @@ func TestInstallDaemonBootoutErrorSurfaced(t *testing.T) {
 	}
 	if !strings.Contains(stderrOutput, "Input/output error") {
 		t.Errorf("expected the diagnostic output text surfaced on stderr, got: %q", stderrOutput)
+	}
+}
+
+// TestInstallDaemonBootoutErrorWithNoOutputStillShowsErr covers the case
+// isBenignBootoutError classifies as a real failure but where launchctl
+// produced no output at all — e.g. launchctl not on PATH, a permission
+// error before exec, a signal kill. Printing only strings.TrimSpace(out)
+// there would leave the warning empty and useless; err must always be
+// shown too.
+func TestInstallDaemonBootoutErrorWithNoOutputStillShowsErr(t *testing.T) {
+	origWrite := writeFile
+	origRename := renameFile
+	origRun := runCommand
+	origHome := userHomeDirFn
+	origStderr := os.Stderr
+	defer func() {
+		writeFile = origWrite
+		renameFile = origRename
+		runCommand = origRun
+		userHomeDirFn = origHome
+		os.Stderr = origStderr
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+	writeFile = func(name string, data []byte, perm os.FileMode) error { return nil }
+	renameFile = func(oldpath, newpath string) error { return nil }
+
+	runCommand = func(name string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "bootout") {
+			return "", fmt.Errorf(`exec: "launchctl": executable file not found in $PATH`)
+		}
+		return "", nil
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+
+	sc := ServiceConfig{
+		WorkDir: filepath.Join(home, ".leo"),
+		LogPath: filepath.Join(home, "state", "service.log"),
+	}
+
+	if err := InstallDaemon(sc); err != nil {
+		t.Fatalf("InstallDaemon() error: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe writer: %v", err)
+	}
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	stderrOutput := string(buf[:n])
+
+	if !strings.Contains(stderrOutput, "executable file not found") {
+		t.Errorf("expected err text surfaced on stderr even with empty output, got: %q", stderrOutput)
 	}
 }
 
@@ -1311,12 +1382,94 @@ func TestDaemonLabelTildeHome(t *testing.T) {
 	}
 }
 
-func TestLegacyBaseLabelCollisionDetected(t *testing.T) {
+// TestLegacyBaseLabelCollisionLoadedButPlistMissing is the case that
+// actually matters: the exact live state this detector exists to catch
+// is a legacy com.blackpaw.leo job STILL LOADED with its plist already
+// deleted from disk (the same drift DaemonStatus/DriftDetected already
+// treat launchctl as authoritative for). A plist-only detector reports
+// false here — no warning, two live registrations. This reproduces that
+// state with no plist on disk at all and a `launchctl print` stub that
+// returns a real "working directory = " line.
+func TestLegacyBaseLabelCollisionLoadedButPlistMissing(t *testing.T) {
 	origHome := userHomeDirFn
-	defer func() { userHomeDirFn = origHome }()
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
 
 	realHome := t.TempDir()
 	userHomeDirFn = func() (string, error) { return realHome, nil }
+	// Deliberately no ~/Library/LaunchAgents/com.blackpaw.leo.plist on disk.
+
+	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
+
+	runCommand = func(name string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "print") {
+			return fmt.Sprintf("PID = 25188\nworking directory = %s\nstate = running\n", nonDefaultHome), nil
+		}
+		return "", nil
+	}
+
+	collided, detail := LegacyBaseLabelCollision(nonDefaultHome)
+	if !collided {
+		t.Fatal("expected a legacy base-label collision to be detected from launchctl print, with no plist on disk")
+	}
+	if !strings.Contains(detail, "launchctl bootout") {
+		t.Errorf("detail = %q, want it to name the exact bootout command", detail)
+	}
+	if !strings.Contains(detail, daemonLabelBase) {
+		t.Errorf("detail = %q, want it to name the legacy label", detail)
+	}
+}
+
+// TestLegacyBaseLabelCollisionLaunchctlDifferentHome verifies the
+// launchctl-primary path's negative case: loaded, plist missing, but the
+// working directory doesn't match the home being installed.
+func TestLegacyBaseLabelCollisionLaunchctlDifferentHome(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
+
+	realHome := t.TempDir()
+	userHomeDirFn = func() (string, error) { return realHome, nil }
+
+	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
+	unrelatedHome := filepath.Join(realHome, "totally-unrelated", ".leo")
+
+	runCommand = func(name string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "print") {
+			return fmt.Sprintf("working directory = %s\n", unrelatedHome), nil
+		}
+		return "", nil
+	}
+
+	collided, detail := LegacyBaseLabelCollision(nonDefaultHome)
+	if collided {
+		t.Errorf("expected no collision for an unrelated legacy home, got detail: %q", detail)
+	}
+}
+
+// TestLegacyBaseLabelCollisionFallsBackToPlist verifies the fallback
+// path: when launchctl has no record of the legacy label at all (a
+// clean removal, not the loaded-but-missing-plist drift state), the
+// plist on disk is still consulted.
+func TestLegacyBaseLabelCollisionFallsBackToPlist(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
+
+	realHome := t.TempDir()
+	userHomeDirFn = func() (string, error) { return realHome, nil }
+	runCommand = func(name string, args ...string) (string, error) {
+		return "", fmt.Errorf("could not find service")
+	}
 
 	// A non-default home, installed under the OLD (pre-scoping) code: its
 	// launchd job is still registered under the shared base label.
@@ -1343,22 +1496,26 @@ func TestLegacyBaseLabelCollisionDetected(t *testing.T) {
 
 	collided, detail := LegacyBaseLabelCollision(nonDefaultHome)
 	if !collided {
-		t.Fatal("expected a legacy base-label collision to be detected")
+		t.Fatal("expected a legacy base-label collision to be detected via the plist fallback")
 	}
 	if !strings.Contains(detail, "launchctl bootout") {
 		t.Errorf("detail = %q, want it to name the exact bootout command", detail)
-	}
-	if !strings.Contains(detail, daemonLabelBase) {
-		t.Errorf("detail = %q, want it to name the legacy label", detail)
 	}
 }
 
 func TestLegacyBaseLabelCollisionNoLegacyPlist(t *testing.T) {
 	origHome := userHomeDirFn
-	defer func() { userHomeDirFn = origHome }()
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
 
 	realHome := t.TempDir()
 	userHomeDirFn = func() (string, error) { return realHome, nil }
+	runCommand = func(name string, args ...string) (string, error) {
+		return "", fmt.Errorf("could not find service")
+	}
 
 	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
 
@@ -1370,10 +1527,17 @@ func TestLegacyBaseLabelCollisionNoLegacyPlist(t *testing.T) {
 
 func TestLegacyBaseLabelCollisionDifferentHome(t *testing.T) {
 	origHome := userHomeDirFn
-	defer func() { userHomeDirFn = origHome }()
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
 
 	realHome := t.TempDir()
 	userHomeDirFn = func() (string, error) { return realHome, nil }
+	runCommand = func(name string, args ...string) (string, error) {
+		return "", fmt.Errorf("could not find service")
+	}
 
 	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
 	unrelatedHome := filepath.Join(realHome, "totally-unrelated", ".leo")
@@ -1400,6 +1564,50 @@ func TestLegacyBaseLabelCollisionDifferentHome(t *testing.T) {
 	collided, detail := LegacyBaseLabelCollision(nonDefaultHome)
 	if collided {
 		t.Errorf("expected no collision for an unrelated legacy home, got detail: %q", detail)
+	}
+}
+
+// TestLegacyBaseLabelCollisionEmptyWorkingDirectoryIsNotAMatch guards
+// against extractPlistWorkingDirectory treating an empty
+// <string></string> as a present-but-empty home: resolveHomePath("")
+// resolves to the current working directory, which could coincidentally
+// equal the candidate home and fire a false collision warning.
+func TestLegacyBaseLabelCollisionEmptyWorkingDirectoryIsNotAMatch(t *testing.T) {
+	origHome := userHomeDirFn
+	origRun := runCommand
+	defer func() {
+		userHomeDirFn = origHome
+		runCommand = origRun
+	}()
+
+	realHome := t.TempDir()
+	userHomeDirFn = func() (string, error) { return realHome, nil }
+	runCommand = func(name string, args ...string) (string, error) {
+		return "", fmt.Errorf("could not find service")
+	}
+
+	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
+
+	launchAgentsDir := filepath.Join(realHome, "Library", "LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	legacyPlist := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>WorkingDirectory</key>
+	<string></string>
+</dict>
+</plist>
+`
+	basePlistPath := filepath.Join(launchAgentsDir, daemonLabelBase+".plist")
+	if err := os.WriteFile(basePlistPath, []byte(legacyPlist), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	collided, detail := LegacyBaseLabelCollision(nonDefaultHome)
+	if collided {
+		t.Errorf("expected no collision for an empty WorkingDirectory, got detail: %q", detail)
 	}
 }
 

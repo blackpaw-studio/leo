@@ -155,7 +155,11 @@ func InstallDaemon(sc ServiceConfig) error {
 	// (e.g. permission denied) is surfaced as a warning rather than
 	// silently discarded.
 	if out, err := bootout(label); err != nil && !isBenignBootoutError(err, out) {
-		fmt.Fprintf(os.Stderr, "warning: launchctl bootout of %s: %s\n", label, strings.TrimSpace(out))
+		// Print both err and out: a failure with no output at all (e.g.
+		// launchctl not on PATH, a permission error before exec, a signal
+		// kill) would otherwise print an empty, useless warning if only
+		// out were shown.
+		fmt.Fprintf(os.Stderr, "warning: launchctl bootout of %s: %v: %s\n", label, err, strings.TrimSpace(out))
 	}
 
 	// Write the new plist to a uniquely-named temp file in the same
@@ -166,7 +170,7 @@ func InstallDaemon(sc ServiceConfig) error {
 	// disk (if any) is never deleted ahead of time — on any failure below,
 	// the original registration's backing file stays intact rather than
 	// leaving launchd with a loaded-but-missing-plist ghost.
-	tmpPath, err := newTempPlistPath(path)
+	tmpPath, err := newTempFileAlongside(path, 0644)
 	if err != nil {
 		return fmt.Errorf("creating temp plist: %w", err)
 	}
@@ -192,20 +196,6 @@ func InstallDaemon(sc ServiceConfig) error {
 	}
 
 	return nil
-}
-
-// newTempPlistPath creates a uniquely-named, empty temp file alongside
-// path (same directory, so the later rename stays on one filesystem) and
-// returns its name. The caller is responsible for writing content to it
-// and either renaming it into place or removing it.
-func newTempPlistPath(path string) (string, error) {
-	f, err := createTempFile(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return "", err
-	}
-	name := f.Name()
-	_ = f.Close()
-	return name, nil
 }
 
 // RemoveDaemon stops and removes the launchd service registered for home.
@@ -333,18 +323,7 @@ func legacyBaseLabelCollision(home, computedLabel string) (bool, string) {
 		return false, "" // this install IS the legacy label; nothing to compare against
 	}
 
-	userHome, err := userHomeDirFn()
-	if err != nil {
-		return false, ""
-	}
-	basePlistPath := filepath.Join(userHome, "Library", "LaunchAgents", daemonLabelBase+".plist")
-
-	data, err := readFile(basePlistPath)
-	if err != nil {
-		return false, "" // no legacy plist on disk — nothing to warn about
-	}
-
-	workDir, ok := extractPlistWorkingDirectory(string(data))
+	workDir, ok := legacyBaseWorkingDirectory()
 	if !ok || resolveHomePath(workDir) != resolveHomePath(home) {
 		return false, ""
 	}
@@ -356,16 +335,74 @@ func legacyBaseLabelCollision(home, computedLabel string) (bool, string) {
 		daemonLabelBase, home, computedLabel, os.Getuid(), daemonLabelBase)
 }
 
+// legacyBaseWorkingDirectory resolves the working directory of a legacy
+// com.blackpaw.leo registration. launchctl is consulted first and is the
+// ONLY reliable source here: the exact failure state this detector
+// exists to catch is a job loaded with its plist already deleted (see
+// DaemonStatus / DriftDetected, which treat launchctl the same way) —
+// reading the plist file alone would silently miss precisely that case.
+// The plist is only a fallback for when launchctl has no record of the
+// legacy label at all (e.g. it was cleanly removed).
+func legacyBaseWorkingDirectory() (string, bool) {
+	if output, err := runCommand("launchctl", "print", launchctlTarget(daemonLabelBase)); err == nil {
+		if wd, ok := extractLaunchctlWorkingDirectory(output); ok {
+			return wd, true
+		}
+	}
+
+	userHome, err := userHomeDirFn()
+	if err != nil {
+		return "", false
+	}
+	basePlistPath := filepath.Join(userHome, "Library", "LaunchAgents", daemonLabelBase+".plist")
+
+	data, err := readFile(basePlistPath)
+	if err != nil {
+		return "", false // no legacy plist on disk — nothing to warn about
+	}
+
+	return extractPlistWorkingDirectory(string(data))
+}
+
+// extractLaunchctlWorkingDirectory parses the "working directory = ..."
+// line out of `launchctl print` output.
+func extractLaunchctlWorkingDirectory(output string) (string, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "working directory = ") {
+			wd := strings.TrimSpace(strings.TrimPrefix(trimmed, "working directory = "))
+			if wd == "" {
+				return "", false
+			}
+			return wd, true
+		}
+	}
+	return "", false
+}
+
 // plistWorkingDirectoryRe matches the <string> value immediately following
 // a <key>WorkingDirectory</key> entry in a launchd plist.
 var plistWorkingDirectoryRe = regexp.MustCompile(`(?s)<key>WorkingDirectory</key>\s*<string>(.*?)</string>`)
 
+// extractPlistWorkingDirectory returns the WorkingDirectory value from a
+// launchd plist. An empty <string></string> value is deliberately
+// reported as "not found" (false), not as an empty-but-present home:
+// resolveHomePath("") resolves to the current working directory via
+// filepath.Abs, and comparing THAT against a candidate non-default home
+// could produce a false collision warning if they happened to match.
+// Every other malformed-plist case here already prefers a false
+// negative (silence) over a wrong warning; this closes the one
+// exception.
 func extractPlistWorkingDirectory(plistXML string) (string, bool) {
 	m := plistWorkingDirectoryRe.FindStringSubmatch(plistXML)
 	if m == nil {
 		return "", false
 	}
-	return strings.TrimSpace(m[1]), true
+	wd := strings.TrimSpace(m[1])
+	if wd == "" {
+		return "", false
+	}
+	return wd, true
 }
 
 // isBenignBootoutError reports whether a bootout failure is launchctl's
