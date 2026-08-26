@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"path/filepath"
+	"strings"
 )
 
 // homeIdentityHashLen is the number of hex characters kept from the
@@ -22,12 +23,32 @@ const homeIdentityHashLen = 12
 // fall back to the absolute form, which is still stable for a given
 // invocation context.
 func resolveHomePath(home string) string {
-	path := home
-	if abs, err := filepath.Abs(home); err == nil {
+	path := expandTildeHome(home)
+	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return resolved
+	}
+	return path
+}
+
+// expandTildeHome replaces a leading "~" or "~/" with the real user home
+// (via the platform's userHomeDirFn seam, defined in daemon_darwin.go /
+// daemon_linux.go). No caller passes a tilde-prefixed home today, but
+// resolveHomePath is the single choke point every identity decision runs
+// through, so handling it here closes off a whole class of future
+// "~/.leo resolved differently than /Users/x/.leo" regressions cheaply.
+func expandTildeHome(path string) string {
+	home, err := userHomeDirFn()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, path[2:])
 	}
 	return path
 }

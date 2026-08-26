@@ -103,13 +103,11 @@ func TestPlistPath(t *testing.T) {
 }
 
 func TestInstallDaemon(t *testing.T) {
-	origMkdir := mkdirAll
 	origWrite := writeFile
 	origRename := renameFile
 	origRun := runCommand
 	origHome := userHomeDirFn
 	defer func() {
-		mkdirAll = origMkdir
 		writeFile = origWrite
 		renameFile = origRename
 		runCommand = origRun
@@ -119,8 +117,11 @@ func TestInstallDaemon(t *testing.T) {
 	home := t.TempDir()
 	userHomeDirFn = func() (string, error) { return home, nil }
 
-	mkdirAll = func(path string, perm os.FileMode) error { return nil }
-
+	// mkdirAll and createTempFile are left as the real os functions here:
+	// createTempFile needs a real directory to create its temp file in, and
+	// the temp dir is cheap/isolated. Only writeFile and renameFile are
+	// stubbed, to assert on the content and rename call without needing a
+	// real plist write to matter.
 	var writtenPath string
 	var writtenContent []byte
 	writeFile = func(name string, data []byte, perm os.FileMode) error {
@@ -146,7 +147,7 @@ func TestInstallDaemon(t *testing.T) {
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    filepath.Join(home, ".leo"),
-		LogPath:    "/workspace/state/service.log",
+		LogPath:    filepath.Join(home, "state", "service.log"),
 		Env: map[string]string{
 			"HOME": "/Users/test",
 		},
@@ -157,9 +158,11 @@ func TestInstallDaemon(t *testing.T) {
 		t.Fatalf("InstallDaemon() error: %v", err)
 	}
 
-	// The plist is written to a temp file first, not the final path directly.
-	if !strings.HasSuffix(writtenPath, "com.blackpaw.leo.plist.tmp") {
-		t.Errorf("plist written to %q, want suffix com.blackpaw.leo.plist.tmp", writtenPath)
+	// The plist is written to a uniquely-named temp file first, not the
+	// final path directly (os.CreateTemp fills in "*" with a random
+	// string, e.g. "com.blackpaw.leo.plist.837462519.tmp").
+	if !strings.Contains(writtenPath, "com.blackpaw.leo.plist.") || !strings.HasSuffix(writtenPath, ".tmp") {
+		t.Errorf("plist written to %q, want to contain com.blackpaw.leo.plist. and end in .tmp", writtenPath)
 	}
 
 	content := string(writtenContent)
@@ -328,18 +331,120 @@ func TestInstallDaemonReplacesAtomically(t *testing.T) {
 	}
 }
 
-// TestInstallDaemonBootoutErrorSurfaced verifies that a genuine bootout
-// failure (not the benign "wasn't loaded" signature) is written to
-// stderr rather than silently discarded, and does not abort the install.
+// TestBootoutClassification drives bootout()/isBenignBootoutError()
+// through the REAL defaultRunCommand seam (a real subprocess, not a
+// stubbed runCommand) using a fake `launchctl` executable that
+// reproduces the exact output shape the real binary produces on each
+// exit path. This matters because the "wasn't loaded" signature lives
+// in the command's OUTPUT ("Boot-out failed: 3: No such process"), while
+// a generic error's Error() text for a nonzero exit is just "exit status
+// N" — a fully-stubbed runCommand can accidentally hand isBenignBootoutError
+// the signature text as err.Error() instead, which the real seam can never
+// produce, and would let this classification logic pass tests while doing
+// nothing at runtime.
+func TestBootoutClassification(t *testing.T) {
+	origRun := runCommand
+	defer func() { runCommand = origRun }()
+	runCommand = defaultRunCommand
+
+	tests := []struct {
+		name       string
+		script     string
+		wantBenign bool
+	}{
+		{
+			name: "not loaded — No such process, exit 3",
+			script: "#!/bin/sh\n" +
+				"echo 'Boot-out failed: 3: No such process' 1>&2\n" +
+				"exit 3\n",
+			wantBenign: true,
+		},
+		{
+			name: "not loaded — Could not find, exit 3",
+			script: "#!/bin/sh\n" +
+				"echo 'Could not find service' 1>&2\n" +
+				"exit 3\n",
+			wantBenign: true,
+		},
+		{
+			name: "unrecognised exit 3 output still classified benign via exit code",
+			script: "#!/bin/sh\n" +
+				"echo 'unexpected message' 1>&2\n" +
+				"exit 3\n",
+			wantBenign: true,
+		},
+		{
+			name: "genuine failure — I/O error, exit 5",
+			script: "#!/bin/sh\n" +
+				"echo 'Boot-out failed: 5: Input/output error' 1>&2\n" +
+				"exit 5\n",
+			wantBenign: false,
+		},
+		{
+			name: "genuine failure — permission denied, exit 1",
+			script: "#!/bin/sh\n" +
+				"echo 'Boot-out failed: 1: Operation not permitted' 1>&2\n" +
+				"exit 1\n",
+			wantBenign: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanup := installFakeLaunchctl(t, tt.script)
+			defer cleanup()
+
+			out, err := bootout("com.blackpaw.leo.test")
+			if err == nil {
+				t.Fatal("expected bootout to return an error")
+			}
+			// The realistic failure shape: err.Error() is just "exit status
+			// N", never the diagnostic text — that lives in out.
+			if strings.Contains(err.Error(), "No such process") || strings.Contains(err.Error(), "Input/output") {
+				t.Errorf("err.Error() = %q unexpectedly carries the diagnostic text a real exec.ExitError would not", err.Error())
+			}
+
+			got := isBenignBootoutError(err, out)
+			if got != tt.wantBenign {
+				t.Errorf("isBenignBootoutError(%v, %q) = %v, want %v", err, out, got, tt.wantBenign)
+			}
+		})
+	}
+}
+
+// installFakeLaunchctl writes an executable `launchctl` script to a temp
+// dir and prepends that dir to PATH so exec.Command("launchctl", ...)
+// resolves to it, then returns a cleanup function that restores PATH.
+func installFakeLaunchctl(t *testing.T, script string) func() {
+	t.Helper()
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "launchctl")
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatalf("writing fake launchctl: %v", err)
+	}
+	origPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+origPath); err != nil {
+		t.Fatalf("setting PATH: %v", err)
+	}
+	return func() {
+		_ = os.Setenv("PATH", origPath)
+	}
+}
+
+// TestInstallDaemonBootoutErrorSurfaced verifies the InstallDaemon-level
+// wiring: a genuine (non-benign) bootout failure is written to stderr
+// rather than silently discarded, and does not abort the install. The
+// stubbed runCommand here mirrors the REAL seam shape verified by
+// TestBootoutClassification above — the diagnostic text goes in the
+// output (first return value), and the error is a bare "exit status N",
+// never the diagnostic text itself.
 func TestInstallDaemonBootoutErrorSurfaced(t *testing.T) {
-	origMkdir := mkdirAll
 	origWrite := writeFile
 	origRename := renameFile
 	origRun := runCommand
 	origHome := userHomeDirFn
 	origStderr := os.Stderr
 	defer func() {
-		mkdirAll = origMkdir
 		writeFile = origWrite
 		renameFile = origRename
 		runCommand = origRun
@@ -349,13 +454,12 @@ func TestInstallDaemonBootoutErrorSurfaced(t *testing.T) {
 
 	home := t.TempDir()
 	userHomeDirFn = func() (string, error) { return home, nil }
-	mkdirAll = func(path string, perm os.FileMode) error { return nil }
 	writeFile = func(name string, data []byte, perm os.FileMode) error { return nil }
 	renameFile = func(oldpath, newpath string) error { return nil }
 
 	runCommand = func(name string, args ...string) (string, error) {
 		if strings.Contains(strings.Join(args, " "), "bootout") {
-			return "", fmt.Errorf("Boot-out failed: 5: Input/output error")
+			return "Boot-out failed: 5: Input/output error", fmt.Errorf("exit status 1")
 		}
 		return "", nil
 	}
@@ -368,7 +472,7 @@ func TestInstallDaemonBootoutErrorSurfaced(t *testing.T) {
 
 	sc := ServiceConfig{
 		WorkDir: filepath.Join(home, ".leo"),
-		LogPath: "/workspace/state/service.log",
+		LogPath: filepath.Join(home, "state", "service.log"),
 	}
 
 	if err := InstallDaemon(sc); err != nil {
@@ -384,6 +488,65 @@ func TestInstallDaemonBootoutErrorSurfaced(t *testing.T) {
 
 	if !strings.Contains(stderrOutput, "bootout") {
 		t.Errorf("expected bootout error surfaced on stderr, got: %q", stderrOutput)
+	}
+	if !strings.Contains(stderrOutput, "Input/output error") {
+		t.Errorf("expected the diagnostic output text surfaced on stderr, got: %q", stderrOutput)
+	}
+}
+
+// TestInstallDaemonBootoutBenignIsSilent verifies the inverse: a benign
+// "wasn't loaded" bootout result — the common case on every first
+// install — must NOT print a warning.
+func TestInstallDaemonBootoutBenignIsSilent(t *testing.T) {
+	origWrite := writeFile
+	origRename := renameFile
+	origRun := runCommand
+	origHome := userHomeDirFn
+	origStderr := os.Stderr
+	defer func() {
+		writeFile = origWrite
+		renameFile = origRename
+		runCommand = origRun
+		userHomeDirFn = origHome
+		os.Stderr = origStderr
+	}()
+
+	home := t.TempDir()
+	userHomeDirFn = func() (string, error) { return home, nil }
+	writeFile = func(name string, data []byte, perm os.FileMode) error { return nil }
+	renameFile = func(oldpath, newpath string) error { return nil }
+
+	runCommand = func(name string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "bootout") {
+			return "Boot-out failed: 3: No such process", fmt.Errorf("exit status 3")
+		}
+		return "", nil
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+
+	sc := ServiceConfig{
+		WorkDir: filepath.Join(home, ".leo"),
+		LogPath: filepath.Join(home, "state", "service.log"),
+	}
+
+	if err := InstallDaemon(sc); err != nil {
+		t.Fatalf("InstallDaemon() error: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe writer: %v", err)
+	}
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	stderrOutput := string(buf[:n])
+
+	if stderrOutput != "" {
+		t.Errorf("expected no warning for a benign 'not loaded' bootout, got: %q", stderrOutput)
 	}
 }
 
@@ -834,13 +997,11 @@ func TestDaemonStatusInstalled(t *testing.T) {
 
 func TestInstallDaemonWithHomeSeam(t *testing.T) {
 	origHome := userHomeDirFn
-	origMkdir := mkdirAll
 	origWrite := writeFile
 	origRename := renameFile
 	origRun := runCommand
 	defer func() {
 		userHomeDirFn = origHome
-		mkdirAll = origMkdir
 		writeFile = origWrite
 		renameFile = origRename
 		runCommand = origRun
@@ -848,7 +1009,6 @@ func TestInstallDaemonWithHomeSeam(t *testing.T) {
 
 	home := t.TempDir()
 	userHomeDirFn = func() (string, error) { return home, nil }
-	mkdirAll = func(path string, perm os.FileMode) error { return nil }
 
 	var writtenPath string
 	writeFile = func(name string, data []byte, perm os.FileMode) error {
@@ -865,7 +1025,7 @@ func TestInstallDaemonWithHomeSeam(t *testing.T) {
 		LeoPath:    "/usr/local/bin/leo",
 		ConfigPath: "/workspace/leo.yaml",
 		WorkDir:    filepath.Join(home, ".leo"),
-		LogPath:    "/workspace/state/service.log",
+		LogPath:    filepath.Join(home, "state", "service.log"),
 	}
 
 	err := InstallDaemon(sc)
@@ -881,12 +1041,10 @@ func TestInstallDaemonWithHomeSeam(t *testing.T) {
 
 func TestInstallDaemonWriteError(t *testing.T) {
 	origHome := userHomeDirFn
-	origMkdir := mkdirAll
 	origWrite := writeFile
 	origRun := runCommand
 	defer func() {
 		userHomeDirFn = origHome
-		mkdirAll = origMkdir
 		writeFile = origWrite
 		runCommand = origRun
 	}()
@@ -894,7 +1052,6 @@ func TestInstallDaemonWriteError(t *testing.T) {
 	home := t.TempDir()
 	userHomeDirFn = func() (string, error) { return home, nil }
 
-	mkdirAll = func(path string, perm os.FileMode) error { return nil }
 	writeFile = func(name string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("disk full")
 	}
@@ -904,7 +1061,7 @@ func TestInstallDaemonWriteError(t *testing.T) {
 
 	sc := ServiceConfig{
 		WorkDir: filepath.Join(home, ".leo"),
-		LogPath: "/workspace/state/service.log",
+		LogPath: filepath.Join(home, "state", "service.log"),
 	}
 
 	err := InstallDaemon(sc)
@@ -918,13 +1075,11 @@ func TestInstallDaemonWriteError(t *testing.T) {
 
 func TestInstallDaemonBootstrapError(t *testing.T) {
 	origHome := userHomeDirFn
-	origMkdir := mkdirAll
 	origWrite := writeFile
 	origRename := renameFile
 	origRun := runCommand
 	defer func() {
 		userHomeDirFn = origHome
-		mkdirAll = origMkdir
 		writeFile = origWrite
 		renameFile = origRename
 		runCommand = origRun
@@ -933,7 +1088,6 @@ func TestInstallDaemonBootstrapError(t *testing.T) {
 	home := t.TempDir()
 	userHomeDirFn = func() (string, error) { return home, nil }
 
-	mkdirAll = func(path string, perm os.FileMode) error { return nil }
 	writeFile = func(name string, data []byte, perm os.FileMode) error { return nil }
 	renameFile = func(oldpath, newpath string) error { return nil }
 
@@ -950,7 +1104,7 @@ func TestInstallDaemonBootstrapError(t *testing.T) {
 
 	sc := ServiceConfig{
 		WorkDir: filepath.Join(home, ".leo"),
-		LogPath: "/workspace/state/service.log",
+		LogPath: filepath.Join(home, "state", "service.log"),
 	}
 
 	err := InstallDaemon(sc)
@@ -1077,10 +1231,7 @@ func TestDriftDetectedLoadedButMissingPlist(t *testing.T) {
 		return "pid = 12345\nstate = running\n", nil
 	}
 
-	drifted, detail, err := DriftDetected(leoHome)
-	if err != nil {
-		t.Fatalf("DriftDetected() error: %v", err)
-	}
+	drifted, detail := DriftDetected(leoHome)
 	if !drifted {
 		t.Fatal("expected drift to be detected")
 	}
@@ -1115,10 +1266,7 @@ func TestDriftDetectedHealthyWithPlist(t *testing.T) {
 		return "pid = 12345\nstate = running\n", nil
 	}
 
-	drifted, detail, err := DriftDetected(leoHome)
-	if err != nil {
-		t.Fatalf("DriftDetected() error: %v", err)
-	}
+	drifted, detail := DriftDetected(leoHome)
 	if drifted {
 		t.Errorf("expected no drift when plist is present, got detail: %q", detail)
 	}
@@ -1141,11 +1289,200 @@ func TestDriftDetectedNotLoadedIsNotAFalseAlarm(t *testing.T) {
 		return "", fmt.Errorf("could not find service")
 	}
 
-	drifted, detail, err := DriftDetected(leoHome)
-	if err != nil {
-		t.Fatalf("DriftDetected() error: %v", err)
-	}
+	drifted, detail := DriftDetected(leoHome)
 	if drifted {
 		t.Errorf("expected no drift when not loaded, got detail: %q", detail)
+	}
+}
+
+// TestDaemonLabelTildeHome verifies that a tilde-prefixed spelling of the
+// default home ("~/.leo") resolves to exactly the same label as the
+// expanded form — resolveHomePath's tilde expansion runs ahead of Abs/
+// EvalSymlinks, so this can't silently split into a second identity.
+func TestDaemonLabelTildeHome(t *testing.T) {
+	origHome := userHomeDirFn
+	defer func() { userHomeDirFn = origHome }()
+
+	realHome := t.TempDir()
+	userHomeDirFn = func() (string, error) { return realHome, nil }
+
+	if got := daemonLabel("~/.leo"); got != daemonLabelBase {
+		t.Errorf("daemonLabel(\"~/.leo\") = %q, want %q", got, daemonLabelBase)
+	}
+}
+
+func TestLegacyBaseLabelCollisionDetected(t *testing.T) {
+	origHome := userHomeDirFn
+	defer func() { userHomeDirFn = origHome }()
+
+	realHome := t.TempDir()
+	userHomeDirFn = func() (string, error) { return realHome, nil }
+
+	// A non-default home, installed under the OLD (pre-scoping) code: its
+	// launchd job is still registered under the shared base label.
+	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
+
+	launchAgentsDir := filepath.Join(realHome, "Library", "LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	legacyPlist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.blackpaw.leo</string>
+	<key>WorkingDirectory</key>
+	<string>%s</string>
+</dict>
+</plist>
+`, nonDefaultHome)
+	basePlistPath := filepath.Join(launchAgentsDir, daemonLabelBase+".plist")
+	if err := os.WriteFile(basePlistPath, []byte(legacyPlist), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	collided, detail := LegacyBaseLabelCollision(nonDefaultHome)
+	if !collided {
+		t.Fatal("expected a legacy base-label collision to be detected")
+	}
+	if !strings.Contains(detail, "launchctl bootout") {
+		t.Errorf("detail = %q, want it to name the exact bootout command", detail)
+	}
+	if !strings.Contains(detail, daemonLabelBase) {
+		t.Errorf("detail = %q, want it to name the legacy label", detail)
+	}
+}
+
+func TestLegacyBaseLabelCollisionNoLegacyPlist(t *testing.T) {
+	origHome := userHomeDirFn
+	defer func() { userHomeDirFn = origHome }()
+
+	realHome := t.TempDir()
+	userHomeDirFn = func() (string, error) { return realHome, nil }
+
+	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
+
+	collided, detail := LegacyBaseLabelCollision(nonDefaultHome)
+	if collided {
+		t.Errorf("expected no collision when no legacy plist exists, got detail: %q", detail)
+	}
+}
+
+func TestLegacyBaseLabelCollisionDifferentHome(t *testing.T) {
+	origHome := userHomeDirFn
+	defer func() { userHomeDirFn = origHome }()
+
+	realHome := t.TempDir()
+	userHomeDirFn = func() (string, error) { return realHome, nil }
+
+	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
+	unrelatedHome := filepath.Join(realHome, "totally-unrelated", ".leo")
+
+	launchAgentsDir := filepath.Join(realHome, "Library", "LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// The legacy plist points at a DIFFERENT home than the one we're
+	// installing now — no collision.
+	legacyPlist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>WorkingDirectory</key>
+	<string>%s</string>
+</dict>
+</plist>
+`, unrelatedHome)
+	basePlistPath := filepath.Join(launchAgentsDir, daemonLabelBase+".plist")
+	if err := os.WriteFile(basePlistPath, []byte(legacyPlist), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	collided, detail := LegacyBaseLabelCollision(nonDefaultHome)
+	if collided {
+		t.Errorf("expected no collision for an unrelated legacy home, got detail: %q", detail)
+	}
+}
+
+// TestLegacyBaseLabelCollisionWarningWiredIntoInstall verifies the
+// InstallDaemon-level wiring: a detected collision prints to stderr but
+// does NOT abort or auto-remediate the install (no bootout of the
+// legacy job is attempted — this is detection-only by design).
+func TestLegacyBaseLabelCollisionWarningWiredIntoInstall(t *testing.T) {
+	origWrite := writeFile
+	origRename := renameFile
+	origRun := runCommand
+	origHome := userHomeDirFn
+	origStderr := os.Stderr
+	defer func() {
+		writeFile = origWrite
+		renameFile = origRename
+		runCommand = origRun
+		userHomeDirFn = origHome
+		os.Stderr = origStderr
+	}()
+
+	realHome := t.TempDir()
+	userHomeDirFn = func() (string, error) { return realHome, nil }
+	nonDefaultHome := filepath.Join(realHome, "second-checkout", ".leo")
+
+	launchAgentsDir := filepath.Join(realHome, "Library", "LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	legacyPlist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>WorkingDirectory</key>
+	<string>%s</string>
+</dict>
+</plist>
+`, nonDefaultHome)
+	basePlistPath := filepath.Join(launchAgentsDir, daemonLabelBase+".plist")
+	if err := os.WriteFile(basePlistPath, []byte(legacyPlist), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	writeFile = func(name string, data []byte, perm os.FileMode) error { return nil }
+	renameFile = func(oldpath, newpath string) error { return nil }
+	var bootoutTargets []string
+	runCommand = func(name string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "bootout") {
+			bootoutTargets = append(bootoutTargets, joined)
+		}
+		return "", nil
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+
+	sc := ServiceConfig{
+		WorkDir: nonDefaultHome,
+		LogPath: filepath.Join(realHome, "state", "service.log"),
+	}
+	if err := InstallDaemon(sc); err != nil {
+		t.Fatalf("InstallDaemon() error: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe writer: %v", err)
+	}
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	stderrOutput := string(buf[:n])
+
+	if !strings.Contains(stderrOutput, "legacy launchd job") {
+		t.Errorf("expected legacy collision warning on stderr, got: %q", stderrOutput)
+	}
+	// bootout IS still called, but only for the computed (hashed) label as
+	// part of the normal install flow — the legacy base label must never
+	// be targeted for bootout automatically; that's the operator's call.
+	for _, target := range bootoutTargets {
+		if strings.Contains(target, daemonLabelBase) && !strings.Contains(target, daemonLabel(nonDefaultHome)) {
+			t.Errorf("bootout was called against the legacy base label automatically: %q", target)
+		}
 	}
 }

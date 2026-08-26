@@ -37,6 +37,7 @@ var (
 	removeFile       = os.Remove
 	renameFile       = os.Rename
 	mkdirAll         = os.MkdirAll
+	createTempFile   = os.CreateTemp
 	openLogFile      = defaultOpenLogFile
 	supervisedExecFn = defaultSupervisedExec
 )
