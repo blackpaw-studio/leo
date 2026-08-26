@@ -25,6 +25,17 @@ var checkServiceDriftFn = service.DriftDetected
 // seam so tests can drive it without a real launchd/systemd.
 var checkLegacyLabelCollisionFn = service.LegacyBaseLabelCollision
 
+// checkLocalNetworkFn and reportTmuxTreeFn are seams over the two
+// network-touching steps runDoctor otherwise performs unconditionally
+// (a live TCP dial, and — with --trigger — mDNS multicast sends that can
+// raise the macOS consent dialog). Neither belongs in a unit test; a
+// smoke test stubs both to prove runDoctor still wires up
+// reportServiceHealth without paying for a real network probe.
+var (
+	checkLocalNetworkFn = checkLocalNetwork
+	reportTmuxTreeFn    = reportTmuxTree
+)
+
 // LocalNetworkStatus is the structured result of the macOS Local Network
 // privacy check performed by checkLocalNetwork. It's shared by the
 // darwin and non-darwin implementations so `leo doctor` can render a
@@ -98,7 +109,7 @@ func runDoctor(probeHost string, trigger bool) error {
 		reportServiceHealth(cfg.HomePath)
 	}
 
-	status := checkLocalNetwork(probeHost, trigger)
+	status := checkLocalNetworkFn(probeHost, trigger)
 
 	switch status.State {
 	case "granted":
@@ -126,7 +137,7 @@ func runDoctor(probeHost string, trigger bool) error {
 	}
 	info.Printf("  Triggered:    %v\n", status.Triggered)
 
-	tree := reportTmuxTree()
+	tree := reportTmuxTreeFn()
 	info.Printf("tmux tree:      %s\n", tree.Line)
 
 	if status.State == treeDeniedState {

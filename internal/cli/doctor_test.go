@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/fatih/color"
 )
 
@@ -180,6 +182,59 @@ func TestReportServiceHealthLegacyCollisionDetected(t *testing.T) {
 	}
 	if !doctorContainsAll(output, "legacy registration collision", "com.blackpaw.leo") {
 		t.Errorf("output = %q, want it to mention the legacy collision and its detail", output)
+	}
+}
+
+// TestRunDoctorCallsReportServiceHealth is a smoke test guarding the
+// runDoctor -> reportServiceHealth wiring itself: without it, deleting
+// the reportServiceHealth call at doctor.go's call site would leave
+// every other test in this file green (they all call
+// reportServiceHealth directly). The two network-touching steps
+// (checkLocalNetworkFn, reportTmuxTreeFn) are stubbed so this stays a
+// unit test — no live TCP dial, no mDNS send, no macOS consent dialog.
+func TestRunDoctorCallsReportServiceHealth(t *testing.T) {
+	origDrift := checkServiceDriftFn
+	origCollision := checkLegacyLabelCollisionFn
+	origLocalNetwork := checkLocalNetworkFn
+	origTmuxTree := reportTmuxTreeFn
+	origCfgFile := cfgFile
+	defer func() {
+		checkServiceDriftFn = origDrift
+		checkLegacyLabelCollisionFn = origCollision
+		checkLocalNetworkFn = origLocalNetwork
+		reportTmuxTreeFn = origTmuxTree
+		cfgFile = origCfgFile
+	}()
+
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "leo.yaml")
+	if err := config.Save(cfgPath, &config.Config{HomePath: home}); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+	cfgFile = cfgPath
+
+	var gotHome string
+	checkServiceDriftFn = func(h string) (bool, string) {
+		gotHome = h
+		return true, "smoke-test drift detail"
+	}
+	checkLegacyLabelCollisionFn = func(h string) (bool, string) { return false, "" }
+	checkLocalNetworkFn = func(probeHost string, trigger bool) LocalNetworkStatus {
+		return LocalNetworkStatus{State: "n/a", Detail: "stubbed for smoke test"}
+	}
+	reportTmuxTreeFn = func() tmuxTreeReport { return tmuxTreeReport{Line: "stubbed"} }
+
+	output := captureColorOutput(t, func() {
+		if err := runDoctor("", false); err != nil {
+			t.Fatalf("runDoctor() error: %v", err)
+		}
+	})
+
+	if gotHome != home {
+		t.Errorf("reportServiceHealth (via runDoctor) received home = %q, want %q", gotHome, home)
+	}
+	if !doctorContainsAll(output, "drift detected", "smoke-test drift detail") {
+		t.Errorf("output = %q, want it to include reportServiceHealth's drift output", output)
 	}
 }
 
