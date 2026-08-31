@@ -750,11 +750,92 @@ func TestClassifyInputDistinguishesMenusFromInputBox(t *testing.T) {
 			inputUnknown,
 		},
 		{"no glyph at all", "just some output\nno prompt here\n", inputUnknown},
+		{
+			"footer with extra hint segment still dialog chrome",
+			"  Some dialog\n  ❯ Proceed\n  ↑/↓ to select · Enter to confirm · Esc to cancel\n",
+			inputUnknown,
+		},
+		{
+			"prose printing both phrases is not dialog chrome",
+			"The old check auto-Escapes any pane showing \"Enter to confirm · Esc to cancel\" anywhere in scrollback.\n  ❯ real prompt\n",
+			inputHasContent,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := classifyInput(c.pane); got != c.want {
 				t.Fatalf("classifyInput = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestHasDialogChromeRequiresFooterLine(t *testing.T) {
+	cases := []struct {
+		name string
+		pane string
+		want bool
+	}{
+		{
+			"real footer, no extra hints",
+			"  Enter to confirm · Esc to cancel\n",
+			true,
+		},
+		{
+			"real footer with extra hint segment",
+			"  ↑/↓ to select · Enter to confirm · Esc to cancel\n",
+			true,
+		},
+		{
+			"real footer with parenthesized tab-toggle segment",
+			"  ↑/↓ to select · Enter to confirm · Esc to cancel · (tab to toggle)\n",
+			true,
+		},
+		{
+			"real footer with Ctrl+C segment",
+			"  Enter to confirm · Esc to cancel · Ctrl+C to exit\n",
+			true,
+		},
+		{
+			"prose quoting the footer on one line is not chrome",
+			"it auto-Escapes any pane showing \"Enter to confirm · Esc to cancel\" in scrollback\n",
+			false,
+		},
+		{
+			"phrases quoted on separate lines is not chrome",
+			"\"Enter to confirm\"\n\"Esc to cancel\"\n",
+			false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := HasDialogChrome(c.pane); got != c.want {
+				t.Fatalf("HasDialogChrome(%q) = %v, want %v", c.pane, got, c.want)
+			}
+		})
+	}
+}
+
+func TestHasConfirmFooterLine(t *testing.T) {
+	cases := []struct {
+		name string
+		pane string
+		want bool
+	}{
+		{"press-style single-action footer", "  Press Enter to confirm\n", true},
+		{"bare single-action footer", "  Enter to confirm\n", true},
+		{"combined footer also counts", "  Enter to confirm · Esc to cancel\n", true},
+		{"combined footer with Ctrl+C segment also counts", "  Enter to confirm · Esc to cancel · Ctrl+C to exit\n", true},
+		{
+			"prose mentioning resume and confirm phrase is not a footer",
+			"I explained that \"Resume from summary\" prompts require pressing \"Enter to confirm\" to proceed.\n",
+			false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := HasConfirmFooterLine(c.pane); got != c.want {
+				t.Fatalf("HasConfirmFooterLine(%q) = %v, want %v", c.pane, got, c.want)
 			}
 		})
 	}
