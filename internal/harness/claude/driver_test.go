@@ -65,6 +65,36 @@ func TestDialogKey(t *testing.T) {
 		},
 		{"plain empty prompt does nothing", "──────\n❯ \n──────\n", ""},
 		{"ordinary output does nothing", "doing some work...\nstill working\n", ""},
+		{
+			"modal footer with extra hint segment declined with Escape",
+			"  Try the new fullscreen renderer?\n  ❯ 1. Yes, try it\n    2. Not now\n  ↑/↓ to select · Enter to confirm · Esc to cancel\n",
+			"Escape",
+		},
+		{
+			// Regression: production sent ~4,100 spurious Escapes into a live
+			// session because a transcript line PRINTED the footer phrases as
+			// prose rather than rendering an actual modal footer.
+			"prose describing the feature is left alone",
+			"Here's the fix summary:\n" +
+				"The old check misfired because it auto-Escapes any pane showing \"Enter to confirm · Esc to cancel\" anywhere in the last 10 lines.\n" +
+				"I'll tighten it to a per-line footer check.\n" +
+				"❯ \n",
+			"",
+		},
+		{
+			"transcript quoting both phrases on separate lines is left alone",
+			"The docs say:\n" +
+				"\"Enter to confirm\"\n" +
+				"\"Esc to cancel\"\n" +
+				"❯ \n",
+			"",
+		},
+		{
+			"prose mentioning resume and confirm phrase is left alone",
+			"I explained that \"Resume from summary\" prompts require pressing \"Enter to confirm\" to proceed.\n" +
+				"❯ \n",
+			"",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

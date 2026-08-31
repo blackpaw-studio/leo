@@ -373,10 +373,62 @@ func paneInputStateAt(ctx context.Context, tmuxPath, pane string, p Profile) Inp
 // a content-bearing input box even though it follows the prompt glyph.
 var menuOptionPattern = regexp.MustCompile(`^\d+[.)]\s`)
 
-// hasDialogChrome reports whether a captured pane shows an interactive dialog's
-// confirm/cancel footer rather than a plain input box.
-func hasDialogChrome(pane string) bool {
-	return strings.Contains(pane, "Enter to confirm") && strings.Contains(pane, "Esc to cancel")
+// dialogFooterSegment matches one "<key> to <action>" hint segment as
+// rendered in a claude dialog footer, e.g. "Enter to confirm", "Esc to
+// cancel", or "↑/↓ to select".
+const dialogFooterSegment = `[A-Za-z0-9↑↓←→/]+\s+to\s+[a-zA-Z]+(?:\s+[a-zA-Z]+){0,2}`
+
+// dialogFooterLinePattern matches an entire trimmed line that consists solely
+// of one or more hint segments joined by "·" (optionally prefixed with
+// "Press "). This is deliberately anchored start-to-end: prose that merely
+// quotes or discusses the footer phrases carries extra words, quotes, or
+// punctuation around them and will not match the whole line.
+var dialogFooterLinePattern = regexp.MustCompile(
+	`^(?:Press\s+)?` + dialogFooterSegment + `(?:\s*·\s*` + dialogFooterSegment + `)*$`,
+)
+
+// dialogFooterLineContaining reports whether pane has a dedicated footer line
+// (matching dialogFooterLinePattern) that contains every phrase in phrases.
+// Restricting the match to a real footer line — rather than a substring
+// search over the whole capture — is what keeps ordinary transcript text that
+// merely prints these phrases (agent discussion, code review output, test
+// logs) from being misread as a live dialog.
+func dialogFooterLineContaining(pane string, phrases ...string) bool {
+	for _, line := range strings.Split(pane, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || !dialogFooterLinePattern.MatchString(trimmed) {
+			continue
+		}
+		matched := true
+		for _, phrase := range phrases {
+			if !strings.Contains(trimmed, phrase) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// HasDialogChrome reports whether pane shows a real interactive dialog's
+// confirm AND cancel footer rendered as its own dedicated line — the chrome
+// that distinguishes a blocking modal from ordinary output that happens to
+// mention both phrases in prose. Shared by claude's DialogKey (see
+// internal/harness/claude/driver.go) and classifyInput below so the two never
+// drift.
+func HasDialogChrome(pane string) bool {
+	return dialogFooterLineContaining(pane, "Enter to confirm", "Esc to cancel")
+}
+
+// HasConfirmFooterLine reports whether pane shows an "Enter to confirm"
+// footer as its own dedicated line — used for single-action confirm dialogs
+// (e.g. "Resume from summary?") that render only the confirm hint, no cancel
+// hint.
+func HasConfirmFooterLine(pane string) bool {
+	return dialogFooterLineContaining(pane, "Enter to confirm")
 }
 
 // classifyInput inspects a captured pane for claude's input line (the last line
@@ -385,7 +437,7 @@ func hasDialogChrome(pane string) bool {
 // glyph there is a menu selector, not a ready input box, so callers keep waiting
 // instead of pasting into the dialog.
 func classifyInput(pane string) InputState {
-	if hasDialogChrome(pane) {
+	if HasDialogChrome(pane) {
 		return InputUnknown
 	}
 	lines := strings.Split(pane, "\n")
