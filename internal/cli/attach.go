@@ -58,7 +58,8 @@ session as a native tab via tmux control mode.`,
 
   # No name — pick interactively
   leo attach`,
-		Args: cobra.MaximumNArgs(1),
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeAgentNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, res, err := dispatch(host)
 			if err != nil {
