@@ -42,6 +42,13 @@ var (
 	supervisedExecFn = defaultSupervisedExec
 )
 
+// tmuxHasAttachedClient is a package-level seam so dismissStartupDialog's
+// attended-session check can be unit-tested without a real tmux. It defaults
+// to real exec, mirroring tmuxHasSession/tmuxRenameSession.
+var tmuxHasAttachedClient = func(tmuxPath, sessionName string) bool {
+	return tmux.HasAttachedClient(context.Background(), tmuxPath, sessionName)
+}
+
 // newTempFileAlongside creates a uniquely-named, empty temp file in the
 // same directory as path (so a later rename stays on one filesystem),
 // chmod'd to perm, and returns its name. The caller is responsible for
@@ -1212,7 +1219,16 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 // startup/announcement dialog so message injection isn't stuck behind it. See
 // paneKey (harness.PaneCare.PaneKey) for the policy. Best-effort: capture/send
 // failures are ignored and retried on the next poll.
+//
+// Auto-dismissal exists only to unblock UNATTENDED sessions. Claude's
+// interactive /mcp (and /model, /config, ...) menu renders the same
+// confirm/cancel footer as a blocking startup dialog, so a session with an
+// attached tmux client is left alone entirely — a human who opened that menu
+// handles it themselves; leo must not slam it shut out from under them.
 func dismissStartupDialog(tmuxPath, sessionName, processName string, paneKey func(string) string) {
+	if tmuxHasAttachedClient(tmuxPath, sessionName) {
+		return
+	}
 	target := tmux.ResolvePaneOrFallback(context.Background(), tmuxPath, sessionName)
 	out, err := exec.Command(tmuxPath, tmux.Args("capture-pane", "-t", target, "-p", "-S", "-10")...).Output()
 	if err != nil {
