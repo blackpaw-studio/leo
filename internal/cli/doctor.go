@@ -6,8 +6,34 @@ import (
 	"syscall"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/spf13/cobra"
+)
+
+// checkServiceDriftFn reports OS-service drift for a leo home: the
+// autostart registration (launchd job / systemd unit) is loaded and
+// running right now, but its backing file has vanished from disk, so it
+// will NOT survive the next logout/reboot. A seam so tests can drive
+// every branch without a real launchd/systemd.
+var checkServiceDriftFn = service.DriftDetected
+
+// checkLegacyLabelCollisionFn reports whether a legacy, pre-home-scoping
+// autostart registration (the shared base label/unit name every install
+// used before this change) is already serving this same home from a
+// non-default install path — see service.LegacyBaseLabelCollision. A
+// seam so tests can drive it without a real launchd/systemd.
+var checkLegacyLabelCollisionFn = service.LegacyBaseLabelCollision
+
+// checkLocalNetworkFn and reportTmuxTreeFn are seams over the two
+// network-touching steps runDoctor otherwise performs unconditionally
+// (a live TCP dial, and — with --trigger — mDNS multicast sends that can
+// raise the macOS consent dialog). Neither belongs in a unit test; a
+// smoke test stubs both to prove runDoctor still wires up
+// reportServiceHealth without paying for a real network probe.
+var (
+	checkLocalNetworkFn = checkLocalNetwork
+	reportTmuxTreeFn    = reportTmuxTree
 )
 
 // LocalNetworkStatus is the structured result of the macOS Local Network
@@ -80,14 +106,10 @@ func runDoctor(probeHost string, trigger bool) error {
 	if err != nil {
 		warn.Printf("Config: %s\n", err)
 	} else {
-		if daemon.IsRunning(cfg.HomePath) {
-			success.Println("Daemon:         running")
-		} else {
-			info.Println("Daemon:         not running")
-		}
+		reportServiceHealth(cfg.HomePath)
 	}
 
-	status := checkLocalNetwork(probeHost, trigger)
+	status := checkLocalNetworkFn(probeHost, trigger)
 
 	switch status.State {
 	case "granted":
@@ -115,7 +137,7 @@ func runDoctor(probeHost string, trigger bool) error {
 	}
 	info.Printf("  Triggered:    %v\n", status.Triggered)
 
-	tree := reportTmuxTree()
+	tree := reportTmuxTreeFn()
 	info.Printf("tmux tree:      %s\n", tree.Line)
 
 	if status.State == treeDeniedState {
@@ -126,6 +148,36 @@ func runDoctor(probeHost string, trigger bool) error {
 	}
 
 	return nil
+}
+
+// reportServiceHealth prints the daemon-running line plus the two
+// autostart-registration checks (drift, legacy label collision) for
+// home. Split out of runDoctor so it's independently testable without
+// triggering runDoctor's real network probing (checkLocalNetwork does a
+// live TCP dial and, with --trigger, mDNS multicast sends that can raise
+// the macOS consent dialog — neither belongs in a unit test).
+func reportServiceHealth(home string) {
+	if daemon.IsRunning(home) {
+		success.Println("Daemon:         running")
+	} else {
+		info.Println("Daemon:         not running")
+	}
+
+	// Only surface autostart drift as a problem; a healthy result stays
+	// silent so this check doesn't add noise on the common path.
+	if drifted, detail := checkServiceDriftFn(home); drifted {
+		warn.Println("Autostart:      drift detected")
+		warn.Printf("  %s\n", detail)
+		warn.Println("  Fix: reinstall with 'leo service start --daemon'")
+	}
+
+	// A legacy pre-scoping registration is a distinct problem from drift:
+	// it means TWO registrations may now be supervising this home. Report
+	// it; never remediate it automatically here.
+	if collided, detail := checkLegacyLabelCollisionFn(home); collided {
+		warn.Println("Autostart:      legacy registration collision")
+		warn.Printf("  %s\n", detail)
+	}
 }
 
 // reportTmuxTree summarizes who owns leo's tmux server, tolerating a missing

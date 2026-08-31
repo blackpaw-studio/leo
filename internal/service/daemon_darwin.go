@@ -4,10 +4,12 @@ package service
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -64,18 +66,58 @@ type plistData struct {
 	Env        map[string]string
 }
 
-func daemonLabel() string {
-	return "com.blackpaw.leo"
+// daemonLabelBase is the launchd label used for the default leo home
+// (~/.leo). This exact string MUST NOT change: it is the identity of the
+// existing production LaunchAgent registration, and changing it would
+// orphan that install (launchd would treat it as a brand new, unrelated
+// service).
+const daemonLabelBase = "com.blackpaw.leo"
+
+// daemonLabel derives the launchd label for the given leo home.
+//
+// Identity scheme: the default home (~/.leo, resolved) always maps to
+// exactly daemonLabelBase, preserving backward compatibility with every
+// existing production install. Any other home (a second checkout, a test
+// daemon under a different LEO_HOME, etc.) gets a deterministic suffix
+// derived from a hash of its resolved absolute path:
+// "com.blackpaw.leo.<12 hex chars of sha256(resolved home)>". This keeps
+// concurrent installs on one machine from ever bootout-ing or
+// overwriting each other's registration.
+func daemonLabel(home string) string {
+	if isDefaultHome(home, defaultLeoHome()) {
+		return daemonLabelBase
+	}
+	return daemonLabelBase + "." + homeIdentityHash(home)
 }
 
-func plistPath() string {
-	home, _ := userHomeDirFn()
-	return filepath.Join(home, "Library", "LaunchAgents", daemonLabel()+".plist")
+// defaultLeoHome returns the platform's canonical leo home (~/.leo) using
+// the same userHomeDirFn seam as plistPath, so tests can control it and
+// production always resolves against the real $HOME.
+func defaultLeoHome() string {
+	home, err := userHomeDirFn()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".leo")
+}
+
+func plistPath(home string) string {
+	userHome, _ := userHomeDirFn()
+	return filepath.Join(userHome, "Library", "LaunchAgents", daemonLabel(home)+".plist")
 }
 
 // InstallDaemon writes a launchd plist and bootstraps the service.
 func InstallDaemon(sc ServiceConfig) error {
-	label := daemonLabel()
+	label := daemonLabel(sc.WorkDir)
+
+	// A non-default home whose hashed label differs from the legacy base
+	// label can still collide with a live pre-scoping registration (anyone
+	// who installed from this same non-default home under the old code has
+	// a "com.blackpaw.leo" job pointing here already). Warn loudly and
+	// leave remediation to the operator — see legacyBaseLabelCollision.
+	if collided, detail := legacyBaseLabelCollision(sc.WorkDir, label); collided {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", detail)
+	}
 
 	// Ensure state directory exists for log file
 	if err := mkdirAll(filepath.Dir(sc.LogPath), 0750); err != nil {
@@ -102,19 +144,43 @@ func InstallDaemon(sc ServiceConfig) error {
 		return fmt.Errorf("rendering plist: %w", err)
 	}
 
-	path := plistPath()
+	path := plistPath(sc.WorkDir)
 	if err := mkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating LaunchAgents directory: %w", err)
 	}
 
-	// Unload existing service if present and wait for launchd to finish
-	_ = bootout(label, path)
-	_ = removeFile(path)
+	// Unload existing service if present so the upcoming bootstrap doesn't
+	// conflict with a live registration. This is best-effort: a target that
+	// simply wasn't loaded is not an error, but a genuine bootout failure
+	// (e.g. permission denied) is surfaced as a warning rather than
+	// silently discarded.
+	if out, err := bootout(label); err != nil && !isBenignBootoutError(err, out) {
+		// Print both err and out: a failure with no output at all (e.g.
+		// launchctl not on PATH, a permission error before exec, a signal
+		// kill) would otherwise print an empty, useless warning if only
+		// out were shown.
+		fmt.Fprintf(os.Stderr, "warning: launchctl bootout of %s: %v: %s\n", label, err, strings.TrimSpace(out))
+	}
 
-	// launchd may need a moment to fully unregister after bootout.
-	// Retry bootstrap a few times with a short delay.
-	if err := writeFile(path, buf.Bytes(), 0644); err != nil {
+	// Write the new plist to a uniquely-named temp file in the same
+	// directory and rename it into place atomically. A fixed ".tmp" name
+	// would let two concurrent installs interleave their writes into one
+	// file and rename a corrupt result into place; os.CreateTemp's
+	// randomized suffix rules that out. The plist that was previously on
+	// disk (if any) is never deleted ahead of time — on any failure below,
+	// the original registration's backing file stays intact rather than
+	// leaving launchd with a loaded-but-missing-plist ghost.
+	tmpPath, err := newTempFileAlongside(path, 0644)
+	if err != nil {
+		return fmt.Errorf("creating temp plist: %w", err)
+	}
+	if err := writeFile(tmpPath, buf.Bytes(), 0644); err != nil {
+		_ = removeFile(tmpPath)
 		return fmt.Errorf("writing plist: %w", err)
+	}
+	if err := renameFile(tmpPath, path); err != nil {
+		_ = removeFile(tmpPath)
+		return fmt.Errorf("installing plist: %w", err)
 	}
 
 	uid := fmt.Sprintf("%d", os.Getuid())
@@ -132,16 +198,16 @@ func InstallDaemon(sc ServiceConfig) error {
 	return nil
 }
 
-// RemoveDaemon stops and removes the launchd service.
+// RemoveDaemon stops and removes the launchd service registered for home.
 //
 // Cleans up both halves independently: the launchd registration and the
 // plist file. If either exists we attempt removal, and we only return
 // "not installed" when both are already gone. This handles drift where
 // one side has been cleaned up but not the other — e.g. a prior bootout
 // failure that left a ghost registration, or a manually deleted plist.
-func RemoveDaemon() error {
-	label := daemonLabel()
-	path := plistPath()
+func RemoveDaemon(home string) error {
+	label := daemonLabel(home)
+	path := plistPath(home)
 
 	_, printErr := runCommand("launchctl", "print", launchctlTarget(label))
 	loaded := printErr == nil
@@ -154,7 +220,7 @@ func RemoveDaemon() error {
 	}
 
 	if loaded {
-		if err := bootout(label, path); err != nil {
+		if _, err := bootout(label); err != nil {
 			return fmt.Errorf("launchctl bootout: %w", err)
 		}
 	}
@@ -168,14 +234,14 @@ func RemoveDaemon() error {
 	return nil
 }
 
-// DaemonStatus returns the status of the launchd service.
+// DaemonStatus returns the status of the launchd service registered for home.
 //
 // launchctl is the source of truth: a service can remain bootstrapped
 // (and running) even after its plist file is deleted from disk, so we
 // query launchctl first and only fall back to the plist check when
 // launchctl has no record of the service.
-func DaemonStatus() (string, error) {
-	label := daemonLabel()
+func DaemonStatus(home string) (string, error) {
+	label := daemonLabel(home)
 
 	output, runErr := runCommand("launchctl", "print", launchctlTarget(label))
 	if runErr == nil {
@@ -189,24 +255,24 @@ func DaemonStatus() (string, error) {
 		return "installed but not running", nil
 	}
 
-	if _, err := os.Stat(plistPath()); os.IsNotExist(err) {
+	if _, err := os.Stat(plistPath(home)); os.IsNotExist(err) {
 		return "not installed", nil
 	}
 
 	return "installed but not running", nil
 }
 
-// RestartDaemon force-restarts the launchd service.
+// RestartDaemon force-restarts the launchd service registered for home.
 //
 // Uses launchctl as the source of truth — a service can be running with
 // its plist file missing, so we rely on the kickstart call itself to
 // report whether the target is loaded. Only when kickstart fails do we
 // consult the plist to produce a clearer "not installed" error.
-func RestartDaemon() error {
-	label := daemonLabel()
+func RestartDaemon(home string) error {
+	label := daemonLabel(home)
 
 	if _, err := runCommand("launchctl", "kickstart", "-k", launchctlTarget(label)); err != nil {
-		if _, statErr := os.Stat(plistPath()); os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(plistPath(home)); os.IsNotExist(statErr) {
 			return fmt.Errorf("daemon not installed")
 		}
 		return fmt.Errorf("launchctl kickstart: %w", err)
@@ -215,9 +281,157 @@ func RestartDaemon() error {
 	return nil
 }
 
-func bootout(label, path string) error {
-	_, err := runCommand("launchctl", "bootout", launchctlTarget(label))
-	return err
+// DriftDetected reports whether the launchd job for home is loaded while
+// its backing plist is missing from disk — the daemon is running right
+// now but launchd has nothing to re-bootstrap it from, so it will NOT
+// survive the next logout/reboot. Every other state (not installed,
+// installed with its plist present, or installed but not currently
+// running) reports false with no detail.
+func DriftDetected(home string) (bool, string) {
+	label := daemonLabel(home)
+	path := plistPath(home)
+
+	_, printErr := runCommand("launchctl", "print", launchctlTarget(label))
+	loaded := printErr == nil
+
+	_, statErr := os.Stat(path)
+	plistExists := statErr == nil
+
+	if loaded && !plistExists {
+		return true, fmt.Sprintf("launchd job %q is loaded but its plist is missing from %s — it will not survive the next logout/reboot", label, path)
+	}
+	return false, ""
+}
+
+// LegacyBaseLabelCollision reports whether a legacy com.blackpaw.leo
+// launchd registration — the single shared label every install used
+// before per-home label scoping — is already serving this same home from
+// a non-default install path. If so, re-installing under the new hashed
+// label would register a SECOND job supervising the same home, and the
+// two would fight over one socket and one set of tmux sessions.
+//
+// Detection only: the fix is a manual `launchctl bootout`, which this
+// code deliberately does not run — bootout-ing another live job during
+// an unrelated install is exactly the class of surprise this whole
+// change exists to prevent.
+func LegacyBaseLabelCollision(home string) (bool, string) {
+	return legacyBaseLabelCollision(home, daemonLabel(home))
+}
+
+func legacyBaseLabelCollision(home, computedLabel string) (bool, string) {
+	if computedLabel == daemonLabelBase {
+		return false, "" // this install IS the legacy label; nothing to compare against
+	}
+
+	workDir, ok := legacyBaseWorkingDirectory()
+	if !ok || resolveHomePath(workDir) != resolveHomePath(home) {
+		return false, ""
+	}
+
+	return true, fmt.Sprintf(
+		"a legacy launchd job %q is already registered for this leo home (%s). "+
+			"Installing under %q would leave two registrations supervising the same home. "+
+			"Recommended fix: launchctl bootout gui/%d/%s",
+		daemonLabelBase, home, computedLabel, os.Getuid(), daemonLabelBase)
+}
+
+// legacyBaseWorkingDirectory resolves the working directory of a legacy
+// com.blackpaw.leo registration. launchctl is consulted first and is the
+// ONLY reliable source here: the exact failure state this detector
+// exists to catch is a job loaded with its plist already deleted (see
+// DaemonStatus / DriftDetected, which treat launchctl the same way) —
+// reading the plist file alone would silently miss precisely that case.
+// The plist is only a fallback for when launchctl has no record of the
+// legacy label at all (e.g. it was cleanly removed).
+func legacyBaseWorkingDirectory() (string, bool) {
+	if output, err := runCommand("launchctl", "print", launchctlTarget(daemonLabelBase)); err == nil {
+		if wd, ok := extractLaunchctlWorkingDirectory(output); ok {
+			return wd, true
+		}
+	}
+
+	userHome, err := userHomeDirFn()
+	if err != nil {
+		return "", false
+	}
+	basePlistPath := filepath.Join(userHome, "Library", "LaunchAgents", daemonLabelBase+".plist")
+
+	data, err := readFile(basePlistPath)
+	if err != nil {
+		return "", false // no legacy plist on disk — nothing to warn about
+	}
+
+	return extractPlistWorkingDirectory(string(data))
+}
+
+// extractLaunchctlWorkingDirectory parses the "working directory = ..."
+// line out of `launchctl print` output.
+func extractLaunchctlWorkingDirectory(output string) (string, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "working directory = ") {
+			wd := strings.TrimSpace(strings.TrimPrefix(trimmed, "working directory = "))
+			if wd == "" {
+				return "", false
+			}
+			return wd, true
+		}
+	}
+	return "", false
+}
+
+// plistWorkingDirectoryRe matches the <string> value immediately following
+// a <key>WorkingDirectory</key> entry in a launchd plist.
+var plistWorkingDirectoryRe = regexp.MustCompile(`(?s)<key>WorkingDirectory</key>\s*<string>(.*?)</string>`)
+
+// extractPlistWorkingDirectory returns the WorkingDirectory value from a
+// launchd plist. An empty <string></string> value is deliberately
+// reported as "not found" (false), not as an empty-but-present home:
+// resolveHomePath("") resolves to the current working directory via
+// filepath.Abs, and comparing THAT against a candidate non-default home
+// could produce a false collision warning if they happened to match.
+// Every other malformed-plist case here already prefers a false
+// negative (silence) over a wrong warning; this closes the one
+// exception.
+func extractPlistWorkingDirectory(plistXML string) (string, bool) {
+	m := plistWorkingDirectoryRe.FindStringSubmatch(plistXML)
+	if m == nil {
+		return "", false
+	}
+	wd := strings.TrimSpace(m[1])
+	if wd == "" {
+		return "", false
+	}
+	return wd, true
+}
+
+// isBenignBootoutError reports whether a bootout failure is launchctl's
+// well-known signature for "the target wasn't loaded" — an expected,
+// non-actionable outcome for InstallDaemon's pre-emptive bootout (there's
+// nothing to unload on a first install). That signature lives in the
+// command's OUTPUT ("Boot-out failed: 3: No such process"), not in
+// err.Error() (which for a nonzero exit is just "exit status 3"), so both
+// are checked: the output text when available, and exit code 3 as a
+// fallback for callers that only have the error. Anything else is a real
+// failure worth surfacing.
+func isBenignBootoutError(err error, output string) bool {
+	if strings.Contains(output, "No such process") || strings.Contains(output, "Could not find") {
+		return true
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 3 {
+		return true
+	}
+	return false
+}
+
+// bootout unloads the launchd job for label, returning the raw combined
+// command output alongside any error. The output is the only place the
+// "wasn't loaded" vs. "failed to unload" distinction is expressed —
+// discarding it (as the original implementation did with `_, err :=`)
+// makes that distinction unrecoverable from err alone.
+func bootout(label string) (string, error) {
+	return runCommand("launchctl", "bootout", launchctlTarget(label))
 }
 
 // launchctlTarget builds the gui domain specifier used by launchctl

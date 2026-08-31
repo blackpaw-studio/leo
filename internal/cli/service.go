@@ -127,7 +127,7 @@ it survives reboots.`,
 					return fmt.Errorf("installing daemon: %w", err)
 				}
 				// Verify it's running
-				status, _ := service.DaemonStatus()
+				status, _ := service.DaemonStatus(cfg.HomePath)
 				success.Printf("Daemon installed (%s).\n", status)
 				info.Printf("Logs: %s\n", sc.LogPath)
 				info.Println("Note: run 'leo service start --daemon' again if you update environment variables.")
@@ -170,7 +170,7 @@ installed OS service (launchd/systemd).`,
 			}
 
 			if daemon {
-				if err := service.RemoveDaemon(); err != nil {
+				if err := service.RemoveDaemon(cfg.HomePath); err != nil {
 					return fmt.Errorf("removing daemon: %w", err)
 				}
 				success.Println("Daemon removed.")
@@ -204,11 +204,11 @@ func newServiceRestartCmd() *cobra.Command {
 			}
 
 			fmt.Println("Restarting daemon...")
-			if err := service.RestartDaemon(); err != nil {
+			if err := service.RestartDaemon(cfg.HomePath); err != nil {
 				return fmt.Errorf("restarting daemon: %w", err)
 			}
 
-			status, _ := service.DaemonStatus()
+			status, _ := service.DaemonStatus(cfg.HomePath)
 			success.Printf("Daemon restarted (%s).\n", status)
 			info.Printf("Logs: %s\n", service.LogPathFor(cfg.HomePath))
 			return nil

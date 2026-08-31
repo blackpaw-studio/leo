@@ -237,22 +237,26 @@ func buildConfig(workspace string, existing *config.Config) *config.Config {
 	return cfg
 }
 
-func promptDaemonInstall(reader *bufio.Reader, workspace, cfgPath string) {
+// promptDaemonInstall offers to install/reinstall the OS-level autostart
+// service. leoHome is the leo home directory (~/.leo or an override),
+// not the workspace subdirectory — it now also drives OS-service
+// identity (launchd label / systemd unit name), so the name matters.
+func promptDaemonInstall(reader *bufio.Reader, leoHome, cfgPath string) {
 	fmt.Println()
-	daemonStatus, daemonErr := daemonStatusFn()
+	daemonStatus, daemonErr := daemonStatusFn(leoHome)
 	if daemonErr != nil {
 		prompt.Warn.Printf("  Could not check daemon status: %v\n", daemonErr)
 	}
 	if daemonStatus == "not installed" || daemonErr != nil {
 		if prompt.YesNo(reader, "Install chat daemon (runs on login)?", true) {
 			fmt.Println("  Installing chat daemon...")
-			installDaemon(workspace, cfgPath)
+			installDaemon(leoHome, cfgPath)
 		}
 	} else {
 		prompt.Info.Printf("  Chat daemon: %s\n", daemonStatus)
 		if prompt.YesNo(reader, "  Reinstall chat daemon?", false) {
 			fmt.Println("  Installing chat daemon...")
-			installDaemon(workspace, cfgPath)
+			installDaemon(leoHome, cfgPath)
 		}
 	}
 }

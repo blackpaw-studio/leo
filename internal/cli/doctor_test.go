@@ -3,9 +3,45 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/fatih/color"
 )
+
+// captureColorOutput redirects the prompt package's color.Output (what
+// success/warn/info actually write to — see internal/prompt/prompt.go)
+// to an in-memory pipe for the duration of fn, and returns everything
+// written. color.Output is read fresh on every Printf/Println call, so
+// reassigning it (unlike os.Stdout) reliably captures output written
+// through *color.Color values created before this call.
+func captureColorOutput(t *testing.T, fn func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := color.Output
+	color.Output = w
+	defer func() { color.Output = orig }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe writer: %v", err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured output: %v", err)
+	}
+	return string(out)
+}
 
 func TestClassifyDial(t *testing.T) {
 	tests := []struct {
@@ -60,6 +96,155 @@ func TestClassifyDial(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReportServiceHealthDriftDetected drives reportServiceHealth (the
+// function runDoctor actually calls) end to end with the drift seam
+// stubbed, and asserts both on the printed output and on the exact home
+// argument the seam receives — unlike calling the seam directly, this
+// exercises the real wiring in doctor.go.
+func TestReportServiceHealthDriftDetected(t *testing.T) {
+	origDrift := checkServiceDriftFn
+	origCollision := checkLegacyLabelCollisionFn
+	defer func() {
+		checkServiceDriftFn = origDrift
+		checkLegacyLabelCollisionFn = origCollision
+	}()
+
+	const wantHome = "/tmp/does-not-matter"
+	var gotHome string
+	checkServiceDriftFn = func(home string) (bool, string) {
+		gotHome = home
+		return true, "launchd job is loaded but its plist is missing"
+	}
+	checkLegacyLabelCollisionFn = func(home string) (bool, string) { return false, "" }
+
+	output := captureColorOutput(t, func() {
+		reportServiceHealth(wantHome)
+	})
+
+	if gotHome != wantHome {
+		t.Errorf("checkServiceDriftFn received home = %q, want %q", gotHome, wantHome)
+	}
+	if !doctorContainsAll(output, "drift detected", "plist is missing") {
+		t.Errorf("output = %q, want it to mention the drift and its detail", output)
+	}
+}
+
+// TestReportServiceHealthHealthyIsSilent verifies the "don't add noise
+// on the common path" requirement: when nothing is wrong, neither the
+// drift nor the legacy-collision line is printed.
+func TestReportServiceHealthHealthyIsSilent(t *testing.T) {
+	origDrift := checkServiceDriftFn
+	origCollision := checkLegacyLabelCollisionFn
+	defer func() {
+		checkServiceDriftFn = origDrift
+		checkLegacyLabelCollisionFn = origCollision
+	}()
+
+	checkServiceDriftFn = func(home string) (bool, string) { return false, "" }
+	checkLegacyLabelCollisionFn = func(home string) (bool, string) { return false, "" }
+
+	output := captureColorOutput(t, func() {
+		reportServiceHealth("/tmp/does-not-matter")
+	})
+
+	if doctorContainsAll(output, "drift") || doctorContainsAll(output, "collision") {
+		t.Errorf("expected no drift/collision noise for the healthy case, got: %q", output)
+	}
+}
+
+// TestReportServiceHealthLegacyCollisionDetected exercises the fourth
+// review finding's wiring: a legacy base-label collision is reported
+// distinctly from drift.
+func TestReportServiceHealthLegacyCollisionDetected(t *testing.T) {
+	origDrift := checkServiceDriftFn
+	origCollision := checkLegacyLabelCollisionFn
+	defer func() {
+		checkServiceDriftFn = origDrift
+		checkLegacyLabelCollisionFn = origCollision
+	}()
+
+	const wantHome = "/tmp/second-checkout/.leo"
+	var gotHome string
+	checkServiceDriftFn = func(home string) (bool, string) { return false, "" }
+	checkLegacyLabelCollisionFn = func(home string) (bool, string) {
+		gotHome = home
+		return true, "a legacy launchd job \"com.blackpaw.leo\" is already registered for this leo home"
+	}
+
+	output := captureColorOutput(t, func() {
+		reportServiceHealth(wantHome)
+	})
+
+	if gotHome != wantHome {
+		t.Errorf("checkLegacyLabelCollisionFn received home = %q, want %q", gotHome, wantHome)
+	}
+	if !doctorContainsAll(output, "legacy registration collision", "com.blackpaw.leo") {
+		t.Errorf("output = %q, want it to mention the legacy collision and its detail", output)
+	}
+}
+
+// TestRunDoctorCallsReportServiceHealth is a smoke test guarding the
+// runDoctor -> reportServiceHealth wiring itself: without it, deleting
+// the reportServiceHealth call at doctor.go's call site would leave
+// every other test in this file green (they all call
+// reportServiceHealth directly). The two network-touching steps
+// (checkLocalNetworkFn, reportTmuxTreeFn) are stubbed so this stays a
+// unit test — no live TCP dial, no mDNS send, no macOS consent dialog.
+func TestRunDoctorCallsReportServiceHealth(t *testing.T) {
+	origDrift := checkServiceDriftFn
+	origCollision := checkLegacyLabelCollisionFn
+	origLocalNetwork := checkLocalNetworkFn
+	origTmuxTree := reportTmuxTreeFn
+	origCfgFile := cfgFile
+	defer func() {
+		checkServiceDriftFn = origDrift
+		checkLegacyLabelCollisionFn = origCollision
+		checkLocalNetworkFn = origLocalNetwork
+		reportTmuxTreeFn = origTmuxTree
+		cfgFile = origCfgFile
+	}()
+
+	home := t.TempDir()
+	cfgPath := filepath.Join(home, "leo.yaml")
+	if err := config.Save(cfgPath, &config.Config{HomePath: home}); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+	cfgFile = cfgPath
+
+	var gotHome string
+	checkServiceDriftFn = func(h string) (bool, string) {
+		gotHome = h
+		return true, "smoke-test drift detail"
+	}
+	checkLegacyLabelCollisionFn = func(h string) (bool, string) { return false, "" }
+	checkLocalNetworkFn = func(probeHost string, trigger bool) LocalNetworkStatus {
+		return LocalNetworkStatus{State: "n/a", Detail: "stubbed for smoke test"}
+	}
+	reportTmuxTreeFn = func() tmuxTreeReport { return tmuxTreeReport{Line: "stubbed"} }
+
+	output := captureColorOutput(t, func() {
+		if err := runDoctor("", false); err != nil {
+			t.Fatalf("runDoctor() error: %v", err)
+		}
+	})
+
+	if gotHome != home {
+		t.Errorf("reportServiceHealth (via runDoctor) received home = %q, want %q", gotHome, home)
+	}
+	if !doctorContainsAll(output, "drift detected", "smoke-test drift detail") {
+		t.Errorf("output = %q, want it to include reportServiceHealth's drift output", output)
+	}
+}
+
+func doctorContainsAll(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestNewDoctorCmd(t *testing.T) {

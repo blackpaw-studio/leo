@@ -255,7 +255,7 @@ func maybeRestartDaemon() error {
 		return nil
 	}
 	info.Println("Restarting daemon...")
-	if err := service.RestartDaemon(); err != nil {
+	if err := service.RestartDaemon(cfg.HomePath); err != nil {
 		return fmt.Errorf("restarting daemon: %w", err)
 	}
 	success.Println("Daemon restarted")
