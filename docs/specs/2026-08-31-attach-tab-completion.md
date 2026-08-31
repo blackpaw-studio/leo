@@ -1,7 +1,7 @@
 # Host-aware tab-completion for agent names
 
 **Date:** 2026-08-31
-**Status:** Proposed
+**Status:** Approved
 
 ## Problem
 
