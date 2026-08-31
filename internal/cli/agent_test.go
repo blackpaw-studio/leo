@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -898,17 +901,31 @@ func TestAgentRenameRequiresTwoArgs(t *testing.T) {
 	}
 }
 
-// TestCompleteAgentNamesGracefulFallback: when the daemon isn't reachable
-// (the common case under `go test`), the completer returns
+// TestCompleteAgentNamesGracefulFallback: when the local daemon isn't
+// reachable (the common case under `go test`), the completer returns
 // ShellCompDirectiveNoFileComp with no values instead of error-ing, so the
-// shell suppresses filename completion rather than suggesting garbage.
+// shell suppresses filename completion rather than suggesting garbage. Uses a
+// host-less config so resolution stays local (a config with a default remote
+// host would exercise the ssh path instead — covered separately below).
 func TestCompleteAgentNamesGracefulFallback(t *testing.T) {
-	path := newAgentCLITestConfig(t)
-	// Point the CLI at the test config so loadConfig() succeeds even though
-	// no daemon is running against that home directory.
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
+	}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
 	oldCfgFile := cfgFile
 	cfgFile = path
 	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	oldList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return nil, errors.New("daemon unreachable")
+	}
+	t.Cleanup(func() { agentListFn = oldList })
 
 	names, directive := completeAgentNames(nil, nil, "")
 	if len(names) != 0 {
@@ -925,6 +942,188 @@ func TestCompleteAgentNamesSkipsAfterFirstArg(t *testing.T) {
 	names, directive := completeAgentNames(nil, []string{"already"}, "")
 	if len(names) != 0 {
 		t.Errorf("expected no names after first arg, got %v", names)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestCompleteAgentNamesLocalUsesSeam: local resolution (no client.hosts, no
+// --host) queries agentListFn and returns every named record, including
+// stopped/dormant agents — attach prompts to start those, so they're valid
+// completion targets too.
+func TestCompleteAgentNamesLocalUsesSeam(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10},
+	}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	oldList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return []agent.Record{
+			{Name: "alpha", Status: "running"},
+			{Name: "beta", Status: "stopped"},
+			{Name: ""}, // unnamed records are skipped
+		}, nil
+	}
+	t.Cleanup(func() { agentListFn = oldList })
+
+	names, directive := completeAgentNames(nil, nil, "")
+	if !equalStrings(names, []string{"alpha", "beta"}) {
+		t.Errorf("names = %v, want [alpha beta]", names)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// completeAgentNamesTestCmd builds a minimal cobra.Command carrying the
+// --host flag, so tests can drive completeAgentNames' host resolution the
+// same way real subcommands do.
+func completeAgentNamesTestCmd(host string) *cobra.Command {
+	cmd := &cobra.Command{Use: "attach"}
+	var h string
+	addHostFlag(cmd, &h)
+	if host != "" {
+		_ = cmd.Flags().Set("host", host)
+	}
+	return cmd
+}
+
+// TestCompleteAgentNamesRemoteBuildsSSHArgv locks the exact ssh argv for
+// remote completion: BatchMode/ConnectTimeout guards, then the shared
+// buildSSHArgs shape (host, SSHArgs, ControlMaster opts so completion
+// multiplexes over the same connection as every other host dispatch),
+// remote leo path, and the quoted `__complete agent attach ”` tail. Prior
+// lesson: loosely-asserted exec seams have shipped argv bugs past review, so
+// this compares the full slice.
+func TestCompleteAgentNamesRemoteBuildsSSHArgv(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	stub := withStubExec(t)
+
+	cmd := completeAgentNamesTestCmd("")
+	names, directive := completeAgentNames(cmd, nil, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+	if len(names) != 0 {
+		t.Errorf("expected no names from `true` stub, got %v", names)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
+	}
+	want := []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "user@prod.example.com", "-p", "2222"}
+	want = append(want, ctlOpts(homeFromConfigPath(path))...)
+	want = append(want, config.DefaultRemoteLeoPath, "__complete", "agent", "attach", "''")
+	if !equalStrings(stub.calls[0], want) {
+		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
+	}
+}
+
+// TestCompleteAgentNamesRemoteParsesCandidates feeds canned cobra
+// `__complete` wire output through the completer: candidate names (some with
+// tab-separated descriptions) followed by the trailing ":<directive>" line,
+// which must be dropped along with any stderr noise.
+func TestCompleteAgentNamesRemoteParsesCandidates(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	old := agentExecCommand
+	agentExecCommand = func(name string, args ...string) *exec.Cmd {
+		script := `printf 'alpha\nbeta\tsome agent\n:4\n'`
+		return exec.Command("sh", "-c", script)
+	}
+	t.Cleanup(func() { agentExecCommand = old })
+	oldTI := ensureRemoteTerminfoFn
+	ensureRemoteTerminfoFn = func(config.HostResolution) string { return "" }
+	t.Cleanup(func() { ensureRemoteTerminfoFn = oldTI })
+
+	cmd := completeAgentNamesTestCmd("")
+	names, directive := completeAgentNames(cmd, nil, "")
+	if !equalStrings(names, []string{"alpha", "beta"}) {
+		t.Errorf("names = %v, want [alpha beta]", names)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestCompleteAgentNamesRemoteNonZeroExit: an ssh failure (non-zero exit)
+// yields no candidates rather than an error or filename fallback.
+func TestCompleteAgentNamesRemoteNonZeroExit(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	old := agentExecCommand
+	agentExecCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("false")
+	}
+	t.Cleanup(func() { agentExecCommand = old })
+
+	cmd := completeAgentNamesTestCmd("")
+	names, directive := completeAgentNames(cmd, nil, "")
+	if len(names) != 0 {
+		t.Errorf("expected no names on ssh failure, got %v", names)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestCompleteAgentNamesRemoteTimeout: a hung ssh call is killed once the
+// timeout elapses rather than blocking the shell indefinitely.
+func TestCompleteAgentNamesRemoteTimeout(t *testing.T) {
+	path := newAgentCLITestConfig(t)
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	oldTimeout := completeAgentRemoteTimeout
+	completeAgentRemoteTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { completeAgentRemoteTimeout = oldTimeout })
+
+	old := agentExecCommand
+	agentExecCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sleep", "5")
+	}
+	t.Cleanup(func() { agentExecCommand = old })
+
+	cmd := completeAgentNamesTestCmd("")
+	names, directive := completeAgentNames(cmd, nil, "")
+	if len(names) != 0 {
+		t.Errorf("expected no names on timeout, got %v", names)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+// TestCompleteAgentNamesConfigLoadError: an unloadable config yields no
+// candidates instead of surfacing the error to the shell.
+func TestCompleteAgentNamesConfigLoadError(t *testing.T) {
+	oldCfgFile := cfgFile
+	cfgFile = filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+
+	names, directive := completeAgentNames(nil, nil, "")
+	if len(names) != 0 {
+		t.Errorf("expected no names on config load error, got %v", names)
 	}
 	if directive != cobra.ShellCompDirectiveNoFileComp {
 		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -1299,6 +1300,18 @@ func newAgentLogsCmd() *cobra.Command {
 // `leo agent list` shows — and returns agent names. Daemon unreachable or any
 // other failure returns ShellCompDirectiveNoFileComp with no values so the
 // shell falls back to no completion rather than suggesting filenames.
+// completeAgentRemoteTimeout bounds the ssh round-trip for remote agent-name
+// completion so a hung connection never blocks the shell. Var so tests can
+// shrink it.
+var completeAgentRemoteTimeout = 3 * time.Second
+
+// completeAgentRemoteWaitDelay bounds cmd.Wait() after a Kill on timeout: if a
+// child (or something it spawned) still holds the stdout pipe open, Wait can
+// hang indefinitely waiting for the pipe to close even though the process
+// itself is dead. See project_ci_cross_platform_tmux_exec.md for the prior
+// exec-Wait-hangs-after-cancel finding this mirrors.
+var completeAgentRemoteWaitDelay = 1 * time.Second
+
 func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
@@ -1308,10 +1321,21 @@ func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 	ctx := context.Background()
+	var flagHost string
 	if cmd != nil {
-		ctx = cmd.Context()
+		if cmdCtx := cmd.Context(); cmdCtx != nil {
+			ctx = cmdCtx
+		}
+		flagHost, _ = cmd.Flags().GetString("host")
 	}
-	records, err := daemon.AgentList(ctx, cfg.HomePath)
+	res, err := cfg.ResolveHost(flagHost)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	if !res.Localhost {
+		return completeAgentNamesRemote(ctx, res, toComplete)
+	}
+	records, err := agentListFn(ctx, cfg.HomePath)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -1322,6 +1346,76 @@ func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([
 		}
 	}
 	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+// completeAgentNamesRemote delegates completion to the remote leo binary via
+// its own `__complete agent attach <toComplete>` invocation, reusing cobra's
+// completion wire format rather than inventing a listing contract — every
+// agent-name completer offers the identical candidate set, so this one
+// canonical remote invocation serves them all.
+//
+// ssh flattens post-host argv into a single string re-parsed by the remote
+// login shell, so toComplete — which is frequently empty or partial — is
+// shell-quoted before being handed to ssh; every other token here is a
+// static literal with no shell metacharacters. No -t (no TTY needed) and a
+// bounded context so a hung connection can't block the shell.
+//
+// Uses buildSSHArgs (host, SSHArgs, sshControlOpts) so completion reuses the
+// same multiplexed ControlMaster connection as every other host dispatch
+// instead of paying a fresh handshake per tab press.
+func completeAgentNamesRemote(ctx context.Context, res config.HostResolution, toComplete string) ([]string, cobra.ShellCompDirective) {
+	tail := []string{res.Host.RemoteLeoPath(), "__complete", "agent", "attach", shellQuoteArg(toComplete)}
+	args := append([]string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=2"}, buildSSHArgs(res, tail...)...)
+	cmd := agentExecCommand("ssh", args...)
+	cmd.WaitDelay = completeAgentRemoteWaitDelay
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	// stderr intentionally left nil — "Completion ended with directive"
+	// diagnostics from the remote go there and must not pollute stdout.
+
+	if err := cmd.Start(); err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	cctx, cancel := context.WithTimeout(ctx, completeAgentRemoteTimeout)
+	defer cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+	case <-cctx.Done():
+		// cmd.WaitDelay bounds the Wait below even if a child still holds
+		// the stdout pipe open after Kill.
+		_ = cmd.Process.Kill()
+		<-done
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	return parseCompletionCandidates(stdout.String()), cobra.ShellCompDirectiveNoFileComp
+}
+
+// parseCompletionCandidates extracts candidate names from cobra's
+// `__complete` wire output: one candidate per line (optionally suffixed with
+// a tab-separated description cobra drops when rendering plain lists), then
+// a trailing ":<directive>" line that this function discards along with any
+// blank lines.
+func parseCompletionCandidates(output string) []string {
+	lines := strings.Split(output, "\n")
+	candidates := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRight(line, "\r")
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if idx := strings.Index(line, "\t"); idx >= 0 {
+			line = line[:idx]
+		}
+		candidates = append(candidates, line)
+	}
+	return candidates
 }
 
 // --- helpers ---
