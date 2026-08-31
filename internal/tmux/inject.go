@@ -373,30 +373,48 @@ func paneInputStateAt(ctx context.Context, tmuxPath, pane string, p Profile) Inp
 // a content-bearing input box even though it follows the prompt glyph.
 var menuOptionPattern = regexp.MustCompile(`^\d+[.)]\s`)
 
-// dialogFooterSegment matches one "<key> to <action>" hint segment as
-// rendered in a claude dialog footer, e.g. "Enter to confirm", "Esc to
-// cancel", or "↑/↓ to select".
-const dialogFooterSegment = `[A-Za-z0-9↑↓←→/]+\s+to\s+[a-zA-Z]+(?:\s+[a-zA-Z]+){0,2}`
-
-// dialogFooterLinePattern matches an entire trimmed line that consists solely
-// of one or more hint segments joined by "·" (optionally prefixed with
-// "Press "). This is deliberately anchored start-to-end: prose that merely
-// quotes or discusses the footer phrases carries extra words, quotes, or
-// punctuation around them and will not match the whole line.
-var dialogFooterLinePattern = regexp.MustCompile(
-	`^(?:Press\s+)?` + dialogFooterSegment + `(?:\s*·\s*` + dialogFooterSegment + `)*$`,
+// dialogFooterSegmentPattern matches one short hint segment as rendered in a
+// claude dialog footer, e.g. "Enter to confirm", "Esc to cancel",
+// "↑/↓ to select", "(tab to toggle)", "Ctrl+C to exit", or "(1/3)". It is
+// deliberately loose on vocabulary (arrows, digits, "/", "+", optional
+// wrapping parens, up to 5 whitespace-separated tokens) but tight on shape:
+// no punctuation a prose sentence would carry (quotes, commas, periods,
+// hyphens), so a sentence merely quoting a footer phrase mid-prose can't
+// pass as a segment.
+var dialogFooterSegmentPattern = regexp.MustCompile(
+	`^\(?[A-Za-z0-9↑↓←→/+]+(?:\s+[A-Za-z0-9↑↓←→/+]+){0,4}\)?$`,
 )
 
 // dialogFooterLineContaining reports whether pane has a dedicated footer line
-// (matching dialogFooterLinePattern) that contains every phrase in phrases.
-// Restricting the match to a real footer line — rather than a substring
-// search over the whole capture — is what keeps ordinary transcript text that
-// merely prints these phrases (agent discussion, code review output, test
-// logs) from being misread as a live dialog.
+// — a trimmed line consisting solely of short "·"-separated hint segments
+// (see dialogFooterSegmentPattern) — where every phrase in phrases appears as
+// (part of) one of those segments. Requiring every segment on the line to
+// have footer shape, rather than substring-searching the raw line or the
+// whole capture, is what keeps ordinary transcript text that merely prints
+// these phrases (agent discussion, code review output, test logs) from being
+// misread as a live dialog: a prose sentence embedding the phrase carries
+// words/punctuation around it that break the segment shape.
 func dialogFooterLineContaining(pane string, phrases ...string) bool {
 	for _, line := range strings.Split(pane, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || !dialogFooterLinePattern.MatchString(trimmed) {
+		if trimmed == "" {
+			continue
+		}
+		segments := strings.Split(trimmed, "·")
+		allFooterShaped := true
+		for i, seg := range segments {
+			segTrim := strings.TrimSpace(seg)
+			// The first segment may carry a "Press " prefix in front of the
+			// actual hint (e.g. "Press Enter to confirm").
+			if i == 0 {
+				segTrim = strings.TrimPrefix(segTrim, "Press ")
+			}
+			if !dialogFooterSegmentPattern.MatchString(segTrim) {
+				allFooterShaped = false
+				break
+			}
+		}
+		if !allFooterShaped {
 			continue
 		}
 		matched := true

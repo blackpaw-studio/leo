@@ -787,6 +787,16 @@ func TestHasDialogChromeRequiresFooterLine(t *testing.T) {
 			true,
 		},
 		{
+			"real footer with parenthesized tab-toggle segment",
+			"  ↑/↓ to select · Enter to confirm · Esc to cancel · (tab to toggle)\n",
+			true,
+		},
+		{
+			"real footer with Ctrl+C segment",
+			"  Enter to confirm · Esc to cancel · Ctrl+C to exit\n",
+			true,
+		},
+		{
 			"prose quoting the footer on one line is not chrome",
 			"it auto-Escapes any pane showing \"Enter to confirm · Esc to cancel\" in scrollback\n",
 			false,
@@ -815,6 +825,7 @@ func TestHasConfirmFooterLine(t *testing.T) {
 		{"press-style single-action footer", "  Press Enter to confirm\n", true},
 		{"bare single-action footer", "  Enter to confirm\n", true},
 		{"combined footer also counts", "  Enter to confirm · Esc to cancel\n", true},
+		{"combined footer with Ctrl+C segment also counts", "  Enter to confirm · Esc to cancel · Ctrl+C to exit\n", true},
 		{
 			"prose mentioning resume and confirm phrase is not a footer",
 			"I explained that \"Resume from summary\" prompts require pressing \"Enter to confirm\" to proceed.\n",
