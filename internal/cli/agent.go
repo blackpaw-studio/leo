@@ -1305,6 +1305,13 @@ func newAgentLogsCmd() *cobra.Command {
 // shrink it.
 var completeAgentRemoteTimeout = 3 * time.Second
 
+// completeAgentRemoteWaitDelay bounds cmd.Wait() after a Kill on timeout: if a
+// child (or something it spawned) still holds the stdout pipe open, Wait can
+// hang indefinitely waiting for the pipe to close even though the process
+// itself is dead. See project_ci_cross_platform_tmux_exec.md for the prior
+// exec-Wait-hangs-after-cancel finding this mirrors.
+var completeAgentRemoteWaitDelay = 1 * time.Second
+
 func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
@@ -1352,11 +1359,15 @@ func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([
 // shell-quoted before being handed to ssh; every other token here is a
 // static literal with no shell metacharacters. No -t (no TTY needed) and a
 // bounded context so a hung connection can't block the shell.
+//
+// Uses buildSSHArgs (host, SSHArgs, sshControlOpts) so completion reuses the
+// same multiplexed ControlMaster connection as every other host dispatch
+// instead of paying a fresh handshake per tab press.
 func completeAgentNamesRemote(ctx context.Context, res config.HostResolution, toComplete string) ([]string, cobra.ShellCompDirective) {
-	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=2"}
-	args = append(args, res.Host.SSHArgs...)
-	args = append(args, res.Host.SSH, res.Host.RemoteLeoPath(), "__complete", "agent", "attach", shellQuoteArg(toComplete))
+	tail := []string{res.Host.RemoteLeoPath(), "__complete", "agent", "attach", shellQuoteArg(toComplete)}
+	args := append([]string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=2"}, buildSSHArgs(res, tail...)...)
 	cmd := agentExecCommand("ssh", args...)
+	cmd.WaitDelay = completeAgentRemoteWaitDelay
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	// stderr intentionally left nil — "Completion ended with directive"
@@ -1377,6 +1388,8 @@ func completeAgentNamesRemote(ctx context.Context, res config.HostResolution, to
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
 	case <-cctx.Done():
+		// cmd.WaitDelay bounds the Wait below even if a child still holds
+		// the stdout pipe open after Kill.
 		_ = cmd.Process.Kill()
 		<-done
 		return nil, cobra.ShellCompDirectiveNoFileComp

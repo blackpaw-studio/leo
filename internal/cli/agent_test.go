@@ -999,10 +999,12 @@ func completeAgentNamesTestCmd(host string) *cobra.Command {
 }
 
 // TestCompleteAgentNamesRemoteBuildsSSHArgv locks the exact ssh argv for
-// remote completion: BatchMode/ConnectTimeout guards, the host's SSHArgs,
-// host, remote leo path, and the quoted `__complete agent attach ”` tail.
-// Prior lesson: loosely-asserted exec seams have shipped argv bugs past
-// review, so this compares the full slice.
+// remote completion: BatchMode/ConnectTimeout guards, then the shared
+// buildSSHArgs shape (host, SSHArgs, ControlMaster opts so completion
+// multiplexes over the same connection as every other host dispatch),
+// remote leo path, and the quoted `__complete agent attach ”` tail. Prior
+// lesson: loosely-asserted exec seams have shipped argv bugs past review, so
+// this compares the full slice.
 func TestCompleteAgentNamesRemoteBuildsSSHArgv(t *testing.T) {
 	path := newAgentCLITestConfig(t)
 	oldCfgFile := cfgFile
@@ -1022,14 +1024,9 @@ func TestCompleteAgentNamesRemoteBuildsSSHArgv(t *testing.T) {
 	if len(stub.calls) != 1 {
 		t.Fatalf("expected 1 ssh call, got %d: %v", len(stub.calls), stub.calls)
 	}
-	want := []string{
-		"ssh",
-		"-o", "BatchMode=yes", "-o", "ConnectTimeout=2",
-		"-p", "2222",
-		"user@prod.example.com",
-		config.DefaultRemoteLeoPath,
-		"__complete", "agent", "attach", "''",
-	}
+	want := []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "user@prod.example.com", "-p", "2222"}
+	want = append(want, ctlOpts(homeFromConfigPath(path))...)
+	want = append(want, config.DefaultRemoteLeoPath, "__complete", "agent", "attach", "''")
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
