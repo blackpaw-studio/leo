@@ -1,0 +1,109 @@
+package web
+
+import (
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
+)
+
+const maxLogFieldRunes = 256
+
+// parseTrustedProxies converts IPs and CIDRs into canonical address prefixes.
+func parseTrustedProxies(values []string) ([]netip.Prefix, error) {
+	trusted := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := normalizeTrustedProxy(value)
+		if err != nil {
+			return nil, err
+		}
+		if prefix.Bits() == 0 {
+			return nil, fmt.Errorf("trusted proxy %q must not match every address", value)
+		}
+		trusted = append(trusted, prefix)
+	}
+	return trusted, nil
+}
+
+func normalizeTrustedProxy(value string) (netip.Prefix, error) {
+	if addr, err := netip.ParseAddr(value); err == nil {
+		if addr.Zone() != "" {
+			return netip.Prefix{}, fmt.Errorf("zoned addresses are not supported")
+		}
+		addr = addr.Unmap()
+		return netip.PrefixFrom(addr, addr.BitLen()).Masked(), nil
+	}
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	addr := prefix.Addr()
+	if addr.Zone() != "" {
+		return netip.Prefix{}, fmt.Errorf("zoned addresses are not supported")
+	}
+	bits := prefix.Bits()
+	if addr.Is4In6() {
+		addr = addr.Unmap()
+		bits -= 96
+	}
+	return netip.PrefixFrom(addr, bits).Masked(), nil
+}
+
+// peerAddr returns the un-mapped IP address from r.RemoteAddr.
+func peerAddr(r *http.Request) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
+// isTrustedPeer reports whether addr belongs to one of trusted.
+func isTrustedPeer(addr netip.Addr, trusted []netip.Prefix) bool {
+	for _, prefix := range trusted {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// proxyAuthenticated reports whether a trusted peer supplied an operator header.
+func proxyAuthenticated(r *http.Request, trusted []netip.Prefix) bool {
+	if len(trusted) == 0 || strings.TrimSpace(r.Header.Get("Remote-User")) == "" {
+		return false
+	}
+	peer, ok := peerAddr(r)
+	if !ok {
+		return false
+	}
+	return isTrustedPeer(peer, trusted)
+}
+
+// logProxyAuthentication records a trusted proxy authentication for state-
+// changing requests. Call it only after proxyAuthenticated returns true.
+func logProxyAuthentication(r *http.Request) {
+	if r.Method == http.MethodGet {
+		return
+	}
+	peer, ok := peerAddr(r)
+	if !ok {
+		return
+	}
+	// #nosec G706 -- Remote-User and URL.Path are truncated to 256 runes with %q for safe logging
+	log.Printf("web: proxy-authenticated %q from %s %s %q", truncate(r.Header.Get("Remote-User")), peer, r.Method, truncate(r.URL.Path))
+}
+
+func truncate(value string) string {
+	runes := []rune(value)
+	if len(runes) <= maxLogFieldRunes {
+		return value
+	}
+	return string(runes[:maxLogFieldRunes])
+}

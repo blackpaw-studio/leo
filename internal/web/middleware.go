@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 )
@@ -27,15 +28,17 @@ var loopbackHosts = map[string]struct{}{
 //     which leaks config) to http://127.0.0.1:<port>. Browsers attach an
 //     Origin header for these requests.
 //
-// The port argument is the port the web server is actually listening on. Host
-// and Origin (if present) must match it exactly. Empty Origin is allowed for
+// The port argument is the port the web server is actually listening on. For
+// untrusted peers Host and Origin (if present) must match it exactly. Trusted
+// proxy peers still require an allowed hostname, but may omit or use any port
+// because reverse proxies normally forward their public Host and Origin. Empty Origin is allowed for
 // tools that never set it (curl, channel plugins making server-to-server
 // requests). Request method is not considered — GETs are blocked too because
 // several endpoints return config JSON.
 //
 // extraHosts lists additional hostnames/IPs (beyond loopback) that are
 // permitted — used when the web UI is bound to a LAN interface.
-func hostOriginMiddleware(port int, extraHosts []string, next http.Handler) http.Handler {
+func hostOriginMiddleware(port int, extraHosts []string, trusted []netip.Prefix, next http.Handler) http.Handler {
 	allowed := make(map[string]struct{}, len(loopbackHosts)+len(extraHosts))
 	for k := range loopbackHosts {
 		allowed[k] = struct{}{}
@@ -44,12 +47,14 @@ func hostOriginMiddleware(port int, extraHosts []string, next http.Handler) http
 		allowed[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := checkHost(r.Host, port, allowed); err != nil {
+		peer, parsed := peerAddr(r)
+		requirePort := !parsed || !isTrustedPeer(peer, trusted)
+		if err := checkHost(r.Host, port, allowed, requirePort); err != nil {
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" {
-			if err := checkOrigin(origin, port, allowed); err != nil {
+			if err := checkOrigin(origin, port, allowed, requirePort); err != nil {
 				http.Error(w, "forbidden origin", http.StatusForbidden)
 				return
 			}
@@ -59,34 +64,43 @@ func hostOriginMiddleware(port int, extraHosts []string, next http.Handler) http
 }
 
 // checkHost parses an HTTP Host header ("host:port" or bracketed "[ipv6]:port")
-// and verifies the hostname is in the allowed set and the port matches the
-// listener port. A missing port is accepted only when the listener is on the
-// well-known default (port 80) — in practice we always have a port.
+// and verifies the hostname is in the allowed set. When requirePort is true
+// (an untrusted peer), its port must match the listener port. When false (a
+// trusted proxy peer), a missing or any port is accepted because it names the
+// proxy's public listener.
 //
 // Hostname comparison is case-insensitive per RFC 3986 §3.2.2, so
 // http://LOCALHOST:8370 is treated the same as http://localhost:8370.
-func checkHost(host string, port int, allowed map[string]struct{}) error {
+func checkHost(host string, port int, allowed map[string]struct{}, requirePort bool) error {
 	if host == "" {
 		return fmt.Errorf("empty host")
 	}
 	h, p, err := net.SplitHostPort(host)
 	if err != nil {
-		// Host may not include a port (e.g. "localhost"); reject, since we
-		// always serve on a non-default port.
-		return fmt.Errorf("bad host %q: %w", host, err)
+		if !requirePort {
+			h = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+			p = ""
+		} else {
+			// Host may not include a port (e.g. "localhost"); reject, since we
+			// always serve on a non-default port.
+			return fmt.Errorf("bad host %q: %w", host, err)
+		}
 	}
 	if _, ok := allowed[strings.ToLower(h)]; !ok {
 		return fmt.Errorf("host %q not allowed", h)
 	}
-	if p != fmt.Sprintf("%d", port) {
+	if requirePort && p != fmt.Sprintf("%d", port) {
 		return fmt.Errorf("host port %q != listener port %d", p, port)
 	}
 	return nil
 }
 
 // checkOrigin validates an Origin header. It must parse as http:// or https://
-// with a hostname in the allowed set and the correct port.
-func checkOrigin(origin string, port int, allowed map[string]struct{}) error {
+// with a hostname in the allowed set. When requirePort is true (an untrusted
+// peer), its port must match the listener port. When false (a trusted proxy
+// peer), a missing or any port is accepted because it names the proxy's public
+// listener.
+func checkOrigin(origin string, port int, allowed map[string]struct{}, requirePort bool) error {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return fmt.Errorf("bad origin %q: %w", origin, err)
@@ -102,12 +116,12 @@ func checkOrigin(origin string, port int, allowed map[string]struct{}) error {
 		return fmt.Errorf("origin host %q not allowed", host)
 	}
 	p := u.Port()
-	if p == "" {
+	if requirePort && p == "" {
 		// Origin without explicit port implies default (80/443), which never
 		// matches our listener.
 		return fmt.Errorf("origin %q missing port", origin)
 	}
-	if p != fmt.Sprintf("%d", port) {
+	if requirePort && p != fmt.Sprintf("%d", port) {
 		return fmt.Errorf("origin port %q != listener port %d", p, port)
 	}
 	return nil
@@ -169,7 +183,7 @@ func matchesAnyToken(got string, accepted []string) bool {
 //
 // Multiple tokens exist because agents get their own, less privileged one —
 // see EnsureAgentToken.
-func bearerAuthMiddleware(tokens []string, next http.Handler) http.Handler {
+func bearerAuthMiddleware(tokens []string, trusted []netip.Prefix, next http.Handler) http.Handler {
 	configured := false
 	for _, tok := range tokens {
 		if tok != "" {
@@ -183,6 +197,11 @@ func bearerAuthMiddleware(tokens []string, next http.Handler) http.Handler {
 		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if proxyAuthenticated(r, trusted) {
+			logProxyAuthentication(r)
+			next.ServeHTTP(w, r)
+			return
+		}
 		got := extractBearer(r.Header.Get("Authorization"))
 		if got == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="leo"`)

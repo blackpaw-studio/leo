@@ -149,6 +149,8 @@ var registry = map[Section][]Field{
 			Help:    "empty = 127.0.0.1 (loopback only)"},
 		{Key: "allowed_hosts", Label: "Allowed hosts", Group: "General",
 			Warning: "Removing your own address here will block your browser"},
+		{Key: "trusted_proxies", Label: "Trusted proxies", Group: "General",
+			Help: "IPs or CIDRs permitted to authenticate with the Remote-User header"},
 	},
 
 	SectionClient: {

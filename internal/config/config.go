@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,6 +36,33 @@ var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // defense-in-depth against future callers that might concatenate paths into
 // a shell string. The list over-catches slightly on purpose.
 const addDirRejectedChars = ";&|$`\n\x00"
+
+// NormalizeTrustedProxy parses an IP address or CIDR into its canonical prefix.
+// IPv4-mapped IPv6 prefixes are converted to their IPv4 equivalent.
+func NormalizeTrustedProxy(value string) (netip.Prefix, error) {
+	if addr, err := netip.ParseAddr(value); err == nil {
+		if addr.Zone() != "" {
+			return netip.Prefix{}, fmt.Errorf("zoned addresses are not supported")
+		}
+		addr = addr.Unmap()
+		return netip.PrefixFrom(addr, addr.BitLen()).Masked(), nil
+	}
+
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	addr := prefix.Addr()
+	if addr.Zone() != "" {
+		return netip.Prefix{}, fmt.Errorf("zoned addresses are not supported")
+	}
+	bits := prefix.Bits()
+	if addr.Is4In6() {
+		addr = addr.Unmap()
+		bits -= 96
+	}
+	return netip.PrefixFrom(addr, bits).Masked(), nil
+}
 
 // ValidateAddDir returns a non-nil error if dir is an unsafe --add-dir value.
 // Entries are passed as argv to claude, so this guards against argv-level
@@ -137,6 +165,9 @@ type WebConfig struct {
 	Port         int      `yaml:"port,omitempty"`
 	Bind         string   `yaml:"bind,omitempty"`
 	AllowedHosts []string `yaml:"allowed_hosts,omitempty"`
+	// TrustedProxies entries are IPs or CIDRs; requests whose peer address
+	// matches may authenticate via the Remote-User header.
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty"`
 }
 
 // WebPort returns the effective web UI port (default 8370).
@@ -419,6 +450,18 @@ func (c *Config) Validate() error {
 		}
 		if !isValidHostOrIP(h) {
 			errs = append(errs, fmt.Sprintf("web.allowed_hosts[%d] %q is not a valid hostname or IP", i, h))
+		}
+	}
+	for i, proxy := range c.Web.TrustedProxies {
+		prefix, err := NormalizeTrustedProxy(proxy)
+		if err != nil {
+			if err.Error() == "zoned addresses are not supported" {
+				errs = append(errs, fmt.Sprintf("web.trusted_proxies[%d] %q: %v", i, proxy, err))
+			} else {
+				errs = append(errs, fmt.Sprintf("web.trusted_proxies[%d] %q is not a valid IP or CIDR", i, proxy))
+			}
+		} else if prefix.Bits() == 0 {
+			errs = append(errs, fmt.Sprintf("web.trusted_proxies[%d] %q must not match every address", i, proxy))
 		}
 	}
 	if c.Web.Enabled && c.Web.Bind != "" && bindValid && !IsLoopbackBind(c.Web.Bind) && len(c.Web.AllowedHosts) == 0 {

@@ -1174,6 +1174,35 @@ func TestValidate_WebAllowedHosts(t *testing.T) {
 	}
 }
 
+func TestValidate_WebTrustedProxies(t *testing.T) {
+	cases := []struct {
+		name    string
+		proxies []string
+		wantErr string
+	}{
+		{"ip", []string{"10.0.2.9"}, ""},
+		{"cidr", []string{"10.0.4.0/24"}, ""},
+		{"ipv6", []string{"::1"}, ""},
+		{"ipv4 catch-all", []string{"0.0.0.0/0"}, "web.trusted_proxies[0] \"0.0.0.0/0\" must not match every address"},
+		{"ipv6 catch-all", []string{"::/0"}, "web.trusted_proxies[0] \"::/0\" must not match every address"},
+		{"mapped ipv4 catch-all", []string{"::ffff:0.0.0.0/96"}, "web.trusted_proxies[0] \"::ffff:0.0.0.0/96\" must not match every address"},
+		{"zoned ipv6", []string{"fe80::1%en0"}, "web.trusted_proxies[0] \"fe80::1%en0\": zoned addresses are not supported"},
+		{"invalid", []string{"not-an-address"}, "web.trusted_proxies[0] \"not-an-address\" is not a valid IP or CIDR"},
+		{"empty", []string{""}, "web.trusted_proxies[0] \"\" is not a valid IP or CIDR"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := (&Config{Web: WebConfig{TrustedProxies: tc.proxies}}).Validate()
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestValidate_WebBind_InvalidNoDoubleError(t *testing.T) {
 	// An invalid web.bind must produce only the bind error, not also the
 	// "web.allowed_hosts must be set" error.

@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -166,6 +168,106 @@ func newRawTestServer(t *testing.T) (*Server, string) {
 
 	s := New(cfgPath, processes, scheduler, reloader, nil, Options{Port: testPort, APIToken: testAPIToken})
 	return s, dir
+}
+
+func TestTrustedProxyAuthentication_AllowsPublicHostWithoutPort(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeTestConfig(t, dir)
+	s := New(cfgPath, &mockProcesses{states: map[string]ProcessStateInfo{}}, &mockScheduler{}, &mockReloader{}, nil, Options{
+		Port:           testPort,
+		APIToken:       "tok",
+		AllowedHosts:   []string{"leo.olympus.nyc", "10.0.2.10"},
+		TrustedProxies: []string{"10.0.2.9"},
+	})
+
+	cases := []struct {
+		name       string
+		remoteAddr string
+		host       string
+		origin     string
+		remoteUser string
+		bearer     string
+		want       int
+		location   string
+	}{
+		{
+			name:       "trusted proxy authenticates public host",
+			remoteAddr: "10.0.2.9:1",
+			host:       "leo.olympus.nyc",
+			origin:     "https://leo.olympus.nyc",
+			remoteUser: "evan",
+			want:       http.StatusOK,
+		},
+		{
+			name:       "trusted proxy without user redirects to login",
+			remoteAddr: "10.0.2.9:1",
+			host:       "leo.olympus.nyc",
+			origin:     "https://leo.olympus.nyc",
+			want:       http.StatusSeeOther,
+			location:   "/login?redirect=%2Ftasks",
+		},
+		{
+			name:       "untrusted peer cannot use public host without port",
+			remoteAddr: "10.0.2.50:1",
+			host:       "leo.olympus.nyc",
+			origin:     "https://leo.olympus.nyc",
+			remoteUser: "evan",
+			want:       http.StatusForbidden,
+		},
+		{
+			name:       "untrusted bearer with listener host succeeds",
+			remoteAddr: "10.0.2.50:1",
+			host:       "10.0.2.10:8370",
+			bearer:     "tok",
+			want:       http.StatusOK,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Host = tc.host
+			req.Header.Set("Accept", "text/html")
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.remoteUser != "" {
+				req.Header.Set("Remote-User", tc.remoteUser)
+			}
+			if tc.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.bearer)
+			}
+			w := httptest.NewRecorder()
+			s.httpServer.Handler.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body=%q)", w.Code, tc.want, w.Body.String())
+			}
+			if tc.location != "" && w.Header().Get("Location") != tc.location {
+				t.Fatalf("Location = %q, want %q", w.Header().Get("Location"), tc.location)
+			}
+		})
+	}
+
+	t.Run("trusted proxy logs authenticated POST", func(t *testing.T) {
+		var logs bytes.Buffer
+		originalOutput := log.Writer()
+		log.SetOutput(&logs)
+		t.Cleanup(func() { log.SetOutput(originalOutput) })
+
+		req := httptest.NewRequest(http.MethodPost, "/web/config/reload", nil)
+		req.RemoteAddr = "10.0.2.9:1"
+		req.Host = "leo.olympus.nyc"
+		req.Header.Set("Origin", "https://leo.olympus.nyc")
+		req.Header.Set("Remote-User", "evan")
+		w := httptest.NewRecorder()
+		s.httpServer.Handler.ServeHTTP(w, req)
+		if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+			t.Fatalf("POST status = %d, want authenticated request", w.Code)
+		}
+		if !strings.Contains(logs.String(), "web: proxy-authenticated") {
+			t.Fatalf("POST did not log proxy authentication: %q", logs.String())
+		}
+	})
 }
 
 func TestDashboardRedirectsToTasks(t *testing.T) {
