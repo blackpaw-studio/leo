@@ -57,6 +57,7 @@ all rejected at config load and before every web-UI save. Full behavior
 | `port` | int | No | `8370` | TCP port for the web UI. |
 | `bind` | string | No | `127.0.0.1` | Bind address. Loopback-only by default. |
 | `allowed_hosts` | list of strings | No | `[]` | Extra hostnames/IPs accepted in the `Host` and `Origin` headers, in addition to loopback. Required when `bind` is non-loopback. Entries must not include a port. |
+| `trusted_proxies` | list of strings | No | `[]` | IPs or CIDRs whose requests with a non-empty `Remote-User` header are authenticated as the operator. |
 
 When enabled, the daemon serves a web dashboard with agent monitoring, task management, agent dispatch, config editing, and cron preview.
 
@@ -111,6 +112,19 @@ web:
 ```
 
 `allowed_hosts` entries are checked against the incoming `Host` and `Origin` headers to defend against DNS-rebinding and drive-by cross-origin POSTs. Entries must be bare hostnames or IPs — no port, no scheme. `allowed_hosts` is required when `bind` is non-loopback; `leo validate` will fail otherwise.
+
+For an Authelia, oauth2-proxy, or similar ForwardAuth proxy, configure its peer IPs or CIDRs in `trusted_proxies`. Requests arriving directly from those peers with a non-empty `Remote-User` header are treated as the operator. The proxy **must overwrite or strip** any client-supplied `Remote-User` header (for example, Authelia ForwardAuth with Traefik's `authResponseHeaders` does this). The proxy's public hostname must also be in `allowed_hosts`; its forwarded port is ignored for trusted peers. Zoned IPv6 addresses such as `fe80::1%en0` are rejected by validation.
+
+```yaml
+web:
+  enabled: true
+  bind: 0.0.0.0
+  port: 8370
+  allowed_hosts: [leo.olympus.nyc]
+  trusted_proxies: [10.0.2.9, 10.0.4.5]
+```
+
+Never trust a range that includes untrusted LAN hosts: anyone who can reach the port directly from a trusted address could forge the header.
 
 The daemon prints a startup warning when `bind` is non-loopback.
 

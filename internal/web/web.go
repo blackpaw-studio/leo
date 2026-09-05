@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os/exec"
 	"strings"
 	"sync"
@@ -111,6 +113,7 @@ type Server struct {
 	agentToken          string         // token exported to agents; /api/* and agent-messaging routes only
 	clients             []ClientPolicy // external API clients; scoped to one message route each
 	allowedHosts        []string       // extra hosts permitted beyond loopback (e.g. LAN IPs)
+	trustedProxies      []netip.Prefix // peers whose Remote-User header is trusted
 	sessions            *sessionStore  // in-memory browser sessions for cookie-based auth
 
 	// serviceLogPath is the absolute path to the service log tailed by the
@@ -302,8 +305,9 @@ type Options struct {
 	// it may POST to /web/agent/<target>/message for the targets its policy
 	// names, and nothing else. Empty means no client tokens are accepted,
 	// which is the behavior before this existed.
-	Clients      []ClientPolicy
-	AllowedHosts []string
+	Clients        []ClientPolicy
+	AllowedHosts   []string
+	TrustedProxies []string
 	// LogPath is the absolute path to the service log, computed by
 	// service.LogPathFor(homePath) at the layer that can import
 	// internal/service (see internal/daemon/server.go's StartWeb). Optional;
@@ -331,6 +335,11 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		leoPath = "leo"
 	}
 
+	trustedProxies, err := parseTrustedProxies(opts.TrustedProxies)
+	if err != nil {
+		log.Printf("web: ignoring web.trusted_proxies: %v", err)
+		trustedProxies = nil
+	}
 	s := &Server{
 		configPath:      configPath,
 		processes:       processes,
@@ -343,6 +352,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		agentToken:      opts.AgentToken,
 		clients:         validClients(opts.Clients, opts.APIToken, opts.AgentToken),
 		allowedHosts:    opts.AllowedHosts,
+		trustedProxies:  trustedProxies,
 		serviceLogPath:  opts.LogPath,
 		execCommand:     exec.Command,
 		resolveHandle:   opts.ResolveHandle,
@@ -472,7 +482,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("GET /api/v1/state", s.handleAPIState)
 	apiMux.HandleFunc("GET /api/v1/events", s.handleAPIEvents)
 	// /api/* is the agent-facing surface: both tokens work there.
-	protectedAPI := bearerAuthMiddleware([]string{s.apiToken, s.agentToken}, apiMux)
+	protectedAPI := bearerAuthMiddleware([]string{s.apiToken, s.agentToken}, s.trustedProxies, apiMux)
 
 	// Path-prefix dispatcher: /api/* is routed through bearer auth to apiMux;
 	// /login, /logout, and /static/* bypass session auth (otherwise the user
@@ -481,13 +491,13 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// a valid session cookie or a Bearer token. /api/* lives on its own mux so
 	// bearerAuthMiddleware can wrap it independently of the browser mux's
 	// session middleware.
-	protectedBrowser := sessionMiddleware(s.sessions, []string{s.apiToken}, mux)
+	protectedBrowser := sessionMiddleware(s.sessions, []string{s.apiToken}, s.trustedProxies, mux)
 	// The agent-messaging routes live on the browser mux but are called by
 	// the in-agent MCP server (leo_send_message, leo_interrupt, key sends),
 	// so they accept the agent token too. Everything else on this mux —
 	// notably the config editor, which renders env values in full — stays
 	// operator-only. See agentCallableBrowserPath.
-	agentCallable := sessionMiddleware(s.sessions, []string{s.apiToken, s.agentToken}, mux)
+	agentCallable := sessionMiddleware(s.sessions, []string{s.apiToken, s.agentToken}, s.trustedProxies, mux)
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// A client token is resolved first and never falls through: its
 		// bearer is outside Leo's trust boundary, so it must not reach the
@@ -514,7 +524,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// Origin check. Defense in depth for the API: even with a valid token,
 	// requests from a non-localhost browser context are rejected. A body-size
 	// cap and baseline security headers sit above that.
-	handler := hostOriginMiddleware(s.port, s.allowedHosts, root)
+	handler := hostOriginMiddleware(s.port, s.allowedHosts, s.trustedProxies, root)
 	handler = bodySizeMiddleware(maxRequestBodyBytes, handler)
 	handler = securityHeadersMiddleware(handler)
 	s.httpServer = &http.Server{

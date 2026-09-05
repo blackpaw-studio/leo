@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -298,9 +299,16 @@ func safeRedirect(p string) string {
 // browser routes accept only the operator's token — the agent token is passed
 // in for the agent-messaging routes alone, so an agent cannot read the config
 // editor (which renders env values) with its own credentials.
-func sessionMiddleware(store *sessionStore, tokens []string, next http.Handler) http.Handler {
+func sessionMiddleware(store *sessionStore, tokens []string, trusted []netip.Prefix, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(sessionCookieName); err == nil && store.validate(c.Value) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if proxyAuthenticated(r, trusted) {
+			// A trusted proxy has authenticated a human, so its header deliberately
+			// grants operator access even if this request also carries an agent bearer.
+			logProxyAuthentication(r)
 			next.ServeHTTP(w, r)
 			return
 		}

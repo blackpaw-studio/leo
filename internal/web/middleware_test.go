@@ -291,22 +291,26 @@ func TestBearerAuth_HostCheckStillApplies(t *testing.T) {
 
 func TestCheckHost(t *testing.T) {
 	tests := []struct {
-		name    string
-		host    string
-		port    int
-		wantErr bool
+		name        string
+		host        string
+		port        int
+		requirePort bool
+		wantErr     bool
 	}{
-		{"loopback v4", "127.0.0.1:8370", 8370, false},
-		{"loopback v6", "[::1]:8370", 8370, false},
-		{"localhost", "localhost:8370", 8370, false},
-		{"wrong port", "127.0.0.1:9999", 8370, true},
-		{"foreign host", "evil.example:8370", 8370, true},
-		{"missing port", "127.0.0.1", 8370, true},
-		{"empty", "", 8370, true},
+		{"loopback v4", "127.0.0.1:8370", 8370, true, false},
+		{"loopback v6", "[::1]:8370", 8370, true, false},
+		{"localhost", "localhost:8370", 8370, true, false},
+		{"wrong port", "127.0.0.1:9999", 8370, true, true},
+		{"foreign host", "evil.example:8370", 8370, true, true},
+		{"missing port", "127.0.0.1", 8370, true, true},
+		{"trusted peer accepts missing port", "127.0.0.1", 8370, false, false},
+		{"trusted peer accepts arbitrary port", "127.0.0.1:9999", 8370, false, false},
+		{"trusted peer still rejects foreign host", "evil.example", 8370, false, true},
+		{"empty", "", 8370, true, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkHost(tc.host, tc.port, loopbackHosts)
+			err := checkHost(tc.host, tc.port, loopbackHosts, tc.requirePort)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("checkHost(%q, %d) err = %v, wantErr %v", tc.host, tc.port, err, tc.wantErr)
 			}
@@ -316,23 +320,27 @@ func TestCheckHost(t *testing.T) {
 
 func TestCheckOrigin(t *testing.T) {
 	tests := []struct {
-		name    string
-		origin  string
-		port    int
-		wantErr bool
+		name        string
+		origin      string
+		port        int
+		requirePort bool
+		wantErr     bool
 	}{
-		{"http loopback", "http://127.0.0.1:8370", 8370, false},
-		{"https loopback", "https://127.0.0.1:8370", 8370, false},
-		{"http localhost", "http://localhost:8370", 8370, false},
-		{"v6 loopback", "http://[::1]:8370", 8370, false},
-		{"wrong scheme", "ftp://127.0.0.1:8370", 8370, true},
-		{"foreign host", "https://evil.example:8370", 8370, true},
-		{"wrong port", "http://127.0.0.1:9999", 8370, true},
-		{"missing port", "http://127.0.0.1", 8370, true},
+		{"http loopback", "http://127.0.0.1:8370", 8370, true, false},
+		{"https loopback", "https://127.0.0.1:8370", 8370, true, false},
+		{"http localhost", "http://localhost:8370", 8370, true, false},
+		{"v6 loopback", "http://[::1]:8370", 8370, true, false},
+		{"wrong scheme", "ftp://127.0.0.1:8370", 8370, true, true},
+		{"foreign host", "https://evil.example:8370", 8370, true, true},
+		{"wrong port", "http://127.0.0.1:9999", 8370, true, true},
+		{"missing port", "http://127.0.0.1", 8370, true, true},
+		{"trusted peer accepts missing port", "https://127.0.0.1", 8370, false, false},
+		{"trusted peer accepts arbitrary port", "https://127.0.0.1:9999", 8370, false, false},
+		{"trusted peer still rejects foreign host", "https://evil.example", 8370, false, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkOrigin(tc.origin, tc.port, loopbackHosts)
+			err := checkOrigin(tc.origin, tc.port, loopbackHosts, tc.requirePort)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("checkOrigin(%q, %d) err = %v, wantErr %v", tc.origin, tc.port, err, tc.wantErr)
 			}
@@ -361,7 +369,7 @@ func TestExtractBearer(t *testing.T) {
 func TestHostOriginMiddleware_AllowedHosts(t *testing.T) {
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true })
-	h := hostOriginMiddleware(8370, []string{"192.0.2.10", "leo.local"}, next)
+	h := hostOriginMiddleware(8370, []string{"192.0.2.10", "leo.local"}, nil, next)
 
 	cases := []struct {
 		name   string

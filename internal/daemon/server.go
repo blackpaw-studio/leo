@@ -327,13 +327,14 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))
 	}
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
-		Port:          port,
-		APIToken:      apiToken,
-		AgentToken:    agentToken,
-		Clients:       clients,
-		AllowedHosts:  cfg.Web.AllowedHosts,
-		LogPath:       s.logPath,
-		ResolveHandle: s.resolveHandle,
+		Port:           port,
+		APIToken:       apiToken,
+		AgentToken:     agentToken,
+		Clients:        clients,
+		AllowedHosts:   cfg.Web.AllowedHosts,
+		TrustedProxies: cfg.Web.TrustedProxies,
+		LogPath:        s.logPath,
+		ResolveHandle:  s.resolveHandle,
 		// Consults record to <state>/consults for `leo consult watch`.
 		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),
 	}, observeOpts...)
