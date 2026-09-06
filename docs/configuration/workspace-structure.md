@@ -61,6 +61,7 @@ Multiple agents can run in parallel against the same repo without stepping on ea
 Runtime files managed by Leo:
 
 - **`sessions.json`** -- task/agent name to Claude session UUID mappings (for `--resume`)
+- **`attach.json`** -- attach picker preferences (sort mode, last-attached timestamps)
 - **`agents.json`** -- ephemeral agent records, used to restore agents after daemon restart
 - **`task-history.json`** -- execution history for scheduled tasks
 - **`service.log`** -- output from the daemon (all supervised agents)

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/attachprefs"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/picker"
 )
@@ -54,7 +56,7 @@ func stubPickerRun(t *testing.T) *map[string]picker.Backend {
 	t.Helper()
 	var captured map[string]picker.Backend
 	old := pickerRunFn
-	pickerRunFn = func(ctx context.Context, backends map[string]picker.Backend, _ picker.Gates) (picker.Result, error) {
+	pickerRunFn = func(ctx context.Context, backends map[string]picker.Backend, _ picker.Gates, _ picker.Options) (picker.Result, error) {
 		captured = backends
 		return picker.Result{}, nil
 	}
@@ -125,5 +127,33 @@ func TestRunAttachPickerIncludesLocalWhenDaemonUp(t *testing.T) {
 	}
 	if _, ok := backends["dionysus"]; !ok {
 		t.Errorf("backends = %v, want dionysus SSH backend present", backends)
+	}
+}
+
+func TestRunAttachPickerSavesReturnedSortMode(t *testing.T) {
+	stubStdinIsTerminal(t, true)
+	oldList := agentListFn
+	agentListFn = func(context.Context, string) ([]agent.Record, error) { return nil, nil }
+	t.Cleanup(func() { agentListFn = oldList })
+	oldRun := pickerRunFn
+	pickerRunFn = func(context.Context, map[string]picker.Backend, picker.Gates, picker.Options) (picker.Result, error) {
+		return picker.Result{SortMode: picker.SortModeName}, nil
+	}
+	t.Cleanup(func() { pickerRunFn = oldRun })
+	cfg := &config.Config{HomePath: t.TempDir()}
+	if err := runAttachPicker(context.Background(), cfg, config.HostResolution{Localhost: true}, attachOptions{}); err != nil {
+		t.Fatalf("runAttachPicker: %v", err)
+	}
+	if got := attachprefs.Load(attachPrefsPath(cfg.HomePath)).Sort; got != attachprefs.SortName {
+		t.Fatalf("sort = %q, want name", got)
+	}
+}
+
+func TestStampLastAttached(t *testing.T) {
+	home := t.TempDir()
+	at := time.Date(2026, 9, 5, 23, 10, 0, 0, time.UTC)
+	stampLastAttached(home, "remote", "vitals", at)
+	if got := attachprefs.Load(attachPrefsPath(home)).LastAttached["remote/vitals"]; !got.Equal(at) {
+		t.Fatalf("stamp = %v, want %v", got, at)
 	}
 }
