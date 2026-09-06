@@ -78,11 +78,11 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 		CanLifecycle: func(verb string) error {
 			return gateToolFor("leo attach: "+verb+" agent", "leo_stop_agent")
 		},
-	}, picker.Options{SortMode: picker.SortMode(prefs.Sort), LastAttached: prefs.LastAttached})
+	}, picker.Options{SortMode: prefs.Sort, LastAttached: prefs.LastAttached})
 	if err != nil {
 		return fmt.Errorf("picker: %w", err)
 	}
-	_ = attachprefs.Save(attachPrefsPath(cfg.HomePath), prefs.WithSort(attachprefs.Sort(result.SortMode)))
+	_ = attachprefs.Save(attachPrefsPath(cfg.HomePath), prefs.WithSort(result.SortMode))
 	if result.Agent == nil {
 		return nil // quit without attaching
 	}

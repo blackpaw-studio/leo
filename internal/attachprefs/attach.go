@@ -6,26 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-)
 
-type Sort string
-
-const (
-	SortRecent Sort = "recent"
-	SortName   Sort = "name"
-	SortUptime Sort = "uptime"
+	"github.com/blackpaw-studio/leo/internal/picker"
 )
 
 type Preferences struct {
-	Sort         Sort                 `json:"sort"`
+	Sort         picker.SortMode      `json:"sort"`
 	LastAttached map[string]time.Time `json:"last_attached"`
 }
 
 func defaults() Preferences {
-	return Preferences{Sort: SortRecent, LastAttached: map[string]time.Time{}}
+	return Preferences{Sort: picker.SortModeRecent, LastAttached: map[string]time.Time{}}
 }
 
-func validSort(s Sort) bool { return s == SortRecent || s == SortName || s == SortUptime }
+func validSort(s picker.SortMode) bool {
+	return s == picker.SortModeRecent || s == picker.SortModeName || s == picker.SortModeUptime
+}
 
 // Load returns defaults if preferences cannot be read or validated.
 func Load(path string) Preferences {
@@ -46,7 +42,7 @@ func Load(path string) Preferences {
 // Save atomically replaces the preferences file with owner-only permissions.
 func Save(path string, p Preferences) error {
 	if !validSort(p.Sort) {
-		p.Sort = SortRecent
+		p.Sort = picker.SortModeRecent
 	}
 	if p.LastAttached == nil {
 		p.LastAttached = map[string]time.Time{}
@@ -78,7 +74,7 @@ func Save(path string, p Preferences) error {
 	return os.Rename(tmp, path)
 }
 
-func (p Preferences) WithSort(sort Sort) Preferences {
+func (p Preferences) WithSort(sort picker.SortMode) Preferences {
 	p.Sort = sort
 	p.LastAttached = copyTimes(p.LastAttached)
 	return p

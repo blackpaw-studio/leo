@@ -5,13 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/picker"
 )
 
 func TestLoadSaveRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "attach.json")
 	tm := time.Date(2026, 9, 5, 23, 10, 0, 0, time.UTC)
 	want := Preferences{
-		Sort:         SortUptime,
+		Sort:         picker.SortModeUptime,
 		LastAttached: map[string]time.Time{"local/vitals": tm},
 	}
 	if err := Save(path, want); err != nil {
@@ -40,7 +42,7 @@ func TestLoadFallsBackToDefaults(t *testing.T) {
 				}
 			}
 			got := Load(path)
-			if got.Sort != SortRecent || len(got.LastAttached) != 0 {
+			if got.Sort != picker.SortModeRecent || len(got.LastAttached) != 0 {
 				t.Fatalf("Load = %#v, want defaults", got)
 			}
 		})
@@ -49,14 +51,14 @@ func TestLoadFallsBackToDefaults(t *testing.T) {
 
 func TestWithUpdatesReturnNewValues(t *testing.T) {
 	original := Preferences{
-		Sort:         SortRecent,
+		Sort:         picker.SortModeRecent,
 		LastAttached: map[string]time.Time{"local/old": {}},
 	}
-	updated := original.WithSort(SortName).WithLastAttached("remote/new", time.Now())
-	if original.Sort != SortRecent || len(original.LastAttached) != 1 {
+	updated := original.WithSort(picker.SortModeName).WithLastAttached("remote/new", time.Now())
+	if original.Sort != picker.SortModeRecent || len(original.LastAttached) != 1 {
 		t.Fatalf("original mutated: %#v", original)
 	}
-	if updated.Sort != SortName || len(updated.LastAttached) != 2 {
+	if updated.Sort != picker.SortModeName || len(updated.LastAttached) != 2 {
 		t.Fatalf("updated = %#v", updated)
 	}
 }

@@ -144,7 +144,7 @@ func TestRunAttachPickerSavesReturnedSortMode(t *testing.T) {
 	if err := runAttachPicker(context.Background(), cfg, config.HostResolution{Localhost: true}, attachOptions{}); err != nil {
 		t.Fatalf("runAttachPicker: %v", err)
 	}
-	if got := attachprefs.Load(attachPrefsPath(cfg.HomePath)).Sort; got != attachprefs.SortName {
+	if got := attachprefs.Load(attachPrefsPath(cfg.HomePath)).Sort; got != picker.SortModeName {
 		t.Fatalf("sort = %q, want name", got)
 	}
 }
