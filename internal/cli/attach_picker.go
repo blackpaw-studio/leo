@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/attachprefs"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/picker"
@@ -67,6 +70,7 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 	backends := buildPickerBackends(cfg, localErr == nil)
 	// The gates ride with the picker, not with a backend: they encode THIS
 	// process's permissions, and a remote leo cannot see them.
+	prefs := attachprefs.Load(attachPrefsPath(cfg.HomePath))
 	result, err := pickerRunFn(ctx, backends, picker.Gates{
 		CanSwitchTemplate: func(template string) error {
 			return gateTemplateSwitch("leo attach: set template", template)
@@ -74,14 +78,26 @@ func runAttachPicker(ctx context.Context, cfg *config.Config, _ config.HostResol
 		CanLifecycle: func(verb string) error {
 			return gateToolFor("leo attach: "+verb+" agent", "leo_stop_agent")
 		},
-	})
+	}, picker.Options{SortMode: prefs.Sort, LastAttached: prefs.LastAttached})
 	if err != nil {
 		return fmt.Errorf("picker: %w", err)
 	}
+	_ = attachprefs.Save(attachPrefsPath(cfg.HomePath), prefs.WithSort(result.SortMode))
 	if result.Agent == nil {
 		return nil // quit without attaching
 	}
-	return attachPickedAgent(ctx, cfg, *result.Agent, opts)
+	err = attachPickedAgent(ctx, cfg, *result.Agent, opts)
+	if err == nil {
+		stampLastAttached(cfg.HomePath, result.Agent.Host, result.Agent.Name, time.Now())
+	}
+	return err
+}
+
+func attachPrefsPath(homePath string) string { return filepath.Join(homePath, "state", "attach.json") }
+
+func stampLastAttached(homePath, host, name string, at time.Time) {
+	prefs := attachprefs.Load(attachPrefsPath(homePath)).WithLastAttached(host+"/"+name, at)
+	_ = attachprefs.Save(attachPrefsPath(homePath), prefs)
 }
 
 // localTemplateNames lists the local host's configured templates for the
