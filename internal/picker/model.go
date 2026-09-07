@@ -111,10 +111,12 @@ type model struct {
 	keys   keyMap
 	styles styles
 
-	byHost    map[string][]Agent
-	byHostErr map[string]error
-	pending   map[string]struct{}
-	frame     int
+	byHost       map[string][]Agent
+	byHostErr    map[string]error
+	pending      map[string]struct{}
+	frame        int
+	sortMode     SortMode
+	lastAttached map[string]time.Time
 
 	confirming *confirmState
 	// deleteBranch carries the pending confirmed delete's branch-removal
@@ -141,6 +143,10 @@ type model struct {
 }
 
 func newModel(ctx context.Context, backends map[string]Backend) model {
+	return newModelWithOptions(ctx, backends, Options{SortMode: SortModeRecent})
+}
+
+func newModelWithOptions(ctx context.Context, backends map[string]Backend, options Options) model {
 	delegate := newTableDelegate()
 	l := list.New(nil, delegate, 0, 0)
 	l.SetShowTitle(false)
@@ -152,16 +158,19 @@ func newModel(ctx context.Context, backends map[string]Backend) model {
 	ti.Prompt = ""
 
 	return model{
-		ctx:       ctx,
-		backends:  backends,
-		list:      l,
-		help:      help.New(),
-		keys:      defaultKeys(),
-		styles:    newStyles(),
-		byHost:    map[string][]Agent{},
-		byHostErr: map[string]error{},
-		pending:   map[string]struct{}{},
-		rename:    ti,
+		ctx:          ctx,
+		backends:     backends,
+		list:         l,
+		help:         help.New(),
+		keys:         defaultKeys(),
+		styles:       newStyles(),
+		byHost:       map[string][]Agent{},
+		byHostErr:    map[string]error{},
+		pending:      map[string]struct{}{},
+		rename:       ti,
+		sortMode:     normalizeSortMode(options.SortMode),
+		lastAttached: copyLastAttached(options.LastAttached),
+		result:       Result{SortMode: normalizeSortMode(options.SortMode)},
 	}
 }
 
@@ -243,6 +252,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, m.keys.Quit):
+		m.result.SortMode = m.sortMode
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Attach):
 		return m.enterSelected()
@@ -256,6 +266,15 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.beginRename()
 	case key.Matches(msg, m.keys.Template):
 		return m.beginTemplateMenu()
+	case key.Matches(msg, m.keys.Sort):
+		selected, ok := m.selectedRow()
+		m.sortMode = nextSortMode(m.sortMode)
+		m.result.SortMode = m.sortMode
+		cmd := m.rebuild()
+		if ok && selected.ag != nil {
+			m.selectAgent(selected.host, selected.ag.Name)
+		}
+		return m, cmd
 	}
 
 	var cmd tea.Cmd
@@ -298,7 +317,7 @@ func (m model) enterSelected() (tea.Model, tea.Cmd) {
 		return m.dispatch(r.host, r.ag.Name, actionStartAttach)
 	}
 	agentCopy := *r.ag
-	m.result = Result{Agent: &agentCopy}
+	m.result = Result{Agent: &agentCopy, SortMode: m.sortMode}
 	return m, tea.Quit
 }
 
@@ -380,7 +399,7 @@ func (m model) onActionDone(msg actionMsg) (tea.Model, tea.Cmd) {
 		// Template/StartedAt are intentionally left zero: the attach path only
 		// consumes Name+Host, and this Agent is synthesized here rather than
 		// refetched from the backend.
-		m.result = Result{Agent: &Agent{Name: msg.name, Host: msg.host, Status: "running"}}
+		m.result = Result{Agent: &Agent{Name: msg.name, Host: msg.host, Status: "running"}, SortMode: m.sortMode}
 		return m, tea.Quit
 	}
 
@@ -493,12 +512,49 @@ func (m model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // rebuild refreshes the list items and column header from the current
 // per-host state.
 func (m *model) rebuild() tea.Cmd {
-	header, items := buildRows(m.byHost, m.byHostErr, m.pending, m.frame)
+	header, items := buildRowsSorted(m.byHost, m.byHostErr, m.pending, m.frame, m.sortMode, m.lastAttached)
 	m.header = header
 	return m.list.SetItems(items)
 }
 
+func (m *model) selectAgent(host, name string) {
+	for i, item := range m.list.Items() {
+		r, ok := item.(row)
+		if ok && r.host == host && r.ag != nil && r.ag.Name == name {
+			m.list.Select(i)
+			return
+		}
+	}
+}
+
+func normalizeSortMode(mode SortMode) SortMode {
+	if mode == SortModeName || mode == SortModeUptime {
+		return mode
+	}
+	return SortModeRecent
+}
+
+func nextSortMode(mode SortMode) SortMode {
+	switch normalizeSortMode(mode) {
+	case SortModeRecent:
+		return SortModeName
+	case SortModeName:
+		return SortModeUptime
+	default:
+		return SortModeRecent
+	}
+}
+
+func copyLastAttached(in map[string]time.Time) map[string]time.Time {
+	out := make(map[string]time.Time, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func (m model) View() string {
+	m.keys.Sort.SetHelp("o", "sort: "+string(m.sortMode))
 	var b strings.Builder
 	b.WriteString(m.styles.header.Render(m.header))
 	b.WriteString("\n")

@@ -147,9 +147,32 @@ func cell(s string, width int) string {
 // action is in flight (present in pending) render a spinner in place of the
 // status glyph.
 func buildRows(byHost map[string][]Agent, byHostErr map[string]error, pending map[string]struct{}, frame int) (string, []list.Item) {
+	return buildRowsSorted(byHost, byHostErr, pending, frame, SortModeRecent, nil)
+}
+
+func buildRowsSorted(byHost map[string][]Agent, byHostErr map[string]error, pending map[string]struct{}, frame int, mode SortMode, lastAttached map[string]time.Time) (string, []list.Item) {
 	hosts := sortedHosts(byHost, byHostErr)
 	nameW, templateW, hostW := columnWidths(hosts, byHost)
 	header := buildHeader(nameW, templateW, hostW)
+
+	var agents []Agent
+	for _, h := range hosts {
+		if byHostErr[h] != nil {
+			continue
+		}
+		for _, a := range byHost[h] {
+			a.Host = h
+			agents = append(agents, a)
+		}
+	}
+	switch normalizeSortMode(mode) {
+	case SortModeName:
+		agents = SortName(agents, lastAttached)
+	case SortModeUptime:
+		agents = SortUptime(agents, lastAttached)
+	default:
+		agents = SortRecent(agents, lastAttached)
+	}
 
 	var items []list.Item
 	for _, h := range hosts {
@@ -161,24 +184,17 @@ func buildRows(byHost map[string][]Agent, byHostErr map[string]error, pending ma
 			})
 			continue
 		}
-		ags := append([]Agent(nil), byHost[h]...)
-		sortAgents(ags)
-		for i := range ags {
-			a := ags[i]
-			g := glyph(a.Status)
-			if _, ok := pending[rowKey(h, a.Name)]; ok {
-				g = spinnerFrames[frame%len(spinnerFrames)]
-			}
-			ac := a // stable pointer for the selected-row result
-			display := agent.DisplayName(a.Name)
-			line := g + " " + cell(display, nameW) + " " + cell(dash(a.Template), templateW) + " " + cell(h, hostW) + " " + ageLabel(a)
-			items = append(items, row{
-				line:   line,
-				filter: display + " " + a.Template + " " + h,
-				host:   h,
-				ag:     &ac,
-			})
+	}
+	for _, a := range agents {
+		h := a.Host
+		g := glyph(a.Status)
+		if _, ok := pending[rowKey(h, a.Name)]; ok {
+			g = spinnerFrames[frame%len(spinnerFrames)]
 		}
+		ac := a
+		display := agent.DisplayName(a.Name)
+		line := g + " " + cell(display, nameW) + " " + cell(dash(a.Template), templateW) + " " + cell(h, hostW) + " " + ageLabel(a)
+		items = append(items, row{line: line, filter: display + " " + a.Template + " " + h, host: h, ag: &ac})
 	}
 	return header, items
 }

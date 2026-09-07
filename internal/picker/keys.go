@@ -17,6 +17,7 @@ type keyMap struct {
 	Delete   key.Binding
 	Rename   key.Binding
 	Template key.Binding
+	Sort     key.Binding
 	Filter   key.Binding
 	Quit     key.Binding
 }
@@ -29,6 +30,7 @@ func defaultKeys() keyMap {
 		Delete:   key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete")),
 		Rename:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
 		Template: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "template")),
+		Sort:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "sort: recent")),
 		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
@@ -36,13 +38,13 @@ func defaultKeys() keyMap {
 
 // ShortHelp / FullHelp satisfy help.KeyMap.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Attach, k.Stop, k.Start, k.Delete, k.Rename, k.Template, k.Filter, k.Quit}
+	return []key.Binding{k.Attach, k.Stop, k.Start, k.Delete, k.Rename, k.Template, k.Sort, k.Filter, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Attach, k.Stop, k.Start},
 		{k.Delete, k.Rename, k.Template},
-		{k.Filter, k.Quit},
+		{k.Sort, k.Filter, k.Quit},
 	}
 }

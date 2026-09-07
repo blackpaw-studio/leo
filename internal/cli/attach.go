@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/picker"
 	"github.com/spf13/cobra"
 )
 
@@ -75,7 +77,11 @@ session as a native tab via tmux control mode.`,
 			// Remote: hand the whole `leo attach <name>` invocation to the server so
 			// it can resolve ambiguity with its own view of agents.
 			if !res.Localhost {
-				return runRemoteAttach(res, "attach", name)
+				err := runRemoteAttach(res, "attach", name)
+				if err == nil {
+					stampLastAttached(cfg.HomePath, res.Name, name, time.Now())
+				}
+				return err
 			}
 
 			// AgentSession is the authoritative presence check: the daemon only
@@ -111,9 +117,17 @@ session as a native tab via tmux control mode.`,
 			// harness/attach spec before falling back to the tmux session
 			// already resolved above.
 			if spec, err := agentAttachSpecFn(cmd.Context(), cfg.HomePath, name); err == nil && spec.Harness != "" && spec.Harness != "claude" {
-				return attachViaDriver(res, toAttachSpec(spec), opts)
+				err := attachViaDriver(res, toAttachSpec(spec), opts)
+				if err == nil {
+					stampLastAttached(cfg.HomePath, picker.LocalHost, session.Name, time.Now())
+				}
+				return err
 			}
-			return attachTmuxSession(res, session.Session, opts)
+			err = attachTmuxSession(res, session.Session, opts)
+			if err == nil {
+				stampLastAttached(cfg.HomePath, picker.LocalHost, session.Name, time.Now())
+			}
+			return err
 		},
 	}
 	addHostFlag(cmd, &host)

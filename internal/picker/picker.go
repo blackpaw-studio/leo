@@ -58,7 +58,15 @@ type Backend interface {
 // Result carries the picker outcome. Agent is nil when the user quit without
 // choosing anything.
 type Result struct {
-	Agent *Agent
+	Agent    *Agent
+	SortMode SortMode
+}
+
+// Options supplies picker state owned by the caller. The picker never
+// persists it itself.
+type Options struct {
+	SortMode     SortMode
+	LastAttached map[string]time.Time
 }
 
 // Gates carries the permission checks Run consults before dispatching an
@@ -82,8 +90,8 @@ type Gates struct {
 // Run starts the picker over the given backends (keyed by host name) and blocks
 // until the user attaches or quits. Attach happens in the caller AFTER Run
 // returns, so tmux inherits a clean terminal.
-func Run(ctx context.Context, backends map[string]Backend, gates Gates) (Result, error) {
-	m := newModel(ctx, backends)
+func Run(ctx context.Context, backends map[string]Backend, gates Gates, options Options) (Result, error) {
+	m := newModelWithOptions(ctx, backends, options)
 	m.canSwitch = gates.CanSwitchTemplate
 	m.canLifecycle = gates.CanLifecycle
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
@@ -95,5 +103,6 @@ func Run(ctx context.Context, backends map[string]Backend, gates Gates) (Result,
 	if !ok {
 		return Result{}, fmt.Errorf("picker: unexpected final model type %T", final)
 	}
+	fm.result.SortMode = fm.sortMode
 	return fm.result, nil
 }

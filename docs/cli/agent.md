@@ -183,7 +183,7 @@ state (running, starting, stopped/dormant). Beyond attaching, the picker
 doubles as a lifecycle surface: **Enter** attach (a dormant agent is started
 first), **s** stop, **u** start, **D** delete (with confirmation naming
 exactly what will be removed), **r** rename, **t** set template (arrow keys
-to choose, Enter to confirm, Esc to cancel), **/** filter, **q** quit. `x` is
+to choose, Enter to confirm, Esc to cancel), **/** filter, **o** sort (cycles Recent → Name → Uptime), **q** quit. `x` is
 deliberately unbound, so old `x`-then-confirm muscle memory does nothing. The
 picker always opens when no name is given — there is no longer a
 single-candidate auto-attach shortcut.
