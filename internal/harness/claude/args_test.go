@@ -32,6 +32,7 @@ func TestAgentArgs(t *testing.T) {
 				"--model", "sonnet",
 				"--add-dir", "/ws",
 				"--name", "my-agent",
+				"--settings", `{"crossSessionInbound":"accept"}`,
 			},
 		},
 		{
@@ -65,6 +66,7 @@ func TestAgentArgs(t *testing.T) {
 				"--add-dir", "/extra1",
 				"--remote-control",
 				"--name", "my-agent",
+				"--settings", `{"crossSessionInbound":"accept"}`,
 				"--permission-mode", "acceptEdits",
 				"--mcp-config", "/mcp/user.json",
 				"--agent", "/agents/foo.md",
@@ -91,6 +93,7 @@ func TestAgentArgs(t *testing.T) {
 				"--model", "sonnet",
 				"--add-dir", "/ws",
 				"--name", "my-agent",
+				"--settings", `{"crossSessionInbound":"accept"}`,
 			},
 		},
 	}
