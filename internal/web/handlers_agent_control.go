@@ -233,6 +233,18 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Live (already-running) fast path: literal paste + readiness confirmation + Enter.
 	sessionName := agent.SessionName(name)
+	if socketPath, err := s.resolvePeerSocket(r.Context(), sessionName); err == nil {
+		if err := s.deliverPeer(r.Context(), socketPath, req.Text); err == nil {
+			s.publishAgentMessage(req.From, name)
+			writeJSON(w, http.StatusOK, apiResponse{OK: true})
+			return
+		} else {
+			log.Printf("web: peer inbox delivery to %q failed: %v; falling back to tmux", sessionName, err)
+		}
+	} else {
+		log.Printf("web: peer inbox socket resolution for %q failed: %v; falling back to tmux", sessionName, err)
+	}
+
 	tmuxPath := findTmuxPath()
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 
