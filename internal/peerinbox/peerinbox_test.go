@@ -174,6 +174,20 @@ func TestResolveSockectContextCancellation(t *testing.T) {
 	}
 }
 
+func TestDefaultExecHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := DefaultExec(ctx, "sleep", "5").Run()
+	if err == nil {
+		t.Fatal("DefaultExec().Run() error = nil, want cancellation error")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("DefaultExec().Run() took %v, want context cancellation within 1s", elapsed)
+	}
+}
+
 func TestXDGRuntimeDirUnsetNoRelativePath(t *testing.T) {
 	oldXDG := os.Getenv("XDG_RUNTIME_DIR")
 	os.Unsetenv("XDG_RUNTIME_DIR")

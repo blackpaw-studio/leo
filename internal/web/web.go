@@ -369,11 +369,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		opt(s)
 	}
 	s.resolvePeerSocket = func(ctx context.Context, session string) (string, error) {
-		// Wrap s.execCommand (no ctx support) to match peerinbox.ExecFunc signature.
-		execFn := func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			return s.execCommand(name, args...)
-		}
-		return peerinbox.ResolveSocket(ctx, execFn, session)
+		return peerinbox.ResolveSocket(ctx, peerinbox.DefaultExec, session)
 	}
 	s.deliverPeer = peerinbox.Deliver
 	s.fetchAgentListFn = s.fetchAgentList

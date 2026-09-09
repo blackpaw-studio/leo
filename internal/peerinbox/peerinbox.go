@@ -18,6 +18,13 @@ import (
 // ExecFunc supplies commands for resolving a tmux pane's Claude process.
 type ExecFunc func(ctx context.Context, name string, args ...string) *exec.Cmd
 
+// DefaultExec creates a context-aware command for peer inbox resolution.
+func DefaultExec(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 2 * time.Second
+	return cmd
+}
+
 // Process ancestry depth: shell → claude wrapper → claude.
 const descendantDepth = 3
 
