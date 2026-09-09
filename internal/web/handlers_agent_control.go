@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -239,10 +240,10 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, apiResponse{OK: true})
 			return
 		} else {
-			log.Printf("web: peer inbox delivery to %q failed: %v; falling back to tmux", sessionName, err)
+			log.Printf("web: peer inbox delivery to %s failed: %s; falling back to tmux", strconv.Quote(sessionName), strconv.Quote(err.Error()))
 		}
 	} else {
-		log.Printf("web: peer inbox socket resolution for %q failed: %v; falling back to tmux", sessionName, err)
+		log.Printf("web: peer inbox socket resolution for %s failed: %s; falling back to tmux", strconv.Quote(sessionName), strconv.Quote(err.Error()))
 	}
 
 	tmuxPath := findTmuxPath()
