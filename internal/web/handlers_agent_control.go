@@ -200,7 +200,7 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 			body := req.Text
 			from := req.From
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), wakeDeliverTimeout)
+				ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), wakeDeliverTimeout)
 				defer cancel()
 				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
 					// #nosec G706 -- name matched an existing agentstore record
