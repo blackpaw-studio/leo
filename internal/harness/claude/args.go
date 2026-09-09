@@ -38,6 +38,7 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 		args = append(args, "--remote-control")
 	}
 	args = append(args, "--name", spec.Name)
+	args = append(args, "--settings", `{"crossSessionInbound":"accept"}`)
 	if o.PermissionMode != "" {
 		args = append(args, "--permission-mode", o.PermissionMode)
 	}
