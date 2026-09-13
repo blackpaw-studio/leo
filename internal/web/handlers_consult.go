@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
@@ -48,10 +49,13 @@ func (s *Server) handleAPIConsult(w http.ResponseWriter, r *http.Request) {
 			workspace = rec.Workspace
 		}
 	}
+	if workspace == "" {
+		workspace, _ = os.Getwd()
+	}
 
 	result, err := s.consults.Consult(r.Context(), cfg, consult.Request{
 		Template: req.Template, Model: req.Model, Prompt: req.Prompt,
-		Workspace: workspace, Caller: req.From,
+		Cwd: workspace, Caller: req.From,
 	})
 	if err != nil {
 		status := http.StatusBadGateway

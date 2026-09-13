@@ -66,7 +66,7 @@ func TestConsultAllHarnessesReturnSynchronousResult(t *testing.T) {
 				return exec.CommandContext(ctx, "echo", tt.output)
 			}
 			result, err := d.Consult(context.Background(), testConfig(), Request{
-				Template: tt.name, Prompt: "what do you think?", Workspace: t.TempDir(),
+				Template: tt.name, Prompt: "what do you think?", Cwd: t.TempDir(),
 			})
 			if err != nil {
 				t.Fatalf("Consult: %v", err)
@@ -95,7 +95,7 @@ func TestConsultReturnsExecutionFailure(t *testing.T) {
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "false")
 	}
-	_, err := d.Consult(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Workspace: t.TempDir()})
+	_, err := d.Consult(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: t.TempDir()})
 	if err == nil || !strings.Contains(err.Error(), "failed") {
 		t.Fatalf("expected execution failure, got %v", err)
 	}
@@ -108,7 +108,7 @@ func TestConsultHonorsCallerCancellationWhileQueued(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := d.Consult(ctx, testConfig(), Request{Template: "claude", Prompt: "q"})
+	_, err := d.Consult(ctx, testConfig(), Request{Template: "claude", Prompt: "q", Cwd: t.TempDir()})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}

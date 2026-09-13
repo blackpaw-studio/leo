@@ -21,9 +21,9 @@ const (
 	// evicted, so the directory can briefly hold a few more.
 	RecordsKept = 20
 
-	consultsDirName = "consults"
-	dirPerm         = 0o700
-	filePerm        = 0o600
+	dispatchesDirName = "dispatches"
+	dirPerm           = 0o700
+	filePerm          = 0o600
 
 	// maxLineBytes caps in-memory line reassembly so a harness that never
 	// emits a newline cannot grow the buffer without bound. A tool result
@@ -37,7 +37,7 @@ const (
 )
 
 // Dir returns the directory holding consult records for a leo state dir.
-func Dir(stateDir string) string { return filepath.Join(stateDir, consultsDirName) }
+func Dir(stateDir string) string { return filepath.Join(stateDir, dispatchesDirName) }
 
 // StreamPath returns the path of a consult's event stream.
 func StreamPath(stateDir, id string) string {
@@ -255,6 +255,16 @@ func (h *fileHandle) SetStatus(s Status) error {
 	if s.Terminal() && h.rec.EndedAt.IsZero() {
 		h.rec.EndedAt = h.now()
 	}
+	return h.persist()
+}
+
+func (h *fileHandle) SetText(text string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
+	h.rec.Text = text
 	return h.persist()
 }
 
