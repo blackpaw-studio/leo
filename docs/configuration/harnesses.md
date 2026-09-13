@@ -27,11 +27,8 @@ leo's own MCP tools instead (see [Support matrix](#support-matrix) and
 Every harness drives a live agent (spawned directly, or ensure-exists'd as a
 persistent task's target) the same way: a resident, interactive TUI process
 lives inside the leo-managed tmux session (`leo-<name>`) for the whole
-lifetime of the agent. Messages are injected by pasting into that pane —
-a readiness probe confirms the TUI's input line is idle and the pasted text
-actually landed before `send-keys Enter` fires — and delivery is
-fire-and-forget: leo does not wait on (or return) a synchronous per-turn
-result for any harness. `leo attach` and `leo agent attach` are a plain
+lifetime of the agent. Delivery is fire-and-forget: leo does not wait on (or
+return) a synchronous per-turn result for any harness. `leo attach` and `leo agent attach` are a plain
 `tmux attach` for all three harnesses — same status bar, same `Ctrl-b d`
 detach, same remote-ssh attach flow, no per-harness special casing.
 
@@ -40,7 +37,10 @@ specifics:
 
 - **`claude`.** `--session-id` is pinned up front at spawn time (the id is
   chosen by leo, not discovered). Recovery from a quick exit follows the
-  existing ladder: `--session-id` → `--resume` → fresh.
+  existing ladder: `--session-id` → `--resume` → fresh. Leo launches agents
+  with `--settings '{"crossSessionInbound":"accept"}'` and sends live
+  `leo_send_message` traffic through Claude Code's per-session inbox socket;
+  it falls back to the tmux paste-and-Enter path when socket delivery fails.
 - **`codex`.** There's no start-time flag to choose a session id, so codex
   always launches fresh (`-a never`, approval policy hardcoded to "never")
   and leo discovers the session id **after the first turn** by scanning

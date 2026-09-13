@@ -2,6 +2,8 @@ package web
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -137,6 +139,11 @@ func newTestServer(t *testing.T) (*Server, string) {
 	logPath := filepath.Join(dir, "state", "service.log")
 
 	s := New(cfgPath, processes, scheduler, reloader, nil, Options{Port: testPort, APIToken: testAPIToken, LogPath: logPath})
+	// Message-handler tests that need peer inbox delivery replace these seams.
+	// Keep unrelated tmux-path tests focused on the fallback they predate.
+	s.resolvePeerSocket = func(context.Context, string) (string, error) {
+		return "", errors.New("peer inbox disabled in test server")
+	}
 
 	// Wrap the real handler so every test request is auto-authenticated for
 	// Host + bearer middleware. Tests that specifically exercise the

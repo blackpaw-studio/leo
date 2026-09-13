@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -199,7 +200,7 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 			body := req.Text
 			from := req.From
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), wakeDeliverTimeout)
+				ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), wakeDeliverTimeout)
 				defer cancel()
 				if err := s.injectPrompt(ctx, sessionName, body); err != nil {
 					// #nosec G706 -- name matched an existing agentstore record
@@ -233,6 +234,18 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Live (already-running) fast path: literal paste + readiness confirmation + Enter.
 	sessionName := agent.SessionName(name)
+	if socketPath, err := s.resolvePeerSocket(r.Context(), sessionName); err == nil {
+		if err := s.deliverPeer(r.Context(), socketPath, req.Text); err == nil {
+			s.publishAgentMessage(req.From, name)
+			writeJSON(w, http.StatusOK, apiResponse{OK: true})
+			return
+		} else {
+			log.Printf("web: peer inbox delivery to %s failed: %s; falling back to tmux", strconv.Quote(sessionName), strconv.Quote(err.Error()))
+		}
+	} else {
+		log.Printf("web: peer inbox socket resolution for %s failed: %s; falling back to tmux", strconv.Quote(sessionName), strconv.Quote(err.Error()))
+	}
+
 	tmuxPath := findTmuxPath()
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 

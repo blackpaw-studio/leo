@@ -24,6 +24,7 @@ import (
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/peerinbox"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -138,6 +139,11 @@ type Server struct {
 
 	// Testability seam for exec.Command
 	execCommand func(name string, args ...string) *exec.Cmd
+
+	// resolvePeerSocket and deliverPeer route live Claude messages through
+	// Claude Code's documented per-session inbox. Tests replace these seams.
+	resolvePeerSocket func(ctx context.Context, session string) (string, error)
+	deliverPeer       func(ctx context.Context, socketPath, text string) error
 
 	// afterInterruptBurst, if non-nil, is invoked after
 	// handleWebAgentInterrupt's background delayed-Escape goroutine finishes
@@ -362,6 +368,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	for _, opt := range extra {
 		opt(s)
 	}
+	s.resolvePeerSocket = func(ctx context.Context, session string) (string, error) {
+		return peerinbox.ResolveSocket(ctx, peerinbox.DefaultExec, session)
+	}
+	s.deliverPeer = peerinbox.Deliver
 	s.fetchAgentListFn = s.fetchAgentList
 	s.consults = consult.NewDispatcher(opts.ConsultRecorder)
 

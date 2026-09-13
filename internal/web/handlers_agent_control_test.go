@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,61 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
+
+func TestWebAgentMessageDeliversClaudeViaPeerInbox(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.resolvePeerSocket = func(context.Context, string) (string, error) { return "/tmp/claude.sock", nil }
+	var gotPath, gotText string
+	s.deliverPeer = func(_ context.Context, path, text string) error {
+		gotPath, gotText = path, text
+		return nil
+	}
+	var tmuxCalls int
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		tmuxCalls++
+		return exec.Command("true")
+	}
+
+	req := httptest.NewRequest("POST", "/web/agent/assistant/message", strings.NewReader(`{"text":"hello"}`))
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if gotPath != "/tmp/claude.sock" || gotText != "hello" {
+		t.Errorf("peer delivery = (%q, %q)", gotPath, gotText)
+	}
+	if tmuxCalls != 0 {
+		t.Errorf("tmux calls = %d, want 0", tmuxCalls)
+	}
+}
+
+func TestWebAgentMessageFallsBackToTmuxWhenPeerInboxFails(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.resolvePeerSocket = func(context.Context, string) (string, error) { return "/tmp/claude.sock", nil }
+	s.deliverPeer = func(context.Context, string, string) error { return errors.New("socket closed") }
+	oldPoll := messageInputPoll
+	messageInputPoll = time.Millisecond
+	defer func() { messageInputPoll = oldPoll }()
+	var calls [][]string
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		if argsContain(args, "capture-pane") {
+			return exec.Command("echo", "❯ hello")
+		}
+		return exec.Command("true")
+	}
+
+	req := httptest.NewRequest("POST", "/web/agent/assistant/message", strings.NewReader(`{"text":"hello"}`))
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if len(calls) == 0 || !argsContain(calls[1], "send-keys") {
+		t.Errorf("want tmux send-keys fallback; calls=%v", calls)
+	}
+}
 
 // argsContain reports whether a tmux arg slice includes sub (e.g. "capture-pane").
 func argsContain(args []string, sub string) bool {
