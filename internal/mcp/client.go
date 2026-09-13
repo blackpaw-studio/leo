@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
@@ -185,4 +186,66 @@ func (c *daemonClient) consult(ctx context.Context, from, template, model, promp
 	client := *c
 	client.http = &http.Client{Timeout: consultHTTPTimeout}
 	return client.doContext(ctx, http.MethodPost, "/api/consult", body)
+}
+
+func (c *daemonClient) dispatch(ctx context.Context, from, template, model, prompt, cwd, name string) (consult.Started, error) {
+	body := map[string]string{"from": from, "template": template, "prompt": prompt, "cwd": cwd}
+	if model != "" {
+		body["model"] = model
+	}
+	if name != "" {
+		body["name"] = name
+	}
+	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch", body)
+	if err != nil {
+		return consult.Started{}, err
+	}
+	var started consult.Started
+	if err := json.Unmarshal(raw, &started); err != nil {
+		return consult.Started{}, fmt.Errorf("decode dispatch: %w", err)
+	}
+	return started, nil
+}
+
+func (c *daemonClient) getDispatch(ctx context.Context, id string) (consult.Record, error) {
+	raw, err := c.doContext(ctx, http.MethodGet, "/api/dispatch/"+url.PathEscape(id), nil)
+	if err != nil {
+		return consult.Record{}, err
+	}
+	var record consult.Record
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return consult.Record{}, fmt.Errorf("decode dispatch: %w", err)
+	}
+	return record, nil
+}
+
+func (c *daemonClient) waitDispatch(ctx context.Context, ids []string, timeout time.Duration) ([]consult.Entry, error) {
+	query := url.Values{}
+	for _, id := range ids {
+		query.Add("id", id)
+	}
+	query.Set("timeout", fmt.Sprintf("%g", timeout.Seconds()))
+	client := *c
+	client.http = &http.Client{Timeout: timeout + time.Minute}
+	raw, err := client.doContext(ctx, http.MethodGet, "/api/dispatch/wait?"+query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var entries []consult.Entry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("decode dispatch wait: %w", err)
+	}
+	return entries, nil
+}
+
+func (c *daemonClient) cancelDispatch(ctx context.Context, id string) (consult.Record, error) {
+	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch/"+url.PathEscape(id)+"/cancel", nil)
+	if err != nil {
+		return consult.Record{}, err
+	}
+	var record consult.Record
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return consult.Record{}, fmt.Errorf("decode dispatch: %w", err)
+	}
+	return record, nil
 }

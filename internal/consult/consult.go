@@ -100,15 +100,22 @@ type runState struct {
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder
 // discards recordings, leaving behavior exactly as it was before consults
 // were observable.
-func NewDispatcher(rec Recorder) *Dispatcher {
+// NewDispatcher builds a dispatcher. parent controls the lifetime of accepted
+// runs; nil retains the historical background-context behavior for callers
+// that do not own a service lifetime.
+func NewDispatcher(rec Recorder, parent ...context.Context) *Dispatcher {
 	if rec == nil {
 		rec = nopRecorder{}
+	}
+	daemonCtx := context.Background()
+	if len(parent) > 0 && parent[0] != nil {
+		daemonCtx = parent[0]
 	}
 	return &Dispatcher{
 		sem:                make(chan struct{}, maxConcurrent),
 		recorder:           rec,
 		ExecCommandContext: exec.CommandContext,
-		daemonCtx:          context.Background(),
+		daemonCtx:          daemonCtx,
 		runs:               make(map[string]*runState),
 	}
 }

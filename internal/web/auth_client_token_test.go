@@ -80,7 +80,7 @@ func TestClientTokenCannotReachAPIRoutes(t *testing.T) {
 
 	for _, path := range []string{
 		"/api/agent/spawn", "/api/agent/stop", "/api/agent/list",
-		"/api/task/deploy/run", "/api/consult", "/api/v1/state",
+		"/api/task/deploy/run", "/api/consult", "/api/dispatch", "/api/dispatch/id", "/api/dispatch/wait", "/api/v1/state",
 	} {
 		w := requestAs(t, s, "POST", path, testClientToken, "{}")
 		if w.Code != http.StatusForbidden {

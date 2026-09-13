@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
+	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/leotools"
 	"github.com/blackpaw-studio/leo/internal/templates"
 )
@@ -295,6 +298,94 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		return fmt.Sprintf("[consult · %s/%s]\n%s", result.Harness, result.Model, result.Text), nil
 	})
 
+	r.addContext(toolDef{
+		Name: "leo_dispatch", Description: allowNote("Run a headless subagent on the template's harness/model in your project directory. Returns immediately; collect with leo_wait. The prompt must be self-contained. Use for delegating implementation/review/exploration to another model. Call several times for a fan-out then one leo_wait.", "dispatch to these templates", perms.CanConsult),
+		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}}, "template", "prompt"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		template, err := stringArg(args, "template")
+		if err != nil {
+			return "", err
+		}
+		if !perms.AllowsConsult(template) {
+			return "", denialError("dispatch template", template, "templates", perms.CanConsult)
+		}
+		prompt, err := stringArg(args, "prompt")
+		if err != nil {
+			return "", err
+		}
+		model, _ := args["model"].(string)
+		cwd, _ := args["cwd"].(string)
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+		name, _ := args["name"].(string)
+		started, err := client.dispatch(ctx, processName, template, model, prompt, cwd, name)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s (%s/%s) · %s\nwatch: leo dispatch watch %s", started.ID, started.Harness, started.Model, started.Cwd, started.ID), nil
+	})
+
+	r.addContext(toolDef{
+		Name: "leo_wait", Description: allowNote("Wait for dispatched subagents. On timeout, running ids come back as running and can be waited again.", "wait on dispatched templates", perms.CanConsult),
+		InputSchema: objectSchema(map[string]any{"ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "timeout_seconds": map[string]any{"type": "number"}}, "ids"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		raw, ok := args["ids"].([]any)
+		if !ok || len(raw) == 0 {
+			return "", fmt.Errorf("ids is required")
+		}
+		ids := make([]string, 0, len(raw))
+		for _, v := range raw {
+			id, ok := v.(string)
+			if !ok || id == "" {
+				return "", fmt.Errorf("ids must contain strings")
+			}
+			ids = append(ids, id)
+		}
+		timeout := consult.RunTimeout
+		if seconds, ok := args["timeout_seconds"].(float64); ok {
+			if seconds < 0 {
+				return "", fmt.Errorf("timeout_seconds must be non-negative")
+			}
+			timeout = time.Duration(seconds * float64(time.Second))
+		}
+		entries, err := client.waitDispatch(ctx, ids, timeout)
+		if err != nil {
+			return "", err
+		}
+		blocks := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			body := entry.Text
+			if entry.Err != "" {
+				body = entry.Err
+			}
+			blocks = append(blocks, fmt.Sprintf("[%s · %s · %.1fs]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), body))
+		}
+		return strings.Join(blocks, "\n\n"), nil
+	})
+
+	r.addContext(toolDef{
+		Name: "leo_cancel", Description: allowNote("Cancel a dispatched subagent.", "cancel dispatched templates", perms.CanConsult), InputSchema: objectSchema(map[string]any{"id": map[string]any{"type": "string"}}, "id"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		id, err := stringArg(args, "id")
+		if err != nil {
+			return "", err
+		}
+		if record, err := client.getDispatch(ctx, id); err != nil {
+			return "", err
+		} else if record.Status.Terminal() {
+			return string(record.Status), nil
+		}
+		record, err := client.cancelDispatch(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if record.Status == "canceled" {
+			return "canceled", nil
+		}
+		return string(record.Status), nil
+	})
+
 	return r
 }
 
@@ -306,7 +397,7 @@ const consultDescription = "Run a one-off consultant subagent for a second opini
 	"Those names are templates (see leo_list_templates), not running agents, so leo_send_message is the wrong tool for them. " +
 	"The template determines the harness and model; `model` optionally overrides the template's model. " +
 	"The prompt must be self-contained: the consultant sees none of your conversation, only files in your workspace. " +
-	"Waits for and returns the consultant's answer directly. For a council, call this concurrently with different templates and reconcile the returned answers."
+	"Waits for and returns the consultant's answer directly. For delegated implementation, review, or exploration that should continue asynchronously, use leo_dispatch and then leo_wait instead."
 
 // allowNote appends the allowlist to a tool description so the model sees the
 // boundary up front instead of discovering it by failing a call. An empty
