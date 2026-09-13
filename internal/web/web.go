@@ -376,7 +376,23 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	}
 	s.deliverPeer = peerinbox.Deliver
 	s.fetchAgentListFn = s.fetchAgentList
-	s.consults = consult.NewDispatcher(opts.ConsultRecorder, opts.ParentContext)
+	viewer := consult.NewViewer(func(caller string) (string, bool) {
+		if s.processes == nil {
+			return "", false
+		}
+		state, ok := s.processes.States()[caller]
+		if !ok || (state.Status != "running" && state.Status != "starting") {
+			return "", false
+		}
+		return agent.SessionName(caller), true
+	})
+	// The viewer executes through the server's command seam, so tests can
+	// inspect its tmux argv without requiring a live tmux server.
+	viewer.TmuxPath = findTmuxPath()
+	viewer.ExecCommand = func(name string, args ...string) *exec.Cmd {
+		return s.execCommand(name, args...)
+	}
+	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart)
 	s.consults.MarkInterrupted()
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {

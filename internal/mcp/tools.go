@@ -75,7 +75,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.add(toolDef{
 		Name:        "leo_skill",
-		Description: "Load Leo's operational instructions on demand. Call with no arguments to list available skills (managing scheduled tasks, reading/debugging logs, daemon control, config reference, workspace maintenance, agent management). Call with `name` set to a skill name to get that skill's full step-by-step instructions. Use this whenever you need to operate Leo.",
+		Description: "Load Leo's operational instructions on demand. Call with no arguments to list available skills (managing scheduled tasks, reading/debugging logs, daemon control, config reference, workspace maintenance, agent management including dispatch). Call with `name` set to a skill name to get that skill's full step-by-step instructions. Use this whenever you need to operate Leo.",
 		InputSchema: objectSchema(map[string]any{
 			"name": map[string]any{"type": "string", "description": "Skill name (with or without .md), e.g. \"managing-tasks\". Omit to list all available skills."},
 		}),

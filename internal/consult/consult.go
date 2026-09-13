@@ -88,6 +88,7 @@ type Dispatcher struct {
 	daemonCtx          context.Context
 	mu                 sync.Mutex
 	runs               map[string]*runState
+	onStart            func(Record)
 }
 
 type runState struct {
@@ -104,12 +105,22 @@ type runState struct {
 // runs; nil retains the historical background-context behavior for callers
 // that do not own a service lifetime.
 func NewDispatcher(rec Recorder, parent ...context.Context) *Dispatcher {
+	var ctx context.Context
+	if len(parent) > 0 {
+		ctx = parent[0]
+	}
+	return NewDispatcherWithOnStart(rec, ctx, nil)
+}
+
+// NewDispatcherWithOnStart builds a dispatcher with an optional best-effort
+// start hook. Hooks observe accepted runs only and cannot reject a dispatch.
+func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func(Record)) *Dispatcher {
 	if rec == nil {
 		rec = nopRecorder{}
 	}
 	daemonCtx := context.Background()
-	if len(parent) > 0 && parent[0] != nil {
-		daemonCtx = parent[0]
+	if parent != nil {
+		daemonCtx = parent
 	}
 	return &Dispatcher{
 		sem:                make(chan struct{}, maxConcurrent),
@@ -117,6 +128,7 @@ func NewDispatcher(rec Recorder, parent ...context.Context) *Dispatcher {
 		ExecCommandContext: exec.CommandContext,
 		daemonCtx:          daemonCtx,
 		runs:               make(map[string]*runState),
+		onStart:            onStart,
 	}
 }
 
@@ -217,6 +229,9 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	d.mu.Lock()
 	d.runs[rec.ID] = state
 	d.mu.Unlock()
+	if rec.Kind == "dispatch" && d.onStart != nil {
+		d.onStart(rec)
+	}
 	go d.run(runCtx, state, h, model, tmpl.Env, args, harnessEnv, req.Cwd)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
 }

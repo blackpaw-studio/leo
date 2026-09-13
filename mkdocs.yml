@@ -85,7 +85,7 @@ nav:
       - Workspace Structure: configuration/workspace-structure.md
       - Persistent Tasks: configuration/persistent-tasks.md
       - Harnesses: configuration/harnesses.md
-      - Consults: configuration/consults.md
+      - Dispatches: configuration/dispatches.md
       - Permissions: configuration/permissions.md
       - API Clients: configuration/api-clients.md
   - CLI Reference:
