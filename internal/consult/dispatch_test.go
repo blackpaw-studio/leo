@@ -3,6 +3,7 @@ package consult
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -89,7 +90,70 @@ func TestWaitTimeoutAndUnknownID(t *testing.T) {
 	if entries[1].Err != "unknown dispatch d-missing" {
 		t.Fatalf("unknown entry = %+v", entries[1])
 	}
+	if entries[1].Status != StatusUnknown {
+		t.Fatalf("unknown status = %q", entries[1].Status)
+	}
 	_, _ = d.Cancel(started.ID)
+}
+
+func TestTerminateDoesNotOverwriteCompletedRecord(t *testing.T) {
+	d := NewDispatcher(nil)
+	state := &runState{
+		record: Record{ID: "d-done", Status: StatusRunning, StartedAt: time.Now()},
+		handle: nopHandle{}, done: make(chan struct{}), cancel: func() {},
+	}
+	d.runs[state.record.ID] = state
+
+	// Simulate terminate's stale pre-lock observation, then complete while it
+	// waits for the dispatcher lock. This is the natural-completion-vs-cancel
+	// race without relying on scheduler timing.
+	d.mu.Lock()
+	state.record.Status = StatusDone
+	state.record.EndedAt = time.Now()
+	result := make(chan Record, 1)
+	go func() { result <- d.terminateState(state, StatusCanceled) }()
+	d.mu.Unlock()
+
+	if rec := <-result; rec.Status != StatusDone {
+		t.Fatalf("terminate status = %q, want done", rec.Status)
+	}
+}
+
+func TestPruneTerminalRunsKeepsDiskFallback(t *testing.T) {
+	stateDir := t.TempDir()
+	recorder := NewFileRecorder(stateDir)
+	d := NewDispatcher(recorder)
+	now := time.Now()
+	for i := range RecordsKept + 1 {
+		id := fmt.Sprintf("d-%02d", i)
+		rec := Record{ID: id, Status: StatusDone, StartedAt: now.Add(-time.Hour), EndedAt: now.Add(-time.Duration(i) * time.Second)}
+		handle, err := recorder.Open(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := handle.Close(StatusDone, nil); err != nil {
+			t.Fatal(err)
+		}
+		d.runs[id] = &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: func() {}}
+	}
+
+	d.mu.Lock()
+	d.pruneTerminalRunsLocked()
+	d.mu.Unlock()
+	if len(d.runs) != RecordsKept {
+		t.Fatalf("in-memory runs = %d, want %d", len(d.runs), RecordsKept)
+	}
+	// d-20 is still retained on disk but was the oldest in-memory terminal
+	// record, so lookup must transparently reload it.
+	if _, ok := d.runs["d-20"]; ok {
+		t.Fatal("oldest terminal run was not pruned from memory")
+	}
+	if rec, err := d.Get("d-20"); err != nil || rec.Status != StatusDone {
+		t.Fatalf("Get disk fallback = %+v, %v", rec, err)
+	}
+	if entries := d.Wait(context.Background(), []string{"d-20"}, 0); len(entries) != 1 || entries[0].Status != StatusDone {
+		t.Fatalf("Wait disk fallback = %+v", entries)
+	}
 }
 
 func TestCancelMarksRecordCanceled(t *testing.T) {

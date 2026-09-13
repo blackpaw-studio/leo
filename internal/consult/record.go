@@ -12,6 +12,7 @@ import (
 type Status string
 
 const (
+	StatusUnknown  Status = "unknown"
 	StatusQueued   Status = "queued"
 	StatusRunning  Status = "running"
 	StatusDone     Status = "done"

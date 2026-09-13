@@ -103,8 +103,8 @@ func TestResolveConsultFallsBackToNewestWhenNoneRunning(t *testing.T) {
 }
 
 func TestResolveConsultWithNoRecords(t *testing.T) {
-	if _, err := resolveConsult(nil, ""); err == nil {
-		t.Fatal("expected an error when nothing has been recorded")
+	if _, err := resolveConsult(nil, ""); err == nil || err.Error() != "no dispatches recorded yet" {
+		t.Fatalf("resolveConsult error = %v, want no dispatches recorded yet", err)
 	}
 }
 

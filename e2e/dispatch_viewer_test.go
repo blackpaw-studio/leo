@@ -27,7 +27,7 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(session))...).Run() })
 
-	v := consult.NewViewer(func(caller string) (string, bool) { return session, caller == "viewer-e2e" })
+	v := consult.NewViewer("/tmp/leo-e2e.yaml", func(caller string) (string, bool) { return session, caller == "viewer-e2e" })
 	v.TmuxPath = tmuxPath
 	d := consult.NewDispatcherWithOnStart(nil, context.Background(), v.OnStart)
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -45,11 +45,14 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	if entries := d.Wait(context.Background(), []string{started.ID}, consult.RunTimeout); len(entries) != 1 || entries[0].Status != consult.StatusDone {
 		t.Fatalf("Wait = %+v", entries)
 	}
-	out, err := exec.Command(tmuxPath, tmux.Args("list-windows", "-t", tmux.Target(session), "-F", "#{window_name}")...).Output()
+	out, err := exec.Command(tmuxPath, tmux.Args("list-panes", "-t", tmux.Target(session)+":="+started.ID, "-F", "#{window_name}\t#{pane_start_command}")...).Output()
 	if err != nil {
 		t.Fatalf("tmux list-windows: %v", err)
 	}
 	if !strings.Contains(string(out), started.ID) {
 		t.Fatalf("viewer window %q missing from %q", started.ID, out)
+	}
+	if !strings.Contains(string(out), "--config '/tmp/leo-e2e.yaml' dispatch watch "+started.ID) {
+		t.Fatalf("viewer command missing daemon config from %q", out)
 	}
 }

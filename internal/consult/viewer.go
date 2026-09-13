@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -8,11 +9,15 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
-const dispatchViewerSession = "leo-dispatch"
+const (
+	dispatchViewerSession = "leo-dispatch"
+	viewerCommandTimeout  = 5 * time.Second
+)
 
 var dispatchID = regexp.MustCompile(`^d-[0-9a-f]+$`)
 
@@ -20,18 +25,22 @@ var dispatchID = regexp.MustCompile(`^d-[0-9a-f]+$`)
 // deliberately an optional Dispatcher hook: dispatch execution and recording
 // remain useful when tmux is unavailable.
 type Viewer struct {
-	once          sync.Once
-	TmuxPath      string
-	Executable    func() (string, error)
-	ExecCommand   func(name string, args ...string) *exec.Cmd
-	ResolveCaller func(caller string) (session string, ok bool)
-	Logf          func(format string, args ...any)
+	once               sync.Once
+	ConfigPath         string
+	TmuxPath           string
+	Executable         func() (string, error)
+	ExecCommand        func(name string, args ...string) *exec.Cmd
+	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
+	Timeout            time.Duration
+	ResolveCaller      func(caller string) (session string, ok bool)
+	Logf               func(format string, args ...any)
 }
 
 // NewViewer returns a viewer using Leo's dedicated tmux server. resolveCaller
 // should return a caller's supervised tmux session only while it is live.
-func NewViewer(resolveCaller func(string) (string, bool)) *Viewer {
+func NewViewer(configPath string, resolveCaller func(string) (string, bool)) *Viewer {
 	return &Viewer{
+		ConfigPath:    configPath,
 		TmuxPath:      "tmux",
 		Executable:    os.Executable,
 		ExecCommand:   exec.Command,
@@ -77,7 +86,7 @@ func (v *Viewer) OnStart(rec Record) {
 		v.log("resolving leo executable: %v", err)
 		return
 	}
-	watch := fmt.Sprintf("%s dispatch watch %s", shellQuote(leo), rec.ID)
+	watch := fmt.Sprintf("%s --config %s dispatch watch %s", shellQuote(leo), shellQuote(v.ConfigPath), rec.ID)
 	if err := v.run("new-window", "-d", "-t", tmux.Target(session), "-n", rec.ID, watch); err != nil {
 		v.log("opening dispatch viewer %q: %v", rec.ID, err)
 		return
@@ -102,8 +111,11 @@ func (v *Viewer) setDefaults() {
 	if v.Executable == nil {
 		v.Executable = os.Executable
 	}
-	if v.ExecCommand == nil {
+	if v.ExecCommand == nil && v.ExecCommandContext == nil {
 		v.ExecCommand = exec.Command
+	}
+	if v.Timeout <= 0 {
+		v.Timeout = viewerCommandTimeout
 	}
 	if v.Logf == nil {
 		v.Logf = log.Printf
@@ -111,7 +123,7 @@ func (v *Viewer) setDefaults() {
 }
 
 func (v *Viewer) prune() {
-	out, err := v.command("list-panes", "-a", "-F", "#{pane_dead}\t#{window_name}\t#{window_id}").Output()
+	out, err := v.output("list-panes", "-a", "-F", "#{pane_dead}\t#{window_name}\t#{window_id}")
 	if err != nil {
 		v.log("listing stale dispatch viewers: %v", err)
 		return
@@ -127,11 +139,24 @@ func (v *Viewer) prune() {
 	}
 }
 
-func (v *Viewer) command(args ...string) *exec.Cmd {
+func (v *Viewer) command(ctx context.Context, args ...string) *exec.Cmd {
+	if v.ExecCommandContext != nil {
+		return v.ExecCommandContext(ctx, v.TmuxPath, tmux.Args(args...)...)
+	}
 	return v.ExecCommand(v.TmuxPath, tmux.Args(args...)...)
 }
 
-func (v *Viewer) run(args ...string) error       { return v.command(args...).Run() }
+func (v *Viewer) run(args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), v.Timeout)
+	defer cancel()
+	return v.command(ctx, args...).Run()
+}
+
+func (v *Viewer) output(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), v.Timeout)
+	defer cancel()
+	return v.command(ctx, args...).Output()
+}
 func (v *Viewer) log(format string, args ...any) { v.Logf("dispatch viewer: "+format, args...) }
 
 func windowTarget(session, name string) string { return tmux.Target(session) + ":=" + name }

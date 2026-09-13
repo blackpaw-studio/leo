@@ -226,7 +226,7 @@ func (c *daemonClient) waitDispatch(ctx context.Context, ids []string, timeout t
 	}
 	query.Set("timeout", fmt.Sprintf("%g", timeout.Seconds()))
 	client := *c
-	client.http = &http.Client{Timeout: timeout + time.Minute}
+	client.http = &http.Client{Timeout: dispatchWaitHTTPTimeout(timeout)}
 	raw, err := client.doContext(ctx, http.MethodGet, "/api/dispatch/wait?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err
@@ -236,6 +236,13 @@ func (c *daemonClient) waitDispatch(ctx context.Context, ids []string, timeout t
 		return nil, fmt.Errorf("decode dispatch wait: %w", err)
 	}
 	return entries, nil
+}
+
+func dispatchWaitHTTPTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return consultHTTPTimeout
+	}
+	return timeout + time.Minute
 }
 
 func (c *daemonClient) cancelDispatch(ctx context.Context, id string) (consult.Record, error) {

@@ -81,6 +81,15 @@ func TestConsultPropagatesCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestWaitDispatchUsesConsultCeilingForUnboundedWait(t *testing.T) {
+	if got := dispatchWaitHTTPTimeout(0); got != consultHTTPTimeout {
+		t.Fatalf("unbounded wait client timeout = %s, want %s", got, consultHTTPTimeout)
+	}
+	if got := dispatchWaitHTTPTimeout(10 * time.Second); got != 70*time.Second {
+		t.Fatalf("bounded wait client timeout = %s, want 1m10s", got)
+	}
+}
+
 // TestDaemonClientOmitsBearerWhenTokenEmpty ensures the client is safe to
 // construct with no token — the server-side tests that spin up fake daemons
 // rely on this.

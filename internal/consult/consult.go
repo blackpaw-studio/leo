@@ -228,6 +228,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	state := &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: cancel}
 	d.mu.Lock()
 	d.runs[rec.ID] = state
+	d.pruneTerminalRunsLocked()
 	d.mu.Unlock()
 	if rec.Kind == "dispatch" && d.onStart != nil {
 		d.onStart(rec)
@@ -354,6 +355,29 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 		_ = state.handle.SetText(text)
 	}
 	finish(state.handle, state.record.ID, status, cause)
+	d.mu.Lock()
+	d.pruneTerminalRunsLocked()
+	d.mu.Unlock()
+}
+
+// pruneTerminalRunsLocked bounds completed in-memory runs. Records on disk
+// remain available through lookup, while active runs are never evicted.
+func (d *Dispatcher) pruneTerminalRunsLocked() {
+	terminal := make([]*runState, 0, len(d.runs))
+	for _, state := range d.runs {
+		if state.record.Status.Terminal() {
+			terminal = append(terminal, state)
+		}
+	}
+	if len(terminal) <= RecordsKept {
+		return
+	}
+	sort.Slice(terminal, func(i, j int) bool {
+		return terminal[i].record.EndedAt.Before(terminal[j].record.EndedAt)
+	})
+	for _, state := range terminal[:len(terminal)-RecordsKept] {
+		delete(d.runs, state.record.ID)
+	}
 }
 
 // Wait returns one entry per requested dispatch once all are terminal or the
@@ -365,6 +389,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 		entries[i].ID = id
 		rec, state, err := d.lookup(id)
 		if err != nil {
+			entries[i].Status = StatusUnknown
 			entries[i].Err = fmt.Sprintf("unknown dispatch %s", id)
 			continue
 		}
@@ -459,14 +484,26 @@ func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
 	if err != nil || state == nil || rec.Status.Terminal() {
 		return rec, err
 	}
+	return d.terminateState(state, status), nil
+}
+
+// terminateState applies a cancellation to a run that was observed as live.
+// The state can finish between that observation and the lock acquisition, so
+// it must always re-check the authoritative record while locked.
+func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	d.mu.Lock()
+	if state.record.Status.Terminal() {
+		rec := state.record
+		d.mu.Unlock()
+		return rec
+	}
 	state.record.Status = status
 	state.record.EndedAt = time.Now()
-	rec = state.record
+	rec := state.record
 	d.mu.Unlock()
 	_ = state.handle.SetStatus(status)
 	state.cancel()
-	return rec, nil
+	return rec
 }
 
 // Consult preserves the synchronous one-off consultant API over dispatch.

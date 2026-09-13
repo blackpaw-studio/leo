@@ -376,7 +376,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	}
 	s.deliverPeer = peerinbox.Deliver
 	s.fetchAgentListFn = s.fetchAgentList
-	viewer := consult.NewViewer(func(caller string) (string, bool) {
+	viewer := consult.NewViewer(configPath, func(caller string) (string, bool) {
 		if s.processes == nil {
 			return "", false
 		}

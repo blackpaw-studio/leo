@@ -45,7 +45,7 @@ with `{id, harness, model, cwd, watch}` where `watch` is the command
   mode; dispatch adds no preamble. Users define a `codex-implementer` template
   with a write-capable permission mode and a `codex-reviewer` template without
   one.
-- `name` is an optional label used for the tmux window and the record.
+- `name` is an optional label stored on the record and shown by `leo dispatch list/show`.
 
 `leo_wait {ids: [string], timeout_seconds?}` → blocks until every id is
 terminal or the timeout elapses; returns one entry per id:
@@ -93,7 +93,7 @@ non-terminal record is marked `failed` with reason `daemon restarted`.
 When a run starts, the daemon opens a viewer window on its own tmux server:
 
 - Caller is a supervised leo agent (its `from` resolves to a tmux session):
-  `tmux new-window -d -t leo-<caller> -n <name or id> "leo dispatch watch <id>"`.
+  `tmux new-window -d -t leo-<caller> -n <id> "leo --config <path> dispatch watch <id>"`. The window is named by id, never by label, so the pruner can recognise viewer windows safely.
 - Any other caller: the same window in a `leo-dispatch` session, created on
   demand.
 

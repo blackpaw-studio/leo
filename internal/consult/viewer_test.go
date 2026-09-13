@@ -5,11 +5,13 @@ import (
 	"os/exec"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestViewerOpensDispatchInCallerSession(t *testing.T) {
 	var calls [][]string
 	v := &Viewer{
+		ConfigPath: "/tmp/leo.yaml",
 		TmuxPath:   "tmux",
 		Executable: func() (string, error) { return "/opt/leo", nil },
 		ResolveCaller: func(caller string) (string, bool) {
@@ -26,7 +28,7 @@ func TestViewerOpensDispatchInCallerSession(t *testing.T) {
 	want := [][]string{
 		{"tmux", "-L", "leo", "list-panes", "-a", "-F", "#{pane_dead}\t#{window_name}\t#{window_id}"},
 		{"tmux", "-L", "leo", "has-session", "-t", "=leo-worker"},
-		{"tmux", "-L", "leo", "new-window", "-d", "-t", "=leo-worker", "-n", "d-123abc", "'/opt/leo' dispatch watch d-123abc"},
+		{"tmux", "-L", "leo", "new-window", "-d", "-t", "=leo-worker", "-n", "d-123abc", "'/opt/leo' --config '/tmp/leo.yaml' dispatch watch d-123abc"},
 		{"tmux", "-L", "leo", "set-window-option", "-t", "=leo-worker:=d-123abc", "remain-on-exit", "on"},
 	}
 	if !reflect.DeepEqual(calls, want) {
@@ -37,6 +39,7 @@ func TestViewerOpensDispatchInCallerSession(t *testing.T) {
 func TestViewerCreatesFallbackSession(t *testing.T) {
 	var calls [][]string
 	v := &Viewer{
+		ConfigPath: "/tmp/leo.yaml",
 		TmuxPath:   "tmux",
 		Executable: func() (string, error) { return "/opt/leo", nil },
 		ExecCommand: func(name string, args ...string) *exec.Cmd {
@@ -54,7 +57,7 @@ func TestViewerCreatesFallbackSession(t *testing.T) {
 		{"tmux", "-L", "leo", "list-panes", "-a", "-F", "#{pane_dead}\t#{window_name}\t#{window_id}"},
 		{"tmux", "-L", "leo", "has-session", "-t", "=leo-dispatch"},
 		{"tmux", "-L", "leo", "new-session", "-d", "-s", "leo-dispatch"},
-		{"tmux", "-L", "leo", "new-window", "-d", "-t", "=leo-dispatch", "-n", "d-456def", "'/opt/leo' dispatch watch d-456def"},
+		{"tmux", "-L", "leo", "new-window", "-d", "-t", "=leo-dispatch", "-n", "d-456def", "'/opt/leo' --config '/tmp/leo.yaml' dispatch watch d-456def"},
 		{"tmux", "-L", "leo", "set-window-option", "-t", "=leo-dispatch:=d-456def", "remain-on-exit", "on"},
 	}
 	if !reflect.DeepEqual(calls, want) {
@@ -66,6 +69,7 @@ func TestViewerContinuesWhenFallbackSessionRaces(t *testing.T) {
 	var calls [][]string
 	hasSessionCalls := 0
 	v := &Viewer{
+		ConfigPath: "/tmp/leo.yaml",
 		TmuxPath:   "tmux",
 		Executable: func() (string, error) { return "/opt/leo", nil },
 		ExecCommand: func(name string, args ...string) *exec.Cmd {
@@ -92,6 +96,7 @@ func TestViewerContinuesWhenFallbackSessionRaces(t *testing.T) {
 func TestViewerShellQuotesExecutable(t *testing.T) {
 	var calls [][]string
 	v := &Viewer{
+		ConfigPath: "/tmp/leo.yaml",
 		TmuxPath:   "tmux",
 		Executable: func() (string, error) { return "/opt/Leo Tools/leo's", nil },
 		ExecCommand: func(name string, args ...string) *exec.Cmd {
@@ -101,7 +106,7 @@ func TestViewerShellQuotesExecutable(t *testing.T) {
 	}
 	v.OnStart(Record{ID: "d-c0ffee", Kind: "dispatch"})
 	for _, call := range calls {
-		if containsArg(call, "new-window") && !containsArg(call, `'/opt/Leo Tools/leo'"'"'s' dispatch watch d-c0ffee`) {
+		if containsArg(call, "new-window") && !containsArg(call, `'/opt/Leo Tools/leo'"'"'s' --config '/tmp/leo.yaml' dispatch watch d-c0ffee`) {
 			t.Fatalf("unquoted watch command: %#v", call)
 		}
 	}
@@ -137,6 +142,20 @@ func TestViewerFailureDoesNotAffectStart(t *testing.T) {
 	}
 	if _, err := d.Start(context.Background(), testConfig(), dispatchRequest(t)); err != nil {
 		t.Fatalf("Start returned tmux failure: %v", err)
+	}
+}
+
+func TestViewerTmuxCommandsTimeOut(t *testing.T) {
+	v := &Viewer{
+		TmuxPath: "tmux", Timeout: 10 * time.Millisecond,
+		ExecCommandContext: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "sleep 1")
+		},
+	}
+	started := time.Now()
+	v.OnStart(Record{ID: "d-timeout", Kind: "dispatch"})
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("OnStart blocked for %s after tmux timeout", elapsed)
 	}
 }
 

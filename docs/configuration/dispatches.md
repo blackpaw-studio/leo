@@ -77,12 +77,16 @@ templates:
   codex-implementer:
     harness: codex
     model: gpt-5.6-terra
-    workspace: ~/src/project
+    harness_options:
+      permission_mode: workspace-write
   codex-reviewer:
     harness: codex
     model: gpt-5.6-sol
-    workspace: ~/src/project
+    harness_options:
+      permission_mode: read-only
 ```
+
+The subagent runs in the caller's cwd unless `cwd` overrides it.
 
 An orchestrator can dispatch the implementation, then dispatch the reviewer
 with the implementation's scope and request the review after it completes.
