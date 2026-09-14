@@ -167,8 +167,10 @@ One injector entrypoint, `InjectInto(paneID, classifier, text)`:
 1. Acquire a slot for the turn; none free → `rejected: no capacity`.
 2. Classify the pane. Anything but `Empty` → `rejected: composer busy` (or
    `composer unknown`). No keystrokes were sent.
-3. `set-buffer --`, `paste-buffer -d`, confirm the pasted body appears; a
-   confirm failure → `rejected: paste failed` (nothing was submitted).
+3. `set-buffer --`, `paste-buffer -d -p` (bracketed paste), then confirm the
+   pasted body appears; confirmation accepts both Claude's `[Pasted text…]`
+   and Codex's `[Pasted Content …]` placeholders. A confirm failure →
+   `rejected: paste failed` (nothing was submitted).
 4. Arm the acknowledgment window (`ack_timeout`, 10 s) **immediately before**
    `Enter`, then send `Enter`.
 5. A submit event while armed marks `delivered: true` and disarms. A human
