@@ -2,13 +2,15 @@
 
 Leo can spawn and manage ephemeral coding agents two ways: the HTTP API (used by channel plugins and the web UI) and the `leo agent` CLI (Bash tool, SSH). Both share one in-memory manager so state is always consistent. Agents run in tmux with `--remote-control` and appear in claude.ai/code.
 
-For bounded, headless work that does not need a persistent agent or a branch,
-use `leo_dispatch` instead: it starts a template asynchronously, returns an
-ID, and `leo_wait` collects the result. Use `leo_consult` for a synchronous
-second opinion, and `leo_cancel` to stop an in-flight dispatch. Call
-`leo dispatch watch <id>` to inspect the retained event feed; dispatches also
-open a viewer window on Leo's tmux server. See the Dispatches configuration
-guide for the complete contract.
+For bounded work that does not need a persistent agent or a branch, use
+`leo_dispatch`: it starts a template asynchronously, returns an ID, and
+`leo_wait` collects the result. It is headless by default; pass
+`mode: "interactive"` to run a steerable Codex/Claude TUI in the caller's
+tmux session, then use `leo_send_dispatch` only when it is idle. Use
+`leo_consult` for a synchronous second opinion, and `leo_cancel` to stop an
+in-flight dispatch. Call `leo dispatch watch <id>` to inspect the retained
+event feed; headless dispatches also open a viewer window on Leo's tmux
+server. See the Dispatches configuration guide for the complete contract.
 
 When you need multiple agents working on the same repo in parallel, use `leo agent spawn --worktree <branch>` — it creates an isolated git worktree per branch so nothing fights over `.git/HEAD`. The HTTP API only supports the shared-workspace flow today; reach for the CLI when you need branch isolation.
 
