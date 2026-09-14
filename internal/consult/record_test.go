@@ -221,6 +221,45 @@ func TestFileRecorderPrunesOldestTerminalRecords(t *testing.T) {
 	}
 }
 
+func TestFileRecorderPruneKeepsViewerWindowsWithinGrace(t *testing.T) {
+	r, dir := newTestRecorder(t)
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	r.Now = func() time.Time { return now }
+	mkdir(t, dir)
+	for i := range 25 {
+		rec := testRecord(fmt.Sprintf("d-%04d", i))
+		rec.Kind = "dispatch"
+		rec.Status = StatusDone
+		rec.StartedAt = now.Add(-time.Hour + time.Duration(i)*time.Minute)
+		rec.EndedAt = now.Add(-time.Duration(25-i) * time.Minute)
+		if i < 3 {
+			rec.ViewerWindowID = fmt.Sprintf("@%d", i)
+		}
+		if err := writeRecord(dir, rec); err != nil {
+			t.Fatalf("seeding record %d: %v", i, err)
+		}
+	}
+
+	r.prune(RecordsKept)
+	records, err := Load(filepath.Dir(dir))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(records) != RecordsKept+3 {
+		t.Fatalf("kept %d records, want %d including protected viewers", len(records), RecordsKept+3)
+	}
+	for i := range 3 {
+		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("d-%04d.json", i))); err != nil {
+			t.Errorf("viewer record d-%04d was pruned during grace: %v", i, err)
+		}
+	}
+	for _, id := range []string{"d-0003", "d-0004"} {
+		if _, err := os.Stat(filepath.Join(dir, id+".json")); !os.IsNotExist(err) {
+			t.Errorf("unprotected record %s survived pruning", id)
+		}
+	}
+}
+
 func TestLoadSkipsUnreadableRecords(t *testing.T) {
 	r, dir := newTestRecorder(t)
 	h, err := r.Open(testRecord("c-good"))
@@ -295,6 +334,16 @@ func TestFileRecorderPrunesAbandonedRecords(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, "c-stuck.json")); !os.IsNotExist(err) {
 		t.Error("abandoned record survived pruning and holds a slot forever")
+	}
+}
+
+func TestUnlimitedDispatchIsNotStale(t *testing.T) {
+	record := testRecord("d-long")
+	record.Kind = "dispatch"
+	record.Status = StatusRunning
+	record.StartedAt = time.Now().Add(-3 * time.Hour)
+	if record.Stale(time.Now()) {
+		t.Fatal("unlimited dispatch was marked stale")
 	}
 }
 

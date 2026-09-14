@@ -898,7 +898,7 @@ answer back into the caller's session as a message.
   configured permissions in the caller's workspace.
 - One-shot only: no session is kept and no follow-up is possible; spawn a
   real agent for a conversation.
-- Timeout 10 minutes; at most 4 consults run concurrently (extra dispatches
+- Timeout 10 minutes; at most 6 consults run concurrently (extra dispatches
   queue). Failures and timeouts are delivered as
   `[consult <id> · … · failed after <elapsed>] <reason>` — never dropped.
 - Callers that are config-defined processes without an agent record run the

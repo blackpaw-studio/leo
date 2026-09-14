@@ -34,6 +34,13 @@ func (h *fakeHandle) SetStatus(s Status) error {
 
 func (h *fakeHandle) SetText(string) error { return nil }
 
+func (h *fakeHandle) SetViewerWindowID(windowID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.rec.ViewerWindowID = windowID
+	return nil
+}
+
 func (h *fakeHandle) Close(s Status, cause error) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()

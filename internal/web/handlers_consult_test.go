@@ -109,6 +109,18 @@ func TestAPIDispatchLifecycle(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "done") {
 		t.Fatalf("wait: %d %s", w.Code, w.Body.String())
 	}
+	var waited struct {
+		Data []struct {
+			ElapsedSeconds *float64        `json:"elapsed_seconds"`
+			Elapsed        json.RawMessage `json:"elapsed"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &waited); err != nil {
+		t.Fatalf("decode wait: %v", err)
+	}
+	if len(waited.Data) != 1 || waited.Data[0].ElapsedSeconds == nil || waited.Data[0].Elapsed != nil {
+		t.Fatalf("wait elapsed shape = %+v", waited.Data)
+	}
 	w = httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/dispatch/"+started.Data.ID, nil)
 	req.SetPathValue("id", started.Data.ID)
@@ -124,5 +136,18 @@ func TestAPIDispatchRejectsMissingCWD(t *testing.T) {
 	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work"}`)))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400", w.Code)
+	}
+}
+
+func TestDispatchTimeout(t *testing.T) {
+	jsonTimeout := 3.5
+	if got, err := dispatchTimeout(&jsonTimeout, ""); err != nil || got != 3500*time.Millisecond {
+		t.Fatalf("JSON timeout = %s, %v", got, err)
+	}
+	if got, err := dispatchTimeout(nil, "2"); err != nil || got != 2*time.Second {
+		t.Fatalf("query timeout = %s, %v", got, err)
+	}
+	if _, err := dispatchTimeout(nil, "-1"); err == nil {
+		t.Fatal("negative timeout was accepted")
 	}
 }

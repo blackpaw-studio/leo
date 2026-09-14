@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -16,7 +17,10 @@ import (
 // handleAPIDispatch starts a headless subagent without tying its lifetime to
 // the request. Unlike consult, callers must state the target workspace.
 func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
-	var req struct{ From, Template, Model, Prompt, Cwd, Name string }
+	var req struct {
+		From, Template, Model, Prompt, Cwd, Name string
+		TimeoutSeconds                           *float64 `json:"timeout_seconds"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
 		return
@@ -34,7 +38,12 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("loading config: %v", err)})
 		return
 	}
-	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name})
+	timeout, err := dispatchTimeout(req.TimeoutSeconds, r.URL.Query().Get("timeout_seconds"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
+		return
+	}
+	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout})
 	if err != nil {
 		var validationErr *consult.ValidationError
 		status := http.StatusInternalServerError
@@ -47,12 +56,31 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: started})
 }
 
+func dispatchTimeout(jsonSeconds *float64, querySeconds string) (time.Duration, error) {
+	seconds := jsonSeconds
+	if querySeconds != "" {
+		parsed, err := strconv.ParseFloat(querySeconds, 64)
+		if err != nil {
+			return 0, fmt.Errorf("timeout_seconds must be a non-negative number of seconds")
+		}
+		seconds = &parsed
+	}
+	if seconds == nil {
+		return 0, nil
+	}
+	if *seconds < 0 || math.IsNaN(*seconds) || math.IsInf(*seconds, 0) || *seconds > float64(time.Duration(1<<63-1))/float64(time.Second) {
+		return 0, fmt.Errorf("timeout_seconds must be a non-negative number of seconds")
+	}
+	return time.Duration(*seconds * float64(time.Second)), nil
+}
+
 func (s *Server) handleAPIDispatchGet(w http.ResponseWriter, r *http.Request) {
 	record, err := s.consults.Get(r.PathValue("id"))
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, apiResponse{Error: err.Error()})
 		return
 	}
+	s.consults.Collect(record)
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: record})
 }
 

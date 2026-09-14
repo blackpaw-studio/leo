@@ -2,13 +2,40 @@ package consult
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
+
+func TestEntryJSONUsesElapsedSeconds(t *testing.T) {
+	want := Entry{ID: "d-1", Status: StatusDone, Elapsed: 1500 * time.Millisecond, Text: "done"}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatalf("decoding wire JSON: %v", err)
+	}
+	if _, ok := wire["elapsed"]; ok {
+		t.Fatalf("wire JSON contains legacy elapsed: %s", data)
+	}
+	if got := string(wire["elapsed_seconds"]); got != "1.5" {
+		t.Fatalf("elapsed_seconds = %s, want 1.5", got)
+	}
+	var got Entry
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.Elapsed != want.Elapsed {
+		t.Fatalf("Elapsed = %s, want %s", got.Elapsed, want.Elapsed)
+	}
+}
 
 func testConfig() *config.Config {
 	return &config.Config{Templates: map[string]config.TemplateConfig{

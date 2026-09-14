@@ -45,7 +45,7 @@ func dispatchHTTP(ctx context.Context, cfg *config.Config, method, path string, 
 		return fmt.Errorf("reading API token: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	resp, err := (&http.Client{Timeout: consult.RunTimeout + time.Minute}).Do(req)
+	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,11 @@ func dispatchHTTP(ctx context.Context, cfg *config.Config, method, path string, 
 
 func newDispatchRunCmd() *cobra.Command {
 	var model, cwd, name, host string
+	var timeout time.Duration
 	cmd := &cobra.Command{Use: "run <template> <prompt>", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		if timeout < 0 {
+			return fmt.Errorf("timeout must be non-negative")
+		}
 		cfg, res, err := dispatch(host)
 		if err != nil {
 			return err
@@ -85,11 +89,15 @@ func newDispatchRunCmd() *cobra.Command {
 			return err
 		}
 		var started consult.Started
-		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodPost, "/api/dispatch", map[string]string{"template": args[0], "prompt": args[1], "model": model, "cwd": cwd, "name": name}, &started); err != nil {
+		body := map[string]any{"template": args[0], "prompt": args[1], "model": model, "cwd": cwd, "name": name}
+		if timeout > 0 {
+			body["timeout_seconds"] = timeout.Seconds()
+		}
+		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodPost, "/api/dispatch", body, &started); err != nil {
 			return err
 		}
 		var entries []consult.Entry
-		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodGet, "/api/dispatch/wait?id="+started.ID+"&timeout="+fmt.Sprintf("%g", consult.RunTimeout.Seconds()), nil, &entries); err != nil {
+		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodGet, "/api/dispatch/wait?id="+started.ID+"&timeout="+fmt.Sprintf("%g", timeout.Seconds()), nil, &entries); err != nil {
 			return err
 		}
 		if len(entries) != 1 {
@@ -104,6 +112,7 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&model, "model", "m", "", "model override")
 	cmd.Flags().StringVar(&cwd, "cwd", "", "working directory")
 	cmd.Flags().StringVar(&name, "name", "", "run name")
+	cmd.Flags().DurationVar(&timeout, "timeout", 0, "optional run cap (unlimited when omitted)")
 	addHostFlag(cmd, &host)
 	return cmd
 }
@@ -118,8 +127,8 @@ func newDispatchShowCmd() *cobra.Command {
 		if !res.Localhost {
 			return fmt.Errorf("dispatch show is not supported for remote hosts")
 		}
-		record, err := consult.LoadOne(cfg.StatePath(), args[0])
-		if err != nil {
+		var record consult.Record
+		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodGet, "/api/dispatch/"+args[0], nil, &record); err != nil {
 			return err
 		}
 		return json.NewEncoder(consultStdout).Encode(record)
