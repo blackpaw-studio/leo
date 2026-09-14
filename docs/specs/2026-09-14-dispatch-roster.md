@@ -23,11 +23,15 @@ and never get crowded.
 - `running_since` (timestamp, nullable): set when work starts, cleared and
   folded into `active_seconds` when it stops.
 
-Work starts when a headless process starts (not while queued) or when an
-interactive turn opens (orchestrator or user). Work stops on terminal status
+Work starts after a headless process starts successfully (not while queued or
+before `Start` succeeds). Interactive work starts when the harness confirms
+delivery (`UserPromptSubmit` / user turn open), rather than when a queued turn
+is created. Work stops on terminal status
 (done, failed, canceled, timeout, closed) and, for interactive runs, on
 `idle` and `settling`. Live active time is
 `active_seconds + (now - running_since)` while running.
+After a daemon restart, a persisted running interval is folded at the restart
+marking time, so it can include downtime that Leo could not observe.
 
 `active_seconds` is added to the API record, `leo_wait` entries, and
 `leo dispatch list/show` output next to the existing wall-clock elapsed value.
@@ -42,12 +46,12 @@ dispatch windows (agent sessions `leo-<name>` and `leo-dispatch`):
 ```
 
 - One entry per record whose window lives in that session, oldest first.
-- Glyphs: `⟳` running, `⏸` idle (interactive, waiting for input), `…`
+- Glyphs: `⟳` running, `⏸` idle or settling (interactive, waiting for input), `…`
   queued, `✓` done or closed, `✗` failed / canceled / timeout.
 - Label is the run name or template, sanitised as for window names,
   truncated to 16 characters. Time is `m:ss`, or `h:mm:ss` past an hour.
 - Colours via tmux style markup, fixed constants: running default,
-  idle amber, done green, failed red.
+  idle and settling amber, done green, failed red.
 - Terminal entries follow their window: gone when the viewer window closes on
   collection, otherwise dropped after the same one-hour grace.
 - Rendering is a pure function of records and `now` in
@@ -63,10 +67,11 @@ set-option -t =<session>: @leo_roster "<text>"
 
 The first time a session gets a roster, leo also sets the session options
 `status 2` and `status-format[1] "#[align=left] #{@leo_roster}"`. When the
-roster becomes empty, leo unsets those two session options (`set-option -u`)
-so the session falls back to the user's global config, and clears
-`@leo_roster`. Sessions that already have `status` ≥ 2 from user config are
-left alone except for `status-format[1]`.
+roster becomes empty, leo always unsets the session's `status-format[1]` and
+`@leo_roster`. It unsets `status` only when leo set it, using a session-scoped
+ownership marker so a restarted daemon can clear stale roster lines. Sessions
+that already have `status` ≥ 2 from user config are left alone except for
+`status-format[1]`.
 
 tmux redraws the status line when a referenced option changes; if the live
 check shows stale counters, leo additionally sets a session

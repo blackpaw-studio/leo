@@ -10,9 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,7 +138,8 @@ type Server struct {
 	fetchAgentListFn func() []string
 
 	// Testability seam for exec.Command
-	execCommand func(name string, args ...string) *exec.Cmd
+	execCommand        func(name string, args ...string) *exec.Cmd
+	execCommandContext func(context.Context, string, ...string) *exec.Cmd
 
 	// resolvePeerSocket and deliverPeer route live Claude messages through
 	// Claude Code's documented per-session inbox. Tests replace these seams.
@@ -352,23 +351,24 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		trustedProxies = nil
 	}
 	s := &Server{
-		configPath:      configPath,
-		processes:       processes,
-		scheduler:       scheduler,
-		reloader:        reloader,
-		agentSvc:        agentSvc,
-		leoPath:         leoPath,
-		port:            opts.Port,
-		apiToken:        opts.APIToken,
-		agentToken:      opts.AgentToken,
-		clients:         validClients(opts.Clients, opts.APIToken, opts.AgentToken),
-		allowedHosts:    opts.AllowedHosts,
-		trustedProxies:  trustedProxies,
-		serviceLogPath:  opts.LogPath,
-		execCommand:     exec.Command,
-		resolveHandle:   opts.ResolveHandle,
-		sseHeartbeat:    defaultSSEHeartbeat,
-		sseWriteTimeout: defaultSSEWriteTimeout,
+		configPath:         configPath,
+		processes:          processes,
+		scheduler:          scheduler,
+		reloader:           reloader,
+		agentSvc:           agentSvc,
+		leoPath:            leoPath,
+		port:               opts.Port,
+		apiToken:           opts.APIToken,
+		agentToken:         opts.AgentToken,
+		clients:            validClients(opts.Clients, opts.APIToken, opts.AgentToken),
+		allowedHosts:       opts.AllowedHosts,
+		trustedProxies:     trustedProxies,
+		serviceLogPath:     opts.LogPath,
+		execCommand:        exec.Command,
+		execCommandContext: exec.CommandContext,
+		resolveHandle:      opts.ResolveHandle,
+		sseHeartbeat:       defaultSSEHeartbeat,
+		sseWriteTimeout:    defaultSSEWriteTimeout,
 	}
 	for _, opt := range extra {
 		opt(s)
@@ -388,44 +388,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		}
 		return agent.SessionName(caller), true
 	}
-	viewer := consult.NewViewer(configPath, resolveCallerSession)
-	// The viewer executes through the server's command seam, so tests can
-	// inspect its tmux argv without requiring a live tmux server.
-	viewer.TmuxPath = findTmuxPath()
-	viewer.ExecCommand = func(name string, args ...string) *exec.Cmd {
-		return s.execCommand(name, args...)
-	}
-	// Viewer operations must be cancellable: collection and housekeeping are
-	// best-effort and may not inherit an unbounded tmux process.
-	viewer.ExecCommandContext = exec.CommandContext
-	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart, viewer.Close)
-	interactiveLeoPath, err := os.Executable()
-	if err != nil {
-		interactiveLeoPath, _ = filepath.Abs(s.leoPath)
-	}
-	runtime := consult.NewInteractiveRuntime(configPath, s.loadConfig, resolveCallerSession, findTmuxPath(), interactiveLeoPath)
-	runtime.AgentToken = s.agentToken
-	s.consults.SetInteractiveRuntime(runtime)
-	s.consults.MarkInterrupted()
-	if opts.ParentContext != nil {
-		go func() {
-			dispatcherTicker := time.NewTicker(5 * time.Second)
-			viewerTicker := time.NewTicker(10 * time.Second)
-			defer dispatcherTicker.Stop()
-			defer viewerTicker.Stop()
-			for {
-				select {
-				case <-opts.ParentContext.Done():
-					return
-				case now := <-dispatcherTicker.C:
-					s.consults.Sweep(now)
-				case now := <-viewerTicker.C:
-					viewer.Sweep(s.consults.Records(), now)
-					s.consults.Prune()
-				}
-			}
-		}()
-	}
+	s.setupConsultRuntime(opts, resolveCallerSession)
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)
