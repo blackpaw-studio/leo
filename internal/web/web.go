@@ -10,7 +10,9 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -376,7 +378,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	}
 	s.deliverPeer = peerinbox.Deliver
 	s.fetchAgentListFn = s.fetchAgentList
-	viewer := consult.NewViewer(configPath, func(caller string) (string, bool) {
+	resolveCallerSession := func(caller string) (string, bool) {
 		if s.processes == nil {
 			return "", false
 		}
@@ -385,7 +387,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 			return "", false
 		}
 		return agent.SessionName(caller), true
-	})
+	}
+	viewer := consult.NewViewer(configPath, resolveCallerSession)
 	// The viewer executes through the server's command seam, so tests can
 	// inspect its tmux argv without requiring a live tmux server.
 	viewer.TmuxPath = findTmuxPath()
@@ -396,16 +399,24 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	// best-effort and may not inherit an unbounded tmux process.
 	viewer.ExecCommandContext = exec.CommandContext
 	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart, viewer.Close)
+	interactiveLeoPath, err := os.Executable()
+	if err != nil {
+		interactiveLeoPath, _ = filepath.Abs(s.leoPath)
+	}
+	runtime := consult.NewInteractiveRuntime(configPath, s.loadConfig, resolveCallerSession, findTmuxPath(), interactiveLeoPath)
+	runtime.AgentToken = s.agentToken
+	s.consults.SetInteractiveRuntime(runtime)
 	s.consults.MarkInterrupted()
 	if opts.ParentContext != nil {
 		go func() {
-			ticker := time.NewTicker(10 * time.Minute)
+			ticker := time.NewTicker(10 * time.Second)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-opts.ParentContext.Done():
 					return
 				case now := <-ticker.C:
+					s.consults.Sweep(now)
 					viewer.Sweep(s.consults.Records(), now)
 					s.consults.Prune()
 				}

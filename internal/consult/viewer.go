@@ -139,7 +139,7 @@ func (v *Viewer) setDefaults() {
 // Close releases a completed dispatch's viewer. Only successful results are
 // collected immediately; other terminal states remain available for diagnosis.
 func (v *Viewer) Close(rec Record) {
-	if v == nil || rec.Kind != "dispatch" || rec.Status != StatusDone {
+	if v == nil || rec.Kind != "dispatch" || rec.Mode == ModeInteractive || rec.Status != StatusDone {
 		return
 	}
 	v.defaults()
@@ -173,7 +173,7 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 			v.windowIDs[rec.ID] = rec.ViewerWindowID
 			v.mu.Unlock()
 		}
-		if rec.Kind != "dispatch" || !rec.Status.Terminal() || rec.EndedAt.IsZero() || now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
+		if rec.Kind != "dispatch" || rec.Mode == ModeInteractive || !rec.Status.Terminal() || rec.EndedAt.IsZero() || now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
 			continue
 		}
 		v.kill(rec.ID)

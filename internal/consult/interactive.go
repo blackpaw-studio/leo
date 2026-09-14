@@ -22,6 +22,7 @@ const (
 // interactive runtime. Step 5 supplies the tmux implementation.
 type LaunchRequest struct {
 	ID, Harness, Model, Cwd, Name string
+	Template, Caller              string
 	Prompt                        string
 	Timeout                       time.Duration
 }
@@ -104,7 +105,7 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	d.persistLocked(s, "status")
 	d.persistLocked(s, "turn")
 	d.mu.Unlock()
-	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Name: req.Name, Prompt: req.Prompt, Timeout: req.Timeout})
+	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: req.Prompt, Timeout: req.Timeout})
 	if err != nil {
 		d.mu.Lock()
 		d.closeTurnLocked(s, t.TurnID, TurnRejected, err.Error())
