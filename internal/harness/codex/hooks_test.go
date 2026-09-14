@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -77,6 +79,87 @@ func TestPrepareInteractiveDetectsUntrusted(t *testing.T) {
 	err := (Codex{}).PrepareInteractive(home, "")
 	if err == nil || !strings.Contains(err.Error(), "/usr/bin/user-hook") {
 		t.Fatalf("PrepareInteractive() error = %v, want untrusted user hook", err)
+	}
+}
+
+func TestPrepareInteractiveUpsertsExistingTrustHash(t *testing.T) {
+	home := t.TempDir()
+	command := "/opt/leo dispatch report"
+	prepareLeoHookCommand = func() string { return command }
+	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
+	hooksPath := filepath.Join(home, "hooks.json")
+	canonicalHooks, err := canonicalPath(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := canonicalHooks + ":stop:0:0"
+	before := "# preserve me\n[other]\nx = 1\n" + trustEntry(key, "sha256:old") + "\n[also_preserve]\ny = 2\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Codex{}).PrepareInteractive(home, ""); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(after)
+	if got := strings.Count(content, "[hooks.state."+strconv.Quote(key)+"]"); got != 1 {
+		t.Fatalf("trust table count = %d, want 1:\n%s", got, content)
+	}
+	want := trustHash("Stop", nil, map[string]any{"type": "command", "command": command})
+	if !strings.Contains(content, "trusted_hash = "+strconv.Quote(want)) {
+		t.Fatalf("config missing updated trust hash %q:\n%s", want, content)
+	}
+	if !strings.Contains(content, "# preserve me\n[other]\nx = 1\n") || !strings.Contains(content, "[also_preserve]\ny = 2\n") {
+		t.Fatalf("unrelated config changed:\n%s", content)
+	}
+}
+
+func TestPrepareInteractiveConcurrent(t *testing.T) {
+	home := t.TempDir()
+	prepareLeoHookCommand = func() string { return "/opt/leo dispatch report" }
+	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- (Codex{}).PrepareInteractive(home, "")
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	hooks, err := readHooks(filepath.Join(home, "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, untrusted := hookTrustEntries(filepath.Join(home, "hooks.json"), hooks, nil)
+	if len(untrusted) != 0 || len(entries) != 4 {
+		t.Fatalf("Leo entries = %d, untrusted = %v; want 4, none", len(entries), untrusted)
+	}
+	config, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		header := strings.Split(entry, "\n")[0]
+		if got := strings.Count(string(config), header); got != 1 {
+			t.Fatalf("trust table %q count = %d, want 1", header, got)
+		}
+	}
+}
+
+func TestCodexHomeUsesLaunchHome(t *testing.T) {
+	if got, want := CodexHome(map[string]string{"HOME": "/launch-home"}), "/launch-home/.codex"; got != want {
+		t.Fatalf("CodexHome() = %q, want %q", got, want)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 var defaultLeoHookCommand = func() string {
@@ -24,12 +25,17 @@ var prepareLeoHookCommand = defaultLeoHookCommand
 
 var codexHookEvents = []string{"Stop", "UserPromptSubmit", "Interrupt", "SessionEnd"}
 
+var prepareInteractiveMu sync.Mutex
+
 // CodexHome resolves the same home directory used by a Codex launch: an
 // explicitly supplied launch environment wins over the daemon environment,
 // then Codex's conventional $HOME/.codex location is used.
 func CodexHome(env map[string]string) string {
 	if home := env["CODEX_HOME"]; home != "" {
 		return home
+	}
+	if home := env["HOME"]; home != "" {
+		return filepath.Join(home, ".codex")
 	}
 	if home := os.Getenv("CODEX_HOME"); home != "" {
 		return home
@@ -53,6 +59,9 @@ func (Codex) TurnHooks(_ []string) ([]string, error) {
 // interactive dispatch launch. Existing user hooks are retained; an untrusted
 // one fails fast rather than allowing Codex to show its review dialog.
 func (Codex) PrepareInteractive(home, _ string) error {
+	prepareInteractiveMu.Lock()
+	defer prepareInteractiveMu.Unlock()
+
 	command := prepareLeoHookCommand()
 	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
 	if err != nil {
@@ -148,10 +157,7 @@ func writeHooks(path string, hooks map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("codex: creating %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, encoded, 0o600); err != nil { // #nosec G306 -- Codex config is private
-		return fmt.Errorf("codex: writing %s: %w", path, err)
-	}
-	return nil
+	return writeFileAtomically(path, encoded)
 }
 
 func hookTrustEntries(path string, file map[string]any, trusted map[string]string) ([]string, []string) {
@@ -277,35 +283,100 @@ func trustedHashes(config string) map[string]string {
 }
 
 func appendTrustEntries(path, config string, entries []string) error {
-	if len(entries) == 0 {
+	updated := config
+	for _, entry := range entries {
+		updated = upsertConfigEntry(updated, entry)
+	}
+	if updated == config {
 		return nil
 	}
-	for _, entry := range entries {
-		if strings.Contains(config, entry) {
-			continue
-		}
-		if err := appendConfigEntry(path, entry); err != nil {
-			return err
-		}
-	}
-	return nil
+	return writeConfig(path, updated)
 }
 
 // appendConfigEntry is shared by Codex's workspace-trust and hook-trust
 // prelaunch paths so both preserve user config and write with the same mode.
 func appendConfigEntry(path, entry string) error {
+	config, err := os.ReadFile(path) // #nosec G304 -- CODEX_HOME config path
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("codex: reading %s: %w", path, err)
+	}
+	updated := upsertConfigEntry(string(config), entry)
+	if updated == string(config) {
+		return nil
+	}
+	return writeConfig(path, updated)
+}
+
+func writeConfig(path, config string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("codex: creating %s: %w", filepath.Dir(path), err)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- CODEX_HOME config path
+	return writeFileAtomically(path, []byte(config))
+}
+
+func writeFileAtomically(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
-		return fmt.Errorf("codex: opening %s: %w", path, err)
+		return fmt.Errorf("codex: creating temporary %s: %w", path, err)
 	}
-	defer f.Close()
-	if _, err := fmt.Fprintf(f, "\n%s\n", entry); err != nil {
-		return fmt.Errorf("codex: writing config entry: %w", err)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("codex: chmod temporary %s: %w", path, err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("codex: writing temporary %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("codex: closing temporary %s: %w", path, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("codex: replacing %s: %w", path, err)
 	}
 	return nil
+}
+
+// upsertConfigEntry replaces entry's single value in an existing exact TOML
+// table, or appends the table if absent. Bytes outside that table are retained.
+func upsertConfigEntry(config, entry string) string {
+	parts := strings.SplitN(entry, "\n", 2)
+	if len(parts) != 2 {
+		return config
+	}
+	header, value := parts[0], parts[1]
+	field := strings.SplitN(value, " =", 2)[0]
+	lines := strings.SplitAfter(config, "\n")
+	start, end := -1, len(lines)
+	for i, line := range lines {
+		trimmed := strings.TrimRight(line, "\r\n")
+		if trimmed == header {
+			start = i
+			continue
+		}
+		if start >= 0 && strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			end = i
+			break
+		}
+	}
+	if start < 0 {
+		return config + "\n" + entry + "\n"
+	}
+	for i := start + 1; i < end; i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), field+" =") {
+			eol := ""
+			if strings.HasSuffix(lines[i], "\r\n") {
+				eol = "\r\n"
+			} else if strings.HasSuffix(lines[i], "\n") {
+				eol = "\n"
+			}
+			lines[i] = value + eol
+			return strings.Join(lines, "")
+		}
+	}
+	lines = append(lines[:end], append([]string{value + "\n"}, lines[end:]...)...)
+	return strings.Join(lines, "")
 }
 
 func trustEntry(key, hash string) string {

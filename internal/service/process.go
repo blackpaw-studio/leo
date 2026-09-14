@@ -1272,7 +1272,7 @@ func tmuxPrimaryPane(tmuxPath, sessionName string) (string, error) {
 		}
 	}
 
-	pane, resolveErr := tmux.ResolvePane(context.Background(), tmuxPath, sessionName)
+	pane, resolveErr := tmuxOriginalPane(tmuxPath, sessionName)
 	if resolveErr != nil {
 		return "", fmt.Errorf("resolve primary pane: %w", resolveErr)
 	}
@@ -1280,6 +1280,37 @@ func tmuxPrimaryPane(tmuxPath, sessionName string) (string, error) {
 		return "", err
 	}
 	return pane, nil
+}
+
+// tmuxOriginalPane finds the pane that belonged to the session's first window,
+// rather than whichever pane happens to be visible in the selected window.
+func tmuxOriginalPane(tmuxPath, sessionName string) (string, error) {
+	out, err := exec.Command(tmuxPath, tmux.Args("list-panes", "-s", "-t", tmux.Target(sessionName)+":", "-F", "#{window_index}.#{pane_index} #{pane_id}")...).Output()
+	if err != nil {
+		return "", err
+	}
+	bestWindow, bestPane := math.MaxInt, math.MaxInt
+	bestID := ""
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		coordinates := strings.Split(fields[0], ".")
+		if len(coordinates) != 2 {
+			continue
+		}
+		window, windowErr := strconv.Atoi(coordinates[0])
+		pane, paneErr := strconv.Atoi(coordinates[1])
+		if windowErr != nil || paneErr != nil || window > bestWindow || (window == bestWindow && pane >= bestPane) {
+			continue
+		}
+		bestWindow, bestPane, bestID = window, pane, fields[1]
+	}
+	if bestID == "" {
+		return "", fmt.Errorf("no panes found")
+	}
+	return bestID, nil
 }
 
 func setTmuxPrimaryPane(tmuxPath, sessionName, pane string) error {

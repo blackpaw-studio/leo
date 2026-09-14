@@ -28,7 +28,7 @@ show-options)
   test -f "$LEO_TEST_TMUX_OPTION" && cat "$LEO_TEST_TMUX_OPTION"
   ;;
 list-panes)
-  printf '%%9\n'
+  printf '1.0 %%9\n0.1 %%1\n'
   ;;
 set-option)
   printf '%s\n' "$7" > "$LEO_TEST_TMUX_OPTION"
@@ -141,7 +141,7 @@ func TestPrimaryPaneAdoptionAndRename(t *testing.T) {
 	id.rename("new")
 	waitForTmuxArgvAfter(t, logPath,
 		"[-L][leo][has-session][-t][=leo-new]",
-		"[-L][leo][display-message][-p][-t][%9][#{pane_dead}]")
+		"[-L][leo][display-message][-p][-t][%1][#{pane_dead}]")
 	cancel()
 	<-done
 
@@ -151,9 +151,9 @@ func TestPrimaryPaneAdoptionAndRename(t *testing.T) {
 	}
 	got := strings.Split(strings.TrimSpace(string(lines)), "\n")
 	if !containsTmuxArgv(got, "[-L][leo][show-options][-t][=leo-old:][-v][@leo_primary_pane]") ||
-		!containsTmuxArgv(got, "[-L][leo][list-panes][-t][=leo-old:][-F][#{pane_id}]") ||
-		!containsTmuxArgv(got, "[-L][leo][set-option][-t][=leo-old:][@leo_primary_pane][%9]") ||
-		!containsTmuxArgv(got, "[-L][leo][display-message][-p][-t][%9][#{pane_dead}]") ||
+		!containsTmuxArgv(got, "[-L][leo][list-panes][-s][-t][=leo-old:][-F][#{window_index}.#{pane_index} #{pane_id}]") ||
+		!containsTmuxArgv(got, "[-L][leo][set-option][-t][=leo-old:][@leo_primary_pane][%1]") ||
+		!containsTmuxArgv(got, "[-L][leo][display-message][-p][-t][%1][#{pane_dead}]") ||
 		!containsTmuxArgv(got, "[-L][leo][has-session][-t][=leo-new]") {
 		t.Fatalf("legacy adoption did not persist and follow the primary pane; tmux argv:\n%s", lines)
 	}
