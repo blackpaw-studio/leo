@@ -52,7 +52,7 @@ func (Codex) TurnHooks(_ []string) ([]string, error) {
 // PrepareInteractive installs and trusts Leo's home-file hooks before an
 // interactive dispatch launch. Existing user hooks are retained; an untrusted
 // one fails fast rather than allowing Codex to show its review dialog.
-func (Codex) PrepareInteractive(home string) error {
+func (Codex) PrepareInteractive(home, _ string) error {
 	command := prepareLeoHookCommand()
 	hooksPath, err := canonicalPath(filepath.Join(home, "hooks.json"))
 	if err != nil {

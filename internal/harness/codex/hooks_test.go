@@ -51,7 +51,7 @@ func TestPrepareInteractiveIdempotent(t *testing.T) {
 	}
 	prepareLeoHookCommand = func() string { return "/opt/leo dispatch report" }
 	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
-	if err := (Codex{}).PrepareInteractive(home); err != nil {
+	if err := (Codex{}).PrepareInteractive(home, ""); err != nil {
 		t.Fatal(err)
 	}
 	firstHooks, _ := os.ReadFile(path)
@@ -59,7 +59,7 @@ func TestPrepareInteractiveIdempotent(t *testing.T) {
 	if !strings.Contains(string(firstHooks), "/usr/bin/user-hook") {
 		t.Fatal("user hook was not preserved")
 	}
-	if err := (Codex{}).PrepareInteractive(home); err != nil {
+	if err := (Codex{}).PrepareInteractive(home, ""); err != nil {
 		t.Fatal(err)
 	}
 	secondHooks, _ := os.ReadFile(path)
@@ -74,7 +74,7 @@ func TestPrepareInteractiveDetectsUntrusted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/usr/bin/user-hook"}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := (Codex{}).PrepareInteractive(home)
+	err := (Codex{}).PrepareInteractive(home, "")
 	if err == nil || !strings.Contains(err.Error(), "/usr/bin/user-hook") {
 		t.Fatalf("PrepareInteractive() error = %v, want untrusted user hook", err)
 	}

@@ -126,31 +126,37 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	s.record.PaneID = pane
 	d.persistLocked(s, "")
 	d.mu.Unlock()
-	if !d.injectable(s, t.TurnID, pane) {
+	go d.injectOpening(ctx, s, rt, t.TurnID, pane, req.Prompt)
+	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Window: window}, nil
+}
+
+// injectOpening deliberately runs after Start returns: the TUI's readiness
+// probe can take a minute, while launch itself is the only synchronous error.
+func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt InteractiveRuntime, turnID, pane, prompt string) {
+	if !d.injectable(s, turnID, pane) {
 		_ = rt.Kill(pane)
-		return Started{}, context.Canceled
+		return
 	}
 	injection := rt.Inject
 	if opening, ok := rt.(openingInteractiveRuntime); ok {
 		injection = opening.InjectOpening
 	}
-	err = injection(ctx, pane, req.Prompt, func() {
+	err := injection(ctx, pane, prompt, func() {
 		d.mu.Lock()
 		if s.record.Status == StatusQueued {
-			s.armedTurn = t.TurnID
+			s.armedTurn = turnID
 			s.armedUntil = d.now().Add(ackTimeout)
 			d.persistLocked(s, "turn")
 		}
 		d.mu.Unlock()
 	})
-	if err != nil {
-		d.mu.Lock()
-		d.closeTurnLocked(s, t.TurnID, TurnRejected, err.Error())
-		d.finishInteractiveLocked(s, StatusFailed)
-		d.mu.Unlock()
-		return Started{}, err
+	if err == nil {
+		return
 	}
-	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Window: window}, nil
+	d.mu.Lock()
+	d.closeTurnLocked(s, turnID, TurnRejected, err.Error())
+	d.finishInteractiveLocked(s, StatusFailed)
+	d.mu.Unlock()
 }
 
 func (d *Dispatcher) trySlot() bool {

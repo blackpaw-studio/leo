@@ -149,7 +149,7 @@ type TurnHooker interface {
 // InteractivePreparer is an optional adapter capability for launch-scoped
 // interactive setup that must finish before the TUI starts.
 type InteractivePreparer interface {
-	PrepareInteractive(home string) error
+	PrepareInteractive(home, cwd string) error
 }
 
 // FallbackString returns primary if non-empty, else fallback. Callers use

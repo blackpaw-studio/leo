@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,6 +15,38 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
+
+func TestClaudeInteractiveArgvSingleSettings(t *testing.T) {
+	args, err := mergeInteractiveArgs(
+		[]string{"--model", "sonnet", "--settings", `{"crossSessionInbound":"accept"}`},
+		[]string{"--settings", `{"hooks":{"Stop":[{}],"UserPromptSubmit":[{}],"SessionEnd":[{}]}}`},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	for i, arg := range args {
+		if arg == "--settings" {
+			if raw != "" {
+				t.Fatalf("args contain more than one --settings: %#v", args)
+			}
+			raw = args[i+1]
+		}
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["crossSessionInbound"] != "accept" {
+		t.Fatalf("settings = %#v", settings)
+	}
+	hooks := settings["hooks"].(map[string]any)
+	for _, event := range []string{"Stop", "UserPromptSubmit", "SessionEnd"} {
+		if _, ok := hooks[event]; !ok {
+			t.Fatalf("settings hooks = %#v, missing %s", hooks, event)
+		}
+	}
+}
 
 func TestOpeningInjectWaitsForReady(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
@@ -65,9 +98,13 @@ func TestOpeningInjectTimeoutKeepsPane(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{injectErr: err}
 	d.SetInteractiveRuntime(rt)
-	_, err = d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
-	if err == nil || rt.kill != 0 {
-		t.Fatalf("start=%v, kill=%d; failed opening must keep pane", err, rt.kill)
+	started, startErr := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if startErr != nil {
+		t.Fatalf("Start() = %v", startErr)
+	}
+	entry := d.Wait(context.Background(), []string{started.ID + "#1"}, time.Second)[0]
+	if entry.Status != StatusFailed || entry.Outcome != TurnRejected || rt.kill != 0 {
+		t.Fatalf("entry=%+v kill=%d; failed opening must settle asynchronously without killing pane", entry, rt.kill)
 	}
 }
 
@@ -115,6 +152,9 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 	}
 	if got := launch[len(launch)-1]; !containsAll(got, "/opt/leo --config /tmp/leo.yaml dispatch report") {
 		t.Fatalf("hook command missing from %q", got)
+	}
+	if got := launch[len(launch)-1]; strings.Count(got, "--settings") != 1 || !containsAll(got, "crossSessionInbound", "Stop", "UserPromptSubmit", "SessionEnd") {
+		t.Fatalf("Claude interactive settings were not merged: %q", got)
 	}
 }
 

@@ -3,11 +3,14 @@ package consult
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 )
 
 type fakeInteractiveRuntime struct {
+	mu        sync.Mutex
 	pane      string
 	alive     bool
 	injected  []string
@@ -18,6 +21,8 @@ type fakeInteractiveRuntime struct {
 }
 
 func (r *fakeInteractiveRuntime) Launch(context.Context, LaunchRequest) (string, string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.pane == "" {
 		r.pane = "%1"
 	}
@@ -25,6 +30,8 @@ func (r *fakeInteractiveRuntime) Launch(context.Context, LaunchRequest) (string,
 	return r.pane, "w", nil
 }
 func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string, arm func()) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.injected = append(r.injected, text)
 	if r.injectErr != nil {
 		return r.injectErr
@@ -34,9 +41,117 @@ func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string
 	}
 	return nil
 }
-func (r *fakeInteractiveRuntime) Alive(string) bool         { return r.alive }
-func (r *fakeInteractiveRuntime) Kill(string) error         { r.kill++; r.alive = false; return nil }
-func (r *fakeInteractiveRuntime) ComposerEmpty(string) bool { return r.empty }
+func (r *fakeInteractiveRuntime) Alive(string) bool { r.mu.Lock(); defer r.mu.Unlock(); return r.alive }
+func (r *fakeInteractiveRuntime) Kill(string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.kill++
+	r.alive = false
+	return nil
+}
+func (r *fakeInteractiveRuntime) ComposerEmpty(string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.empty
+}
+func (r *fakeInteractiveRuntime) setAlive(alive bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.alive = alive
+}
+func (r *fakeInteractiveRuntime) injectionCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.injected)
+}
+
+func waitForInjection(t *testing.T, r *fakeInteractiveRuntime) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for r.injectionCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("opening injection did not run")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+type blockingOpeningRuntime struct {
+	*fakeInteractiveRuntime
+	release <-chan struct{}
+}
+
+func (r *blockingOpeningRuntime) InjectOpening(ctx context.Context, paneID, text string, arm func()) error {
+	<-r.release
+	return r.Inject(ctx, paneID, text, arm)
+}
+
+func TestInteractiveStartReturnsBeforeReady(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	release := make(chan struct{})
+	rt := &blockingOpeningRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}, release: release}
+	d.SetInteractiveRuntime(rt)
+
+	started := make(chan Started, 1)
+	errs := make(chan error, 1)
+	go func() {
+		got, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+		started <- got
+		errs <- err
+	}()
+	var got Started
+	select {
+	case got = <-started:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("Start blocked on opening readiness")
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	entry := d.Wait(context.Background(), []string{got.ID + "#1"}, time.Millisecond)[0]
+	if entry.Outcome != "" || entry.Status != StatusQueued {
+		t.Fatalf("opening entry = %+v, want open queued turn", entry)
+	}
+	close(release)
+	deadline := time.After(time.Second)
+	for rt.injectionCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("opening injection did not finish")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := d.Report(got.ID, hook(t, "UserPromptSubmit", "opening")); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.Get(got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.Turns[0].Delivered {
+		t.Fatalf("opening turn was not armed after injection: %#v", rec.Turns[0])
+	}
+}
+
+func TestInteractiveOpeningFailureSettlesAsync(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	release := make(chan struct{})
+	rt := &blockingOpeningRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{injectErr: errors.New("not ready"), empty: true}, release: release}
+	d.SetInteractiveRuntime(rt)
+	got, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	entries := d.Wait(context.Background(), []string{got.ID + "#1"}, time.Second)
+	if len(entries) != 1 || entries[0].Status != StatusFailed || entries[0].Outcome != TurnRejected {
+		t.Fatalf("entries = %+v, want failed rejected opening", entries)
+	}
+}
+
 func hook(t *testing.T, event, turn string) HookReport {
 	t.Helper()
 	b, _ := json.Marshal(map[string]string{"hook_event_name": event, "turn_id": turn})
@@ -51,6 +166,7 @@ func TestInteractiveReportMatching(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitForInjection(t, rt)
 	rec, _ := d.Get(got.ID)
 	tid := rec.Turns[0].TurnID
 	if err := d.Report(got.ID, hook(t, "UserPromptSubmit", "abc")); err != nil {
@@ -80,6 +196,7 @@ func TestInteractiveWaitReturnsWhenTurnClosesBeforeSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitForInjection(t, rt)
 	done := make(chan []Entry, 1)
 	go func() { done <- d.Wait(context.Background(), []string{started.ID + "#1"}, time.Second) }()
 	_ = d.Report(started.ID, hook(t, "UserPromptSubmit", "one"))
@@ -102,6 +219,7 @@ func TestInteractiveEntryStatusIsRunStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitForInjection(t, rt)
 	if err := d.Report(started.ID, hook(t, "UserPromptSubmit", "one")); err != nil {
 		t.Fatal(err)
 	}
@@ -125,13 +243,14 @@ func TestSweepDeadPaneSettlesWithinBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitForInjection(t, rt)
 	if err := d.Report(started.ID, hook(t, "UserPromptSubmit", "one")); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Report(started.ID, hook(t, "Stop", "one")); err != nil {
 		t.Fatal(err)
 	}
-	rt.alive = false
+	rt.setAlive(false)
 	d.Sweep(now)
 	rec, _ := d.Get(started.ID)
 	if rec.Status != StatusSettling {

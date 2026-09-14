@@ -18,6 +18,7 @@ import (
 // handleAPIDispatch starts a headless subagent without tying its lifetime to
 // the request. Unlike consult, callers must state the target workspace.
 func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	var req struct {
 		From, Template, Model, Prompt, Cwd, Name string
 		Mode                                     consult.Mode `json:"mode"`
