@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const claudeEmptyComposer = "─\n❯\n─"
+
 func TestInjectIntoRejectsWithoutKeys(t *testing.T) {
 	orig := execCommand
 	defer func() { execCommand = orig }()
@@ -44,7 +46,7 @@ func TestInjectIntoPasteConfirmArmOrder(t *testing.T) {
 			if capture == 1 {
 				return exec.Command("echo", "empty")
 			}
-			return exec.Command("echo", "hello")
+			return exec.Command("echo", "─\n❯ hello\n─")
 		}
 		if slices.Contains(args, "send-keys") && !armed {
 			t.Fatal("Enter sent before arm")
@@ -71,7 +73,7 @@ func TestInjectIntoUsesNamedBufferAndConfirmsMultilineCollapsedPaste(t *testing.
 			if captures == 1 {
 				return exec.Command("echo", "empty")
 			}
-			return exec.Command("echo", "[Pasted text #1 +4 lines]")
+			return exec.Command("echo", "─\n❯ [Pasted text #1 +4 lines]\n─")
 		}
 		return exec.Command("true")
 	}
@@ -112,7 +114,7 @@ func TestInjectIntoArmErrorPreventsEnter(t *testing.T) {
 			if captures == 1 {
 				return exec.Command("echo", "empty")
 			}
-			return exec.Command("echo", "hello")
+			return exec.Command("echo", "─\n❯ hello\n─")
 		}
 		return exec.Command("true")
 	}
@@ -125,6 +127,62 @@ func TestInjectIntoArmErrorPreventsEnter(t *testing.T) {
 			t.Fatalf("unexpected enter: %#v", calls)
 		}
 	}
+}
+
+func TestInjectIntoDoesNotConfirmMessageOnlyInHistory(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	origAttempts := injectConfirmAttempts
+	injectConfirmAttempts = 1
+	defer func() { injectConfirmAttempts = origAttempts }()
+	captures := 0
+	execCommand = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "capture-pane") {
+			captures++
+			if captures == 1 {
+				return exec.Command("echo", claudeEmptyComposer)
+			}
+			return exec.Command("echo", "hello appears in history\n"+claudeEmptyComposer)
+		}
+		return exec.Command("true")
+	}
+	err := InjectInto(context.Background(), "tmux", "%1", ClaudeComposerClassifier, "hello", nil)
+	if !errors.Is(err, ErrPasteFailed) {
+		t.Fatalf("error = %v, want paste confirmation failure", err)
+	}
+}
+
+func TestInjectIntoDeletesNamedBufferWhenPasteFails(t *testing.T) {
+	var calls [][]string
+	command := func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		if slices.Contains(args, "capture-pane") {
+			return exec.Command("echo", claudeEmptyComposer)
+		}
+		if slices.Contains(args, "paste-buffer") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	err := InjectIntoWith(context.Background(), "tmux", "%1", ClaudeComposerClassifier, "hello", nil, command)
+	if err == nil {
+		t.Fatal("paste failure accepted")
+	}
+	var buffer string
+	for _, call := range calls {
+		if i := slices.Index(call, "set-buffer"); i >= 0 {
+			buffer = call[i+2]
+		}
+	}
+	if buffer == "" {
+		t.Fatal("set-buffer was not called")
+	}
+	for _, call := range calls {
+		if i := slices.Index(call, "delete-buffer"); i >= 0 && slices.Contains(call, buffer) {
+			return
+		}
+	}
+	t.Fatalf("buffer %q was not deleted after paste failure: %#v", buffer, calls)
 }
 
 func TestInjectIntoPasteFailedNoEnter(t *testing.T) {

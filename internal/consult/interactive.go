@@ -170,8 +170,17 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 		return
 	}
 	d.mu.Lock()
-	d.closeTurnLocked(s, turnID, TurnRejected, err.Error())
-	d.finishInteractiveLocked(s, StatusFailed)
+	// Opening injection is asynchronous. A late error belongs only to the
+	// opening turn; never let it settle a run that has since advanced.
+	if !s.record.Status.Terminal() && s.record.Status != StatusSettling &&
+		len(s.record.Turns) > 0 &&
+		s.record.Turns[len(s.record.Turns)-1].TurnID == turnID &&
+		s.record.Turns[len(s.record.Turns)-1].Outcome == "" {
+		d.closeTurnLocked(s, turnID, TurnRejected, err.Error())
+		d.finishInteractiveLocked(s, StatusFailed)
+	} else {
+		fmt.Fprintf(os.Stderr, "dispatch %s: ignoring late opening injection error: %v\n", s.record.ID, err)
+	}
 	d.mu.Unlock()
 }
 

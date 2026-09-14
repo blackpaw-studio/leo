@@ -71,6 +71,30 @@ func TestPrepareInteractiveIdempotent(t *testing.T) {
 	}
 }
 
+func TestPrepareInteractivePreservesExistingFileModes(t *testing.T) {
+	home := t.TempDir()
+	prepareLeoHookCommand = func() string { return "/opt/leo dispatch report" }
+	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
+	for _, name := range []string{"hooks.json", "config.toml"} {
+		path := filepath.Join(home, name)
+		if err := os.WriteFile(path, []byte("{}\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := (Codex{}).PrepareInteractive(home, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"hooks.json", "config.toml"} {
+		info, err := os.Stat(filepath.Join(home, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o640 {
+			t.Fatalf("%s mode = %o, want 640", name, got)
+		}
+	}
+}
+
 func TestPrepareInteractiveDetectsUntrusted(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/usr/bin/user-hook"}]}]}}`), 0o600); err != nil {

@@ -83,6 +83,23 @@ type blockingOpeningRuntime struct {
 	release <-chan struct{}
 }
 
+// lateOpeningErrorRuntime arms the opening turn, then holds its error until a
+// later turn has been opened. It makes the async error ordering deterministic.
+type lateOpeningErrorRuntime struct {
+	*fakeInteractiveRuntime
+	release  <-chan struct{}
+	returned chan<- struct{}
+}
+
+func (r *lateOpeningErrorRuntime) InjectOpening(ctx context.Context, paneID, text string, arm func() error) error {
+	if err := r.Inject(ctx, paneID, text, arm); err != nil {
+		return err
+	}
+	<-r.release
+	close(r.returned)
+	return errors.New("late opening failure")
+}
+
 func (r *blockingOpeningRuntime) InjectOpening(ctx context.Context, paneID, text string, arm func() error) error {
 	<-r.release
 	return r.Inject(ctx, paneID, text, arm)
@@ -149,6 +166,54 @@ func TestInteractiveOpeningFailureSettlesAsync(t *testing.T) {
 	entries := d.Wait(context.Background(), []string{got.ID + "#1"}, time.Second)
 	if len(entries) != 1 || entries[0].Status != StatusFailed || entries[0].Outcome != TurnRejected {
 		t.Fatalf("entries = %+v, want failed rejected opening", entries)
+	}
+}
+
+func TestInteractiveLateOpeningFailureDoesNotSettleNewTurn(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	rt := &lateOpeningErrorRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}, release: release, returned: returned}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "opening", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt.fakeInteractiveRuntime)
+	if err := d.Report(started.ID, hook(t, "UserPromptSubmit", "one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(started.ID, hook(t, "Stop", "one")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := d.Send(context.Background(), started.ID, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("opening injection did not return its error")
+	}
+	deadline := time.After(time.Second)
+	for {
+		rec, getErr := d.Get(started.ID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if len(rec.Turns) == 2 && rec.Turns[1].Outcome == "" {
+			if rec.Status == StatusFailed || rec.Turns[1].TurnID != second.TurnID || len(d.sem) != 1 {
+				t.Fatalf("late error changed current turn: record=%+v slots=%d", rec, len(d.sem))
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("late opening error did not leave second turn open: record=%+v", rec)
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 

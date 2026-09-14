@@ -315,13 +315,19 @@ func writeConfig(path, config string) error {
 }
 
 func writeFileAtomically(path string, data []byte) error {
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("codex: statting %s: %w", path, err)
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return fmt.Errorf("codex: creating temporary %s: %w", path, err)
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("codex: chmod temporary %s: %w", path, err)
 	}
