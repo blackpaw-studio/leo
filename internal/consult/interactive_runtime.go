@@ -225,13 +225,13 @@ func mergeInteractiveArgs(args, hooks []string) ([]string, error) {
 	return append(base, "--settings", string(encoded)), nil
 }
 
-func (r *TmuxInteractiveRuntime) Inject(ctx context.Context, paneID, text string, arm func()) error {
+func (r *TmuxInteractiveRuntime) Inject(ctx context.Context, paneID, text string, arm func() error) error {
 	return r.inject(ctx, paneID, text, arm)
 }
 
 // InjectOpening waits for a fresh harness pane to expose an empty composer.
 // Follow-up sends use Inject, which intentionally remains single-shot.
-func (r *TmuxInteractiveRuntime) InjectOpening(ctx context.Context, paneID, text string, arm func()) error {
+func (r *TmuxInteractiveRuntime) InjectOpening(ctx context.Context, paneID, text string, arm func() error) error {
 	timeout := r.StartupTimeout
 	if timeout <= 0 {
 		timeout = defaultStartupTimeout
@@ -264,7 +264,7 @@ func (r *TmuxInteractiveRuntime) InjectOpening(ctx context.Context, paneID, text
 	}
 }
 
-func (r *TmuxInteractiveRuntime) inject(ctx context.Context, paneID, text string, arm func()) error {
+func (r *TmuxInteractiveRuntime) inject(ctx context.Context, paneID, text string, arm func() error) error {
 	command := func(ctx context.Context, _ string, args ...string) *exec.Cmd {
 		return r.commandArgs(ctx, args...)
 	}

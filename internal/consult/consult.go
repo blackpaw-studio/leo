@@ -164,7 +164,9 @@ type runState struct {
 	armedTurn      string
 	armedUntil     time.Time
 	pendingCloses  map[string]pendingClose
+	eventIDs       []string
 	closedHarness  map[string]bool
+	closedIDs      []string
 	idleSince      time.Time
 	killPending    bool
 }
@@ -608,7 +610,11 @@ func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
 	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Err: rec.Error, TurnID: turnID}
 	t := turnByID(rec, turnID)
 	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
-	if t.Outcome == "" && !rec.HookActivity.IsZero() && now.Sub(rec.HookActivity) >= stalledAfter {
+	activity := rec.HookActivity
+	if activity.IsZero() {
+		activity = t.StartedAt
+	}
+	if t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfter {
 		e.Stalled = true
 	}
 	return e
@@ -782,7 +788,9 @@ func (d *Dispatcher) MarkInterrupted() {
 	for _, rec := range func() []Record { records, _ := Load(filepath.Dir(recorder.dir)); return records }() {
 		if rec.Status.Terminal() {
 			if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
-				_ = d.interactiveRuntime.Kill(rec.PaneID)
+				if d.interactiveRuntime.Kill(rec.PaneID) != nil {
+					d.trackRestartKill(rec)
+				}
 			}
 			continue
 		}
@@ -808,12 +816,26 @@ func (d *Dispatcher) MarkInterrupted() {
 		}
 		rec.Error, rec.EndedAt = "daemon restarted", d.now()
 		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
-			_ = d.interactiveRuntime.Kill(rec.PaneID)
+			if d.interactiveRuntime.Kill(rec.PaneID) != nil {
+				d.trackRestartKill(rec)
+			}
 		}
 		if err := writeRecord(recorder.dir, rec); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: recording: %v\n", rec.ID, err)
 		}
 	}
+}
+
+// trackRestartKill retains a terminal record solely to retry cleanup. Terminal
+// records normally prune immediately, but a failed kill must not strand its pane.
+func (d *Dispatcher) trackRestartKill(rec Record) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.runs[rec.ID] == nil {
+		d.runs[rec.ID] = &runState{record: rec, handle: nopHandle{}, done: make(chan struct{}), killPending: true}
+		return
+	}
+	d.runs[rec.ID].killPending = true
 }
 
 // finish closes a recording. A recording failure is reported to the daemon

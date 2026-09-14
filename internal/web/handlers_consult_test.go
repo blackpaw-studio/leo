@@ -139,6 +139,18 @@ func TestAPIDispatchRejectsMissingCWD(t *testing.T) {
 	}
 }
 
+func TestAPIDispatchIgnoresUnknownJSONFields(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	s.consults.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
+	}
+	w := httptest.NewRecorder()
+	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work","cwd":"/tmp","future_field":true}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDispatchTimeout(t *testing.T) {
 	jsonTimeout := 3.5
 	if got, err := dispatchTimeout(&jsonTimeout, ""); err != nil || got != 3500*time.Millisecond {
