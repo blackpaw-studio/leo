@@ -16,6 +16,19 @@ import (
 
 const interactiveCommandTimeout = 5 * time.Second
 const interactiveWaitDelay = 100 * time.Millisecond
+const defaultStartupTimeout = 60 * time.Second
+const defaultStartupPollInterval = 500 * time.Millisecond
+
+// ErrNotReady means a new harness pane did not render an empty composer before
+// the bounded opening-injection wait elapsed.
+type ErrNotReady struct{ Screen string }
+
+func (e *ErrNotReady) Error() string {
+	if e.Screen == "" {
+		return "interactive composer not ready"
+	}
+	return "interactive composer not ready: " + e.Screen
+}
 
 // TmuxInteractiveRuntime is the deliberately small bridge between the
 // dispatch state machine and a harness TUI in Leo's tmux server.
@@ -27,6 +40,8 @@ type TmuxInteractiveRuntime struct {
 	AgentToken           string
 	ExecCommandContext   func(context.Context, string, ...string) *exec.Cmd
 	Timeout              time.Duration
+	StartupTimeout       time.Duration
+	StartupPollInterval  time.Duration
 	mu                   sync.RWMutex
 	classifiers          map[string]tmux.ComposerClassifier
 }
@@ -135,7 +150,49 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 }
 
 func (r *TmuxInteractiveRuntime) Inject(ctx context.Context, paneID, text string, arm func()) error {
-	return tmux.InjectInto(ctx, r.tmuxPath, paneID, r.classifier(paneID), text, arm)
+	return r.inject(ctx, paneID, text, arm)
+}
+
+// InjectOpening waits for a fresh harness pane to expose an empty composer.
+// Follow-up sends use Inject, which intentionally remains single-shot.
+func (r *TmuxInteractiveRuntime) InjectOpening(ctx context.Context, paneID, text string, arm func()) error {
+	timeout := r.StartupTimeout
+	if timeout <= 0 {
+		timeout = defaultStartupTimeout
+	}
+	poll := r.StartupPollInterval
+	if poll <= 0 {
+		poll = defaultStartupPollInterval
+	}
+	readyCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	last := ""
+	for {
+		capture, err := r.output(readyCtx, "capture-pane", "-p", "-t", paneID)
+		if err == nil {
+			last = string(capture)
+			if r.classifier(paneID)(last) == tmux.ComposerEmpty {
+				return r.inject(ctx, paneID, text, arm)
+			}
+		}
+		wait := time.NewTimer(poll)
+		select {
+		case <-readyCtx.Done():
+			wait.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return &ErrNotReady{Screen: lastNonEmptyLines(last, 3)}
+		case <-wait.C:
+		}
+	}
+}
+
+func (r *TmuxInteractiveRuntime) inject(ctx context.Context, paneID, text string, arm func()) error {
+	command := func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		return r.commandArgs(ctx, args...)
+	}
+	return tmux.InjectIntoWith(ctx, r.tmuxPath, paneID, r.classifier(paneID), text, arm, tmux.CommandFunc(command))
 }
 func (r *TmuxInteractiveRuntime) Alive(paneID string) bool {
 	out, err := r.output(context.Background(), "display-message", "-p", "-t", paneID, "#{pane_dead}")
@@ -158,9 +215,27 @@ func (r *TmuxInteractiveRuntime) classifier(pane string) tmux.ComposerClassifier
 	return classify
 }
 func (r *TmuxInteractiveRuntime) command(ctx context.Context, args ...string) *exec.Cmd {
-	cmd := r.ExecCommandContext(ctx, r.tmuxPath, tmux.Args(args...)...)
+	return r.commandArgs(ctx, tmux.Args(args...)...)
+}
+
+func (r *TmuxInteractiveRuntime) commandArgs(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := r.ExecCommandContext(ctx, r.tmuxPath, args...)
 	cmd.WaitDelay = interactiveWaitDelay
 	return cmd
+}
+
+func lastNonEmptyLines(capture string, limit int) string {
+	lines := strings.Split(capture, "\n")
+	nonEmpty := make([]string, 0, limit)
+	for i := len(lines) - 1; i >= 0 && len(nonEmpty) < limit; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			nonEmpty = append(nonEmpty, line)
+		}
+	}
+	for left, right := 0, len(nonEmpty)-1; left < right; left, right = left+1, right-1 {
+		nonEmpty[left], nonEmpty[right] = nonEmpty[right], nonEmpty[left]
+	}
+	return strings.Join(nonEmpty, "\n")
 }
 func (r *TmuxInteractiveRuntime) run(ctx context.Context, args ...string) error {
 	timeout := r.Timeout

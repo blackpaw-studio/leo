@@ -8,12 +8,13 @@ import (
 )
 
 type fakeInteractiveRuntime struct {
-	pane     string
-	alive    bool
-	injected []string
-	arm      bool
-	empty    bool
-	kill     int
+	pane      string
+	alive     bool
+	injected  []string
+	arm       bool
+	empty     bool
+	kill      int
+	injectErr error
 }
 
 func (r *fakeInteractiveRuntime) Launch(context.Context, LaunchRequest) (string, string, error) {
@@ -25,6 +26,9 @@ func (r *fakeInteractiveRuntime) Launch(context.Context, LaunchRequest) (string,
 }
 func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string, arm func()) error {
 	r.injected = append(r.injected, text)
+	if r.injectErr != nil {
+		return r.injectErr
+	}
 	if r.arm {
 		arm()
 	}

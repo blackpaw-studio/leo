@@ -33,6 +33,10 @@ type InteractiveRuntime interface {
 	Kill(paneID string) error
 	ComposerEmpty(paneID string) bool
 }
+
+type openingInteractiveRuntime interface {
+	InjectOpening(ctx context.Context, paneID string, text string, arm func()) error
+}
 type HookReport struct {
 	EventID string          `json:"event_id"`
 	Payload json.RawMessage `json:"payload"`
@@ -126,7 +130,11 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 		_ = rt.Kill(pane)
 		return Started{}, context.Canceled
 	}
-	err = rt.Inject(ctx, pane, req.Prompt, func() {
+	injection := rt.Inject
+	if opening, ok := rt.(openingInteractiveRuntime); ok {
+		injection = opening.InjectOpening
+	}
+	err = injection(ctx, pane, req.Prompt, func() {
 		d.mu.Lock()
 		if s.record.Status == StatusQueued {
 			s.armedTurn = t.TurnID

@@ -2,13 +2,88 @@ package consult
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
+
+func TestOpeningInjectWaitsForReady(t *testing.T) {
+	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+	r.StartupPollInterval = time.Nanosecond
+	r.StartupTimeout = time.Second
+	var calls [][]string
+	captures := []string{"starting harness\nMCP warning\n", "starting harness\nMCP warning\n", "❯ \n", "❯ \n", "❯ hello\n"}
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		if slices.Contains(args, "capture-pane") {
+			if len(captures) == 0 {
+				t.Fatal("unexpected capture")
+			}
+			capture := captures[0]
+			captures = captures[1:]
+			return exec.Command("printf", "%s", capture)
+		}
+		return exec.Command("true")
+	}
+	if err := r.InjectOpening(context.Background(), "%1", "hello", nil); err != nil {
+		t.Fatal(err)
+	}
+	for i, args := range calls[:3] {
+		if !slices.Contains(args, "capture-pane") {
+			t.Fatalf("call %d before ready wrote keys: %#v", i, args)
+		}
+	}
+	if slices.Contains(calls[0], "send-keys") || slices.Contains(calls[1], "send-keys") || slices.Contains(calls[2], "send-keys") {
+		t.Fatalf("keystrokes before ready: %#v", calls[:3])
+	}
+}
+
+func TestOpeningInjectTimeoutKeepsPane(t *testing.T) {
+	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+	r.StartupPollInterval = time.Nanosecond
+	r.StartupTimeout = time.Millisecond
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "capture-pane") {
+			return exec.Command("printf", "%s", "booting\nMCP warning\nwaiting for auth\n")
+		}
+		return exec.Command("true")
+	}
+	err := r.InjectOpening(context.Background(), "%1", "hello", nil)
+	var notReady *ErrNotReady
+	if !errors.As(err, &notReady) || !strings.Contains(err.Error(), "MCP warning") || !strings.Contains(err.Error(), "waiting for auth") {
+		t.Fatalf("error = %v, want ErrNotReady with screen excerpt", err)
+	}
+
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{injectErr: err}
+	d.SetInteractiveRuntime(rt)
+	_, err = d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err == nil || rt.kill != 0 {
+		t.Fatalf("start=%v, kill=%d; failed opening must keep pane", err, rt.kill)
+	}
+}
+
+func TestSendDoesNotWait(t *testing.T) {
+	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+	var captures int
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "capture-pane") {
+			captures++
+			return exec.Command("printf", "%s", "starting harness\n")
+		}
+		return exec.Command("true")
+	}
+	err := r.Inject(context.Background(), "%1", "hello", nil)
+	if !errors.Is(err, tmux.ErrComposerUnknown) || captures != 1 {
+		t.Fatalf("Inject = %v after %d captures, want immediate unknown rejection", err, captures)
+	}
+}
 
 func TestInteractiveLaunchArgv(t *testing.T) {
 	dir := t.TempDir()

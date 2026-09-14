@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 )
+
+// CommandFunc starts a tmux command. It makes strict injection usable by
+// callers that own their command-execution seam.
+type CommandFunc func(context.Context, string, ...string) *exec.Cmd
 
 var (
 	ErrComposerBusy    = errors.New("composer busy")
@@ -17,8 +22,13 @@ var (
 // never probes with keys: interactive dispatch shares the composer with a
 // human, so an uncertain state fails closed.
 func InjectInto(ctx context.Context, tmuxPath, paneID string, classify ComposerClassifier, text string, beforeEnter func()) error {
+	return InjectIntoWith(ctx, tmuxPath, paneID, classify, text, beforeEnter, execCommand)
+}
+
+// InjectIntoWith is InjectInto with an injectable tmux command runner.
+func InjectIntoWith(ctx context.Context, tmuxPath, paneID string, classify ComposerClassifier, text string, beforeEnter func(), command CommandFunc) error {
 	capture := func() (string, error) {
-		out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", paneID)...).Output()
+		out, err := command(ctx, tmuxPath, Args("capture-pane", "-p", "-t", paneID)...).Output()
 		return string(out), err
 	}
 	before, err := capture()
@@ -32,10 +42,10 @@ func InjectInto(ctx context.Context, tmuxPath, paneID string, classify ComposerC
 	default:
 		return ErrComposerUnknown
 	}
-	if err := execCommand(ctx, tmuxPath, Args("set-buffer", "--", text)...).Run(); err != nil {
+	if err := command(ctx, tmuxPath, Args("set-buffer", "--", text)...).Run(); err != nil {
 		return fmt.Errorf("set paste buffer: %w", err)
 	}
-	if err := execCommand(ctx, tmuxPath, Args("paste-buffer", "-d", "-t", paneID)...).Run(); err != nil {
+	if err := command(ctx, tmuxPath, Args("paste-buffer", "-d", "-t", paneID)...).Run(); err != nil {
 		return fmt.Errorf("paste buffer: %w", err)
 	}
 	needle := strings.TrimSpace(text)
@@ -61,7 +71,7 @@ func InjectInto(ctx context.Context, tmuxPath, paneID string, classify ComposerC
 	if beforeEnter != nil {
 		beforeEnter()
 	}
-	if err := execCommand(ctx, tmuxPath, Args("send-keys", "-t", paneID, "Enter")...).Run(); err != nil {
+	if err := command(ctx, tmuxPath, Args("send-keys", "-t", paneID, "Enter")...).Run(); err != nil {
 		return fmt.Errorf("submit paste: %w", err)
 	}
 	return nil
