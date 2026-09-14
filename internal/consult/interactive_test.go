@@ -29,7 +29,7 @@ func (r *fakeInteractiveRuntime) Launch(context.Context, LaunchRequest) (string,
 	r.alive = true
 	return r.pane, "w", nil
 }
-func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string, arm func()) error {
+func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string, arm func() error) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.injected = append(r.injected, text)
@@ -37,7 +37,7 @@ func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string
 		return r.injectErr
 	}
 	if r.arm {
-		arm()
+		return arm()
 	}
 	return nil
 }
@@ -83,7 +83,7 @@ type blockingOpeningRuntime struct {
 	release <-chan struct{}
 }
 
-func (r *blockingOpeningRuntime) InjectOpening(ctx context.Context, paneID, text string, arm func()) error {
+func (r *blockingOpeningRuntime) InjectOpening(ctx context.Context, paneID, text string, arm func() error) error {
 	<-r.release
 	return r.Inject(ctx, paneID, text, arm)
 }

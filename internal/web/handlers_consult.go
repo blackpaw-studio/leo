@@ -111,7 +111,6 @@ func (s *Server) handleAPIDispatchReport(w http.ResponseWriter, r *http.Request)
 
 func decodeDispatchJSON(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}

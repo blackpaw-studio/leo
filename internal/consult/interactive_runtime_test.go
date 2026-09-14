@@ -53,7 +53,7 @@ func TestOpeningInjectWaitsForReady(t *testing.T) {
 	r.StartupPollInterval = time.Nanosecond
 	r.StartupTimeout = time.Second
 	var calls [][]string
-	captures := []string{"starting harness\nMCP warning\n", "starting harness\nMCP warning\n", "❯ \n", "❯ \n", "❯ hello\n"}
+	captures := []string{"starting harness\nMCP warning\n", "starting harness\nMCP warning\n", "────\n❯ \n────\n", "────\n❯ \n────\n", "────\n❯ [Pasted text #1 +1 lines]\n────\n"}
 	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
 		calls = append(calls, args)
 		if slices.Contains(args, "capture-pane") {
@@ -269,7 +269,7 @@ func TestRuntimeAliveKillComposerEmpty(t *testing.T) {
 			return exec.Command("echo", "0")
 		}
 		if slices.Contains(args, "capture-pane") {
-			return exec.Command("echo", "❯ ")
+			return exec.Command("printf", "%s", "────\n❯ \n────\n")
 		}
 		return exec.Command("true")
 	}

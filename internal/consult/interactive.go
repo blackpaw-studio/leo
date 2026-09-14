@@ -28,14 +28,14 @@ type LaunchRequest struct {
 }
 type InteractiveRuntime interface {
 	Launch(context.Context, LaunchRequest) (paneID, window string, err error)
-	Inject(ctx context.Context, paneID string, text string, arm func()) error
+	Inject(ctx context.Context, paneID string, text string, arm func() error) error
 	Alive(paneID string) bool
 	Kill(paneID string) error
 	ComposerEmpty(paneID string) bool
 }
 
 type openingInteractiveRuntime interface {
-	InjectOpening(ctx context.Context, paneID string, text string, arm func()) error
+	InjectOpening(ctx context.Context, paneID string, text string, arm func() error) error
 }
 type HookReport struct {
 	EventID string          `json:"event_id"`
@@ -50,6 +50,8 @@ type pendingClose struct {
 	text    string
 	until   time.Time
 }
+
+const maxInteractiveDedup = 512
 
 type interactiveRecordHandle interface {
 	SetRecord(Record) error
@@ -73,6 +75,18 @@ func (d *Dispatcher) persistLocked(s *runState, event string) {
 	} else {
 		_ = s.handle.SetStatus(s.record.Status)
 	}
+}
+
+func (d *Dispatcher) persistTurnLocked(s *runState, turn Turn) {
+	if h, ok := s.handle.(interactiveRecordHandle); ok {
+		if err := h.SetRecord(s.record); err != nil {
+			fmt.Printf("consult %s: recording: %v\n", s.record.ID, err)
+			return
+		}
+		_ = h.AppendEvent("turn", turn)
+		return
+	}
+	_ = s.handle.SetStatus(s.record.Status)
 }
 
 func (d *Dispatcher) SetInteractiveRuntime(r InteractiveRuntime) {
@@ -141,14 +155,16 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 	if opening, ok := rt.(openingInteractiveRuntime); ok {
 		injection = opening.InjectOpening
 	}
-	err := injection(ctx, pane, prompt, func() {
+	err := injection(ctx, pane, prompt, func() error {
 		d.mu.Lock()
-		if s.record.Status == StatusQueued {
-			s.armedTurn = turnID
-			s.armedUntil = d.now().Add(ackTimeout)
-			d.persistLocked(s, "turn")
+		defer d.mu.Unlock()
+		if s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, turnID).Outcome != "" {
+			return errors.New("dispatch settled during injection")
 		}
-		d.mu.Unlock()
+		s.armedTurn = turnID
+		s.armedUntil = d.now().Add(ackTimeout)
+		d.persistLocked(s, "turn")
+		return nil
 	})
 	if err == nil {
 		return
@@ -215,7 +231,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		if !s.record.Status.Terminal() && s.record.Status != StatusSettling {
 			s.record.Status = d.interactiveStatusLocked(s)
 		}
-		d.persistLocked(s, "turn")
+		d.persistTurnLocked(s, *t)
 		if s.record.Status != oldStatus {
 			d.persistLocked(s, "status")
 		}
@@ -276,14 +292,18 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		d.mu.Unlock()
 		return SendResult{TurnID: t.TurnID}, context.Canceled
 	}
-	err = rt.Inject(ctx, pane, message, func() {
+	err = rt.Inject(ctx, pane, message, func() error {
 		d.mu.Lock()
+		defer d.mu.Unlock()
+		if s.record.Status == StatusSettling || s.record.Status.Terminal() || turnByID(s.record, t.TurnID).Outcome != "" {
+			return errors.New("dispatch settled during injection")
+		}
 		if !s.record.Status.Terminal() {
 			s.armedTurn = t.TurnID
 			s.armedUntil = d.now().Add(ackTimeout)
 			d.persistLocked(s, "turn")
 		}
-		d.mu.Unlock()
+		return nil
 	})
 	if err != nil {
 		d.mu.Lock()
@@ -336,13 +356,19 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	if s.closedHarness == nil {
 		s.closedHarness = map[string]bool{}
 	}
-	if r.EventID != "" { // keep a compact dedup set in pending map namespace
+	priorHook := s.record.HookActivity
+	if r.EventID != "" { // keep a bounded dedup set in pending map namespace
 		key := "@" + r.EventID
 		if _, ok := s.pendingCloses[key]; ok {
 			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring duplicate report %s\n", id, r.EventID)
 			return nil
 		}
 		s.pendingCloses[key] = pendingClose{}
+		s.eventIDs = append(s.eventIDs, key)
+		if len(s.eventIDs) > maxInteractiveDedup {
+			delete(s.pendingCloses, s.eventIDs[0])
+			s.eventIDs = s.eventIDs[1:]
+		}
 	}
 	s.lastHook = d.now()
 	s.record.HookActivity = s.lastHook
@@ -370,14 +396,23 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			s.armedUntil = time.Time{}
 			s.record.Status = StatusRunning
 		} else {
+			if hid == "" && !priorHook.IsZero() && d.now().Sub(priorHook) >= stalledAfter {
+				for i := range s.record.Turns {
+					t := &s.record.Turns[i]
+					if t.Source == TurnSourceOrchestrator && t.Delivered && t.Outcome == "" {
+						d.closeTurnLocked(s, t.TurnID, TurnLost, "")
+						break
+					}
+				}
+			}
 			t := d.openTurnLocked(s, TurnSourceUser, "", false)
 			t.HarnessTurnID = hid
 		}
 		if hid != "" {
-			if pc, ok := s.pendingCloses[hid]; ok {
+			if pc, ok := s.pendingCloses[hid]; ok && d.now().Before(pc.until) {
 				d.closeHarnessLocked(s, hid, pc.outcome, pc.text)
-				delete(s.pendingCloses, hid)
 			}
+			delete(s.pendingCloses, hid)
 		}
 		d.persistLocked(s, "turn")
 		if s.record.Status != oldStatus {
@@ -421,6 +456,11 @@ func (d *Dispatcher) closeHarnessLocked(s *runState, hid string, o TurnOutcome, 
 			s.closedHarness = map[string]bool{}
 		}
 		s.closedHarness[hid] = true
+		s.closedIDs = append(s.closedIDs, hid)
+		if len(s.closedIDs) > maxInteractiveDedup {
+			delete(s.closedHarness, s.closedIDs[0])
+			s.closedIDs = s.closedIDs[1:]
+		}
 	}
 	return found
 }
@@ -543,7 +583,7 @@ func (d *Dispatcher) Sweep(now time.Time) {
 			if p.state.record.PaneID == p.pane && !p.state.record.Status.Terminal() {
 				if !alive {
 					d.beginSettlementLocked(p.state, StatusClosed, finalReportGrace)
-				} else if p.idle && p.state.record.Status == StatusIdle && empty {
+				} else if p.idle && p.state.record.Status == StatusIdle && !p.state.idleSince.IsZero() && now.Sub(p.state.idleSince) >= idleCloseAfter && empty {
 					d.beginSettlementLocked(p.state, StatusClosed, 0)
 				}
 				if p.state.record.Status == StatusSettling && !now.Before(p.state.settleDeadline) {
