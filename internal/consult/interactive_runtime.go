@@ -11,6 +11,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness/codex"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -75,11 +76,6 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
-	if p, ok := h.(harness.InteractivePreparer); ok {
-		if err := p.PrepareInteractive(cfg.HomePath); err != nil {
-			return "", "", err
-		}
-	}
 	hooker, ok := h.(harness.TurnHooker)
 	if !ok {
 		return "", "", fmt.Errorf("harness %q does not support interactive turn hooks", h.Name())
@@ -98,6 +94,20 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	}
 	for k, v := range tmpl.Env {
 		env[k] = v
+	}
+	if p, ok := h.(harness.InteractivePreparer); ok {
+		home := cfg.HomePath
+		if h.Name() == "codex" {
+			home = codex.CodexHome(env)
+		}
+		if err := p.PrepareInteractive(home); err != nil {
+			return "", "", err
+		}
+	}
+	if h.Name() == "codex" {
+		if err := codex.EnsureWorkspaceTrusted(codex.CodexHome(env), req.Cwd); err != nil {
+			return "", "", err
+		}
 	}
 	env["LEO_DISPATCH_ID"], env["LEO_CONFIG"] = req.ID, r.configPath
 	if r.AgentToken != "" {

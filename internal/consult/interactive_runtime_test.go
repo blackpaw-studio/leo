@@ -3,7 +3,9 @@ package consult
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -144,6 +146,80 @@ func TestInteractiveLaunchFallbackSession(t *testing.T) {
 	if !found {
 		t.Fatalf("fallback launch missing: %#v", calls)
 	}
+}
+
+func TestInteractiveLaunchPreparesCodexHome(t *testing.T) {
+	t.Run("template CODEX_HOME", func(t *testing.T) {
+		codexHome := t.TempDir()
+		r := interactiveCodexRuntime(t, &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{
+			"codex": {Harness: "codex", Env: map[string]string{"CODEX_HOME": codexHome}},
+		}})
+		if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-home", Template: "codex", Cwd: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(codexHome, "hooks.json")); err != nil {
+			t.Fatalf("hooks.json in template CODEX_HOME: %v", err)
+		}
+	})
+
+	t.Run("daemon environment fallback", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("CODEX_HOME", "")
+		r := interactiveCodexRuntime(t, &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{
+			"codex": {Harness: "codex"},
+		}})
+		if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-home", Template: "codex", Cwd: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); err != nil {
+			t.Fatalf("hooks.json in default CODEX_HOME: %v", err)
+		}
+	})
+}
+
+func TestInteractiveLaunchTrustsWorkspace(t *testing.T) {
+	codexHome := t.TempDir()
+	real := filepath.Join(t.TempDir(), "real-workspace")
+	if err := os.Mkdir(real, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := interactiveCodexRuntime(t, &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{
+		"codex": {Harness: "codex", Env: map[string]string{"CODEX_HOME": codexHome}},
+	}})
+	for range 2 {
+		if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-trust", Template: "codex", Cwd: link}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := `[projects."` + resolved + `"]`
+	if got := strings.Count(string(config), header); got != 1 {
+		t.Fatalf("workspace trust entries = %d, want 1:\n%s", got, config)
+	}
+}
+
+func interactiveCodexRuntime(t *testing.T, cfg *config.Config) *TmuxInteractiveRuntime {
+	t.Helper()
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			return exec.Command("echo", "%42")
+		}
+		return exec.Command("true")
+	}
+	return r
 }
 
 func TestRuntimeAliveKillComposerEmpty(t *testing.T) {

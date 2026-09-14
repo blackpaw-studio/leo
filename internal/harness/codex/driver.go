@@ -50,7 +50,16 @@ func ensureWorkspaceTrusted(h harness.SessionHandle) error {
 	if err != nil {
 		return fmt.Errorf("codex: resolving config path: %w", err)
 	}
-	ws := h.Workspace
+	return ensureWorkspaceTrustedAt(path, h.Workspace)
+}
+
+// EnsureWorkspaceTrusted trusts cwd in codexHome before an interactive launch.
+func EnsureWorkspaceTrusted(codexHome, cwd string) error {
+	return ensureWorkspaceTrustedAt(filepath.Join(codexHome, "config.toml"), cwd)
+}
+
+func ensureWorkspaceTrustedAt(path, cwd string) error {
+	ws := cwd
 	if resolved, rerr := filepath.EvalSymlinks(ws); rerr == nil {
 		ws = resolved
 	}

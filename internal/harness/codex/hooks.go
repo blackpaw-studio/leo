@@ -24,6 +24,23 @@ var prepareLeoHookCommand = defaultLeoHookCommand
 
 var codexHookEvents = []string{"Stop", "UserPromptSubmit", "Interrupt", "SessionEnd"}
 
+// CodexHome resolves the same home directory used by a Codex launch: an
+// explicitly supplied launch environment wins over the daemon environment,
+// then Codex's conventional $HOME/.codex location is used.
+func CodexHome(env map[string]string) string {
+	if home := env["CODEX_HOME"]; home != "" {
+		return home
+	}
+	if home := os.Getenv("CODEX_HOME"); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", ".codex")
+	}
+	return filepath.Join(home, ".codex")
+}
+
 // TurnHooks disables Codex's startup update dialog. Codex 0.153.4 ignores
 // hooks.* command-line overrides, so PrepareInteractive installs home-file
 // hooks instead. The report command itself is intentionally a no-op unless
