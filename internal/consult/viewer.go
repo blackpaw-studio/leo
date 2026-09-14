@@ -17,6 +17,7 @@ import (
 const (
 	dispatchViewerSession = "leo-dispatch"
 	viewerCommandTimeout  = 5 * time.Second
+	viewerWaitDelay       = 100 * time.Millisecond
 )
 
 var dispatchID = regexp.MustCompile(`^d-[0-9a-f]+$`)
@@ -140,10 +141,17 @@ func (v *Viewer) prune() {
 }
 
 func (v *Viewer) command(ctx context.Context, args ...string) *exec.Cmd {
+	var cmd *exec.Cmd
 	if v.ExecCommandContext != nil {
-		return v.ExecCommandContext(ctx, v.TmuxPath, tmux.Args(args...)...)
+		cmd = v.ExecCommandContext(ctx, v.TmuxPath, tmux.Args(args...)...)
+	} else {
+		cmd = v.ExecCommand(v.TmuxPath, tmux.Args(args...)...)
 	}
-	return v.ExecCommand(v.TmuxPath, tmux.Args(args...)...)
+	// After the deadline kills tmux, a forked grandchild (dash forks where
+	// bash execs) can keep the output pipe open; WaitDelay stops Wait from
+	// blocking on that pipe until the orphan exits.
+	cmd.WaitDelay = viewerWaitDelay
+	return cmd
 }
 
 func (v *Viewer) run(args ...string) error {

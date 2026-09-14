@@ -149,7 +149,7 @@ func TestViewerTmuxCommandsTimeOut(t *testing.T) {
 	v := &Viewer{
 		TmuxPath: "tmux", Timeout: 10 * time.Millisecond,
 		ExecCommandContext: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			return exec.CommandContext(ctx, "sh", "-c", "sleep 1")
+			return exec.CommandContext(ctx, "sh", "-c", "sleep 1 & sleep 1")
 		},
 	}
 	started := time.Now()
