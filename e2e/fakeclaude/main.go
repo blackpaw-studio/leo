@@ -26,6 +26,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -73,6 +76,12 @@ func main() {
 	// scenario path is untouched. ContinueOnError + ignoring unknown flags
 	// keeps us tolerant of any other args the caller threads through.
 	if !hasFlag(os.Args[1:], "-p") {
+		// This opt-in shape is used only by interactive-dispatch e2e tests.
+		// Keep the ordinary REPL byte-for-byte stable for the existing suite.
+		if os.Getenv("FAKECLAUDE_DISPATCH_INTERACTIVE") == "1" {
+			runDispatchInteractive()
+			return
+		}
 		interactiveFlags := flag.NewFlagSet("fakeclaude-interactive", flag.ContinueOnError)
 		interactiveFlags.SetOutput(&bytes.Buffer{}) // swallow flag-parsing noise
 		// Registered so Parse tolerates an explicit --interactive appearing
@@ -110,6 +119,82 @@ func main() {
 		fmt.Fprintf(os.Stderr, "fakeclaude: unknown scenario %q\n", scenario)
 		os.Exit(2)
 	}
+}
+
+// runDispatchInteractive is a small Codex-shaped terminal harness. Its final
+// visible line is an empty Codex composer, and every submitted line executes
+// the hook commands Codex would have loaded from $CODEX_HOME/hooks.json.
+func runDispatchInteractive() {
+	fmt.Print("› ")
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	turn := 0
+	for sc.Scan() {
+		text := strings.TrimSpace(sc.Text())
+		if text == "" {
+			fmt.Print("› ")
+			continue
+		}
+		turn++
+		turnID := fmt.Sprintf("fake-turn-%d", turn)
+		runHookEvent("UserPromptSubmit", turnID, "")
+		if ms, _ := strconv.Atoi(os.Getenv("FAKECLAUDE_REPLY_DELAY_MS")); ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
+		reply := "FAKE-REPLY: " + truncate(text, 80)
+		fmt.Printf("\n%s\n", reply)
+		runHookEvent("Stop", turnID, reply)
+		fmt.Print("› ")
+	}
+	runHookEvent("SessionEnd", "", "")
+}
+
+func runHookEvent(event, turnID, reply string) {
+	payload, _ := json.Marshal(map[string]string{
+		"hook_event_name":        event,
+		"turn_id":                turnID,
+		"session_id":             "fake-session",
+		"last_assistant_message": reply,
+	})
+	for _, command := range hookCommands(event) {
+		cmd := exec.Command("sh", "-c", command)
+		cmd.Stdin = bytes.NewReader(payload)
+		cmd.Env = os.Environ()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "fakeclaude: %s hook: %v: %s\n", event, err, strings.TrimSpace(string(out)))
+		}
+	}
+}
+
+func hookCommands(event string) []string {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(filepath.Join(home, "hooks.json"))
+	if err != nil {
+		return nil
+	}
+	var document struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(raw, &document) != nil {
+		return nil
+	}
+	var commands []string
+	for _, group := range document.Hooks[event] {
+		for _, hook := range group.Hooks {
+			if hook.Type == "command" && hook.Command != "" {
+				commands = append(commands, hook.Command)
+			}
+		}
+	}
+	return commands
 }
 
 // hasFlag reports whether name (e.g. "--interactive") appears in args.

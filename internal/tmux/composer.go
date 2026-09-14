@@ -41,7 +41,8 @@ var (
 // CodexComposerClassifier identifies Codex's › composer. Codex renders its
 // empty-composer placeholder on the same line as the marker.
 func CodexComposerClassifier(capture string) ComposerState {
-	return classifyComposer(capture, "› ", isCodexPlaceholder)
+	// capture-pane drops the trailing space from a bare `› ` input line.
+	return classifyComposer(capture, "›", isCodexPlaceholder)
 }
 
 // ClaudeComposerClassifier identifies Claude Code's ❯ composer. Claude
