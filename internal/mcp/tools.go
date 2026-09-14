@@ -363,7 +363,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_send_dispatch", Description: allowNote("Send a follow-up to an idle interactive dispatch. Never send while a turn is running; leo_wait on the returned turn id.", "send to dispatched templates", perms.CanConsult),
+		Name: "leo_send_dispatch", Description: allowNote("Send a follow-up to an idle interactive dispatch. Never send while a turn is running. Returns a turn id to pass to leo_wait; the reply may say the message is still queued because delivery is acknowledged asynchronously by the harness hook, so never re-send based on that alone — wait on the turn id. A rejection (composer busy, no capacity, paste failed) means nothing was sent; wait and retry.", "send to dispatched templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{"id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "id", "message"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		id, err := stringArg(args, "id")
@@ -378,7 +378,10 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%s · delivered=%t; leo_wait on %s", result.TurnID, result.Delivered, result.TurnID), nil
+		if result.Delivered {
+			return fmt.Sprintf("%s · delivered; leo_wait on %s", result.TurnID, result.TurnID), nil
+		}
+		return fmt.Sprintf("%s · queued (delivery is acknowledged asynchronously by the harness; do NOT re-send) · leo_wait on %s", result.TurnID, result.TurnID), nil
 	})
 
 	r.addContext(toolDef{

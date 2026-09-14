@@ -76,7 +76,10 @@ concurrency slot until they settle. Slots are per orchestrator turn, so idle
 sessions and user turns are free.
 
 Use `leo_send_dispatch {id, message}` or `leo dispatch send <id> <message>`
-only while the run is `idle`. A send returns `{turn_id, delivered}` and is
+only while the run is `idle`. A send returns `{turn_id, delivered}`; `delivered`
+is usually `false` at that moment because the harness acknowledges the paste
+asynchronously through its prompt-submit hook, so never re-send on that alone:
+wait on the turn id and trust its outcome. A send is
 rejected if the composer is busy or unknown, no slot is available, pasting
 fails, the body contains disallowed control characters, or the run is not
 idle. Use `leo_wait` on a run ID to wait for the latest orchestrator turn at
