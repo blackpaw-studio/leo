@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -45,12 +46,13 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	if entries := d.Wait(context.Background(), []string{started.ID}, consult.RunTimeout); len(entries) != 1 || entries[0].Status != consult.StatusDone {
 		t.Fatalf("Wait = %+v", entries)
 	}
-	out, err := exec.Command(tmuxPath, tmux.Args("list-panes", "-t", tmux.Target(session)+":="+started.ID, "-F", "#{window_name}\t#{pane_start_command}")...).Output()
+	window := "claude·" + started.ID[len(started.ID)-4:]
+	out, err := exec.Command(tmuxPath, tmux.Args("list-panes", "-t", tmux.Target(session)+":="+window, "-F", "#{window_name}\t#{pane_start_command}")...).Output()
 	if err != nil {
 		t.Fatalf("tmux list-windows: %v", err)
 	}
-	if !strings.Contains(string(out), started.ID) {
-		t.Fatalf("viewer window %q missing from %q", started.ID, out)
+	if !regexp.MustCompile(`claude·[0-9a-f]{4}`).Match(out) {
+		t.Fatalf("viewer window with label and id suffix missing from %q", out)
 	}
 	if !strings.Contains(string(out), "--config '/tmp/leo-e2e.yaml' dispatch watch "+started.ID) {
 		t.Fatalf("viewer command missing daemon config from %q", out)

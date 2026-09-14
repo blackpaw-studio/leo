@@ -35,20 +35,24 @@ func (s Status) Terminal() bool {
 // daemon. The final answer is deliberately not duplicated here: it is the
 // last event in the stream.
 type Record struct {
-	ID        string    `json:"id"`
-	Caller    string    `json:"caller,omitempty"`
-	Template  string    `json:"template"`
-	Harness   string    `json:"harness"`
-	Model     string    `json:"model"`
-	Kind      string    `json:"kind"`
-	Cwd       string    `json:"cwd"`
-	Name      string    `json:"name,omitempty"`
-	Prompt    string    `json:"prompt"`
-	Status    Status    `json:"status"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   time.Time `json:"ended_at,omitzero"`
-	Error     string    `json:"error,omitempty"`
-	Text      string    `json:"text,omitempty"`
+	ID        string        `json:"id"`
+	Caller    string        `json:"caller,omitempty"`
+	Template  string        `json:"template"`
+	Harness   string        `json:"harness"`
+	Model     string        `json:"model"`
+	Kind      string        `json:"kind"`
+	Cwd       string        `json:"cwd"`
+	Name      string        `json:"name,omitempty"`
+	Prompt    string        `json:"prompt"`
+	Status    Status        `json:"status"`
+	StartedAt time.Time     `json:"started_at"`
+	EndedAt   time.Time     `json:"ended_at,omitzero"`
+	Error     string        `json:"error,omitempty"`
+	Text      string        `json:"text,omitempty"`
+	Timeout   time.Duration `json:"timeout,omitempty"`
+	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
+	// can survive a daemon restart.
+	ViewerWindowID string `json:"viewer_window_id,omitempty"`
 }
 
 // Elapsed reports how long the consult ran, or has been running so far.
@@ -71,7 +75,14 @@ const StaleAfter = RunTimeout + 2*time.Minute
 // Stale reports whether an unfinished consult has outlived any plausible
 // run and should be treated as abandoned.
 func (r Record) Stale(now time.Time) bool {
-	return !r.Status.Terminal() && now.Sub(r.StartedAt) > StaleAfter
+	if r.Status.Terminal() {
+		return false
+	}
+	if r.Timeout > 0 {
+		return now.Sub(r.StartedAt) > r.Timeout+2*time.Minute
+	}
+	// Records written before kinds were introduced are consult records.
+	return r.Kind != "dispatch" && now.Sub(r.StartedAt) > StaleAfter
 }
 
 // Settled reports whether a consult has stopped changing, whether it

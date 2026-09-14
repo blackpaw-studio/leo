@@ -6,10 +6,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -18,15 +18,16 @@ const (
 	dispatchViewerSession = "leo-dispatch"
 	viewerCommandTimeout  = 5 * time.Second
 	viewerWaitDelay       = 100 * time.Millisecond
+	viewerGraceAfterEnd   = time.Hour
 )
-
-var dispatchID = regexp.MustCompile(`^d-[0-9a-f]+$`)
 
 // Viewer opens an inspectable tmux window for asynchronous dispatches. It is
 // deliberately an optional Dispatcher hook: dispatch execution and recording
 // remain useful when tmux is unavailable.
 type Viewer struct {
 	once               sync.Once
+	mu                 sync.Mutex
+	windowIDs          map[string]string
 	ConfigPath         string
 	TmuxPath           string
 	Executable         func() (string, error)
@@ -52,16 +53,14 @@ func NewViewer(configPath string, resolveCaller func(string) (string, bool)) *Vi
 
 // OnStart is a Dispatcher start hook. It intentionally returns no error: a
 // missing tmux binary or a racing session teardown must never reject work.
-func (v *Viewer) OnStart(rec Record) {
+func (v *Viewer) OnStart(rec Record) string {
 	if rec.Kind != "dispatch" {
-		return
+		return ""
 	}
 	if v == nil {
-		return
+		return ""
 	}
 	v.defaults()
-	v.prune()
-
 	session := ""
 	if v.ResolveCaller != nil && rec.Caller != "" {
 		if candidate, ok := v.ResolveCaller(rec.Caller); ok && v.run("has-session", "-t", tmux.Target(candidate)) == nil {
@@ -76,7 +75,7 @@ func (v *Viewer) OnStart(rec Record) {
 				// probe and new-session. Only give up when it is still absent.
 				if v.run("has-session", "-t", tmux.Target(session)) != nil {
 					v.log("creating fallback session %q: %v", session, err)
-					return
+					return ""
 				}
 			}
 		}
@@ -85,16 +84,30 @@ func (v *Viewer) OnStart(rec Record) {
 	leo, err := v.Executable()
 	if err != nil {
 		v.log("resolving leo executable: %v", err)
-		return
+		return ""
 	}
 	watch := fmt.Sprintf("%s --config %s dispatch watch %s", shellQuote(leo), shellQuote(v.ConfigPath), rec.ID)
-	if err := v.run("new-window", "-d", "-t", tmux.Target(session), "-n", rec.ID, watch); err != nil {
+	name := viewerWindowName(rec)
+	out, err := v.output("new-window", "-d", "-P", "-F", "#{window_id}", "-t", tmux.Target(session), "-n", name, watch)
+	if err != nil {
 		v.log("opening dispatch viewer %q: %v", rec.ID, err)
-		return
+		return ""
 	}
-	if err := v.run("set-window-option", "-t", windowTarget(session, rec.ID), "remain-on-exit", "on"); err != nil {
+	windowID := strings.TrimSpace(string(out))
+	if windowID == "" {
+		v.log("opening dispatch viewer %q: tmux returned no window ID", rec.ID)
+		return ""
+	}
+	v.mu.Lock()
+	if v.windowIDs == nil {
+		v.windowIDs = make(map[string]string)
+	}
+	v.windowIDs[rec.ID] = windowID
+	v.mu.Unlock()
+	if err := v.run("set-window-option", "-t", windowID, "remain-on-exit", "on"); err != nil {
 		v.log("keeping dispatch viewer %q open: %v", rec.ID, err)
 	}
+	return windowID
 }
 
 func (v *Viewer) defaults() {
@@ -123,20 +136,52 @@ func (v *Viewer) setDefaults() {
 	}
 }
 
-func (v *Viewer) prune() {
-	out, err := v.output("list-panes", "-a", "-F", "#{pane_dead}\t#{window_name}\t#{window_id}")
-	if err != nil {
-		v.log("listing stale dispatch viewers: %v", err)
+// Close releases a completed dispatch's viewer. Only successful results are
+// collected immediately; other terminal states remain available for diagnosis.
+func (v *Viewer) Close(rec Record) {
+	if v == nil || rec.Kind != "dispatch" || rec.Status != StatusDone {
 		return
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Split(line, "\t")
-		if len(fields) != 3 || fields[0] != "1" || !dispatchID.MatchString(fields[1]) {
+	v.defaults()
+	v.kill(rec.ID)
+}
+
+// Sweep closes viewers for terminal dispatches after their post-mortem grace
+// period. It intentionally only considers tracked windows, never arbitrary
+// dead panes in a tmux session.
+func (v *Viewer) Sweep(records []Record, now time.Time) {
+	if v == nil {
+		return
+	}
+	v.defaults()
+	for _, rec := range records {
+		if rec.ViewerWindowID != "" {
+			v.mu.Lock()
+			if v.windowIDs == nil {
+				v.windowIDs = make(map[string]string)
+			}
+			v.windowIDs[rec.ID] = rec.ViewerWindowID
+			v.mu.Unlock()
+		}
+		if rec.Kind != "dispatch" || !rec.Status.Terminal() || rec.EndedAt.IsZero() || now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
 			continue
 		}
-		if err := v.run("kill-window", "-t", fields[2]); err != nil {
-			v.log("pruning dispatch viewer %q: %v", fields[1], err)
-		}
+		v.kill(rec.ID)
+	}
+}
+
+func (v *Viewer) kill(id string) {
+	v.mu.Lock()
+	windowID := v.windowIDs[id]
+	if windowID != "" {
+		delete(v.windowIDs, id)
+	}
+	v.mu.Unlock()
+	if windowID == "" {
+		return
+	}
+	if err := v.run("kill-window", "-t", windowID); err != nil {
+		v.log("closing dispatch viewer %q: %v", id, err)
 	}
 }
 
@@ -167,7 +212,30 @@ func (v *Viewer) output(args ...string) ([]byte, error) {
 }
 func (v *Viewer) log(format string, args ...any) { v.Logf("dispatch viewer: "+format, args...) }
 
-func windowTarget(session, name string) string { return tmux.Target(session) + ":=" + name }
+func viewerWindowName(rec Record) string {
+	label := rec.Name
+	if label == "" {
+		label = rec.Template
+	}
+	label = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == ':' || r == '.' {
+			return '-'
+		}
+		return r
+	}, label)
+	chars := []rune(label)
+	if len(chars) > 24 {
+		label = string(chars[:24])
+	}
+	if label == "" {
+		label = "dispatch"
+	}
+	hex := strings.TrimPrefix(rec.ID, "d-")
+	if len(hex) > 4 {
+		hex = hex[len(hex)-4:]
+	}
+	return label + "·" + hex
+}
 
 // shellQuote returns one POSIX-shell word. tmux executes new-window's command
 // through a shell, so an executable path must not be interpolated raw.

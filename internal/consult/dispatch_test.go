@@ -35,6 +35,27 @@ func TestStartReturnsBeforeRunExits(t *testing.T) {
 	}
 }
 
+func TestWaitCollectsDoneDispatch(t *testing.T) {
+	var collected []Record
+	d := NewDispatcherWithOnStart(nil, context.Background(), nil, func(rec Record) {
+		collected = append(collected, rec)
+	})
+	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
+	}
+	started, err := d.Start(context.Background(), testConfig(), dispatchRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := d.Wait(context.Background(), []string{started.ID}, time.Second)
+	if len(entries) != 1 || entries[0].Status != StatusDone {
+		t.Fatalf("Wait = %+v", entries)
+	}
+	if len(collected) != 1 || collected[0].ID != started.ID || collected[0].Status != StatusDone {
+		t.Fatalf("collected = %+v", collected)
+	}
+}
+
 func TestWaitAggregatesMixedStatuses(t *testing.T) {
 	d := NewDispatcher(nil)
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -174,6 +195,45 @@ func TestCancelMarksRecordCanceled(t *testing.T) {
 	}
 	if _, err := d.Cancel(started.ID); err != nil {
 		t.Fatalf("second Cancel: %v", err)
+	}
+}
+
+func TestUnlimitedDispatchIsCanceledByCancel(t *testing.T) {
+	d := NewDispatcher(nil)
+	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if _, ok := ctx.Deadline(); ok {
+			t.Fatal("unlimited dispatch has a deadline")
+		}
+		return exec.CommandContext(ctx, "sleep", "30")
+	}
+	started, err := d.Start(context.Background(), testConfig(), dispatchRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Cancel(started.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Wait(context.Background(), []string{started.ID}, time.Second)[0].Status; got != StatusCanceled {
+		t.Fatalf("status = %q, want canceled", got)
+	}
+}
+
+func TestUnlimitedDispatchIsCanceledByParent(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	d := NewDispatcher(nil, parent)
+	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if _, ok := ctx.Deadline(); ok {
+			t.Fatal("unlimited dispatch has a deadline")
+		}
+		return exec.CommandContext(ctx, "sleep", "30")
+	}
+	started, err := d.Start(context.Background(), testConfig(), dispatchRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if got := d.Wait(context.Background(), []string{started.ID}, time.Second)[0].Status; got != StatusCanceled {
+		t.Fatalf("status = %q, want canceled", got)
 	}
 }
 

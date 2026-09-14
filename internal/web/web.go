@@ -392,8 +392,26 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	viewer.ExecCommand = func(name string, args ...string) *exec.Cmd {
 		return s.execCommand(name, args...)
 	}
-	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart)
+	// Viewer operations must be cancellable: collection and housekeeping are
+	// best-effort and may not inherit an unbounded tmux process.
+	viewer.ExecCommandContext = exec.CommandContext
+	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart, viewer.Close)
 	s.consults.MarkInterrupted()
+	if opts.ParentContext != nil {
+		go func() {
+			ticker := time.NewTicker(10 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-opts.ParentContext.Done():
+					return
+				case now := <-ticker.C:
+					viewer.Sweep(s.consults.Records(), now)
+					s.consults.Prune()
+				}
+			}
+		}()
+	}
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)

@@ -126,3 +126,16 @@ func TestAPIDispatchRejectsMissingCWD(t *testing.T) {
 		t.Fatalf("status %d, want 400", w.Code)
 	}
 }
+
+func TestDispatchTimeout(t *testing.T) {
+	jsonTimeout := 3.5
+	if got, err := dispatchTimeout(&jsonTimeout, ""); err != nil || got != 3500*time.Millisecond {
+		t.Fatalf("JSON timeout = %s, %v", got, err)
+	}
+	if got, err := dispatchTimeout(nil, "2"); err != nil || got != 2*time.Second {
+		t.Fatalf("query timeout = %s, %v", got, err)
+	}
+	if _, err := dispatchTimeout(nil, "-1"); err == nil {
+		t.Fatal("negative timeout was accepted")
+	}
+}

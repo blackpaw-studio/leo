@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -16,6 +17,26 @@ import (
 // msgPrefixFormat is the wire format prepended to a delivered message so the
 // recipient can identify the sender. Keep in sync with any consumer that parses it.
 const msgPrefixFormat = leotools.MessagePrefixFormat
+
+const maxWaitTimeout = consult.RunTimeout - time.Second
+
+func optionalTimeout(args map[string]any, key string) (time.Duration, error) {
+	seconds, ok := args[key].(float64)
+	if !ok {
+		return 0, nil
+	}
+	if seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds > float64(time.Duration(1<<63-1))/float64(time.Second) {
+		return 0, fmt.Errorf("%s must be non-negative", key)
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
+}
+
+func clampWaitTimeout(timeout time.Duration) time.Duration {
+	if timeout > maxWaitTimeout {
+		return maxWaitTimeout
+	}
+	return timeout
+}
 
 // toolDef is the MCP wire shape for a tool.
 type toolDef struct {
@@ -300,7 +321,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.addContext(toolDef{
 		Name: "leo_dispatch", Description: allowNote("Run a headless subagent on the template's harness/model in your project directory. Returns immediately; collect with leo_wait. The prompt must be self-contained. Use for delegating implementation/review/exploration to another model. Call several times for a fan-out then one leo_wait.", "dispatch to these templates", perms.CanConsult),
-		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}}, "template", "prompt"),
+		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "template", "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, err := stringArg(args, "template")
 		if err != nil {
@@ -319,7 +340,11 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			cwd, _ = os.Getwd()
 		}
 		name, _ := args["name"].(string)
-		started, err := client.dispatch(ctx, processName, template, model, prompt, cwd, name)
+		timeout, err := optionalTimeout(args, "timeout_seconds")
+		if err != nil {
+			return "", err
+		}
+		started, err := client.dispatch(ctx, processName, template, model, prompt, cwd, name, timeout)
 		if err != nil {
 			return "", err
 		}
@@ -327,7 +352,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_wait", Description: allowNote("Wait for dispatched subagents. On timeout, running ids come back as running and can be waited again.", "wait on dispatched templates", perms.CanConsult),
+		Name: "leo_wait", Description: allowNote("Wait for dispatched subagents for at most 1799 seconds per call. On timeout, running ids come back as running; call leo_wait again.", "wait on dispatched templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{"ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "timeout_seconds": map[string]any{"type": "number"}}, "ids"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		raw, ok := args["ids"].([]any)
@@ -342,13 +367,14 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			}
 			ids = append(ids, id)
 		}
-		timeout := consult.RunTimeout
-		if seconds, ok := args["timeout_seconds"].(float64); ok {
-			if seconds < 0 {
-				return "", fmt.Errorf("timeout_seconds must be non-negative")
-			}
-			timeout = time.Duration(seconds * float64(time.Second))
+		timeout, err := optionalTimeout(args, "timeout_seconds")
+		if err != nil {
+			return "", err
 		}
+		if timeout == 0 {
+			timeout = maxWaitTimeout
+		}
+		timeout = clampWaitTimeout(timeout)
 		entries, err := client.waitDispatch(ctx, ids, timeout)
 		if err != nil {
 			return "", err
@@ -361,7 +387,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			}
 			blocks = append(blocks, fmt.Sprintf("[%s · %s · %.1fs]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), body))
 		}
-		return strings.Join(blocks, "\n\n"), nil
+		return fmt.Sprintf("wait timeout: %.0fs\n%s", timeout.Seconds(), strings.Join(blocks, "\n\n")), nil
 	})
 
 	r.addContext(toolDef{

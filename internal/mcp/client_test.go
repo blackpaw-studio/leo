@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/consult"
 )
 
 // TestDaemonClientSetsBearerAuth asserts the MCP daemon client always attaches
@@ -87,6 +89,13 @@ func TestWaitDispatchUsesConsultCeilingForUnboundedWait(t *testing.T) {
 	}
 	if got := dispatchWaitHTTPTimeout(10 * time.Second); got != 70*time.Second {
 		t.Fatalf("bounded wait client timeout = %s, want 1m10s", got)
+	}
+}
+
+func TestClampWaitTimeout(t *testing.T) {
+	got := clampWaitTimeout(consult.RunTimeout + time.Minute)
+	if got >= consult.RunTimeout {
+		t.Fatalf("clamped timeout = %s, want less than %s", got, consult.RunTimeout)
 	}
 }
 

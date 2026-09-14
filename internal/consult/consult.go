@@ -30,7 +30,7 @@ const (
 	// Harness-side MCP tool ceilings are derived from it (leomcp.ToolTimeout)
 	// so leo, not the coding agent, is what times a consult out.
 	RunTimeout    = 30 * time.Minute
-	maxConcurrent = 4
+	maxConcurrent = 6
 	preamble      = "You are a one-off consultant: another agent is asking for your independent opinion. Analyze and answer directly and completely in your final message. Do not modify any files or take actions beyond reading. The question follows."
 )
 
@@ -41,6 +41,9 @@ type Request struct {
 	Cwd      string
 	Name     string
 	Kind     string
+	// Timeout caps this run. Zero means unlimited for dispatches and falls
+	// back to RunTimeout for consults.
+	Timeout  time.Duration
 	Preamble bool
 	// Caller names the process that asked, for the consult record. Optional.
 	Caller string
@@ -88,7 +91,8 @@ type Dispatcher struct {
 	daemonCtx          context.Context
 	mu                 sync.Mutex
 	runs               map[string]*runState
-	onStart            func(Record)
+	onStart            func(Record) string
+	onCollect          func(Record)
 }
 
 type runState struct {
@@ -114,7 +118,7 @@ func NewDispatcher(rec Recorder, parent ...context.Context) *Dispatcher {
 
 // NewDispatcherWithOnStart builds a dispatcher with an optional best-effort
 // start hook. Hooks observe accepted runs only and cannot reject a dispatch.
-func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func(Record)) *Dispatcher {
+func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func(Record) string, onCollect ...func(Record)) *Dispatcher {
 	if rec == nil {
 		rec = nopRecorder{}
 	}
@@ -122,7 +126,7 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 	if parent != nil {
 		daemonCtx = parent
 	}
-	return &Dispatcher{
+	d := &Dispatcher{
 		sem:                make(chan struct{}, maxConcurrent),
 		recorder:           rec,
 		ExecCommandContext: exec.CommandContext,
@@ -130,6 +134,10 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		runs:               make(map[string]*runState),
 		onStart:            onStart,
 	}
+	if len(onCollect) > 0 {
+		d.onCollect = onCollect[0]
+	}
+	return d
 }
 
 // templateNames returns the configured template names, sorted, for use in
@@ -160,6 +168,9 @@ func newID() string {
 // Request contexts govern only validation and the immediate caller, never the
 // lifetime of an accepted run.
 func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
+	if req.Timeout < 0 {
+		return Started{}, invalidf("timeout must be non-negative")
+	}
 	tmpl, ok := cfg.Templates[req.Template]
 	if !ok {
 		// List the valid names so a caller that guessed a model name instead
@@ -212,9 +223,14 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	// Record before competing for a slot, so consults waiting behind the
 	// concurrency limit are visible too. Validation failures never ran and
 	// are deliberately not recorded.
+	kind := requestKind(req)
+	timeout := req.Timeout
+	if kind == "consult" && timeout == 0 {
+		timeout = RunTimeout
+	}
 	rec := Record{
 		ID: newID(), Caller: req.Caller, Template: req.Template,
-		Kind: requestKind(req), Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name,
+		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: time.Now(),
 	}
 	handle, err := d.recorder.Open(rec)
@@ -231,9 +247,19 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	d.pruneTerminalRunsLocked()
 	d.mu.Unlock()
 	if rec.Kind == "dispatch" && d.onStart != nil {
-		d.onStart(rec)
+		if windowID := d.onStart(rec); windowID != "" {
+			d.mu.Lock()
+			state.record.ViewerWindowID = windowID
+			rec = state.record
+			d.mu.Unlock()
+			if recorder, ok := d.recorder.(*FileRecorder); ok {
+				if err := writeRecord(recorder.dir, rec); err != nil {
+					fmt.Fprintf(os.Stderr, "dispatch %s: recording viewer: %v\n", rec.ID, err)
+				}
+			}
+		}
 	}
-	go d.run(runCtx, state, h, model, tmpl.Env, args, harnessEnv, req.Cwd)
+	go d.run(runCtx, state, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
 }
 
@@ -251,7 +277,7 @@ func requestPrompt(req Request) string {
 	return req.Prompt
 }
 
-func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string) {
+func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration) {
 	defer close(state.done)
 	select {
 	case d.sem <- struct{}{}:
@@ -270,7 +296,11 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", state.record.ID, err)
 	}
 	d.setStatus(state, StatusRunning)
-	runCtx, timeoutCancel := context.WithTimeout(parent, RunTimeout)
+	runCtx := parent
+	timeoutCancel := func() {}
+	if timeout > 0 {
+		runCtx, timeoutCancel = context.WithTimeout(parent, timeout)
+	}
 	defer timeoutCancel()
 	binary := h.Binary()
 	if p, err := exec.LookPath(binary); err == nil {
@@ -382,8 +412,18 @@ func (d *Dispatcher) pruneTerminalRunsLocked() {
 
 // Wait returns one entry per requested dispatch once all are terminal or the
 // supplied timeout expires. It never polls records.
-func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Duration) []Entry {
-	entries := make([]Entry, len(ids))
+func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Duration) (entries []Entry) {
+	defer func() {
+		for i, entry := range entries {
+			if entry.Status != StatusDone {
+				continue
+			}
+			if rec, err := d.Get(ids[i]); err == nil {
+				d.Collect(rec)
+			}
+		}
+	}()
+	entries = make([]Entry, len(ids))
 	states := make([]*runState, len(ids))
 	for i, id := range ids {
 		entries[i].ID = id
@@ -464,6 +504,39 @@ func (d *Dispatcher) lookup(id string) (Record, *runState, error) {
 }
 
 func (d *Dispatcher) Get(id string) (Record, error) { rec, _, err := d.lookup(id); return rec, err }
+
+// Collect marks a terminal record as observed by a caller. The collection
+// hook is best-effort observability cleanup and must never affect the result.
+func (d *Dispatcher) Collect(rec Record) {
+	if d.onCollect != nil {
+		d.onCollect(rec)
+	}
+}
+
+// Records returns the persisted records where available, otherwise the
+// dispatcher-owned in-memory records. It supports periodic housekeeping.
+func (d *Dispatcher) Records() []Record {
+	if recorder, ok := d.recorder.(*FileRecorder); ok {
+		records, err := Load(filepath.Dir(recorder.dir))
+		if err == nil {
+			return records
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	records := make([]Record, 0, len(d.runs))
+	for _, state := range d.runs {
+		records = append(records, state.record)
+	}
+	return records
+}
+
+// Prune re-applies the recorder's retention policy during daemon housekeeping.
+func (d *Dispatcher) Prune() {
+	if recorder, ok := d.recorder.(*FileRecorder); ok {
+		recorder.prune(RecordsKept)
+	}
+}
 
 func (d *Dispatcher) Cancel(id string) (Record, error) {
 	rec, state, err := d.lookup(id)

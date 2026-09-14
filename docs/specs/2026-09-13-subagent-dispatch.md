@@ -54,8 +54,10 @@ terminal or the timeout elapses; returns one entry per id:
 - One call waits on any number of ids, so a fan-out needs one blocking call.
 - Already-terminal ids return immediately. On timeout, still-running ids come
   back with `status: running` and no error; the caller may wait again.
-- Default timeout is `consult.RunTimeout` (30 minutes). The MCP tool ceiling
-  derives from it the way consult's does (`leomcp.ToolTimeout`).
+- Each MCP wait is capped just under `consult.RunTimeout` (30 minutes), so
+  callers re-wait for longer work. Dispatch runs themselves are unlimited by
+  default; `timeout_seconds` adds an explicit cap. Consult runs remain capped
+  at 30 minutes.
 - An unknown id yields an error entry for that id, not a failed call.
 
 `leo_cancel {id}` → kills the subagent's process group; status becomes
@@ -71,7 +73,7 @@ governs dispatch templates too.
 
 Endpoints, all under the existing API auth:
 
-- `POST /api/dispatch` `{from, template, model, prompt, cwd, name}` → `{id, ...}`
+- `POST /api/dispatch` `{from, template, model, prompt, cwd, name, timeout_seconds?}` → `{id, ...}`
 - `GET /api/dispatch/{id}` → record
 - `GET /api/dispatch/wait?id=..&id=..&timeout=` → long-poll, returns entries
 - `POST /api/dispatch/{id}/cancel`
@@ -93,18 +95,19 @@ non-terminal record is marked `failed` with reason `daemon restarted`.
 When a run starts, the daemon opens a viewer window on its own tmux server:
 
 - Caller is a supervised leo agent (its `from` resolves to a tmux session):
-  `tmux new-window -d -t leo-<caller> -n <id> "leo --config <path> dispatch watch <id>"`. The window is named by id, never by label, so the pruner can recognise viewer windows safely.
+  `tmux new-window -d -t leo-<caller> -n <label>·<hex4> "leo --config <path> dispatch watch <id>"`. The label is the run name or template, sanitised and truncated to 24 characters; the suffix is the last four ID hex characters.
 - Any other caller: the same window in a `leo-dispatch` session, created on
   demand.
 
-The window is a viewer, never the executor. It has `remain-on-exit` set so the
-final output stays visible; dead viewer windows in that session are pruned when
-the next dispatch opens there. A tmux failure is logged and never fails the
-dispatch.
+The window is a viewer, never the executor. It has `remain-on-exit` set. It
+closes when the result is collected (via `leo_wait`, `leo dispatch run`, or web
+`/api/dispatch/wait`). Failed, canceled, and timed-out runs remain open for
+about one hour for post-mortem inspection; `leo dispatch watch <id>` can replay
+the stream anytime. A tmux failure is logged and never fails the dispatch.
 
 ### CLI
 
-`leo dispatch run <template> [-m model] [--cwd dir] [--name n] <prompt>` runs
+`leo dispatch run <template> [-m model] [--cwd dir] [--name n] [--timeout duration] <prompt>` runs
 synchronously and prints the result. `leo dispatch watch|show|list|cancel <id>`
 operate on records. `leo consult watch` becomes an alias of
 `leo dispatch watch`.

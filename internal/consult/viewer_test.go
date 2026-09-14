@@ -19,17 +19,19 @@ func TestViewerOpensDispatchInCallerSession(t *testing.T) {
 		},
 		ExecCommand: func(name string, args ...string) *exec.Cmd {
 			calls = append(calls, append([]string{name}, args...))
+			if containsArg(args, "new-window") {
+				return exec.Command("printf", "@1\\n")
+			}
 			return exec.Command("true")
 		},
 	}
 
-	v.OnStart(Record{ID: "d-123abc", Caller: "worker", Kind: "dispatch"})
+	v.OnStart(Record{ID: "d-123abc", Caller: "worker", Template: "claude", Kind: "dispatch"})
 
 	want := [][]string{
-		{"tmux", "-L", "leo", "list-panes", "-a", "-F", "#{pane_dead}\t#{window_name}\t#{window_id}"},
 		{"tmux", "-L", "leo", "has-session", "-t", "=leo-worker"},
-		{"tmux", "-L", "leo", "new-window", "-d", "-t", "=leo-worker", "-n", "d-123abc", "'/opt/leo' --config '/tmp/leo.yaml' dispatch watch d-123abc"},
-		{"tmux", "-L", "leo", "set-window-option", "-t", "=leo-worker:=d-123abc", "remain-on-exit", "on"},
+		{"tmux", "-L", "leo", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=leo-worker", "-n", "claude·3abc", "'/opt/leo' --config '/tmp/leo.yaml' dispatch watch d-123abc"},
+		{"tmux", "-L", "leo", "set-window-option", "-t", "@1", "remain-on-exit", "on"},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("tmux calls = %#v\nwant %#v", calls, want)
@@ -47,18 +49,20 @@ func TestViewerCreatesFallbackSession(t *testing.T) {
 			if len(args) > 2 && args[2] == "has-session" {
 				return exec.Command("false")
 			}
+			if containsArg(args, "new-window") {
+				return exec.Command("printf", "@2\\n")
+			}
 			return exec.Command("true")
 		},
 	}
 
-	v.OnStart(Record{ID: "d-456def", Kind: "dispatch"})
+	v.OnStart(Record{ID: "d-456def", Template: "claude", Kind: "dispatch"})
 
 	want := [][]string{
-		{"tmux", "-L", "leo", "list-panes", "-a", "-F", "#{pane_dead}\t#{window_name}\t#{window_id}"},
 		{"tmux", "-L", "leo", "has-session", "-t", "=leo-dispatch"},
 		{"tmux", "-L", "leo", "new-session", "-d", "-s", "leo-dispatch"},
-		{"tmux", "-L", "leo", "new-window", "-d", "-t", "=leo-dispatch", "-n", "d-456def", "'/opt/leo' --config '/tmp/leo.yaml' dispatch watch d-456def"},
-		{"tmux", "-L", "leo", "set-window-option", "-t", "=leo-dispatch:=d-456def", "remain-on-exit", "on"},
+		{"tmux", "-L", "leo", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=leo-dispatch", "-n", "claude·6def", "'/opt/leo' --config '/tmp/leo.yaml' dispatch watch d-456def"},
+		{"tmux", "-L", "leo", "set-window-option", "-t", "@2", "remain-on-exit", "on"},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("tmux calls = %#v\nwant %#v", calls, want)
@@ -109,6 +113,13 @@ func TestViewerShellQuotesExecutable(t *testing.T) {
 		if containsArg(call, "new-window") && !containsArg(call, `'/opt/Leo Tools/leo'"'"'s' --config '/tmp/leo.yaml' dispatch watch d-c0ffee`) {
 			t.Fatalf("unquoted watch command: %#v", call)
 		}
+	}
+}
+
+func TestViewerWindowNameSanitizesAndTruncatesLabel(t *testing.T) {
+	rec := Record{ID: "d-0123456789ab", Name: "one two:three.four-five-six-seven"}
+	if got, want := viewerWindowName(rec), "one-two-three-four-five-·89ab"; got != want {
+		t.Fatalf("viewerWindowName = %q, want %q", got, want)
 	}
 }
 
@@ -165,5 +176,68 @@ func TestViewerSkipsConsults(t *testing.T) {
 	v.OnStart(Record{ID: "d-123abc", Kind: "consult"})
 	if called {
 		t.Fatal("consult opened a viewer")
+	}
+}
+
+func TestViewerClosesDoneDispatchOnCollection(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{
+		TmuxPath: "tmux",
+		ExecCommand: func(name string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{name}, args...))
+			return exec.Command("true")
+		},
+		windowIDs: map[string]string{"d-done": "@42"},
+	}
+
+	v.Close(Record{ID: "d-done", Kind: "dispatch", Status: StatusDone})
+	if !reflect.DeepEqual(calls, [][]string{{"tmux", "-L", "leo", "kill-window", "-t", "@42"}}) {
+		t.Fatalf("tmux calls = %#v", calls)
+	}
+}
+
+func TestViewerLeavesFailedDispatchOpen(t *testing.T) {
+	called := false
+	v := &Viewer{
+		ExecCommand: func(string, ...string) *exec.Cmd { called = true; return exec.Command("true") },
+		windowIDs:   map[string]string{"d-failed": "@42"},
+	}
+
+	v.Close(Record{ID: "d-failed", Kind: "dispatch", Status: StatusFailed})
+	if called {
+		t.Fatal("failed dispatch closed its viewer")
+	}
+}
+
+func TestViewerSweepClosesTerminalDispatchAfterGrace(t *testing.T) {
+	var calls [][]string
+	now := time.Now()
+	v := &Viewer{
+		TmuxPath: "tmux",
+		ExecCommand: func(name string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{name}, args...))
+			return exec.Command("true")
+		},
+		windowIDs: map[string]string{"d-failed": "@42"},
+	}
+
+	v.Sweep([]Record{{ID: "d-failed", Kind: "dispatch", Status: StatusFailed, EndedAt: now.Add(-viewerGraceAfterEnd - time.Second)}}, now)
+	if !reflect.DeepEqual(calls, [][]string{{"tmux", "-L", "leo", "kill-window", "-t", "@42"}}) {
+		t.Fatalf("tmux calls = %#v", calls)
+	}
+}
+
+func TestViewerCollectionOfClosedWindowIsNoop(t *testing.T) {
+	called := false
+	v := &Viewer{
+		ExecCommand: func(string, ...string) *exec.Cmd { called = true; return exec.Command("true") },
+		windowIDs:   map[string]string{"d-done": "@42"},
+	}
+	rec := Record{ID: "d-done", Kind: "dispatch", Status: StatusDone}
+	v.Close(rec)
+	called = false
+	v.Close(rec)
+	if called {
+		t.Fatal("closed window was killed twice")
 	}
 }

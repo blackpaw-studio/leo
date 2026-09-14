@@ -298,6 +298,16 @@ func TestFileRecorderPrunesAbandonedRecords(t *testing.T) {
 	}
 }
 
+func TestUnlimitedDispatchIsNotStale(t *testing.T) {
+	record := testRecord("d-long")
+	record.Kind = "dispatch"
+	record.Status = StatusRunning
+	record.StartedAt = time.Now().Add(-3 * time.Hour)
+	if record.Stale(time.Now()) {
+		t.Fatal("unlimited dispatch was marked stale")
+	}
+}
+
 // TestFileRecorderKeepsFreshUnfinishedRecords is the other half: a consult
 // genuinely in flight must never be evicted, however full the directory is.
 func TestFileRecorderKeepsFreshUnfinishedRecords(t *testing.T) {

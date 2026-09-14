@@ -188,13 +188,16 @@ func (c *daemonClient) consult(ctx context.Context, from, template, model, promp
 	return client.doContext(ctx, http.MethodPost, "/api/consult", body)
 }
 
-func (c *daemonClient) dispatch(ctx context.Context, from, template, model, prompt, cwd, name string) (consult.Started, error) {
-	body := map[string]string{"from": from, "template": template, "prompt": prompt, "cwd": cwd}
+func (c *daemonClient) dispatch(ctx context.Context, from, template, model, prompt, cwd, name string, timeout time.Duration) (consult.Started, error) {
+	body := map[string]any{"from": from, "template": template, "prompt": prompt, "cwd": cwd}
 	if model != "" {
 		body["model"] = model
 	}
 	if name != "" {
 		body["name"] = name
+	}
+	if timeout > 0 {
+		body["timeout_seconds"] = timeout.Seconds()
 	}
 	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch", body)
 	if err != nil {
