@@ -138,6 +138,20 @@ type Harness interface {
 	Driver() SessionDriver
 }
 
+// TurnHooker is an optional adapter capability for interactive dispatch. It
+// returns launch arguments that arrange for reportCmd to run at each native
+// turn boundary; callers must type-assert because not every harness supports
+// reliable turn hooks.
+type TurnHooker interface {
+	TurnHooks(reportCmd []string) (args []string, err error)
+}
+
+// InteractivePreparer is an optional adapter capability for launch-scoped
+// interactive setup that must finish before the TUI starts.
+type InteractivePreparer interface {
+	PrepareInteractive(home string) error
+}
+
 // FallbackString returns primary if non-empty, else fallback. Callers use
 // it to resolve config cascades into a LaunchSpec.
 func FallbackString(primary, fallback string) string {

@@ -62,18 +62,7 @@ func ensureWorkspaceTrusted(h harness.SessionHandle) error {
 	if strings.Contains(string(existing), header) {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("codex: creating %s: %w", filepath.Dir(path), err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304
-	if err != nil {
-		return fmt.Errorf("codex: opening %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := fmt.Fprintf(f, "\n%s\ntrust_level = \"trusted\"\n", header); err != nil {
-		return fmt.Errorf("codex: writing trust entry: %w", err)
-	}
-	return nil
+	return appendConfigEntry(path, header+"\ntrust_level = \"trusted\"")
 }
 
 // refreshSessionArgs rewrites the launch argv from the stored session id:
