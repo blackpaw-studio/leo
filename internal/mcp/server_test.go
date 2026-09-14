@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -553,6 +554,28 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 
 	if gotBody["model"] != "gpt-x" {
 		t.Fatalf("daemon POST body model = %q, want gpt-x; body %+v", gotBody["model"], gotBody)
+	}
+}
+
+func TestLeoDispatchUsesDefaultCWD(t *testing.T) {
+	var gotBody map[string]string
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		if method != "POST" || path != "/api/dispatch" {
+			t.Errorf("request %s %s", method, path)
+		}
+		_ = json.Unmarshal(body, &gotBody)
+		return 200, `{"ok":true,"data":{"id":"d-test","harness":"codex","model":"gpt","cwd":"/tmp"}}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
+	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "codex", "prompt": "do it"}}})
+	cwd, _ := os.Getwd()
+	if gotBody["cwd"] != cwd {
+		t.Fatalf("cwd = %q, want %q", gotBody["cwd"], cwd)
+	}
+	text := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "d-test") || !strings.Contains(text, "leo dispatch watch") {
+		t.Fatalf("result %q", text)
 	}
 }
 

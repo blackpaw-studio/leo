@@ -94,6 +94,7 @@ type Server struct {
 	observeMessageLog *observe.MessageLog
 	observeActivity   observe.ActivityProvider
 	leoVersion        string
+	parentContext     context.Context
 }
 
 // SetObservability wires the observability event bus, run log, activity
@@ -116,11 +117,12 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	}
 
 	s := &Server{
-		sockPath:   sockPath,
-		configPath: configPath,
-		scheduler:  cron.New(leoPath, configPath),
-		processes:  processes,
-		router:     newSessionRouter(),
+		sockPath:      sockPath,
+		configPath:    configPath,
+		scheduler:     cron.New(leoPath, configPath),
+		processes:     processes,
+		router:        newSessionRouter(),
+		parentContext: context.Background(),
 	}
 
 	// The injector is intentionally NOT wired here: deciding how to inject
@@ -185,6 +187,14 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	}
 
 	return s
+}
+
+// SetParentContext supplies the service lifetime to web-dispatched runs.
+// It must be called before StartWeb.
+func (s *Server) SetParentContext(ctx context.Context) {
+	if ctx != nil {
+		s.parentContext = ctx
+	}
 }
 
 // Start binds the Unix socket and begins serving requests.
@@ -337,6 +347,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		ResolveHandle:  s.resolveHandle,
 		// Consults record to <state>/consults for `leo consult watch`.
 		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),
+		ParentContext:   s.parentContext,
 	}, observeOpts...)
 	bind := cfg.WebBind()
 	addr := fmt.Sprintf("%s:%d", bind, port)

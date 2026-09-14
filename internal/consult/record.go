@@ -12,6 +12,7 @@ import (
 type Status string
 
 const (
+	StatusUnknown  Status = "unknown"
 	StatusQueued   Status = "queued"
 	StatusRunning  Status = "running"
 	StatusDone     Status = "done"
@@ -39,12 +40,15 @@ type Record struct {
 	Template  string    `json:"template"`
 	Harness   string    `json:"harness"`
 	Model     string    `json:"model"`
-	Workspace string    `json:"workspace,omitempty"`
+	Kind      string    `json:"kind"`
+	Cwd       string    `json:"cwd"`
+	Name      string    `json:"name,omitempty"`
 	Prompt    string    `json:"prompt"`
 	Status    Status    `json:"status"`
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at,omitzero"`
 	Error     string    `json:"error,omitempty"`
+	Text      string    `json:"text,omitempty"`
 }
 
 // Elapsed reports how long the consult ran, or has been running so far.
@@ -102,6 +106,7 @@ type Recorder interface {
 type Handle interface {
 	io.Writer
 	SetStatus(Status) error
+	SetText(string) error
 	Close(Status, error) error
 }
 
@@ -115,4 +120,5 @@ type nopHandle struct{}
 
 func (nopHandle) Write(p []byte) (int, error) { return len(p), nil }
 func (nopHandle) SetStatus(Status) error      { return nil }
+func (nopHandle) SetText(string) error        { return nil }
 func (nopHandle) Close(Status, error) error   { return nil }

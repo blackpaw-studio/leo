@@ -103,8 +103,8 @@ func TestResolveConsultFallsBackToNewestWhenNoneRunning(t *testing.T) {
 }
 
 func TestResolveConsultWithNoRecords(t *testing.T) {
-	if _, err := resolveConsult(nil, ""); err == nil {
-		t.Fatal("expected an error when nothing has been recorded")
+	if _, err := resolveConsult(nil, ""); err == nil || err.Error() != "no dispatches recorded yet" {
+		t.Fatalf("resolveConsult error = %v, want no dispatches recorded yet", err)
 	}
 }
 
@@ -198,7 +198,7 @@ func appendTo(t *testing.T, path, data string) {
 
 func TestWatchReplaysAFinishedConsultAndExits(t *testing.T) {
 	state := t.TempDir()
-	dir := filepath.Join(state, "consults")
+	dir := filepath.Join(state, "dispatches")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestWatchReplaysAFinishedConsultAndExits(t *testing.T) {
 
 func TestWatchFollowsUntilTheConsultFinishes(t *testing.T) {
 	state := t.TempDir()
-	dir := filepath.Join(state, "consults")
+	dir := filepath.Join(state, "dispatches")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestWatchFollowsUntilTheConsultFinishes(t *testing.T) {
 
 func TestListRendersRunningConsultsFirst(t *testing.T) {
 	state := t.TempDir()
-	dir := filepath.Join(state, "consults")
+	dir := filepath.Join(state, "dispatches")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestListRendersRunningConsultsFirst(t *testing.T) {
 
 func TestListJSONIsMachineReadable(t *testing.T) {
 	state := t.TempDir()
-	dir := filepath.Join(state, "consults")
+	dir := filepath.Join(state, "dispatches")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestFormatOffset(t *testing.T) {
 // leaves behind: nothing will ever close it, so watch must not wait forever.
 func TestWatchReportsAnAbandonedConsult(t *testing.T) {
 	state := t.TempDir()
-	dir := filepath.Join(state, "consults")
+	dir := filepath.Join(state, "dispatches")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestWatchReportsAnAbandonedConsult(t *testing.T) {
 // in-memory copy forever when the record is removed out from under us.
 func TestWatchStopsWhenTheRecordVanishes(t *testing.T) {
 	state := t.TempDir()
-	dir := filepath.Join(state, "consults")
+	dir := filepath.Join(state, "dispatches")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestWatchStopsWhenTheRecordVanishes(t *testing.T) {
 // will ever update is a lie that never expires.
 func TestListMarksAbandonedConsults(t *testing.T) {
 	state := t.TempDir()
-	dir := filepath.Join(state, "consults")
+	dir := filepath.Join(state, "dispatches")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestListMarksAbandonedConsults(t *testing.T) {
 // fails against a plain-WriteFile helper and passes against an atomic one.
 func TestWriteTestRecordIsAtomic(t *testing.T) {
 	state := t.TempDir()
-	dir := filepath.Join(state, "consults")
+	dir := filepath.Join(state, "dispatches")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

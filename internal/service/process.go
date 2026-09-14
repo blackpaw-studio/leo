@@ -776,6 +776,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
 	srv := daemon.New(sockPath, configPath, supervisor)
+	srv.SetParentContext(ctx)
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.
 	srv.SetObservability(bus, runLog, messageLog, activityTracker, opts.Version)

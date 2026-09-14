@@ -82,3 +82,47 @@ func TestAPIConsultRejectsUnknownTemplate(t *testing.T) {
 		t.Fatalf("status %d, want 400", w.Code)
 	}
 }
+
+func TestAPIDispatchLifecycle(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	s.consults.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
+	}
+	w := httptest.NewRecorder()
+	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"from":"caller","template":"coding","prompt":"work","cwd":"/tmp"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("start: %d %s", w.Code, w.Body.String())
+	}
+	var started struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	if started.Data.ID == "" {
+		t.Fatal("missing dispatch id")
+	}
+	w = httptest.NewRecorder()
+	s.handleAPIDispatchWait(w, httptest.NewRequest("GET", "/api/dispatch/wait?id="+started.Data.ID+"&timeout=2", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "done") {
+		t.Fatalf("wait: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/dispatch/"+started.Data.ID, nil)
+	req.SetPathValue("id", started.Data.ID)
+	s.handleAPIDispatchGet(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIDispatchRejectsMissingCWD(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	w := httptest.NewRecorder()
+	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work"}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
+	}
+}

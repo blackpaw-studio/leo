@@ -329,6 +329,9 @@ type Options struct {
 	// `leo consult list` / `leo consult watch` can see work in flight.
 	// Optional; nil discards recordings.
 	ConsultRecorder consult.Recorder
+	// ParentContext is the daemon lifetime. Accepted dispatches are canceled
+	// when it ends instead of surviving a daemon shutdown.
+	ParentContext context.Context
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is
@@ -373,7 +376,24 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	}
 	s.deliverPeer = peerinbox.Deliver
 	s.fetchAgentListFn = s.fetchAgentList
-	s.consults = consult.NewDispatcher(opts.ConsultRecorder)
+	viewer := consult.NewViewer(configPath, func(caller string) (string, bool) {
+		if s.processes == nil {
+			return "", false
+		}
+		state, ok := s.processes.States()[caller]
+		if !ok || (state.Status != "running" && state.Status != "starting") {
+			return "", false
+		}
+		return agent.SessionName(caller), true
+	})
+	// The viewer executes through the server's command seam, so tests can
+	// inspect its tmux argv without requiring a live tmux server.
+	viewer.TmuxPath = findTmuxPath()
+	viewer.ExecCommand = func(name string, args ...string) *exec.Cmd {
+		return s.execCommand(name, args...)
+	}
+	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart)
+	s.consults.MarkInterrupted()
 
 	s.injectPrompt = func(ctx context.Context, session, body string) error {
 		return tmux.InjectPrompt(ctx, findTmuxPath(), session, body)
@@ -480,6 +500,10 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
+	apiMux.HandleFunc("GET /api/dispatch/wait", s.handleAPIDispatchWait)
+	apiMux.HandleFunc("POST /api/dispatch", s.handleAPIDispatch)
+	apiMux.HandleFunc("GET /api/dispatch/{id}", s.handleAPIDispatchGet)
+	apiMux.HandleFunc("POST /api/dispatch/{id}/cancel", s.handleAPIDispatchCancel)
 	apiMux.HandleFunc("GET /api/agent/list", s.handleAPIAgentList)
 	apiMux.HandleFunc("GET /api/template/list", s.handleAPITemplateList)
 	apiMux.HandleFunc("GET /api/task/list", s.handleAPITaskList)

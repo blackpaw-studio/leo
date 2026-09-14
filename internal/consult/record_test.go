@@ -31,7 +31,7 @@ func newTestRecorder(t *testing.T) (*FileRecorder, string) {
 	state := t.TempDir()
 	r := NewFileRecorder(state)
 	r.Now = fixedClock(time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC))
-	return r, filepath.Join(state, "consults")
+	return r, filepath.Join(state, "dispatches")
 }
 
 func testRecord(id string) Record {

@@ -32,6 +32,8 @@ func (h *fakeHandle) SetStatus(s Status) error {
 	return nil
 }
 
+func (h *fakeHandle) SetText(string) error { return nil }
+
 func (h *fakeHandle) Close(s Status, cause error) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -90,7 +92,7 @@ func TestConsultRecordsStreamAndStatusTransitions(t *testing.T) {
 		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"codex opinion","is_error":false}`)
 	}
 	result, err := d.Consult(context.Background(), testConfig(), Request{
-		Caller: "leo", Template: "claude", Prompt: "what do you think?", Workspace: t.TempDir(),
+		Caller: "leo", Template: "claude", Prompt: "what do you think?", Cwd: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("Consult: %v", err)
@@ -99,8 +101,8 @@ func TestConsultRecordsStreamAndStatusTransitions(t *testing.T) {
 	state := rec.waitOpened(t).snapshot()
 	opened := state.opened
 
-	if !strings.HasPrefix(opened.ID, "c-") || len(opened.ID) != 14 {
-		t.Errorf("id = %q, want c- plus 12 hex chars", opened.ID)
+	if !strings.HasPrefix(opened.ID, "d-") || len(opened.ID) != 14 {
+		t.Errorf("id = %q, want d- plus 12 hex chars", opened.ID)
 	}
 	if result.ID != opened.ID {
 		t.Errorf("result id = %q, want the recorded id %q", result.ID, opened.ID)
@@ -132,7 +134,7 @@ func TestConsultRecordsFailure(t *testing.T) {
 		return exec.CommandContext(ctx, "false")
 	}
 	if _, err := d.Consult(context.Background(), testConfig(), Request{
-		Template: "claude", Prompt: "q", Workspace: t.TempDir(),
+		Template: "claude", Prompt: "q", Cwd: t.TempDir(),
 	}); err == nil {
 		t.Fatal("expected an execution failure")
 	}
@@ -153,7 +155,7 @@ func TestConsultRecordsEmptyOutputAsFailure(t *testing.T) {
 		return exec.CommandContext(ctx, "true")
 	}
 	if _, err := d.Consult(context.Background(), testConfig(), Request{
-		Template: "claude", Prompt: "q", Workspace: t.TempDir(),
+		Template: "claude", Prompt: "q", Cwd: t.TempDir(),
 	}); err == nil {
 		t.Fatal("expected a no-output failure")
 	}
@@ -174,7 +176,7 @@ func TestConsultRecordsQueuedConsultsAndCancellation(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = d.Consult(ctx, testConfig(), Request{Template: "claude", Prompt: "q"})
+		_, _ = d.Consult(ctx, testConfig(), Request{Template: "claude", Prompt: "q", Cwd: t.TempDir()})
 	}()
 
 	// The consult is recorded before it competes for a slot, so work
@@ -205,7 +207,7 @@ func TestConsultRecordsDeadlineAsTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := d.Consult(ctx, testConfig(), Request{
-		Template: "claude", Prompt: "q", Workspace: t.TempDir(),
+		Template: "claude", Prompt: "q", Cwd: t.TempDir(),
 	}); err == nil {
 		t.Fatal("expected a timeout")
 	}
@@ -224,7 +226,7 @@ func TestConsultRecordsCancellationWhileRunning(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = d.Consult(ctx, testConfig(), Request{Template: "claude", Prompt: "q", Workspace: t.TempDir()})
+		_, _ = d.Consult(ctx, testConfig(), Request{Template: "claude", Prompt: "q", Cwd: t.TempDir()})
 	}()
 
 	h := rec.waitOpened(t)
@@ -252,7 +254,7 @@ func TestConsultWithoutRecorderIsUnchanged(t *testing.T) {
 		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"ok","is_error":false}`)
 	}
 	result, err := d.Consult(context.Background(), testConfig(), Request{
-		Template: "claude", Prompt: "q", Workspace: t.TempDir(),
+		Template: "claude", Prompt: "q", Cwd: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("Consult: %v", err)

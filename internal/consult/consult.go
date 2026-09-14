@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -33,10 +35,13 @@ const (
 )
 
 type Request struct {
-	Template  string
-	Model     string
-	Prompt    string
-	Workspace string
+	Template string
+	Model    string
+	Prompt   string
+	Cwd      string
+	Name     string
+	Kind     string
+	Preamble bool
 	// Caller names the process that asked, for the consult record. Optional.
 	Caller string
 }
@@ -48,6 +53,21 @@ type Result struct {
 	Harness string `json:"harness"`
 	Model   string `json:"model"`
 	Text    string `json:"text"`
+}
+
+type Started struct {
+	ID      string `json:"id"`
+	Harness string `json:"harness"`
+	Model   string `json:"model"`
+	Cwd     string `json:"cwd"`
+}
+
+type Entry struct {
+	ID      string        `json:"id"`
+	Status  Status        `json:"status"`
+	Elapsed time.Duration `json:"elapsed"`
+	Text    string        `json:"text,omitempty"`
+	Err     string        `json:"error,omitempty"`
 }
 
 // ValidationError reports a request/configuration problem that should be
@@ -65,19 +85,50 @@ type Dispatcher struct {
 	sem                chan struct{}
 	recorder           Recorder
 	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
+	daemonCtx          context.Context
+	mu                 sync.Mutex
+	runs               map[string]*runState
+	onStart            func(Record)
+}
+
+type runState struct {
+	record Record
+	handle Handle
+	done   chan struct{}
+	cancel context.CancelFunc
 }
 
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder
 // discards recordings, leaving behavior exactly as it was before consults
 // were observable.
-func NewDispatcher(rec Recorder) *Dispatcher {
+// NewDispatcher builds a dispatcher. parent controls the lifetime of accepted
+// runs; nil retains the historical background-context behavior for callers
+// that do not own a service lifetime.
+func NewDispatcher(rec Recorder, parent ...context.Context) *Dispatcher {
+	var ctx context.Context
+	if len(parent) > 0 {
+		ctx = parent[0]
+	}
+	return NewDispatcherWithOnStart(rec, ctx, nil)
+}
+
+// NewDispatcherWithOnStart builds a dispatcher with an optional best-effort
+// start hook. Hooks observe accepted runs only and cannot reject a dispatch.
+func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func(Record)) *Dispatcher {
 	if rec == nil {
 		rec = nopRecorder{}
+	}
+	daemonCtx := context.Background()
+	if parent != nil {
+		daemonCtx = parent
 	}
 	return &Dispatcher{
 		sem:                make(chan struct{}, maxConcurrent),
 		recorder:           rec,
 		ExecCommandContext: exec.CommandContext,
+		daemonCtx:          daemonCtx,
+		runs:               make(map[string]*runState),
+		onStart:            onStart,
 	}
 }
 
@@ -102,49 +153,60 @@ func templateNames(cfg *config.Config) string {
 func newID() string {
 	var b [6]byte
 	_, _ = rand.Read(b[:])
-	return "c-" + hex.EncodeToString(b[:])
+	return "d-" + hex.EncodeToString(b[:])
 }
 
-// Consult validates and executes a consultant synchronously. The caller's
-// context controls queueing and execution; RunTimeout supplies an upper bound.
-func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
+// Start validates a dispatch and begins it under the dispatcher context.
+// Request contexts govern only validation and the immediate caller, never the
+// lifetime of an accepted run.
+func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
 	tmpl, ok := cfg.Templates[req.Template]
 	if !ok {
 		// List the valid names so a caller that guessed a model name instead
 		// of a template ("opus") can retry without a second tool call.
-		return Result{}, invalidf("unknown template %q; available templates: %s", req.Template, templateNames(cfg))
+		return Started{}, invalidf("unknown template %q; available templates: %s", req.Template, templateNames(cfg))
 	}
 	h, err := harness.Get(cfg.TemplateHarness(tmpl))
 	if err != nil {
-		return Result{}, invalidf("resolving harness for template %q: %v", req.Template, err)
+		return Started{}, invalidf("resolving harness for template %q: %v", req.Template, err)
 	}
 	if !h.SupportsKind(harness.KindTask) {
-		return Result{}, invalidf("harness %q does not support one-shot runs", h.Name())
+		return Started{}, invalidf("harness %q does not support one-shot runs", h.Name())
 	}
 	model := req.Model
 	if model == "" {
 		model = cfg.TemplateModel(tmpl)
 	}
 	if err := h.ValidateModel(model); err != nil {
-		return Result{}, invalidf("model for consult: %v", err)
+		return Started{}, invalidf("model for consult: %v", err)
 	}
 	decoded, err := h.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
 	if err != nil {
-		return Result{}, invalidf("template %q harness_options: %v", req.Template, err)
+		return Started{}, invalidf("template %q harness_options: %v", req.Template, err)
+	}
+	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
+		return Started{}, invalidf("cwd must be an existing absolute directory")
+	}
+	info, err := os.Stat(req.Cwd)
+	if err != nil || !info.IsDir() {
+		return Started{}, invalidf("cwd must be an existing absolute directory")
 	}
 
 	spec := harness.LaunchSpec{
-		Kind: harness.KindTask, Name: "consult", Model: model,
-		MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Workspace,
-		Prompt: preamble + "\n\n" + req.Prompt, Options: decoded,
+		Kind: harness.KindTask, Name: req.Name, Model: model,
+		MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd,
+		Prompt: requestPrompt(req), Options: decoded,
+	}
+	if spec.Name == "" {
+		spec.Name = "dispatch"
 	}
 	args, err := h.Args(spec)
 	if err != nil {
-		return Result{}, invalidf("building %s args: %v", h.Name(), err)
+		return Started{}, invalidf("building %s args: %v", h.Name(), err)
 	}
 	harnessEnv, err := h.Env(spec)
 	if err != nil {
-		return Result{}, invalidf("building %s env: %v", h.Name(), err)
+		return Started{}, invalidf("building %s env: %v", h.Name(), err)
 	}
 
 	// Record before competing for a slot, so consults waiting behind the
@@ -152,7 +214,7 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 	// are deliberately not recorded.
 	rec := Record{
 		ID: newID(), Caller: req.Caller, Template: req.Template,
-		Harness: h.Name(), Model: model, Workspace: req.Workspace,
+		Kind: requestKind(req), Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: time.Now(),
 	}
 	handle, err := d.recorder.Open(rec)
@@ -162,30 +224,61 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", rec.ID, err)
 		handle = nopHandle{}
 	}
-	fail := func(status Status, err error) (Result, error) {
-		finish(handle, rec.ID, status, err)
-		return Result{}, err
+	runCtx, cancel := context.WithCancel(d.daemonCtx)
+	state := &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: cancel}
+	d.mu.Lock()
+	d.runs[rec.ID] = state
+	d.pruneTerminalRunsLocked()
+	d.mu.Unlock()
+	if rec.Kind == "dispatch" && d.onStart != nil {
+		d.onStart(rec)
 	}
+	go d.run(runCtx, state, h, model, tmpl.Env, args, harnessEnv, req.Cwd)
+	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
+}
 
+func requestKind(req Request) string {
+	if req.Kind != "" {
+		return req.Kind
+	}
+	return "dispatch"
+}
+
+func requestPrompt(req Request) string {
+	if req.Preamble {
+		return preamble + "\n\n" + req.Prompt
+	}
+	return req.Prompt
+}
+
+func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string) {
+	defer close(state.done)
 	select {
 	case d.sem <- struct{}{}:
 		defer func() { <-d.sem }()
-	case <-ctx.Done():
-		return fail(StatusCanceled, ctx.Err())
+	case <-parent.Done():
+		d.complete(state, StatusCanceled, "", parent.Err())
+		return
 	}
-	if err := handle.SetStatus(StatusRunning); err != nil {
-		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", rec.ID, err)
+	// A queued run can be canceled at the same instant a concurrency slot
+	// opens. Do not publish a misleading running transition in that race.
+	if err := parent.Err(); err != nil {
+		d.complete(state, StatusCanceled, "", err)
+		return
 	}
-
-	runCtx, cancel := context.WithTimeout(ctx, RunTimeout)
-	defer cancel()
+	if err := state.handle.SetStatus(StatusRunning); err != nil {
+		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", state.record.ID, err)
+	}
+	d.setStatus(state, StatusRunning)
+	runCtx, timeoutCancel := context.WithTimeout(parent, RunTimeout)
+	defer timeoutCancel()
 	binary := h.Binary()
 	if p, err := exec.LookPath(binary); err == nil {
 		binary = p
 	}
 	cmd := d.ExecCommandContext(runCtx, binary, args...)
-	cmd.Dir = req.Workspace
-	cmd.Env = mergedEnv(os.Environ(), harnessEnv, tmpl.Env)
+	cmd.Dir = cwd
+	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -199,7 +292,7 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 	// value: os/exec only serializes concurrent writes to a shared output
 	// when the two are the same value, so this keeps the harness's combined
 	// output in order — the behavior CombinedOutput used to supply.
-	tee := &recordingTee{handle: handle}
+	tee := &recordingTee{handle: state.handle}
 	cmd.Stdout, cmd.Stderr = tee, tee
 
 	runErr := cmd.Run()
@@ -209,30 +302,260 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			status = StatusCanceled
 		}
-		return fail(status, fmt.Errorf("consult %s/%s: %w", h.Name(), model, runCtx.Err()))
+		d.complete(state, status, "", fmt.Errorf("consult %s/%s: %w", h.Name(), model, runCtx.Err()))
+		return
 	}
 	if runErr != nil {
 		detail := runErr.Error()
 		if len(parsed.Errors) > 0 {
 			detail += ": " + parsed.Errors[0]
 		}
-		return fail(StatusFailed, fmt.Errorf("consult %s/%s failed: %s", h.Name(), model, detail))
+		d.complete(state, StatusFailed, "", fmt.Errorf("consult %s/%s failed: %s", h.Name(), model, detail))
+		return
 	}
 	if parseErr != nil {
-		return fail(StatusFailed, fmt.Errorf("consult %s/%s returned unreadable output: %w", h.Name(), model, parseErr))
+		d.complete(state, StatusFailed, "", fmt.Errorf("consult %s/%s returned unreadable output: %w", h.Name(), model, parseErr))
+		return
 	}
 	if parsed.IsError {
 		detail := "consultant reported an error"
 		if len(parsed.Errors) > 0 {
 			detail = strings.Join(parsed.Errors, "; ")
 		}
-		return fail(StatusFailed, fmt.Errorf("consult %s/%s failed: %s", h.Name(), model, detail))
+		d.complete(state, StatusFailed, "", fmt.Errorf("consult %s/%s failed: %s", h.Name(), model, detail))
+		return
 	}
 	if parsed.Text == "" {
-		return fail(StatusFailed, fmt.Errorf("consult %s/%s produced no output", h.Name(), model))
+		d.complete(state, StatusFailed, "", fmt.Errorf("consult %s/%s produced no output", h.Name(), model))
+		return
 	}
-	finish(handle, rec.ID, StatusDone, nil)
-	return Result{ID: rec.ID, Harness: h.Name(), Model: model, Text: parsed.Text}, nil
+	d.complete(state, StatusDone, parsed.Text, nil)
+}
+
+func (d *Dispatcher) setStatus(state *runState, status Status) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if state.record.Status.Terminal() {
+		return
+	}
+	state.record.Status = status
+}
+
+func (d *Dispatcher) complete(state *runState, status Status, text string, cause error) {
+	d.mu.Lock()
+	if state.record.Status.Terminal() {
+		status = state.record.Status
+	}
+	state.record.Status, state.record.Text, state.record.EndedAt = status, text, time.Now()
+	if cause != nil {
+		state.record.Error = cause.Error()
+	}
+	d.mu.Unlock()
+	if text != "" {
+		_ = state.handle.SetText(text)
+	}
+	finish(state.handle, state.record.ID, status, cause)
+	d.mu.Lock()
+	d.pruneTerminalRunsLocked()
+	d.mu.Unlock()
+}
+
+// pruneTerminalRunsLocked bounds completed in-memory runs. Records on disk
+// remain available through lookup, while active runs are never evicted.
+func (d *Dispatcher) pruneTerminalRunsLocked() {
+	terminal := make([]*runState, 0, len(d.runs))
+	for _, state := range d.runs {
+		if state.record.Status.Terminal() {
+			terminal = append(terminal, state)
+		}
+	}
+	if len(terminal) <= RecordsKept {
+		return
+	}
+	sort.Slice(terminal, func(i, j int) bool {
+		return terminal[i].record.EndedAt.Before(terminal[j].record.EndedAt)
+	})
+	for _, state := range terminal[:len(terminal)-RecordsKept] {
+		delete(d.runs, state.record.ID)
+	}
+}
+
+// Wait returns one entry per requested dispatch once all are terminal or the
+// supplied timeout expires. It never polls records.
+func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Duration) []Entry {
+	entries := make([]Entry, len(ids))
+	states := make([]*runState, len(ids))
+	for i, id := range ids {
+		entries[i].ID = id
+		rec, state, err := d.lookup(id)
+		if err != nil {
+			entries[i].Status = StatusUnknown
+			entries[i].Err = fmt.Sprintf("unknown dispatch %s", id)
+			continue
+		}
+		states[i] = state
+		entries[i] = entryFromRecord(rec)
+	}
+	deadline := time.NewTimer(timeout)
+	if timeout <= 0 {
+		deadline.Stop()
+	}
+	defer deadline.Stop()
+	for {
+		pending := false
+		cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())}}
+		if timeout > 0 {
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(deadline.C)})
+		}
+		for i, state := range states {
+			if state != nil && !entries[i].Status.Terminal() {
+				pending = true
+				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(state.done)})
+			}
+		}
+		if !pending {
+			return entries
+		}
+		chosen, _, _ := reflect.Select(cases)
+		if chosen == 0 || (timeout > 0 && chosen == 1) {
+			for i, state := range states {
+				if state != nil && !entries[i].Status.Terminal() {
+					entries[i] = entryFromRecord(d.stateRecord(state))
+					if !entries[i].Status.Terminal() {
+						entries[i].Status = StatusRunning
+						entries[i].Err = ""
+					}
+				}
+			}
+			return entries
+		}
+		for i, state := range states {
+			if state != nil {
+				entries[i] = entryFromRecord(d.stateRecord(state))
+			}
+		}
+	}
+}
+
+func entryFromRecord(rec Record) Entry {
+	return Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(time.Now()), Text: rec.Text, Err: rec.Error}
+}
+
+func (d *Dispatcher) stateRecord(state *runState) Record {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return state.record
+}
+
+func (d *Dispatcher) lookup(id string) (Record, *runState, error) {
+	d.mu.Lock()
+	state := d.runs[id]
+	d.mu.Unlock()
+	if state != nil {
+		return d.stateRecord(state), state, nil
+	}
+	if recorder, ok := d.recorder.(*FileRecorder); ok {
+		rec, err := LoadOne(filepath.Dir(recorder.dir), id)
+		if err == nil {
+			return rec, nil, nil
+		}
+	}
+	return Record{}, nil, errors.New("not found")
+}
+
+func (d *Dispatcher) Get(id string) (Record, error) { rec, _, err := d.lookup(id); return rec, err }
+
+func (d *Dispatcher) Cancel(id string) (Record, error) {
+	rec, state, err := d.lookup(id)
+	if err != nil {
+		return Record{}, fmt.Errorf("unknown dispatch %s", id)
+	}
+	if rec.Status.Terminal() {
+		return rec, nil
+	}
+	if state == nil {
+		return rec, nil
+	}
+	return d.terminate(id, StatusCanceled)
+}
+
+func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
+	rec, state, err := d.lookup(id)
+	if err != nil || state == nil || rec.Status.Terminal() {
+		return rec, err
+	}
+	return d.terminateState(state, status), nil
+}
+
+// terminateState applies a cancellation to a run that was observed as live.
+// The state can finish between that observation and the lock acquisition, so
+// it must always re-check the authoritative record while locked.
+func (d *Dispatcher) terminateState(state *runState, status Status) Record {
+	d.mu.Lock()
+	if state.record.Status.Terminal() {
+		rec := state.record
+		d.mu.Unlock()
+		return rec
+	}
+	state.record.Status = status
+	state.record.EndedAt = time.Now()
+	rec := state.record
+	d.mu.Unlock()
+	_ = state.handle.SetStatus(status)
+	state.cancel()
+	return rec
+}
+
+// Consult preserves the synchronous one-off consultant API over dispatch.
+func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Request) (Result, error) {
+	req.Kind, req.Preamble = "consult", true
+	started, err := d.Start(ctx, cfg, req)
+	if err != nil {
+		return Result{}, err
+	}
+	entries := d.Wait(ctx, []string{started.ID}, RunTimeout)
+	if err := ctx.Err(); err != nil {
+		status := StatusCanceled
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = StatusTimeout
+		}
+		_, _ = d.terminate(started.ID, status)
+		d.waitDone(started.ID)
+		return Result{}, err
+	}
+	entry := entries[0]
+	if entry.Status != StatusDone {
+		return Result{}, errors.New(entry.Err)
+	}
+	return Result{ID: started.ID, Harness: started.Harness, Model: started.Model, Text: entry.Text}, nil
+}
+
+func (d *Dispatcher) waitDone(id string) {
+	d.mu.Lock()
+	state := d.runs[id]
+	d.mu.Unlock()
+	if state == nil {
+		return
+	}
+	<-state.done
+}
+
+// MarkInterrupted marks persisted in-flight dispatches as failed after a
+// daemon restart. In-memory runs belong to this process and are untouched.
+func (d *Dispatcher) MarkInterrupted() {
+	recorder, ok := d.recorder.(*FileRecorder)
+	if !ok {
+		return
+	}
+	for _, rec := range func() []Record { records, _ := Load(filepath.Dir(recorder.dir)); return records }() {
+		if rec.Status.Terminal() {
+			continue
+		}
+		rec.Status, rec.Error, rec.EndedAt = StatusFailed, "daemon restarted", time.Now()
+		if err := writeRecord(recorder.dir, rec); err != nil {
+			fmt.Fprintf(os.Stderr, "dispatch %s: recording: %v\n", rec.ID, err)
+		}
+	}
 }
 
 // finish closes a recording. A recording failure is reported to the daemon

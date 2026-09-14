@@ -246,7 +246,7 @@ func reportOutcome(out io.Writer, record consult.Record, now time.Time) {
 // always means.
 func resolveConsult(records []consult.Record, prefix string) (consult.Record, error) {
 	if len(records) == 0 {
-		return consult.Record{}, errors.New("no consults recorded yet")
+		return consult.Record{}, errors.New("no dispatches recorded yet")
 	}
 	if prefix == "" {
 		now := time.Now()
