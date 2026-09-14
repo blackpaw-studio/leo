@@ -144,10 +144,17 @@ func newDispatchShowCmd() *cobra.Command {
 		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodGet, "/api/dispatch/"+url.PathEscape(args[0]), nil, &record); err != nil {
 			return err
 		}
-		return json.NewEncoder(consultStdout).Encode(record)
+		return encodeDispatchShow(consultStdout, record, time.Now())
 	}}
 	addHostFlag(cmd, &host)
 	return cmd
+}
+
+func encodeDispatchShow(out io.Writer, record consult.Record, now time.Time) error {
+	return json.NewEncoder(out).Encode(struct {
+		consult.Record
+		ElapsedSeconds float64 `json:"elapsed_seconds"`
+	}{Record: record, ElapsedSeconds: record.Elapsed(now).Seconds()})
 }
 
 func newDispatchCancelCmd() *cobra.Command {

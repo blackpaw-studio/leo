@@ -60,7 +60,7 @@ type interactiveRecordHandle interface {
 
 func (d *Dispatcher) persistLocked(s *runState, event string) {
 	if h, ok := s.handle.(interactiveRecordHandle); ok {
-		if err := h.SetRecord(s.record); err != nil {
+		if err := h.SetRecord(cloneRecord(s.record)); err != nil {
 			fmt.Printf("consult %s: recording: %v\n", s.record.ID, err)
 			return
 		}
@@ -79,7 +79,7 @@ func (d *Dispatcher) persistLocked(s *runState, event string) {
 
 func (d *Dispatcher) persistTurnLocked(s *runState, turn Turn) {
 	if h, ok := s.handle.(interactiveRecordHandle); ok {
-		if err := h.SetRecord(s.record); err != nil {
+		if err := h.SetRecord(cloneRecord(s.record)); err != nil {
 			fmt.Printf("consult %s: recording: %v\n", s.record.ID, err)
 			return
 		}
@@ -205,6 +205,7 @@ func (d *Dispatcher) openTurnLocked(s *runState, source TurnSource, text string,
 	if source == TurnSourceUser {
 		s.record.Steered = true
 		s.record.Status = StatusRunning
+		s.record.startActive(d.now())
 	}
 	return &s.record.Turns[len(s.record.Turns)-1]
 }
@@ -216,13 +217,14 @@ func (d *Dispatcher) expireArmedLocked(s *runState) {
 }
 func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome, text string) bool {
 	oldStatus := s.record.Status
+	boundary := d.now()
 	for i := range s.record.Turns {
 		t := &s.record.Turns[i]
 		if t.TurnID != id || t.Outcome != "" {
 			continue
 		}
 		t.Outcome = outcome
-		t.EndedAt = d.now()
+		t.EndedAt = boundary
 		if text != "" {
 			t.Text = text
 		}
@@ -238,7 +240,10 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 			s.armedUntil = time.Time{}
 		}
 		if !s.record.Status.Terminal() && s.record.Status != StatusSettling {
-			s.record.Status = d.interactiveStatusLocked(s)
+			s.record.Status = d.interactiveStatusLocked(s, boundary)
+		}
+		if !d.hasWorkingTurnLocked(s) {
+			s.record.foldActive(boundary)
 		}
 		d.persistTurnLocked(s, *t)
 		if s.record.Status != oldStatus {
@@ -248,13 +253,23 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 	}
 	return false
 }
-func (d *Dispatcher) interactiveStatusLocked(s *runState) Status {
+
+func (d *Dispatcher) hasWorkingTurnLocked(s *runState) bool {
+	for _, t := range s.record.Turns {
+		if t.Outcome == "" && (t.Source == TurnSourceUser || t.Delivered) {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Dispatcher) interactiveStatusLocked(s *runState, boundary time.Time) Status {
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {
 			return StatusRunning
 		}
 	}
-	s.idleSince = d.now()
+	s.idleSince = boundary
 	return StatusIdle
 }
 
@@ -394,6 +409,10 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		if hid == "" {
 			hid = str(p, "harness_turn_id")
 		}
+		if hid != "" && s.closedHarness[hid] {
+			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring submit for closed harness turn %s\n", id, hid)
+			return nil
+		}
 		if s.armedTurn != "" && d.now().Before(s.armedUntil) {
 			for i := range s.record.Turns {
 				if s.record.Turns[i].TurnID == s.armedTurn {
@@ -404,6 +423,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			s.armedTurn = ""
 			s.armedUntil = time.Time{}
 			s.record.Status = StatusRunning
+			s.record.startActive(d.now())
 		} else {
 			if hid == "" && !priorHook.IsZero() && d.now().Sub(priorHook) >= stalledAfter {
 				for i := range s.record.Turns {
@@ -494,15 +514,18 @@ func (d *Dispatcher) beginSettlementLocked(s *runState, status Status, grace tim
 	if s.record.Status.Terminal() || s.record.Status == StatusSettling {
 		return
 	}
+	boundary := d.now()
 	s.record.Status = StatusSettling
+	s.record.foldActive(boundary)
 	s.settleStatus = status
-	s.settleDeadline = d.now().Add(grace)
+	s.settleDeadline = boundary.Add(grace)
 	d.persistLocked(s, "status")
 }
 func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 	if s.record.Status.Terminal() {
 		return
 	}
+	s.record.foldActive(d.now())
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" {
 			o := TurnLost

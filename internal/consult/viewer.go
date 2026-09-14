@@ -28,6 +28,8 @@ type Viewer struct {
 	once               sync.Once
 	mu                 sync.Mutex
 	windowIDs          map[string]string
+	rosterMu           sync.Mutex
+	rosters            map[string]rosterSessionState
 	ConfigPath         string
 	TmuxPath           string
 	Executable         func() (string, error)
@@ -227,12 +229,7 @@ func viewerWindowName(rec Record) string {
 	if label == "" {
 		label = rec.Template
 	}
-	label = strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) || r == ':' || r == '.' {
-			return '-'
-		}
-		return r
-	}, label)
+	label = sanitizeViewerLabel(label)
 	chars := []rune(label)
 	if len(chars) > 24 {
 		label = string(chars[:24])
@@ -245,6 +242,15 @@ func viewerWindowName(rec Record) string {
 		hex = hex[len(hex)-4:]
 	}
 	return label + "·" + hex
+}
+
+func sanitizeViewerLabel(label string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == ':' || r == '.' {
+			return '-'
+		}
+		return r
+	}, label)
 }
 
 // shellQuote returns one POSIX-shell word. tmux executes new-window's command

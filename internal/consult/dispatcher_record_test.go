@@ -13,6 +13,7 @@ import (
 type fakeHandle struct {
 	mu       sync.Mutex
 	rec      Record
+	latest   Record
 	written  bytes.Buffer
 	statuses []Status
 	closed   Status
@@ -33,6 +34,16 @@ func (h *fakeHandle) SetStatus(s Status) error {
 }
 
 func (h *fakeHandle) SetText(string) error { return nil }
+
+func (h *fakeHandle) SetRecord(rec Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.latest = rec
+	if rec.Status == StatusRunning {
+		h.statuses = append(h.statuses, rec.Status)
+	}
+	return nil
+}
 
 func (h *fakeHandle) SetViewerWindowID(windowID string) error {
 	h.mu.Lock()

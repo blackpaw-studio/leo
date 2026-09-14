@@ -432,7 +432,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 					extra += " · stalled"
 				}
 			}
-			blocks = append(blocks, fmt.Sprintf("[%s · %s · %.1fs%s]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), extra, body))
+			blocks = append(blocks, fmt.Sprintf("[%s · %s · elapsed %.1fs · active %.1fs%s]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), entry.Active.Seconds(), extra, body))
 		}
 		return fmt.Sprintf("wait timeout: %.0fs\n%s", timeout.Seconds(), strings.Join(blocks, "\n\n")), nil
 	})

@@ -329,6 +329,50 @@ func TestListRendersRunningConsultsFirst(t *testing.T) {
 	}
 }
 
+func TestListIncludesActiveTime(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := rec("c-active001", consult.StatusDone, 1)
+	record.ActiveSeconds = 12
+	writeTestRecord(t, dir, record)
+	var out bytes.Buffer
+	if err := listConsults(state, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "ACTIVE") || !strings.Contains(got, "0:12") {
+		t.Fatalf("active column missing:\n%s", got)
+	}
+}
+
+func TestDispatchShowAddsElapsedSecondsAndRetainsRecordActivity(t *testing.T) {
+	now := time.Date(2026, 9, 14, 12, 0, 10, 0, time.UTC)
+	runningSince := now.Add(-2 * time.Second)
+	record := consult.Record{
+		ID: "d-show", Status: consult.StatusRunning, StartedAt: now.Add(-10 * time.Second),
+		ActiveSeconds: 1.5, RunningSince: &runningSince,
+	}
+	var out bytes.Buffer
+	if err := encodeDispatchShow(&out, record, now); err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &wire); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(wire["elapsed_seconds"]); got != "10" {
+		t.Fatalf("elapsed_seconds = %s, want 10", got)
+	}
+	if got := string(wire["active_seconds"]); got != "1.5" {
+		t.Fatalf("active_seconds = %s, want accumulated 1.5", got)
+	}
+	if string(wire["running_since"]) == "null" {
+		t.Fatal("running_since compatibility field was lost")
+	}
+}
+
 func TestListJSONIsMachineReadable(t *testing.T) {
 	state := t.TempDir()
 	dir := filepath.Join(state, "dispatches")

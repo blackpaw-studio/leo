@@ -75,21 +75,23 @@ type Turn struct {
 // daemon. The final answer is deliberately not duplicated here: it is the
 // last event in the stream.
 type Record struct {
-	ID        string        `json:"id"`
-	Caller    string        `json:"caller,omitempty"`
-	Template  string        `json:"template"`
-	Harness   string        `json:"harness"`
-	Model     string        `json:"model"`
-	Kind      string        `json:"kind"`
-	Cwd       string        `json:"cwd"`
-	Name      string        `json:"name,omitempty"`
-	Prompt    string        `json:"prompt"`
-	Status    Status        `json:"status"`
-	StartedAt time.Time     `json:"started_at"`
-	EndedAt   time.Time     `json:"ended_at,omitzero"`
-	Error     string        `json:"error,omitempty"`
-	Text      string        `json:"text,omitempty"`
-	Timeout   time.Duration `json:"timeout,omitempty"`
+	ID            string        `json:"id"`
+	Caller        string        `json:"caller,omitempty"`
+	Template      string        `json:"template"`
+	Harness       string        `json:"harness"`
+	Model         string        `json:"model"`
+	Kind          string        `json:"kind"`
+	Cwd           string        `json:"cwd"`
+	Name          string        `json:"name,omitempty"`
+	Prompt        string        `json:"prompt"`
+	Status        Status        `json:"status"`
+	StartedAt     time.Time     `json:"started_at"`
+	EndedAt       time.Time     `json:"ended_at,omitzero"`
+	ActiveSeconds float64       `json:"active_seconds"`
+	RunningSince  *time.Time    `json:"running_since"`
+	Error         string        `json:"error,omitempty"`
+	Text          string        `json:"text,omitempty"`
+	Timeout       time.Duration `json:"timeout,omitempty"`
 	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
 	// can survive a daemon restart.
 	ViewerWindowID string    `json:"viewer_window_id,omitempty"`
@@ -99,6 +101,36 @@ type Record struct {
 	Turns          []Turn    `json:"turns,omitempty"`
 	Steered        bool      `json:"steered,omitempty"`
 	HookActivity   time.Time `json:"-"`
+}
+
+func (r *Record) startActive(now time.Time) {
+	if r.RunningSince != nil {
+		return
+	}
+	t := now
+	r.RunningSince = &t
+}
+
+func (r *Record) foldActive(now time.Time) {
+	if r.RunningSince == nil {
+		return
+	}
+	if elapsed := now.Sub(*r.RunningSince).Seconds(); elapsed > 0 {
+		r.ActiveSeconds += elapsed
+	}
+	r.RunningSince = nil
+}
+
+// LiveActiveSeconds returns accumulated working time without mutating r.
+func (r Record) LiveActiveSeconds(now time.Time) float64 {
+	if r.RunningSince == nil {
+		return r.ActiveSeconds
+	}
+	elapsed := now.Sub(*r.RunningSince).Seconds()
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return r.ActiveSeconds + elapsed
 }
 
 // Elapsed reports how long the consult ran, or has been running so far.
@@ -169,6 +201,10 @@ type Handle interface {
 	SetText(string) error
 	SetViewerWindowID(string) error
 	Close(Status, error) error
+}
+
+type recordHandle interface {
+	SetRecord(Record) error
 }
 
 // nopRecorder discards everything, so a Dispatcher built without a recorder
