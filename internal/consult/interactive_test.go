@@ -68,6 +68,28 @@ func TestInteractiveReportMatching(t *testing.T) {
 	_ = tid
 }
 
+func TestInteractiveWaitReturnsWhenTurnClosesBeforeSession(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan []Entry, 1)
+	go func() { done <- d.Wait(context.Background(), []string{started.ID + "#1"}, time.Second) }()
+	_ = d.Report(started.ID, hook(t, "UserPromptSubmit", "one"))
+	_ = d.Report(started.ID, hook(t, "Stop", "one"))
+	select {
+	case entries := <-done:
+		if len(entries) != 1 || entries[0].Outcome != TurnFinished {
+			t.Fatalf("entries=%+v", entries)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("wait did not wake for closed turn")
+	}
+}
+
 func TestInteractiveSend(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}

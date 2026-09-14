@@ -545,6 +545,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 	defer deadline.Stop()
 	for {
 		pending := false
+		interactivePending := false
 		cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())}}
 		if timeout > 0 {
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(deadline.C)})
@@ -552,11 +553,21 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 		for i, state := range states {
 			if state != nil && !entries[i].Status.Terminal() && entries[i].Outcome == "" {
 				pending = true
+				if d.stateRecord(state).Mode == ModeInteractive {
+					interactivePending = true
+				}
 				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(state.done)})
 			}
 		}
 		if !pending {
 			return entries
+		}
+		// Interactive turns complete before their parent session does. Polling
+		// here is deliberate: hooks may arrive from an external process and
+		// must wake a wait for a specific turn without making the dispatcher
+		// own a goroutine per waiter.
+		if interactivePending {
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(time.After(25 * time.Millisecond))})
 		}
 		chosen, _, _ := reflect.Select(cases)
 		if chosen == 0 || (timeout > 0 && chosen == 1) {
@@ -609,7 +620,12 @@ func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
 func (d *Dispatcher) stateRecord(state *runState) Record {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return state.record
+	// Record contains a slice of turns. A plain struct copy would retain the
+	// backing array, letting callers inspect it while hook processing mutates a
+	// turn under this lock. Return a real snapshot instead.
+	record := state.record
+	record.Turns = append([]Turn(nil), state.record.Turns...)
+	return record
 }
 
 func (d *Dispatcher) lookup(id string) (Record, *runState, error) {

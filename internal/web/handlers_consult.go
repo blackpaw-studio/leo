@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -19,9 +20,10 @@ import (
 func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		From, Template, Model, Prompt, Cwd, Name string
-		TimeoutSeconds                           *float64 `json:"timeout_seconds"`
+		Mode                                     consult.Mode `json:"mode"`
+		TimeoutSeconds                           *float64     `json:"timeout_seconds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeDispatchJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
 		return
 	}
@@ -43,7 +45,15 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout})
+	mode := req.Mode
+	if mode == "" {
+		mode = consult.ModeHeadless
+	}
+	if mode != consult.ModeHeadless && mode != consult.ModeInteractive {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "mode must be headless or interactive"})
+		return
+	}
+	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode})
 	if err != nil {
 		var validationErr *consult.ValidationError
 		status := http.StatusInternalServerError
@@ -54,6 +64,64 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: started})
+}
+
+func (s *Server) handleAPIDispatchSend(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	result, err := s.consults.Send(r.Context(), r.PathValue("id"), req.Message)
+	if err != nil {
+		// Send failures are ordinary state conflicts: callers need both the
+		// reason and current state without treating the daemon as unavailable.
+		status := "unknown"
+		if rec, getErr := s.consults.Get(r.PathValue("id")); getErr == nil {
+			status = string(rec.Status)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(struct {
+			Error  string `json:"error"`
+			Status string `json:"status"`
+		}{err.Error(), status})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: result})
+}
+
+func (s *Server) handleAPIDispatchReport(w http.ResponseWriter, r *http.Request) {
+	var report consult.HookReport
+	if err := decodeDispatchJSON(r, &report); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+	// Reports intentionally acknowledge unknown, duplicate, and terminal runs
+	// so hook retries stop. Dispatcher.Report only returns transport errors.
+	if err := s.consults.Report(r.PathValue("id"), report); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]bool{"accepted": true}})
+}
+
+func decodeDispatchJSON(r *http.Request, dst any) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 func dispatchTimeout(jsonSeconds *float64, querySeconds string) (time.Duration, error) {

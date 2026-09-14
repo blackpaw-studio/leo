@@ -151,3 +151,20 @@ func TestDispatchTimeout(t *testing.T) {
 		t.Fatal("negative timeout was accepted")
 	}
 }
+
+func TestDispatchReportHTTPMalformed(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	w := httptest.NewRecorder()
+	s.handleAPIDispatchReport(w, httptest.NewRequest("POST", "/api/dispatch/d-nope/report", strings.NewReader(`{`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	// Unknown reports are deliberately acknowledged so hook retry loops stop.
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/dispatch/d-nope/report", strings.NewReader(`{"event_id":"e","payload":{}}`))
+	req.SetPathValue("id", "d-nope")
+	s.handleAPIDispatchReport(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+}

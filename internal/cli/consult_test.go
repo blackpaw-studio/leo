@@ -88,6 +88,47 @@ func TestResolveConsult(t *testing.T) {
 	}
 }
 
+func TestDispatchListInteractive(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRecord(t, dir, consult.Record{ID: "d-int", Template: "coding", Harness: "codex", Model: "gpt", Mode: consult.ModeInteractive, Status: consult.StatusIdle, StartedAt: time.Now(), Turns: []consult.Turn{{TurnID: "d-int#1"}}, Steered: true})
+	var out bytes.Buffer
+	if err := listConsults(state, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"MODE", "TURNS", "STEERED", "interactive", "true"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("list missing %q: %s", want, out.String())
+		}
+	}
+}
+
+func TestDispatchWatchInteractive(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := consult.Record{ID: "d-watch", Template: "coding", Harness: "codex", Model: "gpt", Mode: consult.ModeInteractive, Status: consult.StatusClosed, StartedAt: time.Now().Add(-time.Second), EndedAt: time.Now(), Turns: []consult.Turn{{TurnID: "d-watch#1", Source: consult.TurnSourceOrchestrator, Outcome: consult.TurnFinished, Text: "done"}}}
+	writeTestRecord(t, dir, record)
+	line := `{"t":0,"d":{"type":"turn","seq":1,"data":{"turn_id":"d-watch#1","source":"orchestrator","outcome":"finished","text":"done"}}}` + "\n" + `{"t":0,"d":{"type":"status","seq":2,"data":"closed"}}` + "\n"
+	if err := os.WriteFile(consult.StreamPath(state, record.ID), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := watchConsult(t.Context(), state, record.ID, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"turn", "d-watch#1", "status", "closed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("watch missing %q: %s", want, out.String())
+		}
+	}
+}
+
 func TestResolveConsultFallsBackToNewestWhenNoneRunning(t *testing.T) {
 	records := []consult.Record{
 		rec("c-newest", consult.StatusDone, 1),
