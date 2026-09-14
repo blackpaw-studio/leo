@@ -64,6 +64,11 @@ func (r *fakeInteractiveRuntime) injectionCount() int {
 	defer r.mu.Unlock()
 	return len(r.injected)
 }
+func (r *fakeInteractiveRuntime) killCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.kill
+}
 
 func waitForInjection(t *testing.T, r *fakeInteractiveRuntime) {
 	t.Helper()
@@ -411,7 +416,7 @@ func TestInteractiveSettlement(t *testing.T) {
 	if _, err = d.Cancel(s.ID); err != nil {
 		t.Fatal(err)
 	}
-	if rt.kill == 0 {
+	if rt.killCount() == 0 {
 		t.Fatal("cancel did not kill pane before settlement")
 	}
 	rec, _ := d.Get(s.ID)

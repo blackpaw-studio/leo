@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -66,67 +65,6 @@ type Started struct {
 	Model   string `json:"model"`
 	Cwd     string `json:"cwd"`
 	Window  string `json:"window,omitempty"`
-}
-
-type Entry struct {
-	ID        string        `json:"id"`
-	Status    Status        `json:"status"`
-	Elapsed   time.Duration `json:"elapsed"`
-	Text      string        `json:"text,omitempty"`
-	Err       string        `json:"error,omitempty"`
-	TurnID    string        `json:"turn_id,omitempty"`
-	Outcome   TurnOutcome   `json:"outcome,omitempty"`
-	Delivered bool          `json:"delivered,omitempty"`
-	Stalled   bool          `json:"stalled,omitempty"`
-}
-
-// MarshalJSON exposes elapsed time in seconds for API clients while retaining
-// time.Duration internally for scheduling and display.
-func (e Entry) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		ID             string      `json:"id"`
-		Status         Status      `json:"status"`
-		ElapsedSeconds float64     `json:"elapsed_seconds"`
-		Text           string      `json:"text,omitempty"`
-		Err            string      `json:"error,omitempty"`
-		TurnID         string      `json:"turn_id,omitempty"`
-		Outcome        TurnOutcome `json:"outcome,omitempty"`
-		Delivered      bool        `json:"delivered,omitempty"`
-		Stalled        bool        `json:"stalled,omitempty"`
-	}{
-		ID:             e.ID,
-		Status:         e.Status,
-		ElapsedSeconds: e.Elapsed.Seconds(),
-		Text:           e.Text,
-		Err:            e.Err,
-		TurnID:         e.TurnID, Outcome: e.Outcome, Delivered: e.Delivered, Stalled: e.Stalled,
-	})
-}
-
-// UnmarshalJSON accepts the API's seconds representation and restores the
-// duration used by CLI and MCP clients.
-func (e *Entry) UnmarshalJSON(data []byte) error {
-	var wire struct {
-		ID             string      `json:"id"`
-		Status         Status      `json:"status"`
-		ElapsedSeconds float64     `json:"elapsed_seconds"`
-		Text           string      `json:"text"`
-		Err            string      `json:"error"`
-		TurnID         string      `json:"turn_id"`
-		Outcome        TurnOutcome `json:"outcome"`
-		Delivered      bool        `json:"delivered"`
-		Stalled        bool        `json:"stalled"`
-	}
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	e.ID = wire.ID
-	e.Status = wire.Status
-	e.Elapsed = time.Duration(wire.ElapsedSeconds * float64(time.Second))
-	e.Text = wire.Text
-	e.Err = wire.Err
-	e.TurnID, e.Outcome, e.Delivered, e.Stalled = wire.TurnID, wire.Outcome, wire.Delivered, wire.Stalled
-	return nil
 }
 
 // ValidationError reports a request/configuration problem that should be
@@ -381,10 +319,6 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		d.complete(state, StatusCanceled, "", err)
 		return
 	}
-	if err := state.handle.SetStatus(StatusRunning); err != nil {
-		fmt.Fprintf(os.Stderr, "consult %s: recording: %v\n", state.record.ID, err)
-	}
-	d.setStatus(state, StatusRunning)
 	runCtx := parent
 	timeoutCancel := func() {}
 	if timeout > 0 {
@@ -414,7 +348,17 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	tee := &recordingTee{handle: state.handle}
 	cmd.Stdout, cmd.Stderr = tee, tee
 
-	runErr := cmd.Run()
+	runErr := cmd.Start()
+	if runErr == nil {
+		d.mu.Lock()
+		if !state.record.Status.Terminal() {
+			state.record.Status = StatusRunning
+			state.record.startActive(d.now())
+			d.persistRecordLocked(state)
+		}
+		d.mu.Unlock()
+		runErr = cmd.Wait()
+	}
 	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))
 	if runCtx.Err() != nil {
 		status := StatusTimeout
@@ -449,34 +393,6 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		return
 	}
 	d.complete(state, StatusDone, parsed.Text, nil)
-}
-
-func (d *Dispatcher) setStatus(state *runState, status Status) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if state.record.Status.Terminal() {
-		return
-	}
-	state.record.Status = status
-}
-
-func (d *Dispatcher) complete(state *runState, status Status, text string, cause error) {
-	d.mu.Lock()
-	if state.record.Status.Terminal() {
-		status = state.record.Status
-	}
-	state.record.Status, state.record.Text, state.record.EndedAt = status, text, time.Now()
-	if cause != nil {
-		state.record.Error = cause.Error()
-	}
-	d.mu.Unlock()
-	if text != "" {
-		_ = state.handle.SetText(text)
-	}
-	finish(state.handle, state.record.ID, status, cause)
-	d.mu.Lock()
-	d.pruneTerminalRunsLocked()
-	d.mu.Unlock()
 }
 
 // pruneTerminalRunsLocked bounds completed in-memory runs. Records on disk
@@ -537,7 +453,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			turnIDs[i] = turnID
 			entries[i] = interactiveEntry(rec, turnID, d.now())
 		} else {
-			entries[i] = entryFromRecord(rec)
+			entries[i] = entryFromRecord(rec, d.now())
 		}
 	}
 	deadline := time.NewTimer(timeout)
@@ -579,7 +495,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 					if rec.Mode == ModeInteractive {
 						entries[i] = interactiveEntry(rec, turnIDs[i], d.now())
 					} else {
-						entries[i] = entryFromRecord(rec)
+						entries[i] = entryFromRecord(rec, d.now())
 					}
 					if rec.Mode != ModeInteractive && !entries[i].Status.Terminal() {
 						entries[i].Status = StatusRunning
@@ -595,40 +511,11 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 				if rec.Mode == ModeInteractive {
 					entries[i] = interactiveEntry(rec, turnIDs[i], d.now())
 				} else {
-					entries[i] = entryFromRecord(rec)
+					entries[i] = entryFromRecord(rec, d.now())
 				}
 			}
 		}
 	}
-}
-
-func entryFromRecord(rec Record) Entry {
-	return Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(time.Now()), Text: rec.Text, Err: rec.Error}
-}
-
-func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
-	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Err: rec.Error, TurnID: turnID}
-	t := turnByID(rec, turnID)
-	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
-	activity := rec.HookActivity
-	if activity.IsZero() {
-		activity = t.StartedAt
-	}
-	if t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfter {
-		e.Stalled = true
-	}
-	return e
-}
-
-func (d *Dispatcher) stateRecord(state *runState) Record {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	// Record contains a slice of turns. A plain struct copy would retain the
-	// backing array, letting callers inspect it while hook processing mutates a
-	// turn under this lock. Return a real snapshot instead.
-	record := state.record
-	record.Turns = append([]Turn(nil), state.record.Turns...)
-	return record
 }
 
 func (d *Dispatcher) lookup(id string) (Record, *runState, error) {
@@ -674,7 +561,7 @@ func (d *Dispatcher) Records() []Record {
 	defer d.mu.Unlock()
 	records := make([]Record, 0, len(d.runs))
 	for _, state := range d.runs {
-		records = append(records, state.record)
+		records = append(records, cloneRecord(state.record))
 	}
 	return records
 }
@@ -736,10 +623,11 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 		return rec
 	}
 	state.record.Status = status
-	state.record.EndedAt = time.Now()
-	rec := state.record
+	state.record.EndedAt = d.now()
+	state.record.foldActive(state.record.EndedAt)
+	d.persistRecordLocked(state)
+	rec := cloneRecord(state.record)
 	d.mu.Unlock()
-	_ = state.handle.SetStatus(status)
 	state.cancel()
 	return rec
 }
@@ -785,6 +673,7 @@ func (d *Dispatcher) MarkInterrupted() {
 	if !ok {
 		return
 	}
+	markedAt := d.now()
 	for _, rec := range func() []Record { records, _ := Load(filepath.Dir(recorder.dir)); return records }() {
 		if rec.Status.Terminal() {
 			if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
@@ -802,7 +691,7 @@ func (d *Dispatcher) MarkInterrupted() {
 				}
 				if rec.Turns[i].Outcome == "" {
 					rec.Turns[i].Outcome = TurnLost
-					rec.Turns[i].EndedAt = d.now()
+					rec.Turns[i].EndedAt = markedAt
 					rec.Turns[i].SlotHeld = false
 				}
 			}
@@ -814,7 +703,8 @@ func (d *Dispatcher) MarkInterrupted() {
 		} else {
 			rec.Status = StatusFailed
 		}
-		rec.Error, rec.EndedAt = "daemon restarted", d.now()
+		rec.foldActive(markedAt)
+		rec.Error, rec.EndedAt = "daemon restarted", markedAt
 		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
 			if d.interactiveRuntime.Kill(rec.PaneID) != nil {
 				d.trackRestartKill(rec)

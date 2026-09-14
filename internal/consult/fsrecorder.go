@@ -329,7 +329,9 @@ func (h *fileHandle) Close(s Status, cause error) error {
 	}
 	h.closed = true
 	h.rec.Status = s
-	h.rec.EndedAt = h.now()
+	if h.rec.EndedAt.IsZero() {
+		h.rec.EndedAt = h.now()
+	}
 	if cause != nil {
 		h.rec.Error = cause.Error()
 	}

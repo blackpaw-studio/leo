@@ -12,8 +12,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 )
 
-func TestEntryJSONUsesElapsedSeconds(t *testing.T) {
-	want := Entry{ID: "d-1", Status: StatusDone, Elapsed: 1500 * time.Millisecond, Text: "done"}
+func TestEntryJSONUsesElapsedAndActiveSeconds(t *testing.T) {
+	want := Entry{ID: "d-1", Status: StatusDone, Elapsed: 1500 * time.Millisecond, Active: 750 * time.Millisecond, Text: "done"}
 	data, err := json.Marshal(want)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -28,12 +28,28 @@ func TestEntryJSONUsesElapsedSeconds(t *testing.T) {
 	if got := string(wire["elapsed_seconds"]); got != "1.5" {
 		t.Fatalf("elapsed_seconds = %s, want 1.5", got)
 	}
+	if got := string(wire["active_seconds"]); got != "0.75" {
+		t.Fatalf("active_seconds = %s, want 0.75", got)
+	}
 	var got Entry
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if got.Elapsed != want.Elapsed {
 		t.Fatalf("Elapsed = %s, want %s", got.Elapsed, want.Elapsed)
+	}
+	if got.Active != want.Active {
+		t.Fatalf("Active = %s, want %s", got.Active, want.Active)
+	}
+}
+
+func TestEntryFromRecordIncludesLiveActiveTime(t *testing.T) {
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	runningSince := now.Add(-2 * time.Second)
+	rec := Record{ID: "d-1", Status: StatusRunning, StartedAt: now.Add(-10 * time.Second), ActiveSeconds: 1.5, RunningSince: &runningSince}
+	got := entryFromRecord(rec, now)
+	if got.Active != 3500*time.Millisecond {
+		t.Fatalf("Active = %s, want 3.5s", got.Active)
 	}
 }
 

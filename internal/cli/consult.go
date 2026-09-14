@@ -135,17 +135,22 @@ func listConsults(stateDir string, asJSON bool, out io.Writer) error {
 
 	now := time.Now()
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tMODE\tTURNS\tSTEERED\tELAPSED\tSTATUS")
+	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tMODE\tTURNS\tSTEERED\tELAPSED\tACTIVE\tSTATUS")
 	for _, record := range ordered {
 		mode := record.Mode
 		if mode == "" {
 			mode = consult.ModeHeadless
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\t%s\n",
 			record.ID, orDash(record.Caller), record.Template, record.Model,
-			mode, len(record.Turns), record.Steered, formatOffset(record.Elapsed(now)), displayStatus(record, now))
+			mode, len(record.Turns), record.Steered, formatOffset(record.Elapsed(now)),
+			formatOffset(secondsDuration(record.LiveActiveSeconds(now))), displayStatus(record, now))
 	}
 	return w.Flush()
+}
+
+func secondsDuration(seconds float64) time.Duration {
+	return time.Duration(seconds * float64(time.Second))
 }
 
 // displayStatus reports "abandoned" for a consult whose record stopped

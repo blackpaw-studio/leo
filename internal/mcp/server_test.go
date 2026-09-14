@@ -589,7 +589,7 @@ func TestInteractiveDispatchMCP(t *testing.T) {
 		case "/api/dispatch/d-test/send":
 			return 200, `{"ok":true,"data":{"turn_id":"d-test#2","delivered":true}}`
 		case "/api/dispatch/wait?id=d-test%232&timeout=1799":
-			return 200, `{"ok":true,"data":[{"id":"d-test","status":"closed","elapsed_seconds":1,"turn_id":"d-test#2","outcome":"finished","delivered":true,"text":"done"}]}`
+			return 200, `{"ok":true,"data":[{"id":"d-test","status":"closed","elapsed_seconds":1,"active_seconds":0.4,"turn_id":"d-test#2","outcome":"finished","delivered":true,"text":"done"}]}`
 		}
 		return 404, `{"ok":false,"error":"nope"}`
 	})
@@ -617,7 +617,7 @@ func TestInteractiveDispatchMCP(t *testing.T) {
 func TestInteractiveDispatchMCPWaitRendering(t *testing.T) {
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		if method == "GET" && path == "/api/dispatch/wait" {
-			return 200, `{"ok":true,"data":[{"id":"d-test","status":"idle","elapsed_seconds":1,"turn_id":"d-test#2","outcome":"finished","delivered":false,"stalled":true,"text":"done"}]}`
+			return 200, `{"ok":true,"data":[{"id":"d-test","status":"idle","elapsed_seconds":1,"active_seconds":0.4,"turn_id":"d-test#2","outcome":"finished","delivered":false,"stalled":true,"text":"done"}]}`
 		}
 		return 404, `{"ok":false,"error":"nope"}`
 	})
@@ -625,7 +625,7 @@ func TestInteractiveDispatchMCPWaitRendering(t *testing.T) {
 	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
 	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_wait", "arguments": map[string]any{"ids": []any{"d-test#2"}}}})
 	text := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-	for _, want := range []string{"[d-test · idle · 1.0s · turn 2 finished · undelivered · stalled]"} {
+	for _, want := range []string{"[d-test · idle · elapsed 1.0s · active 0.4s · turn 2 finished · undelivered · stalled]"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("wait missing %q: %s", want, text)
 		}
