@@ -625,7 +625,7 @@ func TestInteractiveDispatchMCPWaitRendering(t *testing.T) {
 	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
 	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_wait", "arguments": map[string]any{"ids": []any{"d-test#2"}}}})
 	text := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-	for _, want := range []string{"turn 2 finished", "undelivered", "stalled"} {
+	for _, want := range []string{"[d-test · idle · 1.0s · turn 2 finished · undelivered · stalled]"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("wait missing %q: %s", want, text)
 		}

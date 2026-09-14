@@ -608,9 +608,6 @@ func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
 	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Err: rec.Error, TurnID: turnID}
 	t := turnByID(rec, turnID)
 	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
-	if t.Outcome != "" {
-		e.Status = StatusClosed
-	}
 	if t.Outcome == "" && !rec.HookActivity.IsZero() && now.Sub(rec.HookActivity) >= stalledAfter {
 		e.Stalled = true
 	}

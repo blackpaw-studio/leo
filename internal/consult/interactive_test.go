@@ -86,11 +86,62 @@ func TestInteractiveWaitReturnsWhenTurnClosesBeforeSession(t *testing.T) {
 	_ = d.Report(started.ID, hook(t, "Stop", "one"))
 	select {
 	case entries := <-done:
-		if len(entries) != 1 || entries[0].Outcome != TurnFinished {
+		if len(entries) != 1 || entries[0].Status != StatusIdle || entries[0].Outcome != TurnFinished {
 			t.Fatalf("entries=%+v", entries)
 		}
 	case <-time.After(300 * time.Millisecond):
 		t.Fatal("wait did not wake for closed turn")
+	}
+}
+
+func TestInteractiveEntryStatusIsRunStatus(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(started.ID, hook(t, "UserPromptSubmit", "one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(started.ID, hook(t, "Stop", "one")); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := d.Wait(context.Background(), []string{started.ID + "#1"}, time.Millisecond)[0]
+	if entry.Status != StatusIdle || entry.Outcome != TurnFinished {
+		t.Fatalf("entry=%+v, want idle run with finished turn", entry)
+	}
+}
+
+func TestSweepDeadPaneSettlesWithinBound(t *testing.T) {
+	now := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(started.ID, hook(t, "UserPromptSubmit", "one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(started.ID, hook(t, "Stop", "one")); err != nil {
+		t.Fatal(err)
+	}
+	rt.alive = false
+	d.Sweep(now)
+	rec, _ := d.Get(started.ID)
+	if rec.Status != StatusSettling {
+		t.Fatalf("first sweep status=%s, want settling", rec.Status)
+	}
+	now = now.Add(finalReportGrace)
+	d.Sweep(now)
+	rec, _ = d.Get(started.ID)
+	if rec.Status != StatusClosed {
+		t.Fatalf("deadline sweep status=%s, want closed", rec.Status)
 	}
 }
 

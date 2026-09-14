@@ -409,14 +409,17 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	s.consults.MarkInterrupted()
 	if opts.ParentContext != nil {
 		go func() {
-			ticker := time.NewTicker(10 * time.Second)
-			defer ticker.Stop()
+			dispatcherTicker := time.NewTicker(5 * time.Second)
+			viewerTicker := time.NewTicker(10 * time.Second)
+			defer dispatcherTicker.Stop()
+			defer viewerTicker.Stop()
 			for {
 				select {
 				case <-opts.ParentContext.Done():
 					return
-				case now := <-ticker.C:
+				case now := <-dispatcherTicker.C:
 					s.consults.Sweep(now)
+				case now := <-viewerTicker.C:
 					viewer.Sweep(s.consults.Records(), now)
 					s.consults.Prune()
 				}
