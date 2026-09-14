@@ -36,6 +36,7 @@ type ComposerClassifier func(capture string) ComposerState
 var (
 	composerDialogPattern = regexp.MustCompile(`(?i)\b(trust|permission|update|hook review|approve|allow|deny)\b`)
 	composerBusyPattern   = regexp.MustCompile(`(?i)\b(working|thinking|generating|running)\b|esc\s+(?:to\s+)?interrupt`)
+	claudeRulePattern     = regexp.MustCompile(`^─{3,}`)
 )
 
 // CodexComposerClassifier identifies Codex's › composer. Codex renders its
@@ -49,8 +50,76 @@ func CodexComposerClassifier(capture string) ComposerState {
 // normally renders an empty composer as a bare glyph, but accepts its prompt
 // hint too because versions differ in whether that hint is visible.
 func ClaudeComposerClassifier(capture string) ComposerState {
-	// capture-pane may trim the trailing space from an otherwise empty prompt.
-	return classifyComposer(capture, "❯", isClaudePlaceholder)
+	if strings.TrimSpace(capture) == "" || isClaudeDialog(capture) {
+		return ComposerUnknown
+	}
+
+	lines := strings.Split(capture, "\n")
+	top, bottom, ok := claudeComposerBox(lines)
+	if !ok {
+		if hasBusyIndicator(capture) {
+			return ComposerBusy
+		}
+		return ComposerUnknown
+	}
+
+	// Only a spinner immediately before the active composer box means Claude is
+	// busy. Finished-turn summaries and prompt history are above that boundary.
+	for _, line := range lines[:top] {
+		if isClaudeBusyLine(line) {
+			return ComposerBusy
+		}
+	}
+
+	composer := strings.TrimLeft(lines[top+1], " \t")
+	content := strings.TrimSpace(strings.TrimPrefix(composer, "❯"))
+	if content != "" && !isClaudePlaceholder(content) {
+		return ComposerDraft
+	}
+	for _, line := range lines[top+2 : bottom] {
+		if strings.TrimSpace(line) != "" {
+			return ComposerDraft
+		}
+	}
+	return ComposerEmpty
+}
+
+// claudeComposerBox finds the final ruled composer box. Its footer is outside
+// the box, so it must never influence composer classification.
+func claudeComposerBox(lines []string) (int, int, bool) {
+	for bottom := len(lines) - 1; bottom >= 0; bottom-- {
+		if !claudeRulePattern.MatchString(strings.TrimSpace(lines[bottom])) {
+			continue
+		}
+		for top := bottom - 2; top >= 0; top-- {
+			if !claudeRulePattern.MatchString(strings.TrimSpace(lines[top])) {
+				continue
+			}
+			composer := strings.TrimLeft(lines[top+1], " \t")
+			if strings.HasPrefix(composer, "❯") {
+				return top, bottom, true
+			}
+			break
+		}
+	}
+	return 0, 0, false
+}
+
+func isClaudeDialog(capture string) bool {
+	return HasConfirmFooterLine(capture) || (composerDialogPattern.MatchString(capture) && menuOptionPattern.MatchString(capture))
+}
+
+func isClaudeBusyLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if strings.HasPrefix(line, "✻ Worked") {
+		return false
+	}
+	if strings.HasPrefix(line, "✻") || strings.HasPrefix(line, "✽") ||
+		strings.HasPrefix(line, "✶") || strings.HasPrefix(line, "✳") ||
+		strings.HasPrefix(line, "✢") || strings.HasPrefix(line, "⠋") {
+		return true
+	}
+	return composerBusyPattern.MatchString(line)
 }
 
 func classifyComposer(capture, marker string, placeholder func(string) bool) ComposerState {

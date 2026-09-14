@@ -67,20 +67,23 @@ Do you trust the contents of this directory?
   ⏵⏵ auto mode on (shift+tab to cycle)                        ● high · /effort
 `
 	claudeMultilineDraftCapture = `
+────────────────────────────────────────────────────────────────────────────────
 ❯ first line
   second line
   third line
-
+────────────────────────────────────────────────────────────────────────────────
   ⏵⏵ accept edits on (shift+tab to cycle)
 `
 	claudePlaceholderCapture = `
+────────────────────────────────────────────────────────────────────────────────
 ❯ Type a message…
-
+────────────────────────────────────────────────────────────────────────────────
   ⏵⏵ accept edits on (shift+tab to cycle)
 `
 	claudeCollapsedPasteCapture = `
+────────────────────────────────────────────────────────────────────────────────
 ❯ [Pasted text #1 +22 lines]
-
+────────────────────────────────────────────────────────────────────────────────
   ⏵⏵ accept edits on (shift+tab to cycle)
 `
 	claudeBusyCapture = `
@@ -103,6 +106,37 @@ Claude Code needs permission to use this directory
 `
 	claudeFooterOnlyCapture = `
   ⏵⏵ accept edits on (shift+tab to cycle)
+`
+	claudeIdleAfterTurn = `
+❯ Reply with exactly the word DELTA and nothing else.
+⏺ DELTA
+✻ Worked for 1s · done 1:51 PM
+───────────────────────────────────────────────────────────────── live-claude3 ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  [Haiku 4.5] | 🧠 default | 🌳 ⎇ no git
+  Session: 18.0% | ⏱️ 2hr 8m | Weekly: 80.0% | ⏱️ 19hr 8m
+  /private/t/leotest-idisp | 𖠰 no git | (no PR) | Ctx Used: 25.0%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 6 agents
+         You've used 80% of your weekly limit · resets 9am (America/New_York)
+                                                                          /rc
+`
+	claudeBusyInLayoutCapture = `
+⏺ DELTA
+✻ Thinking…
+───────────────────────────────────────────────────────────────── live-claude3 ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  [Haiku 4.5] | 🧠 default | 🌳 ⎇ no git
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 6 agents
+`
+	claudeDraftInLayoutCapture = `
+⏺ DELTA
+───────────────────────────────────────────────────────────────── live-claude3 ─
+❯ draft dispatch
+────────────────────────────────────────────────────────────────────────────────
+  [Haiku 4.5] | 🧠 default | 🌳 ⎇ no git
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 6 agents
 `
 )
 
@@ -132,6 +166,9 @@ func TestComposerClassifier(t *testing.T) {
 		{"claude/dialog", ClaudeComposerClassifier, claudeDialogCapture, ComposerUnknown},
 		{"claude/empty-capture", ClaudeComposerClassifier, "", ComposerUnknown},
 		{"claude/footer-only", ClaudeComposerClassifier, claudeFooterOnlyCapture, ComposerUnknown},
+		{"claude/idle-after-turn", ClaudeComposerClassifier, claudeIdleAfterTurn, ComposerEmpty},
+		{"claude/busy-in-layout", ClaudeComposerClassifier, claudeBusyInLayoutCapture, ComposerBusy},
+		{"claude/draft-in-layout", ClaudeComposerClassifier, claudeDraftInLayoutCapture, ComposerDraft},
 	}
 
 	for _, tt := range tests {
