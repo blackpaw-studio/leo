@@ -59,18 +59,14 @@ func EnsureWorkspaceTrusted(codexHome, cwd string) error {
 }
 
 func ensureWorkspaceTrustedAt(path, cwd string) error {
+	prepareInteractiveMu.Lock()
+	defer prepareInteractiveMu.Unlock()
+
 	ws := cwd
 	if resolved, rerr := filepath.EvalSymlinks(ws); rerr == nil {
 		ws = resolved
 	}
 	header := fmt.Sprintf("[projects.%q]", ws)
-	existing, err := os.ReadFile(path) // #nosec G304 -- fixed well-known path
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("codex: reading %s: %w", path, err)
-	}
-	if strings.Contains(string(existing), header) {
-		return nil
-	}
 	return appendConfigEntry(path, header+"\ntrust_level = \"trusted\"")
 }
 

@@ -126,6 +126,31 @@ func TestEnsureWorkspaceTrusted(t *testing.T) {
 		}
 	})
 
+	t.Run("existing project table is updated without duplication", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.toml")
+		withCodexConfigPath(t, path)
+		ws := filepath.Join(dir, "ws")
+		before := "# preserve\n[projects.\"" + ws + "\"]\ntrust_level = \"untrusted\"\n[other]\nx = 1\n"
+		if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureWorkspaceTrusted(harness.SessionHandle{Workspace: ws}); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header := `[projects."` + ws + `"]`
+		if got := strings.Count(string(after), header); got != 1 {
+			t.Fatalf("project table count = %d, want 1:\n%s", got, after)
+		}
+		if !strings.Contains(string(after), `trust_level = "trusted"`) || !strings.Contains(string(after), "# preserve\n") || !strings.Contains(string(after), "[other]\nx = 1\n") {
+			t.Fatalf("config did not preserve unrelated content while upserting:\n%s", after)
+		}
+	})
+
 	t.Run("existing unrelated content preserved", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
