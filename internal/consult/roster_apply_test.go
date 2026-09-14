@@ -54,6 +54,35 @@ func TestViewerRosterAppliesChangesAndOwnershipAwareCleanup(t *testing.T) {
 	assertRosterCall(t, calls, "set-option", "-u", "-t", "=leo-worker:", "status")
 }
 
+func TestViewerRosterCleanupDropsEmptySessionStatusFormat(t *testing.T) {
+	var calls [][]string
+	v := rosterCleanupFormatViewer(&calls, "status-format\n")
+	v.UpdateRoster(nil, time.Now())
+
+	want := [][]string{
+		{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", "status-format[1]"},
+		{"tmux", "-L", "leo", "show-options", "-t", "=leo-worker:", "status-format"},
+		{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", "status-format"},
+	}
+	assertRosterCallSequence(t, calls, want)
+}
+
+func TestViewerRosterCleanupPreservesNonEmptySessionStatusFormat(t *testing.T) {
+	var calls [][]string
+	v := rosterCleanupFormatViewer(&calls, "status-format[0] custom\n")
+	v.UpdateRoster(nil, time.Now())
+
+	assertRosterCallSequence(t, calls, [][]string{
+		{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", "status-format[1]"},
+		{"tmux", "-L", "leo", "show-options", "-t", "=leo-worker:", "status-format"},
+	})
+	for _, call := range calls {
+		if equalRosterCall(call, []string{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", "status-format"}) {
+			t.Fatalf("cleared non-empty session status-format: %#v", calls)
+		}
+	}
+}
+
 func TestViewerRosterPreservesUserStatusAndUsesContextExecSeam(t *testing.T) {
 	legacyCalled := false
 	var calls [][]string
@@ -276,6 +305,24 @@ func restartCleanupViewer(calls *[][]string, sessions string, action func([]stri
 	}}
 }
 
+func rosterCleanupFormatViewer(calls *[][]string, statusFormat string) *Viewer {
+	return &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
+		*calls = append(*calls, append([]string{name}, args...))
+		switch {
+		case containsArg(args, "list-panes"):
+			return exec.Command("printf", "")
+		case containsArg(args, "list-sessions"):
+			return exec.Command("printf", "%s", "leo-worker\t$1\t1\t\told roster\n")
+		case containsArg(args, "show-options") && containsArg(args, "status-format"):
+			return exec.Command("printf", "%s", statusFormat)
+		case containsArg(args, "show-options"):
+			return exec.Command("printf", "2\n")
+		default:
+			return exec.Command("true")
+		}
+	}}
+}
+
 func TestViewerRosterSerializesFullUpdate(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
@@ -339,6 +386,31 @@ func assertRosterCall(t *testing.T, calls [][]string, parts ...string) {
 		}
 	}
 	t.Fatalf("missing call containing %q in %#v", parts, calls)
+}
+
+func assertRosterCallSequence(t *testing.T, calls, want [][]string) {
+	t.Helper()
+	position := 0
+	for _, call := range calls {
+		if position < len(want) && equalRosterCall(call, want[position]) {
+			position++
+		}
+	}
+	if position != len(want) {
+		t.Fatalf("missing ordered calls %#v in %#v", want[position:], calls)
+	}
+}
+
+func equalRosterCall(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func countRosterWrites(calls [][]string, option string) int {

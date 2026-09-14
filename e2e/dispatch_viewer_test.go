@@ -48,6 +48,17 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	}
 	v.UpdateRoster(d.Records(), time.Now())
 	target := tmux.Target(session) + ":"
+	freshSession := session + "-fresh"
+	if out, err := exec.Command(tmuxPath, tmux.Args("new-session", "-d", "-s", freshSession, "sleep", "30")...).CombinedOutput(); err != nil {
+		t.Fatalf("tmux fresh new-session: %v: %s", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(freshSession))...).Run()
+	})
+	freshFormat, err := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", tmux.Target(freshSession)+":", "#{T:status-format[0]}")...).Output()
+	if err != nil || strings.TrimSpace(string(freshFormat)) == "" {
+		t.Fatalf("fresh status-format[0] = %q, err %v", freshFormat, err)
+	}
 	roster, err := exec.Command(tmuxPath, tmux.Args("show-options", "-v", "-t", target, "@leo_roster")...).Output()
 	if err != nil || !strings.Contains(string(roster), "claude") {
 		t.Fatalf("live roster = %q, err %v", roster, err)
@@ -71,6 +82,10 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 		t.Fatalf("Wait = %+v", entries)
 	}
 	v.UpdateRoster(d.Records(), time.Now())
+	format, err := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", target, "#{T:status-format[0]}")...).Output()
+	if err != nil || strings.TrimSpace(string(format)) == "" || string(format) != string(freshFormat) {
+		t.Fatalf("cleaned status-format[0] = %q, want fresh %q, err %v", format, freshFormat, err)
+	}
 	for _, option := range []string{"@leo_roster", "@leo_roster_owned", "@leo_roster_status_owned", "status-format[1]"} {
 		out, _ := exec.Command(tmuxPath, tmux.Args("show-options", "-qv", "-t", target, option)...).Output()
 		if strings.TrimSpace(string(out)) != "" {

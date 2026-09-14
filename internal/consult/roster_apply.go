@@ -257,7 +257,19 @@ func (v *Viewer) clearRosterState(session string, state rosterSessionState) rost
 		}
 		*pending = false
 	}
-	unset(&state.clearFormat, "status-format[1]")
+	if state.clearFormat {
+		if err := v.run("set-option", "-u", "-t", target, "status-format[1]"); err != nil {
+			v.log("clearing status-format[1] for %q: %v", session, err)
+		} else if out, err := v.output("show-options", "-t", target, "status-format"); err != nil {
+			v.log("reading status-format during cleanup for %q: %v", session, err)
+		} else if statusFormatHasEntries(string(out)) {
+			state.clearFormat = false
+		} else if err := v.run("set-option", "-u", "-t", target, "status-format"); err != nil {
+			v.log("clearing empty status-format for %q: %v", session, err)
+		} else {
+			state.clearFormat = false
+		}
+	}
 	unset(&state.clearRoster, "@leo_roster")
 	if state.clearStatus {
 		out, err := v.output("show-options", "-A", "-t", target, "-v", "status")
@@ -282,4 +294,13 @@ func (v *Viewer) clearRosterState(session string, state rosterSessionState) rost
 		return rosterSessionState{}
 	}
 	return state
+}
+
+func statusFormatHasEntries(value string) bool {
+	for _, line := range strings.Split(value, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "status-format[") {
+			return true
+		}
+	}
+	return false
 }
