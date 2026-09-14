@@ -19,15 +19,55 @@ const (
 	StatusFailed   Status = "failed"
 	StatusTimeout  Status = "timeout"
 	StatusCanceled Status = "canceled"
+	StatusIdle     Status = "idle"
+	StatusSettling Status = "settling"
+	StatusClosed   Status = "closed"
 )
 
 // Terminal reports whether the consult has finished, however it ended.
 func (s Status) Terminal() bool {
 	switch s {
-	case StatusDone, StatusFailed, StatusTimeout, StatusCanceled:
+	case StatusDone, StatusFailed, StatusTimeout, StatusCanceled, StatusClosed:
 		return true
 	}
 	return false
+}
+
+// Mode selects the dispatch execution model. The empty value is intentionally
+// headless so records written before interactive dispatch remain compatible.
+type Mode string
+
+const (
+	ModeHeadless    Mode = "headless"
+	ModeInteractive Mode = "interactive"
+)
+
+type TurnSource string
+
+const (
+	TurnSourceOrchestrator TurnSource = "orchestrator"
+	TurnSourceUser         TurnSource = "user"
+)
+
+type TurnOutcome string
+
+const (
+	TurnFinished    TurnOutcome = "finished"
+	TurnInterrupted TurnOutcome = "interrupted"
+	TurnLost        TurnOutcome = "lost"
+	TurnRejected    TurnOutcome = "rejected"
+)
+
+type Turn struct {
+	TurnID        string      `json:"turn_id"`
+	Source        TurnSource  `json:"source"`
+	StartedAt     time.Time   `json:"started_at"`
+	EndedAt       time.Time   `json:"ended_at,omitzero"`
+	Delivered     bool        `json:"delivered"`
+	SlotHeld      bool        `json:"slot_held"`
+	Outcome       TurnOutcome `json:"outcome,omitempty"`
+	Text          string      `json:"text,omitempty"`
+	HarnessTurnID string      `json:"harness_turn_id,omitempty"`
 }
 
 // Record describes one consult. It is persisted next to the consult's event
@@ -52,7 +92,13 @@ type Record struct {
 	Timeout   time.Duration `json:"timeout,omitempty"`
 	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
 	// can survive a daemon restart.
-	ViewerWindowID string `json:"viewer_window_id,omitempty"`
+	ViewerWindowID string    `json:"viewer_window_id,omitempty"`
+	Mode           Mode      `json:"mode,omitempty"`
+	PaneID         string    `json:"pane_id,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	Turns          []Turn    `json:"turns,omitempty"`
+	Steered        bool      `json:"steered,omitempty"`
+	HookActivity   time.Time `json:"-"`
 }
 
 // Elapsed reports how long the consult ran, or has been running so far.
@@ -75,6 +121,9 @@ const StaleAfter = RunTimeout + 2*time.Minute
 // Stale reports whether an unfinished consult has outlived any plausible
 // run and should be treated as abandoned.
 func (r Record) Stale(now time.Time) bool {
+	if r.Mode == ModeInteractive {
+		return false
+	}
 	if r.Status.Terminal() {
 		return false
 	}

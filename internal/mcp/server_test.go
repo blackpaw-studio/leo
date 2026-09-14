@@ -579,6 +579,59 @@ func TestLeoDispatchUsesDefaultCWD(t *testing.T) {
 	}
 }
 
+func TestInteractiveDispatchMCP(t *testing.T) {
+	var dispatchBody map[string]any
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		switch path {
+		case "/api/dispatch":
+			_ = json.Unmarshal(body, &dispatchBody)
+			return 200, `{"ok":true,"data":{"id":"d-test","harness":"codex","model":"gpt","cwd":"/tmp","window":"agent·1234"}}`
+		case "/api/dispatch/d-test/send":
+			return 200, `{"ok":true,"data":{"turn_id":"d-test#2","delivered":true}}`
+		case "/api/dispatch/wait?id=d-test%232&timeout=1799":
+			return 200, `{"ok":true,"data":[{"id":"d-test","status":"closed","elapsed_seconds":1,"turn_id":"d-test#2","outcome":"finished","delivered":true,"text":"done"}]}`
+		}
+		return 404, `{"ok":false,"error":"nope"}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
+	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "codex", "prompt": "go", "mode": "interactive", "cwd": "/tmp"}}})
+	if dispatchBody["mode"] != "interactive" {
+		t.Fatalf("mode = %#v", dispatchBody["mode"])
+	}
+	if got := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(got, "agent·1234") {
+		t.Fatalf("dispatch reply %q", got)
+	}
+	resp = runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "leo_send_dispatch", "arguments": map[string]any{"id": "d-test", "message": "next"}}})
+	if got := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(got, "d-test#2") {
+		t.Fatalf("send reply %q", got)
+	}
+	denied := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{DenyTools: []string{"leo_send_dispatch"}})
+	for _, def := range denied.list() {
+		if def.Name == "leo_send_dispatch" {
+			t.Fatal("denied send tool was registered")
+		}
+	}
+}
+
+func TestInteractiveDispatchMCPWaitRendering(t *testing.T) {
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		if method == "GET" && path == "/api/dispatch/wait" {
+			return 200, `{"ok":true,"data":[{"id":"d-test","status":"idle","elapsed_seconds":1,"turn_id":"d-test#2","outcome":"finished","delivered":false,"stalled":true,"text":"done"}]}`
+		}
+		return 404, `{"ok":false,"error":"nope"}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
+	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_wait", "arguments": map[string]any{"ids": []any{"d-test#2"}}}})
+	text := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	for _, want := range []string{"[d-test · idle · 1.0s · turn 2 finished · undelivered · stalled]"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("wait missing %q: %s", want, text)
+		}
+	}
+}
+
 // TestConsultAndMessageDescriptionsCrossReference guards the copy that keeps
 // "consult fable" from being mis-routed to leo_send_message: each tool must
 // name the other so the model can tell a template from a running agent.

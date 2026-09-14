@@ -21,6 +21,8 @@ import (
 var (
 	leoBin     string
 	fakeclaude string
+	fakecodex  string
+	faketmux   string
 )
 
 func TestMain(m *testing.M) {
@@ -32,6 +34,8 @@ func TestMain(m *testing.M) {
 
 	leoBin = filepath.Join(tmp, "leo")
 	fakeclaude = filepath.Join(tmp, "claude")
+	fakecodex = filepath.Join(tmp, "codex")
+	faketmux = filepath.Join(tmp, "tmux")
 
 	// Build leo
 	build := exec.Command("go", "build", "-o", leoBin, "./cmd/leo")
@@ -45,6 +49,18 @@ func TestMain(m *testing.M) {
 	build.Dir = findRepoRoot()
 	if out, err := build.CombinedOutput(); err != nil {
 		panic("failed to build fakeclaude: " + string(out))
+	}
+	build = exec.Command("go", "build", "-o", fakecodex, "./e2e/fakeclaude")
+	build.Dir = findRepoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		panic("failed to build fake codex: " + string(out))
+	}
+	realTmux, err := exec.LookPath("tmux")
+	if err == nil {
+		wrapper := "#!/bin/sh\nif [ \"$1\" = -L ] && [ \"$2\" = leo ]; then\n  shift 2\n  exec \"" + realTmux + "\" -L \"$FAKECLAUDE_TMUX_SOCKET\" \"$@\"\nfi\nexec \"" + realTmux + "\" \"$@\"\n"
+		if err := os.WriteFile(faketmux, []byte(wrapper), 0o755); err != nil {
+			panic("failed to write fake tmux wrapper: " + err.Error())
+		}
 	}
 
 	os.Exit(m.Run())

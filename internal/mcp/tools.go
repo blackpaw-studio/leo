@@ -320,8 +320,8 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_dispatch", Description: allowNote("Run a headless subagent on the template's harness/model in your project directory. Returns immediately; collect with leo_wait. The prompt must be self-contained. Use for delegating implementation/review/exploration to another model. Call several times for a fan-out then one leo_wait.", "dispatch to these templates", perms.CanConsult),
-		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "template", "prompt"),
+		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI in a window of your tmux session that the user can watch and type into; the result comes from the harness's own turn hooks; use leo_send_dispatch for follow-ups. Returns immediately; collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
+		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "template", "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, err := stringArg(args, "template")
 		if err != nil {
@@ -340,15 +340,45 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			cwd, _ = os.Getwd()
 		}
 		name, _ := args["name"].(string)
+		mode := consult.ModeHeadless
+		if raw, ok := args["mode"].(string); ok && raw != "" {
+			mode = consult.Mode(raw)
+		}
+		if mode != consult.ModeHeadless && mode != consult.ModeInteractive {
+			return "", fmt.Errorf("mode must be headless or interactive")
+		}
 		timeout, err := optionalTimeout(args, "timeout_seconds")
 		if err != nil {
 			return "", err
 		}
-		started, err := client.dispatch(ctx, processName, template, model, prompt, cwd, name, timeout)
+		started, err := client.dispatch(ctx, processName, template, model, prompt, cwd, name, timeout, mode)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%s (%s/%s) · %s\nwatch: leo dispatch watch %s", started.ID, started.Harness, started.Model, started.Cwd, started.ID), nil
+		window := ""
+		if started.Window != "" {
+			window = " · window " + started.Window
+		}
+		return fmt.Sprintf("%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", started.ID, started.Harness, started.Model, started.Cwd, window, started.ID), nil
+	})
+
+	r.addContext(toolDef{
+		Name: "leo_send_dispatch", Description: allowNote("Send a follow-up to an idle interactive dispatch. Never send while a turn is running; leo_wait on the returned turn id.", "send to dispatched templates", perms.CanConsult),
+		InputSchema: objectSchema(map[string]any{"id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "id", "message"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		id, err := stringArg(args, "id")
+		if err != nil {
+			return "", err
+		}
+		message, err := stringArg(args, "message")
+		if err != nil {
+			return "", err
+		}
+		result, err := client.sendDispatch(ctx, id, message)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s · delivered=%t; leo_wait on %s", result.TurnID, result.Delivered, result.TurnID), nil
 	})
 
 	r.addContext(toolDef{
@@ -385,7 +415,21 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			if entry.Err != "" {
 				body = entry.Err
 			}
-			blocks = append(blocks, fmt.Sprintf("[%s · %s · %.1fs]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), body))
+			extra := ""
+			if entry.TurnID != "" {
+				turn := entry.TurnID
+				if i := strings.LastIndexByte(turn, '#'); i >= 0 {
+					turn = turn[i+1:]
+				}
+				extra = fmt.Sprintf(" · turn %s %s", turn, entry.Outcome)
+				if !entry.Delivered {
+					extra += " · undelivered"
+				}
+				if entry.Stalled {
+					extra += " · stalled"
+				}
+			}
+			blocks = append(blocks, fmt.Sprintf("[%s · %s · %.1fs%s]\n%s", entry.ID, entry.Status, entry.Elapsed.Seconds(), extra, body))
 		}
 		return fmt.Sprintf("wait timeout: %.0fs\n%s", timeout.Seconds(), strings.Join(blocks, "\n\n")), nil
 	})

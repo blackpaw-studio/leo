@@ -84,10 +84,11 @@ func newTempFileAlongside(path string, perm os.FileMode) (string, error) {
 // A package var (not a const) so tests can shorten it.
 var sessionPollInterval = 5 * time.Second
 
+var initialBackoff = 5 * time.Second
+
 const (
-	maxBackoff     = 60 * time.Second
-	initialBackoff = 5 * time.Second
-	stopTimeout    = 5 * time.Second
+	maxBackoff  = 60 * time.Second
+	stopTimeout = 5 * time.Second
 
 	// quickExitThreshold: elapsed < this triggers a "hard reset" on the
 	// assumption the session itself is poison — strip --resume, clear the
@@ -133,6 +134,10 @@ type ProcessSpec struct {
 	// it as a trailing positional arg. Empty for claude, which keeps the
 	// prompt in ClaudeArgs.
 	OpeningPrompt string
+	// primaryPane is the tmux-global pane ID captured at session launch or
+	// recovered during adoption. It is intentionally private: it is runtime
+	// supervisor state, not caller configuration.
+	primaryPane string
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -989,7 +994,6 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		adopt = false
 
 		startTime := time.Now()
-
 		if doAdopt {
 			// Re-attach to the session that outlived the previous daemon
 			// instead of recreating it. The running claude keeps its
@@ -997,6 +1001,17 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// (`leo update`, `leo service restart`) becomes a no-op for the
 			// agent. If this session later ends, the loop falls through to a
 			// normal fresh spawn (adopt is already cleared).
+			var err error
+			primaryPane, err := tmuxPrimaryPane(tmuxPath, sessionName)
+			if err != nil {
+				// Keep the adopted agent running when a transient tmux failure
+				// prevents legacy-pane recovery. The poll retries recovery; a
+				// failed probe must not turn a healthy adopted session into a
+				// restart loop.
+				fmt.Fprintf(os.Stderr, "[%s] warning: tmux primary-pane adoption: %v\n", name, err)
+			} else {
+				spec.primaryPane = primaryPane
+			}
 			fmt.Fprintf(os.Stdout, "[%s] adopted existing tmux session '%s', claude already running\n", name, sessionName)
 		} else {
 			if pl, ok := drv.(harness.PreLauncher); ok {
@@ -1020,7 +1035,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			// Create a detached tmux session running claude
 			newSessionArgs := []string{
-				"new-session", "-d", "-s", sessionName,
+				"new-session", "-d", "-P", "-F", "#{pane_id}", "-s", sessionName,
 				"-c", spec.WorkDir,
 				"-x", "200", "-y", "50",
 			}
@@ -1035,7 +1050,8 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// carries credentials; tmux's stderr does not.
 			createCmd.Stderr = os.Stderr
 
-			if err := createCmd.Run(); err != nil {
+			out, err := createCmd.Output()
+			if err != nil {
 				sv.setState(name, id, "restarting")
 				fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", name, err, backoff)
 				select {
@@ -1047,6 +1063,21 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
 				continue
 			}
+			primaryPane := strings.TrimSpace(string(out))
+			if err := setTmuxPrimaryPane(tmuxPath, sessionName, primaryPane); err != nil {
+				killSession(tmuxPath, sessionName, name)
+				sv.setState(name, id, "restarting")
+				fmt.Fprintf(os.Stderr, "[%s] tmux primary-pane setup failed: %v, retrying in %s\n", name, err, backoff)
+				select {
+				case <-ctx.Done():
+					sv.setState(name, id, "stopped")
+					return
+				case <-time.After(backoff):
+				}
+				backoff = time.Duration(math.Min(float64(backoff)*2, float64(maxBackoff)))
+				continue
+			}
+			spec.primaryPane = primaryPane
 
 			fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
 
@@ -1206,6 +1237,18 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 		if !tmuxHasSession(tmuxPath, sessionName) {
 			return false
 		}
+		if spec.primaryPane == "" {
+			// A transient tmux error during adoption must not demote this
+			// session back to session-level supervision. Retry legacy recovery
+			// until the pane can be recorded; after that, never resolve again.
+			if pane, err := tmuxPrimaryPane(tmuxPath, sessionName); err == nil {
+				spec.primaryPane = pane
+			}
+		}
+		if spec.primaryPane != "" && !tmuxPrimaryPaneAlive(tmuxPath, spec.primaryPane) {
+			killSession(tmuxPath, sessionName, id.Name())
+			return false
+		}
 
 		// Auto-dismiss the "Resume from summary" prompt that blocks
 		// unattended sessions when they exceed the context threshold, plus any
@@ -1214,6 +1257,75 @@ func waitForSessionEnd(ctx context.Context, tmuxPath string, id *procIdentity, s
 			dismissStartupDialog(tmuxPath, sessionName, id.Name(), paneKey)
 		}
 	}
+}
+
+const tmuxPrimaryPaneOption = "@leo_primary_pane"
+
+// tmuxPrimaryPane returns the pane recorded at session launch. Sessions from
+// before that metadata existed are adopted once by resolving their original
+// pane and persisting the result under the same option.
+func tmuxPrimaryPane(tmuxPath, sessionName string) (string, error) {
+	out, err := exec.Command(tmuxPath, tmux.Args("show-options", "-t", tmux.Target(sessionName)+":", "-v", tmuxPrimaryPaneOption)...).Output()
+	if err == nil {
+		if pane := strings.TrimSpace(string(out)); pane != "" {
+			return pane, nil
+		}
+	}
+
+	pane, resolveErr := tmuxOriginalPane(tmuxPath, sessionName)
+	if resolveErr != nil {
+		return "", fmt.Errorf("resolve primary pane: %w", resolveErr)
+	}
+	if err := setTmuxPrimaryPane(tmuxPath, sessionName, pane); err != nil {
+		return "", err
+	}
+	return pane, nil
+}
+
+// tmuxOriginalPane finds the pane that belonged to the session's first window,
+// rather than whichever pane happens to be visible in the selected window.
+func tmuxOriginalPane(tmuxPath, sessionName string) (string, error) {
+	out, err := exec.Command(tmuxPath, tmux.Args("list-panes", "-s", "-t", tmux.Target(sessionName)+":", "-F", "#{window_index}.#{pane_index} #{pane_id}")...).Output()
+	if err != nil {
+		return "", err
+	}
+	bestWindow, bestPane := math.MaxInt, math.MaxInt
+	bestID := ""
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		coordinates := strings.Split(fields[0], ".")
+		if len(coordinates) != 2 {
+			continue
+		}
+		window, windowErr := strconv.Atoi(coordinates[0])
+		pane, paneErr := strconv.Atoi(coordinates[1])
+		if windowErr != nil || paneErr != nil || window > bestWindow || (window == bestWindow && pane >= bestPane) {
+			continue
+		}
+		bestWindow, bestPane, bestID = window, pane, fields[1]
+	}
+	if bestID == "" {
+		return "", fmt.Errorf("no panes found")
+	}
+	return bestID, nil
+}
+
+func setTmuxPrimaryPane(tmuxPath, sessionName, pane string) error {
+	if _, err := tmux.LowestPaneID(pane + "\n"); err != nil {
+		return fmt.Errorf("invalid primary pane %q: %w", pane, err)
+	}
+	if err := exec.Command(tmuxPath, tmux.Args("set-option", "-t", tmux.Target(sessionName)+":", tmuxPrimaryPaneOption, pane)...).Run(); err != nil {
+		return fmt.Errorf("set primary pane: %w", err)
+	}
+	return nil
+}
+
+func tmuxPrimaryPaneAlive(tmuxPath, pane string) bool {
+	out, err := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", pane, "#{pane_dead}")...).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "0"
 }
 
 // dismissStartupDialog captures the session's recent pane and clears a blocking

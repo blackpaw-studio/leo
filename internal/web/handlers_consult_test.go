@@ -139,6 +139,18 @@ func TestAPIDispatchRejectsMissingCWD(t *testing.T) {
 	}
 }
 
+func TestAPIDispatchIgnoresUnknownJSONFields(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	s.consults.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
+	}
+	w := httptest.NewRecorder()
+	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work","cwd":"/tmp","future_field":true}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDispatchTimeout(t *testing.T) {
 	jsonTimeout := 3.5
 	if got, err := dispatchTimeout(&jsonTimeout, ""); err != nil || got != 3500*time.Millisecond {
@@ -149,5 +161,22 @@ func TestDispatchTimeout(t *testing.T) {
 	}
 	if _, err := dispatchTimeout(nil, "-1"); err == nil {
 		t.Fatal("negative timeout was accepted")
+	}
+}
+
+func TestDispatchReportHTTPMalformed(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	w := httptest.NewRecorder()
+	s.handleAPIDispatchReport(w, httptest.NewRequest("POST", "/api/dispatch/d-nope/report", strings.NewReader(`{`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	// Unknown reports are deliberately acknowledged so hook retry loops stop.
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/dispatch/d-nope/report", strings.NewReader(`{"event_id":"e","payload":{}}`))
+	req.SetPathValue("id", "d-nope")
+	s.handleAPIDispatchReport(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 }

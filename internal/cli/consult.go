@@ -135,11 +135,15 @@ func listConsults(stateDir string, asJSON bool, out io.Writer) error {
 
 	now := time.Now()
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tELAPSED\tSTATUS")
+	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tMODE\tTURNS\tSTEERED\tELAPSED\tSTATUS")
 	for _, record := range ordered {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		mode := record.Mode
+		if mode == "" {
+			mode = consult.ModeHeadless
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\n",
 			record.ID, orDash(record.Caller), record.Template, record.Model,
-			formatOffset(record.Elapsed(now)), displayStatus(record, now))
+			mode, len(record.Turns), record.Steered, formatOffset(record.Elapsed(now)), displayStatus(record, now))
 	}
 	return w.Flush()
 }
@@ -341,6 +345,23 @@ func (f *consultFeed) emit(event consult.StreamEvent) {
 	}
 	if len(event.Data) == 0 {
 		return
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(event.Data, &raw) == nil {
+		var typ string
+		_ = json.Unmarshal(raw["type"], &typ)
+		if typ == "turn" {
+			var t consult.Turn
+			_ = json.Unmarshal(raw["data"], &t)
+			f.row(event.Offset, "turn", fmt.Sprintf("%s %s %s\n%s", t.TurnID, t.Source, t.Outcome, t.Text))
+			return
+		}
+		if typ == "status" {
+			var status string
+			_ = json.Unmarshal(raw["data"], &status)
+			f.row(event.Offset, "status", status)
+			return
+		}
 	}
 	if f.renderer == nil {
 		f.row(event.Offset, "raw", string(event.Data))

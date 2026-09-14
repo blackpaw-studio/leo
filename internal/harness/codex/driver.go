@@ -50,30 +50,24 @@ func ensureWorkspaceTrusted(h harness.SessionHandle) error {
 	if err != nil {
 		return fmt.Errorf("codex: resolving config path: %w", err)
 	}
-	ws := h.Workspace
+	return ensureWorkspaceTrustedAt(path, h.Workspace)
+}
+
+// EnsureWorkspaceTrusted trusts cwd in codexHome before an interactive launch.
+func EnsureWorkspaceTrusted(codexHome, cwd string) error {
+	return ensureWorkspaceTrustedAt(filepath.Join(codexHome, "config.toml"), cwd)
+}
+
+func ensureWorkspaceTrustedAt(path, cwd string) error {
+	prepareInteractiveMu.Lock()
+	defer prepareInteractiveMu.Unlock()
+
+	ws := cwd
 	if resolved, rerr := filepath.EvalSymlinks(ws); rerr == nil {
 		ws = resolved
 	}
 	header := fmt.Sprintf("[projects.%q]", ws)
-	existing, err := os.ReadFile(path) // #nosec G304 -- fixed well-known path
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("codex: reading %s: %w", path, err)
-	}
-	if strings.Contains(string(existing), header) {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("codex: creating %s: %w", filepath.Dir(path), err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304
-	if err != nil {
-		return fmt.Errorf("codex: opening %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := fmt.Fprintf(f, "\n%s\ntrust_level = \"trusted\"\n", header); err != nil {
-		return fmt.Errorf("codex: writing trust entry: %w", err)
-	}
-	return nil
+	return appendConfigEntry(path, header+"\ntrust_level = \"trusted\"")
 }
 
 // refreshSessionArgs rewrites the launch argv from the stored session id:

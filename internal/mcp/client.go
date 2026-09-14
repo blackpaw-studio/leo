@@ -188,7 +188,7 @@ func (c *daemonClient) consult(ctx context.Context, from, template, model, promp
 	return client.doContext(ctx, http.MethodPost, "/api/consult", body)
 }
 
-func (c *daemonClient) dispatch(ctx context.Context, from, template, model, prompt, cwd, name string, timeout time.Duration) (consult.Started, error) {
+func (c *daemonClient) dispatch(ctx context.Context, from, template, model, prompt, cwd, name string, timeout time.Duration, mode consult.Mode) (consult.Started, error) {
 	body := map[string]any{"from": from, "template": template, "prompt": prompt, "cwd": cwd}
 	if model != "" {
 		body["model"] = model
@@ -199,6 +199,9 @@ func (c *daemonClient) dispatch(ctx context.Context, from, template, model, prom
 	if timeout > 0 {
 		body["timeout_seconds"] = timeout.Seconds()
 	}
+	if mode != "" {
+		body["mode"] = mode
+	}
 	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch", body)
 	if err != nil {
 		return consult.Started{}, err
@@ -208,6 +211,18 @@ func (c *daemonClient) dispatch(ctx context.Context, from, template, model, prom
 		return consult.Started{}, fmt.Errorf("decode dispatch: %w", err)
 	}
 	return started, nil
+}
+
+func (c *daemonClient) sendDispatch(ctx context.Context, id, message string) (consult.SendResult, error) {
+	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch/"+url.PathEscape(id)+"/send", map[string]string{"message": message})
+	if err != nil {
+		return consult.SendResult{}, err
+	}
+	var result consult.SendResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return result, fmt.Errorf("decode dispatch send: %w", err)
+	}
+	return result, nil
 }
 
 func (c *daemonClient) getDispatch(ctx context.Context, id string) (consult.Record, error) {

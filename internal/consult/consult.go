@@ -48,6 +48,7 @@ type Request struct {
 	Preamble bool
 	// Caller names the process that asked, for the consult record. Optional.
 	Caller string
+	Mode   Mode
 }
 
 type Result struct {
@@ -64,31 +65,41 @@ type Started struct {
 	Harness string `json:"harness"`
 	Model   string `json:"model"`
 	Cwd     string `json:"cwd"`
+	Window  string `json:"window,omitempty"`
 }
 
 type Entry struct {
-	ID      string        `json:"id"`
-	Status  Status        `json:"status"`
-	Elapsed time.Duration `json:"elapsed"`
-	Text    string        `json:"text,omitempty"`
-	Err     string        `json:"error,omitempty"`
+	ID        string        `json:"id"`
+	Status    Status        `json:"status"`
+	Elapsed   time.Duration `json:"elapsed"`
+	Text      string        `json:"text,omitempty"`
+	Err       string        `json:"error,omitempty"`
+	TurnID    string        `json:"turn_id,omitempty"`
+	Outcome   TurnOutcome   `json:"outcome,omitempty"`
+	Delivered bool          `json:"delivered,omitempty"`
+	Stalled   bool          `json:"stalled,omitempty"`
 }
 
 // MarshalJSON exposes elapsed time in seconds for API clients while retaining
 // time.Duration internally for scheduling and display.
 func (e Entry) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		ID             string  `json:"id"`
-		Status         Status  `json:"status"`
-		ElapsedSeconds float64 `json:"elapsed_seconds"`
-		Text           string  `json:"text,omitempty"`
-		Err            string  `json:"error,omitempty"`
+		ID             string      `json:"id"`
+		Status         Status      `json:"status"`
+		ElapsedSeconds float64     `json:"elapsed_seconds"`
+		Text           string      `json:"text,omitempty"`
+		Err            string      `json:"error,omitempty"`
+		TurnID         string      `json:"turn_id,omitempty"`
+		Outcome        TurnOutcome `json:"outcome,omitempty"`
+		Delivered      bool        `json:"delivered,omitempty"`
+		Stalled        bool        `json:"stalled,omitempty"`
 	}{
 		ID:             e.ID,
 		Status:         e.Status,
 		ElapsedSeconds: e.Elapsed.Seconds(),
 		Text:           e.Text,
 		Err:            e.Err,
+		TurnID:         e.TurnID, Outcome: e.Outcome, Delivered: e.Delivered, Stalled: e.Stalled,
 	})
 }
 
@@ -96,11 +107,15 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 // duration used by CLI and MCP clients.
 func (e *Entry) UnmarshalJSON(data []byte) error {
 	var wire struct {
-		ID             string  `json:"id"`
-		Status         Status  `json:"status"`
-		ElapsedSeconds float64 `json:"elapsed_seconds"`
-		Text           string  `json:"text"`
-		Err            string  `json:"error"`
+		ID             string      `json:"id"`
+		Status         Status      `json:"status"`
+		ElapsedSeconds float64     `json:"elapsed_seconds"`
+		Text           string      `json:"text"`
+		Err            string      `json:"error"`
+		TurnID         string      `json:"turn_id"`
+		Outcome        TurnOutcome `json:"outcome"`
+		Delivered      bool        `json:"delivered"`
+		Stalled        bool        `json:"stalled"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
@@ -110,6 +125,7 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 	e.Elapsed = time.Duration(wire.ElapsedSeconds * float64(time.Second))
 	e.Text = wire.Text
 	e.Err = wire.Err
+	e.TurnID, e.Outcome, e.Delivered, e.Stalled = wire.TurnID, wire.Outcome, wire.Delivered, wire.Stalled
 	return nil
 }
 
@@ -133,13 +149,26 @@ type Dispatcher struct {
 	runs               map[string]*runState
 	onStart            func(Record) string
 	onCollect          func(Record)
+	interactiveRuntime InteractiveRuntime
+	now                func() time.Time
 }
 
 type runState struct {
-	record Record
-	handle Handle
-	done   chan struct{}
-	cancel context.CancelFunc
+	record         Record
+	handle         Handle
+	done           chan struct{}
+	cancel         context.CancelFunc
+	settleDeadline time.Time
+	settleStatus   Status
+	lastHook       time.Time
+	armedTurn      string
+	armedUntil     time.Time
+	pendingCloses  map[string]pendingClose
+	eventIDs       []string
+	closedHarness  map[string]bool
+	closedIDs      []string
+	idleSince      time.Time
+	killPending    bool
 }
 
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder
@@ -173,6 +202,7 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		daemonCtx:          daemonCtx,
 		runs:               make(map[string]*runState),
 		onStart:            onStart,
+		now:                time.Now,
 	}
 	if len(onCollect) > 0 {
 		d.onCollect = onCollect[0]
@@ -208,6 +238,13 @@ func newID() string {
 // Request contexts govern only validation and the immediate caller, never the
 // lifetime of an accepted run.
 func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
+	mode := req.Mode
+	if mode == "" {
+		mode = ModeHeadless
+	}
+	if mode != ModeHeadless && mode != ModeInteractive {
+		return Started{}, invalidf("unknown dispatch mode %q", req.Mode)
+	}
 	if req.Timeout < 0 {
 		return Started{}, invalidf("timeout must be non-negative")
 	}
@@ -223,6 +260,17 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	if !h.SupportsKind(harness.KindTask) {
 		return Started{}, invalidf("harness %q does not support one-shot runs", h.Name())
+	}
+	if mode == ModeInteractive {
+		if h.Name() == "opencode" {
+			return Started{}, invalidf("interactive dispatch is not supported by harness %q", h.Name())
+		}
+		d.mu.Lock()
+		rt := d.interactiveRuntime
+		d.mu.Unlock()
+		if rt == nil {
+			return Started{}, invalidf("interactive runtime is not configured")
+		}
 	}
 	model := req.Model
 	if model == "" {
@@ -271,7 +319,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	rec := Record{
 		ID: newID(), Caller: req.Caller, Template: req.Template,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
-		Prompt: req.Prompt, Status: StatusQueued, StartedAt: time.Now(),
+		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: req.Mode,
 	}
 	handle, err := d.recorder.Open(rec)
 	if err != nil {
@@ -286,6 +334,9 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	d.runs[rec.ID] = state
 	d.pruneTerminalRunsLocked()
 	d.mu.Unlock()
+	if mode == ModeInteractive {
+		return d.startInteractive(runCtx, state, req, h.Name(), model)
+	}
 	if rec.Kind == "dispatch" && d.onStart != nil {
 		if windowID := d.onStart(rec); windowID != "" {
 			d.mu.Lock()
@@ -463,6 +514,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 	}()
 	entries = make([]Entry, len(ids))
 	states := make([]*runState, len(ids))
+	turnIDs := make([]string, len(ids))
 	for i, id := range ids {
 		entries[i].ID = id
 		rec, state, err := d.lookup(id)
@@ -472,7 +524,21 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			continue
 		}
 		states[i] = state
-		entries[i] = entryFromRecord(rec)
+		if rec.Mode == ModeInteractive {
+			turnID := id
+			if !strings.Contains(id, "#") {
+				for j := len(rec.Turns) - 1; j >= 0; j-- {
+					if rec.Turns[j].Source == TurnSourceOrchestrator {
+						turnID = rec.Turns[j].TurnID
+						break
+					}
+				}
+			}
+			turnIDs[i] = turnID
+			entries[i] = interactiveEntry(rec, turnID, d.now())
+		} else {
+			entries[i] = entryFromRecord(rec)
+		}
 	}
 	deadline := time.NewTimer(timeout)
 	if timeout <= 0 {
@@ -481,25 +547,41 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 	defer deadline.Stop()
 	for {
 		pending := false
+		interactivePending := false
 		cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())}}
 		if timeout > 0 {
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(deadline.C)})
 		}
 		for i, state := range states {
-			if state != nil && !entries[i].Status.Terminal() {
+			if state != nil && !entries[i].Status.Terminal() && entries[i].Outcome == "" {
 				pending = true
+				if d.stateRecord(state).Mode == ModeInteractive {
+					interactivePending = true
+				}
 				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(state.done)})
 			}
 		}
 		if !pending {
 			return entries
 		}
+		// Interactive turns complete before their parent session does. Polling
+		// here is deliberate: hooks may arrive from an external process and
+		// must wake a wait for a specific turn without making the dispatcher
+		// own a goroutine per waiter.
+		if interactivePending {
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(time.After(25 * time.Millisecond))})
+		}
 		chosen, _, _ := reflect.Select(cases)
 		if chosen == 0 || (timeout > 0 && chosen == 1) {
 			for i, state := range states {
-				if state != nil && !entries[i].Status.Terminal() {
-					entries[i] = entryFromRecord(d.stateRecord(state))
-					if !entries[i].Status.Terminal() {
+				if state != nil && !entries[i].Status.Terminal() && entries[i].Outcome == "" {
+					rec := d.stateRecord(state)
+					if rec.Mode == ModeInteractive {
+						entries[i] = interactiveEntry(rec, turnIDs[i], d.now())
+					} else {
+						entries[i] = entryFromRecord(rec)
+					}
+					if rec.Mode != ModeInteractive && !entries[i].Status.Terminal() {
 						entries[i].Status = StatusRunning
 						entries[i].Err = ""
 					}
@@ -509,7 +591,12 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 		}
 		for i, state := range states {
 			if state != nil {
-				entries[i] = entryFromRecord(d.stateRecord(state))
+				rec := d.stateRecord(state)
+				if rec.Mode == ModeInteractive {
+					entries[i] = interactiveEntry(rec, turnIDs[i], d.now())
+				} else {
+					entries[i] = entryFromRecord(rec)
+				}
 			}
 		}
 	}
@@ -519,21 +606,44 @@ func entryFromRecord(rec Record) Entry {
 	return Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(time.Now()), Text: rec.Text, Err: rec.Error}
 }
 
+func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
+	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Err: rec.Error, TurnID: turnID}
+	t := turnByID(rec, turnID)
+	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
+	activity := rec.HookActivity
+	if activity.IsZero() {
+		activity = t.StartedAt
+	}
+	if t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfter {
+		e.Stalled = true
+	}
+	return e
+}
+
 func (d *Dispatcher) stateRecord(state *runState) Record {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return state.record
+	// Record contains a slice of turns. A plain struct copy would retain the
+	// backing array, letting callers inspect it while hook processing mutates a
+	// turn under this lock. Return a real snapshot instead.
+	record := state.record
+	record.Turns = append([]Turn(nil), state.record.Turns...)
+	return record
 }
 
 func (d *Dispatcher) lookup(id string) (Record, *runState, error) {
+	runID := id
+	if i := strings.IndexByte(runID, '#'); i >= 0 {
+		runID = runID[:i]
+	}
 	d.mu.Lock()
-	state := d.runs[id]
+	state := d.runs[runID]
 	d.mu.Unlock()
 	if state != nil {
 		return d.stateRecord(state), state, nil
 	}
 	if recorder, ok := d.recorder.(*FileRecorder); ok {
-		rec, err := LoadOne(filepath.Dir(recorder.dir), id)
+		rec, err := LoadOne(filepath.Dir(recorder.dir), runID)
 		if err == nil {
 			return rec, nil, nil
 		}
@@ -603,6 +713,23 @@ func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
 // it must always re-check the authoritative record while locked.
 func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	d.mu.Lock()
+	if state.record.Mode == ModeInteractive {
+		pane, rt := state.record.PaneID, d.interactiveRuntime
+		d.mu.Unlock()
+		// Cancellation kills first. Publishing settling first would allow a
+		// concurrent hook to observe a partially torn-down session.
+		if pane != "" && rt != nil && rt.Alive(pane) {
+			_ = rt.Kill(pane)
+		}
+		d.mu.Lock()
+		if !state.record.Status.Terminal() {
+			d.beginSettlementLocked(state, status, 0)
+			d.finishInteractiveLocked(state, status)
+		}
+		rec := state.record
+		d.mu.Unlock()
+		return rec
+	}
 	if state.record.Status.Terminal() {
 		rec := state.record
 		d.mu.Unlock()
@@ -660,13 +787,55 @@ func (d *Dispatcher) MarkInterrupted() {
 	}
 	for _, rec := range func() []Record { records, _ := Load(filepath.Dir(recorder.dir)); return records }() {
 		if rec.Status.Terminal() {
+			if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
+				if d.interactiveRuntime.Kill(rec.PaneID) != nil {
+					d.trackRestartKill(rec)
+				}
+			}
 			continue
 		}
-		rec.Status, rec.Error, rec.EndedAt = StatusFailed, "daemon restarted", time.Now()
+		if rec.Mode == ModeInteractive {
+			finished := false
+			for i := range rec.Turns {
+				if rec.Turns[i].Outcome == TurnFinished {
+					finished = true
+				}
+				if rec.Turns[i].Outcome == "" {
+					rec.Turns[i].Outcome = TurnLost
+					rec.Turns[i].EndedAt = d.now()
+					rec.Turns[i].SlotHeld = false
+				}
+			}
+			if finished {
+				rec.Status = StatusClosed
+			} else {
+				rec.Status = StatusFailed
+			}
+		} else {
+			rec.Status = StatusFailed
+		}
+		rec.Error, rec.EndedAt = "daemon restarted", d.now()
+		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
+			if d.interactiveRuntime.Kill(rec.PaneID) != nil {
+				d.trackRestartKill(rec)
+			}
+		}
 		if err := writeRecord(recorder.dir, rec); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: recording: %v\n", rec.ID, err)
 		}
 	}
+}
+
+// trackRestartKill retains a terminal record solely to retry cleanup. Terminal
+// records normally prune immediately, but a failed kill must not strand its pane.
+func (d *Dispatcher) trackRestartKill(rec Record) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.runs[rec.ID] == nil {
+		d.runs[rec.ID] = &runState{record: rec, handle: nopHandle{}, done: make(chan struct{}), killPending: true}
+		return
+	}
+	d.runs[rec.ID].killPending = true
 }
 
 // finish closes a recording. A recording failure is reported to the daemon
