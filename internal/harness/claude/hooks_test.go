@@ -25,7 +25,7 @@ func TestTurnHooksArgv(t *testing.T) {
 		t.Fatalf("crossSessionInbound = %#v", settings["crossSessionInbound"])
 	}
 	hooks := settings["hooks"].(map[string]any)
-	if !reflect.DeepEqual(hooks["Stop"], []any{map[string]any{"command": "/opt/leo dispatch report", "type": "command"}}) {
+	if !reflect.DeepEqual(hooks["Stop"], []any{map[string]any{"hooks": []any{map[string]any{"command": "/opt/leo dispatch report", "type": "command"}}}}) {
 		t.Fatalf("Stop hook = %#v", hooks["Stop"])
 	}
 	for _, event := range []string{"UserPromptSubmit", "SessionEnd"} {

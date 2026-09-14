@@ -22,7 +22,7 @@ func (Claude) TurnHooks(reportCmd []string) ([]string, error) {
 	hooks := settings["hooks"].(map[string]any)
 	command := shellCommand(reportCmd)
 	for _, event := range []string{"Stop", "UserPromptSubmit", "SessionEnd"} {
-		hooks[event] = []any{map[string]any{"type": "command", "command": command}}
+		hooks[event] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}}}
 	}
 	encoded, err := json.Marshal(settings)
 	if err != nil {
