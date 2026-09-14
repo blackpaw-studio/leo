@@ -104,6 +104,9 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		home := cfg.HomePath
 		if h.Name() == "codex" {
 			home = codex.CodexHome(env)
+			// Export the resolved home so the TUI and the prepared
+			// hooks/trust files agree even when HOME is overridden.
+			env["CODEX_HOME"] = home
 		} else if h.Name() == "claude" {
 			home = env["HOME"]
 			if home == "" {
