@@ -1,9 +1,10 @@
 # Interactive dispatch: subagents you can watch, steer, and message
 
 Extends `docs/specs/2026-09-13-subagent-dispatch.md` (shipped, v0.23.0).
-Revision 2 after design review: adds turn identity, an `idle` state distinct
-from terminal `done`, composer ownership, per-run report tokens, restart
-reattachment, and lost-hook recovery.
+Revision 3. Rev 2 tried to make sessions durable and deliveries exclusive;
+both were the source of most review findings and neither is needed for the
+goal. Rev 3 binds subagents to their caller, drops queued sends and per-run
+tokens, and makes delivery honest rather than exclusive.
 
 ## Goal
 
@@ -11,232 +12,229 @@ Make `leo_dispatch` comparable to Claude Code's native subagents: the
 orchestrator starts a subagent, gets its result, and can send follow-up
 messages; the user can watch it in a tmux window and type into it. The
 subagent is a real harness TUI (codex or claude) in a pane of the caller's
-own tmux session. Turn completion comes from the harness's own hooks, never
-from screen scraping or private rollout files.
+tmux session. Turn boundaries come from the harness's own hooks.
 
 ## Non-goals
 
 - Replacing headless mode. It stays the default and what `leo_consult` uses.
-- Supervision: no restart loop, no agentstore entry, no `leo agent` listing.
-- OpenCode (no hooks). Interactive on an opencode template is a validation
-  error.
-- Cross-host dispatch. Per-turn timeouts (session timeout only).
+- Supervision or durability. A subagent lives and dies with its caller's
+  tmux session and with the daemon. No restart loop, no reattach, no
+  agentstore entry.
+- Exclusive ownership of the composer. A human and the orchestrator share
+  one input box; leo avoids clobbering and reports delivery honestly.
+- Queued sends, per-turn timeouts, inbox-socket delivery, OpenCode.
+- Any security claim beyond today's: a subagent holds the caller-level API
+  token like every leo agent and can forge reports for any run.
 
 ## Design
 
 ### Mode
 
 `leo_dispatch` gains `mode`: `headless` (default, unchanged) or
-`interactive`. Switching the default is a later decision, after both harness
-contracts have passed live tests.
+`interactive`. Interactive on an opencode template is a validation error.
 
-### Identity
+### Identity and ownership
 
-Every interactive run has:
-
-- `pane_id` (tmux `%N`, from `new-window -P -F '#{pane_id}'`). All
-  targeting, probing, and cleanup use the pane id, never the window id or
-  name. Cleanup is `kill-pane`.
-- `generation`: incremented on launch and on reattach after a daemon
-  restart. Hook reports carry it; reports from an older generation are ignored.
-- `report_token`: random per run, stored on the record, exported to the
-  harness process as `LEO_DISPATCH_REPORT_TOKEN`. `POST
-  /api/dispatch/{id}/report` accepts only that run's token (or the API token).
-  Anything inside the subagent's sandbox can therefore forge reports for its
-  own run and nothing else.
-- `session_id`: the harness session, learned from the first hook.
+- `pane_id` (tmux `%N`, from `new-window -P -F '#{pane_id}'`) persisted on
+  the record. All targeting and cleanup use it; cleanup is `kill-pane`.
+- `session_id` from the first hook report.
+- Ownership: the pane is created in the caller's session (`leo-<caller>`),
+  or `leo-dispatch` for non-agent callers. When that session ends for any
+  reason (agent stop/restart, daemon shutdown), the pane dies with it and the
+  run finalizes on the next sweep. On daemon start, every non-terminal
+  interactive record is finalized: `closed` if it has a finished turn,
+  `failed` otherwise, and its pane killed if still alive. Nothing is
+  reattached.
 
 ### Launch
 
 The daemon builds a `KindAgent` launch spec from the template (model,
-`harness_options`, `env`, cwd = dispatch cwd) and starts it in a new window
-of the caller's tmux session (`leo-<caller>`), or `leo-dispatch` for
-non-agent callers, named `<label>·<hex4>`:
+`harness_options`, `env`, cwd = dispatch cwd) and starts it:
 
 ```
 tmux new-window -d -P -F '#{pane_id}' -t <session> -n <label>·<hex4> -c <cwd> [-e K=V…] <shell-quoted harness command>
 ```
 
-Argv comes from the adapters' `Args`/`Env`; each launcher and hook argv
-element is shell-quoted; the leo executable path is absolute.
+Argv comes from the adapters' `Args`/`Env`; every element is shell-quoted;
+the leo executable path is absolute. The record (with `pane_id`) is persisted
+before the opening prompt is injected; if persistence fails, the pane is
+killed and the dispatch fails.
 
-Startup dialogs are **prevented, not dismissed**: the supervisor's
-Escape-based heuristics skip attached sessions, and these windows are usually
-attached. The adapters' existing prelaunch config (codex trust entry, claude
-onboarding/trust settings) is reused, plus whatever config key disables the
-codex update prompt (verified live; if none exists, the readiness probe treats
-the prompt as launch failure).
+Startup dialogs are prevented, not dismissed: the adapters' existing
+prelaunch config (codex trust entry, claude onboarding/trust settings) is
+reused, plus the codex config key that disables the update prompt, verified
+live. The readiness probe treats any remaining dialog as launch failure.
 
 ### Hooks
 
 New adapter method `TurnHooks(reportCmd []string) (args []string, err
 error)` adds per-launch hooks for four events, all running
-`leo --config <path> dispatch report <id> --generation <n>`, which forwards
-the stdin payload verbatim with the report token:
+`leo --config <path> dispatch report <id>`:
 
 | Event | codex | claude | leo effect |
 |---|---|---|---|
-| prompt submitted | `user_prompt_submit` | `UserPromptSubmit` | opens a turn (or acknowledges a pending one) |
-| turn finished | `stop` | `Stop` | closes the oldest open turn with `last_assistant_message` |
-| turn aborted | `interrupt` | none | closes the oldest open turn as `interrupted` |
-| session exited | `session_end` | `SessionEnd` | `closed` |
+| prompt submitted | `user_prompt_submit` | `UserPromptSubmit` | acknowledges a pending orchestrator turn, else opens a user turn |
+| turn finished | `stop` | `Stop` | closes a turn with `last_assistant_message` |
+| turn aborted | `interrupt` | none | closes a turn as `interrupted` |
+| session exited | `session_end` | `SessionEnd` | begins final settlement |
 
-Hook config delivery, codex: hooks in the session-flags layer via `-c`
-overrides. Trust must be pinned to one verified mechanism before merge, in
-this order of preference: (a) session-layer hooks are trusted implicitly;
-(b) leo records a trust entry for its own hook's hash in codex's hook state;
-(c) `--dangerously-bypass-hook-trust`, allowed only after leo confirms that no
-other hook sources (user, project, managed) are discovered for that home and
-cwd, since the flag would trust them too. If none can be made to work,
-interactive mode on codex ships disabled with a validation error saying why.
+The report command reads the stdin payload, generates an `event_id` once,
+and POSTs `{event_id, payload}` to `POST /api/dispatch/{id}/report` with the
+agent API token from its environment, retrying with backoff (5 attempts,
+~30 s) on transport failure. The daemon dedups on `event_id` and answers a
+duplicate with 200.
+
+Codex hook delivery: hooks in the session-flags layer via `-c` overrides,
+with trust established by **one** mechanism chosen during implementation and
+verified live, in this order of preference: session-layer hooks trusted
+implicitly; a trust entry for leo's hook hash in codex's hook state;
+`--dangerously-bypass-hook-trust` only when leo has confirmed no other hook
+sources are discovered for that home and cwd. Only the chosen mechanism
+ships; if none works, interactive on codex is a validation error saying why.
 Claude: entries merged into the existing `--settings` JSON.
-
-The report command retries the POST with backoff (5 attempts, ~30 s total)
-before exiting non-zero.
 
 ### Turns
 
-A run holds an ordered list of turns. Invariant: the harness executes turns
-serially, so leo closes the **oldest open turn** on `stop`/`interrupt`; when
-the payload carries a `turn_id` (codex), that id is recorded on the turn and
-used to match instead. Turn:
-
 ```
-{n, source: orchestrator|user, started_at, ended_at, delivered: bool,
- outcome: finished|interrupted|lost|timeout, text, harness_turn_id}
+{turn_id: "d-…#n", source: orchestrator|user, started_at, ended_at,
+ delivered: bool, outcome: finished|interrupted|lost|stalled?, text,
+ harness_turn_id}
 ```
 
-Statuses (interactive): `queued`, `running` (an open turn exists), `idle`
-(alive, no open turn), and the terminal, latched `closed`, `failed`,
-`canceled`, `timeout`. `done` remains the headless terminal state. A terminal
-status is never overwritten; reports for a terminal run or a stale generation
-are logged and ignored.
+Statuses: `queued`, `running` (an open turn exists), `idle` (alive, no open
+turn), and the terminal, latched `closed`, `failed`, `canceled`, `timeout`.
+`done` remains the headless terminal state. Terminal statuses are never
+overwritten; reports for a terminal run are ignored after settlement.
 
-Transitions are serialized under the dispatcher lock. Idle-close timers carry
-the generation and turn count they were armed with and no-op if either moved.
+Matching a `stop`/`interrupt` to a turn: by `harness_turn_id` when the
+payload's `turn_id` was seen on a submit event; otherwise the oldest open
+turn. How codex assigns `turn_id` to prompts submitted while a turn is
+running (queued input) is verified live before merge and covered by a test;
+if codex coalesces queued prompts, leo closes every open turn whose submit
+preceded the `stop` with that same text.
+
+Transitions happen under the dispatcher lock; side effects (paste, kill)
+happen outside it after revalidating status.
 
 ### Opening prompt and follow-ups
 
-Orchestrator input goes through one new injector entrypoint,
-`InjectInto(paneID, marker, text)`:
+One injector entrypoint, `InjectInto(paneID, classifier, text)`:
 
-1. Capture the pane. Require the harness prompt marker on the last line and
-   an empty composer; otherwise fail `composer busy` without touching the
-   pane. No probe keystroke, no Ctrl-U: a human's draft is never modified.
-2. `set-buffer --` / `paste-buffer -d` / `Enter`, as the existing injector.
-3. Open a turn `{source: orchestrator, delivered: false}` **before** step 2,
-   so a hook can never arrive for a turn that does not exist.
-4. Acknowledgment: the next `user_prompt_submit` within `ack_timeout` (10 s)
-   marks the turn `delivered: true`. A human submission inside that window is
-   attributed to the pending orchestrator turn; the composer-empty check makes
-   this a narrow race and it is documented as such. No acknowledgment: the
-   turn stays open with `delivered: false` (a late `stop` still closes it) and
-   the caller is told delivery is uncertain.
+1. Open the turn `{source: orchestrator, delivered: false}` and take a
+   concurrency slot. If no slot is free, fail `no capacity` and close the
+   turn (no queueing).
+2. Capture the pane and classify with the harness's existing passive
+   classifier (the one the readiness probe uses). Require "prompt box shown,
+   composer empty"; unknown layouts fail closed. Otherwise fail
+   `composer busy` and close the turn without touching the pane. No probe
+   keystroke, no Ctrl-U.
+3. `set-buffer --`, `paste-buffer -d`, confirm the pasted body appears,
+   `Enter`. A confirm failure fails the turn `paste failed` (nothing was
+   submitted).
+4. Acknowledgment: a `user_prompt_submit` within `ack_timeout` (10 s) marks
+   `delivered: true`. A human submission in that window is attributed to the
+   pending orchestrator turn; the empty-composer check makes the race narrow
+   and it is documented, not prevented. Without acknowledgment the turn stays
+   open with `delivered: false`; a later `stop` still closes it. After the
+   window a pending turn no longer absorbs submits.
 
-`leo_send_dispatch {id, message}` → `{id, turn: n, delivered}`. Allowed only
-when the run is `idle`; `running`, `queued`, and terminal runs are rejected
-with the status in the error. `POST /api/dispatch/{id}/send` and
-`leo dispatch send <id> <message>` mirror it. Message bodies never pass
-through a shell; control characters other than newline are rejected.
-
-Claude sends use the inbox socket first (resolved from the pane's process
-tree, sharing `peerinbox`'s resolution), then paste. Whether an inbox message
-fires `UserPromptSubmit` is verified live before merge; if it does not, claude
-sends use paste only.
+`leo_send_dispatch {id, message}` → `{turn_id, delivered}` (also
+`POST /api/dispatch/{id}/send`, `leo dispatch send`). Allowed only when the
+run is `idle`; anything else is rejected with the current status. Bodies are
+plain text; control characters other than newline are rejected. Both
+harnesses use paste. The `#` in a turn id is URL-encoded in paths.
 
 ### Human steering
 
-A `user_prompt_submit` with no pending orchestrator turn opens a
-`source: user` turn and moves `idle → running`. It holds no concurrency slot.
-The record shows `steered: true` once any user turn exists.
+A submit with no pending orchestrator turn opens a `source: user` turn and
+moves `idle → running`. User turns take no slot. The record shows
+`steered: true` once any user turn exists.
 
 ### Waiting
 
-`leo_wait` ids may be a run (`d-…`) or a turn (`d-…#3`, as returned by
-send). A run id waits on its latest orchestrator turn; a turn id waits on that
-turn's immutable outcome, so later human turns cannot hide it. Entries gain
-`turn`, `outcome`, and `delivered`. A `queued` run keeps the wait pending, as
-headless does today. Waiting on a run with no open orchestrator turn returns
-its latest turn immediately; on a run with only user turns, the latest user
-turn.
+`leo_wait` ids may be a run (`d-…`) or a turn (`d-…#n`). A run id is
+resolved **once, when the wait starts**, to the run's latest orchestrator
+turn, or its latest user turn if it has none; the wait then tracks that turn.
+A turn id waits on that turn's outcome. Entries gain `turn_id`, `outcome`,
+`delivered`, `stalled`. A `queued` run keeps the wait pending. An open turn
+whose run has had no hook activity for `stalled_after` (10 min) is reported
+with `stalled: true` on each wait timeout; it is not closed and its slot is
+not released. The caller cancels or keeps waiting.
 
 ### Concurrency
 
-`maxConcurrent` (6) admits **orchestrator turns**: the opening prompt and
-each send take a slot from admission until the turn closes or the run goes
-terminal, released exactly once. Idle sessions and user turns hold no slot.
-A send that cannot get a slot returns the turn as `queued`; injection happens
-when admitted.
+`maxConcurrent` (6) admits orchestrator turns: the opening prompt and each
+send hold a slot from step 1 until the turn closes or the run goes terminal,
+released exactly once. Idle sessions and user turns hold no slot.
 
-### Lifecycle
+### Lifecycle and settlement
 
-- `leo_cancel`: `kill-pane`, status `canceled`, open turns closed `interrupted`.
-- `session_end`: `closed` (or `failed` if no turn ever finished). Pane death
-  observed by the sweep without a `session_end` means the same; the sweep
-  waits `final_report_grace` (15 s) after noticing a dead pane before
-  classifying, so a final `stop` racing exit is not lost.
-- Idle close: `idle` with no new turn for `idle_close_after` (1 h) →
-  `kill-pane`, `closed`.
-- Session timeout: `timeout_seconds` on the dispatch caps the whole session
-  as today (`timeout`, latched).
-- Daemon restart: interactive records that are `idle` or `running` are
-  reattached: if the pane is alive, generation is bumped, the record kept,
-  and any open turn left open for the stuck sweep; if the pane is dead, the
-  record is finalized as above. Reports from the old generation are ignored.
-- Stuck sweep: a `running` run with no hook activity for `stuck_after`
-  (10 min) has its pane captured; if the idle prompt marker is present with an
-  empty composer, its oldest open turn closes with outcome `lost` (empty
-  text). Otherwise it is left alone.
+Settlement closes every open turn (`interrupted` for cancel, `lost` for
+exit), latches the terminal status, notifies waiters, and closes the
+recorder. It runs:
 
-Interactive windows never close on collection. Dead panes are swept after the
-existing grace period. Records of `idle`/`running` runs are exempt from
-retention pruning.
+- on `leo_cancel`: `kill-pane`, then settle as `canceled`;
+- on `session_end`, and on pane death noticed by the sweep: wait
+  `final_report_grace` (15 s) for a trailing `stop`, then settle as `closed`
+  if any turn ever finished, else `failed`;
+- on idle close: `idle` for `idle_close_after` (1 h) with the composer empty
+  at check time (a human draft defers it) → `kill-pane`, settle as `closed`;
+- on session timeout (`timeout_seconds`, whole session): `kill-pane`,
+  settle as `timeout`.
+
+Interactive panes never close on collection. Records of `idle`/`running`
+runs are exempt from retention pruning; dead panes are swept after the
+existing grace.
 
 ### Records, stream, CLI
 
-`Record` gains `mode`, `pane_id`, `generation`, `session_id`, `turns`,
-`steered`, `report_token`. The ndjson stream gains `{"type":"turn", …}`
-events written after the record update they describe. `leo dispatch watch`
-prints turns as they close and stays open through `idle`, exiting on a
-terminal status. `list`/`show` display mode, status, turns, steered.
+`Record` gains `mode`, `pane_id`, `session_id`, `turns`, `steered`. The
+ndjson stream uses the existing `{t, d, raw}` envelope with `d.type =
+"turn"` and a per-run sequence number, written after the record update it
+describes; `leo dispatch watch` renders those events and stays open through
+`idle`, exiting on a terminal status, and on start reconciles from the
+persisted turns so a crash between record and stream writes loses nothing
+visible. `list`/`show` display mode, status, turn count, steered.
 `leo_dispatch`'s reply names the window.
 
 ## Error handling
 
-- Interactive on a harness without `TurnHooks`, or codex trust unpinned:
+- Interactive on a harness without `TurnHooks`, or codex trust unverified:
   validation error at dispatch.
-- Readiness never reached (dialog, crash): `failed` with the probe's error;
-  pane kept under the usual grace.
-- Report with bad token, unknown id, stale generation, terminal run, or no
-  open turn: 4xx or ignored, logged.
-- Claude has no abort hook: an interrupted claude turn is closed by the stuck
-  sweep (`lost`) or the next `UserPromptSubmit`.
-- `composer busy`: send fails, nothing changes; the reply says a human has a
-  draft.
+- Readiness never reached: `failed` with the probe's error; pane kept under
+  the usual grace.
+- Report with unknown id, unknown `turn_id` on a close event and no open
+  turn, or a settled run: logged and ignored (200 to stop retries).
+- Claude has no abort hook: an interrupted claude turn shows as `stalled`
+  until the next submit opens a new turn (which closes the old one as
+  `lost`) or the user cancels.
+- `composer busy`, `no capacity`, `paste failed`: send returns the reason;
+  the run's status is unchanged.
 
 ## Testing
 
-- Adapter `TurnHooks` argv exact for codex and claude; launch produces
-  `new-window -P -F '#{pane_id}'` with the pane id persisted.
-- Report endpoint: token scoping; generation filtering; FIFO close and
-  `turn_id` match; duplicate and late reports ignored; terminal latch.
-- Injector `InjectInto`: composer-busy rejection without keystrokes; paste
-  argv; ack within timeout; no ack → `delivered: false`.
-- Waits: run id vs turn id; queued keeps pending; user turns do not hide an
-  orchestrator turn's outcome.
-- Concurrency: slots per orchestrator turn, released once; user turns exempt.
-- Lifecycle: cancel, session_end vs pane death with final-report grace, idle
-  close no-ops when generation/turn count moved, restart reattach and
-  finalize, stuck sweep.
-- e2e with a fake harness binary (prompt box, runs the hook command on each
-  input): dispatch → wait turn 1; send → wait turn 2; typed input → user turn;
-  daemon restart → reattach.
+- `TurnHooks` argv exact for codex and claude; launch produces
+  `new-window -P -F '#{pane_id}'`; record persisted before injection.
+- Report endpoint: `event_id` dedup, `harness_turn_id` and oldest-open
+  matching, ignored cases, terminal latch.
+- `InjectInto`: composer-busy and unknown-layout rejection with zero
+  keystrokes; paste argv; ack; no-ack leaves `delivered: false`; late stop
+  closes it.
+- Waits: run id snapshot vs turn id; queued pending; stalled reporting.
+- Concurrency: slot per orchestrator turn, released once; `no capacity`
+  rejects; user turns exempt.
+- Settlement: cancel, `session_end` and pane death with final-report grace,
+  idle close deferred by a draft, session timeout, daemon-start finalize.
+- e2e with a fake harness binary (prompt box, runs the hook command per
+  input): dispatch → wait; send → wait; typed input → user turn; kill pane →
+  closed.
 - Live before merge, from this session: codex interactive on
-  `codex-explorer` (wait, send, type in the pane), claude once for the inbox
-  path, hook trust mechanism confirmed, update prompt confirmed suppressed.
+  `codex-explorer` (wait, send, type in the pane, cancel); claude once; codex
+  queued-prompt `turn_id` behaviour; hook trust mechanism; update prompt
+  suppressed.
 
 ## Follow-ups
 
-Default to interactive once both contracts are proven; inbox push of turn
-results to idle Claude callers; dispatches page in the web UI; OpenCode when
-it exposes hooks.
+Default to interactive once both contracts are proven; inbox-socket sends
+for claude after verifying the hook fires; durable sessions if a real need
+appears; dispatches page in the web UI.
