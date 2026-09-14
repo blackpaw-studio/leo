@@ -409,6 +409,10 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		if hid == "" {
 			hid = str(p, "harness_turn_id")
 		}
+		if hid != "" && s.closedHarness[hid] {
+			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring submit for closed harness turn %s\n", id, hid)
+			return nil
+		}
 		if s.armedTurn != "" && d.now().Before(s.armedUntil) {
 			for i := range s.record.Turns {
 				if s.record.Turns[i].TurnID == s.armedTurn {

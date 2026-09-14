@@ -440,11 +440,12 @@ func TestInteractiveClosedHarnessAndNoRuntime(t *testing.T) {
 	_ = d.Report(s.ID, hook(t, "UserPromptSubmit", "a"))
 	_ = d.Report(s.ID, hook(t, "Stop", "a"))
 	_ = d.Report(s.ID, hook(t, "Stop", "a"))
-	// A late duplicate close must not be buffered for a future submit using a.
+	// A replayed submit for a closed harness turn must not open a new turn.
+	before, _ := d.Get(s.ID)
 	b, _ := json.Marshal(map[string]string{"hook_event_name": "UserPromptSubmit", "turn_id": "a"})
 	_ = d.Report(s.ID, HookReport{EventID: "new-submit", Payload: b})
 	rec, _ := d.Get(s.ID)
-	if rec.Turns[len(rec.Turns)-1].Outcome != "" {
-		t.Fatal("closed harness id applied to new turn")
+	if len(rec.Turns) != len(before.Turns) || rec.Turns[len(rec.Turns)-1].Outcome != TurnFinished {
+		t.Fatalf("replayed closed harness id changed turns: %+v", rec.Turns)
 	}
 }

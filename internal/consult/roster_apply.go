@@ -15,6 +15,7 @@ const (
 )
 
 type rosterSessionState struct {
+	sessionID                                                                    string
 	text                                                                         string
 	rosterMarked, statusChecked, needsStatus, statusMarked, statusSet, formatSet bool
 	clearFormat, clearRoster, clearStatus, clearStatusMarker, clearRosterMarker  bool
@@ -27,9 +28,9 @@ func (s rosterSessionState) clearing() bool {
 	return s.clearFormat || s.clearRoster || s.clearStatus || s.clearStatusMarker || s.clearRosterMarker
 }
 
-type rosterPane struct{ session, window, pane string }
+type rosterPane struct{ session, sessionID, window, pane string }
 type managedRosterState struct {
-	text                       string
+	sessionID, text            string
 	rosterMarked, statusMarked bool
 }
 
@@ -60,9 +61,9 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 		windowIDs[id] = window
 	}
 	v.mu.Unlock()
-	byPane, byWindow, liveSessions := map[string]string{}, map[string]string{}, map[string]bool{}
+	byPane, byWindow, liveSessions := map[string]string{}, map[string]string{}, map[string]string{}
 	for _, pane := range panes {
-		byPane[pane.pane], byWindow[pane.window], liveSessions[pane.session] = pane.session, pane.session, true
+		byPane[pane.pane], byWindow[pane.window], liveSessions[pane.session] = pane.session, pane.session, pane.sessionID
 	}
 	resolved := make(map[string][]Record)
 	for _, rec := range records {
@@ -87,8 +88,12 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 		v.rosters = make(map[string]rosterSessionState)
 	}
 	for session, found := range managed {
-		liveSessions[session] = true
+		liveSessions[session] = found.sessionID
 		state := v.rosters[session]
+		if state.sessionID != "" && state.sessionID != found.sessionID {
+			state = rosterSessionState{}
+		}
+		state.sessionID = found.sessionID
 		state.rosterMarked, state.statusMarked, state.text = found.rosterMarked, found.statusMarked, found.text
 		if _, ok := resolved[session]; !ok {
 			resolved[session] = nil
@@ -96,7 +101,7 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 		v.rosters[session] = state
 	}
 	for session := range v.rosters {
-		if !liveSessions[session] {
+		if _, ok := liveSessions[session]; !ok {
 			delete(v.rosters, session)
 			continue
 		}
@@ -106,6 +111,10 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 	}
 	for session, recs := range resolved {
 		state := v.rosters[session]
+		if sessionID := liveSessions[session]; state.sessionID != "" && state.sessionID != sessionID {
+			state = rosterSessionState{}
+		}
+		state.sessionID = liveSessions[session]
 		text := RenderRoster(recs, now)
 		if text == "" {
 			if state.managed() || state.clearing() {
@@ -118,37 +127,45 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 			}
 			continue
 		}
+		if state.clearing() {
+			state = v.clearRosterState(session, state)
+			if state.clearing() {
+				v.rosters[session] = state
+				continue
+			}
+			state.sessionID = liveSessions[session]
+		}
 		v.rosters[session] = v.applyRoster(session, text, state)
 	}
 }
 
 func (v *Viewer) rosterInventory() ([]rosterPane, error) {
-	out, err := v.output("list-panes", "-a", "-F", "#{session_name}\t#{window_id}\t#{pane_id}")
+	out, err := v.output("list-panes", "-a", "-F", "#{session_name}\t#{session_id}\t#{window_id}\t#{pane_id}")
 	if err != nil {
 		return nil, err
 	}
 	var panes []rosterPane
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\r\n"), "\n") {
 		parts := strings.Split(line, "\t")
-		if len(parts) == 3 && parts[0] != "" {
-			panes = append(panes, rosterPane{parts[0], parts[1], parts[2]})
+		if len(parts) == 4 && parts[0] != "" {
+			panes = append(panes, rosterPane{parts[0], parts[1], parts[2], parts[3]})
 		}
 	}
 	return panes, nil
 }
 
 func (v *Viewer) managedRosterSessions() (map[string]managedRosterState, error) {
-	out, err := v.output("list-sessions", "-F", "#{session_name}\t#{@leo_roster_owned}\t#{@leo_roster_status_owned}\t#{@leo_roster}")
+	out, err := v.output("list-sessions", "-F", "#{session_name}\t#{session_id}\t#{@leo_roster_owned}\t#{@leo_roster_status_owned}\t#{@leo_roster}")
 	if err != nil {
 		return nil, err
 	}
 	managed := make(map[string]managedRosterState)
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\r\n"), "\n") {
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) >= 3 && (parts[1] == "1" || parts[2] == "1") {
-			state := managedRosterState{rosterMarked: parts[1] == "1", statusMarked: parts[2] == "1"}
-			if len(parts) == 4 {
-				state.text = parts[3]
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) >= 4 && (parts[2] == "1" || parts[3] == "1") {
+			state := managedRosterState{sessionID: parts[1], rosterMarked: parts[2] == "1", statusMarked: parts[3] == "1"}
+			if len(parts) == 5 {
+				state.text = parts[4]
 			}
 			managed[parts[0]] = state
 		}

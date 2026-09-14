@@ -276,6 +276,28 @@ func TestInteractiveActiveTimeSequence(t *testing.T) {
 	}
 }
 
+func TestInteractiveReplaySubmitForClosedHarnessTurnDoesNotRestartActiveTime(t *testing.T) {
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(nil)
+	d.now = func() time.Time { return now }
+	s := &runState{record: Record{ID: "d-replay", Mode: ModeInteractive, Status: StatusRunning}, handle: nopHandle{}, done: make(chan struct{}), pendingCloses: map[string]pendingClose{}, closedHarness: map[string]bool{}}
+	d.mu.Lock()
+	d.runs[s.record.ID] = s
+	turn := d.openTurnLocked(s, TurnSourceUser, "", false)
+	turn.HarnessTurnID = "closed"
+	d.mu.Unlock()
+	_ = d.Report(s.record.ID, hook(t, "Stop", "closed"))
+	now = now.Add(10 * time.Second)
+	_ = d.Report(s.record.ID, hook(t, "UserPromptSubmit", "closed"))
+	now = now.Add(10 * time.Second)
+	if got := s.record.ActiveSeconds; got != 0 {
+		t.Fatalf("active seconds = %v, want 0", got)
+	}
+	if s.record.RunningSince != nil {
+		t.Fatalf("replayed submit restarted active interval: %+v", s.record)
+	}
+}
+
 func TestInteractiveAccountingReorderedRejectAndDefensiveSettlement(t *testing.T) {
 	t0 := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	tests := []struct {

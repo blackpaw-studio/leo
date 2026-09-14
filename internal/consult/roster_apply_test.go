@@ -3,7 +3,6 @@ package consult
 import (
 	"context"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 )
@@ -11,7 +10,7 @@ import (
 func TestViewerRosterAppliesChangesAndOwnershipAwareCleanup(t *testing.T) {
 	var calls [][]string
 	status := "1\n"
-	inventory := "leo-worker\t@7\t%8\n"
+	inventory := "leo-worker\t$1\t@7\t%8\n"
 	v := &Viewer{
 		TmuxPath: "tmux",
 		ExecCommand: func(name string, args ...string) *exec.Cmd {
@@ -20,10 +19,17 @@ func TestViewerRosterAppliesChangesAndOwnershipAwareCleanup(t *testing.T) {
 			case containsArg(args, "list-panes"):
 				return exec.Command("printf", "%s", inventory)
 			case containsArg(args, "list-sessions"):
-				return exec.Command("printf", "leo-worker\t\n")
+				return exec.Command("printf", "leo-worker\t$1\t\n")
 			case containsArg(args, "show-options"):
 				return exec.Command("printf", status)
 			default:
+				if containsArg(args, "set-option") && containsArg(args, "status") {
+					if containsArg(args, "-u") {
+						status = "1\n"
+					} else if containsArg(args, "2") {
+						status = "2\n"
+					}
+				}
 				return exec.Command("true")
 			}
 		},
@@ -57,10 +63,10 @@ func TestViewerRosterPreservesUserStatusAndUsesContextExecSeam(t *testing.T) {
 		ExecCommandContext: func(_ context.Context, name string, args ...string) *exec.Cmd {
 			calls = append(calls, append([]string{name}, args...))
 			if containsArg(args, "list-panes") {
-				return exec.Command("printf", "%s", "leo-worker\t@7\t%8\n")
+				return exec.Command("printf", "%s", "leo-worker\t$1\t@7\t%8\n")
 			}
 			if containsArg(args, "list-sessions") {
-				return exec.Command("printf", "leo-worker\t\n")
+				return exec.Command("printf", "leo-worker\t$1\t\n")
 			}
 			if containsArg(args, "show-options") {
 				return exec.Command("printf", "3\n")
@@ -131,6 +137,64 @@ func TestViewerRosterRetriesFailedStatusMutationAfterOwnershipMarker(t *testing.
 	}
 }
 
+func TestViewerRosterReinitializesAfterPartialCleanup(t *testing.T) {
+	var calls [][]string
+	failFormatUnset := true
+	v := rosterTestViewer(&calls, func(args []string) *exec.Cmd {
+		if containsArg(args, "-u") && containsArg(args, "status-format[1]") && failFormatUnset {
+			failFormatUnset = false
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	})
+	now := time.Now()
+	rec := Record{ID: "d-a", Kind: "dispatch", Status: StatusIdle, StartedAt: now, ViewerWindowID: "@7"}
+	v.UpdateRoster([]Record{rec}, now)
+	v.UpdateRoster(nil, now)
+	formatWrites := countRosterWrites(calls, "status-format[1]")
+	statusWrites := countRosterWrites(calls, "status")
+	v.UpdateRoster([]Record{rec}, now)
+	if got := countRosterWrites(calls, "status-format[1]"); got != formatWrites+1 {
+		t.Fatalf("format writes = %d, want %d; calls=%#v", got, formatWrites+1, calls)
+	}
+	if got := countRosterWrites(calls, "status"); got != statusWrites+1 {
+		t.Fatalf("status writes = %d, want %d; calls=%#v", got, statusWrites+1, calls)
+	}
+}
+
+func TestViewerRosterReinitializesWhenSessionIDChanges(t *testing.T) {
+	var calls [][]string
+	inventory := "leo-worker\t$1\t@7\t%8\n"
+	sessionID := "$1"
+	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		switch {
+		case containsArg(args, "list-panes"):
+			return exec.Command("printf", "%s", inventory)
+		case containsArg(args, "list-sessions"):
+			return exec.Command("printf", "leo-worker\t"+sessionID+"\t\t\t\n")
+		case containsArg(args, "show-options"):
+			return exec.Command("printf", "1\n")
+		default:
+			return exec.Command("true")
+		}
+	}, windowIDs: map[string]string{"d-a": "@7"}}
+	now := time.Now()
+	rec := Record{ID: "d-a", Kind: "dispatch", Status: StatusIdle, StartedAt: now, ViewerWindowID: "@7"}
+	v.UpdateRoster([]Record{rec}, now)
+	formatWrites := countRosterWrites(calls, "status-format[1]")
+	statusWrites := countRosterWrites(calls, "status")
+	rosterWrites := countRosterWrites(calls, "@leo_roster")
+	inventory = "leo-worker\t$2\t@7\t%8\n"
+	sessionID = "$2"
+	v.UpdateRoster([]Record{rec}, now)
+	for option, before := range map[string]int{"status-format[1]": formatWrites, "status": statusWrites, "@leo_roster": rosterWrites} {
+		if got := countRosterWrites(calls, option); got != before+1 {
+			t.Fatalf("%s writes = %d, want %d; calls=%#v", option, got, before+1, calls)
+		}
+	}
+}
+
 func TestViewerRosterRestartDiscoversTextAndCleansOwnedStatus(t *testing.T) {
 	var calls [][]string
 	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
@@ -139,7 +203,7 @@ func TestViewerRosterRestartDiscoversTextAndCleansOwnedStatus(t *testing.T) {
 		case containsArg(args, "list-panes"):
 			return exec.Command("printf", "")
 		case containsArg(args, "list-sessions"):
-			return exec.Command("printf", "%s", "leo-worker\t1\t1\told roster\n")
+			return exec.Command("printf", "%s", "leo-worker\t$1\t1\t1\told roster\n")
 		case containsArg(args, "show-options"):
 			return exec.Command("printf", "2\n")
 		default:
@@ -156,7 +220,7 @@ func TestViewerRosterRestartDiscoversTextAndCleansOwnedStatus(t *testing.T) {
 
 func TestViewerRosterRestartAfterFailedStatusCleanupRetainsOwnership(t *testing.T) {
 	var firstCalls [][]string
-	first := restartCleanupViewer(&firstCalls, "leo-worker\t1\t1\told\n", func(args []string) *exec.Cmd {
+	first := restartCleanupViewer(&firstCalls, "leo-worker\t$1\t1\t1\told\n", func(args []string) *exec.Cmd {
 		if containsArg(args, "-u") && containsArg(args, "status") {
 			return exec.Command("false")
 		}
@@ -168,7 +232,7 @@ func TestViewerRosterRestartAfterFailedStatusCleanupRetainsOwnership(t *testing.
 	}
 
 	var restartCalls [][]string
-	restarted := restartCleanupViewer(&restartCalls, "leo-worker\t\t1\t\n", func([]string) *exec.Cmd { return exec.Command("true") })
+	restarted := restartCleanupViewer(&restartCalls, "leo-worker\t$1\t\t1\t\n", func([]string) *exec.Cmd { return exec.Command("true") })
 	restarted.UpdateRoster(nil, time.Now())
 	if countRosterUnsets(restartCalls, "status") != 1 || countRosterUnsets(restartCalls, rosterStatusMarker) != 1 {
 		t.Fatalf("restart did not finish owned status cleanup: %#v", restartCalls)
@@ -177,7 +241,7 @@ func TestViewerRosterRestartAfterFailedStatusCleanupRetainsOwnership(t *testing.
 
 func TestViewerRosterRestartAfterFailedFormatCleanupRetainsOwnership(t *testing.T) {
 	var firstCalls [][]string
-	first := restartCleanupViewer(&firstCalls, "leo-worker\t1\t\told\n", func(args []string) *exec.Cmd {
+	first := restartCleanupViewer(&firstCalls, "leo-worker\t$1\t1\t\told\n", func(args []string) *exec.Cmd {
 		if containsArg(args, "-u") && containsArg(args, "status-format[1]") {
 			return exec.Command("false")
 		}
@@ -189,7 +253,7 @@ func TestViewerRosterRestartAfterFailedFormatCleanupRetainsOwnership(t *testing.
 	}
 
 	var restartCalls [][]string
-	restarted := restartCleanupViewer(&restartCalls, "leo-worker\t1\t\t\n", func([]string) *exec.Cmd { return exec.Command("true") })
+	restarted := restartCleanupViewer(&restartCalls, "leo-worker\t$1\t1\t\t\n", func([]string) *exec.Cmd { return exec.Command("true") })
 	restarted.UpdateRoster(nil, time.Now())
 	if countRosterUnsets(restartCalls, "status-format[1]") != 1 || countRosterUnsets(restartCalls, rosterMarker) != 1 {
 		t.Fatalf("restart did not finish owned roster cleanup: %#v", restartCalls)
@@ -249,9 +313,9 @@ func rosterTestViewer(calls *[][]string, action func([]string) *exec.Cmd) *Viewe
 		*calls = append(*calls, append([]string{name}, args...))
 		switch {
 		case containsArg(args, "list-panes"):
-			return exec.Command("printf", "%s", "leo-worker\t@7\t%8\n")
+			return exec.Command("printf", "%s", "leo-worker\t$1\t@7\t%8\n")
 		case containsArg(args, "list-sessions"):
-			return exec.Command("printf", "%s", "leo-worker\t\t\t\n")
+			return exec.Command("printf", "%s", "leo-worker\t$1\t\t\t\n")
 		case containsArg(args, "show-options"):
 			return exec.Command("printf", "1\n")
 		default:
@@ -263,10 +327,9 @@ func rosterTestViewer(calls *[][]string, action func([]string) *exec.Cmd) *Viewe
 func assertRosterCall(t *testing.T, calls [][]string, parts ...string) {
 	t.Helper()
 	for _, call := range calls {
-		joined := strings.Join(call, "\x00")
 		ok := true
 		for _, part := range parts {
-			if !strings.Contains(joined, part) {
+			if !containsArg(call, part) {
 				ok = false
 				break
 			}
