@@ -109,6 +109,18 @@ func TestAPIDispatchLifecycle(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "done") {
 		t.Fatalf("wait: %d %s", w.Code, w.Body.String())
 	}
+	var waited struct {
+		Data []struct {
+			ElapsedSeconds *float64        `json:"elapsed_seconds"`
+			Elapsed        json.RawMessage `json:"elapsed"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &waited); err != nil {
+		t.Fatalf("decode wait: %v", err)
+	}
+	if len(waited.Data) != 1 || waited.Data[0].ElapsedSeconds == nil || waited.Data[0].Elapsed != nil {
+		t.Fatalf("wait elapsed shape = %+v", waited.Data)
+	}
 	w = httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/dispatch/"+started.Data.ID, nil)
 	req.SetPathValue("id", started.Data.ID)

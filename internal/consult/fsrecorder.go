@@ -147,6 +147,9 @@ func (r *FileRecorder) prune(keep int) {
 
 	settled := make([]Record, 0, len(records))
 	for _, rec := range records {
+		if rec.ViewerWindowID != "" && !rec.EndedAt.IsZero() && now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
+			continue
+		}
 		if rec.Settled(now) {
 			settled = append(settled, rec)
 		}
@@ -265,6 +268,16 @@ func (h *fileHandle) SetText(text string) error {
 		return nil
 	}
 	h.rec.Text = text
+	return h.persist()
+}
+
+func (h *fileHandle) SetViewerWindowID(windowID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
+	h.rec.ViewerWindowID = windowID
 	return h.persist()
 }
 

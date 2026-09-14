@@ -118,6 +118,7 @@ type Handle interface {
 	io.Writer
 	SetStatus(Status) error
 	SetText(string) error
+	SetViewerWindowID(string) error
 	Close(Status, error) error
 }
 
@@ -129,7 +130,8 @@ func (nopRecorder) Open(Record) (Handle, error) { return nopHandle{}, nil }
 
 type nopHandle struct{}
 
-func (nopHandle) Write(p []byte) (int, error) { return len(p), nil }
-func (nopHandle) SetStatus(Status) error      { return nil }
-func (nopHandle) SetText(string) error        { return nil }
-func (nopHandle) Close(Status, error) error   { return nil }
+func (nopHandle) Write(p []byte) (int, error)    { return len(p), nil }
+func (nopHandle) SetStatus(Status) error         { return nil }
+func (nopHandle) SetText(string) error           { return nil }
+func (nopHandle) SetViewerWindowID(string) error { return nil }
+func (nopHandle) Close(Status, error) error      { return nil }

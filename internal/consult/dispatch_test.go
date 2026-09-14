@@ -35,6 +35,29 @@ func TestStartReturnsBeforeRunExits(t *testing.T) {
 	}
 }
 
+func TestDispatchPersistsViewerWindowIDAfterCompletion(t *testing.T) {
+	stateDir := t.TempDir()
+	recorder := NewFileRecorder(stateDir)
+	d := NewDispatcherWithOnStart(recorder, context.Background(), func(Record) string { return "@42" })
+	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
+	}
+	started, err := d.Start(context.Background(), testConfig(), dispatchRequest(t))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if entries := d.Wait(context.Background(), []string{started.ID}, time.Second); len(entries) != 1 || entries[0].Status != StatusDone {
+		t.Fatalf("Wait = %+v", entries)
+	}
+	rec, err := LoadOne(stateDir, started.ID)
+	if err != nil {
+		t.Fatalf("LoadOne: %v", err)
+	}
+	if rec.ViewerWindowID != "@42" {
+		t.Fatalf("ViewerWindowID = %q, want @42", rec.ViewerWindowID)
+	}
+}
+
 func TestWaitCollectsDoneDispatch(t *testing.T) {
 	var collected []Record
 	d := NewDispatcherWithOnStart(nil, context.Background(), nil, func(rec Record) {

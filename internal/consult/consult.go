@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -71,6 +72,45 @@ type Entry struct {
 	Elapsed time.Duration `json:"elapsed"`
 	Text    string        `json:"text,omitempty"`
 	Err     string        `json:"error,omitempty"`
+}
+
+// MarshalJSON exposes elapsed time in seconds for API clients while retaining
+// time.Duration internally for scheduling and display.
+func (e Entry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ID             string  `json:"id"`
+		Status         Status  `json:"status"`
+		ElapsedSeconds float64 `json:"elapsed_seconds"`
+		Text           string  `json:"text,omitempty"`
+		Err            string  `json:"error,omitempty"`
+	}{
+		ID:             e.ID,
+		Status:         e.Status,
+		ElapsedSeconds: e.Elapsed.Seconds(),
+		Text:           e.Text,
+		Err:            e.Err,
+	})
+}
+
+// UnmarshalJSON accepts the API's seconds representation and restores the
+// duration used by CLI and MCP clients.
+func (e *Entry) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID             string  `json:"id"`
+		Status         Status  `json:"status"`
+		ElapsedSeconds float64 `json:"elapsed_seconds"`
+		Text           string  `json:"text"`
+		Err            string  `json:"error"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	e.ID = wire.ID
+	e.Status = wire.Status
+	e.Elapsed = time.Duration(wire.ElapsedSeconds * float64(time.Second))
+	e.Text = wire.Text
+	e.Err = wire.Err
+	return nil
 }
 
 // ValidationError reports a request/configuration problem that should be
@@ -252,10 +292,8 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 			state.record.ViewerWindowID = windowID
 			rec = state.record
 			d.mu.Unlock()
-			if recorder, ok := d.recorder.(*FileRecorder); ok {
-				if err := writeRecord(recorder.dir, rec); err != nil {
-					fmt.Fprintf(os.Stderr, "dispatch %s: recording viewer: %v\n", rec.ID, err)
-				}
+			if err := handle.SetViewerWindowID(windowID); err != nil {
+				fmt.Fprintf(os.Stderr, "dispatch %s: recording viewer: %v\n", rec.ID, err)
 			}
 		}
 	}

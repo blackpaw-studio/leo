@@ -196,6 +196,22 @@ func TestViewerClosesDoneDispatchOnCollection(t *testing.T) {
 	}
 }
 
+func TestViewerCloseUsesPersistedWindowIDAfterRestart(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{
+		TmuxPath: "tmux",
+		ExecCommand: func(name string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{name}, args...))
+			return exec.Command("true")
+		},
+	}
+
+	v.Close(Record{ID: "d-done", Kind: "dispatch", Status: StatusDone, ViewerWindowID: "@42"})
+	if !reflect.DeepEqual(calls, [][]string{{"tmux", "-L", "leo", "kill-window", "-t", "@42"}}) {
+		t.Fatalf("tmux calls = %#v", calls)
+	}
+}
+
 func TestViewerLeavesFailedDispatchOpen(t *testing.T) {
 	called := false
 	v := &Viewer{

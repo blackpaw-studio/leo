@@ -143,6 +143,16 @@ func (v *Viewer) Close(rec Record) {
 		return
 	}
 	v.defaults()
+	if rec.ViewerWindowID != "" {
+		v.mu.Lock()
+		if v.windowIDs == nil {
+			v.windowIDs = make(map[string]string)
+		}
+		if v.windowIDs[rec.ID] == "" {
+			v.windowIDs[rec.ID] = rec.ViewerWindowID
+		}
+		v.mu.Unlock()
+	}
 	v.kill(rec.ID)
 }
 
