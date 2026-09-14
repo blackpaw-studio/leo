@@ -97,14 +97,28 @@ agent API token from its environment. Delivery is bounded to
 dedups on `event_id`, answering duplicates and reports for settled runs with
 200 so retries stop.
 
-Codex hook delivery: hooks in the session-flags layer via `-c` overrides,
-with trust established by **one** mechanism chosen during implementation and
-verified live, in order of preference: session-layer hooks trusted
-implicitly; a trust entry for leo's hook hash in codex's hook state;
-`--dangerously-bypass-hook-trust` only when leo has confirmed no other hook
-sources are discovered for that home and cwd. Only the chosen mechanism
-ships; if none works, interactive on codex is a validation error saying why.
-Claude: entries merged into the existing `--settings` JSON.
+Codex hook delivery (verified live on 0.153.4): per-launch `-c hooks.*`
+overrides are accepted but inert, and `--dangerously-bypass-hook-trust` only
+affects home-file hooks, so hooks must come from `$CODEX_HOME/hooks.json`
+with a trust entry in `$CODEX_HOME/config.toml`:
+
+```toml
+[hooks.state."<abs path to hooks.json>:<event>:<group>:<index>"]
+trusted_hash = "sha256:<hash>"
+```
+
+Leo therefore installs its four hook entries into the user's `hooks.json`
+(merged idempotently with existing entries, never removing others) and
+writes their trust entries, in the same prelaunch step that already writes
+codex's workspace trust. The hook command is `leo dispatch report`, which
+exits 0 immediately unless `LEO_DISPATCH_ID` and `LEO_CONFIG` are set in its
+environment; interactive launches set them, so ordinary codex sessions run a
+no-op. Every codex launch also passes `-c check_for_update_on_startup=false`.
+If the user's `hooks.json` has other untrusted hooks, codex will show its
+review dialog; prelaunch detects that and fails the dispatch with a message
+naming the untrusted hooks.
+Claude: entries merged into the existing `--settings` JSON, with the same
+env gate.
 
 ### Turns
 
