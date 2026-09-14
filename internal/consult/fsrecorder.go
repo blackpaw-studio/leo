@@ -184,6 +184,7 @@ type fileHandle struct {
 	stream   *os.File
 	writeErr error
 	closed   bool
+	seq      uint64
 }
 
 // Write frames the harness's raw output into timestamped lines. It never
@@ -259,6 +260,40 @@ func (h *fileHandle) SetStatus(s Status) error {
 		h.rec.EndedAt = h.now()
 	}
 	return h.persist()
+}
+
+// SetRecord persists interactive state before its corresponding stream event.
+func (h *fileHandle) SetRecord(rec Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
+	h.rec = rec
+	return h.persist()
+}
+
+func (h *fileHandle) AppendEvent(kind string, data any) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
+	h.seq++
+	d, err := json.Marshal(struct {
+		Type string `json:"type"`
+		Seq  uint64 `json:"seq"`
+		Data any    `json:"data"`
+	}{kind, h.seq, data})
+	if err != nil {
+		return err
+	}
+	ev, err := json.Marshal(streamEvent{T: h.offset(), D: d})
+	if err != nil {
+		return err
+	}
+	_, err = h.stream.Write(append(ev, '\n'))
+	return err
 }
 
 func (h *fileHandle) SetText(text string) error {
