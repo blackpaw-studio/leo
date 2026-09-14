@@ -117,7 +117,7 @@ func TestPrimaryPaneDeathRestartsWithLiveSubagent(t *testing.T) {
 	if !containsTmuxArgvPrefix(lines, "[-L][leo][new-session][-d][-P][-F][#{pane_id}][-s][leo-primary]") {
 		t.Fatalf("new-session did not request its primary pane id; tmux argv:\n%s", strings.Join(lines, "\n"))
 	}
-	if !containsTmuxArgv(lines, "[-L][leo][set-option][-t][=leo-primary][@leo_primary_pane][%1]") {
+	if !containsTmuxArgv(lines, "[-L][leo][set-option][-t][=leo-primary:][@leo_primary_pane][%1]") {
 		t.Fatalf("new primary pane was not persisted; tmux argv:\n%s", strings.Join(lines, "\n"))
 	}
 }
@@ -150,9 +150,9 @@ func TestPrimaryPaneAdoptionAndRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(lines)), "\n")
-	if !containsTmuxArgv(got, "[-L][leo][show-options][-t][=leo-old][-v][@leo_primary_pane]") ||
+	if !containsTmuxArgv(got, "[-L][leo][show-options][-t][=leo-old:][-v][@leo_primary_pane]") ||
 		!containsTmuxArgv(got, "[-L][leo][list-panes][-t][=leo-old:][-F][#{pane_id}]") ||
-		!containsTmuxArgv(got, "[-L][leo][set-option][-t][=leo-old][@leo_primary_pane][%9]") ||
+		!containsTmuxArgv(got, "[-L][leo][set-option][-t][=leo-old:][@leo_primary_pane][%9]") ||
 		!containsTmuxArgv(got, "[-L][leo][display-message][-p][-t][%9][#{pane_dead}]") ||
 		!containsTmuxArgv(got, "[-L][leo][has-session][-t][=leo-new]") {
 		t.Fatalf("legacy adoption did not persist and follow the primary pane; tmux argv:\n%s", lines)

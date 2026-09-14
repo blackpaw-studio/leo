@@ -1265,7 +1265,7 @@ const tmuxPrimaryPaneOption = "@leo_primary_pane"
 // before that metadata existed are adopted once by resolving their original
 // pane and persisting the result under the same option.
 func tmuxPrimaryPane(tmuxPath, sessionName string) (string, error) {
-	out, err := exec.Command(tmuxPath, tmux.Args("show-options", "-t", tmux.Target(sessionName), "-v", tmuxPrimaryPaneOption)...).Output()
+	out, err := exec.Command(tmuxPath, tmux.Args("show-options", "-t", tmux.Target(sessionName)+":", "-v", tmuxPrimaryPaneOption)...).Output()
 	if err == nil {
 		if pane := strings.TrimSpace(string(out)); pane != "" {
 			return pane, nil
@@ -1286,7 +1286,7 @@ func setTmuxPrimaryPane(tmuxPath, sessionName, pane string) error {
 	if _, err := tmux.LowestPaneID(pane + "\n"); err != nil {
 		return fmt.Errorf("invalid primary pane %q: %w", pane, err)
 	}
-	if err := exec.Command(tmuxPath, tmux.Args("set-option", "-t", tmux.Target(sessionName), tmuxPrimaryPaneOption, pane)...).Run(); err != nil {
+	if err := exec.Command(tmuxPath, tmux.Args("set-option", "-t", tmux.Target(sessionName)+":", tmuxPrimaryPaneOption, pane)...).Run(); err != nil {
 		return fmt.Errorf("set primary pane: %w", err)
 	}
 	return nil
