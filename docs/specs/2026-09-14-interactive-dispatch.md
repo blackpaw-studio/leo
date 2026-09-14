@@ -47,17 +47,26 @@ tmux new-window -d -P -F '#{window_id}' -t <session> -n <label>·<hex4> -c <cwd>
 The window id is persisted on the record as today. The launch is the only
 place harness argv is assembled; it reuses the adapters' `Args`/`Env`.
 
-Two per-launch additions to the harness argv, each behind a new adapter
-method `TurnHooks(reportCmd []string) (args []string, err error)`:
+Per-launch hook additions to the harness argv, behind a new adapter method
+`TurnHooks(reportCmd []string) (args []string, err error)`. Four events, all
+pointing at the same report command, which forwards the payload verbatim:
 
-- codex: a `Stop` hook in the session-flags config layer pointing at the
-  report command, with hook trust satisfied for that launch without touching
-  the user's `hooks.json` or trust state. The exact override key and trust
-  mechanism are verified live before merge (codex ≥ 0.153, `hooks` feature
-  stable).
-- claude: a `hooks.Stop` entry merged into the existing `--settings` JSON.
+| Event | codex | claude | leo uses it for |
+|---|---|---|---|
+| turn finished | `stop` | `Stop` | turn text, `running → done` |
+| prompt submitted in the pane | `user_prompt_submit` | `UserPromptSubmit` | a `user`-sourced turn, `done → running` |
+| session exited | `session_end` | `SessionEnd` | `closed` |
+| turn aborted by the user | `interrupt` | none | turn ends with no text, `running → done` |
 
-`reportCmd` is `leo --config <path> dispatch report <id>`.
+- codex: hooks in the session-flags config layer, with hook trust satisfied
+  for that launch without touching the user's `hooks.json` or trust state.
+  The exact override key and trust mechanism are verified live before merge
+  (codex ≥ 0.153, `hooks` feature stable).
+- claude: entries merged into the existing `--settings` JSON.
+
+`reportCmd` is `leo --config <path> dispatch report <id>`; it reads the hook
+payload from stdin, adds nothing, and posts it. The daemon switches on
+`hook_event_name`.
 
 ### Opening prompt
 
@@ -74,12 +83,20 @@ A run is a sequence of turns. Each injected message (opening prompt,
 orchestrator follow-up, or a human typing in the pane) starts a turn; each
 harness `Stop` event ends one.
 
-`leo dispatch report <id>` reads the hook payload from stdin and posts it to
-`POST /api/dispatch/{id}/report {session_id, last_assistant_message, turn_id,
-cwd}`. The daemon records the session id, appends a turn
-`{n, ended_at, text, source}` to the record, sets `text` to that turn's text,
-and moves status `running → done`. Source is `orchestrator` when the turn was
-started by a leo injection and `user` otherwise.
+`POST /api/dispatch/{id}/report` takes the raw hook payload. By event:
+
+- prompt submitted: if no orchestrator turn is pending, open a turn with
+  `source: user` and set `running`. (An orchestrator injection also triggers
+  this event; the pending orchestrator turn absorbs it.)
+- turn finished: record `session_id`, close the open turn with
+  `{n, ended_at, text: last_assistant_message, source}`, set `text`, move
+  `running → done`.
+- turn aborted: close the open turn with empty text and `interrupted: true`,
+  move `running → done`; `text` is unchanged.
+- session exited: move to `closed` (or `failed` if no turn ever completed).
+
+Every turn ends with exactly one of finished or aborted, so a wait never
+outlives a turn the harness has given up on.
 
 Status meanings in interactive mode:
 
@@ -124,7 +141,8 @@ session holds no slot.
 Interactive windows never close on collection. A session closes when:
 
 - `leo_cancel` is called (TUI killed, status `canceled`);
-- the user exits the TUI (pane dead → `closed`);
+- the user exits the TUI (`session_end` hook → `closed`; a dead pane without
+  the hook is the fallback and means the same);
 - it has been `done` with no new turn for `idle_close_after` (default 1h),
   after which the daemon kills the TUI and marks it `closed`.
 
@@ -145,8 +163,11 @@ orchestrator can tell the user where to look.
   dispatch.
 - Readiness probe never sees the prompt box (dialog, crash): run `failed`
   with the injector's error; window kept for post-mortem under the usual grace.
-- `Stop` arrives for an unknown or non-running id: logged and ignored (a user
-  turn after `closed` cannot happen; a duplicate report is a no-op).
+- A report for an unknown id, or a turn-finished report with no open turn:
+  logged and ignored; a duplicate report is a no-op.
+- claude has no abort hook: an interrupted claude turn is closed by the next
+  `UserPromptSubmit` (as a new turn) or by pane death. `leo_wait`'s per-call
+  ceiling bounds the orchestrator meanwhile.
 - Report command cannot reach the daemon: the hook exits non-zero; codex and
   claude both continue the session, so the turn is "lost" to leo. The daemon
   also treats pane death as terminal, so nothing hangs forever. `leo_wait`'s
