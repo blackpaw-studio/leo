@@ -92,13 +92,23 @@ func TestInjectIntoUsesNamedBufferAndConfirmsMultilineCollapsedPaste(t *testing.
 		}
 		if slices.Contains(call, "paste-buffer") {
 			i := slices.Index(call, "paste-buffer")
-			if len(call) < i+5 || call[i+1] != "-b" || call[i+2] != buffer || !slices.Contains(call, "-d") {
+			want := []string{"paste-buffer", "-b", buffer, "-d", "-p", "-t", "%1"}
+			if !slices.Equal(call[i:], want) {
 				t.Fatalf("paste-buffer call = %#v, buffer = %q", call, buffer)
 			}
 		}
 	}
 	if buffer == "" {
 		t.Fatal("no named buffer")
+	}
+}
+
+func TestComposerPasteConfirmedRecognizesCodexPastedContent(t *testing.T) {
+	if !composerPasteConfirmed("› [Pasted Content 2611 chars]", "first line") {
+		t.Fatal("Codex pasted-content placeholder was not confirmed")
+	}
+	if composerPasteConfirmed("›", "first line") {
+		t.Fatal("empty Codex composer was confirmed")
 	}
 }
 

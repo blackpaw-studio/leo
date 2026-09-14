@@ -70,7 +70,7 @@ func InjectIntoWith(ctx context.Context, tmuxPath, paneID string, classify Compo
 			_ = runInjectCommand(ctx, tmuxPath, command, Args("delete-buffer", "-b", buffer)...)
 		}
 	}()
-	if err := runInjectCommand(ctx, tmuxPath, command, Args("paste-buffer", "-b", buffer, "-d", "-t", paneID)...); err != nil {
+	if err := runInjectCommand(ctx, tmuxPath, command, Args("paste-buffer", "-b", buffer, "-d", "-p", "-t", paneID)...); err != nil {
 		return fmt.Errorf("paste buffer: %w", err)
 	}
 	bufferDeleted = true
@@ -137,7 +137,7 @@ func composerLinesContainPaste(lines []string, needle string) bool {
 			content = strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(line, " \t"), "❯"))
 			content = strings.TrimSpace(strings.TrimPrefix(content, "›"))
 		}
-		if strings.Contains(content, "[Pasted text") || strings.HasPrefix(content, needle) {
+		if strings.Contains(content, "[Pasted text") || strings.Contains(content, "[Pasted Content") || strings.HasPrefix(content, needle) {
 			return true
 		}
 	}
