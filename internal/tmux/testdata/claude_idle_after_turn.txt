@@ -1,0 +1,24 @@
+
+     Live activity: http://localhost:37777
+     How it works: `/how-it-works`
+
+     This message disappears once the first observation lands.
+
+     View Observations Live @ http://localhost:37777
+
+❯ Reply with exactly the word DELTA and nothing else.
+
+⏺ DELTA
+
+✻ Sautéed for 1s · done 2:02 PM
+
+───────────────────────────────────────────────────────────────── live-claude5 ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  [Haiku 4.5] | 🧠 default | 🌳 ⎇ no git
+  Session: 19.0% | ⏱️ 1hr 57m | Weekly: 81.0% | ⏱️ 18hr 57m
+  /private/t/leotest-idisp | 𖠰 no git | (no PR) | Ctx Used: 25.0%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 6 agents
+          You've used 81% of your weekly limit · resets 9am (America/New_York)
+                                                                           /rc
+

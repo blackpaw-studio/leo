@@ -36,7 +36,7 @@ type ComposerClassifier func(capture string) ComposerState
 var (
 	composerDialogPattern = regexp.MustCompile(`(?i)\b(trust|permission|update|hook review|approve|allow|deny)\b`)
 	composerBusyPattern   = regexp.MustCompile(`(?i)\b(working|thinking|generating|running)\b|esc\s+(?:to\s+)?interrupt`)
-	claudeRulePattern     = regexp.MustCompile(`^─{3,}`)
+	claudeRulePattern     = regexp.MustCompile(`^─+`)
 )
 
 // CodexComposerClassifier identifies Codex's › composer. Codex renders its
@@ -55,7 +55,7 @@ func ClaudeComposerClassifier(capture string) ComposerState {
 	}
 
 	lines := strings.Split(capture, "\n")
-	top, bottom, ok := claudeComposerBox(lines)
+	top, composerLine, bottom, ok := claudeComposerBox(lines)
 	if !ok {
 		if hasBusyIndicator(capture) {
 			return ComposerBusy
@@ -71,12 +71,12 @@ func ClaudeComposerClassifier(capture string) ComposerState {
 		}
 	}
 
-	composer := strings.TrimLeft(lines[top+1], " \t")
+	composer := strings.TrimLeft(lines[composerLine], " \t")
 	content := strings.TrimSpace(strings.TrimPrefix(composer, "❯"))
 	if content != "" && !isClaudePlaceholder(content) {
 		return ComposerDraft
 	}
-	for _, line := range lines[top+2 : bottom] {
+	for _, line := range lines[composerLine+1 : bottom] {
 		if strings.TrimSpace(line) != "" {
 			return ComposerDraft
 		}
@@ -86,23 +86,25 @@ func ClaudeComposerClassifier(capture string) ComposerState {
 
 // claudeComposerBox finds the final ruled composer box. Its footer is outside
 // the box, so it must never influence composer classification.
-func claudeComposerBox(lines []string) (int, int, bool) {
+func claudeComposerBox(lines []string) (int, int, int, bool) {
 	for bottom := len(lines) - 1; bottom >= 0; bottom-- {
 		if !claudeRulePattern.MatchString(strings.TrimSpace(lines[bottom])) {
 			continue
 		}
-		for top := bottom - 2; top >= 0; top-- {
+		for top := bottom - 1; top >= 0; top-- {
 			if !claudeRulePattern.MatchString(strings.TrimSpace(lines[top])) {
 				continue
 			}
-			composer := strings.TrimLeft(lines[top+1], " \t")
-			if strings.HasPrefix(composer, "❯") {
-				return top, bottom, true
+			for composerLine := bottom - 1; composerLine > top; composerLine-- {
+				composer := strings.TrimLeft(lines[composerLine], " \t")
+				if strings.HasPrefix(composer, "❯") {
+					return top, composerLine, bottom, true
+				}
 			}
 			break
 		}
 	}
-	return 0, 0, false
+	return 0, 0, 0, false
 }
 
 func isClaudeDialog(capture string) bool {
@@ -111,15 +113,25 @@ func isClaudeDialog(capture string) bool {
 
 func isClaudeBusyLine(line string) bool {
 	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "✻ Worked") {
-		return false
+	if strings.HasPrefix(line, "✻") {
+		if strings.Contains(line, "· done") {
+			return false
+		}
+		return isClaudeInProgressLine(line)
 	}
-	if strings.HasPrefix(line, "✻") || strings.HasPrefix(line, "✽") ||
-		strings.HasPrefix(line, "✶") || strings.HasPrefix(line, "✳") ||
+	if strings.HasPrefix(line, "✽") || strings.HasPrefix(line, "✶") || strings.HasPrefix(line, "✳") ||
 		strings.HasPrefix(line, "✢") || strings.HasPrefix(line, "⠋") {
 		return true
 	}
 	return composerBusyPattern.MatchString(line)
+}
+
+func isClaudeInProgressLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+	return strings.HasSuffix(trimmed, "…") || strings.HasSuffix(trimmed, "...") ||
+		strings.Contains(lower, "esc to interrupt") || strings.Contains(lower, "(thinking)") ||
+		strings.ContainsAny(trimmed, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 }
 
 func classifyComposer(capture, marker string, placeholder func(string) bool) ComposerState {
@@ -168,7 +180,13 @@ func hasBusyIndicator(capture string) bool {
 		if strings.Contains(strings.ToLower(line), "esc to interrupt") {
 			return true
 		}
-		if strings.HasPrefix(line, "✻") || strings.HasPrefix(line, "✽") ||
+		if strings.HasPrefix(line, "✻") {
+			if isClaudeBusyLine(line) {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "✽") ||
 			strings.HasPrefix(line, "✶") || strings.HasPrefix(line, "✳") ||
 			strings.HasPrefix(line, "✢") {
 			return true

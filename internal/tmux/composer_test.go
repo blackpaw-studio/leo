@@ -1,6 +1,10 @@
 package tmux
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 // The Codex empty, multiline draft, and trust-dialog fixtures were captured
 // from Codex 0.153.4 in a throwaway tmux server. The remaining Codex fixtures
@@ -179,6 +183,57 @@ func TestComposerClassifier(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClaudeComposerClassifierIdleAfterTurnCapture(t *testing.T) {
+	t.Parallel()
+
+	capture, err := os.ReadFile("testdata/claude_idle_after_turn.txt")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		capture string
+		want    ComposerState
+	}{
+		{"raw", string(capture), ComposerEmpty},
+		{
+			"busy-summary",
+			strings.Replace(string(capture), "✻ Sautéed for 1s · done 2:02 PM", "✻ Cogitating… (esc to interrupt)", 1),
+			ComposerBusy,
+		},
+		{
+			"draft",
+			strings.Replace(string(capture), "❯ ", "❯ draft dispatch", 1),
+			ComposerDraft,
+		},
+		{
+			"without-blank-lines",
+			withoutBlankLines(string(capture)),
+			ComposerEmpty,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ClaudeComposerClassifier(tt.capture); got != tt.want {
+				t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func withoutBlankLines(capture string) string {
+	lines := strings.Split(capture, "\n")
+	nonBlank := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			nonBlank = append(nonBlank, line)
+		}
+	}
+	return strings.Join(nonBlank, "\n")
 }
 
 func TestComposerStateString(t *testing.T) {
