@@ -343,6 +343,33 @@ func TestFileRecorderPruneKeepsPendingNotificationOnDisk(t *testing.T) {
 	}
 }
 
+func TestFileRecorderPruneKeepsClaimedNotificationOnDisk(t *testing.T) {
+	state := t.TempDir()
+	recorder := NewFileRecorder(state)
+	now := time.Now()
+	recorder.Now = func() time.Time { return now }
+	rec := Record{ID: "d-claimed", Status: StatusDone, EndedAt: now.Add(-2 * time.Hour), Notifications: map[string]Notification{"d-claimed": {Disposition: NotificationClaimed, ClaimedAt: now}}}
+	h, err := recorder.Open(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Close(StatusDone, nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < RecordsKept+1; i++ {
+		id := fmt.Sprintf("d-other-%02d", i)
+		h, err := recorder.Open(Record{ID: id, Status: StatusDone, EndedAt: now.Add(-time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = h.Close(StatusDone, nil)
+	}
+	recorder.prune(RecordsKept)
+	if _, err := LoadOne(state, "d-claimed"); err != nil {
+		t.Fatalf("claimed record pruned: %v", err)
+	}
+}
+
 func TestNopRecorderAcceptsEverything(t *testing.T) {
 	h, err := nopRecorder{}.Open(testRecord("c-nop"))
 	if err != nil {

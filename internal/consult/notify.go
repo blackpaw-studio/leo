@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	ErrNotificationNotSent   = errors.New("notification was not sent")
-	ErrNotificationAmbiguous = errors.New("notification delivery is ambiguous")
+	ErrNotificationNotSent    = errors.New("notification was not sent")
+	ErrNotificationAmbiguous  = errors.New("notification delivery is ambiguous")
+	ErrNotificationNotDurable = errors.New("notification record is not durable")
 )
 
 // NotificationDelivery separates passive readiness checks from submission.
@@ -85,8 +86,11 @@ func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status S
 	snapshot.ActiveSeconds = snapshot.LiveActiveSeconds(now)
 	snapshot.RunningSince = nil
 	n := Notification{Message: completionNotification(snapshot, key, status)}
-	if !s.record.Notify || s.record.CallerPaneID == "" || d.waits[key] > 0 {
+	if !s.record.Notify || s.record.CallerPaneID == "" || s.record.CallerHarness == "" || d.waits[key] > 0 {
 		n.Disposition, n.SuppressedAt = NotificationSuppressed, now
+		if s.record.Notify && s.record.CallerPaneID != "" && s.record.CallerHarness == "" {
+			fmt.Fprintf(os.Stderr, "dispatch %s: suppressing notification %s: unknown caller harness\n", s.record.ID, key)
+		}
 	} else {
 		n.Disposition, n.PendingAt = NotificationPending, now
 	}
@@ -100,12 +104,12 @@ func (d *Dispatcher) persistNotificationRecordLocked(s *runState) error {
 	if h, ok := s.handle.(recordHandle); ok {
 		return h.SetRecord(cloneRecord(s.record))
 	}
-	return s.handle.SetStatus(s.record.Status)
+	return ErrNotificationNotDurable
 }
 
 func (d *Dispatcher) restorePendingNotifications(rec Record) {
 	for _, n := range rec.Notifications {
-		if n.Disposition == NotificationPending {
+		if n.Disposition == NotificationPending || n.Disposition == NotificationClaimed {
 			d.mu.Lock()
 			if d.runs[rec.ID] == nil {
 				var handle Handle = nopHandle{}
@@ -162,7 +166,7 @@ func (d *Dispatcher) addRestartCandidates(rec *Record) {
 			return
 		}
 		n := Notification{Message: completionNotification(*rec, key, turnNotificationStatus(*rec, key))}
-		if !rec.Notify || rec.CallerPaneID == "" || d.waits[key] > 0 {
+		if !rec.Notify || rec.CallerPaneID == "" || rec.CallerHarness == "" || d.waits[key] > 0 {
 			n.Disposition, n.SuppressedAt = NotificationSuppressed, d.now()
 		} else {
 			n.Disposition, n.PendingAt = NotificationPending, d.now()
@@ -186,15 +190,6 @@ type pendingNotification struct {
 	key    string
 }
 
-func recordHasPendingNotification(rec Record) bool {
-	for _, n := range rec.Notifications {
-		if n.Disposition == NotificationPending {
-			return true
-		}
-	}
-	return false
-}
-
 func recordHasUnresolvedNotification(rec Record) bool {
 	for _, n := range rec.Notifications {
 		if n.Disposition == NotificationPending || n.Disposition == NotificationClaimed {
@@ -212,8 +207,12 @@ func (d *Dispatcher) SweepNotifications(ctx context.Context) {
 	var pending []pendingNotification
 	for _, s := range d.runs {
 		for key, n := range s.record.Notifications {
-			if n.Disposition == NotificationPending {
-				if !n.PendingAt.IsZero() && !d.now().Before(n.PendingAt.Add(time.Hour)) {
+			if n.Disposition == NotificationPending || n.Disposition == NotificationClaimed {
+				transitionAt := n.PendingAt
+				if n.Disposition == NotificationClaimed {
+					transitionAt = n.ClaimedAt
+				}
+				if !transitionAt.IsZero() && !d.now().Before(transitionAt.Add(time.Hour)) {
 					n.Disposition, n.FailedAt = NotificationFailed, d.now()
 					s.record.Notifications[key] = n
 					if err := d.persistNotificationRecordLocked(s); err != nil {
@@ -260,9 +259,10 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	n.Disposition, n.ClaimedAt = NotificationClaimed, d.now()
 	item.state.record.Notifications[item.key] = n
 	if err := d.persistNotificationRecordLocked(item.state); err != nil {
-		n.Disposition, n.ClaimedAt = NotificationPending, time.Time{}
+		n.Disposition, n.FailedAt = NotificationFailed, d.now()
 		item.state.record.Notifications[item.key] = n
-		fmt.Fprintf(os.Stderr, "dispatch %s: claiming notification: %v\n", item.state.record.ID, err)
+		_ = d.persistNotificationRecordLocked(item.state)
+		fmt.Fprintf(os.Stderr, "dispatch %s: notification %s not delivered: durable claim failed: %v\n", item.state.record.ID, item.key, err)
 		d.mu.Unlock()
 		return
 	}

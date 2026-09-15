@@ -28,6 +28,13 @@ type failingRecorder struct{ h failingRecordHandle }
 
 func (r failingRecorder) Open(Record) (Handle, error) { return r.h, nil }
 
+type durableTestHandle struct {
+	nopHandle
+	rec Record
+}
+
+func (h *durableTestHandle) SetRecord(rec Record) error { h.rec = rec; return nil }
+
 type failedRestartKillRuntime struct{}
 
 func (failedRestartKillRuntime) Launch(context.Context, LaunchRequest) (string, string, error) {
@@ -83,7 +90,7 @@ func TestSweepNotificationsPendingBusyThenClaimsBeforeDelivery(t *testing.T) {
 	d.SetNotificationDelivery(f)
 	now := time.Unix(20, 0)
 	d.now = func() time.Time { return now }
-	s := &runState{record: Record{ID: "d-x", Kind: "dispatch", Notify: true, CallerPaneID: "%1", Status: StatusDone, Notifications: map[string]Notification{"d-x": {Disposition: NotificationPending}}}, handle: nopHandle{}}
+	s := &runState{record: Record{ID: "d-x", Kind: "dispatch", Notify: true, CallerPaneID: "%1", Status: StatusDone, Notifications: map[string]Notification{"d-x": {Disposition: NotificationPending}}}, handle: &durableTestHandle{}}
 	d.runs["d-x"] = s
 	d.SweepNotifications(context.Background())
 	if len(f.calls) != 0 || s.record.Notifications["d-x"].Disposition != NotificationPending {
@@ -125,7 +132,7 @@ func TestSweepNotificationsClaimedAndAmbiguousFailuresNeverRetry(t *testing.T) {
 			d := NewDispatcher(nil)
 			f := &fakeNotificationDelivery{ready: true, err: tc.err}
 			d.SetNotificationDelivery(f)
-			s := &runState{record: Record{ID: "d-x", Notify: true, CallerPaneID: "%1", Status: StatusDone, Notifications: map[string]Notification{"d-x": {Disposition: tc.initial}}}, handle: nopHandle{}}
+			s := &runState{record: Record{ID: "d-x", Notify: true, CallerPaneID: "%1", Status: StatusDone, Notifications: map[string]Notification{"d-x": {Disposition: tc.initial}}}, handle: &durableTestHandle{}}
 			d.runs["d-x"] = s
 			d.SweepNotifications(context.Background())
 			d.SweepNotifications(context.Background())
@@ -147,7 +154,7 @@ func TestNotificationNoSendFailureReturnsPending(t *testing.T) {
 	d := NewDispatcher(nil)
 	f := &fakeNotificationDelivery{ready: true, err: ErrNotificationNotSent}
 	d.SetNotificationDelivery(f)
-	s := &runState{record: Record{ID: "d-x", Notify: true, CallerPaneID: "%1", Status: StatusDone, Notifications: map[string]Notification{"d-x": {Disposition: NotificationPending}}}, handle: nopHandle{}}
+	s := &runState{record: Record{ID: "d-x", Notify: true, CallerPaneID: "%1", Status: StatusDone, Notifications: map[string]Notification{"d-x": {Disposition: NotificationPending}}}, handle: &durableTestHandle{}}
 	d.runs["d-x"] = s
 	d.SweepNotifications(context.Background())
 	if !errors.Is(f.err, ErrNotificationNotSent) || s.record.Notifications["d-x"].Disposition != NotificationPending {
@@ -162,11 +169,11 @@ func TestNotificationClaimPersistsAfterClosedFileHandleBeforeDelivery(t *testing
 	stateDir := t.TempDir()
 	recorder := NewFileRecorder(stateDir)
 	d := NewDispatcher(recorder)
-	h, err := recorder.Open(Record{ID: "d-x", Notify: true, CallerPaneID: "%1", Status: StatusRunning})
+	h, err := recorder.Open(Record{ID: "d-x", Notify: true, CallerPaneID: "%1", CallerHarness: "codex", Status: StatusRunning})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &runState{record: Record{ID: "d-x", Kind: "dispatch", Notify: true, CallerPaneID: "%1", Status: StatusRunning}, handle: h, done: make(chan struct{})}
+	s := &runState{record: Record{ID: "d-x", Kind: "dispatch", Notify: true, CallerPaneID: "%1", CallerHarness: "codex", Status: StatusRunning}, handle: h, done: make(chan struct{})}
 	d.runs["d-x"] = s
 	d.complete(s, StatusDone, "done", nil)
 	d.SetNotificationDelivery(inspectDelivery{ready: true, deliver: func(_ Record, _ string) error {
@@ -199,15 +206,27 @@ func TestNotificationClaimPersistenceFailurePreventsIO(t *testing.T) {
 	if calls != 0 {
 		t.Fatal("delivery occurred after failed claim persistence")
 	}
-	if s.record.Notifications["d-x"].Disposition != NotificationPending {
-		t.Fatal("failed claim did not remain pending")
+	if s.record.Notifications["d-x"].Disposition != NotificationFailed {
+		t.Fatal("failed claim did not fail closed")
+	}
+}
+
+func TestNondurableHandleFailsClosedWithoutDelivery(t *testing.T) {
+	d := NewDispatcher(nil)
+	calls := 0
+	d.SetNotificationDelivery(inspectDelivery{ready: true, deliver: func(Record, string) error { calls++; return nil }})
+	s := &runState{record: Record{ID: "d-x", Status: StatusDone, CallerPaneID: "%1", Notifications: map[string]Notification{"d-x": {Disposition: NotificationPending}}}, handle: nopHandle{}}
+	d.runs["d-x"] = s
+	d.SweepNotifications(context.Background())
+	if calls != 0 || s.record.Notifications["d-x"].Disposition != NotificationFailed {
+		t.Fatalf("calls=%d notification=%+v", calls, s.record.Notifications["d-x"])
 	}
 }
 
 func TestHeadlessCancelCreatesCompletionCandidate(t *testing.T) {
 	d := NewDispatcher(nil)
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &runState{record: Record{ID: "d-x", Kind: "dispatch", Notify: true, CallerPaneID: "%1", Status: StatusRunning}, handle: nopHandle{}, cancel: cancel, done: make(chan struct{})}
+	s := &runState{record: Record{ID: "d-x", Kind: "dispatch", Notify: true, CallerPaneID: "%1", CallerHarness: "codex", Status: StatusRunning}, handle: nopHandle{}, cancel: cancel, done: make(chan struct{})}
 	d.runs["d-x"] = s
 	d.terminateState(s, StatusCanceled)
 	if s.record.Notifications["d-x"].Disposition != NotificationPending {
@@ -262,13 +281,37 @@ func TestPendingNotificationExpiresFailedAfterOneHour(t *testing.T) {
 	d := NewDispatcher(nil)
 	now := time.Unix(7200, 0)
 	d.now = func() time.Time { return now }
-	s := &runState{record: Record{ID: "d-old", Status: StatusDone, Notifications: map[string]Notification{"d-old": {Disposition: NotificationPending, PendingAt: now.Add(-time.Hour)}}}, handle: nopHandle{}}
+	s := &runState{record: Record{ID: "d-old", Status: StatusDone, Notifications: map[string]Notification{"d-old": {Disposition: NotificationPending, PendingAt: now.Add(-time.Hour)}}}, handle: &durableTestHandle{}}
 	d.runs["d-old"] = s
 	d.SetNotificationDelivery(&fakeNotificationDelivery{})
 	d.SweepNotifications(context.Background())
 	n := s.record.Notifications["d-old"]
 	if n.Disposition != NotificationFailed || !n.FailedAt.Equal(now) {
 		t.Fatalf("notification=%+v", n)
+	}
+}
+
+func TestAbandonedClaimExpiresFailedAfterOneHour(t *testing.T) {
+	d := NewDispatcher(nil)
+	now := time.Unix(7200, 0)
+	d.now = func() time.Time { return now }
+	h := &durableTestHandle{}
+	s := &runState{record: Record{ID: "d-claimed", Status: StatusDone, Notifications: map[string]Notification{"d-claimed": {Disposition: NotificationClaimed, ClaimedAt: now.Add(-time.Hour)}}}, handle: h}
+	d.runs["d-claimed"] = s
+	d.SweepNotifications(context.Background())
+	if got := s.record.Notifications["d-claimed"].Disposition; got != NotificationFailed {
+		t.Fatalf("disposition=%s", got)
+	}
+}
+
+func TestUnknownCallerHarnessSuppressesCandidate(t *testing.T) {
+	d := NewDispatcher(nil)
+	s := &runState{record: Record{ID: "d-x", Notify: true, CallerPaneID: "%1", Status: StatusDone}, handle: nopHandle{}}
+	d.mu.Lock()
+	d.completionCandidateLocked(s, "d-x", StatusDone)
+	d.mu.Unlock()
+	if got := s.record.Notifications["d-x"].Disposition; got != NotificationSuppressed {
+		t.Fatalf("disposition=%s", got)
 	}
 }
 
@@ -307,7 +350,7 @@ func TestMarkInterruptedFailedKillInstallsDurableHandleBeforeDelivery(t *testing
 	recorder := NewFileRecorder(state)
 	now := time.Unix(100, 0)
 	recorder.Now = func() time.Time { return now }
-	h, err := recorder.Open(Record{ID: "d-restart", Kind: "dispatch", Mode: ModeInteractive, Status: StatusRunning, PaneID: "%2", Notify: true, CallerPaneID: "%1", Turns: []Turn{{TurnID: "d-restart#1"}}})
+	h, err := recorder.Open(Record{ID: "d-restart", Kind: "dispatch", Mode: ModeInteractive, Status: StatusRunning, PaneID: "%2", Notify: true, CallerPaneID: "%1", CallerHarness: "codex", Turns: []Turn{{TurnID: "d-restart#1"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +377,7 @@ func TestPruneRetainsClaimedNotificationUntilNoSendRetryResolves(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	d.SetNotificationDelivery(inspectDelivery{ready: true, deliver: func(Record, string) error { close(started); <-release; return ErrNotificationNotSent }})
-	claimed := &runState{record: Record{ID: "d-claimed", Status: StatusDone, EndedAt: time.Unix(0, 0), CallerPaneID: "%1", Notifications: map[string]Notification{"d-claimed": {Disposition: NotificationPending}}}, handle: nopHandle{}}
+	claimed := &runState{record: Record{ID: "d-claimed", Status: StatusDone, EndedAt: time.Unix(0, 0), CallerPaneID: "%1", Notifications: map[string]Notification{"d-claimed": {Disposition: NotificationPending}}}, handle: &durableTestHandle{}}
 	d.runs["d-claimed"] = claimed
 	for i := 0; i < RecordsKept+1; i++ {
 		id := fmt.Sprintf("d-done-%d", i)

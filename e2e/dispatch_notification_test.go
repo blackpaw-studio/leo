@@ -42,7 +42,7 @@ func TestHeadlessDispatchCompletionNotification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d := consult.NewDispatcher(nil)
+			d := consult.NewDispatcher(consult.NewFileRecorder(filepath.Join(ws, "state")))
 			d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 				return exec.CommandContext(ctx, "sh", "-c", "sleep .2; printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"t\"}' '{\"type\":\"item.completed\",\"item\":{\"id\":\"i\",\"type\":\"agent_message\",\"text\":\"done\"}}' '{\"type\":\"turn.completed\",\"usage\":{}}'")
 			}
