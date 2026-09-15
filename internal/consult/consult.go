@@ -67,6 +67,7 @@ type Dispatcher struct {
 }
 
 type runState struct {
+	terminalMu     sync.Mutex
 	record         Record
 	handle         Handle
 	done           chan struct{}
@@ -337,22 +338,9 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		d.mu.Lock()
-		pgid, harnessPID := state.pgid, state.harnessPID
-		d.mu.Unlock()
-		// Setpgid requests a private group, but cancellation must use the
-		// kernel-confirmed group ID captured after Start. In particular, do
-		// not fall back to Process.Pid: it may be this process's own group.
-		gone, err := d.terminateOwnedProcessGroup(pgid, harnessPID, d.ProcessGroupGrace)
-		if errors.Is(err, errUnsafeProcessGroup) {
-			// The leader PID is still owned by this exec.Cmd even when process
-			// inventory cannot prove ownership of the cached numeric group.
-			err = cmd.Process.Kill()
-		}
-		d.mu.Lock()
-		state.pgidGone = gone
-		d.mu.Unlock()
-		return err
+		// Cancellation may signal only this run's cached private group and only
+		// before terminal publication clears that temporal authority.
+		return d.terminateRunProcessGroup(state)
 	}
 	cmd.WaitDelay = headlessProcessGrace
 
@@ -367,9 +355,10 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	if runErr == nil {
 		d.mu.Lock()
 		state.harnessPID = cmd.Process.Pid
+		state.pgid = cmd.Process.Pid
 		state.pgidGone = false
-		// Setpgid requests a private group, but record the kernel's answer
-		// rather than assuming the child PID is its group leader.
+		// Setpgid requests a private group whose leader is the child. Prefer the
+		// kernel's answer when the short-lived child remains queryable.
 		if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
 			state.pgid = pgid
 		}
@@ -386,7 +375,7 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		d.mu.Unlock()
 		pgidGone := true
 		if isolated {
-			pgidGone = d.waitOwnedProcessGroupGone(pgid, cmd.Process.Pid)
+			pgidGone = d.waitProcessGroupGone(pgid)
 		}
 		d.mu.Lock()
 		state.pgidGone = pgidGone
@@ -405,11 +394,12 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	if runCtx.Err() != nil {
 		// This is the single timeout/cancel publication boundary. Parsing may
 		// itself cross the deadline after exec.Cmd's watcher has returned.
+		state.terminalMu.Lock()
 		d.mu.Lock()
-		pgid, harnessPID, gone := state.pgid, state.harnessPID, state.pgidGone
+		pgid, gone := state.pgid, state.pgidGone
 		d.mu.Unlock()
 		if !gone && pgid != 0 {
-			gone, _ = d.terminateOwnedProcessGroup(pgid, harnessPID, d.ProcessGroupGrace)
+			gone, _ = d.terminateProcessGroup(pgid, d.ProcessGroupGrace)
 			d.mu.Lock()
 			state.pgidGone = gone
 			if gone {
@@ -421,7 +411,8 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			status = StatusCanceled
 		}
-		d.complete(state, status, "", fmt.Errorf("consult %s/%s: %w", h.Name(), model, runCtx.Err()))
+		d.completeWithTerminalLock(state, status, "", fmt.Errorf("consult %s/%s: %w", h.Name(), model, runCtx.Err()))
+		state.terminalMu.Unlock()
 		return
 	}
 	if runErr != nil {
@@ -749,13 +740,38 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 		d.mu.Unlock()
 		return rec
 	}
+	d.mu.Unlock()
+	state.terminalMu.Lock()
+	defer state.terminalMu.Unlock()
+	d.mu.Lock()
+	if state.record.Status.Terminal() {
+		rec := cloneRecord(state.record)
+		d.mu.Unlock()
+		return rec
+	}
+	pgid := state.pgid
+	gone := state.pgidGone
+	d.mu.Unlock()
+	if pgid > 1 {
+		gone, _ = d.terminateProcessGroup(pgid, d.ProcessGroupGrace)
+	}
+	d.mu.Lock()
+	state.pgidGone = gone
+	state.pgid = 0
+	d.mu.Unlock()
+	state.cancel()
+	d.mu.Lock()
+	if state.record.Status.Terminal() {
+		rec := cloneRecord(state.record)
+		d.mu.Unlock()
+		return rec
+	}
 	state.record.Status = status
 	state.record.EndedAt = d.now()
 	state.record.foldActive(state.record.EndedAt)
 	d.persistRecordLocked(state)
 	rec := cloneRecord(state.record)
 	d.mu.Unlock()
-	state.cancel()
 	return rec
 }
 

@@ -50,6 +50,14 @@ func (d *Dispatcher) persistRecordLocked(state *runState) {
 }
 
 func (d *Dispatcher) complete(state *runState, status Status, text string, cause error) {
+	state.terminalMu.Lock()
+	defer state.terminalMu.Unlock()
+	d.completeWithTerminalLock(state, status, text, cause)
+}
+
+// completeWithTerminalLock publishes terminal state while the caller owns
+// state.terminalMu, the same lock that guards temporal process-group authority.
+func (d *Dispatcher) completeWithTerminalLock(state *runState, status Status, text string, cause error) {
 	d.mu.Lock()
 	// A terminal record no longer owns its cached numeric process-group ID;
 	// retaining it would allow a later Cancel to signal a recycled group.

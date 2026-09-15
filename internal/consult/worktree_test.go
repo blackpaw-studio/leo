@@ -3,7 +3,6 @@ package consult
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -11,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -116,23 +114,7 @@ func TestWorktreeRejectsNonRepositoryAndUnbornHead(t *testing.T) {
 
 func TestWorktreeCancelReapsBeforeCleanRemoval(t *testing.T) {
 	repo, stateDir := gitTestRepo(t), t.TempDir()
-	d := NewDispatcher(NewFileRecorder(stateDir))
-	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "sh", "-c", "sleep 30")
-	}
-	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if name != "ps" || !slices.Equal(args, []string{"-o", "pid=,pgid=,ppid="}) {
-			t.Fatalf("process inventory argv = %q %q", name, args)
-		}
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		for _, state := range d.runs {
-			if state.pgid > 1 && syscall.Kill(-state.pgid, 0) == nil {
-				return exec.CommandContext(ctx, "printf", "%s %s %s\n", strconv.Itoa(state.harnessPID+1), strconv.Itoa(state.pgid), strconv.Itoa(state.harnessPID))
-			}
-		}
-		return exec.CommandContext(ctx, "printf", "")
-	}
+	d := worktreeDispatcher(t, stateDir, "sleep 30")
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
 	if err != nil {
 		t.Fatal(err)
@@ -219,10 +201,7 @@ func TestMarkInterruptedPreservesRemovedWorktrees(t *testing.T) {
 
 func TestCollectWaitsForIsolatedHeadlessReap(t *testing.T) {
 	repo, stateDir := gitTestRepo(t), t.TempDir()
-	d := NewDispatcher(NewFileRecorder(stateDir))
-	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "sh", "-c", "sleep 30")
-	}
+	d := worktreeDispatcher(t, stateDir, "sleep 0.2")
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +229,6 @@ func TestCollectWaitsForIsolatedHeadlessReap(t *testing.T) {
 		t.Fatal("Collect returned before process reap")
 	case <-time.After(50 * time.Millisecond):
 	}
-	state.cancel()
 	select {
 	case <-collected:
 	case <-time.After(5 * time.Second):
@@ -364,43 +342,67 @@ func TestProcessGroupSignalGuardRejectsUnsafeTargetsAndEscalatesValidGroup(t *te
 	}
 }
 
-func TestRecycledProcessGroupIsNotSignaled(t *testing.T) {
+func TestUnknownProcessInventoryRetainsWithoutSignal(t *testing.T) {
+	for name, command := range map[string][]string{
+		"malformed": {"printf", "malformed\\n"},
+		"failed":    {"false"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := NewDispatcher(nil)
+			var gotName string
+			var gotArgs []string
+			d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				gotName, gotArgs = name, append([]string(nil), args...)
+				return exec.CommandContext(ctx, command[0], command[1:]...)
+			}
+			original := signalProcessGroup
+			t.Cleanup(func() { signalProcessGroup = original })
+			signalProcessGroup = func(pid int, signal syscall.Signal) error {
+				t.Fatalf("unknown process group was signaled: pid=%d signal=%v", pid, signal)
+				return nil
+			}
+			if gone, err := d.terminateProcessGroup(4242, 0); gone || !errors.Is(err, errUnsafeProcessGroup) {
+				t.Fatalf("unknown group = gone %v, err %v", gone, err)
+			}
+			if gotName != "ps" || !slices.Equal(gotArgs, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
+				t.Fatalf("process inventory argv = %q %q", gotName, gotArgs)
+			}
+		})
+	}
+}
+
+func TestMatchingProcessInventoryWithMalformedTailRetainsWithoutSignal(t *testing.T) {
 	d := NewDispatcher(nil)
-	var gotName string
-	var gotArgs []string
-	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		gotName, gotArgs = name, append([]string(nil), args...)
-		// Group 4242 exists, but its only member has no ancestry through either
-		// the exited harness (1234) or this daemon.
-		return exec.CommandContext(ctx, "printf", "9000 4242 1\\n")
+	d.ProcessCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "printf", "1235 4242 1\nmalformed\n")
 	}
 	original := signalProcessGroup
 	t.Cleanup(func() { signalProcessGroup = original })
 	signalProcessGroup = func(pid int, signal syscall.Signal) error {
-		t.Fatalf("recycled process group was signaled: pid=%d signal=%v", pid, signal)
+		t.Fatalf("partially parsed process group was signaled: pid=%d signal=%v", pid, signal)
 		return nil
 	}
-	if gone, err := d.terminateOwnedProcessGroup(4242, 1234, 0); gone || !errors.Is(err, errUnsafeProcessGroup) {
-		t.Fatalf("recycled group = gone %v, err %v", gone, err)
-	}
-	if gotName != "ps" || !slices.Equal(gotArgs, []string{"-o", "pid=,pgid=,ppid="}) {
-		t.Fatalf("process inventory argv = %q %q", gotName, gotArgs)
+	if gone, err := d.terminateProcessGroup(4242, 0); gone || !errors.Is(err, errUnsafeProcessGroup) {
+		t.Fatalf("partial inventory = gone %v, err %v", gone, err)
 	}
 }
 
-func TestOwnedProcessGroupProductionGateEscalatesTERMThenKILL(t *testing.T) {
+func TestTemporalProcessGroupAuthorityEscalatesTERMThenKILL(t *testing.T) {
 	d := NewDispatcher(nil)
-	const pgid, harnessPID = 4242, 1234
+	const pgid = 4242
+	alive := true
 	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if name != "ps" || !slices.Equal(args, []string{"-o", "pid=,pgid=,ppid="}) {
+		if name != "ps" || !slices.Equal(args, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
 			t.Fatalf("process inventory argv = %q %q", name, args)
 		}
-		return exec.CommandContext(ctx, "printf", "1235 4242 1234\n")
+		if alive {
+			return exec.CommandContext(ctx, "printf", "1235 4242 1\n")
+		}
+		return exec.CommandContext(ctx, "printf", "")
 	}
 	original := signalProcessGroup
 	t.Cleanup(func() { signalProcessGroup = original })
 	var signals []syscall.Signal
-	alive := true
 	signalProcessGroup = func(pid int, signal syscall.Signal) error {
 		if pid != -pgid {
 			t.Fatalf("signal pid = %d", pid)
@@ -414,41 +416,110 @@ func TestOwnedProcessGroupProductionGateEscalatesTERMThenKILL(t *testing.T) {
 		}
 		return nil
 	}
-	if gone, err := d.terminateOwnedProcessGroup(pgid, harnessPID, 0); err != nil || !gone {
+	if gone, err := d.terminateProcessGroup(pgid, 0); err != nil || !gone {
 		t.Fatalf("owned group = gone %v, err %v", gone, err)
 	}
-	want := []syscall.Signal{syscall.SIGTERM, 0, 0, syscall.SIGKILL, 0, 0}
+	want := []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}
 	if !slices.Equal(signals, want) {
 		t.Fatalf("signals = %v, want %v", signals, want)
+	}
+}
+
+func TestProcessInventoryFailureDuringGraceDoesNotKILL(t *testing.T) {
+	d := NewDispatcher(nil)
+	probes := 0
+	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		probes++
+		if probes == 1 {
+			return exec.CommandContext(ctx, "printf", "1235 4242 1\n")
+		}
+		return exec.CommandContext(ctx, "false")
+	}
+	original := signalProcessGroup
+	t.Cleanup(func() { signalProcessGroup = original })
+	var signals []syscall.Signal
+	signalProcessGroup = func(_ int, signal syscall.Signal) error {
+		signals = append(signals, signal)
+		return nil
+	}
+	if gone, err := d.terminateProcessGroup(4242, time.Second); gone || !errors.Is(err, errUnsafeProcessGroup) {
+		t.Fatalf("unknown group = gone %v, err %v", gone, err)
+	}
+	if !slices.Equal(signals, []syscall.Signal{syscall.SIGTERM}) {
+		t.Fatalf("signals = %v, want TERM only", signals)
+	}
+}
+
+func TestTerminalPublicationSerializesProcessGroupAuthority(t *testing.T) {
+	d := NewDispatcher(nil)
+	state := &runState{record: Record{ID: "d-temporal", Status: StatusRunning}, handle: nopHandle{}, pgid: 4242}
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	probes := 0
+	d.ProcessCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		probes++
+		close(probeStarted)
+		<-releaseProbe
+		return exec.CommandContext(ctx, "printf", "")
+	}
+	terminated := make(chan struct{})
+	go func() {
+		_ = d.terminateRunProcessGroup(state)
+		close(terminated)
+	}()
+	<-probeStarted
+	completed := make(chan struct{})
+	go func() {
+		d.complete(state, StatusCanceled, "", context.Canceled)
+		close(completed)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	d.mu.Lock()
+	status := state.record.Status
+	d.mu.Unlock()
+	if status.Terminal() {
+		t.Fatal("terminal status published while process-group authority was active")
+	}
+	close(releaseProbe)
+	<-terminated
+	<-completed
+	if err := d.terminateRunProcessGroup(state); err != nil {
+		t.Fatal(err)
+	}
+	if probes != 1 {
+		t.Fatalf("terminal run performed %d process probes, want 1", probes)
+	}
+}
+
+func TestTerminateStateClearsUnsafeCachedProcessGroup(t *testing.T) {
+	for _, pgid := range []int{-1, 0, 1, syscall.Getpgrp()} {
+		t.Run(strconv.Itoa(pgid), func(t *testing.T) {
+			d := NewDispatcher(nil)
+			d.ProcessCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+				return exec.CommandContext(ctx, "false")
+			}
+			state := &runState{
+				record: Record{ID: "d-unsafe", Status: StatusRunning},
+				handle: nopHandle{},
+				cancel: func() {},
+				pgid:   pgid,
+			}
+			d.terminateState(state, StatusCanceled)
+			d.mu.Lock()
+			got := state.pgid
+			d.mu.Unlock()
+			if got != 0 {
+				t.Fatalf("cached pgid = %d, want cleared", got)
+			}
+		})
 	}
 }
 
 func TestTimeoutDuringParseEscalatesSurvivingProcessGroup(t *testing.T) {
 	repo, stateDir := gitTestRepo(t), t.TempDir()
 	d := worktreeDispatcher(t, stateDir, "trap '' TERM; sleep 30 </dev/null >/dev/null 2>&1 &")
-	var inventoryMu sync.Mutex
-	var inventory string
-	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if name == "ps" {
-			inventoryMu.Lock()
-			defer inventoryMu.Unlock()
-			if inventory == "" {
-				return exec.CommandContext(ctx, "false")
-			}
-			return exec.CommandContext(ctx, "printf", inventory)
-		}
-		return exec.CommandContext(ctx, name, args...)
-	}
 	d.ProcessGroupGrace = 50 * time.Millisecond
 	d.ParseEvents = func(h harness.Harness, r io.Reader) (harness.Result, error) {
-		d.mu.Lock()
-		for _, state := range d.runs {
-			inventoryMu.Lock()
-			inventory = fmt.Sprintf("%d %d %d\\n", state.harnessPID+1, state.pgid, state.harnessPID)
-			inventoryMu.Unlock()
-			break
-		}
-		d.mu.Unlock()
 		time.Sleep(1200 * time.Millisecond)
 		return h.ParseEvents(r)
 	}
@@ -567,14 +638,14 @@ func worktreeDispatcher(t *testing.T, stateDir string, mutate string) *Dispatche
 	t.Helper()
 	d := NewDispatcher(NewFileRecorder(stateDir))
 	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if name != "ps" {
-			return exec.CommandContext(ctx, name, args...)
+		if name != "ps" || !slices.Equal(args, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
+			t.Fatalf("process inventory argv = %q %q", name, args)
 		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		for _, state := range d.runs {
 			if state.pgid > 1 && syscall.Kill(-state.pgid, 0) == nil {
-				return exec.CommandContext(ctx, "printf", "%s %s %s\n", strconv.Itoa(state.harnessPID+1), strconv.Itoa(state.pgid), strconv.Itoa(state.harnessPID))
+				return exec.CommandContext(ctx, "printf", "%s %s %s\n", strconv.Itoa(state.harnessPID), strconv.Itoa(state.pgid), strconv.Itoa(os.Getpid()))
 			}
 		}
 		return exec.CommandContext(ctx, "printf", "")
