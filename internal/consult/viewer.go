@@ -19,6 +19,7 @@ const (
 	viewerCommandTimeout  = 5 * time.Second
 	viewerWaitDelay       = 100 * time.Millisecond
 	viewerGraceAfterEnd   = time.Hour
+	viewerHandledLimit    = 1024
 )
 
 // Viewer opens an inspectable tmux window for asynchronous dispatches. It is
@@ -28,6 +29,8 @@ type Viewer struct {
 	once               sync.Once
 	mu                 sync.Mutex
 	windowIDs          map[string]string
+	handledWindowIDs   map[string]struct{}
+	handledWindowOrder []string
 	rosterMu           sync.Mutex
 	rosters            map[string]rosterSessionState
 	rosterInventoryLog string
@@ -170,26 +173,50 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 	}
 	v.defaults()
 	for _, rec := range records {
+		expired := rec.Kind == "dispatch" && rec.Mode != ModeInteractive && rec.Status.Terminal() && !rec.EndedAt.IsZero() && !now.Before(rec.EndedAt.Add(viewerGraceAfterEnd))
+		if expired {
+			v.killWindow(rec.ID, rec.ViewerWindowID)
+			continue
+		}
 		if rec.ViewerWindowID != "" {
 			v.mu.Lock()
 			if v.windowIDs == nil {
 				v.windowIDs = make(map[string]string)
 			}
-			v.windowIDs[rec.ID] = rec.ViewerWindowID
+			if _, handled := v.handledWindowIDs[rec.ID]; !handled {
+				v.windowIDs[rec.ID] = rec.ViewerWindowID
+			}
 			v.mu.Unlock()
 		}
-		if rec.Kind != "dispatch" || rec.Mode == ModeInteractive || !rec.Status.Terminal() || rec.EndedAt.IsZero() || now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
-			continue
-		}
-		v.kill(rec.ID)
 	}
 }
 
 func (v *Viewer) kill(id string) {
+	v.killWindow(id, "")
+}
+
+func (v *Viewer) killWindow(id, persistedWindowID string) {
 	v.mu.Lock()
+	if _, handled := v.handledWindowIDs[id]; handled {
+		v.mu.Unlock()
+		return
+	}
 	windowID := v.windowIDs[id]
+	if windowID == "" {
+		windowID = persistedWindowID
+	}
+	delete(v.windowIDs, id)
 	if windowID != "" {
-		delete(v.windowIDs, id)
+		if v.handledWindowIDs == nil {
+			v.handledWindowIDs = make(map[string]struct{})
+		}
+		v.handledWindowIDs[id] = struct{}{}
+		v.handledWindowOrder = append(v.handledWindowOrder, id)
+		if len(v.handledWindowOrder) > viewerHandledLimit {
+			oldest := v.handledWindowOrder[0]
+			v.handledWindowOrder = v.handledWindowOrder[1:]
+			delete(v.handledWindowIDs, oldest)
+		}
 	}
 	v.mu.Unlock()
 	if windowID == "" {

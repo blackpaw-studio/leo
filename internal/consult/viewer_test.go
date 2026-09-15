@@ -243,6 +243,24 @@ func TestViewerSweepClosesTerminalDispatchAfterGrace(t *testing.T) {
 	}
 }
 
+func TestViewerSweepAttemptsStalePersistedWindowOnlyOnce(t *testing.T) {
+	var calls [][]string
+	now := time.Now()
+	v := &Viewer{
+		TmuxPath: "tmux",
+		ExecCommand: func(name string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{name}, args...))
+			return exec.Command("false")
+		},
+	}
+	record := Record{ID: "d-stale", Kind: "dispatch", Status: StatusFailed, EndedAt: now.Add(-viewerGraceAfterEnd - time.Second), ViewerWindowID: "@42"}
+	v.Sweep([]Record{record}, now)
+	v.Sweep([]Record{record}, now.Add(time.Second))
+	if got := len(calls); got != 1 {
+		t.Fatalf("kill attempts = %d, want 1; calls=%#v", got, calls)
+	}
+}
+
 func TestViewerCollectionOfClosedWindowIsNoop(t *testing.T) {
 	called := false
 	v := &Viewer{
@@ -255,5 +273,18 @@ func TestViewerCollectionOfClosedWindowIsNoop(t *testing.T) {
 	v.Close(rec)
 	if called {
 		t.Fatal("closed window was killed twice")
+	}
+}
+
+func TestViewerSweepDoesNotRetrackHandledWindow(t *testing.T) {
+	now := time.Now()
+	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(string, ...string) *exec.Cmd { return exec.Command("true") }}
+	record := Record{ID: "d-done", Kind: "dispatch", Status: StatusDone, EndedAt: now, ViewerWindowID: "@42"}
+	v.Close(record)
+	v.Sweep([]Record{record}, now.Add(time.Minute))
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if _, tracked := v.windowIDs[record.ID]; tracked {
+		t.Fatalf("handled viewer was re-tracked: %#v", v.windowIDs)
 	}
 }
