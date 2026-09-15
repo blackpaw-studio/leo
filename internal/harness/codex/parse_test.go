@@ -64,6 +64,13 @@ func TestUsageRejectsInvalidAndOverflowingCounters(t *testing.T) {
 	}
 }
 
+func TestUsageOutOfRangeCounterMarksIncomplete(t *testing.T) {
+	got, _ := Codex{}.ParseEvents(strings.NewReader(`{"type":"turn.completed","usage":{"input_tokens":9223372036854775808}}`))
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
 func TestParseEventsMCPToolCall(t *testing.T) {
 	f, err := os.Open(filepath.Join("testdata", "mcp_tool_call.jsonl"))
 	if err != nil {

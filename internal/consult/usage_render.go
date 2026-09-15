@@ -4,11 +4,18 @@ import "fmt"
 
 func rosterUsage(rec Record) string {
 	parts := make([]string, 0, 2)
+	partial := ""
+	if rec.UsageIncomplete {
+		partial = "~"
+	}
 	if rec.ToolCalls != nil {
-		parts = append(parts, fmt.Sprintf("%d tools", *rec.ToolCalls))
+		parts = append(parts, fmt.Sprintf("%d%s tools", *rec.ToolCalls, partial))
 	}
 	if rec.InputTokens != nil && rec.OutputTokens != nil {
-		parts = append(parts, fmt.Sprintf("%.1fk tokens", float64(*rec.InputTokens+*rec.OutputTokens)/1000))
+		parts = append(parts, fmt.Sprintf("%.1fk%s tokens", (float64(*rec.InputTokens)+float64(*rec.OutputTokens))/1000, partial))
+	}
+	if len(parts) == 0 && rec.UsageIncomplete {
+		parts = append(parts, "partial")
 	}
 	if len(parts) == 0 {
 		return ""

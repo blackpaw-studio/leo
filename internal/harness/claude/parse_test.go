@@ -80,6 +80,13 @@ func TestUsageRejectsInvalidCountersAndNestedAssistants(t *testing.T) {
 	}
 }
 
+func TestUsageOutOfRangeCounterMarksIncomplete(t *testing.T) {
+	got, _ := Claude{}.ParseEvents(strings.NewReader(`{"type":"result","usage":{"input_tokens":9223372036854775808}}`))
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
 func TestParseEventsStreamJSON(t *testing.T) {
 	stream := `{"type":"system","subtype":"init"}
 {"type":"result","session_id":"abc-123","result":"done","is_error":false}

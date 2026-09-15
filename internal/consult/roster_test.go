@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -68,5 +69,18 @@ func TestRenderRosterUsageSuffixPreservesUnknownAndZero(t *testing.T) {
 	got := RenderRoster(recs, now)
 	if !strings.Contains(got, "0 tools · 0.0k tokens") || !strings.Contains(got, "tools 0:00 · 0 tools") {
 		t.Fatalf("roster usage = %q", got)
+	}
+}
+
+func TestRenderRosterMarksPartialUsageWithoutOverflow(t *testing.T) {
+	now := time.Now()
+	max := int64(math.MaxInt64)
+	one := int64(1)
+	got := RenderRoster([]Record{
+		{ID: "a", Kind: "dispatch", Name: "partial", Status: StatusRunning, StartedAt: now, UsageIncomplete: true},
+		{ID: "b", Kind: "dispatch", Name: "tokens", Status: StatusRunning, StartedAt: now.Add(time.Second), InputTokens: &max, OutputTokens: &one, UsageIncomplete: true},
+	}, now)
+	if !strings.Contains(got, "partial 0:00 · partial") || !strings.Contains(got, "9223372036854776.0k~ tokens") {
+		t.Fatalf("roster=%q", got)
 	}
 }

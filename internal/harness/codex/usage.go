@@ -18,6 +18,12 @@ func (Codex) NewUsageAccumulator() harness.UsageAccumulator {
 	return &usageAccumulator{tools: harness.NewUsageIDs()}
 }
 func (a *usageAccumulator) AddLine(line []byte) {
+	var shape struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(line, &shape) != nil {
+		return
+	}
 	var raw struct {
 		Type  string                    `json:"type"`
 		Item  struct{ ID, Type string } `json:"item"`
@@ -27,6 +33,9 @@ func (a *usageAccumulator) AddLine(line []byte) {
 		} `json:"usage"`
 	}
 	if json.Unmarshal(line, &raw) != nil {
+		if shape.Type == "turn.completed" {
+			a.incomplete = true
+		}
 		return
 	}
 	switch raw.Type {

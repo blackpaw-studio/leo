@@ -139,6 +139,22 @@ func TestDispatchListInteractive(t *testing.T) {
 	}
 }
 
+func TestDispatchListMarksIncompleteUsage(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRecord(t, dir, consult.Record{ID: "d-partial", Template: "coding", Harness: "opencode", Status: consult.StatusDone, StartedAt: time.Now(), UsageIncomplete: true})
+	var out bytes.Buffer
+	if err := listConsults(state, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "PARTIAL") || !strings.Contains(out.String(), "true") {
+		t.Fatalf("list=%s", out.String())
+	}
+}
+
 func TestDispatchWatchInteractive(t *testing.T) {
 	state := t.TempDir()
 	dir := filepath.Join(state, "dispatches")

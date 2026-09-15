@@ -17,6 +17,12 @@ func (Opencode) NewUsageAccumulator() harness.UsageAccumulator {
 	return &usageAccumulator{steps: harness.NewUsageIDs(), finishes: harness.NewUsageIDs(), tools: harness.NewUsageIDs()}
 }
 func (a *usageAccumulator) AddLine(line []byte) {
+	var shape struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(line, &shape) != nil {
+		return
+	}
 	var raw struct {
 		Type string `json:"type"`
 		Part struct {
@@ -33,12 +39,18 @@ func (a *usageAccumulator) AddLine(line []byte) {
 		} `json:"part"`
 	}
 	if json.Unmarshal(line, &raw) != nil {
+		if shape.Type == "step_finish" {
+			a.incomplete = true
+		}
 		return
 	}
 	if raw.Type == "step_start" && raw.Part.ID != "" {
 		a.steps.Add(raw.Part.ID)
 	}
 	if raw.Type == "step_finish" && (raw.Part.ID == "" || a.finishes.Add(raw.Part.ID)) {
+		if raw.Part.Tokens.Input == nil && raw.Part.Tokens.Cache.Read == nil && raw.Part.Tokens.Cache.Write == nil && raw.Part.Tokens.Output == nil && raw.Part.Tokens.Reasoning == nil {
+			a.incomplete = true
+		}
 		inputDelta, inputOK := sumValues(raw.Part.Tokens.Input, raw.Part.Tokens.Cache.Read, raw.Part.Tokens.Cache.Write)
 		outputDelta, outputOK := sumValues(raw.Part.Tokens.Output, raw.Part.Tokens.Reasoning)
 		nextInput, inputAddOK := harness.AddInt64(a.input, inputDelta)
@@ -77,10 +89,8 @@ func sumValues(values ...*int64) (int64, bool) {
 	return total, true
 }
 func (a *usageAccumulator) Usage() *harness.Usage {
-	if a.steps.Len() > a.finishes.Len() {
-		a.incomplete = true
-	}
-	if !a.hasInput && !a.hasOutput && a.steps.Len() == 0 && a.tools.Len() == 0 && !a.incomplete {
+	incomplete := a.incomplete || a.steps.Len() > a.finishes.Len()
+	if !a.hasInput && !a.hasOutput && a.steps.Len() == 0 && a.tools.Len() == 0 && !incomplete {
 		return nil
 	}
 	u := harness.Usage{}
@@ -96,6 +106,6 @@ func (a *usageAccumulator) Usage() *harness.Usage {
 	if a.steps.Len() > 0 || a.tools.Len() > 0 {
 		u.ToolCalls = harness.Int(a.tools.Len())
 	}
-	u.Incomplete = a.incomplete
+	u.Incomplete = incomplete
 	return &u
 }

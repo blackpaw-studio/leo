@@ -18,6 +18,12 @@ func (Claude) NewUsageAccumulator() harness.UsageAccumulator {
 }
 
 func (a *usageAccumulator) AddLine(line []byte) {
+	var shape struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(line, &shape) != nil {
+		return
+	}
 	var raw struct {
 		Type            string `json:"type"`
 		ParentToolUseID string `json:"parent_tool_use_id"`
@@ -31,6 +37,9 @@ func (a *usageAccumulator) AddLine(line []byte) {
 		NumTurns     *int       `json:"num_turns"`
 	}
 	if json.Unmarshal(line, &raw) != nil {
+		if shape.Type == "assistant" || shape.Type == "result" {
+			a.usage.Incomplete = true
+		}
 		return
 	}
 	if raw.Type == "assistant" && raw.ParentToolUseID == "" {

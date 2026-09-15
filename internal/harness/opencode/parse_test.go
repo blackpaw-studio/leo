@@ -150,3 +150,33 @@ func TestUsageRejectsNegativeStepAndBoundsIDs(t *testing.T) {
 		t.Fatalf("usage=%#v", got.Usage)
 	}
 }
+
+func TestUsageOpenStepSnapshotDoesNotPoisonFinal(t *testing.T) {
+	acc := Opencode{}.NewUsageAccumulator()
+	acc.AddLine([]byte(`{"type":"step_start","part":{"id":"start"}}`))
+	if got := acc.Usage(); got == nil || !got.Incomplete {
+		t.Fatalf("open=%#v", got)
+	}
+	acc.AddLine([]byte(`{"type":"step_finish","part":{"id":"finish","tokens":{"input":2,"output":1}}}`))
+	if got := acc.Usage(); got == nil || got.Incomplete {
+		t.Fatalf("final=%#v", got)
+	}
+}
+
+func TestUsageTokenlessFinishMarksPartialTotalsIncomplete(t *testing.T) {
+	stream := `{"type":"step_start","part":{"id":"s1"}}
+{"type":"step_finish","part":{"id":"f1","tokens":{"input":2,"output":1}}}
+{"type":"step_start","part":{"id":"s2"}}
+{"type":"step_finish","part":{"id":"f2"}}`
+	got, _ := Opencode{}.ParseEvents(strings.NewReader(stream))
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens == nil || *got.Usage.InputTokens != 2 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestUsageOutOfRangeCounterMarksIncomplete(t *testing.T) {
+	got, _ := Opencode{}.ParseEvents(strings.NewReader(`{"type":"step_finish","part":{"id":"f","tokens":{"input":9223372036854775808}}}`))
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
