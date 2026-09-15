@@ -227,6 +227,28 @@ func TestFeedWithoutARendererFallsBackToRawJSON(t *testing.T) {
 	}
 }
 
+// This fixture locks watch's historical row layout while the renderer is
+// shared with dispatch-output snapshots.
+func TestWatchRenderingGolden(t *testing.T) {
+	feed := &consultFeed{renderer: claude.Claude{}}
+	var out bytes.Buffer
+	feed.out = &out
+	for _, raw := range []string{
+		`{"t":1,"d":{"type":"assistant","message":{"content":[{"type":"text","text":"first\nsecond"}]}}}`,
+		`{"t":62,"raw":"last"}`,
+	} {
+		event, ok := consult.DecodeEvent([]byte(raw))
+		if !ok {
+			t.Fatalf("decode %q", raw)
+		}
+		feed.emit(event)
+	}
+	const want = "   0:01  text     first\n                  second\n   1:02  raw      last\n"
+	if got := out.String(); got != want {
+		t.Fatalf("watch output:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestTailerYieldsOnlyCompleteLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c-1.ndjson")
 	if err := os.WriteFile(path, []byte(`{"t":1.0,"raw":"first"}`+"\n"+`{"t":2.0,"ra`), 0o600); err != nil {

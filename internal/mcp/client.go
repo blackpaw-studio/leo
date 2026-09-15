@@ -246,6 +246,18 @@ func (c *daemonClient) getDispatch(ctx context.Context, id string) (consult.Reco
 	return record, nil
 }
 
+func (c *daemonClient) dispatchOutput(ctx context.Context, id string, tail int) (consult.Output, error) {
+	raw, err := c.doContext(ctx, http.MethodGet, "/api/dispatch/"+url.PathEscape(id)+"/output?tail="+fmt.Sprintf("%d", tail), nil)
+	if err != nil {
+		return consult.Output{}, err
+	}
+	var output consult.Output
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return consult.Output{}, fmt.Errorf("decode dispatch output: %w", err)
+	}
+	return output, nil
+}
+
 func (c *daemonClient) waitDispatch(ctx context.Context, ids []string, timeout time.Duration) ([]consult.Entry, error) {
 	query := url.Values{}
 	for _, id := range ids {

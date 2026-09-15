@@ -394,6 +394,9 @@ func (d *Dispatcher) pruneTerminalRunsLocked() {
 // supplied timeout expires. It never polls records.
 func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Duration) (entries []Entry) {
 	defer func() {
+		for i := range entries {
+			entries[i] = limitWaitEntry(entries[i])
+		}
 		unlockSerial := d.serialLocks(ids)
 		defer unlockSerial()
 		for i := range entries {

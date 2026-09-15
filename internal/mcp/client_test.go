@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
+	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
 func TestDispatchClientForwardsFoundationOptions(t *testing.T) {
@@ -29,6 +30,27 @@ func TestDispatchClientForwardsFoundationOptions(t *testing.T) {
 	if body["notify"] != false || body["isolation"] != "worktree" || body["caller_pane_id"] != "%7" {
 		t.Fatalf("body = %#v", body)
 	}
+}
+
+func TestDispatchOutputClientAndSchema(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.String()
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"d-x","lines":["line"],"truncated":false}}`))
+	}))
+	defer srv.Close()
+	c := newDaemonClient(strings.TrimPrefix(srv.URL, "http://127.0.0.1:"), "")
+	got, err := c.dispatchOutput(context.Background(), "d-x#2", 400)
+	if err != nil || got.ID != "d-x" || path != "/api/dispatch/d-x%232/output?tail=400" {
+		t.Fatalf("output=%+v path=%q err=%v", got, path, err)
+	}
+	r := newRegistry(c, "assistant", leotools.Permissions{})
+	for _, def := range r.defs {
+		if def.Name == "leo_dispatch_output" {
+			return
+		}
+	}
+	t.Fatal("leo_dispatch_output missing from schema")
 }
 
 // TestDaemonClientSetsBearerAuth asserts the MCP daemon client always attaches
