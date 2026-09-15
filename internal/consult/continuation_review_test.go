@@ -116,6 +116,64 @@ func TestRecorderFailureRollsBackRecreatedWorktreeForRetry(t *testing.T) {
 	_ = d.Wait(context.Background(), []string{sent.TurnID}, time.Second)
 }
 
+type dirtyFailRecorder struct{ *FileRecorder }
+
+func (r dirtyFailRecorder) Resume(rec Record) (Handle, error) {
+	if err := os.WriteFile(filepath.Join(rec.Worktree, "hook-created"), []byte("dirty"), 0o600); err != nil {
+		return nil, err
+	}
+	return nil, errors.New("resume failed")
+}
+
+func TestRollbackRefusalPersistsKeptWorktree(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	baseRaw, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	base, id, branch := strings.TrimSpace(string(baseRaw)), "d-dirty-rollback", "leo/dirty-rollback"
+	if out, err := exec.Command("git", "-C", repo, "branch", branch, base).CombinedOutput(); err != nil {
+		t.Fatalf("branch: %v: %s", err, out)
+	}
+	worktree := filepath.Join(stateDir, "worktrees", id)
+	rec := Record{ID: id, Mode: ModeHeadless, Kind: "dispatch", Template: "claude", Harness: "claude", Model: "opus", Cwd: worktree, Status: StatusDone, SessionID: "sid", Isolation: "worktree", Worktree: worktree, Branch: branch, BaseCommit: base, RepositoryRoot: repo, WorktreeState: WorktreeRemoved, Turns: []Turn{{TurnID: id + "#1", Outcome: TurnFinished, Status: StatusDone}}}
+	baseRecorder := NewFileRecorder(stateDir)
+	h, err := baseRecorder.Open(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h.Close(StatusDone, nil)
+	d := NewDispatcher(dirtyFailRecorder{baseRecorder})
+	d.runs[id] = &runState{record: rec, handle: h, done: closedTestChannel()}
+	if _, err := d.SendWithConfig(context.Background(), testConfig(), id, "retry"); err == nil {
+		t.Fatal("expected failure")
+	}
+	got, _ := d.Get(id)
+	if got.WorktreeState != WorktreeKept {
+		t.Fatalf("worktree state=%q", got.WorktreeState)
+	}
+	persisted, err := LoadOne(stateDir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.WorktreeState != WorktreeKept {
+		t.Fatalf("persisted state=%q", persisted.WorktreeState)
+	}
+}
+
+func TestCancelCurrentInvocationLockedRejectsStaleInvocation(t *testing.T) {
+	d := NewDispatcher(nil)
+	state := &runState{done: make(chan struct{})}
+	oldDone := make(chan struct{})
+	canceled := false
+	d.mu.Lock()
+	cancel := d.currentInvocationCancelLocked(state, oldDone, func() { canceled = true })
+	d.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if canceled {
+		t.Fatal("stale cancel reached replacement invocation")
+	}
+}
+
 func TestContinuationRecorderFailureRestoresInvocationState(t *testing.T) {
 	d := NewDispatcher(resumeErrorRecorder{})
 	priorDone := closedTestChannel()

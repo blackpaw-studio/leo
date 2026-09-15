@@ -791,9 +791,20 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, turnID), status)
 	d.persistRecordLocked(state)
 	rec := cloneRecord(state.record)
+	done, cancel := state.done, state.cancel
+	cancel = d.currentInvocationCancelLocked(state, done, cancel)
 	d.mu.Unlock()
-	state.cancel()
+	if cancel != nil {
+		cancel()
+	}
 	return rec
+}
+
+func (d *Dispatcher) currentInvocationCancelLocked(state *runState, done chan struct{}, cancel context.CancelFunc) context.CancelFunc {
+	if state.done == done {
+		return cancel
+	}
+	return nil
 }
 
 // Consult preserves the synchronous one-off consultant API over dispatch.

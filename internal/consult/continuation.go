@@ -111,12 +111,13 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	// its sandbox writable roots.
 	args, err := h.Args(spec)
 	if err != nil {
+		var rollbackErr error
 		if recreate {
-			d.rollbackRecreatedWorktree(rec)
+			rollbackErr = d.rollbackRecreatedWorktreeLocked(rec)
 		}
 		<-d.sem
 		d.mu.Unlock()
-		return SendResult{}, fmt.Errorf("building %s resume args after workspace preparation: %w", h.Name(), err)
+		return SendResult{}, errors.Join(fmt.Errorf("building %s resume args after workspace preparation: %w", h.Name(), err), rollbackErr)
 	}
 	prospective := rec
 	if state != nil {
@@ -140,12 +141,13 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	handle, openErr := d.recorder.Resume(cloneRecord(prospective))
 	if openErr != nil {
 		cancel()
+		var rollbackErr error
 		if recreate {
-			d.rollbackRecreatedWorktree(rec)
+			rollbackErr = d.rollbackRecreatedWorktreeLocked(rec)
 		}
 		<-d.sem
 		d.mu.Unlock()
-		return SendResult{}, fmt.Errorf("reopening dispatch recording: %w", openErr)
+		return SendResult{}, errors.Join(fmt.Errorf("reopening dispatch recording: %w", openErr), rollbackErr)
 	}
 	if state == nil {
 		state = &runState{}
@@ -159,8 +161,16 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	return SendResult{TurnID: turn.TurnID, Delivered: true}, nil
 }
 
-func (d *Dispatcher) rollbackRecreatedWorktree(rec Record) {
-	_, _ = d.git("-C", rec.RepositoryRoot, "worktree", "remove", rec.Worktree)
+func (d *Dispatcher) rollbackRecreatedWorktreeLocked(rec Record) error {
+	if _, err := d.git("-C", rec.RepositoryRoot, "worktree", "remove", rec.Worktree); err == nil {
+		return nil
+	} else {
+		if state := d.runs[rec.ID]; state != nil {
+			state.record.WorktreeState = WorktreeKept
+			d.persistRecordLocked(state)
+		}
+		return fmt.Errorf("rolling back recreated worktree; retained as kept: %w", err)
+	}
 }
 
 func synthesizeOpeningTurn(rec *Record) {
