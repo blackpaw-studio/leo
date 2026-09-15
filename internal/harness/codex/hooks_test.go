@@ -141,6 +141,75 @@ func TestPrepareInteractiveUpsertsExistingTrustHash(t *testing.T) {
 	}
 }
 
+func TestPrepareInteractiveDeduplicatesStaleLeoHooksAndRewritesTrust(t *testing.T) {
+	home := t.TempDir()
+	current := "/opt/leo dispatch report"
+	prepareLeoHookCommand = func() string { return current }
+	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
+	hooksPath := filepath.Join(home, "hooks.json")
+	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/tmp/leo-a dispatch report"}]},{"hooks":[{"type":"command","command":"/usr/bin/user-hook"}]},{"hooks":[{"type":"command","command":"/tmp/leo-b dispatch report"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	canonicalHooks, err := canonicalPath(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": "/usr/bin/user-hook"})
+	config := strings.Join([]string{
+		trustEntry(canonicalHooks+":stop:0:0", "sha256:stale-a"),
+		trustEntry(canonicalHooks+":stop:1:0", foreignHash),
+		trustEntry(canonicalHooks+":stop:2:0", "sha256:stale-b"),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Codex{}).PrepareInteractive(home, ""); err != nil {
+		t.Fatal(err)
+	}
+	hooks, err := readHooks(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := hooks["hooks"].(map[string]any)["Stop"].([]any)
+	if len(groups) != 2 || !containsCommand(groups, current) || !containsCommand(groups, "/usr/bin/user-hook") {
+		t.Fatalf("Stop groups = %#v, want current Leo plus foreign", groups)
+	}
+	if containsCommand(groups, "/tmp/leo-a dispatch report") || containsCommand(groups, "/tmp/leo-b dispatch report") {
+		t.Fatalf("stale Leo groups remain: %#v", groups)
+	}
+	after, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(after)
+	if strings.Contains(content, "sha256:stale-a") || strings.Contains(content, "sha256:stale-b") {
+		t.Fatalf("stale trust rows remain:\n%s", content)
+	}
+	if got := strings.Count(content, ":stop:"); got != 2 {
+		t.Fatalf("Stop trust row count = %d, want 2:\n%s", got, content)
+	}
+}
+
+func TestMergeLeoHooksPreservesForeignHandlerInMixedGroup(t *testing.T) {
+	file := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{
+		"matcher": "all",
+		"hooks": []any{
+			map[string]any{"type": "command", "command": "/tmp/leo-old dispatch report"},
+			map[string]any{"type": "command", "command": "/usr/bin/user-hook"},
+		},
+	}}}}
+	mergeLeoHooks(file, "/opt/leo dispatch report")
+	groups := file["hooks"].(map[string]any)["Stop"].([]any)
+	if len(groups) != 2 || !containsCommand(groups, "/usr/bin/user-hook") || !containsCommand(groups, "/opt/leo dispatch report") {
+		t.Fatalf("mixed groups = %#v, want preserved foreign handler and current Leo group", groups)
+	}
+	foreign := groups[0].(map[string]any)
+	if foreign["matcher"] != "all" || containsCommand(groups, "/tmp/leo-old dispatch report") {
+		t.Fatalf("mixed group metadata or stale handler wrong: %#v", groups)
+	}
+}
+
 func TestPrepareInteractiveConcurrent(t *testing.T) {
 	home := t.TempDir()
 	prepareLeoHookCommand = func() string { return "/opt/leo dispatch report" }

@@ -89,10 +89,24 @@ func (Codex) PrepareInteractive(home, _ string) error {
 	if err := writeHooks(hooksPath, hooks); err != nil {
 		return err
 	}
-	if err := appendTrustEntries(configPath, string(config), entries); err != nil {
+	if err := rewriteHookTrustEntries(configPath, string(config), hooksPath, entries); err != nil {
 		return err
 	}
 	return nil
+}
+
+func rewriteHookTrustEntries(path, config, hooksPath string, entries []string) error {
+	updated := strings.TrimRight(removeHookTrustEntries(config, hooksPath), "\r\n")
+	for _, entry := range entries {
+		updated += "\n\n" + entry
+	}
+	if updated != "" {
+		updated += "\n"
+	}
+	if updated == config {
+		return nil
+	}
+	return writeConfig(path, updated)
 }
 
 func canonicalPath(path string) (string, error) {
@@ -128,11 +142,41 @@ func mergeLeoHooks(file map[string]any, command string) {
 	events := file["hooks"].(map[string]any)
 	for _, event := range codexHookEvents {
 		groups, _ := events[event].([]any)
-		if containsCommand(groups, command) {
+		kept := make([]any, 0, len(groups)+1)
+		for _, raw := range groups {
+			group, _ := raw.(map[string]any)
+			filtered, changed := withoutLeoHandlers(group)
+			if !changed {
+				kept = append(kept, raw)
+			} else if len(asSlice(filtered["hooks"])) > 0 {
+				kept = append(kept, filtered)
+			}
+		}
+		events[event] = append(kept, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}})
+	}
+}
+
+func withoutLeoHandlers(group map[string]any) (map[string]any, bool) {
+	filtered := make([]any, 0, len(asSlice(group["hooks"])))
+	changed := false
+	for _, raw := range asSlice(group["hooks"]) {
+		handler, _ := raw.(map[string]any)
+		command, _ := handler["command"].(string)
+		if handler["type"] == "command" && strings.HasSuffix(command, " dispatch report") {
+			changed = true
 			continue
 		}
-		events[event] = append(groups, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}})
+		filtered = append(filtered, raw)
 	}
+	if !changed {
+		return group, false
+	}
+	copy := make(map[string]any, len(group))
+	for key, value := range group {
+		copy[key] = value
+	}
+	copy["hooks"] = filtered
+	return copy, true
 }
 
 func containsCommand(groups []any, command string) bool {
@@ -162,6 +206,10 @@ func writeHooks(path string, hooks map[string]any) error {
 
 func hookTrustEntries(path string, file map[string]any, trusted map[string]string) ([]string, []string) {
 	var entries, untrusted []string
+	trustedValues := make(map[string]bool, len(trusted))
+	for _, hash := range trusted {
+		trustedValues[hash] = true
+	}
 	events := file["hooks"].(map[string]any)
 	for _, event := range sortedKeys(events) {
 		groups, ok := events[event].([]any)
@@ -178,11 +226,8 @@ func hookTrustEntries(path string, file map[string]any, trusted map[string]strin
 				}
 				key := fmt.Sprintf("%s:%s:%d:%d", path, eventLabel(event), gi, hi)
 				hash := trustHash(event, matcherPtr(matcher), handler)
-				if trusted[key] == hash {
-					continue
-				}
 				command, _ := handler["command"].(string)
-				if command == prepareLeoHookCommand() {
+				if trusted[key] == hash || trustedValues[hash] || command == prepareLeoHookCommand() {
 					entries = append(entries, trustEntry(key, hash))
 				} else {
 					untrusted = append(untrusted, command)
@@ -191,6 +236,35 @@ func hookTrustEntries(path string, file map[string]any, trusted map[string]strin
 		}
 	}
 	return entries, untrusted
+}
+
+func removeHookTrustEntries(config, hooksPath string) string {
+	lines := strings.SplitAfter(config, "\n")
+	var kept []string
+	for i := 0; i < len(lines); {
+		trimmed := strings.TrimRight(lines[i], "\r\n")
+		remove := false
+		if strings.HasPrefix(trimmed, "[hooks.state.") && strings.HasSuffix(trimmed, "]") {
+			quoted := strings.TrimSuffix(strings.TrimPrefix(trimmed, "[hooks.state."), "]")
+			if key, err := strconv.Unquote(quoted); err == nil && strings.HasPrefix(key, hooksPath+":") {
+				remove = true
+			}
+		}
+		if !remove {
+			kept = append(kept, lines[i])
+			i++
+			continue
+		}
+		i++
+		for i < len(lines) {
+			next := strings.TrimRight(lines[i], "\r\n")
+			if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+				break
+			}
+			i++
+		}
+	}
+	return strings.Join(kept, "")
 }
 
 func matcherPtr(value string) *string {
@@ -280,17 +354,6 @@ func trustedHashes(config string) map[string]string {
 		}
 	}
 	return result
-}
-
-func appendTrustEntries(path, config string, entries []string) error {
-	updated := config
-	for _, entry := range entries {
-		updated = upsertConfigEntry(updated, entry)
-	}
-	if updated == config {
-		return nil
-	}
-	return writeConfig(path, updated)
 }
 
 // appendConfigEntry is shared by Codex's workspace-trust and hook-trust
