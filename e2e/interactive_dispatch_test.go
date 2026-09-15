@@ -66,6 +66,20 @@ func TestInteractiveDispatchLifecycle(t *testing.T) {
 	}
 }
 
+func TestInteractiveDispatchConfirmsLongMultilinePreamble(t *testing.T) {
+	s := newInteractiveE2E(t)
+	lines := make([]string, 160)
+	for i := range lines {
+		lines[i] = "\tplaceholder line " + strings.Repeat("x", 40)
+	}
+	prompt := strings.Join(lines, "\n\n")
+	started := s.dispatch(t, prompt)
+	first := s.wait(t, started.ID+"#1")
+	if !strings.HasPrefix(first.Text, "You are a subagent dispatched by an orchestrator.") {
+		t.Fatalf("first dispatched turn = %+v", first)
+	}
+}
+
 func TestInteractiveDispatchRosterWithNoLocale(t *testing.T) {
 	s := newInteractiveE2EWithoutLocale(t)
 	s.dispatch(t, "roster without locale")

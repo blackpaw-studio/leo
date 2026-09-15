@@ -136,8 +136,29 @@ func runDispatchInteractive() {
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	turn := 0
+	inPaste := false
+	var pasted strings.Builder
 	for sc.Scan() {
-		text := strings.TrimSpace(sc.Text())
+		text := sc.Text()
+		if strings.HasPrefix(text, "\x1b[200~") {
+			inPaste = true
+			pasted.Reset()
+			text = strings.TrimPrefix(text, "\x1b[200~")
+		}
+		if inPaste {
+			if pasted.Len() > 0 {
+				pasted.WriteByte('\n')
+			}
+			if strings.HasSuffix(text, "\x1b[201~") {
+				pasted.WriteString(strings.TrimSuffix(text, "\x1b[201~"))
+				text = pasted.String()
+				inPaste = false
+			} else {
+				pasted.WriteString(text)
+				continue
+			}
+		}
+		text = strings.TrimSpace(text)
 		if text == "" {
 			fmt.Print("› ")
 			continue
