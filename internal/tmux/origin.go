@@ -24,12 +24,18 @@ func CallerPaneFromEnv(environ []string) (string, bool) {
 	if pane == "" || len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return "", false
 	}
+	for _, field := range parts[1:] {
+		value, err := strconv.ParseInt(field, 10, 64)
+		if err != nil || value < 0 {
+			return "", false
+		}
+	}
 	tmpDir := getenv("TMUX_TMPDIR")
 	if tmpDir == "" {
 		tmpDir = "/tmp"
 	}
 	want := filepath.Join(tmpDir, "tmux-"+strconv.Itoa(os.Getuid()), SocketName)
-	if parts[0] == want || sameResolvedPath(parts[0], want) {
+	if sameResolvedPath(parts[0], want) {
 		return pane, true
 	}
 	return "", false

@@ -560,6 +560,13 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 
 func TestLeoDispatchUsesDefaultCWD(t *testing.T) {
 	tmuxTmp := t.TempDir()
+	socketDir := filepath.Join(tmuxTmp, fmt.Sprintf("tmux-%d", os.Getuid()))
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(socketDir, "leo"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TMUX_TMPDIR", tmuxTmp)
 	t.Setenv("TMUX", filepath.Join(tmuxTmp, fmt.Sprintf("tmux-%d", os.Getuid()), "leo")+",123,0")
 	t.Setenv("TMUX_PANE", "%17")

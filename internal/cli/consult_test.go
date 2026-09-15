@@ -17,7 +17,14 @@ import (
 
 func TestDispatchCallerPaneUsesOriginatingTmuxSocket(t *testing.T) {
 	tmp := t.TempDir()
-	leoSocket := filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()), "leo")
+	socketDir := filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()))
+	leoSocket := filepath.Join(socketDir, "leo")
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leoSocket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TMUX_TMPDIR", tmp)
 	t.Setenv("TMUX", leoSocket+",123,0")
 	t.Setenv("TMUX_PANE", "%7")

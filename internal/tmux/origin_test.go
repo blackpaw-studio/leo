@@ -9,7 +9,16 @@ import (
 
 func TestCallerPaneFromEnvValidatesLeoSocketOrigin(t *testing.T) {
 	tmp := t.TempDir()
-	leoSocket := filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()), SocketName)
+	socketDir := filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()))
+	leoSocket := filepath.Join(socketDir, SocketName)
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leoSocket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missingTmp := t.TempDir()
+	missingSocket := filepath.Join(missingTmp, fmt.Sprintf("tmux-%d", os.Getuid()), SocketName)
 	tests := []struct {
 		name string
 		env  []string
@@ -17,9 +26,14 @@ func TestCallerPaneFromEnvValidatesLeoSocketOrigin(t *testing.T) {
 	}{
 		{name: "leo socket", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=" + leoSocket + ",123,0", "TMUX_PANE=%7"}, want: "%7"},
 		{name: "another socket with colliding pane id", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=" + filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()), "other") + ",123,0", "TMUX_PANE=%7"}},
+		{name: "expected socket missing", env: []string{"TMUX_TMPDIR=" + missingTmp, "TMUX=" + missingSocket + ",123,0", "TMUX_PANE=%7"}},
 		{name: "missing tmux", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX_PANE=%7"}},
 		{name: "empty tmux", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=", "TMUX_PANE=%7"}},
 		{name: "malformed tmux", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=" + leoSocket, "TMUX_PANE=%7"}},
+		{name: "non-numeric server pid", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=" + leoSocket + ",pid,0", "TMUX_PANE=%7"}},
+		{name: "negative server pid", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=" + leoSocket + ",-1,0", "TMUX_PANE=%7"}},
+		{name: "non-numeric session index", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=" + leoSocket + ",123,index", "TMUX_PANE=%7"}},
+		{name: "negative session index", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=" + leoSocket + ",123,-1", "TMUX_PANE=%7"}},
 		{name: "missing pane", env: []string{"TMUX_TMPDIR=" + tmp, "TMUX=" + leoSocket + ",123,0"}},
 	}
 	for _, tt := range tests {
