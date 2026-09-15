@@ -61,6 +61,16 @@ func TestInteractiveDispatchLifecycle(t *testing.T) {
 	}
 }
 
+func TestInteractiveDispatchRosterWithNoLocale(t *testing.T) {
+	s := newInteractiveE2EWithoutLocale(t)
+	s.dispatch(t, "roster without locale")
+
+	s.waitFor(t, func() bool {
+		out, err := exec.Command(s.tmux, tmux.Args("show-options", "-qv", "-t", tmux.Target("leo-dispatch")+":", "@leo_roster")...).Output()
+		return err == nil && strings.Contains(string(out), "interactive")
+	})
+}
+
 func TestInteractivePaneDeath(t *testing.T) {
 	t.Run("after finished turn closes", func(t *testing.T) {
 		s := newInteractiveE2E(t)
@@ -117,14 +127,15 @@ func TestInteractiveCallerRestart(t *testing.T) {
 }
 
 type interactiveE2E struct {
-	t       *testing.T
-	ws      string
-	cfgPath string
-	port    int
-	token   string
-	tmux    string
-	service *exec.Cmd
-	output  *bytes.Buffer
+	t           *testing.T
+	ws          string
+	cfgPath     string
+	port        int
+	token       string
+	tmux        string
+	service     *exec.Cmd
+	output      *bytes.Buffer
+	stripLocale bool
 }
 
 func newInteractiveE2E(t *testing.T) *interactiveE2E {
@@ -132,6 +143,14 @@ func newInteractiveE2E(t *testing.T) *interactiveE2E {
 }
 
 func newInteractiveE2EWithDelay(t *testing.T, delayMS int) *interactiveE2E {
+	return newInteractiveE2EWithOptions(t, delayMS, false)
+}
+
+func newInteractiveE2EWithoutLocale(t *testing.T) *interactiveE2E {
+	return newInteractiveE2EWithOptions(t, 0, true)
+}
+
+func newInteractiveE2EWithOptions(t *testing.T, delayMS int, stripLocale bool) *interactiveE2E {
 	tmuxPath, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Skip("tmux not available; skipping interactive dispatch e2e")
@@ -175,7 +194,7 @@ templates:
 		t.Fatal(err)
 	}
 
-	s := &interactiveE2E{t: t, ws: ws, cfgPath: cfgPath, port: port, tmux: tmuxPath}
+	s := &interactiveE2E{t: t, ws: ws, cfgPath: cfgPath, port: port, tmux: tmuxPath, stripLocale: stripLocale}
 	s.startDaemon(t)
 	t.Cleanup(func() {
 		if s.service != nil && s.service.Process != nil {
@@ -202,13 +221,28 @@ func (s *interactiveE2E) startDaemon(t *testing.T) {
 	t.Helper()
 	cmd := exec.Command(leoBin, "service", "--supervised", "-c", s.cfgPath)
 	cmd.Dir = s.ws
-	cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(fakeclaude)+":"+os.Getenv("PATH"))
+	cmd.Env = append(s.daemonEnv(), "PATH="+filepath.Dir(fakeclaude)+":"+os.Getenv("PATH"))
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting service: %v", err)
 	}
 	s.service, s.output = cmd, &output
+}
+
+func (s *interactiveE2E) daemonEnv() []string {
+	base := os.Environ()
+	if !s.stripLocale {
+		return base
+	}
+	filtered := make([]string, 0, len(base))
+	for _, entry := range base {
+		if strings.HasPrefix(entry, "LANG=") || strings.HasPrefix(entry, "LC_ALL=") || strings.HasPrefix(entry, "LC_CTYPE=") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func (s *interactiveE2E) restartDaemon(t *testing.T) {

@@ -3,6 +3,7 @@ package env
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -159,5 +160,50 @@ func TestCaptureExtraKeys(t *testing.T) {
 	}
 	if _, ok := env["LEO_TEST_UNSET_KEY"]; ok {
 		t.Error("unset extra key should be omitted")
+	}
+}
+
+func TestEnsureUTF8Locale(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+		want []string
+	}{
+		{
+			name: "missing locale appends LC_CTYPE",
+			env:  []string{"PATH=/usr/bin"},
+			want: []string{"PATH=/usr/bin", "LC_CTYPE=C.UTF-8"},
+		},
+		{
+			name: "UTF-8 LANG is preserved",
+			env:  []string{"LANG=en_US.UTF-8"},
+			want: []string{"LANG=en_US.UTF-8"},
+		},
+		{
+			name: "explicit non UTF-8 LC_ALL wins over LANG",
+			env:  []string{"LC_ALL=C", "LANG=en_US.UTF-8"},
+			want: []string{"LC_ALL=C", "LANG=en_US.UTF-8"},
+		},
+		{
+			name: "explicit non UTF-8 LC_CTYPE wins over LANG",
+			env:  []string{"LC_CTYPE=C", "LANG=en_US.UTF-8"},
+			want: []string{"LC_CTYPE=C", "LANG=en_US.UTF-8"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EnsureUTF8Locale(tt.env); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("EnsureUTF8Locale() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUTF8LocaleWarning(t *testing.T) {
+	got := UTF8LocaleWarning([]string{"LC_ALL=C", "LANG=en_US.UTF-8"})
+	want := "LC_ALL=\"C\" is not a UTF-8 locale; tmux will sanitize non-ASCII output (dispatch roster and composer checks break) — set LC_ALL/LC_CTYPE/LANG to a UTF-8 locale"
+	if got != want {
+		t.Errorf("UTF8LocaleWarning() = %q, want %q", got, want)
 	}
 }
