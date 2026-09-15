@@ -111,6 +111,9 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	// its sandbox writable roots.
 	args, err := h.Args(spec)
 	if err != nil {
+		if recreate {
+			d.rollbackRecreatedWorktree(rec)
+		}
 		<-d.sem
 		d.mu.Unlock()
 		return SendResult{}, fmt.Errorf("building %s resume args after workspace preparation: %w", h.Name(), err)
@@ -137,6 +140,9 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	handle, openErr := d.recorder.Resume(cloneRecord(prospective))
 	if openErr != nil {
 		cancel()
+		if recreate {
+			d.rollbackRecreatedWorktree(rec)
+		}
 		<-d.sem
 		d.mu.Unlock()
 		return SendResult{}, fmt.Errorf("reopening dispatch recording: %w", openErr)
@@ -153,6 +159,10 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	return SendResult{TurnID: turn.TurnID, Delivered: true}, nil
 }
 
+func (d *Dispatcher) rollbackRecreatedWorktree(rec Record) {
+	_, _ = d.git("-C", rec.RepositoryRoot, "worktree", "remove", rec.Worktree)
+}
+
 func synthesizeOpeningTurn(rec *Record) {
 	if rec.Mode == "" {
 		rec.Mode = ModeHeadless
@@ -161,7 +171,17 @@ func synthesizeOpeningTurn(rec *Record) {
 	if rec.Status != StatusDone {
 		outcome = TurnInterrupted
 	}
-	rec.Turns = append(rec.Turns, Turn{TurnID: rec.ID + "#1", Source: TurnSourceOrchestrator, StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, Delivered: true, Outcome: outcome, Status: rec.Status, Error: rec.Error, Text: rec.Text})
+	turnID := rec.ID + "#1"
+	rec.Turns = append(rec.Turns, Turn{TurnID: turnID, Source: TurnSourceOrchestrator, StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, Delivered: true, Outcome: outcome, Status: rec.Status, Error: rec.Error, Text: rec.Text})
+	if notification, ok := rec.Notifications[rec.ID]; ok {
+		if rec.Notifications == nil {
+			rec.Notifications = make(map[string]Notification)
+		}
+		if _, exists := rec.Notifications[turnID]; !exists {
+			rec.Notifications[turnID] = notification
+		}
+		delete(rec.Notifications, rec.ID)
+	}
 }
 
 func (d *Dispatcher) resumeWorkspace(rec Record) (string, bool, error) {

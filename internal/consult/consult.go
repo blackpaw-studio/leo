@@ -462,6 +462,7 @@ func (d *Dispatcher) pruneTerminalRunsLocked() {
 func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Duration) (entries []Entry) {
 	states := make([]*runState, len(ids))
 	dones := make([]chan struct{}, len(ids))
+	skipCleanup := make([]bool, len(ids))
 	defer func() {
 		for i := range entries {
 			entries[i] = limitWaitEntry(entries[i])
@@ -470,6 +471,9 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 		defer unlockSerial()
 		for i := range entries {
 			if !entries[i].Status.Terminal() {
+				continue
+			}
+			if skipCleanup[i] {
 				continue
 			}
 			rec, state, err := d.lookup(ids[i])
@@ -531,6 +535,9 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			}
 			turnIDs[i] = turnID
 			entries[i] = headlessEntry(rec, turnID, d.now())
+			if strings.Contains(id, "#") && len(rec.Turns) > 0 && turnID != rec.Turns[len(rec.Turns)-1].TurnID && entries[i].Status.Terminal() {
+				skipCleanup[i] = true
+			}
 		}
 		keys[i] = transitionKey(id, rec.Mode, turnIDs[i])
 	}
@@ -869,6 +876,7 @@ func (d *Dispatcher) MarkInterrupted() {
 			d.restorePendingNotifications(rec)
 			continue
 		}
+		rec.Error, rec.EndedAt = "daemon restarted", markedAt
 		if rec.Mode == ModeInteractive {
 			finished := false
 			for i := range rec.Turns {
@@ -906,7 +914,6 @@ func (d *Dispatcher) MarkInterrupted() {
 			}
 		}
 		rec.foldActive(markedAt)
-		rec.Error, rec.EndedAt = "daemon restarted", markedAt
 		d.mu.Lock()
 		d.addRestartCandidates(&rec)
 		d.mu.Unlock()

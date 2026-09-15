@@ -56,6 +56,9 @@ func turnNotificationStatus(rec Record, key string) Status {
 		if turn.TurnID != key {
 			continue
 		}
+		if turn.Status != "" {
+			return turn.Status
+		}
 		switch turn.Outcome {
 		case TurnFinished:
 			return StatusDone

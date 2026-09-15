@@ -3,6 +3,7 @@ package consult
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,53 @@ type resumeErrorRecorder struct{ nopRecorder }
 
 func (resumeErrorRecorder) Resume(Record) (Handle, error) { return nil, errors.New("resume failed") }
 
+type failOnceFileRecorder struct {
+	*FileRecorder
+	fail bool
+}
+
+func (r *failOnceFileRecorder) Resume(rec Record) (Handle, error) {
+	if r.fail {
+		r.fail = false
+		return nil, errors.New("resume failed")
+	}
+	return r.FileRecorder.Resume(rec)
+}
+
+func TestRecorderFailureRollsBackRecreatedWorktreeForRetry(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	baseRaw, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	base, id, branch := strings.TrimSpace(string(baseRaw)), "d-retry", "leo/retry"
+	if out, err := exec.Command("git", "-C", repo, "branch", branch, base).CombinedOutput(); err != nil {
+		t.Fatalf("branch: %v: %s", err, out)
+	}
+	worktree := filepath.Join(stateDir, "worktrees", id)
+	rec := Record{ID: id, Mode: ModeHeadless, Kind: "dispatch", Template: "claude", Harness: "claude", Model: "opus", Cwd: worktree, Status: StatusDone, SessionID: "sid", Isolation: "worktree", Worktree: worktree, Branch: branch, BaseCommit: base, RepositoryRoot: repo, WorktreeState: WorktreeRemoved, Turns: []Turn{{TurnID: id + "#1", Outcome: TurnFinished, Status: StatusDone}}}
+	baseRecorder := NewFileRecorder(stateDir)
+	h, err := baseRecorder.Open(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h.Close(StatusDone, nil)
+	recorder := &failOnceFileRecorder{FileRecorder: baseRecorder, fail: true}
+	d := NewDispatcher(recorder)
+	d.runs[id] = &runState{record: rec, handle: h, done: closedTestChannel()}
+	if _, err := d.SendWithConfig(context.Background(), testConfig(), id, "first retry"); err == nil {
+		t.Fatal("expected recorder failure")
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Fatalf("recreated worktree remains: %v", err)
+	}
+	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "printf", "%s", `{"type":"result","session_id":"sid","result":"done"}`)
+	}
+	sent, err := d.SendWithConfig(context.Background(), testConfig(), id, "second retry")
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	_ = d.Wait(context.Background(), []string{sent.TurnID}, time.Second)
+}
+
 func TestContinuationRecorderFailureRestoresInvocationState(t *testing.T) {
 	d := NewDispatcher(resumeErrorRecorder{})
 	priorDone := closedTestChannel()
@@ -97,6 +145,58 @@ func TestOldTurnWaitCleanupUsesCapturedInvocationChannel(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("old-turn wait blocked on newer invocation")
+	}
+}
+
+func TestOldTurnWaitStartedDuringNewInvocationSkipsCleanup(t *testing.T) {
+	d := NewDispatcher(nil)
+	state := &runState{record: Record{ID: "d-live", Mode: ModeHeadless, Status: StatusRunning, Isolation: "worktree", WorktreeState: WorktreeKept, Turns: []Turn{{TurnID: "d-live#1", Outcome: TurnFinished, Status: StatusDone}, {TurnID: "d-live#2"}}}, done: make(chan struct{})}
+	d.runs[state.record.ID] = state
+	done := make(chan struct{})
+	go func() { _ = d.Wait(context.Background(), []string{"d-live#1"}, 10*time.Millisecond); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("old turn waited for live newer invocation")
+	}
+}
+
+func TestSynthesizeLegacyTurnMigratesRunNotificationLedger(t *testing.T) {
+	rec := Record{ID: "d-ledger", Status: StatusDone, Notifications: map[string]Notification{"d-ledger": {Disposition: NotificationDelivered, Message: "sent"}}}
+	synthesizeOpeningTurn(&rec)
+	if _, ok := rec.Notifications[rec.ID]; ok {
+		t.Fatalf("run key remains: %+v", rec.Notifications)
+	}
+	if got := rec.Notifications[rec.ID+"#1"]; got.Disposition != NotificationDelivered {
+		t.Fatalf("turn ledger=%+v", got)
+	}
+}
+
+func TestTurnNotificationStatusUsesRecordedHeadlessStatus(t *testing.T) {
+	rec := Record{Status: StatusFailed, Turns: []Turn{{TurnID: "d-x#1", Outcome: TurnInterrupted, Status: StatusFailed}}}
+	if got := turnNotificationStatus(rec, "d-x#1"); got != StatusFailed {
+		t.Fatalf("status=%s", got)
+	}
+}
+
+func TestMarkInterruptedLegacySynthesisIncludesRestartMetadata(t *testing.T) {
+	stateDir := t.TempDir()
+	r := NewFileRecorder(stateDir)
+	rec := Record{ID: "d-legacy-restart", Kind: "dispatch", Status: StatusRunning, StartedAt: time.Now()}
+	h, err := r.Open(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h.Close(StatusRunning, nil)
+	d := NewDispatcher(r)
+	d.MarkInterrupted()
+	got, err := LoadOne(stateDir, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := got.Turns[0]
+	if turn.Status != StatusFailed || turn.Error != "daemon restarted" || turn.EndedAt.IsZero() {
+		t.Fatalf("turn=%+v", turn)
 	}
 }
 
