@@ -11,29 +11,34 @@ import (
 )
 
 const (
-	rosterMarker       = "@leo_roster_owned"
-	rosterStatusMarker = "@leo_roster_status_owned"
-	rosterFormat       = "#[align=left] #{@leo_roster}"
+	rosterMarker             = "@leo_roster_owned"
+	rosterStatusMarker       = "@leo_roster_status_owned"
+	rosterFormat0Marker      = "@leo_roster_format0_owned"
+	rosterFormat0ValueMarker = "@leo_roster_format0_value"
+	rosterFormat             = "#[align=left] #{@leo_roster}"
 )
 
 type rosterSessionState struct {
-	sessionID                                                                    string
-	text                                                                         string
-	rosterMarked, statusChecked, needsStatus, statusMarked, statusSet, formatSet bool
-	clearFormat, clearRoster, clearStatus, clearStatusMarker, clearRosterMarker  bool
+	sessionID                                                                                   string
+	text                                                                                        string
+	format0Value                                                                                string
+	rosterMarked, statusChecked, needsStatus, statusMarked, statusSet, formatSet, format0Marked bool
+	clearFormat, clearFormat0, clearFormatArray, clearFormat0Marker, clearFormat0ValueMarker    bool
+	clearRoster, clearStatus, clearStatusMarker, clearRosterMarker                              bool
 }
 
 func (s rosterSessionState) managed() bool {
-	return s.rosterMarked || s.statusMarked || s.statusSet || s.formatSet || s.text != ""
+	return s.rosterMarked || s.statusMarked || s.format0Marked || s.statusSet || s.formatSet || s.text != ""
 }
 func (s rosterSessionState) clearing() bool {
-	return s.clearFormat || s.clearRoster || s.clearStatus || s.clearStatusMarker || s.clearRosterMarker
+	return s.clearFormat || s.clearFormat0 || s.clearFormatArray || s.clearFormat0Marker || s.clearFormat0ValueMarker || s.clearRoster || s.clearStatus || s.clearStatusMarker || s.clearRosterMarker
 }
 
 type rosterPane struct{ session, sessionID, window, pane string }
 type managedRosterState struct {
-	sessionID, text            string
-	rosterMarked, statusMarked bool
+	sessionID, text                           string
+	format0Value                              string
+	rosterMarked, statusMarked, format0Marked bool
 }
 
 // UpdateRoster resolves live tmux membership, renders per-session rosters, and
@@ -115,7 +120,7 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 			state = rosterSessionState{}
 		}
 		state.sessionID = found.sessionID
-		state.rosterMarked, state.statusMarked, state.text = found.rosterMarked, found.statusMarked, found.text
+		state.rosterMarked, state.statusMarked, state.format0Marked, state.format0Value, state.text = found.rosterMarked, found.statusMarked, found.format0Marked, found.format0Value, found.text
 		if _, ok := resolved[session]; !ok {
 			resolved[session] = nil
 		}
@@ -212,22 +217,49 @@ func (v *Viewer) rosterInventory() ([]rosterPane, error) {
 }
 
 func (v *Viewer) managedRosterSessions() (map[string]managedRosterState, error) {
-	out, err := v.output("list-sessions", "-F", "#{session_name}\t#{session_id}\t#{@leo_roster_owned}\t#{@leo_roster_status_owned}\t#{@leo_roster}")
+	out, err := v.output("list-sessions", "-F", "#{session_name}\t#{session_id}\t#{@leo_roster_owned}\t#{@leo_roster_status_owned}\t#{@leo_roster_format0_owned}\t#{@leo_roster}")
 	if err != nil {
 		return nil, err
 	}
 	managed := make(map[string]managedRosterState)
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\r\n"), "\n") {
-		parts := strings.SplitN(line, "\t", 5)
-		if len(parts) >= 4 && (parts[2] == "1" || parts[3] == "1") {
-			state := managedRosterState{sessionID: parts[1], rosterMarked: parts[2] == "1", statusMarked: parts[3] == "1"}
-			if len(parts) == 5 {
-				state.text = parts[4]
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) >= 4 && (parts[2] == "1" || parts[3] == "1" || (len(parts) >= 5 && parts[4] == "1")) {
+			state := managedRosterState{sessionID: parts[1], rosterMarked: parts[2] == "1", statusMarked: parts[3] == "1", format0Marked: len(parts) >= 5 && parts[4] == "1"}
+			if state.format0Marked {
+				value, err := v.output("show-options", "-t", tmux.Target(parts[0])+":", rosterFormat0ValueMarker)
+				if err != nil {
+					return nil, err
+				}
+				state.format0Value, err = rosterOptionValue(rosterFormat0ValueMarker, string(value))
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(parts) == 6 {
+				state.text = parts[5]
 			}
 			managed[parts[0]] = state
 		}
 	}
 	return managed, nil
+}
+
+func rosterOptionValue(option, output string) (string, error) {
+	line := strings.TrimSuffix(strings.TrimSuffix(output, "\n"), "\r")
+	prefix := option + " "
+	if !strings.HasPrefix(line, prefix) {
+		return "", fmt.Errorf("unexpected %s output %q", option, output)
+	}
+	value := strings.TrimPrefix(line, prefix)
+	if strings.HasPrefix(value, `"`) {
+		unquoted, err := strconv.Unquote(value)
+		if err != nil {
+			return "", fmt.Errorf("parsing %s: %w", option, err)
+		}
+		return unquoted, nil
+	}
+	return value, nil
 }
 
 func (v *Viewer) applyRoster(session, text string, state rosterSessionState) rosterSessionState {
@@ -272,6 +304,34 @@ func (v *Viewer) applyRoster(session, text string, state rosterSessionState) ros
 		state.statusSet = true
 	}
 	if !state.formatSet {
+		local, err := v.output("show-options", "-t", target, "status-format")
+		if err != nil {
+			v.log("reading session status-format for %q: %v", session, err)
+			return state
+		}
+		if !statusFormatHasEntries(string(local)) {
+			global, err := v.output("show-options", "-g", "-v", "status-format[0]")
+			if err != nil {
+				v.log("reading global status-format[0] for %q: %v", session, err)
+				return state
+			}
+			if !state.format0Marked {
+				if err := v.run("set-option", "-t", target, rosterFormat0Marker, "1"); err != nil {
+					v.log("marking status-format[0] ownership for %q: %v", session, err)
+					return state
+				}
+				state.format0Marked = true
+			}
+			state.format0Value = strings.TrimRight(string(global), "\r\n")
+			if err := v.run("set-option", "-t", target, rosterFormat0ValueMarker, state.format0Value); err != nil {
+				v.log("recording status-format[0] ownership for %q: %v", session, err)
+				return state
+			}
+			if err := v.run("set-option", "-t", target, "status-format[0]", state.format0Value); err != nil {
+				v.log("copying status-format[0] for %q: %v", session, err)
+				return state
+			}
+		}
 		if err := v.run("set-option", "-t", target, "status-format[1]", rosterFormat); err != nil {
 			v.log("setting roster format for %q: %v", session, err)
 			return state
@@ -302,7 +362,8 @@ func rosterStatusLines(value string) (int, error) {
 func (v *Viewer) clearRosterState(session string, state rosterSessionState) rosterSessionState {
 	target := tmux.Target(session) + ":"
 	if !state.clearing() {
-		state.clearFormat, state.clearRoster = true, true
+		state.clearFormat, state.clearFormatArray, state.clearRoster = true, true, true
+		state.clearFormat0, state.clearFormat0Marker, state.clearFormat0ValueMarker = state.format0Marked, state.format0Marked, state.format0Marked
 		state.clearStatus, state.clearStatusMarker = state.statusMarked, state.statusMarked
 		state.clearRosterMarker = state.rosterMarked
 	}
@@ -319,14 +380,34 @@ func (v *Viewer) clearRosterState(session string, state rosterSessionState) rost
 	if state.clearFormat {
 		if err := v.run("set-option", "-u", "-t", target, "status-format[1]"); err != nil {
 			v.log("clearing status-format[1] for %q: %v", session, err)
-		} else if out, err := v.output("show-options", "-t", target, "status-format"); err != nil {
+		} else {
+			state.clearFormat = false
+		}
+	}
+	if !state.clearFormat && state.clearFormat0 {
+		current, err := v.output("show-options", "-t", target, "-v", "status-format[0]")
+		switch {
+		case err != nil:
+			v.log("reading owned status-format[0] for %q: %v", session, err)
+		case strings.TrimRight(string(current), "\r\n") != state.format0Value:
+			state.clearFormat0, state.clearFormatArray = false, false
+		default:
+			if err := v.run("set-option", "-u", "-t", target, "status-format[0]"); err != nil {
+				v.log("clearing owned status-format[0] for %q: %v", session, err)
+			} else {
+				state.clearFormat0 = false
+			}
+		}
+	}
+	if !state.clearFormat && !state.clearFormat0 && state.clearFormatArray {
+		if out, err := v.output("show-options", "-t", target, "status-format"); err != nil {
 			v.log("reading status-format during cleanup for %q: %v", session, err)
 		} else if statusFormatHasEntries(string(out)) {
-			state.clearFormat = false
+			state.clearFormatArray = false
 		} else if err := v.run("set-option", "-u", "-t", target, "status-format"); err != nil {
 			v.log("clearing empty status-format for %q: %v", session, err)
 		} else {
-			state.clearFormat = false
+			state.clearFormatArray = false
 		}
 	}
 	unset(&state.clearRoster, "@leo_roster")
@@ -348,6 +429,10 @@ func (v *Viewer) clearRosterState(session string, state rosterSessionState) rost
 	}
 	if !state.clearFormat && !state.clearRoster {
 		unset(&state.clearRosterMarker, rosterMarker)
+	}
+	if !state.clearFormat0 && !state.clearFormatArray {
+		unset(&state.clearFormat0Marker, rosterFormat0Marker)
+		unset(&state.clearFormat0ValueMarker, rosterFormat0ValueMarker)
 	}
 	if !state.clearing() {
 		return rosterSessionState{}

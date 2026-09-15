@@ -3,11 +3,14 @@ package consult
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+const rosterTestFormat0Value = `#[bg=colour63,fg=colour253,bold] #S "quoted" \\ path with spaces`
 
 func TestViewerRosterDiagnosticsLogOnlyOnChange(t *testing.T) {
 	var logs []string
@@ -158,7 +161,7 @@ func TestViewerRosterAppliesChangesAndOwnershipAwareCleanup(t *testing.T) {
 
 func TestViewerRosterCleanupDropsEmptySessionStatusFormat(t *testing.T) {
 	var calls [][]string
-	v := rosterCleanupFormatViewer(&calls, "status-format\n")
+	v := rosterCleanupFormatViewer(&calls, "status-format\n", "", "")
 	v.UpdateRoster(nil, time.Now())
 
 	want := [][]string{
@@ -171,7 +174,7 @@ func TestViewerRosterCleanupDropsEmptySessionStatusFormat(t *testing.T) {
 
 func TestViewerRosterCleanupPreservesNonEmptySessionStatusFormat(t *testing.T) {
 	var calls [][]string
-	v := rosterCleanupFormatViewer(&calls, "status-format[0] custom\n")
+	v := rosterCleanupFormatViewer(&calls, "status-format[0] custom\n", "", "")
 	v.UpdateRoster(nil, time.Now())
 
 	assertRosterCallSequence(t, calls, [][]string{
@@ -182,6 +185,97 @@ func TestViewerRosterCleanupPreservesNonEmptySessionStatusFormat(t *testing.T) {
 		if equalRosterCall(call, []string{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", "status-format"}) {
 			t.Fatalf("cleared non-empty session status-format: %#v", calls)
 		}
+	}
+}
+
+func TestViewerRosterCleanupClearsOwnedFormatZeroBeforeEmptyArray(t *testing.T) {
+	var calls [][]string
+	v := rosterCleanupFormatViewer(&calls, "status-format\n", "1", rosterTestFormat0Value)
+	v.UpdateRoster(nil, time.Now())
+
+	assertRosterCallSequence(t, calls, [][]string{
+		{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", "status-format[1]"},
+		{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", "status-format[0]"},
+		{"tmux", "-L", "leo", "show-options", "-t", "=leo-worker:", "status-format"},
+		{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", "status-format"},
+		{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", rosterFormat0Marker},
+		{"tmux", "-L", "leo", "set-option", "-u", "-t", "=leo-worker:", rosterFormat0ValueMarker},
+	})
+}
+
+func TestViewerRosterCleanupPreservesUserEditedOwnedFormatZero(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		switch {
+		case containsArg(args, "show-options") && containsArg(args, "status-format[0]"):
+			return exec.Command("printf", "user format\n")
+		case containsArg(args, "show-options"):
+			return exec.Command("printf", "2\n")
+		default:
+			return exec.Command("true")
+		}
+	}}
+	v.defaults()
+	v.clearRosterState("leo-worker", rosterSessionState{format0Marked: true, format0Value: rosterTestFormat0Value})
+	assertRosterCallSequence(t, calls, [][]string{
+		{"tmux", "-L", "leo", "show-options", "-t", "=leo-worker:", "-v", "status-format[0]"},
+	})
+	for _, option := range []string{"status-format[0]", "status-format"} {
+		if countRosterUnsets(calls, option) != 0 {
+			t.Fatalf("cleared user-edited %s: %#v", option, calls)
+		}
+	}
+	if countRosterUnsets(calls, rosterFormat0Marker) != 1 {
+		t.Fatalf("did not clear format ownership marker: %#v", calls)
+	}
+}
+
+func TestViewerRosterCopiesGlobalFormatZeroOnlyWhenSessionFormatIsUnset(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		localFormat string
+		want        [][]string
+	}{
+		{
+			name: "copies inherited format",
+			want: [][]string{
+				{"tmux", "-L", "leo", "show-options", "-t", "=leo-worker:", "status-format"},
+				{"tmux", "-L", "leo", "show-options", "-g", "-v", "status-format[0]"},
+				{"tmux", "-L", "leo", "set-option", "-t", "=leo-worker:", "@leo_roster_format0_owned", "1"},
+				{"tmux", "-L", "leo", "set-option", "-t", "=leo-worker:", rosterFormat0ValueMarker, rosterTestFormat0Value},
+				{"tmux", "-L", "leo", "set-option", "-t", "=leo-worker:", "status-format[0]", rosterTestFormat0Value},
+				{"tmux", "-L", "leo", "set-option", "-t", "=leo-worker:", "status-format[1]", rosterFormat},
+			},
+		},
+		{
+			name:        "preserves session format",
+			localFormat: "status-format[0] custom\n",
+			want: [][]string{
+				{"tmux", "-L", "leo", "show-options", "-t", "=leo-worker:", "status-format"},
+				{"tmux", "-L", "leo", "set-option", "-t", "=leo-worker:", "status-format[1]", rosterFormat},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls [][]string
+			v := &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
+				calls = append(calls, append([]string{name}, args...))
+				switch {
+				case containsArg(args, "status-format") && containsArg(args, "show-options") && containsArg(args, "-t"):
+					return exec.Command("printf", "%s", tc.localFormat)
+				case containsArg(args, "status-format[0]") && containsArg(args, "show-options"):
+					return exec.Command("printf", "%s\n", rosterTestFormat0Value)
+				case containsArg(args, "show-options"):
+					return exec.Command("printf", "1\n")
+				default:
+					return exec.Command("true")
+				}
+			}}
+			v.defaults()
+			v.applyRoster("leo-worker", "roster", rosterSessionState{})
+			assertRosterCallSequence(t, calls, tc.want)
+		})
 	}
 }
 
@@ -327,6 +421,7 @@ func TestViewerRosterReinitializesWhenSessionIDChanges(t *testing.T) {
 }
 
 func TestViewerRosterRestartDiscoversTextAndCleansOwnedStatus(t *testing.T) {
+	format0Output := rosterFormat0ValueFromTmux(t)
 	var calls [][]string
 	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, append([]string{name}, args...))
@@ -334,7 +429,11 @@ func TestViewerRosterRestartDiscoversTextAndCleansOwnedStatus(t *testing.T) {
 		case containsArg(args, "list-panes"):
 			return exec.Command("printf", "")
 		case containsArg(args, "list-sessions"):
-			return exec.Command("printf", "%s", "leo-worker\t$1\t1\t1\told roster\n")
+			return exec.Command("printf", "%s", "leo-worker\t$1\t1\t1\t1\told roster\n")
+		case containsArg(args, "show-options") && containsArg(args, rosterFormat0ValueMarker):
+			return exec.Command("printf", "%s", format0Output)
+		case containsArg(args, "show-options") && containsArg(args, "status-format[0]"):
+			return exec.Command("printf", "%s\n", rosterTestFormat0Value)
 		case containsArg(args, "show-options"):
 			return exec.Command("printf", "2\n")
 		default:
@@ -342,16 +441,41 @@ func TestViewerRosterRestartDiscoversTextAndCleansOwnedStatus(t *testing.T) {
 		}
 	}}
 	v.UpdateRoster(nil, time.Now())
-	for _, option := range []string{"status-format[1]", "@leo_roster", "status", rosterStatusMarker, rosterMarker} {
+	for _, option := range []string{"status-format[1]", "status-format[0]", "@leo_roster", "status", rosterFormat0Marker, rosterFormat0ValueMarker, rosterStatusMarker, rosterMarker} {
 		if countRosterUnsets(calls, option) != 1 {
 			t.Fatalf("restart cleanup %s calls = %#v", option, calls)
 		}
 	}
 }
 
+func rosterFormat0ValueFromTmux(t *testing.T) string {
+	t.Helper()
+	tmuxPath, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not available")
+	}
+	session := fmt.Sprintf("scratch-%d", os.Getpid())
+	if out, err := exec.Command(tmuxPath, "-L", "leo", "new-session", "-d", "-s", session).CombinedOutput(); err != nil {
+		t.Fatalf("creating scratch tmux session: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command(tmuxPath, "-L", "leo", "kill-session", "-t", session).Run() })
+	if out, err := exec.Command(tmuxPath, "-L", "leo", "set-option", "-t", session+":", rosterFormat0ValueMarker, rosterTestFormat0Value).CombinedOutput(); err != nil {
+		t.Fatalf("setting scratch tmux option: %v: %s", err, out)
+	}
+	line, err := exec.Command(tmuxPath, "-L", "leo", "show-options", "-t", session+":", rosterFormat0ValueMarker).Output()
+	if err != nil {
+		t.Fatalf("reading scratch tmux option: %v", err)
+	}
+	value, err := rosterOptionValue(rosterFormat0ValueMarker, string(line))
+	if err != nil || value != rosterTestFormat0Value {
+		t.Fatalf("unexpected scratch tmux option output %q", line)
+	}
+	return string(line)
+}
+
 func TestViewerRosterRestartAfterFailedStatusCleanupRetainsOwnership(t *testing.T) {
 	var firstCalls [][]string
-	first := restartCleanupViewer(&firstCalls, "leo-worker\t$1\t1\t1\told\n", func(args []string) *exec.Cmd {
+	first := restartCleanupViewer(&firstCalls, "leo-worker\t$1\t1\t1\t\told\n", func(args []string) *exec.Cmd {
 		if containsArg(args, "-u") && containsArg(args, "status") {
 			return exec.Command("false")
 		}
@@ -363,7 +487,7 @@ func TestViewerRosterRestartAfterFailedStatusCleanupRetainsOwnership(t *testing.
 	}
 
 	var restartCalls [][]string
-	restarted := restartCleanupViewer(&restartCalls, "leo-worker\t$1\t\t1\t\n", func([]string) *exec.Cmd { return exec.Command("true") })
+	restarted := restartCleanupViewer(&restartCalls, "leo-worker\t$1\t\t1\t\t\n", func([]string) *exec.Cmd { return exec.Command("true") })
 	restarted.UpdateRoster(nil, time.Now())
 	if countRosterUnsets(restartCalls, "status") != 1 || countRosterUnsets(restartCalls, rosterStatusMarker) != 1 {
 		t.Fatalf("restart did not finish owned status cleanup: %#v", restartCalls)
@@ -372,7 +496,7 @@ func TestViewerRosterRestartAfterFailedStatusCleanupRetainsOwnership(t *testing.
 
 func TestViewerRosterRestartAfterFailedFormatCleanupRetainsOwnership(t *testing.T) {
 	var firstCalls [][]string
-	first := restartCleanupViewer(&firstCalls, "leo-worker\t$1\t1\t\told\n", func(args []string) *exec.Cmd {
+	first := restartCleanupViewer(&firstCalls, "leo-worker\t$1\t1\t\t\told\n", func(args []string) *exec.Cmd {
 		if containsArg(args, "-u") && containsArg(args, "status-format[1]") {
 			return exec.Command("false")
 		}
@@ -384,7 +508,7 @@ func TestViewerRosterRestartAfterFailedFormatCleanupRetainsOwnership(t *testing.
 	}
 
 	var restartCalls [][]string
-	restarted := restartCleanupViewer(&restartCalls, "leo-worker\t$1\t1\t\t\n", func([]string) *exec.Cmd { return exec.Command("true") })
+	restarted := restartCleanupViewer(&restartCalls, "leo-worker\t$1\t1\t\t\t\n", func([]string) *exec.Cmd { return exec.Command("true") })
 	restarted.UpdateRoster(nil, time.Now())
 	if countRosterUnsets(restartCalls, "status-format[1]") != 1 || countRosterUnsets(restartCalls, rosterMarker) != 1 {
 		t.Fatalf("restart did not finish owned roster cleanup: %#v", restartCalls)
@@ -407,14 +531,18 @@ func restartCleanupViewer(calls *[][]string, sessions string, action func([]stri
 	}}
 }
 
-func rosterCleanupFormatViewer(calls *[][]string, statusFormat string) *Viewer {
+func rosterCleanupFormatViewer(calls *[][]string, statusFormat, format0Owned, format0Value string) *Viewer {
 	return &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
 		*calls = append(*calls, append([]string{name}, args...))
 		switch {
 		case containsArg(args, "list-panes"):
 			return exec.Command("printf", "")
 		case containsArg(args, "list-sessions"):
-			return exec.Command("printf", "%s", "leo-worker\t$1\t1\t\told roster\n")
+			return exec.Command("printf", "%s", "leo-worker\t$1\t1\t\t"+format0Owned+"\told roster\n")
+		case containsArg(args, "show-options") && containsArg(args, rosterFormat0ValueMarker):
+			return exec.Command("printf", "%s %s\n", rosterFormat0ValueMarker, format0Value)
+		case containsArg(args, "show-options") && containsArg(args, "status-format[0]"):
+			return exec.Command("printf", "%s\n", format0Value)
 		case containsArg(args, "show-options") && containsArg(args, "status-format"):
 			return exec.Command("printf", "%s", statusFormat)
 		case containsArg(args, "show-options"):

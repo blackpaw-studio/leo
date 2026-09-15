@@ -70,6 +70,11 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	if err != nil || !strings.Contains(string(roster), "claude") || !strings.Contains(string(roster), "1 tools · 0.1k tokens") {
 		t.Fatalf("live roster = %q, err %v", roster, err)
 	}
+	formatWhileRoster, err := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", target, "#{T:status-format[0]}")...).Output()
+	prefix := session[:8]
+	if err != nil || strings.TrimSpace(string(formatWhileRoster)) == "" || !strings.Contains(string(formatWhileRoster), prefix) {
+		t.Fatalf("live status-format[0] = %q, want non-empty format containing %q, err %v", formatWhileRoster, prefix, err)
+	}
 	status, err := exec.Command(tmuxPath, tmux.Args("show-options", "-v", "-t", target, "status")...).Output()
 	if err != nil || strings.TrimSpace(string(status)) != "2" {
 		t.Fatalf("live status = %q, err %v", status, err)
@@ -96,11 +101,11 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	}
 	// tmux's default status-left truncates the session name to 10 columns
 	// ("[leo-dispa"), so only require a prefix of it.
-	prefix := session[:8]
+	prefix = session[:8]
 	if err != nil || strings.TrimSpace(string(format)) == "" || !strings.Contains(string(format), prefix) {
 		t.Fatalf("cleaned status-format[0] = %q, want non-empty format containing %q, err %v", format, prefix, err)
 	}
-	for _, option := range []string{"@leo_roster", "@leo_roster_owned", "@leo_roster_status_owned", "status-format[1]"} {
+	for _, option := range []string{"@leo_roster", "@leo_roster_owned", "@leo_roster_status_owned", "@leo_roster_format0_owned", "@leo_roster_format0_value", "status-format[1]"} {
 		out, _ := exec.Command(tmuxPath, tmux.Args("show-options", "-qv", "-t", target, option)...).Output()
 		if strings.TrimSpace(string(out)) != "" {
 			t.Fatalf("%s remained after collection: %q", option, out)
