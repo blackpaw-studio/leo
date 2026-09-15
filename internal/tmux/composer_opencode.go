@@ -19,7 +19,10 @@ func OpenCodeComposerClassifier(capture string) ComposerState {
 			continue
 		}
 		emptyPlaceholder := false
-		for j := i - 1; j >= 0 && i-j <= 4; j-- {
+		for j := i - 1; j >= 0; j-- {
+			if !strings.HasPrefix(strings.TrimSpace(lines[j]), "┃") {
+				break
+			}
 			content := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[j]), "┃"))
 			if content == "" {
 				continue
@@ -43,7 +46,7 @@ func openCodeComposerLines(lines []string) ([]string, bool) {
 		line := strings.TrimSpace(lines[i])
 		if strings.HasPrefix(line, "┃") && strings.Contains(line, "·") {
 			start := i
-			for start > 0 && i-start < 4 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "┃") {
+			for start > 0 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "┃") {
 				start--
 			}
 			return lines[start:i], true

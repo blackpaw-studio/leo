@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -80,7 +81,10 @@ func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status S
 		return
 	}
 	now := d.now()
-	n := Notification{Message: completionNotification(s.record, key, status)}
+	snapshot := cloneRecord(s.record)
+	snapshot.ActiveSeconds = snapshot.LiveActiveSeconds(now)
+	snapshot.RunningSince = nil
+	n := Notification{Message: completionNotification(snapshot, key, status)}
 	if !s.record.Notify || s.record.CallerPaneID == "" || d.waits[key] > 0 {
 		n.Disposition, n.SuppressedAt = NotificationSuppressed, now
 	} else {
@@ -93,9 +97,6 @@ func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status S
 }
 
 func (d *Dispatcher) persistNotificationRecordLocked(s *runState) error {
-	if recorder, ok := d.recorder.(*FileRecorder); ok {
-		return writeRecord(recorder.dir, cloneRecord(s.record))
-	}
 	if h, ok := s.handle.(recordHandle); ok {
 		return h.SetRecord(cloneRecord(s.record))
 	}
@@ -120,24 +121,33 @@ func (d *Dispatcher) restorePendingNotifications(rec Record) {
 }
 
 type restoredNotificationHandle struct {
+	mu  sync.Mutex
 	dir string
 	rec Record
 }
 
 func (h *restoredNotificationHandle) Write(p []byte) (int, error) { return len(p), nil }
 func (h *restoredNotificationHandle) SetRecord(rec Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.rec = rec
 	return writeRecord(h.dir, rec)
 }
 func (h *restoredNotificationHandle) SetStatus(s Status) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.rec.Status = s
 	return writeRecord(h.dir, h.rec)
 }
 func (h *restoredNotificationHandle) SetText(text string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.rec.Text = text
 	return writeRecord(h.dir, h.rec)
 }
 func (h *restoredNotificationHandle) SetViewerWindowID(id string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.rec.ViewerWindowID = id
 	return writeRecord(h.dir, h.rec)
 }
@@ -191,10 +201,21 @@ func (d *Dispatcher) SweepNotifications(ctx context.Context) {
 	d.mu.Lock()
 	delivery := d.notificationDelivery
 	var pending []pendingNotification
-	if delivery != nil {
-		for _, s := range d.runs {
-			for key, n := range s.record.Notifications {
-				if n.Disposition == NotificationPending {
+	for _, s := range d.runs {
+		for key, n := range s.record.Notifications {
+			if n.Disposition == NotificationPending {
+				if !n.PendingAt.IsZero() && !d.now().Before(n.PendingAt.Add(time.Hour)) {
+					n.Disposition, n.FailedAt = NotificationFailed, d.now()
+					s.record.Notifications[key] = n
+					if err := d.persistNotificationRecordLocked(s); err != nil {
+						n.Disposition, n.FailedAt = NotificationPending, time.Time{}
+						s.record.Notifications[key] = n
+					} else {
+						fmt.Fprintf(os.Stderr, "dispatch %s: notification %s expired after 1h\n", s.record.ID, key)
+					}
+					continue
+				}
+				if delivery != nil {
 					pending = append(pending, pendingNotification{s, cloneRecord(s.record), key})
 				}
 			}

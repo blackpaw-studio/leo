@@ -245,7 +245,11 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		if !d.hasWorkingTurnLocked(s) {
 			s.record.foldActive(boundary)
 		}
-		d.completionCandidateLocked(s, t.TurnID, turnNotificationStatus(s.record, t.TurnID))
+		notificationStatus := turnNotificationStatus(s.record, t.TurnID)
+		if outcome == TurnInterrupted && s.record.Status == StatusSettling && s.settleStatus == StatusTimeout {
+			notificationStatus = StatusTimeout
+		}
+		d.completionCandidateLocked(s, t.TurnID, notificationStatus)
 		d.persistTurnLocked(s, *t)
 		if s.record.Status != oldStatus {
 			d.persistLocked(s, "status")

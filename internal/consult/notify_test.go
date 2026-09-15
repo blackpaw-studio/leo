@@ -245,3 +245,47 @@ func TestPruneKeepsPendingNotificationsResident(t *testing.T) {
 		t.Fatal("pending notification was pruned")
 	}
 }
+
+func TestPendingNotificationExpiresFailedAfterOneHour(t *testing.T) {
+	d := NewDispatcher(nil)
+	now := time.Unix(7200, 0)
+	d.now = func() time.Time { return now }
+	s := &runState{record: Record{ID: "d-old", Status: StatusDone, Notifications: map[string]Notification{"d-old": {Disposition: NotificationPending, PendingAt: now.Add(-time.Hour)}}}, handle: nopHandle{}}
+	d.runs["d-old"] = s
+	d.SetNotificationDelivery(&fakeNotificationDelivery{})
+	d.SweepNotifications(context.Background())
+	n := s.record.Notifications["d-old"]
+	if n.Disposition != NotificationFailed || !n.FailedAt.Equal(now) {
+		t.Fatalf("notification=%+v", n)
+	}
+}
+
+func TestOverlappingTurnCandidateSnapshotsLiveActiveAtBoundary(t *testing.T) {
+	d := NewDispatcher(nil)
+	start := time.Unix(100, 0)
+	boundary := start.Add(5 * time.Second)
+	d.now = func() time.Time { return boundary }
+	s := &runState{record: Record{ID: "d-x", Name: "job", Notify: true, CallerPaneID: "%1", Mode: ModeInteractive, Status: StatusRunning, RunningSince: &start, Turns: []Turn{{TurnID: "d-x#1", Delivered: true}, {TurnID: "d-x#2", Delivered: true}}}, handle: nopHandle{}}
+	d.mu.Lock()
+	d.closeTurnLocked(s, "d-x#1", TurnFinished, "")
+	got := s.record.Notifications["d-x#1"].Message
+	d.mu.Unlock()
+	if !strings.Contains(got, "active 0:05") {
+		t.Fatalf("message=%q", got)
+	}
+}
+
+func TestTimeoutTurnCandidateUsesEffectiveTerminalStatus(t *testing.T) {
+	d := NewDispatcher(nil)
+	now := time.Unix(100, 0)
+	d.now = func() time.Time { return now }
+	s := &runState{record: Record{ID: "d-x", Name: "job", Notify: true, CallerPaneID: "%1", Mode: ModeInteractive, Status: StatusRunning, Turns: []Turn{{TurnID: "d-x#1"}}}, handle: nopHandle{}, done: make(chan struct{})}
+	d.mu.Lock()
+	d.beginSettlementLocked(s, StatusTimeout, 0)
+	d.finishInteractiveLocked(s, StatusTimeout)
+	got := s.record.Notifications["d-x#1"].Message
+	d.mu.Unlock()
+	if !strings.Contains(got, ") timeout ·") {
+		t.Fatalf("message=%q", got)
+	}
+}
