@@ -71,15 +71,15 @@ func turnNotificationStatus(rec Record, key string) Status {
 	return rec.Status
 }
 
-func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status Status) {
+func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status Status) bool {
 	if key == "" {
-		return
+		return true
 	}
 	if s.record.Notifications == nil {
 		s.record.Notifications = make(map[string]Notification)
 	}
 	if _, exists := s.record.Notifications[key]; exists {
-		return
+		return true
 	}
 	now := d.now()
 	snapshot := cloneRecord(s.record)
@@ -101,7 +101,9 @@ func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status S
 			s.record.Notifications[key] = n
 		}
 		fmt.Fprintf(os.Stderr, "dispatch %s: recording notification: %v\n", s.record.ID, err)
+		return false
 	}
+	return true
 }
 
 func (d *Dispatcher) persistNotificationRecordLocked(s *runState) error {

@@ -335,6 +335,16 @@ func TestCandidatePersistenceFailureFailsOnce(t *testing.T) {
 	}
 }
 
+func TestCompleteCandidatePersistenceFailureWritesOnce(t *testing.T) {
+	d := NewDispatcher(nil)
+	h := &countingFailHandle{}
+	s := &runState{record: Record{ID: "d-complete", Kind: "dispatch", Notify: true, CallerPaneID: "%1", CallerHarness: "codex", Status: StatusRunning}, handle: h, done: make(chan struct{})}
+	d.complete(s, StatusDone, "done", nil)
+	if got := s.record.Notifications["d-complete"].Disposition; got != NotificationFailed || h.writes != 1 {
+		t.Fatalf("disposition=%s writes=%d", got, h.writes)
+	}
+}
+
 func TestClaimedExpiryPersistenceFailureStaysFailedOnce(t *testing.T) {
 	now := time.Unix(7200, 0)
 	d := NewDispatcher(nil)
