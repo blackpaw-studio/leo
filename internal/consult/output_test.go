@@ -1,6 +1,9 @@
 package consult
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,4 +87,42 @@ func TestLimitWaitEntryUTF8(t *testing.T) {
 			t.Fatalf("limited value invalid: bytes=%d valid=%t", len(value), utf8.ValidString(value))
 		}
 	}
+}
+
+func TestReadOutputStreamUsesBoundedFramesForLargeRecording(t *testing.T) {
+	var stream bytes.Buffer
+	for range 600 { // >4 MiB of complete, individually valid envelopes.
+		fmt.Fprintf(&stream, `{"t":0,"raw":"%s"}`+"\n", strings.Repeat("x", 8<<10))
+	}
+	reader := &maxReadReader{Reader: bytes.NewReader(stream.Bytes()), max: 128 << 10}
+	got, _, err := readOutputStream(reader, NewRenderer("unknown"), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || reader.largest > 128<<10 {
+		t.Fatalf("lines=%d largest read=%d", len(got), reader.largest)
+	}
+}
+
+func TestLimitWaitEntryOversizedMultibyteID(t *testing.T) {
+	id := strings.Repeat("界", maxWaitEntryBytes)
+	got := limitWaitEntry(Entry{ID: id, Text: strings.Repeat("x", maxWaitEntryBytes+1)})
+	if len(got.Text) > maxWaitEntryBytes || !utf8.ValidString(got.Text) {
+		t.Fatalf("invalid truncation: bytes=%d utf8=%t", len(got.Text), utf8.ValidString(got.Text))
+	}
+}
+
+type maxReadReader struct {
+	io.Reader
+	max, largest int
+}
+
+func (r *maxReadReader) Read(p []byte) (int, error) {
+	if len(p) > r.max {
+		return 0, fmt.Errorf("read buffer = %d, max %d", len(p), r.max)
+	}
+	if len(p) > r.largest {
+		r.largest = len(p)
+	}
+	return r.Reader.Read(p)
 }

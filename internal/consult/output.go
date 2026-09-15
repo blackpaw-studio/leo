@@ -1,9 +1,10 @@
 package consult
 
 import (
-	"bytes"
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -11,9 +12,11 @@ import (
 )
 
 const (
-	defaultOutputTail = 60
-	maxOutputTail     = 400
-	maxWaitEntryBytes = 32768
+	defaultOutputTail  = 60
+	maxOutputTail      = 400
+	maxWaitEntryBytes  = 32768
+	outputReadBuffer   = 64 << 10
+	maxWaitNoteIDBytes = 256
 )
 
 type Output struct {
@@ -48,27 +51,52 @@ func ReadOutput(stateDir, id string, tail int) (Output, error) {
 	if _, err := LoadOne(stateDir, runID); err != nil {
 		return Output{}, fmt.Errorf("unknown dispatch %s", id)
 	}
-	raw, err := os.ReadFile(StreamPath(stateDir, runID))
+	stream, err := os.Open(StreamPath(stateDir, runID))
 	if err != nil {
 		return Output{}, fmt.Errorf("recording unavailable for dispatch %s", runID)
 	}
-	ring := make([]string, 0, tail)
-	truncated := false
-	renderer := NewRenderer("")
+	defer stream.Close()
 	// Render after resolving the record so persisted runs retain their harness mapping.
 	rec, _ := LoadOne(stateDir, runID)
-	renderer = NewRenderer(rec.Harness)
-	for len(raw) > 0 {
-		i := bytes.IndexByte(raw, '\n')
-		if i < 0 {
-			break
-		}
-		line := bytes.TrimRight(raw[:i], "\r")
-		raw = raw[i+1:]
-		if len(bytes.TrimSpace(line)) == 0 {
+	lines, truncated, err := readOutputStream(stream, NewRenderer(rec.Harness), tail)
+	if err != nil {
+		return Output{}, fmt.Errorf("reading dispatch stream: %w", err)
+	}
+	return Output{ID: runID, Lines: lines, Truncated: truncated}, nil
+}
+
+// readOutputStream reads bounded complete frames. A frame exceeding the
+// buffer is intentionally skipped: reassembling it would let a live stream
+// dictate our memory use, and watch already skips unparseable frames.
+func readOutputStream(reader io.Reader, renderer Renderer, tail int) ([]string, bool, error) {
+	framed := bufio.NewReaderSize(reader, outputReadBuffer)
+	ring := make([]string, 0, tail)
+	truncated := false
+	for {
+		line, err := framed.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = framed.ReadSlice('\n')
+			}
+			if errors.Is(err, io.EOF) {
+				return ring, truncated, nil
+			}
+			if err != nil {
+				return nil, false, err
+			}
 			continue
 		}
-		event, ok := DecodeEvent(line)
+		if errors.Is(err, io.EOF) {
+			return ring, truncated, nil
+		} // torn trailing envelope
+		if err != nil {
+			return nil, false, err
+		}
+		lineText := strings.TrimRight(string(line), "\r\n")
+		if strings.TrimSpace(lineText) == "" {
+			continue
+		}
+		event, ok := DecodeEvent([]byte(lineText))
 		if !ok {
 			continue
 		}
@@ -83,7 +111,6 @@ func ReadOutput(stateDir, id string, tail int) (Output, error) {
 			}
 		}
 	}
-	return Output{ID: runID, Lines: ring, Truncated: truncated}, nil
 }
 
 func positiveInteger(value string) bool { n, err := strconv.Atoi(value); return err == nil && n > 0 }
@@ -98,15 +125,35 @@ func limitWaitText(id, text string) string {
 	if len(text) <= maxWaitEntryBytes {
 		return text
 	}
-	runID := strings.SplitN(id, "#", 2)[0]
-	note := `[truncated; collect recorded output with leo_dispatch_output {"id":"` + runID + `"}]`
+	runID := boundedWaitRunID(strings.SplitN(id, "#", 2)[0])
+	note := truncateUTF8(`[truncated; collect recorded output with leo_dispatch_output {"id":"`+runID+`"}]`, maxWaitEntryBytes)
 	available := maxWaitEntryBytes - len(note)
 	if available <= 0 {
-		return note[:maxWaitEntryBytes]
+		return note
 	}
-	prefix := text[:min(available, len(text))]
-	for !utf8.ValidString(prefix) {
-		prefix = prefix[:len(prefix)-1]
-	}
+	prefix := truncateUTF8(text, min(available, len(text)))
 	return prefix + note
+}
+
+func boundedWaitRunID(id string) string {
+	if id == "" || !utf8.ValidString(id) {
+		return "unknown"
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return "unknown"
+		}
+	}
+	return truncateUTF8(id, maxWaitNoteIDBytes)
+}
+
+func truncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	value = value[:limit]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
