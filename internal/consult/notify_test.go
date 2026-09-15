@@ -28,6 +28,13 @@ type failingRecorder struct{ h failingRecordHandle }
 
 func (r failingRecorder) Open(Record) (Handle, error) { return r.h, nil }
 
+type countingFailHandle struct {
+	nopHandle
+	writes int
+}
+
+func (h *countingFailHandle) SetRecord(Record) error { h.writes++; return errors.New("disk full") }
+
 type durableTestHandle struct {
 	nopHandle
 	rec Record
@@ -226,7 +233,7 @@ func TestNondurableHandleFailsClosedWithoutDelivery(t *testing.T) {
 func TestHeadlessCancelCreatesCompletionCandidate(t *testing.T) {
 	d := NewDispatcher(nil)
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &runState{record: Record{ID: "d-x", Kind: "dispatch", Notify: true, CallerPaneID: "%1", CallerHarness: "codex", Status: StatusRunning}, handle: nopHandle{}, cancel: cancel, done: make(chan struct{})}
+	s := &runState{record: Record{ID: "d-x", Kind: "dispatch", Notify: true, CallerPaneID: "%1", CallerHarness: "codex", Status: StatusRunning}, handle: &durableTestHandle{}, cancel: cancel, done: make(chan struct{})}
 	d.runs["d-x"] = s
 	d.terminateState(s, StatusCanceled)
 	if s.record.Notifications["d-x"].Disposition != NotificationPending {
@@ -312,6 +319,33 @@ func TestUnknownCallerHarnessSuppressesCandidate(t *testing.T) {
 	d.mu.Unlock()
 	if got := s.record.Notifications["d-x"].Disposition; got != NotificationSuppressed {
 		t.Fatalf("disposition=%s", got)
+	}
+}
+
+func TestCandidatePersistenceFailureFailsOnce(t *testing.T) {
+	d := NewDispatcher(nil)
+	h := &countingFailHandle{}
+	s := &runState{record: Record{ID: "d-x", Notify: true, CallerPaneID: "%1", CallerHarness: "codex", Status: StatusDone}, handle: h}
+	d.mu.Lock()
+	d.completionCandidateLocked(s, "d-x", StatusDone)
+	d.completionCandidateLocked(s, "d-x", StatusDone)
+	d.mu.Unlock()
+	if got := s.record.Notifications["d-x"].Disposition; got != NotificationFailed || h.writes != 1 {
+		t.Fatalf("disposition=%s writes=%d", got, h.writes)
+	}
+}
+
+func TestClaimedExpiryPersistenceFailureStaysFailedOnce(t *testing.T) {
+	now := time.Unix(7200, 0)
+	d := NewDispatcher(nil)
+	d.now = func() time.Time { return now }
+	h := &countingFailHandle{}
+	s := &runState{record: Record{ID: "d-x", Status: StatusDone, Notifications: map[string]Notification{"d-x": {Disposition: NotificationClaimed, ClaimedAt: now.Add(-time.Hour)}}}, handle: h}
+	d.runs["d-x"] = s
+	d.SweepNotifications(context.Background())
+	d.SweepNotifications(context.Background())
+	if got := s.record.Notifications["d-x"].Disposition; got != NotificationFailed || h.writes != 1 {
+		t.Fatalf("disposition=%s writes=%d", got, h.writes)
 	}
 }
 

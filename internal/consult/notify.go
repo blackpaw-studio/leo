@@ -96,6 +96,10 @@ func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status S
 	}
 	s.record.Notifications[key] = n
 	if err := d.persistNotificationRecordLocked(s); err != nil {
+		if n.Disposition == NotificationPending {
+			n.Disposition, n.FailedAt = NotificationFailed, now
+			s.record.Notifications[key] = n
+		}
 		fmt.Fprintf(os.Stderr, "dispatch %s: recording notification: %v\n", s.record.ID, err)
 	}
 }
@@ -216,8 +220,7 @@ func (d *Dispatcher) SweepNotifications(ctx context.Context) {
 					n.Disposition, n.FailedAt = NotificationFailed, d.now()
 					s.record.Notifications[key] = n
 					if err := d.persistNotificationRecordLocked(s); err != nil {
-						n.Disposition, n.FailedAt = NotificationPending, time.Time{}
-						s.record.Notifications[key] = n
+						fmt.Fprintf(os.Stderr, "dispatch %s: notification %s expired but persistence failed: %v\n", s.record.ID, key, err)
 					} else {
 						fmt.Fprintf(os.Stderr, "dispatch %s: notification %s expired after 1h\n", s.record.ID, key)
 					}
