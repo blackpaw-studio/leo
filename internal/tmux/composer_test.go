@@ -49,6 +49,38 @@ Do you trust the contents of this directory?
 
   Press enter to continue
 `
+	codexApproveDialogCapture = `
+Approve this action?
+
+› Approve
+  Deny
+
+  Press Enter to continue
+`
+	codexAllowDialogCapture = `
+Allow network access?
+
+› Allow
+  Deny
+
+  Press Enter to continue
+`
+	codexDenyDialogCapture = `
+Deny this action?
+
+› Deny
+  Allow
+
+  Press Enter to continue
+`
+	codexUpdateAvailableDialogCapture = `
+Update available
+
+› Install update
+  Not now
+
+  Press Enter to continue
+`
 	codexFooterOnlyCapture = `
   gpt-5.6-luna default · ~/work
 `
@@ -108,6 +140,22 @@ Claude Code needs permission to use this directory
 
   Enter to confirm · Esc to cancel
 `
+	claudeUpdateDialogCapture = `
+Update available
+
+❯ 1. Install update
+  2. Not now
+
+  Enter to confirm · Esc to cancel
+`
+	claudeHookReviewDialogCapture = `
+Hook review
+
+❯ 1. Approve hook
+  2. Deny hook
+
+  Enter to confirm · Esc to cancel
+`
 	claudeFooterOnlyCapture = `
   ⏵⏵ accept edits on (shift+tab to cycle)
 `
@@ -159,6 +207,10 @@ func TestComposerClassifier(t *testing.T) {
 		{"codex/collapsed-paste", CodexComposerClassifier, codexCollapsedPasteCapture, ComposerDraft},
 		{"codex/busy", CodexComposerClassifier, codexBusyCapture, ComposerBusy},
 		{"codex/dialog", CodexComposerClassifier, codexDialogCapture, ComposerUnknown},
+		{"codex/approve-dialog", CodexComposerClassifier, codexApproveDialogCapture, ComposerUnknown},
+		{"codex/allow-dialog", CodexComposerClassifier, codexAllowDialogCapture, ComposerUnknown},
+		{"codex/deny-dialog", CodexComposerClassifier, codexDenyDialogCapture, ComposerUnknown},
+		{"codex/update-available-dialog", CodexComposerClassifier, codexUpdateAvailableDialogCapture, ComposerUnknown},
 		{"codex/empty-capture", CodexComposerClassifier, "", ComposerUnknown},
 		{"codex/footer-only", CodexComposerClassifier, codexFooterOnlyCapture, ComposerUnknown},
 		{"claude/empty", ClaudeComposerClassifier, claudeEmptyCapture, ComposerEmpty},
@@ -168,6 +220,8 @@ func TestComposerClassifier(t *testing.T) {
 		{"claude/collapsed-paste", ClaudeComposerClassifier, claudeCollapsedPasteCapture, ComposerDraft},
 		{"claude/busy", ClaudeComposerClassifier, claudeBusyCapture, ComposerBusy},
 		{"claude/dialog", ClaudeComposerClassifier, claudeDialogCapture, ComposerUnknown},
+		{"claude/update-dialog", ClaudeComposerClassifier, claudeUpdateDialogCapture, ComposerUnknown},
+		{"claude/hook-review-dialog", ClaudeComposerClassifier, claudeHookReviewDialogCapture, ComposerUnknown},
 		{"claude/empty-capture", ClaudeComposerClassifier, "", ComposerUnknown},
 		{"claude/footer-only", ClaudeComposerClassifier, claudeFooterOnlyCapture, ComposerUnknown},
 		{"claude/idle-after-turn", ClaudeComposerClassifier, claudeIdleAfterTurn, ComposerEmpty},
@@ -180,6 +234,122 @@ func TestComposerClassifier(t *testing.T) {
 			t.Parallel()
 			if got := tt.classify(tt.capture); got != tt.want {
 				t.Fatalf("classify() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestComposerClassifierIgnoresDialogKeywordsInProse(t *testing.T) {
+	t.Parallel()
+
+	keywords := []string{"permission", "update", "allow", "deny", "approve"}
+	fixtures := []struct {
+		name     string
+		classify ComposerClassifier
+		capture  string
+	}{
+		{
+			name:     "codex",
+			classify: CodexComposerClassifier,
+			capture: `installed Codex lacks a usable {keyword} profile
+─ Worked for 1s ─
+› Ask Codex to do anything
+
+  gpt-5.6-luna default · ~/work`,
+		},
+		{
+			name:     "claude",
+			classify: ClaudeComposerClassifier,
+			capture: `ordinary assistant output mentions {keyword} in prose
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)`,
+		},
+	}
+
+	for _, fixture := range fixtures {
+		for _, keyword := range keywords {
+			t.Run(fixture.name+"/"+keyword, func(t *testing.T) {
+				capture := strings.ReplaceAll(fixture.capture, "{keyword}", keyword)
+				if got := fixture.classify(capture); got != ComposerEmpty {
+					t.Fatalf("classify() = %s, want %s", got, ComposerEmpty)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexComposerClassifierIgnoresExactPermissionProseCapture(t *testing.T) {
+	t.Parallel()
+
+	capture := `• I inspected the test suite and found the relevant behavior:
+  - TestCodexSandboxCanWriteManagedWorktree: adds negative control and explicit-root write; skipped because
+    installed Codex lacks a usable permission profile.
+─ Worked for 14m 15s ─
+› Ask Codex to do anything
+  gpt-5.6-sol default · ~/leo-worktrees/worktree · dispatch-worktree · Context 65% used · weekly 83% left …`
+	if got := CodexComposerClassifier(capture); got != ComposerEmpty {
+		t.Fatalf("CodexComposerClassifier() = %s, want %s", got, ComposerEmpty)
+	}
+}
+
+func TestComposerClassifierIgnoresProseHeadingsAndNumberedTranscript(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		capture string
+		want    ComposerState
+	}{
+		{"Update:\n› Ask Codex to do anything\n  gpt-5.6-sol default · ~/work", ComposerEmpty},
+		{"1. Allow running the command\n› Ask Codex to do anything\n  gpt-5.6-sol default · ~/work", ComposerEmpty},
+		{"Update:\n› prose heading\n  with an indented continuation", ComposerDraft},
+		{"› 1. Allow running the command\n  gpt-5.6-sol default · ~/work", ComposerDraft},
+		{"› 1. Historical option\n  2. Historical option\n› Ask Codex to do anything\n  gpt-5.6-sol default · ~/work", ComposerEmpty},
+	} {
+		if got := CodexComposerClassifier(tt.capture); got != tt.want {
+			t.Fatalf("CodexComposerClassifier() = %s, want %s for %q", got, tt.want, tt.capture)
+		}
+	}
+}
+
+func TestClaudeComposerClassifierIgnoresHistoricalMenu(t *testing.T) {
+	t.Parallel()
+
+	capture := `❯ 1. Historical option
+  2. Historical option
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)`
+	if got := ClaudeComposerClassifier(capture); got != ComposerEmpty {
+		t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, ComposerEmpty)
+	}
+}
+
+func TestComposerDialogTitleRequiresMenuBlock(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		capture string
+		want    ComposerState
+	}{
+		{
+			"title-only prose",
+			"Update:\n› Ask Codex to do anything\n  gpt-5.6-sol default · ~/work",
+			ComposerEmpty,
+		},
+		{
+			"title with numbered menu",
+			"Update:\n› 1. Install update\n  2. Not now",
+			ComposerUnknown,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CodexComposerClassifier(tt.capture); got != tt.want {
+				t.Fatalf("CodexComposerClassifier() = %s, want %s", got, tt.want)
 			}
 		})
 	}
