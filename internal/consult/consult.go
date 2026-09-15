@@ -376,7 +376,7 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 func (d *Dispatcher) pruneTerminalRunsLocked() {
 	terminal := make([]*runState, 0, len(d.runs))
 	for _, state := range d.runs {
-		if state.record.Status.Terminal() {
+		if state.record.Status.Terminal() && !recordHasPendingNotification(state.record) {
 			terminal = append(terminal, state)
 		}
 	}
@@ -643,6 +643,7 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	state.record.Status = status
 	state.record.EndedAt = d.now()
 	state.record.foldActive(state.record.EndedAt)
+	d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, ""), status)
 	d.persistRecordLocked(state)
 	rec := cloneRecord(state.record)
 	d.mu.Unlock()

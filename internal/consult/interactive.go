@@ -563,7 +563,7 @@ done:
 // Sweep advances time-based interactive transitions. It is intentionally
 // called by the daemon's existing housekeeping loop rather than owning a goroutine.
 func (d *Dispatcher) Sweep(now time.Time) {
-	defer d.SweepNotifications(context.Background())
+	defer d.SweepNotifications(d.daemonCtx)
 	// The dispatcher clock is the single time authority. The argument remains
 	// for the housekeeping API but callers that need deterministic time set
 	// d.now (as tests do), avoiding mixed-clock deadlines.

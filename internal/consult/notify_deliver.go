@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/peerinbox"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -16,10 +17,11 @@ type NotificationCommand func(context.Context, string, ...string) *exec.Cmd
 // TmuxNotificationDelivery delivers to the immutable caller pane captured at
 // acceptance. Its readiness check is passive and includes the session guard.
 type TmuxNotificationDelivery struct {
-	TmuxPath      string
-	Command       NotificationCommand
-	ResolveSocket func(context.Context, peerinbox.ExecFunc, string) (string, error)
-	DeliverSocket func(context.Context, string, string) error
+	TmuxPath       string
+	Command        NotificationCommand
+	ResolveSocket  func(context.Context, peerinbox.ExecFunc, string) (string, error)
+	DeliverSocket  func(context.Context, string, string) error
+	CommandTimeout time.Duration
 }
 
 func NewTmuxNotificationDelivery(tmuxPath string, command NotificationCommand) *TmuxNotificationDelivery {
@@ -28,10 +30,20 @@ func NewTmuxNotificationDelivery(tmuxPath string, command NotificationCommand) *
 			return exec.CommandContext(ctx, name, args...)
 		}
 	}
-	return &TmuxNotificationDelivery{TmuxPath: tmuxPath, Command: command, ResolveSocket: peerinbox.ResolveSocket, DeliverSocket: peerinbox.Deliver}
+	return &TmuxNotificationDelivery{TmuxPath: tmuxPath, Command: command, ResolveSocket: peerinbox.ResolveSocket, DeliverSocket: peerinbox.Deliver, CommandTimeout: 5 * time.Second}
+}
+
+func (d *TmuxNotificationDelivery) commandContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := d.CommandTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func (d *TmuxNotificationDelivery) paneCurrent(ctx context.Context, rec Record) bool {
+	ctx, cancel := d.commandContext(ctx)
+	defer cancel()
 	out, err := d.Command(ctx, d.TmuxPath, tmux.Args("display-message", "-p", "-t", rec.CallerPaneID, "#{session_id}")...).Output()
 	return err == nil && strings.TrimSpace(string(out)) == rec.CallerSessionID && rec.CallerSessionID != ""
 }
@@ -55,7 +67,9 @@ func (d *TmuxNotificationDelivery) Ready(ctx context.Context, rec Record) bool {
 	if classify == nil {
 		return rec.CallerHarness == "claude"
 	}
-	out, err := d.Command(ctx, d.TmuxPath, tmux.Args("capture-pane", "-p", "-t", rec.CallerPaneID)...).Output()
+	commandCtx, cancel := d.commandContext(ctx)
+	defer cancel()
+	out, err := d.Command(commandCtx, d.TmuxPath, tmux.Args("capture-pane", "-p", "-t", rec.CallerPaneID)...).Output()
 	return err == nil && classify(string(out)) == tmux.ComposerEmpty
 }
 

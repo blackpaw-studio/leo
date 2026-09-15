@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -75,6 +77,57 @@ func TestHeadlessDispatchCompletionNotification(t *testing.T) {
 				t.Fatalf("notification count=%d want=%d capture=%q", count, want, capture)
 			}
 		})
+	}
+}
+
+func TestDaemonDeliversHeadlessCompletionIntoCaller(t *testing.T) {
+	s := newInteractiveE2E(t)
+	caller := s.spawnAgent(t, "notify-caller")
+	session := agent.SessionName(caller)
+	s.waitForSession(t, session)
+	submitted := filepath.Join(s.ws, "submitted-notification")
+	script := "printf '› Ask Codex to do anything\\n'; IFS= read -r line; printf '%s' \"$line\" > " + submitted + "; sleep 30"
+	pane := strings.TrimSpace(tmuxOutput(t, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", "notify-inbox", "sh", "-c", script))
+	_ = tmuxOutput(t, "resize-window", "-x", "240", "-y", "24", "-t", pane)
+	var started consult.Started
+	s.request(t, http.MethodPost, "/api/dispatch", map[string]any{"template": "interactive", "prompt": "daemon notify", "cwd": s.ws, "mode": "headless", "from": caller, "caller_pane_id": pane}, &started)
+	deadline := time.Now().Add(12 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.record(t, started.ID).Notifications[started.ID].Disposition == consult.NotificationDelivered {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	rec := s.record(t, started.ID)
+	if rec.Notifications[started.ID].Disposition != consult.NotificationDelivered {
+		t.Fatalf("notification=%+v caller alive=%v capture=%q service=%s", rec.Notifications[started.ID], s.paneAlive(pane), tmuxOutput(t, "capture-pane", "-p", "-t", pane), s.output.String())
+	}
+	raw, err := os.ReadFile(submitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != rec.Notifications[started.ID].Message {
+		t.Fatalf("submitted=%q want=%q", raw, rec.Notifications[started.ID].Message)
+	}
+}
+
+func TestDaemonSuppressesCoveredHeadlessCompletion(t *testing.T) {
+	s := newInteractiveE2E(t)
+	caller := s.spawnAgent(t, "wait-caller")
+	session := agent.SessionName(caller)
+	s.waitForSession(t, session)
+	submitted := filepath.Join(s.ws, "covered-notification")
+	script := "printf '› Ask Codex to do anything\\n'; IFS= read -r line; printf '%s' \"$line\" > " + submitted + "; sleep 30"
+	pane := strings.TrimSpace(tmuxOutput(t, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", "wait-inbox", "sh", "-c", script))
+	var started consult.Started
+	s.request(t, http.MethodPost, "/api/dispatch", map[string]any{"template": "interactive", "prompt": "covered", "cwd": s.ws, "mode": "headless", "from": caller, "caller_pane_id": pane}, &started)
+	_ = s.wait(t, started.ID)
+	rec := s.record(t, started.ID)
+	if rec.Notifications[started.ID].Disposition != consult.NotificationSuppressed {
+		t.Fatalf("notification=%+v", rec.Notifications[started.ID])
+	}
+	if _, err := os.Stat(submitted); !os.IsNotExist(err) {
+		t.Fatalf("covered notification was submitted: %v", err)
 	}
 }
 

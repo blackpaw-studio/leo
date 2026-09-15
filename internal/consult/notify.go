@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -79,15 +80,26 @@ func (d *Dispatcher) completionCandidateLocked(s *runState, key string, status S
 		return
 	}
 	now := d.now()
-	n := Notification{}
+	n := Notification{Message: completionNotification(s.record, key, status)}
 	if !s.record.Notify || s.record.CallerPaneID == "" || d.waits[key] > 0 {
 		n.Disposition, n.SuppressedAt = NotificationSuppressed, now
 	} else {
 		n.Disposition, n.PendingAt = NotificationPending, now
 	}
 	s.record.Notifications[key] = n
-	d.persistRecordLocked(s)
-	_ = status // status is reconstructed durably from the record at delivery.
+	if err := d.persistNotificationRecordLocked(s); err != nil {
+		fmt.Fprintf(os.Stderr, "dispatch %s: recording notification: %v\n", s.record.ID, err)
+	}
+}
+
+func (d *Dispatcher) persistNotificationRecordLocked(s *runState) error {
+	if recorder, ok := d.recorder.(*FileRecorder); ok {
+		return writeRecord(recorder.dir, cloneRecord(s.record))
+	}
+	if h, ok := s.handle.(recordHandle); ok {
+		return h.SetRecord(cloneRecord(s.record))
+	}
+	return s.handle.SetStatus(s.record.Status)
 }
 
 func (d *Dispatcher) restorePendingNotifications(rec Record) {
@@ -139,7 +151,7 @@ func (d *Dispatcher) addRestartCandidates(rec *Record) {
 		if _, ok := rec.Notifications[key]; ok {
 			return
 		}
-		n := Notification{}
+		n := Notification{Message: completionNotification(*rec, key, turnNotificationStatus(*rec, key))}
 		if !rec.Notify || rec.CallerPaneID == "" || d.waits[key] > 0 {
 			n.Disposition, n.SuppressedAt = NotificationSuppressed, d.now()
 		} else {
@@ -164,6 +176,15 @@ type pendingNotification struct {
 	key    string
 }
 
+func recordHasPendingNotification(rec Record) bool {
+	for _, n := range rec.Notifications {
+		if n.Disposition == NotificationPending {
+			return true
+		}
+	}
+	return false
+}
+
 // SweepNotifications claims and delivers pending notifications. All external
 // I/O occurs without Dispatcher.mu; claims are durable before submission.
 func (d *Dispatcher) SweepNotifications(ctx context.Context) {
@@ -182,7 +203,9 @@ func (d *Dispatcher) SweepNotifications(ctx context.Context) {
 	d.mu.Unlock()
 	for _, item := range pending {
 		unlock := d.serialLocks([]string{item.record.CallerPaneID})
-		d.deliverNotification(ctx, delivery, item)
+		itemCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		d.deliverNotification(itemCtx, delivery, item)
+		cancel()
 		unlock()
 	}
 }
@@ -200,16 +223,26 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	if d.waits[item.key] > 0 {
 		n.Disposition, n.SuppressedAt = NotificationSuppressed, d.now()
 		item.state.record.Notifications[item.key] = n
-		d.persistRecordLocked(item.state)
+		_ = d.persistNotificationRecordLocked(item.state)
 		d.mu.Unlock()
 		return
 	}
 	n.Disposition, n.ClaimedAt = NotificationClaimed, d.now()
 	item.state.record.Notifications[item.key] = n
-	d.persistRecordLocked(item.state)
+	if err := d.persistNotificationRecordLocked(item.state); err != nil {
+		n.Disposition, n.ClaimedAt = NotificationPending, time.Time{}
+		item.state.record.Notifications[item.key] = n
+		fmt.Fprintf(os.Stderr, "dispatch %s: claiming notification: %v\n", item.state.record.ID, err)
+		d.mu.Unlock()
+		return
+	}
 	rec := cloneRecord(item.state.record)
 	d.mu.Unlock()
-	err := delivery.Deliver(ctx, rec, completionNotification(rec, item.key, turnNotificationStatus(rec, item.key)))
+	message := n.Message
+	if message == "" {
+		message = completionNotification(rec, item.key, turnNotificationStatus(rec, item.key))
+	}
+	err := delivery.Deliver(ctx, rec, message)
 	d.mu.Lock()
 	n = item.state.record.Notifications[item.key]
 	switch {
@@ -221,6 +254,6 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 		n.Disposition, n.FailedAt = NotificationFailed, d.now()
 	}
 	item.state.record.Notifications[item.key] = n
-	d.persistRecordLocked(item.state)
+	_ = d.persistNotificationRecordLocked(item.state)
 	d.mu.Unlock()
 }

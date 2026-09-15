@@ -18,15 +18,20 @@ func OpenCodeComposerClassifier(capture string) ComposerState {
 		if !strings.HasPrefix(line, "┃") || !strings.Contains(line, "·") {
 			continue
 		}
+		emptyPlaceholder := false
 		for j := i - 1; j >= 0 && i-j <= 4; j-- {
 			content := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[j]), "┃"))
 			if content == "" {
 				continue
 			}
 			if strings.HasPrefix(content, "Ask anything...") {
-				return ComposerEmpty
+				emptyPlaceholder = true
+				continue
 			}
 			return ComposerDraft
+		}
+		if emptyPlaceholder {
+			return ComposerEmpty
 		}
 		return ComposerUnknown
 	}
