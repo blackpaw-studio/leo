@@ -221,18 +221,37 @@ templates:
 			_ = s.service.Wait()
 		}
 	})
-	s.waitFor(t, func() bool {
+	// api.token is written before the HTTP listener is necessarily accepting
+	// requests. Treat an authenticated state response as the daemon readiness
+	// boundary so callers cannot race startup with their first mutation.
+	deadline := time.Now().Add(30 * time.Second)
+	client := &http.Client{Timeout: time.Second}
+	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(filepath.Join(ws, "state", "api.token"))
 		if err != nil {
-			return false
+			time.Sleep(50 * time.Millisecond)
+			continue
 		}
 		s.token = strings.TrimSpace(string(data))
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/state", port))
-		if err == nil {
-			resp.Body.Close()
+		if s.token == "" {
+			time.Sleep(50 * time.Millisecond)
+			continue
 		}
-		return s.token != ""
-	})
+		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/api/v1/state", port), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+s.token)
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return s
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("daemon did not become ready on port %d\nservice output:\n%s", port, s.output.String())
 	return s
 }
 
