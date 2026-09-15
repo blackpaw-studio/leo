@@ -185,6 +185,74 @@ func TestComposerClassifier(t *testing.T) {
 	}
 }
 
+func TestComposerClassifierIgnoresDialogKeywordsInProse(t *testing.T) {
+	t.Parallel()
+
+	keywords := []string{"permission", "update", "allow", "deny", "approve"}
+	fixtures := []struct {
+		name     string
+		classify ComposerClassifier
+		capture  string
+	}{
+		{
+			name:     "codex",
+			classify: CodexComposerClassifier,
+			capture: `installed Codex lacks a usable {keyword} profile
+─ Worked for 1s ─
+› Ask Codex to do anything
+
+  gpt-5.6-luna default · ~/work`,
+		},
+		{
+			name:     "claude",
+			classify: ClaudeComposerClassifier,
+			capture: `ordinary assistant output mentions {keyword} in prose
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)`,
+		},
+	}
+
+	for _, fixture := range fixtures {
+		for _, keyword := range keywords {
+			t.Run(fixture.name+"/"+keyword, func(t *testing.T) {
+				capture := strings.ReplaceAll(fixture.capture, "{keyword}", keyword)
+				if got := fixture.classify(capture); got != ComposerEmpty {
+					t.Fatalf("classify() = %s, want %s", got, ComposerEmpty)
+				}
+			})
+		}
+	}
+}
+
+func TestIsComposerDialogTitleLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"trust", "Trust?", true},
+		{"permission", "Permission:", true},
+		{"update", "Update", true},
+		{"hook-review", "Hook review", true},
+		{"approve", "Approve!", true},
+		{"allow", "Allow", true},
+		{"deny", "Deny", true},
+		{"prose", "Permission profile", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isComposerDialog(tt.line); got != tt.want {
+				t.Fatalf("isComposerDialog(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClaudeComposerClassifierIdleAfterTurnCapture(t *testing.T) {
 	t.Parallel()
 

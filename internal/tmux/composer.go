@@ -34,9 +34,9 @@ func (s ComposerState) String() string {
 type ComposerClassifier func(capture string) ComposerState
 
 var (
-	composerDialogPattern = regexp.MustCompile(`(?i)\b(trust|permission|update|hook review|approve|allow|deny)\b`)
-	composerBusyPattern   = regexp.MustCompile(`(?i)\b(working|thinking|generating|running)\b|esc\s+(?:to\s+)?interrupt`)
-	claudeRulePattern     = regexp.MustCompile(`^─+`)
+	composerDialogTitlePattern = regexp.MustCompile(`(?i)^(?:(?:trust|permission|update|hook review|approve|allow|deny)(?:[[:punct:]\s]+|$))+$`)
+	composerBusyPattern        = regexp.MustCompile(`(?i)\b(working|thinking|generating|running)\b|esc\s+(?:to\s+)?interrupt`)
+	claudeRulePattern          = regexp.MustCompile(`^─+`)
 )
 
 // CodexComposerClassifier identifies Codex's › composer. Codex renders its
@@ -108,7 +108,7 @@ func claudeComposerBox(lines []string) (int, int, int, bool) {
 }
 
 func isClaudeDialog(capture string) bool {
-	return HasConfirmFooterLine(capture) || (composerDialogPattern.MatchString(capture) && menuOptionPattern.MatchString(capture))
+	return isComposerDialog(capture)
 }
 
 func isClaudeBusyLine(line string) bool {
@@ -163,7 +163,16 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 }
 
 func isComposerDialog(capture string) bool {
-	return HasConfirmFooterLine(capture) || composerDialogPattern.MatchString(capture)
+	if HasConfirmFooterLine(capture) {
+		return true
+	}
+	for _, line := range strings.Split(capture, "\n") {
+		line = strings.TrimSpace(line)
+		if menuOptionPattern.MatchString(line) || composerDialogTitlePattern.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }
 
 func isCodexPlaceholder(content string) bool {
