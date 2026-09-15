@@ -147,6 +147,9 @@ func (r *FileRecorder) prune(keep int) {
 
 	settled := make([]Record, 0, len(records))
 	for _, rec := range records {
+		if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
+			continue
+		}
 		if rec.ViewerWindowID != "" && !rec.EndedAt.IsZero() && now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
 			continue
 		}

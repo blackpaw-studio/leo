@@ -190,11 +190,11 @@ func TestAPIDispatchRejectsMissingCWD(t *testing.T) {
 	}
 }
 
-func TestAPIDispatchRejectsUnavailableWorktreeIsolation(t *testing.T) {
+func TestAPIDispatchRejectsWorktreeIsolationOutsideGit(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 	w := httptest.NewRecorder()
 	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"template":"coding","prompt":"work","cwd":"/tmp","isolation":"worktree"}`)))
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `isolation \"worktree\" is not available yet`) {
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `worktree isolation requires`) {
 		t.Fatalf("response %d: %s", w.Code, w.Body.String())
 	}
 }

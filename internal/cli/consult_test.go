@@ -42,7 +42,7 @@ func TestDispatchRunFoundationFlags(t *testing.T) {
 	if got := cmd.Flag("notify"); got == nil || got.DefValue != "true" {
 		t.Fatalf("notify flag = %#v", got)
 	}
-	if got := cmd.Flag("isolation"); got == nil || !strings.Contains(got.Usage, "coming soon") {
+	if got := cmd.Flag("isolation"); got == nil || strings.Contains(got.Usage, "coming soon") || !strings.Contains(got.Usage, "worktree") {
 		t.Fatalf("isolation flag = %#v", got)
 	}
 }

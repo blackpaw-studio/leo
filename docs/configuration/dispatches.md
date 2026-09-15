@@ -20,10 +20,11 @@ steerable TUI (see [Interactive mode](#interactive-mode)).
 
 Dispatch notifications default to enabled. Set `notify: false` (or CLI
 `--notify=false`) to disable the eventual completion wake-up. Synchronous
-`leo_consult` calls never notify. `isolation: "worktree"` and CLI
-`--isolation worktree` are reserved for isolated execution but are coming in
-a later release; Leo currently rejects them instead of running in the shared
-checkout.
+`leo_consult` calls never notify. Set `isolation: "worktree"` or CLI
+`--isolation worktree` to run from a managed Git worktree created at the
+repository's committed HEAD. Leo keeps worktrees containing uncommitted or
+committed changes and reports their path and branch when the result is collected;
+unchanged worktrees are removed while their branches remain available.
 
 `timeout_seconds` is an optional dispatch run cap; dispatches are unlimited
 when it is omitted. `leo_wait(ids, timeout_seconds?)` waits for one or more

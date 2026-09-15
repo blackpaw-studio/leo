@@ -145,7 +145,7 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&mode, "mode", "headless", "execution mode (headless or interactive)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "optional run cap (unlimited when omitted)")
 	cmd.Flags().BoolVar(&notify, "notify", true, "notify the caller when the dispatch completes")
-	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree is coming soon)")
+	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree)")
 	addHostFlag(cmd, &host)
 	return cmd
 }
