@@ -19,6 +19,7 @@ const (
 	viewerCommandTimeout  = 5 * time.Second
 	viewerWaitDelay       = 100 * time.Millisecond
 	viewerGraceAfterEnd   = time.Hour
+	viewerHandledLimit    = 1024
 )
 
 // Viewer opens an inspectable tmux window for asynchronous dispatches. It is
@@ -28,8 +29,13 @@ type Viewer struct {
 	once               sync.Once
 	mu                 sync.Mutex
 	windowIDs          map[string]string
+	handledWindowIDs   map[string]string
+	handledWindowOrder []handledWindow
 	rosterMu           sync.Mutex
 	rosters            map[string]rosterSessionState
+	rosterInventoryLog string
+	rosterZeroLogged   bool
+	rosterEvents       map[string]bool
 	ConfigPath         string
 	TmuxPath           string
 	Executable         func() (string, error)
@@ -38,6 +44,11 @@ type Viewer struct {
 	Timeout            time.Duration
 	ResolveCaller      func(caller string) (session string, ok bool)
 	Logf               func(format string, args ...any)
+}
+
+type handledWindow struct {
+	recordID string
+	windowID string
 }
 
 // NewViewer returns a viewer using Leo's dedicated tmux server. resolveCaller
@@ -150,7 +161,7 @@ func (v *Viewer) Close(rec Record) {
 		if v.windowIDs == nil {
 			v.windowIDs = make(map[string]string)
 		}
-		if v.windowIDs[rec.ID] == "" {
+		if v.handledWindowIDs[rec.ID] != rec.ViewerWindowID && v.windowIDs[rec.ID] == "" {
 			v.windowIDs[rec.ID] = rec.ViewerWindowID
 		}
 		v.mu.Unlock()
@@ -166,27 +177,43 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 		return
 	}
 	v.defaults()
+	v.pruneHandledWindows(records)
 	for _, rec := range records {
-		if rec.ViewerWindowID != "" {
+		expired := rec.Kind == "dispatch" && rec.Mode != ModeInteractive && rec.Status.Terminal() && !rec.EndedAt.IsZero() && !now.Before(rec.EndedAt.Add(viewerGraceAfterEnd))
+		if expired {
+			v.killWindow(rec.ID, rec.ViewerWindowID)
+			continue
+		}
+		if rec.ViewerWindowID != "" && !rec.Status.Terminal() {
 			v.mu.Lock()
 			if v.windowIDs == nil {
 				v.windowIDs = make(map[string]string)
 			}
-			v.windowIDs[rec.ID] = rec.ViewerWindowID
+			if v.handledWindowIDs[rec.ID] != rec.ViewerWindowID {
+				v.windowIDs[rec.ID] = rec.ViewerWindowID
+			}
 			v.mu.Unlock()
 		}
-		if rec.Kind != "dispatch" || rec.Mode == ModeInteractive || !rec.Status.Terminal() || rec.EndedAt.IsZero() || now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
-			continue
-		}
-		v.kill(rec.ID)
 	}
 }
 
 func (v *Viewer) kill(id string) {
+	v.killWindow(id, "")
+}
+
+func (v *Viewer) killWindow(id, persistedWindowID string) {
 	v.mu.Lock()
+	if persistedWindowID != "" && v.handledWindowIDs[id] == persistedWindowID {
+		v.mu.Unlock()
+		return
+	}
 	windowID := v.windowIDs[id]
+	if windowID == "" {
+		windowID = persistedWindowID
+	}
+	delete(v.windowIDs, id)
 	if windowID != "" {
-		delete(v.windowIDs, id)
+		v.recordHandledWindow(id, windowID)
 	}
 	v.mu.Unlock()
 	if windowID == "" {
@@ -195,6 +222,58 @@ func (v *Viewer) kill(id string) {
 	if err := v.run("kill-window", "-t", windowID); err != nil {
 		v.log("closing dispatch viewer %q: %v", id, err)
 	}
+}
+
+// recordHandledWindow retains only the most recently handled persisted window
+// identities. v.mu must be held by the caller.
+func (v *Viewer) recordHandledWindow(recordID, windowID string) {
+	if v.handledWindowIDs == nil {
+		v.handledWindowIDs = make(map[string]string)
+	}
+	if v.handledWindowIDs[recordID] == windowID {
+		return
+	}
+	if _, found := v.handledWindowIDs[recordID]; found {
+		for i, handled := range v.handledWindowOrder {
+			if handled.recordID == recordID {
+				v.handledWindowOrder = append(v.handledWindowOrder[:i], v.handledWindowOrder[i+1:]...)
+				break
+			}
+		}
+	}
+	v.handledWindowIDs[recordID] = windowID
+	v.handledWindowOrder = append(v.handledWindowOrder, handledWindow{recordID: recordID, windowID: windowID})
+	for len(v.handledWindowOrder) > viewerHandledLimit {
+		oldest := v.handledWindowOrder[0]
+		v.handledWindowOrder = v.handledWindowOrder[1:]
+		if v.handledWindowIDs[oldest.recordID] == oldest.windowID {
+			delete(v.handledWindowIDs, oldest.recordID)
+		}
+	}
+}
+
+func (v *Viewer) pruneHandledWindows(records []Record) {
+	present := make(map[string]struct{}, len(records))
+	for _, rec := range records {
+		present[rec.ID] = struct{}{}
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for recordID := range v.handledWindowIDs {
+		if _, found := present[recordID]; !found {
+			delete(v.handledWindowIDs, recordID)
+		}
+	}
+	if len(v.handledWindowOrder) == 0 {
+		return
+	}
+	retained := v.handledWindowOrder[:0]
+	for _, handled := range v.handledWindowOrder {
+		if v.handledWindowIDs[handled.recordID] == handled.windowID {
+			retained = append(retained, handled)
+		}
+	}
+	v.handledWindowOrder = retained
 }
 
 func (v *Viewer) command(ctx context.Context, args ...string) *exec.Cmd {

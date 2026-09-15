@@ -1,6 +1,8 @@
 package consult
 
 import (
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +51,10 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 		v.log("inventorying roster windows: %v", err)
 		return
 	}
+	if len(panes) == 0 && !v.rosterZeroLogged {
+		v.log("roster: inventory returned zero panes")
+		v.rosterZeroLogged = true
+	}
 	managed, err := v.managedRosterSessions()
 	if err != nil {
 		v.log("inventorying managed roster sessions: %v", err)
@@ -66,24 +72,39 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 		byPane[pane.pane], byWindow[pane.window], liveSessions[pane.session] = pane.session, pane.session, pane.sessionID
 	}
 	resolved := make(map[string][]Record)
+	unresolved := make([]string, 0)
+	eligible := 0
 	for _, rec := range records {
 		if rec.Kind != "dispatch" {
+			unresolved = append(unresolved, rec.ID+":not-dispatch")
 			continue
 		}
+		if rec.Status.Terminal() && !rec.EndedAt.IsZero() && !now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
+			unresolved = append(unresolved, rec.ID+":expired")
+			continue
+		}
+		eligible++
 		var session string
 		if rec.Mode == ModeInteractive {
 			session = byPane[rec.PaneID]
+			if session == "" {
+				unresolved = append(unresolved, fmt.Sprintf("%s:no-pane %s", rec.ID, rec.PaneID))
+			}
 		} else {
 			window := rec.ViewerWindowID
 			if window == "" {
 				window = windowIDs[rec.ID]
 			}
 			session = byWindow[window]
+			if session == "" {
+				unresolved = append(unresolved, fmt.Sprintf("%s:no-window %s", rec.ID, window))
+			}
 		}
 		if session != "" {
 			resolved[session] = append(resolved[session], rec)
 		}
 	}
+	v.logRosterInventory(len(panes), len(liveSessions), len(records), eligible, resolved, unresolved)
 	if v.rosters == nil {
 		v.rosters = make(map[string]rosterSessionState)
 	}
@@ -117,11 +138,16 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 		state.sessionID = liveSessions[session]
 		text := RenderRoster(recs, now)
 		if text == "" {
+			wasManaged := state.managed() || state.clearing()
+			sessionID := state.sessionID
 			if state.managed() || state.clearing() {
 				state = v.clearRosterState(session, state)
 			}
 			if !state.managed() && !state.clearing() {
 				delete(v.rosters, session)
+				if wasManaged {
+					v.logRosterEvent("cleared:"+sessionID, "roster: cleared from %q", session)
+				}
 			} else {
 				v.rosters[session] = state
 			}
@@ -135,7 +161,38 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 			}
 			state.sessionID = liveSessions[session]
 		}
-		v.rosters[session] = v.applyRoster(session, text, state)
+		wasApplied := state.text != ""
+		state = v.applyRoster(session, text, state)
+		v.rosters[session] = state
+		if !wasApplied && state.text != "" {
+			v.logRosterEvent("applied:"+state.sessionID, "roster: applied to %q", session)
+		}
+	}
+}
+
+func (v *Viewer) logRosterInventory(panes, sessions, records, eligible int, resolved map[string][]Record, unresolved []string) {
+	resolvedParts := make([]string, 0, len(resolved))
+	for session, recs := range resolved {
+		if len(recs) > 0 {
+			resolvedParts = append(resolvedParts, fmt.Sprintf("%s:%d", session, len(recs)))
+		}
+	}
+	sort.Strings(resolvedParts)
+	sort.Strings(unresolved)
+	line := fmt.Sprintf("roster: inventory panes=%d sessions=%d records=%d eligible=%d resolved=[%s] unresolved=[%s]", panes, sessions, records, eligible, strings.Join(resolvedParts, " "), strings.Join(unresolved, " "))
+	if line != v.rosterInventoryLog {
+		v.log("%s", line)
+		v.rosterInventoryLog = line
+	}
+}
+
+func (v *Viewer) logRosterEvent(key, format string, args ...any) {
+	if v.rosterEvents == nil {
+		v.rosterEvents = make(map[string]bool)
+	}
+	if !v.rosterEvents[key] {
+		v.log(format, args...)
+		v.rosterEvents[key] = true
 	}
 }
 
@@ -196,6 +253,8 @@ func (v *Viewer) applyRoster(session, text string, state rosterSessionState) ros
 		state.statusChecked = true
 		if lines < 2 {
 			state.needsStatus = true
+		} else {
+			v.logRosterEvent("skip-status:"+state.sessionID, "roster: skipped status for %q: already %d", session, lines)
 		}
 	}
 	if state.needsStatus && !state.statusSet {

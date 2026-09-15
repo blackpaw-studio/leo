@@ -2,10 +2,112 @@ package consult
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestViewerRosterDiagnosticsLogOnlyOnChange(t *testing.T) {
+	var logs []string
+	inventory := "leo-leo\t$1\t@574\t%573\n"
+	v := &Viewer{
+		TmuxPath: "tmux",
+		Logf:     func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+		ExecCommand: func(_ string, args ...string) *exec.Cmd {
+			switch {
+			case containsArg(args, "list-panes"):
+				return exec.Command("printf", "%s", inventory)
+			case containsArg(args, "list-sessions"):
+				return exec.Command("printf", "leo-leo\t$1\t\t\t\n")
+			case containsArg(args, "show-options"):
+				return exec.Command("printf", "2\n")
+			default:
+				return exec.Command("true")
+			}
+		},
+	}
+	now := time.Now()
+	records := []Record{
+		{ID: "d-ok", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%573", Status: StatusQueued, StartedAt: now},
+		{ID: "d-pane", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%999", Status: StatusQueued, StartedAt: now},
+		{ID: "d-window", Kind: "dispatch", ViewerWindowID: "@999", Status: StatusQueued, StartedAt: now},
+		{ID: "c-no", Kind: "consult", Status: StatusQueued, StartedAt: now},
+		{ID: "d-old", Kind: "dispatch", Status: StatusDone, EndedAt: now.Add(-viewerGraceAfterEnd), ViewerWindowID: "@574"},
+	}
+	v.UpdateRoster(records, now)
+	v.UpdateRoster(records, now)
+	want := "dispatch viewer: roster: inventory panes=1 sessions=1 records=5 eligible=3 resolved=[leo-leo:1] unresolved=[c-no:not-dispatch d-old:expired d-pane:no-pane %999 d-window:no-window @999]"
+	if got := countExactLog(logs, want); got != 1 {
+		t.Fatalf("inventory log count = %d, want 1; logs=%q", got, logs)
+	}
+	if got := countContainingLog(logs, `roster: applied to "leo-leo"`); got != 1 {
+		t.Fatalf("applied log count = %d, want 1; logs=%q", got, logs)
+	}
+	records = append(records, Record{ID: "d-new", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%573", Status: StatusQueued, StartedAt: now})
+	v.UpdateRoster(records, now)
+	if got := countContainingLog(logs, "roster: inventory panes="); got != 2 {
+		t.Fatalf("changed inventory logs = %d, want 2; logs=%q", got, logs)
+	}
+}
+
+func TestViewerRosterDiagnosticsLogsZeroPanesOnce(t *testing.T) {
+	var logs []string
+	v := &Viewer{TmuxPath: "tmux", Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }, ExecCommand: func(_ string, args ...string) *exec.Cmd {
+		return exec.Command("printf", "")
+	}}
+	v.UpdateRoster(nil, time.Now())
+	v.UpdateRoster(nil, time.Now())
+	if got := countContainingLog(logs, "roster: inventory returned zero panes"); got != 1 {
+		t.Fatalf("zero-pane logs = %d, want 1; logs=%q", got, logs)
+	}
+}
+
+func TestViewerRosterDiagnosticsLogsApplyForRecreatedSession(t *testing.T) {
+	var logs []string
+	sessionID := "$1"
+	v := &Viewer{TmuxPath: "tmux", Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }, ExecCommand: func(_ string, args ...string) *exec.Cmd {
+		switch {
+		case containsArg(args, "list-panes"):
+			return exec.Command("printf", "%s", "leo-leo\t"+sessionID+"\t@1\t%1\n")
+		case containsArg(args, "list-sessions"):
+			return exec.Command("printf", "%s", "leo-leo\t"+sessionID+"\t\t\t\n")
+		case containsArg(args, "show-options"):
+			return exec.Command("printf", "2\n")
+		default:
+			return exec.Command("true")
+		}
+	}}
+	now := time.Now()
+	record := Record{ID: "d-a", Kind: "dispatch", Mode: ModeInteractive, PaneID: "%1", Status: StatusQueued, StartedAt: now}
+	v.UpdateRoster([]Record{record}, now)
+	sessionID = "$2"
+	v.UpdateRoster([]Record{record}, now)
+	if got := countContainingLog(logs, `roster: applied to "leo-leo"`); got != 2 {
+		t.Fatalf("applied logs = %d, want one per session identity; logs=%q", got, logs)
+	}
+}
+
+func countExactLog(logs []string, want string) int {
+	n := 0
+	for _, line := range logs {
+		if line == want {
+			n++
+		}
+	}
+	return n
+}
+
+func countContainingLog(logs []string, part string) int {
+	n := 0
+	for _, line := range logs {
+		if strings.Contains(line, part) {
+			n++
+		}
+	}
+	return n
+}
 
 func TestViewerRosterAppliesChangesAndOwnershipAwareCleanup(t *testing.T) {
 	var calls [][]string
