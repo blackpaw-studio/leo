@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -740,6 +741,19 @@ func RunSupervised(opts RunSupervisedOptions) error {
 
 func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	claudePath, homePath, configPath, webToken := opts.ClaudePath, opts.HomePath, opts.ConfigPath, opts.WebToken
+	localeEnv := os.Environ()
+	if warning := env.UTF8LocaleWarning(localeEnv); warning != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+	}
+	for _, entry := range env.EnsureUTF8Locale(localeEnv) {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("setting daemon locale environment: %w", err)
+		}
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
