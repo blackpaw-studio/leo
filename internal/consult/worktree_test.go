@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -281,6 +282,68 @@ func TestHeadlessTimeoutEscalatesTermIgnoringProcessGroupBeforeCleanup(t *testin
 	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "sh", "-c", `trap '' TERM; sh -c 'trap "" TERM; sleep 30' & wait`)
 	}
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree", Timeout: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := d.Wait(context.Background(), []string{started.ID}, RunTimeout)[0]
+	if entry.Status != StatusTimeout {
+		t.Fatalf("entry status = %s", entry.Status)
+	}
+	rec, _ := d.Get(started.ID)
+	if rec.WorktreeState != WorktreeRemoved {
+		t.Fatalf("timeout record = %+v", rec)
+	}
+}
+
+func TestProcessGroupSignalGuardRejectsUnsafeTargetsAndEscalatesValidGroup(t *testing.T) {
+	original := signalProcessGroup
+	t.Cleanup(func() { signalProcessGroup = original })
+	var calls []struct {
+		pid    int
+		signal syscall.Signal
+	}
+	alive := true
+	signalProcessGroup = func(pid int, signal syscall.Signal) error {
+		calls = append(calls, struct {
+			pid    int
+			signal syscall.Signal
+		}{pid, signal})
+		if signal == syscall.SIGKILL {
+			alive = false
+		}
+		if signal == 0 && !alive {
+			return syscall.ESRCH
+		}
+		return nil
+	}
+	for _, pgid := range []int{-1, 0, 1, syscall.Getpgrp()} {
+		if gone, err := terminateProcessGroup(pgid, 0); err == nil || gone {
+			t.Errorf("unsafe pgid %d = gone %v, err %v", pgid, gone, err)
+		}
+	}
+	if len(calls) != 0 {
+		t.Fatalf("unsafe targets reached signal syscall: %+v", calls)
+	}
+	valid := syscall.Getpgrp() + 10000
+	if gone, err := terminateProcessGroup(valid, 0); err != nil || !gone {
+		t.Fatalf("valid group = gone %v, err %v", gone, err)
+	}
+	want := []syscall.Signal{syscall.SIGTERM, 0, 0, syscall.SIGKILL, 0, 0}
+	if len(calls) != len(want) {
+		t.Fatalf("signals = %+v, want %v", calls, want)
+	}
+	for i := range want {
+		if calls[i].pid != -valid || calls[i].signal != want[i] {
+			t.Fatalf("signal[%d] = %+v, want pid %d signal %v", i, calls[i], -valid, want[i])
+		}
+	}
+}
+
+func TestTimeoutDuringPostWaitProbeEscalatesSurvivingGroup(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	d := worktreeDispatcher(t, stateDir, "trap '' TERM; sleep 30 </dev/null >/dev/null 2>&1 &")
+	d.ProcessGroupGrace = 50 * time.Millisecond
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree", Timeout: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)

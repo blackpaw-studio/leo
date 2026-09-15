@@ -331,10 +331,13 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		gone, err := terminateProcessGroup(cmd.Process.Pid, d.ProcessGroupGrace)
+		d.mu.Lock()
+		pgid := state.pgid
+		d.mu.Unlock()
+		// Setpgid requests a private group, but cancellation must use the
+		// kernel-confirmed group ID captured after Start. In particular, do
+		// not fall back to Process.Pid: it may be this process's own group.
+		gone, err := terminateProcessGroup(pgid, d.ProcessGroupGrace)
 		d.mu.Lock()
 		state.pgidGone = gone
 		d.mu.Unlock()
@@ -365,7 +368,16 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		}
 		d.mu.Unlock()
 		runErr = cmd.Wait()
-		pgidGone := waitProcessGroupGone(state.pgid)
+		d.mu.Lock()
+		pgid := state.pgid
+		d.mu.Unlock()
+		pgidGone := waitProcessGroupGone(pgid)
+		// Cmd.Wait can return when its leader exits while a descendant still
+		// owns an output pipe. If the run context expires during that probe,
+		// reap the surviving group before publishing the timeout.
+		if runCtx.Err() != nil && !pgidGone {
+			pgidGone, _ = terminateProcessGroup(pgid, d.ProcessGroupGrace)
+		}
 		d.mu.Lock()
 		state.pgidGone = pgidGone
 		d.mu.Unlock()

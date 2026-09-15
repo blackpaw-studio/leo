@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
-	"time"
 )
 
 const worktreesDirName = "worktrees"
@@ -152,25 +150,6 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 		return keep()
 	}
 	return d.setWorktreeState(rec, state, WorktreeRemoved)
-}
-
-// processGroupGone treats every error other than ESRCH as uncertainty. A
-// cleanup that cannot prove the group is gone must keep its worktree. This
-// only contains descendants that remain in the harness process group: a
-// deliberate setsid-style daemon escape is not portably discoverable here.
-func processGroupGone(pgid int) bool {
-	if pgid <= 0 {
-		return false
-	}
-	return syscall.Kill(-pgid, 0) == syscall.ESRCH
-}
-
-func waitProcessGroupGone(pgid int) bool {
-	deadline := time.Now().Add(2 * time.Second)
-	for !processGroupGone(pgid) && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	return processGroupGone(pgid)
 }
 
 func headlessProcessGroupGone(state *runState) bool {
