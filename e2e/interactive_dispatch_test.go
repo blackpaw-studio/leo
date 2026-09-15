@@ -31,7 +31,12 @@ func TestInteractiveDispatchLifecycle(t *testing.T) {
 		t.Fatalf("interactive window %q was not created", started.Window)
 	}
 	first := s.wait(t, started.ID+"#1")
-	if first.Outcome != consult.TurnFinished || first.Text != "FAKE-REPLY: opening prompt" {
+	openingPrompt := strings.Join([]string{
+		"You are a subagent dispatched by an orchestrator. Do not spawn agents or run your own code review; the orchestrator reviews your work.",
+		"opening prompt",
+	}, " ")
+	wantOpening := "FAKE-REPLY: " + truncate80(strings.TrimSpace(openingPrompt))
+	if first.Outcome != consult.TurnFinished || first.Text != wantOpening {
 		t.Fatalf("opening turn = %+v", first)
 	}
 

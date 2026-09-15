@@ -25,6 +25,7 @@ type LaunchRequest struct {
 	Template, Caller              string
 	Prompt                        string
 	Timeout                       time.Duration
+	Dispatched                    bool
 }
 type InteractiveRuntime interface {
 	Launch(context.Context, LaunchRequest) (paneID, window string, err error)
@@ -112,12 +113,13 @@ func (d *Dispatcher) SetInteractiveRuntime(r InteractiveRuntime) {
 }
 
 func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Request, harnessName, model string) (Started, error) {
+	prompt := requestPrompt(req)
 	d.mu.Lock()
 	rt := d.interactiveRuntime
 	d.mu.Unlock()
 	if rt == nil {
 		d.mu.Lock()
-		t := d.openTurnLocked(s, TurnSourceOrchestrator, req.Prompt, false)
+		t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, false)
 		d.closeTurnLocked(s, t.TurnID, TurnRejected, "interactive runtime is not configured")
 		d.finishInteractiveLocked(s, StatusFailed)
 		d.mu.Unlock()
@@ -128,18 +130,18 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	}
 	if !d.trySlot() {
 		d.mu.Lock()
-		t := d.openTurnLocked(s, TurnSourceOrchestrator, req.Prompt, false)
+		t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, false)
 		d.closeTurnLocked(s, t.TurnID, TurnRejected, "no capacity")
 		d.finishInteractiveLocked(s, StatusFailed)
 		d.mu.Unlock()
 		return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd}, nil
 	}
 	d.mu.Lock()
-	t := d.openTurnLocked(s, TurnSourceOrchestrator, req.Prompt, true)
+	t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, true)
 	d.persistLocked(s, "status")
 	d.persistLocked(s, "turn")
 	d.mu.Unlock()
-	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: req.Prompt, Timeout: req.Timeout})
+	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: req.Prompt, Timeout: req.Timeout, Dispatched: true})
 	if err != nil {
 		d.mu.Lock()
 		d.closeTurnLocked(s, t.TurnID, TurnRejected, err.Error())
@@ -156,7 +158,7 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	s.record.PaneID = pane
 	d.persistLocked(s, "")
 	d.mu.Unlock()
-	go d.injectOpening(ctx, s, rt, t.TurnID, pane, req.Prompt)
+	go d.injectOpening(ctx, s, rt, t.TurnID, pane, prompt)
 	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Window: window}, nil
 }
 

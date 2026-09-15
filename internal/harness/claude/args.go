@@ -27,6 +27,7 @@ func mergeSystemPrompt(systemContext, userPrompt string) string {
 // appendPermissionFlags, used by the other two kinds) rather than relying on
 // callers to leave it false.
 func agentArgs(spec harness.LaunchSpec, o Options) []string {
+	o = dispatchedOptions(spec.Dispatched, o)
 	var args []string
 	args = append(args, "--model", spec.Model)
 	args = appendChannelFlags(args, spec.Channels, spec.DevChannels)
@@ -64,6 +65,7 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 
 // taskArgs reproduces internal/run.buildArgs flag order exactly.
 func taskArgs(spec harness.LaunchSpec, o Options) []string {
+	o = dispatchedOptions(spec.Dispatched, o)
 	args := []string{
 		"-p", spec.Prompt,
 		"--model", spec.Model,
@@ -86,4 +88,17 @@ func taskArgs(spec harness.LaunchSpec, o Options) []string {
 		args = append(args, "--append-system-prompt", sp)
 	}
 	return args
+}
+
+func dispatchedOptions(dispatched bool, o Options) Options {
+	if !dispatched {
+		return o
+	}
+	for _, tool := range o.DisallowedTools {
+		if tool == "Agent" {
+			return o
+		}
+	}
+	o.DisallowedTools = append(append([]string(nil), o.DisallowedTools...), "Agent")
+	return o
 }

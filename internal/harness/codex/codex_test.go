@@ -103,6 +103,13 @@ func TestArgs(t *testing.T) {
 		want func(ws string) []string
 	}{
 		{
+			name: "dispatched task disables multi agent",
+			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "do it", Dispatched: true, Options: Options{}},
+			want: func(ws string) []string {
+				return withRoots([]string{"exec", "--json", "--skip-git-repo-check", "-c", "features.multi_agent=false"}, ws, []string{"do it"})
+			},
+		},
+		{
 			name: "fresh minimal",
 			spec: harness.LaunchSpec{Kind: harness.KindTask, Prompt: "do it", Options: Options{}},
 			want: func(ws string) []string {
@@ -234,6 +241,13 @@ func TestArgsSessionKindsBuildTUIArgv(t *testing.T) {
 		spec harness.LaunchSpec
 		want func(ws string) []string
 	}{
+		{
+			name: "dispatched KindAgent TUI disables multi agent",
+			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol", Dispatched: true, Options: Options{}},
+			want: func(ws string) []string {
+				return withRoots([]string{"-a", "never", "--model", "gpt-5.6-sol", "-c", "features.multi_agent=false"}, ws, nil)
+			},
+		},
 		{
 			name: "KindAgent TUI argv",
 			spec: harness.LaunchSpec{Kind: harness.KindAgent, Model: "gpt-5.6-sol",

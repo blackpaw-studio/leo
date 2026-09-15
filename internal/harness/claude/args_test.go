@@ -20,6 +20,18 @@ func TestAgentArgs(t *testing.T) {
 		want []string
 	}{
 		{
+			name: "dispatched TUI disallows Agent without duplicates",
+			spec: harness.LaunchSpec{
+				Kind: harness.KindAgent, Model: "sonnet", Name: "dispatch", Workspace: "/ws", Dispatched: true,
+			},
+			opts: Options{DisallowedTools: []string{"Bash", "Agent", "Read"}},
+			want: []string{
+				"--model", "sonnet", "--add-dir", "/ws", "--name", "dispatch",
+				"--settings", `{"crossSessionInbound":"accept"}`,
+				"--disallowed-tools", "Bash,Agent,Read",
+			},
+		},
+		{
 			name: "minimal",
 			spec: harness.LaunchSpec{
 				Kind:      harness.KindAgent,
@@ -119,6 +131,17 @@ func TestTaskArgs(t *testing.T) {
 		opts Options
 		want []string
 	}{
+		{
+			name: "dispatched headless disallows Agent",
+			spec: harness.LaunchSpec{
+				Kind: harness.KindTask, Model: "sonnet", Workspace: "/ws", Prompt: "run the task", MaxTurns: 3, Dispatched: true,
+			},
+			opts: Options{DisallowedTools: []string{"Bash"}},
+			want: []string{
+				"-p", "run the task", "--model", "sonnet", "--max-turns", "3", "--output-format", "stream-json", "--verbose",
+				"--add-dir", "/ws", "--disallowed-tools", "Bash,Agent",
+			},
+		},
 		{
 			name: "minimal",
 			spec: harness.LaunchSpec{

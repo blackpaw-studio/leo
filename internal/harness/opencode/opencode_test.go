@@ -268,6 +268,28 @@ func TestEnvPermissionOnly(t *testing.T) {
 	}
 }
 
+func TestEnvDispatchedDeniesTaskTool(t *testing.T) {
+	spec := harness.LaunchSpec{Kind: harness.KindTask, Dispatched: true, Options: Options{
+		Permission: map[string]any{"bash": "allow", "task": "allow"},
+	}}
+	env, err := Opencode{}.Env(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Permission map[string]any `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(env["OPENCODE_CONFIG_CONTENT"]), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Permission["task"]; got != "deny" {
+		t.Errorf("permission.task = %#v, want deny", got)
+	}
+	if got := cfg.Permission["bash"]; got != "allow" {
+		t.Errorf("permission.bash = %#v, want allow", got)
+	}
+}
+
 func TestEnvLeoMCPOnly(t *testing.T) {
 	spec := harness.LaunchSpec{Kind: harness.KindTask, Options: Options{
 		LeoMCP: &LeoMCPBridge{Command: []string{"leo", "mcp-server"}},

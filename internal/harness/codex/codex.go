@@ -88,6 +88,7 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		}
 		args = append(args, execPermissionArgs(opts.PermissionMode)...)
 		args = append(args, developerInstructionsArgs(spec.SystemContext)...)
+		args = append(args, dispatchedArgs(spec.Dispatched)...)
 		args = append(args, sandboxWritableRootsArgs(spec.Workspace)...)
 		args = append(args, opts.LeoMCP.configArgs()...)
 		args = append(args, c.SessionArgs(spec.Session)...)
@@ -103,8 +104,16 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 	}
 	args = append(args, sandboxArgs(opts.PermissionMode)...)
 	args = append(args, developerInstructionsArgs(spec.SystemContext)...)
+	args = append(args, dispatchedArgs(spec.Dispatched)...)
 	args = append(args, sandboxWritableRootsArgs(spec.Workspace)...)
 	return append(args, opts.LeoMCP.configArgs()...), nil
+}
+
+func dispatchedArgs(dispatched bool) []string {
+	if !dispatched {
+		return nil
+	}
+	return []string{"-c", "features.multi_agent=false"}
 }
 
 // developerInstructionsArgs renders Leo's harness-neutral system-context
