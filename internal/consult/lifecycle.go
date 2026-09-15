@@ -59,6 +59,7 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 		if cause != nil {
 			state.record.Error = cause.Error()
 		}
+		d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, ""), status)
 	}
 	d.persistRecordLocked(state)
 	recordID := state.record.ID

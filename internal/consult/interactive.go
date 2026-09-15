@@ -245,6 +245,7 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		if !d.hasWorkingTurnLocked(s) {
 			s.record.foldActive(boundary)
 		}
+		d.completionCandidateLocked(s, t.TurnID, turnNotificationStatus(s.record, t.TurnID))
 		d.persistTurnLocked(s, *t)
 		if s.record.Status != oldStatus {
 			d.persistLocked(s, "status")
@@ -562,6 +563,7 @@ done:
 // Sweep advances time-based interactive transitions. It is intentionally
 // called by the daemon's existing housekeeping loop rather than owning a goroutine.
 func (d *Dispatcher) Sweep(now time.Time) {
+	defer d.SweepNotifications(context.Background())
 	// The dispatcher clock is the single time authority. The argument remains
 	// for the housekeeping API but callers that need deterministic time set
 	// d.now (as tests do), avoiding mixed-clock deadlines.
