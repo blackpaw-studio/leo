@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
+	"time"
 )
 
 const worktreesDirName = "worktrees"
@@ -115,9 +117,16 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 		d.mu.Lock()
 		rt := d.interactiveRuntime
 		d.mu.Unlock()
-		if rt == nil || rt.Alive(rec.PaneID) {
+		if rt == nil {
 			return d.setWorktreeState(rec, state, WorktreeKept)
 		}
+		alive, certain := paneAlive(rt, rec.PaneID)
+		if !certain || alive {
+			return d.setWorktreeState(rec, state, WorktreeKept)
+		}
+	}
+	if rec.Mode != ModeInteractive && state != nil && !headlessProcessGroupGone(state) {
+		return d.setWorktreeState(rec, state, WorktreeKept)
 	}
 	keep := func() Record { return d.setWorktreeState(rec, state, WorktreeKept) }
 	if rec.Worktree == "" || rec.RepositoryRoot == "" || rec.BaseCommit == "" || rec.Branch == "" {
@@ -143,6 +152,27 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 		return keep()
 	}
 	return d.setWorktreeState(rec, state, WorktreeRemoved)
+}
+
+// processGroupGone treats every error other than ESRCH as uncertainty. A
+// cleanup that cannot prove the group is gone must keep its worktree.
+func processGroupGone(pgid int) bool {
+	if pgid <= 0 {
+		return false
+	}
+	return syscall.Kill(-pgid, 0) == syscall.ESRCH
+}
+
+func waitProcessGroupGone(pgid int) bool {
+	deadline := time.Now().Add(time.Second)
+	for !processGroupGone(pgid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return processGroupGone(pgid)
+}
+
+func headlessProcessGroupGone(state *runState) bool {
+	return state.pgidGone
 }
 
 func (d *Dispatcher) setWorktreeState(rec Record, state *runState, disposition WorktreeState) Record {

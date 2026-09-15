@@ -78,6 +78,10 @@ type runState struct {
 	closedIDs      []string
 	idleSince      time.Time
 	killPending    bool
+	// pgid is the headless command's private process group. It is retained
+	// after Wait so worktree cleanup can prove no detached child remains.
+	pgid     int
+	pgidGone bool
 }
 
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder
@@ -237,7 +241,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		handle = nopHandle{}
 	}
 	runCtx, cancel := context.WithCancel(d.daemonCtx)
-	state := &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: cancel}
+	state := &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: cancel, pgidGone: true}
 	d.mu.Lock()
 	d.runs[rec.ID] = state
 	d.pruneTerminalRunsLocked()
@@ -342,6 +346,12 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	runErr := cmd.Start()
 	if runErr == nil {
 		d.mu.Lock()
+		state.pgidGone = false
+		// Setpgid requests a private group, but record the kernel's answer
+		// rather than assuming the child PID is its group leader.
+		if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
+			state.pgid = pgid
+		}
 		if !state.record.Status.Terminal() {
 			state.record.Status = StatusRunning
 			state.record.startActive(d.now())
@@ -349,6 +359,10 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		}
 		d.mu.Unlock()
 		runErr = cmd.Wait()
+		pgidGone := waitProcessGroupGone(state.pgid)
+		d.mu.Lock()
+		state.pgidGone = pgidGone
+		d.mu.Unlock()
 	}
 	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))
 	if parsed.SessionID != "" {
@@ -587,6 +601,7 @@ func (d *Dispatcher) Collect(rec Record) Record {
 	unlock := d.serialLocks([]string{rec.ID})
 	defer unlock()
 	if rec.Status.Terminal() {
+		d.waitDone(rec.ID)
 		rec = d.cleanupWorktree(rec.ID)
 	}
 	d.collect(rec)
@@ -625,24 +640,30 @@ func (d *Dispatcher) Prune() {
 }
 
 func (d *Dispatcher) Cancel(id string) (Record, error) {
+	return d.terminateReapAndCleanup(id, StatusCanceled)
+}
+
+// terminateReapAndCleanup is the only cancellation path that can remove an
+// isolated worktree. Serialization prevents another collector from observing
+// a terminal status between termination and process reaping.
+func (d *Dispatcher) terminateReapAndCleanup(id string, status Status) (Record, error) {
 	unlock := d.serialLocks([]string{id})
 	defer unlock()
 	rec, state, err := d.lookup(id)
 	if err != nil {
 		return Record{}, fmt.Errorf("unknown dispatch %s", id)
 	}
-	if rec.Status.Terminal() {
-		return rec, nil
-	}
 	if state == nil {
 		return rec, nil
 	}
-	rec, err = d.terminate(id, StatusCanceled)
-	if err == nil {
-		d.waitDone(strings.SplitN(id, "#", 2)[0])
-		rec = d.cleanupWorktree(rec.ID)
+	if !rec.Status.Terminal() {
+		rec, err = d.terminate(id, status)
+		if err != nil {
+			return rec, err
+		}
 	}
-	return rec, err
+	d.waitDone(strings.SplitN(id, "#", 2)[0])
+	return d.cleanupWorktree(rec.ID), nil
 }
 
 func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
@@ -703,8 +724,7 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 		if errors.Is(err, context.DeadlineExceeded) {
 			status = StatusTimeout
 		}
-		_, _ = d.terminate(started.ID, status)
-		d.waitDone(started.ID)
+		_, _ = d.terminateReapAndCleanup(started.ID, status)
 		return Result{}, err
 	}
 	entry := entries[0]
@@ -738,14 +758,17 @@ func (d *Dispatcher) MarkInterrupted() {
 		}
 		if rec.Status.Terminal() {
 			writerUncertain := false
-			if rec.Isolation == "worktree" && rec.Mode != ModeInteractive {
+			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode != ModeInteractive {
 				writerUncertain = true
 			}
-			if rec.Isolation == "worktree" && rec.Mode == ModeInteractive && rec.PaneID == "" {
+			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved && rec.Mode == ModeInteractive && rec.PaneID == "" {
 				writerUncertain = true
 			}
-			if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
-				if d.interactiveRuntime.Kill(rec.PaneID) != nil {
+			if rec.WorktreeState != WorktreeRemoved && rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
+				alive, certain := paneAlive(d.interactiveRuntime, rec.PaneID)
+				if !certain {
+					writerUncertain = true
+				} else if alive && d.interactiveRuntime.Kill(rec.PaneID) != nil {
 					d.trackRestartKill(rec)
 					writerUncertain = true
 				}
@@ -776,14 +799,19 @@ func (d *Dispatcher) MarkInterrupted() {
 			}
 		} else {
 			rec.Status = StatusFailed
-			if rec.Isolation == "worktree" {
+			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
 				rec.WorktreeState = WorktreeKept
 			}
 		}
 		rec.foldActive(markedAt)
 		rec.Error, rec.EndedAt = "daemon restarted", markedAt
-		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
-			if d.interactiveRuntime.Kill(rec.PaneID) != nil {
+		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
+			alive, certain := paneAlive(d.interactiveRuntime, rec.PaneID)
+			if !certain {
+				if rec.Isolation == "worktree" {
+					rec.WorktreeState = WorktreeKept
+				}
+			} else if alive && d.interactiveRuntime.Kill(rec.PaneID) != nil {
 				d.trackRestartKill(rec)
 			}
 		}

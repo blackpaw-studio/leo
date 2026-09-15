@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +169,117 @@ func TestMarkInterruptedReconcilesCreatingWorktree(t *testing.T) {
 	}
 }
 
+func TestMarkInterruptedPreservesRemovedWorktrees(t *testing.T) {
+	stateDir := t.TempDir()
+	recorder := NewFileRecorder(stateDir)
+	for _, rec := range []Record{
+		{ID: "d-removed", Template: "claude", Harness: "claude", Kind: "dispatch", Status: StatusDone, Isolation: "worktree", Worktree: "/gone", WorktreeState: WorktreeRemoved},
+		{ID: "d-creating", Template: "claude", Harness: "claude", Kind: "dispatch", Status: StatusRunning, Isolation: "worktree", Worktree: filepath.Join(stateDir, "missing"), RepositoryRoot: gitTestRepo(t), WorktreeState: WorktreeCreating},
+	} {
+		h, err := recorder.Open(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.Close(rec.Status, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := NewDispatcher(recorder)
+	d.MarkInterrupted()
+	for _, id := range []string{"d-removed", "d-creating"} {
+		rec, err := d.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.WorktreeState != WorktreeRemoved {
+			t.Fatalf("%s state = %q", id, rec.WorktreeState)
+		}
+	}
+}
+
+func TestCollectWaitsForIsolatedHeadlessReap(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "sleep 30")
+	}
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state *runState
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		d.mu.Lock()
+		state = d.runs[started.ID]
+		running := state.record.Status == StatusRunning
+		d.mu.Unlock()
+		if running {
+			break
+		}
+	}
+	d.mu.Lock()
+	state.record.Status = StatusCanceled
+	state.record.EndedAt = time.Now()
+	d.persistRecordLocked(state)
+	rec := cloneRecord(state.record)
+	d.mu.Unlock()
+	collected := make(chan struct{})
+	go func() { d.Collect(rec); close(collected) }()
+	select {
+	case <-collected:
+		t.Fatal("Collect returned before process reap")
+	case <-time.After(50 * time.Millisecond):
+	}
+	state.cancel()
+	select {
+	case <-collected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Collect did not return after reap")
+	}
+}
+
+func TestHeadlessBackgroundProcessGroupForcesRetention(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	d := worktreeDispatcher(t, stateDir, "sleep 5 </dev/null >/dev/null 2>&1 &")
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := d.Wait(context.Background(), []string{started.ID}, RunTimeout)[0]
+	if entry.Worktree == "" {
+		t.Fatalf("worktree removed while process group survived: %+v", entry)
+	}
+}
+
+func TestIsolatedConsultCancellationReapsAndCleans(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	for range maxConcurrent {
+		d.sem <- struct{}{}
+	}
+	defer func() {
+		for range maxConcurrent {
+			<-d.sem
+		}
+	}()
+	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "sleep 30")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := d.Consult(ctx, testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
+	if err == nil {
+		t.Fatal("expected cancellation")
+	}
+	records := d.Records()
+	if len(records) != 1 {
+		t.Fatalf("records = %d", len(records))
+	}
+	if records[0].WorktreeState != WorktreeRemoved {
+		t.Fatalf("record = %+v", records[0])
+	}
+}
+
 func TestCodexWorktreeArgsIncludeLinkedAndCommonGitDirs(t *testing.T) {
 	repo, stateDir := gitTestRepo(t), t.TempDir()
 	d := NewDispatcher(NewFileRecorder(stateDir))
@@ -181,15 +293,35 @@ func TestCodexWorktreeArgsIncludeLinkedAndCommonGitDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec, _ := d.Get(started.ID)
-	d.Wait(context.Background(), []string{started.ID}, RunTimeout)
-	joined := strings.Join(gotArgs, " ")
-	for _, want := range []string{filepath.Join(repo, ".git"), filepath.Join(repo, ".git", "worktrees", filepath.Base(rec.Worktree)), filepath.Join(rec.Worktree, ".agents")} {
-		canonical, _ := filepath.EvalSymlinks(want)
-		if canonical == "" {
-			canonical = want
+	wantRoots := []string{filepath.Join(repo, ".git"), filepath.Join(repo, ".git", "worktrees", filepath.Base(rec.Worktree)), filepath.Join(rec.Worktree, ".agents")}
+	for i, want := range wantRoots {
+		if canonical, err := filepath.EvalSymlinks(want); err == nil {
+			wantRoots[i] = canonical
+		} else if canonicalParent, parentErr := filepath.EvalSymlinks(filepath.Dir(want)); parentErr == nil {
+			wantRoots[i] = filepath.Join(canonicalParent, filepath.Base(want))
 		}
-		if !strings.Contains(joined, canonical) {
-			t.Errorf("args missing %q: %v", canonical, gotArgs)
+	}
+	d.Wait(context.Background(), []string{started.ID}, RunTimeout)
+	var roots map[string]bool
+	for i := range gotArgs {
+		if i > 0 && gotArgs[i-1] == "-c" && strings.HasPrefix(gotArgs[i], "sandbox_workspace_write.writable_roots=") {
+			raw := strings.TrimPrefix(gotArgs[i], "sandbox_workspace_write.writable_roots=")
+			roots = map[string]bool{}
+			for _, item := range strings.Split(strings.Trim(raw, "[]"), ",") {
+				value, err := strconv.Unquote(strings.TrimSpace(item))
+				if err != nil {
+					t.Fatal(err)
+				}
+				roots[value] = true
+			}
+		}
+	}
+	if roots == nil {
+		t.Fatalf("writable roots argument missing: %v", gotArgs)
+	}
+	for _, want := range wantRoots {
+		if !roots[want] {
+			t.Errorf("writable roots missing exact member %q: %v", want, roots)
 		}
 	}
 }

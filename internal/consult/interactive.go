@@ -37,6 +37,22 @@ type InteractiveRuntime interface {
 type openingInteractiveRuntime interface {
 	InjectOpening(ctx context.Context, paneID string, text string, arm func() error) error
 }
+
+// paneAliveRuntime distinguishes a missing pane from an unavailable tmux
+// probe. Existing runtimes can keep the simpler Alive method; callers that
+// make destructive decisions use this richer optional capability.
+type paneAliveRuntime interface {
+	PaneAlive(paneID string) (alive bool, err error)
+}
+
+func paneAlive(rt InteractiveRuntime, paneID string) (alive, certain bool) {
+	if prober, ok := rt.(paneAliveRuntime); ok {
+		alive, err := prober.PaneAlive(paneID)
+		return alive, err == nil
+	}
+	return rt.Alive(paneID), true
+}
+
 type HookReport struct {
 	EventID string          `json:"event_id"`
 	Payload json.RawMessage `json:"payload"`
