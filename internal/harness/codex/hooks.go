@@ -162,7 +162,7 @@ func withoutLeoHandlers(group map[string]any) (map[string]any, bool) {
 	for _, raw := range asSlice(group["hooks"]) {
 		handler, _ := raw.(map[string]any)
 		command, _ := handler["command"].(string)
-		if handler["type"] == "command" && strings.HasSuffix(command, " dispatch report") {
+		if handler["type"] == "command" && isLeoDispatchReportCommand(command) {
 			changed = true
 			continue
 		}
@@ -177,6 +177,24 @@ func withoutLeoHandlers(group map[string]any) (map[string]any, bool) {
 	}
 	copy["hooks"] = filtered
 	return copy, true
+}
+
+func isLeoDispatchReportCommand(command string) bool {
+	const suffix = " dispatch report"
+	if !strings.HasSuffix(command, suffix) {
+		return false
+	}
+	path := strings.TrimSuffix(command, suffix)
+	if path == "" {
+		return false
+	}
+	if filepath.Base(path) == "leo" {
+		return true
+	}
+	// shellCommand quotes executable paths containing whitespace, so retain an
+	// exact match for the running executable in addition to the conventional
+	// binary name check above.
+	return command == defaultLeoHookCommand()
 }
 
 func containsCommand(groups []any, command string) bool {

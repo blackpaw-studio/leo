@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -147,18 +148,19 @@ func TestPrepareInteractiveDeduplicatesStaleLeoHooksAndRewritesTrust(t *testing.
 	prepareLeoHookCommand = func() string { return current }
 	t.Cleanup(func() { prepareLeoHookCommand = defaultLeoHookCommand })
 	hooksPath := filepath.Join(home, "hooks.json")
-	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/tmp/leo-a dispatch report"}]},{"hooks":[{"type":"command","command":"/usr/bin/user-hook"}]},{"hooks":[{"type":"command","command":"/tmp/leo-b dispatch report"}]}]}}`), 0o600); err != nil {
+	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/tmp/leo-x/leo dispatch report"}]},{"hooks":[{"type":"command","command":"/usr/local/bin/other dispatch report"}]},{"hooks":[{"type":"command","command":"/Users/x/.worktrees/leo/bin/leo dispatch report"}]},{"hooks":[{"type":"command","command":"/opt/leo dispatch report"}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	canonicalHooks, err := canonicalPath(hooksPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreignHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": "/usr/bin/user-hook"})
+	foreignHash := trustHash("Stop", nil, map[string]any{"type": "command", "command": "/usr/local/bin/other dispatch report"})
 	config := strings.Join([]string{
 		trustEntry(canonicalHooks+":stop:0:0", "sha256:stale-a"),
 		trustEntry(canonicalHooks+":stop:1:0", foreignHash),
 		trustEntry(canonicalHooks+":stop:2:0", "sha256:stale-b"),
+		trustEntry(canonicalHooks+":stop:3:0", "sha256:current"),
 	}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -172,10 +174,13 @@ func TestPrepareInteractiveDeduplicatesStaleLeoHooksAndRewritesTrust(t *testing.
 		t.Fatal(err)
 	}
 	groups := hooks["hooks"].(map[string]any)["Stop"].([]any)
-	if len(groups) != 2 || !containsCommand(groups, current) || !containsCommand(groups, "/usr/bin/user-hook") {
+	if len(groups) != 2 || !containsCommand(groups, current) || !containsCommand(groups, "/usr/local/bin/other dispatch report") {
 		t.Fatalf("Stop groups = %#v, want current Leo plus foreign", groups)
 	}
-	if containsCommand(groups, "/tmp/leo-a dispatch report") || containsCommand(groups, "/tmp/leo-b dispatch report") {
+	if got := strings.Count(string(mustJSON(t, groups)), current); got != 1 {
+		t.Fatalf("current Leo group count = %d, want 1; groups=%#v", got, groups)
+	}
+	if containsCommand(groups, "/tmp/leo-x/leo dispatch report") || containsCommand(groups, "/Users/x/.worktrees/leo/bin/leo dispatch report") {
 		t.Fatalf("stale Leo groups remain: %#v", groups)
 	}
 	after, err := os.ReadFile(filepath.Join(home, "config.toml"))
@@ -191,11 +196,20 @@ func TestPrepareInteractiveDeduplicatesStaleLeoHooksAndRewritesTrust(t *testing.
 	}
 }
 
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
 func TestMergeLeoHooksPreservesForeignHandlerInMixedGroup(t *testing.T) {
 	file := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{
 		"matcher": "all",
 		"hooks": []any{
-			map[string]any{"type": "command", "command": "/tmp/leo-old dispatch report"},
+			map[string]any{"type": "command", "command": "/tmp/leo-old/leo dispatch report"},
 			map[string]any{"type": "command", "command": "/usr/bin/user-hook"},
 		},
 	}}}}
@@ -205,7 +219,7 @@ func TestMergeLeoHooksPreservesForeignHandlerInMixedGroup(t *testing.T) {
 		t.Fatalf("mixed groups = %#v, want preserved foreign handler and current Leo group", groups)
 	}
 	foreign := groups[0].(map[string]any)
-	if foreign["matcher"] != "all" || containsCommand(groups, "/tmp/leo-old dispatch report") {
+	if foreign["matcher"] != "all" || containsCommand(groups, "/tmp/leo-old/leo dispatch report") {
 		t.Fatalf("mixed group metadata or stale handler wrong: %#v", groups)
 	}
 }
