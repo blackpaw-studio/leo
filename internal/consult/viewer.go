@@ -30,6 +30,9 @@ type Viewer struct {
 	windowIDs          map[string]string
 	rosterMu           sync.Mutex
 	rosters            map[string]rosterSessionState
+	rosterInventoryLog string
+	rosterZeroLogged   bool
+	rosterEvents       map[string]bool
 	ConfigPath         string
 	TmuxPath           string
 	Executable         func() (string, error)
