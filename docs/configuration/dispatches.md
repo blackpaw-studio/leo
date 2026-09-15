@@ -35,6 +35,11 @@ work. A timeout leaves still-running IDs available for another wait.
 dispatch IDs. In interactive mode, `leo_wait` accepts either a run ID or a
 turn ID (`d-…#n`).
 
+`leo_dispatch_output(id, tail?)` reads a nonblocking snapshot of recorded
+output without collecting the dispatch. `tail` is a positive rendered-line
+count, defaults to 60, and is capped at 400. It accepts turn IDs and returns
+the parent run's stream. Use it when a wait result is truncated.
+
 The template-selecting tools use a named `templates:` entry, not a running agent. The
 template supplies the harness, model, environment, and harness options; an
 explicit `model` is validated by that harness. `can_consult` permissions apply
@@ -48,6 +53,7 @@ leo dispatch run codex-implementer "Inspect only" --notify=false
 leo dispatch list
 leo dispatch watch d-12ab34
 leo dispatch show d-12ab34
+leo dispatch output d-12ab34 --tail 120
 leo dispatch send d-12ab34 "Please also cover malformed input"
 leo dispatch cancel d-12ab34
 ```
@@ -56,7 +62,7 @@ leo dispatch cancel d-12ab34
 opening turn. `list` and `watch` also work for consults, preserving the older
 `leo consult list|watch` interface. `watch` accepts an unambiguous ID prefix;
 Ctrl-C only detaches. `show` prints a record as JSON. `list` and `watch`
-support `--host`; `run`, `show`, `send`, and `cancel` currently require the
+support `--host`; `run`, `show`, `output`, `send`, and `cancel` currently require the
 local daemon.
 
 ## Interactive mode

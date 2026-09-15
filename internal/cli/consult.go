@@ -17,9 +17,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// feedIndent aligns continuation lines under the body column of a feed row.
-const feedIndent = 18
-
 // Testability seams — overridden in tests.
 var (
 	consultStdout       io.Writer = os.Stdout
@@ -204,7 +201,7 @@ func watchConsult(ctx context.Context, stateDir, prefix string, out io.Writer) e
 	}
 	defer stream.Close()
 
-	feed := &consultFeed{out: out, renderer: rendererFor(record.Harness)}
+	renderer := consult.NewRenderer(record.Harness)
 	tail := &streamTailer{f: stream}
 
 	for {
@@ -222,7 +219,9 @@ func watchConsult(ctx context.Context, stateDir, prefix string, out io.Writer) e
 			return err
 		}
 		for _, event := range events {
-			feed.emit(event)
+			for _, line := range renderer.Render(event) {
+				fmt.Fprintln(out, line)
+			}
 		}
 		if now := time.Now(); record.Settled(now) {
 			reportOutcome(out, record, now)
@@ -289,20 +288,6 @@ func resolveConsult(records []consult.Record, prefix string) (consult.Record, er
 	}
 }
 
-// rendererFor resolves a harness's live-feed renderer. A harness without
-// one makes the feed fall back to raw event lines.
-func rendererFor(name string) harness.EventRenderer {
-	h, err := harness.Get(name)
-	if err != nil {
-		return nil
-	}
-	renderer, ok := h.(harness.EventRenderer)
-	if !ok {
-		return nil
-	}
-	return renderer
-}
-
 // streamTailer reads complete framed lines from a stream the daemon may
 // still be appending to, holding a torn trailing line until it completes.
 type streamTailer struct {
@@ -335,74 +320,21 @@ func (t *streamTailer) drain() ([]consult.StreamEvent, error) {
 	return events, nil
 }
 
-// consultFeed renders recorded events as readable rows.
+func formatOffset(d time.Duration) string { return consult.FormatOffset(d) }
+
+// Compatibility adapter for the older watch tests; all event formatting lives
+// in consult.Renderer.
+const feedIndent = consult.FeedIndent
+
 type consultFeed struct {
-	out io.Writer
-	// renderer is nil for a harness with no live-feed mapping; its events
-	// print as raw JSON rather than not at all.
+	out      io.Writer
 	renderer harness.EventRenderer
 }
 
 func (f *consultFeed) emit(event consult.StreamEvent) {
-	if event.Raw != "" {
-		f.row(event.Offset, "raw", event.Raw)
-		return
+	for _, line := range consult.NewRendererFor(f.renderer).Render(event) {
+		fmt.Fprintln(f.out, line)
 	}
-	if len(event.Data) == 0 {
-		return
-	}
-	var raw map[string]json.RawMessage
-	if json.Unmarshal(event.Data, &raw) == nil {
-		var typ string
-		_ = json.Unmarshal(raw["type"], &typ)
-		if typ == "turn" {
-			var t consult.Turn
-			_ = json.Unmarshal(raw["data"], &t)
-			f.row(event.Offset, "turn", fmt.Sprintf("%s %s %s\n%s", t.TurnID, t.Source, t.Outcome, t.Text))
-			return
-		}
-		if typ == "status" {
-			var status string
-			_ = json.Unmarshal(raw["data"], &status)
-			f.row(event.Offset, "status", status)
-			return
-		}
-	}
-	if f.renderer == nil {
-		f.row(event.Offset, "raw", string(event.Data))
-		return
-	}
-	for _, rendered := range f.renderer.RenderEvent(event.Data) {
-		label := string(rendered.Kind)
-		if rendered.Kind == harness.EventTool {
-			// Lower-cased so the column reads the same across harnesses,
-			// which disagree on tool-name casing.
-			label = strings.ToLower(rendered.Tool)
-		}
-		f.row(event.Offset, label, rendered.Summary)
-	}
-}
-
-func (f *consultFeed) row(offset time.Duration, label, body string) {
-	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
-	fmt.Fprintf(f.out, "%7s  %-8s %s\n", formatOffset(offset), label, lines[0])
-	for _, extra := range lines[1:] {
-		fmt.Fprintf(f.out, "%s%s\n", strings.Repeat(" ", feedIndent), extra)
-	}
-}
-
-// formatOffset renders a duration as m:ss, growing to h:mm:ss only when
-// needed.
-func formatOffset(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
-	total := int(d.Seconds())
-	hours, minutes, seconds := total/3600, (total%3600)/60, total%60
-	if hours > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
-	}
-	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
 func callerSuffix(record consult.Record) string {
