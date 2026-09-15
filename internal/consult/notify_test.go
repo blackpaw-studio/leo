@@ -270,18 +270,39 @@ func TestTurnCandidatePersistsBoundaryMessage(t *testing.T) {
 	}
 }
 
-func TestPruneKeepsPendingNotificationsResident(t *testing.T) {
-	d := NewDispatcher(nil)
-	for i := 0; i < RecordsKept+2; i++ {
-		id := fmt.Sprintf("d-%02d", i)
-		d.runs[id] = &runState{record: Record{ID: id, Status: StatusDone, EndedAt: time.Unix(int64(i), 0)}, handle: nopHandle{}}
-	}
-	d.runs["d-pending"] = &runState{record: Record{ID: "d-pending", Status: StatusDone, EndedAt: time.Unix(0, 0), Notifications: map[string]Notification{"d-pending": {Disposition: NotificationPending}}}, handle: nopHandle{}}
-	d.mu.Lock()
-	d.pruneTerminalRunsLocked()
-	d.mu.Unlock()
-	if d.runs["d-pending"] == nil {
-		t.Fatal("pending notification was pruned")
+func TestPruneKeepsResidentWhileWorktreeOrNotificationUnresolved(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		worktreeKept, pending bool
+		wantRetained          bool
+	}{
+		{name: "both unresolved", worktreeKept: true, pending: true, wantRetained: true},
+		{name: "notification only", pending: true, wantRetained: true},
+		{name: "worktree only", worktreeKept: true, wantRetained: true},
+		{name: "both resolved"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewDispatcher(nil)
+			for i := 0; i < RecordsKept+1; i++ {
+				id := fmt.Sprintf("d-new-%02d", i)
+				d.runs[id] = &runState{record: Record{ID: id, Status: StatusDone, EndedAt: time.Unix(int64(i+1), 0)}, handle: nopHandle{}}
+			}
+			rec := Record{ID: "d-oldest", Status: StatusDone, EndedAt: time.Unix(0, 0), WorktreeState: WorktreeRemoved}
+			if tc.worktreeKept {
+				rec.Isolation, rec.WorktreeState = "worktree", WorktreeKept
+			}
+			if tc.pending {
+				rec.Notifications = map[string]Notification{rec.ID: {Disposition: NotificationPending}}
+			}
+			d.runs[rec.ID] = &runState{record: rec, handle: nopHandle{}}
+			d.mu.Lock()
+			d.pruneTerminalRunsLocked()
+			d.mu.Unlock()
+			_, retained := d.runs[rec.ID]
+			if retained != tc.wantRetained {
+				t.Fatalf("retained = %v, want %v", retained, tc.wantRetained)
+			}
+		})
 	}
 }
 
