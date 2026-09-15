@@ -168,6 +168,12 @@ func (d *Dispatcher) rollbackRecreatedWorktreeLocked(rec Record) error {
 		if state := d.runs[rec.ID]; state != nil {
 			state.record.WorktreeState = WorktreeKept
 			d.persistRecordLocked(state)
+		} else if writer, ok := d.recorder.(interface{ PersistRecord(Record) error }); ok {
+			kept := cloneRecord(rec)
+			kept.WorktreeState = WorktreeKept
+			if persistErr := writer.PersistRecord(kept); persistErr != nil {
+				return errors.Join(fmt.Errorf("rolling back recreated worktree; retained as kept: %w", err), fmt.Errorf("persisting kept worktree: %w", persistErr))
+			}
 		}
 		return fmt.Errorf("rolling back recreated worktree; retained as kept: %w", err)
 	}

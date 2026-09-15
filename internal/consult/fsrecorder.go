@@ -47,7 +47,8 @@ func StreamPath(stateDir, id string) string {
 // FileRecorder persists consults under <state>/consults as an <id>.json
 // record plus an <id>.ndjson event stream.
 type FileRecorder struct {
-	dir string
+	dir        string
+	resumeHook func(Record) error
 	// Now supplies stream timestamps and decides staleness; replaced in
 	// tests. It must be safe for concurrent use: every recording goroutine
 	// calls it, as does pruning.
@@ -59,6 +60,12 @@ type FileRecorder struct {
 
 func NewFileRecorder(stateDir string) *FileRecorder {
 	return &FileRecorder{dir: Dir(stateDir), Now: time.Now}
+}
+
+func (r *FileRecorder) PersistRecord(rec Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return writeRecord(r.dir, rec)
 }
 
 func (r *FileRecorder) Open(rec Record) (Handle, error) {
@@ -90,6 +97,11 @@ func (r *FileRecorder) Open(rec Record) (Handle, error) {
 // Lifecycle sequence numbers are recovered from the durable stream so daemon
 // restarts do not make appended events ambiguous.
 func (r *FileRecorder) Resume(rec Record) (Handle, error) {
+	if r.resumeHook != nil {
+		if err := r.resumeHook(rec); err != nil {
+			return nil, err
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	path := filepath.Join(r.dir, rec.ID+".ndjson")
