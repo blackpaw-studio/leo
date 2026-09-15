@@ -155,7 +155,9 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 }
 
 // processGroupGone treats every error other than ESRCH as uncertainty. A
-// cleanup that cannot prove the group is gone must keep its worktree.
+// cleanup that cannot prove the group is gone must keep its worktree. This
+// only contains descendants that remain in the harness process group: a
+// deliberate setsid-style daemon escape is not portably discoverable here.
 func processGroupGone(pgid int) bool {
 	if pgid <= 0 {
 		return false
@@ -164,7 +166,7 @@ func processGroupGone(pgid int) bool {
 }
 
 func waitProcessGroupGone(pgid int) bool {
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for !processGroupGone(pgid) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}

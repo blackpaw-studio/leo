@@ -25,6 +25,8 @@ Dispatch notifications default to enabled. Set `notify: false` (or CLI
 repository's committed HEAD. Leo keeps worktrees containing uncommitted or
 committed changes and reports their path and branch when the result is collected;
 unchanged worktrees are removed while their branches remain available.
+A subagent that deliberately daemonizes a writer outside its process group can
+outlive collection; such writes after a clean removal are lost.
 
 `timeout_seconds` is an optional dispatch run cap; dispatches are unlimited
 when it is omitted. `leo_wait(ids, timeout_seconds?)` waits for one or more

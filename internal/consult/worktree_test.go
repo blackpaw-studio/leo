@@ -251,6 +251,54 @@ func TestHeadlessBackgroundProcessGroupForcesRetention(t *testing.T) {
 	}
 }
 
+func TestCancelTerminalHeadlessKillsSurvivingProcessGroupAndRemovesWorktree(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	d := worktreeDispatcher(t, stateDir, "sleep 30 </dev/null >/dev/null 2>&1 &")
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := d.Wait(context.Background(), []string{started.ID}, RunTimeout)[0]
+	if entry.Worktree == "" {
+		t.Fatalf("initial collection removed live process-group worktree: %+v", entry)
+	}
+	rec, err := d.Cancel(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.WorktreeState != WorktreeRemoved {
+		t.Fatalf("cancel record = %+v", rec)
+	}
+	if _, err := os.Stat(rec.Worktree); !os.IsNotExist(err) {
+		t.Fatalf("worktree remains after terminal cancel: %v", err)
+	}
+}
+
+func TestHeadlessTimeoutEscalatesTermIgnoringProcessGroupBeforeCleanup(t *testing.T) {
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	d := NewDispatcher(NewFileRecorder(stateDir))
+	d.ProcessGroupGrace = 50 * time.Millisecond
+	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", `trap '' TERM; sh -c 'trap "" TERM; sleep 30' & wait`)
+	}
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree", Timeout: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := d.Wait(context.Background(), []string{started.ID}, RunTimeout)[0]
+	if entry.Status != StatusTimeout {
+		t.Fatalf("entry status = %s", entry.Status)
+	}
+	rec, _ := d.Get(started.ID)
+	if rec.WorktreeState != WorktreeRemoved {
+		t.Fatalf("timeout record = %+v", rec)
+	}
+}
+
+func TestDetachedWriterOutsideProcessGroupIsDocumentedLimitation(t *testing.T) {
+	t.Skip("portable process-group cleanup cannot contain a descendant that deliberately daemonizes with setsid; post-removal writes can be lost")
+}
+
 func TestIsolatedConsultCancellationReapsAndCleans(t *testing.T) {
 	repo, stateDir := gitTestRepo(t), t.TempDir()
 	d := NewDispatcher(NewFileRecorder(stateDir))

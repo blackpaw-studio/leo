@@ -50,6 +50,7 @@ type Dispatcher struct {
 	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
 	GitCommand         func(name string, args ...string) *exec.Cmd
 	WorktreeSuffix     func() string
+	ProcessGroupGrace  time.Duration
 	daemonCtx          context.Context
 	mu                 sync.Mutex
 	runs               map[string]*runState
@@ -114,6 +115,7 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		ExecCommandContext: exec.CommandContext,
 		GitCommand:         exec.Command,
 		WorktreeSuffix:     worktreeSuffix,
+		ProcessGroupGrace:  headlessProcessGrace,
 		daemonCtx:          daemonCtx,
 		runs:               make(map[string]*runState),
 		onStart:            onStart,
@@ -332,9 +334,13 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		if cmd.Process == nil {
 			return nil
 		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		gone, err := terminateProcessGroup(cmd.Process.Pid, d.ProcessGroupGrace)
+		d.mu.Lock()
+		state.pgidGone = gone
+		d.mu.Unlock()
+		return err
 	}
-	cmd.WaitDelay = 10 * time.Second
+	cmd.WaitDelay = headlessProcessGrace
 
 	// The tee is assigned to both Stdout and Stderr as the *same* Writer
 	// value: os/exec only serializes concurrent writes to a shared output
@@ -663,6 +669,15 @@ func (d *Dispatcher) terminateReapAndCleanup(id string, status Status) (Record, 
 		}
 	}
 	d.waitDone(strings.SplitN(id, "#", 2)[0])
+	if rec.Mode != ModeInteractive {
+		d.terminateHeadlessProcessGroup(state)
+		d.mu.Lock()
+		gone := state.pgidGone
+		d.mu.Unlock()
+		if gone && rec.WorktreeState == WorktreeKept {
+			rec = d.setWorktreeState(rec, state, WorktreePresent)
+		}
+	}
 	return d.cleanupWorktree(rec.ID), nil
 }
 
