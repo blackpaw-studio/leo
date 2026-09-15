@@ -61,6 +61,7 @@ type Dispatcher struct {
 	waits              map[string]int
 	serial             map[string]*serialLock
 	waitResolvedHook   func()
+	waitDoneHook       func(string)
 }
 
 type runState struct {
@@ -598,7 +599,7 @@ func (d *Dispatcher) Get(id string) (Record, error) { rec, _, err := d.lookup(id
 func (d *Dispatcher) Collect(rec Record) Record {
 	unlock := d.serialLocks([]string{rec.ID})
 	defer unlock()
-	if rec.Status.Terminal() {
+	if rec.Status.Terminal() && rec.Isolation == "worktree" {
 		d.waitDone(rec.ID)
 		rec = d.cleanupWorktree(rec.ID)
 	}
@@ -638,7 +639,20 @@ func (d *Dispatcher) Prune() {
 }
 
 func (d *Dispatcher) Cancel(id string) (Record, error) {
-	return d.terminateReapAndCleanup(id, StatusCanceled)
+	rec, state, err := d.lookup(id)
+	if err != nil {
+		return Record{}, fmt.Errorf("unknown dispatch %s", id)
+	}
+	if state == nil {
+		return rec, nil
+	}
+	if rec.Isolation == "worktree" {
+		return d.terminateReapAndCleanup(id, StatusCanceled)
+	}
+	if rec.Status.Terminal() {
+		return rec, nil
+	}
+	return d.terminate(id, StatusCanceled)
 }
 
 // terminateReapAndCleanup is the only cancellation path that can remove an
@@ -702,20 +716,13 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 		d.mu.Unlock()
 		return rec
 	}
-	d.mu.Unlock()
-	state.cancel()
-	d.mu.Lock()
-	if state.record.Status.Terminal() {
-		rec := cloneRecord(state.record)
-		d.mu.Unlock()
-		return rec
-	}
 	state.record.Status = status
 	state.record.EndedAt = d.now()
 	state.record.foldActive(state.record.EndedAt)
 	d.persistRecordLocked(state)
 	rec := cloneRecord(state.record)
 	d.mu.Unlock()
+	state.cancel()
 	return rec
 }
 
@@ -732,7 +739,12 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 		if errors.Is(err, context.DeadlineExceeded) {
 			status = StatusTimeout
 		}
-		_, _ = d.terminateReapAndCleanup(started.ID, status)
+		if req.Isolation == "worktree" {
+			_, _ = d.terminateReapAndCleanup(started.ID, status)
+		} else {
+			_, _ = d.terminate(started.ID, status)
+			d.waitDone(started.ID)
+		}
 		return Result{}, err
 	}
 	entry := entries[0]
@@ -743,6 +755,9 @@ func (d *Dispatcher) Consult(ctx context.Context, cfg *config.Config, req Reques
 }
 
 func (d *Dispatcher) waitDone(id string) {
+	if d.waitDoneHook != nil {
+		d.waitDoneHook(id)
+	}
 	d.mu.Lock()
 	state := d.runs[id]
 	d.mu.Unlock()
