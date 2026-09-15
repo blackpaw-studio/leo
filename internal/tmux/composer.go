@@ -150,9 +150,6 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 		}
 
 		content := strings.TrimSpace(line[len(marker):])
-		if menuOptionPattern.MatchString(content) {
-			return ComposerUnknown
-		}
 		if content == "" || placeholder(content) {
 			return ComposerEmpty
 		}
@@ -163,14 +160,107 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 }
 
 func isComposerDialog(capture string) bool {
-	if HasConfirmFooterLine(capture) {
+	lines := strings.Split(capture, "\n")
+	return hasComposerDialogFooterAtBottom(lines) || hasComposerMenuBlock(lines)
+}
+
+// hasComposerMenuBlock recognizes a live selection menu, not a numbered line
+// that happened to appear in transcript history. A menu has the active
+// selector on one option and at least one immediately-following option aligned
+// at the same content column. Unnumbered menus also need a dedicated
+// continuation footer, since a wrapped composer draft has the same alignment.
+func hasComposerMenuBlock(lines []string) bool {
+	i := lastComposerSelectorLine(lines)
+	if i < 0 || i+1 >= len(lines) {
+		return false
+	}
+	contentIndent, content, ok := selectedMenuOption(lines[i])
+	if !ok {
+		return false
+	}
+
+	nextIndent, nextContent := menuOptionLine(lines[i+1])
+	if nextContent == "" || nextIndent != contentIndent || !isComposerMenuOption(nextContent) {
+		return false
+	}
+	if menuOptionPattern.MatchString(content) && menuOptionPattern.MatchString(nextContent) {
 		return true
 	}
-	for _, line := range strings.Split(capture, "\n") {
-		line = strings.TrimSpace(line)
-		if menuOptionPattern.MatchString(line) || composerDialogTitlePattern.MatchString(line) {
+	return hasMenuContinueFooterAfter(lines, i+2)
+}
+
+func lastComposerSelectorLine(lines []string) int {
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimLeft(lines[i], " \t")
+		if strings.HasPrefix(line, "›") || strings.HasPrefix(line, "❯") {
+			return i
+		}
+	}
+	return -1
+}
+
+func isComposerMenuOption(content string) bool {
+	// Status/footer rows share an option's indentation in Codex, but carry the
+	// middle-dot-separated model/context metadata that menu choices do not.
+	return !strings.Contains(content, "·")
+}
+
+func selectedMenuOption(line string) (int, string, bool) {
+	indent, rest := menuOptionLine(line)
+	for _, marker := range []string{"›", "❯"} {
+		if !strings.HasPrefix(rest, marker) {
+			continue
+		}
+		afterMarker := rest[len(marker):]
+		spacing := len(afterMarker) - len(strings.TrimLeft(afterMarker, " \t"))
+		content := strings.TrimSpace(afterMarker)
+		if spacing == 0 || content == "" {
+			return 0, "", false
+		}
+		// Both selector glyphs occupy one terminal column; spaces after the
+		// glyph align the next option's indentation with its content.
+		return indent + 1 + spacing, content, true
+	}
+	return 0, "", false
+}
+
+func menuOptionLine(line string) (int, string) {
+	indent := len(line) - len(strings.TrimLeft(line, " \t"))
+	return indent, strings.TrimSpace(line)
+}
+
+func hasMenuContinueFooterAfter(lines []string, menuEnd int) bool {
+	if menuEnd >= len(lines) {
+		return false
+	}
+	footerEnd := min(menuEnd+3, len(lines))
+	return dialogFooterLineContaining(strings.Join(lines[menuEnd:footerEnd], "\n"), "Enter to continue")
+}
+
+func hasComposerDialogFooterAtBottom(lines []string) bool {
+	for i := len(lines) - 1; i >= 0; i-- {
+		footer := strings.TrimSpace(lines[i])
+		if footer == "" {
+			continue
+		}
+		if HasConfirmFooterLine(footer) {
 			return true
 		}
+		if dialogFooterLineContaining(footer, "Enter to continue") {
+			return hasComposerDialogTitleBefore(lines, i)
+		}
+		return false
+	}
+	return false
+}
+
+func hasComposerDialogTitleBefore(lines []string, footer int) bool {
+	for i := footer - 1; i >= 0 && i >= footer-3; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		return composerDialogTitlePattern.MatchString(line)
 	}
 	return false
 }
