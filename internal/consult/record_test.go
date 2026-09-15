@@ -620,3 +620,21 @@ func mkdir(t *testing.T, dir string) string {
 	}
 	return dir
 }
+
+func TestRecordUsageJSONDistinguishesAbsentFromZero(t *testing.T) {
+	zero := int64(0)
+	absent, err := json.Marshal(Record{ID: "d-absent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measured, err := json.Marshal(Record{ID: "d-zero", InputTokens: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(absent), "input_tokens") {
+		t.Fatalf("unknown usage serialized: %s", absent)
+	}
+	if !strings.Contains(string(measured), `"input_tokens":0`) {
+		t.Fatalf("zero usage omitted: %s", measured)
+	}
+}

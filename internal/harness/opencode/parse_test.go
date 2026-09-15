@@ -40,7 +40,12 @@ func TestParseEventsFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseEvents: %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
+			if got.Usage == nil && (tt.file == "fresh.jsonl" || tt.file == "resume.jsonl" || tt.file == "multistep_deny.jsonl") {
+				t.Fatalf("fixture %s has no usage", tt.file)
+			}
+			outcome := got
+			outcome.Usage = nil
+			if !reflect.DeepEqual(outcome, tt.want) {
 				t.Errorf("got %+v\nwant %+v", got, tt.want)
 			}
 		})
@@ -68,5 +73,64 @@ func TestParseEventsMultiText(t *testing.T) {
 	want := harness.Result{SessionID: "ses_x", Text: "one\ntwo"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestParseEventsUsageIncludesReasoningAndDeduplicatesParts(t *testing.T) {
+	stream := `{"type":"step_start","part":{"id":"s1"}}
+{"type":"step_start","part":{"id":"s1"}}
+{"type":"tool_use","part":{"id":"t1","type":"tool"}}
+{"type":"tool_use","part":{"id":"t1","type":"tool"}}
+{"type":"step_finish","part":{"id":"finish1","tokens":{"input":10,"output":2,"reasoning":3}}}
+{"type":"step_finish","part":{"id":"finish1","tokens":{"input":10,"output":2,"reasoning":3}}}`
+	got, err := Opencode{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 10 || *got.Usage.OutputTokens != 5 || *got.Usage.Turns != 1 || *got.Usage.ToolCalls != 1 {
+		t.Fatalf("usage = %#v", got.Usage)
+	}
+}
+
+func TestParseEventsFixtureUsageIncludesCacheInputs(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "fresh.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got, err := Opencode{}.ParseEvents(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 15965 || *got.Usage.OutputTokens != 17 || *got.Usage.Turns != 1 || *got.Usage.ToolCalls != 0 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestParseEventsCountsOnlyExactToolUseShape(t *testing.T) {
+	stream := `{"type":"tool_result","part":{"id":"wrong","type":"tool-result"}}
+{"type":"not-a-tool","part":{"id":"also-wrong","type":"tool"}}
+{"type":"tool_use","part":{"id":"right","type":"tool"}}`
+	got, err := Opencode{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || got.Usage.ToolCalls == nil || *got.Usage.ToolCalls != 1 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestParseEventsTruncatedFixtureLeavesTokensUnknown(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "truncated_no_step_finish.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got, err := Opencode{}.ParseEvents(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || got.Usage.InputTokens != nil || got.Usage.OutputTokens != nil || got.Usage.Turns == nil || *got.Usage.Turns != 1 || got.Usage.ToolCalls == nil || *got.Usage.ToolCalls != 0 {
+		t.Fatalf("usage=%#v", got.Usage)
 	}
 }

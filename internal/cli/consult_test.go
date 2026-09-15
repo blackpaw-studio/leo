@@ -569,6 +569,31 @@ func TestListMarksAbandonedConsults(t *testing.T) {
 //
 // Hammering it concurrently makes that window reliably observable: this test
 // fails against a plain-WriteFile helper and passes against an atomic one.
+func TestListConsultsUsageColumnsPreserveZeroAndUnknown(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "dispatches")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	in, out, turns, tools := int64(0), int64(12), 0, 0
+	cost := float64(0)
+	writeTestRecord(t, dir, consult.Record{ID: "d-usage", Template: "coding", Harness: "claude", Status: consult.StatusDone, StartedAt: time.Now(), EndedAt: time.Now(), InputTokens: &in, OutputTokens: &out, CostUSD: &cost, UsageTurns: &turns, ToolCalls: &tools})
+	writeTestRecord(t, dir, consult.Record{ID: "d-unknown", Template: "coding", Harness: "codex", Status: consult.StatusDone, StartedAt: time.Now(), EndedAt: time.Now()})
+	var rendered bytes.Buffer
+	if err := listConsults(state, false, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	got := rendered.String()
+	for _, want := range []string{"INPUT", "OUTPUT", "COST_USD", "USAGE_TURNS", "TOOLS", "0", "12"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("list missing %q: %q", want, got)
+		}
+	}
+	if !strings.Contains(got, "—") {
+		t.Errorf("list should render unknown values as dash: %q", got)
+	}
+}
+
 func TestWriteTestRecordIsAtomic(t *testing.T) {
 	state := t.TempDir()
 	dir := filepath.Join(state, "dispatches")

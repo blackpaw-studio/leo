@@ -32,11 +32,13 @@ func (Claude) ParseEvents(r io.Reader) (harness.Result, error) {
 		return harness.Result{}, err
 	}
 	var best claudeResult
+	acc := Claude{}.NewUsageAccumulator()
 	for _, line := range bytes.Split(output, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
+		acc.AddLine(line)
 		var evt streamEvent
 		if json.Unmarshal(line, &evt) == nil && evt.Type == "result" {
 			best = evt.claudeResult
@@ -51,5 +53,6 @@ func (Claude) ParseEvents(r io.Reader) (harness.Result, error) {
 		Text:      best.Result,
 		IsError:   best.IsError,
 		Errors:    best.Errors,
+		Usage:     acc.Usage(),
 	}, nil
 }

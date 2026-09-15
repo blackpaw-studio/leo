@@ -109,6 +109,12 @@ func main() {
 	case "success":
 		fmt.Println("Task completed successfully.")
 		os.Exit(0)
+	case "usage":
+		// A compact real stream-json-shaped transcript used by dispatch usage
+		// accounting integration tests.
+		fmt.Println(`{"type":"assistant","message":{"id":"fake-usage-message","usage":{"input_tokens":100,"cache_read_input_tokens":25},"content":[{"type":"tool_use","id":"fake-tool"}]}}`)
+		fmt.Println(`{"type":"result","session_id":"fake-usage-session","result":"usage done","usage":{"input_tokens":125,"output_tokens":10},"total_cost_usd":0,"num_turns":1}`)
+		os.Exit(0)
 	case "worktree":
 		if err := os.WriteFile("fake-harness-output.txt", []byte("isolated"), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)

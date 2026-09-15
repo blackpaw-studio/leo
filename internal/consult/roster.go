@@ -37,7 +37,7 @@ func RenderRoster(records []Record, now time.Time) string {
 	entries := make([]string, 0, len(eligible))
 	for _, rec := range eligible {
 		glyph, style := rosterAppearance(rec.Status)
-		entries = append(entries, fmt.Sprintf("%s%s %s %s%s", style, glyph, rosterLabel(rec), formatActiveSeconds(rec.LiveActiveSeconds(now)), rosterDefaultStyle))
+		entries = append(entries, fmt.Sprintf("%s%s %s %s%s%s", style, glyph, rosterLabel(rec), formatActiveSeconds(rec.LiveActiveSeconds(now)), rosterUsage(rec), rosterDefaultStyle))
 	}
 	return strings.Join(entries, "   ")
 }

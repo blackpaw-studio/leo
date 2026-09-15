@@ -39,7 +39,12 @@ func TestParseEventsFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseEvents: %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
+			if got.Usage == nil {
+				t.Fatalf("fixture %s has no usage", tt.file)
+			}
+			outcome := got
+			outcome.Usage = nil
+			if !reflect.DeepEqual(outcome, tt.want) {
 				t.Errorf("got %+v\nwant %+v", got, tt.want)
 			}
 		})
@@ -56,6 +61,7 @@ func TestParseEventsMCPToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEvents: %v", err)
 	}
+	got.Usage = nil
 	want := harness.Result{SessionID: "019f4ebe-c9ad-71c2-b77c-851c3102efed", Text: "2"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v\nwant %+v", got, want)
@@ -72,6 +78,7 @@ func TestParseEventsMCPCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEvents: %v", err)
 	}
+	got.Usage = nil
 	want := harness.Result{
 		SessionID: "019f4ebb-d318-7fc1-bb09-229d3b45157f",
 		Text:      "0",
@@ -80,6 +87,31 @@ func TestParseEventsMCPCancelled(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestParseEventsUsageCountsNativeEventsOnce(t *testing.T) {
+	stream := `{"type":"turn.started"}
+{"type":"item.started","item":{"id":"tool-1","type":"mcp_tool_call"}}
+{"type":"item.completed","item":{"id":"tool-1","type":"mcp_tool_call"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":8,"output_tokens":2}}
+`
+	got, err := Codex{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 10 || *got.Usage.OutputTokens != 2 || *got.Usage.Turns != 1 || *got.Usage.ToolCalls != 1 {
+		t.Fatalf("usage = %#v", got.Usage)
+	}
+}
+
+func TestParseEventsUsageExcludesFunctionCallItems(t *testing.T) {
+	got, err := Codex{}.ParseEvents(strings.NewReader(`{"type":"item.completed","item":{"id":"f1","type":"function_call"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage != nil && got.Usage.ToolCalls != nil {
+		t.Fatalf("function call counted: %#v", got.Usage)
 	}
 }
 

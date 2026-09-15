@@ -160,7 +160,7 @@ func TestAPIConsultRejectsUnknownTemplate(t *testing.T) {
 func TestAPIDispatchLifecycle(t *testing.T) {
 	s, _, _ := newTestServerWithAgents(t)
 	s.consults.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
+		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false,"usage":{"input_tokens":3,"output_tokens":0},"total_cost_usd":0,"num_turns":0}`)
 	}
 	w := httptest.NewRecorder()
 	s.handleAPIDispatch(w, httptest.NewRequest("POST", "/api/dispatch", strings.NewReader(`{"from":"caller","template":"coding","prompt":"work","cwd":"/tmp"}`)))
@@ -201,6 +201,20 @@ func TestAPIDispatchLifecycle(t *testing.T) {
 	s.handleAPIDispatchGet(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("get: %d %s", w.Code, w.Body.String())
+	}
+	var payload struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"input_tokens", "output_tokens", "cost_usd", "usage_turns"} {
+		if string(payload.Data[key]) != "0" && (key != "input_tokens" || string(payload.Data[key]) != "3") {
+			t.Fatalf("API %s = %s", key, payload.Data[key])
+		}
+	}
+	if _, present := payload.Data["tool_calls"]; present {
+		t.Fatalf("API emitted unknown tool_calls: %s", w.Body.String())
 	}
 }
 

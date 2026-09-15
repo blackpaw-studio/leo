@@ -92,3 +92,28 @@ func TestParseEventsErrors(t *testing.T) {
 		t.Errorf("got %+v", res)
 	}
 }
+
+func TestParseEventsUsageDeduplicatesAssistantAndUsesResultOutput(t *testing.T) {
+	stream := `{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":99},"content":[{"type":"tool_use","id":"t1"},{"type":"tool_use","id":"t1"}]}}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10},"content":[{"type":"tool_use","id":"t1"}]}}
+{"type":"result","usage":{"input_tokens":15,"output_tokens":4},"total_cost_usd":0,"num_turns":2}`
+	got, err := Claude{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 15 || *got.Usage.OutputTokens != 4 || *got.Usage.ToolCalls != 1 || *got.Usage.Turns != 2 || *got.Usage.CostUSD != 0 {
+		t.Fatalf("usage = %#v", got.Usage)
+	}
+}
+
+func TestParseEventsUsageCountsNewToolsOnRepeatedMessage(t *testing.T) {
+	stream := `{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10},"content":[{"type":"tool_use","id":"t1"}]}}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10},"content":[{"type":"tool_use","id":"t1"},{"type":"tool_use","id":"t2"}]}}`
+	got, err := Claude{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 10 || *got.Usage.ToolCalls != 2 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}

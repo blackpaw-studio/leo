@@ -38,11 +38,13 @@ func (Opencode) ParseEvents(r io.Reader) (harness.Result, error) {
 	}
 	var res harness.Result
 	var texts []string
+	acc := Opencode{}.NewUsageAccumulator()
 	for _, line := range bytes.Split(output, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
+		acc.AddLine(line)
 		var evt event
 		if json.Unmarshal(line, &evt) != nil {
 			continue
@@ -67,5 +69,6 @@ func (Opencode) ParseEvents(r io.Reader) (harness.Result, error) {
 		}
 	}
 	res.Text = strings.Join(texts, "\n")
+	res.Usage = acc.Usage()
 	return res, nil
 }

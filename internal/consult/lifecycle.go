@@ -8,6 +8,14 @@ import (
 
 func cloneRecord(record Record) Record {
 	record.Turns = append([]Turn(nil), record.Turns...)
+	record.UsageInvocations = append([]InvocationUsage(nil), record.UsageInvocations...)
+	for i := range record.UsageInvocations {
+		record.UsageInvocations[i].InputTokens = clonePtr(record.UsageInvocations[i].InputTokens)
+		record.UsageInvocations[i].OutputTokens = clonePtr(record.UsageInvocations[i].OutputTokens)
+		record.UsageInvocations[i].CostUSD = clonePtr(record.UsageInvocations[i].CostUSD)
+		record.UsageInvocations[i].UsageTurns = clonePtr(record.UsageInvocations[i].UsageTurns)
+		record.UsageInvocations[i].ToolCalls = clonePtr(record.UsageInvocations[i].ToolCalls)
+	}
 	if record.Notifications != nil {
 		notifications := make(map[string]Notification, len(record.Notifications))
 		for key, value := range record.Notifications {

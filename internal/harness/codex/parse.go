@@ -40,11 +40,13 @@ func (Codex) ParseEvents(r io.Reader) (harness.Result, error) {
 		return harness.Result{}, err
 	}
 	var res harness.Result
+	acc := Codex{}.NewUsageAccumulator()
 	for _, line := range bytes.Split(output, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
+		acc.AddLine(line)
 		var evt event
 		if json.Unmarshal(line, &evt) != nil {
 			continue
@@ -77,5 +79,6 @@ func (Codex) ParseEvents(r io.Reader) (harness.Result, error) {
 			}
 		}
 	}
+	res.Usage = acc.Usage()
 	return res, nil
 }
