@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 const worktreesDirName = "worktrees"
@@ -123,7 +124,23 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 			return d.setWorktreeState(rec, state, WorktreeKept)
 		}
 	}
-	if rec.Mode != ModeInteractive && state != nil && !headlessProcessGroupGone(state) {
+	if rec.Mode != ModeInteractive {
+		if !rec.Status.Terminal() {
+			return rec
+		}
+		if state != nil {
+			select {
+			case <-state.done:
+			default:
+				return rec
+			}
+		}
+	}
+	if rec.Mode != ModeInteractive && state != nil && state.headlessStarted {
+		if !d.headlessWritersGone(state) {
+			return d.setWorktreeState(rec, state, WorktreeKept)
+		}
+	} else if rec.Mode != ModeInteractive && state == nil {
 		return d.setWorktreeState(rec, state, WorktreeKept)
 	}
 	keep := func() Record { return d.setWorktreeState(rec, state, WorktreeKept) }
@@ -152,8 +169,15 @@ func (d *Dispatcher) cleanupWorktree(id string) Record {
 	return d.setWorktreeState(rec, state, WorktreeRemoved)
 }
 
-func headlessProcessGroupGone(state *runState) bool {
-	return state.pgidGone
+func (d *Dispatcher) headlessWritersGone(state *runState) bool {
+	if !state.headlessStarted {
+		return true
+	}
+	if state.pgid <= 1 || state.pgid == syscall.Getpgrp() {
+		return false
+	}
+	present, known := d.processGroupPresent(state.pgid)
+	return known && !present
 }
 
 func (d *Dispatcher) setWorktreeState(rec Record, state *runState, disposition WorktreeState) Record {

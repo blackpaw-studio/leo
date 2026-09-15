@@ -2,8 +2,6 @@ package consult
 
 import (
 	"context"
-	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,8 +11,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 func gitTestRepo(t *testing.T) string {
@@ -237,8 +233,15 @@ func TestCollectWaitsForIsolatedHeadlessReap(t *testing.T) {
 }
 
 func TestHeadlessBackgroundProcessGroupForcesRetention(t *testing.T) {
+	requireProcessInventory(t)
 	repo, stateDir := gitTestRepo(t), t.TempDir()
 	d := worktreeDispatcher(t, stateDir, "sleep 5 </dev/null >/dev/null 2>&1 &")
+	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name != "ps" || !slices.Equal(args, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
+			t.Fatalf("process inventory argv = %q %q", name, args)
+		}
+		return exec.CommandContext(ctx, name, args...)
+	}
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
 	if err != nil {
 		t.Fatal(err)
@@ -249,9 +252,85 @@ func TestHeadlessBackgroundProcessGroupForcesRetention(t *testing.T) {
 	}
 }
 
+func TestHeadlessExitedProcessGroupAllowsRemoval(t *testing.T) {
+	requireProcessInventory(t)
+	repo, stateDir := gitTestRepo(t), t.TempDir()
+	d := worktreeDispatcher(t, stateDir, "sleep 0.05 </dev/null >/dev/null 2>&1 & wait")
+	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name != "ps" || !slices.Equal(args, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
+			t.Fatalf("process inventory argv = %q %q", name, args)
+		}
+		return exec.CommandContext(ctx, name, args...)
+	}
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := d.Wait(context.Background(), []string{started.ID}, RunTimeout)[0]
+	rec, _ := d.Get(started.ID)
+	if entry.Worktree != "" || rec.WorktreeState != WorktreeRemoved {
+		state := d.runs[started.ID]
+		out, _ := exec.Command("ps", "-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid=").CombinedOutput()
+		t.Fatalf("exited descendant retained worktree: pgid=%d inventory=%s entry=%+v record=%+v", state.pgid, out, entry, rec)
+	}
+}
+
+func requireProcessInventory(t *testing.T) {
+	t.Helper()
+	if err := exec.Command("ps", "-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid=").Run(); err != nil {
+		t.Skipf("process inventory unavailable: %v", err)
+	}
+}
+
+func TestProcessGroupInventoryExactArgvAndUncertainty(t *testing.T) {
+	for name, command := range map[string][]string{
+		"empty":     {"printf", ""},
+		"failed":    {"false"},
+		"malformed": {"printf", "not-process-data\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := NewDispatcher(nil)
+			var gotName string
+			var gotArgs []string
+			d.ProcessCommand = func(ctx context.Context, executable string, args ...string) *exec.Cmd {
+				gotName, gotArgs = executable, append([]string(nil), args...)
+				return exec.CommandContext(ctx, command[0], command[1:]...)
+			}
+			present, known := d.processGroupPresent(4242)
+			if gotName != "ps" || !slices.Equal(gotArgs, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
+				t.Fatalf("process inventory argv = %q %q", gotName, gotArgs)
+			}
+			if known {
+				t.Fatalf("%s inventory unexpectedly known", name)
+			}
+			if present {
+				t.Fatalf("%s inventory unexpectedly contains target group", name)
+			}
+		})
+	}
+}
+
+func TestUnknownOrDaemonProcessGroupRetainsWorktree(t *testing.T) {
+	for _, pgid := range []int{0, syscall.Getpgrp()} {
+		t.Run(strconv.Itoa(pgid), func(t *testing.T) {
+			d := NewDispatcher(nil)
+			if d.headlessWritersGone(&runState{headlessStarted: true, pgid: pgid}) {
+				t.Fatalf("unsafe pgid %d reported writer-free", pgid)
+			}
+		})
+	}
+}
+
 func TestCancelTerminalHeadlessDoesNotSignalCachedProcessGroup(t *testing.T) {
+	requireProcessInventory(t)
 	repo, stateDir := gitTestRepo(t), t.TempDir()
 	d := worktreeDispatcher(t, stateDir, "sleep 30 </dev/null >/dev/null 2>&1 &")
+	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name != "ps" || !slices.Equal(args, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
+			t.Fatalf("process inventory argv = %q %q", name, args)
+		}
+		return exec.CommandContext(ctx, name, args...)
+	}
 	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree"})
 	if err != nil {
 		t.Fatal(err)
@@ -269,289 +348,6 @@ func TestCancelTerminalHeadlessDoesNotSignalCachedProcessGroup(t *testing.T) {
 	}
 	if _, err := os.Stat(rec.Worktree); err != nil {
 		t.Fatalf("terminal cancel removed retained worktree: %v", err)
-	}
-}
-
-func TestHeadlessTimeoutEscalatesTermIgnoringProcessGroupBeforeCleanup(t *testing.T) {
-	repo, stateDir := gitTestRepo(t), t.TempDir()
-	d := NewDispatcher(NewFileRecorder(stateDir))
-	d.ProcessGroupGrace = 50 * time.Millisecond
-	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "sh", "-c", `trap '' TERM; sh -c 'trap "" TERM; sleep 30' & wait`)
-	}
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree", Timeout: 20 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := d.Wait(context.Background(), []string{started.ID}, RunTimeout)[0]
-	if entry.Status != StatusTimeout {
-		t.Fatalf("entry status = %s", entry.Status)
-	}
-	rec, _ := d.Get(started.ID)
-	if rec.WorktreeState != WorktreeKept {
-		t.Fatalf("timeout record = %+v", rec)
-	}
-}
-
-func TestProcessGroupSignalGuardRejectsUnsafeTargetsAndEscalatesValidGroup(t *testing.T) {
-	original := signalProcessGroup
-	t.Cleanup(func() { signalProcessGroup = original })
-	var calls []struct {
-		pid    int
-		signal syscall.Signal
-	}
-	alive := true
-	signalProcessGroup = func(pid int, signal syscall.Signal) error {
-		calls = append(calls, struct {
-			pid    int
-			signal syscall.Signal
-		}{pid, signal})
-		if signal == syscall.SIGKILL {
-			alive = false
-		}
-		if signal == 0 && !alive {
-			return syscall.ESRCH
-		}
-		return nil
-	}
-	for _, pgid := range []int{-1, 0, 1, syscall.Getpgrp()} {
-		for _, sig := range []syscall.Signal{0, syscall.SIGKILL} {
-			if err := signalGroup(pgid, sig); err == nil {
-				t.Errorf("signalGroup(%d, %v) unexpectedly succeeded", pgid, sig)
-			}
-		}
-		if gone, err := terminateProcessGroup(pgid, 0); err == nil || gone {
-			t.Errorf("unsafe pgid %d = gone %v, err %v", pgid, gone, err)
-		}
-	}
-	if len(calls) != 0 {
-		t.Fatalf("unsafe targets reached signal syscall: %+v", calls)
-	}
-	valid := syscall.Getpgrp() + 10000
-	if gone, err := terminateProcessGroup(valid, 0); err != nil || !gone {
-		t.Fatalf("valid group = gone %v, err %v", gone, err)
-	}
-	want := []syscall.Signal{syscall.SIGTERM, 0, 0, syscall.SIGKILL, 0, 0}
-	if len(calls) != len(want) {
-		t.Fatalf("signals = %+v, want %v", calls, want)
-	}
-	for i := range want {
-		if calls[i].pid != -valid || calls[i].signal != want[i] {
-			t.Fatalf("signal[%d] = %+v, want pid %d signal %v", i, calls[i], -valid, want[i])
-		}
-	}
-}
-
-func TestUnknownProcessInventoryRetainsWithoutSignal(t *testing.T) {
-	for name, command := range map[string][]string{
-		"malformed": {"printf", "malformed\\n"},
-		"failed":    {"false"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			d := NewDispatcher(nil)
-			var gotName string
-			var gotArgs []string
-			d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-				gotName, gotArgs = name, append([]string(nil), args...)
-				return exec.CommandContext(ctx, command[0], command[1:]...)
-			}
-			original := signalProcessGroup
-			t.Cleanup(func() { signalProcessGroup = original })
-			signalProcessGroup = func(pid int, signal syscall.Signal) error {
-				t.Fatalf("unknown process group was signaled: pid=%d signal=%v", pid, signal)
-				return nil
-			}
-			if gone, err := d.terminateProcessGroup(4242, 0); gone || !errors.Is(err, errUnsafeProcessGroup) {
-				t.Fatalf("unknown group = gone %v, err %v", gone, err)
-			}
-			if gotName != "ps" || !slices.Equal(gotArgs, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
-				t.Fatalf("process inventory argv = %q %q", gotName, gotArgs)
-			}
-		})
-	}
-}
-
-func TestMatchingProcessInventoryWithMalformedTailRetainsWithoutSignal(t *testing.T) {
-	d := NewDispatcher(nil)
-	d.ProcessCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "printf", "1235 4242 1\nmalformed\n")
-	}
-	original := signalProcessGroup
-	t.Cleanup(func() { signalProcessGroup = original })
-	signalProcessGroup = func(pid int, signal syscall.Signal) error {
-		t.Fatalf("partially parsed process group was signaled: pid=%d signal=%v", pid, signal)
-		return nil
-	}
-	if gone, err := d.terminateProcessGroup(4242, 0); gone || !errors.Is(err, errUnsafeProcessGroup) {
-		t.Fatalf("partial inventory = gone %v, err %v", gone, err)
-	}
-}
-
-func TestTemporalProcessGroupAuthorityEscalatesTERMThenKILL(t *testing.T) {
-	d := NewDispatcher(nil)
-	const pgid = 4242
-	alive := true
-	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if name != "ps" || !slices.Equal(args, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
-			t.Fatalf("process inventory argv = %q %q", name, args)
-		}
-		if alive {
-			return exec.CommandContext(ctx, "printf", "1235 4242 1\n")
-		}
-		return exec.CommandContext(ctx, "printf", "")
-	}
-	original := signalProcessGroup
-	t.Cleanup(func() { signalProcessGroup = original })
-	var signals []syscall.Signal
-	signalProcessGroup = func(pid int, signal syscall.Signal) error {
-		if pid != -pgid {
-			t.Fatalf("signal pid = %d", pid)
-		}
-		signals = append(signals, signal)
-		if signal == syscall.SIGKILL {
-			alive = false
-		}
-		if signal == 0 && !alive {
-			return syscall.ESRCH
-		}
-		return nil
-	}
-	if gone, err := d.terminateProcessGroup(pgid, 0); err != nil || !gone {
-		t.Fatalf("owned group = gone %v, err %v", gone, err)
-	}
-	want := []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}
-	if !slices.Equal(signals, want) {
-		t.Fatalf("signals = %v, want %v", signals, want)
-	}
-}
-
-func TestProcessInventoryFailureDuringGraceDoesNotKILL(t *testing.T) {
-	d := NewDispatcher(nil)
-	probes := 0
-	d.ProcessCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		probes++
-		if probes == 1 {
-			return exec.CommandContext(ctx, "printf", "1235 4242 1\n")
-		}
-		return exec.CommandContext(ctx, "false")
-	}
-	original := signalProcessGroup
-	t.Cleanup(func() { signalProcessGroup = original })
-	var signals []syscall.Signal
-	signalProcessGroup = func(_ int, signal syscall.Signal) error {
-		signals = append(signals, signal)
-		return nil
-	}
-	if gone, err := d.terminateProcessGroup(4242, time.Second); gone || !errors.Is(err, errUnsafeProcessGroup) {
-		t.Fatalf("unknown group = gone %v, err %v", gone, err)
-	}
-	if !slices.Equal(signals, []syscall.Signal{syscall.SIGTERM}) {
-		t.Fatalf("signals = %v, want TERM only", signals)
-	}
-}
-
-func TestTerminalPublicationSerializesProcessGroupAuthority(t *testing.T) {
-	d := NewDispatcher(nil)
-	state := &runState{record: Record{ID: "d-temporal", Status: StatusRunning}, handle: nopHandle{}, pgid: 4242}
-	probeStarted := make(chan struct{})
-	releaseProbe := make(chan struct{})
-	probes := 0
-	d.ProcessCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		probes++
-		close(probeStarted)
-		<-releaseProbe
-		return exec.CommandContext(ctx, "printf", "")
-	}
-	terminated := make(chan struct{})
-	go func() {
-		_ = d.terminateRunProcessGroup(state)
-		close(terminated)
-	}()
-	<-probeStarted
-	completed := make(chan struct{})
-	go func() {
-		d.complete(state, StatusCanceled, "", context.Canceled)
-		close(completed)
-	}()
-	time.Sleep(20 * time.Millisecond)
-	d.mu.Lock()
-	status := state.record.Status
-	d.mu.Unlock()
-	if status.Terminal() {
-		t.Fatal("terminal status published while process-group authority was active")
-	}
-	close(releaseProbe)
-	<-terminated
-	<-completed
-	if err := d.terminateRunProcessGroup(state); err != nil {
-		t.Fatal(err)
-	}
-	if probes != 1 {
-		t.Fatalf("terminal run performed %d process probes, want 1", probes)
-	}
-}
-
-func TestTerminateStateClearsUnsafeCachedProcessGroup(t *testing.T) {
-	for _, pgid := range []int{-1, 0, 1, syscall.Getpgrp()} {
-		t.Run(strconv.Itoa(pgid), func(t *testing.T) {
-			d := NewDispatcher(nil)
-			d.ProcessCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-				return exec.CommandContext(ctx, "false")
-			}
-			state := &runState{
-				record: Record{ID: "d-unsafe", Status: StatusRunning},
-				handle: nopHandle{},
-				cancel: func() {},
-				pgid:   pgid,
-			}
-			d.terminateState(state, StatusCanceled)
-			d.mu.Lock()
-			got := state.pgid
-			d.mu.Unlock()
-			if got != 0 {
-				t.Fatalf("cached pgid = %d, want cleared", got)
-			}
-		})
-	}
-}
-
-func TestTimeoutDuringParseEscalatesSurvivingProcessGroup(t *testing.T) {
-	repo, stateDir := gitTestRepo(t), t.TempDir()
-	d := worktreeDispatcher(t, stateDir, "trap '' TERM; sleep 30 </dev/null >/dev/null 2>&1 &")
-	d.ProcessGroupGrace = 50 * time.Millisecond
-	d.ParseEvents = func(h harness.Harness, r io.Reader) (harness.Result, error) {
-		time.Sleep(1200 * time.Millisecond)
-		return h.ParseEvents(r)
-	}
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree", Timeout: 3 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := d.Wait(context.Background(), []string{started.ID}, RunTimeout)[0]
-	if entry.Status != StatusTimeout {
-		t.Fatalf("entry status = %s", entry.Status)
-	}
-	rec, _ := d.Get(started.ID)
-	if rec.WorktreeState != WorktreeRemoved {
-		t.Fatalf("timeout during parse record = %+v", rec)
-	}
-}
-
-func TestTimeoutDuringPostWaitProbeEscalatesSurvivingGroup(t *testing.T) {
-	repo, stateDir := gitTestRepo(t), t.TempDir()
-	d := worktreeDispatcher(t, stateDir, "trap '' TERM; sleep 30 </dev/null >/dev/null 2>&1 &")
-	d.ProcessGroupGrace = 50 * time.Millisecond
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: repo, Isolation: "worktree", Timeout: 20 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := d.Wait(context.Background(), []string{started.ID}, RunTimeout)[0]
-	if entry.Status != StatusTimeout {
-		t.Fatalf("entry status = %s", entry.Status)
-	}
-	rec, _ := d.Get(started.ID)
-	if rec.WorktreeState != WorktreeRemoved {
-		t.Fatalf("timeout record = %+v", rec)
 	}
 }
 
@@ -641,14 +437,7 @@ func worktreeDispatcher(t *testing.T, stateDir string, mutate string) *Dispatche
 		if name != "ps" || !slices.Equal(args, []string{"-A", "-o", "pid=", "-o", "pgid=", "-o", "ppid="}) {
 			t.Fatalf("process inventory argv = %q %q", name, args)
 		}
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		for _, state := range d.runs {
-			if state.pgid > 1 && syscall.Kill(-state.pgid, 0) == nil {
-				return exec.CommandContext(ctx, "printf", "%s %s %s\n", strconv.Itoa(state.harnessPID), strconv.Itoa(state.pgid), strconv.Itoa(os.Getpid()))
-			}
-		}
-		return exec.CommandContext(ctx, "printf", "")
+		return exec.CommandContext(ctx, "printf", "1 1 0\n")
 	}
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		if name == "ps" {

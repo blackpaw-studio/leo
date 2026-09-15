@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,8 +51,6 @@ type Dispatcher struct {
 	ProcessCommand     func(ctx context.Context, name string, args ...string) *exec.Cmd
 	GitCommand         func(name string, args ...string) *exec.Cmd
 	WorktreeSuffix     func() string
-	ProcessGroupGrace  time.Duration
-	ParseEvents        func(harness.Harness, io.Reader) (harness.Result, error)
 	daemonCtx          context.Context
 	mu                 sync.Mutex
 	runs               map[string]*runState
@@ -67,7 +64,6 @@ type Dispatcher struct {
 }
 
 type runState struct {
-	terminalMu     sync.Mutex
 	record         Record
 	handle         Handle
 	done           chan struct{}
@@ -85,9 +81,8 @@ type runState struct {
 	killPending    bool
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
-	pgid       int
-	pgidGone   bool
-	harnessPID int
+	pgid            int
+	headlessStarted bool
 }
 
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder
@@ -121,8 +116,6 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		ProcessCommand:     exec.CommandContext,
 		GitCommand:         exec.Command,
 		WorktreeSuffix:     worktreeSuffix,
-		ProcessGroupGrace:  headlessProcessGrace,
-		ParseEvents:        func(h harness.Harness, r io.Reader) (harness.Result, error) { return h.ParseEvents(r) },
 		daemonCtx:          daemonCtx,
 		runs:               make(map[string]*runState),
 		onStart:            onStart,
@@ -250,7 +243,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		handle = nopHandle{}
 	}
 	runCtx, cancel := context.WithCancel(d.daemonCtx)
-	state := &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: cancel, pgidGone: true}
+	state := &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: cancel}
 	d.mu.Lock()
 	d.runs[rec.ID] = state
 	d.pruneTerminalRunsLocked()
@@ -338,11 +331,12 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		// Cancellation may signal only this run's cached private group and only
-		// before terminal publication clears that temporal authority.
-		return d.terminateRunProcessGroup(state)
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	cmd.WaitDelay = headlessProcessGrace
+	cmd.WaitDelay = 10 * time.Second
 
 	// The tee is assigned to both Stdout and Stderr as the *same* Writer
 	// value: os/exec only serializes concurrent writes to a shared output
@@ -354,13 +348,11 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	runErr := cmd.Start()
 	if runErr == nil {
 		d.mu.Lock()
-		state.harnessPID = cmd.Process.Pid
-		state.pgid = cmd.Process.Pid
-		state.pgidGone = false
-		// Setpgid requests a private group whose leader is the child. Prefer the
-		// kernel's answer when the short-lived child remains queryable.
-		if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
-			state.pgid = pgid
+		if state.record.Isolation == "worktree" {
+			state.headlessStarted = true
+			if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
+				state.pgid = pgid
+			}
 		}
 		if !state.record.Status.Terminal() {
 			state.record.Status = StatusRunning
@@ -369,22 +361,8 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		}
 		d.mu.Unlock()
 		runErr = cmd.Wait()
-		d.mu.Lock()
-		pgid := state.pgid
-		isolated := state.record.Isolation == "worktree"
-		d.mu.Unlock()
-		pgidGone := true
-		if isolated {
-			pgidGone = d.waitProcessGroupGone(pgid)
-		}
-		d.mu.Lock()
-		state.pgidGone = pgidGone
-		if pgidGone {
-			state.pgid = 0
-		}
-		d.mu.Unlock()
 	}
-	parsed, parseErr := d.ParseEvents(h, bytes.NewReader(tee.Bytes()))
+	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))
 	if parsed.SessionID != "" {
 		d.mu.Lock()
 		state.record.SessionID = parsed.SessionID
@@ -392,27 +370,11 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		d.mu.Unlock()
 	}
 	if runCtx.Err() != nil {
-		// This is the single timeout/cancel publication boundary. Parsing may
-		// itself cross the deadline after exec.Cmd's watcher has returned.
-		state.terminalMu.Lock()
-		d.mu.Lock()
-		pgid, gone := state.pgid, state.pgidGone
-		d.mu.Unlock()
-		if !gone && pgid != 0 {
-			gone, _ = d.terminateProcessGroup(pgid, d.ProcessGroupGrace)
-			d.mu.Lock()
-			state.pgidGone = gone
-			if gone {
-				state.pgid = 0
-			}
-			d.mu.Unlock()
-		}
 		status := StatusTimeout
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			status = StatusCanceled
 		}
-		d.completeWithTerminalLock(state, status, "", fmt.Errorf("consult %s/%s: %w", h.Name(), model, runCtx.Err()))
-		state.terminalMu.Unlock()
+		d.complete(state, status, "", fmt.Errorf("consult %s/%s: %w", h.Name(), model, runCtx.Err()))
 		return
 	}
 	if runErr != nil {
@@ -740,24 +702,6 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 		d.mu.Unlock()
 		return rec
 	}
-	d.mu.Unlock()
-	state.terminalMu.Lock()
-	defer state.terminalMu.Unlock()
-	d.mu.Lock()
-	if state.record.Status.Terminal() {
-		rec := cloneRecord(state.record)
-		d.mu.Unlock()
-		return rec
-	}
-	pgid := state.pgid
-	gone := state.pgidGone
-	d.mu.Unlock()
-	if pgid > 1 {
-		gone, _ = d.terminateProcessGroup(pgid, d.ProcessGroupGrace)
-	}
-	d.mu.Lock()
-	state.pgidGone = gone
-	state.pgid = 0
 	d.mu.Unlock()
 	state.cancel()
 	d.mu.Lock()
