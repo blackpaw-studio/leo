@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"reflect"
 	"testing"
@@ -273,6 +274,27 @@ func TestViewerCollectionOfClosedWindowIsNoop(t *testing.T) {
 	v.Close(rec)
 	if called {
 		t.Fatal("closed window was killed twice")
+	}
+}
+
+func TestViewerPersistedCloseAndSweepDoNotRekillAfterHandledEviction(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		return exec.Command("true")
+	}}
+	target := Record{ID: "d-target", Kind: "dispatch", Status: StatusDone, ViewerWindowID: "@target"}
+	v.Close(target)
+	v.Close(target)
+	v.Close(target)
+	for i := 0; i < viewerHandledLimit; i++ {
+		v.Close(Record{ID: fmt.Sprintf("d-pressure-%d", i), Kind: "dispatch", Status: StatusDone, ViewerWindowID: fmt.Sprintf("@%d", i)})
+	}
+	now := time.Now()
+	target.EndedAt = now.Add(-viewerGraceAfterEnd - time.Second)
+	v.Sweep([]Record{target}, now)
+	if got := len(calls); got != viewerHandledLimit+1 {
+		t.Fatalf("kill calls = %d, want %d; calls=%#v", got, viewerHandledLimit+1, calls)
 	}
 }
 

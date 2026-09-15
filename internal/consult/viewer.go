@@ -29,8 +29,7 @@ type Viewer struct {
 	once               sync.Once
 	mu                 sync.Mutex
 	windowIDs          map[string]string
-	handledWindowIDs   map[string]struct{}
-	handledWindowOrder []string
+	handledWindowIDs   map[string]string
 	rosterMu           sync.Mutex
 	rosters            map[string]rosterSessionState
 	rosterInventoryLog string
@@ -156,7 +155,7 @@ func (v *Viewer) Close(rec Record) {
 		if v.windowIDs == nil {
 			v.windowIDs = make(map[string]string)
 		}
-		if v.windowIDs[rec.ID] == "" {
+		if v.handledWindowIDs[rec.ID] != rec.ViewerWindowID && v.windowIDs[rec.ID] == "" {
 			v.windowIDs[rec.ID] = rec.ViewerWindowID
 		}
 		v.mu.Unlock()
@@ -178,12 +177,12 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 			v.killWindow(rec.ID, rec.ViewerWindowID)
 			continue
 		}
-		if rec.ViewerWindowID != "" {
+		if rec.ViewerWindowID != "" && !rec.Status.Terminal() {
 			v.mu.Lock()
 			if v.windowIDs == nil {
 				v.windowIDs = make(map[string]string)
 			}
-			if _, handled := v.handledWindowIDs[rec.ID]; !handled {
+			if v.handledWindowIDs[rec.ID] != rec.ViewerWindowID {
 				v.windowIDs[rec.ID] = rec.ViewerWindowID
 			}
 			v.mu.Unlock()
@@ -197,7 +196,7 @@ func (v *Viewer) kill(id string) {
 
 func (v *Viewer) killWindow(id, persistedWindowID string) {
 	v.mu.Lock()
-	if _, handled := v.handledWindowIDs[id]; handled {
+	if persistedWindowID != "" && v.handledWindowIDs[id] == persistedWindowID {
 		v.mu.Unlock()
 		return
 	}
@@ -208,15 +207,9 @@ func (v *Viewer) killWindow(id, persistedWindowID string) {
 	delete(v.windowIDs, id)
 	if windowID != "" {
 		if v.handledWindowIDs == nil {
-			v.handledWindowIDs = make(map[string]struct{})
+			v.handledWindowIDs = make(map[string]string)
 		}
-		v.handledWindowIDs[id] = struct{}{}
-		v.handledWindowOrder = append(v.handledWindowOrder, id)
-		if len(v.handledWindowOrder) > viewerHandledLimit {
-			oldest := v.handledWindowOrder[0]
-			v.handledWindowOrder = v.handledWindowOrder[1:]
-			delete(v.handledWindowIDs, oldest)
-		}
+		v.handledWindowIDs[id] = windowID
 	}
 	v.mu.Unlock()
 	if windowID == "" {
