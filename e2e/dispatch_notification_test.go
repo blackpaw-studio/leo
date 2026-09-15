@@ -107,7 +107,7 @@ func TestHeadlessDispatchUsageAppearsInWaitAndRoster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := consult.RenderRoster([]consult.Record{rec}, time.Now()); !strings.Contains(got, "1 tools · 0.1k tokens") {
+	if got := consult.RenderRoster([]consult.Record{rec}, time.Now()); !strings.Contains(got, "1 tool · 0.1k tokens") {
 		t.Fatalf("roster=%q", got)
 	}
 }

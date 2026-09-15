@@ -67,7 +67,7 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 		t.Fatalf("fresh status-format[0] = %q, err %v", freshFormat, err)
 	}
 	roster, err := exec.Command(tmuxPath, tmux.Args("show-options", "-v", "-t", target, "@leo_roster")...).Output()
-	if err != nil || !strings.Contains(string(roster), "claude") || !strings.Contains(string(roster), "1 tools · 0.1k tokens") {
+	if err != nil || !strings.Contains(string(roster), "claude") || !strings.Contains(string(roster), "1 tool · 0.1k tokens") {
 		t.Fatalf("live roster = %q, err %v", roster, err)
 	}
 	formatWhileRoster, err := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", target, "#{T:status-format[0]}")...).Output()

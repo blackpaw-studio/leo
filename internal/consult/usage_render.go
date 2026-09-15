@@ -9,7 +9,11 @@ func rosterUsage(rec Record) string {
 		partial = "~"
 	}
 	if rec.ToolCalls != nil {
-		parts = append(parts, fmt.Sprintf("%d%s tools", *rec.ToolCalls, partial))
+		label := "tools"
+		if *rec.ToolCalls == 1 {
+			label = "tool"
+		}
+		parts = append(parts, fmt.Sprintf("%d%s %s", *rec.ToolCalls, partial, label))
 	}
 	if rec.InputTokens != nil && rec.OutputTokens != nil {
 		parts = append(parts, fmt.Sprintf("%.1fk%s tokens", (float64(*rec.InputTokens)+float64(*rec.OutputTokens))/1000, partial))
