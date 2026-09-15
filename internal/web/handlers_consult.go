@@ -23,6 +23,9 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		From, Template, Model, Prompt, Cwd, Name string
 		Mode                                     consult.Mode `json:"mode"`
 		TimeoutSeconds                           *float64     `json:"timeout_seconds"`
+		Notify                                   *bool        `json:"notify"`
+		Isolation                                string       `json:"isolation"`
+		CallerPaneID                             string       `json:"caller_pane_id"`
 	}
 	if err := decodeDispatchJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -54,7 +57,12 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "mode must be headless or interactive"})
 		return
 	}
-	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode})
+	caller, err := s.resolveDispatchCaller(req.From, req.CallerPaneID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
+		return
+	}
+	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerHarness: caller.Harness})
 	if err != nil {
 		var validationErr *consult.ValidationError
 		status := http.StatusInternalServerError

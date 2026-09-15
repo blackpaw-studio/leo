@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,38 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/harness/claude"
 )
+
+func TestDispatchCallerPaneUsesOriginatingTmuxSocket(t *testing.T) {
+	tmp := t.TempDir()
+	socketDir := filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()))
+	leoSocket := filepath.Join(socketDir, "leo")
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leoSocket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", tmp)
+	t.Setenv("TMUX", leoSocket+",123,0")
+	t.Setenv("TMUX_PANE", "%7")
+	if got := dispatchCallerPane(os.Environ()); got != "%7" {
+		t.Fatalf("verified pane = %q", got)
+	}
+	t.Setenv("TMUX", filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()), "other")+",123,0")
+	if got := dispatchCallerPane(os.Environ()); got != "" {
+		t.Fatalf("colliding foreign-server pane forwarded as %q", got)
+	}
+}
+
+func TestDispatchRunFoundationFlags(t *testing.T) {
+	cmd := newDispatchRunCmd()
+	if got := cmd.Flag("notify"); got == nil || got.DefValue != "true" {
+		t.Fatalf("notify flag = %#v", got)
+	}
+	if got := cmd.Flag("isolation"); got == nil || !strings.Contains(got.Usage, "coming soon") {
+		t.Fatalf("isolation flag = %#v", got)
+	}
+}
 
 // rec builds a record started minutesAgo minutes back. Recency is relative
 // to now on purpose: an unfinished consult older than consult.StaleAfter is

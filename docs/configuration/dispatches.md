@@ -10,13 +10,20 @@ conversation after they finish. Dispatches can also run interactively.
 waits and returns the consultant's final answer directly. Consults get an
 advisory preamble: inspect and answer, but do not modify files.
 
-`leo_dispatch(template, prompt, model?, cwd?, name?, mode?, timeout_seconds?)`
+`leo_dispatch(template, prompt, model?, cwd?, name?, mode?, timeout_seconds?, notify?, isolation?)`
 starts work asynchronously and immediately returns an ID. Use it for
 implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
 access to the caller's conversation. `cwd` defaults to the caller's working
 directory. `mode` is `headless` by default; set it to `interactive` to start a
 steerable TUI (see [Interactive mode](#interactive-mode)).
+
+Dispatch notifications default to enabled. Set `notify: false` (or CLI
+`--notify=false`) to disable the eventual completion wake-up. Synchronous
+`leo_consult` calls never notify. `isolation: "worktree"` and CLI
+`--isolation worktree` are reserved for isolated execution but are coming in
+a later release; Leo currently rejects them instead of running in the shared
+checkout.
 
 `timeout_seconds` is an optional dispatch run cap; dispatches are unlimited
 when it is omitted. `leo_wait(ids, timeout_seconds?)` waits for one or more
@@ -37,6 +44,7 @@ to both consult and dispatch targets.
 
 ```console
 leo dispatch run codex-implementer "Add the parser tests" --cwd "$PWD"
+leo dispatch run codex-implementer "Inspect only" --notify=false
 leo dispatch list
 leo dispatch watch d-12ab34
 leo dispatch show d-12ab34

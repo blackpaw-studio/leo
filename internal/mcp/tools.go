@@ -12,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/leotools"
 	"github.com/blackpaw-studio/leo/internal/templates"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // msgPrefixFormat is the wire format prepended to a delivered message so the
@@ -321,7 +322,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.addContext(toolDef{
 		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI in a window of your tmux session that the user can watch and type into; the result comes from the harness's own turn hooks; use leo_send_dispatch for follow-ups. Returns immediately; collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
-		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "template", "prompt"),
+		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "isolated worktree execution (coming soon)"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "template", "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, err := stringArg(args, "template")
 		if err != nil {
@@ -351,7 +352,13 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		if err != nil {
 			return "", err
 		}
-		started, err := client.dispatch(ctx, processName, template, model, prompt, cwd, name, timeout, mode)
+		var notify *bool
+		if raw, ok := args["notify"].(bool); ok {
+			notify = &raw
+		}
+		isolation, _ := args["isolation"].(string)
+		callerPane, _ := tmux.CallerPaneFromEnv(os.Environ())
+		started, err := client.dispatch(ctx, consult.Request{Caller: processName, CallerPaneID: callerPane, Template: template, Model: model, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, Isolation: isolation})
 		if err != nil {
 			return "", err
 		}

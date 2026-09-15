@@ -16,9 +16,15 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 	"github.com/spf13/cobra"
 )
+
+func dispatchCallerPane(environ []string) string {
+	pane, _ := tmux.CallerPaneFromEnv(environ)
+	return pane
+}
 
 func newDispatchCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "dispatch", Short: "Run and inspect subagents"}
@@ -68,6 +74,8 @@ func dispatchHTTP(ctx context.Context, cfg *config.Config, method, path string, 
 
 func newDispatchRunCmd() *cobra.Command {
 	var model, cwd, name, host, mode string
+	var isolation string
+	var notify bool
 	var timeout time.Duration
 	cmd := &cobra.Command{Use: "run <template> <prompt>", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
 		if timeout < 0 {
@@ -95,6 +103,16 @@ func newDispatchRunCmd() *cobra.Command {
 			return fmt.Errorf("mode must be headless or interactive")
 		}
 		body := map[string]any{"template": args[0], "prompt": args[1], "model": model, "cwd": cwd, "name": name, "mode": mode}
+		if caller := os.Getenv("LEO_PROCESS_NAME"); caller != "" {
+			body["from"] = caller
+		}
+		body["notify"] = notify
+		if isolation != "" {
+			body["isolation"] = isolation
+		}
+		if pane := dispatchCallerPane(os.Environ()); pane != "" {
+			body["caller_pane_id"] = pane
+		}
 		if timeout > 0 {
 			body["timeout_seconds"] = timeout.Seconds()
 		}
@@ -126,6 +144,8 @@ func newDispatchRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "run name")
 	cmd.Flags().StringVar(&mode, "mode", "headless", "execution mode (headless or interactive)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "optional run cap (unlimited when omitted)")
+	cmd.Flags().BoolVar(&notify, "notify", true, "notify the caller when the dispatch completes")
+	cmd.Flags().StringVar(&isolation, "isolation", "", "execution isolation (worktree is coming soon)")
 	addHostFlag(cmd, &host)
 	return cmd
 }
