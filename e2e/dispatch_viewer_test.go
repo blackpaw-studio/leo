@@ -83,8 +83,12 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	}
 	v.UpdateRoster(d.Records(), time.Now())
 	format, err := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", target, "#{T:status-format[0]}")...).Output()
-	if err != nil || strings.TrimSpace(string(format)) == "" || string(format) != string(freshFormat) {
-		t.Fatalf("cleaned status-format[0] = %q, want fresh %q, err %v", format, freshFormat, err)
+	localFormat, localErr := exec.Command(tmuxPath, tmux.Args("show-options", "-t", target, "status-format")...).Output()
+	if localErr != nil || strings.TrimSpace(string(localFormat)) != "" {
+		t.Fatalf("session-local status-format remained after collection: %q, err %v", localFormat, localErr)
+	}
+	if err != nil || strings.TrimSpace(string(format)) == "" || !strings.Contains(string(format), session) {
+		t.Fatalf("cleaned status-format[0] = %q, want non-empty format containing %q, err %v", format, session, err)
 	}
 	for _, option := range []string{"@leo_roster", "@leo_roster_owned", "@leo_roster_status_owned", "status-format[1]"} {
 		out, _ := exec.Command(tmuxPath, tmux.Args("show-options", "-qv", "-t", target, option)...).Output()
