@@ -45,19 +45,20 @@ func invalidf(format string, args ...any) error {
 }
 
 type Dispatcher struct {
-	sem                chan struct{}
-	recorder           Recorder
-	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
-	daemonCtx          context.Context
-	mu                 sync.Mutex
-	runs               map[string]*runState
-	onStart            func(Record) string
-	onCollect          func(Record)
-	interactiveRuntime InteractiveRuntime
-	now                func() time.Time
-	waits              map[string]int
-	serial             map[string]*serialLock
-	waitResolvedHook   func()
+	sem                  chan struct{}
+	recorder             Recorder
+	ExecCommandContext   func(ctx context.Context, name string, args ...string) *exec.Cmd
+	daemonCtx            context.Context
+	mu                   sync.Mutex
+	runs                 map[string]*runState
+	onStart              func(Record) string
+	onCollect            func(Record)
+	interactiveRuntime   InteractiveRuntime
+	now                  func() time.Time
+	waits                map[string]int
+	serial               map[string]*serialLock
+	waitResolvedHook     func()
+	notificationDelivery NotificationDelivery
 }
 
 type runState struct {
@@ -375,7 +376,7 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 func (d *Dispatcher) pruneTerminalRunsLocked() {
 	terminal := make([]*runState, 0, len(d.runs))
 	for _, state := range d.runs {
-		if state.record.Status.Terminal() {
+		if state.record.Status.Terminal() && !recordHasUnresolvedNotification(state.record) {
 			terminal = append(terminal, state)
 		}
 	}
@@ -645,6 +646,7 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	state.record.Status = status
 	state.record.EndedAt = d.now()
 	state.record.foldActive(state.record.EndedAt)
+	d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, ""), status)
 	d.persistRecordLocked(state)
 	rec := cloneRecord(state.record)
 	d.mu.Unlock()
@@ -696,6 +698,7 @@ func (d *Dispatcher) MarkInterrupted() {
 	markedAt := d.now()
 	for _, rec := range func() []Record { records, _ := Load(filepath.Dir(recorder.dir)); return records }() {
 		if rec.Status.Terminal() {
+			d.restorePendingNotifications(rec)
 			if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
 				if d.interactiveRuntime.Kill(rec.PaneID) != nil {
 					d.trackRestartKill(rec)
@@ -725,6 +728,9 @@ func (d *Dispatcher) MarkInterrupted() {
 		}
 		rec.foldActive(markedAt)
 		rec.Error, rec.EndedAt = "daemon restarted", markedAt
+		d.mu.Lock()
+		d.addRestartCandidates(&rec)
+		d.mu.Unlock()
 		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil && d.interactiveRuntime.Alive(rec.PaneID) {
 			if d.interactiveRuntime.Kill(rec.PaneID) != nil {
 				d.trackRestartKill(rec)
@@ -733,6 +739,7 @@ func (d *Dispatcher) MarkInterrupted() {
 		if err := writeRecord(recorder.dir, rec); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: recording: %v\n", rec.ID, err)
 		}
+		d.restorePendingNotifications(rec)
 	}
 }
 
@@ -742,7 +749,11 @@ func (d *Dispatcher) trackRestartKill(rec Record) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.runs[rec.ID] == nil {
-		d.runs[rec.ID] = &runState{record: rec, handle: nopHandle{}, done: make(chan struct{}), killPending: true}
+		var handle Handle = nopHandle{}
+		if recorder, ok := d.recorder.(*FileRecorder); ok {
+			handle = &restoredNotificationHandle{dir: recorder.dir, rec: rec}
+		}
+		d.runs[rec.ID] = &runState{record: rec, handle: handle, done: make(chan struct{}), killPending: true}
 		return
 	}
 	d.runs[rec.ID].killPending = true

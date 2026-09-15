@@ -25,6 +25,16 @@ Dispatch notifications default to enabled. Set `notify: false` (or CLI
 a later release; Leo currently rejects them instead of running in the shared
 checkout.
 
+One notification is considered for each completed headless run or interactive
+turn. A covering `leo_wait` suppresses it, including a wait registered after
+completion but before delivery. The single-line notification identifies the
+dispatch or turn, its outcome and cumulative active time, and directs the
+caller to collect the result with `leo_wait`.
+
+Delivery is best-effort and at most once. Leo durably claims a notification
+before writing to the caller, so a daemon crash can lose a claimed notification
+rather than risk sending it twice. Collection remains available in that case.
+
 `timeout_seconds` is an optional dispatch run cap; dispatches are unlimited
 when it is omitted. `leo_wait(ids, timeout_seconds?)` waits for one or more
 dispatches and returns each final result or current status. Each MCP wait call

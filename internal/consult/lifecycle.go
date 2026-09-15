@@ -51,6 +51,7 @@ func (d *Dispatcher) persistRecordLocked(state *runState) {
 
 func (d *Dispatcher) complete(state *runState, status Status, text string, cause error) {
 	d.mu.Lock()
+	persist := true
 	if state.record.Status.Terminal() {
 		status, text = state.record.Status, state.record.Text
 	} else {
@@ -59,8 +60,11 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 		if cause != nil {
 			state.record.Error = cause.Error()
 		}
+		persist = d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, ""), status)
 	}
-	d.persistRecordLocked(state)
+	if persist {
+		d.persistRecordLocked(state)
+	}
 	recordID := state.record.ID
 	d.mu.Unlock()
 	if text != "" {

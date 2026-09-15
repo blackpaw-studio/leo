@@ -292,6 +292,84 @@ func TestLoadOnMissingDirectoryIsEmpty(t *testing.T) {
 	}
 }
 
+func TestFileHandleSetRecordAfterCloseRemainsAuthoritative(t *testing.T) {
+	state := t.TempDir()
+	recorder := NewFileRecorder(state)
+	h, err := recorder.Open(Record{ID: "d-closed", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Close(StatusDone, nil); err != nil {
+		t.Fatal(err)
+	}
+	rec := Record{ID: "d-closed", Status: StatusDone, Notifications: map[string]Notification{"d-closed": {Disposition: NotificationClaimed}}}
+	if err := h.(recordHandle).SetRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.SetText("late"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadOne(state, "d-closed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Notifications["d-closed"].Disposition != NotificationClaimed {
+		t.Fatalf("record=%+v", got)
+	}
+}
+
+func TestFileRecorderPruneKeepsPendingNotificationOnDisk(t *testing.T) {
+	state := t.TempDir()
+	recorder := NewFileRecorder(state)
+	now := time.Now()
+	recorder.Now = func() time.Time { return now }
+	for i := 0; i < RecordsKept+2; i++ {
+		id := fmt.Sprintf("d-prune-%02d", i)
+		rec := Record{ID: id, Status: StatusDone, EndedAt: now.Add(-2 * time.Hour)}
+		if i == 0 {
+			rec.Notifications = map[string]Notification{id: {Disposition: NotificationPending, PendingAt: now.Add(-2 * time.Hour)}}
+		}
+		h, err := recorder.Open(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.Close(StatusDone, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recorder.prune(RecordsKept)
+	if _, err := LoadOne(state, "d-prune-00"); err != nil {
+		t.Fatalf("pending record pruned: %v", err)
+	}
+}
+
+func TestFileRecorderPruneKeepsClaimedNotificationOnDisk(t *testing.T) {
+	state := t.TempDir()
+	recorder := NewFileRecorder(state)
+	now := time.Now()
+	recorder.Now = func() time.Time { return now }
+	rec := Record{ID: "d-claimed", Status: StatusDone, EndedAt: now.Add(-2 * time.Hour), Notifications: map[string]Notification{"d-claimed": {Disposition: NotificationClaimed, ClaimedAt: now}}}
+	h, err := recorder.Open(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Close(StatusDone, nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < RecordsKept+1; i++ {
+		id := fmt.Sprintf("d-other-%02d", i)
+		h, err := recorder.Open(Record{ID: id, Status: StatusDone, EndedAt: now.Add(-time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = h.Close(StatusDone, nil)
+	}
+	recorder.prune(RecordsKept)
+	if _, err := LoadOne(state, "d-claimed"); err != nil {
+		t.Fatalf("claimed record pruned: %v", err)
+	}
+}
+
 func TestNopRecorderAcceptsEverything(t *testing.T) {
 	h, err := nopRecorder{}.Open(testRecord("c-nop"))
 	if err != nil {

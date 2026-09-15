@@ -28,6 +28,15 @@ func (d *Dispatcher) registerWaitsLocked(keys []string) func() {
 	for _, key := range keys {
 		if key != "" {
 			d.waits[key]++
+			for _, state := range d.runs {
+				n, ok := state.record.Notifications[key]
+				if !ok || n.Disposition != NotificationPending {
+					continue
+				}
+				n.Disposition, n.SuppressedAt = NotificationSuppressed, d.now()
+				state.record.Notifications[key] = n
+				_ = d.persistNotificationRecordLocked(state)
+			}
 		}
 	}
 	return func() {

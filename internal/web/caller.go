@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -55,6 +56,15 @@ func (s *Server) resolveDispatchCaller(caller, pane string) (dispatchCaller, err
 		}
 		if harness == "" && session != "" {
 			harness = "claude"
+		}
+	}
+	if harness == "" {
+		command, err := s.execCommand(findTmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{pane_current_command}")...).Output()
+		if err == nil {
+			switch strings.ToLower(filepath.Base(strings.TrimSpace(string(command)))) {
+			case "claude", "codex", "opencode":
+				harness = strings.ToLower(filepath.Base(strings.TrimSpace(string(command))))
+			}
 		}
 	}
 	return dispatchCaller{PaneID: pane, SessionID: fields[1], Harness: harness}, nil

@@ -147,6 +147,9 @@ func (r *FileRecorder) prune(keep int) {
 
 	settled := make([]Record, 0, len(records))
 	for _, rec := range records {
+		if recordHasUnresolvedNotification(rec) {
+			continue
+		}
 		if rec.ViewerWindowID != "" && !rec.EndedAt.IsZero() && now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
 			continue
 		}
@@ -266,9 +269,6 @@ func (h *fileHandle) SetStatus(s Status) error {
 func (h *fileHandle) SetRecord(rec Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.closed {
-		return nil
-	}
 	h.rec = rec
 	return h.persist()
 }
