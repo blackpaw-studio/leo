@@ -56,6 +56,9 @@ func turnNotificationStatus(rec Record, key string) Status {
 		if turn.TurnID != key {
 			continue
 		}
+		if turn.Status != "" {
+			return turn.Status
+		}
 		switch turn.Outcome {
 		case TurnFinished:
 			return StatusDone
@@ -183,13 +186,9 @@ func (d *Dispatcher) addRestartCandidates(rec *Record) {
 		}
 		rec.Notifications[key] = n
 	}
-	if rec.Mode != ModeInteractive {
-		add(rec.ID)
-	} else {
-		for _, turn := range rec.Turns {
-			if turn.Outcome != "" {
-				add(turn.TurnID)
-			}
+	for _, turn := range rec.Turns {
+		if turn.Outcome != "" {
+			add(turn.TurnID)
 		}
 	}
 }

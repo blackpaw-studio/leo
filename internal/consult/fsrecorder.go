@@ -47,7 +47,8 @@ func StreamPath(stateDir, id string) string {
 // FileRecorder persists consults under <state>/consults as an <id>.json
 // record plus an <id>.ndjson event stream.
 type FileRecorder struct {
-	dir string
+	dir        string
+	resumeHook func(Record) error
 	// Now supplies stream timestamps and decides staleness; replaced in
 	// tests. It must be safe for concurrent use: every recording goroutine
 	// calls it, as does pruning.
@@ -59,6 +60,12 @@ type FileRecorder struct {
 
 func NewFileRecorder(stateDir string) *FileRecorder {
 	return &FileRecorder{dir: Dir(stateDir), Now: time.Now}
+}
+
+func (r *FileRecorder) PersistRecord(rec Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return writeRecord(r.dir, rec)
 }
 
 func (r *FileRecorder) Open(rec Record) (Handle, error) {
@@ -79,6 +86,47 @@ func (r *FileRecorder) Open(rec Record) (Handle, error) {
 		return nil, fmt.Errorf("creating consult stream: %w", err)
 	}
 	h := &fileHandle{dir: r.dir, rec: rec, stream: stream, now: r.Now}
+	if err := h.persist(); err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	return h, nil
+}
+
+// Resume reopens an existing dispatch stream without truncating prior output.
+// Lifecycle sequence numbers are recovered from the durable stream so daemon
+// restarts do not make appended events ambiguous.
+func (r *FileRecorder) Resume(rec Record) (Handle, error) {
+	if r.resumeHook != nil {
+		if err := r.resumeHook(rec); err != nil {
+			return nil, err
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	path := filepath.Join(r.dir, rec.ID+".ndjson")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading consult stream for resume: %w", err)
+	}
+	var seq uint64
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		var ev streamEvent
+		if json.Unmarshal(line, &ev) != nil || len(ev.D) == 0 {
+			continue
+		}
+		var lifecycle struct {
+			Seq uint64 `json:"seq"`
+		}
+		if json.Unmarshal(ev.D, &lifecycle) == nil && lifecycle.Seq > seq {
+			seq = lifecycle.Seq
+		}
+	}
+	stream, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, filePerm)
+	if err != nil {
+		return nil, fmt.Errorf("opening consult stream for resume: %w", err)
+	}
+	h := &fileHandle{dir: r.dir, rec: rec, stream: stream, now: r.Now, seq: seq}
 	if err := h.persist(); err != nil {
 		_ = stream.Close()
 		return nil, err

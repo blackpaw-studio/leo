@@ -144,6 +144,25 @@ leo_dispatch(..., mode: "interactive") → leo_wait(["d-…"])
 → leo_wait(["d-…#2"]) → leo_cancel({id: "d-…"})
 ```
 
+## Headless continuation
+
+`leo_send_dispatch`, `leo dispatch send`, and `POST /api/dispatch/{id}/send`
+also continue a terminal headless dispatch. Leo resumes the harness-native
+session with the new prompt and returns the new turn ID (`d-…#2`, `#3`, and
+so on). A wait on the run ID snapshots the latest turn when the wait begins;
+a wait on an explicit older turn ID remains bound to that invocation.
+
+Continuation requires the original session ID, unchanged template harness,
+and an available workspace. A kept isolated worktree resumes in place without
+resetting changes. A clean removed worktree is recreated from its retained
+branch only while that branch still points to the recorded base commit. Active
+or still-reaping runs, missing sessions/templates/workspaces, changed
+harnesses, unsupported adapters, and exhausted capacity are rejected before
+the record is changed. Timeout and completion notification apply separately
+to each invocation; elapsed active time and measured usage accumulate across
+turns. Recorded output is append-only, so `dispatch output` and `watch` show
+the complete session history.
+
 ## Headless viewer windows
 
 Headless `leo_dispatch` opens a detached viewer window on Leo's dedicated tmux server

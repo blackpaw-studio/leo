@@ -83,7 +83,12 @@ func (s *Server) handleAPIDispatchSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
 		return
 	}
-	result, err := s.consults.Send(r.Context(), r.PathValue("id"), req.Message)
+	cfg, cfgErr := s.loadConfig()
+	if cfgErr != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("loading config: %v", cfgErr)})
+		return
+	}
+	result, err := s.consults.SendWithConfig(r.Context(), cfg, r.PathValue("id"), req.Message)
 	if err != nil {
 		// Send failures are ordinary state conflicts: callers need both the
 		// reason and current state without treating the daemon as unavailable.

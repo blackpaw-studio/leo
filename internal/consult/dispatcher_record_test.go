@@ -92,6 +92,8 @@ func (r *fakeRecorder) Open(rec Record) (Handle, error) {
 	return h, nil
 }
 
+func (r *fakeRecorder) Resume(rec Record) (Handle, error) { return r.Open(rec) }
+
 func (r *fakeRecorder) waitOpened(t *testing.T) *fakeHandle {
 	t.Helper()
 	select {

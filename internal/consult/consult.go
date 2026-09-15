@@ -230,7 +230,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	rec := Record{
 		ID: newID(), Caller: req.Caller, Template: req.Template,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
-		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: req.Mode,
+		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
 		Notify: notify, Isolation: req.Isolation, SourceCwd: req.Cwd,
 		CallerPaneID: req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID,
 	}
@@ -246,6 +246,15 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	runCtx, cancel := context.WithCancel(d.daemonCtx)
 	state := &runState{record: rec, handle: handle, done: make(chan struct{}), cancel: cancel}
+	if mode == ModeHeadless {
+		state.record.Turns = append(state.record.Turns, Turn{TurnID: rec.ID + "#1", Source: TurnSourceOrchestrator, StartedAt: rec.StartedAt, Delivered: true, Text: req.Prompt})
+		d.beginUsageInvocationLocked(state)
+		if _, ok := state.handle.(interactiveRecordHandle); ok {
+			d.persistLocked(state, "turn")
+		} else {
+			d.persistRecordLocked(state)
+		}
+	}
 	d.mu.Lock()
 	d.runs[rec.ID] = state
 	d.pruneTerminalRunsLocked()
@@ -299,18 +308,26 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 			}
 		}
 	}
-	go d.run(runCtx, state, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout)
+	go d.runInvocation(runCtx, state, state.done, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout, false)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
 }
 
 func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration) {
-	defer close(state.done)
-	select {
-	case d.sem <- struct{}{}:
+	d.runInvocation(parent, state, state.done, h, model, env, args, harnessEnv, cwd, timeout, false)
+}
+
+func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done chan struct{}, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration, slotHeld bool) {
+	defer close(done)
+	if slotHeld {
 		defer func() { <-d.sem }()
-	case <-parent.Done():
-		d.complete(state, StatusCanceled, "", parent.Err())
-		return
+	} else {
+		select {
+		case d.sem <- struct{}{}:
+			defer func() { <-d.sem }()
+		case <-parent.Done():
+			d.complete(state, StatusCanceled, "", parent.Err())
+			return
+		}
 	}
 	// A queued run can be canceled at the same instant a concurrency slot
 	// opens. Do not publish a misleading running transition in that race.
@@ -444,6 +461,8 @@ func (d *Dispatcher) pruneTerminalRunsLocked() {
 // supplied timeout expires. It never polls records.
 func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Duration) (entries []Entry) {
 	states := make([]*runState, len(ids))
+	dones := make([]chan struct{}, len(ids))
+	skipCleanup := make([]bool, len(ids))
 	defer func() {
 		for i := range entries {
 			entries[i] = limitWaitEntry(entries[i])
@@ -454,12 +473,24 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			if !entries[i].Status.Terminal() {
 				continue
 			}
-			rec, err := d.Get(ids[i])
+			if skipCleanup[i] {
+				continue
+			}
+			rec, state, err := d.lookup(ids[i])
 			if err != nil {
 				continue
 			}
-			if state := states[i]; state != nil && rec.Isolation == "worktree" {
-				<-state.done
+			if rec.Isolation == "worktree" && states[i] != nil && dones[i] != nil {
+				<-dones[i]
+				rec, state, err = d.lookup(ids[i])
+				if err != nil {
+					continue
+				}
+			}
+			// A wait for an older terminal turn must not clean up or collect
+			// while a newer invocation owns the run.
+			if state != nil && state.done != dones[i] && !rec.Status.Terminal() {
+				continue
 			}
 			rec = d.cleanupWorktree(rec.ID)
 			entries[i].Worktree, entries[i].Branch = "", ""
@@ -484,6 +515,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 		}
 		rec := cloneRecord(state.record)
 		states[i] = state
+		dones[i] = state.done
 		if rec.Mode == ModeInteractive {
 			turnID := id
 			if !strings.Contains(id, "#") {
@@ -497,7 +529,15 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			turnIDs[i] = turnID
 			entries[i] = interactiveEntry(rec, turnID, d.now())
 		} else {
-			entries[i] = entryFromRecord(rec, d.now())
+			turnID := id
+			if !strings.Contains(id, "#") && len(rec.Turns) > 0 {
+				turnID = rec.Turns[len(rec.Turns)-1].TurnID
+			}
+			turnIDs[i] = turnID
+			entries[i] = headlessEntry(rec, turnID, d.now())
+			if strings.Contains(id, "#") && len(rec.Turns) > 0 && turnID != rec.Turns[len(rec.Turns)-1].TurnID && entries[i].Status.Terminal() {
+				skipCleanup[i] = true
+			}
 		}
 		keys[i] = transitionKey(id, rec.Mode, turnIDs[i])
 	}
@@ -524,7 +564,11 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 				}
 				entries[i] = interactiveEntry(rec, turnID, d.now())
 			} else {
-				entries[i] = entryFromRecord(rec, d.now())
+				turnID := ids[i]
+				if !strings.Contains(turnID, "#") && len(rec.Turns) > 0 {
+					turnID = rec.Turns[len(rec.Turns)-1].TurnID
+				}
+				entries[i] = headlessEntry(rec, turnID, d.now())
 			}
 		}
 	}
@@ -546,7 +590,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 				if d.stateRecord(state).Mode == ModeInteractive {
 					interactivePending = true
 				}
-				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(state.done)})
+				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(dones[i])})
 			}
 		}
 		if !pending {
@@ -567,7 +611,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 					if rec.Mode == ModeInteractive {
 						entries[i] = interactiveEntry(rec, turnIDs[i], d.now())
 					} else {
-						entries[i] = entryFromRecord(rec, d.now())
+						entries[i] = headlessEntry(rec, turnIDs[i], d.now())
 					}
 					if rec.Mode != ModeInteractive && !entries[i].Status.Terminal() {
 						entries[i].Status = StatusRunning
@@ -583,7 +627,7 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 				if rec.Mode == ModeInteractive {
 					entries[i] = interactiveEntry(rec, turnIDs[i], d.now())
 				} else {
-					entries[i] = entryFromRecord(rec, d.now())
+					entries[i] = headlessEntry(rec, turnIDs[i], d.now())
 				}
 			}
 		}
@@ -737,12 +781,30 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	state.record.Status = status
 	state.record.EndedAt = d.now()
 	state.record.foldActive(state.record.EndedAt)
-	d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, ""), status)
+	turnID := ""
+	if state.record.Mode == ModeHeadless && len(state.record.Turns) > 0 {
+		t := &state.record.Turns[len(state.record.Turns)-1]
+		t.EndedAt, t.Outcome, t.Status = state.record.EndedAt, TurnInterrupted, status
+		t.Error = state.record.Error
+		turnID = t.TurnID
+	}
+	d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, turnID), status)
 	d.persistRecordLocked(state)
 	rec := cloneRecord(state.record)
+	done, cancel := state.done, state.cancel
+	cancel = d.currentInvocationCancelLocked(state, done, cancel)
 	d.mu.Unlock()
-	state.cancel()
+	if cancel != nil {
+		cancel()
+	}
 	return rec
+}
+
+func (d *Dispatcher) currentInvocationCancelLocked(state *runState, done chan struct{}, cancel context.CancelFunc) context.CancelFunc {
+	if state.done == done {
+		return cancel
+	}
+	return nil
 }
 
 // Consult preserves the synchronous one-off consultant API over dispatch.
@@ -825,6 +887,7 @@ func (d *Dispatcher) MarkInterrupted() {
 			d.restorePendingNotifications(rec)
 			continue
 		}
+		rec.Error, rec.EndedAt = "daemon restarted", markedAt
 		if rec.Mode == ModeInteractive {
 			finished := false
 			for i := range rec.Turns {
@@ -843,13 +906,25 @@ func (d *Dispatcher) MarkInterrupted() {
 				rec.Status = StatusFailed
 			}
 		} else {
+			if rec.Mode == "" {
+				rec.Mode = ModeHeadless
+			}
 			rec.Status = StatusFailed
+			if len(rec.Turns) == 0 {
+				synthesizeOpeningTurn(&rec)
+			}
+			for i := range rec.Turns {
+				if rec.Turns[i].Outcome == "" {
+					rec.Turns[i].Outcome, rec.Turns[i].Status = TurnInterrupted, StatusFailed
+					rec.Turns[i].Error, rec.Turns[i].EndedAt = "daemon restarted", markedAt
+					rec.Turns[i].SlotHeld = false
+				}
+			}
 			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
 				rec.WorktreeState = WorktreeKept
 			}
 		}
 		rec.foldActive(markedAt)
-		rec.Error, rec.EndedAt = "daemon restarted", markedAt
 		d.mu.Lock()
 		d.addRestartCandidates(&rec)
 		d.mu.Unlock()
