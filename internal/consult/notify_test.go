@@ -27,7 +27,8 @@ func (failingRecordHandle) SetRecord(Record) error { return errors.New("disk ful
 
 type failingRecorder struct{ h failingRecordHandle }
 
-func (r failingRecorder) Open(Record) (Handle, error) { return r.h, nil }
+func (r failingRecorder) Open(Record) (Handle, error)   { return r.h, nil }
+func (r failingRecorder) Resume(Record) (Handle, error) { return r.h, nil }
 
 type countingFailHandle struct {
 	nopHandle

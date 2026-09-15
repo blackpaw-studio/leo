@@ -68,7 +68,16 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 		if cause != nil {
 			state.record.Error = cause.Error()
 		}
-		persist = d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, ""), status)
+		turnID := ""
+		if state.record.Mode == ModeHeadless && len(state.record.Turns) > 0 {
+			t := &state.record.Turns[len(state.record.Turns)-1]
+			t.EndedAt, t.Outcome, t.Text = state.record.EndedAt, TurnFinished, text
+			if status != StatusDone {
+				t.Outcome = TurnInterrupted
+			}
+			turnID = t.TurnID
+		}
+		persist = d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, turnID), status)
 	}
 	if persist {
 		d.persistRecordLocked(state)
@@ -98,6 +107,26 @@ func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
 	}
 	if t.Outcome == "" && !activity.IsZero() && now.Sub(activity) >= stalledAfter {
 		e.Stalled = true
+	}
+	return e
+}
+
+func headlessEntry(rec Record, turnID string, now time.Time) Entry {
+	e := entryFromRecord(rec, now)
+	e.TurnID = turnID
+	if turnID == "" {
+		return e
+	}
+	t := turnByID(rec, turnID)
+	if t.TurnID == "" {
+		return e
+	}
+	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
+	switch t.Outcome {
+	case "":
+		e.Status, e.Err = StatusRunning, ""
+	case TurnFinished:
+		e.Status, e.Err = StatusDone, ""
 	}
 	return e
 }

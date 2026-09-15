@@ -231,6 +231,7 @@ type Recorder interface {
 	// Open registers a consult and returns a handle whose Writer receives
 	// the harness's raw output as it arrives.
 	Open(Record) (Handle, error)
+	Resume(Record) (Handle, error)
 }
 
 // Handle is one consult's open recording. Writes are best-effort: a
@@ -252,7 +253,8 @@ type recordHandle interface {
 // behaves exactly as it did before recording existed.
 type nopRecorder struct{}
 
-func (nopRecorder) Open(Record) (Handle, error) { return nopHandle{}, nil }
+func (nopRecorder) Open(Record) (Handle, error)   { return nopHandle{}, nil }
+func (nopRecorder) Resume(Record) (Handle, error) { return nopHandle{}, nil }
 
 type nopHandle struct{}
 

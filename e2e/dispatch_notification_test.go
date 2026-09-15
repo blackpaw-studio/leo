@@ -68,7 +68,7 @@ func TestHeadlessDispatchCompletionNotification(t *testing.T) {
 			}
 			d.SweepNotifications(context.Background())
 			capture := tmuxOutput(t, "capture-pane", "-p", "-t", pane)
-			count := strings.Count(capture, "[leo] dispatch "+started.ID+" (notify) done · active 0:00 — collect with leo_wait")
+			count := strings.Count(capture, "[leo] dispatch "+started.ID+"#1 (notify) done · active 0:00 — collect with leo_wait")
 			want := 1
 			if covered {
 				want = 0
@@ -123,23 +123,24 @@ func TestDaemonDeliversHeadlessCompletionIntoCaller(t *testing.T) {
 	_ = tmuxOutput(t, "resize-window", "-x", "240", "-y", "24", "-t", pane)
 	var started consult.Started
 	s.request(t, http.MethodPost, "/api/dispatch", map[string]any{"template": "interactive", "prompt": "daemon notify", "cwd": s.ws, "mode": "headless", "from": caller, "caller_pane_id": pane}, &started)
+	key := started.ID + "#1"
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
-		if s.record(t, started.ID).Notifications[started.ID].Disposition == consult.NotificationDelivered {
+		if s.record(t, started.ID).Notifications[key].Disposition == consult.NotificationDelivered {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	rec := s.record(t, started.ID)
-	if rec.Notifications[started.ID].Disposition != consult.NotificationDelivered {
-		t.Fatalf("notification=%+v caller alive=%v capture=%q service=%s", rec.Notifications[started.ID], s.paneAlive(pane), tmuxOutput(t, "capture-pane", "-p", "-t", pane), s.output.String())
+	if rec.Notifications[key].Disposition != consult.NotificationDelivered {
+		t.Fatalf("notification=%+v caller alive=%v capture=%q service=%s", rec.Notifications[key], s.paneAlive(pane), tmuxOutput(t, "capture-pane", "-p", "-t", pane), s.output.String())
 	}
 	raw, err := os.ReadFile(submitted)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(raw) != rec.Notifications[started.ID].Message {
-		t.Fatalf("submitted=%q want=%q", raw, rec.Notifications[started.ID].Message)
+	if string(raw) != rec.Notifications[key].Message {
+		t.Fatalf("submitted=%q want=%q", raw, rec.Notifications[key].Message)
 	}
 }
 
@@ -155,8 +156,8 @@ func TestDaemonSuppressesCoveredHeadlessCompletion(t *testing.T) {
 	s.request(t, http.MethodPost, "/api/dispatch", map[string]any{"template": "interactive", "prompt": "covered", "cwd": s.ws, "mode": "headless", "from": caller, "caller_pane_id": pane}, &started)
 	_ = s.wait(t, started.ID)
 	rec := s.record(t, started.ID)
-	if rec.Notifications[started.ID].Disposition != consult.NotificationSuppressed {
-		t.Fatalf("notification=%+v", rec.Notifications[started.ID])
+	if rec.Notifications[started.ID+"#1"].Disposition != consult.NotificationSuppressed {
+		t.Fatalf("notification=%+v", rec.Notifications[started.ID+"#1"])
 	}
 	if _, err := os.Stat(submitted); !os.IsNotExist(err) {
 		t.Fatalf("covered notification was submitted: %v", err)

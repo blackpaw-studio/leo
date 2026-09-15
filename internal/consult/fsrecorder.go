@@ -86,6 +86,42 @@ func (r *FileRecorder) Open(rec Record) (Handle, error) {
 	return h, nil
 }
 
+// Resume reopens an existing dispatch stream without truncating prior output.
+// Lifecycle sequence numbers are recovered from the durable stream so daemon
+// restarts do not make appended events ambiguous.
+func (r *FileRecorder) Resume(rec Record) (Handle, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	path := filepath.Join(r.dir, rec.ID+".ndjson")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading consult stream for resume: %w", err)
+	}
+	var seq uint64
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		var ev streamEvent
+		if json.Unmarshal(line, &ev) != nil || len(ev.D) == 0 {
+			continue
+		}
+		var lifecycle struct {
+			Seq uint64 `json:"seq"`
+		}
+		if json.Unmarshal(ev.D, &lifecycle) == nil && lifecycle.Seq > seq {
+			seq = lifecycle.Seq
+		}
+	}
+	stream, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, filePerm)
+	if err != nil {
+		return nil, fmt.Errorf("opening consult stream for resume: %w", err)
+	}
+	h := &fileHandle{dir: r.dir, rec: rec, stream: stream, now: r.Now, seq: seq}
+	if err := h.persist(); err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	return h, nil
+}
+
 // prune bounds the consult directory: it reclaims garbage, then deletes
 // the oldest settled consults until at most keep remain.
 //

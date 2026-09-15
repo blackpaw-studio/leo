@@ -12,7 +12,7 @@ type serialLock struct {
 }
 
 func transitionKey(runID string, mode Mode, turnID string) string {
-	if mode == ModeInteractive && turnID != "" {
+	if turnID != "" {
 		return turnID
 	}
 	return strings.SplitN(runID, "#", 2)[0]
