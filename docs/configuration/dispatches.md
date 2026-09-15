@@ -28,6 +28,16 @@ unchanged worktrees are removed while their branches remain available.
 A subagent that deliberately daemonizes a writer outside its process group can
 outlive collection; such writes after a clean removal are lost.
 
+One notification is considered for each completed headless run or interactive
+turn. A covering `leo_wait` suppresses it, including a wait registered after
+completion but before delivery. The single-line notification identifies the
+dispatch or turn, its outcome and cumulative active time, and directs the
+caller to collect the result with `leo_wait`.
+
+Delivery is best-effort and at most once. Leo durably claims a notification
+before writing to the caller, so a daemon crash can lose a claimed notification
+rather than risk sending it twice. Collection remains available in that case.
+
 `timeout_seconds` is an optional dispatch run cap; dispatches are unlimited
 when it is omitted. `leo_wait(ids, timeout_seconds?)` waits for one or more
 dispatches and returns each final result or current status. Each MCP wait call
@@ -37,6 +47,11 @@ work. A timeout leaves still-running IDs available for another wait.
 `leo_dispatch` select templates; `leo_wait` and `leo_cancel` operate on
 dispatch IDs. In interactive mode, `leo_wait` accepts either a run ID or a
 turn ID (`d-…#n`).
+
+`leo_dispatch_output(id, tail?)` reads a nonblocking snapshot of recorded
+output without collecting the dispatch. `tail` is a positive rendered-line
+count, defaults to 60, and is capped at 400. It accepts turn IDs and returns
+the parent run's stream. Use it when a wait result is truncated.
 
 The template-selecting tools use a named `templates:` entry, not a running agent. The
 template supplies the harness, model, environment, and harness options; an
@@ -51,6 +66,7 @@ leo dispatch run codex-implementer "Inspect only" --notify=false
 leo dispatch list
 leo dispatch watch d-12ab34
 leo dispatch show d-12ab34
+leo dispatch output d-12ab34 --tail 120
 leo dispatch send d-12ab34 "Please also cover malformed input"
 leo dispatch cancel d-12ab34
 ```
@@ -59,7 +75,7 @@ leo dispatch cancel d-12ab34
 opening turn. `list` and `watch` also work for consults, preserving the older
 `leo consult list|watch` interface. `watch` accepts an unambiguous ID prefix;
 Ctrl-C only detaches. `show` prints a record as JSON. `list` and `watch`
-support `--host`; `run`, `show`, `send`, and `cancel` currently require the
+support `--host`; `run`, `show`, `output`, `send`, and `cancel` currently require the
 local daemon.
 
 ## Interactive mode

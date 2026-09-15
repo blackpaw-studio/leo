@@ -504,6 +504,67 @@ func TestWorktreeDirtyCollectionKeepsCheckoutAndReportsIt(t *testing.T) {
 	}
 }
 
+func TestSetWorktreeStatePreservesAuthoritativeNotificationTransition(t *testing.T) {
+	stateDir := t.TempDir()
+	recorder := NewFileRecorder(stateDir)
+	d := NewDispatcher(recorder)
+	stale := Record{
+		ID: "d-cleanup", Kind: "dispatch", Status: StatusDone,
+		Isolation: "worktree", WorktreeState: WorktreePresent,
+		Notifications: map[string]Notification{"d-cleanup": {Disposition: NotificationPending}},
+	}
+	h, err := recorder.Open(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := cloneRecord(stale)
+	n := current.Notifications[current.ID]
+	n.Disposition = NotificationClaimed
+	current.Notifications[current.ID] = n
+	s := &runState{record: current, handle: h, done: make(chan struct{})}
+	if err := h.(recordHandle).SetRecord(current); err != nil {
+		t.Fatal(err)
+	}
+	d.runs[current.ID] = s
+
+	got := d.setWorktreeState(stale, s, WorktreeRemoved)
+	if got.WorktreeState != WorktreeRemoved || got.Notifications[got.ID].Disposition != NotificationClaimed {
+		t.Fatalf("record=%+v", got)
+	}
+	disk, err := LoadOne(stateDir, current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk.WorktreeState != WorktreeRemoved || disk.Notifications[disk.ID].Disposition != NotificationClaimed {
+		t.Fatalf("disk record=%+v", disk)
+	}
+}
+
+func TestSetWorktreeStateKeepsAuthoritativeRecordOnPersistenceFailure(t *testing.T) {
+	d := NewDispatcher(nil)
+	current := Record{
+		ID: "d-cleanup-failure", Kind: "dispatch", Status: StatusDone,
+		Isolation: "worktree", WorktreeState: WorktreePresent,
+		Notifications: map[string]Notification{"d-cleanup-failure": {Disposition: NotificationClaimed}},
+	}
+	s := &runState{record: current, handle: failingRecordHandle{}, done: make(chan struct{})}
+	stale := cloneRecord(current)
+	n := stale.Notifications[stale.ID]
+	n.Disposition = NotificationPending
+	stale.Notifications[stale.ID] = n
+
+	got := d.setWorktreeState(stale, s, WorktreeRemoved)
+	if got.WorktreeState != WorktreeKept || s.record.WorktreeState != WorktreeKept {
+		t.Fatalf("result=%+v state=%+v", got, s.record)
+	}
+	if got.Notifications[got.ID].Disposition != NotificationClaimed {
+		t.Fatalf("authoritative notification reverted: %+v", got.Notifications)
+	}
+	if !strings.Contains(got.Error, "cleanup metadata was not persisted: disk full") {
+		t.Fatalf("diagnostic=%q", got.Error)
+	}
+}
+
 func TestWorktreeCreationUsesRepositoryRootFromSourceSubdirectory(t *testing.T) {
 	repo, stateDir := gitTestRepo(t), t.TempDir()
 	sub := filepath.Join(repo, "a", "b")

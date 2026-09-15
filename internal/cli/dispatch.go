@@ -28,7 +28,7 @@ func dispatchCallerPane(environ []string) string {
 
 func newDispatchCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "dispatch", Short: "Run and inspect subagents"}
-	cmd.AddCommand(newDispatchRunCmd(), newConsultListCmd(), newConsultWatchCmd(), newDispatchShowCmd(), newDispatchCancelCmd(), newDispatchSendCmd(), newDispatchReportCmd())
+	cmd.AddCommand(newDispatchRunCmd(), newConsultListCmd(), newConsultWatchCmd(), newDispatchShowCmd(), newDispatchOutputCmd(), newDispatchCancelCmd(), newDispatchSendCmd(), newDispatchReportCmd())
 	return cmd
 }
 

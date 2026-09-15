@@ -181,6 +181,25 @@ func (d *Dispatcher) headlessWritersGone(state *runState) bool {
 }
 
 func (d *Dispatcher) setWorktreeState(rec Record, state *runState, disposition WorktreeState) Record {
+	if state != nil {
+		d.mu.Lock()
+		state.record.WorktreeState = disposition
+		rec = cloneRecord(state.record)
+		if h, ok := state.handle.(recordHandle); ok {
+			if err := h.SetRecord(rec); err != nil {
+				state.record.WorktreeState = WorktreeKept
+				state.record.Error = strings.TrimSpace(state.record.Error + "; cleanup metadata was not persisted: " + err.Error())
+				rec = cloneRecord(state.record)
+				if retryErr := h.SetRecord(rec); retryErr != nil {
+					fmt.Fprintf(os.Stderr, "dispatch %s: recording worktree: %v\n", rec.ID, retryErr)
+				}
+			}
+		} else {
+			d.persistRecordLocked(state)
+		}
+		d.mu.Unlock()
+		return rec
+	}
 	original := rec
 	rec.WorktreeState = disposition
 	if recorder, ok := d.recorder.(*FileRecorder); ok {
@@ -188,19 +207,8 @@ func (d *Dispatcher) setWorktreeState(rec Record, state *runState, disposition W
 			fmt.Fprintf(os.Stderr, "dispatch %s: recording worktree: %v\n", rec.ID, err)
 			original.WorktreeState = WorktreeKept
 			original.Error = strings.TrimSpace(original.Error + "; cleanup metadata was not persisted: " + err.Error())
-			if state != nil {
-				d.mu.Lock()
-				state.record = cloneRecord(original)
-				d.mu.Unlock()
-			}
 			return original
 		}
-	}
-	if state != nil {
-		d.mu.Lock()
-		state.record.WorktreeState = disposition
-		rec = cloneRecord(state.record)
-		d.mu.Unlock()
 	}
 	return rec
 }

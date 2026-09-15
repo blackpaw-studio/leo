@@ -122,6 +122,9 @@ func composerPasteConfirmed(capture, needle string) bool {
 	if _, composerLine, bottom, ok := claudeComposerBox(lines); ok {
 		return composerLinesContainPaste(lines[composerLine:bottom], needle)
 	}
+	if composer, ok := openCodeComposerLines(lines); ok {
+		return composerLinesContainPaste(composer, needle)
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.HasPrefix(strings.TrimLeft(lines[i], " \t"), "›") {
 			return composerLinesContainPaste(lines[i:], needle)
@@ -133,9 +136,11 @@ func composerPasteConfirmed(capture, needle string) bool {
 func composerLinesContainPaste(lines []string, needle string) bool {
 	for i, line := range lines {
 		content := strings.TrimSpace(line)
+		content = strings.TrimSpace(strings.TrimPrefix(content, "┃"))
 		if i == 0 {
 			content = strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(line, " \t"), "❯"))
 			content = strings.TrimSpace(strings.TrimPrefix(content, "›"))
+			content = strings.TrimSpace(strings.TrimPrefix(content, "┃"))
 		}
 		if strings.Contains(content, "[Pasted text") || strings.Contains(content, "[Pasted Content") || strings.HasPrefix(content, needle) {
 			return true

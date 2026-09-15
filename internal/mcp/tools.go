@@ -445,6 +445,36 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
+		Name: "leo_dispatch_output", Description: allowNote("Read a nonblocking snapshot of a dispatch's recorded output. Use this for large results or live progress; it does not collect the dispatch. tail defaults to 60 rendered lines and is capped at 400.", "read output from dispatched templates", perms.CanConsult),
+		InputSchema: objectSchema(map[string]any{"id": map[string]any{"type": "string"}, "tail": map[string]any{"type": "integer", "minimum": 1}}, "id"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		id, err := stringArg(args, "id")
+		if err != nil {
+			return "", err
+		}
+		tail := 60
+		if raw, ok := args["tail"]; ok {
+			n, ok := raw.(float64)
+			if !ok || n != math.Trunc(n) || n <= 0 {
+				return "", fmt.Errorf("tail must be a positive integer")
+			}
+			tail = int(n)
+			if tail > 400 {
+				tail = 400
+			}
+		}
+		output, err := client.dispatchOutput(ctx, id, tail)
+		if err != nil {
+			return "", err
+		}
+		encoded, err := json.Marshal(output)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	})
+
+	r.addContext(toolDef{
 		Name: "leo_cancel", Description: allowNote("Cancel a dispatched subagent.", "cancel dispatched templates", perms.CanConsult), InputSchema: objectSchema(map[string]any{"id": map[string]any{"type": "string"}}, "id"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		id, err := stringArg(args, "id")

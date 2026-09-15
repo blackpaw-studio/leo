@@ -62,6 +62,29 @@ func TestResolveDispatchCallerRequiresCanonicalPaneID(t *testing.T) {
 	}
 }
 
+func TestResolveDispatchCallerDerivesHarnessFromExplicitPaneCommandExactArgv(t *testing.T) {
+	s, _, _ := newTestServerWithAgents(t)
+	var calls [][]string
+	s.execCommand = func(_ string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		if len(calls) == 1 {
+			return exec.Command("printf", "outside $4\\n")
+		}
+		return exec.Command("printf", "opencode\\n")
+	}
+	got, err := s.resolveDispatchCaller("", "%8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Harness != "opencode" {
+		t.Fatalf("caller=%+v", got)
+	}
+	want := []string{"-L", "leo", "display-message", "-p", "-t", "%8", "#{pane_current_command}"}
+	if !reflect.DeepEqual(calls[1], want) {
+		t.Fatalf("argv=%q want=%q", calls[1], want)
+	}
+}
+
 type deadlineRecorder struct {
 	*httptest.ResponseRecorder
 	deadlineCleared bool
