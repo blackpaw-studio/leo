@@ -1,6 +1,8 @@
 package codex
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -48,6 +50,17 @@ func TestParseEventsFixtures(t *testing.T) {
 				t.Errorf("got %+v\nwant %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestUsageRejectsInvalidAndOverflowingCounters(t *testing.T) {
+	stream := fmt.Sprintf("{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":%d,\"output_tokens\":1}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":-1}}", int64(math.MaxInt64))
+	got, err := Codex{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens == nil || *got.Usage.InputTokens != math.MaxInt64 || got.Usage.OutputTokens == nil || *got.Usage.OutputTokens != 1 {
+		t.Fatalf("usage=%#v", got.Usage)
 	}
 }
 

@@ -7,14 +7,15 @@ import (
 )
 
 type usageAccumulator struct {
-	tools               map[string]bool
+	tools               harness.UsageIDs
 	input, output       int64
 	hasInput, hasOutput bool
 	turns               int
+	incomplete          bool
 }
 
 func (Codex) NewUsageAccumulator() harness.UsageAccumulator {
-	return &usageAccumulator{tools: map[string]bool{}}
+	return &usageAccumulator{tools: harness.NewUsageIDs()}
 }
 func (a *usageAccumulator) AddLine(line []byte) {
 	var raw struct {
@@ -30,21 +31,39 @@ func (a *usageAccumulator) AddLine(line []byte) {
 	}
 	switch raw.Type {
 	case "turn.started":
-		a.turns++
+		if n, ok := harness.AddInt(a.turns, 1); ok {
+			a.turns = n
+		} else {
+			a.incomplete = true
+		}
 	case "turn.completed":
+		nextInput, inputOK := addOptional(a.input, raw.Usage.Input)
+		nextOutput, outputOK := addOptional(a.output, raw.Usage.Output)
+		if !inputOK || !outputOK {
+			a.incomplete = true
+			break
+		}
 		if raw.Usage.Input != nil {
-			a.input += *raw.Usage.Input
-			a.hasInput = true
+			a.input, a.hasInput = nextInput, true
 		}
 		if raw.Usage.Output != nil {
-			a.output += *raw.Usage.Output
-			a.hasOutput = true
+			a.output, a.hasOutput = nextOutput, true
 		}
 	case "item.started", "item.completed":
 		if isTool(raw.Item.Type) && raw.Item.ID != "" {
-			a.tools[raw.Item.ID] = true
+			a.tools.Add(raw.Item.ID)
 		}
 	}
+	if a.tools.Overflow {
+		a.incomplete = true
+	}
+}
+
+func addOptional(total int64, value *int64) (int64, bool) {
+	if value == nil {
+		return total, true
+	}
+	return harness.AddInt64(total, *value)
 }
 func isTool(t string) bool {
 	switch t {
@@ -54,7 +73,7 @@ func isTool(t string) bool {
 	return false
 }
 func (a *usageAccumulator) Usage() *harness.Usage {
-	if !a.hasInput && !a.hasOutput && a.turns == 0 && len(a.tools) == 0 {
+	if !a.hasInput && !a.hasOutput && a.turns == 0 && a.tools.Len() == 0 && !a.incomplete {
 		return nil
 	}
 	u := harness.Usage{}
@@ -67,8 +86,9 @@ func (a *usageAccumulator) Usage() *harness.Usage {
 	if a.turns > 0 {
 		u.Turns = harness.Int(a.turns)
 	}
-	if a.turns > 0 || len(a.tools) > 0 {
-		u.ToolCalls = harness.Int(len(a.tools))
+	if a.turns > 0 || a.tools.Len() > 0 {
+		u.ToolCalls = harness.Int(a.tools.Len())
 	}
+	u.Incomplete = a.incomplete
 	return &u
 }

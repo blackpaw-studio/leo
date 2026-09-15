@@ -3,6 +3,8 @@ package consult
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"math"
 	"os/exec"
 	"testing"
 	"time"
@@ -23,6 +25,25 @@ func TestUsageFinalReplacesProvisionalAndInvocationsAggregate(t *testing.T) {
 	d.applyUsageLocked(state, &harness.Usage{InputTokens: harness.Int64(3), OutputTokens: harness.Int64(4), ToolCalls: harness.Int(0)}, true)
 	if *state.record.InputTokens != 8 || *state.record.OutputTokens != 6 || *state.record.ToolCalls != 1 {
 		t.Fatalf("invocations did not aggregate: %+v", state.record)
+	}
+}
+
+func TestUsageAggregationOverflowIsIncompleteWithoutWrapping(t *testing.T) {
+	d := NewDispatcher(nopRecorder{})
+	state := &runState{record: Record{ID: "d-overflow"}, handle: nopHandle{}}
+	d.applyUsageLocked(state, &harness.Usage{InputTokens: harness.Int64(math.MaxInt64)}, true)
+	d.beginUsageInvocationLocked(state)
+	d.applyUsageLocked(state, &harness.Usage{InputTokens: harness.Int64(1)}, true)
+	if !state.record.UsageIncomplete || state.record.InputTokens == nil || *state.record.InputTokens != math.MaxInt64 {
+		t.Fatalf("record=%+v", state.record)
+	}
+	e := entryFromRecord(state.record, time.Now())
+	raw, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"usage_incomplete":true`)) {
+		t.Fatalf("entry=%s", raw)
 	}
 }
 

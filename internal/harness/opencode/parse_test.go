@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -130,7 +131,22 @@ func TestParseEventsTruncatedFixtureLeavesTokensUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Usage == nil || got.Usage.InputTokens != nil || got.Usage.OutputTokens != nil || got.Usage.Turns == nil || *got.Usage.Turns != 1 || got.Usage.ToolCalls == nil || *got.Usage.ToolCalls != 0 {
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil || got.Usage.OutputTokens != nil || got.Usage.Turns == nil || *got.Usage.Turns != 1 || got.Usage.ToolCalls == nil || *got.Usage.ToolCalls != 0 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestUsageRejectsNegativeStepAndBoundsIDs(t *testing.T) {
+	var stream strings.Builder
+	stream.WriteString(`{"type":"step_finish","part":{"id":"bad","tokens":{"input":-1}}}` + "\n")
+	for i := 0; i <= 10000; i++ {
+		fmt.Fprintf(&stream, `{"type":"step_start","part":{"id":"s%d"}}`+"\n", i)
+	}
+	got, err := Opencode{}.ParseEvents(strings.NewReader(stream.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil {
 		t.Fatalf("usage=%#v", got.Usage)
 	}
 }

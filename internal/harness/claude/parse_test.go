@@ -1,6 +1,8 @@
 package claude
 
 import (
+	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -61,6 +63,20 @@ func TestParseEvents(t *testing.T) {
 				t.Errorf("Text = %q, want %q", result.Text, tt.wantText)
 			}
 		})
+	}
+}
+
+func TestUsageRejectsInvalidCountersAndNestedAssistants(t *testing.T) {
+	stream := `{"type":"assistant","parent_tool_use_id":"parent","message":{"id":"nested","usage":{"input_tokens":9},"content":[{"type":"tool_use","id":"nested-tool"}]}}
+{"type":"assistant","message":{"id":"top","usage":{"input_tokens":` + fmt.Sprint(math.MaxInt64) + `},"content":[]}}
+{"type":"assistant","message":{"id":"top2","usage":{"input_tokens":1},"content":[]}}
+{"type":"result","usage":{"input_tokens":-1,"output_tokens":2},"num_turns":-1}`
+	got, err := Claude{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens == nil || *got.Usage.InputTokens != math.MaxInt64 || got.Usage.OutputTokens != nil || got.Usage.Turns != nil || got.Usage.ToolCalls == nil || *got.Usage.ToolCalls != 0 {
+		t.Fatalf("usage=%#v", got.Usage)
 	}
 }
 

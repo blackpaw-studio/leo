@@ -85,11 +85,11 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 }
 
 func entryFromRecord(rec Record, now time.Time) Entry {
-	return Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Text: rec.Text, Err: rec.Error, InputTokens: clonePtr(rec.InputTokens), OutputTokens: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD), UsageTurns: clonePtr(rec.UsageTurns), ToolCalls: clonePtr(rec.ToolCalls), Worktree: rec.Worktree, Branch: rec.Branch}
+	return Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Text: rec.Text, Err: rec.Error, InputTokens: clonePtr(rec.InputTokens), OutputTokens: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD), UsageTurns: clonePtr(rec.UsageTurns), ToolCalls: clonePtr(rec.ToolCalls), UsageIncomplete: rec.UsageIncomplete, Worktree: rec.Worktree, Branch: rec.Branch}
 }
 
 func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
-	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Err: rec.Error, TurnID: turnID, InputTokens: clonePtr(rec.InputTokens), OutputTokens: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD), UsageTurns: clonePtr(rec.UsageTurns), ToolCalls: clonePtr(rec.ToolCalls), Worktree: rec.Worktree, Branch: rec.Branch}
+	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Err: rec.Error, TurnID: turnID, InputTokens: clonePtr(rec.InputTokens), OutputTokens: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD), UsageTurns: clonePtr(rec.UsageTurns), ToolCalls: clonePtr(rec.ToolCalls), UsageIncomplete: rec.UsageIncomplete, Worktree: rec.Worktree, Branch: rec.Branch}
 	t := turnByID(rec, turnID)
 	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
 	activity := rec.HookActivity

@@ -7,13 +7,14 @@ import (
 )
 
 type usageAccumulator struct {
-	steps, finishes, tools map[string]bool
+	steps, finishes, tools harness.UsageIDs
 	input, output          int64
 	hasInput, hasOutput    bool
+	incomplete             bool
 }
 
 func (Opencode) NewUsageAccumulator() harness.UsageAccumulator {
-	return &usageAccumulator{steps: map[string]bool{}, finishes: map[string]bool{}, tools: map[string]bool{}}
+	return &usageAccumulator{steps: harness.NewUsageIDs(), finishes: harness.NewUsageIDs(), tools: harness.NewUsageIDs()}
 }
 func (a *usageAccumulator) AddLine(line []byte) {
 	var raw struct {
@@ -35,40 +36,51 @@ func (a *usageAccumulator) AddLine(line []byte) {
 		return
 	}
 	if raw.Type == "step_start" && raw.Part.ID != "" {
-		a.steps[raw.Part.ID] = true
+		a.steps.Add(raw.Part.ID)
 	}
-	if raw.Type == "step_finish" && (raw.Part.ID == "" || !a.finishes[raw.Part.ID]) {
-		if raw.Part.ID != "" {
-			a.finishes[raw.Part.ID] = true
-		}
-		if raw.Part.Tokens.Input != nil {
-			a.input += *raw.Part.Tokens.Input
-			a.hasInput = true
-		}
-		if raw.Part.Tokens.Cache.Read != nil {
-			a.input += *raw.Part.Tokens.Cache.Read
-			a.hasInput = true
-		}
-		if raw.Part.Tokens.Cache.Write != nil {
-			a.input += *raw.Part.Tokens.Cache.Write
-			a.hasInput = true
-		}
-		if raw.Part.Tokens.Output != nil || raw.Part.Tokens.Reasoning != nil {
-			if raw.Part.Tokens.Output != nil {
-				a.output += *raw.Part.Tokens.Output
+	if raw.Type == "step_finish" && (raw.Part.ID == "" || a.finishes.Add(raw.Part.ID)) {
+		inputDelta, inputOK := sumValues(raw.Part.Tokens.Input, raw.Part.Tokens.Cache.Read, raw.Part.Tokens.Cache.Write)
+		outputDelta, outputOK := sumValues(raw.Part.Tokens.Output, raw.Part.Tokens.Reasoning)
+		nextInput, inputAddOK := harness.AddInt64(a.input, inputDelta)
+		nextOutput, outputAddOK := harness.AddInt64(a.output, outputDelta)
+		if !inputOK || !outputOK || !inputAddOK || !outputAddOK {
+			a.incomplete = true
+		} else {
+			if raw.Part.Tokens.Input != nil || raw.Part.Tokens.Cache.Read != nil || raw.Part.Tokens.Cache.Write != nil {
+				a.input, a.hasInput = nextInput, true
 			}
-			if raw.Part.Tokens.Reasoning != nil {
-				a.output += *raw.Part.Tokens.Reasoning
+			if raw.Part.Tokens.Output != nil || raw.Part.Tokens.Reasoning != nil {
+				a.output, a.hasOutput = nextOutput, true
 			}
-			a.hasOutput = true
 		}
 	}
 	if raw.Type == "tool_use" && raw.Part.Type == "tool" && raw.Part.ID != "" {
-		a.tools[raw.Part.ID] = true
+		a.tools.Add(raw.Part.ID)
+	}
+	if a.steps.Overflow || a.finishes.Overflow || a.tools.Overflow {
+		a.incomplete = true
 	}
 }
+
+func sumValues(values ...*int64) (int64, bool) {
+	var total int64
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		var ok bool
+		total, ok = harness.AddInt64(total, *value)
+		if !ok {
+			return 0, false
+		}
+	}
+	return total, true
+}
 func (a *usageAccumulator) Usage() *harness.Usage {
-	if !a.hasInput && !a.hasOutput && len(a.steps) == 0 && len(a.tools) == 0 {
+	if a.steps.Len() > a.finishes.Len() {
+		a.incomplete = true
+	}
+	if !a.hasInput && !a.hasOutput && a.steps.Len() == 0 && a.tools.Len() == 0 && !a.incomplete {
 		return nil
 	}
 	u := harness.Usage{}
@@ -78,11 +90,12 @@ func (a *usageAccumulator) Usage() *harness.Usage {
 	if a.hasOutput {
 		u.OutputTokens = harness.Int64(a.output)
 	}
-	if len(a.steps) > 0 {
-		u.Turns = harness.Int(len(a.steps))
+	if a.steps.Len() > 0 {
+		u.Turns = harness.Int(a.steps.Len())
 	}
-	if len(a.steps) > 0 || len(a.tools) > 0 {
-		u.ToolCalls = harness.Int(len(a.tools))
+	if a.steps.Len() > 0 || a.tools.Len() > 0 {
+		u.ToolCalls = harness.Int(a.tools.Len())
 	}
+	u.Incomplete = a.incomplete
 	return &u
 }

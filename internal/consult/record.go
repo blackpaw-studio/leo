@@ -79,6 +79,7 @@ type InvocationUsage struct {
 	CostUSD      *float64 `json:"cost_usd,omitempty"`
 	UsageTurns   *int     `json:"usage_turns,omitempty"`
 	ToolCalls    *int     `json:"tool_calls,omitempty"`
+	Incomplete   bool     `json:"incomplete,omitempty"`
 	Completed    bool     `json:"completed,omitempty"`
 }
 
@@ -128,6 +129,7 @@ type Record struct {
 	CostUSD          *float64                `json:"cost_usd,omitempty"`
 	UsageTurns       *int                    `json:"usage_turns,omitempty"`
 	ToolCalls        *int                    `json:"tool_calls,omitempty"`
+	UsageIncomplete  bool                    `json:"usage_incomplete,omitempty"`
 	UsageInvocations []InvocationUsage       `json:"usage_invocations,omitempty"`
 	Isolation        string                  `json:"isolation,omitempty"`
 	Worktree         string                  `json:"worktree,omitempty"`
