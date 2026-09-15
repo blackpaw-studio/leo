@@ -39,6 +39,9 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	}
 	// Refresh after acquiring the per-run serialization lock.
 	rec, state, _ := d.lookup(rec.ID)
+	if rec.Mode == "" {
+		rec.Mode = ModeHeadless
+	}
 	if !rec.Status.Terminal() {
 		return SendResult{}, fmt.Errorf("dispatch is %s", rec.Status)
 	}
@@ -78,7 +81,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	if spec.Name == "" {
 		spec.Name = "dispatch"
 	}
-	args, err := h.Args(spec)
+	_, err = h.Args(spec)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("building %s resume args: %w", h.Name(), err)
 	}
@@ -104,35 +107,46 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 			return SendResult{}, fmt.Errorf("recreating retained worktree: %w", err)
 		}
 	}
-	if state == nil {
-		state = &runState{record: rec}
-		d.runs[rec.ID] = state
+	// Rebuild after recreation: Codex discovers Git metadata while rendering
+	// its sandbox writable roots.
+	args, err := h.Args(spec)
+	if err != nil {
+		<-d.sem
+		d.mu.Unlock()
+		return SendResult{}, fmt.Errorf("building %s resume args after workspace preparation: %w", h.Name(), err)
 	}
-	if len(state.record.Turns) == 0 {
-		synthesizeOpeningTurn(&state.record)
+	prospective := rec
+	if state != nil {
+		prospective = cloneRecord(state.record)
+	}
+	prospective.Mode = ModeHeadless
+	if len(prospective.Turns) == 0 {
+		synthesizeOpeningTurn(&prospective)
 	}
 	now := d.now()
-	turn := Turn{TurnID: fmt.Sprintf("%s#%d", rec.ID, len(state.record.Turns)+1), Source: TurnSourceOrchestrator, StartedAt: now, Delivered: true, SlotHeld: true, Text: message}
-	state.record.Turns = append(state.record.Turns, turn)
-	state.record.Status, state.record.Text, state.record.Error = StatusQueued, "", ""
-	state.record.EndedAt, state.record.Cwd = time.Time{}, cwd
-	if state.record.WorktreeState == WorktreeRemoved {
-		state.record.WorktreeState = WorktreePresent
+	turn := Turn{TurnID: fmt.Sprintf("%s#%d", rec.ID, len(prospective.Turns)+1), Source: TurnSourceOrchestrator, StartedAt: now, Delivered: true, SlotHeld: true, Text: message}
+	prospective.Turns = append(prospective.Turns, turn)
+	prospective.Status, prospective.Text, prospective.Error = StatusQueued, "", ""
+	prospective.EndedAt, prospective.Cwd = time.Time{}, cwd
+	if prospective.WorktreeState == WorktreeRemoved {
+		prospective.WorktreeState = WorktreePresent
 	}
-	d.beginUsageInvocationLocked(state)
+	prospective.UsageInvocations = append(prospective.UsageInvocations, InvocationUsage{})
 	done := make(chan struct{})
 	runCtx, cancel := context.WithCancel(d.daemonCtx)
-	state.done, state.cancel = done, cancel
-	handle, openErr := d.recorder.Resume(cloneRecord(state.record))
+	handle, openErr := d.recorder.Resume(cloneRecord(prospective))
 	if openErr != nil {
+		cancel()
 		<-d.sem
-		state.record.Status, state.record.Error, state.record.EndedAt = rec.Status, rec.Error, rec.EndedAt
-		state.record.Turns = state.record.Turns[:len(state.record.Turns)-1]
-		state.record.UsageInvocations = state.record.UsageInvocations[:len(state.record.UsageInvocations)-1]
 		d.mu.Unlock()
 		return SendResult{}, fmt.Errorf("reopening dispatch recording: %w", openErr)
 	}
-	state.handle = handle
+	if state == nil {
+		state = &runState{}
+		d.runs[rec.ID] = state
+	}
+	state.record, state.handle = prospective, handle
+	state.done, state.cancel = done, cancel
 	d.persistLocked(state, "turn")
 	d.mu.Unlock()
 	go d.runInvocation(runCtx, state, done, h, rec.Model, tmpl.Env, args, harnessEnv, cwd, rec.Timeout, true)
@@ -140,11 +154,14 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 }
 
 func synthesizeOpeningTurn(rec *Record) {
+	if rec.Mode == "" {
+		rec.Mode = ModeHeadless
+	}
 	outcome := TurnFinished
 	if rec.Status != StatusDone {
 		outcome = TurnInterrupted
 	}
-	rec.Turns = append(rec.Turns, Turn{TurnID: rec.ID + "#1", Source: TurnSourceOrchestrator, StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, Delivered: true, Outcome: outcome, Text: rec.Text})
+	rec.Turns = append(rec.Turns, Turn{TurnID: rec.ID + "#1", Source: TurnSourceOrchestrator, StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, Delivered: true, Outcome: outcome, Status: rec.Status, Error: rec.Error, Text: rec.Text})
 }
 
 func (d *Dispatcher) resumeWorkspace(rec Record) (string, bool, error) {

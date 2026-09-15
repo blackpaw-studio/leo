@@ -472,12 +472,21 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			if !entries[i].Status.Terminal() {
 				continue
 			}
-			rec, err := d.Get(ids[i])
+			rec, state, err := d.lookup(ids[i])
 			if err != nil {
 				continue
 			}
-			if state := states[i]; state != nil && rec.Isolation == "worktree" {
-				<-state.done
+			if rec.Isolation == "worktree" && states[i] != nil && dones[i] != nil {
+				<-dones[i]
+				rec, state, err = d.lookup(ids[i])
+				if err != nil {
+					continue
+				}
+			}
+			// A wait for an older terminal turn must not clean up or collect
+			// while a newer invocation owns the run.
+			if state != nil && state.done != dones[i] && !rec.Status.Terminal() {
+				continue
 			}
 			rec = d.cleanupWorktree(rec.ID)
 			entries[i].Worktree, entries[i].Branch = "", ""
@@ -768,7 +777,8 @@ func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	turnID := ""
 	if state.record.Mode == ModeHeadless && len(state.record.Turns) > 0 {
 		t := &state.record.Turns[len(state.record.Turns)-1]
-		t.EndedAt, t.Outcome = state.record.EndedAt, TurnInterrupted
+		t.EndedAt, t.Outcome, t.Status = state.record.EndedAt, TurnInterrupted, status
+		t.Error = state.record.Error
 		turnID = t.TurnID
 	}
 	d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, turnID), status)
@@ -877,7 +887,20 @@ func (d *Dispatcher) MarkInterrupted() {
 				rec.Status = StatusFailed
 			}
 		} else {
+			if rec.Mode == "" {
+				rec.Mode = ModeHeadless
+			}
 			rec.Status = StatusFailed
+			if len(rec.Turns) == 0 {
+				synthesizeOpeningTurn(&rec)
+			}
+			for i := range rec.Turns {
+				if rec.Turns[i].Outcome == "" {
+					rec.Turns[i].Outcome, rec.Turns[i].Status = TurnInterrupted, StatusFailed
+					rec.Turns[i].Error, rec.Turns[i].EndedAt = "daemon restarted", markedAt
+					rec.Turns[i].SlotHeld = false
+				}
+			}
 			if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
 				rec.WorktreeState = WorktreeKept
 			}

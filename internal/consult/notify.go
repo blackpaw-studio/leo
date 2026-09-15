@@ -183,13 +183,9 @@ func (d *Dispatcher) addRestartCandidates(rec *Record) {
 		}
 		rec.Notifications[key] = n
 	}
-	if rec.Mode != ModeInteractive {
-		add(rec.ID)
-	} else {
-		for _, turn := range rec.Turns {
-			if turn.Outcome != "" {
-				add(turn.TurnID)
-			}
+	for _, turn := range rec.Turns {
+		if turn.Outcome != "" {
+			add(turn.TurnID)
 		}
 	}
 }

@@ -66,6 +66,8 @@ type Turn struct {
 	Delivered     bool        `json:"delivered"`
 	SlotHeld      bool        `json:"slot_held"`
 	Outcome       TurnOutcome `json:"outcome,omitempty"`
+	Status        Status      `json:"status,omitempty"`
+	Error         string      `json:"error,omitempty"`
 	Text          string      `json:"text,omitempty"`
 	HarnessTurnID string      `json:"harness_turn_id,omitempty"`
 }

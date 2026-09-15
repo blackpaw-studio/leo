@@ -71,10 +71,11 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 		turnID := ""
 		if state.record.Mode == ModeHeadless && len(state.record.Turns) > 0 {
 			t := &state.record.Turns[len(state.record.Turns)-1]
-			t.EndedAt, t.Outcome, t.Text = state.record.EndedAt, TurnFinished, text
+			t.EndedAt, t.Outcome, t.Status, t.Text = state.record.EndedAt, TurnFinished, status, text
 			if status != StatusDone {
 				t.Outcome = TurnInterrupted
 			}
+			t.Error = state.record.Error
 			turnID = t.TurnID
 		}
 		persist = d.completionCandidateLocked(state, transitionKey(state.record.ID, state.record.Mode, turnID), status)
@@ -122,6 +123,10 @@ func headlessEntry(rec Record, turnID string, now time.Time) Entry {
 		return e
 	}
 	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
+	if t.Status != "" {
+		e.Status, e.Err = t.Status, t.Error
+		return e
+	}
 	switch t.Outcome {
 	case "":
 		e.Status, e.Err = StatusRunning, ""
