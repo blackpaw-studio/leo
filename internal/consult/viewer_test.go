@@ -277,24 +277,53 @@ func TestViewerCollectionOfClosedWindowIsNoop(t *testing.T) {
 	}
 }
 
-func TestViewerPersistedCloseAndSweepDoNotRekillAfterHandledEviction(t *testing.T) {
+func TestViewerBoundsHandledWindowsInInsertionOrder(t *testing.T) {
+	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(string, ...string) *exec.Cmd { return exec.Command("true") }}
+	for i := 0; i < viewerHandledLimit+10; i++ {
+		v.Close(Record{ID: fmt.Sprintf("d-%04d", i), Kind: "dispatch", Status: StatusDone, ViewerWindowID: fmt.Sprintf("@%d", i)})
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if got := len(v.handledWindowIDs); got != viewerHandledLimit {
+		t.Fatalf("handled windows = %d, want %d", got, viewerHandledLimit)
+	}
+	for i := 0; i < 10; i++ {
+		if _, found := v.handledWindowIDs[fmt.Sprintf("d-%04d", i)]; found {
+			t.Fatalf("old handled window d-%04d was retained", i)
+		}
+	}
+	for i := 10; i < viewerHandledLimit+10; i++ {
+		if got := v.handledWindowIDs[fmt.Sprintf("d-%04d", i)]; got != fmt.Sprintf("@%d", i) {
+			t.Fatalf("handled window d-%04d = %q, want @%d", i, got, i)
+		}
+	}
+}
+
+func TestViewerSweepPrunesAbsentHandledWindowsWithoutRekillingPresentWindow(t *testing.T) {
 	var calls [][]string
 	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, append([]string{name}, args...))
 		return exec.Command("true")
 	}}
-	target := Record{ID: "d-target", Kind: "dispatch", Status: StatusDone, ViewerWindowID: "@target"}
-	v.Close(target)
-	v.Close(target)
-	v.Close(target)
-	for i := 0; i < viewerHandledLimit; i++ {
-		v.Close(Record{ID: fmt.Sprintf("d-pressure-%d", i), Kind: "dispatch", Status: StatusDone, ViewerWindowID: fmt.Sprintf("@%d", i)})
-	}
+	v.Close(Record{ID: "d-pruned", Kind: "dispatch", Status: StatusDone, ViewerWindowID: "@pruned"})
+	present := Record{ID: "d-present", Kind: "dispatch", Status: StatusFailed, ViewerWindowID: "@present"}
+	v.Close(Record{ID: present.ID, Kind: "dispatch", Status: StatusDone, ViewerWindowID: present.ViewerWindowID})
 	now := time.Now()
-	target.EndedAt = now.Add(-viewerGraceAfterEnd - time.Second)
-	v.Sweep([]Record{target}, now)
-	if got := len(calls); got != viewerHandledLimit+1 {
-		t.Fatalf("kill calls = %d, want %d; calls=%#v", got, viewerHandledLimit+1, calls)
+	present.EndedAt = now.Add(-viewerGraceAfterEnd - time.Second)
+	v.Sweep([]Record{present}, now)
+	v.Sweep([]Record{present}, now.Add(time.Second))
+
+	if got := len(calls); got != 2 {
+		t.Fatalf("kill calls = %d, want 2; calls=%#v", got, calls)
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if _, found := v.handledWindowIDs["d-pruned"]; found {
+		t.Fatal("handled window for absent record was retained")
+	}
+	if got := v.handledWindowIDs[present.ID]; got != present.ViewerWindowID {
+		t.Fatalf("present handled window = %q, want %q", got, present.ViewerWindowID)
 	}
 }
 
