@@ -172,7 +172,7 @@ func TestEnsureUTF8Locale(t *testing.T) {
 		{
 			name: "missing locale appends LC_CTYPE",
 			env:  []string{"PATH=/usr/bin"},
-			want: []string{"PATH=/usr/bin", "LC_CTYPE=en_US.UTF-8"},
+			want: []string{"PATH=/usr/bin", "LC_CTYPE=C.UTF-8"},
 		},
 		{
 			name: "UTF-8 LANG is preserved",
@@ -202,7 +202,8 @@ func TestEnsureUTF8Locale(t *testing.T) {
 
 func TestUTF8LocaleWarning(t *testing.T) {
 	got := UTF8LocaleWarning([]string{"LC_ALL=C", "LANG=en_US.UTF-8"})
-	if !strings.Contains(got, "LC_ALL=C") {
-		t.Errorf("UTF8LocaleWarning() = %q, want LC_ALL warning", got)
+	want := "LC_ALL=\"C\" is not a UTF-8 locale; tmux will sanitize non-ASCII output (dispatch roster and composer checks break) — set LC_ALL/LC_CTYPE/LANG to a UTF-8 locale"
+	if got != want {
+		t.Errorf("UTF8LocaleWarning() = %q, want %q", got, want)
 	}
 }

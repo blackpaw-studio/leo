@@ -1,6 +1,7 @@
 package env
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,8 @@ var (
 	statFn        = os.Stat
 )
 
-const fallbackUTF8Locale = "en_US.UTF-8"
+// fallbackUTF8Locale is expected to be available to tmux and child runtimes.
+const fallbackUTF8Locale = "C.UTF-8"
 
 // EnsureUTF8Locale returns environ with a UTF-8 locale available to child
 // processes when the caller did not choose a locale. tmux uses the first
@@ -34,7 +36,7 @@ func UTF8LocaleWarning(environ []string) string {
 	if !ok || isUTF8Locale(value) {
 		return ""
 	}
-	return "tmux client locale " + key + "=" + value + " is not UTF-8; preserving explicit user setting"
+	return fmt.Sprintf("%s=%q is not a UTF-8 locale; tmux will sanitize non-ASCII output (dispatch roster and composer checks break) — set LC_ALL/LC_CTYPE/LANG to a UTF-8 locale", key, value)
 }
 
 func winningLocale(environ []string) (string, string, bool) {
