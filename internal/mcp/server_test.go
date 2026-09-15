@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -558,6 +559,9 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 }
 
 func TestLeoDispatchUsesDefaultCWD(t *testing.T) {
+	tmuxTmp := t.TempDir()
+	t.Setenv("TMUX_TMPDIR", tmuxTmp)
+	t.Setenv("TMUX", filepath.Join(tmuxTmp, fmt.Sprintf("tmux-%d", os.Getuid()), "leo")+",123,0")
 	t.Setenv("TMUX_PANE", "%17")
 	var gotBody map[string]any
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
@@ -580,6 +584,24 @@ func TestLeoDispatchUsesDefaultCWD(t *testing.T) {
 	text := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
 	if !strings.Contains(text, "d-test") || !strings.Contains(text, "leo dispatch watch") {
 		t.Fatalf("result %q", text)
+	}
+}
+
+func TestLeoDispatchRejectsCallerPaneFromAnotherTmuxServer(t *testing.T) {
+	tmuxTmp := t.TempDir()
+	t.Setenv("TMUX_TMPDIR", tmuxTmp)
+	t.Setenv("TMUX", filepath.Join(tmuxTmp, fmt.Sprintf("tmux-%d", os.Getuid()), "other")+",123,0")
+	t.Setenv("TMUX_PANE", "%7") // The same ID may also exist on Leo's server.
+	var gotBody map[string]any
+	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+		_ = json.Unmarshal(body, &gotBody)
+		return 200, `{"ok":true,"data":{"id":"d-test","harness":"codex","model":"gpt","cwd":"/tmp"}}`
+	})
+	defer d.close()
+	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
+	runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "codex", "prompt": "do it"}}})
+	if pane, ok := gotBody["caller_pane_id"]; ok {
+		t.Fatalf("foreign caller pane forwarded as %#v", pane)
 	}
 }
 

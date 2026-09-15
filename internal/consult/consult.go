@@ -397,8 +397,11 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 		unlockSerial := d.serialLocks(ids)
 		defer unlockSerial()
 		for i := range entries {
+			if !entries[i].Status.Terminal() {
+				continue
+			}
 			rec, err := d.Get(ids[i])
-			if err != nil || !rec.Status.Terminal() {
+			if err != nil {
 				continue
 			}
 			d.collect(rec)

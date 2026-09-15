@@ -2,12 +2,10 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -17,26 +15,18 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
-func TestDispatchCallerPaneRequiresLeoTmuxServer(t *testing.T) {
-	orig := dispatchExecCommand
-	t.Cleanup(func() { dispatchExecCommand = orig })
-	var calls [][]string
-	dispatchExecCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		calls = append(calls, append([]string{name}, args...))
-		return exec.CommandContext(ctx, "printf", "%%7\\n")
-	}
-	if got := dispatchCallerPane(context.Background(), "%7"); got != "%7" {
+func TestDispatchCallerPaneUsesOriginatingTmuxSocket(t *testing.T) {
+	tmp := t.TempDir()
+	leoSocket := filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()), "leo")
+	t.Setenv("TMUX_TMPDIR", tmp)
+	t.Setenv("TMUX", leoSocket+",123,0")
+	t.Setenv("TMUX_PANE", "%7")
+	if got := dispatchCallerPane(os.Environ()); got != "%7" {
 		t.Fatalf("verified pane = %q", got)
 	}
-	want := []string{"tmux", "-L", "leo", "display-message", "-p", "-t", "%7", "#{pane_id}"}
-	if !reflect.DeepEqual(calls, [][]string{want}) {
-		t.Fatalf("argv = %#v, want %#v", calls, [][]string{want})
-	}
-	dispatchExecCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "printf", "%%9\\n")
-	}
-	if got := dispatchCallerPane(context.Background(), "%7"); got != "" {
-		t.Fatalf("foreign-server pane forwarded as %q", got)
+	t.Setenv("TMUX", filepath.Join(tmp, fmt.Sprintf("tmux-%d", os.Getuid()), "other")+",123,0")
+	if got := dispatchCallerPane(os.Environ()); got != "" {
+		t.Fatalf("colliding foreign-server pane forwarded as %q", got)
 	}
 }
 

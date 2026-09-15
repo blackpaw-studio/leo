@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,16 +21,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var dispatchExecCommand = exec.CommandContext
-
-func dispatchCallerPane(ctx context.Context, pane string) string {
-	if pane == "" {
-		return ""
-	}
-	out, err := dispatchExecCommand(ctx, "tmux", tmux.Args("display-message", "-p", "-t", pane, "#{pane_id}")...).Output()
-	if err != nil || strings.TrimSpace(string(out)) != pane {
-		return ""
-	}
+func dispatchCallerPane(environ []string) string {
+	pane, _ := tmux.CallerPaneFromEnv(environ)
 	return pane
 }
 
@@ -119,7 +110,7 @@ func newDispatchRunCmd() *cobra.Command {
 		if isolation != "" {
 			body["isolation"] = isolation
 		}
-		if pane := dispatchCallerPane(cmd.Context(), os.Getenv("TMUX_PANE")); pane != "" {
+		if pane := dispatchCallerPane(os.Environ()); pane != "" {
 			body["caller_pane_id"] = pane
 		}
 		if timeout > 0 {

@@ -140,6 +140,39 @@ func TestWaitTimeoutAndUnknownID(t *testing.T) {
 	_, _ = d.Cancel(started.ID)
 }
 
+func TestWaitTimeoutCompletionRaceLeavesResultCollectable(t *testing.T) {
+	var collected []Record
+	d := NewDispatcherWithOnStart(nil, context.Background(), nil, func(rec Record) {
+		collected = append(collected, rec)
+	})
+	state := &runState{record: Record{ID: "d-race", Kind: "dispatch", Mode: ModeHeadless, Status: StatusRunning, StartedAt: time.Now()}, handle: nopHandle{}, done: make(chan struct{})}
+	d.runs[state.record.ID] = state
+	calls := 0
+	d.now = func() time.Time {
+		calls++
+		if calls == 2 {
+			d.complete(state, StatusDone, "finished", nil)
+		}
+		return time.Now()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	first := d.Wait(ctx, []string{state.record.ID}, time.Hour)[0]
+	if first.Status != StatusRunning {
+		t.Fatalf("first Wait = %+v, want running", first)
+	}
+	if len(collected) != 0 {
+		t.Fatalf("timed-out running result was collected: %+v", collected)
+	}
+	second := d.Wait(context.Background(), []string{state.record.ID}, time.Second)[0]
+	if second.Status != StatusDone || second.Text != "finished" {
+		t.Fatalf("second Wait = %+v, want done text", second)
+	}
+	if len(collected) != 1 {
+		t.Fatalf("collection count = %d, want 1", len(collected))
+	}
+}
+
 func TestTerminateDoesNotOverwriteCompletedRecord(t *testing.T) {
 	d := NewDispatcher(nil)
 	state := &runState{

@@ -12,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/leotools"
 	"github.com/blackpaw-studio/leo/internal/templates"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // msgPrefixFormat is the wire format prepended to a delivered message so the
@@ -356,7 +357,8 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			notify = &raw
 		}
 		isolation, _ := args["isolation"].(string)
-		started, err := client.dispatch(ctx, consult.Request{Caller: processName, CallerPaneID: os.Getenv("TMUX_PANE"), Template: template, Model: model, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, Isolation: isolation})
+		callerPane, _ := tmux.CallerPaneFromEnv(os.Environ())
+		started, err := client.dispatch(ctx, consult.Request{Caller: processName, CallerPaneID: callerPane, Template: template, Model: model, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, Isolation: isolation})
 		if err != nil {
 			return "", err
 		}
