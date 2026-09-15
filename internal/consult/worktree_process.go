@@ -1,13 +1,116 @@
 package consult
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
+
+type processInfo struct{ pid, pgid, ppid int }
+
+// processGroupOwnership takes a fresh process-table snapshot before signalling.
+// A recycled group is not owned merely because its numeric ID matches a
+// cached PGID; at least one member must descend from the harness or daemon.
+func (d *Dispatcher) processGroupOwnership(pgid, harnessPID int) (bool, bool, bool) {
+	out, err := d.ProcessCommand(context.Background(), "ps", "-o", "pid=,pgid=,ppid=").Output()
+	if err != nil {
+		return false, false, false
+	}
+	processes := make(map[int]processInfo)
+	groupPresent := false
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(fields[0])
+		group, err2 := strconv.Atoi(fields[1])
+		parent, err3 := strconv.Atoi(fields[2])
+		if err1 != nil || err2 != nil || err3 != nil {
+			continue
+		}
+		processes[pid] = processInfo{pid, group, parent}
+		groupPresent = groupPresent || group == pgid
+	}
+	for _, process := range processes {
+		if process.pgid != pgid {
+			continue
+		}
+		seen := map[int]bool{}
+		for pid := process.pid; pid > 1 && !seen[pid]; {
+			if pid == harnessPID || pid == os.Getpid() {
+				return true, true, true
+			}
+			seen[pid] = true
+			parent, ok := processes[pid]
+			if !ok {
+				break
+			}
+			pid = parent.ppid
+		}
+		if process.ppid == harnessPID || process.ppid == os.Getpid() {
+			return true, true, true
+		}
+	}
+	return false, groupPresent, true
+}
+
+func (d *Dispatcher) ownedSignal(pgid, harnessPID int, signal syscall.Signal) error {
+	owned, _, _ := d.processGroupOwnership(pgid, harnessPID)
+	if !owned {
+		return errUnsafeProcessGroup
+	}
+	return signalGroup(pgid, signal)
+}
+
+func (d *Dispatcher) ownedProcessGroupGone(pgid, harnessPID int) bool {
+	owned, present, known := d.processGroupOwnership(pgid, harnessPID)
+	if !known {
+		return false
+	}
+	if !present {
+		return true
+	}
+	if !owned {
+		return false
+	}
+	return signalGroup(pgid, 0) == syscall.ESRCH
+}
+
+func (d *Dispatcher) waitOwnedProcessGroupGone(pgid, harnessPID int) bool {
+	deadline := time.Now().Add(2 * time.Second)
+	for !d.ownedProcessGroupGone(pgid, harnessPID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return d.ownedProcessGroupGone(pgid, harnessPID)
+}
+
+func (d *Dispatcher) terminateOwnedProcessGroup(pgid, harnessPID int, grace time.Duration) (bool, error) {
+	err := d.ownedSignal(pgid, harnessPID, syscall.SIGTERM)
+	if err == syscall.ESRCH {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	deadline := time.Now().Add(grace)
+	for !d.ownedProcessGroupGone(pgid, harnessPID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d.ownedProcessGroupGone(pgid, harnessPID) {
+		return true, nil
+	}
+	if err := d.ownedSignal(pgid, harnessPID, syscall.SIGKILL); err != nil {
+		return false, err
+	}
+	return d.waitOwnedProcessGroupGone(pgid, harnessPID), nil
+}
 
 const headlessProcessGrace = 10 * time.Second
 
@@ -47,22 +150,6 @@ func waitProcessGroupGone(pgid int) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return processGroupGone(pgid)
-}
-
-// terminateHeadlessProcessGroup is used by explicit cancellation after the
-// harness leader has already exited. It gives surviving descendants the same
-// bounded grace used by exec.Cmd before escalating to SIGKILL.
-func (d *Dispatcher) terminateHeadlessProcessGroup(state *runState) {
-	d.mu.Lock()
-	pgid, gone := state.pgid, state.pgidGone
-	d.mu.Unlock()
-	if gone {
-		return
-	}
-	gone, _ = terminateProcessGroup(pgid, d.ProcessGroupGrace)
-	d.mu.Lock()
-	state.pgidGone = gone
-	d.mu.Unlock()
 }
 
 func terminateProcessGroup(pgid int, grace time.Duration) (bool, error) {

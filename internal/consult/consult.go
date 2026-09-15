@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,9 +49,11 @@ type Dispatcher struct {
 	sem                chan struct{}
 	recorder           Recorder
 	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
+	ProcessCommand     func(ctx context.Context, name string, args ...string) *exec.Cmd
 	GitCommand         func(name string, args ...string) *exec.Cmd
 	WorktreeSuffix     func() string
 	ProcessGroupGrace  time.Duration
+	ParseEvents        func(harness.Harness, io.Reader) (harness.Result, error)
 	daemonCtx          context.Context
 	mu                 sync.Mutex
 	runs               map[string]*runState
@@ -81,8 +84,9 @@ type runState struct {
 	killPending    bool
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
-	pgid     int
-	pgidGone bool
+	pgid       int
+	pgidGone   bool
+	harnessPID int
 }
 
 // NewDispatcher builds a dispatcher recording through rec. A nil recorder
@@ -113,9 +117,11 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		sem:                make(chan struct{}, maxConcurrent),
 		recorder:           rec,
 		ExecCommandContext: exec.CommandContext,
+		ProcessCommand:     exec.CommandContext,
 		GitCommand:         exec.Command,
 		WorktreeSuffix:     worktreeSuffix,
 		ProcessGroupGrace:  headlessProcessGrace,
+		ParseEvents:        func(h harness.Harness, r io.Reader) (harness.Result, error) { return h.ParseEvents(r) },
 		daemonCtx:          daemonCtx,
 		runs:               make(map[string]*runState),
 		onStart:            onStart,
@@ -332,12 +338,17 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		d.mu.Lock()
-		pgid := state.pgid
+		pgid, harnessPID := state.pgid, state.harnessPID
 		d.mu.Unlock()
 		// Setpgid requests a private group, but cancellation must use the
 		// kernel-confirmed group ID captured after Start. In particular, do
 		// not fall back to Process.Pid: it may be this process's own group.
-		gone, err := terminateProcessGroup(pgid, d.ProcessGroupGrace)
+		gone, err := d.terminateOwnedProcessGroup(pgid, harnessPID, d.ProcessGroupGrace)
+		if errors.Is(err, errUnsafeProcessGroup) {
+			// The leader PID is still owned by this exec.Cmd even when process
+			// inventory cannot prove ownership of the cached numeric group.
+			err = cmd.Process.Kill()
+		}
 		d.mu.Lock()
 		state.pgidGone = gone
 		d.mu.Unlock()
@@ -355,6 +366,7 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	runErr := cmd.Start()
 	if runErr == nil {
 		d.mu.Lock()
+		state.harnessPID = cmd.Process.Pid
 		state.pgidGone = false
 		// Setpgid requests a private group, but record the kernel's answer
 		// rather than assuming the child PID is its group leader.
@@ -370,19 +382,20 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		runErr = cmd.Wait()
 		d.mu.Lock()
 		pgid := state.pgid
+		isolated := state.record.Isolation == "worktree"
 		d.mu.Unlock()
-		pgidGone := waitProcessGroupGone(pgid)
-		// Cmd.Wait can return when its leader exits while a descendant still
-		// owns an output pipe. If the run context expires during that probe,
-		// reap the surviving group before publishing the timeout.
-		if runCtx.Err() != nil && !pgidGone {
-			pgidGone, _ = terminateProcessGroup(pgid, d.ProcessGroupGrace)
+		pgidGone := true
+		if isolated {
+			pgidGone = d.waitOwnedProcessGroupGone(pgid, cmd.Process.Pid)
 		}
 		d.mu.Lock()
 		state.pgidGone = pgidGone
+		if pgidGone {
+			state.pgid = 0
+		}
 		d.mu.Unlock()
 	}
-	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))
+	parsed, parseErr := d.ParseEvents(h, bytes.NewReader(tee.Bytes()))
 	if parsed.SessionID != "" {
 		d.mu.Lock()
 		state.record.SessionID = parsed.SessionID
@@ -390,6 +403,20 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		d.mu.Unlock()
 	}
 	if runCtx.Err() != nil {
+		// This is the single timeout/cancel publication boundary. Parsing may
+		// itself cross the deadline after exec.Cmd's watcher has returned.
+		d.mu.Lock()
+		pgid, harnessPID, gone := state.pgid, state.harnessPID, state.pgidGone
+		d.mu.Unlock()
+		if !gone && pgid != 0 {
+			gone, _ = d.terminateOwnedProcessGroup(pgid, harnessPID, d.ProcessGroupGrace)
+			d.mu.Lock()
+			state.pgidGone = gone
+			if gone {
+				state.pgid = 0
+			}
+			d.mu.Unlock()
+		}
 		status := StatusTimeout
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			status = StatusCanceled
@@ -681,15 +708,9 @@ func (d *Dispatcher) terminateReapAndCleanup(id string, status Status) (Record, 
 		}
 	}
 	d.waitDone(strings.SplitN(id, "#", 2)[0])
-	if rec.Mode != ModeInteractive {
-		d.terminateHeadlessProcessGroup(state)
-		d.mu.Lock()
-		gone := state.pgidGone
-		d.mu.Unlock()
-		if gone && rec.WorktreeState == WorktreeKept {
-			rec = d.setWorktreeState(rec, state, WorktreePresent)
-		}
-	}
+	// Once terminal is published the run no longer owns its former numeric
+	// PGID. A terminal Cancel therefore only retries cleanup; uncertainty is
+	// retained rather than signalling a potentially recycled group.
 	return d.cleanupWorktree(rec.ID), nil
 }
 
