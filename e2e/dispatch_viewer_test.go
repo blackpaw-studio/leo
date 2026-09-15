@@ -87,8 +87,11 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	if localErr != nil || strings.TrimSpace(string(localFormat)) != "" {
 		t.Fatalf("session-local status-format remained after collection: %q, err %v", localFormat, localErr)
 	}
-	if err != nil || strings.TrimSpace(string(format)) == "" || !strings.Contains(string(format), session) {
-		t.Fatalf("cleaned status-format[0] = %q, want non-empty format containing %q, err %v", format, session, err)
+	// tmux's default status-left truncates the session name to 10 columns
+	// ("[leo-dispa"), so only require a prefix of it.
+	prefix := session[:8]
+	if err != nil || strings.TrimSpace(string(format)) == "" || !strings.Contains(string(format), prefix) {
+		t.Fatalf("cleaned status-format[0] = %q, want non-empty format containing %q, err %v", format, prefix, err)
 	}
 	for _, option := range []string{"@leo_roster", "@leo_roster_owned", "@leo_roster_status_owned", "status-format[1]"} {
 		out, _ := exec.Command(tmuxPath, tmux.Args("show-options", "-qv", "-t", target, option)...).Output()
