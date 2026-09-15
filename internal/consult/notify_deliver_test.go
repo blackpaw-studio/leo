@@ -119,7 +119,7 @@ func TestOpenCodeNotificationDeliverySubmitsWithExactEnterArgv(t *testing.T) {
 
 func TestNotificationReadinessCommandHasDeadline(t *testing.T) {
 	d := NewTmuxNotificationDelivery("tmux", func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "sh", "-c", "sleep 5")
+		return exec.CommandContext(ctx, "sh", "-c", "exec sleep 5")
 	})
 	d.CommandTimeout = 20 * time.Millisecond
 	started := time.Now()
