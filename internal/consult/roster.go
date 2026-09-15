@@ -19,10 +19,7 @@ const (
 func RenderRoster(records []Record, now time.Time) string {
 	eligible := make([]Record, 0, len(records))
 	for _, rec := range records {
-		if rec.Kind != "dispatch" {
-			continue
-		}
-		if rec.Status.Terminal() && !rec.EndedAt.IsZero() && !now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
+		if !rosterEligible(rec, now) {
 			continue
 		}
 		eligible = append(eligible, rec)
@@ -40,6 +37,21 @@ func RenderRoster(records []Record, now time.Time) string {
 		entries = append(entries, fmt.Sprintf("%s%s %s %s%s%s", style, glyph, rosterLabel(rec), formatActiveSeconds(rec.LiveActiveSeconds(now)), rosterUsage(rec), rosterDefaultStyle))
 	}
 	return strings.Join(entries, "   ")
+}
+
+// HasRosterEligibleRecord reports whether records contains a dispatch that
+// RenderRoster would render at now.
+func HasRosterEligibleRecord(records []Record, now time.Time) bool {
+	for _, rec := range records {
+		if rosterEligible(rec, now) {
+			return true
+		}
+	}
+	return false
+}
+
+func rosterEligible(rec Record, now time.Time) bool {
+	return rec.Kind == "dispatch" && (!rec.Status.Terminal() || rec.EndedAt.IsZero() || now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)))
 }
 
 func rosterAppearance(status Status) (string, string) {

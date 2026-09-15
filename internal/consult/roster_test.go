@@ -72,6 +72,45 @@ func TestRenderRosterUsageSuffixPreservesUnknownAndZero(t *testing.T) {
 	}
 }
 
+func TestRosterUsagePluralizesTools(t *testing.T) {
+	for _, tc := range []struct {
+		tools int
+		want  string
+	}{
+		{0, "0 tools"},
+		{1, "1 tool"},
+		{2, "2 tools"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			tools := tc.tools
+			if got := rosterUsage(Record{ToolCalls: &tools}); got != " · "+tc.want {
+				t.Fatalf("rosterUsage() = %q, want %q", got, " · "+tc.want)
+			}
+		})
+	}
+}
+
+func TestHasRosterEligibleRecord(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		records []Record
+		want    bool
+	}{
+		{"none", nil, false},
+		{"non-dispatch", []Record{{Kind: "agent", Status: StatusRunning}}, false},
+		{"running dispatch", []Record{{Kind: "dispatch", Status: StatusRunning}}, true},
+		{"recent terminal dispatch", []Record{{Kind: "dispatch", Status: StatusDone, EndedAt: now.Add(-viewerGraceAfterEnd + time.Second)}}, true},
+		{"expired terminal dispatch", []Record{{Kind: "dispatch", Status: StatusDone, EndedAt: now.Add(-viewerGraceAfterEnd)}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HasRosterEligibleRecord(tc.records, now); got != tc.want {
+				t.Fatalf("HasRosterEligibleRecord() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRenderRosterMarksPartialUsageWithoutOverflow(t *testing.T) {
 	now := time.Now()
 	max := int64(math.MaxInt64)

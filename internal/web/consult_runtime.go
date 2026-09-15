@@ -30,8 +30,11 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	}
 	go func() {
 		dispatcherTicker := time.NewTicker(5 * time.Second)
+		rosterTicker := time.NewTicker(time.Second)
 		viewerTicker := time.NewTicker(10 * time.Second)
+		lastRosterUpdate := time.Now()
 		defer dispatcherTicker.Stop()
+		defer rosterTicker.Stop()
 		defer viewerTicker.Stop()
 		for {
 			select {
@@ -39,7 +42,12 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 				return
 			case now := <-dispatcherTicker.C:
 				s.consults.Sweep(now)
-				viewer.UpdateRoster(s.consults.Records(), now)
+			case now := <-rosterTicker.C:
+				records := s.consults.Records()
+				if consult.HasRosterEligibleRecord(records, now) || now.Sub(lastRosterUpdate) >= 5*time.Second {
+					viewer.UpdateRoster(records, now)
+					lastRosterUpdate = now
+				}
 			case now := <-viewerTicker.C:
 				viewer.Sweep(s.consults.Records(), now)
 				s.consults.Prune()
