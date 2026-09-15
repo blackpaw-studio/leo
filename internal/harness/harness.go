@@ -54,6 +54,9 @@ type LaunchSpec struct {
 	Prompt      string // opening prompt (agents) or task prompt; empty for processes
 	Session     SessionState
 	Options     any // adapter-specific resolved options (e.g. claude.Options)
+	// Dispatched identifies a one-off subagent launched by leo_dispatch or
+	// leo_consult. Adapters use it to disable their native nested-agent tools.
+	Dispatched bool
 
 	// SystemContext is a Leo-injected, harness-neutral system-prompt
 	// addendum (messaging + skill-tool awareness). Each adapter renders it

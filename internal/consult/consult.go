@@ -262,7 +262,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	spec := harness.LaunchSpec{
 		Kind: harness.KindTask, Name: req.Name, Model: model,
 		MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd,
-		Prompt: requestPrompt(req), Options: decoded,
+		Prompt: requestPrompt(req), Options: decoded, Dispatched: true,
 	}
 	if spec.Name == "" {
 		spec.Name = "dispatch"

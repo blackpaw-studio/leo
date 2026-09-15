@@ -4,6 +4,12 @@ Leo can run a template's harness/model as a one-shot subagent. `leo_consult`
 and headless dispatches receive a self-contained prompt and retain no
 conversation after they finish. Dispatches can also run interactively.
 
+## Nested agents
+
+Dispatches and consults cannot launch nested agents: Leo disables the native
+subagent tool for each supported harness, and tells the subagent that the
+orchestrator performs review. There is no opt-out yet.
+
 ## MCP tools
 
 `leo_consult(template, prompt, model?)` is for a quick second opinion. It

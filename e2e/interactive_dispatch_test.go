@@ -31,7 +31,12 @@ func TestInteractiveDispatchLifecycle(t *testing.T) {
 		t.Fatalf("interactive window %q was not created", started.Window)
 	}
 	first := s.wait(t, started.ID+"#1")
-	if first.Outcome != consult.TurnFinished || first.Text != "FAKE-REPLY: opening prompt" {
+	openingPrompt := strings.Join([]string{
+		"You are a subagent dispatched by an orchestrator. Do not spawn agents or run your own code review; the orchestrator reviews your work.",
+		"opening prompt",
+	}, " ")
+	wantOpening := "FAKE-REPLY: " + truncate80(strings.TrimSpace(openingPrompt))
+	if first.Outcome != consult.TurnFinished || first.Text != wantOpening {
 		t.Fatalf("opening turn = %+v", first)
 	}
 
@@ -58,6 +63,20 @@ func TestInteractiveDispatchLifecycle(t *testing.T) {
 	s.waitFor(t, func() bool { return s.record(t, started.ID).Status == consult.StatusCanceled })
 	if s.paneAlive(rec.PaneID) {
 		t.Fatal("interactive pane survived cancel")
+	}
+}
+
+func TestInteractiveDispatchConfirmsLongMultilinePreamble(t *testing.T) {
+	s := newInteractiveE2E(t)
+	lines := make([]string, 160)
+	for i := range lines {
+		lines[i] = "\tplaceholder line " + strings.Repeat("x", 40)
+	}
+	prompt := strings.Join(lines, "\n\n")
+	started := s.dispatch(t, prompt)
+	first := s.wait(t, started.ID+"#1")
+	if !strings.HasPrefix(first.Text, "You are a subagent dispatched by an orchestrator.") {
+		t.Fatalf("first dispatched turn = %+v", first)
 	}
 }
 

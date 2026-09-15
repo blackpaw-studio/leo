@@ -109,7 +109,15 @@ func (Opencode) Env(spec harness.LaunchSpec) (map[string]string, error) {
 		return nil, fmt.Errorf("opencode: spec.Options is %T, want opencode.Options", spec.Options)
 	}
 	env := map[string]string{}
-	if opts.LeoMCP != nil || len(opts.Permission) > 0 {
+	permission := opts.Permission
+	if spec.Dispatched {
+		permission = make(map[string]any, len(opts.Permission)+1)
+		for tool, value := range opts.Permission {
+			permission[tool] = value
+		}
+		permission["task"] = "deny"
+	}
+	if opts.LeoMCP != nil || len(permission) > 0 {
 		cfg := map[string]any{}
 		if opts.LeoMCP != nil {
 			leo := map[string]any{
@@ -124,8 +132,8 @@ func (Opencode) Env(spec harness.LaunchSpec) (map[string]string, error) {
 			}
 			cfg["mcp"] = map[string]any{"leo": leo}
 		}
-		if len(opts.Permission) > 0 {
-			cfg["permission"] = opts.Permission
+		if len(permission) > 0 {
+			cfg["permission"] = permission
 		}
 		content, err := json.Marshal(cfg)
 		if err != nil {

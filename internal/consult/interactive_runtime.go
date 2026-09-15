@@ -73,7 +73,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
-	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts}
+	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
 	args, err := h.Args(spec)
 	if err != nil {
 		return "", "", err

@@ -64,6 +64,15 @@ func (r *fakeInteractiveRuntime) injectionCount() int {
 	defer r.mu.Unlock()
 	return len(r.injected)
 }
+
+func (r *fakeInteractiveRuntime) firstInjection() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.injected) == 0 {
+		return ""
+	}
+	return r.injected[0]
+}
 func (r *fakeInteractiveRuntime) killCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -155,6 +164,19 @@ func TestInteractiveStartReturnsBeforeReady(t *testing.T) {
 	}
 	if !rec.Turns[0].Delivered {
 		t.Fatalf("opening turn was not armed after injection: %#v", rec.Turns[0])
+	}
+}
+
+func TestInteractiveOpeningIncludesDispatchPreamble(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	if _, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive}); err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	if got, want := rt.firstInjection(), dispatchPreamble+" hello"; got != want {
+		t.Fatalf("opening prompt = %q, want %q", got, want)
 	}
 }
 
