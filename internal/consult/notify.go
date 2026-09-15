@@ -122,7 +122,11 @@ func (d *Dispatcher) restorePendingNotifications(rec Record) {
 				if recorder, ok := d.recorder.(*FileRecorder); ok {
 					handle = &restoredNotificationHandle{dir: recorder.dir, rec: rec}
 				}
-				d.runs[rec.ID] = &runState{record: rec, handle: handle, done: make(chan struct{})}
+				done := make(chan struct{})
+				if rec.Status.Terminal() {
+					close(done)
+				}
+				d.runs[rec.ID] = &runState{record: rec, handle: handle, done: done}
 			}
 			d.mu.Unlock()
 			return

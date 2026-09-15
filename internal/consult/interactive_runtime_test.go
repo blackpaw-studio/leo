@@ -281,6 +281,29 @@ func TestRuntimeAliveKillComposerEmpty(t *testing.T) {
 	}
 }
 
+func TestRuntimePaneAliveDistinguishesProbeFailureFromAbsence(t *testing.T) {
+	r := NewInteractiveRuntime("", nil, nil, "tmux", "leo")
+	r.ExecCommandContext = func(context.Context, string, ...string) *exec.Cmd { return exec.Command("false") }
+	if alive, err := r.PaneAlive("%1"); err == nil || alive {
+		t.Fatalf("PaneAlive = %v, %v; want false with error", alive, err)
+	}
+	r.ExecCommandContext = func(context.Context, string, ...string) *exec.Cmd { return exec.Command("printf", "1") }
+	if alive, err := r.PaneAlive("%1"); err != nil || alive {
+		t.Fatalf("PaneAlive absent = %v, %v", alive, err)
+	}
+	calls := 0
+	r.ExecCommandContext = func(context.Context, string, ...string) *exec.Cmd {
+		calls++
+		if calls == 1 {
+			return exec.Command("false")
+		}
+		return exec.Command("printf", "%%2\n")
+	}
+	if alive, err := r.PaneAlive("%1"); err != nil || alive {
+		t.Fatalf("inventory-confirmed absence = %v, %v", alive, err)
+	}
+}
+
 func containsAll(s string, words ...string) bool {
 	for _, word := range words {
 		if !contains(s, word) {

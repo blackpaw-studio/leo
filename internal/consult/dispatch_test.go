@@ -79,6 +79,31 @@ func TestWaitCollectsDoneDispatch(t *testing.T) {
 	}
 }
 
+func TestNonIsolatedCollectDoesNotWaitForReaping(t *testing.T) {
+	collected := make(chan Record, 1)
+	d := NewDispatcherWithOnStart(nil, context.Background(), nil, func(rec Record) {
+		collected <- rec
+	})
+	state := &runState{
+		record: Record{ID: "d-collected-immediately", Mode: ModeHeadless, Status: StatusCanceled, StartedAt: time.Now(), EndedAt: time.Now()},
+		handle: nopHandle{}, done: make(chan struct{}), cancel: func() {},
+	}
+	d.runs[state.record.ID] = state
+	d.waitDoneHook = func(id string) {
+		t.Fatalf("Collect waited for non-isolated run %q to reap", id)
+	}
+
+	d.Collect(state.record)
+	select {
+	case rec := <-collected:
+		if rec.ID != state.record.ID {
+			t.Fatalf("collected %q, want %q", rec.ID, state.record.ID)
+		}
+	default:
+		t.Fatal("Collect returned without invoking collection hook")
+	}
+}
+
 func TestWaitAggregatesMixedStatuses(t *testing.T) {
 	d := NewDispatcher(nil)
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -193,6 +218,49 @@ func TestTerminateDoesNotOverwriteCompletedRecord(t *testing.T) {
 
 	if rec := <-result; rec.Status != StatusDone {
 		t.Fatalf("terminate status = %q, want done", rec.Status)
+	}
+}
+
+func TestNonIsolatedTimeoutPublishesBeforeCancellation(t *testing.T) {
+	d := NewDispatcher(nil)
+	state := &runState{
+		record: Record{ID: "d-timeout-order", Mode: ModeHeadless, Status: StatusRunning, StartedAt: time.Now()},
+		handle: nopHandle{}, done: make(chan struct{}),
+	}
+	state.cancel = func() { d.complete(state, StatusCanceled, "", context.Canceled) }
+	d.runs[state.record.ID] = state
+
+	if got := d.terminateState(state, StatusTimeout); got.Status != StatusTimeout {
+		t.Fatalf("terminateState status = %q, want timeout", got.Status)
+	}
+	if got, err := d.Get(state.record.ID); err != nil || got.Status != StatusTimeout {
+		t.Fatalf("Get = %+v, %v; want timeout", got, err)
+	}
+}
+
+func TestNonIsolatedCancelDoesNotWaitForReaping(t *testing.T) {
+	d := NewDispatcher(nil)
+	const id = "d-cancel-immediate"
+	state := &runState{
+		record: Record{ID: id, Mode: ModeHeadless, Status: StatusRunning, StartedAt: time.Now()},
+		handle: nopHandle{}, done: make(chan struct{}),
+		cancel: func() {
+			d.mu.Lock()
+			_, serialized := d.serial[id]
+			d.mu.Unlock()
+			if serialized {
+				t.Fatal("non-isolated cancellation entered the reap/cleanup boundary")
+			}
+		},
+	}
+	d.runs[state.record.ID] = state
+
+	rec, err := d.Cancel(state.record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Status != StatusCanceled {
+		t.Fatalf("Cancel status = %q, want canceled", rec.Status)
 	}
 }
 

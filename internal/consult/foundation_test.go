@@ -161,13 +161,10 @@ func TestEntryFoundationJSONRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDispatchNotifyDefaultAndIsolationRejection(t *testing.T) {
+func TestDispatchNotifyDefaultAndIsolationValidation(t *testing.T) {
 	d := NewDispatcher(nil)
 	if _, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: t.TempDir(), Isolation: "bogus"}); err == nil || err.Error() != `isolation must be empty or "worktree"` {
 		t.Fatalf("invalid isolation error = %v", err)
-	}
-	if _, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "q", Cwd: t.TempDir(), Isolation: "worktree"}); err == nil || err.Error() != `isolation "worktree" is not available yet` {
-		t.Fatalf("worktree error = %v", err)
 	}
 	rec := newFakeRecorder()
 	d = NewDispatcher(rec)

@@ -274,8 +274,24 @@ func (r *TmuxInteractiveRuntime) inject(ctx context.Context, paneID, text string
 	return tmux.InjectIntoWith(ctx, r.tmuxPath, paneID, r.classifier(paneID), text, arm, tmux.CommandFunc(command))
 }
 func (r *TmuxInteractiveRuntime) Alive(paneID string) bool {
+	alive, _ := r.PaneAlive(paneID)
+	return alive
+}
+func (r *TmuxInteractiveRuntime) PaneAlive(paneID string) (bool, error) {
 	out, err := r.output(context.Background(), "display-message", "-p", "-t", paneID, "#{pane_dead}")
-	return err == nil && strings.TrimSpace(string(out)) == "0"
+	if err != nil {
+		panes, inventoryErr := r.output(context.Background(), "list-panes", "-a", "-F", "#{pane_id}")
+		if inventoryErr != nil {
+			return false, err
+		}
+		for _, pane := range strings.Fields(string(panes)) {
+			if pane == paneID {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return strings.TrimSpace(string(out)) == "0", nil
 }
 func (r *TmuxInteractiveRuntime) Kill(paneID string) error {
 	return r.run(context.Background(), "kill-pane", "-t", paneID)

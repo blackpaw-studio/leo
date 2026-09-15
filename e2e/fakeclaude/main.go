@@ -109,6 +109,13 @@ func main() {
 	case "success":
 		fmt.Println("Task completed successfully.")
 		os.Exit(0)
+	case "worktree":
+		if err := os.WriteFile("fake-harness-output.txt", []byte("isolated"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(`{"type":"result","result":"done","is_error":false}`)
+		os.Exit(0)
 	case "error":
 		fmt.Fprintln(os.Stderr, "fakeclaude: simulated error")
 		os.Exit(1)

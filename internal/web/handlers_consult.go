@@ -156,7 +156,7 @@ func (s *Server) handleAPIDispatchGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, apiResponse{Error: err.Error()})
 		return
 	}
-	s.consults.Collect(record)
+	record = s.consults.Collect(record)
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: record})
 }
 

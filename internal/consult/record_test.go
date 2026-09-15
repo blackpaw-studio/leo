@@ -370,6 +370,68 @@ func TestFileRecorderPruneKeepsClaimedNotificationOnDisk(t *testing.T) {
 	}
 }
 
+func TestFileRecorderPruneRequiresWorktreeAndNotificationToBeResolved(t *testing.T) {
+	for _, disposition := range []NotificationDisposition{NotificationPending, NotificationClaimed} {
+		t.Run(string(disposition), func(t *testing.T) {
+			state := t.TempDir()
+			recorder := NewFileRecorder(state)
+			now := time.Now()
+			recorder.Now = func() time.Time { return now }
+			dir := Dir(state)
+			if err := os.MkdirAll(dir, dirPerm); err != nil {
+				t.Fatal(err)
+			}
+
+			oldest := Record{
+				ID: "d-protected", Status: StatusDone, StartedAt: now.Add(-4 * time.Hour), EndedAt: now.Add(-3 * time.Hour),
+				Isolation: "worktree", WorktreeState: WorktreeKept,
+				Notifications: map[string]Notification{"d-protected": {Disposition: disposition, PendingAt: now.Add(-3 * time.Hour)}},
+			}
+			if err := writeRecord(dir, oldest); err != nil {
+				t.Fatal(err)
+			}
+			for i := range RecordsKept + 1 {
+				rec := Record{ID: fmt.Sprintf("d-new-%02d", i), Status: StatusDone, StartedAt: now.Add(time.Duration(i-RecordsKept) * time.Minute), EndedAt: now.Add(time.Duration(i-RecordsKept+1) * time.Minute)}
+				if err := writeRecord(dir, rec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertProtected := func(stage string) {
+				t.Helper()
+				recorder.prune(RecordsKept)
+				if _, err := LoadOne(state, oldest.ID); err != nil {
+					t.Fatalf("%s: jointly protected record pruned: %v", stage, err)
+				}
+			}
+
+			assertProtected("both unresolved")
+			oldest.WorktreeState = WorktreeRemoved
+			if err := writeRecord(dir, oldest); err != nil {
+				t.Fatal(err)
+			}
+			assertProtected("notification only")
+
+			oldest.WorktreeState = WorktreeKept
+			n := oldest.Notifications[oldest.ID]
+			n.Disposition = NotificationDelivered
+			oldest.Notifications[oldest.ID] = n
+			if err := writeRecord(dir, oldest); err != nil {
+				t.Fatal(err)
+			}
+			assertProtected("worktree only")
+
+			oldest.WorktreeState = WorktreeRemoved
+			if err := writeRecord(dir, oldest); err != nil {
+				t.Fatal(err)
+			}
+			recorder.prune(RecordsKept)
+			if _, err := os.Stat(filepath.Join(dir, oldest.ID+".json")); !os.IsNotExist(err) {
+				t.Fatalf("fully resolved record survived pruning: %v", err)
+			}
+		})
+	}
+}
+
 func TestNopRecorderAcceptsEverything(t *testing.T) {
 	h, err := nopRecorder{}.Open(testRecord("c-nop"))
 	if err != nil {
