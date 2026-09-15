@@ -188,19 +188,28 @@ func (c *daemonClient) consult(ctx context.Context, from, template, model, promp
 	return client.doContext(ctx, http.MethodPost, "/api/consult", body)
 }
 
-func (c *daemonClient) dispatch(ctx context.Context, from, template, model, prompt, cwd, name string, timeout time.Duration, mode consult.Mode) (consult.Started, error) {
-	body := map[string]any{"from": from, "template": template, "prompt": prompt, "cwd": cwd}
-	if model != "" {
-		body["model"] = model
+func (c *daemonClient) dispatch(ctx context.Context, request consult.Request) (consult.Started, error) {
+	body := map[string]any{"from": request.Caller, "template": request.Template, "prompt": request.Prompt, "cwd": request.Cwd}
+	if request.Model != "" {
+		body["model"] = request.Model
 	}
-	if name != "" {
-		body["name"] = name
+	if request.Name != "" {
+		body["name"] = request.Name
 	}
-	if timeout > 0 {
-		body["timeout_seconds"] = timeout.Seconds()
+	if request.Timeout > 0 {
+		body["timeout_seconds"] = request.Timeout.Seconds()
 	}
-	if mode != "" {
-		body["mode"] = mode
+	if request.Mode != "" {
+		body["mode"] = request.Mode
+	}
+	if request.Notify != nil {
+		body["notify"] = *request.Notify
+	}
+	if request.Isolation != "" {
+		body["isolation"] = request.Isolation
+	}
+	if request.CallerPaneID != "" {
+		body["caller_pane_id"] = request.CallerPaneID
 	}
 	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch", body)
 	if err != nil {

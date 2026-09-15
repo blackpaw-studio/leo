@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,24 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/consult"
 )
+
+func TestDispatchClientForwardsFoundationOptions(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"d-x"}}`))
+	}))
+	defer srv.Close()
+	notify := false
+	c := newDaemonClient(strings.TrimPrefix(srv.URL, "http://127.0.0.1:"), "")
+	_, err := c.dispatch(context.Background(), consult.Request{Caller: "caller", CallerPaneID: "%7", Template: "worker", Prompt: "go", Cwd: "/tmp", Notify: &notify, Isolation: "worktree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["notify"] != false || body["isolation"] != "worktree" || body["caller_pane_id"] != "%7" {
+		t.Fatalf("body = %#v", body)
+	}
+}
 
 // TestDaemonClientSetsBearerAuth asserts the MCP daemon client always attaches
 // the Authorization: Bearer header when constructed with a non-empty token.

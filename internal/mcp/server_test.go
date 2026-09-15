@@ -505,7 +505,7 @@ func TestSendMessageRequiresMessage(t *testing.T) {
 
 func TestLeoConsultReturnsResult(t *testing.T) {
 	var gotPath string
-	var gotBody map[string]string
+	var gotBody map[string]any
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		gotPath = method + " " + path
 		json.Unmarshal(body, &gotBody)
@@ -558,7 +558,8 @@ func TestLeoConsultDispatchesWithModelOverride(t *testing.T) {
 }
 
 func TestLeoDispatchUsesDefaultCWD(t *testing.T) {
-	var gotBody map[string]string
+	t.Setenv("TMUX_PANE", "%17")
+	var gotBody map[string]any
 	d := newFakeDaemon(func(method, path string, body []byte) (int, string) {
 		if method != "POST" || path != "/api/dispatch" {
 			t.Errorf("request %s %s", method, path)
@@ -568,10 +569,13 @@ func TestLeoDispatchUsesDefaultCWD(t *testing.T) {
 	})
 	defer d.close()
 	reg := newRegistry(newDaemonClient(d.port(), "tok"), "assistant", leotools.Permissions{})
-	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "codex", "prompt": "do it"}}})
+	resp := runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "leo_dispatch", "arguments": map[string]any{"template": "codex", "prompt": "do it", "notify": false}}})
 	cwd, _ := os.Getwd()
 	if gotBody["cwd"] != cwd {
 		t.Fatalf("cwd = %q, want %q", gotBody["cwd"], cwd)
+	}
+	if gotBody["notify"] != false || gotBody["caller_pane_id"] != "%17" {
+		t.Fatalf("foundation body = %#v", gotBody)
 	}
 	text := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
 	if !strings.Contains(text, "d-test") || !strings.Contains(text, "leo dispatch watch") {

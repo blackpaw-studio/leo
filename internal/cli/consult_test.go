@@ -2,9 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +16,39 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/harness/claude"
 )
+
+func TestDispatchCallerPaneRequiresLeoTmuxServer(t *testing.T) {
+	orig := dispatchExecCommand
+	t.Cleanup(func() { dispatchExecCommand = orig })
+	var calls [][]string
+	dispatchExecCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		return exec.CommandContext(ctx, "printf", "%%7\\n")
+	}
+	if got := dispatchCallerPane(context.Background(), "%7"); got != "%7" {
+		t.Fatalf("verified pane = %q", got)
+	}
+	want := []string{"tmux", "-L", "leo", "display-message", "-p", "-t", "%7", "#{pane_id}"}
+	if !reflect.DeepEqual(calls, [][]string{want}) {
+		t.Fatalf("argv = %#v, want %#v", calls, [][]string{want})
+	}
+	dispatchExecCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "printf", "%%9\\n")
+	}
+	if got := dispatchCallerPane(context.Background(), "%7"); got != "" {
+		t.Fatalf("foreign-server pane forwarded as %q", got)
+	}
+}
+
+func TestDispatchRunFoundationFlags(t *testing.T) {
+	cmd := newDispatchRunCmd()
+	if got := cmd.Flag("notify"); got == nil || got.DefValue != "true" {
+		t.Fatalf("notify flag = %#v", got)
+	}
+	if got := cmd.Flag("isolation"); got == nil || !strings.Contains(got.Usage, "coming soon") {
+		t.Fatalf("isolation flag = %#v", got)
+	}
+}
 
 // rec builds a record started minutesAgo minutes back. Recency is relative
 // to now on purpose: an unfinished consult older than consult.StaleAfter is

@@ -8,11 +8,31 @@ import (
 
 func cloneRecord(record Record) Record {
 	record.Turns = append([]Turn(nil), record.Turns...)
+	if record.Notifications != nil {
+		notifications := make(map[string]Notification, len(record.Notifications))
+		for key, value := range record.Notifications {
+			notifications[key] = value
+		}
+		record.Notifications = notifications
+	}
+	record.InputTokens = clonePtr(record.InputTokens)
+	record.OutputTokens = clonePtr(record.OutputTokens)
+	record.CostUSD = clonePtr(record.CostUSD)
+	record.UsageTurns = clonePtr(record.UsageTurns)
+	record.ToolCalls = clonePtr(record.ToolCalls)
 	if record.RunningSince != nil {
 		runningSince := *record.RunningSince
 		record.RunningSince = &runningSince
 	}
 	return record
+}
+
+func clonePtr[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 // persistRecordLocked serializes a full lifecycle snapshot with its mutation.
@@ -53,11 +73,11 @@ func (d *Dispatcher) complete(state *runState, status Status, text string, cause
 }
 
 func entryFromRecord(rec Record, now time.Time) Entry {
-	return Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Text: rec.Text, Err: rec.Error}
+	return Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Text: rec.Text, Err: rec.Error, InputTokens: clonePtr(rec.InputTokens), OutputTokens: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD), UsageTurns: clonePtr(rec.UsageTurns), ToolCalls: clonePtr(rec.ToolCalls), Worktree: rec.Worktree, Branch: rec.Branch}
 }
 
 func interactiveEntry(rec Record, turnID string, now time.Time) Entry {
-	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Err: rec.Error, TurnID: turnID}
+	e := Entry{ID: rec.ID, Status: rec.Status, Elapsed: rec.Elapsed(now), Active: secondsDuration(rec.LiveActiveSeconds(now)), Err: rec.Error, TurnID: turnID, InputTokens: clonePtr(rec.InputTokens), OutputTokens: clonePtr(rec.OutputTokens), CostUSD: clonePtr(rec.CostUSD), UsageTurns: clonePtr(rec.UsageTurns), ToolCalls: clonePtr(rec.ToolCalls), Worktree: rec.Worktree, Branch: rec.Branch}
 	t := turnByID(rec, turnID)
 	e.Outcome, e.Delivered, e.Text = t.Outcome, t.Delivered, t.Text
 	activity := rec.HookActivity

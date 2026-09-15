@@ -31,41 +31,7 @@ const (
 	// so leo, not the coding agent, is what times a consult out.
 	RunTimeout    = 30 * time.Minute
 	maxConcurrent = 6
-	preamble      = "You are a one-off consultant: another agent is asking for your independent opinion. Analyze and answer directly and completely in your final message. Do not modify any files or take actions beyond reading. The question follows."
 )
-
-type Request struct {
-	Template string
-	Model    string
-	Prompt   string
-	Cwd      string
-	Name     string
-	Kind     string
-	// Timeout caps this run. Zero means unlimited for dispatches and falls
-	// back to RunTimeout for consults.
-	Timeout  time.Duration
-	Preamble bool
-	// Caller names the process that asked, for the consult record. Optional.
-	Caller string
-	Mode   Mode
-}
-
-type Result struct {
-	// ID identifies the consult's record and event stream, so a caller can
-	// point at it after the fact (`leo consult watch <id>`).
-	ID      string `json:"id"`
-	Harness string `json:"harness"`
-	Model   string `json:"model"`
-	Text    string `json:"text"`
-}
-
-type Started struct {
-	ID      string `json:"id"`
-	Harness string `json:"harness"`
-	Model   string `json:"model"`
-	Cwd     string `json:"cwd"`
-	Window  string `json:"window,omitempty"`
-}
 
 // ValidationError reports a request/configuration problem that should be
 // returned to API clients as a 4xx response rather than an execution failure.
@@ -89,6 +55,9 @@ type Dispatcher struct {
 	onCollect          func(Record)
 	interactiveRuntime InteractiveRuntime
 	now                func() time.Time
+	waits              map[string]int
+	serial             map[string]*serialLock
+	waitResolvedHook   func()
 }
 
 type runState struct {
@@ -141,6 +110,8 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		runs:               make(map[string]*runState),
 		onStart:            onStart,
 		now:                time.Now,
+		waits:              make(map[string]int),
+		serial:             make(map[string]*serialLock),
 	}
 	if len(onCollect) > 0 {
 		d.onCollect = onCollect[0]
@@ -176,6 +147,12 @@ func newID() string {
 // Request contexts govern only validation and the immediate caller, never the
 // lifetime of an accepted run.
 func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (Started, error) {
+	if req.Isolation != "" && req.Isolation != "worktree" {
+		return Started{}, invalidf("isolation must be empty or \"worktree\"")
+	}
+	if req.Isolation == "worktree" {
+		return Started{}, invalidf("isolation \"worktree\" is not available yet")
+	}
 	mode := req.Mode
 	if mode == "" {
 		mode = ModeHeadless
@@ -254,10 +231,16 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if kind == "consult" && timeout == 0 {
 		timeout = RunTimeout
 	}
+	notify := requestKind(req) == "dispatch"
+	if notify && req.Notify != nil {
+		notify = *req.Notify
+	}
 	rec := Record{
 		ID: newID(), Caller: req.Caller, Template: req.Template,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: req.Mode,
+		Notify: notify, Isolation: req.Isolation, SourceCwd: req.Cwd,
+		CallerPaneID: req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID,
 	}
 	handle, err := d.recorder.Open(rec)
 	if err != nil {
@@ -288,20 +271,6 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	go d.run(runCtx, state, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout)
 	return Started{ID: rec.ID, Harness: h.Name(), Model: model, Cwd: req.Cwd}, nil
-}
-
-func requestKind(req Request) string {
-	if req.Kind != "" {
-		return req.Kind
-	}
-	return "dispatch"
-}
-
-func requestPrompt(req Request) string {
-	if req.Preamble {
-		return preamble + "\n\n" + req.Prompt
-	}
-	return req.Prompt
 }
 
 func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harness, model string, env map[string]string, args []string, harnessEnv map[string]string, cwd string, timeout time.Duration) {
@@ -360,6 +329,12 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		runErr = cmd.Wait()
 	}
 	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))
+	if parsed.SessionID != "" {
+		d.mu.Lock()
+		state.record.SessionID = parsed.SessionID
+		d.persistRecordLocked(state)
+		d.mu.Unlock()
+	}
 	if runCtx.Err() != nil {
 		status := StatusTimeout
 		if errors.Is(runCtx.Err(), context.Canceled) {
@@ -419,26 +394,31 @@ func (d *Dispatcher) pruneTerminalRunsLocked() {
 // supplied timeout expires. It never polls records.
 func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Duration) (entries []Entry) {
 	defer func() {
-		for i, entry := range entries {
-			if entry.Status != StatusDone {
+		unlockSerial := d.serialLocks(ids)
+		defer unlockSerial()
+		for i := range entries {
+			rec, err := d.Get(ids[i])
+			if err != nil || !rec.Status.Terminal() {
 				continue
 			}
-			if rec, err := d.Get(ids[i]); err == nil {
-				d.Collect(rec)
-			}
+			d.collect(rec)
 		}
 	}()
 	entries = make([]Entry, len(ids))
 	states := make([]*runState, len(ids))
 	turnIDs := make([]string, len(ids))
+	keys := make([]string, len(ids))
+	d.mu.Lock()
 	for i, id := range ids {
 		entries[i].ID = id
-		rec, state, err := d.lookup(id)
-		if err != nil {
+		runID := strings.SplitN(id, "#", 2)[0]
+		state := d.runs[runID]
+		if state == nil {
 			entries[i].Status = StatusUnknown
 			entries[i].Err = fmt.Sprintf("unknown dispatch %s", id)
 			continue
 		}
+		rec := cloneRecord(state.record)
 		states[i] = state
 		if rec.Mode == ModeInteractive {
 			turnID := id
@@ -454,6 +434,34 @@ func (d *Dispatcher) Wait(ctx context.Context, ids []string, timeout time.Durati
 			entries[i] = interactiveEntry(rec, turnID, d.now())
 		} else {
 			entries[i] = entryFromRecord(rec, d.now())
+		}
+		keys[i] = transitionKey(id, rec.Mode, turnIDs[i])
+	}
+	if d.waitResolvedHook != nil {
+		d.waitResolvedHook()
+	}
+	unregister := d.registerWaitsLocked(keys)
+	d.mu.Unlock()
+	defer unregister()
+	for i, state := range states {
+		if state != nil {
+			continue
+		}
+		if rec, _, err := d.lookup(ids[i]); err == nil {
+			if rec.Mode == ModeInteractive {
+				turnID := ids[i]
+				if !strings.Contains(turnID, "#") {
+					for j := len(rec.Turns) - 1; j >= 0; j-- {
+						if rec.Turns[j].Source == TurnSourceOrchestrator {
+							turnID = rec.Turns[j].TurnID
+							break
+						}
+					}
+				}
+				entries[i] = interactiveEntry(rec, turnID, d.now())
+			} else {
+				entries[i] = entryFromRecord(rec, d.now())
+			}
 		}
 	}
 	deadline := time.NewTimer(timeout)
@@ -543,6 +551,12 @@ func (d *Dispatcher) Get(id string) (Record, error) { rec, _, err := d.lookup(id
 // Collect marks a terminal record as observed by a caller. The collection
 // hook is best-effort observability cleanup and must never affect the result.
 func (d *Dispatcher) Collect(rec Record) {
+	unlock := d.serialLocks([]string{rec.ID})
+	defer unlock()
+	d.collect(rec)
+}
+
+func (d *Dispatcher) collect(rec Record) {
 	if d.onCollect != nil {
 		d.onCollect(rec)
 	}

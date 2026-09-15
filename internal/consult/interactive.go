@@ -274,6 +274,8 @@ func (d *Dispatcher) interactiveStatusLocked(s *runState, boundary time.Time) St
 }
 
 func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, error) {
+	unlockSerial := d.serialLocks([]string{id})
+	defer unlockSerial()
 	for _, ch := range message {
 		if (ch < 0x20 && ch != '\n') || ch == 0x7f {
 			return SendResult{}, invalidf("message contains control characters")
