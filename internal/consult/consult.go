@@ -376,7 +376,7 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 func (d *Dispatcher) pruneTerminalRunsLocked() {
 	terminal := make([]*runState, 0, len(d.runs))
 	for _, state := range d.runs {
-		if state.record.Status.Terminal() && !recordHasPendingNotification(state.record) {
+		if state.record.Status.Terminal() && !recordHasUnresolvedNotification(state.record) {
 			terminal = append(terminal, state)
 		}
 	}
@@ -746,7 +746,11 @@ func (d *Dispatcher) trackRestartKill(rec Record) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.runs[rec.ID] == nil {
-		d.runs[rec.ID] = &runState{record: rec, handle: nopHandle{}, done: make(chan struct{}), killPending: true}
+		var handle Handle = nopHandle{}
+		if recorder, ok := d.recorder.(*FileRecorder); ok {
+			handle = &restoredNotificationHandle{dir: recorder.dir, rec: rec}
+		}
+		d.runs[rec.ID] = &runState{record: rec, handle: handle, done: make(chan struct{}), killPending: true}
 		return
 	}
 	d.runs[rec.ID].killPending = true

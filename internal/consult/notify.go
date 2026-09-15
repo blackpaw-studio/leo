@@ -195,6 +195,15 @@ func recordHasPendingNotification(rec Record) bool {
 	return false
 }
 
+func recordHasUnresolvedNotification(rec Record) bool {
+	for _, n := range rec.Notifications {
+		if n.Disposition == NotificationPending || n.Disposition == NotificationClaimed {
+			return true
+		}
+	}
+	return false
+}
+
 // SweepNotifications claims and delivers pending notifications. All external
 // I/O occurs without Dispatcher.mu; claims are durable before submission.
 func (d *Dispatcher) SweepNotifications(ctx context.Context) {

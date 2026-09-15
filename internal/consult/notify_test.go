@@ -28,6 +28,18 @@ type failingRecorder struct{ h failingRecordHandle }
 
 func (r failingRecorder) Open(Record) (Handle, error) { return r.h, nil }
 
+type failedRestartKillRuntime struct{}
+
+func (failedRestartKillRuntime) Launch(context.Context, LaunchRequest) (string, string, error) {
+	return "", "", errors.New("unused")
+}
+func (failedRestartKillRuntime) Inject(context.Context, string, string, func() error) error {
+	return errors.New("unused")
+}
+func (failedRestartKillRuntime) Alive(string) bool         { return true }
+func (failedRestartKillRuntime) Kill(string) error         { return errors.New("kill failed") }
+func (failedRestartKillRuntime) ComposerEmpty(string) bool { return true }
+
 type fakeNotificationDelivery struct {
 	ready bool
 	err   error
@@ -287,5 +299,59 @@ func TestTimeoutTurnCandidateUsesEffectiveTerminalStatus(t *testing.T) {
 	d.mu.Unlock()
 	if !strings.Contains(got, ") timeout ·") {
 		t.Fatalf("message=%q", got)
+	}
+}
+
+func TestMarkInterruptedFailedKillInstallsDurableHandleBeforeDelivery(t *testing.T) {
+	state := t.TempDir()
+	recorder := NewFileRecorder(state)
+	now := time.Unix(100, 0)
+	recorder.Now = func() time.Time { return now }
+	h, err := recorder.Open(Record{ID: "d-restart", Kind: "dispatch", Mode: ModeInteractive, Status: StatusRunning, PaneID: "%2", Notify: true, CallerPaneID: "%1", Turns: []Turn{{TurnID: "d-restart#1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h.Close(StatusRunning, nil)
+	d := NewDispatcher(recorder)
+	d.now = func() time.Time { return now }
+	d.SetInteractiveRuntime(failedRestartKillRuntime{})
+	d.MarkInterrupted()
+	d.SetNotificationDelivery(inspectDelivery{ready: true, deliver: func(_ Record, _ string) error {
+		got, err := LoadOne(state, "d-restart")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Notifications["d-restart#1"].Disposition != NotificationClaimed {
+			t.Fatalf("disk notification=%+v", got.Notifications)
+		}
+		return nil
+	}})
+	d.SweepNotifications(context.Background())
+}
+
+func TestPruneRetainsClaimedNotificationUntilNoSendRetryResolves(t *testing.T) {
+	d := NewDispatcher(nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d.SetNotificationDelivery(inspectDelivery{ready: true, deliver: func(Record, string) error { close(started); <-release; return ErrNotificationNotSent }})
+	claimed := &runState{record: Record{ID: "d-claimed", Status: StatusDone, EndedAt: time.Unix(0, 0), CallerPaneID: "%1", Notifications: map[string]Notification{"d-claimed": {Disposition: NotificationPending}}}, handle: nopHandle{}}
+	d.runs["d-claimed"] = claimed
+	for i := 0; i < RecordsKept+1; i++ {
+		id := fmt.Sprintf("d-done-%d", i)
+		d.runs[id] = &runState{record: Record{ID: id, Status: StatusDone, EndedAt: time.Unix(int64(i+1), 0)}, handle: nopHandle{}}
+	}
+	done := make(chan struct{})
+	go func() { d.SweepNotifications(context.Background()); close(done) }()
+	<-started
+	d.mu.Lock()
+	d.pruneTerminalRunsLocked()
+	d.mu.Unlock()
+	if d.runs["d-claimed"] == nil {
+		t.Fatal("claimed notification evicted during delivery")
+	}
+	close(release)
+	<-done
+	if d.runs["d-claimed"] == nil || claimed.record.Notifications["d-claimed"].Disposition != NotificationPending {
+		t.Fatalf("run=%v notification=%+v", d.runs["d-claimed"] != nil, claimed.record.Notifications)
 	}
 }
