@@ -80,6 +80,38 @@ func TestHeadlessDispatchCompletionNotification(t *testing.T) {
 	}
 }
 
+func TestHeadlessDispatchUsageAppearsInWaitAndRoster(t *testing.T) {
+	ws := mkTempE2EDir(t, "leo-usage-dispatch-*")
+	cfgPath := filepath.Join(ws, "leo.yaml")
+	if err := os.WriteFile(cfgPath, []byte("templates:\n  worker:\n    harness: claude\n    model: sonnet\n    workspace: "+ws+"\n    env:\n      FAKECLAUDE_SCENARIO: usage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := consult.NewDispatcher(consult.NewFileRecorder(filepath.Join(ws, "state")))
+	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, fakeclaude, "-p", "usage")
+		return cmd
+	}
+	started, err := d.Start(context.Background(), cfg, consult.Request{Template: "worker", Prompt: "usage", Cwd: ws, Name: "usage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := d.Wait(context.Background(), []string{started.ID}, 3*time.Second)
+	if len(entries) != 1 || entries[0].InputTokens == nil || entries[0].OutputTokens == nil || entries[0].ToolCalls == nil || *entries[0].InputTokens != 125 || *entries[0].OutputTokens != 10 || *entries[0].ToolCalls != 1 {
+		t.Fatalf("wait usage = %+v", entries)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := consult.RenderRoster([]consult.Record{rec}, time.Now()); !strings.Contains(got, "1 tools · 0.1k tokens") {
+		t.Fatalf("roster=%q", got)
+	}
+}
+
 func TestDaemonDeliversHeadlessCompletionIntoCaller(t *testing.T) {
 	s := newInteractiveE2E(t)
 	caller := s.spawnAgent(t, "notify-caller")

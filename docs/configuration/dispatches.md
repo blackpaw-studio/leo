@@ -84,6 +84,14 @@ Ctrl-C only detaches. `show` prints a record as JSON. `list` and `watch`
 support `--host`; `run`, `show`, `output`, `send`, and `cancel` currently require the
 local daemon.
 
+`list` includes measured `INPUT`, `OUTPUT`, `COST_USD`, `USAGE_TURNS`, and
+`TOOLS`. An em dash is unknown; zero is measured. Claude reports native token
+usage and cost (including separately reported cache input), Codex reports
+completed-turn usage without double-counting cached input, and OpenCode only
+reports tokens from completed steps (reasoning output is included). Leo never
+estimates Codex or OpenCode cost. Interactive runs leave usage unknown because
+their hooks do not provide a complete native event stream.
+
 ## Interactive mode
 
 Set `mode: interactive` on `leo_dispatch`, include `"mode": "interactive"`

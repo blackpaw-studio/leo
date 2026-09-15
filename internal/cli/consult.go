@@ -132,18 +132,37 @@ func listConsults(stateDir string, asJSON bool, out io.Writer) error {
 
 	now := time.Now()
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tMODE\tTURNS\tSTEERED\tELAPSED\tACTIVE\tSTATUS")
+	fmt.Fprintln(w, "ID\tCALLER\tTEMPLATE\tMODEL\tMODE\tTURNS\tSTEERED\tELAPSED\tACTIVE\tSTATUS\tINPUT\tOUTPUT\tCOST_USD\tUSAGE_TURNS\tTOOLS\tPARTIAL")
 	for _, record := range ordered {
 		mode := record.Mode
 		if mode == "" {
 			mode = consult.ModeHeadless
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%t\n",
 			record.ID, orDash(record.Caller), record.Template, record.Model,
 			mode, len(record.Turns), record.Steered, formatOffset(record.Elapsed(now)),
-			formatOffset(secondsDuration(record.LiveActiveSeconds(now))), displayStatus(record, now))
+			formatOffset(secondsDuration(record.LiveActiveSeconds(now))), displayStatus(record, now), optionalInt64(record.InputTokens), optionalInt64(record.OutputTokens), optionalFloat(record.CostUSD), optionalInt(record.UsageTurns), optionalInt(record.ToolCalls), record.UsageIncomplete)
 	}
 	return w.Flush()
+}
+
+func optionalInt64(v *int64) string {
+	if v == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%d", *v)
+}
+func optionalInt(v *int) string {
+	if v == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%d", *v)
+}
+func optionalFloat(v *float64) string {
+	if v == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%g", *v)
 }
 
 func secondsDuration(seconds float64) time.Duration {

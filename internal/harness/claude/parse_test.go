@@ -1,6 +1,8 @@
 package claude
 
 import (
+	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -64,6 +66,27 @@ func TestParseEvents(t *testing.T) {
 	}
 }
 
+func TestUsageRejectsInvalidCountersAndNestedAssistants(t *testing.T) {
+	stream := `{"type":"assistant","parent_tool_use_id":"parent","message":{"id":"nested","usage":{"input_tokens":9},"content":[{"type":"tool_use","id":"nested-tool"}]}}
+{"type":"assistant","message":{"id":"top","usage":{"input_tokens":` + fmt.Sprint(math.MaxInt64) + `},"content":[]}}
+{"type":"assistant","message":{"id":"top2","usage":{"input_tokens":1},"content":[]}}
+{"type":"result","usage":{"input_tokens":-1,"output_tokens":2},"num_turns":-1}`
+	got, err := Claude{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens == nil || *got.Usage.InputTokens != math.MaxInt64 || got.Usage.OutputTokens != nil || got.Usage.Turns != nil || got.Usage.ToolCalls == nil || *got.Usage.ToolCalls != 0 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestUsageOutOfRangeCounterMarksIncomplete(t *testing.T) {
+	got, _ := Claude{}.ParseEvents(strings.NewReader(`{"type":"result","usage":{"input_tokens":9223372036854775808}}`))
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
 func TestParseEventsStreamJSON(t *testing.T) {
 	stream := `{"type":"system","subtype":"init"}
 {"type":"result","session_id":"abc-123","result":"done","is_error":false}
@@ -90,5 +113,30 @@ func TestParseEventsErrors(t *testing.T) {
 	res, _ := Claude{}.ParseEvents(strings.NewReader(stream))
 	if !res.IsError || len(res.Errors) != 1 || res.Errors[0] != "boom" {
 		t.Errorf("got %+v", res)
+	}
+}
+
+func TestParseEventsUsageDeduplicatesAssistantAndUsesResultOutput(t *testing.T) {
+	stream := `{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":99},"content":[{"type":"tool_use","id":"t1"},{"type":"tool_use","id":"t1"}]}}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10},"content":[{"type":"tool_use","id":"t1"}]}}
+{"type":"result","usage":{"input_tokens":15,"output_tokens":4},"total_cost_usd":0,"num_turns":2}`
+	got, err := Claude{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 15 || *got.Usage.OutputTokens != 4 || *got.Usage.ToolCalls != 1 || *got.Usage.Turns != 2 || *got.Usage.CostUSD != 0 {
+		t.Fatalf("usage = %#v", got.Usage)
+	}
+}
+
+func TestParseEventsUsageCountsNewToolsOnRepeatedMessage(t *testing.T) {
+	stream := `{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10},"content":[{"type":"tool_use","id":"t1"}]}}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10},"content":[{"type":"tool_use","id":"t1"},{"type":"tool_use","id":"t2"}]}}`
+	got, err := Claude{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 10 || *got.Usage.ToolCalls != 2 {
+		t.Fatalf("usage=%#v", got.Usage)
 	}
 }

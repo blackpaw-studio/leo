@@ -70,6 +70,19 @@ type Turn struct {
 	HarnessTurnID string      `json:"harness_turn_id,omitempty"`
 }
 
+// InvocationUsage keeps a native invocation's provisional/final accounting
+// separate. This lets continuation add an invocation while final provider
+// totals replace only that invocation's live snapshot.
+type InvocationUsage struct {
+	InputTokens  *int64   `json:"input_tokens,omitempty"`
+	OutputTokens *int64   `json:"output_tokens,omitempty"`
+	CostUSD      *float64 `json:"cost_usd,omitempty"`
+	UsageTurns   *int     `json:"usage_turns,omitempty"`
+	ToolCalls    *int     `json:"tool_calls,omitempty"`
+	Incomplete   bool     `json:"incomplete,omitempty"`
+	Completed    bool     `json:"completed,omitempty"`
+}
+
 type WorktreeState string
 
 const (
@@ -103,30 +116,32 @@ type Record struct {
 	Timeout       time.Duration `json:"timeout,omitempty"`
 	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
 	// can survive a daemon restart.
-	ViewerWindowID  string                  `json:"viewer_window_id,omitempty"`
-	Mode            Mode                    `json:"mode,omitempty"`
-	PaneID          string                  `json:"pane_id,omitempty"`
-	SessionID       string                  `json:"session_id,omitempty"`
-	Notify          bool                    `json:"notify"`
-	CallerPaneID    string                  `json:"caller_pane_id,omitempty"`
-	CallerHarness   string                  `json:"caller_harness,omitempty"`
-	CallerSessionID string                  `json:"caller_session_id,omitempty"`
-	InputTokens     *int64                  `json:"input_tokens,omitempty"`
-	OutputTokens    *int64                  `json:"output_tokens,omitempty"`
-	CostUSD         *float64                `json:"cost_usd,omitempty"`
-	UsageTurns      *int                    `json:"usage_turns,omitempty"`
-	ToolCalls       *int                    `json:"tool_calls,omitempty"`
-	Isolation       string                  `json:"isolation,omitempty"`
-	Worktree        string                  `json:"worktree,omitempty"`
-	Branch          string                  `json:"branch,omitempty"`
-	BaseCommit      string                  `json:"base_commit,omitempty"`
-	SourceCwd       string                  `json:"source_cwd,omitempty"`
-	RepositoryRoot  string                  `json:"repository_root,omitempty"`
-	WorktreeState   WorktreeState           `json:"worktree_state,omitempty"`
-	Notifications   map[string]Notification `json:"notifications,omitempty"`
-	Turns           []Turn                  `json:"turns,omitempty"`
-	Steered         bool                    `json:"steered,omitempty"`
-	HookActivity    time.Time               `json:"-"`
+	ViewerWindowID   string                  `json:"viewer_window_id,omitempty"`
+	Mode             Mode                    `json:"mode,omitempty"`
+	PaneID           string                  `json:"pane_id,omitempty"`
+	SessionID        string                  `json:"session_id,omitempty"`
+	Notify           bool                    `json:"notify"`
+	CallerPaneID     string                  `json:"caller_pane_id,omitempty"`
+	CallerHarness    string                  `json:"caller_harness,omitempty"`
+	CallerSessionID  string                  `json:"caller_session_id,omitempty"`
+	InputTokens      *int64                  `json:"input_tokens,omitempty"`
+	OutputTokens     *int64                  `json:"output_tokens,omitempty"`
+	CostUSD          *float64                `json:"cost_usd,omitempty"`
+	UsageTurns       *int                    `json:"usage_turns,omitempty"`
+	ToolCalls        *int                    `json:"tool_calls,omitempty"`
+	UsageIncomplete  bool                    `json:"usage_incomplete,omitempty"`
+	UsageInvocations []InvocationUsage       `json:"usage_invocations,omitempty"`
+	Isolation        string                  `json:"isolation,omitempty"`
+	Worktree         string                  `json:"worktree,omitempty"`
+	Branch           string                  `json:"branch,omitempty"`
+	BaseCommit       string                  `json:"base_commit,omitempty"`
+	SourceCwd        string                  `json:"source_cwd,omitempty"`
+	RepositoryRoot   string                  `json:"repository_root,omitempty"`
+	WorktreeState    WorktreeState           `json:"worktree_state,omitempty"`
+	Notifications    map[string]Notification `json:"notifications,omitempty"`
+	Turns            []Turn                  `json:"turns,omitempty"`
+	Steered          bool                    `json:"steered,omitempty"`
+	HookActivity     time.Time               `json:"-"`
 }
 
 func (r *Record) startActive(now time.Time) {

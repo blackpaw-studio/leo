@@ -72,6 +72,7 @@ type Result struct {
 	Text      string   // final result text
 	IsError   bool     // the stream carried a fatal error event/flag
 	Errors    []string // error messages accumulated from the stream
+	Usage     *Usage   // optional measured native usage
 }
 
 // ValidateModelFormat is the shared "shape check only" model validation used

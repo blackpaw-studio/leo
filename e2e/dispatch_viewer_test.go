@@ -35,7 +35,7 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	v.TmuxPath = tmuxPath
 	d := consult.NewDispatcherWithOnStart(nil, context.Background(), v.OnStart, v.Close)
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"done","is_error":false}`)
+		return exec.CommandContext(ctx, "sh", "-c", `printf '%s\n' '{"type":"assistant","message":{"id":"m","usage":{"input_tokens":100},"content":[{"type":"tool_use","id":"t"}]}}' '{"type":"result","result":"done","is_error":false,"usage":{"input_tokens":100,"output_tokens":20},"num_turns":1}'`)
 	}
 	cfg := &config.Config{Templates: map[string]config.TemplateConfig{
 		"claude": {Harness: "claude", Model: "opus"},
@@ -45,6 +45,13 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		rec, err := d.Get(started.ID)
+		if err == nil && rec.InputTokens != nil && rec.OutputTokens != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	v.UpdateRoster(d.Records(), time.Now())
 	target := tmux.Target(session) + ":"
@@ -60,7 +67,7 @@ func TestDispatchOpensViewerWindow(t *testing.T) {
 		t.Fatalf("fresh status-format[0] = %q, err %v", freshFormat, err)
 	}
 	roster, err := exec.Command(tmuxPath, tmux.Args("show-options", "-v", "-t", target, "@leo_roster")...).Output()
-	if err != nil || !strings.Contains(string(roster), "claude") {
+	if err != nil || !strings.Contains(string(roster), "claude") || !strings.Contains(string(roster), "1 tools · 0.1k tokens") {
 		t.Fatalf("live roster = %q, err %v", roster, err)
 	}
 	status, err := exec.Command(tmuxPath, tmux.Args("show-options", "-v", "-t", target, "status")...).Output()

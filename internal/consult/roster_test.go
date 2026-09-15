@@ -1,6 +1,7 @@
 package consult
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -58,5 +59,28 @@ func TestRenderRosterDeterministicIDTieBreak(t *testing.T) {
 	got := RenderRoster(records, now)
 	if strings.Index(got, "first") > strings.Index(got, "second") {
 		t.Fatalf("RenderRoster tie order = %q", got)
+	}
+}
+
+func TestRenderRosterUsageSuffixPreservesUnknownAndZero(t *testing.T) {
+	now := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
+	tools, input, output := 0, int64(0), int64(0)
+	recs := []Record{{ID: "d-1", Kind: "dispatch", Name: "zero", Status: StatusRunning, StartedAt: now, ToolCalls: &tools, InputTokens: &input, OutputTokens: &output}, {ID: "d-2", Kind: "dispatch", Name: "tools", Status: StatusRunning, StartedAt: now.Add(time.Second), ToolCalls: &tools}}
+	got := RenderRoster(recs, now)
+	if !strings.Contains(got, "0 tools · 0.0k tokens") || !strings.Contains(got, "tools 0:00 · 0 tools") {
+		t.Fatalf("roster usage = %q", got)
+	}
+}
+
+func TestRenderRosterMarksPartialUsageWithoutOverflow(t *testing.T) {
+	now := time.Now()
+	max := int64(math.MaxInt64)
+	one := int64(1)
+	got := RenderRoster([]Record{
+		{ID: "a", Kind: "dispatch", Name: "partial", Status: StatusRunning, StartedAt: now, UsageIncomplete: true},
+		{ID: "b", Kind: "dispatch", Name: "tokens", Status: StatusRunning, StartedAt: now.Add(time.Second), InputTokens: &max, OutputTokens: &one, UsageIncomplete: true},
+	}, now)
+	if !strings.Contains(got, "partial 0:00 · partial") || !strings.Contains(got, "9223372036854776.0k~ tokens") {
+		t.Fatalf("roster=%q", got)
 	}
 }

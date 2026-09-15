@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -40,7 +41,12 @@ func TestParseEventsFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseEvents: %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
+			if got.Usage == nil && (tt.file == "fresh.jsonl" || tt.file == "resume.jsonl" || tt.file == "multistep_deny.jsonl") {
+				t.Fatalf("fixture %s has no usage", tt.file)
+			}
+			outcome := got
+			outcome.Usage = nil
+			if !reflect.DeepEqual(outcome, tt.want) {
 				t.Errorf("got %+v\nwant %+v", got, tt.want)
 			}
 		})
@@ -68,5 +74,109 @@ func TestParseEventsMultiText(t *testing.T) {
 	want := harness.Result{SessionID: "ses_x", Text: "one\ntwo"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestParseEventsUsageIncludesReasoningAndDeduplicatesParts(t *testing.T) {
+	stream := `{"type":"step_start","part":{"id":"s1"}}
+{"type":"step_start","part":{"id":"s1"}}
+{"type":"tool_use","part":{"id":"t1","type":"tool"}}
+{"type":"tool_use","part":{"id":"t1","type":"tool"}}
+{"type":"step_finish","part":{"id":"finish1","tokens":{"input":10,"output":2,"reasoning":3}}}
+{"type":"step_finish","part":{"id":"finish1","tokens":{"input":10,"output":2,"reasoning":3}}}`
+	got, err := Opencode{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 10 || *got.Usage.OutputTokens != 5 || *got.Usage.Turns != 1 || *got.Usage.ToolCalls != 1 {
+		t.Fatalf("usage = %#v", got.Usage)
+	}
+}
+
+func TestParseEventsFixtureUsageIncludesCacheInputs(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "fresh.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got, err := Opencode{}.ParseEvents(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || *got.Usage.InputTokens != 15965 || *got.Usage.OutputTokens != 17 || *got.Usage.Turns != 1 || *got.Usage.ToolCalls != 0 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestParseEventsCountsOnlyExactToolUseShape(t *testing.T) {
+	stream := `{"type":"tool_result","part":{"id":"wrong","type":"tool-result"}}
+{"type":"not-a-tool","part":{"id":"also-wrong","type":"tool"}}
+{"type":"tool_use","part":{"id":"right","type":"tool"}}`
+	got, err := Opencode{}.ParseEvents(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || got.Usage.ToolCalls == nil || *got.Usage.ToolCalls != 1 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestParseEventsTruncatedFixtureLeavesTokensUnknown(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "truncated_no_step_finish.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got, err := Opencode{}.ParseEvents(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil || got.Usage.OutputTokens != nil || got.Usage.Turns == nil || *got.Usage.Turns != 1 || got.Usage.ToolCalls == nil || *got.Usage.ToolCalls != 0 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestUsageRejectsNegativeStepAndBoundsIDs(t *testing.T) {
+	var stream strings.Builder
+	stream.WriteString(`{"type":"step_finish","part":{"id":"bad","tokens":{"input":-1}}}` + "\n")
+	for i := 0; i <= 10000; i++ {
+		fmt.Fprintf(&stream, `{"type":"step_start","part":{"id":"s%d"}}`+"\n", i)
+	}
+	got, err := Opencode{}.ParseEvents(strings.NewReader(stream.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestUsageOpenStepSnapshotDoesNotPoisonFinal(t *testing.T) {
+	acc := Opencode{}.NewUsageAccumulator()
+	acc.AddLine([]byte(`{"type":"step_start","part":{"id":"start"}}`))
+	if got := acc.Usage(); got == nil || !got.Incomplete {
+		t.Fatalf("open=%#v", got)
+	}
+	acc.AddLine([]byte(`{"type":"step_finish","part":{"id":"finish","tokens":{"input":2,"output":1}}}`))
+	if got := acc.Usage(); got == nil || got.Incomplete {
+		t.Fatalf("final=%#v", got)
+	}
+}
+
+func TestUsageTokenlessFinishMarksPartialTotalsIncomplete(t *testing.T) {
+	stream := `{"type":"step_start","part":{"id":"s1"}}
+{"type":"step_finish","part":{"id":"f1","tokens":{"input":2,"output":1}}}
+{"type":"step_start","part":{"id":"s2"}}
+{"type":"step_finish","part":{"id":"f2"}}`
+	got, _ := Opencode{}.ParseEvents(strings.NewReader(stream))
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens == nil || *got.Usage.InputTokens != 2 {
+		t.Fatalf("usage=%#v", got.Usage)
+	}
+}
+
+func TestUsageOutOfRangeCounterMarksIncomplete(t *testing.T) {
+	got, _ := Opencode{}.ParseEvents(strings.NewReader(`{"type":"step_finish","part":{"id":"f","tokens":{"input":9223372036854775808}}}`))
+	if got.Usage == nil || !got.Usage.Incomplete || got.Usage.InputTokens != nil {
+		t.Fatalf("usage=%#v", got.Usage)
 	}
 }

@@ -345,6 +345,14 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 	// when the two are the same value, so this keeps the harness's combined
 	// output in order — the behavior CombinedOutput used to supply.
 	tee := &recordingTee{handle: state.handle}
+	if factory, ok := h.(harness.UsageAccounter); ok {
+		tee.usage = factory.NewUsageAccumulator()
+		tee.onUsage = func(usage *harness.Usage) {
+			d.mu.Lock()
+			d.applyUsageLocked(state, usage, false)
+			d.mu.Unlock()
+		}
+	}
 	cmd.Stdout, cmd.Stderr = tee, tee
 
 	runErr := cmd.Start()
@@ -365,6 +373,11 @@ func (d *Dispatcher) run(parent context.Context, state *runState, h harness.Harn
 		runErr = cmd.Wait()
 	}
 	parsed, parseErr := h.ParseEvents(bytes.NewReader(tee.Bytes()))
+	if parsed.Usage != nil {
+		d.mu.Lock()
+		d.applyUsageLocked(state, parsed.Usage, true)
+		d.mu.Unlock()
+	}
 	if parsed.SessionID != "" {
 		d.mu.Lock()
 		state.record.SessionID = parsed.SessionID
@@ -897,17 +910,43 @@ func finish(handle Handle, id string, status Status, cause error) {
 // reintroduce a data race silently. See internal/run/runner.go's syncBuffer
 // for the case where exactly that happened.
 type recordingTee struct {
-	mu     sync.Mutex
-	buf    bytes.Buffer
-	handle Handle
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	handle  Handle
+	usage   harness.UsageAccumulator
+	pending []byte
+	onUsage func(*harness.Usage)
 }
 
 func (t *recordingTee) Write(p []byte) (int, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.buf.Write(p)
+	var snapshots []*harness.Usage
+	if t.usage != nil {
+		t.pending = append(t.pending, p...)
+		for {
+			i := bytes.IndexByte(t.pending, '\n')
+			if i < 0 {
+				break
+			}
+			line := bytes.TrimSpace(t.pending[:i])
+			t.pending = t.pending[i+1:]
+			if len(line) > 0 {
+				t.usage.AddLine(line)
+				snapshots = append(snapshots, t.usage.Usage())
+			}
+		}
+	}
 	// Recording is best-effort; the handle reports failures from Close.
 	_, _ = t.handle.Write(p)
+	t.mu.Unlock()
+	// Persisting can perform file I/O; do it after releasing the tee mutex so
+	// a recorder callback can never block a concurrent stdout/stderr writer.
+	if t.onUsage != nil {
+		for _, usage := range snapshots {
+			t.onUsage(usage)
+		}
+	}
 	return len(p), nil
 }
 
