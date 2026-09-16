@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // claudePromptGlyph marks the start of claude's interactive input line. We use
@@ -35,10 +36,19 @@ var (
 	submitConfirmPoll     = 200 * time.Millisecond
 )
 
-// submitConfirmNeedleRunes bounds how much of body's first non-empty line we
+// submitConfirmNeedleRunes bounds how much of body's last non-empty line we
 // look for in the pane before submitting with Enter — long enough to be
 // distinctive, short enough to survive an input-line wrapping the pasted
 // text.
+//
+// The needle is taken from the END of the body, not the start: a bracketed
+// paste can render progressively, with the head of a long body visible in
+// the pane well before the paste actually finishes landing. A head-derived
+// needle would therefore match — and release Enter — before the tail had
+// arrived, and that Enter would land inside the still-in-flight paste as a
+// literal newline instead of a submit (the long-prompt paste-doesn't-submit
+// bug). A tail-derived needle can only match once the whole body, including
+// its very end, is on screen.
 const submitConfirmNeedleRunes = 24
 
 // submitNeedleMinRunes floors how short a derived needle may be before we
@@ -262,6 +272,29 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 		pane = PaneTarget(session)
 	}
 
+	// Determine before staging whether body has a distinctive tail needle
+	// worth confirming against — the submitNeedleMinRunes floor is applied
+	// to the NORMALIZED needle (whitespace stripped), since normalization is
+	// also what the confirm loop below matches against; checking the raw
+	// needle's length could pass the floor on whitespace alone.
+	needle := submitConfirmNeedle(body)
+	normalizedNeedle := stripWhitespace(needle)
+	useNeedleMatch := len([]rune(normalizedNeedle)) >= submitNeedleMinRunes
+
+	// If we're going to needle-match, capture a BASELINE of the pane before
+	// anything is staged/pasted, and count how many times the (normalized)
+	// needle already appears in it. Presence alone isn't proof the new paste
+	// landed: a resend of an identical message, or the harness echoing back
+	// the previous prompt, can already carry the needle before paste-buffer
+	// even runs. The confirm loop below requires the occurrence count to
+	// exceed this baseline, not merely be present.
+	baselineCount := 0
+	if useNeedleMatch {
+		if out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", pane)...).Output(); err == nil {
+			baselineCount = strings.Count(stripWhitespace(string(out)), normalizedNeedle)
+		}
+	}
+
 	// Phase 2: stage and paste the body exactly once.
 	buf := sessionBufferName(session)
 	for _, args := range [][]string{
@@ -278,16 +311,40 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 	// submitting. Some TUIs (codex) commit a bracketed paste asynchronously,
 	// so an Enter fired immediately after paste-buffer can arrive before the
 	// text lands and gets silently dropped. claude/opencode render the body
-	// synchronously, so this loop breaks on its first iteration for them —
-	// zero added latency. This is best-effort: a capture-pane error, or the
-	// needle never appearing within the budget, still falls through to
-	// sending Enter (never blocks/loses the message).
-	needle := submitConfirmNeedle(body)
-	if len([]rune(needle)) >= submitNeedleMinRunes {
+	// synchronously, so this loop matches on its first iteration for them.
+	// This is best-effort: a capture-pane error, or the needle's occurrence
+	// count never exceeding the baseline within the budget, still falls
+	// through to sending Enter (never blocks/loses the message).
+	//
+	// A single match isn't trusted on its own: once the needle's occurrence
+	// count first exceeds the baseline, one more poll must show the SAME
+	// (normalized) pane content before Enter is sent. A long paste can still
+	// be streaming in even after its tail briefly flickers into view (e.g.
+	// mid-scroll render), so requiring one stable re-read guards against
+	// submitting into a paste that hasn't actually settled. This stability
+	// check is bounded by the same attempts budget as the match itself, so
+	// it can never hang — on budget exhaustion it still falls through to
+	// Enter exactly as before.
+	if useNeedleMatch {
+		matched := false
+		var lastNormalized string
 		for attempt := 0; attempt < submitConfirmAttempts; attempt++ {
 			out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", pane)...).Output()
-			if err == nil && strings.Contains(string(out), needle) {
-				break
+			normalized := ""
+			count := 0
+			if err == nil {
+				normalized = stripWhitespace(string(out))
+				count = strings.Count(normalized, normalizedNeedle)
+			}
+			isMatch := err == nil && count > baselineCount
+			if isMatch {
+				if matched && normalized == lastNormalized {
+					break
+				}
+				matched = true
+				lastNormalized = normalized
+			} else {
+				matched = false
 			}
 			if attempt == submitConfirmAttempts-1 {
 				break
@@ -318,30 +375,49 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 	return nil
 }
 
-// submitConfirmNeedle derives a short, distinctive slice of body's first
-// NON-EMPTY line to look for in the pane before submitting — long enough to
+// submitConfirmNeedle derives a short, distinctive slice of body's LAST
+// non-empty line to look for in the pane before submitting — long enough to
 // be unlikely to appear by coincidence, short enough to survive the input
-// line wrapping the pasted text. A body like "\n\nreal text" would otherwise
-// yield an empty needle from its literal first line and skip confirmation
-// entirely, even though it plainly has distinctive content further down.
-// Returns "" if every line is empty/whitespace-only, which callers treat as
-// "nothing distinctive to match" (see submitConfirmFallbackDelays).
+// line wrapping the pasted text. The slice is taken from the END of that
+// line (see submitConfirmNeedleRunes for why): it can only appear in the
+// pane once the whole body, including its tail, has actually landed. A body
+// like "real text\n\n" would otherwise yield an empty needle from its
+// literal last line and skip confirmation entirely, even though it plainly
+// has distinctive content earlier. Returns "" if every line is
+// empty/whitespace-only, which callers treat as "nothing distinctive to
+// match" (see submitConfirmFallbackDelays).
 func submitConfirmNeedle(body string) string {
-	var firstNonEmpty string
+	var lastNonEmpty string
 	for _, line := range strings.Split(body, "\n") {
 		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			firstNonEmpty = trimmed
-			break
+			lastNonEmpty = trimmed
 		}
 	}
-	if firstNonEmpty == "" {
+	if lastNonEmpty == "" {
 		return ""
 	}
-	runes := []rune(firstNonEmpty)
+	runes := []rune(lastNonEmpty)
 	if len(runes) > submitConfirmNeedleRunes {
-		runes = runes[:submitConfirmNeedleRunes]
+		runes = runes[len(runes)-submitConfirmNeedleRunes:]
 	}
 	return string(runes)
+}
+
+// stripWhitespace removes every Unicode whitespace rune (spaces, tabs,
+// newlines) from s. Used to normalize both the needle and captured pane text
+// before comparing, so a terminal that wraps the pasted tail across two
+// rendered lines — inserting a newline in the middle of what was one
+// contiguous run of text — can't defeat the match.
+func stripWhitespace(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // PaneInputHasContent reports whether a captured claude pane shows text
