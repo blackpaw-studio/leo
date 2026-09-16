@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -159,6 +160,11 @@ func TestConcurrentViewerPlacementCap(t *testing.T) {
 		}
 		return "@h"
 	})
+	placementCtx, cancelPlacement := context.WithCancel(context.Background())
+	defer cancelPlacement()
+	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/bin/sleep", "60")
+	}
 	rt := &fakeInteractiveRuntime{}
 	d.SetInteractiveRuntime(rt)
 	start := make(chan struct{})
@@ -172,7 +178,7 @@ func TestConcurrentViewerPlacementCap(t *testing.T) {
 			if i%2 == 0 {
 				mode = ModeHeadless
 			}
-			_, _ = d.Start(context.Background(), cfg, Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: mode, Kind: "dispatch", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"})
+			_, _ = d.Start(placementCtx, cfg, Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: mode, Kind: "dispatch", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"})
 		}()
 	}
 	close(start)
@@ -191,7 +197,7 @@ func TestConcurrentViewerPlacementCap(t *testing.T) {
 		}
 	}
 	if n > max {
-		t.Fatalf("split placements=%d max=%d: %v", n, max, rt.placements)
+		t.Fatalf("split placements=%d max=%d: interactive=%v headless=%v", n, max, rt.placements, headless)
 	}
 }
 

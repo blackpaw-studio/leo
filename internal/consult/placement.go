@@ -109,9 +109,7 @@ func LiveViewerPaneCount(records []Record, sessionID, windowID string) int {
 		if pane == "" || r.Status == StatusReleased {
 			continue
 		}
-		if !r.Status.Terminal() || r.Mode == ModeInteractive {
-			n++
-		}
+		n++
 	}
 	return n
 }

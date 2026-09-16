@@ -27,11 +27,12 @@ func TestResolveViewerPlacement(t *testing.T) {
 func TestLiveViewerPaneCount(t *testing.T) {
 	records := []Record{
 		{CallerSessionID: "$1", CallerWindowID: "@1", ViewerKind: "split", ViewerPaneID: "%2", Status: StatusRunning},
+		{CallerSessionID: "$1", CallerWindowID: "@1", ViewerKind: "split", ViewerPaneID: "%6", Status: StatusFailed},
 		{CallerSessionID: "$1", CallerWindowID: "@1", ViewerKind: "split", PaneID: "%3", Mode: ModeInteractive, Status: StatusIdle},
 		{CallerSessionID: "$1", CallerWindowID: "@1", ViewerKind: "split", PaneID: "%4", Mode: ModeInteractive, Status: StatusReleased},
 		{CallerSessionID: "$1", CallerWindowID: "@2", ViewerKind: "split", ViewerPaneID: "%5", Status: StatusRunning},
 	}
-	if got := LiveViewerPaneCount(records, "$1", "@1"); got != 2 {
+	if got := LiveViewerPaneCount(records, "$1", "@1"); got != 3 {
 		t.Fatalf("count=%d", got)
 	}
 }
