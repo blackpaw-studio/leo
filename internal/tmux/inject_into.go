@@ -74,16 +74,72 @@ func InjectIntoWith(ctx context.Context, tmuxPath, paneID string, classify Compo
 		return fmt.Errorf("paste buffer: %w", err)
 	}
 	bufferDeleted = true
-	needle := submitConfirmNeedle(text)
+	// The needle is tail-anchored (composerConfirmNeedle: submitConfirmNeedle
+	// applied to the body AFTER the same per-line stripLeadingComposerGlyph
+	// normalization composerScopeText applies to the rendered composer — see
+	// composerConfirmNeedle for why the two sides must match) and matched
+	// Contains-style against the composer's JOINED, whitespace-normalized
+	// scope text (composerPasteConfirmed below) — not HasPrefix per rendered
+	// row. A long single-line body wraps across composer rows; a
+	// row-boundary-sensitive match would put the tail mid-row and never match
+	// no matter how long the loop waited (the interactive-dispatch "paste
+	// failed" / Enter-lands-inside-the-paste bug). Only a genuinely empty
+	// (whitespace-only) body skips confirmation entirely.
+	needle := composerConfirmNeedle(text)
 	if needle == "" {
 		return ErrPasteFailed
 	}
+	// Below submitNeedleMinRunes, count-based baseline matching isn't safe:
+	// the composer's own empty-state hint text ("Ask Codex to do anything",
+	// claude's equivalent) can coincidentally CONTAIN a 1-2 rune needle
+	// somewhere mid-word ("a" in "anything"), inflating the baseline count —
+	// the hint then disappears once real text is typed, so the count never
+	// exceeds that contaminated baseline and confirmation never succeeds.
+	// Fall back to the pre-baseline, per-row PRESENCE check instead (see
+	// composerRowStartsWithNeedle): a short needle essentially never STARTS
+	// an entire composer row by coincidence, so no baseline is needed at all
+	// — this mirrors InjectInto's behavior before the count-based baseline
+	// logic existed.
+	useCountMatch := len([]rune(needle)) >= submitNeedleMinRunes
+	baselineNeedle, baselinePlaceholder := 0, 0
+	if useCountMatch {
+		// Baseline: how many times the needle and the collapsed-paste
+		// placeholder ("[Pasted text ...]"/"[Pasted Content ...]") already
+		// appear in the composer's scope BEFORE anything is pasted (reusing
+		// the classify capture above — no extra round trip). Presence alone
+		// isn't proof the new paste landed: a resend of an identical
+		// message, a harness echo of a prior prompt, or a placeholder left
+		// over from an earlier paste that was never cleared can already
+		// satisfy a presence-only check. The confirm loop requires each
+		// occurrence count to exceed its own baseline, not merely be
+		// present.
+		if scope, ok := composerScopeText(before); ok {
+			baselineNeedle = strings.Count(stripWhitespace(scope), needle)
+			baselinePlaceholder = composerPlaceholderCount(scope)
+		}
+	}
 	confirmed := false
+	matchedOnce := false
+	var lastNormalized string
 	for i := 0; i < injectConfirmAttempts; i++ {
 		after, err := capture()
-		if err == nil && after != before && composerPasteConfirmed(after, needle) {
-			confirmed = true
-			break
+		if err == nil && after != before {
+			if useCountMatch {
+				isMatch, normalized := composerPasteConfirmed(after, needle, baselineNeedle, baselinePlaceholder)
+				if isMatch {
+					if matchedOnce && normalized == lastNormalized {
+						confirmed = true
+						break
+					}
+					matchedOnce = true
+					lastNormalized = normalized
+				} else {
+					matchedOnce = false
+				}
+			} else if composerRowStartsWithNeedle(after, needle) {
+				confirmed = true
+				break
+			}
 		}
 		if i+1 < injectConfirmAttempts {
 			wait := time.NewTimer(submitConfirmPoll)
@@ -114,39 +170,181 @@ func InjectIntoWith(ctx context.Context, tmuxPath, paneID string, classify Compo
 	return nil
 }
 
-// composerPasteConfirmed only trusts confirmation inside the active composer.
-// History can contain an earlier copy of the message, especially after a
-// scrollback capture, and must not cause an Enter into an empty composer.
-func composerPasteConfirmed(capture, needle string) bool {
-	lines := strings.Split(capture, "\n")
-	if _, composerLine, bottom, ok := claudeComposerBox(lines); ok {
-		return composerLinesContainPaste(lines[composerLine:bottom], needle)
+// composerGlyphs are the prompt/border glyphs that may lead a composer row:
+// claude's "❯", codex's "›", and opencode's bordered-panel "┃".
+var composerGlyphs = []string{"❯", "›", "┃"}
+
+// stripLeadingComposerGlyph strips AT MOST ONE leading composer/border glyph
+// from line — but only when it is unambiguously chrome, not body content
+// that merely starts with the same character. A real prompt/border glyph
+// always renders as "glyph + space" (e.g. "❯ text", "┃ text") or bare alone
+// on its row (an empty composer, or a bordered panel's blank border row);
+// pasted body text that happens to start a wrapped row with a literal ›, ❯,
+// or ┃ character is never followed immediately by a space in that position
+// (it's mid-word/mid-punctuation), so it is left untouched. Stripping
+// unconditionally — the previous behavior — silently ate body content: a
+// paste whose tail contained "›" (a markdown blockquote marker, a shell
+// prompt being quoted, etc.) landing at the start of a wrapped row would
+// have that character removed, corrupting the text the confirm loop matches
+// against and breaking confirmation for otherwise-landed pastes.
+func stripLeadingComposerGlyph(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	for {
+		stripped := false
+		for _, glyph := range composerGlyphs {
+			rest, ok := strings.CutPrefix(trimmed, glyph)
+			if !ok {
+				continue
+			}
+			if rest == "" || strings.HasPrefix(rest, " ") {
+				trimmed = strings.TrimPrefix(rest, " ")
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			return trimmed
+		}
 	}
-	if composer, ok := openCodeComposerLines(lines); ok {
-		return composerLinesContainPaste(composer, needle)
+}
+
+// composerConfirmNeedle derives InjectInto's confirm-loop needle: the same
+// tail-of-whitespace-normalized-body derivation as submitConfirmNeedle
+// (inject.go), but the body is first run through stripLeadingComposerGlyph
+// PER LINE — the exact same normalization composerScopeText applies to each
+// rendered composer row. Without this, a body line that itself starts with
+// "› " (e.g. quoting a codex prompt, "hello\n› world") has that leading "› "
+// stripped from the RENDERED composer scope (it's indistinguishable from
+// real chrome), but not from a needle derived from the raw, unstripped body
+// — leaving the needle carrying a "›" character the scope no longer has, so
+// the two sides could never match again. inject.go's own needle derivation
+// is untouched: its confirm loop matches against the raw, unscoped capture,
+// which never goes through this per-row glyph stripping in the first place.
+func composerConfirmNeedle(text string) string {
+	lines := strings.Split(text, "\n")
+	cleaned := make([]string, len(lines))
+	for i, line := range lines {
+		cleaned[i] = stripLeadingComposerGlyph(line)
 	}
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(strings.TrimLeft(lines[i], " \t"), "›") {
-			return composerLinesContainPaste(lines[i:], needle)
+	return submitConfirmNeedle(strings.Join(cleaned, "\n"))
+}
+
+// composerRowStartsWithNeedle reports whether capture's composer scope shows
+// a collapsed-paste placeholder, or any of its rows (trimmed) STARTS WITH
+// needle. This is InjectInto's confirmation behavior from before the
+// count-based baseline logic existed (see composerPasteConfirmed) — used
+// only for needles too short to trust with Contains/count matching (below
+// submitNeedleMinRunes), where a baseline would itself be unreliable: the
+// composer's own empty-state hint text can coincidentally CONTAIN a 1-2 rune
+// needle somewhere mid-word without ever actually STARTING a row with it, so
+// a per-row prefix check stays reliable with no baseline at all.
+func composerRowStartsWithNeedle(capture, needle string) bool {
+	scope, ok := composerScopeText(capture)
+	if !ok {
+		return false
+	}
+	if composerPlaceholderCount(scope) > 0 {
+		return true
+	}
+	for _, line := range strings.Split(scope, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), needle) {
+			return true
 		}
 	}
 	return false
 }
 
-func composerLinesContainPaste(lines []string, needle string) bool {
-	for i, line := range lines {
-		content := strings.TrimSpace(line)
-		content = strings.TrimSpace(strings.TrimPrefix(content, "┃"))
-		if i == 0 {
-			content = strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(line, " \t"), "❯"))
-			content = strings.TrimSpace(strings.TrimPrefix(content, "›"))
-			content = strings.TrimSpace(strings.TrimPrefix(content, "┃"))
-		}
-		if strings.Contains(content, "[Pasted text") || strings.Contains(content, "[Pasted Content") || strings.HasPrefix(content, needle) {
-			return true
+// composerScopeText returns the identified composer scope's lines in
+// capture — the ruled composer box for claude, the marker-prefixed block for
+// opencode, or the "›"-prefixed tail for codex — with each row's leading
+// composer/border glyph stripped (see stripLeadingComposerGlyph), then
+// joined into one string. When more than one composer-shaped box exists in
+// the capture (e.g. a stale/historical claude-style block above the live
+// one in scrollback), the BOTTOM-most is used: claudeComposerBox and the
+// codex "›" fallback both scan from the end of the capture backward and
+// return on their first (i.e. lowest) match, so the live composer — always
+// the last thing rendered — wins over anything stale further up.
+//
+// Scoping matching to this text (rather than the raw capture) is what keeps
+// an earlier copy of the message sitting in scrollback history from causing
+// a false confirm; joining the CLEANED lines (rather than checking each row
+// in isolation) is what lets a match survive the composer wrapping a long
+// line across several rendered rows — opencode in particular re-renders its
+// left border glyph on every wrapped row, and an unstripped border
+// character sitting mid-string would otherwise split a needle that happens
+// to wrap right at that column. ok=false means no composer scope could be
+// identified (history-only capture, or a mid-transition frame) — the caller
+// treats that as "cannot confirm yet," not "definitely not landed."
+func composerScopeText(capture string) (string, bool) {
+	lines := strings.Split(capture, "\n")
+	var scope []string
+	if _, composerLine, bottom, ok := claudeComposerBox(lines); ok {
+		scope = lines[composerLine:bottom]
+	} else if composer, ok := openCodeComposerLines(lines); ok {
+		scope = composer
+	} else {
+		for i := len(lines) - 1; i >= 0; i-- {
+			if strings.HasPrefix(strings.TrimLeft(lines[i], " \t"), "›") {
+				scope = lines[i:]
+				break
+			}
 		}
 	}
-	return false
+	if scope == nil {
+		return "", false
+	}
+	cleaned := make([]string, len(scope))
+	for i, line := range scope {
+		cleaned[i] = stripLeadingComposerGlyph(line)
+	}
+	return strings.Join(cleaned, "\n"), true
+}
+
+// composerPlaceholderCount counts how many times a collapsed-paste
+// placeholder ("[Pasted text ...]" or "[Pasted Content ...]") appears in
+// scope — some TUIs replace a large paste with this marker instead of
+// rendering it verbatim.
+func composerPlaceholderCount(scope string) int {
+	return strings.Count(scope, "[Pasted text") + strings.Count(scope, "[Pasted Content")
+}
+
+// composerPasteConfirmed reports whether capture's composer scope proves the
+// NEW paste landed, given needle (already whitespace-normalized) and the two
+// pre-paste baselines: baselineNeedle (the needle's occurrence count in the
+// composer before anything was pasted) and baselinePlaceholder (likewise for
+// the collapsed-paste placeholder). It returns the scope's normalized text
+// alongside the verdict so the caller can require one further stable
+// (unchanged) poll before trusting a single match — mirroring inject.go's
+// confirm loop.
+//
+// Two independent signals confirm a landed paste, and BOTH are count-based
+// against their own baseline — never mere presence, which a resend of an
+// identical message, a harness echo, or a placeholder left over from an
+// earlier paste that was never cleared could already satisfy before the new
+// paste even lands:
+//   - the placeholder's occurrence count in the composer exceeds
+//     baselinePlaceholder;
+//   - the needle's occurrence count in the composer exceeds baselineNeedle.
+//
+// Matching is Contains-style against the JOINED, whitespace-stripped scope
+// text, not HasPrefix per rendered row: a long single-line body can wrap
+// across several composer rows, landing the needle mid-row, where a
+// per-row-prefix check would never match regardless of how long the loop
+// waited (the interactive-dispatch "paste failed" bug this replaces).
+func composerPasteConfirmed(capture, needle string, baselineNeedle, baselinePlaceholder int) (matched bool, normalized string) {
+	scope, ok := composerScopeText(capture)
+	if !ok {
+		return false, ""
+	}
+	normalized = stripWhitespace(scope)
+	if composerPlaceholderCount(scope) > baselinePlaceholder {
+		return true, normalized
+	}
+	if needle == "" {
+		return false, normalized
+	}
+	count := strings.Count(normalized, needle)
+	return count > baselineNeedle, normalized
 }
 
 func runInjectCommand(ctx context.Context, tmuxPath string, command CommandFunc, args ...string) error {

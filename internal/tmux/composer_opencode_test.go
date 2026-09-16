@@ -24,7 +24,7 @@ func TestOpenCodeComposerClassifier(t *testing.T) {
 }
 
 func TestComposerPasteConfirmedRecognizesOpenCodePanel(t *testing.T) {
-	if !composerPasteConfirmed("┃\n┃ first line\n┃\n┃ Build · model", "first line") {
+	if matched, _ := composerPasteConfirmed("┃\n┃ first line\n┃\n┃ Build · model", stripWhitespace("first line"), 0, 0); !matched {
 		t.Fatal("OpenCode paste not confirmed")
 	}
 }

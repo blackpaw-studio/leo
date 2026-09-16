@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -417,21 +418,16 @@ func TestInjectPromptConfirmsPasteBeforeSubmitting(t *testing.T) {
 	}
 }
 
-// TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately proves the
-// claude/opencode path — where the pasted body appears in the pane on the
-// very first confirm-loop capture — adds zero extra polling: the loop breaks
-// on its first iteration and Enter fires immediately.
-func TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately(t *testing.T) {
+// TestInjectPromptConfirmSettlesAfterOneStabilityPollWhenBodyLandsImmediately
+// proves the claude/opencode path — where the pasted body appears in the
+// pane on the very first confirm-loop capture — still incurs exactly one
+// stability re-check (the fix's guard against submitting into a paste that
+// only flickered into view) rather than growing unbounded: it costs one
+// submitConfirmPoll interval, not zero and not the full attempts budget.
+func TestInjectPromptConfirmSettlesAfterOneStabilityPollWhenBodyLandsImmediately(t *testing.T) {
 	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
 	submitConfirmAttempts = 25
-	// A large poll interval, asserted against below by margin (elapsed must
-	// stay under half of it) rather than a tight absolute wall-clock bound —
-	// a tight bound (e.g. "<100ms") is indistinguishable from ordinary
-	// subprocess-exec overhead (this test now shells out to list-panes too)
-	// on a loaded/slow CI runner, which caused a real flake. Any accidental
-	// poll sleep here misses the margin by hundreds of ms; exec overhead
-	// (single-digit ms even under load) cannot.
-	submitConfirmPoll = 800 * time.Millisecond
+	submitConfirmPoll = 5 * time.Millisecond
 	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
 
 	var got [][]string
@@ -445,31 +441,33 @@ func TestInjectPromptConfirmAddsNoDelayWhenBodyLandsImmediately(t *testing.T) {
 		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
-			if captureCalls == 1 {
+			switch captureCalls {
+			case 1:
 				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			case 2:
+				// Baseline capture, before staging/pasting: the marker isn't
+				// on screen yet.
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			default:
+				// Every confirm-loop capture already shows the body:
+				// claude/opencode commit a bracketed paste synchronously.
+				return exec.Command("printf", "%s", "sync-body-marker\n")
 			}
-			// Every confirm-loop capture already shows the body: claude/opencode
-			// commit a bracketed paste synchronously.
-			return exec.Command("printf", "%s", "sync-body-marker\n")
 		}
 		return exec.Command("true")
 	}
 
 	body := "sync-body-marker"
-	start := time.Now()
 	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
-	// Margin-based, not a tight absolute bound: any accidental confirm-loop
-	// poll sleep (submitConfirmPoll = 800ms) blows well past half a poll
-	// interval, while ordinary subprocess-exec overhead for this test's
-	// handful of tmux calls (a few ms each, even on a loaded CI runner)
-	// cannot.
-	if elapsed := time.Since(start); elapsed > submitConfirmPoll/2 {
-		t.Fatalf("expected no added latency on the synchronous-paste path, took %v (poll interval is %v)", elapsed, submitConfirmPoll)
-	}
-	if captureCalls != 2 {
-		t.Fatalf("expected exactly 2 capture-pane calls (1 readiness + 1 confirm), got %d: %#v", captureCalls, got)
+	// Asserted on capture-pane call count rather than wall-clock time: a
+	// tight wall-clock bound around a single poll interval is flaky under
+	// CI load (a slow scheduler tick can blow a ~100ms margin on its own).
+	// The call-count assertion below proves the same thing deterministically
+	// — exactly one stability re-check, not the loop exhausting its budget.
+	if captureCalls != 4 {
+		t.Fatalf("expected exactly 4 capture-pane calls (1 readiness + 1 baseline + 1 match + 1 stability confirm), got %d: %#v", captureCalls, got)
 	}
 	idx := enterCallIndex(got)
 	if idx != len(got)-1 {
@@ -515,9 +513,10 @@ func TestInjectPromptConfirmFallsThroughToEnterOnBudgetExpiry(t *testing.T) {
 	if idx != len(got)-1 {
 		t.Fatalf("Enter must still be sent as the final call even when unconfirmed, got index %d of %d: %#v", idx, len(got), got)
 	}
-	// 1 readiness capture + submitConfirmAttempts confirm-loop captures.
-	if captureCalls != 1+submitConfirmAttempts {
-		t.Fatalf("expected the confirm loop to exhaust its budget (%d captures after readiness), got %d total captures: %#v", submitConfirmAttempts, captureCalls, got)
+	// 1 readiness capture + 1 baseline capture + submitConfirmAttempts
+	// confirm-loop captures.
+	if captureCalls != 2+submitConfirmAttempts {
+		t.Fatalf("expected the confirm loop to exhaust its budget (%d captures after readiness+baseline), got %d total captures: %#v", submitConfirmAttempts, captureCalls, got)
 	}
 }
 
@@ -627,17 +626,119 @@ func TestInjectPromptShortBodyUsesFixedDelayNotNeedleMatch(t *testing.T) {
 	}
 }
 
-// TestInjectPromptNeedleUsesFirstNonEmptyLine proves Fix 3: the confirm-loop
-// needle is derived from the body's first NON-EMPTY line, not the literal
-// first line — a body starting with blank lines (e.g. "\n\nreal text") still
-// gets a distinctive needle and goes through the Contains-matching confirm
-// loop, instead of silently falling back to the short/empty-needle path.
-func TestInjectPromptNeedleUsesFirstNonEmptyLine(t *testing.T) {
+// TestInjectPromptConfirmRequiresNeedleCountToIncreaseOverBaseline proves the
+// confirm loop no longer treats the mere PRESENCE of the tail needle as
+// proof the new paste landed. If the pane already carries the needle before
+// paste-buffer runs — e.g. a resend of an identical message, or the harness
+// echoing back the previous prompt — a naive presence check matches
+// immediately, before the new paste has rendered at all, and fires Enter
+// into the still-pending paste. The fix takes a baseline occurrence count of
+// the needle right before staging/pasting, and only treats the confirm loop
+// as matched once a later capture's occurrence count exceeds that baseline.
+// Asserts the full ordered tmux call sequence via reflect.DeepEqual: a
+// readiness capture, a baseline capture (before set-buffer/paste-buffer),
+// four head-only confirm-loop captures whose needle count never exceeds the
+// baseline, one capture whose count finally exceeds it, one stability
+// re-check, then submit.
+func TestInjectPromptConfirmRequiresNeedleCountToIncreaseOverBaseline(t *testing.T) {
 	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
-	submitConfirmAttempts = 10
+	submitConfirmAttempts = 12
 	submitConfirmPoll = time.Millisecond
 	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
 
+	body := "HEADSTART-" + strings.Repeat("x", 40) + "-TAILEND-DISTINCT-MARKER-1234567890"
+	bodyRunes := []rune(body)
+	// Partial render of the NEW paste — carries no complete needle of its
+	// own, so it can't contribute a second occurrence on its own.
+	headOnly := string(bodyRunes[:30])
+
+	const buf = "leo-leo-agent-foo"
+	capturePane := []string{"tmux", "-L", "leo", "capture-pane", "-p", "-t", testResolvedPane}
+	cp := func() []string {
+		c := make([]string, len(capturePane))
+		copy(c, capturePane)
+		return c
+	}
+
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			switch {
+			case captureCalls == 1:
+				// Readiness capture.
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			case captureCalls == 2:
+				// Baseline capture, taken before staging/pasting: the pane
+				// already carries one full copy of this exact message — a
+				// resend of an identical prior prompt.
+				return exec.Command("printf", "%s", body+"\n")
+			case captureCalls <= 2+4:
+				// Confirm loop: the new paste is only partially rendered so
+				// far, so the needle's occurrence count is still just the
+				// pre-existing baseline copy (1) — not yet exceeded.
+				return exec.Command("printf", "%s", body+"\n"+headOnly+"\n")
+			default:
+				// The new paste has now fully landed alongside the old copy:
+				// two occurrences of the needle, exceeding the baseline.
+				return exec.Command("printf", "%s", body+"\n"+body+"\n")
+			}
+		}
+		return exec.Command("true")
+	}
+
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+
+	want := [][]string{
+		{"tmux", "-L", "leo", "list-panes", "-t", "=leo-agent-foo:", "-F", "#{pane_id}"},
+		{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "-l", inputProbe},
+		cp(), // readiness capture
+		{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "C-u"},
+		cp(), // baseline capture, before set-buffer/paste-buffer
+		{"tmux", "-L", "leo", "set-buffer", "-b", buf, "--", body},
+		{"tmux", "-L", "leo", "paste-buffer", "-b", buf, "-t", testResolvedPane, "-d"},
+		cp(), cp(), cp(), cp(), // four head-only confirm-loop captures
+		cp(), // capture whose needle count exceeds the baseline
+		cp(), // stability re-check: same count, confirms
+		{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "Enter"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("call sequence mismatch:\n got  %#v\nwant %#v", got, want)
+	}
+}
+
+// TestInjectPromptConfirmWaitsForBodyTailNotJustHead proves the fix for the
+// codex long-prompt paste bug: the pre-fix confirm loop derived its needle
+// from the HEAD of the body's first non-empty line, so a long paste that
+// renders progressively (head visible immediately, tail still streaming in)
+// satisfied the needle before the paste actually completed, and an Enter
+// fired in that window landed mid-paste as a literal newline instead of a
+// submit. The fix derives the needle from the body's TAIL instead, so the
+// confirm loop must withhold Enter until the tail — not just the head — is
+// visible in the pane.
+func TestInjectPromptConfirmWaitsForBodyTailNotJustHead(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 12
+	submitConfirmPoll = time.Millisecond
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	body := "HEADSTART-" + strings.Repeat("x", 40) + "-TAILEND-DISTINCT-MARKER-1234567890"
+	bodyRunes := []rune(body)
+	// Only the first 30 runes have "rendered" so far in the pane — enough to
+	// carry the OLD head-derived needle (first 24 runes) but nowhere near the
+	// tail.
+	headOnly := string(bodyRunes[:30])
+
+	const withheldCaptures = 4 // confirm-loop captures showing only the head before the tail appears
 	var got [][]string
 	captureCalls := 0
 	orig := execCommand
@@ -652,24 +753,175 @@ func TestInjectPromptNeedleUsesFirstNonEmptyLine(t *testing.T) {
 			if captureCalls == 1 {
 				return exec.Command("printf", "%s", paneWithInput(inputProbe))
 			}
-			// Only matches once the pane shows the first NON-EMPTY line's
-			// text — proving the needle skipped the leading blank lines
-			// rather than deriving an empty needle from them.
-			return exec.Command("printf", "%s", "hello world this is the real content\n")
+			if captureCalls <= 1+withheldCaptures {
+				// Progressive rendering: only the head of the paste has landed.
+				return exec.Command("printf", "%s", headOnly+"\n")
+			}
+			// Full body (including tail) has landed.
+			return exec.Command("printf", "%s", body+"\n")
 		}
 		return exec.Command("true")
 	}
 
-	body := "\n\nhello world this is the real content"
 	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
 	}
-	if captureCalls != 2 {
-		t.Fatalf("expected exactly 2 captures (1 readiness + 1 confirm-loop match), got %d: %#v", captureCalls, got)
+
+	idx := enterCallIndex(got)
+	if idx == -1 {
+		t.Fatalf("expected a submit Enter call, got none: %#v", got)
+	}
+	if idx != len(got)-1 {
+		t.Fatalf("Enter must be the final call, got at index %d of %d: %#v", idx, len(got), got)
+	}
+	if n := captureCallsBefore(got, idx); n < 1+withheldCaptures {
+		t.Fatalf("Enter fired before the body's tail was visible: only %d capture-pane calls before it (head-only captures were %d), want >= %d: %#v", n, withheldCaptures, 1+withheldCaptures, got)
+	}
+}
+
+// TestInjectPromptConfirmMatchesTailAcrossLineWrap proves the tail-needle
+// match normalises whitespace on both sides before comparing, so a terminal
+// wrapping the pasted tail across two rendered lines (inserting a newline in
+// the middle of what was one contiguous run of text) doesn't defeat the
+// match.
+func TestInjectPromptConfirmMatchesTailAcrossLineWrap(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 10
+	submitConfirmPoll = time.Millisecond
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	body := "prefix text before the tail TAILMARKER1234567890AB"
+	bodyRunes := []rune(body)
+	needleRunes := bodyRunes[len(bodyRunes)-submitConfirmNeedleRunes:]
+	mid := len(needleRunes) / 2
+	wrapped := string(needleRunes[:mid]) + "\n" + string(needleRunes[mid:])
+	prefix := string(bodyRunes[:len(bodyRunes)-submitConfirmNeedleRunes])
+
+	const buf = "leo-leo-agent-foo"
+	capturePane := []string{"tmux", "-L", "leo", "capture-pane", "-p", "-t", testResolvedPane}
+	cp := func() []string {
+		c := make([]string, len(capturePane))
+		copy(c, capturePane)
+		return c
+	}
+
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			switch captureCalls {
+			case 1:
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			case 2:
+				// Baseline capture, before staging/pasting: the tail isn't
+				// on screen yet.
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			default:
+				// Every confirm-loop capture shows the same wrapped
+				// rendering — stable from the start — so the loop should
+				// still match and submit despite the mid-needle newline.
+				return exec.Command("printf", "%s", prefix+wrapped+"\n")
+			}
+		}
+		return exec.Command("true")
+	}
+
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
+	}
+
+	want := [][]string{
+		{"tmux", "-L", "leo", "list-panes", "-t", "=leo-agent-foo:", "-F", "#{pane_id}"},
+		{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "-l", inputProbe},
+		cp(), // readiness capture
+		{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "C-u"},
+		cp(), // baseline capture
+		{"tmux", "-L", "leo", "set-buffer", "-b", buf, "--", body},
+		{"tmux", "-L", "leo", "paste-buffer", "-b", buf, "-t", testResolvedPane, "-d"},
+		cp(), // match capture: wrapped tail matches despite the mid-needle newline
+		cp(), // stability re-check: same content, confirms
+		{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "Enter"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("call sequence mismatch:\n got  %#v\nwant %#v", got, want)
+	}
+}
+
+// TestSubmitConfirmNeedleSpansWholeNormalizedBody proves the needle is drawn
+// from the tail of the WHOLE whitespace-normalized body, not just its last
+// line: matching is already done against normalized text everywhere the
+// needle is used, so line boundaries carry no meaning for the needle itself.
+// A body whose last line is a single short token ("}", "ok") would otherwise
+// yield a near-useless 1-rune needle even though the body plainly has
+// distinctive content just before it, across the line break.
+func TestSubmitConfirmNeedleSpansWholeNormalizedBody(t *testing.T) {
+	body := "func exampleWithADistinctiveNameForThisTest() {\n    doSomething()\n}"
+	needle := submitConfirmNeedle(body)
+	if got, want := len([]rune(needle)), submitConfirmNeedleRunes; got != want {
+		t.Fatalf("needle = %q (%d runes), want exactly %d runes drawn across the line boundary", needle, got, want)
+	}
+	if !strings.HasSuffix(needle, "}") {
+		t.Fatalf("needle = %q, want it to end with the body's actual last character '}'", needle)
+	}
+	if needle == "}" {
+		t.Fatal("needle was derived from the last line alone (1 rune), not the whole normalized body")
+	}
+	if want := stripWhitespace(needle); needle != want {
+		t.Fatalf("needle = %q is not already whitespace-normalized (want %q)", needle, want)
+	}
+}
+
+// TestInjectPromptConfirmsCrossLineTailWhenLastLineIsShort is the end-to-end
+// regression test: a multiline body ending in a short line ("}") must still
+// confirm via a needle whose tail reaches back across the line boundary,
+// rather than deriving an unusably short (or floor-failing) needle from the
+// last line alone.
+func TestInjectPromptConfirmsCrossLineTailWhenLastLineIsShort(t *testing.T) {
+	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
+	submitConfirmAttempts = 10
+	submitConfirmPoll = time.Millisecond
+	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	body := "func exampleWithADistinctiveNameForThisTest() {\n    doSomething()\n}"
+	rendered := body + "\n" // pane renders the body as-is, newlines intact
+
+	var got [][]string
+	captureCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			captureCalls++
+			if captureCalls <= 2 {
+				// Readiness + baseline: nothing has landed yet.
+				return exec.Command("printf", "%s", paneWithInput(inputProbe))
+			}
+			return exec.Command("printf", "%s", rendered)
+		}
+		return exec.Command("true")
+	}
+
+	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
+		t.Fatalf("injectPrompt: %v", err)
 	}
 	idx := enterCallIndex(got)
 	if idx != len(got)-1 {
 		t.Fatalf("Enter must be the final call, got index %d of %d: %#v", idx, len(got), got)
+	}
+	// 1 readiness + 1 baseline + 1 match + 1 stability re-check.
+	if captureCalls != 4 {
+		t.Fatalf("expected exactly 4 captures (1 readiness + 1 baseline + match + stability confirm), got %d: %#v", captureCalls, got)
 	}
 }
 
