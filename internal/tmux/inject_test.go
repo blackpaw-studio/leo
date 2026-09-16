@@ -854,18 +854,43 @@ func TestInjectPromptConfirmMatchesTailAcrossLineWrap(t *testing.T) {
 	}
 }
 
-// TestInjectPromptNeedleUsesFirstNonEmptyLine proves Fix 3: the confirm-loop
-// needle is derived from the body's LAST non-empty line, not its first (and
-// not the literal last line either) — a body with an earlier distinct line
-// followed by blank trailing lines (e.g. "ignore this\n\nreal
-// content\n\n") still derives its needle from "real content", proving both
-// that trailing blank lines are skipped and that an earlier non-empty line
-// is NOT what the needle is drawn from.
-func TestInjectPromptNeedleUsesLastNonEmptyLine(t *testing.T) {
+// TestSubmitConfirmNeedleSpansWholeNormalizedBody proves the needle is drawn
+// from the tail of the WHOLE whitespace-normalized body, not just its last
+// line: matching is already done against normalized text everywhere the
+// needle is used, so line boundaries carry no meaning for the needle itself.
+// A body whose last line is a single short token ("}", "ok") would otherwise
+// yield a near-useless 1-rune needle even though the body plainly has
+// distinctive content just before it, across the line break.
+func TestSubmitConfirmNeedleSpansWholeNormalizedBody(t *testing.T) {
+	body := "func exampleWithADistinctiveNameForThisTest() {\n    doSomething()\n}"
+	needle := submitConfirmNeedle(body)
+	if got, want := len([]rune(needle)), submitConfirmNeedleRunes; got != want {
+		t.Fatalf("needle = %q (%d runes), want exactly %d runes drawn across the line boundary", needle, got, want)
+	}
+	if !strings.HasSuffix(needle, "}") {
+		t.Fatalf("needle = %q, want it to end with the body's actual last character '}'", needle)
+	}
+	if needle == "}" {
+		t.Fatal("needle was derived from the last line alone (1 rune), not the whole normalized body")
+	}
+	if want := stripWhitespace(needle); needle != want {
+		t.Fatalf("needle = %q is not already whitespace-normalized (want %q)", needle, want)
+	}
+}
+
+// TestInjectPromptConfirmsCrossLineTailWhenLastLineIsShort is the end-to-end
+// regression test: a multiline body ending in a short line ("}") must still
+// confirm via a needle whose tail reaches back across the line boundary,
+// rather than deriving an unusably short (or floor-failing) needle from the
+// last line alone.
+func TestInjectPromptConfirmsCrossLineTailWhenLastLineIsShort(t *testing.T) {
 	origAttempts, origPoll := submitConfirmAttempts, submitConfirmPoll
 	submitConfirmAttempts = 10
 	submitConfirmPoll = time.Millisecond
 	defer func() { submitConfirmAttempts = origAttempts; submitConfirmPoll = origPoll }()
+
+	body := "func exampleWithADistinctiveNameForThisTest() {\n    doSomething()\n}"
+	rendered := body + "\n" // pane renders the body as-is, newlines intact
 
 	var got [][]string
 	captureCalls := 0
@@ -878,37 +903,25 @@ func TestInjectPromptNeedleUsesLastNonEmptyLine(t *testing.T) {
 		}
 		if len(args) >= 3 && args[2] == "capture-pane" {
 			captureCalls++
-			switch captureCalls {
-			case 1:
+			if captureCalls <= 2 {
+				// Readiness + baseline: nothing has landed yet.
 				return exec.Command("printf", "%s", paneWithInput(inputProbe))
-			case 2:
-				// Baseline capture, before staging/pasting: nothing has
-				// landed yet.
-				return exec.Command("printf", "%s", paneWithInput(inputProbe))
-			default:
-				// Only matches once the pane shows the LAST non-empty line's
-				// text ("hello world this is the real content"), not the
-				// earlier "ignore this first line" — proving the needle is
-				// drawn from the end of the body, and skips trailing blanks
-				// rather than deriving an empty needle from them.
-				return exec.Command("printf", "%s", "hello world this is the real content\n")
 			}
+			return exec.Command("printf", "%s", rendered)
 		}
 		return exec.Command("true")
 	}
 
-	body := "ignore this first line\n\nhello world this is the real content\n\n"
 	if err := injectPrompt(context.Background(), "tmux", "leo-agent-foo", body, 1, time.Millisecond); err != nil {
 		t.Fatalf("injectPrompt: %v", err)
-	}
-	// 1 readiness capture + 1 baseline capture + 1 confirm-loop match + 1
-	// stability re-check.
-	if captureCalls != 4 {
-		t.Fatalf("expected exactly 4 captures (1 readiness + 1 baseline + match + stability confirm), got %d: %#v", captureCalls, got)
 	}
 	idx := enterCallIndex(got)
 	if idx != len(got)-1 {
 		t.Fatalf("Enter must be the final call, got index %d of %d: %#v", idx, len(got), got)
+	}
+	// 1 readiness + 1 baseline + 1 match + 1 stability re-check.
+	if captureCalls != 4 {
+		t.Fatalf("expected exactly 4 captures (1 readiness + 1 baseline + match + stability confirm), got %d: %#v", captureCalls, got)
 	}
 }
 

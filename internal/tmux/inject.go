@@ -375,28 +375,25 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 	return nil
 }
 
-// submitConfirmNeedle derives a short, distinctive slice of body's LAST
-// non-empty line to look for in the pane before submitting — long enough to
-// be unlikely to appear by coincidence, short enough to survive the input
-// line wrapping the pasted text. The slice is taken from the END of that
-// line (see submitConfirmNeedleRunes for why): it can only appear in the
-// pane once the whole body, including its tail, has actually landed. A body
-// like "real text\n\n" would otherwise yield an empty needle from its
-// literal last line and skip confirmation entirely, even though it plainly
-// has distinctive content earlier. Returns "" if every line is
-// empty/whitespace-only, which callers treat as "nothing distinctive to
-// match" (see submitConfirmFallbackDelays).
+// submitConfirmNeedle derives a short, distinctive TAIL slice of body's
+// WHOLE whitespace-normalized text — not just its last line — to look for in
+// the pane before submitting: long enough to be unlikely to appear by
+// coincidence, short enough to survive the input line wrapping the pasted
+// text. Matching against this needle is already done against
+// whitespace-normalized pane text everywhere it's used (both here and in
+// InjectInto), so line boundaries carry no meaning for the needle itself —
+// deriving from the last line ALONE would yield a near-useless needle for a
+// body whose last line is short ("}", "ok"), even though the body plainly
+// has distinctive content just before it, across the line break. The
+// returned needle is itself already whitespace-normalized. Returns "" only
+// when the whole body is empty/whitespace-only, which callers treat as
+// "nothing distinctive to match" (see submitConfirmFallbackDelays).
 func submitConfirmNeedle(body string) string {
-	var lastNonEmpty string
-	for _, line := range strings.Split(body, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			lastNonEmpty = trimmed
-		}
-	}
-	if lastNonEmpty == "" {
+	normalized := stripWhitespace(body)
+	if normalized == "" {
 		return ""
 	}
-	runes := []rune(lastNonEmpty)
+	runes := []rune(normalized)
 	if len(runes) > submitConfirmNeedleRunes {
 		runes = runes[len(runes)-submitConfirmNeedleRunes:]
 	}

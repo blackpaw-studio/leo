@@ -77,7 +77,12 @@ func TestOpeningInjectWaitsForReady(t *testing.T) {
 	r.StartupPollInterval = time.Nanosecond
 	r.StartupTimeout = time.Second
 	var calls [][]string
-	captures := []string{"starting harness\nMCP warning\n", "starting harness\nMCP warning\n", "────\n❯ \n────\n", "────\n❯ \n────\n", "────\n❯ [Pasted text #1 +1 lines]\n────\n"}
+	captures := []string{
+		"starting harness\nMCP warning\n", "starting harness\nMCP warning\n", "────\n❯ \n────\n", // InjectOpening's own readiness poll.
+		"────\n❯ \n────\n",                          // InjectIntoWith's baseline capture, before staging/pasting.
+		"────\n❯ [Pasted text #1 +1 lines]\n────\n", // confirm loop: paste placeholder lands.
+		"────\n❯ [Pasted text #1 +1 lines]\n────\n", // confirm loop stability re-check: same content.
+	}
 	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
 		calls = append(calls, args)
 		if slices.Contains(args, "capture-pane") {
