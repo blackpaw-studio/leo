@@ -1,9 +1,8 @@
 package web
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/history"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
 )
 
 // defaultSSEHeartbeat is the interval between SSE comment heartbeats on
@@ -35,41 +35,31 @@ const sseSubscriberBuffer = 32
 // handleAPIState serves the whole observable world as one snapshot.
 // GET /api/v1/state
 func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
-		return
-	}
-
-	var records []agent.Record
-	if s.agentSvc != nil {
-		records = s.agentSvc.List()
-	}
-
-	var processStates map[string]ProcessStateInfo
-	if s.processes != nil {
-		processStates = s.processes.States()
-	}
-
-	var cronEntries []cron.EntryInfo
-	if s.scheduler != nil {
-		cronEntries = s.scheduler.List()
-	}
-
-	snap := buildSnapshot(snapshotInput{
-		Config:        cfg,
-		Records:       records,
-		ProcessStates: processStates,
-		CronEntries:   cronEntries,
-		History:       s.loadHistory(cfg).All(),
-		Activity:      s.activity,
-		RunLog:        s.runLog,
-		MessageLog:    s.messageLog,
-		LeoVersion:    s.version,
-		Now:           time.Now(),
+	httpapi.ServeState(w, r, func(context.Context) (any, error) {
+		cfg, err := s.loadConfig()
+		if err != nil {
+			return nil, err
+		}
+		var records []agent.Record
+		if s.agentSvc != nil {
+			records = s.agentSvc.List()
+		}
+		var states map[string]ProcessStateInfo
+		if s.processes != nil {
+			states = s.processes.States()
+		}
+		var entries []cron.EntryInfo
+		if s.scheduler != nil {
+			entries = s.scheduler.List()
+		}
+		return buildSnapshot(snapshotInput{Config: cfg, Records: records, ProcessStates: states, CronEntries: entries, History: s.loadHistory(cfg).All(), Activity: s.activity, RunLog: s.runLog, MessageLog: s.messageLog, LeoVersion: s.version, Now: time.Now()}), nil
+	}, func(w http.ResponseWriter, status int, data any, err error) {
+		if err != nil {
+			writeJSON(w, status, apiResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, status, apiResponse{OK: true, Data: data})
 	})
-
-	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: snap})
 }
 
 // snapshotInput is buildSnapshot's input: every raw source of world state,
@@ -194,6 +184,19 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities
 	}
 
 	return a
+}
+
+func ProjectAgents(records []agent.Record, states map[string]ProcessStateInfo, activity observe.ActivityProvider, cfg *config.Config) []observe.Agent {
+	var activities map[string]observe.AgentActivity
+	if activity != nil {
+		activities = activity.Activities()
+	}
+	out := make([]observe.Agent, 0, len(records))
+	for _, rec := range records {
+		out = append(out, buildAgent(rec, states, activities, cfg))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // buildTask maps one configured task to its observe.Task view.
@@ -337,116 +340,15 @@ func runError(e history.Entry) string {
 // written directly, per the wire contract.
 // GET /api/v1/events
 func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
-	if _, ok := w.(http.Flusher); !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	// The connection itself is long-lived (no overall deadline), but every
-	// individual write gets its own bounded deadline via setWriteDeadline
-	// below — clearing the deadline entirely here (as a prior version did)
-	// let a stalled client (one that stops reading, e.g. a full TCP receive
-	// window) block this goroutine inside a write forever, since
-	// r.Context() only fires when the connection itself closes.
-	//
-	// http.NewResponseController never returns nil, so — unlike the http.Flusher
-	// type assertion above — there is no "unsupported" case to guard here.
-	rc := http.NewResponseController(w)
 	writeTimeout := s.sseWriteTimeout
+	heartbeat := s.sseHeartbeat
 	if writeTimeout <= 0 {
 		writeTimeout = defaultSSEWriteTimeout
 	}
-	setWriteDeadline := func() {
-		_ = rc.SetWriteDeadline(time.Now().Add(writeTimeout))
-	}
-
-	// Subscribe before writing anything a client can observe (headers
-	// included): a subscriber registered only after the first response byte
-	// reaches the client races a publisher that fires the instant it sees
-	// the connection open — the response controller's Do() can return once
-	// headers land, a few instructions before Subscribe would otherwise run,
-	// so a fast publish immediately after connecting could be dropped.
-	var events <-chan observe.Event
-	var helloSeq uint64
-	if s.events != nil {
-		var unsubscribe func()
-		// Subscribe atomically returns the starting seq alongside
-		// registration, so there is no window in which a concurrent Publish
-		// can be counted in helloSeq without also being delivered to this
-		// subscriber. See observe.Bus.Subscribe's doc comment.
-		events, unsubscribe, helloSeq = s.events.Subscribe(sseSubscriberBuffer)
-		defer unsubscribe()
-	}
-
-	setWriteDeadline()
-	w.WriteHeader(http.StatusOK)
-
-	now := time.Now()
-	hello := observe.HelloPayload{
-		Meta:       observe.Meta{Seq: helloSeq, At: now},
-		Version:    observe.SnapshotVersion,
-		ServerTime: now,
-	}
-	setWriteDeadline()
-	if err := writeSSEEvent(w, string(observe.EventHello), hello); err != nil {
-		return
-	}
-	if err := rc.Flush(); err != nil {
-		return
-	}
-
-	heartbeat := s.sseHeartbeat
 	if heartbeat <= 0 {
 		heartbeat = defaultSSEHeartbeat
 	}
-	ticker := time.NewTicker(heartbeat)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-			setWriteDeadline()
-			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
-				return
-			}
-			if err := rc.Flush(); err != nil {
-				return
-			}
-		case ev, ok := <-events:
-			// events is nil when s.events is unset: a nil channel receive
-			// never fires, so this case is simply inert (hello + heartbeats
-			// only) rather than needing special-casing here.
-			if !ok {
-				// The source closed our subscription (e.g. we were dropped
-				// as a slow consumer) — end the response cleanly so the
-				// client reconnects rather than spinning on a closed channel.
-				return
-			}
-			setWriteDeadline()
-			if err := writeSSEEvent(w, string(ev.Type), ev.Payload); err != nil {
-				return
-			}
-			if err := rc.Flush(); err != nil {
-				return
-			}
-		}
-	}
-}
-
-// writeSSEEvent writes one named SSE frame. payload is JSON-marshaled, never
-// interpolated into markup — Action.Detail and similar fields carry untrusted
-// display text, and json.Marshal is what keeps it safely escaped.
-func writeSSEEvent(w io.Writer, event string, payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
-	return err
+	httpapi.ServeEvents(w, r, httpapi.EventsOptions{Source: s.events, Covered: map[observe.EventType]bool{observe.EventAgentSpawned: true, observe.EventAgentStateChanged: true, observe.EventAgentActivity: true, observe.EventAgentStopped: true}, Buffer: sseSubscriberBuffer, Heartbeat: heartbeat, WriteTimeout: writeTimeout, Hello: func(seq uint64, now time.Time) any {
+		return observe.HelloPayload{Meta: observe.Meta{Seq: seq, At: now}, Version: observe.SnapshotVersion, ServerTime: now}
+	}})
 }

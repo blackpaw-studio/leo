@@ -24,6 +24,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/hosts"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -818,6 +819,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.
 	srv.SetObservability(bus, runLog, messageLog, activityTracker, opts.Version)
+	var hostHub *hosts.Hub
+	if hubCfg, loadErr := config.Load(configPath); loadErr == nil {
+		hostHub = hosts.New(hubCfg, bus, srv.Handler())
+		srv.SetHostHub(hostHub)
+	}
 	// SetLogPath before Start/StartWeb so the Service page's log tail knows
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
@@ -837,6 +843,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
 		defer func() { _ = srv.Shutdown() }()
+		if hostHub != nil {
+			defer func() { _ = hostHub.Close() }()
+			hostHub.Start(ctx)
+		}
 		fmt.Fprintf(os.Stdout, "daemon IPC server listening on %s\n", sockPath)
 
 		// Build the agent.Manager shared by web, daemon, and CLI handlers.

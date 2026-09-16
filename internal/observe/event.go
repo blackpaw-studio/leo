@@ -1,6 +1,9 @@
 package observe
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // EventType is the SSE event name. Consumers must ignore types they do not recognize, so
 // new types can be added without breaking them.
@@ -25,7 +28,8 @@ const (
 	EventTaskRunFailed EventType = "task_run_failed"
 	// EventAgentMessage announces one agent-to-agent message being routed, as a pair of
 	// names only. Never carries the message body.
-	EventAgentMessage EventType = "agent_message"
+	EventAgentMessage     EventType = "agent_message"
+	EventHostStateChanged EventType = "host_state_changed"
 )
 
 // Meta is the sequence number and timestamp carried by every event payload. The bus
@@ -37,6 +41,22 @@ const (
 type Meta struct {
 	Seq uint64    `json:"seq"`
 	At  time.Time `json:"at"`
+}
+
+// RawPayload carries an event received from another daemon. Fields are kept
+// verbatim while Meta is restamped by the local bus.
+type RawPayload struct {
+	Meta
+	Fields map[string]any `json:"-"`
+}
+
+func (p *RawPayload) MarshalJSON() ([]byte, error) {
+	m := make(map[string]any, len(p.Fields)+2)
+	for k, v := range p.Fields {
+		m[k] = v
+	}
+	m["seq"], m["at"] = p.Seq, p.At
+	return json.Marshal(m)
 }
 
 // Payload is one event's body. Implementations embed Meta, which supplies stamp.

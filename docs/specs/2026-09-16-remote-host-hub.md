@@ -75,6 +75,10 @@ Every route above except the SSE stream returns the standard
 responses are the remote's envelope passed through unchanged.
 Unknown host name -> 404 `{ok:false, code:"host_unknown", error}`.
 
+`GET /events?scope=local` and `GET /state?scope=local` return only the
+daemon's localhost events/state. Hubs always use this projection for remote
+fan-in, preventing already-relayed host data from being relayed recursively.
+
 ### Event fan-in
 
 The SSE and state handlers in `internal/web/handlers_observe.go` move to a
