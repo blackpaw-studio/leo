@@ -19,12 +19,14 @@ type fakeInteractiveRuntime struct {
 	empty        bool
 	kill         int
 	injectErr    error
+	injectHook   func()
 	placements   []string
 	sessionAlive *bool
 	killHook     func()
 	launchHook   func()
 	killErr      error
 	layouts      []string
+	layoutErr    map[string]error
 }
 
 type recoveringInteractiveRuntime struct {
@@ -72,9 +74,12 @@ func (r *fakeInteractiveRuntime) ReapplyLayout(target string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.layouts = append(r.layouts, target)
-	return nil
+	return r.layoutErr[target]
 }
 func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string, arm func() error) error {
+	if r.injectHook != nil {
+		r.injectHook()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.injected = append(r.injected, text)

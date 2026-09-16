@@ -133,7 +133,14 @@ func (v *Viewer) OnStart(rec Record) string {
 	}
 	watch := fmt.Sprintf("%s --config %s dispatch watch %s", shellQuote(leo), shellQuote(v.ConfigPath), rec.ID)
 	name := viewerWindowName(rec)
-	out, err := v.output("new-window", "-d", "-P", "-F", "#{window_id}", "-t", tmux.Target(session), "-n", name, watch)
+	// A window cannot have remain-on-exit pre-set before it exists (unlike
+	// the caller's window in openSplit), so create it with a placeholder
+	// command that cannot exit, turn the option on, then respawn the real
+	// watch command into the same pane. This avoids the same race as
+	// split-window: a fast-exiting watch process closing the window
+	// before a later set-window-option ever runs. respawn-pane exists on
+	// every tmux >= 3.2, our minimum supported version.
+	out, err := v.output("new-window", "-d", "-P", "-F", "#{window_id}", "-t", tmux.Target(session), "-n", name, "sleep 86400")
 	if err != nil {
 		v.log("opening dispatch viewer %q: %v", rec.ID, err)
 		return ""
@@ -151,8 +158,27 @@ func (v *Viewer) OnStart(rec Record) string {
 	v.mu.Unlock()
 	if err := v.run("set-window-option", "-t", windowID, "remain-on-exit", "on"); err != nil {
 		v.log("keeping dispatch viewer %q open: %v", rec.ID, err)
+		v.abandonWindow(rec.ID, windowID)
+		return ""
+	}
+	if err := v.run("respawn-pane", "-k", "-t", windowID, watch); err != nil {
+		v.log("starting dispatch viewer %q: %v", rec.ID, err)
+		v.abandonWindow(rec.ID, windowID)
+		return ""
 	}
 	return windowID
+}
+
+// abandonWindow kills a placeholder window that failed to become a real
+// viewer (remain-on-exit never applied, or the watch command never
+// started), so it doesn't linger looking like a live viewer.
+func (v *Viewer) abandonWindow(recID, windowID string) {
+	v.mu.Lock()
+	delete(v.windowIDs, recID)
+	v.mu.Unlock()
+	if err := v.run("kill-window", "-t", windowID); err != nil {
+		v.log("killing abandoned dispatch viewer window %q: %v", windowID, err)
+	}
 }
 
 func (v *Viewer) openSplit(rec Record, placement ViewerPlacement) string {
@@ -161,16 +187,29 @@ func (v *Viewer) openSplit(rec Record, placement ViewerPlacement) string {
 		return ""
 	}
 	watch := fmt.Sprintf("%s --config %s dispatch watch %s", shellQuote(leo), shellQuote(v.ConfigPath), rec.ID)
+	// remain-on-exit must be on before the pane is created: a fast-exiting
+	// watch process can close the pane before a later, pane-scoped
+	// set-option ever runs (a real race, observed on Linux tmux where
+	// process startup is quick relative to macOS). It is set at window
+	// scope only long enough to cover that gap, then pinned onto the new
+	// pane specifically and unset from the window again immediately after
+	// — leaving it at window scope would make every other pane in the
+	// caller's window (including the caller's own) linger dead on exit,
+	// which the agent supervisor does not expect.
+	_ = v.run("set-window-option", "-t", rec.CallerWindowID, "remain-on-exit", "on")
 	out, err := v.output("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", placement.Target, "-c", rec.Cwd, watch)
 	if err != nil {
+		_ = v.run("set-window-option", "-u", "-t", rec.CallerWindowID, "remain-on-exit")
 		return ""
 	}
 	pane := strings.TrimSpace(string(out))
 	if pane == "" {
+		_ = v.run("set-window-option", "-u", "-t", rec.CallerWindowID, "remain-on-exit")
 		return ""
 	}
 	_ = v.run("select-pane", "-t", pane, "-T", viewerWindowName(rec))
 	_ = v.run("set-option", "-p", "-t", pane, "remain-on-exit", "on")
+	_ = v.run("set-window-option", "-u", "-t", rec.CallerWindowID, "remain-on-exit")
 	_ = v.run("set-option", "-w", "-t", rec.CallerWindowID, "main-pane-height", fmt.Sprintf("%d%%", placement.MainPaneHeight))
 	_ = v.run("select-layout", "-t", rec.CallerWindowID, "main-horizontal")
 	return pane
@@ -252,7 +291,7 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 				}
 				continue
 			}
-			v.killWindow(rec.ID, rec.ViewerWindowID)
+			_ = v.killWindow(rec.ID, rec.ViewerWindowID)
 			continue
 		}
 		if rec.ViewerWindowID != "" && !rec.Status.Terminal() {
@@ -269,30 +308,66 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 }
 
 func (v *Viewer) kill(id string) {
-	v.killWindow(id, "")
+	_ = v.killWindow(id, "")
 }
 
-func (v *Viewer) killWindow(id, persistedWindowID string) {
+func (v *Viewer) killWindow(id, persistedWindowID string) error {
+	return v.killWindowWithRetry(id, persistedWindowID, false)
+}
+
+func (v *Viewer) killWindowWithRetry(id, persistedWindowID string, retry bool) error {
 	v.mu.Lock()
 	if persistedWindowID != "" && v.handledWindowIDs[id] == persistedWindowID {
 		v.mu.Unlock()
-		return
+		return nil
 	}
 	windowID := v.windowIDs[id]
 	if windowID == "" {
 		windowID = persistedWindowID
 	}
-	delete(v.windowIDs, id)
-	if windowID != "" {
-		v.recordHandledWindow(id, windowID)
-	}
 	v.mu.Unlock()
 	if windowID == "" {
-		return
+		return nil
 	}
 	if err := v.run("kill-window", "-t", windowID); err != nil {
 		v.log("closing dispatch viewer %q: %v", id, err)
+		if retry {
+			v.mu.Lock()
+			if v.handledWindowIDs == nil {
+				v.handledWindowIDs = make(map[string]string)
+			}
+			if v.windowIDs == nil {
+				v.windowIDs = make(map[string]string)
+			}
+			delete(v.handledWindowIDs, id)
+			v.windowIDs[id] = windowID
+			v.mu.Unlock()
+		}
+		return err
 	}
+	v.mu.Lock()
+	delete(v.windowIDs, id)
+	v.recordHandledWindow(id, windowID)
+	v.mu.Unlock()
+	return nil
+}
+
+// CloseFinished closes a terminal headless viewer regardless of outcome.
+func (v *Viewer) CloseFinished(rec Record, layout func(string) error) (Record, error) {
+	v.defaults()
+	if rec.ViewerKind == "split" && rec.ViewerPaneID != "" {
+		return v.ClosePane(rec, rec.ViewerPaneID, func(p string) error { return v.run("kill-pane", "-t", p) }, layout)
+	}
+	if rec.ViewerWindowID != "" {
+		if err := v.killWindowWithRetry(rec.ID, rec.ViewerWindowID, true); err != nil {
+			return rec, err
+		}
+		rec.ViewerWindowID = ""
+		if v.PersistRecord != nil {
+			v.PersistRecord(rec)
+		}
+	}
+	return rec, nil
 }
 
 // recordHandledWindow retains only the most recently handled persisted window

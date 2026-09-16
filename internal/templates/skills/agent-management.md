@@ -11,6 +11,7 @@ passes, release an interactive dispatch with `leo_release`. Use
 `leo_consult` for a synchronous second opinion, and `leo_cancel` to stop an
 in-flight dispatch. Call `leo dispatch watch <id>` to inspect the retained
 event feed; headless dispatches also open a viewer pane beneath the caller,
+whose placement and pane cap can be changed with tmux `prefix + L`,
 with a fallback window when needed. See the Dispatches configuration guide
 for the complete contract.
 

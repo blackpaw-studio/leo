@@ -167,6 +167,11 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	argv := []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", label, "-c", req.Cwd}
 	if req.Placement.Kind == "split" {
 		argv = []string{"split-window", "-d", "-P", "-F", "#{pane_id}", "-t", req.Placement.Target, "-c", req.Cwd}
+		// See consult.Viewer.openSplit: a pane-scoped remain-on-exit set
+		// after split-window races a fast-exiting process closing the pane
+		// first. Cover the gap at window scope, then narrow to the new
+		// pane and unset the window-level option once it is in place.
+		_ = r.run(ctx, "set-window-option", "-t", req.CallerWindowID, "remain-on-exit", "on")
 	}
 	for _, k := range sortedKeys(env) {
 		argv = append(argv, "-e", k+"="+env[k])
@@ -174,6 +179,10 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	argv = append(argv, strings.Join(words, " "))
 	out, err := r.output(ctx, argv...)
 	if err != nil && req.Placement.Kind == "split" {
+		// The split attempt already set window-scoped remain-on-exit; the
+		// fallback below no longer runs the "== split" cleanup block, so
+		// unset it here to avoid leaving it on the caller's window.
+		_ = r.run(ctx, "set-window-option", "-u", "-t", req.CallerWindowID, "remain-on-exit")
 		argv = []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", label, "-c", req.Cwd}
 		for _, k := range sortedKeys(env) {
 			argv = append(argv, "-e", k+"="+env[k])
@@ -189,11 +198,15 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	}
 	pane := strings.TrimSpace(string(out))
 	if pane == "" {
+		if req.Placement.Kind == "split" {
+			_ = r.run(ctx, "set-window-option", "-u", "-t", req.CallerWindowID, "remain-on-exit")
+		}
 		return "", "", fmt.Errorf("tmux returned no pane id")
 	}
 	if req.Placement.Kind == "split" {
 		_ = r.run(ctx, "select-pane", "-t", pane, "-T", label)
 		_ = r.run(ctx, "set-option", "-p", "-t", pane, "remain-on-exit", "on")
+		_ = r.run(ctx, "set-window-option", "-u", "-t", req.CallerWindowID, "remain-on-exit")
 		_ = r.run(ctx, "set-option", "-w", "-t", req.CallerWindowID, "main-pane-height", fmt.Sprintf("%d%%", req.Placement.MainPaneHeight))
 		_ = r.run(ctx, "select-layout", "-t", req.CallerWindowID, "main-horizontal")
 	}

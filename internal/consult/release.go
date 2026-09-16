@@ -5,6 +5,10 @@ import "fmt"
 func (d *Dispatcher) Release(id string) (Record, error) {
 	unlock := d.serialLocks([]string{id})
 	defer unlock()
+	return d.releaseLocked(id, nil)
+}
+
+func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record, error) {
 	rec, state, err := d.lookup(id)
 	if err != nil {
 		return Record{}, fmt.Errorf("unknown dispatch %s", id)
@@ -16,7 +20,7 @@ func (d *Dispatcher) Release(id string) (Record, error) {
 		return rec, nil
 	}
 	switch rec.Status {
-	case StatusIdle, StatusDone, StatusFailed, StatusCanceled, StatusClosed:
+	case StatusIdle, StatusDone, StatusFailed, StatusCanceled, StatusTimeout, StatusClosed:
 	default:
 		return rec, invalidf("dispatch %s cannot be released while %s", id, rec.Status)
 	}
@@ -29,7 +33,7 @@ func (d *Dispatcher) Release(id string) (Record, error) {
 			return rec, invalidf("dispatch %s is being released", id)
 		}
 		switch rec.Status {
-		case StatusIdle, StatusDone, StatusFailed, StatusCanceled, StatusClosed:
+		case StatusIdle, StatusDone, StatusFailed, StatusCanceled, StatusTimeout, StatusClosed:
 		default:
 			d.mu.Unlock()
 			return rec, invalidf("dispatch %s cannot be released while %s", id, rec.Status)
@@ -42,7 +46,10 @@ func (d *Dispatcher) Release(id string) (Record, error) {
 	}
 	if rec.PaneID != "" && rt != nil {
 		var closeErr error
-		rec, closeErr = d.closeRecordedPane(rec, rec.PaneID, rt.Kill, runtimeLayout(rt))
+		if layout == nil {
+			layout = runtimeLayout(rt)
+		}
+		rec, closeErr = d.closeRecordedPane(rec, rec.PaneID, rt.Kill, layout)
 		if closeErr != nil {
 			return rec, fmt.Errorf("release dispatch %s: %w", id, closeErr)
 		}

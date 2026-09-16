@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -41,6 +42,7 @@ type stubServer struct {
 	foreground      bool
 	failShowOptions bool
 	calls           []string
+	argv            [][]string
 }
 
 // exec resolves one serverExecCommand-shaped call against the stub's current
@@ -50,6 +52,7 @@ func (s *stubServer) exec(_ string, args ...string) *exec.Cmd {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, strings.Join(args, " "))
+	s.argv = append(s.argv, append([]string(nil), args...))
 	sub := ""
 	if len(args) >= 3 {
 		sub = args[2]
@@ -87,9 +90,73 @@ func (s *stubServer) exec(_ string, args ...string) *exec.Cmd {
 func (s *stubServer) startForeground(_ string, args ...string) *exec.Cmd {
 	s.mu.Lock()
 	s.calls = append(s.calls, strings.Join(args, " "))
+	s.argv = append(s.argv, append([]string(nil), args...))
 	s.running = true
 	s.mu.Unlock()
 	return exec.Command("true")
+}
+
+func TestViewerBindingInstalledOnStartAdoptAndRestart(t *testing.T) {
+	binding := ViewerMenuBinding{"/leo", "/cfg"}
+	want := Args("bind-key", "-T", "prefix", "L", "run-shell", "if [ '#{client_control_mode}' != 1 ]; then '/leo' --config '/cfg' dispatch viewer menu --session #{q:session_name}; fi")
+	assertBinding := func(t *testing.T, s *stubServer) {
+		t.Helper()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var got [][]string
+		for _, argv := range s.argv {
+			if len(argv) > 2 && argv[2] == "bind-key" {
+				got = append(got, argv)
+			}
+		}
+		if !reflect.DeepEqual(got, [][]string{want}) {
+			t.Fatalf("bind argv=%q want=%q; all=%q", got, [][]string{want}, s.argv)
+		}
+	}
+	t.Run("fresh start", func(t *testing.T) {
+		s := &stubServer{}
+		withStubServer(t, s)
+		if err := EnsureForegroundServer("tmux", binding); err != nil {
+			t.Fatal(err)
+		}
+		assertBinding(t, s)
+	})
+	t.Run("adopt surviving server", func(t *testing.T) {
+		s := &stubServer{running: true, foreground: true}
+		withStubServer(t, s)
+		if err := EnsureForegroundServer("tmux", binding); err != nil {
+			t.Fatal(err)
+		}
+		assertBinding(t, s)
+	})
+	t.Run("supervisor restart", func(t *testing.T) {
+		s := &stubServer{}
+		withStubServer(t, s)
+		old := foregroundSuperviseInterval
+		foregroundSuperviseInterval = time.Millisecond
+		t.Cleanup(func() { foregroundSuperviseInterval = old })
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { SuperviseForegroundServer(ctx, "tmux", binding); close(done) }()
+		deadline := time.Now().Add(time.Second)
+		for {
+			s.mu.Lock()
+			found := false
+			for _, a := range s.argv {
+				if len(a) > 2 && a[2] == "bind-key" {
+					found = true
+				}
+			}
+			s.mu.Unlock()
+			if found || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+		<-done
+		assertBinding(t, s)
+	})
 }
 
 // isRunning reads running under the lock, for test goroutines polling
