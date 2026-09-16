@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -35,8 +36,38 @@ func TestStartReturnsBeforeRunExits(t *testing.T) {
 	}
 }
 
+// removeAllRetrying bounds-and-retries os.RemoveAll against a transient
+// "directory not empty" from a file that briefly existed (or was still
+// being unlinked) at the moment of removal. Go's own t.TempDir() cleanup
+// only retries this class of error on Windows (see testing.removeAll /
+// isWindowsRetryable in the standard library) — on Linux and macOS a single
+// os.RemoveAll failure is fatal with no retry at all, so any environment
+// jitter around a directory's last write (slow CI filesystem, a scheduler
+// pause between a write completing and the next syscall observing it) has
+// zero tolerance. Registering this via t.Cleanup BEFORE t.TempDir() is
+// called (so it runs AFTER — Cleanup order is LIFO, and t.TempDir()
+// registers its own cleanup at first use) pre-empties the directory with
+// retries of our own, so the stdlib's single-shot RemoveAll on the parent
+// has nothing left to trip over.
+func removeAllRetrying(t *testing.T, dir string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
+	for {
+		if lastErr = os.RemoveAll(dir); lastErr == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Logf("removeAllRetrying: giving up on %s: %v", dir, lastErr)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestDispatchPersistsViewerWindowIDAfterCompletion(t *testing.T) {
 	stateDir := t.TempDir()
+	t.Cleanup(func() { removeAllRetrying(t, stateDir) })
 	recorder := NewFileRecorder(stateDir)
 	d := NewDispatcherWithOnStart(recorder, context.Background(), func(Record) string { return "@42" })
 	d.ExecCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
