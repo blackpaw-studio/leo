@@ -30,7 +30,7 @@ var Excluded = map[Section][]string{
 	// Web UI section.
 	SectionDefaults: {"harness_options", "provider",
 		"permission_mode", "bypass_permissions", "remote_control",
-		"allowed_tools", "disallowed_tools", "append_system_prompt"},
+		"allowed_tools", "disallowed_tools", "append_system_prompt", "dispatch"},
 	SectionTask: {"harness_options", "provider",
 		"permission_mode", "allowed_tools", "disallowed_tools", "append_system_prompt"},
 	// permissions is a nested struct, not a flat field: it is rendered from

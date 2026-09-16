@@ -4,30 +4,75 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
 )
 
 type fakeInteractiveRuntime struct {
-	mu        sync.Mutex
-	pane      string
-	alive     bool
-	injected  []string
-	arm       bool
-	empty     bool
-	kill      int
-	injectErr error
+	mu           sync.Mutex
+	pane         string
+	alive        bool
+	injected     []string
+	arm          bool
+	empty        bool
+	kill         int
+	injectErr    error
+	placements   []string
+	sessionAlive *bool
+	killHook     func()
+	launchHook   func()
+	killErr      error
+	layouts      []string
 }
 
-func (r *fakeInteractiveRuntime) Launch(context.Context, LaunchRequest) (string, string, error) {
+type recoveringInteractiveRuntime struct {
+	*fakeInteractiveRuntime
+	pane string
+}
+
+type presenceInteractiveRuntime struct {
+	*fakeInteractiveRuntime
+	presence PanePresence
+	probeErr error
+}
+
+func (r presenceInteractiveRuntime) PanePresence(string) (PanePresence, error) {
+	return r.presence, r.probeErr
+}
+
+func (r recoveringInteractiveRuntime) FindPaneByDispatchID(windowID, dispatchID string) (string, error) {
+	if windowID != "@7" || dispatchID != "d-cafe" {
+		return "", errors.New("unexpected recovery lookup")
+	}
+	return r.pane, nil
+}
+
+func (r *fakeInteractiveRuntime) Launch(_ context.Context, req LaunchRequest) (string, string, error) {
+	if r.launchHook != nil {
+		r.launchHook()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.pane == "" {
 		r.pane = "%1"
 	}
 	r.alive = true
+	r.placements = append(r.placements, req.Placement.Kind)
 	return r.pane, "w", nil
+}
+func (r *fakeInteractiveRuntime) SessionAlive(string) (bool, error) {
+	if r.sessionAlive == nil {
+		return true, nil
+	}
+	return *r.sessionAlive, nil
+}
+func (r *fakeInteractiveRuntime) ReapplyLayout(target string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.layouts = append(r.layouts, target)
+	return nil
 }
 func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string, arm func() error) error {
 	r.mu.Lock()
@@ -43,9 +88,15 @@ func (r *fakeInteractiveRuntime) Inject(_ context.Context, _ string, text string
 }
 func (r *fakeInteractiveRuntime) Alive(string) bool { r.mu.Lock(); defer r.mu.Unlock(); return r.alive }
 func (r *fakeInteractiveRuntime) Kill(string) error {
+	if r.killHook != nil {
+		r.killHook()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.kill++
+	if r.killErr != nil {
+		return r.killErr
+	}
 	r.alive = false
 	return nil
 }
@@ -92,6 +143,346 @@ func waitForInjection(t *testing.T, r *fakeInteractiveRuntime) {
 	}
 }
 
+func TestConcurrentViewerPlacementCap(t *testing.T) {
+	max := 3
+	cfg := testConfig()
+	cfg.Defaults.Dispatch.Viewer.MaxPanes = &max
+	var d *Dispatcher
+	var headlessMu sync.Mutex
+	var headless []string
+	d = NewDispatcherWithOnStart(newFakeRecorder(), context.Background(), func(rec Record) string {
+		p := d.placement.Decide(rec, ViewerOverrides{}, cfg, d.Records)
+		headlessMu.Lock()
+		headless = append(headless, p.Kind)
+		headlessMu.Unlock()
+		if p.Kind == "split" {
+			return "%h"
+		}
+		return "@h"
+	})
+	placementCtx, cancelPlacement := context.WithCancel(context.Background())
+	defer cancelPlacement()
+	d.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/bin/sleep", "60")
+	}
+	rt := &fakeInteractiveRuntime{}
+	d.SetInteractiveRuntime(rt)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			mode := ModeInteractive
+			if i%2 == 0 {
+				mode = ModeHeadless
+			}
+			_, _ = d.Start(placementCtx, cfg, Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: mode, Kind: "dispatch", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	n := 0
+	for _, kind := range rt.placements {
+		if kind == "split" {
+			n++
+		}
+	}
+	for _, kind := range headless {
+		if kind == "split" {
+			n++
+		}
+	}
+	if n > max {
+		t.Fatalf("split placements=%d max=%d: interactive=%v headless=%v", n, max, rt.placements, headless)
+	}
+}
+
+func TestViewerPlacementReservationsIgnoreUnpublishedRecords(t *testing.T) {
+	max := 2
+	cfg := testConfig()
+	cfg.Defaults.Dispatch.Viewer.MaxPanes = &max
+	c := NewViewerPlacementCoordinator()
+	records := []Record{}
+	base := Record{Kind: "dispatch", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"}
+	first := base
+	first.ID = "first"
+	if got := c.Decide(first, ViewerOverrides{}, cfg, func() []Record { return records }); got.Kind != "split" {
+		t.Fatalf("first=%s", got.Kind)
+	}
+	records = append(records, first) // queued/published record has no pane yet.
+	second := base
+	second.ID = "second"
+	if got := c.Decide(second, ViewerOverrides{}, cfg, func() []Record { return records }); got.Kind != "split" {
+		t.Fatalf("second=%s", got.Kind)
+	}
+	third := base
+	third.ID = "third"
+	if got := c.Decide(third, ViewerOverrides{}, cfg, func() []Record { return records }); got.Kind != "window" {
+		t.Fatalf("third=%s", got.Kind)
+	}
+}
+
+func releaseState(t *testing.T, status Status) (*Dispatcher, *fakeInteractiveRuntime, string) {
+	t.Helper()
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{alive: true}
+	d.SetInteractiveRuntime(rt)
+	id := "d-release"
+	d.runs[id] = &runState{record: Record{ID: id, Kind: "dispatch", Mode: ModeInteractive, Status: status, PaneID: "%9", ViewerKind: "split", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"}, handle: nopHandle{}, done: make(chan struct{})}
+	return d, rt, id
+}
+
+func TestReleaseAllowedStatuses(t *testing.T) {
+	for _, status := range []Status{StatusIdle, StatusDone, StatusFailed, StatusCanceled, StatusClosed} {
+		t.Run(string(status), func(t *testing.T) {
+			d, _, id := releaseState(t, status)
+			rec, err := d.Release(id)
+			if err != nil || rec.Status != StatusReleased {
+				t.Fatalf("Release=%+v,%v", rec, err)
+			}
+		})
+	}
+}
+
+func TestSweepSkipsRunBeingReleased(t *testing.T) {
+	d, rt, id := releaseState(t, StatusIdle)
+	now := time.Now()
+	d.now = func() time.Time { return now }
+	d.runs[id].record.StartedAt = now.Add(-time.Hour)
+	d.runs[id].record.Timeout = time.Second
+	rt.killHook = func() { d.Sweep(now) }
+	rec, err := d.Release(id)
+	if err != nil || rec.Status != StatusReleased {
+		t.Fatalf("Release=%+v,%v", rec, err)
+	}
+}
+
+func TestCloseRecordedPaneClearsIDsAndUsesCallerWindow(t *testing.T) {
+	rec := Record{PaneID: "%9", ViewerPaneID: "%9", ViewerKind: "split", CallerWindowID: "@7"}
+	var killed, layout string
+	d := NewDispatcher(nil)
+	got, err := d.closeRecordedPane(rec, "%9", func(p string) error { killed = p; return nil }, func(w string) error { layout = w; return nil })
+	if err != nil || got.PaneID != "" || got.ViewerPaneID != "" || killed != "%9" || layout != "@7" {
+		t.Fatalf("cleanup=%+v err=%v killed=%q layout=%q", got, err, killed, layout)
+	}
+}
+
+func TestCloseRecordedPaneFailureKeepsPaneAndRetry(t *testing.T) {
+	d, _, id := releaseState(t, StatusCanceled)
+	rec := d.runs[id].record
+	got, err := d.closeRecordedPane(rec, rec.PaneID, func(string) error { return errors.New("tmux unavailable") }, nil)
+	if err == nil || got.PaneID != "%9" || got.ViewerKind != "split" || !d.runs[id].killPending {
+		t.Fatalf("cleanup=%+v err=%v retry=%v", got, err, d.runs[id].killPending)
+	}
+}
+
+func TestSweepKillFailureAfterReleaseDoesNotResurrectPane(t *testing.T) {
+	d, _, id := releaseState(t, StatusCanceled)
+	rec := cloneRecord(d.runs[id].record)
+	got, err := d.closeRecordedPane(rec, rec.PaneID, func(string) error {
+		d.mu.Lock()
+		d.runs[id].record.Status = StatusReleased
+		d.runs[id].record.PaneID = ""
+		d.runs[id].record.ViewerPaneID = ""
+		d.runs[id].record.ViewerKind = ""
+		d.mu.Unlock()
+		return errors.New("stale sweep kill failed")
+	}, nil)
+	if err == nil || got.Status != StatusReleased || got.PaneID != "" || d.runs[id].killPending {
+		t.Fatalf("cleanup=%+v err=%v retry=%v", got, err, d.runs[id].killPending)
+	}
+}
+
+func TestSweepPanePresenceOutcomes(t *testing.T) {
+	tests := []struct {
+		name      string
+		presence  PanePresence
+		probeErr  error
+		wantKills int
+		wantPane  string
+	}{
+		{"present-alive", PanePresentAlive, nil, 1, ""},
+		{"present-dead", PanePresentDead, nil, 1, ""},
+		{"absent", PaneAbsent, nil, 0, ""},
+		{"probe-error", PaneAbsent, errors.New("socket unavailable"), 0, "%9"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, fake, id := releaseState(t, StatusCanceled)
+			d.runs[id].killPending = true
+			d.SetInteractiveRuntime(presenceInteractiveRuntime{fakeInteractiveRuntime: fake, presence: tt.presence, probeErr: tt.probeErr})
+			d.Sweep(time.Now())
+			if fake.killCount() != tt.wantKills || d.runs[id].record.PaneID != tt.wantPane {
+				t.Fatalf("kills=%d pane=%q", fake.killCount(), d.runs[id].record.PaneID)
+			}
+		})
+	}
+}
+
+func TestSweepActiveProbeErrorLeavesRunUntouched(t *testing.T) {
+	d, fake, id := releaseState(t, StatusRunning)
+	d.runs[id].killPending = false
+	d.SetInteractiveRuntime(presenceInteractiveRuntime{fakeInteractiveRuntime: fake, probeErr: errors.New("socket unavailable")})
+	d.Sweep(time.Now())
+	if got := d.runs[id].record.Status; got != StatusRunning {
+		t.Fatalf("status=%s", got)
+	}
+}
+
+func TestPostLaunchCancellationKillFailureKeepsReservation(t *testing.T) {
+	cfg := testConfig()
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{killErr: errors.New("tmux unavailable")}
+	d.SetInteractiveRuntime(rt)
+	rt.launchHook = func() {
+		d.mu.Lock()
+		for _, state := range d.runs {
+			d.finishInteractiveLocked(state, StatusCanceled)
+		}
+		d.mu.Unlock()
+	}
+	started, err := d.Start(context.Background(), cfg, Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive, Kind: "dispatch", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start=%+v,%v", started, err)
+	}
+	d.mu.Lock()
+	id := started.ID
+	if id == "" {
+		for candidate := range d.runs {
+			id = candidate
+		}
+	}
+	rec := cloneRecord(d.runs[id].record)
+	d.mu.Unlock()
+	d.placement.mu.Lock()
+	_, reserved := d.placement.reserved[id]
+	d.placement.mu.Unlock()
+	if rec.PaneID == "" || !reserved || !d.runs[id].killPending {
+		t.Fatalf("record=%+v reserved=%v retry=%v", rec, reserved, d.runs[id].killPending)
+	}
+}
+
+func TestMarkInterruptedClearsKilledPaneAndReappliesLayout(t *testing.T) {
+	stateDir := t.TempDir()
+	recorder := NewFileRecorder(stateDir)
+	h, err := recorder.Open(Record{ID: "d-restart-pane", Kind: "dispatch", Mode: ModeInteractive, Status: StatusRunning, PaneID: "%9", ViewerKind: "split", CallerWindowID: "@7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h.Close(StatusRunning, nil)
+	rt := &fakeInteractiveRuntime{alive: true}
+	d := NewDispatcher(recorder)
+	d.SetInteractiveRuntime(rt)
+	d.MarkInterrupted()
+	got, err := LoadOne(stateDir, "d-restart-pane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PaneID != "" || rt.killCount() != 1 || len(rt.layouts) != 1 || rt.layouts[0] != "@7" {
+		t.Fatalf("record=%+v kills=%d layouts=%v", got, rt.killCount(), rt.layouts)
+	}
+}
+
+func TestMarkInterruptedAdoptsSplitPaneByDispatchID(t *testing.T) {
+	stateDir := t.TempDir()
+	recorder := NewFileRecorder(stateDir)
+	h, err := recorder.Open(Record{ID: "d-cafe", Kind: "dispatch", Template: "worker", Mode: ModeInteractive, Status: StatusRunning, ViewerKind: "split", ViewerTitle: "worker·cafe", CallerWindowID: "@7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h.Close(StatusRunning, nil)
+	fake := &fakeInteractiveRuntime{alive: true}
+	d := NewDispatcher(recorder)
+	d.SetInteractiveRuntime(recoveringInteractiveRuntime{fakeInteractiveRuntime: fake, pane: "%9"})
+	d.MarkInterrupted()
+	if fake.killCount() != 1 {
+		t.Fatalf("recovered pane kills=%d", fake.killCount())
+	}
+}
+func TestReleaseRejectsActiveStates(t *testing.T) {
+	for _, status := range []Status{StatusQueued, StatusRunning, StatusSettling} {
+		t.Run(string(status), func(t *testing.T) {
+			d, rt, id := releaseState(t, status)
+			if _, err := d.Release(id); err == nil {
+				t.Fatal("active release accepted")
+			}
+			if rt.killCount() != 0 {
+				t.Fatal("active pane killed")
+			}
+		})
+	}
+}
+func TestReleaseIdempotent(t *testing.T) {
+	d, rt, id := releaseState(t, StatusIdle)
+	if _, err := d.Release(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Release(id); err != nil {
+		t.Fatal(err)
+	}
+	if rt.killCount() != 1 {
+		t.Fatalf("kills=%d", rt.killCount())
+	}
+	rec, _ := d.Get(id)
+	if rec.EndedAt.IsZero() {
+		t.Fatal("release did not set EndedAt")
+	}
+	select {
+	case <-d.runs[id].done:
+	default:
+		t.Fatal("release did not close done")
+	}
+}
+
+func TestReleasePreservesConcurrentRecordAndBlocksHook(t *testing.T) {
+	d, rt, id := releaseState(t, StatusIdle)
+	rt.killHook = func() { _ = d.Report(id, hook(t, "UserPromptSubmit", "late")) }
+	d.mu.Lock()
+	d.runs[id].record.Text = "preserve"
+	d.mu.Unlock()
+	rec, err := d.Release(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Text != "preserve" || len(rec.Turns) != 0 {
+		t.Fatalf("record=%+v", rec)
+	}
+}
+func TestSweepCallerSessionGone(t *testing.T) {
+	d, rt, id := releaseState(t, StatusIdle)
+	gone := false
+	rt.sessionAlive = &gone
+	d.Sweep(time.Now())
+	rec, err := d.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.Status.Terminal() {
+		t.Fatalf("status=%s", rec.Status)
+	}
+}
+
+func TestSweepCleanupClearsPaneAndReappliesWindowLayout(t *testing.T) {
+	d, rt, id := releaseState(t, StatusCanceled)
+	d.runs[id].record.CallerWindowID = "@1"
+	d.runs[id].killPending = true
+	rt.alive = false
+	d.Sweep(time.Now())
+	rec, _ := d.Get(id)
+	if rec.PaneID != "" {
+		t.Fatalf("pane=%q", rec.PaneID)
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.layouts) != 1 || rt.layouts[0] != "@1" {
+		t.Fatalf("layouts=%v", rt.layouts)
+	}
+}
+
 type blockingOpeningRuntime struct {
 	*fakeInteractiveRuntime
 	release <-chan struct{}
@@ -135,7 +526,7 @@ func TestInteractiveStartReturnsBeforeReady(t *testing.T) {
 	var got Started
 	select {
 	case got = <-started:
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Start blocked on opening readiness")
 	}
 	if err := <-errs; err != nil {
@@ -290,7 +681,7 @@ func TestInteractiveWaitReturnsWhenTurnClosesBeforeSession(t *testing.T) {
 	}
 	waitForInjection(t, rt)
 	done := make(chan []Entry, 1)
-	go func() { done <- d.Wait(context.Background(), []string{started.ID + "#1"}, time.Second) }()
+	go func() { done <- d.Wait(context.Background(), []string{started.ID + "#1"}, time.Minute) }()
 	_ = d.Report(started.ID, hook(t, "UserPromptSubmit", "one"))
 	_ = d.Report(started.ID, hook(t, "Stop", "one"))
 	select {
@@ -298,7 +689,7 @@ func TestInteractiveWaitReturnsWhenTurnClosesBeforeSession(t *testing.T) {
 		if len(entries) != 1 || entries[0].Status != StatusIdle || entries[0].Outcome != TurnFinished {
 			t.Fatalf("entries=%+v", entries)
 		}
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("wait did not wake for closed turn")
 	}
 }

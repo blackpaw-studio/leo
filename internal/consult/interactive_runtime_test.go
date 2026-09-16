@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -45,6 +46,29 @@ func TestClaudeInteractiveArgvSingleSettings(t *testing.T) {
 		if _, ok := hooks[event]; !ok {
 			t.Fatalf("settings hooks = %#v, missing %s", hooks, event)
 		}
+	}
+}
+
+func TestFindPaneByDispatchID(t *testing.T) {
+	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
+	var got []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		got = append([]string(nil), args...)
+		return exec.Command("printf", "%%8\tenv LEO_DISPATCH_ID=d-other codex\n%%9\tenv LEO_DISPATCH_ID=d-cafe codex\n")
+	}
+	pane, err := r.FindPaneByDispatchID("@7", "d-cafe")
+	if err != nil || pane != "%9" {
+		t.Fatalf("FindPaneByDispatchID=%q,%v", pane, err)
+	}
+	want := tmux.Args("list-panes", "-t", "@7", "-F", "#{pane_id}\t#{pane_start_command}")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv=%#v want=%#v", got, want)
+	}
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		return exec.Command("printf", "%%8\tenv LEO_DISPATCH_ID=d-cafe2 codex\n")
+	}
+	if pane, err := r.FindPaneByDispatchID("@7", "d-cafe"); err != nil || pane != "" {
+		t.Fatalf("adopted mismatched dispatch pane=%q err=%v", pane, err)
 	}
 }
 
@@ -265,8 +289,8 @@ func interactiveCodexRuntime(t *testing.T, cfg *config.Config) *TmuxInteractiveR
 func TestRuntimeAliveKillComposerEmpty(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
 	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
-		if slices.Contains(args, "display-message") {
-			return exec.Command("echo", "0")
+		if slices.Contains(args, "list-panes") {
+			return exec.Command("printf", "%%1\t0")
 		}
 		if slices.Contains(args, "capture-pane") {
 			return exec.Command("printf", "%s", "────\n❯ \n────\n")
@@ -281,26 +305,80 @@ func TestRuntimeAliveKillComposerEmpty(t *testing.T) {
 	}
 }
 
-func TestRuntimePaneAliveDistinguishesProbeFailureFromAbsence(t *testing.T) {
+func TestRuntimePanePresenceOutcomes(t *testing.T) {
 	r := NewInteractiveRuntime("", nil, nil, "tmux", "leo")
-	r.ExecCommandContext = func(context.Context, string, ...string) *exec.Cmd { return exec.Command("false") }
-	if alive, err := r.PaneAlive("%1"); err == nil || alive {
-		t.Fatalf("PaneAlive = %v, %v; want false with error", alive, err)
+	tests := []struct {
+		name string
+		cmd  func() *exec.Cmd
+		want PanePresence
+		err  bool
+	}{
+		{"alive-multi-pane", func() *exec.Cmd { return exec.Command("printf", "%%2\t0\n%%1\t0\n") }, PanePresentAlive, false},
+		{"dead-multi-pane", func() *exec.Cmd { return exec.Command("printf", "%%2\t0\n%%1\t1\n") }, PanePresentDead, false},
+		{"absent", func() *exec.Cmd { return exec.Command("sh", "-c", `echo "can't find pane: %1" >&2; exit 1`) }, PaneAbsent, false},
+		{"error", func() *exec.Cmd { return exec.Command("sh", "-c", `echo "socket unavailable" >&2; exit 1`) }, PaneAbsent, true},
 	}
-	r.ExecCommandContext = func(context.Context, string, ...string) *exec.Cmd { return exec.Command("printf", "1") }
-	if alive, err := r.PaneAlive("%1"); err != nil || alive {
-		t.Fatalf("PaneAlive absent = %v, %v", alive, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r.ExecCommandContext = func(context.Context, string, ...string) *exec.Cmd { return tt.cmd() }
+			got, err := r.PanePresence("%1")
+			if got != tt.want || (err != nil) != tt.err {
+				t.Fatalf("PanePresence=%v,%v want=%v err=%v", got, err, tt.want, tt.err)
+			}
+		})
 	}
-	calls := 0
-	r.ExecCommandContext = func(context.Context, string, ...string) *exec.Cmd {
-		calls++
-		if calls == 1 {
-			return exec.Command("false")
-		}
-		return exec.Command("printf", "%%2\n")
+}
+
+func TestStartCommandHasDispatchIDExactTokens(t *testing.T) {
+	tests := []struct {
+		name, command string
+		want          bool
+	}{
+		{"interactive", `'env' 'LEO_DISPATCH_ID=d-abc' 'codex'`, true},
+		{"headless", `'/opt/leo' dispatch watch d-abc`, true},
+		{"prompt-id", `'codex' 'please inspect d-abc before replying'`, false},
+		{"prompt-sequence", `'codex' 'please run dispatch watch d-abc later'`, false},
+		{"different-env", `'env' 'LEO_DISPATCH_ID=d-abc2' 'codex'`, false},
 	}
-	if alive, err := r.PaneAlive("%1"); err != nil || alive {
-		t.Fatalf("inventory-confirmed absence = %v, %v", alive, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := startCommandHasDispatchID(tt.command, "d-abc"); got != tt.want {
+				t.Fatalf("match=%v want=%v command=%q", got, tt.want, tt.command)
+			}
+		})
+	}
+}
+
+func TestInteractiveViewerSessionOverrides(t *testing.T) {
+	r := NewInteractiveRuntime("", nil, nil, "tmux", "leo")
+	var calls [][]string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		return exec.Command("printf", "@leo_viewer_placement window\\n@leo_viewer_max_panes 5\\n")
+	}
+	got := r.ViewerOverrides(context.Background(), "$1")
+	if got.Placement != "window" || got.MaxPanes != 5 {
+		t.Fatalf("overrides=%+v", got)
+	}
+	want := [][]string{{"-L", "leo", "show-options", "-t", "$1"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v", calls)
+	}
+}
+
+func TestSessionAliveDistinguishesMissingFromTmuxFailure(t *testing.T) {
+	r := NewInteractiveRuntime("", nil, nil, "tmux", "leo")
+	r.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "echo \"can't find session: x\" >&2; exit 1")
+	}
+	if alive, err := r.SessionAlive("$1"); err != nil || alive {
+		t.Fatalf("missing=%v,%v", alive, err)
+	}
+	r.ExecCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "echo permission denied >&2; exit 1")
+	}
+	if alive, err := r.SessionAlive("$1"); err == nil || alive {
+		t.Fatalf("failure=%v,%v", alive, err)
 	}
 }
 
@@ -313,3 +391,89 @@ func containsAll(s string, words ...string) bool {
 	return true
 }
 func contains(s, want string) bool { return strings.Contains(s, want) }
+
+func TestInteractiveSplitArgv(t *testing.T) {
+	codexHome, cwd := t.TempDir(), t.TempDir()
+	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Model: "gpt-5", Env: map[string]string{"CODEX_HOME": codexHome}}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var calls [][]string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		if len(args) > 2 && args[2] == "split-window" {
+			return exec.Command("printf", "%%9\\n")
+		}
+		return exec.Command("true")
+	}
+	placement := ViewerPlacement{Kind: "split", Target: "%1", MainPaneHeight: 60}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-abc", Template: "codex", Cwd: cwd, Name: "work", CallerPaneID: "%1", CallerWindowID: "@1", Placement: placement}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 6 {
+		t.Fatalf("calls=%#v", calls)
+	}
+	if !reflect.DeepEqual(calls[0], []string{"-L", "leo", "has-session", "-t", "=leo-dispatch"}) {
+		t.Fatalf("probe=%#v", calls[0])
+	}
+	launch := calls[1]
+	wantPrefix := []string{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc"}
+	resolved, _ := filepath.EvalSymlinks(cwd)
+	wantCommand := "'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'gpt-5' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
+	wantLaunch := append(append([]string(nil), wantPrefix...), wantCommand)
+	if !reflect.DeepEqual(launch, wantLaunch) {
+		t.Fatalf("launch=%#v", launch)
+	}
+	wantTail := [][]string{{"-L", "leo", "select-pane", "-t", "%9", "-T", "work·abc"}, {"-L", "leo", "set-option", "-p", "-t", "%9", "remain-on-exit", "on"}, {"-L", "leo", "set-option", "-w", "-t", "@1", "main-pane-height", "60%"}, {"-L", "leo", "select-layout", "-t", "@1", "main-horizontal"}}
+	if !reflect.DeepEqual(calls[2:], wantTail) {
+		t.Fatalf("calls=%#v\nwant tail=%#v", calls, wantTail)
+	}
+}
+
+func TestInteractiveSplitFallbackArgv(t *testing.T) {
+	codexHome, cwd := t.TempDir(), t.TempDir()
+	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Env: map[string]string{"CODEX_HOME": codexHome}}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var calls [][]string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		if len(args) > 2 && args[2] == "split-window" {
+			return exec.Command("false")
+		}
+		if len(args) > 2 && args[2] == "new-window" {
+			return exec.Command("printf", "%%8\\n")
+		}
+		return exec.Command("true")
+	}
+	pane, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-abc", Template: "codex", Cwd: cwd, CallerPaneID: "%1", Placement: ViewerPlacement{Kind: "split", Target: "%1", MainPaneHeight: 60}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, _ := filepath.EvalSymlinks(cwd)
+	command := "'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'sonnet' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
+	suffix := []string{"-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", command}
+	want := [][]string{{"-L", "leo", "has-session", "-t", "=leo-dispatch"}, append([]string{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1"}, suffix...), append([]string{"-L", "leo", "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=leo-dispatch", "-n", "codex·abc"}, suffix...)}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v\nwant=%#v", calls, want)
+	}
+	if got := r.ViewerKind(pane); got != "window" {
+		t.Fatalf("ViewerKind=%q", got)
+	}
+}
+
+func TestInteractiveSplitCloseLayout(t *testing.T) {
+	r := NewInteractiveRuntime("", nil, nil, "tmux", "leo")
+	var calls [][]string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		return exec.Command("true")
+	}
+	if err := r.Kill("%9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReapplyLayout("%1"); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"-L", "leo", "kill-pane", "-t", "%9"}, {"-L", "leo", "select-layout", "-t", "%1", "main-horizontal"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v want=%#v", calls, want)
+	}
+}

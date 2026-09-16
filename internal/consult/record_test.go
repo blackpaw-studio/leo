@@ -233,7 +233,11 @@ func TestFileRecorderPruneKeepsViewerWindowsWithinGrace(t *testing.T) {
 		rec.StartedAt = now.Add(-time.Hour + time.Duration(i)*time.Minute)
 		rec.EndedAt = now.Add(-time.Duration(25-i) * time.Minute)
 		if i < 3 {
-			rec.ViewerWindowID = fmt.Sprintf("@%d", i)
+			if i%2 == 0 {
+				rec.ViewerWindowID = fmt.Sprintf("@%d", i)
+			} else {
+				rec.ViewerPaneID = fmt.Sprintf("%%%d", i)
+			}
 		}
 		if err := writeRecord(dir, rec); err != nil {
 			t.Fatalf("seeding record %d: %v", i, err)

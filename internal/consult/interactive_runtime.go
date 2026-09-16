@@ -3,9 +3,11 @@ package consult
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -47,6 +49,19 @@ type TmuxInteractiveRuntime struct {
 	StartupPollInterval  time.Duration
 	mu                   sync.RWMutex
 	classifiers          map[string]tmux.ComposerClassifier
+	placements           map[string]string
+}
+
+type PanePresence uint8
+
+const (
+	PaneAbsent PanePresence = iota
+	PanePresentAlive
+	PanePresentDead
+)
+
+type panePresenceRuntime interface {
+	PanePresence(string) (PanePresence, error)
 }
 
 func NewInteractiveRuntime(cfgPath string, cfg func() (*config.Config, error), resolveCallerSession func(caller string) (session string, ok bool), tmuxPath, leoPath string) *TmuxInteractiveRuntime {
@@ -142,25 +157,45 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		}
 	}
 	label := viewerWindowName(Record{ID: req.ID, Name: req.Name, Template: req.Template})
-	command := make([]string, 0, len(args)+1)
-	command = append(command, h.Binary())
+	command := make([]string, 0, len(args)+3)
+	command = append(command, "env", "LEO_DISPATCH_ID="+req.ID, h.Binary())
 	command = append(command, args...)
 	words := make([]string, len(command))
 	for i, word := range command {
 		words[i] = shellQuote(word)
 	}
 	argv := []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", label, "-c", req.Cwd}
+	if req.Placement.Kind == "split" {
+		argv = []string{"split-window", "-d", "-P", "-F", "#{pane_id}", "-t", req.Placement.Target, "-c", req.Cwd}
+	}
 	for _, k := range sortedKeys(env) {
 		argv = append(argv, "-e", k+"="+env[k])
 	}
 	argv = append(argv, strings.Join(words, " "))
 	out, err := r.output(ctx, argv...)
+	if err != nil && req.Placement.Kind == "split" {
+		argv = []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", label, "-c", req.Cwd}
+		for _, k := range sortedKeys(env) {
+			argv = append(argv, "-e", k+"="+env[k])
+		}
+		argv = append(argv, strings.Join(words, " "))
+		out, err = r.output(ctx, argv...)
+		if err == nil {
+			req.Placement.Kind = "window"
+		}
+	}
 	if err != nil {
 		return "", "", fmt.Errorf("launch interactive pane: %w", err)
 	}
 	pane := strings.TrimSpace(string(out))
 	if pane == "" {
 		return "", "", fmt.Errorf("tmux returned no pane id")
+	}
+	if req.Placement.Kind == "split" {
+		_ = r.run(ctx, "select-pane", "-t", pane, "-T", label)
+		_ = r.run(ctx, "set-option", "-p", "-t", pane, "remain-on-exit", "on")
+		_ = r.run(ctx, "set-option", "-w", "-t", req.CallerWindowID, "main-pane-height", fmt.Sprintf("%d%%", req.Placement.MainPaneHeight))
+		_ = r.run(ctx, "select-layout", "-t", req.CallerWindowID, "main-horizontal")
 	}
 	r.mu.Lock()
 	if r.classifiers == nil {
@@ -171,8 +206,18 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	} else {
 		r.classifiers[pane] = tmux.ClaudeComposerClassifier
 	}
+	if r.placements == nil {
+		r.placements = make(map[string]string)
+	}
+	r.placements[pane] = req.Placement.Kind
 	r.mu.Unlock()
 	return pane, label, nil
+}
+
+func (r *TmuxInteractiveRuntime) ViewerKind(pane string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.placements[pane]
 }
 
 // mergeInteractiveArgs combines settings flags because Claude's base agent
@@ -274,27 +319,144 @@ func (r *TmuxInteractiveRuntime) inject(ctx context.Context, paneID, text string
 	return tmux.InjectIntoWith(ctx, r.tmuxPath, paneID, r.classifier(paneID), text, arm, tmux.CommandFunc(command))
 }
 func (r *TmuxInteractiveRuntime) Alive(paneID string) bool {
-	alive, _ := r.PaneAlive(paneID)
-	return alive
+	presence, _ := r.PanePresence(paneID)
+	return presence == PanePresentAlive
 }
 func (r *TmuxInteractiveRuntime) PaneAlive(paneID string) (bool, error) {
-	out, err := r.output(context.Background(), "display-message", "-p", "-t", paneID, "#{pane_dead}")
-	if err != nil {
-		panes, inventoryErr := r.output(context.Background(), "list-panes", "-a", "-F", "#{pane_id}")
-		if inventoryErr != nil {
-			return false, err
-		}
-		for _, pane := range strings.Fields(string(panes)) {
-			if pane == paneID {
-				return true, nil
-			}
-		}
-		return false, nil
+	presence, err := r.PanePresence(paneID)
+	return presence == PanePresentAlive, err
+}
+func (r *TmuxInteractiveRuntime) PanePresence(paneID string) (PanePresence, error) {
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = interactiveCommandTimeout
 	}
-	return strings.TrimSpace(string(out)) == "0", nil
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := r.command(ctx, "list-panes", "-t", paneID, "-F", "#{pane_id}\t#{pane_dead}").CombinedOutput()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && strings.Contains(strings.ToLower(string(out)), "can't find pane") {
+			return PaneAbsent, nil
+		}
+		return PaneAbsent, fmt.Errorf("probe tmux pane %q: %w: %s", paneID, err, strings.TrimSpace(string(out)))
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != paneID {
+			continue
+		}
+		if fields[1] == "1" {
+			return PanePresentDead, nil
+		}
+		return PanePresentAlive, nil
+	}
+	return PaneAbsent, nil
 }
 func (r *TmuxInteractiveRuntime) Kill(paneID string) error {
-	return r.run(context.Background(), "kill-pane", "-t", paneID)
+	err := r.run(context.Background(), "kill-pane", "-t", paneID)
+	if err == nil {
+		r.mu.Lock()
+		delete(r.classifiers, paneID)
+		delete(r.placements, paneID)
+		r.mu.Unlock()
+	}
+	return err
+}
+func (r *TmuxInteractiveRuntime) ReapplyLayout(target string) error {
+	if target == "" {
+		return nil
+	}
+	return r.run(context.Background(), "select-layout", "-t", target, "main-horizontal")
+}
+func (r *TmuxInteractiveRuntime) SessionAlive(session string) (bool, error) {
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = interactiveCommandTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := r.command(ctx, "has-session", "-t", session).CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && strings.Contains(strings.ToLower(string(out)), "can't find session") {
+		return false, nil
+	}
+	return false, fmt.Errorf("probe tmux session %q: %w: %s", session, err, strings.TrimSpace(string(out)))
+}
+func (r *TmuxInteractiveRuntime) ViewerOverrides(ctx context.Context, session string) ViewerOverrides {
+	return ReadViewerSessionOverrides(ctx, r.tmuxPath, session, r.ExecCommandContext)
+}
+func (r *TmuxInteractiveRuntime) FindPaneByDispatchID(windowID, dispatchID string) (string, error) {
+	out, err := r.output(context.Background(), "list-panes", "-t", windowID, "-F", "#{pane_id}\t#{pane_start_command}")
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) == 2 && startCommandHasDispatchID(fields[1], dispatchID) {
+			return fields[0], nil
+		}
+	}
+	return "", nil
+}
+
+func startCommandHasDispatchID(command, dispatchID string) bool {
+	words := shellCommandWords(command)
+	for i, word := range words {
+		if word == "LEO_DISPATCH_ID="+dispatchID && i > 0 && filepath.Base(words[i-1]) == "env" {
+			return true
+		}
+		if i+2 < len(words) && word == "dispatch" && words[i+1] == "watch" && words[i+2] == dispatchID {
+			return true
+		}
+	}
+	return false
+}
+
+func shellCommandWords(command string) []string {
+	var words []string
+	var word strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		if word.Len() > 0 {
+			words = append(words, word.String())
+			word.Reset()
+		}
+	}
+	for _, r := range command {
+		if escaped {
+			word.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			} else {
+				word.WriteRune(r)
+			}
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		if r == ' ' || r == '\t' || r == '\n' {
+			flush()
+			continue
+		}
+		word.WriteRune(r)
+	}
+	flush()
+	return words
 }
 func (r *TmuxInteractiveRuntime) ComposerEmpty(paneID string) bool {
 	out, err := r.output(context.Background(), "capture-pane", "-p", "-t", paneID)

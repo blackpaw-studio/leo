@@ -214,6 +214,35 @@ type DefaultsConfig struct {
 	// DefaultHarnessName.
 	Harness        string         `yaml:"harness,omitempty"`
 	HarnessOptions map[string]any `yaml:"harness_options,omitempty"`
+	Dispatch       DispatchConfig `yaml:"dispatch,omitempty"`
+}
+
+type DispatchConfig struct {
+	Viewer DispatchViewerConfig `yaml:"viewer,omitempty"`
+}
+type DispatchViewerConfig struct {
+	Placement      string `yaml:"placement,omitempty"`
+	MaxPanes       *int   `yaml:"max_panes,omitempty"`
+	MainPaneHeight *int   `yaml:"main_pane_height,omitempty"`
+}
+
+func (c *Config) DispatchViewerPlacement() string {
+	if c.Defaults.Dispatch.Viewer.Placement != "" {
+		return c.Defaults.Dispatch.Viewer.Placement
+	}
+	return "pane"
+}
+func (c *Config) DispatchViewerMaxPanes() int {
+	if v := c.Defaults.Dispatch.Viewer.MaxPanes; v != nil {
+		return *v
+	}
+	return 3
+}
+func (c *Config) DispatchViewerMainPaneHeight() int {
+	if v := c.Defaults.Dispatch.Viewer.MainPaneHeight; v != nil {
+		return *v
+	}
+	return 60
 }
 
 type TaskConfig struct {
@@ -386,6 +415,15 @@ func (c *Config) TaskTimeout(t TaskConfig) time.Duration {
 // Validate checks the config for required fields and valid values.
 func (c *Config) Validate() error {
 	var errs []string
+	if p := c.DispatchViewerPlacement(); p != "pane" && p != "window" {
+		errs = append(errs, fmt.Sprintf("defaults.dispatch.viewer.placement %q must be pane or window", p))
+	}
+	if n := c.DispatchViewerMaxPanes(); n < 1 || n > 6 {
+		errs = append(errs, "defaults.dispatch.viewer.max_panes must be between 1 and 6")
+	}
+	if n := c.DispatchViewerMainPaneHeight(); n < 20 || n > 90 {
+		errs = append(errs, "defaults.dispatch.viewer.main_pane_height must be between 20 and 90")
+	}
 
 	// resolveHarness returns the adapter for a scope, emitting at most one
 	// error per bad name: defaults errors at defaults.harness; a scope only

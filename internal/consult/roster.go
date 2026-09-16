@@ -51,6 +51,9 @@ func HasRosterEligibleRecord(records []Record, now time.Time) bool {
 }
 
 func rosterEligible(rec Record, now time.Time) bool {
+	if rec.Status == StatusReleased {
+		return false
+	}
 	return rec.Kind == "dispatch" && (!rec.Status.Terminal() || rec.EndedAt.IsZero() || now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)))
 }
 

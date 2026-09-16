@@ -22,12 +22,13 @@ const (
 	StatusIdle     Status = "idle"
 	StatusSettling Status = "settling"
 	StatusClosed   Status = "closed"
+	StatusReleased Status = "released"
 )
 
 // Terminal reports whether the consult has finished, however it ended.
 func (s Status) Terminal() bool {
 	switch s {
-	case StatusDone, StatusFailed, StatusTimeout, StatusCanceled, StatusClosed:
+	case StatusDone, StatusFailed, StatusTimeout, StatusCanceled, StatusClosed, StatusReleased:
 		return true
 	}
 	return false
@@ -119,6 +120,9 @@ type Record struct {
 	// ViewerWindowID identifies the optional tmux viewer so lifecycle cleanup
 	// can survive a daemon restart.
 	ViewerWindowID   string                  `json:"viewer_window_id,omitempty"`
+	ViewerPaneID     string                  `json:"viewer_pane_id,omitempty"`
+	ViewerKind       string                  `json:"viewer_kind,omitempty"`
+	ViewerTitle      string                  `json:"viewer_title,omitempty"`
 	Mode             Mode                    `json:"mode,omitempty"`
 	PaneID           string                  `json:"pane_id,omitempty"`
 	SessionID        string                  `json:"session_id,omitempty"`
@@ -126,6 +130,7 @@ type Record struct {
 	CallerPaneID     string                  `json:"caller_pane_id,omitempty"`
 	CallerHarness    string                  `json:"caller_harness,omitempty"`
 	CallerSessionID  string                  `json:"caller_session_id,omitempty"`
+	CallerWindowID   string                  `json:"caller_window_id,omitempty"`
 	InputTokens      *int64                  `json:"input_tokens,omitempty"`
 	OutputTokens     *int64                  `json:"output_tokens,omitempty"`
 	CostUSD          *float64                `json:"cost_usd,omitempty"`

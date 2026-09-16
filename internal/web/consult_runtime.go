@@ -16,6 +16,11 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	viewer.ExecCommand = s.execCommand
 	viewer.ExecCommandContext = s.execCommandContext
 	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart, viewer.Close)
+	viewer.Coordinator = s.consults.PlacementCoordinator()
+	viewer.Records = s.consults.Records
+	viewer.PersistRecord = s.consults.PersistViewerRecord
+	viewer.PersistIntent = s.consults.PersistViewerRecord
+	viewer.ClosePane = s.consults.CloseRecordedPane
 	s.consults.SetNotificationDelivery(consult.NewTmuxNotificationDelivery(findTmuxPath(), s.execCommandContext))
 	interactiveLeoPath, err := os.Executable()
 	if err != nil {

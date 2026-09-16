@@ -69,6 +69,27 @@ func TestViewerRosterDiagnosticsLogsZeroPanesOnce(t *testing.T) {
 	}
 }
 
+func TestHeadlessSplitViewerAppearsInRoster(t *testing.T) {
+	var logs []string
+	v := &Viewer{TmuxPath: "tmux", Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }, ExecCommand: func(_ string, args ...string) *exec.Cmd {
+		switch {
+		case containsArg(args, "list-panes"):
+			return exec.Command("printf", "leo-worker\t$1\t@1\t%%9\n")
+		case containsArg(args, "list-sessions"):
+			return exec.Command("printf", "leo-worker\t$1\t\t\t\n")
+		case containsArg(args, "show-options"):
+			return exec.Command("printf", "2\n")
+		default:
+			return exec.Command("true")
+		}
+	}}
+	now := time.Now()
+	v.UpdateRoster([]Record{{ID: "d-split", Kind: "dispatch", Mode: ModeHeadless, ViewerKind: "split", ViewerPaneID: "%9", Status: StatusRunning, StartedAt: now}}, now)
+	if countContainingLog(logs, "resolved=[leo-worker:1]") != 1 {
+		t.Fatalf("logs=%q", logs)
+	}
+}
+
 func TestViewerRosterDiagnosticsLogsApplyForRecreatedSession(t *testing.T) {
 	var logs []string
 	sessionID := "$1"

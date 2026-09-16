@@ -295,3 +295,15 @@ func (c *daemonClient) cancelDispatch(ctx context.Context, id string) (consult.R
 	}
 	return record, nil
 }
+
+func (c *daemonClient) releaseDispatch(ctx context.Context, id string) (consult.Record, error) {
+	raw, err := c.doContext(ctx, http.MethodPost, "/api/dispatch/"+url.PathEscape(id)+"/release", nil)
+	if err != nil {
+		return consult.Record{}, err
+	}
+	var record consult.Record
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return consult.Record{}, fmt.Errorf("decode dispatch: %w", err)
+	}
+	return record, nil
+}

@@ -1,6 +1,15 @@
 package consult
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestDispatchPreambleReleaseGuidance(t *testing.T) {
+	if !strings.Contains(requestPrompt(Request{Prompt: "work"}), "orchestrator has finished with you, it releases this pane") {
+		t.Fatal("release guidance missing")
+	}
+}
 
 func TestRequestPrompt(t *testing.T) {
 	tests := []struct {

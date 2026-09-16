@@ -28,7 +28,7 @@ func dispatchCallerPane(environ []string) string {
 
 func newDispatchCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "dispatch", Short: "Run and inspect subagents"}
-	cmd.AddCommand(newDispatchRunCmd(), newConsultListCmd(), newConsultWatchCmd(), newDispatchShowCmd(), newDispatchOutputCmd(), newDispatchCancelCmd(), newDispatchSendCmd(), newDispatchReportCmd())
+	cmd.AddCommand(newDispatchRunCmd(), newConsultListCmd(), newConsultWatchCmd(), newDispatchShowCmd(), newDispatchOutputCmd(), newDispatchCancelCmd(), newDispatchReleaseCmd(), newDispatchSendCmd(), newDispatchReportCmd())
 	return cmd
 }
 
@@ -189,6 +189,27 @@ func newDispatchCancelCmd() *cobra.Command {
 		}
 		var record consult.Record
 		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodPost, "/api/dispatch/"+url.PathEscape(args[0])+"/cancel", nil, &record); err != nil {
+			return err
+		}
+		fmt.Fprintln(consultStdout, record.Status)
+		return nil
+	}}
+	addHostFlag(cmd, &host)
+	return cmd
+}
+
+func newDispatchReleaseCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{Use: "release <id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, res, err := dispatch(host)
+		if err != nil {
+			return err
+		}
+		if !res.Localhost {
+			return fmt.Errorf("dispatch release is not supported for remote hosts")
+		}
+		var record consult.Record
+		if err := dispatchHTTP(cmd.Context(), cfg, http.MethodPost, "/api/dispatch/"+url.PathEscape(args[0])+"/release", nil, &record); err != nil {
 			return err
 		}
 		fmt.Fprintln(consultStdout, record.Status)

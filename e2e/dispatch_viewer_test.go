@@ -4,9 +4,13 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +19,131 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
+
+func TestDispatchViewerPanePlacement(t *testing.T) {
+	tmuxPath, session, caller, window, other, before := viewerPaneFixture(t)
+	records := []consult.Record{}
+	v := consult.NewViewer(viewerPaneConfig(t, 3), nil)
+	v.TmuxPath = tmuxPath
+	sleeper := viewerSleeper(t)
+	v.Executable = func() (string, error) { return sleeper, nil }
+	v.Records = func() []consult.Record { return append([]consult.Record(nil), records...) }
+	var viewers []string
+	for i := 1; i <= 3; i++ {
+		rec := consult.Record{ID: fmt.Sprintf("d-%04d", i), Kind: "dispatch", Template: "worker", Cwd: t.TempDir(), CallerPaneID: caller, CallerSessionID: session, CallerWindowID: window}
+		pane := v.OnStart(rec)
+		if !strings.HasPrefix(pane, "%") {
+			t.Fatalf("viewer %d=%q", i, pane)
+		}
+		rec.ViewerKind, rec.ViewerPaneID = "split", pane
+		records = append(records, rec)
+		v.Coordinator.Publish(rec.ID, nil)
+		viewers = append(viewers, pane)
+	}
+	out, err := exec.Command(tmuxPath, tmux.Args("list-panes", "-t", window, "-F", "#{pane_id} #{pane_top} #{pane_left} #{pane_width}")...).Output()
+	if err != nil {
+		t.Fatalf("panes=%q err=%v", out, err)
+	}
+	widthOut, err := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", window, "#{window_width}")...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	width := strings.TrimSpace(string(widthOut))
+	if !strings.Contains(string(out), caller+" 0 0 "+width) {
+		t.Fatalf("caller does not span the full width at top: panes=%q width=%q", out, width)
+	}
+	viewerTop := -1
+	lefts := map[int]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 4 || !slices.Contains(viewers, fields[0]) {
+			continue
+		}
+		top, _ := strconv.Atoi(fields[1])
+		left, _ := strconv.Atoi(fields[2])
+		if top == 0 || (viewerTop >= 0 && top != viewerTop) || lefts[left] {
+			t.Fatalf("viewers are not side by side beneath caller: %q", out)
+		}
+		viewerTop, lefts[left] = top, true
+	}
+	if len(lefts) != 3 {
+		t.Fatalf("viewer geometry=%q", out)
+	}
+	after, _ := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", other, "#{window_layout}")...).Output()
+	if string(after) != before {
+		t.Fatalf("other window layout changed: before=%q after=%q", before, after)
+	}
+}
+
+func TestDispatchViewerPaneCap(t *testing.T) {
+	tmuxPath, session, caller, window, _, _ := viewerPaneFixture(t)
+	records := []consult.Record{}
+	v := consult.NewViewer(viewerPaneConfig(t, 3), func(string) (string, bool) { return session, true })
+	v.TmuxPath = tmuxPath
+	sleeper := viewerSleeper(t)
+	v.Executable = func() (string, error) { return sleeper, nil }
+	v.Records = func() []consult.Record { return append([]consult.Record(nil), records...) }
+	for i := 1; i <= 4; i++ {
+		rec := consult.Record{ID: fmt.Sprintf("d-%04d", i), Kind: "dispatch", Caller: "caller", Template: "worker", Cwd: t.TempDir(), CallerPaneID: caller, CallerSessionID: session, CallerWindowID: window}
+		id := v.OnStart(rec)
+		if i <= 3 {
+			if !strings.HasPrefix(id, "%") {
+				t.Fatalf("viewer %d=%q", i, id)
+			}
+			rec.ViewerKind, rec.ViewerPaneID = "split", id
+		} else {
+			if !strings.HasPrefix(id, "@") {
+				t.Fatalf("fourth viewer=%q", id)
+			}
+			rec.ViewerKind, rec.ViewerWindowID = "window", id
+		}
+		records = append(records, rec)
+		v.Coordinator.Publish(rec.ID, nil)
+	}
+	out, _ := exec.Command(tmuxPath, tmux.Args("list-panes", "-t", window, "-F", "#{pane_id}")...).Output()
+	if len(strings.Fields(string(out))) != 4 {
+		t.Fatalf("caller window panes=%q", out)
+	}
+}
+
+func viewerPaneConfig(t *testing.T, max int) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "leo.yaml")
+	if err := os.WriteFile(p, []byte(fmt.Sprintf("defaults:\n  dispatch:\n    viewer:\n      placement: pane\n      max_panes: %d\ntasks: {}\n", max)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+func viewerSleeper(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "leo-sleep")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nsleep 60\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+func viewerPaneFixture(t *testing.T) (string, string, string, string, string, string) {
+	t.Helper()
+	tmuxPath := faketmux
+	t.Setenv("FAKECLAUDE_TMUX_SOCKET", fmt.Sprintf("viewer-pane-%d", time.Now().UnixNano()))
+	_ = exec.Command(tmuxPath, tmux.Args("kill-server")...).Run()
+	out, err := exec.Command(tmuxPath, tmux.Args("new-session", "-d", "-P", "-F", "#{pane_id} #{session_id} #{window_id}", "-s", "caller", "sleep", "60")...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := strings.Fields(string(out))
+	if len(f) != 3 {
+		t.Fatalf("identity=%q", out)
+	}
+	otherOut, err := exec.Command(tmuxPath, tmux.Args("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=caller", "sleep", "60")...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := strings.TrimSpace(string(otherOut))
+	before, _ := exec.Command(tmuxPath, tmux.Args("display-message", "-p", "-t", other, "#{window_layout}")...).Output()
+	t.Cleanup(func() { _ = exec.Command(tmuxPath, tmux.Args("kill-server")...).Run() })
+	return tmuxPath, f[1], f[0], f[2], other, string(before)
+}
 
 func TestDispatchOpensViewerWindow(t *testing.T) {
 	if _, err := os.Stat(faketmux); err != nil {

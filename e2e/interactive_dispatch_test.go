@@ -20,6 +20,54 @@ import (
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
+func TestInteractiveReleasePane(t *testing.T) {
+	s := newInteractiveE2E(t)
+	session := "release-caller"
+	out, err := exec.Command(s.tmux, tmux.Args("new-session", "-d", "-P", "-F", "#{pane_id} #{window_id}", "-s", session, "sleep", "60")...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) != 2 {
+		t.Fatalf("identity=%q", out)
+	}
+	caller, window := ids[0], ids[1]
+	otherOut, err := exec.Command(s.tmux, tmux.Args("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "="+session, "sleep", "60")...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := strings.TrimSpace(string(otherOut))
+	before, _ := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", other, "#{window_layout}")...).Output()
+	var started consult.Started
+	s.request(t, http.MethodPost, "/api/dispatch", map[string]string{"template": "interactive", "prompt": "release me", "cwd": s.ws, "mode": "interactive", "caller_pane_id": caller}, &started)
+	_ = s.wait(t, started.ID+"#1")
+	rec := s.record(t, started.ID)
+	paneWindow, err := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", rec.PaneID, "#{window_id}")...).Output()
+	if err != nil || strings.TrimSpace(string(paneWindow)) != window {
+		t.Fatalf("pane window=%q want=%q err=%v", paneWindow, window, err)
+	}
+	beforePanes, err := exec.Command(s.tmux, tmux.Args("list-panes", "-t", window, "-F", "#{pane_id}")...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.request(t, http.MethodPost, "/api/dispatch/"+started.ID+"/release", nil, &struct{}{})
+	s.waitFor(t, func() bool { return !s.paneAlive(rec.PaneID) })
+	if got := s.record(t, started.ID); got.Status != consult.StatusReleased {
+		t.Fatalf("status=%s", got.Status)
+	}
+	afterPanes, err := exec.Command(s.tmux, tmux.Args("list-panes", "-t", window, "-F", "#{pane_id}")...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(afterPanes), rec.PaneID) || len(strings.Fields(string(afterPanes))) != len(strings.Fields(string(beforePanes)))-1 {
+		t.Fatalf("release panes before=%q after=%q released=%q", beforePanes, afterPanes, rec.PaneID)
+	}
+	after, _ := exec.Command(s.tmux, tmux.Args("display-message", "-p", "-t", other, "#{window_layout}")...).Output()
+	if string(after) != string(before) {
+		t.Fatalf("other layout changed: %q -> %q", before, after)
+	}
+}
+
 // TestInteractiveDispatchLifecycle is deliberately black-box: the service,
 // HTTP bearer auth, tmux pane, hook subprocess, and dispatch CLI all run for
 // real.  The only fake is the Codex-shaped TUI binary built in TestMain.
@@ -53,7 +101,10 @@ func TestInteractiveDispatchLifecycle(t *testing.T) {
 	if err := exec.Command(s.tmux, tmux.Args("send-keys", "-t", rec.PaneID, "human steer", "Enter")...).Run(); err != nil {
 		t.Fatalf("typing into interactive pane: %v", err)
 	}
-	s.waitFor(t, func() bool { return len(s.record(t, started.ID).Turns) == 3 })
+	s.waitFor(t, func() bool {
+		turns := s.record(t, started.ID).Turns
+		return len(turns) == 3 && turns[2].Outcome == consult.TurnFinished
+	})
 	rec = s.record(t, started.ID)
 	if !rec.Steered || rec.Turns[2].Source != consult.TurnSourceUser || rec.Turns[2].Outcome != consult.TurnFinished {
 		t.Fatalf("human steering record = %+v", rec)
@@ -172,7 +223,7 @@ func newInteractiveE2EWithoutLocale(t *testing.T) *interactiveE2E {
 func newInteractiveE2EWithOptions(t *testing.T, delayMS int, stripLocale bool) *interactiveE2E {
 	tmuxPath, err := exec.LookPath("tmux")
 	if err != nil {
-		t.Skip("tmux not available; skipping interactive dispatch e2e")
+		t.Fatalf("tmux is required for interactive e2e: %v", err)
 	}
 	_ = tmuxPath // TestMain's wrapper rewrites production's fixed -L leo.
 	tmuxPath = faketmux

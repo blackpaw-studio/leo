@@ -495,6 +495,19 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		}
 		return string(record.Status), nil
 	})
+	r.addContext(toolDef{
+		Name: "leo_release", Description: allowNote("Close an idle or finished interactive dispatch pane.", "release dispatched templates", perms.CanConsult), InputSchema: objectSchema(map[string]any{"id": map[string]any{"type": "string"}}, "id"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		id, err := stringArg(args, "id")
+		if err != nil {
+			return "", err
+		}
+		record, err := client.releaseDispatch(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		return string(record.Status), nil
+	})
 
 	return r
 }
