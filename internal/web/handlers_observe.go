@@ -40,19 +40,34 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
+
 		var records []agent.Record
 		if s.agentSvc != nil {
 			records = s.agentSvc.List()
 		}
-		var states map[string]ProcessStateInfo
+
+		var processStates map[string]ProcessStateInfo
 		if s.processes != nil {
-			states = s.processes.States()
+			processStates = s.processes.States()
 		}
-		var entries []cron.EntryInfo
+
+		var cronEntries []cron.EntryInfo
 		if s.scheduler != nil {
-			entries = s.scheduler.List()
+			cronEntries = s.scheduler.List()
 		}
-		return buildSnapshot(snapshotInput{Config: cfg, Records: records, ProcessStates: states, CronEntries: entries, History: s.loadHistory(cfg).All(), Activity: s.activity, RunLog: s.runLog, MessageLog: s.messageLog, LeoVersion: s.version, Now: time.Now()}), nil
+
+		return buildSnapshot(snapshotInput{
+			Config:        cfg,
+			Records:       records,
+			ProcessStates: processStates,
+			CronEntries:   cronEntries,
+			History:       s.loadHistory(cfg).All(),
+			Activity:      s.activity,
+			RunLog:        s.runLog,
+			MessageLog:    s.messageLog,
+			LeoVersion:    s.version,
+			Now:           time.Now(),
+		}), nil
 	}, func(w http.ResponseWriter, status int, data any, err error) {
 		if err != nil {
 			writeJSON(w, status, apiResponse{Error: err.Error()})
@@ -186,6 +201,7 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities
 	return a
 }
 
+// ProjectAgents builds the same rows exposed by /api/v1/state.data.agents.
 func ProjectAgents(records []agent.Record, states map[string]ProcessStateInfo, activity observe.ActivityProvider, cfg *config.Config) []observe.Agent {
 	var activities map[string]observe.AgentActivity
 	if activity != nil {
@@ -340,15 +356,7 @@ func runError(e history.Entry) string {
 // written directly, per the wire contract.
 // GET /api/v1/events
 func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
-	writeTimeout := s.sseWriteTimeout
-	heartbeat := s.sseHeartbeat
-	if writeTimeout <= 0 {
-		writeTimeout = defaultSSEWriteTimeout
-	}
-	if heartbeat <= 0 {
-		heartbeat = defaultSSEHeartbeat
-	}
-	httpapi.ServeEvents(w, r, httpapi.EventsOptions{Source: s.events, Covered: map[observe.EventType]bool{observe.EventAgentSpawned: true, observe.EventAgentStateChanged: true, observe.EventAgentActivity: true, observe.EventAgentStopped: true}, Buffer: sseSubscriberBuffer, Heartbeat: heartbeat, WriteTimeout: writeTimeout, Hello: func(seq uint64, now time.Time) any {
-		return observe.HelloPayload{Meta: observe.Meta{Seq: seq, At: now}, Version: observe.SnapshotVersion, ServerTime: now}
-	}})
+	httpapi.ServeEvents(w, r, httpapi.EventsOptions{
+		Source: s.events, Heartbeat: s.sseHeartbeat, WriteTimeout: s.sseWriteTimeout, Buffer: sseSubscriberBuffer,
+	})
 }

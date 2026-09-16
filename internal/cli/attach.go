@@ -149,7 +149,7 @@ func runRemoteAttach(res config.HostResolution, remoteArgs ...string) error {
 	// $TERM from this SSH session. Make sure the remote knows that terminal
 	// type — or fall back to xterm-256color on the remote command.
 	termOverride := ensureRemoteTerminfoFn(res)
-	sshArgs := append([]string{"-t"}, buildSSHArgs(res)...)
+	sshArgs := append([]string{"-t", res.Host.SSH}, res.Host.SSHArgs...)
 	prefixLen := len(sshArgs)
 	sshArgs = append(sshArgs, res.Host.RemoteLeoPath())
 	sshArgs = append(sshArgs, remoteArgs...)

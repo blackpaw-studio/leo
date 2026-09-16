@@ -17,8 +17,8 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
-	"github.com/blackpaw-studio/leo/internal/hosts"
 	"github.com/blackpaw-studio/leo/internal/observe"
+	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 	"github.com/blackpaw-studio/leo/internal/web"
 )
@@ -94,10 +94,9 @@ type Server struct {
 	observeRunLog     *observe.RunLog
 	observeMessageLog *observe.MessageLog
 	observeActivity   observe.ActivityProvider
+	observeClock      httpapi.Clock
 	leoVersion        string
 	parentContext     context.Context
-	hostHub           *hosts.Hub
-	mux               *http.ServeMux
 }
 
 // SetObservability wires the observability event bus, run log, activity
@@ -143,14 +142,9 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
-	mux.HandleFunc("GET /hosts", s.handleHosts)
-	mux.HandleFunc("POST /hosts/{name}/connect", s.handleHostConnect)
-	mux.HandleFunc("POST /hosts/{name}/disconnect", s.handleHostDisconnect)
+	mux.HandleFunc("GET /events", s.handleEvents)
+	mux.HandleFunc("GET /state", s.handleState)
 	mux.HandleFunc("GET /templates", s.handleTemplates)
-	mux.HandleFunc("GET /events", s.handleHostEvents)
-	mux.HandleFunc("GET /state", s.handleHostState)
-	mux.HandleFunc("/hosts/{name}/agents/{rest...}", s.handleHostProxy)
-	mux.HandleFunc("/hosts/{name}/templates", s.handleHostProxy)
 	mux.HandleFunc("POST /cron/install", s.handleCronInstall)
 	mux.HandleFunc("POST /cron/remove", s.handleCronRemove)
 	mux.HandleFunc("GET /cron/list", s.handleCronList)
@@ -192,7 +186,6 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
 	mux.HandleFunc("GET /agents/{name}/attach-spec", s.handleAgentAttachSpec)
 
-	s.mux = mux
 	s.httpServer = &http.Server{
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
@@ -210,8 +203,8 @@ func (s *Server) SetParentContext(ctx context.Context) {
 	}
 }
 
-func (s *Server) SetHostHub(h *hosts.Hub) { s.hostHub = h }
-func (s *Server) Handler() http.Handler   { return s.mux }
+// Handler exposes the Unix-socket mux for in-process clients and tests.
+func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
 
 // Start binds the Unix socket and begins serving requests.
 func (s *Server) Start() error {
@@ -468,11 +461,8 @@ func (s *Server) SetLogPath(path string) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	b, _ := json.Marshal(map[string]string{"version": s.leoVersion})
-	writeJSON(w, http.StatusOK, Response{OK: true, Data: b})
+	writeData(w, http.StatusOK, versionData{Version: s.leoVersion})
 }
-
-func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) { s.handleHealth(w, r) }
 
 type taskEnqueueReq struct {
 	InvocationID   string   `json:"invocation_id,omitempty"`

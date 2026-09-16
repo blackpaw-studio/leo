@@ -136,7 +136,6 @@ var registry = map[Section][]Field{
 	SectionClientHost: {
 		{Key: "ssh", Label: "SSH", Group: "General", Help: "user@host"},
 		{Key: "ssh_args", Label: "SSH args", Group: "General"},
-		{Key: "autoconnect", Label: "Connect at daemon startup", Kind: KindBool, Group: "General"},
 		{Key: "leo_path", Label: "Leo path", Group: "General"},
 		{Key: "tmux_path", Label: "Tmux path", Group: "General"},
 	},

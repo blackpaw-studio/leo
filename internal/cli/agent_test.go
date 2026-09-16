@@ -287,7 +287,7 @@ func TestAgentAttachRemoteNonCCDelegatesToRemoteLeo(t *testing.T) {
 	// splice in the ControlMaster multiplexing opts that other remote calls
 	// (resolve, --cc attach) use — that's pre-existing behavior we reuse as-is,
 	// not something this fix changes.
-	want := append([]string{"ssh", "-t", "user@prod.example.com"}, append(ctlOpts(home), config.DefaultRemoteLeoPath, "agent", "attach", "scratch")...)
+	want := []string{"ssh", "-t", "user@prod.example.com", config.DefaultRemoteLeoPath, "agent", "attach", "scratch"}
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}
@@ -386,7 +386,7 @@ func TestAgentAttachRemoteUsesRemoteLeoDelegate(t *testing.T) {
 	}
 	// See TestAgentAttachRemoteNonCCDelegatesToRemoteLeo: runRemoteAttach
 	// (reused as-is from top-level `leo attach`) doesn't add ControlMaster opts.
-	want := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, append(ctlOpts(homeFromConfigPath(path)), config.DefaultRemoteLeoPath, "agent", "attach", "scratch")...)
+	want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "agent", "attach", "scratch"}
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}

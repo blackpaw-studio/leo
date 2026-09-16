@@ -1,6 +1,6 @@
 # Remote CLI
 
-Leo's `agent` subcommand is designed to be run from a laptop against a persistent leo host. The local daemon owns SSH ControlMaster forwards for configured hosts; CLI agent commands continue to use SSH and reuse that master connection.
+Leo's `agent` subcommand is designed to be run from a laptop against a persistent leo host. No new daemon, listener, or auth layer — Leo shells out to `ssh` for every remote call and reuses whatever SSH setup you already have (`~/.ssh/config`, agent forwarding, MFA, jump hosts).
 
 This guide walks through turning a fresh laptop into a client.
 
@@ -30,14 +30,12 @@ client:
     prod:
       ssh: alice@leo.example.com
       ssh_args: ["-p", "2222"]
-      autoconnect: true
     dev:
       ssh: alice@devbox.local
 ```
 
 - `ssh` is passed verbatim as the SSH target. Anything SSH itself resolves (Host aliases, ProxyJump, IdentityFile) works.
 - `ssh_args` inserts extra flags between the target and the remote command. Handy for non-default ports or explicit identity files.
-- `autoconnect` asks the local daemon to connect at startup. Without it, the first proxied request connects lazily.
 - `leo_path` overrides the remote binary path. Defaults to `$HOME/.local/bin/leo` (matches `install.sh`). Set this if the remote installed leo elsewhere, or if you see `command not found: leo` over SSH — non-interactive SSH shells don't source `.zshrc` so PATH additions there don't apply.
 - `tmux_path` overrides the remote `tmux` path used by `agent attach` and `agent logs --follow`. Defaults to `tmux`. For macOS arm64 homebrew remotes set to `/opt/homebrew/bin/tmux`; for intel homebrew, `/usr/local/bin/tmux`. Same reason as `leo_path` — homebrew paths live in `.zprofile`/`.zshrc` which ssh command-mode doesn't load.
 - `default_host` is optional — if set, commands without `--host` use it. Otherwise the first host in sorted order wins.
@@ -47,8 +45,6 @@ Verify the config parses:
 ```bash
 leo config show
 ```
-
-Inspect and control daemon-owned connections with `leo host list`, `leo host connect <name>`, and `leo host disconnect <name>`. The former foreground `leo host forward` command has been retired.
 
 ## First spawn
 

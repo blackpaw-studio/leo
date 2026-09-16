@@ -45,7 +45,7 @@ func TestAttachAliasRemoteDelegatesToServer(t *testing.T) {
 	if len(stub.calls) != 1 {
 		t.Fatalf("expected 1 ssh call, got %d", len(stub.calls))
 	}
-	want := append([]string{"ssh", "-t", "user@prod.example.com", "-p", "2222"}, append(ctlOpts(homeFromConfigPath(path)), config.DefaultRemoteLeoPath, "attach", "whatever")...)
+	want := []string{"ssh", "-t", "user@prod.example.com", "-p", "2222", config.DefaultRemoteLeoPath, "attach", "whatever"}
 	if !equalStrings(stub.calls[0], want) {
 		t.Errorf("ssh args = %v, want %v", stub.calls[0], want)
 	}

@@ -144,7 +144,6 @@ Each entry under `hosts` has:
 |-------|------|----------|-------------|
 | `ssh` | string | Yes | SSH target passed verbatim (e.g. `user@host`, or a `Host` alias from `~/.ssh/config`). |
 | `ssh_args` | list | No | Extra arguments inserted between the target and the remote command (e.g. `["-p", "2222"]`). |
-| `autoconnect` | bool | No | Connect the daemon-owned SSH forward at startup. Defaults to `false`; otherwise the first proxied request connects lazily. |
 | `leo_path` | string | No | Absolute path to `leo` on the remote host. Defaults to `$HOME/.local/bin/leo` (matches `install.sh`). Override when `leo` is installed elsewhere or the remote's non-interactive SSH shell doesn't have it on PATH. |
 | `tmux_path` | string | No | Path to `tmux` on the remote host. Used by `agent attach` and `agent logs --follow`. Defaults to `tmux` (relies on PATH). Set to `/opt/homebrew/bin/tmux` for macOS arm64 homebrew remotes, `/usr/local/bin/tmux` for macOS intel. |
 
@@ -155,7 +154,6 @@ client:
     prod:
       ssh: alice@leo.example.com
       ssh_args: ["-p", "2222"]
-      autoconnect: true
       leo_path: /usr/local/bin/leo
       tmux_path: /opt/homebrew/bin/tmux
     dev:
