@@ -63,6 +63,9 @@ type Dispatcher struct {
 	placement            *ViewerPlacementCoordinator
 	waitResolvedHook     func()
 	waitDoneHook         func(string)
+	beforeOpeningInject  func()
+	afterOpeningInject   func()
+	beforeSendInjectable func()
 	notificationDelivery NotificationDelivery
 	closeFinishedViewer  func(Record, func(string) error) (Record, error)
 }
