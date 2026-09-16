@@ -133,7 +133,14 @@ func (v *Viewer) OnStart(rec Record) string {
 	}
 	watch := fmt.Sprintf("%s --config %s dispatch watch %s", shellQuote(leo), shellQuote(v.ConfigPath), rec.ID)
 	name := viewerWindowName(rec)
-	out, err := v.output("new-window", "-d", "-P", "-F", "#{window_id}", "-t", tmux.Target(session), "-n", name, watch)
+	// A window cannot have remain-on-exit pre-set before it exists (unlike
+	// the caller's window in openSplit), so create it with a placeholder
+	// command that cannot exit, turn the option on, then respawn the real
+	// watch command into the same pane. This avoids the same race as
+	// split-window: a fast-exiting watch process closing the window
+	// before a later set-window-option ever runs. respawn-pane exists on
+	// every tmux >= 3.2, our minimum supported version.
+	out, err := v.output("new-window", "-d", "-P", "-F", "#{window_id}", "-t", tmux.Target(session), "-n", name, "sleep 86400")
 	if err != nil {
 		v.log("opening dispatch viewer %q: %v", rec.ID, err)
 		return ""
@@ -151,8 +158,27 @@ func (v *Viewer) OnStart(rec Record) string {
 	v.mu.Unlock()
 	if err := v.run("set-window-option", "-t", windowID, "remain-on-exit", "on"); err != nil {
 		v.log("keeping dispatch viewer %q open: %v", rec.ID, err)
+		v.abandonWindow(rec.ID, windowID)
+		return ""
+	}
+	if err := v.run("respawn-pane", "-k", "-t", windowID, watch); err != nil {
+		v.log("starting dispatch viewer %q: %v", rec.ID, err)
+		v.abandonWindow(rec.ID, windowID)
+		return ""
 	}
 	return windowID
+}
+
+// abandonWindow kills a placeholder window that failed to become a real
+// viewer (remain-on-exit never applied, or the watch command never
+// started), so it doesn't linger looking like a live viewer.
+func (v *Viewer) abandonWindow(recID, windowID string) {
+	v.mu.Lock()
+	delete(v.windowIDs, recID)
+	v.mu.Unlock()
+	if err := v.run("kill-window", "-t", windowID); err != nil {
+		v.log("killing abandoned dispatch viewer window %q: %v", windowID, err)
+	}
 }
 
 func (v *Viewer) openSplit(rec Record, placement ViewerPlacement) string {
