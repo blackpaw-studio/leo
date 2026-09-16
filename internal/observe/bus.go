@@ -149,6 +149,8 @@ func (b *Bus) Subscribe(buffer int) (<-chan Event, func(), uint64) {
 	return s.ch, unsub, seq
 }
 
+func (b *Bus) Sequence() uint64 { b.mu.Lock(); defer b.mu.Unlock(); return b.seq }
+
 // drop removes and closes the subscriber if it is still registered. Safe to
 // race with an in-flight unsubscribe or another drop for the same id — only
 // the caller that actually removes the map entry closes the channel.
