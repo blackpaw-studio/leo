@@ -35,9 +35,11 @@ func TestViewerSplitArgv(t *testing.T) {
 	}
 	want := [][]string{
 		{"tmux", "-L", "leo", "show-options", "-t", "$1"},
+		{"tmux", "-L", "leo", "set-window-option", "-t", "@1", "remain-on-exit", "on"},
 		{"tmux", "-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", "/work", "'/opt/leo' --config '" + v.ConfigPath + "' dispatch watch d-123abc"},
 		{"tmux", "-L", "leo", "select-pane", "-t", "%9", "-T", "claude·3abc"},
 		{"tmux", "-L", "leo", "set-option", "-p", "-t", "%9", "remain-on-exit", "on"},
+		{"tmux", "-L", "leo", "set-window-option", "-u", "-t", "@1", "remain-on-exit"},
 		{"tmux", "-L", "leo", "set-option", "-w", "-t", "@1", "main-pane-height", "60%"},
 		{"tmux", "-L", "leo", "select-layout", "-t", "@1", "main-horizontal"},
 	}
@@ -64,7 +66,9 @@ func TestViewerSplitFailureFallsBack(t *testing.T) {
 	}
 	want := [][]string{
 		{"tmux", "-L", "leo", "show-options", "-t", "$1"},
+		{"tmux", "-L", "leo", "set-window-option", "-t", "@1", "remain-on-exit", "on"},
 		{"tmux", "-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", "/work", "'/opt/leo' --config '" + v.ConfigPath + "' dispatch watch d-123abc"},
+		{"tmux", "-L", "leo", "set-window-option", "-u", "-t", "@1", "remain-on-exit"},
 		{"tmux", "-L", "leo", "has-session", "-t", "=leo-caller"},
 		{"tmux", "-L", "leo", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=leo-caller", "-n", "claude·3abc", "'/opt/leo' --config '" + v.ConfigPath + "' dispatch watch d-123abc"},
 		{"tmux", "-L", "leo", "set-window-option", "-t", "@7", "remain-on-exit", "on"},

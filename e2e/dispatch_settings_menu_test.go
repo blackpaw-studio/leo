@@ -4,12 +4,14 @@ package e2e
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -116,6 +118,18 @@ func TestDispatchViewerMenuActionLiteralSession(t *testing.T) {
 		t.Fatalf("new-session: %v: %s", err, out)
 	}
 	t.Cleanup(func() { _ = exec.Command(realTmux, tmux.Args("kill-session", "-t", tmux.Target(holder))...).Run() })
+
+	// The menu action re-expands via a run-shell on the "leo"-named socket
+	// the daemon owns in production. Spin up an isolated, uniquely named
+	// socket here rather than depending on an ambient "-L leo" server —
+	// none exists in CI, and using the real name risks colliding with a
+	// live daemon on a dev machine.
+	actionSocket := fmt.Sprintf("leo-e2e-action-%d", time.Now().UnixNano())
+	actionKeepalive := fmt.Sprintf("keepalive-%d", time.Now().UnixNano())
+	if out, err := exec.Command(realTmux, tmux.Args("-L", actionSocket, "new-session", "-d", "-s", actionKeepalive, "sleep", "30")...).CombinedOutput(); err != nil {
+		t.Fatalf("new-session action socket: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command(realTmux, tmux.Args("-L", actionSocket, "kill-server")...).Run() })
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "leo.yaml")
 	if err := os.WriteFile(cfg, []byte("tasks: {}\n"), 0600); err != nil {
@@ -159,8 +173,27 @@ func TestDispatchViewerMenuActionLiteralSession(t *testing.T) {
 			if err := os.Remove(link); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Symlink(leoBin, link); err != nil {
-				t.Fatal(err)
+			// A hard link, not a symlink: os.Executable() reads
+			// /proc/self/exe on Linux, which resolves symlinks to the
+			// canonical target (leoBin) but preserves a hard link's own
+			// path, since it is a distinct directory entry for the same
+			// inode. The menu build below must observe "link", not
+			// leoBin, so the swap to the stub script further down
+			// actually intercepts the later action invocation.
+			if err := os.Link(leoBin, link); err != nil {
+				if !errors.Is(err, syscall.EXDEV) {
+					t.Fatalf("link: %v", err)
+				}
+				// t.TempDir() and leoBin's directory live on separate
+				// filesystems; fall back to a byte copy so the swap still
+				// works (at the cost of the larger copy).
+				data, readErr := os.ReadFile(leoBin)
+				if readErr != nil {
+					t.Fatalf("link: %v; read fallback: %v", err, readErr)
+				}
+				if writeErr := os.WriteFile(link, data, 0700); writeErr != nil {
+					t.Fatalf("link: %v; write fallback: %v", err, writeErr)
+				}
 			}
 			cmd := exec.Command(link, "--config", cfg, "dispatch", "viewer", "menu", "--session", session)
 			cmd.Env = replacePath(os.Environ(), fakeTmuxDir+":"+os.Getenv("PATH"))
@@ -189,7 +222,7 @@ func TestDispatchViewerMenuActionLiteralSession(t *testing.T) {
 			}
 			expected := [][]string{{"--config", cfg, "dispatch", "viewer", "set", "placement=window", "--session", session}, {"--config", cfg, "dispatch", "viewer", "set", "max_panes=4", "--session", session}, {"--config", cfg, "dispatch", "viewer", "close-finished", "--session", session}, {"--config", cfg, "dispatch", "viewer", "save-default", "--session", session}}
 			for i, action := range actions {
-				outer := shellQuoteE2E(realTmux) + " -L leo " + action
+				outer := shellQuoteE2E(realTmux) + " -L " + actionSocket + " " + action
 				if out, err := exec.Command(realTmux, tmux.Args("run-shell", "-t", holder, outer)...).CombinedOutput(); err != nil {
 					t.Fatalf("action %d: %v: %s", i, err, out)
 				}

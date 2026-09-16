@@ -408,13 +408,16 @@ func TestInteractiveSplitArgv(t *testing.T) {
 	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-abc", Template: "codex", Cwd: cwd, Name: "work", CallerPaneID: "%1", CallerWindowID: "@1", Placement: placement}); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 6 {
+	if len(calls) != 8 {
 		t.Fatalf("calls=%#v", calls)
 	}
 	if !reflect.DeepEqual(calls[0], []string{"-L", "leo", "has-session", "-t", "=leo-dispatch"}) {
 		t.Fatalf("probe=%#v", calls[0])
 	}
-	launch := calls[1]
+	if !reflect.DeepEqual(calls[1], []string{"-L", "leo", "set-window-option", "-t", "@1", "remain-on-exit", "on"}) {
+		t.Fatalf("pre-split remain-on-exit=%#v", calls[1])
+	}
+	launch := calls[2]
 	wantPrefix := []string{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc"}
 	resolved, _ := filepath.EvalSymlinks(cwd)
 	wantCommand := "'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'gpt-5' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
@@ -422,8 +425,8 @@ func TestInteractiveSplitArgv(t *testing.T) {
 	if !reflect.DeepEqual(launch, wantLaunch) {
 		t.Fatalf("launch=%#v", launch)
 	}
-	wantTail := [][]string{{"-L", "leo", "select-pane", "-t", "%9", "-T", "work·abc"}, {"-L", "leo", "set-option", "-p", "-t", "%9", "remain-on-exit", "on"}, {"-L", "leo", "set-option", "-w", "-t", "@1", "main-pane-height", "60%"}, {"-L", "leo", "select-layout", "-t", "@1", "main-horizontal"}}
-	if !reflect.DeepEqual(calls[2:], wantTail) {
+	wantTail := [][]string{{"-L", "leo", "select-pane", "-t", "%9", "-T", "work·abc"}, {"-L", "leo", "set-option", "-p", "-t", "%9", "remain-on-exit", "on"}, {"-L", "leo", "set-window-option", "-u", "-t", "@1", "remain-on-exit"}, {"-L", "leo", "set-option", "-w", "-t", "@1", "main-pane-height", "60%"}, {"-L", "leo", "select-layout", "-t", "@1", "main-horizontal"}}
+	if !reflect.DeepEqual(calls[3:], wantTail) {
 		t.Fatalf("calls=%#v\nwant tail=%#v", calls, wantTail)
 	}
 }
@@ -450,12 +453,48 @@ func TestInteractiveSplitFallbackArgv(t *testing.T) {
 	resolved, _ := filepath.EvalSymlinks(cwd)
 	command := "'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'sonnet' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
 	suffix := []string{"-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", command}
-	want := [][]string{{"-L", "leo", "has-session", "-t", "=leo-dispatch"}, append([]string{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1"}, suffix...), append([]string{"-L", "leo", "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=leo-dispatch", "-n", "codex·abc"}, suffix...)}
+	want := [][]string{
+		{"-L", "leo", "has-session", "-t", "=leo-dispatch"},
+		{"-L", "leo", "set-window-option", "-t", "", "remain-on-exit", "on"},
+		append([]string{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1"}, suffix...),
+		{"-L", "leo", "set-window-option", "-u", "-t", "", "remain-on-exit"},
+		append([]string{"-L", "leo", "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=leo-dispatch", "-n", "codex·abc"}, suffix...),
+	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls=%#v\nwant=%#v", calls, want)
 	}
 	if got := r.ViewerKind(pane); got != "window" {
 		t.Fatalf("ViewerKind=%q", got)
+	}
+}
+
+func TestInteractiveSplitEmptyPaneIDUnsetsWindowOption(t *testing.T) {
+	codexHome, cwd := t.TempDir(), t.TempDir()
+	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{"codex": {Harness: "codex", Env: map[string]string{"CODEX_HOME": codexHome}}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var calls [][]string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		if len(args) > 2 && args[2] == "split-window" {
+			// Succeeds but reports no pane id.
+			return exec.Command("true")
+		}
+		return exec.Command("true")
+	}
+	_, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-abc", Template: "codex", Cwd: cwd, CallerPaneID: "%1", CallerWindowID: "@1", Placement: ViewerPlacement{Kind: "split", Target: "%1", MainPaneHeight: 60}})
+	if err == nil || err.Error() != "tmux returned no pane id" {
+		t.Fatalf("err=%v", err)
+	}
+	resolved, _ := filepath.EvalSymlinks(cwd)
+	command := "'env' 'LEO_DISPATCH_ID=d-abc' 'codex' '-a' 'never' '--model' 'sonnet' '-c' 'sandbox_workspace_write.writable_roots=[\"" + resolved + "/.agents\"]' '-c' 'check_for_update_on_startup=false'"
+	want := [][]string{
+		{"-L", "leo", "has-session", "-t", "=leo-dispatch"},
+		{"-L", "leo", "set-window-option", "-t", "@1", "remain-on-exit", "on"},
+		{"-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", cwd, "-e", "CODEX_HOME=" + codexHome, "-e", "LEO_CONFIG=/tmp/leo.yaml", "-e", "LEO_DISPATCH_ID=d-abc", command},
+		{"-L", "leo", "set-window-option", "-u", "-t", "@1", "remain-on-exit"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v\nwant=%#v", calls, want)
 	}
 }
 

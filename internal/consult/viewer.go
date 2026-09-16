@@ -161,16 +161,29 @@ func (v *Viewer) openSplit(rec Record, placement ViewerPlacement) string {
 		return ""
 	}
 	watch := fmt.Sprintf("%s --config %s dispatch watch %s", shellQuote(leo), shellQuote(v.ConfigPath), rec.ID)
+	// remain-on-exit must be on before the pane is created: a fast-exiting
+	// watch process can close the pane before a later, pane-scoped
+	// set-option ever runs (a real race, observed on Linux tmux where
+	// process startup is quick relative to macOS). It is set at window
+	// scope only long enough to cover that gap, then pinned onto the new
+	// pane specifically and unset from the window again immediately after
+	// — leaving it at window scope would make every other pane in the
+	// caller's window (including the caller's own) linger dead on exit,
+	// which the agent supervisor does not expect.
+	_ = v.run("set-window-option", "-t", rec.CallerWindowID, "remain-on-exit", "on")
 	out, err := v.output("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", placement.Target, "-c", rec.Cwd, watch)
 	if err != nil {
+		_ = v.run("set-window-option", "-u", "-t", rec.CallerWindowID, "remain-on-exit")
 		return ""
 	}
 	pane := strings.TrimSpace(string(out))
 	if pane == "" {
+		_ = v.run("set-window-option", "-u", "-t", rec.CallerWindowID, "remain-on-exit")
 		return ""
 	}
 	_ = v.run("select-pane", "-t", pane, "-T", viewerWindowName(rec))
 	_ = v.run("set-option", "-p", "-t", pane, "remain-on-exit", "on")
+	_ = v.run("set-window-option", "-u", "-t", rec.CallerWindowID, "remain-on-exit")
 	_ = v.run("set-option", "-w", "-t", rec.CallerWindowID, "main-pane-height", fmt.Sprintf("%d%%", placement.MainPaneHeight))
 	_ = v.run("select-layout", "-t", rec.CallerWindowID, "main-horizontal")
 	return pane
