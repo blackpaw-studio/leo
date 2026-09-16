@@ -64,10 +64,16 @@ All state transitions publish `host_state_changed` on the `observe.Bus`.
 | `/hosts/{name}/agents/...`, `/hosts/{name}/templates` | Reverse proxy (`httputil.ReverseProxy` over a unix-socket transport) with the prefix stripped. Status and body pass through unchanged. `localhost` dispatches to the local mux in-process. Not connected -> 503 `{code:"host_unavailable", error}`. |
 | `GET /events` | SSE. `hello {version, ...}` first, then one `host_state_changed` per known host (including `localhost`, state `local`) so a fresh subscriber learns current states without racing `GET /hosts`, then `: ping` every 20 s and the same event names/payloads as `/api/v1/events` with `host` added to every payload. `host_state_changed {host, state, error?, code?}` also fires on every transition. |
 | `GET /state` | `{agents: [...]}`, same row shape as `/api/v1/state.data.agents` with `host` per row, merged across `localhost` and every `connected` host. |
-| `GET /health` | `{ok:true, version}`. |
-| `GET /version` | `{version}`. |
+| `GET /health` | `{ok:true, data:{version}}`. |
+| `GET /version` | `{ok:true, data:{version}}`. |
 
-Unknown host name -> 404 `{code:"host_unknown"}`.
+Every route above except the SSE stream returns the standard
+`daemon.Response` envelope: `{ok:true, data:<payload>}` on success,
+`{ok:false, error, code}` on failure. So `GET /hosts` is
+`{ok:true, data:[...]}`, `GET /state` is `{ok:true, data:{agents:[...]}}`,
+`GET /templates` is `{ok:true, data:[...]}`. Proxied `/hosts/{name}/...`
+responses are the remote's envelope passed through unchanged.
+Unknown host name -> 404 `{ok:false, code:"host_unknown", error}`.
 
 ### Event fan-in
 
