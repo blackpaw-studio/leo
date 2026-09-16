@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -155,6 +156,7 @@ func TestSendDoesNotWait(t *testing.T) {
 
 func TestInteractiveLaunchArgv(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet", Env: map[string]string{"THING": "value"}}}}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, func(string) (string, bool) { return "leo-caller", true }, "tmux", "/opt/leo")
 	r.AgentToken = "token"
@@ -187,8 +189,65 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 	}
 }
 
+func TestInteractiveClaudeDispatchLaunchProfile(t *testing.T) {
+	home := t.TempDir()
+	registry := filepath.Join(home, ".claude", "plugins", "installed_plugins.json")
+	if err := os.MkdirAll(filepath.Dir(registry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(registry, []byte(`{"plugins":{"b@market":{},"a@local":{}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{
+		"claude": {Harness: "claude", Model: "sonnet", Env: map[string]string{"HOME": home}},
+	}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		if slices.Contains(args, "has-session") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-profile", Template: "claude", Cwd: t.TempDir(), Dispatched: true}); err != nil {
+		t.Fatal(err)
+	}
+	command := launch[len(launch)-1]
+	if !containsAll(command, "--strict-mcp-config", "--mcp-config", `{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}`) {
+		t.Fatalf("profile flags missing from %q", command)
+	}
+	match := regexp.MustCompile(`'--settings' '([^']*)'`).FindStringSubmatch(command)
+	if len(match) != 2 {
+		t.Fatalf("settings missing from %q", command)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(match[1]), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["crossSessionInbound"] != "accept" {
+		t.Fatalf("settings = %#v", settings)
+	}
+	hooks, ok := settings["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks = %#v", settings["hooks"])
+	}
+	for _, event := range []string{"Stop", "UserPromptSubmit", "SessionEnd"} {
+		if _, ok := hooks[event]; !ok {
+			t.Errorf("missing %s hook: %#v", event, hooks)
+		}
+	}
+	if want := map[string]any{"a@local": false, "b@market": false}; !reflect.DeepEqual(settings["enabledPlugins"], want) {
+		t.Fatalf("enabledPlugins = %#v, want %#v", settings["enabledPlugins"], want)
+	}
+}
+
 func TestInteractiveLaunchFallbackSession(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude"}}}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, func(string) (string, bool) { return "leo-dead", true }, "tmux", "/opt/leo")
 	var calls [][]string

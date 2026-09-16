@@ -257,3 +257,35 @@ func TestTaskArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskArgsDispatchProfile(t *testing.T) {
+	spec := harness.LaunchSpec{Kind: harness.KindTask, Model: "fable", Workspace: "/ws", Prompt: "P", MaxTurns: 2, Dispatched: true}
+	got, err := (Claude{}).Args(harness.LaunchSpec{Kind: spec.Kind, Model: spec.Model, Workspace: spec.Workspace, Prompt: spec.Prompt, MaxTurns: spec.MaxTurns, Dispatched: true, Options: Options{MCP: "none", Plugins: "none", EnabledPlugins: []string{"b@market", "a@local"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-p", "P", "--model", "fable", "--max-turns", "2", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--add-dir", "/ws", "--disallowed-tools", "Agent", "--settings", `{"enabledPlugins":{"a@local":false,"b@market":false}}`}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Args() = %#v, want %#v", got, want)
+	}
+}
+
+func TestTaskArgsMCPNoneExcludesOtherMCPConfigs(t *testing.T) {
+	spec := harness.LaunchSpec{Kind: harness.KindTask, Model: "fable", Workspace: "/ws", Prompt: "P", MaxTurns: 1, Dispatched: true}
+	got, err := (Claude{}).Args(harness.LaunchSpec{Kind: spec.Kind, Model: spec.Model, Workspace: spec.Workspace, Prompt: spec.Prompt, MaxTurns: spec.MaxTurns, Dispatched: true, Options: Options{MCP: "none", MCPConfigPath: "/user.json", LeoMCPArgs: []string{"--mcp-config", "/leo.json"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range got {
+		if arg == "/user.json" || arg == "/leo.json" {
+			t.Fatalf("none profile leaked MCP config: %#v", got)
+		}
+	}
+	inherit, err := (Claude{}).Args(harness.LaunchSpec{Kind: spec.Kind, Model: spec.Model, Workspace: spec.Workspace, Prompt: spec.Prompt, MaxTurns: spec.MaxTurns, Dispatched: true, Options: Options{MCP: "inherit", MCPConfigPath: "/user.json", LeoMCPArgs: []string{"--mcp-config", "/leo.json"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(inherit, []string{"-p", "P", "--model", "fable", "--max-turns", "1", "--output-format", "stream-json", "--verbose", "--mcp-config", "/user.json", "--mcp-config", "/leo.json", "--add-dir", "/ws", "--disallowed-tools", "Agent"}) {
+		t.Fatalf("inherit argv = %#v", inherit)
+	}
+}

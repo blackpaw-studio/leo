@@ -39,11 +39,15 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 		args = append(args, "--remote-control")
 	}
 	args = append(args, "--name", spec.Name)
-	args = append(args, "--settings", `{"crossSessionInbound":"accept"}`)
+	args = append(args, strictMCPArgs(o)...)
+	profiled := o.MCP == "none" || o.Plugins == "none"
+	if !profiled {
+		args = append(args, "--settings", `{"crossSessionInbound":"accept"}`)
+	}
 	if o.PermissionMode != "" {
 		args = append(args, "--permission-mode", o.PermissionMode)
 	}
-	if o.MCPConfigPath != "" {
+	if o.MCP != "none" && o.MCPConfigPath != "" {
 		args = append(args, "--mcp-config", o.MCPConfigPath)
 	}
 	if o.AgentFile != "" {
@@ -53,12 +57,17 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 	if sp := mergeSystemPrompt(spec.SystemContext, o.AppendSystemPrompt); sp != "" {
 		args = append(args, "--append-system-prompt", sp)
 	}
-	args = append(args, o.LeoMCPArgs...)
+	if o.MCP != "none" {
+		args = append(args, o.LeoMCPArgs...)
+	}
 	if spec.MaxTurns > 0 {
 		args = append(args, "--max-turns", strconv.Itoa(spec.MaxTurns))
 	}
 	if spec.Prompt != "" {
 		args = append(args, spec.Prompt)
+	}
+	if profiled {
+		args = append(args, "--settings", settingsJSON(map[string]any{"crossSessionInbound": "accept"}, o))
 	}
 	return args
 }
@@ -78,14 +87,20 @@ func taskArgs(spec harness.LaunchSpec, o Options) []string {
 	}
 	args = append(args, Claude{}.SessionArgs(spec.Session)...)
 	args = appendPermissionFlags(args, o)
-	if o.MCPConfigPath != "" {
+	args = append(args, strictMCPArgs(o)...)
+	if o.MCP != "none" && o.MCPConfigPath != "" {
 		args = append(args, "--mcp-config", o.MCPConfigPath)
 	}
-	args = append(args, o.LeoMCPArgs...)
+	if o.MCP != "none" {
+		args = append(args, o.LeoMCPArgs...)
+	}
 	args = append(args, "--add-dir", spec.Workspace)
 	args = appendToolFlags(args, o)
 	if sp := mergeSystemPrompt(spec.SystemContext, o.AppendSystemPrompt); sp != "" {
 		args = append(args, "--append-system-prompt", sp)
+	}
+	if o.Plugins == "none" {
+		args = append(args, "--settings", settingsJSON(map[string]any{}, o))
 	}
 	return args
 }

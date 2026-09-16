@@ -15,6 +15,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/codex"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -87,6 +88,9 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	opts, err := h.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
 	if err != nil {
 		return "", "", err
+	}
+	if claudeOpts, ok := opts.(claudeharness.Options); ok && req.Dispatched {
+		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env)
 	}
 	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
 	args, err := h.Args(spec)

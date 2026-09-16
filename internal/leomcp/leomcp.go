@@ -138,6 +138,10 @@ func buildConfig() []byte {
 	return append(out, '\n')
 }
 
+// InlineConfig returns the Leo bridge as compact JSON for strict Claude MCP
+// profiles. Unlike EnsureConfig it never touches the filesystem.
+func InlineConfig() string { return `{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}` }
+
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false

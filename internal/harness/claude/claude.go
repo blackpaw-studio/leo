@@ -24,6 +24,10 @@ type Options struct {
 	AllowedTools       []string
 	DisallowedTools    []string
 	AppendSystemPrompt string
+	MCP                string   // inherit or none
+	Plugins            string   // inherit or none
+	EnabledPlugins     []string // plugin IDs disabled when Plugins is none
+	StrictMCPConfig    string   // inline Leo-only config when MCP is none
 	MCPConfigPath      string   // user MCP config; empty when absent or serverless
 	LeoMCPArgs         []string // precomputed leomcp.AppendArg(nil, cfg); nil when gated off
 	// LeoMCPToolTimeout is leo's per-tool MCP ceiling (leomcp.ToolTimeout).
@@ -81,7 +85,7 @@ func (Claude) Env(spec harness.LaunchSpec) (map[string]string, error) {
 	if spec.Kind == harness.KindTask {
 		env["CLAUDE_CODE_ENTRYPOINT"] = "cli"
 	}
-	if len(opts.LeoMCPArgs) > 0 && opts.LeoMCPToolTimeout > 0 {
+	if (len(opts.LeoMCPArgs) > 0 || opts.StrictMCPConfig != "") && opts.LeoMCPToolTimeout > 0 {
 		env["MCP_TOOL_TIMEOUT"] = strconv.FormatInt(opts.LeoMCPToolTimeout.Milliseconds(), 10)
 	}
 	if len(env) == 0 {
