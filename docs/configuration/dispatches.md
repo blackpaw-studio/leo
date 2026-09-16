@@ -14,6 +14,14 @@ window when the cap is reached or a split fails. Session options
 `@leo_viewer_placement` and `@leo_viewer_max_panes` override the config.
 Release an idle or finished interactive pane with `leo dispatch release <id>`.
 
+Inside Leo's tmux server, press `prefix + L` to open the dispatch viewer
+settings menu. It has four actions: toggle viewer placement, cycle the pane
+cap from 1 through 6, close finished viewers belonging to the current caller
+session, and save the current session overrides as the config default. Saving
+merges only placement and max-panes into `defaults.dispatch.viewer`, preserves
+`main_pane_height`, reloads the daemon, and clears the session overrides only
+after both save and reload succeed.
+
 ## Nested agents
 
 Dispatches and consults cannot launch nested agents: Leo disables the native

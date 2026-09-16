@@ -7,11 +7,14 @@ func (d *Dispatcher) CloseRecordedPane(rec Record, pane string, kill func(string
 func (d *Dispatcher) PersistViewerRecord(rec Record) {
 	d.mu.Lock()
 	if state := d.runs[rec.ID]; state != nil {
+		state.record.ViewerWindowID = rec.ViewerWindowID
 		state.record.ViewerPaneID = rec.ViewerPaneID
 		state.record.PaneID = rec.PaneID
 		state.record.ViewerKind = rec.ViewerKind
 		state.record.ViewerTitle = rec.ViewerTitle
 		state.record.CallerWindowID = rec.CallerWindowID
+		state.record.CallerPaneID = rec.CallerPaneID
+		state.record.CallerSessionID = rec.CallerSessionID
 		d.persistLocked(state, "")
 		rec = cloneRecord(state.record)
 	}

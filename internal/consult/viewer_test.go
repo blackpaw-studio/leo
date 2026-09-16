@@ -341,7 +341,7 @@ func TestViewerSweepClosesTerminalDispatchAfterGrace(t *testing.T) {
 	}
 }
 
-func TestViewerSweepAttemptsStalePersistedWindowOnlyOnce(t *testing.T) {
+func TestViewerSweepRetriesStalePersistedWindowAfterFailure(t *testing.T) {
 	var calls [][]string
 	now := time.Now()
 	v := &Viewer{
@@ -354,8 +354,43 @@ func TestViewerSweepAttemptsStalePersistedWindowOnlyOnce(t *testing.T) {
 	record := Record{ID: "d-stale", Kind: "dispatch", Status: StatusFailed, EndedAt: now.Add(-viewerGraceAfterEnd - time.Second), ViewerWindowID: "@42"}
 	v.Sweep([]Record{record}, now)
 	v.Sweep([]Record{record}, now.Add(time.Second))
-	if got := len(calls); got != 1 {
-		t.Fatalf("kill attempts = %d, want 1; calls=%#v", got, calls)
+	if got := len(calls); got != 2 {
+		t.Fatalf("kill attempts = %d, want 2; calls=%#v", got, calls)
+	}
+}
+
+func TestCloseFinishedWindowPersistsClearedWindowID(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	id := "d-window-clear"
+	d.runs[id] = &runState{record: Record{ID: id, Kind: "dispatch", Status: StatusDone, ViewerKind: "window", ViewerWindowID: "@9"}, handle: nopHandle{}, done: make(chan struct{})}
+	v := NewViewer("", nil)
+	v.ExecCommand = func(string, ...string) *exec.Cmd { return exec.Command("true") }
+	v.PersistRecord = d.PersistViewerRecord
+	if _, err := v.CloseFinished(d.runs[id].record, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.runs[id].record.ViewerWindowID; got != "" {
+		t.Fatalf("ViewerWindowID=%q", got)
+	}
+}
+
+func TestCloseFinishedRetriesFailedSweepWindowKill(t *testing.T) {
+	v := NewViewer("", nil)
+	attempts := 0
+	v.ExecCommand = func(string, ...string) *exec.Cmd {
+		attempts++
+		if attempts == 1 {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	rec := Record{ID: "d-retry", Kind: "dispatch", Status: StatusDone, EndedAt: time.Now().Add(-viewerGraceAfterEnd - time.Second), ViewerKind: "window", ViewerWindowID: "@9"}
+	v.Sweep([]Record{rec}, time.Now())
+	if _, err := v.CloseFinished(rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 {
+		t.Fatalf("kill attempts=%d", attempts)
 	}
 }
 

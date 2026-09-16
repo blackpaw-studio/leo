@@ -21,12 +21,14 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	viewer.PersistRecord = s.consults.PersistViewerRecord
 	viewer.PersistIntent = s.consults.PersistViewerRecord
 	viewer.ClosePane = s.consults.CloseRecordedPane
+	s.consults.SetCloseFinishedViewer(viewer.CloseFinished)
 	s.consults.SetNotificationDelivery(consult.NewTmuxNotificationDelivery(findTmuxPath(), s.execCommandContext))
 	interactiveLeoPath, err := os.Executable()
 	if err != nil {
 		interactiveLeoPath, _ = filepath.Abs(s.leoPath)
 	}
 	runtime := consult.NewInteractiveRuntime(s.configPath, s.loadConfig, resolveCallerSession, findTmuxPath(), interactiveLeoPath)
+	runtime.ExecCommandContext = s.execCommandContext
 	runtime.AgentToken = s.agentToken
 	s.consults.SetInteractiveRuntime(runtime)
 	s.consults.MarkInterrupted()

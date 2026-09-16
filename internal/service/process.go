@@ -31,17 +31,35 @@ import (
 
 // Testability seams
 var (
-	startProcess     = defaultStartProcess
-	findProcess      = os.FindProcess
-	readFile         = os.ReadFile
-	writeFile        = os.WriteFile
-	removeFile       = os.Remove
-	renameFile       = os.Rename
-	mkdirAll         = os.MkdirAll
-	createTempFile   = os.CreateTemp
-	openLogFile      = defaultOpenLogFile
-	supervisedExecFn = defaultSupervisedExec
+	startProcess      = defaultStartProcess
+	findProcess       = os.FindProcess
+	readFile          = os.ReadFile
+	writeFile         = os.WriteFile
+	removeFile        = os.Remove
+	renameFile        = os.Rename
+	mkdirAll          = os.MkdirAll
+	createTempFile    = os.CreateTemp
+	openLogFile       = defaultOpenLogFile
+	supervisedExecFn  = defaultSupervisedExec
+	serviceExecutable = os.Executable
 )
+
+func resolveViewerMenuBinding(configPath string) (tmux.ViewerMenuBinding, error) {
+	leoPath, err := serviceExecutable()
+	if err != nil {
+		return tmux.ViewerMenuBinding{}, fmt.Errorf("resolve leo executable for tmux viewer menu: %w", err)
+	}
+	return tmux.ViewerMenuBinding{LeoPath: leoPath, ConfigPath: configPath}, nil
+}
+
+func resolveViewerMenuBindings(configPath string, warnings io.Writer) []tmux.ViewerMenuBinding {
+	binding, err := resolveViewerMenuBinding(configPath)
+	if err != nil {
+		fmt.Fprintf(warnings, "warning: tmux viewer menu binding skipped: %v\n", err)
+		return nil
+	}
+	return []tmux.ViewerMenuBinding{binding}
+}
 
 // tmuxHasAttachedClient is a package-level seam so dismissStartupDialog's
 // attended-session check can be unit-tested without a real tmux. It defaults
@@ -778,10 +796,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// signed leo binary. Must run before RestoreAgents/any supervise loop
 	// issues a new-session. Fail-open: a daemonized fallback server is worse
 	// than a dead daemon, so a failure here only warns.
-	if err := tmux.EnsureForegroundServer(tmuxPath); err != nil {
+	menuBindings := resolveViewerMenuBindings(configPath, os.Stderr)
+	if err := tmux.EnsureForegroundServer(tmuxPath, menuBindings...); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: foreground tmux server setup failed: %v\n", err)
 	} else {
-		go tmux.SuperviseForegroundServer(ctx, tmuxPath)
+		go tmux.SuperviseForegroundServer(ctx, tmuxPath, menuBindings...)
 	}
 
 	supervisor := NewSupervisor(ctx)

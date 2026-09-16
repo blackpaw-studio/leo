@@ -252,7 +252,7 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 				}
 				continue
 			}
-			v.killWindow(rec.ID, rec.ViewerWindowID)
+			_ = v.killWindow(rec.ID, rec.ViewerWindowID)
 			continue
 		}
 		if rec.ViewerWindowID != "" && !rec.Status.Terminal() {
@@ -269,30 +269,66 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 }
 
 func (v *Viewer) kill(id string) {
-	v.killWindow(id, "")
+	_ = v.killWindow(id, "")
 }
 
-func (v *Viewer) killWindow(id, persistedWindowID string) {
+func (v *Viewer) killWindow(id, persistedWindowID string) error {
+	return v.killWindowWithRetry(id, persistedWindowID, false)
+}
+
+func (v *Viewer) killWindowWithRetry(id, persistedWindowID string, retry bool) error {
 	v.mu.Lock()
 	if persistedWindowID != "" && v.handledWindowIDs[id] == persistedWindowID {
 		v.mu.Unlock()
-		return
+		return nil
 	}
 	windowID := v.windowIDs[id]
 	if windowID == "" {
 		windowID = persistedWindowID
 	}
-	delete(v.windowIDs, id)
-	if windowID != "" {
-		v.recordHandledWindow(id, windowID)
-	}
 	v.mu.Unlock()
 	if windowID == "" {
-		return
+		return nil
 	}
 	if err := v.run("kill-window", "-t", windowID); err != nil {
 		v.log("closing dispatch viewer %q: %v", id, err)
+		if retry {
+			v.mu.Lock()
+			if v.handledWindowIDs == nil {
+				v.handledWindowIDs = make(map[string]string)
+			}
+			if v.windowIDs == nil {
+				v.windowIDs = make(map[string]string)
+			}
+			delete(v.handledWindowIDs, id)
+			v.windowIDs[id] = windowID
+			v.mu.Unlock()
+		}
+		return err
 	}
+	v.mu.Lock()
+	delete(v.windowIDs, id)
+	v.recordHandledWindow(id, windowID)
+	v.mu.Unlock()
+	return nil
+}
+
+// CloseFinished closes a terminal headless viewer regardless of outcome.
+func (v *Viewer) CloseFinished(rec Record, layout func(string) error) (Record, error) {
+	v.defaults()
+	if rec.ViewerKind == "split" && rec.ViewerPaneID != "" {
+		return v.ClosePane(rec, rec.ViewerPaneID, func(p string) error { return v.run("kill-pane", "-t", p) }, layout)
+	}
+	if rec.ViewerWindowID != "" {
+		if err := v.killWindowWithRetry(rec.ID, rec.ViewerWindowID, true); err != nil {
+			return rec, err
+		}
+		rec.ViewerWindowID = ""
+		if v.PersistRecord != nil {
+			v.PersistRecord(rec)
+		}
+	}
+	return rec, nil
 }
 
 // recordHandledWindow retains only the most recently handled persisted window

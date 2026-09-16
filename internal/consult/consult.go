@@ -64,6 +64,13 @@ type Dispatcher struct {
 	waitResolvedHook     func()
 	waitDoneHook         func(string)
 	notificationDelivery NotificationDelivery
+	closeFinishedViewer  func(Record, func(string) error) (Record, error)
+}
+
+func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) (Record, error)) {
+	d.mu.Lock()
+	d.closeFinishedViewer = fn
+	d.mu.Unlock()
 }
 
 type runState struct {

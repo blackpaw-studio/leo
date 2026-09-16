@@ -224,11 +224,12 @@ func waitForServerGone(tmuxPath string) {
 // starting the daemon rather than aborting it. Falling back to tmux's own
 // auto-daemonized server (today's behavior) is worse than a dead daemon, but
 // strictly better than refusing to start at all over this optimization.
-func EnsureForegroundServer(tmuxPath string) error {
+func EnsureForegroundServer(tmuxPath string, menu ...ViewerMenuBinding) error {
 	if ServerRunning(tmuxPath) {
 		marked, ok := markerState(tmuxPath)
 		if marked {
 			fmt.Fprintln(os.Stdout, "tmux: adopting existing foreground server")
+			installViewerMenuBestEffort(tmuxPath, menu)
 			return nil
 		}
 		if !ok {
@@ -239,6 +240,7 @@ func EnsureForegroundServer(tmuxPath string) error {
 			// otherwise fall through to a fresh start below.
 			if ServerRunning(tmuxPath) {
 				fmt.Fprintln(os.Stdout, "tmux: adopting existing tmux server (marker probe inconclusive)")
+				installViewerMenuBestEffort(tmuxPath, menu)
 				return nil
 			}
 		} else {
@@ -257,7 +259,17 @@ func EnsureForegroundServer(tmuxPath string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "tmux: started foreground server (pid %d)\n", proc.Pid)
+	installViewerMenuBestEffort(tmuxPath, menu)
 	return nil
+}
+
+func installViewerMenuBestEffort(tmuxPath string, menu []ViewerMenuBinding) {
+	if len(menu) == 0 {
+		return
+	}
+	if err := InstallViewerMenuBinding(tmuxPath, menu[0]); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: tmux viewer menu binding failed: %v\n", err)
+	}
 }
 
 // SuperviseForegroundServer polls leo's tmux socket and restarts the
@@ -266,7 +278,7 @@ func EnsureForegroundServer(tmuxPath string) error {
 // ctx stops this monitor loop but deliberately leaves a still-running server
 // alone (see StartForegroundServer's Setpgid + Release lifetime contract —
 // it must survive daemon shutdown, clean or SIGKILL).
-func SuperviseForegroundServer(ctx context.Context, tmuxPath string) {
+func SuperviseForegroundServer(ctx context.Context, tmuxPath string, menu ...ViewerMenuBinding) {
 	ticker := time.NewTicker(foregroundSuperviseInterval)
 	defer ticker.Stop()
 	for {
@@ -281,6 +293,8 @@ func SuperviseForegroundServer(ctx context.Context, tmuxPath string) {
 		fmt.Fprintln(os.Stderr, "tmux: foreground server exited; restarting")
 		if _, err := StartForegroundServer(tmuxPath); err != nil {
 			fmt.Fprintf(os.Stderr, "tmux: failed to restart foreground server: %v\n", err)
+		} else {
+			installViewerMenuBestEffort(tmuxPath, menu)
 		}
 	}
 }
