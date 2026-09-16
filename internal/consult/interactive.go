@@ -221,7 +221,24 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 // injectOpening deliberately runs after Start returns: the TUI's readiness
 // probe can take a minute, while launch itself is the only synchronous error.
 func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt InteractiveRuntime, turnID, pane, prompt string) {
-	if !d.injectable(s, turnID, pane) {
+	if d.beforeOpeningInject != nil {
+		d.beforeOpeningInject()
+	}
+	if d.afterOpeningInject != nil {
+		defer d.afterOpeningInject()
+	}
+	d.mu.Lock()
+	settled := s.record.Status.Terminal() || s.record.Status == StatusSettling
+	paneChanged := s.record.PaneID != pane
+	t := turnByID(s.record, turnID)
+	injectable := !settled && !paneChanged && t.Outcome == "" && s.record.Status == StatusQueued
+	d.mu.Unlock()
+	if !injectable {
+		// A hook can close the opening turn before this goroutine is scheduled.
+		// That advances the same live session; it does not orphan its pane.
+		if !settled && !paneChanged {
+			return
+		}
 		d.mu.Lock()
 		rec := cloneRecord(s.record)
 		d.mu.Unlock()
@@ -397,6 +414,9 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 		d.closeTurnLocked(s, t.TurnID, TurnRejected, "interactive runtime unavailable")
 		d.mu.Unlock()
 		return SendResult{TurnID: t.TurnID}, errors.New("interactive runtime unavailable")
+	}
+	if d.beforeSendInjectable != nil {
+		d.beforeSendInjectable()
 	}
 	if !d.injectable(s, t.TurnID, pane) {
 		d.mu.Lock()

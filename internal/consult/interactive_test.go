@@ -779,17 +779,30 @@ func TestInteractiveSend(t *testing.T) {
 
 func TestInteractiveSlots(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
+	openingStarted, releaseOpening := make(chan struct{}), make(chan struct{})
+	d.beforeOpeningInject = func() { close(openingStarted); <-releaseOpening }
+	openingDone := make(chan struct{})
+	d.afterOpeningInject = func() { close(openingDone) }
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
 	s, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
+	<-openingStarted
 	_ = d.Report(s.ID, hook(t, "UserPromptSubmit", "a"))
 	_ = d.Report(s.ID, hook(t, "Interrupt", "a"))
 	if len(d.sem) != 0 {
 		t.Fatalf("slot leaked after interrupt: %d", len(d.sem))
 	}
+	sendReady, releaseSend := make(chan struct{}), make(chan struct{})
+	d.beforeSendInjectable = func() { close(sendReady); <-releaseSend }
+	go func() {
+		<-sendReady
+		close(releaseOpening)
+		<-openingDone
+		close(releaseSend)
+	}()
 	if _, err := d.Send(context.Background(), s.ID, "again"); err != nil {
 		t.Fatal(err)
 	}
