@@ -97,13 +97,20 @@ func (v *Viewer) UpdateRoster(records []Record, now time.Time) {
 				unresolved = append(unresolved, fmt.Sprintf("%s:no-pane %s", rec.ID, rec.PaneID))
 			}
 		} else {
-			window := rec.ViewerWindowID
-			if window == "" {
-				window = windowIDs[rec.ID]
-			}
-			session = byWindow[window]
-			if session == "" {
-				unresolved = append(unresolved, fmt.Sprintf("%s:no-window %s", rec.ID, window))
+			if rec.ViewerPaneID != "" {
+				session = byPane[rec.ViewerPaneID]
+				if session == "" {
+					unresolved = append(unresolved, fmt.Sprintf("%s:no-pane %s", rec.ID, rec.ViewerPaneID))
+				}
+			} else {
+				window := rec.ViewerWindowID
+				if window == "" {
+					window = windowIDs[rec.ID]
+				}
+				session = byWindow[window]
+				if session == "" {
+					unresolved = append(unresolved, fmt.Sprintf("%s:no-window %s", rec.ID, window))
+				}
 			}
 		}
 		if session != "" {

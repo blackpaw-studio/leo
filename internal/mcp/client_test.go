@@ -53,6 +53,23 @@ func TestDispatchOutputClientAndSchema(t *testing.T) {
 	t.Fatal("leo_dispatch_output missing from schema")
 }
 
+func TestReleaseDispatch(t *testing.T) {
+	var method, path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.EscapedPath()
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"id":"d/x","status":"released"}}`))
+	}))
+	defer srv.Close()
+	c := newDaemonClient(strings.TrimPrefix(srv.URL, "http://127.0.0.1:"), "")
+	rec, err := c.releaseDispatch(context.Background(), "d/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != "POST" || path != "/api/dispatch/d%2Fx/release" || rec.Status != consult.StatusReleased {
+		t.Fatalf("method=%s path=%s rec=%+v", method, path, rec)
+	}
+}
+
 // TestDaemonClientSetsBearerAuth asserts the MCP daemon client always attaches
 // the Authorization: Bearer header when constructed with a non-empty token.
 // Both the apiEnvelope path (do) and the raw-response path (interrupt) go

@@ -15,6 +15,7 @@ Settings inherited by all tasks and templates unless overridden.
 | `harness` | string | No | Adapter name for this scope and everything that cascades from it. One of `claude`, `codex`, `opencode`. Defaults to `claude`. All three run every leo primitive (tasks, ephemeral agents, persistent tasks) — see [Harnesses](harnesses.md). |
 | `harness_options` | map | No | Adapter-specific options, strictly validated by the resolved harness. For `claude`: `permission_mode`, `bypass_permissions`, `remote_control`, `agent`, `allowed_tools`, `disallowed_tools`, `append_system_prompt`. For `codex`: `permission_mode`. For `opencode`: `permission`. See [Harnesses](harnesses.md) for the full reference and merge rules. |
 | `idle_suspend_after` | string | No | Idle interval (Go duration, e.g. `24h`) after which an ephemeral agent is auto-stopped (dormant, auto-wakes on the next message). Empty/unset disables it. See [Idle-suspend](#idle-suspend). |
+| `dispatch.viewer` | map | No | Dispatch viewer settings: `placement` (`pane` or `window`, default `pane`), `max_panes` (1–6, default 3), and `main_pane_height` (20–90 percent, default 60). |
 
 Custom Anthropic-compatible endpoints (z.ai GLM, OpenRouter, Moonshot, DeepSeek, MiniMax, …) are configured via each scope's own `env:` map (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`) — see [Harnesses → providers is gone](harnesses.md#providers-is-gone).
 

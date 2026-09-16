@@ -3,11 +3,108 @@ package consult
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func viewerConfig(t *testing.T, placement string) string {
+	t.Helper()
+	path := t.TempDir() + "/leo.yaml"
+	contents := "defaults:\n  dispatch:\n    viewer:\n      placement: " + placement + "\ntasks: {}\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestViewerSplitArgv(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{ConfigPath: viewerConfig(t, "pane"), TmuxPath: "tmux", Executable: func() (string, error) { return "/opt/leo", nil }, ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		if len(args) > 2 && args[2] == "split-window" {
+			return exec.Command("printf", "%%9\\n")
+		}
+		return exec.Command("true")
+	}}
+	rec := Record{ID: "d-123abc", Kind: "dispatch", Template: "claude", Cwd: "/work", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"}
+	if got := v.OnStart(rec); got != "%9" {
+		t.Fatalf("OnStart=%q", got)
+	}
+	want := [][]string{
+		{"tmux", "-L", "leo", "show-options", "-t", "$1"},
+		{"tmux", "-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", "/work", "'/opt/leo' --config '" + v.ConfigPath + "' dispatch watch d-123abc"},
+		{"tmux", "-L", "leo", "select-pane", "-t", "%9", "-T", "claude·3abc"},
+		{"tmux", "-L", "leo", "set-option", "-p", "-t", "%9", "remain-on-exit", "on"},
+		{"tmux", "-L", "leo", "set-option", "-w", "-t", "@1", "main-pane-height", "60%"},
+		{"tmux", "-L", "leo", "select-layout", "-t", "@1", "main-horizontal"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v\nwant=%#v", calls, want)
+	}
+}
+
+func TestViewerSplitFailureFallsBack(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{ConfigPath: viewerConfig(t, "pane"), TmuxPath: "tmux", Executable: func() (string, error) { return "/opt/leo", nil }, ResolveCaller: func(string) (string, bool) { return "leo-caller", true }, ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		if len(args) > 2 && args[2] == "split-window" {
+			return exec.Command("false")
+		}
+		if len(args) > 2 && args[2] == "new-window" {
+			return exec.Command("printf", "@7\\n")
+		}
+		return exec.Command("true")
+	}}
+	rec := Record{ID: "d-123abc", Kind: "dispatch", Caller: "caller", Template: "claude", Cwd: "/work", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"}
+	if got := v.OnStart(rec); got != "@7" {
+		t.Fatalf("OnStart=%q", got)
+	}
+	want := [][]string{
+		{"tmux", "-L", "leo", "show-options", "-t", "$1"},
+		{"tmux", "-L", "leo", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "%1", "-c", "/work", "'/opt/leo' --config '" + v.ConfigPath + "' dispatch watch d-123abc"},
+		{"tmux", "-L", "leo", "has-session", "-t", "=leo-caller"},
+		{"tmux", "-L", "leo", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=leo-caller", "-n", "claude·3abc", "'/opt/leo' --config '" + v.ConfigPath + "' dispatch watch d-123abc"},
+		{"tmux", "-L", "leo", "set-window-option", "-t", "@7", "remain-on-exit", "on"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v\nwant=%#v", calls, want)
+	}
+}
+
+func TestViewerWindowArgvUnchanged(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{ConfigPath: viewerConfig(t, "window"), TmuxPath: "tmux", Executable: func() (string, error) { return "/opt/leo", nil }, ResolveCaller: func(string) (string, bool) { return "leo-caller", true }, ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		if len(args) > 2 && args[2] == "new-window" {
+			return exec.Command("printf", "@7\\n")
+		}
+		return exec.Command("true")
+	}}
+	rec := Record{ID: "d-123abc", Kind: "dispatch", Caller: "caller", Template: "claude", CallerPaneID: "%1", CallerSessionID: "$1", CallerWindowID: "@1"}
+	v.OnStart(rec)
+	want := [][]string{{"tmux", "-L", "leo", "show-options", "-t", "$1"}, {"tmux", "-L", "leo", "has-session", "-t", "=leo-caller"}, {"tmux", "-L", "leo", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=leo-caller", "-n", "claude·3abc", "'/opt/leo' --config '" + v.ConfigPath + "' dispatch watch d-123abc"}, {"tmux", "-L", "leo", "set-window-option", "-t", "@7", "remain-on-exit", "on"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v\nwant=%#v", calls, want)
+	}
+}
+
+func TestViewerSplitCollectAndSweep(t *testing.T) {
+	var calls [][]string
+	v := &Viewer{TmuxPath: "tmux", ExecCommand: func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		return exec.Command("true")
+	}}
+	v.Close(Record{ID: "d-done", Kind: "dispatch", Status: StatusDone, ViewerKind: "split", ViewerPaneID: "%9", CallerPaneID: "%1", CallerWindowID: "@1"})
+	now := time.Now()
+	v.Sweep([]Record{{ID: "d-fail", Kind: "dispatch", Status: StatusFailed, EndedAt: now.Add(-viewerGraceAfterEnd - time.Second), ViewerKind: "split", ViewerPaneID: "%8", CallerPaneID: "%1", CallerWindowID: "@1"}}, now)
+	want := [][]string{{"tmux", "-L", "leo", "kill-pane", "-t", "%9"}, {"tmux", "-L", "leo", "select-layout", "-t", "@1", "main-horizontal"}, {"tmux", "-L", "leo", "kill-pane", "-t", "%8"}, {"tmux", "-L", "leo", "select-layout", "-t", "@1", "main-horizontal"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%#v\nwant=%#v", calls, want)
+	}
+}
 
 func TestViewerOpensDispatchInCallerSession(t *testing.T) {
 	var calls [][]string

@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -29,6 +30,7 @@ type Viewer struct {
 	once               sync.Once
 	mu                 sync.Mutex
 	windowIDs          map[string]string
+	Coordinator        *ViewerPlacementCoordinator
 	handledWindowIDs   map[string]string
 	handledWindowOrder []handledWindow
 	rosterMu           sync.Mutex
@@ -44,6 +46,10 @@ type Viewer struct {
 	Timeout            time.Duration
 	ResolveCaller      func(caller string) (session string, ok bool)
 	Logf               func(format string, args ...any)
+	Records            func() []Record
+	PersistRecord      func(Record)
+	PersistIntent      func(Record)
+	ClosePane          func(Record, string, func(string) error, func(string) error) (Record, error)
 }
 
 type handledWindow struct {
@@ -74,6 +80,32 @@ func (v *Viewer) OnStart(rec Record) string {
 		return ""
 	}
 	v.defaults()
+	if rec.CallerPaneID != "" && rec.CallerSessionID != "" && rec.CallerSessionID != dispatchViewerSession {
+		cfg, err := config.Load(v.ConfigPath)
+		if err == nil {
+			overrides := ReadViewerSessionOverrides(context.Background(), v.TmuxPath, rec.CallerSessionID, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				if v.ExecCommandContext != nil {
+					return v.ExecCommandContext(ctx, name, args...)
+				}
+				return v.ExecCommand(name, args...)
+			})
+			if v.Coordinator == nil {
+				v.Coordinator = NewViewerPlacementCoordinator()
+			}
+			placement := v.Coordinator.Decide(rec, overrides, cfg, v.Records)
+			if placement.Kind == "split" {
+				rec.ViewerKind = "split"
+				rec.ViewerTitle = viewerWindowName(rec)
+				if v.PersistIntent != nil {
+					v.PersistIntent(rec)
+				}
+				if pane := v.openSplit(rec, placement); pane != "" {
+					return pane
+				}
+				v.Coordinator.Cancel(rec.ID)
+			}
+		}
+	}
 	session := ""
 	if v.ResolveCaller != nil && rec.Caller != "" {
 		if candidate, ok := v.ResolveCaller(rec.Caller); ok && v.run("has-session", "-t", tmux.Target(candidate)) == nil {
@@ -123,6 +155,27 @@ func (v *Viewer) OnStart(rec Record) string {
 	return windowID
 }
 
+func (v *Viewer) openSplit(rec Record, placement ViewerPlacement) string {
+	leo, err := v.Executable()
+	if err != nil {
+		return ""
+	}
+	watch := fmt.Sprintf("%s --config %s dispatch watch %s", shellQuote(leo), shellQuote(v.ConfigPath), rec.ID)
+	out, err := v.output("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", placement.Target, "-c", rec.Cwd, watch)
+	if err != nil {
+		return ""
+	}
+	pane := strings.TrimSpace(string(out))
+	if pane == "" {
+		return ""
+	}
+	_ = v.run("select-pane", "-t", pane, "-T", viewerWindowName(rec))
+	_ = v.run("set-option", "-p", "-t", pane, "remain-on-exit", "on")
+	_ = v.run("set-option", "-w", "-t", rec.CallerWindowID, "main-pane-height", fmt.Sprintf("%d%%", placement.MainPaneHeight))
+	_ = v.run("select-layout", "-t", rec.CallerWindowID, "main-horizontal")
+	return pane
+}
+
 func (v *Viewer) defaults() {
 	v.once.Do(func() { v.setDefaults() })
 }
@@ -147,6 +200,9 @@ func (v *Viewer) setDefaults() {
 	if v.Logf == nil {
 		v.Logf = log.Printf
 	}
+	if v.ClosePane == nil {
+		v.ClosePane = NewDispatcher(nil).CloseRecordedPane
+	}
 }
 
 // Close releases a completed dispatch's viewer. Only successful results are
@@ -156,6 +212,15 @@ func (v *Viewer) Close(rec Record) {
 		return
 	}
 	v.defaults()
+	if v.Coordinator != nil {
+		v.Coordinator.Cancel(rec.ID)
+	}
+	if rec.ViewerKind == "split" && rec.ViewerPaneID != "" {
+		if v.ClosePane != nil {
+			_, _ = v.ClosePane(rec, rec.ViewerPaneID, func(p string) error { return v.run("kill-pane", "-t", p) }, func(w string) error { return v.run("select-layout", "-t", w, "main-horizontal") })
+		}
+		return
+	}
 	if rec.ViewerWindowID != "" {
 		v.mu.Lock()
 		if v.windowIDs == nil {
@@ -181,6 +246,12 @@ func (v *Viewer) Sweep(records []Record, now time.Time) {
 	for _, rec := range records {
 		expired := rec.Kind == "dispatch" && rec.Mode != ModeInteractive && rec.Status.Terminal() && !rec.EndedAt.IsZero() && !now.Before(rec.EndedAt.Add(viewerGraceAfterEnd))
 		if expired {
+			if rec.ViewerKind == "split" && rec.ViewerPaneID != "" {
+				if v.ClosePane != nil {
+					_, _ = v.ClosePane(rec, rec.ViewerPaneID, func(p string) error { return v.run("kill-pane", "-t", p) }, func(w string) error { return v.run("select-layout", "-t", w, "main-horizontal") })
+				}
+				continue
+			}
 			v.killWindow(rec.ID, rec.ViewerWindowID)
 			continue
 		}

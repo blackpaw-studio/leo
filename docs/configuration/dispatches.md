@@ -4,6 +4,16 @@ Leo can run a template's harness/model as a one-shot subagent. `leo_consult`
 and headless dispatches receive a self-contained prompt and retain no
 conversation after they finish. Dispatches can also run interactively.
 
+## Viewer placement
+
+Dispatch viewers open in panes below the caller by default, using tmux's
+`main-horizontal` layout. Configure `defaults.dispatch.viewer` with
+`placement: pane|window` (default `pane`), `max_panes: 1..6` (default `3`),
+and `main_pane_height: 20..90` (default `60`). Leo falls back to a separate
+window when the cap is reached or a split fails. Session options
+`@leo_viewer_placement` and `@leo_viewer_max_panes` override the config.
+Release an idle or finished interactive pane with `leo dispatch release <id>`.
+
 ## Nested agents
 
 Dispatches and consults cannot launch nested agents: Leo disables the native

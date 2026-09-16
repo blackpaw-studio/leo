@@ -198,7 +198,7 @@ func (r *FileRecorder) prune(keep int) {
 		if (rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved) || recordHasUnresolvedNotification(rec) {
 			continue
 		}
-		if rec.ViewerWindowID != "" && !rec.EndedAt.IsZero() && now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
+		if (rec.ViewerWindowID != "" || rec.ViewerPaneID != "") && !rec.EndedAt.IsZero() && now.Before(rec.EndedAt.Add(viewerGraceAfterEnd)) {
 			continue
 		}
 		if rec.Settled(now) {

@@ -111,6 +111,17 @@ func TestHasRosterEligibleRecord(t *testing.T) {
 	}
 }
 
+func TestReleasedExcludedFromRoster(t *testing.T) {
+	now := time.Now()
+	rec := Record{ID: "d-x", Kind: "dispatch", Name: "released", Status: StatusReleased, StartedAt: now}
+	if got := RenderRoster([]Record{rec}, now); strings.Contains(got, "released") {
+		t.Fatalf("roster=%q", got)
+	}
+	if HasRosterEligibleRecord([]Record{rec}, now) {
+		t.Fatal("released record is eligible")
+	}
+}
+
 func TestRenderRosterMarksPartialUsageWithoutOverflow(t *testing.T) {
 	now := time.Now()
 	max := int64(math.MaxInt64)

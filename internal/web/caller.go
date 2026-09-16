@@ -12,7 +12,7 @@ import (
 
 var canonicalPaneID = regexp.MustCompile(`^%[0-9]+$`)
 
-type dispatchCaller struct{ PaneID, SessionID, Harness string }
+type dispatchCaller struct{ PaneID, SessionID, WindowID, Harness string }
 
 func (s *Server) resolveDispatchCaller(caller, pane string) (dispatchCaller, error) {
 	session := ""
@@ -35,12 +35,12 @@ func (s *Server) resolveDispatchCaller(caller, pane string) (dispatchCaller, err
 	if !canonicalPaneID.MatchString(pane) {
 		return dispatchCaller{}, fmt.Errorf("caller_pane_id %q must be a canonical %%N pane id", pane)
 	}
-	out, err := s.execCommand(findTmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{session_name} #{session_id}")...).Output()
+	out, err := s.execCommand(findTmuxPath(), tmux.Args("display-message", "-p", "-t", pane, "#{session_name} #{session_id} #{window_id}")...).Output()
 	if err != nil {
 		return dispatchCaller{}, fmt.Errorf("caller_pane_id %q is not a live pane", pane)
 	}
 	fields := strings.Fields(string(out))
-	if len(fields) != 2 {
+	if len(fields) != 2 && len(fields) != 3 {
 		return dispatchCaller{}, fmt.Errorf("caller_pane_id %q returned invalid tmux identity", pane)
 	}
 	if session != "" && fields[0] != session {
@@ -67,5 +67,9 @@ func (s *Server) resolveDispatchCaller(caller, pane string) (dispatchCaller, err
 			}
 		}
 	}
-	return dispatchCaller{PaneID: pane, SessionID: fields[1], Harness: harness}, nil
+	windowID := ""
+	if len(fields) == 3 {
+		windowID = fields[2]
+	}
+	return dispatchCaller{PaneID: pane, SessionID: fields[1], WindowID: windowID, Harness: harness}, nil
 }

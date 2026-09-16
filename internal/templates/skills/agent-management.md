@@ -6,11 +6,13 @@ For bounded work that does not need a persistent agent or a branch, use
 `leo_dispatch`: it starts a template asynchronously, returns an ID, and
 `leo_wait` collects the result. It is headless by default; pass
 `mode: "interactive"` to run a steerable Codex/Claude TUI in the caller's
-tmux session, then use `leo_send_dispatch` only when it is idle. Use
+tmux session, then use `leo_send_dispatch` only when it is idle. Once review
+passes, release an interactive dispatch with `leo_release`. Use
 `leo_consult` for a synchronous second opinion, and `leo_cancel` to stop an
 in-flight dispatch. Call `leo dispatch watch <id>` to inspect the retained
-event feed; headless dispatches also open a viewer window on Leo's tmux
-server. See the Dispatches configuration guide for the complete contract.
+event feed; headless dispatches also open a viewer pane beneath the caller,
+with a fallback window when needed. See the Dispatches configuration guide
+for the complete contract.
 
 When you need multiple agents working on the same repo in parallel, use `leo agent spawn --worktree <branch>` — it creates an isolated git worktree per branch so nothing fights over `.git/HEAD`. The HTTP API only supports the shared-workspace flow today; reach for the CLI when you need branch isolation.
 

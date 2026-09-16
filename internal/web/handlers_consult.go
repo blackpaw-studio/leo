@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
@@ -62,7 +63,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerHarness: caller.Harness})
+	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness})
 	if err != nil {
 		var validationErr *consult.ValidationError
 		status := http.StatusInternalServerError
@@ -188,6 +189,19 @@ func (s *Server) handleAPIDispatchCancel(w http.ResponseWriter, r *http.Request)
 	record, err := s.consults.Cancel(r.PathValue("id"))
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, apiResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: record})
+}
+
+func (s *Server) handleAPIDispatchRelease(w http.ResponseWriter, r *http.Request) {
+	record, err := s.consults.Release(r.PathValue("id"))
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "unknown dispatch") {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, apiResponse{Error: err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: record})

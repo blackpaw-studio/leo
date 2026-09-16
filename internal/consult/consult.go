@@ -60,6 +60,7 @@ type Dispatcher struct {
 	now                  func() time.Time
 	waits                map[string]int
 	serial               map[string]*serialLock
+	placement            *ViewerPlacementCoordinator
 	waitResolvedHook     func()
 	waitDoneHook         func(string)
 	notificationDelivery NotificationDelivery
@@ -81,6 +82,7 @@ type runState struct {
 	closedIDs      []string
 	idleSince      time.Time
 	killPending    bool
+	releasing      bool
 	// pgid is the headless command's private process group. It is retained
 	// after Wait so worktree cleanup can prove no detached child remains.
 	pgid            int
@@ -124,6 +126,7 @@ func NewDispatcherWithOnStart(rec Recorder, parent context.Context, onStart func
 		now:                time.Now,
 		waits:              make(map[string]int),
 		serial:             make(map[string]*serialLock),
+		placement:          NewViewerPlacementCoordinator(),
 	}
 	if len(onCollect) > 0 {
 		d.onCollect = onCollect[0]
@@ -232,7 +235,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
 		Notify: notify, Isolation: req.Isolation, SourceCwd: req.Cwd,
-		CallerPaneID: req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID,
+		CallerPaneID: req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID,
 	}
 	handle, err := d.recorder.Open(rec)
 	if err != nil {
@@ -291,7 +294,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		return Started{}, invalidf("building %s env: %v", h.Name(), err)
 	}
 	if mode == ModeInteractive {
-		started, startErr := d.startInteractive(runCtx, state, req, h.Name(), model)
+		started, startErr := d.startInteractive(runCtx, state, req, h.Name(), model, cfg)
 		if startErr != nil && req.Isolation == "worktree" {
 			d.cleanupWorktree(rec.ID)
 		}
@@ -299,13 +302,24 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	}
 	if rec.Kind == "dispatch" && d.onStart != nil {
 		if windowID := d.onStart(rec); windowID != "" {
-			d.mu.Lock()
-			state.record.ViewerWindowID = windowID
-			rec = state.record
-			d.mu.Unlock()
-			if err := handle.SetViewerWindowID(windowID); err != nil {
-				fmt.Fprintf(os.Stderr, "dispatch %s: recording viewer: %v\n", rec.ID, err)
-			}
+			d.placement.Publish(rec.ID, func() bool {
+				d.mu.Lock()
+				if strings.HasPrefix(windowID, "%") {
+					state.record.ViewerKind, state.record.ViewerPaneID = "split", windowID
+				} else {
+					state.record.ViewerKind, state.record.ViewerWindowID, state.record.ViewerTitle = "window", windowID, ""
+				}
+				rec = state.record
+				d.mu.Unlock()
+				if rh, ok := handle.(recordHandle); ok {
+					_ = rh.SetRecord(rec)
+				} else if err := handle.SetViewerWindowID(windowID); err != nil {
+					fmt.Fprintf(os.Stderr, "dispatch %s: recording viewer: %v\n", rec.ID, err)
+				}
+				return true
+			})
+		} else {
+			d.placement.Cancel(rec.ID)
 		}
 	}
 	go d.runInvocation(runCtx, state, state.done, h, model, tmpl.Env, args, harnessEnv, req.Cwd, timeout, false)
@@ -757,14 +771,18 @@ func (d *Dispatcher) terminate(id string, status Status) (Record, error) {
 func (d *Dispatcher) terminateState(state *runState, status Status) Record {
 	d.mu.Lock()
 	if state.record.Mode == ModeInteractive {
-		pane, rt := state.record.PaneID, d.interactiveRuntime
+		pane, rt, paneRec := state.record.PaneID, d.interactiveRuntime, cloneRecord(state.record)
 		d.mu.Unlock()
 		// Cancellation kills first. Publishing settling first would allow a
 		// concurrent hook to observe a partially torn-down session.
 		if pane != "" && rt != nil && rt.Alive(pane) {
-			_ = rt.Kill(pane)
+			paneRec, _ = d.closeRecordedPane(paneRec, pane, rt.Kill, runtimeLayout(rt))
 		}
 		d.mu.Lock()
+		if state.record.Status.Terminal() {
+			d.mu.Unlock()
+			return paneRec
+		}
 		if !state.record.Status.Terminal() {
 			d.beginSettlementLocked(state, status, 0)
 			d.finishInteractiveLocked(state, status)
@@ -857,6 +875,7 @@ func (d *Dispatcher) MarkInterrupted() {
 	}
 	markedAt := d.now()
 	for _, rec := range func() []Record { records, _ := Load(filepath.Dir(recorder.dir)); return records }() {
+		rec = d.reconcileRestartViewer(rec)
 		if rec.WorktreeState == WorktreeCreating {
 			rec = d.reconcileCreating(rec)
 		}
@@ -869,13 +888,19 @@ func (d *Dispatcher) MarkInterrupted() {
 				writerUncertain = true
 			}
 			if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
-				alive, certain := paneAlive(d.interactiveRuntime, rec.PaneID)
+				alive, certain := panePresent(d.interactiveRuntime, rec.PaneID)
 				if !certain && rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
 					writerUncertain = true
-				} else if alive && d.interactiveRuntime.Kill(rec.PaneID) != nil {
-					d.trackRestartKill(rec)
-					if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
-						writerUncertain = true
+				} else if alive {
+					cleaned, killErr := d.closeRestartPane(rec)
+					if killErr != nil {
+						d.trackRestartKill(rec)
+						if rec.Isolation == "worktree" && rec.WorktreeState != WorktreeRemoved {
+							writerUncertain = true
+						}
+					} else {
+						rec = cleaned
+						_ = writeRecord(recorder.dir, rec)
 					}
 				}
 			}
@@ -929,13 +954,18 @@ func (d *Dispatcher) MarkInterrupted() {
 		d.addRestartCandidates(&rec)
 		d.mu.Unlock()
 		if rec.Mode == ModeInteractive && rec.PaneID != "" && d.interactiveRuntime != nil {
-			alive, certain := paneAlive(d.interactiveRuntime, rec.PaneID)
+			alive, certain := panePresent(d.interactiveRuntime, rec.PaneID)
 			if !certain {
 				if rec.Isolation == "worktree" {
 					rec.WorktreeState = WorktreeKept
 				}
-			} else if alive && d.interactiveRuntime.Kill(rec.PaneID) != nil {
-				d.trackRestartKill(rec)
+			} else if alive {
+				cleaned, killErr := d.closeRestartPane(rec)
+				if killErr != nil {
+					d.trackRestartKill(rec)
+				} else {
+					rec = cleaned
+				}
 			}
 		}
 		if err := writeRecord(recorder.dir, rec); err != nil {
@@ -946,6 +976,11 @@ func (d *Dispatcher) MarkInterrupted() {
 		}
 		d.restorePendingNotifications(rec)
 	}
+}
+
+func (d *Dispatcher) closeRestartPane(rec Record) (Record, error) {
+	rt := d.interactiveRuntime
+	return d.closeRecordedPane(rec, rec.PaneID, rt.Kill, runtimeLayout(rt))
 }
 
 // trackRestartKill retains a terminal record solely to retry cleanup. Terminal
