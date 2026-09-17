@@ -19,13 +19,31 @@ import (
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
+// isolatedViewerTmux routes Leo's fixed -L leo commands through TestMain's
+// wrapper to a disposable server. The returned socket is used directly only
+// to prove the binding was installed on that server.
+func isolatedViewerTmux(t *testing.T, realTmux string) (string, string) {
+	t.Helper()
+	if _, err := os.Stat(faketmux); err != nil {
+		t.Skip("tmux wrapper unavailable")
+	}
+	socket := fmt.Sprintf("leo-e2e-settings-%d", time.Now().UnixNano())
+	t.Setenv("FAKECLAUDE_TMUX_SOCKET", socket)
+	if out, err := exec.Command(faketmux, tmux.Args("new-session", "-d", "-s", "keepalive", "sleep", "30")...).CombinedOutput(); err != nil {
+		t.Fatalf("new-session isolated socket: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command(faketmux, tmux.Args("kill-server")...).Run() })
+	return faketmux, socket
+}
+
 func runViewerSettingE2E(t *testing.T, session string) {
 	t.Helper()
 	realTmux, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Skip("tmux unavailable")
 	}
-	identity, err := exec.Command(realTmux, tmux.Args("new-session", "-d", "-P", "-F", "#{pane_id} #{session_id} #{window_id}", "-s", session, "sleep", "30")...).CombinedOutput()
+	tmuxPath, socket := isolatedViewerTmux(t, realTmux)
+	identity, err := exec.Command(tmuxPath, tmux.Args("new-session", "-d", "-P", "-F", "#{pane_id} #{session_id} #{window_id}", "-s", session, "sleep", "30")...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("new-session: %v: %s", err, identity)
 	}
@@ -34,7 +52,7 @@ func runViewerSettingE2E(t *testing.T, session string) {
 		t.Fatalf("identity=%q", identity)
 	}
 	t.Cleanup(func() {
-		_ = exec.Command(realTmux, tmux.Args("kill-session", "-t", ids[1])...).Run()
+		_ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", ids[1])...).Run()
 	})
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "leo.yaml")
@@ -42,28 +60,29 @@ func runViewerSettingE2E(t *testing.T, session string) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(leoBin, "--config", cfg, "dispatch", "viewer", "set", "--session", ids[1], "placement=window")
+	cmd.Env = replacePath(os.Environ(), filepath.Dir(faketmux)+":"+os.Getenv("PATH"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("set: %v: %s", err, out)
 	}
-	out, err := exec.Command(realTmux, tmux.Args("show-options", "-v", "-t", ids[1], "@leo_viewer_placement")...).CombinedOutput()
+	out, err := exec.Command(tmuxPath, tmux.Args("show-options", "-v", "-t", ids[1], "@leo_viewer_placement")...).CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "window" {
 		t.Fatalf("show=%q err=%v", out, err)
 	}
-	if err := tmux.InstallViewerMenuBinding(realTmux, tmux.ViewerMenuBinding{LeoPath: leoBin, ConfigPath: cfg}); err != nil {
+	if err := tmux.InstallViewerMenuBinding(tmuxPath, tmux.ViewerMenuBinding{LeoPath: leoBin, ConfigPath: cfg}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = exec.Command(realTmux, tmux.Args("unbind-key", "-T", "prefix", "L")...).Run() })
-	binding, err := exec.Command(realTmux, tmux.Args("list-keys", "-T", "prefix", "L")...).CombinedOutput()
+	t.Cleanup(func() { _ = exec.Command(tmuxPath, tmux.Args("unbind-key", "-T", "prefix", "L")...).Run() })
+	binding, err := exec.Command(realTmux, "-L", socket, "list-keys", "-T", "prefix", "L").CombinedOutput()
 	if err != nil || !strings.Contains(string(binding), "dispatch viewer menu") {
 		t.Fatalf("binding=%q err=%v", binding, err)
 	}
 	v := consult.NewViewer(cfg, func(string) (string, bool) { return ids[1], true })
-	v.TmuxPath = realTmux
+	v.TmuxPath = tmuxPath
 	v.Executable = func() (string, error) { return leoBin, nil }
 	v.Records = func() []consult.Record { return nil }
 	count := func(args ...string) int {
 		t.Helper()
-		out, err := exec.Command(realTmux, tmux.Args(args...)...).CombinedOutput()
+		out, err := exec.Command(tmuxPath, tmux.Args(args...)...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("count %q: %v: %s", args, err, out)
 		}
@@ -84,10 +103,10 @@ func runViewerSettingE2E(t *testing.T, session string) {
 	if got := count("list-panes", "-t", ids[2], "-F", "#{pane_id}"); got != panesBefore {
 		t.Fatalf("caller pane count=%d want unchanged %d", got, panesBefore)
 	}
-	if out, err := exec.Command(realTmux, tmux.Args("kill-window", "-t", window)...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(tmuxPath, tmux.Args("kill-window", "-t", window)...).CombinedOutput(); err != nil {
 		t.Fatalf("kill window: %v: %s", err, out)
 	}
-	if out, err := exec.Command(realTmux, tmux.Args("set-option", "-u", "-t", ids[1], "@leo_viewer_placement")...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(tmuxPath, tmux.Args("set-option", "-u", "-t", ids[1], "@leo_viewer_placement")...).CombinedOutput(); err != nil {
 		t.Fatalf("unset override: %v: %s", err, out)
 	}
 	windowsBefore = count("list-windows", "-t", ids[1], "-F", "#{window_id}")
@@ -113,23 +132,12 @@ func TestDispatchViewerMenuActionLiteralSession(t *testing.T) {
 	if err != nil {
 		t.Skip("tmux unavailable")
 	}
+	tmuxPath, actionSocket := isolatedViewerTmux(t, realTmux)
 	holder := fmt.Sprintf("viewer-action-%d", time.Now().UnixNano())
-	if out, err := exec.Command(realTmux, tmux.Args("new-session", "-d", "-s", holder, "sleep", "30")...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(tmuxPath, tmux.Args("new-session", "-d", "-s", holder, "sleep", "30")...).CombinedOutput(); err != nil {
 		t.Fatalf("new-session: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command(realTmux, tmux.Args("kill-session", "-t", tmux.Target(holder))...).Run() })
-
-	// The menu action re-expands via a run-shell on the "leo"-named socket
-	// the daemon owns in production. Spin up an isolated, uniquely named
-	// socket here rather than depending on an ambient "-L leo" server —
-	// none exists in CI, and using the real name risks colliding with a
-	// live daemon on a dev machine.
-	actionSocket := fmt.Sprintf("leo-e2e-action-%d", time.Now().UnixNano())
-	actionKeepalive := fmt.Sprintf("keepalive-%d", time.Now().UnixNano())
-	if out, err := exec.Command(realTmux, tmux.Args("-L", actionSocket, "new-session", "-d", "-s", actionKeepalive, "sleep", "30")...).CombinedOutput(); err != nil {
-		t.Fatalf("new-session action socket: %v: %s", err, out)
-	}
-	t.Cleanup(func() { _ = exec.Command(realTmux, tmux.Args("-L", actionSocket, "kill-server")...).Run() })
+	t.Cleanup(func() { _ = exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(holder))...).Run() })
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "leo.yaml")
 	if err := os.WriteFile(cfg, []byte("tasks: {}\n"), 0600); err != nil {
@@ -141,17 +149,17 @@ func TestDispatchViewerMenuActionLiteralSession(t *testing.T) {
 	if err := os.WriteFile(link, []byte(stubScript), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := tmux.InstallViewerMenuBinding(realTmux, tmux.ViewerMenuBinding{LeoPath: link, ConfigPath: cfg}); err != nil {
+	if err := tmux.InstallViewerMenuBinding(tmuxPath, tmux.ViewerMenuBinding{LeoPath: link, ConfigPath: cfg}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = exec.Command(realTmux, tmux.Args("unbind-key", "-T", "prefix", "L")...).Run() })
-	listed, err := exec.Command(realTmux, tmux.Args("list-keys", "-T", "prefix", "L")...).CombinedOutput()
+	t.Cleanup(func() { _ = exec.Command(tmuxPath, tmux.Args("unbind-key", "-T", "prefix", "L")...).Run() })
+	listed, err := exec.Command(realTmux, "-L", actionSocket, "list-keys", "-T", "prefix", "L").CombinedOutput()
 	bindingCommand := tmux.ViewerMenuBindingCommand(tmux.ViewerMenuBinding{LeoPath: link, ConfigPath: cfg})
 	wantListed := "bind-key -T prefix L run-shell \"" + bindingCommand + "\""
 	if err != nil || strings.TrimSpace(string(listed)) != wantListed {
 		t.Fatalf("list binding=%q want=%q err=%v", strings.TrimSpace(string(listed)), wantListed, err)
 	}
-	if out, err := exec.Command(realTmux, tmux.Args("run-shell", "-t", holder, bindingCommand)...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(tmuxPath, tmux.Args("run-shell", "-t", holder, bindingCommand)...).CombinedOutput(); err != nil {
 		t.Fatalf("run binding: %v: %s", err, out)
 	}
 	wantBinding := []string{"--config", cfg, "dispatch", "viewer", "menu", "--session", holder}
@@ -223,7 +231,7 @@ func TestDispatchViewerMenuActionLiteralSession(t *testing.T) {
 			expected := [][]string{{"--config", cfg, "dispatch", "viewer", "set", "placement=window", "--session", session}, {"--config", cfg, "dispatch", "viewer", "set", "max_panes=4", "--session", session}, {"--config", cfg, "dispatch", "viewer", "close-finished", "--session", session}, {"--config", cfg, "dispatch", "viewer", "save-default", "--session", session}}
 			for i, action := range actions {
 				outer := shellQuoteE2E(realTmux) + " -L " + actionSocket + " " + action
-				if out, err := exec.Command(realTmux, tmux.Args("run-shell", "-t", holder, outer)...).CombinedOutput(); err != nil {
+				if out, err := exec.Command(tmuxPath, tmux.Args("run-shell", "-t", holder, outer)...).CombinedOutput(); err != nil {
 					t.Fatalf("action %d: %v: %s", i, err, out)
 				}
 				if got := readArgLines(t, capture); !reflect.DeepEqual(got, expected[i]) {
