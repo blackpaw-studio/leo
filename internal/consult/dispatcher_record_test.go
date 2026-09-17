@@ -18,6 +18,12 @@ type fakeHandle struct {
 	statuses []Status
 	closed   Status
 	cause    error
+	events   []fakeEvent
+}
+
+type fakeEvent struct {
+	kind string
+	data any
 }
 
 func (h *fakeHandle) Write(p []byte) (int, error) {
@@ -45,6 +51,13 @@ func (h *fakeHandle) SetRecord(rec Record) error {
 	return nil
 }
 
+func (h *fakeHandle) AppendEvent(kind string, data any) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.events = append(h.events, fakeEvent{kind: kind, data: data})
+	return nil
+}
+
 func (h *fakeHandle) SetViewerWindowID(windowID string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -66,6 +79,7 @@ type handleState struct {
 	closed   Status
 	cause    error
 	written  string
+	events   []fakeEvent
 }
 
 func (h *fakeHandle) snapshot() handleState {
@@ -77,6 +91,7 @@ func (h *fakeHandle) snapshot() handleState {
 		closed:   h.closed,
 		cause:    h.cause,
 		written:  h.written.String(),
+		events:   append([]fakeEvent(nil), h.events...),
 	}
 }
 

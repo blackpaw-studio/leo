@@ -127,6 +127,10 @@ are environment-gated, so ordinary Codex sessions no-op. Claude gets `Stop`,
 `UserPromptSubmit`, and `SessionEnd` hooks through `--settings`, plus a trust
 flag in `~/.claude.json`.
 
+| Event | Codex hook | Claude hook | Behavior |
+| --- | --- | --- | --- |
+| Prompt submitted | `UserPromptSubmit` | `UserPromptSubmit` | Acknowledges an armed orchestrator turn; if that acknowledgement is late, Leo matches normalized prompt text to the oldest undelivered orchestrator turn before opening a user turn. |
+
 Interactive statuses are `queued`, `running`, `idle`, `settling`, `closed`,
 `failed`, `canceled`, and `timeout`. Turn outcomes are `finished`,
 `interrupted`, `lost`, and `rejected`. A user submission opens a free user
