@@ -71,6 +71,7 @@ type Turn struct {
 	Error         string      `json:"error,omitempty"`
 	Text          string      `json:"text,omitempty"`
 	HarnessTurnID string      `json:"harness_turn_id,omitempty"`
+	armedAt       time.Time
 }
 
 // InvocationUsage keeps a native invocation's provisional/final accounting

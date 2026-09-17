@@ -13,7 +13,9 @@ import (
 )
 
 const (
-	ackTimeout       = 10 * time.Second
+	ackTimeout = 10 * time.Second
+	// lateAckWindow covers observed Codex MCP-startup delays, including 8.5 minutes.
+	lateAckWindow    = 30 * time.Minute
 	unmatchedGrace   = 5 * time.Second
 	finalReportGrace = 30 * time.Second
 	idleCloseAfter   = time.Hour
@@ -255,8 +257,7 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 		if s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, turnID).Outcome != "" {
 			return errors.New("dispatch settled during injection")
 		}
-		s.armedTurn = turnID
-		s.armedUntil = d.now().Add(ackTimeout)
+		d.armTurnLocked(s, turnID)
 		d.persistLocked(s, "turn")
 		return nil
 	})
@@ -431,8 +432,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 			return errors.New("dispatch settled during injection")
 		}
 		if !s.record.Status.Terminal() {
-			s.armedTurn = t.TurnID
-			s.armedUntil = d.now().Add(ackTimeout)
+			d.armTurnLocked(s, t.TurnID)
 			d.persistLocked(s, "turn")
 		}
 		return nil
@@ -521,37 +521,44 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring submit for closed harness turn %s\n", id, hid)
 			return nil
 		}
+		var delivered *Turn
 		if s.armedTurn != "" && d.now().Before(s.armedUntil) {
-			for i := range s.record.Turns {
-				if s.record.Turns[i].TurnID == s.armedTurn {
-					s.record.Turns[i].Delivered = true
-					s.record.Turns[i].HarnessTurnID = hid
-				}
-			}
-			s.armedTurn = ""
-			s.armedUntil = time.Time{}
-			s.record.Status = StatusRunning
-			s.record.startActive(d.now())
+			delivered = d.deliverTurnLocked(s, s.armedTurn, hid)
 		} else {
-			if hid == "" && !priorHook.IsZero() && d.now().Sub(priorHook) >= stalledAfter {
-				for i := range s.record.Turns {
-					t := &s.record.Turns[i]
-					if t.Source == TurnSourceOrchestrator && t.Delivered && t.Outcome == "" {
-						d.closeTurnLocked(s, t.TurnID, TurnLost, "")
-						break
+			prompt := str(p, "prompt")
+			attributed, matched := false, (*Turn)(nil)
+			if prompt != "" {
+				matched = d.deliverOldestMatchingTurnLocked(s, prompt, hid)
+				attributed = matched != nil
+			}
+			if !attributed {
+				if hid == "" && !priorHook.IsZero() && d.now().Sub(priorHook) >= stalledAfter {
+					for i := range s.record.Turns {
+						t := &s.record.Turns[i]
+						if t.Source == TurnSourceOrchestrator && t.Delivered && t.Outcome == "" {
+							d.closeTurnLocked(s, t.TurnID, TurnLost, "")
+							break
+						}
 					}
 				}
+				t := d.openTurnLocked(s, TurnSourceUser, "", false)
+				t.HarnessTurnID = hid
+			} else {
+				delivered = matched
 			}
-			t := d.openTurnLocked(s, TurnSourceUser, "", false)
-			t.HarnessTurnID = hid
 		}
+		closeApplied := false
 		if hid != "" {
 			if pc, ok := s.pendingCloses[hid]; ok && d.now().Before(pc.until) {
-				d.closeHarnessLocked(s, hid, pc.outcome, pc.text)
+				closeApplied = d.closeHarnessLocked(s, hid, pc.outcome, pc.text)
 			}
 			delete(s.pendingCloses, hid)
 		}
-		d.persistLocked(s, "turn")
+		if delivered != nil && !closeApplied {
+			d.persistTurnLocked(s, *delivered)
+		} else if !closeApplied {
+			d.persistLocked(s, "turn")
+		}
 		if s.record.Status != oldStatus {
 			d.persistLocked(s, "status")
 		}
@@ -579,6 +586,50 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	}
 	return nil
 }
+
+func (d *Dispatcher) armTurnLocked(s *runState, turnID string) {
+	armedAt := d.now()
+	s.armedTurn = turnID
+	s.armedUntil = armedAt.Add(ackTimeout)
+	for i := range s.record.Turns {
+		if s.record.Turns[i].TurnID == turnID {
+			s.record.Turns[i].armedAt = armedAt
+			return
+		}
+	}
+}
+
+func (d *Dispatcher) deliverTurnLocked(s *runState, turnID, harnessTurnID string) *Turn {
+	for i := range s.record.Turns {
+		if s.record.Turns[i].TurnID == turnID {
+			s.record.Turns[i].Delivered = true
+			s.record.Turns[i].HarnessTurnID = harnessTurnID
+			s.armedTurn = ""
+			s.armedUntil = time.Time{}
+			s.record.Status = StatusRunning
+			s.record.startActive(d.now())
+			return &s.record.Turns[i]
+		}
+	}
+	return nil
+}
+
+func (d *Dispatcher) deliverOldestMatchingTurnLocked(s *runState, prompt, harnessTurnID string) *Turn {
+	want := normalizePrompt(prompt)
+	now := d.now()
+	for i := range s.record.Turns {
+		t := &s.record.Turns[i]
+		if t.Source == TurnSourceOrchestrator && t.Outcome == "" && !t.Delivered &&
+			!t.armedAt.IsZero() && !now.After(t.armedAt.Add(lateAckWindow)) &&
+			normalizePrompt(t.Text) == want {
+			return d.deliverTurnLocked(s, t.TurnID, harnessTurnID)
+		}
+	}
+	return nil
+}
+
+func normalizePrompt(text string) string { return strings.Join(strings.Fields(text), " ") }
+
 func str(p map[string]any, k string) string { v, _ := p[k].(string); return v }
 func (d *Dispatcher) closeHarnessLocked(s *runState, hid string, o TurnOutcome, text string) bool {
 	found := false

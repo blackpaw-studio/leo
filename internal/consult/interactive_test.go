@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -646,6 +647,12 @@ func hook(t *testing.T, event, turn string) HookReport {
 	return HookReport{EventID: event + turn, Payload: b}
 }
 
+func hookWithPrompt(t *testing.T, event, turn, prompt string) HookReport {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{"hook_event_name": event, "turn_id": turn, "prompt": prompt})
+	return HookReport{EventID: event + turn, Payload: b}
+}
+
 func TestInteractiveReportMatching(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
@@ -674,6 +681,181 @@ func TestInteractiveReportMatching(t *testing.T) {
 		t.Fatal("duplicate changed turns")
 	}
 	_ = tid
+}
+
+func TestInteractiveReportLateSubmitMatchesUndeliveredOrchestratorTurn(t *testing.T) {
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	now = now.Add(ackTimeout)
+	if err := d.Report(started.ID, hookWithPrompt(t, "UserPromptSubmit", "late", rt.firstInjection())); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(started.ID)
+	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].HarnessTurnID != "late" || rec.Turns[0].Outcome != "" || rec.Status != StatusRunning || rec.Steered {
+		t.Fatalf("late matching submit=%+v", rec)
+	}
+	d.mu.Lock()
+	s := d.runs[started.ID]
+	armedTurn, armedUntil := s.armedTurn, s.armedUntil
+	d.mu.Unlock()
+	if armedTurn != "" || !armedUntil.IsZero() || rec.RunningSince == nil || !rec.RunningSince.Equal(now) {
+		t.Fatalf("late matching state: armedTurn=%q armedUntil=%v record=%+v", armedTurn, armedUntil, rec)
+	}
+	now = now.Add(4 * time.Second)
+	if err := d.Report(started.ID, hook(t, "Stop", "late")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.Get(started.ID)
+	if rec.ActiveSeconds != 4 || rec.RunningSince != nil || rec.Status != StatusIdle {
+		t.Fatalf("late matching accounting=%+v", rec)
+	}
+}
+
+func TestInteractiveReportLateSubmitDifferentPromptOpensUserTurn(t *testing.T) {
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	now = now.Add(ackTimeout)
+	if err := d.Report(started.ID, hookWithPrompt(t, "UserPromptSubmit", "late", "different")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(started.ID)
+	if len(rec.Turns) != 2 || rec.Turns[0].Outcome != TurnLost || rec.Turns[1].Source != TurnSourceUser || rec.Turns[1].HarnessTurnID != "late" || rec.Status != StatusRunning || !rec.Steered {
+		t.Fatalf("late different submit=%+v", rec)
+	}
+}
+
+func TestInteractiveReportLateSubmitNormalizesPromptWhitespace(t *testing.T) {
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello  there\n", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	now = now.Add(ackTimeout)
+	prompt := strings.ReplaceAll(rt.firstInjection(), " ", "  \t") + "\r\n"
+	if err := d.Report(started.ID, hookWithPrompt(t, "UserPromptSubmit", "late", prompt)); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(started.ID)
+	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].HarnessTurnID != "late" || rec.Steered || rec.Status != StatusRunning || rec.RunningSince.IsZero() {
+		t.Fatalf("late normalized submit=%+v", rec)
+	}
+	d.mu.Lock()
+	s := d.runs[started.ID]
+	armedTurn, armedUntil := s.armedTurn, s.armedUntil
+	d.mu.Unlock()
+	if armedTurn != "" || !armedUntil.IsZero() {
+		t.Fatalf("late normalized arm: %q %v", armedTurn, armedUntil)
+	}
+}
+
+func TestInteractiveReportLateSubmitAttributesOldestMatchingTurn(t *testing.T) {
+	recorder := newFakeRecorder()
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(recorder)
+	d.now = func() time.Time { return now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := recorder.waitOpened(t)
+	waitForInjection(t, rt)
+	injected := rt.firstInjection()
+	d.mu.Lock()
+	s := d.runs[started.ID]
+	s.record.Turns = append(s.record.Turns, Turn{TurnID: started.ID + "#2", Source: TurnSourceOrchestrator, Text: injected, StartedAt: now, armedAt: now})
+	d.mu.Unlock()
+	now = now.Add(ackTimeout)
+	if err := d.Report(started.ID, hookWithPrompt(t, "UserPromptSubmit", "late", injected)); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(started.ID)
+	if len(rec.Turns) != 2 || !rec.Turns[0].Delivered || rec.Turns[0].HarnessTurnID != "late" || rec.Turns[1].Delivered || rec.Turns[1].Outcome != "" || rec.Steered || rec.Status != StatusRunning || rec.RunningSince.IsZero() {
+		t.Fatalf("late oldest submit=%+v", rec)
+	}
+	d.mu.Lock()
+	armedTurn, armedUntil := d.runs[started.ID].armedTurn, d.runs[started.ID].armedUntil
+	d.mu.Unlock()
+	if armedTurn != "" || !armedUntil.IsZero() {
+		t.Fatalf("late oldest arm: %q %v", armedTurn, armedUntil)
+	}
+	state := h.snapshot()
+	var last Turn
+	for _, event := range state.events {
+		if event.kind == "turn" {
+			last, _ = event.data.(Turn)
+		}
+	}
+	if last.TurnID != rec.Turns[0].TurnID {
+		t.Fatalf("persisted turn=%+v, want oldest=%+v", last, rec.Turns[0])
+	}
+}
+
+func TestInteractiveReportLateSubmitBeyondWindowOpensUserTurn(t *testing.T) {
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	now = now.Add(31 * time.Minute)
+	if err := d.Report(started.ID, hookWithPrompt(t, "UserPromptSubmit", "late", rt.firstInjection())); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(started.ID)
+	if len(rec.Turns) != 2 || rec.Turns[0].Outcome != TurnLost || rec.Turns[1].Source != TurnSourceUser || !rec.Steered {
+		t.Fatalf("late beyond window=%+v", rec)
+	}
+}
+
+func TestInteractiveReportLateSubmitAppliesPendingClose(t *testing.T) {
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	now = now.Add(ackTimeout)
+	if err := d.Report(started.ID, hook(t, "Stop", "late")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(started.ID, hookWithPrompt(t, "UserPromptSubmit", "late", rt.firstInjection())); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(started.ID)
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Turns[0].HarnessTurnID != "late" || rec.Steered || rec.Status != StatusIdle {
+		t.Fatalf("late pending close=%+v", rec)
+	}
 }
 
 func TestInteractiveWaitReturnsWhenTurnClosesBeforeSession(t *testing.T) {
