@@ -60,9 +60,19 @@ func TestDecodeOptions(t *testing.T) {
 			want: Options{AppendSystemPrompt: "be nice"},
 		},
 		{
+			name: "mcp and plugins",
+			raw:  map[string]any{"mcp": "none", "plugins": "inherit"},
+			want: Options{MCP: "none", Plugins: "inherit"},
+		},
+		{
+			name:    "invalid mcp",
+			raw:     map[string]any{"mcp": "all"},
+			wantErr: `mcp "all" is not valid (use inherit or none)`,
+		},
+		{
 			name:    "unknown key",
 			raw:     map[string]any{"bogus": "x"},
-			wantErr: `unknown option "bogus" (valid: agent, allowed_tools, append_system_prompt, bypass_permissions, disallowed_tools, permission_mode, remote_control)`,
+			wantErr: `unknown option "bogus" (valid: agent, allowed_tools, append_system_prompt, bypass_permissions, disallowed_tools, permission_mode, remote_control, mcp, plugins)`,
 		},
 		{
 			name:    "permission_mode wrong type",

@@ -1,6 +1,35 @@
 package claude
 
-import "strings"
+import (
+	"encoding/json"
+	"sort"
+	"strings"
+)
+
+func strictMCPArgs(o Options) []string {
+	if o.MCP != "none" {
+		return nil
+	}
+	config := o.StrictMCPConfig
+	if config == "" {
+		config = `{"mcpServers":{}}`
+	}
+	return []string{"--strict-mcp-config", "--mcp-config", config}
+}
+
+func settingsJSON(base map[string]any, o Options) string {
+	if o.Plugins == "none" {
+		ids := append([]string(nil), o.EnabledPlugins...)
+		sort.Strings(ids)
+		enabled := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			enabled[id] = false
+		}
+		base["enabledPlugins"] = enabled
+	}
+	b, _ := json.Marshal(base)
+	return string(b)
+}
 
 func appendChannelFlags(args []string, channels, devChannels []string) []string {
 	for _, ch := range channels {

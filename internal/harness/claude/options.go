@@ -18,6 +18,8 @@ var optionKeys = []string{
 	"disallowed_tools",
 	"permission_mode",
 	"remote_control",
+	"mcp",
+	"plugins",
 }
 
 var validPermissionModes = map[string]bool{
@@ -56,6 +58,10 @@ func (Claude) DecodeOptions(raw map[string]any) (any, error) {
 			o.DisallowedTools, err = stringSliceOption(key, val)
 		case "append_system_prompt":
 			o.AppendSystemPrompt, err = stringOption(key, val)
+		case "mcp":
+			o.MCP, err = profileOption(key, val)
+		case "plugins":
+			o.Plugins, err = profileOption(key, val)
 		default:
 			err = fmt.Errorf("unknown option %q (valid: %s)", key, strings.Join(optionKeys, ", "))
 		}
@@ -85,7 +91,17 @@ func (Claude) OptionsSchema() []harness.OptionField {
 			Help: "--disallowed-tools, comma-separated"},
 		{Key: "append_system_prompt", Label: "Append system prompt", Type: harness.OptionText,
 			Help: "--append-system-prompt"},
+		{Key: "mcp", Label: "MCP profile", Type: harness.OptionEnum, EnumValues: []string{"inherit", "none"}, Help: "inherit global MCP servers or use Leo-only"},
+		{Key: "plugins", Label: "Plugin profile", Type: harness.OptionEnum, EnumValues: []string{"inherit", "none"}, Help: "inherit installed plugins or disable them"},
 	}
+}
+
+func profileOption(key string, val any) (string, error) {
+	s, err := stringOption(key, val)
+	if err != nil || s == "" || s == "inherit" || s == "none" {
+		return s, err
+	}
+	return "", fmt.Errorf("%s %q is not valid (use inherit or none)", key, s)
 }
 
 func stringOption(key string, val any) (string, error) {

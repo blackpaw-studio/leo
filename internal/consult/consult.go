@@ -21,6 +21,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 const (
@@ -219,6 +220,9 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	decoded, err := h.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
 	if err != nil {
 		return Started{}, invalidf("template %q harness_options: %v", req.Template, err)
+	}
+	if opts, ok := decoded.(claudeharness.Options); ok {
+		decoded = resolveClaudeDispatchProfile(cfg, tmpl, requestKind(req), opts, tmpl.Env)
 	}
 	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
 		return Started{}, invalidf("cwd must be an existing absolute directory")

@@ -3,6 +3,7 @@ package consult
 import (
 	"context"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 )
 
 func TestHeadlessContinuationAppendsTurnResumesAndAccumulatesUsage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	d := NewDispatcher(NewFileRecorder(t.TempDir()))
 	var mu sync.Mutex
 	var calls [][]string
@@ -25,7 +27,8 @@ func TestHeadlessContinuationAppendsTurnResumesAndAccumulatesUsage(t *testing.T)
 		return exec.CommandContext(ctx, "printf", "%s", output)
 	}
 	cfg := testConfig()
-	started, err := d.Start(context.Background(), cfg, Request{Template: "claude", Prompt: "first", Cwd: t.TempDir(), Kind: "dispatch"})
+	cwd := t.TempDir()
+	started, err := d.Start(context.Background(), cfg, Request{Template: "claude", Prompt: "first", Cwd: cwd, Kind: "dispatch"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +62,10 @@ func TestHeadlessContinuationAppendsTurnResumesAndAccumulatesUsage(t *testing.T)
 	mu.Unlock()
 	if !strings.Contains(argv, "--resume sid-1") || !strings.Contains(argv, "follow up") {
 		t.Fatalf("resume argv = %q", argv)
+	}
+	want := []string{"-p", "follow up", "--model", "opus", "--max-turns", "15", "--output-format", "stream-json", "--verbose", "--resume", "sid-1", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--add-dir", cwd, "--disallowed-tools", "Agent", "--settings", `{"enabledPlugins":{}}`}
+	if !reflect.DeepEqual(calls[1], want) {
+		t.Fatalf("resume argv = %#v, want %#v", calls[1], want)
 	}
 }
 

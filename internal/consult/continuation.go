@@ -11,6 +11,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 // SendWithConfig sends to interactive sessions or starts a new native
@@ -72,6 +73,9 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	decoded, err := h.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
 	if err != nil {
 		return SendResult{}, fmt.Errorf("template %q harness_options: %w", rec.Template, err)
+	}
+	if opts, ok := decoded.(claudeharness.Options); ok {
+		decoded = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", opts, tmpl.Env)
 	}
 	cwd, recreate, err := d.resumeWorkspace(rec)
 	if err != nil {

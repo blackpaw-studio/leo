@@ -163,7 +163,7 @@ tasks:
 
 ## Claude option reference
 
-These are the seven `harness_options` keys the `claude` adapter accepts.
+These are the nine `harness_options` keys the `claude` adapter accepts.
 Unknown keys are rejected.
 
 | Key | Type | Meaning |
@@ -175,6 +175,15 @@ Unknown keys are rejected.
 | `allowed_tools` | list of strings | Tool whitelist, passed via `--allowed-tools`. |
 | `disallowed_tools` | list of strings | Tool blacklist, passed via `--disallowed-tools`. |
 | `append_system_prompt` | string | Extra text appended to the system prompt. |
+| `mcp` | `inherit` or `none` | `none` starts Claude with a strict inline MCP configuration containing only Leo's bridge, or no servers at all when the run has no bridge; `inherit` leaves Claude's MCP configuration unchanged. |
+| `plugins` | `inherit` or `none` | `none` disables every installed Claude plugin while preserving Leo lifecycle hooks; `inherit` leaves plugins enabled. |
+
+For `leo_dispatch` only, both values default to `none` when neither the
+defaults nor selected template explicitly sets that key. Set either key to
+`inherit` to opt back in. This dispatch profile applies to headless and
+interactive dispatches; ordinary agents and scheduled tasks retain their
+existing argv and inherited configuration. The options follow the normal
+defaults → template cascade.
 
 Model validation is also delegated to the adapter. For `claude`, `model:` is
 a **format check only** — any whitespace-free string passes, and empty means
