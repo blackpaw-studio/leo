@@ -101,9 +101,11 @@ func (s *AttentionStore) Remove(agent string) {
 	s.mu.Unlock()
 }
 
-// Move re-keys an agent's attention after a rename without bumping it, and
-// announces it under the new name so a stream consumer learns the carried
-// state. A no-op when oldName has no attention.
+// Move re-keys an agent's attention after a rename and announces it under
+// the new name so a stream consumer learns the carried state. The revision
+// bumps past both names' counters: a consumer may already have seen newName
+// at its own (possibly higher) revision. A no-op when oldName has no
+// attention.
 func (s *AttentionStore) Move(oldName, newName string) {
 	if s == nil {
 		return
@@ -114,7 +116,7 @@ func (s *AttentionStore) Move(oldName, newName string) {
 	if !ok {
 		return
 	}
-	rev := max(s.revisions[oldName], s.revisions[newName])
+	rev := max(s.revisions[oldName], s.revisions[newName]) + 1
 	delete(s.states, oldName)
 	s.states[newName] = state
 	s.revisions[newName] = rev

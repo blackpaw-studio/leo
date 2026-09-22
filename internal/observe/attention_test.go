@@ -58,9 +58,13 @@ func TestAttentionRemoveThenSetContinuesRevision(t *testing.T) {
 	}
 }
 
-func TestAttentionMoveCarriesStateWithoutBumping(t *testing.T) {
+func TestAttentionMoveBumpsPastBothNames(t *testing.T) {
 	pub := &recordingPublisher{}
 	s := NewAttentionStore(pub)
+	for range 3 {
+		s.Set("new", AttentionFinished)
+	}
+	s.Remove("new") // a deleted agent's revision (3) outlives it
 	s.Set("old", AttentionNeedsInput)
 	pub.events = nil
 
@@ -70,8 +74,8 @@ func TestAttentionMoveCarriesStateWithoutBumping(t *testing.T) {
 		t.Fatal("old name still present after Move")
 	}
 	got, ok := s.Get("new")
-	if !ok || got != (AgentAttention{State: AttentionNeedsInput, Revision: 1}) {
-		t.Fatalf("Get(new) = %+v, %v", got, ok)
+	if !ok || got != (AgentAttention{State: AttentionNeedsInput, Revision: 4}) {
+		t.Fatalf("Get(new) = %+v, %v; want needs_input rev 4 (max(1,3)+1)", got, ok)
 	}
 	if len(pub.events) != 1 {
 		t.Fatalf("Move published %d events, want 1", len(pub.events))
@@ -80,9 +84,8 @@ func TestAttentionMoveCarriesStateWithoutBumping(t *testing.T) {
 	if p.Agent != "new" || p.Attention == nil || *p.Attention != got {
 		t.Fatalf("Move payload = %+v", p)
 	}
-	// A later transition under the new name continues past the carried revision.
-	if next := s.Set("new", AttentionWorking); next.Revision != 2 {
-		t.Fatalf("revision after Move+Set = %d, want 2", next.Revision)
+	if next := s.Set("new", AttentionWorking); next.Revision != 5 {
+		t.Fatalf("revision after Move+Set = %d, want 5", next.Revision)
 	}
 }
 

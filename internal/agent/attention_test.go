@@ -49,7 +49,7 @@ func TestRenameMovesAttention(t *testing.T) {
 			if _, ok := store.Get("leo-old"); ok {
 				t.Error("old name still has attention")
 			}
-			if att, ok := store.Get("leo-new"); !ok || att.State != observe.AttentionFinished || att.Revision != 1 {
+			if att, ok := store.Get("leo-new"); !ok || att.State != observe.AttentionFinished || att.Revision != 2 {
 				t.Errorf("new name attention = %+v, %v", att, ok)
 			}
 		})
