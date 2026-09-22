@@ -1,18 +1,21 @@
 {{define "delegation_cell"}}
-<form class="deleg-cell{{if not .Target.Template}} is-unmapped{{end}}" hx-post="/web/delegation/cell" hx-trigger="change, submit" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace">
+<form class="deleg-cell{{if not .Target.Template}} is-unmapped{{end}}" hx-post="/web/delegation/cell" hx-trigger="change, submit" hx-target="find .cell-status" hx-swap="outerHTML" hx-sync="this:replace">
   <input type="hidden" name="profile" value="{{.Profile}}">
   <input type="hidden" name="role" value="{{.Role}}">
   <div class="deleg-cell-row">
     <select name="template" class="form-input deleg-template" aria-label="Template for {{.Role}} in {{.Profile}}">
-      <option value="">— unmapped</option>
-      {{$current := .Target.Template}}{{range .Templates}}<option value="{{.}}"{{if eq . $current}} selected{{end}}>{{.}}</option>{{end}}
+      <option value="" data-model="">— unmapped</option>
+      {{$current := .Target.Template}}{{range .Templates}}<option value="{{.Name}}" data-model="{{.Model}}"{{if eq .Name $current}} selected{{end}}>{{.Name}}</option>{{end}}
     </select>
-    <input name="model" class="deleg-model" value="{{.Target.Model}}" placeholder="{{if .InheritedModel}}{{.InheritedModel}}{{else}}model{{end}}" aria-label="Model override for {{.Role}} in {{.Profile}}"{{if .InheritedModel}} title="inherits {{.InheritedModel}} when empty"{{end}}>
+    <input name="model" class="deleg-model" value="{{.Target.Model}}" placeholder="{{if .InheritedModel}}{{.InheritedModel}}{{else}}model{{end}}" aria-label="Model override for {{.Role}} in {{.Profile}}">
     <input name="effort" class="deleg-effort" value="{{.Target.Effort}}" placeholder="effort" aria-label="Effort for {{.Role}} in {{.Profile}}">
-    {{template "delegation_status" .}}
+    <span class="cell-status" role="status"></span>
   </div>
-  {{if eq .Status "err"}}<div class="cell-msg">{{.Message}}</div>{{end}}
+  <div id="{{.ID}}-msg" class="cell-msg"></div>
 </form>
 {{end}}
 
-{{define "delegation_status"}}<span class="cell-status {{.Status}}" role="status"{{if .Message}} title="{{.Message}}"{{end}}>{{if eq .Status "ok"}}✓ saved{{else if eq .Status "warn"}}! saved{{else if eq .Status "err"}}✕ not saved{{end}}</span>{{end}}
+{{/* Autosave response: the indicator swaps into the field's .cell-status; the
+     message slot updates out of band so the inputs are never re-rendered. */}}
+{{define "delegation_status"}}<span class="cell-status {{.Status}}" role="status">{{if eq .Status "ok"}}✓ saved{{else if eq .Status "warn"}}! saved{{else if eq .Status "err"}}✕ not saved{{end}}</span>
+<div id="{{.ID}}-msg" class="cell-msg" hx-swap-oob="true">{{if ne .Status "ok"}}{{.Message}}{{end}}</div>{{end}}

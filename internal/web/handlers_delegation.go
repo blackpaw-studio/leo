@@ -1,7 +1,7 @@
 package web
 
 import (
-	"errors"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"sort"
@@ -11,11 +11,18 @@ import (
 
 type delegationPageData struct {
 	Config    *config.DelegationConfig
-	Templates []string
+	Templates []delegationTemplate
 	Profiles  []delegationProfileRow
 	Rows      []delegationRow
 	Warnings  []string
 	Records   []any
+}
+
+// delegationTemplate is a template choice plus the model a role inherits
+// from it, so the grid can update the model placeholder without a swap.
+type delegationTemplate struct {
+	Name  string
+	Model string
 }
 
 type delegationProfileRow struct {
@@ -29,6 +36,7 @@ type delegationRole struct {
 	Name     string
 	UseFor   string
 	Declared bool
+	StatusID string
 }
 
 type delegationRow struct {
@@ -36,22 +44,22 @@ type delegationRow struct {
 	Cells []delegationCell
 }
 
-// delegationCell is one autosaving profile×role grid cell. Status is empty,
-// "ok", "warn", or "err"; Message explains a non-ok status.
+// delegationStatus is the inline saved/error indicator of an autosaved field.
+// ID addresses the field's message slot; Status is "", "ok", "warn", or "err".
+type delegationStatus struct {
+	ID      string
+	Status  string
+	Message string
+}
+
+// delegationCell is one autosaving profile×role grid cell.
 type delegationCell struct {
+	delegationStatus
 	Profile        string
 	Role           string
 	Target         config.RoleTarget
 	InheritedModel string
-	Templates      []string
-	Status         string
-	Message        string
-}
-
-// delegationStatus is the inline saved/error indicator for autosaved fields.
-type delegationStatus struct {
-	Status  string
-	Message string
+	Templates      []delegationTemplate
 }
 
 type delegationPreviewData struct {
@@ -67,6 +75,14 @@ type delegationProfileChange struct {
 	After  config.RoleTarget
 }
 
+// Element ids built from names hex-encode them: names may contain '.', which
+// is not safe in a CSS selector, and hex never collides the way escaping can.
+func cellStatusID(profile, role string) string {
+	return "dc-" + hex.EncodeToString([]byte(profile)) + "-" + hex.EncodeToString([]byte(role))
+}
+
+func useForStatusID(role string) string { return "uf-" + hex.EncodeToString([]byte(role)) }
+
 func (s *Server) buildDelegationData(_ *http.Request) (any, error) {
 	cfg, err := s.loadConfig()
 	if err != nil {
@@ -76,7 +92,7 @@ func (s *Server) buildDelegationData(_ *http.Request) (any, error) {
 	if d == nil {
 		return delegationPageData{}, nil
 	}
-	templates := sortedTemplateNames(cfg)
+	templates := delegationTemplates(cfg)
 	var records []any
 	for _, rec := range s.consults.Records() {
 		if rec.Role != "" {
@@ -91,20 +107,20 @@ func (s *Server) buildDelegationData(_ *http.Request) (any, error) {
 	for _, role := range delegationRoles(d) {
 		row := delegationRow{Role: role}
 		for _, p := range profiles {
-			target := d.Profiles[p.Name].Roles[role.Name]
-			row.Cells = append(row.Cells, newDelegationCell(cfg, templates, p.Name, role.Name, target))
+			row.Cells = append(row.Cells, newDelegationCell(cfg, templates, p.Name, role.Name, d.Profiles[p.Name].Roles[role.Name]))
 		}
 		rows = append(rows, row)
 	}
 	return delegationPageData{Config: d, Templates: templates, Profiles: profiles, Rows: rows, Warnings: cfg.DelegationWarnings(), Records: records}, nil
 }
 
-func sortedTemplateNames(cfg *config.Config) []string {
-	templates := make([]string, 0, len(cfg.Templates))
+func delegationTemplates(cfg *config.Config) []delegationTemplate {
+	templates := make([]delegationTemplate, 0, len(cfg.Templates))
 	for name := range cfg.Templates {
-		templates = append(templates, name)
+		model, _ := cfg.RoleTargetModel(config.RoleTarget{Template: name})
+		templates = append(templates, delegationTemplate{Name: name, Model: model})
 	}
-	sort.Strings(templates)
+	sort.Slice(templates, func(i, j int) bool { return templates[i].Name < templates[j].Name })
 	return templates
 }
 
@@ -119,8 +135,8 @@ func delegationProfileRows(d *config.DelegationConfig) []delegationProfileRow {
 
 // newDelegationCell builds a grid cell whose model placeholder shows the model
 // the role would inherit from its template when no override is set.
-func newDelegationCell(cfg *config.Config, templates []string, profile, role string, target config.RoleTarget) delegationCell {
-	cell := delegationCell{Profile: profile, Role: role, Target: target, Templates: templates}
+func newDelegationCell(cfg *config.Config, templates []delegationTemplate, profile, role string, target config.RoleTarget) delegationCell {
+	cell := delegationCell{delegationStatus: delegationStatus{ID: cellStatusID(profile, role)}, Profile: profile, Role: role, Target: target, Templates: templates}
 	if _, ok := cfg.Templates[target.Template]; ok {
 		cell.InheritedModel, _ = cfg.RoleTargetModel(config.RoleTarget{Template: target.Template})
 	}
@@ -146,32 +162,18 @@ func delegationRoles(d *config.DelegationConfig) []delegationRole {
 	sort.Strings(names)
 	roles := make([]delegationRole, 0, len(names))
 	for _, name := range names {
-		roles = append(roles, all[name])
+		role := all[name]
+		role.StatusID = useForStatusID(name)
+		roles = append(roles, role)
 	}
 	return roles
-}
-
-// applyDelegation loads, mutates, validates, and saves config, then reloads.
-// An invalid edit returns a non-empty errMsg and leaves leo.yaml untouched.
-func (s *Server) applyDelegation(apply func(*config.Config) error) (cfg *config.Config, warn, errMsg string) {
-	cfg, err := s.loadConfig()
-	if err != nil {
-		return nil, "", err.Error()
-	}
-	if err := apply(cfg); err != nil {
-		return nil, "", err.Error()
-	}
-	if msg := s.validateAndSave(cfg); msg != "" {
-		return nil, "", msg
-	}
-	return cfg, s.reloadConfigOrWarn(), ""
 }
 
 // delegationMutation handles structural edits (add/rename/remove, activate):
 // on success the page refreshes so the grid, profile badges, and warnings
 // all reflect the new shape.
 func (s *Server) delegationMutation(w http.ResponseWriter, _ *http.Request, apply func(*config.Config) error) {
-	_, warn, errMsg := s.applyDelegation(apply)
+	warn, errMsg := s.mutateConfig(apply)
 	if errMsg != "" {
 		s.renderFlash(w, "error", errMsg)
 		return
@@ -181,11 +183,17 @@ func (s *Server) delegationMutation(w http.ResponseWriter, _ *http.Request, appl
 	s.renderFlash(w, typ, msg)
 }
 
-func savedStatus(warn string) delegationStatus {
-	if warn != "" {
-		return delegationStatus{Status: "warn", Message: "saved — " + warn}
+// renderDelegationStatus answers an autosave with only its status indicator
+// and an out-of-band message slot, so the user's inputs are never replaced.
+func (s *Server) renderDelegationStatus(w http.ResponseWriter, id, warn, errMsg string) {
+	st := delegationStatus{ID: id, Status: "ok", Message: "saved"}
+	switch {
+	case errMsg != "":
+		st.Status, st.Message = "err", errMsg
+	case warn != "":
+		st.Status, st.Message = "warn", "saved — "+warn
 	}
-	return delegationStatus{Status: "ok", Message: "saved"}
+	s.renderDelegationFragment(w, "delegation_status", st)
 }
 
 func (s *Server) renderDelegationFragment(w http.ResponseWriter, name string, data any) {
@@ -195,16 +203,16 @@ func (s *Server) renderDelegationFragment(w http.ResponseWriter, name string, da
 	}
 }
 
-// handleDelegationCell autosaves one grid cell and swaps just that cell back
-// in, so editing never reloads the page or steals focus.
+// handleDelegationCell autosaves one grid cell.
 func (s *Server) handleDelegationCell(w http.ResponseWriter, r *http.Request) {
 	profile, role := r.FormValue("profile"), r.FormValue("role")
 	submitted := config.RoleTarget{Template: r.FormValue("template"), Model: r.FormValue("model"), Effort: r.FormValue("effort")}
-	cfg, warn, errMsg := s.applyDelegation(func(cfg *config.Config) error {
-		if cfg.Delegation == nil {
-			return fmt.Errorf("delegation not configured")
+	warn, errMsg := s.mutateConfig(func(cfg *config.Config) error {
+		d, err := requireDelegation(cfg)
+		if err != nil {
+			return err
 		}
-		p, ok := cfg.Delegation.Profiles[profile]
+		p, ok := d.Profiles[profile]
 		if !ok {
 			return fmt.Errorf("profile %q not found", profile)
 		}
@@ -218,244 +226,42 @@ func (s *Server) handleDelegationCell(w http.ResponseWriter, r *http.Request) {
 			roles[role] = submitted
 		}
 		p.Roles = roles
-		cfg.Delegation.Profiles[profile] = p
+		d.Profiles[profile] = p
 		return nil
 	})
-	if errMsg != "" {
-		fallback, err := s.loadConfig()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		cell := newDelegationCell(fallback, sortedTemplateNames(fallback), profile, role, submitted)
-		cell.Status, cell.Message = "err", errMsg
-		s.renderDelegationFragment(w, "delegation_cell", cell)
-		return
-	}
-	if submitted.Template == "" {
-		submitted = config.RoleTarget{}
-	}
-	cell := newDelegationCell(cfg, sortedTemplateNames(cfg), profile, role, submitted)
-	st := savedStatus(warn)
-	cell.Status, cell.Message = st.Status, st.Message
-	s.renderDelegationFragment(w, "delegation_cell", cell)
+	s.renderDelegationStatus(w, cellStatusID(profile, role), warn, errMsg)
 }
 
-// handleDelegationUseFor autosaves a role's use_for text and returns only the
-// inline status indicator.
+// handleDelegationUseFor autosaves a declared role's use_for text.
 func (s *Server) handleDelegationUseFor(w http.ResponseWriter, r *http.Request) {
-	_, warn, errMsg := s.applyDelegation(func(cfg *config.Config) error {
-		if cfg.Delegation == nil {
-			return fmt.Errorf("delegation not configured")
+	role := r.FormValue("role")
+	warn, errMsg := s.mutateConfig(func(cfg *config.Config) error {
+		d, err := requireDelegation(cfg)
+		if err != nil {
+			return err
 		}
-		role := r.FormValue("role")
-		spec, ok := cfg.Delegation.Roles[role]
+		spec, ok := d.Roles[role]
 		if !ok {
 			return fmt.Errorf("role %q not found", role)
 		}
 		spec.UseFor = r.FormValue("use_for")
-		cfg.Delegation.Roles[role] = spec
+		d.Roles[role] = spec
 		return nil
 	})
-	st := savedStatus(warn)
-	if errMsg != "" {
-		st = delegationStatus{Status: "err", Message: errMsg}
-	}
-	s.renderDelegationFragment(w, "delegation_status", st)
+	s.renderDelegationStatus(w, useForStatusID(role), warn, errMsg)
 }
 
 func (s *Server) handleDelegationActive(w http.ResponseWriter, r *http.Request) {
 	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		if cfg.Delegation == nil {
-			return fmt.Errorf("delegation not configured")
+		d, err := requireDelegation(cfg)
+		if err != nil {
+			return err
 		}
 		name := r.FormValue("profile")
-		if _, ok := cfg.Delegation.Profiles[name]; !ok {
-			return fmt.Errorf("profile %q not found", name)
-		}
-		cfg.Delegation.ActiveProfile = name
-		return nil
-	})
-}
-
-func delegationConfig(cfg *config.Config) (*config.DelegationConfig, error) {
-	if cfg.Delegation == nil {
-		return nil, fmt.Errorf("delegation not configured")
-	}
-	return cfg.Delegation, nil
-}
-
-func (s *Server) handleDelegationRoleAdd(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		d, err := delegationConfig(cfg)
-		if err != nil {
-			return err
-		}
-		name := r.FormValue("name")
-		if !validEntityName(name) {
-			return errors.New(entityNameError)
-		}
-		if delegationRoleExists(d, name) {
-			return fmt.Errorf("role %q already exists", name)
-		}
-		template := r.FormValue("template")
-		if _, ok := cfg.Templates[template]; !ok {
-			return fmt.Errorf("template %q not found", template)
-		}
-		if d.Roles == nil {
-			d.Roles = declaredActiveRoles(d)
-		}
-		d.Roles[name] = config.RoleSpec{}
-		active := d.Profiles[d.ActiveProfile]
-		if active.Roles == nil {
-			active.Roles = map[string]config.RoleTarget{}
-		}
-		active.Roles[name] = config.RoleTarget{Template: template}
-		d.Profiles[d.ActiveProfile] = active
-		return nil
-	})
-}
-
-// delegationRoleExists reports whether name is declared or mapped in any
-// profile, so adding a role can never overwrite existing routing.
-func delegationRoleExists(d *config.DelegationConfig, name string) bool {
-	if _, ok := d.Roles[name]; ok {
-		return true
-	}
-	for _, p := range d.Profiles {
-		if _, ok := p.Roles[name]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-// declaredActiveRoles builds the first delegation.roles declaration. While
-// roles are undeclared the injected block lists the active profile's roles, so
-// declaring only a new role would silently drop those; migrate them all.
-func declaredActiveRoles(d *config.DelegationConfig) map[string]config.RoleSpec {
-	roles := map[string]config.RoleSpec{}
-	for name := range d.Profiles[d.ActiveProfile].Roles {
-		roles[name] = config.RoleSpec{}
-	}
-	return roles
-}
-
-func (s *Server) handleDelegationRoleRename(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		if !validEntityName(r.FormValue("new_name")) {
-			return errors.New(entityNameError)
-		}
-		return config.RenameRole(cfg, r.FormValue("name"), r.FormValue("new_name"))
-	})
-}
-func (s *Server) handleDelegationRoleDelete(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		d, err := delegationConfig(cfg)
-		if err != nil {
-			return err
-		}
-		name := r.FormValue("name")
-		found := false
-		if _, ok := d.Roles[name]; ok {
-			delete(d.Roles, name)
-			found = true
-		}
-		for profileName, p := range d.Profiles {
-			if _, ok := p.Roles[name]; ok {
-				found = true
-			}
-			delete(p.Roles, name)
-			d.Profiles[profileName] = p
-		}
-		if !found {
-			return fmt.Errorf("role %q not found", name)
-		}
-		return nil
-	})
-}
-func (s *Server) handleDelegationProfileAdd(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		d, err := delegationConfig(cfg)
-		if err != nil {
-			return err
-		}
-		name := r.FormValue("name")
-		if !validEntityName(name) {
-			return errors.New(entityNameError)
-		}
-		if _, ok := d.Profiles[name]; ok {
-			return fmt.Errorf("profile %q already exists", name)
-		}
-		d.Profiles[name] = config.Profile{Roles: map[string]config.RoleTarget{}}
-		return nil
-	})
-}
-func (s *Server) handleDelegationProfileRename(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		d, err := delegationConfig(cfg)
-		if err != nil {
-			return err
-		}
-		old, name := r.FormValue("name"), r.FormValue("new_name")
-		if !validEntityName(name) {
-			return errors.New(entityNameError)
-		}
-		p, ok := d.Profiles[old]
-		if !ok {
-			return fmt.Errorf("profile %q not found", old)
-		}
-		if _, ok := d.Profiles[name]; ok {
-			return fmt.Errorf("profile %q already exists", name)
-		}
-		d.Profiles[name] = p
-		delete(d.Profiles, old)
-		if d.ActiveProfile == old {
-			d.ActiveProfile = name
-		}
-		return nil
-	})
-}
-func (s *Server) handleDelegationProfileDelete(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		d, err := delegationConfig(cfg)
-		if err != nil {
-			return err
-		}
-		name := r.FormValue("name")
-		if name == d.ActiveProfile {
-			return fmt.Errorf("cannot remove active profile %q", name)
-		}
 		if _, ok := d.Profiles[name]; !ok {
 			return fmt.Errorf("profile %q not found", name)
 		}
-		delete(d.Profiles, name)
-		return nil
-	})
-}
-func (s *Server) handleDelegationProfileDuplicate(w http.ResponseWriter, r *http.Request) {
-	s.delegationMutation(w, r, func(cfg *config.Config) error {
-		d, err := delegationConfig(cfg)
-		if err != nil {
-			return err
-		}
-		source, name := r.FormValue("name"), r.FormValue("new_name")
-		if !validEntityName(name) {
-			return errors.New(entityNameError)
-		}
-		p, ok := d.Profiles[source]
-		if !ok {
-			return fmt.Errorf("profile %q not found", source)
-		}
-		if _, ok := d.Profiles[name]; ok {
-			return fmt.Errorf("profile %q already exists", name)
-		}
-		roles := map[string]config.RoleTarget{}
-		for role, target := range p.Roles {
-			roles[role] = target
-		}
-		p.Roles = roles
-		d.Profiles[name] = p
+		d.ActiveProfile = name
 		return nil
 	})
 }
@@ -466,7 +272,7 @@ func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	d, err := delegationConfig(cfg)
+	d, err := requireDelegation(cfg)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return

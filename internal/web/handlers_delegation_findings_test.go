@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -66,9 +67,23 @@ func TestDelegationRejectsDotNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{".", ".."} {
-		postDelegation(t, s.handleDelegationRoleAdd, "name="+name+"&template=one")
-		postDelegation(t, s.handleDelegationProfileAdd, "name="+name)
+	routes := map[string]struct {
+		handler http.HandlerFunc
+		form    string
+	}{
+		"role add":          {s.handleDelegationRoleAdd, "template=one&name="},
+		"role rename":       {s.handleDelegationRoleRename, "name=implement&new_name="},
+		"profile add":       {s.handleDelegationProfileAdd, "name="},
+		"profile rename":    {s.handleDelegationProfileRename, "name=p&new_name="},
+		"profile duplicate": {s.handleDelegationProfileDuplicate, "name=p&new_name="},
+	}
+	for route, tc := range routes {
+		for _, name := range []string{".", ".."} {
+			w := postDelegation(t, tc.handler, tc.form+name)
+			if !strings.Contains(w.Body.String(), entityNameError) {
+				t.Errorf("%s %q: response = %q", route, name, w.Body.String())
+			}
+		}
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -76,5 +91,24 @@ func TestDelegationRejectsDotNames(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("dot name changed leo.yaml")
+	}
+}
+
+func TestDelegationCannotRemoveLastDeclaredRole(t *testing.T) {
+	s, path := newTestServerWithConfigFile(t, delegationTestConfig())
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := postDelegation(t, s.handleDelegationRoleDelete, "name=implement")
+	if !strings.Contains(w.Body.String(), "cannot remove the last declared role") {
+		t.Fatalf("response = %q", w.Body.String())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("blocked removal changed leo.yaml")
 	}
 }

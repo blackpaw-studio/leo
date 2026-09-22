@@ -2,18 +2,53 @@
 <h1 class="page-title">Delegation</h1>
 <div id="delegation-content">{{template "delegation_content" .}}</div>
 <script>
-// Open the switch-preview dialog as a modal once htmx swaps it in; closing it
-// (cancel, Esc) restores the empty placeholder so the next preview can load.
-document.body.addEventListener('htmx:afterSwap', function () {
-  var d = document.getElementById('delegation-preview');
-  if (!d || d.tagName !== 'DIALOG' || d.open) return;
-  d.addEventListener('close', function () {
-    var slot = document.createElement('div');
-    slot.id = 'delegation-preview';
-    d.replaceWith(slot);
-  }, { once: true });
-  d.showModal();
-});
+(function () {
+  // Guard: boosted navigation can re-run this script.
+  if (window.leoDelegationUI) return;
+  window.leoDelegationUI = true;
+
+  // Open the switch-preview dialog as a modal once htmx swaps it in; closing
+  // it (cancel, Esc) restores the empty slot so the next preview can load.
+  document.body.addEventListener('htmx:afterSwap', function () {
+    var d = document.getElementById('delegation-preview');
+    if (!d || d.tagName !== 'DIALOG' || d.open) return;
+    d.addEventListener('close', function () {
+      var slot = document.createElement('div');
+      slot.id = 'delegation-preview';
+      d.replaceWith(slot);
+    }, { once: true });
+    d.showModal();
+  });
+
+  // Keep the model placeholder showing what the chosen template inherits.
+  document.addEventListener('change', function (e) {
+    var sel = e.target;
+    if (!sel.matches || !sel.matches('select.deleg-template')) return;
+    var model = sel.form && sel.form.querySelector('input.deleg-model');
+    var opt = sel.selectedOptions[0];
+    if (model) model.placeholder = (opt && opt.dataset.model) || 'model';
+    sel.form.classList.toggle('is-unmapped', !sel.value);
+  });
+
+  // ⋯ menus: one open at a time; close on outside click and on Escape.
+  function openMenus() { return document.querySelectorAll('details.menu[open]'); }
+  document.addEventListener('toggle', function (e) {
+    var m = e.target;
+    if (!m.matches || !m.matches('details.menu') || !m.open) return;
+    openMenus().forEach(function (o) { if (o !== m) o.open = false; });
+  }, true);
+  document.addEventListener('click', function (e) {
+    openMenus().forEach(function (o) { if (!o.contains(e.target)) o.open = false; });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    openMenus().forEach(function (o) {
+      o.open = false;
+      var summary = o.querySelector('summary');
+      if (summary && o.contains(document.activeElement)) summary.focus();
+    });
+  });
+})();
 </script>
 {{end}}
 
@@ -77,7 +112,8 @@ document.body.addEventListener('htmx:afterSwap', function () {
           {{if .Role.Declared}}<form class="deleg-usefor" hx-post="/web/delegation/use-for" hx-trigger="change" hx-target="find .cell-status" hx-swap="outerHTML">
             <input type="hidden" name="role" value="{{.Role.Name}}">
             <textarea name="use_for" rows="2" placeholder="use for…" aria-label="Use {{.Role.Name}} for">{{.Role.UseFor}}</textarea>
-            <span class="cell-status"></span>
+            <span class="cell-status" role="status"></span>
+            <div id="{{.Role.StatusID}}-msg" class="cell-msg"></div>
           </form>{{end}}
           <details class="menu">
             <summary class="btn btn-sm" aria-label="Actions for role {{.Role.Name}}">⋯</summary>
@@ -101,7 +137,7 @@ document.body.addEventListener('htmx:afterSwap', function () {
   </table></div>
   <form class="frow-inline deleg-add" hx-post="/web/delegation/role/add" hx-target="#flash-container">
     <input name="name" placeholder="new-role" required aria-label="New role name">
-    <select name="template" class="form-input" aria-label="Template for the new role">{{range .Data.Templates}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+    <select name="template" class="form-input" aria-label="Template for the new role">{{range .Data.Templates}}<option value="{{.Name}}">{{.Name}}</option>{{end}}</select>
     <button class="btn">add role</button>
   </form>
 </section>

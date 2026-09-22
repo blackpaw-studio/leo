@@ -126,6 +126,11 @@ type Server struct {
 	// a "not configured" message instead of guessing a path.
 	serviceLogPath string
 
+	// configMu serializes every web-initiated leo.yaml mutation. Each save is
+	// load → mutate → validate → save, so two concurrent requests would
+	// otherwise interleave and the later save would drop the earlier edit.
+	configMu sync.Mutex
+
 	// agentMu guards the on-demand, 60s-TTL cache of claude sub-agent names
 	// used to populate dropdowns without shelling out on every render.
 	agentMu       sync.Mutex

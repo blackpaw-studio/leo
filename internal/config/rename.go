@@ -76,16 +76,8 @@ func RenameRole(cfg *Config, oldName, newName string) error {
 	if newName == "" {
 		return fmt.Errorf("new role name must not be empty")
 	}
-	if _, exists := cfg.Delegation.Roles[newName]; exists {
+	if cfg.Delegation.HasRole(newName) {
 		return fmt.Errorf("role %q already exists", newName)
-	}
-	for profileName, profile := range cfg.Delegation.Profiles {
-		if _, exists := profile.Roles[oldName]; !exists {
-			continue
-		}
-		if _, exists := profile.Roles[newName]; exists {
-			return fmt.Errorf("role %q already exists in profile %q", newName, profileName)
-		}
 	}
 	found := false
 	if role, ok := cfg.Delegation.Roles[oldName]; ok {

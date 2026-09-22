@@ -314,6 +314,7 @@ th .pill { font-size: var(--fs-xs); letter-spacing: 0.04em; padding: 0 var(--sp-
   .deleg-cell select.deleg-template { min-width: 120px; }
 }
 @keyframes cell-status-fade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+.cell-msg:empty { display: none; }
 .cell-msg { color: var(--bad); font-size: var(--fs-xs); margin-top: 2px; max-width: 360px; line-height: 1.4; }
 
 /* ⋯ menus (<details class="menu">) */
@@ -341,6 +342,7 @@ dialog.modal {
 dialog.modal::backdrop { background: rgb(5 7 11 / 0.7); }
 .modal-body { padding: var(--sp-3); max-height: 60vh; overflow: auto; }
 .modal-body .flash { margin: var(--sp-3) 0 0; }
+#delegation-preview-error:empty { display: none; }
 .modal-actions {
   display: flex; justify-content: flex-end; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line);

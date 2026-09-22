@@ -66,3 +66,30 @@ func TestDelegationStatusShowsInheritedModel(t *testing.T) {
 		t.Fatalf("status missing override:\n%s", status)
 	}
 }
+
+func TestRenameRoleRejectsNameMappedElsewhere(t *testing.T) {
+	cfg := delegationFixture()
+	// "legacy" is undeclared and mapped only in secondary; "plan" is mapped in both.
+	cfg.Delegation.Profiles["secondary"].Roles["legacy"] = RoleTarget{Template: "worker-template"}
+	delete(cfg.Delegation.Profiles["primary"].Roles, "implement")
+	delete(cfg.Delegation.Roles, "implement")
+	cfg.Delegation.Profiles["primary"].Roles["solo"] = RoleTarget{Template: "planner-template"}
+	err := RenameRole(cfg, "solo", "legacy")
+	if err == nil || !strings.Contains(err.Error(), `role "legacy" already exists`) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, ok := cfg.Delegation.Profiles["primary"].Roles["solo"]; !ok {
+		t.Fatal("failed rename mutated config")
+	}
+}
+
+func TestDelegationHasRoleCoversDeclaredAndMapped(t *testing.T) {
+	d := delegationFixture().Delegation
+	d.Profiles["secondary"].Roles["legacy"] = RoleTarget{Template: "worker-template"}
+	d.Roles["declared-only"] = RoleSpec{}
+	for name, want := range map[string]bool{"plan": true, "legacy": true, "declared-only": true, "nope": false} {
+		if got := d.HasRole(name); got != want {
+			t.Fatalf("HasRole(%q) = %v", name, got)
+		}
+	}
+}

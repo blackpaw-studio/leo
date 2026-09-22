@@ -333,3 +333,17 @@ func DiffProfiles(a, b Profile) []string {
 	}
 	return changes
 }
+
+// HasRole reports whether name is declared in roles or mapped in any profile.
+// Adds and renames check this so they can never merge into existing routing.
+func (d *DelegationConfig) HasRole(name string) bool {
+	if _, ok := d.Roles[name]; ok {
+		return true
+	}
+	for _, p := range d.Profiles {
+		if _, ok := p.Roles[name]; ok {
+			return true
+		}
+	}
+	return false
+}

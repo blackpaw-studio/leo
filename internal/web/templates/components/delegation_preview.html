@@ -11,11 +11,12 @@
         <td>{{if ne .Kind "removed"}}{{template "delegation_target" .After}}{{else}}—{{end}}</td>
       </tr>{{end}}</tbody>
     </table>{{else}}<p class="dim">No role-routing changes.</p>{{end}}
+    <div id="delegation-preview-error" role="alert"></div>
     {{if .Missing}}<p class="flash flash-warning">Blocked: unmapped declared roles: {{range .Missing}}<code>{{.}}</code> {{end}}</p>{{end}}
   </div>
   <div class="modal-actions">
     <form method="dialog"><button class="btn">cancel</button></form>
-    {{if not .Missing}}<form hx-post="/web/delegation/active" hx-target="#flash-container"><input type="hidden" name="profile" value="{{.Profile}}"><button class="btn hot">confirm make active</button></form>{{end}}
+    {{if not .Missing}}<form hx-post="/web/delegation/active" hx-target="#delegation-preview-error"><input type="hidden" name="profile" value="{{.Profile}}"><button class="btn hot">confirm make active</button></form>{{end}}
   </div>
 </dialog>
 {{end}}
