@@ -1479,6 +1479,7 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 
 	agentstore.Remove(cfg.HomePath, name)
 	m.attention.Remove(name)
+	removeSettingsSpill(cfg.HomePath, name)
 	// Delete only ever reaches here for a not-live agent (the EphemeralAgents
 	// check above already rejected a live one), verbatim the rationale
 	// announceStoppedIfNotLive documents for Stop: nothing else along this

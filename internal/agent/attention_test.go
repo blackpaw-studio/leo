@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
@@ -53,5 +55,32 @@ func TestRenameMovesAttention(t *testing.T) {
 				t.Errorf("new name attention = %+v, %v", att, ok)
 			}
 		})
+	}
+}
+
+func TestDeleteRemovesSettingsSpillFile(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-gone", Workspace: "/w", Stopped: true})
+	spill := filepath.Join(home, "state", "settings", "leo-gone.json")
+	other := filepath.Join(home, "state", "settings", "leo-other.json")
+	for _, p := range []string{spill, other} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(`{"env":{"K":"secret"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := newTestManager(t, home, &fakeSupervisor{ephemeral: map[string]ProcessState{}})
+
+	if err := m.Delete(context.Background(), "leo-gone", DeleteOptions{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if _, err := os.Stat(spill); !os.IsNotExist(err) {
+		t.Fatalf("spill file after Delete: err=%v, want removed", err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("another agent's spill file removed: %v", err)
 	}
 }
