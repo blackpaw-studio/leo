@@ -100,17 +100,39 @@ Rules:
   `role "review.perf" is not mapped in active delegation profile "claude-heavy" (mapped: plan, implement, explore, review, review.security)`
 - Dispatch by explicit `template` keeps working unchanged (escape hatch).
 
-## Instructions rendering
+## Instructions injection
 
-Agents need to know the roles exist, not which model backs them.
+When `delegation` is configured, **Leo injects a delegation block into the
+agent's system prompt at launch** (same mechanism Leo already uses for its
+managed prompt/instruction blocks). No external tooling (ai-config) is needed.
 
-- New `leo delegation render` prints a markdown table of roles for the active
-  profile (role → template → model, plus descriptions). Also exposed as an MCP
-  tool `leo_delegation` (read-only) so an agent can ask "what roles exist right
-  now" mid-session instead of trusting stale prose.
-- Evan's ai-config instructions will be rewritten (by Rocket, separately) to say
-  "dispatch by role" and list role *names* only. Model names leave the prose.
-  Not in scope for the Leo change, but the MCP tool must exist for it.
+- Content: the roles in the active profile with each role's `use_for` guidance
+  (new optional per-role field, see below), plus the rule "dispatch with
+  `leo_dispatch(role: ...)`; do not pick templates or models yourself".
+- Role names and guidance only — **no template or model names**. Profiles
+  normally share a role set, so a profile switch doesn't make a running agent's
+  prompt stale; only adding/removing roles does.
+- For the live view, a read-only MCP tool `leo_delegation` returns the current
+  roles (and resolved template/model, for debugging). The injected block tells
+  agents to call it if a role they expect is missing.
+- `leo delegation render` prints the exact block that would be injected.
+- Absent `delegation` block = nothing injected.
+
+Per-role guidance lives in config, profile-independent:
+
+```yaml
+delegation:
+  roles:
+    plan: { use_for: "Designs and plans before any nontrivial change; read-only" }
+    implement: { use_for: "All code changes, from a complete brief" }
+    review.security: { use_for: "Required review for auth, secrets, crypto, input handling" }
+  active_profile: codex-heavy
+  profiles: { ... }
+```
+
+`leo validate` warns when a profile maps a role not declared under
+`delegation.roles`, and errors when a declared role is unmapped in the active
+profile (fail loudly at config time, not just dispatch time).
 
 ## Web UI
 
