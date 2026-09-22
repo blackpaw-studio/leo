@@ -112,7 +112,10 @@ type TurnAborter interface {
 // must never persist it as the session's stored args. It must be idempotent
 // and must not mutate args. supported=false (with args returned unchanged)
 // means the harness has no attention hooks; an error also means the launch
-// proceeds unhooked.
+// proceeds unhooked. AttentionSupported reports, without side effects,
+// whether AttentionLaunch would install hooks at all, so the supervisor can
+// mark a spawn's attention before the launch runs.
 type AttentionHooker interface {
 	AttentionLaunch(h SessionHandle, args, reportCmd []string) (out []string, supported bool, err error)
+	AttentionSupported() bool
 }

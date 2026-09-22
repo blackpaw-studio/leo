@@ -153,9 +153,6 @@ type ProcessSpec struct {
 	// it as a trailing positional arg. Empty for claude, which keeps the
 	// prompt in ClaudeArgs.
 	OpeningPrompt string
-	// Resumed marks a spawn reviving a dormant agent (agent.SpawnRequest.
-	// Resumed); a hooked resume starts its attention as working.
-	Resumed bool
 	// attentionToken is this launch's attention token, exported to the
 	// session as LEO_ATTENTION_TOKEN ("" = launched without hooks). Runtime
 	// supervisor state, like primaryPane.
@@ -361,6 +358,7 @@ func (s *Supervisor) ReleaseAgent(name string) {
 // The process is not persisted to config — it lives only in memory.
 // Implements daemon.AgentManager.
 func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
+	hooked := spawnHooked(driverFor(spec.Harness), s.homePath, spec.Name, spec.Adopt)
 	s.mu.Lock()
 	if _, exists := s.states[spec.Name]; exists {
 		s.mu.Unlock()
@@ -372,6 +370,12 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	}
 	// Consume any reservation so the name is owned by states from here on.
 	delete(s.reservations, spec.Name)
+	// A hooked agent is unknown from the moment it is visible: set before
+	// states/identities publish it and before agent_spawned, not after the
+	// launch goroutine's tmux round-trip.
+	if hooked {
+		s.attention.Set(spec.Name, observe.AttentionUnknown)
+	}
 
 	childCtx, cancel := context.WithCancel(s.ctx) // #nosec G118 -- cancel stored in s.cancels, called by StopAgent
 	s.cancels[spec.Name] = cancel
@@ -420,7 +424,6 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		Harness:       spec.Harness,
 		Kind:          harness.KindAgent,
 		OpeningPrompt: spec.OpeningPrompt,
-		Resumed:       spec.Resumed,
 	}
 	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
 	return nil
@@ -1211,13 +1214,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				case !hooked:
 					sv.dropAttention(name, id)
 				case firstLaunch || !sv.attentionTracked(name):
-					// Only the launch that resumed the agent is mid-turn; a later
-					// restart's first hooked launch knows nothing yet.
-					initial := observe.AttentionUnknown
-					if firstLaunch && spec.Resumed {
-						initial = observe.AttentionWorking
-					}
-					sv.launchAttention(name, id, initial)
+					// Every launch, resumed or not, knows nothing until a hook
+					// fires; only hooks set working.
+					sv.launchAttention(name, id, observe.AttentionUnknown)
 				}
 				// A hooked in-loop restart keeps errored until the next hook.
 			}

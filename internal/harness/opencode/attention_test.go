@@ -17,4 +17,7 @@ func TestOpencodeHasNoAttentionHooks(t *testing.T) {
 	if err != nil || supported || !reflect.DeepEqual(got, args) {
 		t.Fatalf("got %#v supported=%v err=%v", got, supported, err)
 	}
+	if hooker.AttentionSupported() {
+		t.Fatal("AttentionSupported() = true, want false")
+	}
 }

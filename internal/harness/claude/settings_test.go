@@ -17,6 +17,9 @@ func attentionHooker(t *testing.T) harness.AttentionHooker {
 	if !ok {
 		t.Fatal("claude driver is not a harness.AttentionHooker")
 	}
+	if !h.AttentionSupported() {
+		t.Fatal("AttentionSupported() = false, want true")
+	}
 	return h
 }
 

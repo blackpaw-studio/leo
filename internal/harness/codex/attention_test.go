@@ -18,6 +18,9 @@ func TestAttentionLaunchInstallsHooksInCodexHome(t *testing.T) {
 	if !ok {
 		t.Fatal("codex driver is not a harness.AttentionHooker")
 	}
+	if !hooker.AttentionSupported() {
+		t.Fatal("AttentionSupported() = false, want true")
+	}
 	args := []string{"--model", "gpt"}
 
 	got, supported, err := hooker.AttentionLaunch(harness.SessionHandle{Env: map[string]string{"CODEX_HOME": home}, Workspace: t.TempDir()}, args, []string{"/ignored"})

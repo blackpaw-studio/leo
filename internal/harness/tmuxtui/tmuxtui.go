@@ -153,6 +153,8 @@ func (d Driver) AttentionLaunch(h harness.SessionHandle, args, reportCmd []strin
 	return out, true, nil
 }
 
+func (d Driver) AttentionSupported() bool { return d.cfg.AttentionFn != nil }
+
 func (d Driver) RefreshSessionArgs(args []string, storedID string) []string {
 	if d.cfg.RefreshArgsFn == nil {
 		return args

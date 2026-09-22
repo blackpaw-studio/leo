@@ -43,6 +43,17 @@ func attentionLaunchArgs(drv harness.SessionDriver, h harness.SessionHandle, arg
 	return out, true
 }
 
+// spawnHooked predicts whether an agent spawn will launch with attention
+// hooks: an adopt keeps the surviving launch's token, a fresh launch hooks
+// when the driver supports it. A later launch-time failure drops the preset.
+func spawnHooked(drv harness.SessionDriver, homePath, name string, adopt bool) bool {
+	if adopt {
+		return storedAttentionToken(homePath, name) != ""
+	}
+	hooker, ok := drv.(harness.AttentionHooker)
+	return ok && hooker.AttentionSupported()
+}
+
 // newAttentionToken returns a fresh random per-launch attention token.
 func newAttentionToken() (string, error) {
 	buf := make([]byte, 16)

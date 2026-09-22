@@ -29,6 +29,8 @@ func (d *fakeAttentionDriver) AttentionLaunch(_ harness.SessionHandle, args, rep
 	return append(append([]string(nil), args...), "--hooked", strings.Join(reportCmd, " ")), true, nil
 }
 
+func (d *fakeAttentionDriver) AttentionSupported() bool { return d.supported }
+
 // liveTmuxStub launches successfully and keeps the session alive, logging
 // every invocation. has-session reports alive (so adoption applies).
 func liveTmuxStub(t *testing.T) (path, logPath string) {
@@ -147,12 +149,64 @@ func TestFreshSpawnInjectsAttentionHooksWithoutPersistingArgs(t *testing.T) {
 	}
 }
 
-func TestResumedSpawnWithHooksIsWorking(t *testing.T) {
+// A resumed launch knows nothing about the pane yet: only hooks set
+// working, so a restarted-but-idle agent never reads as working.
+func TestResumedSpawnWithHooksIsUnknown(t *testing.T) {
 	f := newLaunchFixture(t, &fakeAttentionDriver{supported: true}, agentstore.Record{Name: "resumed"})
+	pub := &recordingPublisher{}
+	f.sv.SetAttention(observe.NewAttentionStore(pub))
+	f.store = f.sv.attentionStore()
 
 	f.spawn(t, daemon.AgentSpawnSpec{Name: "resumed", Resumed: true})
+	waitForLog(t, f.logPath, "new-session")
 
-	waitAttention(t, f.store, "resumed", observe.AttentionWorking)
+	// Wait for the launch's own attention write (spawn preset + launch).
+	deadline := time.Now().Add(5 * time.Second)
+	for len(pub.Events()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	for _, ev := range pub.Events() {
+		if att := ev.Payload.(*observe.AgentActivityPayload).Attention; att == nil || att.State != observe.AttentionUnknown {
+			t.Fatalf("resumed launch published attention %+v, want only unknown", att)
+		}
+	}
+	waitAttention(t, f.store, "resumed", observe.AttentionUnknown)
+}
+
+// The spawn window: a hooked agent carries attention the moment SpawnAgent
+// returns (before its launch goroutine runs) and on agent_spawned; an
+// unhooked one carries neither.
+func TestSpawnCarriesAttentionBeforeLaunch(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		supported bool
+	}{{"hooked", true}, {"unhooked", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLaunchFixture(t, &fakeAttentionDriver{supported: tc.supported}, agentstore.Record{Name: "fresh"})
+			pub := &recordingPublisher{}
+			f.sv.SetPublisher(pub)
+
+			f.spawn(t, daemon.AgentSpawnSpec{Name: "fresh"})
+
+			att, present := f.store.Get("fresh")
+			if present != tc.supported || (present && att.State != observe.AttentionUnknown) {
+				t.Fatalf("attention right after SpawnAgent = %+v (present=%v), want unknown only when hooked", att, present)
+			}
+			var spawned *observe.AgentSpawnedPayload
+			for _, ev := range pub.Events() {
+				if p, ok := ev.Payload.(*observe.AgentSpawnedPayload); ok {
+					spawned = p
+				}
+			}
+			if spawned == nil {
+				t.Fatal("no agent_spawned published")
+			}
+			got := spawned.Agent.Attention
+			if (got != nil) != tc.supported || (got != nil && got.State != observe.AttentionUnknown) {
+				t.Fatalf("agent_spawned attention = %+v, want unknown only when hooked", got)
+			}
+		})
+	}
 }
 
 func TestSpawnWithoutAttentionSupportLeavesAttentionAbsent(t *testing.T) {
@@ -194,8 +248,16 @@ func TestAdoptSetsUnknownOnlyForHookedRecords(t *testing.T) {
 			if tc.present {
 				waitAttention(t, f.store, "adopted", observe.AttentionUnknown)
 				// The surviving process still reports with its launch token.
-				if name, ok := f.store.AgentForToken(tc.token); !ok || name != "adopted" {
-					t.Fatalf("persisted token routes to %q, %v; want adopted", name, ok)
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					name, ok := f.store.AgentForToken(tc.token)
+					if ok && name == "adopted" {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("persisted token routes to %q, %v; want adopted", name, ok)
+					}
+					time.Sleep(5 * time.Millisecond)
 				}
 			} else {
 				time.Sleep(50 * time.Millisecond)
