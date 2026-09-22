@@ -22,6 +22,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
+	defer s.configWriter.Lock()()
 	var req TaskAddRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -71,6 +72,7 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskRemove(w http.ResponseWriter, r *http.Request) {
+	defer s.configWriter.Lock()()
 	var req TaskNameRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -107,6 +109,7 @@ func (s *Server) handleTaskDisable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setTaskEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	defer s.configWriter.Lock()()
 	var req TaskNameRequest
 	if !decodeJSON(w, r, &req) {
 		return

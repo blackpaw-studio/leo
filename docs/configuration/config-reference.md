@@ -4,6 +4,9 @@ Complete field-by-field reference for `leo.yaml`.
 
 Config lives at `~/.leo/leo.yaml` (the Leo home directory).
 
+See [Delegation profiles](delegation.md) for stable work roles routed to
+templates by an active profile.
+
 ## `defaults`
 
 Settings inherited by all tasks and templates unless overridden.

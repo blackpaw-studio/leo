@@ -198,7 +198,7 @@ func TestInteractiveClaudeDispatchLaunchProfile(t *testing.T) {
 	if err := os.WriteFile(registry, []byte(`{"plugins":{"b@market":{},"a@local":{}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{
+	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}, Delegation: &config.DelegationConfig{ActiveProfile: "p", Profiles: map[string]config.Profile{"p": {Roles: map[string]config.RoleTarget{"implement": {Template: "claude"}}}}}, Templates: map[string]config.TemplateConfig{
 		"claude": {Harness: "claude", Model: "sonnet", Env: map[string]string{"HOME": home}},
 	}}
 	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
@@ -213,10 +213,16 @@ func TestInteractiveClaudeDispatchLaunchProfile(t *testing.T) {
 		}
 		return exec.Command("true")
 	}
-	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-profile", Template: "claude", Cwd: t.TempDir(), Dispatched: true}); err != nil {
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-profile", Template: "claude", Cwd: t.TempDir(), Effort: "high", Dispatched: true}); err != nil {
 		t.Fatal(err)
 	}
 	command := launch[len(launch)-1]
+	if strings.Contains(command, "--append-system-prompt") {
+		t.Fatalf("interactive dispatch leaked system context into %q", command)
+	}
+	if !containsAll(command, "--effort", "high") {
+		t.Fatalf("interactive dispatch dropped effort from %q", command)
+	}
 	if !containsAll(command, "--strict-mcp-config", "--mcp-config", `{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}`) {
 		t.Fatalf("profile flags missing from %q", command)
 	}

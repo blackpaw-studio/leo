@@ -25,7 +25,7 @@ const (
 // LaunchRequest contains the already validated dispatch details needed by an
 // interactive runtime. Step 5 supplies the tmux implementation.
 type LaunchRequest struct {
-	ID, Harness, Model, Cwd, Name                 string
+	ID, Harness, Model, Effort, Cwd, Name         string
 	Template, Caller                              string
 	Prompt                                        string
 	Timeout                                       time.Duration
@@ -176,7 +176,7 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	d.persistLocked(s, "")
 	placementRecord = cloneRecord(s.record)
 	d.mu.Unlock()
-	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: req.Prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement})
+	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: req.Prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement})
 	if err != nil {
 		d.placement.Cancel(placementRecord.ID)
 		d.mu.Lock()

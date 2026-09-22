@@ -92,7 +92,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if claudeOpts, ok := opts.(claudeharness.Options); ok && req.Dispatched {
 		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env)
 	}
-	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
+	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
 	args, err := h.Args(spec)
 	if err != nil {
 		return "", "", err

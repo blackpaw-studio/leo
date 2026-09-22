@@ -88,6 +88,9 @@ func collectValidateFindings(ctx context.Context) ([]Finding, *config.Config) {
 		return sortFindings(findings), nil
 	}
 	add(SeverityInfo, "config", "valid")
+	for _, message := range cfg.DelegationWarnings() {
+		add(SeverityWarn, "delegation", message)
+	}
 
 	// 2. Check prerequisites — one line per harness referenced by the config.
 	for _, name := range referencedHarnesses(cfg) {

@@ -46,6 +46,7 @@ type LaunchSpec struct {
 	Kind        Kind
 	Name        string // process/agent name; empty for tasks
 	Model       string // fully resolved
+	Effort      string // optional harness-specific reasoning effort
 	MaxTurns    int    // 0 = omit the flag (harness default)
 	Workspace   string
 	AddDirs     []string
@@ -140,6 +141,13 @@ type Harness interface {
 	// talks to it. Nil while the harness supports no interactive kinds
 	// (SupportsKind gates every call site).
 	Driver() SessionDriver
+}
+
+// EffortValidator is optionally implemented by harnesses that accept an
+// effort setting. Keeping it separate preserves compatibility for harnesses
+// that do not expose an effort control.
+type EffortValidator interface {
+	ValidateEffort(effort string) error
 }
 
 // TurnHooker is an optional adapter capability for interactive dispatch. It

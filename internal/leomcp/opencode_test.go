@@ -159,3 +159,28 @@ func TestEnsureOpenCodeContextSkipsWhenNudgeEmpty(t *testing.T) {
 		t.Errorf("expected no file to be created, stat err = %v", err)
 	}
 }
+
+func TestEnsureOpenCodeContextReplacesDelegationBlockInPlace(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	path := agentsPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	existing := "# user content\n" + openCodeManagedBeginMarker + "\nstale\n" + openCodeManagedEndMarker + "\n# retained trailer\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true}, Delegation: &config.DelegationConfig{Roles: map[string]config.RoleSpec{"implement": {UseFor: "write code"}}, ActiveProfile: "p", Profiles: map[string]config.Profile{"p": {Roles: map[string]config.RoleTarget{"implement": {Template: "hidden"}}}}}}
+	if err := EnsureOpenCodeContext(cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "# user content") || !strings.Contains(content, "# retained trailer") || strings.Contains(content, "stale") || !strings.Contains(content, "implement") {
+		t.Fatalf("content=%q", content)
+	}
+}

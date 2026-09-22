@@ -50,6 +50,7 @@ var Names = []string{
 	"leo_send_message",
 	"leo_consult",
 	"leo_dispatch",
+	"leo_delegation",
 	"leo_dispatch_output",
 	"leo_send_dispatch",
 	"leo_wait",

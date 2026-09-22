@@ -23,7 +23,7 @@ func viewerHandlerServer(t *testing.T, reload error) *Server {
 	if err := os.WriteFile(path, []byte("tasks: {}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return &Server{configPath: path, apiToken: "operator", agentToken: "agent", reloader: viewerTestReloader{reload}, consults: consult.NewDispatcher(nil)}
+	return &Server{configWriter: config.NewWriter(), configPath: path, apiToken: "operator", agentToken: "agent", reloader: viewerTestReloader{reload}, consults: consult.NewDispatcher(nil)}
 }
 func viewerRequest(path, body, token string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))

@@ -1,0 +1,167 @@
+{{define "page_config_delegation"}}
+<h1 class="page-title">Delegation</h1>
+<div id="delegation-content">{{template "delegation_content" .}}</div>
+<script>
+(function () {
+  // Guard: boosted navigation can re-run this script.
+  if (window.leoDelegationUI) return;
+  window.leoDelegationUI = true;
+
+  // Open the switch-preview dialog as a modal once htmx swaps it in; closing
+  // it (cancel, Esc) restores the empty slot so the next preview can load.
+  document.body.addEventListener('htmx:afterSwap', function () {
+    var d = document.getElementById('delegation-preview');
+    if (!d || d.tagName !== 'DIALOG' || d.open) return;
+    d.addEventListener('close', function () {
+      var slot = document.createElement('div');
+      slot.id = 'delegation-preview';
+      d.replaceWith(slot);
+    }, { once: true });
+    d.showModal();
+  });
+
+  // Keep the model placeholder showing what the chosen template inherits.
+  document.addEventListener('change', function (e) {
+    var sel = e.target;
+    if (!sel.matches || !sel.matches('select.deleg-template')) return;
+    var model = sel.form && sel.form.querySelector('input.deleg-model');
+    var opt = sel.selectedOptions[0];
+    if (model) model.placeholder = (opt && opt.dataset.model) || 'model';
+    sel.form.classList.toggle('is-unmapped', !sel.value);
+  });
+
+  // ⋯ menus: one open at a time; close on outside click and on Escape.
+  function openMenus() { return document.querySelectorAll('details.menu[open]'); }
+  document.addEventListener('toggle', function (e) {
+    var m = e.target;
+    if (!m.matches || !m.matches('details.menu') || !m.open) return;
+    openMenus().forEach(function (o) { if (o !== m) o.open = false; });
+  }, true);
+  document.addEventListener('click', function (e) {
+    openMenus().forEach(function (o) { if (!o.contains(e.target)) o.open = false; });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    openMenus().forEach(function (o) {
+      o.open = false;
+      var summary = o.querySelector('summary');
+      if (summary && o.contains(document.activeElement)) summary.focus();
+    });
+  });
+})();
+</script>
+{{end}}
+
+{{define "delegation_content"}}
+{{if not .Data.Config}}
+<div class="card empty-state">Delegation is not configured.</div>
+{{else}}
+<section class="card deleg-switch{{if not .Data.Enabled}} is-off{{end}}">
+  <div class="deleg-switch-text">
+    <b>Delegation {{if .Data.Enabled}}on{{else}}off{{end}}</b>
+    <span class="dim">{{if .Data.Enabled}}Role dispatches route through the active profile, and managed agents get the roles block.{{else}}Role dispatches fail and no roles block is injected. Template dispatches still work.{{end}}</span>
+  </div>
+  <form hx-post="/web/delegation/enabled" hx-target="#flash-container">
+    <input type="hidden" name="enabled" value="{{if .Data.Enabled}}false{{else}}true{{end}}">
+    <button class="switch" role="switch" aria-checked="{{.Data.Enabled}}" aria-label="Delegation {{if .Data.Enabled}}on — turn off{{else}}off — turn on{{end}}"><span class="switch-track"><span class="switch-thumb"></span></span><span class="switch-label">{{if .Data.Enabled}}on{{else}}off{{end}}</span></button>
+  </form>
+</section>
+{{if not .Data.Enabled}}<div class="flash flash-warning deleg-off-banner"><strong>Delegation is off.</strong> Profiles and roles below are kept and still editable. Running agents keep their current prompt until they restart.</div>{{end}}
+
+<div class="deleg-editor{{if not .Data.Enabled}} is-disabled{{end}}">
+{{range .Data.Warnings}}<div class="flash flash-warning">{{.}}</div>{{end}}
+
+<section class="card">
+  <div class="card-head"><b>Profiles</b><span class="dim">the active profile routes every role dispatch</span></div>
+  <table class="deleg-profiles">
+    <thead><tr><th>profile</th><th>description</th><th>roles</th><th></th></tr></thead>
+    <tbody>{{range .Data.Profiles}}
+      <tr{{if .Active}} class="is-active"{{end}}>
+        <td><code>{{.Name}}</code>{{if .Active}} <span class="pill ok">active</span>{{end}}</td>
+        <td class="dim">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
+        <td class="dim">{{.RoleCount}}</td>
+        <td><div class="row-actions">
+          {{if not .Active}}<button type="button" class="btn btn-sm hot" hx-get="/web/delegation/preview?profile={{.Name}}" hx-target="#delegation-preview" hx-swap="outerHTML">make active</button>{{end}}
+          <details class="menu">
+            <summary class="btn btn-sm" aria-label="Actions for profile {{.Name}}">⋯</summary>
+            <div class="menu-panel">
+              <form hx-post="/web/delegation/profile/rename" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <label class="menu-label">rename</label>
+                <div class="menu-row"><input name="new_name" placeholder="new-name" required aria-label="New name for {{.Name}}"><button class="btn btn-sm">rename</button></div>
+              </form>
+              <form hx-post="/web/delegation/profile/duplicate" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <label class="menu-label">duplicate as</label>
+                <div class="menu-row"><input name="new_name" placeholder="copy-name" required aria-label="Duplicate {{.Name}} as"><button class="btn btn-sm">duplicate</button></div>
+              </form>
+              {{if not .Active}}<form hx-post="/web/delegation/profile/delete" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <button class="btn btn-sm danger menu-wide">remove profile</button>
+              </form>{{else}}<p class="menu-note">The active profile cannot be removed.</p>{{end}}
+            </div>
+          </details>
+        </div></td>
+      </tr>{{end}}
+    </tbody>
+  </table>
+  <form class="frow-inline deleg-add" hx-post="/web/delegation/profile/add" hx-target="#flash-container">
+    <input name="name" placeholder="new-profile" required aria-label="New profile name">
+    <button class="btn">add profile</button>
+  </form>
+</section>
+<div id="delegation-preview"></div>
+
+<section class="card">
+  <div class="card-head"><b>Role routing</b><span class="dim">changes save automatically · empty model inherits the template's</span></div>
+  <div class="table-wrap"><table class="deleg-grid">
+    <thead><tr><th>role</th>{{range .Data.Profiles}}<th>{{.Name}}{{if .Active}} <span class="pill ok">active</span>{{end}}</th>{{end}}</tr></thead>
+    <tbody>{{range .Data.Rows}}
+      <tr>
+        <td class="deleg-role">
+          <div class="deleg-role-head">
+            <strong>{{.Role.Name}}</strong>{{if not .Role.Declared}} <span class="pill warn">undeclared</span>{{end}}
+          </div>
+          {{if .Role.Declared}}<form class="deleg-usefor" hx-post="/web/delegation/use-for" hx-trigger="change" hx-target="find .cell-status" hx-swap="outerHTML">
+            <input type="hidden" name="role" value="{{.Role.Name}}">
+            <textarea name="use_for" rows="2" placeholder="use for…" aria-label="Use {{.Role.Name}} for">{{.Role.UseFor}}</textarea>
+            <span class="cell-status" role="status"></span>
+            <div id="{{.Role.StatusID}}-msg" class="cell-msg"></div>
+          </form>{{end}}
+          <details class="menu">
+            <summary class="btn btn-sm" aria-label="Actions for role {{.Role.Name}}">⋯</summary>
+            <div class="menu-panel">
+              <form hx-post="/web/delegation/role/rename" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Role.Name}}">
+                <label class="menu-label">rename</label>
+                <div class="menu-row"><input name="new_name" placeholder="new-name" required aria-label="New name for {{.Role.Name}}"><button class="btn btn-sm">rename</button></div>
+              </form>
+              <form hx-post="/web/delegation/role/delete" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Role.Name}}">
+                <button class="btn btn-sm danger menu-wide">remove role</button>
+              </form>
+            </div>
+          </details>
+        </td>
+        {{range .Cells}}<td class="deleg-cell-td">{{template "delegation_cell" .}}</td>{{end}}
+      </tr>{{else}}
+      <tr><td colspan="99" class="empty-state">No roles yet</td></tr>{{end}}
+    </tbody>
+  </table></div>
+  <form class="frow-inline deleg-add" hx-post="/web/delegation/role/add" hx-target="#flash-container">
+    <input name="name" placeholder="new-role" required aria-label="New role name">
+    <select name="template" class="form-input" aria-label="Template for the new role">{{range .Data.Templates}}<option value="{{.Name}}">{{.Name}}</option>{{end}}</select>
+    <button class="btn">add role</button>
+  </form>
+</section>
+
+<section class="card">
+  <div class="card-head"><b>Recent role dispatches</b></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>role</th><th>profile</th><th>template</th><th>model</th><th>effort</th><th>status</th></tr></thead>
+    <tbody>{{range .Data.Records}}<tr><td>{{.Role}}</td><td>{{.Profile}}</td><td>{{.Template}}</td><td>{{if .Model}}{{.Model}}{{else}}<span class="dim">inherit</span>{{end}}</td><td>{{.Effort}}</td><td>{{.Status}}</td></tr>{{else}}<tr><td colspan="6" class="empty-state">No role dispatches yet</td></tr>{{end}}</tbody>
+  </table></div>
+</section>
+</div>
+{{end}}
+{{end}}

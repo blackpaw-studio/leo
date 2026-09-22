@@ -63,6 +63,20 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Delegation profiles.** Configure stable work roles with `use_for` guidance
+  and route them through an active profile to templates, models, and
+  harness-specific effort. `leo_dispatch`, `/api/dispatch`, and `leo dispatch
+  run` can resolve a role; the CLI, MCP `leo_delegation` tool, and web UI can
+  inspect and manage the active policy.
+
+- **Delegation on/off switch.** `delegation.enabled` (default on when omitted)
+  turns delegation off without losing profiles or roles. Toggle it with
+  `leo delegation enable|disable` or the switch on the web Delegation page.
+  While it is off, role dispatches fail with a clear error, template
+  dispatches still work, and managed agents get no roles block. The OpenCode
+  `AGENTS.md` block refreshes on reload; running Claude and Codex agents keep
+  their current prompt until they restart.
+
 - **`permission_mode: approve-for-me` for the codex harness.** Codex's
   `--approve-for-me` preset: it implies the `workspace-write` sandbox, sets
   approval policy `on-request`, and routes each escalation to codex's

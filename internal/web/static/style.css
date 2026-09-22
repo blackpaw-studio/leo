@@ -85,6 +85,7 @@ tbody tr:hover td { background: var(--panel-2); }
 .pill { display: inline-block; padding: 1px var(--sp-2); border-radius: 3px; font-size: var(--fs-sm); }
 .pill.ok { color: var(--good); background: var(--good-bg); }
 .pill.err { color: var(--bad); background: var(--bad-bg); }
+.pill.warn { color: var(--accent); background: var(--accent-bg); }
 .pill.off { color: var(--dim); background: var(--dim-bg); }
 .btn {
   display: inline-block; padding: 3px var(--sp-3); border: 1px solid var(--line);
@@ -268,6 +269,115 @@ textarea.prompt-editor-textarea { min-height: 200px; width: 100%; font-family: v
 .advanced-details[open] > .advanced-summary::before { transform: rotate(90deg); }
 .advanced-summary:hover { color: var(--text); }
 .advanced-content { padding-top: var(--sp-2); }
+
+/* delegation page (pages/config_delegation.html, components/delegation_*.html) */
+.card-head .dim { font-size: var(--fs-xs); }
+.deleg-profiles td { vertical-align: middle; }
+.deleg-profiles td:first-child, .deleg-grid th { white-space: nowrap; }
+th .pill { font-size: var(--fs-xs); letter-spacing: 0.04em; padding: 0 var(--sp-1); margin-left: var(--sp-1); }
+.deleg-profiles tr.is-active td:first-child { box-shadow: inset 2px 0 0 var(--good); }
+.deleg-add { border-top: 1px solid var(--line); padding: var(--sp-2) var(--sp-3); }
+.deleg-add input { max-width: 240px; }
+.deleg-add select { width: auto; min-width: 160px; }
+.deleg-grid td { vertical-align: top; }
+.deleg-grid tbody tr:hover td { background: transparent; }
+.deleg-role { min-width: 220px; max-width: 320px; }
+.deleg-role-head { display: flex; align-items: center; gap: var(--sp-2); }
+.deleg-role { position: relative; padding-right: 44px; }
+.deleg-role > .menu { display: block; position: static; }
+.deleg-role > .menu > summary { position: absolute; top: var(--sp-2); right: var(--sp-3); }
+/* In-flow inside the scrollable grid so the panel is never clipped. */
+.deleg-role > .menu > .menu-panel { position: static; width: auto; margin-top: var(--sp-2); box-shadow: none; background: var(--bg); }
+.deleg-usefor { position: relative; margin-top: var(--sp-1); }
+.deleg-usefor textarea {
+  resize: none; field-sizing: content; min-height: 2.4em; max-height: 9em; font-size: var(--fs-xs); line-height: 1.4;
+  color: var(--dim); background: transparent; border-color: transparent; padding: 2px var(--sp-1);
+}
+.deleg-usefor textarea:hover { border-color: var(--line); }
+.deleg-usefor textarea:focus { color: var(--text); background: var(--bg); border-color: var(--line); }
+.deleg-usefor .cell-status { position: absolute; right: var(--sp-1); bottom: -14px; }
+.deleg-cell-row { display: flex; align-items: center; gap: var(--sp-1); }
+.deleg-cell select.deleg-template { width: auto; min-width: 150px; flex: 1 1 150px; }
+.deleg-cell input.deleg-model { width: 14ch; flex: 0 0 14ch; }
+.deleg-cell input.deleg-effort { width: 10ch; flex: 0 0 10ch; }
+.deleg-cell.is-unmapped select { color: var(--dim); }
+.deleg-cell.htmx-request { opacity: 0.6; }
+.cell-status { min-width: 1ch; font-size: var(--fs-xs); white-space: nowrap; color: var(--dim); }
+.cell-status.ok { color: var(--good); animation: cell-status-fade 2.4s ease forwards; }
+.cell-status.warn { color: var(--accent); }
+.cell-status.err { color: var(--bad); }
+@media (max-width: 1100px) {
+  .deleg-cell-row { flex-wrap: wrap; }
+  .deleg-cell select.deleg-template { flex-basis: 100%; }
+  .deleg-cell input.deleg-model { flex: 1 1 10ch; }
+  .deleg-role { min-width: 170px; }
+  .deleg-cell select.deleg-template { min-width: 120px; }
+}
+@keyframes cell-status-fade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+.cell-msg:empty { display: none; }
+.cell-msg { color: var(--bad); font-size: var(--fs-xs); margin-top: 2px; max-width: 360px; line-height: 1.4; }
+
+/* global delegation switch */
+.deleg-switch {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4); border-left: 3px solid var(--good);
+}
+.deleg-switch.is-off { border-left-color: var(--dim); }
+.deleg-switch-text { display: grid; gap: 2px; }
+.deleg-switch-text b { font-size: var(--fs-lg); }
+.deleg-switch form { margin: 0; flex-shrink: 0; }
+.switch {
+  display: inline-flex; align-items: center; gap: var(--sp-2); padding: 0;
+  background: none; border: 0; color: var(--dim); font: inherit; font-size: var(--fs-sm); cursor: pointer;
+}
+.switch-track {
+  position: relative; width: 40px; height: 22px; border-radius: 12px;
+  background: var(--dim-bg); border: 1px solid var(--line); transition: background 0.15s, border-color 0.15s;
+}
+.switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--dim); transition: transform 0.15s, background 0.15s;
+}
+.switch[aria-checked="true"] { color: var(--good); }
+.switch[aria-checked="true"] .switch-track { background: var(--good-bg); border-color: var(--good); }
+.switch[aria-checked="true"] .switch-thumb { transform: translateX(18px); background: var(--good); }
+.switch:hover .switch-track { border-color: var(--dim); }
+.switch-label { min-width: 3ch; text-transform: uppercase; letter-spacing: 0.12em; font-size: var(--fs-xs); }
+.deleg-off-banner strong { font-weight: 700; }
+.deleg-editor.is-disabled > .card { opacity: 0.55; transition: opacity 0.15s; }
+.deleg-editor.is-disabled > .card:hover, .deleg-editor.is-disabled > .card:focus-within { opacity: 1; }
+
+/* ⋯ menus (<details class="menu">) */
+.menu { position: relative; display: inline-block; }
+.menu > summary { list-style: none; line-height: 1.2; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu[open] > summary { color: var(--text); border-color: var(--dim); }
+.menu-panel {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; width: 260px;
+  display: grid; gap: var(--sp-3); padding: var(--sp-3);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45); white-space: normal; text-align: left;
+}
+.menu-label { display: block; font-size: var(--fs-xs); letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin-bottom: var(--sp-1); }
+.menu-row { display: flex; gap: var(--sp-1); }
+.menu-row input { flex: 1; min-width: 0; }
+.menu-wide { width: 100%; }
+.menu-note { margin: 0; font-size: var(--fs-xs); color: var(--dim); }
+
+/* modal dialog (components/delegation_preview.html) */
+dialog.modal {
+  padding: 0; width: min(640px, calc(100vw - 32px)); color: var(--text);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+dialog.modal::backdrop { background: rgb(5 7 11 / 0.7); }
+.modal-body { padding: var(--sp-3); max-height: 60vh; overflow: auto; }
+.modal-body .flash { margin: var(--sp-3) 0 0; }
+#delegation-preview-error:empty { display: none; }
+.modal-actions {
+  display: flex; justify-content: flex-end; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line);
+}
+.modal-actions form { margin: 0; }
 
 /* login page */
 body.login { display: flex; align-items: center; justify-content: center; min-height: 100vh; }

@@ -509,6 +509,7 @@ func (s *Server) handleAPITaskRun(w http.ResponseWriter, r *http.Request) {
 // handleAPITaskToggle toggles a task's enabled state via the API.
 // POST /api/task/{name}/toggle
 func (s *Server) handleAPITaskToggle(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 
 	cfg, err := s.loadConfig()

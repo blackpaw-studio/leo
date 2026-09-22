@@ -1,0 +1,162 @@
+# Delegation profiles
+
+Delegation profiles give stable names to kinds of work while letting the
+operator switch the template, model, and reasoning effort used for that work.
+Dispatch a role, rather than selecting a template directly, when the routing
+policy belongs to the operator.
+
+```yaml
+delegation:
+  enabled: true      # optional; absent means on
+  roles:
+    implement:
+      use_for: Implementing and testing a bounded change
+    review.security:
+      use_for: Security-focused review
+  active_profile: fast
+  profiles:
+    fast:
+      description: Lower-cost routine work
+      roles:
+        implement: codex-worker          # string target
+        review.security:                 # object target
+          template: claude-reviewer
+          model: sonnet
+          effort: high
+    thorough:
+      roles:
+        implement:
+          template: claude-worker
+          model: opus
+          effort: max
+        review.security: claude-reviewer
+```
+
+`roles` declares the stable role names. `use_for` is optional operator-facing
+guidance injected into managed agents; it does not choose a template. A target
+can be a string (`template: <that string>`) or an object with `template` and
+optional `model` and `effort`. Object targets accept only those three keys.
+
+`active_profile` names the profile used by every role dispatch. Profiles may
+have different mappings. A declared role must be mapped in the active profile;
+it may be absent from an inactive profile while that profile is being edited.
+If `roles` is omitted, the active profile's roles are canonical instead.
+
+## Turning delegation off
+
+`enabled` is a global switch. It defaults to on when omitted, so existing
+configs keep delegating. Set it with `leo delegation disable` /
+`leo delegation enable` or the switch at the top of the web **Delegation**
+page. Both save `leo.yaml` and reload a running daemon.
+
+While delegation is off:
+
+- `roles`, `profiles`, and `active_profile` stay in `leo.yaml` unchanged and
+  are still validated, so turning delegation back on is always safe. The web
+  page stays editable.
+- Managed agents get no delegation roles block. Leo's usual guidance about
+  `leo_dispatch` and `leo_consult` is unchanged.
+- A role dispatch fails with `delegation is disabled (enable it with "leo
+  delegation enable" or the web Delegation page)`. Template dispatches are
+  unaffected.
+- `leo_delegation` reports that delegation is disabled, and
+  `leo delegation render` prints nothing and exits 0.
+
+The switch reaches agents the same way role guidance does (see below). A
+daemon reload rewrites the managed OpenCode `AGENTS.md` block. **Running
+Claude and Codex agents keep their current prompt until they restart.**
+
+## Resolution and overrides
+
+Role resolution is exact: `review.security` does **not** fall back to
+`review`. An unmapped role fails with:
+
+```text
+role "review.security" is not mapped in active delegation profile "fast" (mapped: implement)
+```
+
+The selected target supplies the template, model, and effort. Explicit
+dispatch `model` and `effort` values take precedence over the selected
+profile's values; an explicit template is mutually exclusive with `role`.
+
+## Validation and warnings
+
+`leo validate` checks that `active_profile` is present and exists, that there
+is at least one profile, and that role/profile names contain only letters,
+digits, dot, underscore, or dash. It also checks every mapped target has a
+template, that the template exists, and validates target models and effort
+against that template's resolved harness. With a declared `roles` map, every
+declared role must be mapped in the active profile.
+
+The validator reports `delegation.profiles.<profile>.roles.<role>.template is
+required` for an empty target and reports unknown role-target mapping keys at
+YAML load time. It warns (rather than fails) when a profile maps a role that
+is not declared in `delegation.roles`; no such warnings are emitted when the
+`roles` map is absent.
+
+Effort is harness-specific:
+
+| Harness | Allowed effort |
+| --- | --- |
+| Claude | `low`, `medium`, `high`, `xhigh`, `max` |
+| Codex | `minimal`, `low`, `medium`, `high`, `xhigh` |
+| OpenCode | Any non-empty value using letters, digits, `.`, `_`, or `-` |
+
+For a harness without effort support, a non-empty effort fails validation with
+`effort not supported by harness <name>`.
+
+## Agent guidance and reloads
+
+When `delegation` is configured and enabled, and `web.enabled: true` is set, Leo adds the
+declared roles and their `use_for` text to the built-in system guidance for
+managed agents and tasks. The block deliberately contains no profile routing,
+template, model, or effort values, so changing the active profile does not
+change the guidance. One-off dispatches and consults do **not** receive this
+block.
+
+Daemon config reload replaces an existing managed OpenCode agent's `AGENTS.md`
+block. Existing Claude and Codex agents need a restart to receive changed role
+guidance. `leo delegation use` reloads a running daemon after saving; if the
+daemon is not running, the new profile applies when it starts.
+
+## CLI, MCP, and web UI
+
+Use the local CLI to inspect and change policy:
+
+```console
+leo delegation list
+leo delegation show [profile]
+leo delegation render
+leo delegation resolve <role>
+leo delegation use <profile>
+leo delegation enable
+leo delegation disable
+leo dispatch run --role implement --effort high "Add parser tests"
+```
+
+The delegation commands are unavailable in remote-client mode. `render` prints
+the exact injected block. `show` and `resolve` print the effective model with
+its source: `profile` (the role's own override), `template` (the template's
+model), or `default` (inherited from `defaults.model`). Only a `profile`
+override is passed to the dispatch; otherwise the template chooses. `use` validates and saves the configuration, prints
+warnings, then reloads a running daemon.
+
+Edits made inside the daemon (web UI saves and daemon task commands) are
+serialized, so concurrent edits there never drop each other. `leo delegation
+use`, `enable`, and `disable` write `leo.yaml` from a separate CLI process, so
+they are last-writer-wins against a web edit saved at the same moment. Re-check
+the page after running them while someone else is editing.
+
+Managed agents also have the read-only `leo_delegation` MCP tool, which shows
+the active profile's routing, including each role's effective model and its
+source. `leo_dispatch` accepts exactly one of `template`
+or `role`, plus optional `model` and `effort`; see [Dispatches](dispatches.md).
+The web dashboard's **Delegation** page has the on/off switch, and edits roles, profiles, mappings, and
+the active profile, shows switch diffs, warnings, and recent role dispatches.
+
+## Permissions
+
+For a role dispatch, `permissions.can_consult` is checked against the
+**resolved template**, not the role name. Grant the template that the active
+profile routes to; switching profiles can therefore change whether a caller
+is permitted to dispatch that role.

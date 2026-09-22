@@ -37,6 +37,7 @@ type saveViewerDefaultsRequest struct {
 }
 
 func (s *Server) handleDispatchViewerSaveDefault(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	if !s.viewerOperatorOnly(r) {
 		writeJSON(w, http.StatusForbidden, apiResponse{Error: "operator token required"})
 		return

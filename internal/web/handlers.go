@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -301,6 +300,7 @@ func parseResultEvent(raw map[string]json.RawMessage) (logEvent, bool) {
 }
 
 func (s *Server) handleTaskToggle(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 
 	cfg, err := s.loadConfig()
@@ -432,6 +432,7 @@ func (s *Server) handleTaskPromptGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskPromptSave(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
@@ -595,24 +596,12 @@ func (s *Server) renderFlash(w http.ResponseWriter, typ, msg string) {
 	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: typ, Message: msg}) //nolint:errcheck
 }
 
-// entityNamePattern restricts config entity names (tasks, processes,
-// templates, providers, hosts, sessions) to a safe, URL- and filesystem-path
-// friendly character set. Without this, a name containing "/", "#", "?", or
-// similar creates entries no route can address (e.g. /web/task/{name}/delete
-// splits on an embedded "/") and, worse, task names flow straight into a
-// prompt file path (prompts/<name>.md in handleTaskAdd) where "../x" would
-// escape the workspace.
-var entityNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
 // validEntityName reports whether name is safe to use as a config map key
-// that also gets embedded in URLs and filesystem paths. It must be non-empty,
-// match entityNamePattern, and not be the literal "." or ".." (both match
-// the pattern above but are directory-traversal special cases).
+// that also gets embedded in URLs and filesystem paths. It delegates to
+// config.ValidName so web, CLI, and config validation share one rule
+// (non-empty, a URL- and path-safe charset, and never the traversal names "." / "..").
 func validEntityName(name string) bool {
-	if name == "" || name == "." || name == ".." {
-		return false
-	}
-	return entityNamePattern.MatchString(name)
+	return config.ValidName(name)
 }
 
 // entityNameError is the flash message shown when validEntityName rejects a
@@ -667,6 +656,7 @@ func (s *Server) handleCronPreview(w http.ResponseWriter, r *http.Request) {
 // The add form is a plain (non-htmx-boosted) POST, so a 303 here is a normal
 // browser redirect rather than an htmx swap.
 func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
 		return
@@ -716,6 +706,7 @@ func (s *Server) handleTaskAdd(w http.ResponseWriter, r *http.Request) {
 // task list — the edit page the delete button lives on no longer has
 // anything to show once the task is gone.
 func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 
 	cfg, err := s.loadConfig()
@@ -749,6 +740,7 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 // inherit the default workspace, matching the empty-means-inherit convention
 // used elsewhere in this file (e.g. handleHostAdd below).
 func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
 		return
@@ -789,6 +781,7 @@ func (s *Server) handleTemplateAdd(w http.ResponseWriter, r *http.Request) {
 // to the template list — the edit page the delete button lives on no longer
 // has anything to show once the template is gone.
 func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 
 	cfg, err := s.loadConfig()
@@ -824,6 +817,7 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 // rename form targets a non-#flash-container element, so failures are retargeted
 // to the shared flash container via renderFlashToContainer.
 func (s *Server) handleTemplateRename(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 
 	newName := r.FormValue("new_name")
@@ -902,6 +896,7 @@ func (s *Server) handleTemplateRename(w http.ResponseWriter, r *http.Request) {
 // The flash message still tells the operator to fill in ssh via the card's
 // inline form before the host is usable.
 func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", fmt.Sprintf("Invalid form: %v", err))
 		return
@@ -946,6 +941,7 @@ func (s *Server) handleHostAdd(w http.ResponseWriter, r *http.Request) {
 // CLI dispatch, not a validated foreign key — so an optimistic delete is
 // safe.
 func (s *Server) handleHostDelete(w http.ResponseWriter, r *http.Request) {
+	defer s.lockConfigWrite()()
 	name := r.PathValue("name")
 
 	cfg, err := s.loadConfig()

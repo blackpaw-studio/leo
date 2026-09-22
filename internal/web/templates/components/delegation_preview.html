@@ -1,0 +1,24 @@
+{{define "delegation_preview"}}
+<dialog id="delegation-preview" class="modal" aria-labelledby="delegation-preview-title">
+  <div class="card-head"><b id="delegation-preview-title">Switch to {{.Profile}}?</b></div>
+  <div class="modal-body">
+    {{if .Changes}}<table>
+      <thead><tr><th>role</th><th>change</th><th>before</th><th>after</th></tr></thead>
+      <tbody>{{range .Changes}}<tr>
+        <td><code>{{.Role}}</code></td>
+        <td><span class="pill {{if eq .Kind "removed"}}err{{else if eq .Kind "added"}}ok{{else}}warn{{end}}">{{.Kind}}</span></td>
+        <td class="dim">{{if ne .Kind "added"}}{{template "delegation_target" .Before}}{{else}}—{{end}}</td>
+        <td>{{if ne .Kind "removed"}}{{template "delegation_target" .After}}{{else}}—{{end}}</td>
+      </tr>{{end}}</tbody>
+    </table>{{else}}<p class="dim">No role-routing changes.</p>{{end}}
+    <div id="delegation-preview-error" role="alert"></div>
+    {{if .Missing}}<p class="flash flash-warning">Blocked: unmapped declared roles: {{range .Missing}}<code>{{.}}</code> {{end}}</p>{{end}}
+  </div>
+  <div class="modal-actions">
+    <form method="dialog"><button class="btn">cancel</button></form>
+    {{if not .Missing}}<form hx-post="/web/delegation/active" hx-target="#delegation-preview-error"><input type="hidden" name="profile" value="{{.Profile}}"><button class="btn hot">confirm make active</button></form>{{end}}
+  </div>
+</dialog>
+{{end}}
+
+{{define "delegation_target"}}{{.Template}}{{if .Model}} · {{.Model}}{{end}}{{if .Effort}} · {{.Effort}}{{end}}{{end}}

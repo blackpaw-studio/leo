@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/config"
 )
 
 func TestHeadlessContinuationAppendsTurnResumesAndAccumulatesUsage(t *testing.T) {
@@ -27,8 +29,10 @@ func TestHeadlessContinuationAppendsTurnResumesAndAccumulatesUsage(t *testing.T)
 		return exec.CommandContext(ctx, "printf", "%s", output)
 	}
 	cfg := testConfig()
+	cfg.Web.Enabled = true
+	cfg.Delegation = &config.DelegationConfig{ActiveProfile: "p", Profiles: map[string]config.Profile{"p": {Roles: map[string]config.RoleTarget{"implement": {Template: "claude"}}}}}
 	cwd := t.TempDir()
-	started, err := d.Start(context.Background(), cfg, Request{Template: "claude", Prompt: "first", Cwd: cwd, Kind: "dispatch"})
+	started, err := d.Start(context.Background(), cfg, Request{Template: "claude", Prompt: "first", Cwd: cwd, Kind: "dispatch", Effort: "high"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,9 +67,14 @@ func TestHeadlessContinuationAppendsTurnResumesAndAccumulatesUsage(t *testing.T)
 	if !strings.Contains(argv, "--resume sid-1") || !strings.Contains(argv, "follow up") {
 		t.Fatalf("resume argv = %q", argv)
 	}
-	want := []string{"-p", "follow up", "--model", "opus", "--max-turns", "15", "--output-format", "stream-json", "--verbose", "--resume", "sid-1", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--add-dir", cwd, "--disallowed-tools", "Agent", "--settings", `{"enabledPlugins":{}}`}
+	want := []string{"-p", "follow up", "--model", "opus", "--max-turns", "15", "--output-format", "stream-json", "--verbose", "--effort", "high", "--resume", "sid-1", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--add-dir", cwd, "--disallowed-tools", "Agent", "--settings", `{"enabledPlugins":{}}`}
 	if !reflect.DeepEqual(calls[1], want) {
 		t.Fatalf("resume argv = %#v, want %#v", calls[1], want)
+	}
+	for _, args := range calls {
+		if strings.Contains(strings.Join(args, " "), "--append-system-prompt") {
+			t.Fatalf("dispatch leaked system context into argv: %q", args)
+		}
 	}
 }
 

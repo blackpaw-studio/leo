@@ -126,6 +126,10 @@ type Server struct {
 	// a "not configured" message instead of guessing a path.
 	serviceLogPath string
 
+	// configWriter serializes leo.yaml mutations with every other in-process
+	// writer (the daemon's IPC handlers share it); see config.Writer.
+	configWriter *config.Writer
+
 	// agentMu guards the on-demand, 60s-TTL cache of claude sub-agent names
 	// used to populate dropdowns without shelling out on every render.
 	agentMu       sync.Mutex
@@ -294,14 +298,21 @@ func WithVersion(v string) Option {
 	return func(s *Server) { s.version = v }
 }
 
+// Handler returns the server's fully wrapped HTTP handler (auth and
+// middleware included), for callers that serve or test it in-process.
+func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
+
 // Options bundles the knobs the web server needs that aren't part of the
 // provider interfaces. Zero values disable the corresponding surface:
 //   - Port must match the listener port so Host/Origin checks pass.
 //   - APIToken must be non-empty for /api/* routes to work. If empty, /api/*
 //     responds 500 to avoid accidentally serving the API unauthenticated.
 type Options struct {
-	Port     int
-	APIToken string
+	// ConfigWriter is the process-wide leo.yaml write lock, shared with the
+	// daemon's IPC handlers. Optional; nil gets a private one (tests).
+	ConfigWriter *config.Writer
+	Port         int
+	APIToken     string
 	// AgentToken is the less-privileged token handed to spawned agents as
 	// LEO_API_TOKEN. Accepted on /api/* and the agent-messaging routes, and
 	// rejected at /login and on the rest of the browser UI. Empty means only
@@ -350,7 +361,12 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		log.Printf("web: ignoring web.trusted_proxies: %v", err)
 		trustedProxies = nil
 	}
+	configWriter := opts.ConfigWriter
+	if configWriter == nil {
+		configWriter = config.NewWriter()
+	}
 	s := &Server{
+		configWriter:       configWriter,
 		configPath:         configPath,
 		processes:          processes,
 		scheduler:          scheduler,
@@ -423,6 +439,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /config/defaults", s.handlePage("config_defaults", "Defaults", s.buildDefaultsData))
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
 	mux.HandleFunc("GET /config/templates/{name}", s.handleTemplateEditPage)
+	mux.HandleFunc("GET /config/delegation", s.handlePage("config_delegation", "Delegation", s.buildDelegationData))
 	mux.HandleFunc("GET /config/settings", s.handlePage("config_settings", "Settings", s.buildSettingsData))
 	mux.HandleFunc("GET /service", s.handlePage("service", "Service", s.buildServiceData))
 
@@ -457,6 +474,18 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
 	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
 	mux.HandleFunc("POST /web/template/{name}/rename", s.handleTemplateRename)
+	mux.HandleFunc("POST /web/delegation/cell", s.handleDelegationCell)
+	mux.HandleFunc("POST /web/delegation/use-for", s.handleDelegationUseFor)
+	mux.HandleFunc("POST /web/delegation/active", s.handleDelegationActive)
+	mux.HandleFunc("POST /web/delegation/enabled", s.handleDelegationEnabled)
+	mux.HandleFunc("GET /web/delegation/preview", s.handleDelegationPreview)
+	mux.HandleFunc("POST /web/delegation/role/add", s.handleDelegationRoleAdd)
+	mux.HandleFunc("POST /web/delegation/role/rename", s.handleDelegationRoleRename)
+	mux.HandleFunc("POST /web/delegation/role/delete", s.handleDelegationRoleDelete)
+	mux.HandleFunc("POST /web/delegation/profile/add", s.handleDelegationProfileAdd)
+	mux.HandleFunc("POST /web/delegation/profile/rename", s.handleDelegationProfileRename)
+	mux.HandleFunc("POST /web/delegation/profile/delete", s.handleDelegationProfileDelete)
+	mux.HandleFunc("POST /web/delegation/profile/duplicate", s.handleDelegationProfileDuplicate)
 
 	// Settings page: Web UI + Remote client config, and remote-host CRUD —
 	// full CRUD lives on one page (no separate edit page).
@@ -495,6 +524,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
+	apiMux.HandleFunc("GET /api/delegation", s.handleAPIDelegation)
+	apiMux.HandleFunc("GET /api/delegation/resolve", s.handleAPIDelegationResolve)
 	apiMux.HandleFunc("GET /api/dispatch/wait", s.handleAPIDispatchWait)
 	apiMux.HandleFunc("GET /api/dispatch/{id}/output", s.handleAPIDispatchOutput)
 	apiMux.HandleFunc("POST /api/dispatch", s.handleAPIDispatch)

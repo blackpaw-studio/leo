@@ -166,6 +166,7 @@ func (s *Server) applySection(w http.ResponseWriter, r *http.Request,
 	applyOptions func(cfg *config.Config, target any, form url.Values) error,
 	okMsg string, restartFlag *atomic.Bool,
 ) {
+	defer s.lockConfigWrite()()
 	if err := r.ParseForm(); err != nil {
 		s.renderFlash(w, "error", "Invalid form: "+err.Error())
 		return
