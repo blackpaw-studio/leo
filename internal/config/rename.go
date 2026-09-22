@@ -54,6 +54,56 @@ func RenameTemplate(cfg *Config, oldName, newName string) error {
 		}
 		cfg.Templates[name] = tmpl
 	}
+	if cfg.Delegation != nil {
+		for profileName, profile := range cfg.Delegation.Profiles {
+			for role, target := range profile.Roles {
+				if target.Template == oldName {
+					target.Template = newName
+					profile.Roles[role] = target
+				}
+			}
+			cfg.Delegation.Profiles[profileName] = profile
+		}
+	}
+	return nil
+}
+
+// RenameRole re-keys a declared delegation role and every profile mapping.
+func RenameRole(cfg *Config, oldName, newName string) error {
+	if cfg.Delegation == nil {
+		return fmt.Errorf("delegation is not configured")
+	}
+	if newName == "" {
+		return fmt.Errorf("new role name must not be empty")
+	}
+	if _, exists := cfg.Delegation.Roles[newName]; exists {
+		return fmt.Errorf("role %q already exists", newName)
+	}
+	for profileName, profile := range cfg.Delegation.Profiles {
+		if _, exists := profile.Roles[oldName]; !exists {
+			continue
+		}
+		if _, exists := profile.Roles[newName]; exists {
+			return fmt.Errorf("role %q already exists in profile %q", newName, profileName)
+		}
+	}
+	found := false
+	if role, ok := cfg.Delegation.Roles[oldName]; ok {
+		cfg.Delegation.Roles[newName] = role
+		delete(cfg.Delegation.Roles, oldName)
+		found = true
+	}
+	for profileName, profile := range cfg.Delegation.Profiles {
+		if target, ok := profile.Roles[oldName]; ok {
+			profile.Roles[newName] = target
+			delete(profile.Roles, oldName)
+			cfg.Delegation.Profiles[profileName] = profile
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("role %q not found", oldName)
+	}
 	return nil
 }
 

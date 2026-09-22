@@ -142,6 +142,13 @@ type Harness interface {
 	Driver() SessionDriver
 }
 
+// EffortValidator is optionally implemented by harnesses that accept an
+// effort setting. Keeping it separate preserves compatibility for harnesses
+// that do not expose an effort control.
+type EffortValidator interface {
+	ValidateEffort(effort string) error
+}
+
 // TurnHooker is an optional adapter capability for interactive dispatch. It
 // returns launch arguments that arrange for reportCmd to run at each native
 // turn boundary; callers must type-assert because not every harness supports

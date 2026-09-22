@@ -96,6 +96,7 @@ type Config struct {
 	APIClients map[string]APIClientConfig `yaml:"api_clients,omitempty"`
 	Tasks      map[string]TaskConfig      `yaml:"tasks"`
 	Templates  map[string]TemplateConfig  `yaml:"templates,omitempty"`
+	Delegation *DelegationConfig          `yaml:"delegation,omitempty"`
 	// Providers was removed with the harness abstraction. The field survives
 	// only so Validate() can emit a precise removal error (yaml.v3 silently
 	// ignores unknown keys).
@@ -630,6 +631,8 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+
+	errs = append(errs, c.validateDelegation()...)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
