@@ -46,6 +46,11 @@ func TestClaudeDispatchProfile(t *testing.T) {
 	t.Setenv("PATH", filepath.Dir(fakeclaude)+":"+os.Getenv("PATH"))
 
 	srv := startDaemon(t, ws, cfgPath)
+	// Registered after startDaemon, so it runs before Shutdown: nothing this
+	// daemon starts may outlive the test and touch later tests' tmux sockets.
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	t.Cleanup(cancelDaemon)
+	srv.SetParentContext(daemonCtx)
 	sup := &profileCaptureSupervisor{}
 	mgr := agent.New(func() (*config.Config, error) { return config.Load(cfgPath) }, sup, "tmux-unused", "")
 	srv.SetAgentManager(mgr)

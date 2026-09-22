@@ -175,6 +175,14 @@ type Server struct {
 
 	// consults runs synchronous one-off consultant subagents (leo_consult).
 	consults *consult.Dispatcher
+	// consultIntervals paces the consult runtime loop; zero fields take the
+	// production defaults. updateRoster replaces viewer.UpdateRoster when set.
+	// Both are test seams.
+	consultIntervals consultLoopIntervals
+	updateRoster     func([]consult.Record, time.Time)
+	// stopConsultLoop cancels the consult runtime loop and waits for it to
+	// exit. nil when no loop was started (no ParentContext).
+	stopConsultLoop func()
 
 	// activity is the read seam onto the activity tracker (internal/observe),
 	// wired via WithActivityProvider. nil is a supported default: every agent
@@ -619,8 +627,13 @@ func (s *Server) ListenAndServe(addr string) error {
 	return nil
 }
 
-// Shutdown gracefully stops the web server.
+// Shutdown gracefully stops the web server and its background consult loop.
+// The loop must not outlive the server: a daemon whose parent context is
+// never canceled would otherwise keep sweeping and redrawing rosters forever.
 func (s *Server) Shutdown() error {
+	if s.stopConsultLoop != nil {
+		s.stopConsultLoop()
+	}
 	if s.httpServer == nil {
 		return nil
 	}
