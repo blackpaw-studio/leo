@@ -1,0 +1,57 @@
+package agent
+
+import (
+	"context"
+	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/observe"
+)
+
+func TestDeleteRemovesAttention(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-gone", Workspace: "/w", Stopped: true})
+	m := newTestManager(t, home, &fakeSupervisor{ephemeral: map[string]ProcessState{}})
+	store := observe.NewAttentionStore(nil)
+	store.Set("leo-gone", observe.AttentionUnknown)
+	m.SetAttention(store)
+
+	if err := m.Delete(context.Background(), "leo-gone", DeleteOptions{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if att, ok := store.Get("leo-gone"); ok {
+		t.Fatalf("attention after Delete = %+v, want absent", att)
+	}
+}
+
+func TestRenameMovesAttention(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		live bool
+	}{{"stopped", false}, {"running", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", Workspace: "/w", Stopped: !tc.live, ClaudeArgs: []string{"--name", "leo-old"}})
+			sup := &fakeSupervisor{ephemeral: map[string]ProcessState{}}
+			if tc.live {
+				sup.ephemeral["leo-old"] = ProcessState{Name: "leo-old", Status: "running"}
+			}
+			m := newTestManager(t, home, sup)
+			store := observe.NewAttentionStore(nil)
+			store.Set("leo-old", observe.AttentionFinished)
+			m.SetAttention(store)
+
+			if _, err := m.Rename("leo-old", "leo-new"); err != nil {
+				t.Fatalf("Rename: %v", err)
+			}
+
+			if _, ok := store.Get("leo-old"); ok {
+				t.Error("old name still has attention")
+			}
+			if att, ok := store.Get("leo-new"); !ok || att.State != observe.AttentionFinished || att.Revision != 1 {
+				t.Errorf("new name attention = %+v, %v", att, ok)
+			}
+		})
+	}
+}

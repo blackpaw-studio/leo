@@ -184,6 +184,8 @@ type Supervisor struct {
 	// event bus. nil (the default for every existing caller) makes publish a
 	// no-op — see SetPublisher.
 	publisher observe.Publisher
+	// attention is the per-agent attention store — see SetAttention.
+	attention *observe.AttentionStore
 }
 
 // NewSupervisor creates a new process supervisor. The context parameter is
@@ -829,7 +831,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	supervisor.homePath = homePath
 	supervisor.configPath = configPath
 
-	bus, runLog, messageLog, activityTracker := wireObservability(ctx, supervisor, tmuxPath)
+	obs := wireObservability(ctx, supervisor, tmuxPath)
 
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
@@ -837,7 +839,8 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	srv.SetParentContext(ctx)
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.
-	srv.SetObservability(bus, runLog, messageLog, activityTracker, opts.Version)
+	srv.SetObservability(obs.Bus, obs.RunLog, obs.MessageLog, obs.Tracker, opts.Version)
+	srv.SetAttention(obs.Attention)
 	// SetLogPath before Start/StartWeb so the Service page's log tail knows
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
@@ -867,7 +870,8 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// manager needs its own seam: a stop/rename against a non-live agent
 		// never reaches sup.StopAgent/RenameAgent, so it never reaches the
 		// supervisor's own publish calls either.
-		agentMgr.SetPublisher(runLog)
+		agentMgr.SetPublisher(obs.RunLog)
+		agentMgr.SetAttention(obs.Attention)
 		srv.SetAgentManager(agentMgr)
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets
@@ -928,7 +932,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 // socket via daemon.ObservePublisher, wired per-invocation in
 // internal/cli/run.go — see handleObserveTaskRun in internal/daemon/server.go
 // for the daemon-side end of that path.
-func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) (*observe.Bus, *observe.RunLog, *observe.MessageLog, *observe.Tracker) {
+func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) observability {
 	// runLog forwards every event to bus (the HTTP layer's read seam) and
 	// additionally records task runs, so it is the single Publisher the
 	// supervisor is given — see internal/observe.RunLog's doc comment for why
@@ -943,13 +947,29 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) (*o
 	messageLog := observe.NewMessageLog(runLog, 0)
 	sv.SetPublisher(runLog)
 
+	// attention publishes through runLog like every other agent event. The
+	// tracker copies it onto sweep events; the store reads the tracker's
+	// reading back for its own events, hence the post-construction setter.
+	attention := observe.NewAttentionStore(runLog)
+	sv.SetAttention(attention)
+
 	// sv.SessionNames is the narrow accessor onto the live agent-name ->
 	// tmux-session-name mapping the tracker sweeps (see its doc comment for
 	// why it isn't recomputed here).
-	tracker := observe.NewTracker(tmuxPath, sv.SessionNames, runLog)
+	tracker := observe.NewTracker(tmuxPath, sv.SessionNames, runLog, observe.WithAttention(attention))
+	attention.SetActivityProvider(tracker)
 	go tracker.Start(ctx)
 
-	return bus, runLog, messageLog, tracker
+	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention}
+}
+
+// observability bundles what wireObservability builds for daemon boot.
+type observability struct {
+	Bus        *observe.Bus
+	RunLog     *observe.RunLog
+	MessageLog *observe.MessageLog
+	Tracker    *observe.Tracker
+	Attention  *observe.AttentionStore
 }
 
 // driverFor resolves a spec's session driver. Empty harness means claude

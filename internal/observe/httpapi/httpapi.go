@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,7 +36,27 @@ type ticker struct{ *time.Ticker }
 
 func (t ticker) C() <-chan time.Time { return t.Ticker.C }
 
+// bootID identifies this daemon process on every SSE hello. It is minted
+// once at package init: anything that restarts with the process (attention
+// revisions, event seq) is scoped to it.
+var bootID = newBootID()
+
+func newBootID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand never fails on supported platforms; a time-derived id
+		// still changes across restarts, which is all consumers rely on.
+		return fmt.Sprintf("t%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
+// BootID returns this process's boot id.
+func BootID() string { return bootID }
+
 type EventsOptions struct {
+	// BootID overrides the process boot id reported on hello (tests).
+	BootID       string
 	Source       EventSource
 	Heartbeat    time.Duration
 	WriteTimeout time.Duration
@@ -76,11 +98,15 @@ func ServeEvents(w http.ResponseWriter, r *http.Request, opts EventsOptions) {
 		defer unsubscribe()
 	}
 
+	boot := opts.BootID
+	if boot == "" {
+		boot = bootID
+	}
 	now := clock.Now()
 	deadline()
 	w.WriteHeader(http.StatusOK)
 	if WriteEvent(w, string(observe.EventHello), observe.HelloPayload{
-		Meta: observe.Meta{Seq: seq, At: now}, Version: observe.SnapshotVersion, ServerTime: now,
+		Meta: observe.Meta{Seq: seq, At: now}, Version: observe.SnapshotVersion, ServerTime: now, BootID: boot,
 	}) != nil || rc.Flush() != nil {
 		return
 	}

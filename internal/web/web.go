@@ -190,6 +190,11 @@ type Server struct {
 	// works before the tracker exists / when it's not configured.
 	activity observe.ActivityProvider
 
+	// attention is the per-agent attention store, wired via WithAttention.
+	// It backs both the snapshot's attention field and the agent hook
+	// callback. nil leaves attention absent everywhere.
+	attention *observe.AttentionStore
+
 	// events is the read seam onto the (not-yet-existing) event bus, wired via
 	// WithEventSource. nil is a supported default: GET /api/v1/events still
 	// serves hello + heartbeats, just no bus-published events.
@@ -270,6 +275,12 @@ type Option func(*Server)
 // Optional; omitting it makes every agent report observe.ActivityUnknown.
 func WithActivityProvider(p observe.ActivityProvider) Option {
 	return func(s *Server) { s.activity = p }
+}
+
+// WithAttention wires the attention store read by GET /api/v1/state and
+// written by POST /api/agent/{name}/hook. Optional.
+func WithAttention(a *observe.AttentionStore) Option {
+	return func(s *Server) { s.attention = a }
 }
 
 // WithEventSource wires the event bus that GET /api/v1/events streams from.

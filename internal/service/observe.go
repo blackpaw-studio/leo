@@ -19,6 +19,22 @@ func (s *Supervisor) SetPublisher(p observe.Publisher) {
 	s.mu.Unlock()
 }
 
+// SetAttention wires the per-agent attention store the supervisor drives on
+// launch, unexpected exit, and stop. Optional: nil disables attention.
+func (s *Supervisor) SetAttention(a *observe.AttentionStore) {
+	s.mu.Lock()
+	s.attention = a
+	s.mu.Unlock()
+}
+
+// attentionStore returns the wired store (possibly nil; its methods are
+// nil-safe).
+func (s *Supervisor) attentionStore() *observe.AttentionStore {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.attention
+}
+
 // publish is a nil-safe no-op when no publisher has been configured.
 func (s *Supervisor) publish(ev observe.Event) {
 	s.mu.RLock()
@@ -60,6 +76,9 @@ func (s *Supervisor) spawnedAgentView(spec daemon.AgentSpawnSpec, spawnedAt time
 		Harness:   spec.Harness,
 		Status:    observe.StatusStarting,
 		StartedAt: spawnedAt,
+	}
+	if att, ok := s.attentionStore().Get(spec.Name); ok {
+		a.Attention = &att
 	}
 
 	if records, err := agentstore.Load(agentstore.FilePath(s.homePath)); err == nil {

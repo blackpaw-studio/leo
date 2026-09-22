@@ -76,6 +76,15 @@ type Manager struct {
 	// Optional: nil (the default) makes publish a safe no-op, matching
 	// service.Supervisor's own publisher seam.
 	publisher observe.Publisher
+	// attention is the per-agent attention store. Delete drops an agent's
+	// entry and Rename carries it to the new name. nil-safe.
+	attention *observe.AttentionStore
+}
+
+// SetAttention wires the attention store. Optional; daemon boot is the only
+// production caller.
+func (m *Manager) SetAttention(a *observe.AttentionStore) {
+	m.attention = a
 }
 
 // SetPublisher wires an observe.Publisher into the Manager, for lifecycle
@@ -1469,6 +1478,7 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 	}
 
 	agentstore.Remove(cfg.HomePath, name)
+	m.attention.Remove(name)
 	// Delete only ever reaches here for a not-live agent (the EphemeralAgents
 	// check above already rejected a live one), verbatim the rationale
 	// announceStoppedIfNotLive documents for Stop: nothing else along this
@@ -1653,6 +1663,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		if err := persistRename(); err != nil {
 			return Record{}, fmt.Errorf("persisting rename: %w", err)
 		}
+		m.attention.Move(oldName, newName)
 	} else {
 		// Not live: sup.RenameAgent (and its announce) never runs, so this
 		// path announces on its own — but only AFTER persistRename succeeds.
@@ -1664,6 +1675,9 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 			return Record{}, fmt.Errorf("persisting rename: %w", err)
 		}
 		m.announceRename(cfg, rec, oldName, newName)
+		// After the announce, so consumers see the new name spawn before
+		// its carried attention arrives.
+		m.attention.Move(oldName, newName)
 	}
 
 	rec.Name = newName

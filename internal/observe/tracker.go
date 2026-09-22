@@ -36,6 +36,12 @@ func WithClock(now func() time.Time) TrackerOption {
 	return func(t *Tracker) { t.now = now }
 }
 
+// WithAttention makes every published activity event carry the agent's
+// current attention. Sweeps only copy it; they never bump a revision.
+func WithAttention(a *AttentionStore) TrackerOption {
+	return func(t *Tracker) { t.attention = a }
+}
+
 // Tracker sweeps tmux session activity for every supervised agent and
 // derives each one's live Activity, satisfying observe.ActivityProvider.
 type Tracker struct {
@@ -45,6 +51,7 @@ type Tracker struct {
 	tmuxPath      string
 	sessionNames  func() map[string]string
 	publisher     Publisher
+	attention     *AttentionStore
 	interval      time.Duration
 	idleThreshold time.Duration
 	now           func() time.Time
@@ -201,12 +208,17 @@ func (t *Tracker) publish(agentName string, a AgentActivity) {
 		cp := *a.CurrentAction
 		action = &cp
 	}
+	var attention *AgentAttention
+	if att, ok := t.attention.Get(agentName); ok {
+		attention = &att
+	}
 	t.publisher.Publish(Event{
 		Type: EventAgentActivity,
 		Payload: &AgentActivityPayload{
 			Agent:         agentName,
 			Activity:      a.Activity,
 			CurrentAction: action,
+			Attention:     attention,
 		},
 	})
 }

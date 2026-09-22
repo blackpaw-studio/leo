@@ -58,7 +58,8 @@ func TestObservabilityWiringEndToEnd(t *testing.T) {
 	// bus/runLog/tracker/SetPublisher calls inline) is what makes this test
 	// catch a regression in the wiring itself, not just in a hand-copied
 	// reproduction of it.
-	bus, runLog, messageLog, tracker := wireObservability(ctx, sv, fakeTmux)
+	obs := wireObservability(ctx, sv, fakeTmux)
+	bus, runLog, messageLog, tracker := obs.Bus, obs.RunLog, obs.MessageLog, obs.Tracker
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "leo.yaml")
