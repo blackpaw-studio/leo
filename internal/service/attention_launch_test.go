@@ -249,7 +249,7 @@ func TestClaudeAgentLaunchCarriesOneMergedSettings(t *testing.T) {
 	hook := `[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}]}]`
 	wantSettings := `'--settings' '{"crossSessionInbound":"accept","hooks":{` +
 		`"Notification":[{"hooks":[{"command":"/opt/leo dispatch report","type":"command"}],"matcher":"permission_prompt|elicitation_dialog"}],` +
-		`"SessionEnd":` + hook + `,"Stop":` + hook + `,"UserPromptSubmit":` + hook + `}}'`
+		`"PostToolUse":` + hook + `,"SessionEnd":` + hook + `,"Stop":` + hook + `,"UserPromptSubmit":` + hook + `}}'`
 	if !strings.Contains(logged, "'--model' 'sonnet' "+wantSettings) {
 		t.Fatalf("spawned command lacks the exact merged settings:\n%s\nwant substring:\n%s", logged, wantSettings)
 	}

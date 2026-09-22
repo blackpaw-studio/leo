@@ -13,20 +13,23 @@ const attentionNotificationMatcher = "permission_prompt|elicitation_dialog"
 
 // AttentionHooks is TurnHooks plus a Notification group, so a supervised
 // agent also reports when it is blocked on a permission prompt or an
-// elicitation dialog.
+// elicitation dialog, and a PostToolUse group, whose report clears that
+// needs_input once the prompt is answered and the tool runs.
 func (c Claude) AttentionHooks(reportCmd []string) ([]string, error) {
 	turn, err := c.TurnHooks(reportCmd)
 	if err != nil {
 		return nil, err
 	}
+	command := []any{map[string]any{"type": "command", "command": shellCommand(reportCmd)}}
 	notification, err := json.Marshal(map[string]any{"hooks": map[string]any{
 		"Notification": []any{map[string]any{
 			"matcher": attentionNotificationMatcher,
-			"hooks":   []any{map[string]any{"type": "command", "command": shellCommand(reportCmd)}},
+			"hooks":   command,
 		}},
+		"PostToolUse": []any{map[string]any{"hooks": command}},
 	}})
 	if err != nil {
-		return nil, fmt.Errorf("claude: encoding notification hook: %w", err)
+		return nil, fmt.Errorf("claude: encoding attention hooks: %w", err)
 	}
 	return MergeSettingsArgs(turn, []string{"--settings", string(notification)})
 }
