@@ -278,7 +278,7 @@ func WithActivityProvider(p observe.ActivityProvider) Option {
 }
 
 // WithAttention wires the attention store read by GET /api/v1/state and
-// written by POST /api/agent/{name}/hook. Optional.
+// written by POST /api/agent/hook. Optional.
 func WithAttention(a *observe.AttentionStore) Option {
 	return func(s *Server) { s.attention = a }
 }
@@ -542,7 +542,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/stop", s.handleAPIAgentStop)
 	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
-	apiMux.HandleFunc("POST /api/agent/{name}/hook", s.handleAPIAgentHook)
+	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
 	apiMux.HandleFunc("GET /api/delegation", s.handleAPIDelegation)
 	apiMux.HandleFunc("GET /api/delegation/resolve", s.handleAPIDelegationResolve)

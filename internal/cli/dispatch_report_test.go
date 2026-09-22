@@ -49,7 +49,7 @@ func runReport(t *testing.T, payload string) error {
 }
 
 func clearReportEnv(t *testing.T) {
-	for _, k := range []string{"LEO_DISPATCH_ID", "LEO_CONFIG", "LEO_ATTENTION_AGENT", "LEO_WEB_PORT", "LEO_API_TOKEN"} {
+	for _, k := range []string{"LEO_DISPATCH_ID", "LEO_CONFIG", "LEO_ATTENTION_AGENT", "LEO_ATTENTION_TOKEN", "LEO_WEB_PORT", "LEO_API_TOKEN"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
@@ -58,7 +58,7 @@ func clearReportEnv(t *testing.T) {
 func TestDispatchReportRoutesAttentionHook(t *testing.T) {
 	clearReportEnv(t)
 	port, got := reportServer(t)
-	t.Setenv("LEO_ATTENTION_AGENT", "leo-worker")
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
 	t.Setenv("LEO_WEB_PORT", port)
 	t.Setenv("LEO_API_TOKEN", "agent-token")
 
@@ -70,11 +70,29 @@ func TestDispatchReportRoutesAttentionHook(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("requests = %d, want 1", len(reqs))
 	}
-	if reqs[0].path != "/api/agent/leo-worker/hook" || reqs[0].auth != "Bearer agent-token" {
+	if reqs[0].path != "/api/agent/hook" || reqs[0].auth != "Bearer agent-token" {
 		t.Fatalf("request = %+v", reqs[0])
 	}
-	if string(reqs[0].body) != `{"hook_event_name":"Stop","session_id":"s1"}` {
-		t.Fatalf("body = %s, want the raw hook payload", reqs[0].body)
+	var wrapped struct {
+		Token   string          `json:"token"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(reqs[0].body, &wrapped); err != nil || wrapped.Token != "launch-tok" || string(wrapped.Payload) != `{"hook_event_name":"Stop","session_id":"s1"}` {
+		t.Fatalf("body = %s (%v), want the launch token + raw hook payload", reqs[0].body, err)
+	}
+}
+
+func TestDispatchReportIgnoresLegacyAgentName(t *testing.T) {
+	clearReportEnv(t)
+	port, got := reportServer(t)
+	t.Setenv("LEO_ATTENTION_AGENT", "leo-worker")
+	t.Setenv("LEO_WEB_PORT", port)
+
+	if err := runReport(t, `{"hook_event_name":"Stop"}`); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if n := len(got()); n != 0 {
+		t.Fatalf("requests = %d, want 0 (name routing is gone)", n)
 	}
 }
 
@@ -88,7 +106,7 @@ func TestDispatchReportPrefersDispatchRoute(t *testing.T) {
 	}
 	t.Setenv("LEO_DISPATCH_ID", "d-123")
 	t.Setenv("LEO_CONFIG", cfgPath)
-	t.Setenv("LEO_ATTENTION_AGENT", "leo-worker")
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
 	t.Setenv("LEO_WEB_PORT", port)
 
 	if err := runReport(t, `{"hook_event_name":"Stop"}`); err != nil {
@@ -123,7 +141,7 @@ func TestDispatchReportNoOpWithoutRouteEnv(t *testing.T) {
 
 func TestDispatchReportAttentionFailureDoesNotFailHook(t *testing.T) {
 	clearReportEnv(t)
-	t.Setenv("LEO_ATTENTION_AGENT", "leo-worker")
+	t.Setenv("LEO_ATTENTION_TOKEN", "launch-tok")
 	t.Setenv("LEO_WEB_PORT", "1") // nothing listens on port 1
 
 	if err := runReport(t, `{"hook_event_name":"Stop"}`); err != nil {

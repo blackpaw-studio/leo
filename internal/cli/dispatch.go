@@ -275,10 +275,10 @@ func newDispatchReportCmd() *cobra.Command {
 			}
 			return reportDispatch(cmd.InOrStdin(), id, configPath)
 		}
-		if agentName, port := os.Getenv("LEO_ATTENTION_AGENT"), os.Getenv("LEO_WEB_PORT"); agentName != "" && port != "" {
+		if token, port := os.Getenv("LEO_ATTENTION_TOKEN"), os.Getenv("LEO_WEB_PORT"); token != "" && port != "" {
 			// Best-effort: a daemon that is down must not surface as a hook
 			// failure inside the agent's own UI.
-			if err := reportAttention(cmd.InOrStdin(), agentName, port); err != nil {
+			if err := reportAttention(cmd.InOrStdin(), token, port); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "leo: attention report: %v\n", err)
 			}
 		}
@@ -290,7 +290,9 @@ func newDispatchReportCmd() *cobra.Command {
 // the agent's turn boundary by at most this long.
 const attentionReportTimeout = 5 * time.Second
 
-func reportAttention(stdin io.Reader, agentName, port string) error {
+// reportAttention relays a supervised agent's hook payload with its
+// per-launch attention token; the daemon resolves the token to the agent.
+func reportAttention(stdin io.Reader, token, port string) error {
 	if _, err := strconv.Atoi(port); err != nil {
 		return fmt.Errorf("invalid LEO_WEB_PORT %q", port)
 	}
@@ -299,8 +301,12 @@ func reportAttention(stdin io.Reader, agentName, port string) error {
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("http://127.0.0.1:%s/api/agent/%s/hook", port, url.PathEscape(agentName))
-	return postReport(path, os.Getenv("LEO_API_TOKEN"), payload, deadline)
+	body, err := json.Marshal(map[string]any{"token": token, "payload": json.RawMessage(payload)})
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("http://127.0.0.1:%s/api/agent/hook", port)
+	return postReport(path, os.Getenv("LEO_API_TOKEN"), body, deadline)
 }
 
 func reportDispatch(stdin io.Reader, id, configPath string) error {
