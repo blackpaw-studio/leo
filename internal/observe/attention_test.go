@@ -215,6 +215,24 @@ func TestAttentionSetIfTrackedOnlyTransitionsTrackedAgents(t *testing.T) {
 	}
 }
 
+func TestAttentionSetIfUntrackedKeepsExistingState(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.Set("tracked", AttentionWorking)
+
+	_, trackedOK := s.SetIfUntracked("tracked", AttentionUnknown)
+	got, ok := s.SetIfUntracked("untracked", AttentionUnknown)
+
+	if trackedOK {
+		t.Fatal("tracked agent was overwritten")
+	}
+	if att, _ := s.Get("tracked"); att != (AgentAttention{State: AttentionWorking, Revision: 1}) {
+		t.Fatalf("tracked = %+v, want working rev 1", att)
+	}
+	if !ok || got != (AgentAttention{State: AttentionUnknown, Revision: 1}) {
+		t.Fatalf("untracked = %+v, %v", got, ok)
+	}
+}
+
 func TestAttentionTokenRoutesToCurrentName(t *testing.T) {
 	s := NewAttentionStore(nil)
 	s.RegisterToken("tok-a", "old")

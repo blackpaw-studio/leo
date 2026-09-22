@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,9 +18,30 @@ import (
 )
 
 // fakeAttentionDriver adds harness.AttentionHooker to fakeHookDriver.
+// started (when non-nil) receives once per driver Start, which the launch
+// runs only after its own attention write.
 type fakeAttentionDriver struct {
 	fakeHookDriver
 	supported bool
+	started   chan struct{}
+}
+
+func (d *fakeAttentionDriver) Start(context.Context, harness.SessionHandle) error {
+	if d.started != nil {
+		d.started <- struct{}{}
+	}
+	return nil
+}
+
+// waitStarted blocks until the launch has reached driver Start, i.e. past
+// its attention write.
+func waitStarted(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("launch never reached driver Start")
+	}
 }
 
 func (d *fakeAttentionDriver) AttentionLaunch(_ harness.SessionHandle, args, reportCmd []string) ([]string, bool, error) {
@@ -39,7 +61,9 @@ func liveTmuxStub(t *testing.T) (path, logPath string) {
 	path, logPath = filepath.Join(dir, "tmux"), filepath.Join(dir, "tmux.log")
 	// On new-session it snapshots $LEO_TEST_SNAP_SRC (when set) to
 	// $LEO_TEST_SNAP_DST, capturing the store as the session is created.
-	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\nfor a in \"$@\"; do case \"$a\" in new-session) [ -n \"$LEO_TEST_SNAP_SRC\" ] && cp \"$LEO_TEST_SNAP_SRC\" \"$LEO_TEST_SNAP_DST\"; echo '%1'; exit 0;; display-message) echo 0; exit 0;; esac; done\nexit 0\n"
+	// The snapshot is taken before the invocation is logged, so a test that
+	// has seen new-session in the log can read it.
+	script := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = new-session ] && [ -n \"$LEO_TEST_SNAP_SRC\" ] && cp \"$LEO_TEST_SNAP_SRC\" \"$LEO_TEST_SNAP_DST\"; done\necho \"$@\" >> " + logPath + "\nfor a in \"$@\"; do case \"$a\" in new-session) echo '%1'; exit 0;; display-message) echo 0; exit 0;; esac; done\nexit 0\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture, needs +x
 		t.Fatal(err)
 	}
@@ -152,18 +176,17 @@ func TestFreshSpawnInjectsAttentionHooksWithoutPersistingArgs(t *testing.T) {
 // A resumed launch knows nothing about the pane yet: only hooks set
 // working, so a restarted-but-idle agent never reads as working.
 func TestResumedSpawnWithHooksIsUnknown(t *testing.T) {
-	f := newLaunchFixture(t, &fakeAttentionDriver{supported: true}, agentstore.Record{Name: "resumed"})
+	drv := &fakeAttentionDriver{supported: true, started: make(chan struct{}, 1)}
+	f := newLaunchFixture(t, drv, agentstore.Record{Name: "resumed"})
 	pub := &recordingPublisher{}
 	f.sv.SetAttention(observe.NewAttentionStore(pub))
 	f.store = f.sv.attentionStore()
 
 	f.spawn(t, daemon.AgentSpawnSpec{Name: "resumed", Resumed: true})
-	waitForLog(t, f.logPath, "new-session")
+	waitStarted(t, drv.started)
 
-	// Wait for the launch's own attention write (spawn preset + launch).
-	deadline := time.Now().Add(5 * time.Second)
-	for len(pub.Events()) < 2 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	if len(pub.Events()) == 0 {
+		t.Fatal("no attention published")
 	}
 	for _, ev := range pub.Events() {
 		if att := ev.Payload.(*observe.AgentActivityPayload).Attention; att == nil || att.State != observe.AttentionUnknown {
@@ -376,5 +399,95 @@ func TestStopClearsStoredToken(t *testing.T) {
 	recs, _ := agentstore.Load(agentstore.FilePath(f.sv.homePath))
 	if tok := recs["stopme"].AttentionToken; tok != "" {
 		t.Fatalf("stored token after stop = %q, want cleared", tok)
+	}
+}
+
+// gatedTmuxStub is liveTmuxStub, but new-session blocks until gate exists:
+// the launch has registered its token and not yet written its attention.
+func gatedTmuxStub(t *testing.T) (path, logPath, gate string) {
+	t.Helper()
+	dir := t.TempDir()
+	path, logPath, gate = filepath.Join(dir, "tmux"), filepath.Join(dir, "tmux.log"), filepath.Join(dir, "gate")
+	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\nfor a in \"$@\"; do case \"$a\" in new-session) i=0; while [ ! -e " + gate + " ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i+1)); done; echo '%1'; exit 0;; display-message) echo 0; exit 0;; esac; done\nexit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture, needs +x
+		t.Fatal(err)
+	}
+	return path, logPath, gate
+}
+
+// A hook that fires after the launch registered its token but before the
+// launch's own attention write must survive: the spawn preset already
+// covers the launch, so the launch must not clobber it with unknown.
+func TestLaunchDoesNotClobberEarlyHook(t *testing.T) {
+	drv := &fakeAttentionDriver{supported: true, started: make(chan struct{}, 1)}
+	f := newLaunchFixture(t, drv, agentstore.Record{Name: "early"})
+	var logPath, gate string
+	f.sv.tmuxPath, logPath, gate = gatedTmuxStub(t)
+
+	f.spawn(t, daemon.AgentSpawnSpec{Name: "early"})
+	waitForLog(t, logPath, "new-session")
+	token := storedToken(t, f.sv.homePath, "early")
+	if _, ok := f.store.SetByToken(token, observe.AttentionWorking); !ok {
+		t.Fatal("hook with the launch token was not routed")
+	}
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitStarted(t, drv.started)
+
+	if att, _ := f.store.Get("early"); att.State != observe.AttentionWorking {
+		t.Fatalf("attention after launch = %+v, want the hook's working", att)
+	}
+}
+
+// laterHookedDriver launches unhooked the first time and hooked after.
+type laterHookedDriver struct {
+	fakeHookDriver
+	calls atomic.Int32
+}
+
+func (d *laterHookedDriver) AttentionLaunch(_ harness.SessionHandle, args, _ []string) ([]string, bool, error) {
+	if d.calls.Add(1) == 1 {
+		return args, false, nil
+	}
+	return args, true, nil
+}
+
+func (d *laterHookedDriver) AttentionSupported() bool { return false }
+
+// An in-loop restart that is the first hooked launch finds no attention
+// (the unhooked first launch dropped it, and no spawn preset ran) and
+// starts it unknown.
+func TestFirstHookedRestartStartsUnknown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sv := NewSupervisor(ctx)
+	pub := &recordingPublisher{}
+	sv.SetAttention(observe.NewAttentionStore(pub))
+	testFakeDriver = &laterHookedDriver{}
+	t.Cleanup(func() { testFakeDriver = nil })
+	origPoll, origBackoff := sessionPollInterval, initialBackoff
+	sessionPollInterval, initialBackoff = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { sessionPollInterval, initialBackoff = origPoll, origBackoff })
+	sv.tmuxPath, _ = exitingTmuxStub(t)
+	sv.homePath = t.TempDir()
+	if err := agentstore.Save(sv.homePath, agentstore.Record{Name: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "later", WorkDir: t.TempDir(), Harness: "fakehook"}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sv.StopAgent("later", false) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(pub.Events()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no attention published")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	first := pub.Events()[0].Payload.(*observe.AgentActivityPayload).Attention
+	if first == nil || first.State != observe.AttentionUnknown {
+		t.Fatalf("first hooked launch (a restart) attention = %+v, want unknown", first)
 	}
 }

@@ -1071,9 +1071,6 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	// driver's Start on the first successful launch (create or adopt), then
 	// cleared so an in-loop restart never replays it.
 	openingPrompt := spec.OpeningPrompt
-	// firstLaunch sets the initial attention once per supervise goroutine;
-	// in-loop restarts leave the errored state for the next hook to clear.
-	firstLaunch := true
 
 	for {
 		// Snapshot identity for this iteration. The tmux session name is also
@@ -1210,17 +1207,16 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
 			if spec.Kind == harness.KindAgent {
-				switch {
-				case !hooked:
-					sv.dropAttention(name, id)
-				case firstLaunch || !sv.attentionTracked(name):
+				if hooked {
 					// Every launch, resumed or not, knows nothing until a hook
-					// fires; only hooks set working.
+					// fires; only hooks set working. Already-tracked attention
+					// (the spawn preset, an early hook, a restart's errored)
+					// is kept.
 					sv.launchAttention(name, id, observe.AttentionUnknown)
+				} else {
+					sv.dropAttention(name, id)
 				}
-				// A hooked in-loop restart keeps errored until the next hook.
 			}
-			firstLaunch = false
 
 			// If any --dangerously-load-development-channels flags are present,
 			// claude will show an interactive confirmation prompt on a fresh

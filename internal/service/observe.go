@@ -51,15 +51,17 @@ func (s *Supervisor) markAttention(name string, id *procIdentity, state observe.
 	s.attention.SetIfTracked(name, state)
 }
 
-// launchAttention sets name's attention on launch/adopt, for the live
-// generation only.
+// launchAttention sets name's initial attention on launch/adopt, for the
+// live generation only, and only while name has none: SpawnAgent's preset,
+// a hook that landed once the token was registered, or a restart's errored
+// all win over it.
 func (s *Supervisor) launchAttention(name string, id *procIdentity, state observe.AttentionState) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if cur, ok := s.identities[name]; !ok || cur != id {
 		return
 	}
-	s.attention.Set(name, state)
+	s.attention.SetIfUntracked(name, state)
 }
 
 // dropAttention removes name's attention when its live generation launched
@@ -96,12 +98,6 @@ func (s *Supervisor) endLaunchToken(homePath, name, token string) {
 	if err := agentstore.ClearAttentionToken(homePath, name, token); err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] clearing attention token: %v\n", name, err)
 	}
-}
-
-// attentionTracked reports whether name currently has attention.
-func (s *Supervisor) attentionTracked(name string) bool {
-	_, ok := s.attentionStore().Get(name)
-	return ok
 }
 
 // publish is a nil-safe no-op when no publisher has been configured.

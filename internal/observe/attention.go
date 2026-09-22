@@ -90,6 +90,21 @@ func (s *AttentionStore) SetIfTracked(agent string, state AttentionState) (Agent
 	return s.setLocked(agent, state), true
 }
 
+// SetIfUntracked is Set, but only for an agent with no attention yet — a
+// launch's initial state must not clobber a preset or a hook that already
+// landed. ok=false means the agent was tracked and nothing changed.
+func (s *AttentionStore) SetIfUntracked(agent string, state AttentionState) (AgentAttention, bool) {
+	if s == nil {
+		return AgentAttention{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.states[agent]; ok {
+		return AgentAttention{}, false
+	}
+	return s.setLocked(agent, state), true
+}
+
 func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAttention {
 	s.revisions[agent]++
 	s.states[agent] = state

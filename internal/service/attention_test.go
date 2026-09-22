@@ -197,9 +197,10 @@ func TestDaemonShutdownDoesNotMarkErrored(t *testing.T) {
 	origPoll := sessionPollInterval
 	sessionPollInterval = time.Hour // park in waitForSessionEnd until cancel
 	t.Cleanup(func() { sessionPollInterval = origPoll })
-	testFakeDriver = &fakeAttentionDriver{supported: true}
+	drv := &fakeAttentionDriver{supported: true, started: make(chan struct{}, 1)}
+	testFakeDriver = drv
 	t.Cleanup(func() { testFakeDriver = nil })
-	tmuxPath, logPath := liveTmuxStub(t)
+	tmuxPath, _ := liveTmuxStub(t)
 	sv.tmuxPath = tmuxPath
 	sv.homePath = t.TempDir()
 	if err := agentstore.Save(sv.homePath, agentstore.Record{Name: "tracked"}); err != nil {
@@ -208,13 +209,8 @@ func TestDaemonShutdownDoesNotMarkErrored(t *testing.T) {
 	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "tracked", WorkDir: t.TempDir(), Harness: "fakehook"}); err != nil {
 		t.Fatal(err)
 	}
-	waitForLog(t, logPath, "new-session")
-	// Revision 1 is SpawnAgent's preset; 2 is the launch's own write.
+	waitStarted(t, drv.started)
 	before := waitAttention(t, store, "tracked", observe.AttentionUnknown)
-	for deadline := time.Now().Add(5 * time.Second); before.Revision < 2 && time.Now().Before(deadline); {
-		time.Sleep(5 * time.Millisecond)
-		before, _ = store.Get("tracked")
-	}
 
 	cancel()
 	waitForState(t, sv, "tracked", "stopped")
