@@ -92,5 +92,9 @@ func (d *Dispatcher) releaseLocked(id string, layout func(string) error) (Record
 		}
 		_ = h.Close(StatusReleased, nil)
 	}
+	// Released runs never launch again, in memory or restored from disk.
+	d.mu.Lock()
+	d.releaseRunFilesLocked(id)
+	d.mu.Unlock()
 	return rec, nil
 }

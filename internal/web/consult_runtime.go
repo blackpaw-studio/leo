@@ -63,6 +63,9 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	runtime.AgentToken = s.agentToken
 	s.consults.SetInteractiveRuntime(runtime)
 	s.consults.MarkInterrupted()
+	// Best-effort: drop settings spill files (which can hold credentials)
+	// of runs the previous daemon never finalized.
+	s.consults.SweepRunFiles()
 	if opts.ParentContext == nil {
 		return
 	}
