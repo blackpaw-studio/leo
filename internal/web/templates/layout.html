@@ -17,6 +17,7 @@
             <div class="nav-sect">Configure</div>
             <a class="nav-item {{if eq .Page "config_defaults"}}on{{end}}" href="/config/defaults">Defaults</a>
             <a class="nav-item {{if or (eq .Page "config_templates") (eq .Page "template_edit")}}on{{end}}" href="/config/templates">Templates</a>
+            <a class="nav-item {{if eq .Page "config_delegation"}}on{{end}}" href="/config/delegation">Delegation</a>
             <a class="nav-item {{if eq .Page "config_settings"}}on{{end}}" href="/config/settings">Settings</a>
             <a class="nav-item {{if eq .Page "service"}}on{{end}}" href="/service">Service</a>
             <form method="post" action="/logout" class="logout-form" hx-boost="false">
@@ -32,6 +33,7 @@
             {{else if eq .Page "agents"}}{{template "page_agents" .}}
             {{else if eq .Page "config_defaults"}}{{template "page_config_defaults" .}}
             {{else if eq .Page "config_templates"}}{{template "page_config_templates" .}}
+            {{else if eq .Page "config_delegation"}}{{template "page_config_delegation" .}}
             {{else if eq .Page "template_edit"}}{{template "page_template_edit" .}}
             {{else if eq .Page "config_settings"}}{{template "page_config_settings" .}}
             {{else if eq .Page "service"}}{{template "page_service" .}}{{end}}

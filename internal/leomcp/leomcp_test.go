@@ -215,7 +215,8 @@ func TestDelegationBlockAndNudgeGate(t *testing.T) {
 		t.Fatal("nudge omitted delegation block")
 	}
 	cfg.Web.Enabled = false
-	if DelegationBlock(cfg) != "" || strings.Contains(LeoNudge(cfg), "implement") {
+	withoutDelegation := &config.Config{Web: config.WebConfig{Enabled: false}}
+	if DelegationBlock(cfg) != "" || LeoNudge(cfg) != LeoNudge(withoutDelegation) {
 		t.Fatal("web-disabled delegation leaked")
 	}
 	plain := &config.Config{Web: config.WebConfig{Enabled: true}}

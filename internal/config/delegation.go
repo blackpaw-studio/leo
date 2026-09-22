@@ -270,3 +270,21 @@ func sortedRoleNames[T any](m map[string]T) []string {
 	return names
 }
 func sortedProfileNames(m map[string]Profile) []string { return sortedRoleNames(m) }
+
+// DiffProfiles reports deterministic role-routing changes from a to b.
+func DiffProfiles(a, b Profile) []string {
+	roles := map[string]struct{}{}
+	for role := range a.Roles {
+		roles[role] = struct{}{}
+	}
+	for role := range b.Roles {
+		roles[role] = struct{}{}
+	}
+	var changes []string
+	for _, role := range sortedRoleNames(roles) {
+		if a.Roles[role] != b.Roles[role] {
+			changes = append(changes, role)
+		}
+	}
+	return changes
+}

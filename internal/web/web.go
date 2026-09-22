@@ -423,6 +423,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("GET /config/defaults", s.handlePage("config_defaults", "Defaults", s.buildDefaultsData))
 	mux.HandleFunc("GET /config/templates", s.handlePage("config_templates", "Templates", s.buildTemplatesData))
 	mux.HandleFunc("GET /config/templates/{name}", s.handleTemplateEditPage)
+	mux.HandleFunc("GET /config/delegation", s.handlePage("config_delegation", "Delegation", s.buildDelegationData))
 	mux.HandleFunc("GET /config/settings", s.handlePage("config_settings", "Settings", s.buildSettingsData))
 	mux.HandleFunc("GET /service", s.handlePage("service", "Service", s.buildServiceData))
 
@@ -457,6 +458,9 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/template/add", s.handleTemplateAdd)
 	mux.HandleFunc("DELETE /web/template/{name}", s.handleTemplateDelete)
 	mux.HandleFunc("POST /web/template/{name}/rename", s.handleTemplateRename)
+	mux.HandleFunc("POST /web/delegation/cell", s.handleDelegationCell)
+	mux.HandleFunc("POST /web/delegation/use-for", s.handleDelegationUseFor)
+	mux.HandleFunc("POST /web/delegation/active", s.handleDelegationActive)
 
 	// Settings page: Web UI + Remote client config, and remote-host CRUD —
 	// full CRUD lives on one page (no separate edit page).
