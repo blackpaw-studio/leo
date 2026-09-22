@@ -15,6 +15,12 @@ leo mcp-server
 
 Speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdin/stdout. Supervised Claude agents dispatch the universal channel slash commands — `/clear`, `/compact`, `/stop`, `/tasks`, `/agent`, `/agents` — by calling the `leo_*` tools this server exposes.
 
+For asynchronous work, `leo_dispatch` accepts exactly one of `template` or
+`role`, plus optional `model` and `effort`. A role is resolved through the
+active [delegation profile](../configuration/delegation.md), and permission is
+checked against the resolved template. `leo_delegation` is the read-only tool
+for showing that active routing.
+
 ### Environment
 
 `mcp-server` reads two variables injected by the Leo supervisor:

@@ -34,7 +34,7 @@ orchestrator performs review. There is no opt-out yet.
 waits and returns the consultant's final answer directly. Consults get an
 advisory preamble: inspect and answer, but do not modify files.
 
-`leo_dispatch(template, prompt, model?, cwd?, name?, mode?, timeout_seconds?, notify?, isolation?)`
+`leo_dispatch(template? | role?, prompt, model?, effort?, cwd?, name?, mode?, timeout_seconds?, notify?, isolation?)`
 starts work asynchronously and immediately returns an ID. Use it for
 implementation, review, or exploration that can proceed while the caller does
 other work. The prompt must say exactly what the subagent should do; it has no
@@ -79,13 +79,17 @@ the parent run's stream. Use it when a wait result is truncated.
 
 The template-selecting tools use a named `templates:` entry, not a running agent. The
 template supplies the harness, model, environment, and harness options; an
-explicit `model` is validated by that harness. `can_consult` permissions apply
-to both consult and dispatch targets.
+explicit `model` is validated by that harness. `leo_dispatch` accepts exactly
+one of `template` or a [delegation role](delegation.md); explicit `model` and
+`effort` override the active profile target. For a role dispatch,
+`can_consult` is checked against the resolved template. `can_consult`
+permissions apply to both consult and dispatch targets.
 
 ## CLI
 
 ```console
 leo dispatch run codex-implementer "Add the parser tests" --cwd "$PWD"
+leo dispatch run --role implement --effort high "Add the parser tests"
 leo dispatch run codex-implementer "Inspect only" --notify=false
 leo dispatch list
 leo dispatch watch d-12ab34

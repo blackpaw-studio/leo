@@ -86,6 +86,7 @@ nav:
       - Persistent Tasks: configuration/persistent-tasks.md
       - Harnesses: configuration/harnesses.md
       - Dispatches: configuration/dispatches.md
+      - Delegation Profiles: configuration/delegation.md
       - Permissions: configuration/permissions.md
       - API Clients: configuration/api-clients.md
   - CLI Reference:

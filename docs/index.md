@@ -24,6 +24,14 @@ Leo spawns and supervises [Claude Code](https://docs.anthropic.com/en/docs/claud
 
     [:octicons-arrow-right-24: Configuration](configuration/dispatches.md)
 
+-   :material-source-branch:{ .lg .middle } **Delegation Profiles**
+
+    ---
+
+    Route stable work roles to templates, models, and effort by active profile.
+
+    [:octicons-arrow-right-24: Configuration](configuration/delegation.md)
+
 -   :material-rocket-launch-outline:{ .lg .middle } **Agent Templates**
 
     ---

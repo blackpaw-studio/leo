@@ -67,6 +67,7 @@ Config lives at `~/.leo/leo.yaml` (the "leo home"). Key sections:
 - `defaults` (model, harness, harness_options, max_turns, idle_suspend_after)
 - `web` (enabled, port, bind — web UI configuration)
 - `client` (default_host, hosts — remote-host definitions for `leo agent` CLI dispatch; empty on servers)
+- `delegation` (stable roles, active profile, and per-profile template/model/effort routing)
 - `templates` (map of agent template configs — blueprints for ephemeral agents, plus `idle_suspend_after` for auto-suspending idle agents; also the target of `runtime: persistent` tasks via `tasks.*.template`)
 - `tasks` (map of named task configs — schedule, prompt_file, model, harness, harness_options, timeout, retries, channels, notify_on_fail, runtime, template, queue_max, etc.)
 

@@ -63,6 +63,12 @@ All notable user-visible changes to Leo are documented here.
 
 ### Added
 
+- **Delegation profiles.** Configure stable work roles with `use_for` guidance
+  and route them through an active profile to templates, models, and
+  harness-specific effort. `leo_dispatch`, `/api/dispatch`, and `leo dispatch
+  run` can resolve a role; the CLI, MCP `leo_delegation` tool, and web UI can
+  inspect and manage the active policy.
+
 - **`permission_mode: approve-for-me` for the codex harness.** Codex's
   `--approve-for-me` preset: it implies the `workspace-write` sandbox, sets
   approval policy `on-request`, and routes each escalation to codex's
