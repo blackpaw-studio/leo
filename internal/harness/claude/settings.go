@@ -132,6 +132,11 @@ func writePrivateFile(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	// MkdirAll leaves an existing directory's mode alone.
+	// #nosec G302 -- a directory needs the owner execute bit; 0700 is owner-only
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(dir, ".settings-*.json") // created 0600
 	if err != nil {
 		return err

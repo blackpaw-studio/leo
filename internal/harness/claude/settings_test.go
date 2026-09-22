@@ -253,3 +253,25 @@ func TestMergeSettingsArgsTrailingFlagWithoutValueErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestSpillTightensPreexistingSettingsDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state", "settings")
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // loose on purpose
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // loose on purpose
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "s.json")
+	if err := os.WriteFile(file, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := MergeSettingsArgs([]string{"--settings", file}, []string{"--settings", `{"a":1}`}, MergeOptions{SpillPath: filepath.Join(dir, "a.json")}); err != nil {
+		t.Fatal(err)
+	}
+
+	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("settings dir mode = %v (err %v), want 0700", info.Mode().Perm(), err)
+	}
+}
