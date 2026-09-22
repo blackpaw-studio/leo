@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -595,24 +594,12 @@ func (s *Server) renderFlash(w http.ResponseWriter, typ, msg string) {
 	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: typ, Message: msg}) //nolint:errcheck
 }
 
-// entityNamePattern restricts config entity names (tasks, processes,
-// templates, providers, hosts, sessions) to a safe, URL- and filesystem-path
-// friendly character set. Without this, a name containing "/", "#", "?", or
-// similar creates entries no route can address (e.g. /web/task/{name}/delete
-// splits on an embedded "/") and, worse, task names flow straight into a
-// prompt file path (prompts/<name>.md in handleTaskAdd) where "../x" would
-// escape the workspace.
-var entityNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
 // validEntityName reports whether name is safe to use as a config map key
-// that also gets embedded in URLs and filesystem paths. It must be non-empty,
-// match entityNamePattern, and not be the literal "." or ".." (both match
-// the pattern above but are directory-traversal special cases).
+// that also gets embedded in URLs and filesystem paths. It delegates to
+// config.ValidName so web, CLI, and config validation share one rule
+// (non-empty, a URL- and path-safe charset, and never the traversal names "." / "..").
 func validEntityName(name string) bool {
-	if name == "" || name == "." || name == ".." {
-		return false
-	}
-	return entityNamePattern.MatchString(name)
+	return config.ValidName(name)
 }
 
 // entityNameError is the flash message shown when validEntityName rejects a

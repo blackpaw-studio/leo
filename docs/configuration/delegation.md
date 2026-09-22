@@ -108,11 +108,15 @@ leo dispatch run --role implement --effort high "Add parser tests"
 ```
 
 The delegation commands are unavailable in remote-client mode. `render` prints
-the exact injected block. `use` validates and saves the configuration, prints
+the exact injected block. `show` and `resolve` print the effective model with
+its source: `profile` (the role's own override), `template` (the template's
+model), or `default` (inherited from `defaults.model`). Only a `profile`
+override is passed to the dispatch; otherwise the template chooses. `use` validates and saves the configuration, prints
 warnings, then reloads a running daemon.
 
 Managed agents also have the read-only `leo_delegation` MCP tool, which shows
-the active profile's routing. `leo_dispatch` accepts exactly one of `template`
+the active profile's routing, including each role's effective model and its
+source. `leo_dispatch` accepts exactly one of `template`
 or `role`, plus optional `model` and `effort`; see [Dispatches](dispatches.md).
 The web dashboard's **Delegation** page edits roles, profiles, mappings, and
 the active profile, shows switch diffs, warnings, and recent role dispatches.

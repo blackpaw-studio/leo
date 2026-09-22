@@ -14,7 +14,31 @@ import (
 // ErrDelegationDisabled indicates that config has no delegation block.
 var ErrDelegationDisabled = errors.New("delegation is not configured")
 
-var delegationNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+// namePattern restricts config entity names (tasks, templates, hosts,
+// delegation roles and profiles, ...) to a URL- and filesystem-path friendly
+// character set. Without it a name containing "/", "#" or "?" creates entries
+// no web route can address, and task names flow into prompt file paths
+// (prompts/<name>.md) where "../x" would escape the workspace.
+var namePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ValidName reports whether name is safe as a config map key that may also be
+// embedded in URLs and filesystem paths: non-empty, limited to letters,
+// digits, dot, underscore and dash, and not the traversal names "." or "..".
+// It is the single name validator shared by config validation, CLI and web.
+func ValidName(name string) bool {
+	if name == "." || name == ".." {
+		return false
+	}
+	return namePattern.MatchString(name)
+}
+
+// Model sources reported by Resolution.ModelSource.
+const (
+	ModelSourceRequest  = "request"
+	ModelSourceProfile  = "profile"
+	ModelSourceTemplate = "template"
+	ModelSourceDefault  = "default"
+)
 
 // DelegationConfig maps stable work roles to templates by profile.
 type DelegationConfig struct {
@@ -90,14 +114,20 @@ type Resolution struct {
 	Role     string `json:"role"`
 	Profile  string `json:"profile"`
 	Template string `json:"template"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort"`
+	// Model is only an explicit override (profile or request); dispatch passes
+	// it through so an empty value still lets the template choose.
+	Model string `json:"model"`
+	// EffectiveModel is the model the dispatch will actually run with.
+	EffectiveModel string `json:"effective_model"`
+	// ModelSource says where EffectiveModel came from (ModelSource* consts).
+	ModelSource string `json:"model_source"`
+	Effort      string `json:"effort"`
 }
 
 // WithOverrides applies explicit dispatch values over profile values.
 func (r Resolution) WithOverrides(model, effort string) Resolution {
 	if model != "" {
-		r.Model = model
+		r.Model, r.EffectiveModel, r.ModelSource = model, model, ModelSourceRequest
 	}
 	if effort != "" {
 		r.Effort = effort
@@ -120,7 +150,21 @@ func (c *Config) ResolveRole(role string) (Resolution, error) {
 		mapped := sortedRoleNames(p.Roles)
 		return Resolution{}, fmt.Errorf("role %q is not mapped in active delegation profile %q (mapped: %s)", role, d.ActiveProfile, strings.Join(mapped, ", "))
 	}
-	return Resolution{Role: role, Profile: d.ActiveProfile, Template: target.Template, Model: target.Model, Effort: target.Effort}, nil
+	effective, source := c.RoleTargetModel(target)
+	return Resolution{Role: role, Profile: d.ActiveProfile, Template: target.Template, Model: target.Model, EffectiveModel: effective, ModelSource: source, Effort: target.Effort}, nil
+}
+
+// RoleTargetModel reports the model a role target runs with and its source:
+// the profile override, else the template's model, else the inherited default.
+func (c *Config) RoleTargetModel(target RoleTarget) (string, string) {
+	if target.Model != "" {
+		return target.Model, ModelSourceProfile
+	}
+	tmpl, ok := c.Templates[target.Template]
+	if ok && tmpl.Model != "" {
+		return tmpl.Model, ModelSourceTemplate
+	}
+	return c.TemplateModel(tmpl), ModelSourceDefault
 }
 
 // DelegationWarnings reports mappings without a declared role. It intentionally
@@ -158,19 +202,19 @@ func (c *Config) validateDelegation() []string {
 		}
 	}
 	for _, role := range sortedRoleNames(d.Roles) {
-		if !delegationNamePattern.MatchString(role) {
+		if !ValidName(role) {
 			errs = append(errs, fmt.Sprintf("delegation.roles.%q is not a valid name", role))
 		}
 	}
 	for _, profileName := range sortedProfileNames(d.Profiles) {
 		profile := d.Profiles[profileName]
-		if !delegationNamePattern.MatchString(profileName) {
+		if !ValidName(profileName) {
 			errs = append(errs, fmt.Sprintf("delegation.profiles.%q is not a valid name", profileName))
 		}
 		for _, role := range sortedRoleNames(profile.Roles) {
 			target := profile.Roles[role]
 			prefix := fmt.Sprintf("delegation.profiles.%s.roles.%s", profileName, role)
-			if !delegationNamePattern.MatchString(role) {
+			if !ValidName(role) {
 				errs = append(errs, fmt.Sprintf("%s is not a valid name", prefix))
 				continue
 			}
@@ -253,10 +297,11 @@ func RenderDelegationStatus(cfg *Config) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("profile\trole\ttemplate\tmodel\teffort\n")
+	b.WriteString("profile\trole\ttemplate\tmodel\tmodel_source\teffort\n")
 	for _, role := range sortedRoleNames(profile.Roles) {
 		t := profile.Roles[role]
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\n", d.ActiveProfile, role, t.Template, t.Model, t.Effort)
+		model, source := cfg.RoleTargetModel(t)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\n", d.ActiveProfile, role, t.Template, model, source, t.Effort)
 	}
 	return b.String()
 }

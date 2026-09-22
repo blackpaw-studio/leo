@@ -180,15 +180,15 @@ func (s *Server) handleDelegationRoleAdd(w http.ResponseWriter, r *http.Request)
 		if !validEntityName(name) {
 			return errors.New(entityNameError)
 		}
-		if _, ok := d.Roles[name]; ok {
+		if delegationRoleExists(d, name) {
 			return fmt.Errorf("role %q already exists", name)
-		}
-		if d.Roles == nil {
-			d.Roles = map[string]config.RoleSpec{}
 		}
 		template := r.FormValue("template")
 		if _, ok := cfg.Templates[template]; !ok {
 			return fmt.Errorf("template %q not found", template)
+		}
+		if d.Roles == nil {
+			d.Roles = declaredActiveRoles(d)
 		}
 		d.Roles[name] = config.RoleSpec{}
 		active := d.Profiles[d.ActiveProfile]
@@ -200,6 +200,31 @@ func (s *Server) handleDelegationRoleAdd(w http.ResponseWriter, r *http.Request)
 		return nil
 	})
 }
+// delegationRoleExists reports whether name is declared or mapped in any
+// profile, so adding a role can never overwrite existing routing.
+func delegationRoleExists(d *config.DelegationConfig, name string) bool {
+	if _, ok := d.Roles[name]; ok {
+		return true
+	}
+	for _, p := range d.Profiles {
+		if _, ok := p.Roles[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// declaredActiveRoles builds the first delegation.roles declaration. While
+// roles are undeclared the injected block lists the active profile's roles, so
+// declaring only a new role would silently drop those; migrate them all.
+func declaredActiveRoles(d *config.DelegationConfig) map[string]config.RoleSpec {
+	roles := map[string]config.RoleSpec{}
+	for name := range d.Profiles[d.ActiveProfile].Roles {
+		roles[name] = config.RoleSpec{}
+	}
+	return roles
+}
+
 func (s *Server) handleDelegationRoleRename(w http.ResponseWriter, r *http.Request) {
 	s.delegationMutation(w, r, func(cfg *config.Config) error {
 		if !validEntityName(r.FormValue("new_name")) {

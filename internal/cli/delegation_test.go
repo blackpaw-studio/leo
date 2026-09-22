@@ -80,3 +80,38 @@ func TestDelegationRenderResolveAndAbsentConfig(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestDelegationResolveAndShowReportEffectiveModel(t *testing.T) {
+	cfg := delegationCLIConfig()
+	cfg.Templates["one"] = config.TemplateConfig{Model: "tmpl-model"}
+	path := filepath.Join(t.TempDir(), "leo.yaml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	old := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = old })
+	out, _, err := delegationCommand(t, "resolve", "implement")
+	if err != nil || out.String() != "implement\tone\ttmpl-model\ttemplate\t\n" {
+		t.Fatalf("resolve=%q err=%v", out, err)
+	}
+	out, _, err = delegationCommand(t, "show")
+	if err != nil || !strings.Contains(out.String(), "implement\tone\ttmpl-model\ttemplate\t\n") {
+		t.Fatalf("show=%q err=%v", out, err)
+	}
+}
+
+func TestDelegationCLIRejectsDotNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "leo.yaml")
+	if err := config.Save(path, delegationCLIConfig()); err != nil {
+		t.Fatal(err)
+	}
+	old := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = old })
+	for _, args := range [][]string{{"use", ".."}, {"show", "."}, {"resolve", ".."}} {
+		if _, _, err := delegationCommand(t, args...); err == nil || !strings.Contains(err.Error(), "invalid") {
+			t.Fatalf("%v: err=%v", args, err)
+		}
+	}
+}
