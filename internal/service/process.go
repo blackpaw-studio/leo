@@ -754,7 +754,27 @@ type RunSupervisedOptions struct {
 // its own tmux session with a restart loop). It no longer starts any
 // config-declared "processes" — agents are the only supervised primitive.
 func RunSupervised(opts RunSupervisedOptions) error {
+	if err := scrubDispatchIdentity(); err != nil {
+		return err
+	}
 	return supervisedExecFn(opts)
+}
+
+// scrubDispatchIdentity drops a dispatch identity the daemon inherited from
+// the shell that launched it (e.g. `leo service` or `make e2e` run inside a
+// dispatch pane). Every child the daemon spawns — its tmux server, one-shot
+// task runs, headless dispatches — starts from os.Environ(), and any of them
+// running `leo dispatch report` would otherwise act for the caller's run.
+// The daemon itself never reads these vars; it gets its config via
+// RunSupervisedOptions.ConfigPath. sessionEnvArgs still blanks them per
+// session as defence in depth.
+func scrubDispatchIdentity() error {
+	for _, k := range dispatchIdentityEnvKeys {
+		if err := os.Unsetenv(k); err != nil {
+			return fmt.Errorf("scrubbing inherited %s: %w", k, err)
+		}
+	}
+	return nil
 }
 
 func defaultSupervisedExec(opts RunSupervisedOptions) error {
