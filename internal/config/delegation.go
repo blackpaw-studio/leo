@@ -157,7 +157,7 @@ func (c *Config) validateDelegation() []string {
 			errs = append(errs, fmt.Sprintf("delegation.active_profile %q does not exist", d.ActiveProfile))
 		}
 	}
-	for role := range d.Roles {
+	for _, role := range sortedRoleNames(d.Roles) {
 		if !delegationNamePattern.MatchString(role) {
 			errs = append(errs, fmt.Sprintf("delegation.roles.%q is not a valid name", role))
 		}

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 func TestEnsureConfigWritesFile(t *testing.T) {
@@ -198,4 +200,41 @@ func TestLeoNudge(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDelegationBlockAndNudgeGate(t *testing.T) {
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true}, Delegation: &config.DelegationConfig{
+		Roles:         map[string]config.RoleSpec{"implement": {UseFor: "Write \"safe\" code with `tests`"}},
+		ActiveProfile: "a", Profiles: map[string]config.Profile{"a": {Roles: map[string]config.RoleTarget{"implement": {Template: "hidden-template", Model: "hidden-model"}}}},
+	}}
+	block := DelegationBlock(cfg)
+	if !strings.Contains(block, "implement") || !strings.Contains(block, `Write "safe" code with `+"`tests`") || strings.Contains(block, "hidden-template") || strings.Contains(block, "hidden-model") {
+		t.Fatalf("block=%q", block)
+	}
+	if !strings.Contains(LeoNudge(cfg), block) {
+		t.Fatal("nudge omitted delegation block")
+	}
+	cfg.Web.Enabled = false
+	if DelegationBlock(cfg) != "" || strings.Contains(LeoNudge(cfg), "implement") {
+		t.Fatal("web-disabled delegation leaked")
+	}
+	plain := &config.Config{Web: config.WebConfig{Enabled: true}}
+	if got, want := LeoNudge(plain), leoMessagingNudgeText+" "+leoConsultNudgeText+" "+leoSkillNudgeText; got != want {
+		t.Fatalf("absent delegation changed nudge: %q", got)
+	}
+}
+
+func TestDelegationBlockMergesWithClaudeUserPrompt(t *testing.T) {
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true}, Delegation: &config.DelegationConfig{Roles: map[string]config.RoleSpec{"implement": {UseFor: "write code"}}, ActiveProfile: "p", Profiles: map[string]config.Profile{"p": {Roles: map[string]config.RoleTarget{"implement": {Template: "hidden"}}}}}}
+	block := DelegationBlock(cfg)
+	args, err := (claudeharness.Claude{}).Args(harness.LaunchSpec{Kind: harness.KindTask, Model: "sonnet", Workspace: "/ws", SystemContext: block, Options: claudeharness.Options{AppendSystemPrompt: "user instruction"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range args[:len(args)-1] {
+		if args[i] == "--append-system-prompt" && args[i+1] == block+"\n\nuser instruction" {
+			return
+		}
+	}
+	t.Fatalf("args=%q", args)
 }

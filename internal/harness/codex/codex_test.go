@@ -2,11 +2,26 @@ package codex
 
 import (
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
+
+func TestDeveloperInstructionsTOMLRoundTrip(t *testing.T) {
+	want := "Delegation:\n- implement: use `leo_dispatch` with \"quoted\" guidance"
+	args := developerInstructionsArgs(want)
+	if len(args) != 2 {
+		t.Fatalf("args=%q", args)
+	}
+	encoded := strings.TrimPrefix(args[1], "developer_instructions=")
+	got, err := strconv.Unquote(encoded)
+	if err != nil || got != want {
+		t.Fatalf("round trip = %q, %v", got, err)
+	}
+}
 
 func TestValidateModel(t *testing.T) {
 	tests := []struct {

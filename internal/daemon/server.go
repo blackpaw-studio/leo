@@ -17,6 +17,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -382,6 +383,11 @@ func (s *Server) ReloadConfig() error {
 	cfg, err := config.Load(s.configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+	if cfg.UsesHarness("opencode") {
+		if err := leomcp.EnsureOpenCodeContext(cfg); err != nil {
+			return fmt.Errorf("refresh opencode context: %w", err)
+		}
 	}
 	return s.scheduler.Install(cfg)
 }

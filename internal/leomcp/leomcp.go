@@ -100,9 +100,22 @@ func LeoNudge(cfg *config.Config) string {
 		return ""
 	}
 	if cfg.Web.Enabled {
-		return leoMessagingNudgeText + " " + leoConsultNudgeText + " " + leoSkillNudgeText
+		nudge := leoMessagingNudgeText + " " + leoConsultNudgeText + " " + leoSkillNudgeText
+		if block := DelegationBlock(cfg); block != "" {
+			return nudge + "\n\n" + block
+		}
+		return nudge
 	}
 	return leoSkillNudgeText
+}
+
+// DelegationBlock returns the routing guidance injected into managed agents.
+// It is intentionally unavailable when daemon-backed MCP tools are absent.
+func DelegationBlock(cfg *config.Config) string {
+	if cfg == nil || cfg.Delegation == nil || !cfg.Web.Enabled {
+		return ""
+	}
+	return config.RenderDelegationInstructions(cfg)
 }
 
 // MergeSystemPrompt combines Leo's built-in nudge with any user-configured

@@ -25,7 +25,7 @@ func delegationFixture() *Config {
 			Profiles: map[string]Profile{
 				"primary": {Roles: map[string]RoleTarget{
 					"plan":      {Template: "planner-template"},
-					"implement": {Template: "worker-template", Model: "role-model"},
+					"implement": {Template: "worker-template", Model: "role-model", Effort: "high"},
 				}},
 				"secondary": {Roles: map[string]RoleTarget{
 					"plan":      {Template: "worker-template"},
@@ -82,6 +82,26 @@ func TestDelegationScalarRoundTrip(t *testing.T) {
 	}
 	if got := loaded.Delegation.Profiles["primary"].Roles["plan"].Template; got != "planner-template" {
 		t.Fatalf("template = %q", got)
+	}
+	object := loaded.Delegation.Profiles["primary"].Roles["implement"]
+	if object.Template != "worker-template" || object.Model != "role-model" || object.Effort != "high" {
+		t.Fatalf("object target = %#v", object)
+	}
+}
+
+func TestDelegationDeclaredRoleErrorsAreSorted(t *testing.T) {
+	cfg := delegationFixture()
+	cfg.Delegation.Roles = map[string]RoleSpec{"z bad": {}, "a bad": {}}
+	cfg.Delegation.Profiles["primary"] = Profile{}
+	for range 100 {
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		got := err.Error()
+		if strings.Index(got, `delegation.roles."a bad"`) > strings.Index(got, `delegation.roles."z bad"`) {
+			t.Fatalf("role errors were not sorted: %s", got)
+		}
 	}
 }
 
