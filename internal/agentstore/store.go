@@ -136,6 +136,12 @@ type Record struct {
 	// by a stale inherited value. Empty/nil for shared spawns (no inheritance
 	// concept) and legacy records written before this field existed.
 	InheritedEnv map[string]string `json:"inherited_env,omitempty"`
+
+	// AttentionHooks records that the agent's current session was launched
+	// with attention hooks (set by the supervisor on every fresh spawn). An
+	// agent adopted after a daemon restart reports attention only when this
+	// is true.
+	AttentionHooks bool `json:"attention_hooks,omitempty"`
 }
 
 // IsFailedRestore reports whether this record was stopped by the system after

@@ -18,38 +18,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
-func TestClaudeInteractiveArgvSingleSettings(t *testing.T) {
-	args, err := mergeInteractiveArgs(
-		[]string{"--model", "sonnet", "--settings", `{"crossSessionInbound":"accept"}`},
-		[]string{"--settings", `{"hooks":{"Stop":[{}],"UserPromptSubmit":[{}],"SessionEnd":[{}]}}`},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var raw string
-	for i, arg := range args {
-		if arg == "--settings" {
-			if raw != "" {
-				t.Fatalf("args contain more than one --settings: %#v", args)
-			}
-			raw = args[i+1]
-		}
-	}
-	var settings map[string]any
-	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
-		t.Fatal(err)
-	}
-	if settings["crossSessionInbound"] != "accept" {
-		t.Fatalf("settings = %#v", settings)
-	}
-	hooks := settings["hooks"].(map[string]any)
-	for _, event := range []string{"Stop", "UserPromptSubmit", "SessionEnd"} {
-		if _, ok := hooks[event]; !ok {
-			t.Fatalf("settings hooks = %#v, missing %s", hooks, event)
-		}
-	}
-}
-
 func TestFindPaneByDispatchID(t *testing.T) {
 	r := NewInteractiveRuntime("x", nil, nil, "tmux", "/opt/leo")
 	var got []string

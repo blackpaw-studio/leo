@@ -153,6 +153,9 @@ type ProcessSpec struct {
 	// it as a trailing positional arg. Empty for claude, which keeps the
 	// prompt in ClaudeArgs.
 	OpeningPrompt string
+	// Resumed marks a spawn reviving a dormant agent (agent.SpawnRequest.
+	// Resumed); a hooked resume starts its attention as working.
+	Resumed bool
 	// primaryPane is the tmux-global pane ID captured at session launch or
 	// recovered during adoption. It is intentionally private: it is runtime
 	// supervisor state, not caller configuration.
@@ -413,6 +416,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		Harness:       spec.Harness,
 		Kind:          harness.KindAgent,
 		OpeningPrompt: spec.OpeningPrompt,
+		Resumed:       spec.Resumed,
 	}
 	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
 	return nil
@@ -1048,6 +1052,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	// driver's Start on the first successful launch (create or adopt), then
 	// cleared so an in-loop restart never replays it.
 	openingPrompt := spec.OpeningPrompt
+	// firstLaunch sets the initial attention once per supervise goroutine;
+	// in-loop restarts leave the errored state for the next hook to clear.
+	firstLaunch := true
 
 	for {
 		// Snapshot identity for this iteration. The tmux session name is also
@@ -1089,6 +1096,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				spec.primaryPane = primaryPane
 			}
 			fmt.Fprintf(os.Stdout, "[%s] adopted existing tmux session '%s', claude already running\n", name, sessionName)
+			// Attention does not survive a daemon restart; an agent launched
+			// with hooks is unknown until its next hook fires.
+			if agentAttentionHooks(homePath, name) {
+				sv.launchAttention(name, id, observe.AttentionUnknown)
+			}
 		} else {
 			if pl, ok := drv.(harness.PreLauncher); ok {
 				if err := pl.PreLaunch(handleForSpec(spec, id, homePath)); err != nil {
@@ -1100,7 +1112,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				id.setArgs(currentArgs)
 			}
 
-			claudeCmd := buildClaudeShellCmd(binPath, currentArgs, spec, os.Getenv("PATH"))
+			// launchArgs carries this launch's attention hooks; currentArgs
+			// (and the stored args behind it) never do.
+			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath), currentArgs, spec, name)
+			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, spec, os.Getenv("PATH"))
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
 			// persists a pane's start command, so an interpolated credential
 			// stays readable for the life of the session. See sessionEnvArgs.
@@ -1156,6 +1171,21 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			spec.primaryPane = primaryPane
 
 			fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
+			if spec.Kind == harness.KindAgent {
+				persistAttentionHooks(homePath, name, hooked)
+				switch {
+				case !hooked:
+					sv.dropAttention(name, id)
+				case firstLaunch || !sv.attentionTracked(name):
+					initial := observe.AttentionUnknown
+					if spec.Resumed {
+						initial = observe.AttentionWorking
+					}
+					sv.launchAttention(name, id, initial)
+				}
+				// A hooked in-loop restart keeps errored until the next hook.
+			}
+			firstLaunch = false
 
 			// If any --dangerously-load-development-channels flags are present,
 			// claude will show an interactive confirmation prompt on a fresh

@@ -2,7 +2,6 @@ package consult
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -105,7 +104,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
-	args, err = mergeInteractiveArgs(args, hooks)
+	args, err = claudeharness.MergeSettingsArgs(args, hooks)
 	if err != nil {
 		return "", "", err
 	}
@@ -235,59 +234,6 @@ func (r *TmuxInteractiveRuntime) ViewerKind(pane string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.placements[pane]
-}
-
-// mergeInteractiveArgs combines settings flags because Claude's base agent
-// argv already carries crossSessionInbound and its hooks live in settings too.
-func mergeInteractiveArgs(args, hooks []string) ([]string, error) {
-	settings := map[string]any{}
-	merge := func(raw string) error {
-		var next map[string]any
-		if err := json.Unmarshal([]byte(raw), &next); err != nil {
-			return err
-		}
-		for key, value := range next {
-			if child, ok := value.(map[string]any); ok {
-				if existing, ok := settings[key].(map[string]any); ok {
-					for childKey, childValue := range child {
-						existing[childKey] = childValue
-					}
-					continue
-				}
-			}
-			settings[key] = value
-		}
-		return nil
-	}
-	base := make([]string, 0, len(args)+len(hooks))
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--settings" && i+1 < len(args) {
-			if err := merge(args[i+1]); err != nil {
-				return nil, fmt.Errorf("merge base settings: %w", err)
-			}
-			i++
-			continue
-		}
-		base = append(base, args[i])
-	}
-	for i := 0; i < len(hooks); i++ {
-		if hooks[i] == "--settings" && i+1 < len(hooks) {
-			if err := merge(hooks[i+1]); err != nil {
-				return nil, fmt.Errorf("merge hook settings: %w", err)
-			}
-			i++
-			continue
-		}
-		base = append(base, hooks[i])
-	}
-	if len(settings) == 0 {
-		return base, nil
-	}
-	encoded, err := json.Marshal(settings)
-	if err != nil {
-		return nil, fmt.Errorf("encode merged settings: %w", err)
-	}
-	return append(base, "--settings", string(encoded)), nil
 }
 
 func (r *TmuxInteractiveRuntime) Inject(ctx context.Context, paneID, text string, arm func() error) error {

@@ -101,7 +101,8 @@ func TestServeEventsHelloCarriesBootID(t *testing.T) {
 }
 
 func TestBootIDIsStableWithinProcess(t *testing.T) {
-	if BootID() == "" || BootID() != BootID() {
-		t.Fatalf("BootID() = %q, want stable non-empty", BootID())
+	first, second := BootID(), BootID()
+	if first == "" || first != second {
+		t.Fatalf("BootID() = %q then %q, want stable non-empty", first, second)
 	}
 }

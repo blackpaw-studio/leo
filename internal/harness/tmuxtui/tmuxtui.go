@@ -40,6 +40,9 @@ type Config struct {
 	PreLaunchFn   func(h harness.SessionHandle) error
 	RefreshArgsFn func(args []string, storedID string) []string
 	DiscoverIDFn  func(ctx context.Context, h harness.SessionHandle, since time.Time) (string, error)
+	// AttentionFn backs harness.AttentionHooker; nil means no attention
+	// hooks for this harness.
+	AttentionFn func(h harness.SessionHandle, args, reportCmd []string) ([]string, error)
 }
 
 type Driver struct{ cfg Config }
@@ -137,6 +140,17 @@ func (d Driver) PreLaunch(h harness.SessionHandle) error {
 		return nil
 	}
 	return d.cfg.PreLaunchFn(h)
+}
+
+func (d Driver) AttentionLaunch(h harness.SessionHandle, args, reportCmd []string) ([]string, bool, error) {
+	if d.cfg.AttentionFn == nil {
+		return args, false, nil
+	}
+	out, err := d.cfg.AttentionFn(h, args, reportCmd)
+	if err != nil {
+		return args, false, err
+	}
+	return out, true, nil
 }
 
 func (d Driver) RefreshSessionArgs(args []string, storedID string) []string {

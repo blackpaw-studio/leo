@@ -53,11 +53,12 @@ func TestWireObservabilitySharesAttentionStore(t *testing.T) {
 }
 
 // spawnFakehook spawns name through SpawnAgent on the fakehook harness with a
-// logging tmux stub whose has-session always fails, so every launch looks
-// like an immediate unexpected exit.
-func spawnFakehook(t *testing.T, sv *Supervisor, name string) {
+// tmux stub whose has-session always fails, so every launch looks like an
+// immediate unexpected exit. hooked selects whether the launch carries
+// attention hooks (and so starts tracked).
+func spawnFakehook(t *testing.T, sv *Supervisor, name string, hooked bool) {
 	t.Helper()
-	testFakeDriver = &fakeHookDriver{}
+	testFakeDriver = &fakeAttentionDriver{supported: hooked}
 	t.Cleanup(func() { testFakeDriver = nil })
 	origPoll, origBackoff := sessionPollInterval, initialBackoff
 	sessionPollInterval, initialBackoff = time.Millisecond, time.Hour
@@ -100,10 +101,9 @@ func TestUnexpectedExitMarksTrackedAgentErrored(t *testing.T) {
 	defer cancel()
 	sv := NewSupervisor(ctx)
 	store := observe.NewAttentionStore(nil)
-	store.Set("tracked", observe.AttentionWorking)
 	sv.SetAttention(store)
 
-	spawnFakehook(t, sv, "tracked")
+	spawnFakehook(t, sv, "tracked", true)
 
 	waitAttention(t, store, "tracked", observe.AttentionErrored)
 	_ = sv.StopAgent("tracked", false)
@@ -116,7 +116,7 @@ func TestUnexpectedExitLeavesUntrackedAgentAbsent(t *testing.T) {
 	store := observe.NewAttentionStore(nil)
 	sv.SetAttention(store)
 
-	spawnFakehook(t, sv, "untracked")
+	spawnFakehook(t, sv, "untracked", false)
 	waitForRestarts(t, sv, "untracked")
 
 	if att, ok := store.Get("untracked"); ok {
@@ -130,9 +130,9 @@ func TestStopAgentMarksTrackedAgentUnknown(t *testing.T) {
 	defer cancel()
 	sv := NewSupervisor(ctx)
 	store := observe.NewAttentionStore(nil)
-	store.Set("tracked", observe.AttentionErrored)
 	sv.SetAttention(store)
-	spawnFakehook(t, sv, "tracked")
+	spawnFakehook(t, sv, "tracked", true)
+	waitAttention(t, store, "tracked", observe.AttentionErrored)
 	store.Set("tracked", observe.AttentionWorking)
 
 	if err := sv.StopAgent("tracked", true); err != nil {
@@ -156,7 +156,7 @@ func TestStopAgentLeavesUntrackedAgentAbsent(t *testing.T) {
 	sv := NewSupervisor(ctx)
 	store := observe.NewAttentionStore(nil)
 	sv.SetAttention(store)
-	spawnFakehook(t, sv, "untracked")
+	spawnFakehook(t, sv, "untracked", false)
 
 	if err := sv.StopAgent("untracked", false); err != nil {
 		t.Fatalf("StopAgent: %v", err)
@@ -170,26 +170,26 @@ func TestDaemonShutdownDoesNotMarkErrored(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	sv := NewSupervisor(ctx)
 	store := observe.NewAttentionStore(nil)
-	store.Set("tracked", observe.AttentionWorking)
 	sv.SetAttention(store)
 	origPoll := sessionPollInterval
 	sessionPollInterval = time.Hour // park in waitForSessionEnd until cancel
 	t.Cleanup(func() { sessionPollInterval = origPoll })
-	testFakeDriver = &fakeHookDriver{}
+	testFakeDriver = &fakeAttentionDriver{supported: true}
 	t.Cleanup(func() { testFakeDriver = nil })
-	dir := t.TempDir()
-	sv.tmuxPath = stubTmux(t, dir, filepath.Join(dir, "tmux.log"))
+	tmuxPath, logPath := liveTmuxStub(t)
+	sv.tmuxPath = tmuxPath
 	sv.homePath = t.TempDir()
 	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "tracked", WorkDir: t.TempDir(), Harness: "fakehook"}); err != nil {
 		t.Fatal(err)
 	}
-	waitForLog(t, filepath.Join(dir, "tmux.log"), "new-session")
+	waitForLog(t, logPath, "new-session")
+	before := waitAttention(t, store, "tracked", observe.AttentionUnknown)
 
 	cancel()
 	waitForState(t, sv, "tracked", "stopped")
 
-	if att, _ := store.Get("tracked"); att.State != observe.AttentionWorking {
-		t.Fatalf("attention after shutdown = %+v, want working untouched", att)
+	if att, _ := store.Get("tracked"); att != before {
+		t.Fatalf("attention after shutdown = %+v, want %+v untouched", att, before)
 	}
 }
 

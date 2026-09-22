@@ -103,3 +103,16 @@ type SessionArgsRefresher interface {
 type TurnAborter interface {
 	AbortTurn(h SessionHandle) error // cancel the in-flight injected turn, if any
 }
+
+// AttentionHooker is an optional SessionDriver capability for harnesses that
+// can report a supervised session's turn boundaries (attention). The
+// supervisor calls it before every fresh spawn of an agent session.
+// AttentionLaunch installs whatever the harness needs so reportCmd runs at
+// each turn boundary and returns the argv for THIS launch only — callers
+// must never persist it as the session's stored args. It must be idempotent
+// and must not mutate args. supported=false (with args returned unchanged)
+// means the harness has no attention hooks; an error also means the launch
+// proceeds unhooked.
+type AttentionHooker interface {
+	AttentionLaunch(h SessionHandle, args, reportCmd []string) (out []string, supported bool, err error)
+}
