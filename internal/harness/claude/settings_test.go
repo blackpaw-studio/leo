@@ -2,7 +2,10 @@ package claude
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -21,6 +24,7 @@ func TestMergeSettingsArgsSingleSettings(t *testing.T) {
 	args, err := MergeSettingsArgs(
 		[]string{"--model", "sonnet", "--settings", `{"crossSessionInbound":"accept"}`},
 		[]string{"--settings", `{"hooks":{"Stop":[{}],"UserPromptSubmit":[{}],"SessionEnd":[{}]}}`},
+		"",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -88,5 +92,61 @@ func TestAttentionLaunchMergesSingleSettingsExactly(t *testing.T) {
 	again, _, err := attentionHooker(t).AttentionLaunch(harness.SessionHandle{}, got, report)
 	if err != nil || !reflect.DeepEqual(again, got) {
 		t.Fatalf("not idempotent:\n%#v\nvs\n%#v (err=%v)", again, got, err)
+	}
+}
+
+func TestMergeSettingsArgsForms(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "user-settings.json")
+	if err := os.WriteFile(file, []byte(`{"theme":"dark","hooks":{"PreToolUse":[{}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	extra := []string{"--settings", `{"hooks":{"Stop":[{}]}}`}
+	want := []string{"--model", "sonnet", "--settings", `{"hooks":{"PreToolUse":[{}],"Stop":[{}]},"theme":"dark"}`}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"equals json", []string{"--model", "sonnet", `--settings={"theme":"dark","hooks":{"PreToolUse":[{}]}}`}},
+		{"file path", []string{"--model", "sonnet", "--settings", file}},
+		{"equals file path", []string{"--model", "sonnet", "--settings=" + file}},
+		{"relative file path", []string{"--model", "sonnet", "--settings", "user-settings.json"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := MergeSettingsArgs(tc.args, extra, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("argv =\n%#v\nwant\n%#v", got, want)
+			}
+		})
+	}
+}
+
+// An unreadable or invalid settings file must fail the merge (the caller
+// then launches with its original argv, unhooked) rather than produce two
+// --settings or silently drop the operator's settings.
+func TestMergeSettingsArgsUnusableFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(dir, "missing.json"), bad} {
+		_, err := MergeSettingsArgs([]string{"--settings", path}, []string{"--settings", `{"a":1}`}, dir)
+		if err == nil || !strings.Contains(err.Error(), path) {
+			t.Errorf("MergeSettingsArgs(%s) err = %v, want an error naming the file", path, err)
+		}
+	}
+}
+
+func TestAttentionLaunchWithUnreadableSettingsFileLeavesArgvUnhooked(t *testing.T) {
+	base := []string{"--settings", "/nonexistent/leo-settings.json"}
+
+	got, supported, err := attentionHooker(t).AttentionLaunch(harness.SessionHandle{Workspace: t.TempDir()}, base, []string{"/opt/leo", "dispatch", "report"})
+
+	if err == nil || supported || !reflect.DeepEqual(got, base) {
+		t.Fatalf("AttentionLaunch = %#v, supported=%v, err=%v; want original argv, unsupported, error", got, supported, err)
 	}
 }

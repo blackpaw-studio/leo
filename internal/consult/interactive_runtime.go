@@ -104,7 +104,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
-	args, err = claudeharness.MergeSettingsArgs(args, hooks)
+	args, err = claudeharness.MergeSettingsArgs(args, hooks, req.Cwd)
 	if err != nil {
 		return "", "", err
 	}

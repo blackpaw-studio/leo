@@ -3,6 +3,9 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
@@ -31,56 +34,49 @@ func (c Claude) AttentionHooks(reportCmd []string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("claude: encoding attention hooks: %w", err)
 	}
-	return MergeSettingsArgs(turn, []string{"--settings", string(notification)})
+	return MergeSettingsArgs(turn, []string{"--settings", string(notification)}, "")
 }
 
 // attentionLaunch backs the driver's harness.AttentionHooker capability.
-func attentionLaunch(_ harness.SessionHandle, args, reportCmd []string) ([]string, error) {
+func attentionLaunch(h harness.SessionHandle, args, reportCmd []string) ([]string, error) {
 	hooks, err := (Claude{}).AttentionHooks(reportCmd)
 	if err != nil {
 		return nil, err
 	}
-	return MergeSettingsArgs(args, hooks)
+	return MergeSettingsArgs(args, hooks, h.Workspace)
 }
 
-// MergeSettingsArgs folds every `--settings <json>` in args and extra into a
-// single trailing --settings, because claude honors only one. Top-level keys
+// settingsFlag is claude's settings flag; it takes a JSON string or a path
+// to a settings file, as `--settings <v>` or `--settings=<v>`.
+const settingsFlag = "--settings"
+
+// MergeSettingsArgs folds every --settings in args and extra into a single
+// trailing --settings, because claude honors only one. Values may be inline
+// JSON or a settings file path (relative paths resolve against baseDir, the
+// session's working directory); a file is read and inlined. Top-level keys
 // merge, and object values (e.g. hooks) merge one level deep, later wins;
-// other flags keep their order. Neither input is mutated.
-func MergeSettingsArgs(args, extra []string) ([]string, error) {
+// other flags keep their order. An unreadable or invalid value is an error,
+// never a second --settings or a silently dropped one. Neither input is
+// mutated.
+func MergeSettingsArgs(args, extra []string, baseDir string) ([]string, error) {
 	settings := map[string]any{}
-	merge := func(raw string) error {
-		var next map[string]any
-		if err := json.Unmarshal([]byte(raw), &next); err != nil {
-			return err
-		}
-		for key, value := range next {
-			if child, ok := value.(map[string]any); ok {
-				if existing, ok := settings[key].(map[string]any); ok {
-					for childKey, childValue := range child {
-						existing[childKey] = childValue
-					}
-					continue
-				}
-			}
-			settings[key] = value
-		}
-		return nil
-	}
 	base := make([]string, 0, len(args)+len(extra))
 	for _, group := range []struct {
 		name string
 		argv []string
 	}{{"base", args}, {"extra", extra}} {
 		for i := 0; i < len(group.argv); i++ {
-			if group.argv[i] == "--settings" && i+1 < len(group.argv) {
-				if err := merge(group.argv[i+1]); err != nil {
-					return nil, fmt.Errorf("merge %s settings: %w", group.name, err)
-				}
-				i++
+			value, consumed, ok := settingsValue(group.argv, i)
+			if !ok {
+				base = append(base, group.argv[i])
 				continue
 			}
-			base = append(base, group.argv[i])
+			i += consumed
+			next, err := loadSettings(value, baseDir)
+			if err != nil {
+				return nil, fmt.Errorf("merge %s settings: %w", group.name, err)
+			}
+			mergeSettings(settings, next)
 		}
 	}
 	if len(settings) == 0 {
@@ -90,5 +86,58 @@ func MergeSettingsArgs(args, extra []string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode merged settings: %w", err)
 	}
-	return append(base, "--settings", string(encoded)), nil
+	return append(base, settingsFlag, string(encoded)), nil
+}
+
+// settingsValue reports whether argv[i] is a --settings flag, returning its
+// value and how many extra argv entries it consumed.
+func settingsValue(argv []string, i int) (value string, consumed int, ok bool) {
+	arg := argv[i]
+	if v, found := strings.CutPrefix(arg, settingsFlag+"="); found {
+		return v, 0, true
+	}
+	if arg == settingsFlag && i+1 < len(argv) {
+		return argv[i+1], 1, true
+	}
+	return "", 0, false
+}
+
+// loadSettings decodes one --settings value: inline JSON when it starts
+// with '{', otherwise a settings file path.
+func loadSettings(value, baseDir string) (map[string]any, error) {
+	var out map[string]any
+	if strings.HasPrefix(strings.TrimSpace(value), "{") {
+		if err := json.Unmarshal([]byte(value), &out); err != nil {
+			return nil, fmt.Errorf("decoding inline settings: %w", err)
+		}
+		return out, nil
+	}
+	path := value
+	if !filepath.IsAbs(path) && baseDir != "" {
+		path = filepath.Join(baseDir, path)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // operator-configured settings file
+	if err != nil {
+		return nil, fmt.Errorf("reading settings file %s: %w", path, err)
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decoding settings file %s: %w", path, err)
+	}
+	return out, nil
+}
+
+// mergeSettings folds next into dst: top-level keys, and object values one
+// level deep, later wins.
+func mergeSettings(dst, next map[string]any) {
+	for key, value := range next {
+		if child, ok := value.(map[string]any); ok {
+			if existing, ok := dst[key].(map[string]any); ok {
+				for childKey, childValue := range child {
+					existing[childKey] = childValue
+				}
+				continue
+			}
+		}
+		dst[key] = value
+	}
 }
