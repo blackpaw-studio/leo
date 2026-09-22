@@ -1,0 +1,14 @@
+{{define "delegation_preview"}}
+<section id="delegation-preview" class="card">
+  <h3>Switch to {{.Profile}}?</h3>
+  {{if .Changes}}<ul>{{range .Changes}}
+    <li><code>{{.Role}}</code> {{.Kind}}
+      {{if eq .Kind "changed"}}: template={{.Before.Template}}, model={{.Before.Model}}, effort={{.Before.Effort}} → template={{.After.Template}}, model={{.After.Model}}, effort={{.After.Effort}}{{end}}
+      {{if eq .Kind "added"}}: template={{.After.Template}}, model={{.After.Model}}, effort={{.After.Effort}}{{end}}
+      {{if eq .Kind "removed"}}: template={{.Before.Template}}, model={{.Before.Model}}, effort={{.Before.Effort}}{{end}}
+    </li>{{end}}
+  </ul>{{else}}<p>No role-routing changes.</p>{{end}}
+  {{if .Missing}}<p class="flash flash-warning">Blocked: unmapped declared roles: {{range .Missing}}<code>{{.}}</code> {{end}}</p>
+  {{else}}<form hx-post="/web/delegation/active" hx-target="#flash-container"><input type="hidden" name="profile" value="{{.Profile}}"><button class="btn">confirm make active</button></form>{{end}}
+</section>
+{{end}}

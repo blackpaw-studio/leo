@@ -85,6 +85,7 @@ tbody tr:hover td { background: var(--panel-2); }
 .pill { display: inline-block; padding: 1px var(--sp-2); border-radius: 3px; font-size: var(--fs-sm); }
 .pill.ok { color: var(--good); background: var(--good-bg); }
 .pill.err { color: var(--bad); background: var(--bad-bg); }
+.pill.warn { color: var(--accent); background: var(--accent-bg); }
 .pill.off { color: var(--dim); background: var(--dim-bg); }
 .btn {
   display: inline-block; padding: 3px var(--sp-3); border: 1px solid var(--line);

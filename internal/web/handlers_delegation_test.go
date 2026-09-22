@@ -101,7 +101,7 @@ func TestDelegationPreviewShowsDiffAndBlock(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/web/delegation/preview?profile=next", nil)
 	s.handleDelegationPreview(w, req)
 	got := w.Body.String()
-	if !strings.Contains(got, "implement") || !strings.Contains(got, "blocked: unmapped declared roles: [review]") {
+	if !strings.Contains(got, "implement") || !strings.Contains(got, "Blocked: unmapped declared roles:") || !strings.Contains(got, "review") {
 		t.Fatalf("preview = %q", got)
 	}
 }

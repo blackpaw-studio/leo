@@ -12,8 +12,28 @@ import (
 type delegationPageData struct {
 	Config    *config.DelegationConfig
 	Templates []string
+	Roles     []delegationRole
 	Warnings  []string
 	Records   []any
+}
+
+type delegationRole struct {
+	Name     string
+	UseFor   string
+	Declared bool
+}
+
+type delegationPreviewData struct {
+	Profile string
+	Changes []delegationProfileChange
+	Missing []string
+}
+
+type delegationProfileChange struct {
+	Role   string
+	Kind   string
+	Before config.RoleTarget
+	After  config.RoleTarget
 }
 
 func (s *Server) buildDelegationData(_ *http.Request) (any, error) {
@@ -39,7 +59,32 @@ func (s *Server) buildDelegationData(_ *http.Request) (any, error) {
 			}
 		}
 	}
-	return delegationPageData{Config: d, Templates: templates, Warnings: cfg.DelegationWarnings(), Records: records}, nil
+	roles := delegationRoles(d)
+	return delegationPageData{Config: d, Templates: templates, Roles: roles, Warnings: cfg.DelegationWarnings(), Records: records}, nil
+}
+
+func delegationRoles(d *config.DelegationConfig) []delegationRole {
+	all := map[string]delegationRole{}
+	for name, spec := range d.Roles {
+		all[name] = delegationRole{Name: name, UseFor: spec.UseFor, Declared: true}
+	}
+	for _, profile := range d.Profiles {
+		for name := range profile.Roles {
+			if _, declared := all[name]; !declared {
+				all[name] = delegationRole{Name: name}
+			}
+		}
+	}
+	names := make([]string, 0, len(all))
+	for name := range all {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	roles := make([]delegationRole, 0, len(names))
+	for _, name := range names {
+		roles = append(roles, all[name])
+	}
+	return roles
 }
 
 func (s *Server) delegationMutation(w http.ResponseWriter, r *http.Request, apply func(*config.Config) error) {
@@ -58,6 +103,9 @@ func (s *Server) delegationMutation(w http.ResponseWriter, r *http.Request, appl
 	}
 	warn := s.reloadConfigOrWarn()
 	typ, msg := appendReloadWarning("success", "Delegation saved", warn)
+	// Match existing config pages: a successful mutation must refresh the
+	// grid, profile markers, and warning state, not only its flash message.
+	w.Header().Set("HX-Refresh", "true")
 	s.renderFlash(w, typ, msg)
 }
 
@@ -75,6 +123,9 @@ func (s *Server) handleDelegationCell(w http.ResponseWriter, r *http.Request) {
 		if template == "" {
 			delete(p.Roles, role)
 		} else {
+			if p.Roles == nil {
+				p.Roles = map[string]config.RoleTarget{}
+			}
 			p.Roles[role] = config.RoleTarget{Template: template, Model: r.FormValue("model"), Effort: r.FormValue("effort")}
 		}
 		cfg.Delegation.Profiles[profile] = p
@@ -164,13 +215,20 @@ func (s *Server) handleDelegationRoleDelete(w http.ResponseWriter, r *http.Reque
 			return err
 		}
 		name := r.FormValue("name")
-		if _, ok := d.Roles[name]; !ok {
-			return fmt.Errorf("role %q not found", name)
+		found := false
+		if _, ok := d.Roles[name]; ok {
+			delete(d.Roles, name)
+			found = true
 		}
-		delete(d.Roles, name)
 		for profileName, p := range d.Profiles {
+			if _, ok := p.Roles[name]; ok {
+				found = true
+			}
 			delete(p.Roles, name)
 			d.Profiles[profileName] = p
+		}
+		if !found {
+			return fmt.Errorf("role %q not found", name)
 		}
 		return nil
 	})
@@ -280,6 +338,7 @@ func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request)
 	}
 	current := d.Profiles[d.ActiveProfile]
 	diff := config.DiffProfiles(current, p)
+	data := delegationPreviewData{Profile: target}
 	missing := []string{}
 	for role := range d.Roles {
 		if _, ok := p.Roles[role]; !ok {
@@ -287,24 +346,21 @@ func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	sort.Strings(missing)
-	_, _ = fmt.Fprint(w, "diff:")
+	data.Missing = missing
 	for _, role := range diff {
 		before, hadBefore := current.Roles[role]
 		after, hadAfter := p.Roles[role]
 		switch {
 		case !hadBefore:
-			fmt.Fprintf(w, " %s added (%s)", role, formatRoleTarget(after))
+			data.Changes = append(data.Changes, delegationProfileChange{Role: role, Kind: "added", After: after})
 		case !hadAfter:
-			fmt.Fprintf(w, " %s removed (%s)", role, formatRoleTarget(before))
+			data.Changes = append(data.Changes, delegationProfileChange{Role: role, Kind: "removed", Before: before})
 		default:
-			fmt.Fprintf(w, " %s changed (%s → %s)", role, formatRoleTarget(before), formatRoleTarget(after))
+			data.Changes = append(data.Changes, delegationProfileChange{Role: role, Kind: "changed", Before: before, After: after})
 		}
 	}
-	if len(missing) > 0 {
-		fmt.Fprintf(w, "; blocked: unmapped declared roles: %v", missing)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "delegation_preview", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-func formatRoleTarget(target config.RoleTarget) string {
-	return fmt.Sprintf("template=%s model=%s effort=%s", target.Template, target.Model, target.Effort)
 }
