@@ -58,6 +58,11 @@ func isolateFromCaller() string {
 }
 
 func TestMain(m *testing.M) {
+	os.Exit(runE2E(m))
+}
+
+// runE2E holds TestMain's body so its deferred cleanup runs before os.Exit.
+func runE2E(m *testing.M) int {
 	tmuxDir := isolateFromCaller()
 	defer os.RemoveAll(tmuxDir)
 
@@ -98,10 +103,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	code := m.Run()
-	os.RemoveAll(tmp)
-	os.RemoveAll(tmuxDir)
-	os.Exit(code)
+	return m.Run()
 }
 
 // isolatedLeoTmux routes Leo's fixed `-L leo` commands through TestMain's
