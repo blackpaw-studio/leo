@@ -177,3 +177,22 @@ In the existing Leo web UI, a **Delegation** page:
   to inform manual switching.
 - Per-agent/per-repo profile override.
 - Opt-in hierarchical role fallback.
+
+## Implementation rulings (Evan, 2026-09-22)
+
+Settled during implementation. Where these differ from the text above, these win.
+
+1. **`effort`:** effort control was added for all three harnesses.
+   - claude: `--effort`
+   - codex: `-c model_reasoning_effort`, limited to `minimal|low|medium|high|xhigh`
+   - opencode: `--variant`
+2. **leo.yaml writes:** writes go through the existing config writer, so comments in leo.yaml are lost. Accepted.
+3. **Scope of `role`:** only `leo_dispatch` takes a `role`. `leo_consult` still takes a template.
+4. **Roles listed in the injected block:** the block lists the roles declared under `delegation.roles`, not the roles the active profile maps. As a result, switching profiles never changes the block.
+5. **No `delegation.roles` map:** the block falls back to listing the active profile's role names without `use_for` text. Undeclared-role warnings are skipped in this case.
+6. **Dispatched subagents:** they never get the block. opencode is the exception, because its global AGENTS.md reaches its dispatches too.
+7. **Global switch:** `delegation.enabled` is on when absent. When it is off:
+   - Profiles stay in the config and are still validated.
+   - The injected block is removed, and the prompt is byte-identical to one with no `delegation` section. The existing `leo_dispatch`/`leo_consult` nudge stays.
+   - Dispatching by role fails loudly. Dispatching by template is unaffected.
+   - It is controlled with `leo delegation enable|disable` or the switch on the web page.
