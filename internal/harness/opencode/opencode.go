@@ -35,6 +35,8 @@ func (Opencode) ValidateModel(model string) error {
 	return fmt.Errorf("%q is not valid (must be provider/model, e.g. anthropic/claude-sonnet-4-5)", model)
 }
 
+func (Opencode) ValidateEffort(effort string) error { return harness.ValidateModelFormat(effort) }
+
 func (Opencode) SupportsChannels() bool { return false }
 
 // SupportsKind: scheduled tasks plus ephemeral agents — all driven against
@@ -81,6 +83,9 @@ func (o Opencode) Args(spec harness.LaunchSpec) ([]string, error) {
 		if spec.Model != "" {
 			args = append(args, "--model", spec.Model)
 		}
+		if spec.Effort != "" {
+			args = append(args, "--variant", spec.Effort)
+		}
 		return args, nil
 	}
 
@@ -97,6 +102,9 @@ func (o Opencode) Args(spec harness.LaunchSpec) ([]string, error) {
 	args := []string{"run", "--format", "json"}
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
+	}
+	if spec.Effort != "" {
+		args = append(args, "--variant", spec.Effort)
 	}
 	args = append(args, o.SessionArgs(spec.Session)...)
 	return append(args, spec.Prompt), nil

@@ -30,6 +30,9 @@ func agentArgs(spec harness.LaunchSpec, o Options) []string {
 	o = dispatchedOptions(spec.Dispatched, o)
 	var args []string
 	args = append(args, "--model", spec.Model)
+	if spec.Effort != "" {
+		args = append(args, "--effort", spec.Effort)
+	}
 	args = appendChannelFlags(args, spec.Channels, spec.DevChannels)
 	args = append(args, "--add-dir", spec.Workspace)
 	for _, dir := range spec.AddDirs {
@@ -81,6 +84,9 @@ func taskArgs(spec harness.LaunchSpec, o Options) []string {
 		"--max-turns", strconv.Itoa(spec.MaxTurns),
 		"--output-format", "stream-json",
 		"--verbose",
+	}
+	if spec.Effort != "" {
+		args = append(args, "--effort", spec.Effort)
 	}
 	for _, ch := range spec.DevChannels {
 		args = append(args, "--dangerously-load-development-channels", ch)

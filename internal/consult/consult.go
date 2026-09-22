@@ -217,6 +217,15 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 	if err := h.ValidateModel(model); err != nil {
 		return Started{}, invalidf("model for consult: %v", err)
 	}
+	if req.Effort != "" {
+		validator, ok := h.(harness.EffortValidator)
+		if !ok {
+			return Started{}, invalidf("effort not supported by harness %s", h.Name())
+		}
+		if err := validator.ValidateEffort(req.Effort); err != nil {
+			return Started{}, invalidf("effort for dispatch: %v", err)
+		}
+	}
 	decoded, err := h.DecodeOptions(cfg.TemplateHarnessOptions(tmpl))
 	if err != nil {
 		return Started{}, invalidf("template %q harness_options: %v", req.Template, err)
@@ -245,8 +254,9 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		notify = *req.Notify
 	}
 	rec := Record{
-		ID: newID(), Caller: req.Caller, Template: req.Template,
+		ID: newID(), Caller: req.Caller, Template: req.Template, Role: req.Role, Profile: req.Profile,
 		Kind: kind, Harness: h.Name(), Model: model, Cwd: req.Cwd, Name: req.Name, Timeout: timeout,
+		Effort: req.Effort,
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
 		Notify: notify, Isolation: req.Isolation, SourceCwd: req.Cwd,
 		CallerPaneID: req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID,
@@ -286,7 +296,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		rec = cloneRecord(state.record)
 	}
 	spec := harness.LaunchSpec{
-		Kind: harness.KindTask, Name: req.Name, Model: model,
+		Kind: harness.KindTask, Name: req.Name, Model: model, Effort: req.Effort,
 		MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd,
 		Prompt: requestPrompt(req), Options: decoded, Dispatched: true,
 	}

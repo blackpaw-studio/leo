@@ -123,7 +123,11 @@ func TestDelegationValidate(t *testing.T) {
 		{"bad model", "delegation.profiles.primary.roles.plan.model", func(c *Config) {
 			c.Delegation.Profiles["primary"] = Profile{Roles: map[string]RoleTarget{"plan": {Template: "planner-template", Model: "bad model"}}}
 		}},
-		{"effort unsupported", "delegation.profiles.primary.roles.plan.effort: effort not supported by harness claude", func(c *Config) {
+		{"effort unsupported", "delegation.profiles.primary.roles.plan.effort: effort not supported by harness stubnochannels", func(c *Config) {
+			registerStubNoChannels()
+			tmpl := c.Templates["planner-template"]
+			tmpl.Harness, tmpl.Model = stubNoChannelsName, ""
+			c.Templates["planner-template"] = tmpl
 			c.Delegation.Profiles["primary"] = Profile{Roles: map[string]RoleTarget{"plan": {Template: "planner-template", Effort: "high"}}}
 		}},
 		{"declared unmapped", "delegation.roles.implement is not mapped in active profile primary", func(c *Config) {

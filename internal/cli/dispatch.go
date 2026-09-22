@@ -73,11 +73,19 @@ func dispatchHTTP(ctx context.Context, cfg *config.Config, method, path string, 
 }
 
 func newDispatchRunCmd() *cobra.Command {
-	var model, cwd, name, host, mode string
+	var model, effort, role, cwd, name, host, mode string
 	var isolation string
 	var notify bool
 	var timeout time.Duration
-	cmd := &cobra.Command{Use: "run <template> <prompt>", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "run <template> <prompt> | run --role <role> <prompt>", Args: func(_ *cobra.Command, args []string) error {
+		if role != "" && len(args) == 1 {
+			return nil
+		}
+		if role == "" && len(args) == 2 {
+			return nil
+		}
+		return fmt.Errorf("provide <template> <prompt>, or --role <role> <prompt>")
+	}, RunE: func(cmd *cobra.Command, args []string) error {
 		if timeout < 0 {
 			return fmt.Errorf("timeout must be non-negative")
 		}
@@ -102,7 +110,18 @@ func newDispatchRunCmd() *cobra.Command {
 		if mode != "headless" && mode != "interactive" {
 			return fmt.Errorf("mode must be headless or interactive")
 		}
-		body := map[string]any{"template": args[0], "prompt": args[1], "model": model, "cwd": cwd, "name": name, "mode": mode}
+		template, prompt := "", ""
+		if role != "" {
+			prompt = args[0]
+		} else {
+			template, prompt = args[0], args[1]
+		}
+		body := map[string]any{"prompt": prompt, "model": model, "effort": effort, "cwd": cwd, "name": name, "mode": mode}
+		if role != "" {
+			body["role"] = role
+		} else {
+			body["template"] = template
+		}
 		if caller := os.Getenv("LEO_PROCESS_NAME"); caller != "" {
 			body["from"] = caller
 		}
@@ -140,6 +159,8 @@ func newDispatchRunCmd() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVarP(&model, "model", "m", "", "model override")
+	cmd.Flags().StringVar(&effort, "effort", "", "reasoning effort override")
+	cmd.Flags().StringVar(&role, "role", "", "delegation role")
 	cmd.Flags().StringVar(&cwd, "cwd", "", "working directory")
 	cmd.Flags().StringVar(&name, "name", "", "run name")
 	cmd.Flags().StringVar(&mode, "mode", "headless", "execution mode (headless or interactive)")

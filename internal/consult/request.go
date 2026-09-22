@@ -9,6 +9,9 @@ const dispatchPreamble = "You are a subagent dispatched by an orchestrator. Do n
 type Request struct {
 	Template string
 	Model    string
+	Effort   string
+	Role     string
+	Profile  string
 	Prompt   string
 	Cwd      string
 	Name     string

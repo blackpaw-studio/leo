@@ -66,6 +66,13 @@ func (Claude) ValidateModel(model string) error {
 	return harness.ValidateModelFormat(model)
 }
 
+func (Claude) ValidateEffort(effort string) error {
+	if effort == "" || effort == "low" || effort == "medium" || effort == "high" || effort == "xhigh" || effort == "max" {
+		return nil
+	}
+	return fmt.Errorf("%q is not valid (use low, medium, high, xhigh, or max)", effort)
+}
+
 // SupportsChannels reports that Claude Code hosts channel plugins.
 func (Claude) SupportsChannels() bool { return true }
 

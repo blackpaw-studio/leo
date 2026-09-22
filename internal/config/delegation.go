@@ -87,7 +87,11 @@ func (r RoleTarget) MarshalYAML() (any, error) {
 
 // Resolution is the resolved routing decision for one role.
 type Resolution struct {
-	Role, Profile, Template, Model, Effort string
+	Role     string `json:"role"`
+	Profile  string `json:"profile"`
+	Template string `json:"template"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort"`
 }
 
 // WithOverrides applies explicit dispatch values over profile values.

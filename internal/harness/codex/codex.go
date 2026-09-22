@@ -31,6 +31,8 @@ func (Codex) ValidateModel(model string) error {
 	return harness.ValidateModelFormat(model)
 }
 
+func (Codex) ValidateEffort(effort string) error { return harness.ValidateModelFormat(effort) }
+
 func (Codex) SupportsChannels() bool { return false }
 
 // SupportsKind: scheduled tasks run one-shot; ephemeral agents and
@@ -86,6 +88,9 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		if spec.Model != "" {
 			args = append(args, "--model", spec.Model)
 		}
+		if spec.Effort != "" {
+			args = append(args, "-c", `model_reasoning_effort="`+spec.Effort+`"`)
+		}
 		args = append(args, execPermissionArgs(opts.PermissionMode)...)
 		args = append(args, developerInstructionsArgs(spec.SystemContext)...)
 		args = append(args, dispatchedArgs(spec.Dispatched)...)
@@ -101,6 +106,9 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 	args := approvalPolicyArgs(opts.PermissionMode)
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
+	}
+	if spec.Effort != "" {
+		args = append(args, "-c", `model_reasoning_effort="`+spec.Effort+`"`)
 	}
 	args = append(args, sandboxArgs(opts.PermissionMode)...)
 	args = append(args, developerInstructionsArgs(spec.SystemContext)...)

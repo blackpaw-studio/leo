@@ -495,6 +495,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
+	apiMux.HandleFunc("GET /api/delegation", s.handleAPIDelegation)
+	apiMux.HandleFunc("GET /api/delegation/resolve", s.handleAPIDelegationResolve)
 	apiMux.HandleFunc("GET /api/dispatch/wait", s.handleAPIDispatchWait)
 	apiMux.HandleFunc("GET /api/dispatch/{id}/output", s.handleAPIDispatchOutput)
 	apiMux.HandleFunc("POST /api/dispatch", s.handleAPIDispatch)

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 )
 
@@ -21,12 +22,13 @@ import (
 func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	var req struct {
-		From, Template, Model, Prompt, Cwd, Name string
-		Mode                                     consult.Mode `json:"mode"`
-		TimeoutSeconds                           *float64     `json:"timeout_seconds"`
-		Notify                                   *bool        `json:"notify"`
-		Isolation                                string       `json:"isolation"`
-		CallerPaneID                             string       `json:"caller_pane_id"`
+		From, Template, Role, Model, Effort, Prompt, Cwd, Name string
+		ExpectTemplate                                         string       `json:"expect_template"`
+		Mode                                                   consult.Mode `json:"mode"`
+		TimeoutSeconds                                         *float64     `json:"timeout_seconds"`
+		Notify                                                 *bool        `json:"notify"`
+		Isolation                                              string       `json:"isolation"`
+		CallerPaneID                                           string       `json:"caller_pane_id"`
 	}
 	if err := decodeDispatchJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
@@ -36,14 +38,32 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "cwd is required"})
 		return
 	}
-	if req.Template == "" || req.Prompt == "" {
-		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "template and prompt are required"})
+	if (req.Template == "" && req.Role == "") || (req.Template != "" && req.Role != "") {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "exactly one of template or role is required"})
+		return
+	}
+	if req.Prompt == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "prompt is required"})
 		return
 	}
 	cfg, err := s.loadConfig()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("loading config: %v", err)})
 		return
+	}
+	profile := ""
+	if req.Role != "" {
+		resolved, err := cfg.ResolveRole(req.Role)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
+			return
+		}
+		if req.ExpectTemplate != "" && req.ExpectTemplate != resolved.Template {
+			writeJSON(w, http.StatusConflict, apiResponse{Error: "delegation profile changed during dispatch; retry"})
+			return
+		}
+		resolved = resolved.WithOverrides(req.Model, req.Effort)
+		req.Template, req.Model, req.Effort, profile = resolved.Template, resolved.Model, resolved.Effort, resolved.Profile
 	}
 	timeout, err := dispatchTimeout(req.TimeoutSeconds, r.URL.Query().Get("timeout_seconds"))
 	if err != nil {
@@ -63,7 +83,7 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
 		return
 	}
-	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness})
+	started, err := s.consults.Start(r.Context(), cfg, consult.Request{Caller: req.From, Template: req.Template, Model: req.Model, Effort: req.Effort, Role: req.Role, Profile: profile, Prompt: req.Prompt, Cwd: req.Cwd, Name: req.Name, Timeout: timeout, Mode: mode, Notify: req.Notify, Isolation: req.Isolation, CallerPaneID: caller.PaneID, CallerSessionID: caller.SessionID, CallerWindowID: caller.WindowID, CallerHarness: caller.Harness})
 	if err != nil {
 		var validationErr *consult.ValidationError
 		status := http.StatusInternalServerError
@@ -74,6 +94,34 @@ func (s *Server) handleAPIDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: started})
+}
+
+func (s *Server) handleAPIDelegation(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("loading config: %v", err)})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: config.RenderDelegationStatus(cfg)})
+}
+
+func (s *Server) handleAPIDelegationResolve(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("loading config: %v", err)})
+		return
+	}
+	role := r.URL.Query().Get("role")
+	if role == "" {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: "role is required"})
+		return
+	}
+	resolved, err := cfg.ResolveRole(role)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: resolved})
 }
 
 func (s *Server) handleAPIDispatchSend(w http.ResponseWriter, r *http.Request) {

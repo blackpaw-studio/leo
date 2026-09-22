@@ -104,8 +104,11 @@ type Record struct {
 	ID            string        `json:"id"`
 	Caller        string        `json:"caller,omitempty"`
 	Template      string        `json:"template"`
+	Role          string        `json:"role,omitempty"`
+	Profile       string        `json:"profile,omitempty"`
 	Harness       string        `json:"harness"`
 	Model         string        `json:"model"`
+	Effort        string        `json:"effort,omitempty"`
 	Kind          string        `json:"kind"`
 	Cwd           string        `json:"cwd"`
 	Name          string        `json:"name,omitempty"`

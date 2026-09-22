@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 )
 
@@ -189,9 +190,21 @@ func (c *daemonClient) consult(ctx context.Context, from, template, model, promp
 }
 
 func (c *daemonClient) dispatch(ctx context.Context, request consult.Request) (consult.Started, error) {
-	body := map[string]any{"from": request.Caller, "template": request.Template, "prompt": request.Prompt, "cwd": request.Cwd}
+	body := map[string]any{"from": request.Caller, "prompt": request.Prompt, "cwd": request.Cwd}
+	if request.Template != "" && request.Role == "" {
+		body["template"] = request.Template
+	}
+	if request.Role != "" {
+		body["role"] = request.Role
+	}
+	if request.Template != "" && request.Role != "" {
+		body["expect_template"] = request.Template
+	}
 	if request.Model != "" {
 		body["model"] = request.Model
+	}
+	if request.Effort != "" {
+		body["effort"] = request.Effort
 	}
 	if request.Name != "" {
 		body["name"] = request.Name
@@ -220,6 +233,30 @@ func (c *daemonClient) dispatch(ctx context.Context, request consult.Request) (c
 		return consult.Started{}, fmt.Errorf("decode dispatch: %w", err)
 	}
 	return started, nil
+}
+
+func (c *daemonClient) resolveRole(ctx context.Context, role string) (config.Resolution, error) {
+	raw, err := c.doContext(ctx, http.MethodGet, "/api/delegation/resolve?role="+url.QueryEscape(role), nil)
+	if err != nil {
+		return config.Resolution{}, err
+	}
+	var resolved config.Resolution
+	if err := json.Unmarshal(raw, &resolved); err != nil {
+		return config.Resolution{}, fmt.Errorf("decode delegation role: %w", err)
+	}
+	return resolved, nil
+}
+
+func (c *daemonClient) delegationStatus(ctx context.Context) (string, error) {
+	raw, err := c.doContext(ctx, http.MethodGet, "/api/delegation", nil)
+	if err != nil {
+		return "", err
+	}
+	var status string
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return "", fmt.Errorf("decode delegation status: %w", err)
+	}
+	return status, nil
 }
 
 func (c *daemonClient) sendDispatch(ctx context.Context, id, message string) (consult.SendResult, error) {

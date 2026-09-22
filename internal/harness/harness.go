@@ -46,6 +46,7 @@ type LaunchSpec struct {
 	Kind        Kind
 	Name        string // process/agent name; empty for tasks
 	Model       string // fully resolved
+	Effort      string // optional harness-specific reasoning effort
 	MaxTurns    int    // 0 = omit the flag (harness default)
 	Workspace   string
 	AddDirs     []string

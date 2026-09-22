@@ -322,20 +322,30 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.addContext(toolDef{
 		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI in a window of your tmux session that the user can watch and type into; the result comes from the harness's own turn hooks; use leo_send_dispatch for follow-ups. Returns immediately; collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
-		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "template", "prompt"),
+		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
-		template, err := stringArg(args, "template")
-		if err != nil {
-			return "", err
+		template, _ := args["template"].(string)
+		role, _ := args["role"].(string)
+		if (template == "" && role == "") || (template != "" && role != "") {
+			return "", fmt.Errorf("exactly one of template or role is required")
 		}
-		if !perms.AllowsConsult(template) {
-			return "", denialError("dispatch template", template, "templates", perms.CanConsult)
+		resolvedTemplate := template
+		if role != "" {
+			resolved, err := client.resolveRole(ctx, role)
+			if err != nil {
+				return "", err
+			}
+			resolvedTemplate = resolved.Template
+		}
+		if !perms.AllowsConsult(resolvedTemplate) {
+			return "", denialError("dispatch template", resolvedTemplate, "templates", perms.CanConsult)
 		}
 		prompt, err := stringArg(args, "prompt")
 		if err != nil {
 			return "", err
 		}
 		model, _ := args["model"].(string)
+		effort, _ := args["effort"].(string)
 		cwd, _ := args["cwd"].(string)
 		if cwd == "" {
 			cwd, _ = os.Getwd()
@@ -358,7 +368,11 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		}
 		isolation, _ := args["isolation"].(string)
 		callerPane, _ := tmux.CallerPaneFromEnv(os.Environ())
-		started, err := client.dispatch(ctx, consult.Request{Caller: processName, CallerPaneID: callerPane, Template: template, Model: model, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, Isolation: isolation})
+		request := consult.Request{Caller: processName, CallerPaneID: callerPane, Template: template, Role: role, Model: model, Effort: effort, Prompt: prompt, Cwd: cwd, Name: name, Timeout: timeout, Mode: mode, Notify: notify, Isolation: isolation}
+		if role != "" {
+			request.Template = resolvedTemplate
+		}
+		started, err := client.dispatch(ctx, request)
 		if err != nil {
 			return "", err
 		}
@@ -366,8 +380,14 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		if started.Window != "" {
 			window = " · window " + started.Window
 		}
-		return fmt.Sprintf("%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", started.ID, started.Harness, started.Model, started.Cwd, window, started.ID), nil
+		prefix := ""
+		if role != "" {
+			prefix = role + "→" + resolvedTemplate + " · "
+		}
+		return fmt.Sprintf("%s%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", prefix, started.ID, started.Harness, started.Model, started.Cwd, window, started.ID), nil
 	})
+
+	r.addContext(toolDef{Name: "leo_delegation", Description: "Show active delegation routing.", InputSchema: emptyArgs}, func(ctx context.Context, _ map[string]any) (string, error) { return client.delegationStatus(ctx) })
 
 	r.addContext(toolDef{
 		Name: "leo_send_dispatch", Description: allowNote("Continue a terminal headless dispatch in its captured native session, or send a follow-up to an idle interactive dispatch. Never send while a turn is running. Returns a turn id to pass to leo_wait. Headless continuation requires a resumable session and available retained workspace; interactive delivery may be acknowledged asynchronously, so never re-send based on delivered alone — wait on the turn id. A rejection means nothing was sent.", "send to dispatched templates", perms.CanConsult),

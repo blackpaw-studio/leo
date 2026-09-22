@@ -81,7 +81,7 @@ func (d *Dispatcher) continueHeadless(cfg *config.Config, rec Record, message st
 	if err != nil {
 		return SendResult{}, err
 	}
-	spec := harness.LaunchSpec{Kind: harness.KindTask, Name: rec.Name, Model: rec.Model, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: cwd, Prompt: message, Options: decoded, Dispatched: true, Session: harness.SessionState{Mode: harness.SessionResume, ID: rec.SessionID}}
+	spec := harness.LaunchSpec{Kind: harness.KindTask, Name: rec.Name, Model: rec.Model, Effort: rec.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: cwd, Prompt: message, Options: decoded, Dispatched: true, Session: harness.SessionState{Mode: harness.SessionResume, ID: rec.SessionID}}
 	if spec.Name == "" {
 		spec.Name = "dispatch"
 	}
