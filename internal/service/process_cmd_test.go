@@ -159,6 +159,33 @@ func TestSessionEnvArgs(t *testing.T) {
 	}
 }
 
+// TestSessionEnvArgsBlanksDispatchIdentity guards against a supervised agent
+// inheriting a dispatch identity. A daemon started from inside a dispatch pane
+// (an e2e run, a manual `leo service` in a dev pane) carries that pane's
+// LEO_DISPATCH_ID and LEO_CONFIG; tmux seeds every new session from the
+// server's global env, so without an explicit blank the agent's
+// `leo dispatch report` hooks would report into the caller's run.
+func TestSessionEnvArgsBlanksDispatchIdentity(t *testing.T) {
+	t.Setenv("LEO_DISPATCH_ID", "d-canary")
+	t.Setenv("LEO_CONFIG", "/caller/leo.yaml")
+	spec := ProcessSpec{
+		Name: "alpha",
+		Env:  map[string]string{"LEO_DISPATCH_ID": "d-configured", "LEO_CONFIG": "/configured.yaml"},
+	}
+
+	got := sessionEnvArgs("/t", spec, nil)
+
+	want := []string{
+		"-e", "LEO_CONFIG=",
+		"-e", "LEO_DISPATCH_ID=",
+		"-e", "LEO_PROCESS_NAME=alpha",
+		"-e", "LEO_TMUX_PATH=/t",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("session env args\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // TestSessionEnvArgsDeterministicOrder keeps logs and tests readable: Go map
 // iteration is randomized, so the args must be sorted.
 func TestSessionEnvArgsDeterministicOrder(t *testing.T) {

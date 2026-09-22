@@ -1500,6 +1500,10 @@ func harnessBinaryPath(harnessName, claudePath string) string {
 	return h.Binary()
 }
 
+// dispatchIdentityEnvKeys are the vars that make `leo dispatch report` act
+// for a dispatch run. sessionEnvArgs blanks them for every supervised agent.
+var dispatchIdentityEnvKeys = []string{"LEO_DISPATCH_ID", "LEO_CONFIG"}
+
 // sessionEnvArgs returns the `-e KEY=VALUE` args for tmux new-session,
 // carrying the process's own configured env plus leo's control vars.
 //
@@ -1547,6 +1551,14 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 		env[k] = v
 	}
 
+	// A supervised agent is never a dispatch. tmux seeds a new session from
+	// the server's global env, which is the daemon's own; a daemon launched
+	// from a dispatch pane would otherwise hand that pane's identity to every
+	// agent, whose `leo dispatch report` hooks then report into the caller's
+	// run. Blank rather than omit: omission leaves the inherited value alone.
+	for _, k := range dispatchIdentityEnvKeys {
+		env[k] = ""
+	}
 	env["LEO_PROCESS_NAME"] = spec.Name
 	env["LEO_TMUX_PATH"] = tmuxPath
 	if spec.WebPort != "" {
