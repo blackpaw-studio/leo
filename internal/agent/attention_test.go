@@ -85,17 +85,14 @@ func TestDeleteRemovesSettingsSpillFile(t *testing.T) {
 	}
 }
 
-func TestRenameRemovesOldSettingsSpillFile(t *testing.T) {
+// A live agent's claude was launched with --settings <old>.json and may
+// re-read it, so only a non-live rename deletes the old spill; the startup
+// sweep (SweepSettingsSpills) cleans the live leftover later.
+func TestRenameRemovesOldSettingsSpillOnlyWhenNotLive(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		home := t.TempDir()
 		_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", Workspace: "/w", Stopped: !live, ClaudeArgs: []string{"--name", "leo-old"}})
-		old := filepath.Join(home, "state", "settings", "leo-old.json")
-		if err := os.MkdirAll(filepath.Dir(old), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(old, []byte(`{"env":{"K":"secret"}}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		old := writeAgentSpill(t, home, "leo-old")
 		sup := &fakeSupervisor{ephemeral: map[string]ProcessState{}}
 		if live {
 			sup.ephemeral["leo-old"] = ProcessState{Name: "leo-old", Status: "running"}
@@ -106,8 +103,43 @@ func TestRenameRemovesOldSettingsSpillFile(t *testing.T) {
 			t.Fatalf("Rename (live=%v): %v", live, err)
 		}
 
-		if _, err := os.Stat(old); !os.IsNotExist(err) {
-			t.Fatalf("live=%v: old spill file after Rename: err=%v, want removed", live, err)
+		_, err := os.Stat(old)
+		if live && err != nil {
+			t.Fatalf("live rename removed the running agent's settings file: %v", err)
+		}
+		if !live && !os.IsNotExist(err) {
+			t.Fatalf("non-live rename kept the old spill file: err=%v", err)
 		}
 	}
+}
+
+func TestSweepSettingsSpillsRemovesOrphanAgentFiles(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-known"})
+	known := writeAgentSpill(t, home, "leo-known")
+	orphan := writeAgentSpill(t, home, "leo-renamed-away")
+	dispatch := writeAgentSpill(t, home, "dispatch-d-123") // the dispatcher's own sweep owns these
+
+	SweepSettingsSpills(home)
+
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan agent spill kept: err=%v", err)
+	}
+	for _, p := range []string{known, dispatch} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s removed: %v", p, err)
+		}
+	}
+}
+
+func writeAgentSpill(t *testing.T, home, name string) string {
+	t.Helper()
+	path := filepath.Join(home, "state", "settings", name+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"env":{"K":"secret"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

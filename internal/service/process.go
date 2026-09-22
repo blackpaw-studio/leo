@@ -891,6 +891,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		agentMgr.SetPublisher(obs.RunLog)
 		agentMgr.SetAttention(obs.Attention)
 		srv.SetAgentManager(agentMgr)
+		// Best-effort: drop settings spill files (which can hold
+		// credentials) of agents that no longer have a record, such as the
+		// old name of an agent renamed while live.
+		agent.SweepSettingsSpills(homePath)
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets
 		// before injection. agentMgr already satisfies daemon.EnsureAgentManager

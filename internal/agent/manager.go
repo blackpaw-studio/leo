@@ -1676,14 +1676,16 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 			return Record{}, fmt.Errorf("persisting rename: %w", err)
 		}
 		m.announceRename(cfg, rec, oldName, newName)
+		// Not live, so nothing runs with --settings <oldName>.json; the next
+		// launch writes <newName>.json, and the old file may hold
+		// credentials. A live agent keeps its file until the startup
+		// SweepSettingsSpills, since its claude may re-read it.
+		removeSettingsSpill(cfg.HomePath, oldName)
 		// After the announce, so consumers see the new name spawn before
 		// its carried attention arrives.
 		m.attention.Move(oldName, newName)
 	}
 
-	// The next launch writes <newName>.json; the old file may hold
-	// credentials.
-	removeSettingsSpill(cfg.HomePath, oldName)
 	rec.Name = newName
 	return rec, nil
 }
