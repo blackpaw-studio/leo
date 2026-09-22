@@ -11,6 +11,7 @@ import (
 
 type delegationPageData struct {
 	Config    *config.DelegationConfig
+	Enabled   bool
 	Templates []delegationTemplate
 	Profiles  []delegationProfileRow
 	Rows      []delegationRow
@@ -111,7 +112,7 @@ func (s *Server) buildDelegationData(_ *http.Request) (any, error) {
 		}
 		rows = append(rows, row)
 	}
-	return delegationPageData{Config: d, Templates: templates, Profiles: profiles, Rows: rows, Warnings: cfg.DelegationWarnings(), Records: records}, nil
+	return delegationPageData{Config: d, Enabled: d.IsEnabled(), Templates: templates, Profiles: profiles, Rows: rows, Warnings: cfg.DelegationWarnings(), Records: records}, nil
 }
 
 func delegationTemplates(cfg *config.Config) []delegationTemplate {
@@ -249,6 +250,26 @@ func (s *Server) handleDelegationUseFor(w http.ResponseWriter, r *http.Request) 
 		return nil
 	})
 	s.renderDelegationStatus(w, useForStatusID(role), warn, errMsg)
+}
+
+// handleDelegationEnabled flips the global delegation switch. Profiles and
+// roles are kept either way; the page refreshes to show the new state.
+func (s *Server) handleDelegationEnabled(w http.ResponseWriter, r *http.Request) {
+	s.delegationMutation(w, r, func(cfg *config.Config) error {
+		d, err := requireDelegation(cfg)
+		if err != nil {
+			return err
+		}
+		switch r.FormValue("enabled") {
+		case "true":
+			d.SetEnabled(true)
+		case "false":
+			d.SetEnabled(false)
+		default:
+			return fmt.Errorf("enabled must be true or false")
+		}
+		return nil
+	})
 }
 
 func (s *Server) handleDelegationActive(w http.ResponseWriter, r *http.Request) {

@@ -317,6 +317,36 @@ th .pill { font-size: var(--fs-xs); letter-spacing: 0.04em; padding: 0 var(--sp-
 .cell-msg:empty { display: none; }
 .cell-msg { color: var(--bad); font-size: var(--fs-xs); margin-top: 2px; max-width: 360px; line-height: 1.4; }
 
+/* global delegation switch */
+.deleg-switch {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4); border-left: 3px solid var(--good);
+}
+.deleg-switch.is-off { border-left-color: var(--dim); }
+.deleg-switch-text { display: grid; gap: 2px; }
+.deleg-switch-text b { font-size: var(--fs-lg); }
+.deleg-switch form { margin: 0; flex-shrink: 0; }
+.switch {
+  display: inline-flex; align-items: center; gap: var(--sp-2); padding: 0;
+  background: none; border: 0; color: var(--dim); font: inherit; font-size: var(--fs-sm); cursor: pointer;
+}
+.switch-track {
+  position: relative; width: 40px; height: 22px; border-radius: 12px;
+  background: var(--dim-bg); border: 1px solid var(--line); transition: background 0.15s, border-color 0.15s;
+}
+.switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--dim); transition: transform 0.15s, background 0.15s;
+}
+.switch[aria-checked="true"] { color: var(--good); }
+.switch[aria-checked="true"] .switch-track { background: var(--good-bg); border-color: var(--good); }
+.switch[aria-checked="true"] .switch-thumb { transform: translateX(18px); background: var(--good); }
+.switch:hover .switch-track { border-color: var(--dim); }
+.switch-label { min-width: 3ch; text-transform: uppercase; letter-spacing: 0.12em; font-size: var(--fs-xs); }
+.deleg-off-banner strong { font-weight: 700; }
+.deleg-editor.is-disabled > .card { opacity: 0.55; transition: opacity 0.15s; }
+.deleg-editor.is-disabled > .card:hover, .deleg-editor.is-disabled > .card:focus-within { opacity: 1; }
+
 /* ⋯ menus (<details class="menu">) */
 .menu { position: relative; display: inline-block; }
 .menu > summary { list-style: none; line-height: 1.2; }

@@ -466,6 +466,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/delegation/cell", s.handleDelegationCell)
 	mux.HandleFunc("POST /web/delegation/use-for", s.handleDelegationUseFor)
 	mux.HandleFunc("POST /web/delegation/active", s.handleDelegationActive)
+	mux.HandleFunc("POST /web/delegation/enabled", s.handleDelegationEnabled)
 	mux.HandleFunc("GET /web/delegation/preview", s.handleDelegationPreview)
 	mux.HandleFunc("POST /web/delegation/role/add", s.handleDelegationRoleAdd)
 	mux.HandleFunc("POST /web/delegation/role/rename", s.handleDelegationRoleRename)

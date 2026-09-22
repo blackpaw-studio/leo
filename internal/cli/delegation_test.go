@@ -115,3 +115,37 @@ func TestDelegationCLIRejectsDotNames(t *testing.T) {
 		}
 	}
 }
+
+func TestDelegationEnableDisableRoundTripKeepsUnrelatedKeys(t *testing.T) {
+	cfg := delegationCLIConfig()
+	cfg.Web.Port = 4321
+	cfg.Templates["one"] = config.TemplateConfig{Model: "keep-me"}
+	path := filepath.Join(t.TempDir(), "leo.yaml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	old := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = old })
+	if _, _, err := delegationCommand(t, "disable"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(path)
+	if err != nil || loaded.Delegation.IsEnabled() {
+		t.Fatalf("disable: enabled=%v err=%v", loaded.Delegation.IsEnabled(), err)
+	}
+	if loaded.Web.Port != 4321 || loaded.Templates["one"].Model != "keep-me" || loaded.Delegation.ActiveProfile != "a" || len(loaded.Delegation.Profiles) != 2 {
+		t.Fatalf("disable changed unrelated keys: %+v", loaded)
+	}
+	out, errOut, err := delegationCommand(t, "render")
+	if err != nil || out.String() != "" || !strings.Contains(errOut.String(), "delegation is disabled") {
+		t.Fatalf("render while disabled: out=%q err=%q %v", out, errOut, err)
+	}
+	if _, _, err := delegationCommand(t, "enable"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = config.Load(path)
+	if err != nil || !loaded.Delegation.IsEnabled() || loaded.Web.Port != 4321 || loaded.Templates["one"].Model != "keep-me" {
+		t.Fatalf("enable: %+v err=%v", loaded, err)
+	}
+}

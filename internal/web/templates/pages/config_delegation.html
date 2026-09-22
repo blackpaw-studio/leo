@@ -56,6 +56,19 @@
 {{if not .Data.Config}}
 <div class="card empty-state">Delegation is not configured.</div>
 {{else}}
+<section class="card deleg-switch{{if not .Data.Enabled}} is-off{{end}}">
+  <div class="deleg-switch-text">
+    <b>Delegation {{if .Data.Enabled}}on{{else}}off{{end}}</b>
+    <span class="dim">{{if .Data.Enabled}}Role dispatches route through the active profile, and managed agents get the roles block.{{else}}Role dispatches fail and no roles block is injected. Template dispatches still work.{{end}}</span>
+  </div>
+  <form hx-post="/web/delegation/enabled" hx-target="#flash-container">
+    <input type="hidden" name="enabled" value="{{if .Data.Enabled}}false{{else}}true{{end}}">
+    <button class="switch" role="switch" aria-checked="{{.Data.Enabled}}" aria-label="Delegation {{if .Data.Enabled}}on — turn off{{else}}off — turn on{{end}}"><span class="switch-track"><span class="switch-thumb"></span></span><span class="switch-label">{{if .Data.Enabled}}on{{else}}off{{end}}</span></button>
+  </form>
+</section>
+{{if not .Data.Enabled}}<div class="flash flash-warning deleg-off-banner"><strong>Delegation is off.</strong> Profiles and roles below are kept and still editable. Running agents keep their current prompt until they restart.</div>{{end}}
+
+<div class="deleg-editor{{if not .Data.Enabled}} is-disabled{{end}}">
 {{range .Data.Warnings}}<div class="flash flash-warning">{{.}}</div>{{end}}
 
 <section class="card">
@@ -149,5 +162,6 @@
     <tbody>{{range .Data.Records}}<tr><td>{{.Role}}</td><td>{{.Profile}}</td><td>{{.Template}}</td><td>{{if .Model}}{{.Model}}{{else}}<span class="dim">inherit</span>{{end}}</td><td>{{.Effort}}</td><td>{{.Status}}</td></tr>{{else}}<tr><td colspan="6" class="empty-state">No role dispatches yet</td></tr>{{end}}</tbody>
   </table></div>
 </section>
+</div>
 {{end}}
 {{end}}

@@ -11,8 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ErrDelegationDisabled indicates that config has no delegation block.
-var ErrDelegationDisabled = errors.New("delegation is not configured")
+// ErrDelegationNotConfigured indicates that config has no delegation block.
+var ErrDelegationNotConfigured = errors.New("delegation is not configured")
+
+// ErrDelegationDisabled indicates that delegation.enabled is false: profiles
+// are kept, but role dispatch and prompt injection are off.
+var ErrDelegationDisabled = errors.New(`delegation is disabled (enable it with "leo delegation enable" or the web Delegation page)`)
 
 // namePattern restricts config entity names (tasks, templates, hosts,
 // delegation roles and profiles, ...) to a URL- and filesystem-path friendly
@@ -42,9 +46,22 @@ const (
 
 // DelegationConfig maps stable work roles to templates by profile.
 type DelegationConfig struct {
+	// Enabled is the global switch. Absent means on, so configs written
+	// before the switch existed keep delegating.
+	Enabled       *bool               `yaml:"enabled,omitempty"`
 	Roles         map[string]RoleSpec `yaml:"roles,omitempty"`
 	ActiveProfile string              `yaml:"active_profile"`
 	Profiles      map[string]Profile  `yaml:"profiles"`
+}
+
+// IsEnabled reports whether delegation is configured and switched on.
+func (d *DelegationConfig) IsEnabled() bool {
+	return d != nil && (d.Enabled == nil || *d.Enabled)
+}
+
+// SetEnabled records the global switch explicitly.
+func (d *DelegationConfig) SetEnabled(on bool) {
+	d.Enabled = &on
 }
 
 // RoleSpec describes the profile-independent purpose of a role.
@@ -138,6 +155,9 @@ func (r Resolution) WithOverrides(model, effort string) Resolution {
 // ResolveRole performs an exact role lookup in the active profile.
 func (c *Config) ResolveRole(role string) (Resolution, error) {
 	if c.Delegation == nil {
+		return Resolution{}, ErrDelegationNotConfigured
+	}
+	if !c.Delegation.IsEnabled() {
 		return Resolution{}, ErrDelegationDisabled
 	}
 	d := c.Delegation
@@ -260,7 +280,7 @@ func (c *Config) validateDelegation() []string {
 
 // RenderDelegationInstructions returns the profile-independent prompt block.
 func RenderDelegationInstructions(cfg *Config) string {
-	if cfg == nil || cfg.Delegation == nil {
+	if cfg == nil || !cfg.Delegation.IsEnabled() {
 		return ""
 	}
 	d := cfg.Delegation
@@ -290,6 +310,9 @@ func RenderDelegationInstructions(cfg *Config) string {
 func RenderDelegationStatus(cfg *Config) string {
 	if cfg == nil || cfg.Delegation == nil {
 		return ""
+	}
+	if !cfg.Delegation.IsEnabled() {
+		return ErrDelegationDisabled.Error() + "\n"
 	}
 	d := cfg.Delegation
 	profile, ok := d.Profiles[d.ActiveProfile]

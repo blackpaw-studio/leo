@@ -118,7 +118,7 @@ func TestResolveRoleAndOverrides(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	cfg.Delegation = nil
-	if _, err := cfg.ResolveRole("plan"); !errors.Is(err, ErrDelegationDisabled) {
+	if _, err := cfg.ResolveRole("plan"); !errors.Is(err, ErrDelegationNotConfigured) {
 		t.Fatalf("error = %v", err)
 	}
 }

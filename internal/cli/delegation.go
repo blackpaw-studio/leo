@@ -12,7 +12,7 @@ import (
 
 func newDelegationCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "delegation", Short: "Manage delegation profiles"}
-	cmd.AddCommand(newDelegationListCmd(), newDelegationShowCmd(), newDelegationRenderCmd(), newDelegationResolveCmd(), newDelegationUseCmd())
+	cmd.AddCommand(newDelegationListCmd(), newDelegationShowCmd(), newDelegationRenderCmd(), newDelegationResolveCmd(), newDelegationUseCmd(), newDelegationToggleCmd(true), newDelegationToggleCmd(false))
 	return cmd
 }
 
@@ -103,6 +103,10 @@ func newDelegationRenderCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if !cfg.Delegation.IsEnabled() {
+			fmt.Fprintln(cmd.ErrOrStderr(), "delegation is disabled; nothing is injected")
+			return nil
+		}
 		_, err = fmt.Fprint(cmd.OutOrStdout(), leomcp.DelegationBlock(cfg))
 		return err
 	}}
@@ -139,23 +143,48 @@ func newDelegationUseCmd() *cobra.Command {
 			return fmt.Errorf("delegation profile %q not found", args[0])
 		}
 		cfg.Delegation.ActiveProfile = args[0]
-		if err := saveConfig(cfg); err != nil {
+		return saveDelegationAndReload(cmd, cfg)
+	}}
+}
+
+func newDelegationToggleCmd(on bool) *cobra.Command {
+	use, short := "disable", "Turn delegation off (profiles are kept)"
+	if on {
+		use, short = "enable", "Turn delegation on"
+	}
+	return &cobra.Command{Use: use, Args: cobra.NoArgs, Short: short, RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := localDelegationConfig()
+		if err != nil {
 			return err
 		}
-		for _, warning := range cfg.DelegationWarnings() {
-			fmt.Fprintln(cmd.ErrOrStderr(), "WARN:", warning)
+		cfg.Delegation.SetEnabled(on)
+		if err := saveDelegationAndReload(cmd, cfg); err != nil {
+			return err
 		}
-		if !daemon.IsRunning(cfg.HomePath) {
-			fmt.Fprintln(cmd.ErrOrStderr(), "WARN: daemon is not running; profile will apply when it starts")
-			return nil
-		}
-		resp, err := daemon.Send(cmd.Context(), cfg.HomePath, "POST", "/config/reload", nil)
-		if err != nil {
-			return fmt.Errorf("sending reload: %w", err)
-		}
-		if !resp.OK {
-			return fmt.Errorf("reload failed: %s", resp.Error)
-		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "delegation %sd; running agents keep their current prompt until restarted\n", use)
 		return nil
 	}}
+}
+
+// saveDelegationAndReload validates and saves a delegation change, prints
+// warnings, then reloads a running daemon.
+func saveDelegationAndReload(cmd *cobra.Command, cfg *config.Config) error {
+	if err := saveConfig(cfg); err != nil {
+		return err
+	}
+	for _, warning := range cfg.DelegationWarnings() {
+		fmt.Fprintln(cmd.ErrOrStderr(), "WARN:", warning)
+	}
+	if !daemon.IsRunning(cfg.HomePath) {
+		fmt.Fprintln(cmd.ErrOrStderr(), "WARN: daemon is not running; the change applies when it starts")
+		return nil
+	}
+	resp, err := daemon.Send(cmd.Context(), cfg.HomePath, "POST", "/config/reload", nil)
+	if err != nil {
+		return fmt.Errorf("sending reload: %w", err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("reload failed: %s", resp.Error)
+	}
+	return nil
 }
