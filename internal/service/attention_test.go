@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -265,5 +266,53 @@ func TestSessionEnvArgsIgnoresSpecEnvAttentionVars(t *testing.T) {
 		if strings.Contains(args, "spoof") {
 			t.Errorf("env = %s, want leo's value to win", args)
 		}
+	}
+}
+
+// laterHookedDriver launches unhooked the first time and hooked after.
+type laterHookedDriver struct {
+	fakeHookDriver
+	calls atomic.Int32
+}
+
+func (d *laterHookedDriver) AttentionLaunch(_ harness.SessionHandle, args, _ []string) ([]string, bool, error) {
+	if d.calls.Add(1) == 1 {
+		return args, false, nil
+	}
+	return args, true, nil
+}
+
+// A resumed spawn is working only on its first launch: a later in-loop
+// restart that is the first hooked launch starts unknown, not working.
+func TestResumedSpawnIsWorkingOnlyOnFirstLaunch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sv := NewSupervisor(ctx)
+	pub := &recordingPublisher{}
+	store := observe.NewAttentionStore(pub)
+	sv.SetAttention(store)
+	testFakeDriver = &laterHookedDriver{}
+	t.Cleanup(func() { testFakeDriver = nil })
+	origPoll, origBackoff := sessionPollInterval, initialBackoff
+	sessionPollInterval, initialBackoff = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { sessionPollInterval, initialBackoff = origPoll, origBackoff })
+	sv.tmuxPath = exitingTmuxStub(t)
+	sv.homePath = t.TempDir()
+	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "resumed", WorkDir: t.TempDir(), Harness: "fakehook", Resumed: true}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sv.StopAgent("resumed", false) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(pub.Events()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	events := pub.Events()
+	if len(events) == 0 {
+		t.Fatal("no attention published")
+	}
+	first := events[0].Payload.(*observe.AgentActivityPayload).Attention
+	if first == nil || first.State != observe.AttentionUnknown {
+		t.Fatalf("first hooked launch (a restart) attention = %+v, want unknown", first)
 	}
 }

@@ -1202,8 +1202,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				case !hooked:
 					sv.dropAttention(name, id)
 				case firstLaunch || !sv.attentionTracked(name):
+					// Only the launch that resumed the agent is mid-turn; a later
+					// restart's first hooked launch knows nothing yet.
 					initial := observe.AttentionUnknown
-					if spec.Resumed {
+					if firstLaunch && spec.Resumed {
 						initial = observe.AttentionWorking
 					}
 					sv.launchAttention(name, id, initial)
