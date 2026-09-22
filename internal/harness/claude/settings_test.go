@@ -141,12 +141,41 @@ func TestMergeSettingsArgsUnusableFileErrors(t *testing.T) {
 	}
 }
 
-func TestAttentionLaunchWithUnreadableSettingsFileLeavesArgvUnhooked(t *testing.T) {
-	base := []string{"--settings", "/nonexistent/leo-settings.json"}
+func TestAttentionLaunchWithUnusableSettingsLeavesArgvUnhooked(t *testing.T) {
+	for _, base := range [][]string{
+		{"--settings", "/nonexistent/leo-settings.json"},
+		{"--model", "sonnet", "--settings"},
+	} {
+		got, supported, err := attentionHooker(t).AttentionLaunch(harness.SessionHandle{Workspace: t.TempDir()}, base, []string{"/opt/leo", "dispatch", "report"})
 
-	got, supported, err := attentionHooker(t).AttentionLaunch(harness.SessionHandle{Workspace: t.TempDir()}, base, []string{"/opt/leo", "dispatch", "report"})
+		if err == nil || supported || !reflect.DeepEqual(got, base) {
+			t.Fatalf("AttentionLaunch(%q) = %#v, supported=%v, err=%v; want original argv, unsupported, error", base, got, supported, err)
+		}
+	}
+}
 
-	if err == nil || supported || !reflect.DeepEqual(got, base) {
-		t.Fatalf("AttentionLaunch = %#v, supported=%v, err=%v; want original argv, unsupported, error", got, supported, err)
+func TestMergeSettingsArgsAppendsToOperatorHookArrays(t *testing.T) {
+	operator := `{"hooks":{"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"audit"}]}]}}`
+	leo := `{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"report"}]}],"Stop":[{"hooks":[{"type":"command","command":"report"}]}]}}`
+
+	got, err := MergeSettingsArgs([]string{"--settings", operator}, []string{"--settings", leo}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"--settings", `{"hooks":{"PostToolUse":[` +
+		`{"hooks":[{"command":"audit","type":"command"}],"matcher":"Bash"},` +
+		`{"hooks":[{"command":"report","type":"command"}]}],` +
+		`"Stop":[{"hooks":[{"command":"report","type":"command"}]}]}}`}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv =\n%#v\nwant\n%#v", got, want)
+	}
+}
+
+func TestMergeSettingsArgsTrailingFlagWithoutValueErrors(t *testing.T) {
+	for _, args := range [][]string{{"--model", "sonnet", "--settings"}, {"--settings", `{"a":1}`, "--settings"}} {
+		if got, err := MergeSettingsArgs(args, []string{"--settings", `{"b":2}`}, ""); err == nil {
+			t.Errorf("MergeSettingsArgs(%q) = %#v, want an error", args, got)
+		}
 	}
 }

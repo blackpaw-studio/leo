@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -66,7 +68,10 @@ func MergeSettingsArgs(args, extra []string, baseDir string) ([]string, error) {
 		argv []string
 	}{{"base", args}, {"extra", extra}} {
 		for i := 0; i < len(group.argv); i++ {
-			value, consumed, ok := settingsValue(group.argv, i)
+			value, consumed, ok, err := settingsValue(group.argv, i)
+			if err != nil {
+				return nil, fmt.Errorf("merge %s settings: %w", group.name, err)
+			}
 			if !ok {
 				base = append(base, group.argv[i])
 				continue
@@ -90,16 +95,20 @@ func MergeSettingsArgs(args, extra []string, baseDir string) ([]string, error) {
 }
 
 // settingsValue reports whether argv[i] is a --settings flag, returning its
-// value and how many extra argv entries it consumed.
-func settingsValue(argv []string, i int) (value string, consumed int, ok bool) {
+// value and how many extra argv entries it consumed. A trailing --settings
+// with no value is an error: passing it through would leave claude with two.
+func settingsValue(argv []string, i int) (value string, consumed int, ok bool, err error) {
 	arg := argv[i]
 	if v, found := strings.CutPrefix(arg, settingsFlag+"="); found {
-		return v, 0, true
+		return v, 0, true, nil
 	}
-	if arg == settingsFlag && i+1 < len(argv) {
-		return argv[i+1], 1, true
+	if arg != settingsFlag {
+		return "", 0, false, nil
 	}
-	return "", 0, false
+	if i+1 >= len(argv) {
+		return "", 0, false, fmt.Errorf("%s has no value", settingsFlag)
+	}
+	return argv[i+1], 1, true, nil
 }
 
 // loadSettings decodes one --settings value: inline JSON when it starts
@@ -127,17 +136,37 @@ func loadSettings(value, baseDir string) (map[string]any, error) {
 }
 
 // mergeSettings folds next into dst: top-level keys, and object values one
-// level deep, later wins.
+// level deep, later wins — except that arrays one level deep (hook event
+// groups such as hooks.PostToolUse) append, so the operator's own hooks run
+// alongside leo's. A group already present is not appended again, which
+// keeps re-merging an already-merged argv idempotent.
 func mergeSettings(dst, next map[string]any) {
 	for key, value := range next {
-		if child, ok := value.(map[string]any); ok {
-			if existing, ok := dst[key].(map[string]any); ok {
-				for childKey, childValue := range child {
-					existing[childKey] = childValue
-				}
-				continue
-			}
+		child, ok := value.(map[string]any)
+		existing, isMap := dst[key].(map[string]any)
+		if !ok || !isMap {
+			dst[key] = value
+			continue
 		}
-		dst[key] = value
+		for childKey, childValue := range child {
+			existing[childKey] = appendGroups(existing[childKey], childValue)
+		}
 	}
+}
+
+// appendGroups appends next's elements to prev when both are arrays,
+// skipping elements prev already holds; otherwise next wins.
+func appendGroups(prev, next any) any {
+	prevGroups, ok := prev.([]any)
+	nextGroups, isArr := next.([]any)
+	if !ok || !isArr {
+		return next
+	}
+	out := slices.Clone(prevGroups)
+	for _, group := range nextGroups {
+		if !slices.ContainsFunc(out, func(g any) bool { return reflect.DeepEqual(g, group) }) {
+			out = append(out, group)
+		}
+	}
+	return out
 }
