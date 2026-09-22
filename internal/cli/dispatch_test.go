@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -49,5 +50,40 @@ func TestDispatchReleaseCommand(t *testing.T) {
 	}
 	if method != "POST" || path != "/api/dispatch/d%2Fx/release" || auth != "Bearer tok" || out.String() != "released\n" {
 		t.Fatalf("method=%s path=%s auth=%q out=%q", method, path, auth, out.String())
+	}
+}
+
+// A supervised agent gets LEO_DISPATCH_ID and LEO_CONFIG blanked rather than
+// unset (see service.sessionEnvArgs); blank must read as "not a dispatch".
+func TestDispatchReportTreatsBlankIdentityAsUnset(t *testing.T) {
+	var hits atomic.Int32
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits.Add(1) })}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	configPath := filepath.Join(t.TempDir(), "leo.yaml")
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf("web:\n  port: %d\ntasks: {}\n", port)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ name, id, config string }{
+		{"blank id", "", configPath},
+		{"blank config", "d-canary", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LEO_DISPATCH_ID", tc.id)
+			t.Setenv("LEO_CONFIG", tc.config)
+			cmd := newDispatchReportCmd()
+			if err := cmd.RunE(cmd, nil); err != nil {
+				t.Fatalf("report: %v", err)
+			}
+			if n := hits.Load(); n != 0 {
+				t.Fatalf("report posted %d times with a blank identity", n)
+			}
+		})
 	}
 }
