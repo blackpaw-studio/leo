@@ -206,21 +206,31 @@ type interactiveE2E struct {
 	service     *exec.Cmd
 	output      *bytes.Buffer
 	stripLocale bool
+	extraEnv    []string
+}
+
+// interactiveOptions shape the e2e daemon. daemonEnv is appended after the
+// test process's own env, so its entries win.
+type interactiveOptions struct {
+	delayMS     int
+	stripLocale bool
+	daemonEnv   []string
 }
 
 func newInteractiveE2E(t *testing.T) *interactiveE2E {
-	return newInteractiveE2EWithDelay(t, 0)
+	return newInteractiveE2EWithOptions(t, interactiveOptions{})
 }
 
 func newInteractiveE2EWithDelay(t *testing.T, delayMS int) *interactiveE2E {
-	return newInteractiveE2EWithOptions(t, delayMS, false)
+	return newInteractiveE2EWithOptions(t, interactiveOptions{delayMS: delayMS})
 }
 
 func newInteractiveE2EWithoutLocale(t *testing.T) *interactiveE2E {
-	return newInteractiveE2EWithOptions(t, 0, true)
+	return newInteractiveE2EWithOptions(t, interactiveOptions{stripLocale: true})
 }
 
-func newInteractiveE2EWithOptions(t *testing.T, delayMS int, stripLocale bool) *interactiveE2E {
+func newInteractiveE2EWithOptions(t *testing.T, opts interactiveOptions) *interactiveE2E {
+	delayMS := opts.delayMS
 	tmuxPath, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Fatalf("tmux is required for interactive e2e: %v", err)
@@ -264,7 +274,7 @@ templates:
 		t.Fatal(err)
 	}
 
-	s := &interactiveE2E{t: t, ws: ws, cfgPath: cfgPath, port: port, tmux: tmuxPath, stripLocale: stripLocale}
+	s := &interactiveE2E{t: t, ws: ws, cfgPath: cfgPath, port: port, tmux: tmuxPath, stripLocale: opts.stripLocale, extraEnv: opts.daemonEnv}
 	s.startDaemon(t)
 	t.Cleanup(func() {
 		if s.service != nil && s.service.Process != nil {
@@ -310,7 +320,7 @@ func (s *interactiveE2E) startDaemon(t *testing.T) {
 	t.Helper()
 	cmd := exec.Command(leoBin, "service", "--supervised", "-c", s.cfgPath)
 	cmd.Dir = s.ws
-	cmd.Env = append(s.daemonEnv(), "PATH="+filepath.Dir(fakeclaude)+":"+os.Getenv("PATH"))
+	cmd.Env = append(append(s.daemonEnv(), "PATH="+filepath.Dir(fakeclaude)+":"+os.Getenv("PATH")), s.extraEnv...)
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
