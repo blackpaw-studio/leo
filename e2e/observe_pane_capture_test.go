@@ -22,10 +22,8 @@ import (
 // Only a real tmux server can fail a bad `-t` argument the way production
 // tmux does.
 func TestObserveTrackerCapturesPaneActionFromRealTmux(t *testing.T) {
-	tmuxPath, err := exec.LookPath("tmux")
-	if err != nil {
-		t.Skip("tmux not available; skipping live pane-capture test")
-	}
+	// A real tmux server, but a disposable one: `-L leo` is production's.
+	tmuxPath, _ := isolatedLeoTmux(t, "leo-e2e-observe")
 
 	const agentName = "e2epanecapture"
 	sessionName := agent.SessionName(agentName)

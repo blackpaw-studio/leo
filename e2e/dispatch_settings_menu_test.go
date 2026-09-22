@@ -24,16 +24,11 @@ import (
 // to prove the binding was installed on that server.
 func isolatedViewerTmux(t *testing.T, realTmux string) (string, string) {
 	t.Helper()
-	if _, err := os.Stat(faketmux); err != nil {
-		t.Skip("tmux wrapper unavailable")
-	}
-	socket := fmt.Sprintf("leo-e2e-settings-%d", time.Now().UnixNano())
-	t.Setenv("FAKECLAUDE_TMUX_SOCKET", socket)
-	if out, err := exec.Command(faketmux, tmux.Args("new-session", "-d", "-s", "keepalive", "sleep", "30")...).CombinedOutput(); err != nil {
+	tmuxPath, socket := isolatedLeoTmux(t, "leo-e2e-settings")
+	if out, err := exec.Command(tmuxPath, tmux.Args("new-session", "-d", "-s", "keepalive", "sleep", "30")...).CombinedOutput(); err != nil {
 		t.Fatalf("new-session isolated socket: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command(faketmux, tmux.Args("kill-server")...).Run() })
-	return faketmux, socket
+	return tmuxPath, socket
 }
 
 func runViewerSettingE2E(t *testing.T, session string) {
