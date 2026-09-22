@@ -214,3 +214,75 @@ func TestAttentionSetIfTrackedOnlyTransitionsTrackedAgents(t *testing.T) {
 		t.Fatal("SetIfTracked created an entry")
 	}
 }
+
+func TestAttentionTokenRoutesToCurrentName(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.RegisterToken("tok-a", "old")
+
+	s.Move("old", "new")
+	att, ok := s.SetByToken("tok-a", AttentionWorking)
+
+	if !ok || att.State != AttentionWorking {
+		t.Fatalf("SetByToken after rename = %+v, %v", att, ok)
+	}
+	if got, ok := s.Get("new"); !ok || got != att {
+		t.Fatalf("Get(new) = %+v, %v; want %+v", got, ok, att)
+	}
+	if _, ok := s.Get("old"); ok {
+		t.Fatal("hook landed on the old name")
+	}
+	if name, ok := s.AgentForToken("tok-a"); !ok || name != "new" {
+		t.Fatalf("AgentForToken = %q, %v", name, ok)
+	}
+}
+
+func TestAttentionUnknownOrUnregisteredTokenIsNoop(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.RegisterToken("tok-a", "a")
+	s.RegisterToken("tok-b", "b")
+	s.Set("b", AttentionFinished)
+
+	s.UnregisterAgent("a")
+	s.Remove("b")
+
+	for _, tok := range []string{"tok-a", "tok-b", "never", ""} {
+		if att, ok := s.SetByToken(tok, AttentionWorking); ok {
+			t.Errorf("SetByToken(%q) = %+v, want no-op", tok, att)
+		}
+	}
+	if len(s.All()) != 0 {
+		t.Fatalf("All = %+v, want empty", s.All())
+	}
+}
+
+func TestAttentionUnregisterTokenLeavesOtherGenerations(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.RegisterToken("gen1", "a")
+	s.RegisterToken("gen2", "a")
+
+	s.UnregisterToken("gen1")
+
+	if _, ok := s.SetByToken("gen1", AttentionWorking); ok {
+		t.Error("stale generation token still routes")
+	}
+	if _, ok := s.SetByToken("gen2", AttentionWorking); !ok {
+		t.Error("live generation token stopped routing")
+	}
+}
+
+func TestAttentionSetByTokenFromGuard(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.RegisterToken("tok", "a")
+	s.Set("a", AttentionWorking)
+
+	if att, ok := s.SetByToken("tok", AttentionWorking, AttentionNeedsInput); ok {
+		t.Fatalf("guarded transition from working applied: %+v", att)
+	}
+	if got, _ := s.Get("a"); got.Revision != 1 {
+		t.Fatalf("guarded no-op churned revision: %+v", got)
+	}
+	s.Set("a", AttentionNeedsInput)
+	if att, ok := s.SetByToken("tok", AttentionWorking, AttentionNeedsInput); !ok || att != (AgentAttention{State: AttentionWorking, Revision: 3}) {
+		t.Fatalf("guarded transition from needs_input = %+v, %v", att, ok)
+	}
+}

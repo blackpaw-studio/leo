@@ -1,6 +1,9 @@
 package observe
 
-import "sync"
+import (
+	"slices"
+	"sync"
+)
 
 // AttentionState is an agent's semantic turn state, fed by harness hooks and
 // supervisor lifecycle transitions — never by pane sampling.
@@ -32,6 +35,10 @@ type AttentionStore struct {
 	mu        sync.Mutex
 	states    map[string]AttentionState
 	revisions map[string]uint64
+	// tokens maps each live launch's attention token to its agent's current
+	// name. Hooks address an agent only through its token, so a rename
+	// follows the agent and a stopped launch's late hooks go nowhere.
+	tokens    map[string]string
 	publisher Publisher
 	activity  ActivityProvider
 }
@@ -41,6 +48,7 @@ func NewAttentionStore(publisher Publisher) *AttentionStore {
 	return &AttentionStore{
 		states:    make(map[string]AttentionState),
 		revisions: make(map[string]uint64),
+		tokens:    make(map[string]string),
 		publisher: publisher,
 	}
 }
@@ -90,28 +98,106 @@ func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAtte
 	return att
 }
 
-// Remove drops agent's attention (the field becomes absent) while keeping its
-// revision counter, so a later Set under the same name still moves forward.
+// Remove drops agent's attention (the field becomes absent) and its tokens
+// while keeping its revision counter, so a later Set under the same name
+// still moves forward.
 func (s *AttentionStore) Remove(agent string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	delete(s.states, agent)
+	s.unregisterAgentLocked(agent)
 	s.mu.Unlock()
 }
 
-// Move re-keys an agent's attention after a rename and announces it under
-// the new name so a stream consumer learns the carried state. The revision
-// bumps past both names' counters: a consumer may already have seen newName
-// at its own (possibly higher) revision. A no-op when oldName has no
-// attention.
+// RegisterToken routes hooks carrying token to agent. An empty token is
+// ignored.
+func (s *AttentionStore) RegisterToken(token, agent string) {
+	if s == nil || token == "" {
+		return
+	}
+	s.mu.Lock()
+	s.tokens[token] = agent
+	s.mu.Unlock()
+}
+
+// UnregisterToken stops routing token, leaving the agent's other tokens.
+func (s *AttentionStore) UnregisterToken(token string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	delete(s.tokens, token)
+	s.mu.Unlock()
+}
+
+// UnregisterAgent stops routing every token of agent.
+func (s *AttentionStore) UnregisterAgent(agent string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.unregisterAgentLocked(agent)
+	s.mu.Unlock()
+}
+
+func (s *AttentionStore) unregisterAgentLocked(agent string) {
+	for token, name := range s.tokens {
+		if name == agent {
+			delete(s.tokens, token)
+		}
+	}
+}
+
+// AgentForToken returns the agent token currently routes to.
+func (s *AttentionStore) AgentForToken(token string) (string, bool) {
+	if s == nil || token == "" {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name, ok := s.tokens[token]
+	return name, ok
+}
+
+// SetByToken is Set for the agent token routes to, resolved and applied
+// atomically so an unregister (stop, exit, delete) always wins over a late
+// hook. When from is non-empty the transition applies only while the
+// agent's current state is one of from; a skipped transition changes
+// nothing. ok=false means no transition was recorded.
+func (s *AttentionStore) SetByToken(token string, state AttentionState, from ...AttentionState) (AgentAttention, bool) {
+	if s == nil || token == "" {
+		return AgentAttention{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, ok := s.tokens[token]
+	if !ok {
+		return AgentAttention{}, false
+	}
+	if len(from) > 0 && !slices.Contains(from, s.states[agent]) {
+		return AgentAttention{}, false
+	}
+	return s.setLocked(agent, state), true
+}
+
+// Move re-keys an agent's attention and tokens after a rename and announces
+// the attention under the new name so a stream consumer learns the carried
+// state. The revision bumps past both names' counters: a consumer may
+// already have seen newName at its own (possibly higher) revision. Tokens
+// move even when oldName has no attention yet.
 func (s *AttentionStore) Move(oldName, newName string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for token, name := range s.tokens {
+		if name == oldName {
+			s.tokens[token] = newName
+		}
+	}
 	state, ok := s.states[oldName]
 	if !ok {
 		return
