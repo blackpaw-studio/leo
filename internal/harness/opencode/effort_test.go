@@ -13,3 +13,14 @@ func TestArgsIncludesEffort(t *testing.T) {
 		t.Fatalf("args=%q err=%v", args, err)
 	}
 }
+
+func TestValidateEffortCharset(t *testing.T) {
+	if err := (Opencode{}).ValidateEffort("high.v2_beta-1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"has space", `quote"`, "line\nbreak"} {
+		if err := (Opencode{}).ValidateEffort(value); err == nil {
+			t.Fatalf("accepted %q", value)
+		}
+	}
+}

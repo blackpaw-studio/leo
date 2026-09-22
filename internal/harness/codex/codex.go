@@ -31,7 +31,14 @@ func (Codex) ValidateModel(model string) error {
 	return harness.ValidateModelFormat(model)
 }
 
-func (Codex) ValidateEffort(effort string) error { return harness.ValidateModelFormat(effort) }
+func (Codex) ValidateEffort(effort string) error {
+	switch effort {
+	case "", "minimal", "low", "medium", "high", "xhigh":
+		return nil
+	default:
+		return fmt.Errorf("%q is not valid (use minimal, low, medium, high, or xhigh)", effort)
+	}
+}
 
 func (Codex) SupportsChannels() bool { return false }
 
@@ -89,7 +96,7 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 			args = append(args, "--model", spec.Model)
 		}
 		if spec.Effort != "" {
-			args = append(args, "-c", `model_reasoning_effort="`+spec.Effort+`"`)
+			args = append(args, "-c", "model_reasoning_effort="+tomlString(spec.Effort))
 		}
 		args = append(args, execPermissionArgs(opts.PermissionMode)...)
 		args = append(args, developerInstructionsArgs(spec.SystemContext)...)
@@ -108,7 +115,7 @@ func (c Codex) Args(spec harness.LaunchSpec) ([]string, error) {
 		args = append(args, "--model", spec.Model)
 	}
 	if spec.Effort != "" {
-		args = append(args, "-c", `model_reasoning_effort="`+spec.Effort+`"`)
+		args = append(args, "-c", "model_reasoning_effort="+tomlString(spec.Effort))
 	}
 	args = append(args, sandboxArgs(opts.PermissionMode)...)
 	args = append(args, developerInstructionsArgs(spec.SystemContext)...)

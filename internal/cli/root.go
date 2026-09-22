@@ -56,6 +56,7 @@ func newRootCmd() *cobra.Command {
 		newCronCmd(),
 		newTaskCmd(),
 		newTemplateCmd(),
+		newDelegationCmd(),
 		newSetupCmd(),
 		newValidateCmd(),
 		newUpdateCmd(),

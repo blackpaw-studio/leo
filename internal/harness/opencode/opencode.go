@@ -8,6 +8,7 @@ package opencode
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -35,7 +36,14 @@ func (Opencode) ValidateModel(model string) error {
 	return fmt.Errorf("%q is not valid (must be provider/model, e.g. anthropic/claude-sonnet-4-5)", model)
 }
 
-func (Opencode) ValidateEffort(effort string) error { return harness.ValidateModelFormat(effort) }
+var effortPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func (Opencode) ValidateEffort(effort string) error {
+	if effort == "" || effortPattern.MatchString(effort) {
+		return nil
+	}
+	return fmt.Errorf("%q is not valid (must contain only letters, numbers, dot, underscore, or hyphen)", effort)
+}
 
 func (Opencode) SupportsChannels() bool { return false }
 
