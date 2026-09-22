@@ -461,6 +461,14 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/delegation/cell", s.handleDelegationCell)
 	mux.HandleFunc("POST /web/delegation/use-for", s.handleDelegationUseFor)
 	mux.HandleFunc("POST /web/delegation/active", s.handleDelegationActive)
+	mux.HandleFunc("GET /web/delegation/preview", s.handleDelegationPreview)
+	mux.HandleFunc("POST /web/delegation/role/add", s.handleDelegationRoleAdd)
+	mux.HandleFunc("POST /web/delegation/role/rename", s.handleDelegationRoleRename)
+	mux.HandleFunc("POST /web/delegation/role/delete", s.handleDelegationRoleDelete)
+	mux.HandleFunc("POST /web/delegation/profile/add", s.handleDelegationProfileAdd)
+	mux.HandleFunc("POST /web/delegation/profile/rename", s.handleDelegationProfileRename)
+	mux.HandleFunc("POST /web/delegation/profile/delete", s.handleDelegationProfileDelete)
+	mux.HandleFunc("POST /web/delegation/profile/duplicate", s.handleDelegationProfileDuplicate)
 
 	// Settings page: Web UI + Remote client config, and remote-host CRUD —
 	// full CRUD lives on one page (no separate edit page).

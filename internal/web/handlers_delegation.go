@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -109,4 +110,201 @@ func (s *Server) handleDelegationActive(w http.ResponseWriter, r *http.Request) 
 		cfg.Delegation.ActiveProfile = name
 		return nil
 	})
+}
+
+func delegationConfig(cfg *config.Config) (*config.DelegationConfig, error) {
+	if cfg.Delegation == nil {
+		return nil, fmt.Errorf("delegation not configured")
+	}
+	return cfg.Delegation, nil
+}
+
+func (s *Server) handleDelegationRoleAdd(w http.ResponseWriter, r *http.Request) {
+	s.delegationMutation(w, r, func(cfg *config.Config) error {
+		d, err := delegationConfig(cfg)
+		if err != nil {
+			return err
+		}
+		name := r.FormValue("name")
+		if !validEntityName(name) {
+			return errors.New(entityNameError)
+		}
+		if _, ok := d.Roles[name]; ok {
+			return fmt.Errorf("role %q already exists", name)
+		}
+		if d.Roles == nil {
+			d.Roles = map[string]config.RoleSpec{}
+		}
+		template := r.FormValue("template")
+		if _, ok := cfg.Templates[template]; !ok {
+			return fmt.Errorf("template %q not found", template)
+		}
+		d.Roles[name] = config.RoleSpec{}
+		active := d.Profiles[d.ActiveProfile]
+		if active.Roles == nil {
+			active.Roles = map[string]config.RoleTarget{}
+		}
+		active.Roles[name] = config.RoleTarget{Template: template}
+		d.Profiles[d.ActiveProfile] = active
+		return nil
+	})
+}
+func (s *Server) handleDelegationRoleRename(w http.ResponseWriter, r *http.Request) {
+	s.delegationMutation(w, r, func(cfg *config.Config) error {
+		if !validEntityName(r.FormValue("new_name")) {
+			return errors.New(entityNameError)
+		}
+		return config.RenameRole(cfg, r.FormValue("name"), r.FormValue("new_name"))
+	})
+}
+func (s *Server) handleDelegationRoleDelete(w http.ResponseWriter, r *http.Request) {
+	s.delegationMutation(w, r, func(cfg *config.Config) error {
+		d, err := delegationConfig(cfg)
+		if err != nil {
+			return err
+		}
+		name := r.FormValue("name")
+		if _, ok := d.Roles[name]; !ok {
+			return fmt.Errorf("role %q not found", name)
+		}
+		delete(d.Roles, name)
+		for profileName, p := range d.Profiles {
+			delete(p.Roles, name)
+			d.Profiles[profileName] = p
+		}
+		return nil
+	})
+}
+func (s *Server) handleDelegationProfileAdd(w http.ResponseWriter, r *http.Request) {
+	s.delegationMutation(w, r, func(cfg *config.Config) error {
+		d, err := delegationConfig(cfg)
+		if err != nil {
+			return err
+		}
+		name := r.FormValue("name")
+		if !validEntityName(name) {
+			return errors.New(entityNameError)
+		}
+		if _, ok := d.Profiles[name]; ok {
+			return fmt.Errorf("profile %q already exists", name)
+		}
+		d.Profiles[name] = config.Profile{Roles: map[string]config.RoleTarget{}}
+		return nil
+	})
+}
+func (s *Server) handleDelegationProfileRename(w http.ResponseWriter, r *http.Request) {
+	s.delegationMutation(w, r, func(cfg *config.Config) error {
+		d, err := delegationConfig(cfg)
+		if err != nil {
+			return err
+		}
+		old, name := r.FormValue("name"), r.FormValue("new_name")
+		if !validEntityName(name) {
+			return errors.New(entityNameError)
+		}
+		p, ok := d.Profiles[old]
+		if !ok {
+			return fmt.Errorf("profile %q not found", old)
+		}
+		if _, ok := d.Profiles[name]; ok {
+			return fmt.Errorf("profile %q already exists", name)
+		}
+		d.Profiles[name] = p
+		delete(d.Profiles, old)
+		if d.ActiveProfile == old {
+			d.ActiveProfile = name
+		}
+		return nil
+	})
+}
+func (s *Server) handleDelegationProfileDelete(w http.ResponseWriter, r *http.Request) {
+	s.delegationMutation(w, r, func(cfg *config.Config) error {
+		d, err := delegationConfig(cfg)
+		if err != nil {
+			return err
+		}
+		name := r.FormValue("name")
+		if name == d.ActiveProfile {
+			return fmt.Errorf("cannot remove active profile %q", name)
+		}
+		if _, ok := d.Profiles[name]; !ok {
+			return fmt.Errorf("profile %q not found", name)
+		}
+		delete(d.Profiles, name)
+		return nil
+	})
+}
+func (s *Server) handleDelegationProfileDuplicate(w http.ResponseWriter, r *http.Request) {
+	s.delegationMutation(w, r, func(cfg *config.Config) error {
+		d, err := delegationConfig(cfg)
+		if err != nil {
+			return err
+		}
+		source, name := r.FormValue("name"), r.FormValue("new_name")
+		if !validEntityName(name) {
+			return errors.New(entityNameError)
+		}
+		p, ok := d.Profiles[source]
+		if !ok {
+			return fmt.Errorf("profile %q not found", source)
+		}
+		if _, ok := d.Profiles[name]; ok {
+			return fmt.Errorf("profile %q already exists", name)
+		}
+		roles := map[string]config.RoleTarget{}
+		for role, target := range p.Roles {
+			roles[role] = target
+		}
+		p.Roles = roles
+		d.Profiles[name] = p
+		return nil
+	})
+}
+
+func (s *Server) handleDelegationPreview(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	d, err := delegationConfig(cfg)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	target := r.URL.Query().Get("profile")
+	p, ok := d.Profiles[target]
+	if !ok {
+		http.Error(w, "profile not found", 404)
+		return
+	}
+	current := d.Profiles[d.ActiveProfile]
+	diff := config.DiffProfiles(current, p)
+	missing := []string{}
+	for role := range d.Roles {
+		if _, ok := p.Roles[role]; !ok {
+			missing = append(missing, role)
+		}
+	}
+	sort.Strings(missing)
+	_, _ = fmt.Fprint(w, "diff:")
+	for _, role := range diff {
+		before, hadBefore := current.Roles[role]
+		after, hadAfter := p.Roles[role]
+		switch {
+		case !hadBefore:
+			fmt.Fprintf(w, " %s added (%s)", role, formatRoleTarget(after))
+		case !hadAfter:
+			fmt.Fprintf(w, " %s removed (%s)", role, formatRoleTarget(before))
+		default:
+			fmt.Fprintf(w, " %s changed (%s → %s)", role, formatRoleTarget(before), formatRoleTarget(after))
+		}
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(w, "; blocked: unmapped declared roles: %v", missing)
+	}
+}
+
+func formatRoleTarget(target config.RoleTarget) string {
+	return fmt.Sprintf("template=%s model=%s effort=%s", target.Template, target.Model, target.Effort)
 }
