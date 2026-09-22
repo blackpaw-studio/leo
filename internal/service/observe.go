@@ -35,6 +35,20 @@ func (s *Supervisor) attentionStore() *observe.AttentionStore {
 	return s.attention
 }
 
+// markAttention transitions an already-tracked agent's attention, but only
+// while id is still that name's registered live generation. Unlike
+// isStaleLocked, a missing identity counts as stale here: StopAgent removes
+// it before recording its own transition, and a dying goroutine must not
+// overwrite that.
+func (s *Supervisor) markAttention(name string, id *procIdentity, state observe.AttentionState) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.attention.SetIfTracked(name, state)
+}
+
 // publish is a nil-safe no-op when no publisher has been configured.
 func (s *Supervisor) publish(ev observe.Event) {
 	s.mu.RLock()

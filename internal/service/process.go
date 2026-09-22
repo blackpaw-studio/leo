@@ -429,6 +429,9 @@ func (s *Supervisor) StopAgent(name string, wakeOnMessage bool) error {
 	if err := s.stopAgentProcess(name); err != nil {
 		return err
 	}
+	// After stopAgentProcess dropped the identity, so the dying supervise
+	// goroutine can no longer mark this generation errored behind us.
+	s.attentionStore().SetIfTracked(name, observe.AttentionUnknown)
 	s.publish(observe.Event{
 		Type: observe.EventAgentStopped,
 		Payload: &observe.AgentStoppedPayload{
@@ -1203,6 +1206,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		default:
 		}
 
+		// Neither ctx nor a stop asked for this exit: the harness died on
+		// its own.
+		sv.markAttention(name, id, observe.AttentionErrored)
 		sv.setState(name, id, "restarting")
 		sv.incrementRestarts(name, id)
 
@@ -1601,6 +1607,13 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 	}
 	env["LEO_PROCESS_NAME"] = spec.Name
 	env["LEO_TMUX_PATH"] = tmuxPath
+	// Routes `leo dispatch report` hook calls to this agent's attention. Set
+	// by leo (never inherited from spec.Env) so a hook cannot be pointed at
+	// another agent's state by config.
+	delete(env, "LEO_ATTENTION_AGENT")
+	if spec.Kind == harness.KindAgent {
+		env["LEO_ATTENTION_AGENT"] = spec.Name
+	}
 	if spec.WebPort != "" {
 		if supervisorWebPortPattern.MatchString(spec.WebPort) {
 			env["LEO_WEB_PORT"] = spec.WebPort

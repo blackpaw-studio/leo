@@ -193,3 +193,21 @@ func fakeActivity(last map[string]time.Time) func(context.Context, string) (map[
 		return out, nil
 	}
 }
+
+func TestAttentionSetIfTrackedOnlyTransitionsTrackedAgents(t *testing.T) {
+	s := NewAttentionStore(nil)
+	s.Set("tracked", AttentionWorking)
+
+	got, ok := s.SetIfTracked("tracked", AttentionErrored)
+	_, untrackedOK := s.SetIfTracked("untracked", AttentionErrored)
+
+	if !ok || got != (AgentAttention{State: AttentionErrored, Revision: 2}) {
+		t.Fatalf("tracked = %+v, %v", got, ok)
+	}
+	if untrackedOK {
+		t.Fatal("untracked agent transitioned")
+	}
+	if _, present := s.Get("untracked"); present {
+		t.Fatal("SetIfTracked created an entry")
+	}
+}

@@ -64,6 +64,25 @@ func (s *AttentionStore) Set(agent string, state AttentionState) AgentAttention 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.setLocked(agent, state)
+}
+
+// SetIfTracked is Set, but only for an agent that already has attention —
+// lifecycle transitions (errored, stopped) must not invent a source for an
+// agent whose harness reports none.
+func (s *AttentionStore) SetIfTracked(agent string, state AttentionState) (AgentAttention, bool) {
+	if s == nil {
+		return AgentAttention{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.states[agent]; !ok {
+		return AgentAttention{}, false
+	}
+	return s.setLocked(agent, state), true
+}
+
+func (s *AttentionStore) setLocked(agent string, state AttentionState) AgentAttention {
 	s.revisions[agent]++
 	s.states[agent] = state
 	att := AgentAttention{State: state, Revision: s.revisions[agent]}
