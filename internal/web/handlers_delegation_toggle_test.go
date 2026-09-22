@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 func TestAPIDispatchRoleFailsLoudlyWhenDelegationDisabled(t *testing.T) {
@@ -64,5 +65,62 @@ func TestDelegationToggleHandler(t *testing.T) {
 	}
 	if page := getDelegationPage(t, s); strings.Contains(page, "Delegation is off") || !strings.Contains(page, `name="enabled" value="false"`) {
 		t.Fatal("enabled page must hide the banner and offer disable")
+	}
+}
+
+// A config written before the switch existed must not gain an `enabled:` key
+// just because an unrelated web save round-trips it.
+func TestUnrelatedWebSaveKeepsEnabledKeyAbsent(t *testing.T) {
+	s, path := newTestServerWithConfigFile(t, delegationTestConfig())
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delegationEnabledKeyPresent(t, before) {
+		t.Fatalf("precondition: fixture already has delegation.enabled:\n%s", before)
+	}
+	w := postDelegation(t, s.handleDelegationUseFor, "role=implement&use_for=changed")
+	if !strings.Contains(w.Body.String(), "saved") {
+		t.Fatalf("save failed: %s", w.Body.String())
+	}
+	postDelegation(t, s.handleDelegationProfileAdd, "name=extra")
+	loaded := loadConfigFile(t, path)
+	if loaded.Delegation.Enabled != nil {
+		t.Fatalf("unrelated save wrote delegation.enabled = %v", *loaded.Delegation.Enabled)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delegationEnabledKeyPresent(t, after) {
+		t.Fatalf("delegation.enabled key appeared:\n%s", after)
+	}
+}
+
+func delegationEnabledKeyPresent(t *testing.T, data []byte) bool {
+	t.Helper()
+	var raw map[string]map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	_, ok := raw["delegation"]["enabled"]
+	return ok
+}
+
+// Activation success must not land in the dialog's role="alert" error slot.
+func TestDelegationActivationSuccessIsNotAnAlert(t *testing.T) {
+	cfg := delegationTestConfig()
+	cfg.Delegation.Profiles["next"] = config.Profile{Roles: map[string]config.RoleTarget{"implement": {Template: "two"}}}
+	s, _ := newTestServerWithConfigFile(t, cfg)
+	w := postDelegation(t, s.handleDelegationActive, "profile=next")
+	if w.Header().Get("HX-Refresh") != "true" {
+		t.Fatalf("activation must refresh: %v", w.Header())
+	}
+	if retarget := w.Header().Get("HX-Retarget"); retarget != "#flash-container" {
+		t.Fatalf("success must be retargeted out of the alert slot, got HX-Retarget=%q", retarget)
+	}
+	w = postDelegation(t, s.handleDelegationActive, "profile=missing")
+	if w.Header().Get("HX-Retarget") != "" || !strings.Contains(w.Body.String(), "not found") {
+		t.Fatalf("errors stay in the dialog slot: %v %s", w.Header(), w.Body.String())
 	}
 }

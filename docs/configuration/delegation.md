@@ -141,6 +141,12 @@ model), or `default` (inherited from `defaults.model`). Only a `profile`
 override is passed to the dispatch; otherwise the template chooses. `use` validates and saves the configuration, prints
 warnings, then reloads a running daemon.
 
+Edits made inside the daemon (web UI saves and daemon task commands) are
+serialized, so concurrent edits there never drop each other. `leo delegation
+use`, `enable`, and `disable` write `leo.yaml` from a separate CLI process, so
+they are last-writer-wins against a web edit saved at the same moment. Re-check
+the page after running them while someone else is editing.
+
 Managed agents also have the read-only `leo_delegation` MCP tool, which shows
 the active profile's routing, including each role's effective model and its
 source. `leo_dispatch` accepts exactly one of `template`

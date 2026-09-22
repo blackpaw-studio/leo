@@ -7,8 +7,7 @@ import "github.com/blackpaw-studio/leo/internal/config"
 //
 //	defer s.lockConfigWrite()()
 func (s *Server) lockConfigWrite() func() {
-	s.configMu.Lock()
-	return s.configMu.Unlock
+	return s.configWriter.Lock()
 }
 
 // mutateConfig loads config, applies apply, validates, saves, and reloads,

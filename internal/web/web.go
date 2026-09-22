@@ -126,10 +126,9 @@ type Server struct {
 	// a "not configured" message instead of guessing a path.
 	serviceLogPath string
 
-	// configMu serializes every web-initiated leo.yaml mutation. Each save is
-	// load → mutate → validate → save, so two concurrent requests would
-	// otherwise interleave and the later save would drop the earlier edit.
-	configMu sync.Mutex
+	// configWriter serializes leo.yaml mutations with every other in-process
+	// writer (the daemon's IPC handlers share it); see config.Writer.
+	configWriter *config.Writer
 
 	// agentMu guards the on-demand, 60s-TTL cache of claude sub-agent names
 	// used to populate dropdowns without shelling out on every render.
@@ -299,14 +298,21 @@ func WithVersion(v string) Option {
 	return func(s *Server) { s.version = v }
 }
 
+// Handler returns the server's fully wrapped HTTP handler (auth and
+// middleware included), for callers that serve or test it in-process.
+func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
+
 // Options bundles the knobs the web server needs that aren't part of the
 // provider interfaces. Zero values disable the corresponding surface:
 //   - Port must match the listener port so Host/Origin checks pass.
 //   - APIToken must be non-empty for /api/* routes to work. If empty, /api/*
 //     responds 500 to avoid accidentally serving the API unauthenticated.
 type Options struct {
-	Port     int
-	APIToken string
+	// ConfigWriter is the process-wide leo.yaml write lock, shared with the
+	// daemon's IPC handlers. Optional; nil gets a private one (tests).
+	ConfigWriter *config.Writer
+	Port         int
+	APIToken     string
 	// AgentToken is the less-privileged token handed to spawned agents as
 	// LEO_API_TOKEN. Accepted on /api/* and the agent-messaging routes, and
 	// rejected at /login and on the rest of the browser UI. Empty means only
@@ -355,7 +361,12 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 		log.Printf("web: ignoring web.trusted_proxies: %v", err)
 		trustedProxies = nil
 	}
+	configWriter := opts.ConfigWriter
+	if configWriter == nil {
+		configWriter = config.NewWriter()
+	}
 	s := &Server{
+		configWriter:       configWriter,
 		configPath:         configPath,
 		processes:          processes,
 		scheduler:          scheduler,

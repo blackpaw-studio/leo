@@ -72,16 +72,19 @@ type AgentManager interface {
 
 // Server is an HTTP server listening on a Unix socket for daemon IPC.
 type Server struct {
-	sockPath   string
-	configPath string
-	httpServer *http.Server
-	listener   net.Listener
-	scheduler  *cron.Scheduler
-	processes  ProcessStateProvider
-	webServer  *web.Server
-	agentMgr   AgentManager
-	router     *sessionRouter
-	logPath    string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
+	// configWriter serializes every in-process leo.yaml write: the IPC task
+	// handlers here and the web server, which is handed the same Writer.
+	configWriter *config.Writer
+	sockPath     string
+	configPath   string
+	httpServer   *http.Server
+	listener     net.Listener
+	scheduler    *cron.Scheduler
+	processes    ProcessStateProvider
+	webServer    *web.Server
+	agentMgr     AgentManager
+	router       *sessionRouter
+	logPath      string // service log path, set via SetLogPath; threaded into web.Options.LogPath by StartWeb
 	// resolveHandle backs web.Options.ResolveHandle: resolves a config-defined
 	// process name to its harness name and SessionHandle. Set via
 	// SetResolveHandle by service boot; nil means every process is claude.
@@ -112,6 +115,10 @@ func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, mess
 	s.leoVersion = version
 }
 
+// ConfigWriter returns the process-wide leo.yaml write lock shared by the
+// daemon's IPC handlers and its web server.
+func (s *Server) ConfigWriter() *config.Writer { return s.configWriter }
+
 // New creates a new daemon server. The processes provider is optional (may be nil).
 func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	leoPath, err := exec.LookPath("leo")
@@ -126,6 +133,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 		processes:     processes,
 		router:        newSessionRouter(),
 		parentContext: context.Background(),
+		configWriter:  config.NewWriter(),
 	}
 
 	// The injector is intentionally NOT wired here: deciding how to inject
@@ -347,6 +355,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))
 	}
 	s.webServer = web.New(s.configPath, &processAdapter{inner: s.processes}, s.scheduler, s, agentSvc, web.Options{
+		ConfigWriter:   s.configWriter,
 		Port:           port,
 		APIToken:       apiToken,
 		AgentToken:     agentToken,

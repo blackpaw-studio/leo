@@ -181,6 +181,9 @@ func (s *Server) delegationMutation(w http.ResponseWriter, _ *http.Request, appl
 	}
 	typ, msg := appendReloadWarning("success", "Delegation saved", warn)
 	w.Header().Set("HX-Refresh", "true")
+	// Success always goes to the page flash, never into a form's local error
+	// slot (the preview dialog's is role="alert").
+	w.Header().Set("HX-Retarget", "#flash-container")
 	s.renderFlash(w, typ, msg)
 }
 
