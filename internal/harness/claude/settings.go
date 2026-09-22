@@ -36,7 +36,7 @@ func (c Claude) AttentionHooks(reportCmd []string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("claude: encoding attention hooks: %w", err)
 	}
-	return MergeSettingsArgs(turn, []string{"--settings", string(notification)}, "")
+	return MergeSettingsArgs(turn, []string{"--settings", string(notification)}, MergeOptions{})
 }
 
 // attentionLaunch backs the driver's harness.AttentionHooker capability.
@@ -45,7 +45,17 @@ func attentionLaunch(h harness.SessionHandle, args, reportCmd []string) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	return MergeSettingsArgs(args, hooks, h.Workspace)
+	return MergeSettingsArgs(args, hooks, MergeOptions{BaseDir: h.Workspace, SpillPath: SettingsSpillPath(h.HomePath, h.Name)})
+}
+
+// MergeOptions configures MergeSettingsArgs.
+type MergeOptions struct {
+	// BaseDir resolves relative settings file paths (the session's working
+	// directory).
+	BaseDir string
+	// SpillPath is the private file the merged settings are written to when
+	// any input was a settings file.
+	SpillPath string
 }
 
 // settingsFlag is claude's settings flag; it takes a JSON string or a path
@@ -55,13 +65,17 @@ const settingsFlag = "--settings"
 // MergeSettingsArgs folds every --settings in args and extra into a single
 // trailing --settings, because claude honors only one. Values may be inline
 // JSON or a settings file path (relative paths resolve against baseDir, the
-// session's working directory); a file is read and inlined. Top-level keys
+// session's working directory). Inline JSON stays inline, but when any value
+// was a file the merged result is written to opts.SpillPath (0600) and
+// passed by path, so a file's contents (credentials in env, say) never reach
+// argv, ps, or tmux's retained pane command. Top-level keys
 // merge, and object values (e.g. hooks) merge one level deep, later wins;
 // other flags keep their order. An unreadable or invalid value is an error,
 // never a second --settings or a silently dropped one. Neither input is
 // mutated.
-func MergeSettingsArgs(args, extra []string, baseDir string) ([]string, error) {
+func MergeSettingsArgs(args, extra []string, opts MergeOptions) ([]string, error) {
 	settings := map[string]any{}
+	fromFile := false
 	base := make([]string, 0, len(args)+len(extra))
 	for _, group := range []struct {
 		name string
@@ -77,7 +91,8 @@ func MergeSettingsArgs(args, extra []string, baseDir string) ([]string, error) {
 				continue
 			}
 			i += consumed
-			next, err := loadSettings(value, baseDir)
+			fromFile = fromFile || !isInlineSettings(value)
+			next, err := loadSettings(value, opts.BaseDir)
 			if err != nil {
 				return nil, fmt.Errorf("merge %s settings: %w", group.name, err)
 			}
@@ -91,7 +106,56 @@ func MergeSettingsArgs(args, extra []string, baseDir string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode merged settings: %w", err)
 	}
-	return append(base, settingsFlag, string(encoded)), nil
+	if !fromFile {
+		return append(base, settingsFlag, string(encoded)), nil
+	}
+	if err := writePrivateFile(opts.SpillPath, encoded); err != nil {
+		return nil, fmt.Errorf("write merged settings: %w", err)
+	}
+	return append(base, settingsFlag, opts.SpillPath), nil
+}
+
+// isInlineSettings reports whether a --settings value is inline JSON rather
+// than a settings file path.
+func isInlineSettings(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), "{")
+}
+
+// writePrivateFile replaces path with data, readable only by the owner,
+// via a same-directory temp file and rename so claude never reads a
+// partial write.
+func writePrivateFile(path string, data []byte) error {
+	if path == "" {
+		return fmt.Errorf("a settings file was given but no private settings path is available; refusing to inline it into argv")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".settings-*.json") // created 0600
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) //nolint:errcheck // gone after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// SettingsSpillPath is where a session's merged settings are written when
+// they include a settings file: <home>/state/settings/<name>.json, one per
+// session name, overwritten on each launch. "" when name is not a plain
+// file name, which makes a file-settings merge fail closed.
+func SettingsSpillPath(homePath, name string) string {
+	if homePath == "" || name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return ""
+	}
+	return filepath.Join(homePath, "state", "settings", name+".json")
 }
 
 // settingsValue reports whether argv[i] is a --settings flag, returning its
@@ -115,7 +179,7 @@ func settingsValue(argv []string, i int) (value string, consumed int, ok bool, e
 // with '{', otherwise a settings file path.
 func loadSettings(value, baseDir string) (map[string]any, error) {
 	var out map[string]any
-	if strings.HasPrefix(strings.TrimSpace(value), "{") {
+	if isInlineSettings(value) {
 		if err := json.Unmarshal([]byte(value), &out); err != nil {
 			return nil, fmt.Errorf("decoding inline settings: %w", err)
 		}

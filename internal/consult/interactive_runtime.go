@@ -104,7 +104,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if err != nil {
 		return "", "", err
 	}
-	args, err = claudeharness.MergeSettingsArgs(args, hooks, req.Cwd)
+	args, err = claudeharness.MergeSettingsArgs(args, hooks, claudeharness.MergeOptions{BaseDir: req.Cwd, SpillPath: claudeharness.SettingsSpillPath(cfg.HomePath, "dispatch-"+req.ID)})
 	if err != nil {
 		return "", "", err
 	}

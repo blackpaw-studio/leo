@@ -24,7 +24,7 @@ func TestMergeSettingsArgsSingleSettings(t *testing.T) {
 	args, err := MergeSettingsArgs(
 		[]string{"--model", "sonnet", "--settings", `{"crossSessionInbound":"accept"}`},
 		[]string{"--settings", `{"hooks":{"Stop":[{}],"UserPromptSubmit":[{}],"SessionEnd":[{}]}}`},
-		"",
+		MergeOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -102,25 +102,99 @@ func TestMergeSettingsArgsForms(t *testing.T) {
 		t.Fatal(err)
 	}
 	extra := []string{"--settings", `{"hooks":{"Stop":[{}]}}`}
-	want := []string{"--model", "sonnet", "--settings", `{"hooks":{"PreToolUse":[{}],"Stop":[{}]},"theme":"dark"}`}
+	merged := `{"hooks":{"PreToolUse":[{}],"Stop":[{}]},"theme":"dark"}`
 	for _, tc := range []struct {
-		name string
-		args []string
+		name   string
+		args   []string
+		inline bool
 	}{
-		{"equals json", []string{"--model", "sonnet", `--settings={"theme":"dark","hooks":{"PreToolUse":[{}]}}`}},
-		{"file path", []string{"--model", "sonnet", "--settings", file}},
-		{"equals file path", []string{"--model", "sonnet", "--settings=" + file}},
-		{"relative file path", []string{"--model", "sonnet", "--settings", "user-settings.json"}},
+		{"equals json", []string{"--model", "sonnet", `--settings={"theme":"dark","hooks":{"PreToolUse":[{}]}}`}, true},
+		{"file path", []string{"--model", "sonnet", "--settings", file}, false},
+		{"equals file path", []string{"--model", "sonnet", "--settings=" + file}, false},
+		{"relative file path", []string{"--model", "sonnet", "--settings", "user-settings.json"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := MergeSettingsArgs(tc.args, extra, dir)
+			spill := filepath.Join(t.TempDir(), "state", "settings", "a.json")
+			got, err := MergeSettingsArgs(tc.args, extra, MergeOptions{BaseDir: dir, SpillPath: spill})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, want) {
+			if tc.inline {
+				if want := []string{"--model", "sonnet", "--settings", merged}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("argv =\n%#v\nwant\n%#v", got, want)
+				}
+				return
+			}
+			if want := []string{"--model", "sonnet", "--settings", spill}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("argv =\n%#v\nwant\n%#v", got, want)
 			}
+			if data, _ := os.ReadFile(spill); string(data) != merged {
+				t.Fatalf("spill file = %s, want %s", data, merged)
+			}
 		})
+	}
+}
+
+// A settings FILE may hold credentials (env), so its contents must never
+// reach argv (ps, tmux's retained pane command): the merged settings go to
+// a private file, rewritten on every launch.
+func TestMergeSettingsArgsFileNeverInlinedIntoArgv(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "secret-settings.json")
+	if err := os.WriteFile(file, []byte(`{"env":{"API_KEY":"s3cret-value"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spill := filepath.Join(t.TempDir(), "state", "settings", "leo-a.json")
+	if err := os.MkdirAll(filepath.Dir(spill), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(spill, []byte(`{"stale":true}`), 0o644); err != nil { //nolint:gosec // stale file with loose perms on purpose
+		t.Fatal(err)
+	}
+
+	got, err := MergeSettingsArgs([]string{"--settings", file}, []string{"--settings", `{"hooks":{"Stop":[{}]}}`}, MergeOptions{SpillPath: spill})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(strings.Join(got, " "), "s3cret-value") {
+		t.Fatalf("argv leaks the settings file's contents: %#v", got)
+	}
+	if !reflect.DeepEqual(got, []string{"--settings", spill}) {
+		t.Fatalf("argv = %#v, want the single private settings path", got)
+	}
+	info, err := os.Stat(spill)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("spill file mode = %v (err %v), want 0600", info.Mode().Perm(), err)
+	}
+	data, _ := os.ReadFile(spill)
+	if string(data) != `{"env":{"API_KEY":"s3cret-value"},"hooks":{"Stop":[{}]}}` {
+		t.Fatalf("spill file = %s, want the merged settings (stale content overwritten)", data)
+	}
+}
+
+func TestMergeSettingsArgsFileWithoutSpillPathErrors(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "s.json")
+	if err := os.WriteFile(file, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := MergeSettingsArgs([]string{"--settings", file}, []string{"--settings", `{"a":1}`}, MergeOptions{}); err == nil {
+		t.Fatalf("argv = %#v, want an error rather than inlining a settings file", got)
+	}
+}
+
+func TestAttentionLaunchSpillsFileSettingsUnderStateDir(t *testing.T) {
+	home, work := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "s.json"), []byte(`{"env":{"K":"secret"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := harness.SessionHandle{Name: "leo-a", Workspace: work, HomePath: home}
+
+	got, supported, err := attentionHooker(t).AttentionLaunch(h, []string{"--settings", "s.json"}, []string{"/opt/leo", "dispatch", "report"})
+
+	want := []string{"--settings", filepath.Join(home, "state", "settings", "leo-a.json")}
+	if err != nil || !supported || !reflect.DeepEqual(got, want) {
+		t.Fatalf("AttentionLaunch = %#v, %v, %v; want %#v", got, supported, err, want)
 	}
 }
 
@@ -134,7 +208,7 @@ func TestMergeSettingsArgsUnusableFileErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{filepath.Join(dir, "missing.json"), bad} {
-		_, err := MergeSettingsArgs([]string{"--settings", path}, []string{"--settings", `{"a":1}`}, dir)
+		_, err := MergeSettingsArgs([]string{"--settings", path}, []string{"--settings", `{"a":1}`}, MergeOptions{BaseDir: dir, SpillPath: filepath.Join(dir, "spill.json")})
 		if err == nil || !strings.Contains(err.Error(), path) {
 			t.Errorf("MergeSettingsArgs(%s) err = %v, want an error naming the file", path, err)
 		}
@@ -158,7 +232,7 @@ func TestMergeSettingsArgsAppendsToOperatorHookArrays(t *testing.T) {
 	operator := `{"hooks":{"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"audit"}]}]}}`
 	leo := `{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"report"}]}],"Stop":[{"hooks":[{"type":"command","command":"report"}]}]}}`
 
-	got, err := MergeSettingsArgs([]string{"--settings", operator}, []string{"--settings", leo}, "")
+	got, err := MergeSettingsArgs([]string{"--settings", operator}, []string{"--settings", leo}, MergeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +248,7 @@ func TestMergeSettingsArgsAppendsToOperatorHookArrays(t *testing.T) {
 
 func TestMergeSettingsArgsTrailingFlagWithoutValueErrors(t *testing.T) {
 	for _, args := range [][]string{{"--model", "sonnet", "--settings"}, {"--settings", `{"a":1}`, "--settings"}} {
-		if got, err := MergeSettingsArgs(args, []string{"--settings", `{"b":2}`}, ""); err == nil {
+		if got, err := MergeSettingsArgs(args, []string{"--settings", `{"b":2}`}, MergeOptions{}); err == nil {
 			t.Errorf("MergeSettingsArgs(%q) = %#v, want an error", args, got)
 		}
 	}
