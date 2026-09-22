@@ -1681,6 +1681,9 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		m.attention.Move(oldName, newName)
 	}
 
+	// The next launch writes <newName>.json; the old file may hold
+	// credentials.
+	removeSettingsSpill(cfg.HomePath, oldName)
 	rec.Name = newName
 	return rec, nil
 }

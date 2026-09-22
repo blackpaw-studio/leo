@@ -84,3 +84,30 @@ func TestDeleteRemovesSettingsSpillFile(t *testing.T) {
 		t.Fatalf("another agent's spill file removed: %v", err)
 	}
 }
+
+func TestRenameRemovesOldSettingsSpillFile(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		home := t.TempDir()
+		_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", Workspace: "/w", Stopped: !live, ClaudeArgs: []string{"--name", "leo-old"}})
+		old := filepath.Join(home, "state", "settings", "leo-old.json")
+		if err := os.MkdirAll(filepath.Dir(old), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(old, []byte(`{"env":{"K":"secret"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sup := &fakeSupervisor{ephemeral: map[string]ProcessState{}}
+		if live {
+			sup.ephemeral["leo-old"] = ProcessState{Name: "leo-old", Status: "running"}
+		}
+		m := newTestManager(t, home, sup)
+
+		if _, err := m.Rename("leo-old", "leo-new"); err != nil {
+			t.Fatalf("Rename (live=%v): %v", live, err)
+		}
+
+		if _, err := os.Stat(old); !os.IsNotExist(err) {
+			t.Fatalf("live=%v: old spill file after Rename: err=%v, want removed", live, err)
+		}
+	}
+}
