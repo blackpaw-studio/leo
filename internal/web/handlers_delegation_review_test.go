@@ -68,7 +68,10 @@ func TestDelegationCellInitializesNilRoles(t *testing.T) {
 }
 
 func TestDelegationActivationUsesPreviewDialog(t *testing.T) {
-	s, _ := newTestServerWithConfigFile(t, delegationTestConfig())
+	cfg := delegationTestConfig()
+	// The active profile has no "make active" button; add one that can be activated.
+	cfg.Delegation.Profiles["next"] = config.Profile{Roles: map[string]config.RoleTarget{"implement": {Template: "two"}}}
+	s, _ := newTestServerWithConfigFile(t, cfg)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/config/delegation", nil)
 	authorizeTestRequest(req)

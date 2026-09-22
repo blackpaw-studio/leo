@@ -1,6 +1,20 @@
 {{define "page_config_delegation"}}
 <h1 class="page-title">Delegation</h1>
 <div id="delegation-content">{{template "delegation_content" .}}</div>
+<script>
+// Open the switch-preview dialog as a modal once htmx swaps it in; closing it
+// (cancel, Esc) restores the empty placeholder so the next preview can load.
+document.body.addEventListener('htmx:afterSwap', function () {
+  var d = document.getElementById('delegation-preview');
+  if (!d || d.tagName !== 'DIALOG' || d.open) return;
+  d.addEventListener('close', function () {
+    var slot = document.createElement('div');
+    slot.id = 'delegation-preview';
+    d.replaceWith(slot);
+  }, { once: true });
+  d.showModal();
+});
+</script>
 {{end}}
 
 {{define "delegation_content"}}
@@ -10,39 +24,94 @@
 {{range .Data.Warnings}}<div class="flash flash-warning">{{.}}</div>{{end}}
 
 <section class="card">
-  <h2>Profiles</h2>
-  {{range $name, $_ := .Data.Config.Profiles}}
-  <div class="frow-inline">
-    <code>{{if eq $name $.Data.Config.ActiveProfile}}* {{end}}{{$name}}</code>
-    <button type="button" class="btn btn-sm" hx-get="/web/delegation/preview?profile={{$name}}" hx-target="#delegation-preview" hx-swap="outerHTML">make active</button>
-    <form class="frow-inline" hx-post="/web/delegation/profile/rename" hx-target="#flash-container"><input type="hidden" name="name" value="{{$name}}"><input name="new_name" placeholder="rename"><button class="btn btn-sm">rename</button></form>
-    <form class="frow-inline" hx-post="/web/delegation/profile/duplicate" hx-target="#flash-container"><input type="hidden" name="name" value="{{$name}}"><input name="new_name" placeholder="duplicate as"><button class="btn btn-sm">duplicate</button></form>
-    <form class="frow-inline" hx-post="/web/delegation/profile/delete" hx-target="#flash-container"><input type="hidden" name="name" value="{{$name}}"><button class="btn btn-sm danger">remove</button></form>
-  </div>
-  {{end}}
-  <div id="delegation-preview" class="dim"></div>
-  <form class="frow-inline" hx-post="/web/delegation/profile/add" hx-target="#flash-container"><input name="name" placeholder="new profile"><button class="btn">add profile</button></form>
+  <div class="card-head"><b>Profiles</b><span class="dim">the active profile routes every role dispatch</span></div>
+  <table class="deleg-profiles">
+    <thead><tr><th>profile</th><th>description</th><th>roles</th><th></th></tr></thead>
+    <tbody>{{range .Data.Profiles}}
+      <tr{{if .Active}} class="is-active"{{end}}>
+        <td><code>{{.Name}}</code>{{if .Active}} <span class="pill ok">active</span>{{end}}</td>
+        <td class="dim">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
+        <td class="dim">{{.RoleCount}}</td>
+        <td><div class="row-actions">
+          {{if not .Active}}<button type="button" class="btn btn-sm hot" hx-get="/web/delegation/preview?profile={{.Name}}" hx-target="#delegation-preview" hx-swap="outerHTML">make active</button>{{end}}
+          <details class="menu">
+            <summary class="btn btn-sm" aria-label="Actions for profile {{.Name}}">⋯</summary>
+            <div class="menu-panel">
+              <form hx-post="/web/delegation/profile/rename" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <label class="menu-label">rename</label>
+                <div class="menu-row"><input name="new_name" placeholder="new-name" required aria-label="New name for {{.Name}}"><button class="btn btn-sm">rename</button></div>
+              </form>
+              <form hx-post="/web/delegation/profile/duplicate" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <label class="menu-label">duplicate as</label>
+                <div class="menu-row"><input name="new_name" placeholder="copy-name" required aria-label="Duplicate {{.Name}} as"><button class="btn btn-sm">duplicate</button></div>
+              </form>
+              {{if not .Active}}<form hx-post="/web/delegation/profile/delete" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <button class="btn btn-sm danger menu-wide">remove profile</button>
+              </form>{{else}}<p class="menu-note">The active profile cannot be removed.</p>{{end}}
+            </div>
+          </details>
+        </div></td>
+      </tr>{{end}}
+    </tbody>
+  </table>
+  <form class="frow-inline deleg-add" hx-post="/web/delegation/profile/add" hx-target="#flash-container">
+    <input name="name" placeholder="new-profile" required aria-label="New profile name">
+    <button class="btn">add profile</button>
+  </form>
+</section>
+<div id="delegation-preview"></div>
+
+<section class="card">
+  <div class="card-head"><b>Role routing</b><span class="dim">changes save automatically · empty model inherits the template's</span></div>
+  <div class="table-wrap"><table class="deleg-grid">
+    <thead><tr><th>role</th>{{range .Data.Profiles}}<th>{{.Name}}{{if .Active}} <span class="pill ok">active</span>{{end}}</th>{{end}}</tr></thead>
+    <tbody>{{range .Data.Rows}}
+      <tr>
+        <td class="deleg-role">
+          <div class="deleg-role-head">
+            <strong>{{.Role.Name}}</strong>{{if not .Role.Declared}} <span class="pill warn">undeclared</span>{{end}}
+          </div>
+          {{if .Role.Declared}}<form class="deleg-usefor" hx-post="/web/delegation/use-for" hx-trigger="change" hx-target="find .cell-status" hx-swap="outerHTML">
+            <input type="hidden" name="role" value="{{.Role.Name}}">
+            <textarea name="use_for" rows="2" placeholder="use for…" aria-label="Use {{.Role.Name}} for">{{.Role.UseFor}}</textarea>
+            <span class="cell-status"></span>
+          </form>{{end}}
+          <details class="menu">
+            <summary class="btn btn-sm" aria-label="Actions for role {{.Role.Name}}">⋯</summary>
+            <div class="menu-panel">
+              <form hx-post="/web/delegation/role/rename" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Role.Name}}">
+                <label class="menu-label">rename</label>
+                <div class="menu-row"><input name="new_name" placeholder="new-name" required aria-label="New name for {{.Role.Name}}"><button class="btn btn-sm">rename</button></div>
+              </form>
+              <form hx-post="/web/delegation/role/delete" hx-target="#flash-container">
+                <input type="hidden" name="name" value="{{.Role.Name}}">
+                <button class="btn btn-sm danger menu-wide">remove role</button>
+              </form>
+            </div>
+          </details>
+        </td>
+        {{range .Cells}}<td class="deleg-cell-td">{{template "delegation_cell" .}}</td>{{end}}
+      </tr>{{else}}
+      <tr><td colspan="99" class="empty-state">No roles yet</td></tr>{{end}}
+    </tbody>
+  </table></div>
+  <form class="frow-inline deleg-add" hx-post="/web/delegation/role/add" hx-target="#flash-container">
+    <input name="name" placeholder="new-role" required aria-label="New role name">
+    <select name="template" class="form-input" aria-label="Template for the new role">{{range .Data.Templates}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+    <button class="btn">add role</button>
+  </form>
 </section>
 
 <section class="card">
-  <h2>Role routing</h2>
-  <form class="frow-inline" hx-post="/web/delegation/role/add" hx-target="#flash-container"><input name="name" placeholder="new role"><select name="template">{{range .Data.Templates}}<option value="{{.}}">{{.}}</option>{{end}}</select><button class="btn">add role</button></form>
+  <div class="card-head"><b>Recent role dispatches</b></div>
   <div class="table-wrap"><table>
-    <thead><tr><th>role / use for</th>{{range $name, $_ := .Data.Config.Profiles}}<th>{{$name}}</th>{{end}}</tr></thead>
-    <tbody>{{range $role := .Data.Roles}}
-      <tr><td><strong>{{$role.Name}}</strong>{{if not $role.Declared}} <span class="pill warn">undeclared</span>{{end}}
-        {{if $role.Declared}}<form hx-post="/web/delegation/use-for" hx-target="#flash-container"><input type="hidden" name="role" value="{{$role.Name}}"><input name="use_for" value="{{$role.UseFor}}"><button class="btn btn-sm">save</button></form>{{end}}
-        <form class="frow-inline" hx-post="/web/delegation/role/rename" hx-target="#flash-container"><input type="hidden" name="name" value="{{$role.Name}}"><input name="new_name" placeholder="rename"><button class="btn btn-sm">rename</button></form>
-        <form class="frow-inline" hx-post="/web/delegation/role/delete" hx-target="#flash-container"><input type="hidden" name="name" value="{{$role.Name}}"><button class="btn btn-sm danger">remove</button></form>
-      </td>{{range $profile, $p := $.Data.Config.Profiles}}{{$target := index $p.Roles $role.Name}}
-      <td><form hx-post="/web/delegation/cell" hx-target="#flash-container"><input type="hidden" name="profile" value="{{$profile}}"><input type="hidden" name="role" value="{{$role.Name}}"><select name="template"><option value="">—</option>{{range $.Data.Templates}}<option value="{{.}}" {{if eq . $target.Template}}selected{{end}}>{{.}}</option>{{end}}</select><input name="model" value="{{$target.Model}}" placeholder="model"><input name="effort" value="{{$target.Effort}}" placeholder="effort"><button class="btn btn-sm">save</button></form></td>{{end}}</tr>
-    {{end}}</tbody>
+    <thead><tr><th>role</th><th>profile</th><th>template</th><th>model</th><th>effort</th><th>status</th></tr></thead>
+    <tbody>{{range .Data.Records}}<tr><td>{{.Role}}</td><td>{{.Profile}}</td><td>{{.Template}}</td><td>{{if .Model}}{{.Model}}{{else}}<span class="dim">inherit</span>{{end}}</td><td>{{.Effort}}</td><td>{{.Status}}</td></tr>{{else}}<tr><td colspan="6" class="empty-state">No role dispatches yet</td></tr>{{end}}</tbody>
   </table></div>
 </section>
-
-<section class="card"><h2>Recent role dispatches</h2><div class="table-wrap"><table>
-  <thead><tr><th>role</th><th>profile</th><th>template</th><th>model</th><th>effort</th><th>status</th></tr></thead>
-  <tbody>{{range .Data.Records}}<tr><td>{{.Role}}</td><td>{{.Profile}}</td><td>{{.Template}}</td><td>{{.Model}}</td><td>{{.Effort}}</td><td>{{.Status}}</td></tr>{{else}}<tr><td colspan="6" class="empty-state">No role dispatches yet</td></tr>{{end}}</tbody>
-</table></div></section>
 {{end}}
 {{end}}
