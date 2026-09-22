@@ -278,6 +278,26 @@ func SetAttentionToken(homePath, name, token string) error {
 	})
 }
 
+// ClearAttentionToken clears name's attention token only while it is still
+// token, so a launch that ended never wipes a newer launch's token. A missing
+// record is not an error.
+func ClearAttentionToken(homePath, name, token string) error {
+	if token == "" {
+		return nil
+	}
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	path := FilePath(homePath)
+	records, _ := loadLocked(path)
+	rec, ok := records[name]
+	if !ok || rec.AttentionToken != token {
+		return nil
+	}
+	rec.AttentionToken = ""
+	records[name] = rec
+	return write(path, records)
+}
+
 func write(path string, records map[string]Record) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("creating state dir: %w", err)

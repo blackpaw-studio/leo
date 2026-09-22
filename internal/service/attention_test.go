@@ -58,14 +58,14 @@ func TestWireObservabilitySharesAttentionStore(t *testing.T) {
 // tmux stub whose has-session always fails, so every launch looks like an
 // immediate unexpected exit. hooked selects whether the launch carries
 // attention hooks (and so starts tracked).
-func spawnFakehook(t *testing.T, sv *Supervisor, name string, hooked bool) {
+func spawnFakehook(t *testing.T, sv *Supervisor, name string, hooked bool) (tmuxLog string) {
 	t.Helper()
 	testFakeDriver = &fakeAttentionDriver{supported: hooked}
 	t.Cleanup(func() { testFakeDriver = nil })
 	origPoll, origBackoff := sessionPollInterval, initialBackoff
 	sessionPollInterval, initialBackoff = time.Millisecond, time.Hour
 	t.Cleanup(func() { sessionPollInterval, initialBackoff = origPoll, origBackoff })
-	sv.tmuxPath = exitingTmuxStub(t)
+	sv.tmuxPath, tmuxLog = exitingTmuxStub(t)
 	sv.homePath = t.TempDir()
 	if err := agentstore.Save(sv.homePath, agentstore.Record{Name: name}); err != nil {
 		t.Fatal(err)
@@ -73,18 +73,21 @@ func spawnFakehook(t *testing.T, sv *Supervisor, name string, hooked bool) {
 	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: name, WorkDir: t.TempDir(), Harness: "fakehook"}); err != nil {
 		t.Fatalf("SpawnAgent: %v", err)
 	}
+	return tmuxLog
 }
 
 // exitingTmuxStub launches successfully (new-session reports a pane id) but
-// has-session always fails, so the session appears to die on its own.
-func exitingTmuxStub(t *testing.T) string {
+// has-session always fails, so the session appears to die on its own. Every
+// invocation is logged to logPath.
+func exitingTmuxStub(t *testing.T) (path, logPath string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "tmux")
-	script := "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in new-session) echo '%1'; exit 0;; has-session) exit 1;; esac; done\nexit 0\n"
+	dir := t.TempDir()
+	path, logPath = filepath.Join(dir, "tmux"), filepath.Join(dir, "tmux.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\nfor a in \"$@\"; do case \"$a\" in new-session) echo '%1'; exit 0;; has-session) exit 1;; esac; done\nexit 0\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture, needs +x
 		t.Fatal(err)
 	}
-	return path
+	return path, logPath
 }
 
 func waitAttention(t *testing.T, store *observe.AttentionStore, name string, want observe.AttentionState) observe.AgentAttention {
@@ -108,17 +111,24 @@ func TestUnexpectedExitMarksTrackedAgentErrored(t *testing.T) {
 	store := observe.NewAttentionStore(nil)
 	sv.SetAttention(store)
 
-	spawnFakehook(t, sv, "tracked", true)
+	tmuxLog := spawnFakehook(t, sv, "tracked", true)
 
 	waitAttention(t, store, "tracked", observe.AttentionErrored)
 	// The dead launch's token no longer routes, so its late hooks can't
-	// overwrite errored.
+	// overwrite errored, and it is no longer stored for a future adopt.
 	if all := store.All(); len(all) != 1 {
 		t.Fatalf("attention = %+v", all)
 	}
-	tok := storedToken(t, sv.homePath, "tracked")
-	if name, ok := store.AgentForToken(tok); tok == "" || ok {
-		t.Fatalf("launch token %q still routes to %q after the launch exited", tok, name)
+	tok := launchedTokens(t, tmuxLog)
+	if len(tok) != 1 {
+		t.Fatalf("launched tokens = %v, want 1", tok)
+	}
+	if name, ok := store.AgentForToken(tok[0]); ok {
+		t.Fatalf("launch token still routes to %q after the launch exited", name)
+	}
+	recs, _ := agentstore.Load(agentstore.FilePath(sv.homePath))
+	if stored := recs["tracked"].AttentionToken; stored != "" {
+		t.Fatalf("stored token after exit = %q, want cleared", stored)
 	}
 	_ = sv.StopAgent("tracked", false)
 }
@@ -193,6 +203,9 @@ func TestDaemonShutdownDoesNotMarkErrored(t *testing.T) {
 	tmuxPath, logPath := liveTmuxStub(t)
 	sv.tmuxPath = tmuxPath
 	sv.homePath = t.TempDir()
+	if err := agentstore.Save(sv.homePath, agentstore.Record{Name: "tracked"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "tracked", WorkDir: t.TempDir(), Harness: "fakehook"}); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +217,10 @@ func TestDaemonShutdownDoesNotMarkErrored(t *testing.T) {
 
 	if att, _ := store.Get("tracked"); att != before {
 		t.Fatalf("attention after shutdown = %+v, want %+v untouched", att, before)
+	}
+	// The session outlives the daemon, so its token must stay for adopt.
+	if recs, _ := agentstore.Load(agentstore.FilePath(sv.homePath)); recs["tracked"].AttentionToken == "" {
+		t.Fatal("shutdown cleared the stored token a surviving session needs")
 	}
 }
 
@@ -296,8 +313,11 @@ func TestResumedSpawnIsWorkingOnlyOnFirstLaunch(t *testing.T) {
 	origPoll, origBackoff := sessionPollInterval, initialBackoff
 	sessionPollInterval, initialBackoff = time.Millisecond, time.Millisecond
 	t.Cleanup(func() { sessionPollInterval, initialBackoff = origPoll, origBackoff })
-	sv.tmuxPath = exitingTmuxStub(t)
+	sv.tmuxPath, _ = exitingTmuxStub(t)
 	sv.homePath = t.TempDir()
+	if err := agentstore.Save(sv.homePath, agentstore.Record{Name: "resumed"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "resumed", WorkDir: t.TempDir(), Harness: "fakehook", Resumed: true}); err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
@@ -81,6 +83,19 @@ func (s *Supervisor) registerAttentionToken(name string, id *procIdentity, token
 		return
 	}
 	s.attention.RegisterToken(token, name)
+}
+
+// endLaunchToken retires a launch's token that will never run again: it
+// stops routing and is cleared from the store unless a newer launch has
+// already replaced it.
+func (s *Supervisor) endLaunchToken(homePath, name, token string) {
+	if token == "" {
+		return
+	}
+	s.attentionStore().UnregisterToken(token)
+	if err := agentstore.ClearAttentionToken(homePath, name, token); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] clearing attention token: %v\n", name, err)
+	}
 }
 
 // attentionTracked reports whether name currently has attention.

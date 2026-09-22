@@ -442,6 +442,10 @@ func (s *Supervisor) StopAgent(name string, wakeOnMessage bool) error {
 	// token) behind us. Unregister first so a late in-flight hook cannot
 	// overwrite unknown.
 	s.attentionStore().UnregisterAgent(name)
+	// No launch is live any more, so no adopt may revive a token.
+	if err := agentstore.ClearAttentionToken(s.homePath, name, storedAttentionToken(s.homePath, name)); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] clearing attention token: %v\n", name, err)
+	}
 	s.attentionStore().SetIfTracked(name, observe.AttentionUnknown)
 	s.publish(observe.Event{
 		Type: observe.EventAgentStopped,
@@ -1129,14 +1133,15 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath), currentArgs, spec, name)
 			spec.attentionToken = ""
 			if hooked {
-				token, err := newAttentionToken()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "[%s] attention hooks unavailable: %v\n", name, err)
-					launchArgs, hooked = currentArgs, false
-				} else {
+				if token, ok := launchAttentionToken(homePath, name); ok {
 					spec.attentionToken = token
 					sv.registerAttentionToken(name, id, token)
+				} else {
+					launchArgs, hooked = currentArgs, false
 				}
+			}
+			if !hooked && spec.Kind == harness.KindAgent {
+				_ = persistAttentionToken(homePath, name, "")
 			}
 			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, spec, os.Getenv("PATH"))
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
@@ -1166,7 +1171,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			out, err := createCmd.Output()
 			if err != nil {
-				sv.attentionStore().UnregisterToken(spec.attentionToken)
+				sv.endLaunchToken(homePath, name, spec.attentionToken)
 				sv.setState(name, id, "restarting")
 				fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", name, err, backoff)
 				select {
@@ -1181,7 +1186,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			primaryPane := strings.TrimSpace(string(out))
 			if err := setTmuxPrimaryPane(tmuxPath, sessionName, primaryPane); err != nil {
 				killSession(tmuxPath, sessionName, name)
-				sv.attentionStore().UnregisterToken(spec.attentionToken)
+				sv.endLaunchToken(homePath, name, spec.attentionToken)
 				sv.setState(name, id, "restarting")
 				fmt.Fprintf(os.Stderr, "[%s] tmux primary-pane setup failed: %v, retrying in %s\n", name, err, backoff)
 				select {
@@ -1197,7 +1202,6 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
 			if spec.Kind == harness.KindAgent {
-				persistAttentionToken(homePath, name, spec.attentionToken)
 				switch {
 				case !hooked:
 					sv.dropAttention(name, id)
@@ -1249,7 +1253,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		}
 
 		ended := waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey, sv.shuttingDown)
-		// This launch is over either way; its late hooks must go nowhere.
+		// This launch is over for this daemon either way; its late hooks
+		// must go nowhere. The stored token stays on a shutdown (the
+		// session survives for adopt); StopAgent clears it on a stop.
 		sv.attentionStore().UnregisterToken(spec.attentionToken)
 		if ended {
 			sv.setState(name, id, "stopped")
@@ -1268,6 +1274,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 		// Neither ctx nor a stop asked for this exit: the harness died on
 		// its own.
+		sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
 		sv.markAttention(name, id, observe.AttentionErrored)
 		sv.setState(name, id, "restarting")
 		sv.incrementRestarts(name, id)

@@ -35,7 +35,9 @@ func liveTmuxStub(t *testing.T) (path, logPath string) {
 	t.Helper()
 	dir := t.TempDir()
 	path, logPath = filepath.Join(dir, "tmux"), filepath.Join(dir, "tmux.log")
-	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\nfor a in \"$@\"; do case \"$a\" in new-session) echo '%1'; exit 0;; display-message) echo 0; exit 0;; esac; done\nexit 0\n"
+	// On new-session it snapshots $LEO_TEST_SNAP_SRC (when set) to
+	// $LEO_TEST_SNAP_DST, capturing the store as the session is created.
+	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\nfor a in \"$@\"; do case \"$a\" in new-session) [ -n \"$LEO_TEST_SNAP_SRC\" ] && cp \"$LEO_TEST_SNAP_SRC\" \"$LEO_TEST_SNAP_DST\"; echo '%1'; exit 0;; display-message) echo 0; exit 0;; esac; done\nexit 0\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture, needs +x
 		t.Fatal(err)
 	}
@@ -255,5 +257,62 @@ func TestClaudeAgentLaunchCarriesOneMergedSettings(t *testing.T) {
 	}
 	if n := strings.Count(logged, "--settings"); n != 1 {
 		t.Fatalf("--settings appears %d times, want 1:\n%s", n, logged)
+	}
+}
+
+// The launch token must be on disk before the session exists, so an adopt
+// after a daemon crash mid-launch re-registers the live launch's token and
+// never the previous one's.
+func TestLaunchTokenPersistedBeforeSessionCreated(t *testing.T) {
+	f := newLaunchFixture(t, &fakeAttentionDriver{supported: true}, agentstore.Record{Name: "early", AttentionToken: "previous-launch"})
+	snap := filepath.Join(t.TempDir(), "agents-at-new-session.json")
+	t.Setenv("LEO_TEST_SNAP_SRC", agentstore.FilePath(f.sv.homePath))
+	t.Setenv("LEO_TEST_SNAP_DST", snap)
+
+	f.spawn(t, daemon.AgentSpawnSpec{Name: "early"})
+	waitForLog(t, f.logPath, "new-session")
+
+	launched := launchedTokens(t, f.logPath)
+	atCreate, err := agentstore.Load(snap)
+	if err != nil || len(launched) != 1 || atCreate["early"].AttentionToken != launched[0] {
+		t.Fatalf("token on disk at new-session = %q (err %v), launched with %v", atCreate["early"].AttentionToken, err, launched)
+	}
+	if _, ok := f.store.AgentForToken("previous-launch"); ok {
+		t.Fatal("previous launch's token was registered")
+	}
+}
+
+// With nowhere to persist the token (no agent record), the launch goes
+// unhooked: a token adopt could never recover must not be handed out.
+func TestFailedTokenPersistLaunchesUnhooked(t *testing.T) {
+	f := newLaunchFixture(t, &fakeAttentionDriver{supported: true}, agentstore.Record{})
+
+	f.spawn(t, daemon.AgentSpawnSpec{Name: "recordless", ClaudeArgs: []string{"--base"}})
+
+	logged := waitForLog(t, f.logPath, "new-session")
+	if strings.Contains(logged, "--hooked") || strings.Contains(logged, "LEO_ATTENTION_TOKEN") {
+		t.Fatalf("launch hooked despite the failed persist:\n%s", logged)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if att, ok := f.store.Get("recordless"); ok {
+		t.Fatalf("attention = %+v, want absent", att)
+	}
+	_ = f.sv.StopAgent("recordless", false)
+}
+
+func TestStopClearsStoredToken(t *testing.T) {
+	f := newLaunchFixture(t, &fakeAttentionDriver{supported: true}, agentstore.Record{Name: "stopme"})
+	f.spawn(t, daemon.AgentSpawnSpec{Name: "stopme"})
+	if storedToken(t, f.sv.homePath, "stopme") == "" {
+		t.Fatal("no token stored")
+	}
+
+	if err := f.sv.StopAgent("stopme", false); err != nil {
+		t.Fatal(err)
+	}
+
+	recs, _ := agentstore.Load(agentstore.FilePath(f.sv.homePath))
+	if tok := recs["stopme"].AttentionToken; tok != "" {
+		t.Fatalf("stored token after stop = %q, want cleared", tok)
 	}
 }

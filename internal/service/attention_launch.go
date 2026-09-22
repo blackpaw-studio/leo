@@ -62,12 +62,27 @@ func storedAttentionToken(homePath, name string) string {
 	return records[name].AttentionToken
 }
 
-// persistAttentionToken records token as name's current launch token so an
-// adopt after a daemon restart can re-register it. Record-less specs (tests,
-// shared processes) are left alone.
-func persistAttentionToken(homePath, name, token string) {
+// persistAttentionToken stores token as name's current launch token BEFORE
+// the session is created, so an adopt after a daemon restart re-registers
+// exactly the live launch's token. An error means the launch must go
+// unhooked.
+func persistAttentionToken(homePath, name, token string) error {
 	if storedAttentionToken(homePath, name) == token {
-		return
+		return nil
 	}
-	_ = agentstore.SetAttentionToken(homePath, name, token)
+	return agentstore.SetAttentionToken(homePath, name, token)
+}
+
+// launchAttentionToken mints and persists this launch's token. ok=false
+// (logged) means the launch proceeds unhooked and nothing is registered.
+func launchAttentionToken(homePath, name string) (string, bool) {
+	token, err := newAttentionToken()
+	if err == nil {
+		err = persistAttentionToken(homePath, name, token)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] attention hooks unavailable: persisting launch token: %v\n", name, err)
+		return "", false
+	}
+	return token, true
 }

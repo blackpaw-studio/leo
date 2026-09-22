@@ -109,3 +109,25 @@ func TestConcurrentSavesNeverLoseAttentionToken(t *testing.T) {
 		t.Fatalf("token = %q, want tok", recs["a"].AttentionToken)
 	}
 }
+
+func TestClearAttentionTokenOnlyClearsMatchingToken(t *testing.T) {
+	home := t.TempDir()
+	_ = Save(home, Record{Name: "a"})
+	_ = SetAttentionToken(home, "a", "newer")
+
+	if err := ClearAttentionToken(home, "a", "older"); err != nil {
+		t.Fatal(err)
+	}
+	if recs, _ := Load(FilePath(home)); recs["a"].AttentionToken != "newer" {
+		t.Fatalf("token = %q, want a stale clear to leave the newer token", recs["a"].AttentionToken)
+	}
+	if err := ClearAttentionToken(home, "a", "newer"); err != nil {
+		t.Fatal(err)
+	}
+	if recs, _ := Load(FilePath(home)); recs["a"].AttentionToken != "" {
+		t.Fatalf("token = %q, want cleared", recs["a"].AttentionToken)
+	}
+	if err := ClearAttentionToken(home, "ghost", "x"); err != nil {
+		t.Fatalf("missing record: %v", err)
+	}
+}
