@@ -156,6 +156,10 @@ type ProcessSpec struct {
 	// Resumed marks a spawn reviving a dormant agent (agent.SpawnRequest.
 	// Resumed); a hooked resume starts its attention as working.
 	Resumed bool
+	// attentionToken is this launch's attention token, exported to the
+	// session as LEO_ATTENTION_TOKEN ("" = launched without hooks). Runtime
+	// supervisor state, like primaryPane.
+	attentionToken string
 	// primaryPane is the tmux-global pane ID captured at session launch or
 	// recovered during adoption. It is intentionally private: it is runtime
 	// supervisor state, not caller configuration.
@@ -434,7 +438,10 @@ func (s *Supervisor) StopAgent(name string, wakeOnMessage bool) error {
 		return err
 	}
 	// After stopAgentProcess dropped the identity, so the dying supervise
-	// goroutine can no longer mark this generation errored behind us.
+	// goroutine can no longer mark this generation errored (or register a
+	// token) behind us. Unregister first so a late in-flight hook cannot
+	// overwrite unknown.
+	s.attentionStore().UnregisterAgent(name)
 	s.attentionStore().SetIfTracked(name, observe.AttentionUnknown)
 	s.publish(observe.Event{
 		Type: observe.EventAgentStopped,
@@ -1097,9 +1104,14 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}
 			fmt.Fprintf(os.Stdout, "[%s] adopted existing tmux session '%s', claude already running\n", name, sessionName)
 			// Attention does not survive a daemon restart; an agent launched
-			// with hooks is unknown until its next hook fires.
-			if agentAttentionHooks(homePath, name) {
+			// with hooks is unknown until its next hook fires, which carries
+			// the token persisted at launch.
+			if token := storedAttentionToken(homePath, name); token != "" {
+				spec.attentionToken = token
+				sv.registerAttentionToken(name, id, token)
 				sv.launchAttention(name, id, observe.AttentionUnknown)
+			} else {
+				spec.attentionToken = ""
 			}
 		} else {
 			if pl, ok := drv.(harness.PreLauncher); ok {
@@ -1115,6 +1127,17 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// launchArgs carries this launch's attention hooks; currentArgs
 			// (and the stored args behind it) never do.
 			launchArgs, hooked := attentionLaunchArgs(drv, handleForSpec(spec, id, homePath), currentArgs, spec, name)
+			spec.attentionToken = ""
+			if hooked {
+				token, err := newAttentionToken()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[%s] attention hooks unavailable: %v\n", name, err)
+					launchArgs, hooked = currentArgs, false
+				} else {
+					spec.attentionToken = token
+					sv.registerAttentionToken(name, id, token)
+				}
+			}
 			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, spec, os.Getenv("PATH"))
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
 			// persists a pane's start command, so an interpolated credential
@@ -1143,6 +1166,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			out, err := createCmd.Output()
 			if err != nil {
+				sv.attentionStore().UnregisterToken(spec.attentionToken)
 				sv.setState(name, id, "restarting")
 				fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", name, err, backoff)
 				select {
@@ -1157,6 +1181,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			primaryPane := strings.TrimSpace(string(out))
 			if err := setTmuxPrimaryPane(tmuxPath, sessionName, primaryPane); err != nil {
 				killSession(tmuxPath, sessionName, name)
+				sv.attentionStore().UnregisterToken(spec.attentionToken)
 				sv.setState(name, id, "restarting")
 				fmt.Fprintf(os.Stderr, "[%s] tmux primary-pane setup failed: %v, retrying in %s\n", name, err, backoff)
 				select {
@@ -1172,7 +1197,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
 			if spec.Kind == harness.KindAgent {
-				persistAttentionHooks(homePath, name, hooked)
+				persistAttentionToken(homePath, name, spec.attentionToken)
 				switch {
 				case !hooked:
 					sv.dropAttention(name, id)
@@ -1221,7 +1246,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}(startHandle)
 		}
 
-		if waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey, sv.shuttingDown) {
+		ended := waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey, sv.shuttingDown)
+		// This launch is over either way; its late hooks must go nowhere.
+		sv.attentionStore().UnregisterToken(spec.attentionToken)
+		if ended {
 			sv.setState(name, id, "stopped")
 			return
 		}
@@ -1640,9 +1668,9 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 	// Routes `leo dispatch report` hook calls to this agent's attention. Set
 	// by leo (never inherited from spec.Env) so a hook cannot be pointed at
 	// another agent's state by config.
-	delete(env, "LEO_ATTENTION_AGENT")
-	if spec.Kind == harness.KindAgent {
-		env["LEO_ATTENTION_AGENT"] = spec.Name
+	delete(env, "LEO_ATTENTION_TOKEN")
+	if spec.attentionToken != "" {
+		env["LEO_ATTENTION_TOKEN"] = spec.attentionToken
 	}
 	if spec.WebPort != "" {
 		if supervisorWebPortPattern.MatchString(spec.WebPort) {

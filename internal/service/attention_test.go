@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -65,6 +66,9 @@ func spawnFakehook(t *testing.T, sv *Supervisor, name string, hooked bool) {
 	t.Cleanup(func() { sessionPollInterval, initialBackoff = origPoll, origBackoff })
 	sv.tmuxPath = exitingTmuxStub(t)
 	sv.homePath = t.TempDir()
+	if err := agentstore.Save(sv.homePath, agentstore.Record{Name: name}); err != nil {
+		t.Fatal(err)
+	}
 	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: name, WorkDir: t.TempDir(), Harness: "fakehook"}); err != nil {
 		t.Fatalf("SpawnAgent: %v", err)
 	}
@@ -106,6 +110,15 @@ func TestUnexpectedExitMarksTrackedAgentErrored(t *testing.T) {
 	spawnFakehook(t, sv, "tracked", true)
 
 	waitAttention(t, store, "tracked", observe.AttentionErrored)
+	// The dead launch's token no longer routes, so its late hooks can't
+	// overwrite errored.
+	if all := store.All(); len(all) != 1 {
+		t.Fatalf("attention = %+v", all)
+	}
+	tok := storedToken(t, sv.homePath, "tracked")
+	if name, ok := store.AgentForToken(tok); tok == "" || ok {
+		t.Fatalf("launch token %q still routes to %q after the launch exited", tok, name)
+	}
 	_ = sv.StopAgent("tracked", false)
 }
 
@@ -233,21 +246,24 @@ func waitForRestarts(t *testing.T, sv *Supervisor, name string) {
 	t.Fatalf("%s never restarted", name)
 }
 
-func TestSessionEnvArgsSetsAttentionAgentOnlyForAgents(t *testing.T) {
-	agentArgs := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "leo-a", Kind: harness.KindAgent}, nil), " ")
-	otherArgs := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "proc"}, nil), " ")
+func TestSessionEnvArgsCarriesLaunchAttentionToken(t *testing.T) {
+	hooked := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "leo-a", Kind: harness.KindAgent, attentionToken: "tok"}, nil), " ")
+	unhooked := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "leo-a", Kind: harness.KindAgent}, nil), " ")
 
-	if !strings.Contains(agentArgs, "-e LEO_ATTENTION_AGENT=leo-a") {
-		t.Errorf("agent env = %s, want LEO_ATTENTION_AGENT", agentArgs)
+	if !strings.Contains(hooked, "-e LEO_ATTENTION_TOKEN=tok") {
+		t.Errorf("hooked env = %s, want LEO_ATTENTION_TOKEN", hooked)
 	}
-	if strings.Contains(otherArgs, "LEO_ATTENTION_AGENT") {
-		t.Errorf("non-agent env = %s, want no LEO_ATTENTION_AGENT", otherArgs)
+	if strings.Contains(unhooked, "LEO_ATTENTION") {
+		t.Errorf("unhooked env = %s, want no attention token", unhooked)
 	}
 }
 
-func TestSessionEnvArgsAttentionAgentOverridesSpecEnv(t *testing.T) {
-	args := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "leo-a", Kind: harness.KindAgent, Env: map[string]string{"LEO_ATTENTION_AGENT": "spoof"}}, nil), " ")
-	if strings.Contains(args, "spoof") {
-		t.Errorf("env = %s, want leo's value to win", args)
+func TestSessionEnvArgsIgnoresSpecEnvAttentionVars(t *testing.T) {
+	env := map[string]string{"LEO_ATTENTION_TOKEN": "spoof"}
+	for _, tok := range []string{"", "tok"} {
+		args := strings.Join(sessionEnvArgs("/tmux", ProcessSpec{Name: "leo-a", Kind: harness.KindAgent, Env: env, attentionToken: tok}, nil), " ")
+		if strings.Contains(args, "spoof") {
+			t.Errorf("env = %s, want leo's value to win", args)
+		}
 	}
 }

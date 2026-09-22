@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 
@@ -41,25 +43,31 @@ func attentionLaunchArgs(drv harness.SessionDriver, h harness.SessionHandle, arg
 	return out, true
 }
 
-// persistAttentionHooks records on the agent's store record whether its
-// current session was launched with attention hooks, so an adopt after a
-// daemon restart knows whether the agent has an attention source. Records
-// that don't exist (non-agent specs, tests) are left alone.
-func persistAttentionHooks(homePath, name string, hooked bool) {
-	if agentAttentionHooks(homePath, name) == hooked {
-		return
+// newAttentionToken returns a fresh random per-launch attention token.
+func newAttentionToken() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generating attention token: %w", err)
 	}
-	_ = agentstore.Update(homePath, name, func(r agentstore.Record) agentstore.Record {
-		r.AttentionHooks = hooked
-		return r
-	})
+	return hex.EncodeToString(buf), nil
 }
 
-// agentAttentionHooks reads the persisted attention_hooks flag.
-func agentAttentionHooks(homePath, name string) bool {
+// storedAttentionToken reads the attention token persisted for name's
+// current launch ("" when unhooked or record-less).
+func storedAttentionToken(homePath, name string) string {
 	records, err := agentstore.Load(agentstore.FilePath(homePath))
 	if err != nil {
-		return false
+		return ""
 	}
-	return records[name].AttentionHooks
+	return records[name].AttentionToken
+}
+
+// persistAttentionToken records token as name's current launch token so an
+// adopt after a daemon restart can re-register it. Record-less specs (tests,
+// shared processes) are left alone.
+func persistAttentionToken(homePath, name, token string) {
+	if storedAttentionToken(homePath, name) == token {
+		return
+	}
+	_ = agentstore.SetAttentionToken(homePath, name, token)
 }

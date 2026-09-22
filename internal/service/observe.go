@@ -71,6 +71,18 @@ func (s *Supervisor) dropAttention(name string, id *procIdentity) {
 	s.attention.Remove(name)
 }
 
+// registerAttentionToken routes token's hooks to name, for the live
+// generation only: once StopAgent has dropped the identity, a racing launch
+// can no longer register behind StopAgent's unregister.
+func (s *Supervisor) registerAttentionToken(name string, id *procIdentity, token string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.attention.RegisterToken(token, name)
+}
+
 // attentionTracked reports whether name currently has attention.
 func (s *Supervisor) attentionTracked(name string) bool {
 	_, ok := s.attentionStore().Get(name)
