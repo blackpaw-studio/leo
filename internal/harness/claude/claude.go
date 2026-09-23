@@ -108,9 +108,10 @@ func (Claude) SupportsKind(harness.Kind) bool { return true }
 // policy, and --session-id → --resume → fresh quick-exit ladder.
 func (Claude) Driver() harness.SessionDriver {
 	return tmuxtui.New(tmuxtui.Config{
-		Probe:     tmux.ClaudeProfile(),
-		PaneKeyFn: DialogKey,
-		RecoverFn: RecoverQuickExitArgs,
+		Probe:       tmux.ClaudeProfile(),
+		PaneKeyFn:   DialogKey,
+		RecoverFn:   RecoverQuickExitArgs,
+		AttentionFn: attentionLaunch,
 	})
 }
 

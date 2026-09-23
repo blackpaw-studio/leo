@@ -80,6 +80,9 @@ type Agent struct {
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 
 	CurrentAction *Action `json:"current_action"`
+
+	// Attention is absent when the agent has no attention source.
+	Attention *AgentAttention `json:"attention,omitempty"`
 }
 
 // ActionKind names the provenance of an Action's detail, so consumers can tell how much

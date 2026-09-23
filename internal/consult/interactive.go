@@ -707,6 +707,7 @@ done:
 	s.record.Status = status
 	s.record.EndedAt = d.now()
 	d.persistLocked(s, "status")
+	d.releaseRunFilesLocked(s.record.ID)
 	_ = s.handle.Close(status, nil)
 	select {
 	case <-s.done:

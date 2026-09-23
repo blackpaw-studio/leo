@@ -1,6 +1,8 @@
 package service
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
@@ -17,6 +19,85 @@ func (s *Supervisor) SetPublisher(p observe.Publisher) {
 	s.mu.Lock()
 	s.publisher = p
 	s.mu.Unlock()
+}
+
+// SetAttention wires the per-agent attention store the supervisor drives on
+// launch, unexpected exit, and stop. Optional: nil disables attention.
+func (s *Supervisor) SetAttention(a *observe.AttentionStore) {
+	s.mu.Lock()
+	s.attention = a
+	s.mu.Unlock()
+}
+
+// attentionStore returns the wired store (possibly nil; its methods are
+// nil-safe).
+func (s *Supervisor) attentionStore() *observe.AttentionStore {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.attention
+}
+
+// markAttention transitions an already-tracked agent's attention, but only
+// while id is still that name's registered live generation. Unlike
+// isStaleLocked, a missing identity counts as stale here: StopAgent removes
+// it before recording its own transition, and a dying goroutine must not
+// overwrite that.
+func (s *Supervisor) markAttention(name string, id *procIdentity, state observe.AttentionState) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.attention.SetIfTracked(name, state)
+}
+
+// launchAttention sets name's initial attention on launch/adopt, for the
+// live generation only, and only while name has none: SpawnAgent's preset,
+// a hook that landed once the token was registered, or a restart's errored
+// all win over it.
+func (s *Supervisor) launchAttention(name string, id *procIdentity, state observe.AttentionState) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.attention.SetIfUntracked(name, state)
+}
+
+// dropAttention removes name's attention when its live generation launched
+// without hooks, so the field reads absent rather than stale.
+func (s *Supervisor) dropAttention(name string, id *procIdentity) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.attention.Remove(name)
+}
+
+// registerAttentionToken routes token's hooks to name, for the live
+// generation only: once StopAgent has dropped the identity, a racing launch
+// can no longer register behind StopAgent's unregister.
+func (s *Supervisor) registerAttentionToken(name string, id *procIdentity, token string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if cur, ok := s.identities[name]; !ok || cur != id {
+		return
+	}
+	s.attention.RegisterToken(token, name)
+}
+
+// endLaunchToken retires a launch's token that will never run again: it
+// stops routing and is cleared from the store unless a newer launch has
+// already replaced it.
+func (s *Supervisor) endLaunchToken(homePath, name, token string) {
+	if token == "" {
+		return
+	}
+	s.attentionStore().UnregisterToken(token)
+	if err := agentstore.ClearAttentionToken(homePath, name, token); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] clearing attention token: %v\n", name, err)
+	}
 }
 
 // publish is a nil-safe no-op when no publisher has been configured.
@@ -60,6 +141,9 @@ func (s *Supervisor) spawnedAgentView(spec daemon.AgentSpawnSpec, spawnedAt time
 		Harness:   spec.Harness,
 		Status:    observe.StatusStarting,
 		StartedAt: spawnedAt,
+	}
+	if att, ok := s.attentionStore().Get(spec.Name); ok {
+		a.Attention = &att
 	}
 
 	if records, err := agentstore.Load(agentstore.FilePath(s.homePath)); err == nil {

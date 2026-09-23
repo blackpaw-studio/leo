@@ -65,6 +65,9 @@ type HelloPayload struct {
 	Meta
 	Version    int       `json:"version"`
 	ServerTime time.Time `json:"server_time"`
+	// BootID is random per daemon process. Attention revisions restart with
+	// the daemon, so a consumer that sees BootID change must re-baseline.
+	BootID string `json:"boot_id"`
 }
 
 // AgentSpawnedPayload carries the whole agent, since the consumer has never seen it.
@@ -92,6 +95,9 @@ type AgentActivityPayload struct {
 	Agent         string   `json:"agent"`
 	Activity      Activity `json:"activity"`
 	CurrentAction *Action  `json:"current_action"`
+	// Attention is absent when the agent has no attention source (e.g. a
+	// harness without hook plumbing). See AttentionStore.
+	Attention *AgentAttention `json:"attention,omitempty"`
 }
 
 // AgentStoppedPayload announces an agent leaving supervision.

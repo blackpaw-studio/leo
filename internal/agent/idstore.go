@@ -33,14 +33,17 @@ func (a *agentIDs) Get() string {
 	return rec.SessionID
 }
 
+// Set persists id through agentstore.Update, so it rewrites only SessionID
+// and cannot clobber fields other writers changed since any earlier load.
 func (a *agentIDs) Set(id string) {
-	rec, ok := a.load()
-	if !ok {
+	if _, ok := a.load(); !ok {
 		log.Printf("agent %q: cannot persist session id, no agentstore record", a.name)
 		return
 	}
-	rec.SessionID = id
-	if err := agentstore.Save(a.homePath, rec); err != nil {
+	if err := agentstore.Update(a.homePath, a.name, func(r agentstore.Record) agentstore.Record {
+		r.SessionID = id
+		return r
+	}); err != nil {
 		log.Printf("agent %q: could not persist session id: %v", a.name, err)
 	}
 }

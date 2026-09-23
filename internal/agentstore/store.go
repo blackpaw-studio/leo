@@ -136,6 +136,14 @@ type Record struct {
 	// by a stale inherited value. Empty/nil for shared spawns (no inheritance
 	// concept) and legacy records written before this field existed.
 	InheritedEnv map[string]string `json:"inherited_env,omitempty"`
+
+	// AttentionToken is the per-launch token the agent's current session
+	// reports attention hooks with; empty means it launched without hooks.
+	// The supervisor re-registers it when adopting the session after a
+	// daemon restart. SetAttentionToken is its only writer: Save always
+	// keeps the stored value, so a load-modify-Save that read the record
+	// before the launch can never wipe it.
+	AttentionToken string `json:"attention_token,omitempty"`
 }
 
 // IsFailedRestore reports whether this record was stopped by the system after
@@ -153,12 +161,14 @@ func FilePath(homePath string) string {
 	return filepath.Join(homePath, "state", "agents.json")
 }
 
-// Save persists an agent record to agents.json.
+// Save persists an agent record to agents.json. The stored AttentionToken is
+// kept whatever record carries (see Record.AttentionToken).
 func Save(homePath string, record Record) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 	path := FilePath(homePath)
 	records, _ := loadLocked(path)
+	record.AttentionToken = records[record.Name].AttentionToken
 	records[record.Name] = record
 	return write(path, records)
 }
@@ -256,6 +266,35 @@ func Update(homePath, name string, mutate func(Record) Record) error {
 		return fmt.Errorf("agent %q not found", name)
 	}
 	records[name] = mutate(rec)
+	return write(path, records)
+}
+
+// SetAttentionToken records the attention token of name's current launch
+// ("" for an unhooked launch). It errors if name is absent.
+func SetAttentionToken(homePath, name, token string) error {
+	return Update(homePath, name, func(r Record) Record {
+		r.AttentionToken = token
+		return r
+	})
+}
+
+// ClearAttentionToken clears name's attention token only while it is still
+// token, so a launch that ended never wipes a newer launch's token. A missing
+// record is not an error.
+func ClearAttentionToken(homePath, name, token string) error {
+	if token == "" {
+		return nil
+	}
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	path := FilePath(homePath)
+	records, _ := loadLocked(path)
+	rec, ok := records[name]
+	if !ok || rec.AttentionToken != token {
+		return nil
+	}
+	rec.AttentionToken = ""
+	records[name] = rec
 	return write(path, records)
 }
 

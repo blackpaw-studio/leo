@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -261,85 +262,135 @@ func newDispatchSendCmd() *cobra.Command {
 	return cmd
 }
 
-// dispatch report is intentionally a no-op outside interactive harnesses:
-// Codex/Claude invoke every configured hook for ordinary sessions too.
+// dispatch report is intentionally a no-op outside leo-launched harnesses:
+// Codex/Claude invoke every configured hook for ordinary sessions too. The
+// command string is fixed (codex hook trust is hash-based), so routing is by
+// environment: a dispatch run wins; otherwise a supervised agent launched
+// with attention hooks reports its turn state.
 func newDispatchReportCmd() *cobra.Command {
 	return &cobra.Command{Use: "report", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		id, configPath := os.Getenv("LEO_DISPATCH_ID"), os.Getenv("LEO_CONFIG")
-		if id == "" || configPath == "" {
-			return nil
-		}
-		deadline := time.Now().Add(20 * time.Second)
-		cfg, err := config.Load(configPath)
-		if err != nil {
-			return err
-		}
-		type readResult struct {
-			data []byte
-			err  error
-		}
-		read := make(chan readResult, 1)
-		go func() { data, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20)); read <- readResult{data, err} }()
-		var payload []byte
-		select {
-		case result := <-read:
-			payload, err = result.data, result.err
-		case <-time.After(time.Until(deadline)):
-			return context.DeadlineExceeded
-		}
-		if err != nil {
-			return err
-		}
-		if !json.Valid(payload) {
-			return fmt.Errorf("invalid hook payload")
-		}
-		buf := make([]byte, 16)
-		if _, err := rand.Read(buf); err != nil {
-			return err
-		}
-		eventID := fmt.Sprintf("%x", buf)
-		body, err := json.Marshal(map[string]any{"event_id": eventID, "payload": json.RawMessage(payload)})
-		if err != nil {
-			return err
-		}
-		token := os.Getenv("LEO_API_TOKEN")
-		path := fmt.Sprintf("http://127.0.0.1:%d/api/dispatch/%s/report", cfg.WebPort(), url.PathEscape(id))
-		var last error
-		for attempt := 0; attempt < 3 && time.Now().Before(deadline); attempt++ {
-			ctx, cancel := context.WithDeadline(context.Background(), minTime(deadline, time.Now().Add(3*time.Second)))
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))
-			if err == nil {
-				req.Header.Set("Content-Type", "application/json")
-				if token != "" {
-					req.Header.Set("Authorization", "Bearer "+token)
-				}
-				resp, callErr := (&http.Client{}).Do(req)
-				if callErr == nil {
-					resp.Body.Close()
-					if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-						cancel()
-						return nil
-					}
-					last = fmt.Errorf("report returned status %d", resp.StatusCode)
-				} else {
-					last = callErr
-				}
-			} else {
-				last = err
+		if id, configPath := os.Getenv("LEO_DISPATCH_ID"), os.Getenv("LEO_CONFIG"); id != "" {
+			if configPath == "" {
+				return nil
 			}
-			cancel()
-			if attempt < 2 {
-				select {
-				case <-time.After(time.Duration(attempt+1) * 200 * time.Millisecond):
-				case <-time.After(time.Until(deadline)):
-				}
+			return reportDispatch(cmd.InOrStdin(), id, configPath)
+		}
+		if token, port := os.Getenv("LEO_ATTENTION_TOKEN"), os.Getenv("LEO_WEB_PORT"); token != "" && port != "" {
+			// Best-effort: a daemon that is down must not surface as a hook
+			// failure inside the agent's own UI.
+			if err := reportAttention(cmd.InOrStdin(), token, port); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "leo: attention report: %v\n", err)
 			}
 		}
-		if last == nil {
-			last = context.DeadlineExceeded
-		}
-		return last
+		return nil
 	}}
+}
+
+// attentionReportTimeout bounds an attention hook so a dead daemon delays
+// the agent's turn boundary by at most this long.
+const attentionReportTimeout = 5 * time.Second
+
+// reportAttention relays a supervised agent's hook payload with its
+// per-launch attention token; the daemon resolves the token to the agent.
+func reportAttention(stdin io.Reader, token, port string) error {
+	if _, err := strconv.Atoi(port); err != nil {
+		return fmt.Errorf("invalid LEO_WEB_PORT %q", port)
+	}
+	deadline := time.Now().Add(attentionReportTimeout)
+	payload, err := readHookPayload(stdin, deadline)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]any{"token": token, "payload": json.RawMessage(payload)})
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("http://127.0.0.1:%s/api/agent/hook", port)
+	return postReport(path, os.Getenv("LEO_API_TOKEN"), body, deadline)
+}
+
+func reportDispatch(stdin io.Reader, id, configPath string) error {
+	deadline := time.Now().Add(20 * time.Second)
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	payload, err := readHookPayload(stdin, deadline)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return err
+	}
+	eventID := fmt.Sprintf("%x", buf)
+	body, err := json.Marshal(map[string]any{"event_id": eventID, "payload": json.RawMessage(payload)})
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("http://127.0.0.1:%d/api/dispatch/%s/report", cfg.WebPort(), url.PathEscape(id))
+	return postReport(path, os.Getenv("LEO_API_TOKEN"), body, deadline)
+}
+
+// readHookPayload reads the hook's JSON stdin, bounded in size and time.
+func readHookPayload(stdin io.Reader, deadline time.Time) ([]byte, error) {
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	read := make(chan readResult, 1)
+	go func() { data, err := io.ReadAll(io.LimitReader(stdin, 1<<20)); read <- readResult{data, err} }()
+	select {
+	case result := <-read:
+		if result.err != nil {
+			return nil, result.err
+		}
+		if !json.Valid(result.data) {
+			return nil, fmt.Errorf("invalid hook payload")
+		}
+		return result.data, nil
+	case <-time.After(time.Until(deadline)):
+		return nil, context.DeadlineExceeded
+	}
+}
+
+// postReport POSTs body with up to three attempts before deadline.
+func postReport(path, token string, body []byte, deadline time.Time) error {
+	var last error
+	for attempt := 0; attempt < 3 && time.Now().Before(deadline); attempt++ {
+		ctx, cancel := context.WithDeadline(context.Background(), minTime(deadline, time.Now().Add(3*time.Second)))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			resp, callErr := (&http.Client{}).Do(req)
+			if callErr == nil {
+				resp.Body.Close()
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					cancel()
+					return nil
+				}
+				last = fmt.Errorf("report returned status %d", resp.StatusCode)
+			} else {
+				last = callErr
+			}
+		} else {
+			last = err
+		}
+		cancel()
+		if attempt < 2 {
+			select {
+			case <-time.After(time.Duration(attempt+1) * 200 * time.Millisecond):
+			case <-time.After(time.Until(deadline)):
+			}
+		}
+	}
+	if last == nil {
+		last = context.DeadlineExceeded
+	}
+	return last
 }
 
 func minTime(a, b time.Time) time.Time {

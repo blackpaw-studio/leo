@@ -806,3 +806,42 @@ func newTestServerWithObserveDeps(t *testing.T, activity observe.ActivityProvide
 	})
 	return s, dir
 }
+
+func TestBuildSnapshotAttentionIncludedOnlyWhenPresent(t *testing.T) {
+	store := observe.NewAttentionStore(nil)
+	store.Set("agent-a", observe.AttentionFinished)
+	store.Set("agent-a", observe.AttentionNeedsInput)
+	in := snapshotInput{
+		Records:   []agent.Record{{Name: "agent-a", Status: "running"}, {Name: "agent-b", Status: "running"}},
+		Attention: store,
+		Now:       time.Now(),
+	}
+
+	snap := buildSnapshot(in)
+
+	a, b := snap.Agents[0], snap.Agents[1]
+	if a.Attention == nil || *a.Attention != (observe.AgentAttention{State: observe.AttentionNeedsInput, Revision: 2}) {
+		t.Errorf("agent-a attention = %+v", a.Attention)
+	}
+	if b.Attention != nil {
+		t.Errorf("agent-b attention = %+v, want absent", b.Attention)
+	}
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "attention") {
+		t.Errorf("agent-b JSON = %s, want no attention key", raw)
+	}
+}
+
+func TestProjectAgentsCarriesAttention(t *testing.T) {
+	store := observe.NewAttentionStore(nil)
+	store.Set("agent-a", observe.AttentionWorking)
+
+	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, nil, store, nil)
+
+	if got[0].Attention == nil || got[0].Attention.State != observe.AttentionWorking {
+		t.Fatalf("attention = %+v", got[0].Attention)
+	}
+}

@@ -58,6 +58,7 @@ func (Codex) Driver() harness.SessionDriver {
 		PreLaunchFn:   ensureWorkspaceTrusted,
 		RefreshArgsFn: refreshSessionArgs,
 		DiscoverIDFn:  discoverSessionID,
+		AttentionFn:   attentionLaunch,
 	})
 }
 
