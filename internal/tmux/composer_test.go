@@ -494,6 +494,12 @@ func TestComposerClassifierIgnoresBusyWordsInProse(t *testing.T) {
 			"• Running the suite now.\n\n• Working (12s • esc to interrupt)\n\n› Ask Codex to do anything\n\n  gpt-5.6-luna default · ~/work\n",
 			ComposerBusy,
 		},
+		{
+			"codex/timerless-status-above-composer",
+			CodexComposerClassifier,
+			"• Working · esc to interrupt\n\n› Ask Codex to do anything\n",
+			ComposerBusy,
+		},
 	}
 
 	for _, tt := range tests {
@@ -568,5 +574,46 @@ func TestClaudeComposerClassifierSpinnerFrames(t *testing.T) {
 				t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCodexComposerClassifierIgnoresStatusShapesInProse(t *testing.T) {
+	t.Parallel()
+
+	fixture, err := os.ReadFile("testdata/codex_idle_prose_esc_to_interrupt.txt")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	const composer = "\n\n› Ask Codex to do anything\n\n  gpt-5.6-luna default · ~/work\n"
+	tests := []struct {
+		name    string
+		capture string
+	}{
+		{"wrapped-interrupt-hint-in-message", string(fixture)},
+		{"interrupt-hint-without-boundary", `  matches "esc to interrupt" in prose` + composer},
+		{"latency-unit", "• Latency dropped (10ms → 2ms)." + composer},
+		{"minutes-unit", "• Build takes (5min) now" + composer},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := CodexComposerClassifier(tt.capture); got != ComposerEmpty {
+				t.Fatalf("CodexComposerClassifier() = %s, want %s", got, ComposerEmpty)
+			}
+		})
+	}
+}
+
+func TestClaudeComposerClassifierIgnoresIndentedSpinnerGlyphs(t *testing.T) {
+	t.Parallel()
+
+	capture := "⏺ Summary:\n  ✳ Cogitating… is what the spinner said\n  ✢ another one…\n" + `
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
+`
+	if got := ClaudeComposerClassifier(capture); got != ComposerEmpty {
+		t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, ComposerEmpty)
 	}
 }

@@ -132,12 +132,12 @@ var (
 	claudeTokenCounter      = regexp.MustCompile(`\(\s*\d+[hms][^)]*[↑↓]`)
 )
 
-// isClaudeSpinnerLine recognizes a spinner frame. The · and * frames double as
-// bullets, so they count only unindented and in the in-progress shape.
+// isClaudeSpinnerLine recognizes a spinner frame. The spinner is always
+// unindented, and the · and * frames double as bullets, so those also need the
+// in-progress shape.
 func isClaudeSpinnerLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
 	for _, glyph := range claudeSpinnerGlyphs {
-		if strings.HasPrefix(trimmed, glyph) {
+		if strings.HasPrefix(line, glyph) {
 			return true
 		}
 	}
@@ -200,27 +200,30 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 	return ComposerUnknown
 }
 
-var codexStatusLinePattern = regexp.MustCompile(`^•\s+\S+(?:\s+\S+){0,3}\s+\(\d+[hms]`)
+// codexStatusLinePattern is Codex's live status header: a short title, then an
+// elapsed timer such as "(12s •" or "(1m 02s)", or an interrupt hint set off
+// by "(", "•" or "·". Units must end the token, so "(10ms" and "(5min)" in
+// prose do not match, and a quoted "esc to interrupt" is not set off.
+var codexStatusLinePattern = regexp.MustCompile(`(?i)^•\s+(?:\S+\s+){0,7}(?:\((?:\d+[hms]\b\s*)+(?:[•·)]|$)|(?:\(|[•·]\s+)esc to interrupt\b)`)
 
-// isStatusLineBusy scans the region between a composer and the transcript
-// entry above it (the previous • message or › prompt). Codex renders its live
-// "• Working (12s • esc to interrupt)" status there, followed by queued ↳ rows
-// and their edit hint; any of those may wrap in a narrow pane, so the region is
-// joined before matching. A finished agent message carries neither shape.
+// isStatusLineBusy finds the entry directly above a composer (the previous •
+// message or › prompt) and reports whether it is Codex's live status block:
+// a • header in the status-line shape, followed by its queued ↳ rows, edit
+// hint, and wrapped lines. The header is joined with its rows before matching
+// because a narrow pane wraps it. A plain agent message never counts, whatever
+// it says, and without an entry on screen there is no status to find.
 func isStatusLineBusy(above []string) bool {
-	region := []string{}
 	for i := len(above) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(above[i])
-		region = append([]string{line}, region...)
-		if strings.HasPrefix(line, "•") || strings.HasPrefix(line, "›") {
-			break
+		if strings.HasPrefix(line, "›") {
+			return false
+		}
+		if strings.HasPrefix(line, "•") {
+			joined := strings.Join(strings.Fields(strings.Join(above[i:], " ")), " ")
+			return codexStatusLinePattern.MatchString(joined)
 		}
 	}
-	if len(region) > 0 && codexStatusLinePattern.MatchString(region[0]) {
-		return true
-	}
-	joined := strings.ToLower(strings.Join(strings.Fields(strings.Join(region, " ")), " "))
-	return strings.Contains(joined, "esc to interrupt")
+	return false
 }
 
 func isComposerDialog(capture string) bool {
