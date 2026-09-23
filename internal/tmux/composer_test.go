@@ -590,7 +590,10 @@ func TestCodexComposerClassifierIgnoresStatusShapesInProse(t *testing.T) {
 		capture string
 	}{
 		{"wrapped-interrupt-hint-in-message", string(fixture)},
-		{"interrupt-hint-without-boundary", `  matches "esc to interrupt" in prose` + composer},
+		{"quoted-interrupt-hint-in-message", `• Fixed it; matches "esc to interrupt" in prose` + composer},
+		{"bare-timer-seconds", "• Tests pass (4s)." + composer},
+		{"bare-timer-with-trailer", "• Ran the suite (3s) — green" + composer},
+		{"bare-timer-hours", "• Estimate (2h) for the rewrite" + composer},
 		{"latency-unit", "• Latency dropped (10ms → 2ms)." + composer},
 		{"minutes-unit", "• Build takes (5min) now" + composer},
 	}

@@ -200,11 +200,11 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 	return ComposerUnknown
 }
 
-// codexStatusLinePattern is Codex's live status header: a short title, then an
-// elapsed timer such as "(12s •" or "(1m 02s)", or an interrupt hint set off
-// by "(", "•" or "·". Units must end the token, so "(10ms" and "(5min)" in
-// prose do not match, and a quoted "esc to interrupt" is not set off.
-var codexStatusLinePattern = regexp.MustCompile(`(?i)^•\s+(?:\S+\s+){0,7}(?:\((?:\d+[hms]\b\s*)+(?:[•·)]|$)|(?:\(|[•·]\s+)esc to interrupt\b)`)
+// codexStatusLinePattern is Codex's live status header: a short title whose
+// interrupt hint is set off by "(", "•" or "·", as in "Working (12s • esc to
+// interrupt)". A timer alone is not evidence, and a quoted hint in prose is
+// not set off.
+var codexStatusLinePattern = regexp.MustCompile(`(?i)^•\s+(?:\S+\s+){0,7}(?:\(|[•·]\s+)esc to interrupt\b`)
 
 // isStatusLineBusy finds the entry directly above a composer (the previous •
 // message or › prompt) and reports whether it is Codex's live status block:
