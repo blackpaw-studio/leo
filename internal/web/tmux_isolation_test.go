@@ -4,10 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
+
+// isolatedTmuxDirPrefix names the private TMUX_TMPDIR that TestMain creates.
+const isolatedTmuxDirPrefix = "leo-web-tmux-"
 
 // leoSocketPath is where `tmux -L leo` connects for the given TMUX_TMPDIR
 // (empty means tmux's default, /tmp).
@@ -32,7 +36,11 @@ func sameDir(a, b string) bool {
 // TMUX_TMPDIR points somewhere private, that lands on the production leo
 // server (issue #213).
 func TestTestsNeverReachLiveLeoTmuxServer(t *testing.T) {
-	got := leoSocketPath(os.Getenv("TMUX_TMPDIR"))
+	tmuxTmpDir := os.Getenv("TMUX_TMPDIR")
+	if !strings.HasPrefix(filepath.Base(tmuxTmpDir), isolatedTmuxDirPrefix) {
+		t.Fatalf("TMUX_TMPDIR=%q was not created by TestMain; an inherited value may point at a live leo server", tmuxTmpDir)
+	}
+	got := leoSocketPath(tmuxTmpDir)
 	live := leoSocketPath("")
 	if sameDir(filepath.Dir(got), filepath.Dir(live)) {
 		t.Fatalf("tmux -L %s resolves to the live server socket %s; TestMain must isolate TMUX_TMPDIR", tmux.SocketName, got)

@@ -40,7 +40,7 @@ func isolateTmux() (string, error) {
 			return "", err
 		}
 	}
-	dir, err := os.MkdirTemp("/tmp", "leo-web-tmux-")
+	dir, err := os.MkdirTemp("/tmp", isolatedTmuxDirPrefix)
 	if err != nil {
 		return "", err
 	}
