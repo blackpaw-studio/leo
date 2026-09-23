@@ -541,6 +541,14 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 						}
 					}
 				}
+				if hid == "" && hasWorkingTurnLocked(s) {
+					// Claude carries no turn id, and its background-task
+					// auto-continuation submits mid-turn before a single
+					// Stop. Fold it into the working turn; a separate turn
+					// would never close (#211).
+					d.persistLocked(s, "")
+					return nil
+				}
 				t := d.openTurnLocked(s, TurnSourceUser, "", false)
 				t.HarnessTurnID = hid
 			} else {
@@ -651,6 +659,18 @@ func (d *Dispatcher) closeHarnessLocked(s *runState, hid string, o TurnOutcome, 
 		}
 	}
 	return found
+}
+
+// hasWorkingTurnLocked reports an open turn the harness is executing: a user
+// turn, or an orchestrator turn that was delivered. Armed-but-undelivered
+// orchestrator turns are not running yet.
+func hasWorkingTurnLocked(s *runState) bool {
+	for _, t := range s.record.Turns {
+		if t.Outcome == "" && (t.Source == TurnSourceUser || t.Delivered) {
+			return true
+		}
+	}
+	return false
 }
 func (d *Dispatcher) closeOldestLocked(s *runState, o TurnOutcome, text string) {
 	for i := range s.record.Turns {

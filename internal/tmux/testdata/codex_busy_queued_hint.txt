@@ -1,0 +1,10 @@
+• Reading the config loader.
+
+• Working (12s • esc to interrupt)
+
+  ↳ also check the docs
+    ⌥ + ↑ edit
+
+› Ask Codex to do anything
+
+  gpt-5.6-luna default · ~/work

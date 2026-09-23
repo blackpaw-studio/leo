@@ -63,12 +63,8 @@ func ClaudeComposerClassifier(capture string) ComposerState {
 		return ComposerUnknown
 	}
 
-	// Only a spinner immediately before the active composer box means Claude is
-	// busy. Finished-turn summaries and prompt history are above that boundary.
-	for _, line := range lines[:top] {
-		if isClaudeBusyLine(line) {
-			return ComposerBusy
-		}
+	if isClaudeStatusBusy(lines[:top]) {
+		return ComposerBusy
 	}
 
 	composer := strings.TrimLeft(lines[composerLine], " \t")
@@ -111,19 +107,59 @@ func isClaudeDialog(capture string) bool {
 	return isComposerDialog(capture)
 }
 
-func isClaudeBusyLine(line string) bool {
-	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "✻") {
-		if strings.Contains(line, "· done") {
+// isClaudeStatusBusy reports whether the live status region directly above
+// the composer box shows an in-progress spinner. Claude renders that spinner
+// (or its "done" summary) below the last transcript message, so the walk stops
+// at the nearest spinner line or at the ⏺ message that starts the transcript.
+// Queued prompts may render between the spinner and the box, so ❯ is not a
+// boundary. Transcript prose never counts, whatever words it contains.
+func isClaudeStatusBusy(above []string) bool {
+	for i := len(above) - 1; i >= 0; i-- {
+		if isClaudeSpinnerLine(above[i]) {
+			return isClaudeBusyLine(above[i])
+		}
+		if strings.HasPrefix(strings.TrimSpace(above[i]), "⏺") {
 			return false
 		}
-		return isClaudeInProgressLine(line)
 	}
-	if strings.HasPrefix(line, "✽") || strings.HasPrefix(line, "✶") || strings.HasPrefix(line, "✳") ||
-		strings.HasPrefix(line, "✢") || strings.HasPrefix(line, "⠋") {
-		return true
+	return false
+}
+
+// Claude's spinner cycles · ✢ ✳ ✶ ✻ ✽ (* substitutes for ✳ off darwin).
+var (
+	claudeSpinnerGlyphs     = []string{"✻", "✽", "✶", "✳", "✢", "⠋"}
+	claudeWeakSpinnerGlyphs = []string{"·", "*"}
+	claudeTokenCounter      = regexp.MustCompile(`\(\s*\d+[hms][^)]*[↑↓]`)
+)
+
+// isClaudeSpinnerLine recognizes a spinner frame. The spinner is always
+// unindented, and the · and * frames double as bullets, so those also need the
+// in-progress shape.
+func isClaudeSpinnerLine(line string) bool {
+	for _, glyph := range claudeSpinnerGlyphs {
+		if strings.HasPrefix(line, glyph) {
+			return true
+		}
 	}
-	return composerBusyPattern.MatchString(line)
+	for _, glyph := range claudeWeakSpinnerGlyphs {
+		if strings.HasPrefix(line, glyph+" ") {
+			return isClaudeInProgressLine(line)
+		}
+	}
+	return false
+}
+
+// isClaudeBusyLine classifies one spinner line: "✻ Worked for 3s · done" is a
+// finished-turn summary, every other spinner frame is live.
+func isClaudeBusyLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "✻") {
+		return isClaudeSpinnerLine(line)
+	}
+	if strings.Contains(line, "· done") {
+		return false
+	}
+	return isClaudeInProgressLine(line)
 }
 
 func isClaudeInProgressLine(line string) bool {
@@ -131,6 +167,7 @@ func isClaudeInProgressLine(line string) bool {
 	lower := strings.ToLower(trimmed)
 	return strings.HasSuffix(trimmed, "…") || strings.HasSuffix(trimmed, "...") ||
 		strings.Contains(lower, "esc to interrupt") || strings.Contains(lower, "(thinking)") ||
+		claudeTokenCounter.MatchString(trimmed) ||
 		strings.ContainsAny(trimmed, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 }
 
@@ -138,10 +175,6 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 	if strings.TrimSpace(capture) == "" || isComposerDialog(capture) {
 		return ComposerUnknown
 	}
-	if hasBusyIndicator(capture) {
-		return ComposerBusy
-	}
-
 	lines := strings.Split(capture, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimLeft(lines[i], " \t")
@@ -149,6 +182,11 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 			continue
 		}
 
+		// With a composer on screen, only its live status line can mean busy;
+		// agent messages above it are prose.
+		if isStatusLineBusy(lines[:i]) {
+			return ComposerBusy
+		}
 		content := strings.TrimSpace(line[len(marker):])
 		if content == "" || placeholder(content) {
 			return ComposerEmpty
@@ -156,7 +194,36 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 		return ComposerDraft
 	}
 
+	if hasBusyIndicator(capture) {
+		return ComposerBusy
+	}
 	return ComposerUnknown
+}
+
+// codexStatusLinePattern is Codex's live status header: a short title whose
+// interrupt hint is set off by "(", "•" or "·", as in "Working (12s • esc to
+// interrupt)". A timer alone is not evidence, and a quoted hint in prose is
+// not set off.
+var codexStatusLinePattern = regexp.MustCompile(`(?i)^•\s+(?:\S+\s+){0,12}(?:\(|[•·]\s+)esc to interrupt\b`)
+
+// isStatusLineBusy finds the entry directly above a composer (the previous •
+// message or › prompt) and reports whether it is Codex's live status block:
+// a • header in the status-line shape, followed by its queued ↳ rows, edit
+// hint, and wrapped lines. The header is joined with its rows before matching
+// because a narrow pane wraps it. A plain agent message never counts, whatever
+// it says, and without an entry on screen there is no status to find.
+func isStatusLineBusy(above []string) bool {
+	for i := len(above) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(above[i])
+		if strings.HasPrefix(line, "›") {
+			return false
+		}
+		if strings.HasPrefix(line, "•") {
+			joined := strings.Join(strings.Fields(strings.Join(above[i:], " ")), " ")
+			return codexStatusLinePattern.MatchString(joined)
+		}
+	}
+	return false
 }
 
 func isComposerDialog(capture string) bool {

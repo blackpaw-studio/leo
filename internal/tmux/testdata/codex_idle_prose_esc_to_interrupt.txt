@@ -1,0 +1,7 @@
+• Fixed the status check.
+  It now matches "esc to
+  interrupt" across wraps.
+
+› Ask Codex to do anything
+
+  gpt-5.6-luna default · ~/work

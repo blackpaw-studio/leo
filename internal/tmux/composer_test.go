@@ -420,3 +420,215 @@ func TestComposerStateString(t *testing.T) {
 		}
 	}
 }
+
+// Real captures of idle Claude dispatch panes that were reported busy because
+// transcript prose above the composer said "running" (issue #211).
+func TestClaudeComposerClassifierIgnoresBusyWordsInTranscriptCaptures(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range []string{
+		"testdata/claude_idle_prose_running_397.txt",
+		"testdata/claude_idle_prose_running_411.txt",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			t.Parallel()
+			capture, err := os.ReadFile(fixture)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			if got := ClaudeComposerClassifier(string(capture)); got != ComposerEmpty {
+				t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, ComposerEmpty)
+			}
+		})
+	}
+}
+
+func TestComposerClassifierIgnoresBusyWordsInProse(t *testing.T) {
+	t.Parallel()
+
+	const claudeBox = `
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
+`
+	tests := []struct {
+		name     string
+		classify ComposerClassifier
+		capture  string
+		want     ComposerState
+	}{
+		{
+			"claude/prose-running-above-done-summary",
+			ClaudeComposerClassifier,
+			"⏺ The daemon kept running while I was working.\n\n✻ Worked for 3s · done 6:08 PM" + claudeBox,
+			ComposerEmpty,
+		},
+		{
+			"claude/prose-working-directly-above-box",
+			ClaudeComposerClassifier,
+			"⏺ Done.\n  Still working: nothing; the thinking step is running fine." + claudeBox,
+			ComposerEmpty,
+		},
+		{
+			"claude/spinner-above-todo-list",
+			ClaudeComposerClassifier,
+			"⏺ Starting.\n\n✢ Running tests… (esc to interrupt)\n  ⎿  ☐ write test\n     ☐ fix bug\n" + claudeBox,
+			ComposerBusy,
+		},
+		{
+			"codex/prose-running-above-composer",
+			CodexComposerClassifier,
+			"• The tests are running in parallel and still working.\n\n› Ask Codex to do anything\n\n  gpt-5.6-luna default · ~/work\n",
+			ComposerEmpty,
+		},
+		{
+			"codex/prose-running-in-history",
+			CodexComposerClassifier,
+			"• Running the suite now.\n\n• All green.\n\n› Ask Codex to do anything\n\n  gpt-5.6-luna default · ~/work\n",
+			ComposerEmpty,
+		},
+		{
+			"codex/live-status-above-composer",
+			CodexComposerClassifier,
+			"• Running the suite now.\n\n• Working (12s • esc to interrupt)\n\n› Ask Codex to do anything\n\n  gpt-5.6-luna default · ~/work\n",
+			ComposerBusy,
+		},
+		{
+			"codex/long-title-minutes-timer",
+			CodexComposerClassifier,
+			"• Inspecting the composer status detection logic (1m 02s • esc to interrupt)\n\n› Ask Codex to do anything\n",
+			ComposerBusy,
+		},
+		{
+			"codex/long-title-hours-timer",
+			CodexComposerClassifier,
+			"• Rerunning the full race suite (1h 02m 03s • esc to interrupt)\n\n› Ask Codex to do anything\n",
+			ComposerBusy,
+		},
+		{
+			"codex/timerless-status-above-composer",
+			CodexComposerClassifier,
+			"• Working · esc to interrupt\n\n› Ask Codex to do anything\n",
+			ComposerBusy,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.classify(tt.capture); got != tt.want {
+				t.Fatalf("classify() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// Synthesized from Codex's live status layout: queued ↳ rows with their edit
+// hint, a wrapped queued message, and a status line wrapped by a narrow pane.
+func TestCodexComposerClassifierStatusRegionCaptures(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range []string{
+		"testdata/codex_busy_queued_hint.txt",
+		"testdata/codex_busy_wrapped_queued.txt",
+		"testdata/codex_busy_wrapped_status.txt",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			t.Parallel()
+			capture, err := os.ReadFile(fixture)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			if got := CodexComposerClassifier(string(capture)); got != ComposerBusy {
+				t.Fatalf("CodexComposerClassifier() = %s, want %s", got, ComposerBusy)
+			}
+		})
+	}
+}
+
+func TestClaudeComposerClassifierSpinnerFrames(t *testing.T) {
+	t.Parallel()
+
+	const box = `
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
+`
+	const todos = "\n  ⎿  ☐ write test\n     ☐ fix bug"
+	tests := []struct {
+		name   string
+		status string
+		want   ComposerState
+	}{
+		{"frame-·", "· Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✢", "✢ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✳", "✳ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✶", "✶ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✻", "✻ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✽", "✽ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-*", "* Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-·-token-counter", "· Pondering (5s · ↑ 200 tokens)", ComposerBusy},
+		{"token-counter-without-interrupt-hint", "✻ Pondering… (5s · ↑ 200 tokens)", ComposerBusy},
+		{"token-counter-without-ellipsis", "✻ Pondering (5s · ↑ 200 tokens)", ComposerBusy},
+		{"queued-prompt-below-spinner", "✻ Pondering… (esc to interrupt)\n\n❯ also check the docs", ComposerBusy},
+		{"done-summary", "✻ Worked for 3s · done 6:08 PM", ComposerEmpty},
+		{"transcript-·-bullet", "⏺ Summary:\n  · the daemon is running\n· plain dot line", ComposerEmpty},
+		{"transcript-*-bullet", "⏺ Summary:\n* working on nothing", ComposerEmpty},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			capture := "⏺ Starting.\n\n" + tt.status + "\n" + box
+			if got := ClaudeComposerClassifier(capture); got != tt.want {
+				t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexComposerClassifierIgnoresStatusShapesInProse(t *testing.T) {
+	t.Parallel()
+
+	fixture, err := os.ReadFile("testdata/codex_idle_prose_esc_to_interrupt.txt")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	const composer = "\n\n› Ask Codex to do anything\n\n  gpt-5.6-luna default · ~/work\n"
+	tests := []struct {
+		name    string
+		capture string
+	}{
+		{"wrapped-interrupt-hint-in-message", string(fixture)},
+		{"quoted-interrupt-hint-in-message", `• Fixed it; matches "esc to interrupt" in prose` + composer},
+		{"bare-timer-seconds", "• Tests pass (4s)." + composer},
+		{"bare-timer-with-trailer", "• Ran the suite (3s) — green" + composer},
+		{"bare-timer-hours", "• Estimate (2h) for the rewrite" + composer},
+		{"latency-unit", "• Latency dropped (10ms → 2ms)." + composer},
+		{"minutes-unit", "• Build takes (5min) now" + composer},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := CodexComposerClassifier(tt.capture); got != ComposerEmpty {
+				t.Fatalf("CodexComposerClassifier() = %s, want %s", got, ComposerEmpty)
+			}
+		})
+	}
+}
+
+func TestClaudeComposerClassifierIgnoresIndentedSpinnerGlyphs(t *testing.T) {
+	t.Parallel()
+
+	capture := "⏺ Summary:\n  ✳ Cogitating… is what the spinner said\n  ✢ another one…\n" + `
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
+`
+	if got := ClaudeComposerClassifier(capture); got != ComposerEmpty {
+		t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, ComposerEmpty)
+	}
+}
