@@ -1,0 +1,20 @@
+  - Results: env -u TMUX go test -race ./... passes,
+    make lint reports 0 issues (with a fresh lint
+    cache), and the safe e2e command
+    (TMUX_TMPDIR=/tmp/leo-e2e-XXXX) exits 0 with 59
+    passes and the same 2 skips as before.
+  - Unconfirmed cleanup: the cleanup fix hasn't been
+    proven. An empty /tmp/leo-e2e-tmux-* dir from
+    18:06 was left behind, and I can't tell if it
+    came from my run: another e2e daemon from
+    someone else was running in parallel.
+
+✻ Sautéed for 2m 45s · done 6:08 PM
+            new task? /clear to save 141.9k tokens
+───────────────────────────────────── e2e-env-leak ─
+❯ 
+────────────────────────────────────────────────────
+  [Opus 5.5] | 🧠 medium | ...
+  Session: 11.0% | ⏱️ 1hr 5...
+  ~/.l/s/w/d-6a69d2d0dfae |...
+  ⏵⏵ auto mode on · PR #209 · ← 6 agents

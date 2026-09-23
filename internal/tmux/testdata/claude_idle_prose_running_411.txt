@@ -1,0 +1,20 @@
+    deletes any <name>.json with no matching agent
+    record. It leaves dispatch-* files to the
+    dispatcher's own sweep, and deletes nothing if
+    the agent records file can't be read. The orphan
+    test failed on a stub first.
+  - Gap: an agent renamed while live that is still
+    running at the next daemon restart gets adopted,
+    and it's still using <old>.json when the sweep
+    deletes it. So a live rename followed by a daemon
+    restart has the same hot-reload risk as before.
+
+✻ Cogitated for 3m 41s · done 6:51 PM
+             new task? /clear to save 294.4k tokens
+─────────────────────────────────── attention-fixes ─
+❯ 
+─────────────────────────────────────────────────────
+  [Opus 5.5] | 🧠 medium | 🌳 feat/agent-atten...
+  Session: 17.0% | ⏱️ 1hr 8m | Weekly: 10.0% |...
+  ~/.l/a/leo | main | #210 OPEN | Ctx Used: 29.0%
+  ⏵⏵ auto mode on · PR #210 · ← 6 agents

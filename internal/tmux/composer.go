@@ -63,12 +63,8 @@ func ClaudeComposerClassifier(capture string) ComposerState {
 		return ComposerUnknown
 	}
 
-	// Only a spinner immediately before the active composer box means Claude is
-	// busy. Finished-turn summaries and prompt history are above that boundary.
-	for _, line := range lines[:top] {
-		if isClaudeBusyLine(line) {
-			return ComposerBusy
-		}
+	if isClaudeStatusBusy(lines[:top]) {
+		return ComposerBusy
 	}
 
 	composer := strings.TrimLeft(lines[composerLine], " \t")
@@ -111,19 +107,44 @@ func isClaudeDialog(capture string) bool {
 	return isComposerDialog(capture)
 }
 
-func isClaudeBusyLine(line string) bool {
-	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "✻") {
-		if strings.Contains(line, "· done") {
+// isClaudeStatusBusy reports whether the live status region directly above
+// the composer box shows an in-progress spinner. Claude renders that spinner
+// (or its "done" summary) below the last transcript message, so the walk stops
+// at the nearest spinner line or at the message/prompt that starts the
+// transcript. Transcript prose never counts, whatever words it contains.
+func isClaudeStatusBusy(above []string) bool {
+	for i := len(above) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(above[i])
+		if isClaudeSpinnerLine(line) {
+			return isClaudeBusyLine(line)
+		}
+		if strings.HasPrefix(line, "⏺") || strings.HasPrefix(line, "❯") {
 			return false
 		}
-		return isClaudeInProgressLine(line)
 	}
-	if strings.HasPrefix(line, "✽") || strings.HasPrefix(line, "✶") || strings.HasPrefix(line, "✳") ||
-		strings.HasPrefix(line, "✢") || strings.HasPrefix(line, "⠋") {
-		return true
+	return false
+}
+
+func isClaudeSpinnerLine(line string) bool {
+	for _, glyph := range []string{"✻", "✽", "✶", "✳", "✢", "⠋"} {
+		if strings.HasPrefix(line, glyph) {
+			return true
+		}
 	}
-	return composerBusyPattern.MatchString(line)
+	return false
+}
+
+// isClaudeBusyLine classifies one spinner line: "✻ Worked for 3s · done" is a
+// finished-turn summary, every other spinner frame is live.
+func isClaudeBusyLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "✻") {
+		return isClaudeSpinnerLine(line)
+	}
+	if strings.Contains(line, "· done") {
+		return false
+	}
+	return isClaudeInProgressLine(line)
 }
 
 func isClaudeInProgressLine(line string) bool {
@@ -138,10 +159,6 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 	if strings.TrimSpace(capture) == "" || isComposerDialog(capture) {
 		return ComposerUnknown
 	}
-	if hasBusyIndicator(capture) {
-		return ComposerBusy
-	}
-
 	lines := strings.Split(capture, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimLeft(lines[i], " \t")
@@ -149,6 +166,11 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 			continue
 		}
 
+		// With a composer on screen, only its live status line can mean busy;
+		// agent messages above it are prose.
+		if isStatusLineBusy(lines[:i]) {
+			return ComposerBusy
+		}
 		content := strings.TrimSpace(line[len(marker):])
 		if content == "" || placeholder(content) {
 			return ComposerEmpty
@@ -156,7 +178,25 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 		return ComposerDraft
 	}
 
+	if hasBusyIndicator(capture) {
+		return ComposerBusy
+	}
 	return ComposerUnknown
+}
+
+// isStatusLineBusy checks the nearest non-blank line above a composer, skipping
+// queued-message rows. Codex renders its live "Working (12s • esc to
+// interrupt)" status there; a finished agent message in that slot carries no
+// interrupt hint.
+func isStatusLineBusy(above []string) bool {
+	for i := len(above) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(above[i])
+		if line == "" || strings.HasPrefix(line, "↳") {
+			continue
+		}
+		return strings.Contains(strings.ToLower(line), "esc to interrupt") || isClaudeBusyLine(line)
+	}
+	return false
 }
 
 func isComposerDialog(capture string) bool {
