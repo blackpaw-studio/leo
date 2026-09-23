@@ -495,6 +495,18 @@ func TestComposerClassifierIgnoresBusyWordsInProse(t *testing.T) {
 			ComposerBusy,
 		},
 		{
+			"codex/long-title-minutes-timer",
+			CodexComposerClassifier,
+			"• Inspecting the composer status detection logic (1m 02s • esc to interrupt)\n\n› Ask Codex to do anything\n",
+			ComposerBusy,
+		},
+		{
+			"codex/long-title-hours-timer",
+			CodexComposerClassifier,
+			"• Rerunning the full race suite (1h 02m 03s • esc to interrupt)\n\n› Ask Codex to do anything\n",
+			ComposerBusy,
+		},
+		{
 			"codex/timerless-status-above-composer",
 			CodexComposerClassifier,
 			"• Working · esc to interrupt\n\n› Ask Codex to do anything\n",

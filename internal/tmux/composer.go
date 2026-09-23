@@ -204,7 +204,7 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 // interrupt hint is set off by "(", "•" or "·", as in "Working (12s • esc to
 // interrupt)". A timer alone is not evidence, and a quoted hint in prose is
 // not set off.
-var codexStatusLinePattern = regexp.MustCompile(`(?i)^•\s+(?:\S+\s+){0,7}(?:\(|[•·]\s+)esc to interrupt\b`)
+var codexStatusLinePattern = regexp.MustCompile(`(?i)^•\s+(?:\S+\s+){0,12}(?:\(|[•·]\s+)esc to interrupt\b`)
 
 // isStatusLineBusy finds the entry directly above a composer (the previous •
 // message or › prompt) and reports whether it is Codex's live status block:
