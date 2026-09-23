@@ -480,6 +480,35 @@ func TestStartLogFileError(t *testing.T) {
 	}
 }
 
+// TestRunSupervisedScrubsDispatchIdentity: a daemon started from inside a
+// dispatch pane inherits that pane's LEO_DISPATCH_ID and LEO_CONFIG. Every
+// child the daemon spawns — the tmux server, one-shot task runs, headless
+// dispatches — builds its env from os.Environ(), so the daemon must drop them
+// before it starts anything.
+func TestRunSupervisedScrubsDispatchIdentity(t *testing.T) {
+	origFn := supervisedExecFn
+	defer func() { supervisedExecFn = origFn }()
+	t.Setenv("LEO_DISPATCH_ID", "d-canary")
+	t.Setenv("LEO_CONFIG", "/caller/leo.yaml")
+
+	var leaked []string
+	supervisedExecFn = func(RunSupervisedOptions) error {
+		for _, entry := range os.Environ() {
+			if strings.HasPrefix(entry, "LEO_DISPATCH_ID=") || strings.HasPrefix(entry, "LEO_CONFIG=") {
+				leaked = append(leaked, entry)
+			}
+		}
+		return nil
+	}
+
+	if err := RunSupervised(RunSupervisedOptions{ConfigPath: "/home/.leo/leo.yaml"}); err != nil {
+		t.Fatalf("RunSupervised() error: %v", err)
+	}
+	if len(leaked) != 0 {
+		t.Fatalf("daemon env still carries the caller's dispatch identity: %q", leaked)
+	}
+}
+
 func TestRunSupervisedDelegates(t *testing.T) {
 	origFn := supervisedExecFn
 	defer func() { supervisedExecFn = origFn }()

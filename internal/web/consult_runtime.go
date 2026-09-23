@@ -1,12 +1,43 @@
 package web
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
 )
+
+// consultLoopIntervals are the consult runtime loop's tick periods. rosterIdle
+// is how often the roster refreshes when no record is roster-eligible.
+type consultLoopIntervals struct {
+	sweep, roster, rosterIdle, viewer time.Duration
+}
+
+var defaultConsultLoopIntervals = consultLoopIntervals{
+	sweep:      5 * time.Second,
+	roster:     time.Second,
+	rosterIdle: 5 * time.Second,
+	viewer:     10 * time.Second,
+}
+
+// withDefaults fills zero fields from defaultConsultLoopIntervals.
+func (i consultLoopIntervals) withDefaults() consultLoopIntervals {
+	pick := func(v, def time.Duration) time.Duration {
+		if v > 0 {
+			return v
+		}
+		return def
+	}
+	d := defaultConsultLoopIntervals
+	return consultLoopIntervals{
+		sweep:      pick(i.sweep, d.sweep),
+		roster:     pick(i.roster, d.roster),
+		rosterIdle: pick(i.rosterIdle, d.rosterIdle),
+		viewer:     pick(i.viewer, d.viewer),
+	}
+}
 
 // setupConsultRuntime keeps dispatch viewer command execution on the server's
 // injectable context-aware seam; this is the path used by roster sweeps too.
@@ -35,24 +66,36 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	if opts.ParentContext == nil {
 		return
 	}
+	intervals := s.consultIntervals.withDefaults()
+	updateRoster := s.updateRoster
+	if updateRoster == nil {
+		updateRoster = viewer.UpdateRoster
+	}
+	loopCtx, cancel := context.WithCancel(opts.ParentContext)
+	done := make(chan struct{})
+	s.stopConsultLoop = func() {
+		cancel()
+		<-done
+	}
 	go func() {
-		dispatcherTicker := time.NewTicker(5 * time.Second)
-		rosterTicker := time.NewTicker(time.Second)
-		viewerTicker := time.NewTicker(10 * time.Second)
+		defer close(done)
+		dispatcherTicker := time.NewTicker(intervals.sweep)
+		rosterTicker := time.NewTicker(intervals.roster)
+		viewerTicker := time.NewTicker(intervals.viewer)
 		lastRosterUpdate := time.Now()
 		defer dispatcherTicker.Stop()
 		defer rosterTicker.Stop()
 		defer viewerTicker.Stop()
 		for {
 			select {
-			case <-opts.ParentContext.Done():
+			case <-loopCtx.Done():
 				return
 			case now := <-dispatcherTicker.C:
 				s.consults.Sweep(now)
 			case now := <-rosterTicker.C:
 				records := s.consults.Records()
-				if consult.HasRosterEligibleRecord(records, now) || now.Sub(lastRosterUpdate) >= 5*time.Second {
-					viewer.UpdateRoster(records, now)
+				if consult.HasRosterEligibleRecord(records, now) || now.Sub(lastRosterUpdate) >= intervals.rosterIdle {
+					updateRoster(records, now)
 					lastRosterUpdate = now
 				}
 			case now := <-viewerTicker.C:

@@ -40,10 +40,8 @@ import (
 // to probe) and fakeclaude's live process echoes a reply back into the pane,
 // and (3) the spawn is persisted to the agentstore under the bare agent name.
 func TestPersistentEnsureSpawnsMissingAgent(t *testing.T) {
-	tmuxPath, err := exec.LookPath("tmux")
-	if err != nil {
-		t.Skip("tmux not available; skipping live ensure-exists test")
-	}
+	// A real tmux server, but a disposable one: `-L leo` is production's.
+	tmuxPath, _ := isolatedLeoTmux(t, "leo-e2e-ensure")
 
 	dir := mkTempE2EDir(t, "leo-e2e-persist-ensure-*")
 	templateWS := filepath.Join(dir, "worker-ws")

@@ -754,7 +754,27 @@ type RunSupervisedOptions struct {
 // its own tmux session with a restart loop). It no longer starts any
 // config-declared "processes" — agents are the only supervised primitive.
 func RunSupervised(opts RunSupervisedOptions) error {
+	if err := scrubDispatchIdentity(); err != nil {
+		return err
+	}
 	return supervisedExecFn(opts)
+}
+
+// scrubDispatchIdentity drops a dispatch identity the daemon inherited from
+// the shell that launched it (e.g. `leo service` or `make e2e` run inside a
+// dispatch pane). Every child the daemon spawns — its tmux server, one-shot
+// task runs, headless dispatches — starts from os.Environ(), and any of them
+// running `leo dispatch report` would otherwise act for the caller's run.
+// The daemon itself never reads these vars; it gets its config via
+// RunSupervisedOptions.ConfigPath. sessionEnvArgs still blanks them per
+// session as defence in depth.
+func scrubDispatchIdentity() error {
+	for _, k := range dispatchIdentityEnvKeys {
+		if err := os.Unsetenv(k); err != nil {
+			return fmt.Errorf("scrubbing inherited %s: %w", k, err)
+		}
+	}
+	return nil
 }
 
 func defaultSupervisedExec(opts RunSupervisedOptions) error {
@@ -1500,6 +1520,10 @@ func harnessBinaryPath(harnessName, claudePath string) string {
 	return h.Binary()
 }
 
+// dispatchIdentityEnvKeys are the vars that make `leo dispatch report` act
+// for a dispatch run. sessionEnvArgs blanks them for every supervised agent.
+var dispatchIdentityEnvKeys = []string{"LEO_DISPATCH_ID", "LEO_CONFIG"}
+
 // sessionEnvArgs returns the `-e KEY=VALUE` args for tmux new-session,
 // carrying the process's own configured env plus leo's control vars.
 //
@@ -1547,6 +1571,14 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 		env[k] = v
 	}
 
+	// A supervised agent is never a dispatch. tmux seeds a new session from
+	// the server's global env, which is the daemon's own; a daemon launched
+	// from a dispatch pane would otherwise hand that pane's identity to every
+	// agent, whose `leo dispatch report` hooks then report into the caller's
+	// run. Blank rather than omit: omission leaves the inherited value alone.
+	for _, k := range dispatchIdentityEnvKeys {
+		env[k] = ""
+	}
 	env["LEO_PROCESS_NAME"] = spec.Name
 	env["LEO_TMUX_PATH"] = tmuxPath
 	if spec.WebPort != "" {

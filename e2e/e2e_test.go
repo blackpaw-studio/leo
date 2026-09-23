@@ -16,6 +16,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 var (
@@ -25,7 +26,46 @@ var (
 	faketmux   string
 )
 
+// callerEnvKeys are the vars that tie a process to the leo daemon and tmux
+// server it runs under. `make e2e` launched from inside a leo agent or dispatch
+// pane inherits them; any e2e daemon or fake agent that saw them would report
+// hooks into, and drive tmux on, the caller's production setup.
+var callerEnvKeys = []string{
+	"TMUX", "TMUX_PANE",
+	"LEO_DISPATCH_ID", "LEO_CONFIG", "LEO_API_TOKEN", "LEO_WEB_PORT",
+	"LEO_PROCESS_NAME", "LEO_ATTENTION_AGENT", "LEO_TMUX_PATH",
+}
+
+// isolateFromCaller scrubs callerEnvKeys and points TMUX_TMPDIR at a fresh
+// directory, so even an unwrapped `tmux -L leo` cannot reach the production
+// server's socket. The directory lives under /tmp rather than $TMPDIR:
+// macOS's $TMPDIR is long enough to push tmux's socket path past the 104-byte
+// sun_path limit. Returns the directory for the caller to remove.
+func isolateFromCaller() string {
+	for _, k := range callerEnvKeys {
+		if err := os.Unsetenv(k); err != nil {
+			panic(err)
+		}
+	}
+	dir, err := os.MkdirTemp("/tmp", "leo-e2e-tmux-")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("TMUX_TMPDIR", dir); err != nil {
+		panic(err)
+	}
+	return dir
+}
+
 func TestMain(m *testing.M) {
+	os.Exit(runE2E(m))
+}
+
+// runE2E holds TestMain's body so its deferred cleanup runs before os.Exit.
+func runE2E(m *testing.M) int {
+	tmuxDir := isolateFromCaller()
+	defer os.RemoveAll(tmuxDir)
+
 	tmp, err := os.MkdirTemp("", "leo-e2e-bin-*")
 	if err != nil {
 		panic(err)
@@ -63,7 +103,21 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	os.Exit(m.Run())
+	return m.Run()
+}
+
+// isolatedLeoTmux routes Leo's fixed `-L leo` commands through TestMain's
+// wrapper to a disposable server named after prefix, killed at cleanup. The
+// returned socket name addresses that server directly with the real tmux.
+func isolatedLeoTmux(t *testing.T, prefix string) (tmuxPath, socket string) {
+	t.Helper()
+	if _, err := os.Stat(faketmux); err != nil {
+		t.Skip("tmux wrapper unavailable")
+	}
+	socket = fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	t.Setenv("FAKECLAUDE_TMUX_SOCKET", socket)
+	t.Cleanup(func() { _ = exec.Command(faketmux, tmux.Args("kill-server")...).Run() })
+	return faketmux, socket
 }
 
 func findRepoRoot() string {
