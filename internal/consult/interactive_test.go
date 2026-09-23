@@ -1062,3 +1062,111 @@ func TestInteractiveClosedHarnessAndNoRuntime(t *testing.T) {
 		t.Fatalf("replayed closed harness id changed turns: %+v", rec.Turns)
 	}
 }
+
+// claudeHook builds a Claude Code hook report: Claude's payloads carry no
+// turn_id, so turns are attributed by arming, prompt text, and order.
+func claudeHook(t *testing.T, eventID, event, prompt string) HookReport {
+	t.Helper()
+	payload := map[string]string{"hook_event_name": event}
+	if prompt != "" {
+		payload["prompt"] = prompt
+	}
+	b, _ := json.Marshal(payload)
+	return HookReport{EventID: eventID, Payload: b}
+}
+
+func startClaudeInteractive(t *testing.T, now *time.Time) (*Dispatcher, *fakeInteractiveRuntime, string) {
+	t.Helper()
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return *now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	if err := d.Report(started.ID, claudeHook(t, "submit-1", "UserPromptSubmit", rt.firstInjection())); err != nil {
+		t.Fatal(err)
+	}
+	return d, rt, started.ID
+}
+
+// Claude's background-task auto-continuation submits a prompt mid-turn and
+// then fires a single Stop; that submit must fold into the working turn
+// instead of opening a turn nothing will ever close (#211).
+func TestInteractiveReportClaudeMidTurnSubmitFoldsIntoWorkingTurn(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	now = now.Add(time.Second)
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "<task-notification>background command finished</task-notification>")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Status != StatusIdle || rec.Steered {
+		t.Fatalf("mid-turn submit record=%+v", rec)
+	}
+	if _, err := d.Send(context.Background(), id, "next"); err != nil {
+		t.Fatalf("Send after folded continuation: %v", err)
+	}
+}
+
+func TestInteractiveReportClaudeSubmitWhileIdleOpensUserTurn(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "typed by a human")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if len(rec.Turns) != 2 || rec.Turns[1].Source != TurnSourceUser || rec.Turns[1].Outcome != "" || !rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("idle submit record=%+v", rec)
+	}
+}
+
+func TestInteractiveReportClaudeSubmitAfterStallMarksTurnLost(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	now = now.Add(stalledAfter)
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "typed by a human")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if len(rec.Turns) != 2 || rec.Turns[0].Outcome != TurnLost || rec.Turns[1].Source != TurnSourceUser || rec.Turns[1].Outcome != "" || !rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("stalled submit record=%+v", rec)
+	}
+}
+
+func TestInteractiveReportCodexOverlappingTurnsCloseIndependently(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	for _, r := range []HookReport{hook(t, "UserPromptSubmit", "a"), hook(t, "UserPromptSubmit", "b"), hook(t, "Stop", "b")} {
+		if err := d.Report(started.ID, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec, _ := d.Get(started.ID)
+	if len(rec.Turns) != 2 || rec.Turns[0].Outcome != "" || rec.Turns[1].HarnessTurnID != "b" || rec.Turns[1].Outcome != TurnFinished || rec.Status != StatusRunning {
+		t.Fatalf("after stop b record=%+v", rec)
+	}
+	if err := d.Report(started.ID, hook(t, "Stop", "a")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.Get(started.ID)
+	if rec.Turns[0].Outcome != TurnFinished || rec.Status != StatusIdle {
+		t.Fatalf("after stop a record=%+v", rec)
+	}
+}
