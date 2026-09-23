@@ -505,3 +505,68 @@ func TestComposerClassifierIgnoresBusyWordsInProse(t *testing.T) {
 		})
 	}
 }
+
+// Synthesized from Codex's live status layout: queued ↳ rows with their edit
+// hint, a wrapped queued message, and a status line wrapped by a narrow pane.
+func TestCodexComposerClassifierStatusRegionCaptures(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range []string{
+		"testdata/codex_busy_queued_hint.txt",
+		"testdata/codex_busy_wrapped_queued.txt",
+		"testdata/codex_busy_wrapped_status.txt",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			t.Parallel()
+			capture, err := os.ReadFile(fixture)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			if got := CodexComposerClassifier(string(capture)); got != ComposerBusy {
+				t.Fatalf("CodexComposerClassifier() = %s, want %s", got, ComposerBusy)
+			}
+		})
+	}
+}
+
+func TestClaudeComposerClassifierSpinnerFrames(t *testing.T) {
+	t.Parallel()
+
+	const box = `
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
+`
+	const todos = "\n  ⎿  ☐ write test\n     ☐ fix bug"
+	tests := []struct {
+		name   string
+		status string
+		want   ComposerState
+	}{
+		{"frame-·", "· Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✢", "✢ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✳", "✳ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✶", "✶ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✻", "✻ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-✽", "✽ Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-*", "* Cogitating… (esc to interrupt)" + todos, ComposerBusy},
+		{"frame-·-token-counter", "· Pondering (5s · ↑ 200 tokens)", ComposerBusy},
+		{"token-counter-without-interrupt-hint", "✻ Pondering… (5s · ↑ 200 tokens)", ComposerBusy},
+		{"token-counter-without-ellipsis", "✻ Pondering (5s · ↑ 200 tokens)", ComposerBusy},
+		{"queued-prompt-below-spinner", "✻ Pondering… (esc to interrupt)\n\n❯ also check the docs", ComposerBusy},
+		{"done-summary", "✻ Worked for 3s · done 6:08 PM", ComposerEmpty},
+		{"transcript-·-bullet", "⏺ Summary:\n  · the daemon is running\n· plain dot line", ComposerEmpty},
+		{"transcript-*-bullet", "⏺ Summary:\n* working on nothing", ComposerEmpty},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			capture := "⏺ Starting.\n\n" + tt.status + "\n" + box
+			if got := ClaudeComposerClassifier(capture); got != tt.want {
+				t.Fatalf("ClaudeComposerClassifier() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}

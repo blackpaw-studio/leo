@@ -110,25 +110,40 @@ func isClaudeDialog(capture string) bool {
 // isClaudeStatusBusy reports whether the live status region directly above
 // the composer box shows an in-progress spinner. Claude renders that spinner
 // (or its "done" summary) below the last transcript message, so the walk stops
-// at the nearest spinner line or at the message/prompt that starts the
-// transcript. Transcript prose never counts, whatever words it contains.
+// at the nearest spinner line or at the ⏺ message that starts the transcript.
+// Queued prompts may render between the spinner and the box, so ❯ is not a
+// boundary. Transcript prose never counts, whatever words it contains.
 func isClaudeStatusBusy(above []string) bool {
 	for i := len(above) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(above[i])
-		if isClaudeSpinnerLine(line) {
-			return isClaudeBusyLine(line)
+		if isClaudeSpinnerLine(above[i]) {
+			return isClaudeBusyLine(above[i])
 		}
-		if strings.HasPrefix(line, "⏺") || strings.HasPrefix(line, "❯") {
+		if strings.HasPrefix(strings.TrimSpace(above[i]), "⏺") {
 			return false
 		}
 	}
 	return false
 }
 
+// Claude's spinner cycles · ✢ ✳ ✶ ✻ ✽ (* substitutes for ✳ off darwin).
+var (
+	claudeSpinnerGlyphs     = []string{"✻", "✽", "✶", "✳", "✢", "⠋"}
+	claudeWeakSpinnerGlyphs = []string{"·", "*"}
+	claudeTokenCounter      = regexp.MustCompile(`\(\s*\d+[hms][^)]*[↑↓]`)
+)
+
+// isClaudeSpinnerLine recognizes a spinner frame. The · and * frames double as
+// bullets, so they count only unindented and in the in-progress shape.
 func isClaudeSpinnerLine(line string) bool {
-	for _, glyph := range []string{"✻", "✽", "✶", "✳", "✢", "⠋"} {
-		if strings.HasPrefix(line, glyph) {
+	trimmed := strings.TrimSpace(line)
+	for _, glyph := range claudeSpinnerGlyphs {
+		if strings.HasPrefix(trimmed, glyph) {
 			return true
+		}
+	}
+	for _, glyph := range claudeWeakSpinnerGlyphs {
+		if strings.HasPrefix(line, glyph+" ") {
+			return isClaudeInProgressLine(line)
 		}
 	}
 	return false
@@ -152,6 +167,7 @@ func isClaudeInProgressLine(line string) bool {
 	lower := strings.ToLower(trimmed)
 	return strings.HasSuffix(trimmed, "…") || strings.HasSuffix(trimmed, "...") ||
 		strings.Contains(lower, "esc to interrupt") || strings.Contains(lower, "(thinking)") ||
+		claudeTokenCounter.MatchString(trimmed) ||
 		strings.ContainsAny(trimmed, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 }
 
@@ -184,19 +200,27 @@ func classifyComposer(capture, marker string, placeholder func(string) bool) Com
 	return ComposerUnknown
 }
 
-// isStatusLineBusy checks the nearest non-blank line above a composer, skipping
-// queued-message rows. Codex renders its live "Working (12s • esc to
-// interrupt)" status there; a finished agent message in that slot carries no
-// interrupt hint.
+var codexStatusLinePattern = regexp.MustCompile(`^•\s+\S+(?:\s+\S+){0,3}\s+\(\d+[hms]`)
+
+// isStatusLineBusy scans the region between a composer and the transcript
+// entry above it (the previous • message or › prompt). Codex renders its live
+// "• Working (12s • esc to interrupt)" status there, followed by queued ↳ rows
+// and their edit hint; any of those may wrap in a narrow pane, so the region is
+// joined before matching. A finished agent message carries neither shape.
 func isStatusLineBusy(above []string) bool {
+	region := []string{}
 	for i := len(above) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(above[i])
-		if line == "" || strings.HasPrefix(line, "↳") {
-			continue
+		region = append([]string{line}, region...)
+		if strings.HasPrefix(line, "•") || strings.HasPrefix(line, "›") {
+			break
 		}
-		return strings.Contains(strings.ToLower(line), "esc to interrupt") || isClaudeBusyLine(line)
 	}
-	return false
+	if len(region) > 0 && codexStatusLinePattern.MatchString(region[0]) {
+		return true
+	}
+	joined := strings.ToLower(strings.Join(strings.Fields(strings.Join(region, " ")), " "))
+	return strings.Contains(joined, "esc to interrupt")
 }
 
 func isComposerDialog(capture string) bool {
