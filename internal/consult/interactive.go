@@ -547,9 +547,6 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 					// Stop. Fold it into the working turn; a separate turn
 					// would never close (#211).
 					d.persistLocked(s, "")
-					if s.record.Status != oldStatus {
-						d.persistLocked(s, "status")
-					}
 					return nil
 				}
 				t := d.openTurnLocked(s, TurnSourceUser, "", false)

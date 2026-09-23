@@ -1170,3 +1170,28 @@ func TestInteractiveReportCodexOverlappingTurnsCloseIndependently(t *testing.T) 
 		t.Fatalf("after stop a record=%+v", rec)
 	}
 }
+
+func TestInteractiveReportClaudeSubmitAfterStallThenMidTurnSubmitFolds(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	now = now.Add(stalledAfter)
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "typed by a human")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := d.Report(id, claudeHook(t, "submit-3", "UserPromptSubmit", "<task-notification>background command finished</task-notification>")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if len(rec.Turns) != 2 || rec.Turns[0].Source != TurnSourceOrchestrator || rec.Turns[0].Outcome != TurnLost ||
+		rec.Turns[1].Source != TurnSourceUser || rec.Turns[1].Outcome != "" || rec.Status != StatusRunning {
+		t.Fatalf("stall then mid-turn submit record=%+v", rec)
+	}
+	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.Get(id)
+	if len(rec.Turns) != 2 || rec.Turns[1].Outcome != TurnFinished || rec.Status != StatusIdle {
+		t.Fatalf("after stop record=%+v", rec)
+	}
+}
