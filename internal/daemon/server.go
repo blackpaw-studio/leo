@@ -99,6 +99,7 @@ type Server struct {
 	observeMessageLog *observe.MessageLog
 	observeActivity   observe.ActivityProvider
 	observeAttention  *observe.AttentionStore
+	observeSurfaced   *observe.SurfacedFileStore
 	observeClock      httpapi.Clock
 	leoVersion        string
 	parentContext     context.Context
@@ -120,6 +121,13 @@ func (s *Server) SetObservability(bus *observe.Bus, runLog *observe.RunLog, mess
 // view and, via StartWeb, the web API. Must be called before StartWeb.
 func (s *Server) SetAttention(a *observe.AttentionStore) {
 	s.observeAttention = a
+}
+
+// SetSurfacedFiles wires the surfaced-file store into the local /state view
+// and, via StartWeb, the web API's surface-file endpoint and /api/v1/state.
+// Must be called before StartWeb.
+func (s *Server) SetSurfacedFiles(store *observe.SurfacedFileStore) {
+	s.observeSurfaced = store
 }
 
 // ConfigWriter returns the process-wide leo.yaml write lock shared by the
@@ -360,6 +368,9 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 	}
 	if s.observeAttention != nil {
 		observeOpts = append(observeOpts, web.WithAttention(s.observeAttention))
+	}
+	if s.observeSurfaced != nil {
+		observeOpts = append(observeOpts, web.WithSurfacedFiles(s.observeSurfaced))
 	}
 	if s.leoVersion != "" {
 		observeOpts = append(observeOpts, web.WithVersion(s.leoVersion))

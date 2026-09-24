@@ -135,3 +135,37 @@ func TestLocalStateContainsWebAgentRowsWithoutHost(t *testing.T) {
 		t.Fatalf("local state contains host: %s", w.Body.String())
 	}
 }
+
+func TestLocalStateCarriesSurfacedFiles(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "leo.yaml")
+	if err := config.Save(cfgPath, &config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	store := observe.NewSurfacedFileStore(nil, nil)
+	if _, err := store.Add("local", time.Time{}, observe.SurfaceInput{Path: "a.go", AbsPath: "/w/a.go", Line: 2}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(filepath.Join(dir, "leo.sock"), cfgPath, nil)
+	s.SetAgentManager(&fakeAgentManager{records: []agent.Record{{Name: "local", Status: "running"}, {Name: "other"}}})
+	s.SetSurfacedFiles(store)
+	w := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/state", nil))
+
+	var body struct {
+		Data struct {
+			Agents []observe.Agent `json:"agents"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	agents := body.Data.Agents
+	if len(agents) != 2 || len(agents[0].SurfacedFiles) != 1 || agents[0].SurfacedFiles[0].AbsPath != "/w/a.go" || agents[0].SurfacedFiles[0].Line != 2 {
+		t.Fatalf("unexpected state: %s", w.Body.String())
+	}
+	if strings.Count(w.Body.String(), "surfaced_files") != 1 {
+		t.Fatalf("surfaced_files must be omitted for agents without any: %s", w.Body.String())
+	}
+}

@@ -65,7 +65,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		return localStateData{Agents: web.ProjectAgents(records, states, s.observeActivity, s.observeAttention, cfg)}, nil
+		return localStateData{Agents: web.ProjectAgents(records, states, s.observeActivity, s.observeAttention, s.observeSurfaced, cfg)}, nil
 	}, func(w http.ResponseWriter, status int, data any, err error) {
 		if err != nil {
 			writeError(w, status, err.Error())

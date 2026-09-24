@@ -64,6 +64,7 @@ func (s *Server) handleAPIState(w http.ResponseWriter, r *http.Request) {
 			History:       s.loadHistory(cfg).All(),
 			Activity:      s.activity,
 			Attention:     s.attention,
+			SurfacedFiles: s.surfacedFiles,
 			RunLog:        s.runLog,
 			MessageLog:    s.messageLog,
 			LeoVersion:    s.version,
@@ -92,6 +93,9 @@ type snapshotInput struct {
 	// Attention is the attention store's read seam. nil leaves every
 	// agent's attention absent.
 	Attention attentionProvider
+	// SurfacedFiles is the surfaced-file store's read seam. nil leaves
+	// every agent's surfaced_files absent.
+	SurfacedFiles surfacedProvider
 	// RunLog is the run log's read seam (observe.RunLog satisfies it). It
 	// alone knows about in-flight runs, so it takes priority over History
 	// for the runs it holds; History only tops up older completed runs the
@@ -115,10 +119,11 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 		activities = in.Activity.Activities()
 	}
 	attention := attentionSnapshot(in.Attention)
+	surfaced := surfacedSnapshot(in.SurfacedFiles)
 
 	agents := make([]observe.Agent, 0, len(in.Records))
 	for _, rec := range in.Records {
-		agents = append(agents, buildAgent(rec, in.ProcessStates, activities, attention, in.Config))
+		agents = append(agents, buildAgent(rec, in.ProcessStates, activities, attention, surfaced, in.Config))
 	}
 	sort.Slice(agents, func(i, j int) bool { return agents[i].Name < agents[j].Name })
 
@@ -163,7 +168,7 @@ func buildSnapshot(in snapshotInput) observe.Snapshot {
 // (states) over the record — the agentstore-backed record can be stale for
 // those fields — falling back to the record when the agent has no live
 // process entry (e.g. a stopped worktree agent kept around for pruning).
-func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities map[string]observe.AgentActivity, attention map[string]observe.AgentAttention, cfg *config.Config) observe.Agent {
+func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities map[string]observe.AgentActivity, attention map[string]observe.AgentAttention, surfaced map[string][]observe.SurfacedFile, cfg *config.Config) observe.Agent {
 	rawStatus := rec.Status
 	restarts := rec.Restarts
 	startedAt := rec.StartedAt
@@ -206,6 +211,7 @@ func buildAgent(rec agent.Record, states map[string]ProcessStateInfo, activities
 	if att, ok := attention[rec.Name]; ok {
 		a.Attention = &att
 	}
+	a.SurfacedFiles = surfaced[rec.Name]
 
 	return a
 }
@@ -223,16 +229,31 @@ func attentionSnapshot(p attentionProvider) map[string]observe.AgentAttention {
 	return p.All()
 }
 
+// surfacedProvider is the narrow read seam onto observe.SurfacedFileStore.
+type surfacedProvider interface {
+	All() map[string][]observe.SurfacedFile
+}
+
+// surfacedSnapshot reads every agent's surfaced files once, nil-safe. A
+// typed-nil store is nil-safe itself, so only the interface needs checking.
+func surfacedSnapshot(p surfacedProvider) map[string][]observe.SurfacedFile {
+	if p == nil {
+		return nil
+	}
+	return p.All()
+}
+
 // ProjectAgents builds the same rows exposed by /api/v1/state.data.agents.
-func ProjectAgents(records []agent.Record, states map[string]ProcessStateInfo, activity observe.ActivityProvider, attention attentionProvider, cfg *config.Config) []observe.Agent {
+func ProjectAgents(records []agent.Record, states map[string]ProcessStateInfo, activity observe.ActivityProvider, attention attentionProvider, surfaced surfacedProvider, cfg *config.Config) []observe.Agent {
 	var activities map[string]observe.AgentActivity
 	if activity != nil {
 		activities = activity.Activities()
 	}
 	attentions := attentionSnapshot(attention)
+	surfacedFiles := surfacedSnapshot(surfaced)
 	out := make([]observe.Agent, 0, len(records))
 	for _, rec := range records {
-		out = append(out, buildAgent(rec, states, activities, attentions, cfg))
+		out = append(out, buildAgent(rec, states, activities, attentions, surfacedFiles, cfg))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
