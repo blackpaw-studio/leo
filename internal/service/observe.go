@@ -29,6 +29,22 @@ func (s *Supervisor) SetAttention(a *observe.AttentionStore) {
 	s.mu.Unlock()
 }
 
+// SetSurfacedFiles wires the per-agent surfaced-file store, which the
+// supervisor resets whenever an agent's StartedAt changes. Optional: nil
+// disables it.
+func (s *Supervisor) SetSurfacedFiles(store *observe.SurfacedFileStore) {
+	s.mu.Lock()
+	s.surfacedFiles = store
+	s.mu.Unlock()
+}
+
+// surfacedFileStore returns the wired store (possibly nil; nil-safe).
+func (s *Supervisor) surfacedFileStore() *observe.SurfacedFileStore {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.surfacedFiles
+}
+
 // attentionStore returns the wired store (possibly nil; its methods are
 // nil-safe).
 func (s *Supervisor) attentionStore() *observe.AttentionStore {

@@ -190,6 +190,9 @@ type Supervisor struct {
 	publisher observe.Publisher
 	// attention is the per-agent attention store — see SetAttention.
 	attention *observe.AttentionStore
+	// surfacedFiles is the per-agent surfaced-file store, reset to each new
+	// incarnation (StartedAt) — see SetSurfacedFiles.
+	surfacedFiles *observe.SurfacedFileStore
 }
 
 // NewSupervisor creates a new process supervisor. The context parameter is
@@ -292,6 +295,7 @@ func (s *Supervisor) initState(name string) {
 		// Preserve fields (e.g. Ephemeral) set before superviseProcess starts
 		existing.Status = "starting"
 		existing.StartedAt = time.Now()
+		s.surfacedFiles.Reset(name, existing.StartedAt)
 		return
 	}
 	s.states[name] = &ProcessState{
@@ -299,6 +303,7 @@ func (s *Supervisor) initState(name string) {
 		Status:    "starting",
 		StartedAt: time.Now(),
 	}
+	s.surfacedFiles.Reset(name, s.states[name].StartedAt)
 }
 
 // incrementRestarts bumps name's restart counter, subject to the same
@@ -313,6 +318,7 @@ func (s *Supervisor) incrementRestarts(name string, id *procIdentity) {
 	}
 	st.Restarts++
 	st.StartedAt = time.Now()
+	s.surfacedFiles.Reset(name, st.StartedAt)
 	restarts := st.Restarts
 	status := st.Status
 	s.mu.Unlock()
@@ -388,6 +394,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	id := newProcIdentity(spec.Name, spec.ClaudeArgs)
 	s.identities[spec.Name] = id
 	spawnedAt := s.states[spec.Name].StartedAt
+	s.surfacedFiles.Reset(spec.Name, spawnedAt)
 	s.mu.Unlock()
 
 	// A resumed agent (agent.SpawnRequest.Resumed) already exists from a
@@ -860,8 +867,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	srv.SetParentContext(ctx)
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.
-	srv.SetObservability(obs.Bus, obs.RunLog, obs.MessageLog, obs.Tracker, opts.Version)
-	srv.SetAttention(obs.Attention)
+	obs.wireDaemon(srv, opts.Version)
 	// SetLogPath before Start/StartWeb so the Service page's log tail knows
 	// where to read from — service is the only package that can compute
 	// this path (LogPathFor) without an import cycle through daemon -> web.
@@ -891,13 +897,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// Build the agent.Manager shared by web, daemon, and CLI handlers.
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
-		// runLog is the same Publisher wired into the supervisor (SetPublisher
-		// above) — see agent.Manager.SetPublisher's doc comment for why the
-		// manager needs its own seam: a stop/rename against a non-live agent
-		// never reaches sup.StopAgent/RenameAgent, so it never reaches the
-		// supervisor's own publish calls either.
-		agentMgr.SetPublisher(obs.RunLog)
-		agentMgr.SetAttention(obs.Attention)
+		obs.wireManager(agentMgr)
 		srv.SetAgentManager(agentMgr)
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets
@@ -986,7 +986,33 @@ func wireObservability(ctx context.Context, sv *Supervisor, tmuxPath string) obs
 	attention.SetActivityProvider(tracker)
 	go tracker.Start(ctx)
 
-	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention}
+	// Surfaced files publish through runLog like every other agent event;
+	// the supervisor resets an agent's list whenever it starts a new
+	// incarnation.
+	surfaced := observe.NewSurfacedFileStore(runLog, nil)
+	sv.SetSurfacedFiles(surfaced)
+
+	return observability{Bus: bus, RunLog: runLog, MessageLog: messageLog, Tracker: tracker, Attention: attention, SurfacedFiles: surfaced}
+}
+
+// wireDaemon hands the observability pieces to the daemon server. Must run
+// before srv.StartWeb, which threads them into the web server.
+func (o observability) wireDaemon(srv *daemon.Server, version string) {
+	srv.SetObservability(o.Bus, o.RunLog, o.MessageLog, o.Tracker, version)
+	srv.SetAttention(o.Attention)
+	srv.SetSurfacedFiles(o.SurfacedFiles)
+}
+
+// wireManager hands the observability pieces to the agent manager. RunLog is
+// the same Publisher wired into the supervisor — see
+// agent.Manager.SetPublisher's doc comment for why the manager needs its own
+// seam: a stop/rename against a non-live agent never reaches
+// sup.StopAgent/RenameAgent, so it never reaches the supervisor's own
+// publish calls either.
+func (o observability) wireManager(m *agent.Manager) {
+	m.SetPublisher(o.RunLog)
+	m.SetAttention(o.Attention)
+	m.SetSurfacedFiles(o.SurfacedFiles)
 }
 
 // observability bundles what wireObservability builds for daemon boot.
@@ -996,6 +1022,9 @@ type observability struct {
 	MessageLog *observe.MessageLog
 	Tracker    *observe.Tracker
 	Attention  *observe.AttentionStore
+	// SurfacedFiles is shared by the supervisor (incarnation resets), the
+	// agent manager (delete/rename), and the daemon's state + web surfaces.
+	SurfacedFiles *observe.SurfacedFileStore
 }
 
 // driverFor resolves a spec's session driver. Empty harness means claude
