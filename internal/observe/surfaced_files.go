@@ -7,6 +7,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/leotools"
 )
 
 // MaxSurfacedFiles caps how many surfaced files each agent keeps; the oldest
@@ -15,7 +17,7 @@ const MaxSurfacedFiles = 20
 
 // MaxSurfaceReasonRunes caps a surfaced file's reason, in Unicode code points.
 // Longer reasons are rejected, never truncated.
-const MaxSurfaceReasonRunes = 200
+const MaxSurfaceReasonRunes = leotools.MaxSurfaceReasonRunes
 
 // ErrStaleIncarnation rejects a submission made by an agent generation that
 // has since been replaced (its StartedAt is older than the store's).

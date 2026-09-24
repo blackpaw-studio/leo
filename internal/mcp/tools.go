@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/leotools"
@@ -62,6 +63,18 @@ type registry struct {
 	// perms is the template's permission set, consulted both when
 	// registering tools and inside the handlers whose arguments it narrows.
 	perms leotools.Permissions
+	// dispatchID is the caller's LEO_DISPATCH_ID, set only inside a
+	// leo_dispatch subagent. Such a subagent inherits its orchestrator's
+	// LEO_PROCESS_NAME, so this is the only thing that tells them apart.
+	dispatchID string
+}
+
+// registryOption adjusts a registry before its tools are registered.
+type registryOption func(*registry)
+
+// withDispatchID marks the registry as serving a leo_dispatch subagent.
+func withDispatchID(id string) registryOption {
+	return func(r *registry) { r.dispatchID = id }
 }
 
 // newRegistry builds the Leo tool surface bound to the given daemon client
@@ -75,12 +88,15 @@ type registry struct {
 // unrestricted). Denied tools are never registered at all, which removes them
 // from tools/list and the handler map in one move; the Can* allowlists are
 // enforced inside the handlers they narrow, before the daemon is called.
-func newRegistry(client *daemonClient, processName string, perms leotools.Permissions) *registry {
+func newRegistry(client *daemonClient, processName string, perms leotools.Permissions, opts ...registryOption) *registry {
 	r := &registry{
 		handlers:           make(map[string]toolHandler),
 		contextualHandlers: make(map[string]func(context.Context, map[string]any) (string, error)),
 		denied:             make(map[string]bool),
 		perms:              perms,
+	}
+	for _, opt := range opts {
+		opt(r)
 	}
 
 	objectSchema := func(props map[string]any, required ...string) map[string]any {
@@ -387,6 +403,33 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		return fmt.Sprintf("%s%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", prefix, started.ID, started.Harness, started.Model, started.Cwd, window, started.ID), nil
 	})
 
+	r.addContext(toolDef{
+		Name:        "leo_surface_file",
+		Description: surfaceFileDescription,
+		InputSchema: objectSchema(map[string]any{
+			"path":   map[string]any{"type": "string", "description": "File to show the user: absolute, or relative to your agent workspace. Must exist and not be a directory."},
+			"line":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional 1-based line to focus."},
+			"reason": map[string]any{"type": "string", "maxLength": leotools.MaxSurfaceReasonRunes, "description": "Optional short note on why the user should look (at most 200 characters)."},
+		}, "path"),
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		if r.dispatchID != "" {
+			return "", fmt.Errorf("leo_surface_file is only available to supervised Leo agents, not to a leo_dispatch subagent (dispatch %s); report the file path to your orchestrator instead", r.dispatchID)
+		}
+		req, err := parseSurfaceFileArgs(args)
+		if err != nil {
+			return "", err
+		}
+		id, err := client.surfaceFile(ctx, processName, req)
+		if err != nil {
+			return "", err
+		}
+		encoded, err := json.Marshal(map[string]string{"id": id})
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	})
+
 	r.addContext(toolDef{Name: "leo_delegation", Description: "Show active delegation routing.", InputSchema: emptyArgs}, func(ctx context.Context, _ map[string]any) (string, error) { return client.delegationStatus(ctx) })
 
 	r.addContext(toolDef{
@@ -541,6 +584,47 @@ const consultDescription = "Run a one-off consultant subagent for a second opini
 	"The template determines the harness and model; `model` optionally overrides the template's model. " +
 	"The prompt must be self-contained: the consultant sees none of your conversation, only files in your workspace. " +
 	"Waits for and returns the consultant's answer directly. For delegated implementation, review, or exploration that should continue asynchronously, use leo_dispatch and then leo_wait instead."
+
+const surfaceFileDescription = "Push a file to the user's attention — a result, a diff, a report, or a line that needs their eyes. " +
+	"The file appears in Leo's observability state and event stream for dashboards to show. " +
+	"path is absolute or relative to your agent workspace; line optionally focuses a 1-based line; reason is an optional note of at most 200 characters. " +
+	"Returns {\"id\": \"<uuid>\"}. Only supervised Leo agents may call it; leo_dispatch subagents are refused."
+
+// surfaceFileRequest is the leo_surface_file call body sent to the daemon.
+type surfaceFileRequest struct {
+	Path   string `json:"path"`
+	Line   *int   `json:"line,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// parseSurfaceFileArgs checks argument shapes before the daemon call. The
+// daemon re-validates everything and alone checks the filesystem.
+func parseSurfaceFileArgs(args map[string]any) (surfaceFileRequest, error) {
+	path, err := stringArg(args, "path")
+	if err != nil {
+		return surfaceFileRequest{}, err
+	}
+	req := surfaceFileRequest{Path: path}
+	if raw, ok := args["line"]; ok {
+		n, ok := raw.(float64)
+		if !ok || n != math.Trunc(n) || n < 1 || n > math.MaxInt32 {
+			return surfaceFileRequest{}, fmt.Errorf("line must be an integer >= 1")
+		}
+		line := int(n)
+		req.Line = &line
+	}
+	if raw, ok := args["reason"]; ok {
+		reason, ok := raw.(string)
+		if !ok {
+			return surfaceFileRequest{}, fmt.Errorf("reason must be a string")
+		}
+		if utf8.RuneCountInString(reason) > leotools.MaxSurfaceReasonRunes {
+			return surfaceFileRequest{}, fmt.Errorf("reason must be at most %d characters", leotools.MaxSurfaceReasonRunes)
+		}
+		req.Reason = reason
+	}
+	return req, nil
+}
 
 // allowNote appends the allowlist to a tool description so the model sees the
 // boundary up front instead of discovering it by failing a call. An empty

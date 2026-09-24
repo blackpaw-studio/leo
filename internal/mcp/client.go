@@ -344,3 +344,17 @@ func (c *daemonClient) releaseDispatch(ctx context.Context, id string) (consult.
 	}
 	return record, nil
 }
+
+func (c *daemonClient) surfaceFile(ctx context.Context, agentName string, req surfaceFileRequest) (string, error) {
+	data, err := c.doContext(ctx, http.MethodPost, "/api/agent/"+url.PathEscape(agentName)+"/surface-file", req)
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil || result.ID == "" {
+		return "", fmt.Errorf("unexpected surface-file response: %s", data)
+	}
+	return result.ID, nil
+}
