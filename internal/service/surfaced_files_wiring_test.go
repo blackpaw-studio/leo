@@ -96,12 +96,11 @@ func TestSurfaceFileBootWiring(t *testing.T) {
 
 	// --- The call, authenticated as an agent. ---
 	body := strings.NewReader(`{"path":"notes ü.md","line":3,"reason":"read me"}`)
-	resp := doJSON(t, ctx, http.MethodPost, baseURL+"/api/agent/surf/surface-file", agentToken, body)
 	var created struct {
 		OK   bool
 		Data struct{ ID string }
 	}
-	decodeBody(t, resp, &created)
+	requestJSON(ctx, t, http.MethodPost, baseURL+"/api/agent/surf/surface-file", agentToken, body, &created)
 	if !created.OK || created.Data.ID == "" {
 		t.Fatalf("surface-file response = %+v", created)
 	}
@@ -122,7 +121,7 @@ func TestSurfaceFileBootWiring(t *testing.T) {
 	var tcpState struct {
 		Data struct{ Agents []observe.Agent }
 	}
-	decodeBody(t, doJSON(t, ctx, http.MethodGet, baseURL+"/api/v1/state", apiToken, nil), &tcpState)
+	requestJSON(ctx, t, http.MethodGet, baseURL+"/api/v1/state", apiToken, nil, &tcpState)
 	assertSurfacedState(t, "TCP /api/v1/state", tcpState.Data.Agents, want)
 
 	// --- IPC /state over the Unix socket ---
@@ -163,7 +162,7 @@ type eventStream struct{ r *bufio.Reader }
 
 func openEventStream(ctx context.Context, t *testing.T, baseURL, token string) *eventStream {
 	t.Helper()
-	resp := doJSON(t, ctx, http.MethodGet, baseURL+"/api/v1/events", token, nil)
+	resp := doRequest(ctx, t, http.MethodGet, baseURL+"/api/v1/events", token, nil)
 	t.Cleanup(func() { resp.Body.Close() })
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /api/v1/events = %d", resp.StatusCode)
@@ -192,7 +191,15 @@ func (s *eventStream) next(t *testing.T, name string) string {
 	}
 }
 
-func doJSON(t *testing.T, ctx context.Context, method, url, token string, body io.Reader) *http.Response {
+// requestJSON sends one request and decodes its JSON response into dst.
+func requestJSON(ctx context.Context, t *testing.T, method, url, token string, body io.Reader, dst any) {
+	t.Helper()
+	resp := doRequest(ctx, t, method, url, token, body)
+	defer resp.Body.Close()
+	decodeBody(t, resp, dst)
+}
+
+func doRequest(ctx context.Context, t *testing.T, method, url, token string, body io.Reader) *http.Response {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	t.Cleanup(cancel)
