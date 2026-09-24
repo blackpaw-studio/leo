@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,9 +44,17 @@ func surfaceErrorf(status int, format string, args ...any) *surfaceError {
 
 // handleAPIAgentSurfaceFile records a file the named agent pushed to the
 // user's attention and announces it on the event bus.
+//
+// Trust boundary: the caller's identity is self-asserted. {name} comes from
+// the URL and dispatch_id from the body, both set by the calling MCP server
+// from its own environment, and every agent shares one agent bearer token.
+// Any agent (or anything holding that token) can therefore surface a file
+// as any other live agent, or omit dispatch_id. The liveness and dispatch
+// checks keep honest callers correct; they are not authentication.
+// Per-agent auth is deliberately deferred.
 // POST /api/agent/{name}/surface-file
 func (s *Server) handleAPIAgentSurfaceFile(w http.ResponseWriter, r *http.Request) {
-	id, err := s.surfaceFile(r.PathValue("name"), r.Body)
+	id, err := s.surfaceFile(r.PathValue("name"), http.MaxBytesReader(w, r.Body, maxSurfaceFileBody))
 	if err != nil {
 		status := http.StatusInternalServerError
 		var se *surfaceError
@@ -94,11 +103,23 @@ func (s *Server) surfaceFile(name string, body io.Reader) (string, error) {
 }
 
 // decodeSurfaceRequest parses and validates everything that does not need
-// the filesystem or the agent's state.
+// the filesystem or the agent's state. body must already be size-capped
+// (http.MaxBytesReader); exceeding the cap is a 413.
 func decodeSurfaceRequest(body io.Reader) (surfaceFileRequest, error) {
 	var req surfaceFileRequest
-	if err := json.NewDecoder(io.LimitReader(body, maxSurfaceFileBody)).Decode(&req); err != nil {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return req, surfaceErrorf(http.StatusRequestEntityTooLarge, "request body exceeds %d bytes", maxSurfaceFileBody)
+		}
+		return req, surfaceErrorf(http.StatusBadRequest, "reading request: %v", err)
+	}
+	if err := decodeSingleJSON(raw, &req); err != nil {
 		return req, surfaceErrorf(http.StatusBadRequest, "invalid request: %v", err)
+	}
+	if err := rejectNullFields(raw, "line", "reason"); err != nil {
+		return req, surfaceErrorf(http.StatusBadRequest, "%v", err)
 	}
 	switch {
 	case req.DispatchID != "":
@@ -111,6 +132,34 @@ func decodeSurfaceRequest(body io.Reader) (surfaceFileRequest, error) {
 		return req, surfaceErrorf(http.StatusBadRequest, "reason must be at most %d characters", observe.MaxSurfaceReasonRunes)
 	}
 	return req, nil
+}
+
+// decodeSingleJSON decodes exactly one JSON value from raw into dst;
+// anything but whitespace after it is an error.
+func decodeSingleJSON(raw []byte, dst any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("unexpected data after the JSON object")
+	}
+	return nil
+}
+
+// rejectNullFields errors when any of fields is present as an explicit JSON
+// null. Optional fields are omitted when unset, never null.
+func rejectNullFields(raw []byte, fields ...string) error {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return fmt.Errorf("invalid request: %w", err)
+	}
+	for _, field := range fields {
+		if v, ok := obj[field]; ok && bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			return fmt.Errorf("%s must be omitted rather than null", field)
+		}
+	}
+	return nil
 }
 
 // liveSurfaceAgent returns the incarnation and workspace of name, which must
