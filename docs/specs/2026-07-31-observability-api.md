@@ -97,6 +97,37 @@ envelope.
     Escape it before rendering, never parse it or branch on its contents, and handle it
     being absent or garbage.
 - `model` / `harness` — resolved values after the defaults→template→agent cascade.
+- `surfaced_files` — files this agent pushed to the user's attention with the
+  `leo_surface_file` MCP tool, oldest first, at most 20 (older ones are dropped). Omitted
+  when empty. Each entry is exactly the `file_surfaced` event body (see SurfacedFile
+  below). The list belongs to one incarnation: it is cleared when the agent's
+  `started_at` changes (restart, resume) and when the agent is deleted or renamed. It is
+  held in memory only, so a daemon restart empties it.
+
+### SurfacedFile
+
+```json
+{
+  "type": "file_surfaced",
+  "agent": "den",
+  "started_at": "2026-07-31T18:42:33-04:00",
+  "id": "0b6f7c4e-8f7e-4c55-9d7a-1f2e3d4c5b6a",
+  "path": "docs/report.md",
+  "abs_path": "/Users/evan/.leo/agents/leo-den/docs/report.md",
+  "line": 42,
+  "reason": "Benchmarks regressed; see the table",
+  "at": "2026-07-31T18:50:12-04:00"
+}
+```
+
+- `id` — UUID, unique per call; the value the tool returned to the agent.
+- `path` — as the agent gave it; `abs_path` — resolved against the agent's workspace
+  when relative. The file existed and was not a directory when the call was made.
+- `line` (≥ 1) and `reason` (≤ 200 characters) are omitted when the agent did not set
+  them, never `null`. `reason` is untrusted display text.
+- `started_at` — the agent incarnation that surfaced it, equal to the Agent's
+  `started_at` while the entry is listed.
+- `at` — when it was surfaced; identical in the event and in the snapshot.
 
 `agent_spawned`'s embedded `Agent` (see the event table below) is populated the same way,
 sourced from the agentstore record and the same model cascade — `template`, `repo`, and
@@ -260,6 +291,7 @@ Event types:
 | `task_run_succeeded` | `TaskRun` |
 | `task_run_failed` | `TaskRun` (with `error`) |
 | `agent_message` | `from` (omitted if not an agent), `to` |
+| `file_surfaced` | a `SurfacedFile` (including `"type":"file_surfaced"`); its `at` is the surfacing time, not the publish time |
 
 A resume is represented as `agent_state_changed` with the new `status`; consumers key
 off `status`, not a distinct event name. `agent_stopped`'s `wake_on_message` carries the

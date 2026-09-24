@@ -17,6 +17,17 @@ for the complete contract.
 
 When you need multiple agents working on the same repo in parallel, use `leo agent spawn --worktree <branch>` — it creates an isolated git worktree per branch so nothing fights over `.git/HEAD`. The HTTP API only supports the shared-workspace flow today; reach for the CLI when you need branch isolation.
 
+## Surfacing a File to the User
+
+Call `leo_surface_file` with `path` (absolute, or relative to your agent
+workspace), an optional 1-based `line`, and an optional `reason` of at most
+200 characters to push a file to the user's attention — a finished report, a
+diff to review, a failing line. It returns `{"id": "<uuid>"}`. The file must
+exist and not be a directory. Dashboards pick it up from the observability
+state and event stream. Only supervised Leo agents may call it; inside a
+`leo_dispatch` subagent it is refused, so report paths to your orchestrator
+instead.
+
 ## API Endpoints
 
 All endpoints are on `http://127.0.0.1:${LEO_WEB_PORT}` (default port 8370).
