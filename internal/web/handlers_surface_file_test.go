@@ -280,6 +280,8 @@ func TestSurfaceFileBodyLimits(t *testing.T) {
 		{"duplicate line null last", `{"path":"main.go","line":3,"line":null}`, http.StatusBadRequest},
 		{"duplicate key across case", `{"path":"main.go","line":2,"LINE":3}`, http.StatusBadRequest},
 		{"duplicate path", `{"path":"nope.go","path":"main.go"}`, http.StatusBadRequest},
+		{"duplicate path across case", `{"path":"a","PATH":"b"}`, http.StatusBadRequest},
+		{"duplicate line mixed case", `{"path":"main.go","line":1,"LiNe":2}`, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := newSurfaceServer(t)
@@ -310,5 +312,18 @@ func TestSurfaceFileCaseVariantKeyAccepted(t *testing.T) {
 	}
 	if got := s.surfacedFiles.Get("alpha"); len(got) != 1 || got[0].Line != 4 {
 		t.Fatalf("stored %+v", got)
+	}
+}
+
+func TestSurfaceFileIgnoresUnknownKeys(t *testing.T) {
+	s, _ := newSurfaceServer(t)
+	for _, body := range []string{
+		`{"path":"main.go","Σ":1,"ς":2}`,
+		`{"path":"main.go","foo":1,"FOO":2}`,
+		`{"path":"main.go","foo":1,"foo":2}`,
+	} {
+		if code, resp := postSurface(t, s, "alpha", body); code != http.StatusOK {
+			t.Fatalf("%s: status %d resp %+v; unknown keys must be ignored", body, code, resp)
+		}
 	}
 }

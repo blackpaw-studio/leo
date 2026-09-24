@@ -196,26 +196,28 @@ func isJSONNull(raw json.RawMessage) bool {
 // case-insensitively (Unicode simple folding, as strings.EqualFold does).
 var surfaceFileKeys = []string{"path", "line", "reason", "dispatch_id"}
 
-// rejectDuplicateKeys errors when the top-level object repeats a key,
-// comparing keys the way encoding/json matches them to struct fields.
-// encoding/json would silently keep the last occurrence, letting an earlier
-// null or a second path slip past validation; any repeat is refused instead.
+// rejectDuplicateKeys errors when the top-level object names a known field
+// more than once, matching keys to fields with strings.EqualFold as
+// encoding/json does. encoding/json would silently keep the last occurrence,
+// letting an earlier null or a second path slip past validation, so any
+// repeat is refused. Unknown keys are ignored, as encoding/json ignores them.
 func rejectDuplicateKeys(raw []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return errors.New("body must be a JSON object")
 	}
-	seen := map[string]bool{}
+	seen := make(map[string]bool, len(surfaceFileKeys))
 	for dec.More() {
 		tok, err := dec.Token()
 		if err != nil {
 			return err
 		}
-		key := canonicalSurfaceKey(tok.(string))
-		if seen[key] {
-			return fmt.Errorf("duplicate key %q", tok)
+		if field, known := knownSurfaceField(tok.(string)); known {
+			if seen[field] {
+				return fmt.Errorf("duplicate key %q", tok)
+			}
+			seen[field] = true
 		}
-		seen[key] = true
 		var skip json.RawMessage
 		if err := dec.Decode(&skip); err != nil {
 			return err
@@ -224,13 +226,14 @@ func rejectDuplicateKeys(raw []byte) error {
 	return nil
 }
 
-func canonicalSurfaceKey(key string) string {
-	for _, known := range surfaceFileKeys {
-		if strings.EqualFold(key, known) {
-			return known
+// knownSurfaceField returns the body field key names, if any.
+func knownSurfaceField(key string) (string, bool) {
+	for _, field := range surfaceFileKeys {
+		if strings.EqualFold(key, field) {
+			return field, true
 		}
 	}
-	return strings.ToLower(key)
+	return "", false
 }
 
 // liveSurfaceAgent returns the incarnation and workspace of name, which must
