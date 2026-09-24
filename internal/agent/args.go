@@ -224,8 +224,14 @@ func applyPermissions(env map[string]string, tmpl config.TemplateConfig) map[str
 // the leo MCP server. codex forwards by name rather than value, so a variable
 // missing from this list never reaches the server no matter what the process
 // environment holds.
+//
+// LEO_DISPATCH_ID is always named: a codex run started inside a leo_dispatch
+// subagent inherits its caller's LEO_PROCESS_NAME, and the dispatch id is
+// what lets the server refuse caller-only tools (leo_surface_file) there.
+// Codex skips a named variable that is unset, so supervised agents are
+// unaffected.
 func leoMCPEnvVars(tmpl config.TemplateConfig) []string {
-	names := []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"}
+	names := []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN", "LEO_DISPATCH_ID"}
 	if !tmpl.Permissions.IsZero() {
 		names = append(names, permissionsEnvVar)
 	}

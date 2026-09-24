@@ -24,6 +24,10 @@ import (
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
+// dispatchIDEnv names the variable every dispatched or consulted run
+// carries, set to its dispatch id.
+const dispatchIDEnv = "LEO_DISPATCH_ID"
+
 const (
 	// RunTimeout is the authoritative deadline for one consult. A consult is
 	// a full agent run, so this is generous; it stays a hard cap only so a
@@ -385,7 +389,13 @@ func (d *Dispatcher) runInvocation(parent context.Context, state *runState, done
 	}
 	cmd := d.ExecCommandContext(runCtx, binary, args...)
 	cmd.Dir = cwd
-	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env)
+	d.mu.Lock()
+	dispatchID := state.record.ID
+	d.mu.Unlock()
+	// LEO_DISPATCH_ID is applied last so neither an identity the daemon
+	// inherited nor a template env can mask it: the run's own tools (leo MCP,
+	// `leo dispatch report`) rely on it to know they are inside a dispatch.
+	cmd.Env = mergedEnv(os.Environ(), harnessEnv, env, map[string]string{dispatchIDEnv: dispatchID})
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
