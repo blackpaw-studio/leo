@@ -26,6 +26,9 @@ const (
 	// EventAgentMessage announces one agent-to-agent message being routed, as a pair of
 	// names only. Never carries the message body.
 	EventAgentMessage EventType = "agent_message"
+	// EventFileSurfaced announces a file an agent pushed to the user's attention
+	// (leo_surface_file). Its payload is FileSurfacedPayload.
+	EventFileSurfaced EventType = "file_surfaced"
 )
 
 // Meta is the sequence number and timestamp carried by every event payload. The bus
