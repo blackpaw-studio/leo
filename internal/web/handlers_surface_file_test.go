@@ -261,3 +261,38 @@ func TestSurfaceFileUnavailableWithoutStore(t *testing.T) {
 		t.Fatalf("status %d, want 503", code)
 	}
 }
+
+func TestSurfaceFileBodyLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"oversized body", `{"path":"main.go","reason":"` + strings.Repeat("a", maxSurfaceFileBody) + `"}`, http.StatusRequestEntityTooLarge},
+		{"oversized trailing data", `{"path":"main.go"}` + strings.Repeat(" ", maxSurfaceFileBody), http.StatusRequestEntityTooLarge},
+		{"trailing garbage", `{"path":"main.go"} garbage`, http.StatusBadRequest},
+		{"second json value", `{"path":"main.go"}{"path":"main.go"}`, http.StatusBadRequest},
+		{"explicit null line", `{"path":"main.go","line":null}`, http.StatusBadRequest},
+		{"explicit null reason", `{"path":"main.go","reason":null}`, http.StatusBadRequest},
+		{"explicit null both", `{"path":"main.go","line":null,"reason":null}`, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newSurfaceServer(t)
+
+			code, resp := postSurface(t, s, "alpha", tc.body)
+
+			if code != tc.want || resp.OK || resp.Error == "" {
+				t.Fatalf("status %d resp %+v; want %d with an error", code, resp, tc.want)
+			}
+			if all := s.surfacedFiles.All(); len(all) != 0 {
+				t.Fatalf("rejected call stored %+v", all)
+			}
+		})
+	}
+}
+
+func TestSurfaceFileTrailingWhitespaceAccepted(t *testing.T) {
+	s, _ := newSurfaceServer(t)
+	if code, resp := postSurface(t, s, "alpha", "{\"path\":\"main.go\"}\n"); code != http.StatusOK {
+		t.Fatalf("status %d resp %+v", code, resp)
+	}
+}
