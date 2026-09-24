@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -24,10 +25,20 @@ const maxSurfaceFileBody = 64 << 10
 // is the caller's LEO_DISPATCH_ID: a dispatched subagent inherits its
 // caller's LEO_PROCESS_NAME, so the name alone cannot tell them apart.
 type surfaceFileRequest struct {
-	Path       string `json:"path"`
-	Line       *int   `json:"line,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	DispatchID string `json:"dispatch_id,omitempty"`
+	Path       string
+	Line       *int
+	Reason     string
+	DispatchID string
+}
+
+// surfaceFileWire is the body as sent. The optional fields stay raw so an
+// explicit null is visible after the decoder's own (case-insensitive) key
+// matching, rather than through a second, differently-keyed parse.
+type surfaceFileWire struct {
+	Path       string          `json:"path"`
+	Line       json.RawMessage `json:"line"`
+	Reason     json.RawMessage `json:"reason"`
+	DispatchID string          `json:"dispatch_id"`
 }
 
 // surfaceError is a rejection with the HTTP status it maps to.
@@ -115,11 +126,16 @@ func decodeSurfaceRequest(body io.Reader) (surfaceFileRequest, error) {
 		}
 		return req, surfaceErrorf(http.StatusBadRequest, "reading request: %v", err)
 	}
-	if err := decodeSingleJSON(raw, &req); err != nil {
+	if err := rejectDuplicateKeys(raw); err != nil {
 		return req, surfaceErrorf(http.StatusBadRequest, "invalid request: %v", err)
 	}
-	if err := rejectNullFields(raw, "line", "reason"); err != nil {
-		return req, surfaceErrorf(http.StatusBadRequest, "%v", err)
+	var wire surfaceFileWire
+	if err := decodeSingleJSON(raw, &wire); err != nil {
+		return req, surfaceErrorf(http.StatusBadRequest, "invalid request: %v", err)
+	}
+	req, err = wire.typed()
+	if err != nil {
+		return req, surfaceErrorf(http.StatusBadRequest, "invalid request: %v", err)
 	}
 	switch {
 	case req.DispatchID != "":
@@ -147,19 +163,74 @@ func decodeSingleJSON(raw []byte, dst any) error {
 	return nil
 }
 
-// rejectNullFields errors when any of fields is present as an explicit JSON
-// null. Optional fields are omitted when unset, never null.
-func rejectNullFields(raw []byte, fields ...string) error {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return fmt.Errorf("invalid request: %w", err)
+// typed converts the optional raw fields. Absent is unset; an explicit null
+// is an error, since optional fields are omitted rather than null.
+func (w surfaceFileWire) typed() (surfaceFileRequest, error) {
+	req := surfaceFileRequest{Path: w.Path, DispatchID: w.DispatchID}
+	if w.Line != nil {
+		if isJSONNull(w.Line) {
+			return req, errors.New("line must be omitted rather than null")
+		}
+		var line int
+		if err := json.Unmarshal(w.Line, &line); err != nil {
+			return req, fmt.Errorf("line must be an integer: %w", err)
+		}
+		req.Line = &line
 	}
-	for _, field := range fields {
-		if v, ok := obj[field]; ok && bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
-			return fmt.Errorf("%s must be omitted rather than null", field)
+	if w.Reason != nil {
+		if isJSONNull(w.Reason) {
+			return req, errors.New("reason must be omitted rather than null")
+		}
+		if err := json.Unmarshal(w.Reason, &req.Reason); err != nil {
+			return req, fmt.Errorf("reason must be a string: %w", err)
+		}
+	}
+	return req, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+// surfaceFileKeys are the body's known keys. encoding/json matches keys
+// case-insensitively (Unicode simple folding, as strings.EqualFold does).
+var surfaceFileKeys = []string{"path", "line", "reason", "dispatch_id"}
+
+// rejectDuplicateKeys errors when the top-level object repeats a key,
+// comparing keys the way encoding/json matches them to struct fields.
+// encoding/json would silently keep the last occurrence, letting an earlier
+// null or a second path slip past validation; any repeat is refused instead.
+func rejectDuplicateKeys(raw []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return errors.New("body must be a JSON object")
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key := canonicalSurfaceKey(tok.(string))
+		if seen[key] {
+			return fmt.Errorf("duplicate key %q", tok)
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func canonicalSurfaceKey(key string) string {
+	for _, known := range surfaceFileKeys {
+		if strings.EqualFold(key, known) {
+			return known
+		}
+	}
+	return strings.ToLower(key)
 }
 
 // liveSurfaceAgent returns the incarnation and workspace of name, which must

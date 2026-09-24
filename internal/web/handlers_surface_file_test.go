@@ -274,6 +274,12 @@ func TestSurfaceFileBodyLimits(t *testing.T) {
 		{"explicit null line", `{"path":"main.go","line":null}`, http.StatusBadRequest},
 		{"explicit null reason", `{"path":"main.go","reason":null}`, http.StatusBadRequest},
 		{"explicit null both", `{"path":"main.go","line":null,"reason":null}`, http.StatusBadRequest},
+		{"null line other case", `{"path":"main.go","Line":null}`, http.StatusBadRequest},
+		{"null reason other case", `{"path":"main.go","REASON":null}`, http.StatusBadRequest},
+		{"duplicate line null first", `{"path":"main.go","line":null,"line":3}`, http.StatusBadRequest},
+		{"duplicate line null last", `{"path":"main.go","line":3,"line":null}`, http.StatusBadRequest},
+		{"duplicate key across case", `{"path":"main.go","line":2,"LINE":3}`, http.StatusBadRequest},
+		{"duplicate path", `{"path":"nope.go","path":"main.go"}`, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := newSurfaceServer(t)
@@ -294,5 +300,15 @@ func TestSurfaceFileTrailingWhitespaceAccepted(t *testing.T) {
 	s, _ := newSurfaceServer(t)
 	if code, resp := postSurface(t, s, "alpha", "{\"path\":\"main.go\"}\n"); code != http.StatusOK {
 		t.Fatalf("status %d resp %+v", code, resp)
+	}
+}
+
+func TestSurfaceFileCaseVariantKeyAccepted(t *testing.T) {
+	s, _ := newSurfaceServer(t)
+	if code, resp := postSurface(t, s, "alpha", `{"Path":"main.go","Line":4}`); code != http.StatusOK {
+		t.Fatalf("status %d resp %+v", code, resp)
+	}
+	if got := s.surfacedFiles.Get("alpha"); len(got) != 1 || got[0].Line != 4 {
+		t.Fatalf("stored %+v", got)
 	}
 }
