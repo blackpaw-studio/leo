@@ -136,7 +136,7 @@ func TestSurfaceFileLineAndReason(t *testing.T) {
 func TestSurfaceFileRejections(t *testing.T) {
 	for _, tc := range []struct {
 		name, agent, body string
-		want             int
+		want              int
 	}{
 		{"empty path", "alpha", `{"path":""}`, http.StatusBadRequest},
 		{"missing path", "alpha", `{}`, http.StatusBadRequest},
