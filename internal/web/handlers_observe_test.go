@@ -839,9 +839,59 @@ func TestProjectAgentsCarriesAttention(t *testing.T) {
 	store := observe.NewAttentionStore(nil)
 	store.Set("agent-a", observe.AttentionWorking)
 
-	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, nil, store, nil)
+	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, nil, store, nil, nil)
 
 	if got[0].Attention == nil || got[0].Attention.State != observe.AttentionWorking {
 		t.Fatalf("attention = %+v", got[0].Attention)
+	}
+}
+
+func TestBuildSnapshotSurfacedFilesGoldenAndAbsentWhenEmpty(t *testing.T) {
+	startedAt := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	at := time.Date(2026, 9, 24, 12, 5, 0, 0, time.UTC)
+	store := observe.NewSurfacedFileStore(nil, func() time.Time { return at })
+	file, err := store.Add("agent-a", startedAt, observe.SurfaceInput{Path: "a b/ü.go", AbsPath: "/w/a b/ü.go", Line: 4, Reason: "r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := snapshotInput{
+		Records:       []agent.Record{{Name: "agent-a"}, {Name: "agent-b"}},
+		ProcessStates: map[string]ProcessStateInfo{"agent-a": {Name: "agent-a", Status: "running", StartedAt: startedAt, Ephemeral: true}},
+		SurfacedFiles: store,
+		Now:           at,
+	}
+
+	snap := buildSnapshot(in)
+
+	raw, err := json.Marshal(snap.Agents[0].SurfacedFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"type":"file_surfaced","agent":"agent-a","started_at":"2026-09-24T12:00:00Z","id":"` + file.ID + `","path":"a b/ü.go","abs_path":"/w/a b/ü.go","line":4,"reason":"r","at":"2026-09-24T12:05:00Z"}]`
+	if string(raw) != want {
+		t.Fatalf("surfaced_files\n got %s\nwant %s", raw, want)
+	}
+	if !snap.Agents[0].StartedAt.Equal(snap.Agents[0].SurfacedFiles[0].StartedAt) {
+		t.Fatal("surfaced file started_at differs from the agent's")
+	}
+	b, err := json.Marshal(snap.Agents[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "surfaced_files") {
+		t.Fatalf("agent-b JSON = %s, want no surfaced_files key", b)
+	}
+}
+
+func TestProjectAgentsCarriesSurfacedFiles(t *testing.T) {
+	store := observe.NewSurfacedFileStore(nil, nil)
+	if _, err := store.Add("agent-a", time.Time{}, observe.SurfaceInput{Path: "p", AbsPath: "/p"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ProjectAgents([]agent.Record{{Name: "agent-a"}}, nil, nil, nil, store, nil)
+
+	if len(got[0].SurfacedFiles) != 1 || got[0].SurfacedFiles[0].Path != "p" {
+		t.Fatalf("surfaced files = %+v", got[0].SurfacedFiles)
 	}
 }

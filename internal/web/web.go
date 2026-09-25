@@ -194,6 +194,10 @@ type Server struct {
 	// It backs both the snapshot's attention field and the agent hook
 	// callback. nil leaves attention absent everywhere.
 	attention *observe.AttentionStore
+	// surfacedFiles holds files agents pushed to the user's attention,
+	// wired via WithSurfacedFiles. It backs POST /api/agent/{name}/surface-file
+	// and the snapshot's surfaced_files. nil disables both.
+	surfacedFiles *observe.SurfacedFileStore
 
 	// events is the read seam onto the (not-yet-existing) event bus, wired via
 	// WithEventSource. nil is a supported default: GET /api/v1/events still
@@ -281,6 +285,12 @@ func WithActivityProvider(p observe.ActivityProvider) Option {
 // written by POST /api/agent/hook. Optional.
 func WithAttention(a *observe.AttentionStore) Option {
 	return func(s *Server) { s.attention = a }
+}
+
+// WithSurfacedFiles wires the surfaced-file store written by
+// POST /api/agent/{name}/surface-file and read by GET /api/v1/state. Optional.
+func WithSurfacedFiles(store *observe.SurfacedFileStore) Option {
+	return func(s *Server) { s.surfacedFiles = store }
 }
 
 // WithEventSource wires the event bus that GET /api/v1/events streams from.
@@ -543,6 +553,7 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	apiMux.HandleFunc("POST /api/agent/start", s.handleAPIAgentStart)
 	apiMux.HandleFunc("POST /api/agent/{name}/rename", s.handleAPIAgentRename)
 	apiMux.HandleFunc("POST /api/agent/hook", s.handleAPIAgentHook)
+	apiMux.HandleFunc("POST /api/agent/{name}/surface-file", s.handleAPIAgentSurfaceFile)
 	apiMux.HandleFunc("POST /api/consult", s.handleAPIConsult)
 	apiMux.HandleFunc("GET /api/delegation", s.handleAPIDelegation)
 	apiMux.HandleFunc("GET /api/delegation/resolve", s.handleAPIDelegationResolve)

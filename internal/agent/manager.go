@@ -79,12 +79,21 @@ type Manager struct {
 	// attention is the per-agent attention store. Delete drops an agent's
 	// entry and Rename carries it to the new name. nil-safe.
 	attention *observe.AttentionStore
+	// surfacedFiles holds files agents surfaced to the user. Delete and
+	// Rename clear them (a renamed agent starts with none). nil-safe.
+	surfacedFiles *observe.SurfacedFileStore
 }
 
 // SetAttention wires the attention store. Optional; daemon boot is the only
 // production caller.
 func (m *Manager) SetAttention(a *observe.AttentionStore) {
 	m.attention = a
+}
+
+// SetSurfacedFiles wires the surfaced-file store. Optional; daemon boot is
+// the only production caller.
+func (m *Manager) SetSurfacedFiles(store *observe.SurfacedFileStore) {
+	m.surfacedFiles = store
 }
 
 // SetPublisher wires an observe.Publisher into the Manager, for lifecycle
@@ -1479,6 +1488,7 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 
 	agentstore.Remove(cfg.HomePath, name)
 	m.attention.Remove(name)
+	m.surfacedFiles.Remove(name)
 	removeSettingsSpill(cfg.HomePath, name)
 	// Delete only ever reaches here for a not-live agent (the EphemeralAgents
 	// check above already rejected a live one), verbatim the rationale
@@ -1665,6 +1675,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 			return Record{}, fmt.Errorf("persisting rename: %w", err)
 		}
 		m.attention.Move(oldName, newName)
+		m.clearSurfacedFiles(oldName, newName)
 	} else {
 		// Not live: sup.RenameAgent (and its announce) never runs, so this
 		// path announces on its own — but only AFTER persistRename succeeds.
@@ -1684,6 +1695,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		// After the announce, so consumers see the new name spawn before
 		// its carried attention arrives.
 		m.attention.Move(oldName, newName)
+		m.clearSurfacedFiles(oldName, newName)
 	}
 
 	rec.Name = newName
@@ -1782,4 +1794,11 @@ func rewriteNameArg(args []string, newName string) []string {
 		}
 	}
 	return out
+}
+
+// clearSurfacedFiles drops the surfaced files held under any of names.
+func (m *Manager) clearSurfacedFiles(names ...string) {
+	for _, name := range names {
+		m.surfacedFiles.Remove(name)
+	}
 }

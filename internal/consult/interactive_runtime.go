@@ -143,7 +143,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 			return "", "", err
 		}
 	}
-	env["LEO_DISPATCH_ID"], env["LEO_CONFIG"] = req.ID, r.configPath
+	env[dispatchIDEnv], env["LEO_CONFIG"] = req.ID, r.configPath
 	if r.AgentToken != "" {
 		env["LEO_API_TOKEN"] = r.AgentToken
 	}
@@ -161,7 +161,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	}
 	label := viewerWindowName(Record{ID: req.ID, Name: req.Name, Template: req.Template})
 	command := make([]string, 0, len(args)+3)
-	command = append(command, "env", "LEO_DISPATCH_ID="+req.ID, h.Binary())
+	command = append(command, "env", dispatchIDEnv+"="+req.ID, h.Binary())
 	command = append(command, args...)
 	words := make([]string, len(command))
 	for i, word := range command {
@@ -369,7 +369,7 @@ func (r *TmuxInteractiveRuntime) FindPaneByDispatchID(windowID, dispatchID strin
 func startCommandHasDispatchID(command, dispatchID string) bool {
 	words := shellCommandWords(command)
 	for i, word := range words {
-		if word == "LEO_DISPATCH_ID="+dispatchID && i > 0 && filepath.Base(words[i-1]) == "env" {
+		if word == dispatchIDEnv+"="+dispatchID && i > 0 && filepath.Base(words[i-1]) == "env" {
 			return true
 		}
 		if i+2 < len(words) && word == "dispatch" && words[i+1] == "watch" && words[i+2] == dispatchID {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/observe"
@@ -142,4 +143,56 @@ func writeAgentSpill(t *testing.T, home, name string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestDeleteClearsSurfacedFiles(t *testing.T) {
+	home := t.TempDir()
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-gone", Workspace: "/w", Stopped: true})
+	m := newTestManager(t, home, &fakeSupervisor{ephemeral: map[string]ProcessState{}})
+	store := observe.NewSurfacedFileStore(nil, nil)
+	_, _ = store.Add("leo-gone", time.Time{}, observe.SurfaceInput{Path: "p", AbsPath: "/p"})
+	_, _ = store.Add("leo-other", time.Time{}, observe.SurfaceInput{Path: "p", AbsPath: "/p"})
+	m.SetSurfacedFiles(store)
+
+	if err := m.Delete(context.Background(), "leo-gone", DeleteOptions{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if got := store.Get("leo-gone"); len(got) != 0 {
+		t.Fatalf("surfaced files after Delete = %+v", got)
+	}
+	if got := store.Get("leo-other"); len(got) != 1 {
+		t.Fatalf("Delete touched another agent: %+v", got)
+	}
+}
+
+func TestRenameClearsSurfacedFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		live bool
+	}{{"stopped", false}, {"running", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", Workspace: "/w", Stopped: !tc.live, ClaudeArgs: []string{"--name", "leo-old"}})
+			sup := &fakeSupervisor{ephemeral: map[string]ProcessState{}}
+			if tc.live {
+				sup.ephemeral["leo-old"] = ProcessState{Name: "leo-old", Status: "running"}
+			}
+			m := newTestManager(t, home, sup)
+			store := observe.NewSurfacedFileStore(nil, nil)
+			_, _ = store.Add("leo-old", time.Time{}, observe.SurfaceInput{Path: "p", AbsPath: "/p"})
+			// A stale entry under the target name (a since-deleted agent)
+			// must not be inherited either.
+			_, _ = store.Add("leo-new", time.Time{}, observe.SurfaceInput{Path: "q", AbsPath: "/q"})
+			m.SetSurfacedFiles(store)
+
+			if _, err := m.Rename("leo-old", "leo-new"); err != nil {
+				t.Fatalf("Rename: %v", err)
+			}
+
+			if all := store.All(); len(all) != 0 {
+				t.Fatalf("surfaced files after Rename = %+v", all)
+			}
+		})
+	}
 }

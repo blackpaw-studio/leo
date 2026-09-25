@@ -83,6 +83,11 @@ type Agent struct {
 
 	// Attention is absent when the agent has no attention source.
 	Attention *AgentAttention `json:"attention,omitempty"`
+
+	// SurfacedFiles are the files this incarnation pushed to the user's
+	// attention (leo_surface_file), oldest first, capped at
+	// MaxSurfacedFiles. Absent when there are none.
+	SurfacedFiles []SurfacedFile `json:"surfaced_files,omitempty"`
 }
 
 // ActionKind names the provenance of an Action's detail, so consumers can tell how much
