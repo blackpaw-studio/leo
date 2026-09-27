@@ -253,6 +253,96 @@ func TestInteractiveLaunchClaudeBriefPathIsSafelyQuoted(t *testing.T) {
 	}
 }
 
+// TestWritePrivateBriefRefusesExistingSymlink covers a symlink planted (or
+// left over) at the brief path: writePrivateBrief must never follow it and
+// write through to wherever it points, and the symlink itself, not its
+// target, is what gets replaced.
+func TestWritePrivateBriefRefusesExistingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("do not touch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	briefPath := filepath.Join(dir, "briefs", "d-sym.txt")
+	if err := os.MkdirAll(filepath.Dir(briefPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, briefPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateBrief(briefPath, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "do not touch" {
+		t.Fatalf("symlink target was written through: content=%q err=%v", got, err)
+	}
+	info, err := os.Lstat(briefPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("brief path is still a symlink after writePrivateBrief")
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("brief file mode = %o, want 0600", perm)
+	}
+	got, err := os.ReadFile(briefPath)
+	if err != nil || string(got) != "hello" {
+		t.Fatalf("brief content = %q, err=%v", got, err)
+	}
+}
+
+// TestWritePrivateBriefTightensExistingFileMode covers a stale brief file
+// left over with the wrong (looser) mode: writePrivateBrief must replace it
+// rather than reuse its permissions, since os.WriteFile alone would keep
+// them.
+func TestWritePrivateBriefTightensExistingFileMode(t *testing.T) {
+	dir := t.TempDir()
+	briefPath := filepath.Join(dir, "briefs", "d-loose.txt")
+	if err := os.MkdirAll(filepath.Dir(briefPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(briefPath, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateBrief(briefPath, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(briefPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("brief file mode = %o, want 0600", perm)
+	}
+	if got, err := os.ReadFile(briefPath); err != nil || string(got) != "fresh" {
+		t.Fatalf("brief content = %q, err=%v", got, err)
+	}
+}
+
+// TestWritePrivateBriefTightensExistingDirMode covers a dispatch-briefs
+// directory that already exists with a looser mode (e.g. created by an
+// older leo version): writePrivateBrief must tighten it, since MkdirAll
+// alone leaves an existing directory's mode untouched.
+func TestWritePrivateBriefTightensExistingDirMode(t *testing.T) {
+	dir := t.TempDir()
+	briefDir := filepath.Join(dir, "briefs")
+	if err := os.MkdirAll(briefDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	briefPath := filepath.Join(briefDir, "d-loosedir.txt")
+	if err := writePrivateBrief(briefPath, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(briefDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("brief directory mode = %o, want 0700", perm)
+	}
+}
+
 // TestInteractiveLaunchClaudeArgvPromptAtLimit is the "still fits" side of
 // the claudeArgvPromptLimit boundary: a brief exactly at the limit is still
 // written to a brief file and referenced via $(cat ...) rather than falling
