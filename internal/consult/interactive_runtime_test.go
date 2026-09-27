@@ -96,7 +96,7 @@ func TestOpeningInjectTimeoutKeepsPane(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{injectErr: err}
 	d.SetInteractiveRuntime(rt)
-	started, startErr := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, startErr := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if startErr != nil {
 		t.Fatalf("Start() = %v", startErr)
 	}
@@ -154,6 +154,57 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 	}
 	if got := launch[len(launch)-1]; strings.Count(got, "--settings") != 1 || !containsAll(got, "crossSessionInbound", "Stop", "UserPromptSubmit", "SessionEnd") {
 		t.Fatalf("Claude interactive settings were not merged: %q", got)
+	}
+}
+
+// TestInteractiveLaunchClaudePromptIsArgvPositional verifies that a claude
+// interactive launch delivers the opening brief as claude's launch-time
+// positional prompt (see TmuxInteractiveRuntime.Launch), never a tmux paste.
+// A pasted brief arrives wrapped as <pasted_content>, which the model has
+// been observed to refuse as untrusted; an argv prompt arrives as a plain
+// user message. The brief here deliberately carries quotes, a backtick, a
+// dollar sign, and a newline, which must survive shellQuote round-tripping
+// intact so the pane's shell never reinterprets them.
+func TestInteractiveLaunchClaudePromptIsArgvPositional(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	brief := "do the thing; also handle $HOME, `echo hi`, a \"quoted\" 'word', and\na second line"
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-argv", Template: "claude", Cwd: dir, Name: "work", Prompt: brief}); err != nil {
+		t.Fatal(err)
+	}
+	if len(launch) == 0 {
+		t.Fatal("new-window was never called")
+	}
+	command := launch[len(launch)-1]
+	words := shellCommandWords(command)
+	found := false
+	for _, w := range words {
+		if w == brief {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("prompt %q not found intact as a positional word in argv; words=%#v\ncommand=%q", brief, words, command)
+	}
+	// The prompt must not be embedded inside another flag's value (e.g. as
+	// part of --append-system-prompt or --settings JSON); it is its own word.
+	if strings.Contains(command, "--append-system-prompt") && strings.Contains(command, brief) {
+		for i, w := range words {
+			if w == "--append-system-prompt" && i+1 < len(words) && words[i+1] == brief {
+				t.Fatalf("prompt landed as an --append-system-prompt value instead of a bare positional: %q", command)
+			}
+		}
 	}
 }
 

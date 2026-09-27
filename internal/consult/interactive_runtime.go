@@ -92,6 +92,14 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env)
 	}
 	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
+	if h.Name() == "claude" {
+		// Claude delivers the opening brief as a plain launch-time argument
+		// instead of a tmux paste: a pasted brief arrives wrapped as
+		// <pasted_content>, which the model can refuse as untrusted (see
+		// injectOpening in interactive.go). Other harnesses keep injecting
+		// the opening turn once the pane's composer is ready.
+		spec.Prompt = req.Prompt
+	}
 	args, err := h.Args(spec)
 	if err != nil {
 		return "", "", err

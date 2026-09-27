@@ -176,7 +176,12 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	d.persistLocked(s, "")
 	placementRecord = cloneRecord(s.record)
 	d.mu.Unlock()
-	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: req.Prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement})
+	// Prompt carries the dispatch-preamble-wrapped opening text (not the raw
+	// req.Prompt): a claude Launch reads it straight into the process's argv
+	// as the opening brief (see TmuxInteractiveRuntime.Launch), so it must
+	// already be what the model should see, identical to what a tmux paste
+	// would have delivered.
+	pane, window, err := rt.Launch(ctx, LaunchRequest{ID: s.record.ID, Harness: harnessName, Model: model, Effort: req.Effort, Cwd: req.Cwd, Name: req.Name, Template: req.Template, Caller: req.Caller, Prompt: prompt, Timeout: req.Timeout, Dispatched: true, CallerPaneID: req.CallerPaneID, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID, Placement: placement})
 	if err != nil {
 		d.placement.Cancel(placementRecord.ID)
 		d.mu.Lock()
@@ -247,11 +252,7 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 		_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
 		return
 	}
-	injection := rt.Inject
-	if opening, ok := rt.(openingInteractiveRuntime); ok {
-		injection = opening.InjectOpening
-	}
-	err := injection(ctx, pane, prompt, func() error {
+	arm := func() error {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		if s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, turnID).Outcome != "" {
@@ -260,7 +261,24 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 		d.armTurnLocked(s, turnID)
 		d.persistLocked(s, "turn")
 		return nil
-	})
+	}
+	var err error
+	if s.record.Harness == "claude" {
+		// Claude's opening brief travels as its launch-time positional
+		// argument (see TmuxInteractiveRuntime.Launch), not a tmux paste:
+		// a pasted brief arrives wrapped as <pasted_content>, which the
+		// model can refuse as untrusted. Claude submits turn 1 itself at
+		// startup, so there is nothing to inject here — only arm the turn
+		// so the resulting UserPromptSubmit hook attributes to it instead
+		// of being read as a steered or lost turn.
+		err = arm()
+	} else {
+		injection := rt.Inject
+		if opening, ok := rt.(openingInteractiveRuntime); ok {
+			injection = opening.InjectOpening
+		}
+		err = injection(ctx, pane, prompt, arm)
+	}
 	if err == nil {
 		return
 	}
