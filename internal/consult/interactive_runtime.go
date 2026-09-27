@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -23,6 +24,98 @@ const interactiveCommandTimeout = 5 * time.Second
 const interactiveWaitDelay = 100 * time.Millisecond
 const defaultStartupTimeout = 60 * time.Second
 const defaultStartupPollInterval = 500 * time.Millisecond
+
+// claudeArgvPromptLimit is a sanity cap on the opening brief's size, measured
+// on the preamble-wrapped bytes. The brief itself never appears as literal
+// launch argv text (see claudeBriefArgvWord), sidestepping tmux 3.6a's own
+// ~16 KiB total client-command limit (measured: a 15 KiB literal argument to
+// `tmux new-session -d "<cmd>"` launched, a 17 KiB one failed with "command
+// too long") — but the $(cat ...) substitution's *result* still becomes a
+// single argv string in the exec'd claude process, and Linux caps any one
+// argv/envp string at MAX_ARG_STRLEN, 32 pages (128 KiB on the common 4 KiB
+// page size), independent of the much larger overall ARG_MAX. A brief between
+// this cap and the old 256 KiB would launch fine on macOS but fail with
+// E2BIG on Linux. 96 KiB stays safely under MAX_ARG_STRLEN with headroom for
+// the shell's own overhead in materializing the substitution; above it, the
+// opening turn falls back to the existing tmux-paste injection instead.
+const claudeArgvPromptLimit = 96 * 1024
+
+// claudeDeliversPromptViaArgv reports whether an opening brief of this size
+// is delivered via claude's launch-time argv (as a $(cat <brief file>)
+// command substitution — see claudeBriefArgvWord) rather than a tmux paste.
+// Both interactive_runtime.go (building the launch spec) and interactive.go
+// (arming turn 1 before Launch, and later deciding whether injectOpening has
+// anything left to do) must agree on this, so it is one pure function shared
+// by both.
+func claudeDeliversPromptViaArgv(harnessName, prompt string) bool {
+	return harnessName == "claude" && len(prompt) <= claudeArgvPromptLimit
+}
+
+// claudeBriefArgvWord is the shell text placed in claude's launch-argv
+// positional slot when claudeDeliversPromptViaArgv is true. It expands to
+// path's full contents via command substitution instead of embedding them
+// directly, so the tmux client command that carries the launch stays a few
+// dozen bytes regardless of the brief's actual size (see
+// claudeArgvPromptLimit). It deliberately bypasses the per-word shellQuote
+// pass in Launch (single quotes would disable the "$(...)" expansion
+// entirely): the outer double quotes keep the substituted content as one
+// argv word even when it contains spaces or newlines, and the inner
+// shellQuote(path) keeps a path containing a quote or a space safe.
+func claudeBriefArgvWord(path string) string {
+	return `"$(cat ` + shellQuote(path) + `)"`
+}
+
+// briefSpillDir names the directory (under a leo home's state dir) holding
+// per-dispatch opening-brief files: <home>/state/dispatch-briefs/<id>.txt.
+const briefSpillDir = "dispatch-briefs"
+
+// dispatchBriefPath is dispatch id's opening-brief file path ("" if
+// unusable).
+func dispatchBriefPath(homePath, id string) string {
+	if homePath == "" || id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
+		return ""
+	}
+	return filepath.Join(homePath, "state", briefSpillDir, id+".txt")
+}
+
+// writePrivateBrief writes brief to path, creating its directory as needed.
+// The brief can carry orchestrator- or user-authored task instructions, so
+// both the directory and the file are owner-only.
+func writePrivateBrief(path, brief string) error {
+	if path == "" {
+		return errors.New("no opening-brief path available")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating opening-brief directory: %w", err)
+	}
+	// MkdirAll leaves an existing directory's mode alone (a prior leo
+	// version, or something else entirely, could have created it looser);
+	// tighten it explicitly rather than trusting whatever created it first.
+	// #nosec G302 -- a directory needs the owner execute bit; 0700 is owner-only
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("securing opening-brief directory: %w", err)
+	}
+	// A stale file (leftover from a crashed prior run) or a symlink planted
+	// at this exact path must never be reused or followed: os.WriteFile
+	// would keep a stale file's existing mode, and would happily write
+	// through a symlink to wherever it points. Remove whatever is there
+	// (Remove itself never follows a symlink) and create fresh with
+	// O_EXCL|O_NOFOLLOW, so even something recreated in the gap between the
+	// Remove and this Open is refused rather than silently written to.
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing stale opening-brief file: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating opening-brief file: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte(brief)); err != nil {
+		return fmt.Errorf("writing opening brief: %w", err)
+	}
+	return nil
+}
 
 // ErrNotReady means a new harness pane did not render an empty composer before
 // the bounded opening-injection wait elapsed.
@@ -92,6 +185,22 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env)
 	}
 	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
+	// Claude delivers the opening brief as a launch-time argv positional
+	// instead of a tmux paste: a pasted brief arrives wrapped as
+	// <pasted_content>, which the model can refuse as untrusted (see
+	// injectOpening in interactive.go). Other harnesses, and an oversized
+	// claude brief, keep injecting the opening turn once the pane's composer
+	// is ready. spec.Prompt is deliberately left unset here: the brief goes
+	// to a private file instead, and the launch command below embeds only a
+	// $(cat ...) command substitution referencing it (see
+	// claudeArgvPromptLimit for why).
+	var briefPath string
+	if claudeDeliversPromptViaArgv(h.Name(), req.Prompt) {
+		briefPath = dispatchBriefPath(cfg.HomePath, req.ID)
+		if err := writePrivateBrief(briefPath, req.Prompt); err != nil {
+			return "", "", fmt.Errorf("claude: %w", err)
+		}
+	}
 	args, err := h.Args(spec)
 	if err != nil {
 		return "", "", err
@@ -166,6 +275,12 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	words := make([]string, len(command))
 	for i, word := range command {
 		words[i] = shellQuote(word)
+	}
+	if briefPath != "" {
+		// Appended after the per-word shellQuote pass on purpose: shellQuote
+		// wraps its input in single quotes, which would disable the
+		// "$(...)" expansion this word depends on (see claudeBriefArgvWord).
+		words = append(words, claudeBriefArgvWord(briefPath))
 	}
 	argv := []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", label, "-c", req.Cwd}
 	if req.Placement.Kind == "split" {

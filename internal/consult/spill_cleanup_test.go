@@ -109,6 +109,12 @@ func TestTmuxRuntimeRunFileCleanup(t *testing.T) {
 	if err := os.WriteFile(agentFile, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A claude opening brief (see claudeDeliversPromptViaArgv) leaves a
+	// second per-dispatch file behind, under its own directory; it must be
+	// cleaned up on exactly the same schedule as the settings spill.
+	briefGone := writeBrief(t, home, "d-a")
+	briefKept := writeBrief(t, home, "d-b")
+	briefOrphan := writeBrief(t, home, "d-c")
 
 	rt.ReleaseRunFiles("d-a")
 	rt.ReleaseRunFiles("../../escape")
@@ -116,9 +122,53 @@ func TestTmuxRuntimeRunFileCleanup(t *testing.T) {
 
 	assertGone(t, gone)
 	assertGone(t, orphan)
-	for _, p := range []string{kept, agentFile} {
+	assertGone(t, briefGone)
+	assertGone(t, briefOrphan)
+	for _, p := range []string{kept, agentFile, briefKept} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("%s removed: %v", p, err)
 		}
 	}
+}
+
+// TestDispatcherSweepRunFilesRemovesBriefFilesForTerminalAndUnknownRuns
+// covers the safety net for a brief file written after its dispatch already
+// went terminal (e.g. a cancel racing Launch): the per-dispatch
+// ReleaseRunFiles call on the cancel path can miss a file that did not exist
+// yet, but the periodic/startup Dispatcher.SweepRunFiles must still remove
+// it once the dispatch reads back as terminal (or is not tracked at all —
+// "unknown"), exactly like it already does for the settings spill.
+func TestDispatcherSweepRunFilesRemovesBriefFilesForTerminalAndUnknownRuns(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	rt := NewInteractiveRuntime("", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "leo")
+	d := NewDispatcher(newFakeRecorder())
+	d.SetInteractiveRuntime(rt)
+	d.runs["d-live"] = &runState{record: Record{ID: "d-live", Kind: "dispatch", Mode: ModeInteractive, Status: StatusRunning}, handle: nopHandle{}, done: make(chan struct{})}
+	d.runs["d-terminal"] = &runState{record: Record{ID: "d-terminal", Kind: "dispatch", Mode: ModeInteractive, Status: StatusClosed}, handle: nopHandle{}, done: make(chan struct{})}
+	live := writeBrief(t, home, "d-live")
+	terminal := writeBrief(t, home, "d-terminal")
+	unknown := writeBrief(t, home, "d-unknown") // never in d.runs at all
+
+	d.SweepRunFiles()
+
+	if _, err := os.Stat(live); err != nil {
+		t.Fatalf("live run's brief file removed: %v", err)
+	}
+	assertGone(t, terminal)
+	assertGone(t, unknown)
+}
+
+// writeBrief writes a dispatch id's opening-brief file directly (bypassing
+// Launch) so run-file cleanup tests can assert on it independently.
+func writeBrief(t *testing.T, home, id string) string {
+	t.Helper()
+	path := dispatchBriefPath(home, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("brief for "+id), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

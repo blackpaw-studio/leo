@@ -61,35 +61,48 @@ func (r *TmuxInteractiveRuntime) spillHome() string {
 	return cfg.HomePath
 }
 
-// ReleaseRunFiles removes run id's settings spill file.
+// ReleaseRunFiles removes run id's settings spill file and, if it used
+// argv-delivered claude opening (see claudeDeliversPromptViaArgv), its
+// opening-brief file.
 func (r *TmuxInteractiveRuntime) ReleaseRunFiles(id string) {
-	path := dispatchSpillPath(r.spillHome(), id)
+	home := r.spillHome()
+	removeIfExists(dispatchSpillPath(home, id), "settings spill", id)
+	removeIfExists(dispatchBriefPath(home, id), "opening brief", id)
+}
+
+func removeIfExists(path, what, id string) {
 	if path == "" {
 		return
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "dispatch %s: removing settings spill: %v\n", id, err)
+		fmt.Fprintf(os.Stderr, "dispatch %s: removing %s: %v\n", id, what, err)
 	}
 }
 
-// SweepRunFiles removes every dispatch settings spill file whose run id is
-// not in keep. Agent spill files (<agent>.json) are left alone.
+// SweepRunFiles removes every dispatch settings spill and opening-brief file
+// whose run id is not in keep. Agent spill files (<agent>.json) are left
+// alone.
 func (r *TmuxInteractiveRuntime) SweepRunFiles(keep map[string]bool) {
 	home := r.spillHome()
 	if home == "" {
 		return
 	}
-	matches, err := filepath.Glob(filepath.Join(home, "state", "settings", dispatchSpillPrefix+"*.json"))
+	sweepGlob(filepath.Join(home, "state", "settings", dispatchSpillPrefix+"*.json"), dispatchSpillPrefix, ".json", "settings spill", keep)
+	sweepGlob(filepath.Join(home, "state", briefSpillDir, "*.txt"), "", ".txt", "opening brief", keep)
+}
+
+func sweepGlob(pattern, prefix, suffix, what string, keep map[string]bool) {
+	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return
 	}
 	for _, path := range matches {
-		id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), dispatchSpillPrefix), ".json")
+		id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), prefix), suffix)
 		if keep[id] {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "dispatch %s: sweeping settings spill: %v\n", id, err)
+			fmt.Fprintf(os.Stderr, "dispatch %s: sweeping %s: %v\n", id, what, err)
 		}
 	}
 }

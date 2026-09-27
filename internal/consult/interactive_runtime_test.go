@@ -96,7 +96,7 @@ func TestOpeningInjectTimeoutKeepsPane(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{injectErr: err}
 	d.SetInteractiveRuntime(rt)
-	started, startErr := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, startErr := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if startErr != nil {
 		t.Fatalf("Start() = %v", startErr)
 	}
@@ -154,6 +154,253 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 	}
 	if got := launch[len(launch)-1]; strings.Count(got, "--settings") != 1 || !containsAll(got, "crossSessionInbound", "Stop", "UserPromptSubmit", "SessionEnd") {
 		t.Fatalf("Claude interactive settings were not merged: %q", got)
+	}
+}
+
+// TestInteractiveLaunchClaudePromptGoesToBriefFileNotArgv verifies that a
+// claude interactive launch never inlines the opening brief into the tmux
+// launch command: tmux 3.6a rejects any client command over roughly 16 KiB
+// in total (see claudeArgvPromptLimit), a budget the brief's own quoting,
+// preamble, and the launch's other flags (--settings especially) already
+// compete for. Instead the brief goes to a private file, mode 0600, and the
+// launch argv's positional slot carries only a short $(cat '<path>') command
+// substitution, unquoted by the per-word shellQuote pass (so the pane's
+// shell actually expands it) with its path safely single-quoted. The brief
+// here deliberately carries quotes, a backtick, a dollar sign, and a
+// newline, which must round-trip byte-exact through the brief file.
+func TestInteractiveLaunchClaudePromptGoesToBriefFileNotArgv(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	brief := "do the thing; also handle $HOME, `echo hi`, a \"quoted\" 'word', and\na second line"
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-argv", Template: "claude", Cwd: dir, Name: "work", Prompt: brief}); err != nil {
+		t.Fatal(err)
+	}
+	if len(launch) == 0 {
+		t.Fatal("new-window was never called")
+	}
+	command := launch[len(launch)-1]
+	if strings.Contains(command, brief) {
+		t.Fatalf("brief must never be inlined into launch argv: %q", command)
+	}
+	briefPath := dispatchBriefPath(dir, "d-argv")
+	wantWord := claudeBriefArgvWord(briefPath)
+	if !strings.HasSuffix(strings.TrimSpace(command), wantWord) {
+		t.Fatalf("launch argv positional = %q, want it to end with %q", command, wantWord)
+	}
+	info, err := os.Stat(briefPath)
+	if err != nil {
+		t.Fatalf("brief file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("brief file mode = %o, want 0600", perm)
+	}
+	got, err := os.ReadFile(briefPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != brief {
+		t.Fatalf("brief file content = %q, want %q", got, brief)
+	}
+}
+
+// TestInteractiveLaunchClaudeBriefPathIsSafelyQuoted covers a brief-file path
+// containing a space and a single quote (an unusual but possible leo home),
+// asserting the $(cat ...) word in the launch argv round-trips through the
+// same shellQuote escaping every other launch argument uses.
+func TestInteractiveLaunchClaudeBriefPathIsSafelyQuoted(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a home's dir")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-quoted", Template: "claude", Cwd: dir, Name: "work", Prompt: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	command := launch[len(launch)-1]
+	briefPath := dispatchBriefPath(dir, "d-quoted")
+	wantWord := claudeBriefArgvWord(briefPath)
+	// The path's embedded single quote (from "a home's dir") must be escaped
+	// with the standard close-quote/escaped-quote/reopen-quote sequence, the
+	// same one shellQuote uses for every other launch argument.
+	if !strings.Contains(command, `home'"'"'s`) {
+		t.Fatalf("launch argv did not safely quote the brief path's embedded quote: %q", command)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(command), wantWord) {
+		t.Fatalf("launch argv positional = %q, want it to end with %q", command, wantWord)
+	}
+	if _, err := os.Stat(briefPath); err != nil {
+		t.Fatalf("brief file: %v", err)
+	}
+}
+
+// TestWritePrivateBriefRefusesExistingSymlink covers a symlink planted (or
+// left over) at the brief path: writePrivateBrief must never follow it and
+// write through to wherever it points, and the symlink itself, not its
+// target, is what gets replaced.
+func TestWritePrivateBriefRefusesExistingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("do not touch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	briefPath := filepath.Join(dir, "briefs", "d-sym.txt")
+	if err := os.MkdirAll(filepath.Dir(briefPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, briefPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateBrief(briefPath, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "do not touch" {
+		t.Fatalf("symlink target was written through: content=%q err=%v", got, err)
+	}
+	info, err := os.Lstat(briefPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("brief path is still a symlink after writePrivateBrief")
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("brief file mode = %o, want 0600", perm)
+	}
+	got, err := os.ReadFile(briefPath)
+	if err != nil || string(got) != "hello" {
+		t.Fatalf("brief content = %q, err=%v", got, err)
+	}
+}
+
+// TestWritePrivateBriefTightensExistingFileMode covers a stale brief file
+// left over with the wrong (looser) mode: writePrivateBrief must replace it
+// rather than reuse its permissions, since os.WriteFile alone would keep
+// them.
+func TestWritePrivateBriefTightensExistingFileMode(t *testing.T) {
+	dir := t.TempDir()
+	briefPath := filepath.Join(dir, "briefs", "d-loose.txt")
+	if err := os.MkdirAll(filepath.Dir(briefPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(briefPath, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateBrief(briefPath, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(briefPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("brief file mode = %o, want 0600", perm)
+	}
+	if got, err := os.ReadFile(briefPath); err != nil || string(got) != "fresh" {
+		t.Fatalf("brief content = %q, err=%v", got, err)
+	}
+}
+
+// TestWritePrivateBriefTightensExistingDirMode covers a dispatch-briefs
+// directory that already exists with a looser mode (e.g. created by an
+// older leo version): writePrivateBrief must tighten it, since MkdirAll
+// alone leaves an existing directory's mode untouched.
+func TestWritePrivateBriefTightensExistingDirMode(t *testing.T) {
+	dir := t.TempDir()
+	briefDir := filepath.Join(dir, "briefs")
+	if err := os.MkdirAll(briefDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	briefPath := filepath.Join(briefDir, "d-loosedir.txt")
+	if err := writePrivateBrief(briefPath, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(briefDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("brief directory mode = %o, want 0700", perm)
+	}
+}
+
+// TestInteractiveLaunchClaudeArgvPromptAtLimit is the "still fits" side of
+// the claudeArgvPromptLimit boundary: a brief exactly at the limit is still
+// written to a brief file and referenced via $(cat ...) rather than falling
+// back to a tmux paste.
+func TestInteractiveLaunchClaudeArgvPromptAtLimit(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	brief := strings.Repeat("a", claudeArgvPromptLimit)
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-atlimit", Template: "claude", Cwd: dir, Name: "work", Prompt: brief}); err != nil {
+		t.Fatal(err)
+	}
+	command := launch[len(launch)-1]
+	briefPath := dispatchBriefPath(dir, "d-atlimit")
+	if !strings.HasSuffix(strings.TrimSpace(command), claudeBriefArgvWord(briefPath)) {
+		t.Fatal("a brief exactly at claudeArgvPromptLimit was not delivered via a brief file")
+	}
+	if got, err := os.ReadFile(briefPath); err != nil || string(got) != brief {
+		t.Fatalf("brief file content mismatch: err=%v", err)
+	}
+}
+
+// TestInteractiveLaunchClaudeArgvPromptOverLimitFallsBackToPaste is the
+// "too big" side: one byte over claudeArgvPromptLimit must never land in the
+// launch argv, or in a brief file, at all — injectOpening's tmux-paste
+// fallback (interactive.go) is what delivers it instead.
+func TestInteractiveLaunchClaudeArgvPromptOverLimitFallsBackToPaste(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	brief := strings.Repeat("a", claudeArgvPromptLimit+1)
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-overlimit", Template: "claude", Cwd: dir, Name: "work", Prompt: brief}); err != nil {
+		t.Fatal(err)
+	}
+	command := launch[len(launch)-1]
+	if _, err := os.Stat(dispatchBriefPath(dir, "d-overlimit")); !os.IsNotExist(err) {
+		t.Fatalf("oversized brief must not get a brief file: stat err=%v", err)
+	}
+	if strings.Contains(command, brief) {
+		t.Fatal("an oversized brief must not be inlined into launch argv; it must fall back to a tmux paste")
 	}
 }
 

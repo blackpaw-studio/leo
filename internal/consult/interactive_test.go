@@ -149,6 +149,29 @@ func waitForInjection(t *testing.T, r *fakeInteractiveRuntime) {
 	}
 }
 
+// waitForArmed polls until id's opening turn is armed. Claude's opening turn
+// never goes through rt.Inject (see injectOpening): it arms directly, so
+// tests that would otherwise use waitForInjection poll this instead.
+func waitForArmed(t *testing.T, d *Dispatcher, id string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		d.mu.Lock()
+		s := d.runs[id]
+		armed := s != nil && s.armedTurn != ""
+		d.mu.Unlock()
+		if armed {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("opening turn was never armed")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func TestConcurrentViewerPlacementCap(t *testing.T) {
 	max := 3
 	cfg := testConfig()
@@ -525,7 +548,7 @@ func TestInteractiveStartReturnsBeforeReady(t *testing.T) {
 	started := make(chan Started, 1)
 	errs := make(chan error, 1)
 	go func() {
-		got, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+		got, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 		started <- got
 		errs <- err
 	}()
@@ -568,7 +591,7 @@ func TestInteractiveOpeningIncludesDispatchPreamble(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	if _, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive}); err != nil {
+	if _, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive}); err != nil {
 		t.Fatal(err)
 	}
 	waitForInjection(t, rt)
@@ -582,7 +605,7 @@ func TestInteractiveOpeningFailureSettlesAsync(t *testing.T) {
 	release := make(chan struct{})
 	rt := &blockingOpeningRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{injectErr: errors.New("not ready"), empty: true}, release: release}
 	d.SetInteractiveRuntime(rt)
-	got, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	got, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +622,7 @@ func TestInteractiveLateOpeningFailureDoesNotSettleNewTurn(t *testing.T) {
 	returned := make(chan struct{})
 	rt := &lateOpeningErrorRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}, release: release, returned: returned}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "opening", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "opening", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,7 +680,7 @@ func TestInteractiveReportMatching(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	got, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	got, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -689,7 +712,7 @@ func TestInteractiveReportLateSubmitMatchesUndeliveredOrchestratorTurn(t *testin
 	d.now = func() time.Time { return now }
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -725,7 +748,7 @@ func TestInteractiveReportLateSubmitDifferentPromptOpensUserTurn(t *testing.T) {
 	d.now = func() time.Time { return now }
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -746,7 +769,7 @@ func TestInteractiveReportLateSubmitNormalizesPromptWhitespace(t *testing.T) {
 	d.now = func() time.Time { return now }
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello  there\n", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello  there\n", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +799,7 @@ func TestInteractiveReportLateSubmitAttributesOldestMatchingTurn(t *testing.T) {
 	d.now = func() time.Time { return now }
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -819,7 +842,7 @@ func TestInteractiveReportLateSubmitBeyondWindowOpensUserTurn(t *testing.T) {
 	d.now = func() time.Time { return now }
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -840,7 +863,7 @@ func TestInteractiveReportLateSubmitAppliesPendingClose(t *testing.T) {
 	d.now = func() time.Time { return now }
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -862,7 +885,7 @@ func TestInteractiveWaitReturnsWhenTurnClosesBeforeSession(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -885,7 +908,7 @@ func TestInteractiveEntryStatusIsRunStatus(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -909,7 +932,7 @@ func TestSweepDeadPaneSettlesWithinBound(t *testing.T) {
 	d.now = func() time.Time { return now }
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1085,11 +1108,227 @@ func startClaudeInteractive(t *testing.T, now *time.Time) (*Dispatcher, *fakeInt
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForInjection(t, rt)
-	if err := d.Report(started.ID, claudeHook(t, "submit-1", "UserPromptSubmit", rt.firstInjection())); err != nil {
+	// Claude's opening brief travels as its launch-time positional argument,
+	// never a tmux paste (see injectOpening): the pane submits it on its own,
+	// so there is nothing to wait for injecting here, only arming.
+	waitForArmed(t, d, started.ID)
+	if got := rt.injectionCount(); got != 0 {
+		t.Fatalf("claude opening turn must not be pasted via tmux, got %d injection(s)", got)
+	}
+	if err := d.Report(started.ID, claudeHook(t, "submit-1", "UserPromptSubmit", dispatchPreamble+" hello")); err != nil {
 		t.Fatal(err)
 	}
 	return d, rt, started.ID
+}
+
+// TestInteractiveClaudeOpeningNeverPastesViaTmux locks in the fix for
+// Claude's opening brief arriving wrapped as <pasted_content> and being
+// refused as untrusted: a claude interactive dispatch must never call
+// rt.Inject/InjectOpening for its opening turn, on success or on failure.
+func TestInteractiveClaudeOpeningNeverPastesViaTmux(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForArmed(t, d, started.ID)
+	if got := rt.injectionCount(); got != 0 {
+		t.Fatalf("claude opening turn was pasted via tmux: %d injection(s)", got)
+	}
+}
+
+// TestInteractiveClaudeOversizedOpeningFallsBackToPaste is the "too big" side
+// of TestInteractiveClaudeOpeningNeverPastesViaTmux: a brief over
+// claudeArgvPromptLimit must never be armed ahead of Launch (there is no
+// argv delivery to race), and must instead flow through the ordinary
+// tmux-paste opening injection, exactly like a non-claude harness.
+func TestInteractiveClaudeOversizedOpeningFallsBackToPaste(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	big := strings.Repeat("a", claudeArgvPromptLimit+1)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: big, Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	if got := rt.firstInjection(); got != dispatchPreamble+" "+big {
+		t.Fatal("oversized claude brief was not delivered via the tmux-paste fallback")
+	}
+	d.mu.Lock()
+	armedBeforeReport := d.runs[started.ID].armedTurn
+	d.mu.Unlock()
+	if armedBeforeReport == "" {
+		t.Fatal("oversized brief's turn 1 was not armed by injection's own arm callback")
+	}
+}
+
+// TestInteractiveCodexOpeningStillInjects is the control for
+// TestInteractiveClaudeOpeningNeverPastesViaTmux: codex's opening turn keeps
+// going through the tmux-TUI driver's paste-based injection unchanged.
+func TestInteractiveCodexOpeningStillInjects(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	if got := rt.firstInjection(); got != dispatchPreamble+" hello" {
+		t.Fatalf("codex opening injection = %q", got)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Turns) != 1 || rec.Turns[0].Delivered {
+		t.Fatalf("codex opening turn should still wait for its own UserPromptSubmit: %+v", rec.Turns)
+	}
+}
+
+// TestInteractiveClaudeOpeningSubmitDeliversTurn1 covers the immediate
+// arm-window path: claude submits the argv-delivered opening prompt itself
+// at startup, and the resulting UserPromptSubmit must attribute to turn 1 as
+// delivered, never steered or lost.
+func TestInteractiveClaudeOpeningSubmitDeliversTurn1(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForArmed(t, d, started.ID)
+	if err := d.Report(started.ID, claudeHook(t, "submit-1", "UserPromptSubmit", dispatchPreamble+" hello")); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != "" || rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("opening submit was not delivered as turn 1: %+v", rec.Turns)
+	}
+}
+
+// TestInteractiveClaudeOpeningLateAckDeliversTurn1ByText covers claude
+// startup taking longer than the immediate ack window (observed: MCP
+// startup can take minutes): the late-ack text-match fallback must still
+// attribute the first UserPromptSubmit to turn 1 rather than opening a
+// second, "steered" turn.
+func TestInteractiveClaudeOpeningLateAckDeliversTurn1ByText(t *testing.T) {
+	now := time.Date(2026, time.September, 27, 12, 0, 0, 0, time.UTC)
+	d := NewDispatcher(newFakeRecorder())
+	d.now = func() time.Time { return now }
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForArmed(t, d, started.ID)
+	now = now.Add(ackTimeout + time.Minute)
+	if err := d.Report(started.ID, claudeHook(t, "submit-1", "UserPromptSubmit", dispatchPreamble+" hello")); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != "" || rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("late-ack opening submit was not delivered as turn 1: %+v", rec.Turns)
+	}
+}
+
+// findSoleRunID returns the id of the single in-flight run, for use from
+// inside a fake runtime's Launch hook: Start has not returned yet, so the
+// test has no other way to learn the dispatch id it should report against.
+func findSoleRunID(t *testing.T, d *Dispatcher) string {
+	t.Helper()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.runs) != 1 {
+		t.Fatalf("expected exactly one in-flight run, got %d", len(d.runs))
+	}
+	for id := range d.runs {
+		return id
+	}
+	return ""
+}
+
+// TestInteractiveClaudeSubmitDuringLaunchDeliversTurn1 covers claude
+// submitting its argv-delivered opening brief (via the hook's own "leo
+// dispatch report" process) before Launch even returns to startInteractive,
+// let alone before Publish or the async injectOpening goroutine run. Turn 1
+// must already be armed at that point (armed before Launch, not after), so
+// the submit delivers turn 1 instead of being read as unarmed and opening a
+// second, steered turn — which would also flip status to Running before
+// Publish's guard, making Publish reject the pane as already-Queued and get
+// it killed.
+func TestInteractiveClaudeSubmitDuringLaunchDeliversTurn1(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	rt.launchHook = func() {
+		id := findSoleRunID(t, d)
+		if err := d.Report(id, claudeHook(t, "submit-1", "UserPromptSubmit", dispatchPreamble+" hello")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != "" || rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("submit racing launch = %+v", rec.Turns)
+	}
+	if got := rt.killCount(); got != 0 {
+		t.Fatalf("pane killed after a submit that raced launch: %d kills", got)
+	}
+}
+
+// TestInteractiveClaudeSubmitAndStopDuringLaunchFinishesTurn1 extends the
+// above with a same-turn Stop, also fired before Launch returns: claude can
+// answer and go idle faster than tmux confirms the pane. Publish must still
+// accept the record (now Idle, not merely Running) and must not kill the
+// live pane.
+func TestInteractiveClaudeSubmitAndStopDuringLaunchFinishesTurn1(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	rt.launchHook = func() {
+		id := findSoleRunID(t, d)
+		if err := d.Report(id, claudeHook(t, "submit-1", "UserPromptSubmit", dispatchPreamble+" hello")); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != TurnFinished || rec.Steered || rec.Status != StatusIdle {
+		t.Fatalf("submit+stop racing launch = %+v record=%+v", rec.Turns, rec)
+	}
+	if got := rt.killCount(); got != 0 {
+		t.Fatalf("pane killed after submit+stop that raced launch: %d kills", got)
+	}
+	if rec.PaneID == "" {
+		t.Fatal("record lost its pane after a fast-finishing opening turn")
+	}
 }
 
 // Claude's background-task auto-continuation submits a prompt mid-turn and
@@ -1205,7 +1444,7 @@ func TestInteractiveReportCodexOverlappingTurnsCloseIndependently(t *testing.T) 
 	d := NewDispatcher(newFakeRecorder())
 	rt := &fakeInteractiveRuntime{arm: true, empty: true}
 	d.SetInteractiveRuntime(rt)
-	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
 	if err != nil {
 		t.Fatal(err)
 	}
