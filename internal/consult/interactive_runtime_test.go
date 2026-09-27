@@ -157,15 +157,18 @@ func TestInteractiveLaunchArgv(t *testing.T) {
 	}
 }
 
-// TestInteractiveLaunchClaudePromptIsArgvPositional verifies that a claude
-// interactive launch delivers the opening brief as claude's launch-time
-// positional prompt (see TmuxInteractiveRuntime.Launch), never a tmux paste.
-// A pasted brief arrives wrapped as <pasted_content>, which the model has
-// been observed to refuse as untrusted; an argv prompt arrives as a plain
-// user message. The brief here deliberately carries quotes, a backtick, a
-// dollar sign, and a newline, which must survive shellQuote round-tripping
-// intact so the pane's shell never reinterprets them.
-func TestInteractiveLaunchClaudePromptIsArgvPositional(t *testing.T) {
+// TestInteractiveLaunchClaudePromptGoesToBriefFileNotArgv verifies that a
+// claude interactive launch never inlines the opening brief into the tmux
+// launch command: tmux 3.6a rejects any client command over roughly 16 KiB
+// in total (see claudeArgvPromptLimit), a budget the brief's own quoting,
+// preamble, and the launch's other flags (--settings especially) already
+// compete for. Instead the brief goes to a private file, mode 0600, and the
+// launch argv's positional slot carries only a short $(cat '<path>') command
+// substitution, unquoted by the per-word shellQuote pass (so the pane's
+// shell actually expands it) with its path safely single-quoted. The brief
+// here deliberately carries quotes, a backtick, a dollar sign, and a
+// newline, which must round-trip byte-exact through the brief file.
+func TestInteractiveLaunchClaudePromptGoesToBriefFileNotArgv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
@@ -186,31 +189,74 @@ func TestInteractiveLaunchClaudePromptIsArgvPositional(t *testing.T) {
 		t.Fatal("new-window was never called")
 	}
 	command := launch[len(launch)-1]
-	words := shellCommandWords(command)
-	found := false
-	for _, w := range words {
-		if w == brief {
-			found = true
-			break
-		}
+	if strings.Contains(command, brief) {
+		t.Fatalf("brief must never be inlined into launch argv: %q", command)
 	}
-	if !found {
-		t.Fatalf("prompt %q not found intact as a positional word in argv; words=%#v\ncommand=%q", brief, words, command)
+	briefPath := dispatchBriefPath(dir, "d-argv")
+	wantWord := claudeBriefArgvWord(briefPath)
+	if !strings.HasSuffix(strings.TrimSpace(command), wantWord) {
+		t.Fatalf("launch argv positional = %q, want it to end with %q", command, wantWord)
 	}
-	// The prompt must not be embedded inside another flag's value (e.g. as
-	// part of --append-system-prompt or --settings JSON); it is its own word.
-	if strings.Contains(command, "--append-system-prompt") && strings.Contains(command, brief) {
-		for i, w := range words {
-			if w == "--append-system-prompt" && i+1 < len(words) && words[i+1] == brief {
-				t.Fatalf("prompt landed as an --append-system-prompt value instead of a bare positional: %q", command)
-			}
+	info, err := os.Stat(briefPath)
+	if err != nil {
+		t.Fatalf("brief file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("brief file mode = %o, want 0600", perm)
+	}
+	got, err := os.ReadFile(briefPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != brief {
+		t.Fatalf("brief file content = %q, want %q", got, brief)
+	}
+}
+
+// TestInteractiveLaunchClaudeBriefPathIsSafelyQuoted covers a brief-file path
+// containing a space and a single quote (an unusual but possible leo home),
+// asserting the $(cat ...) word in the launch argv round-trips through the
+// same shellQuote escaping every other launch argument uses.
+func TestInteractiveLaunchClaudeBriefPathIsSafelyQuoted(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a home's dir")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
 		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-quoted", Template: "claude", Cwd: dir, Name: "work", Prompt: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	command := launch[len(launch)-1]
+	briefPath := dispatchBriefPath(dir, "d-quoted")
+	wantWord := claudeBriefArgvWord(briefPath)
+	// The path's embedded single quote (from "a home's dir") must be escaped
+	// with the standard close-quote/escaped-quote/reopen-quote sequence, the
+	// same one shellQuote uses for every other launch argument.
+	if !strings.Contains(command, `home'"'"'s`) {
+		t.Fatalf("launch argv did not safely quote the brief path's embedded quote: %q", command)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(command), wantWord) {
+		t.Fatalf("launch argv positional = %q, want it to end with %q", command, wantWord)
+	}
+	if _, err := os.Stat(briefPath); err != nil {
+		t.Fatalf("brief file: %v", err)
 	}
 }
 
 // TestInteractiveLaunchClaudeArgvPromptAtLimit is the "still fits" side of
-// the claudeArgvPromptLimit boundary: a brief exactly at the limit still
-// travels as claude's launch-time positional argument.
+// the claudeArgvPromptLimit boundary: a brief exactly at the limit is still
+// written to a brief file and referenced via $(cat ...) rather than falling
+// back to a tmux paste.
 func TestInteractiveLaunchClaudeArgvPromptAtLimit(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -229,15 +275,19 @@ func TestInteractiveLaunchClaudeArgvPromptAtLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := launch[len(launch)-1]
-	if !slices.Contains(shellCommandWords(command), brief) {
-		t.Fatal("a brief exactly at claudeArgvPromptLimit was not delivered as an argv positional")
+	briefPath := dispatchBriefPath(dir, "d-atlimit")
+	if !strings.HasSuffix(strings.TrimSpace(command), claudeBriefArgvWord(briefPath)) {
+		t.Fatal("a brief exactly at claudeArgvPromptLimit was not delivered via a brief file")
+	}
+	if got, err := os.ReadFile(briefPath); err != nil || string(got) != brief {
+		t.Fatalf("brief file content mismatch: err=%v", err)
 	}
 }
 
 // TestInteractiveLaunchClaudeArgvPromptOverLimitFallsBackToPaste is the
 // "too big" side: one byte over claudeArgvPromptLimit must never land in the
-// launch argv at all, so injectOpening's tmux-paste fallback (interactive.go)
-// is what delivers it instead.
+// launch argv, or in a brief file, at all — injectOpening's tmux-paste
+// fallback (interactive.go) is what delivers it instead.
 func TestInteractiveLaunchClaudeArgvPromptOverLimitFallsBackToPaste(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -256,6 +306,9 @@ func TestInteractiveLaunchClaudeArgvPromptOverLimitFallsBackToPaste(t *testing.T
 		t.Fatal(err)
 	}
 	command := launch[len(launch)-1]
+	if _, err := os.Stat(dispatchBriefPath(dir, "d-overlimit")); !os.IsNotExist(err) {
+		t.Fatalf("oversized brief must not get a brief file: stat err=%v", err)
+	}
 	if strings.Contains(command, brief) {
 		t.Fatal("an oversized brief must not be inlined into launch argv; it must fall back to a tmux paste")
 	}

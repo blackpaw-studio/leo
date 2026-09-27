@@ -109,6 +109,12 @@ func TestTmuxRuntimeRunFileCleanup(t *testing.T) {
 	if err := os.WriteFile(agentFile, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A claude opening brief (see claudeDeliversPromptViaArgv) leaves a
+	// second per-dispatch file behind, under its own directory; it must be
+	// cleaned up on exactly the same schedule as the settings spill.
+	briefGone := writeBrief(t, home, "d-a")
+	briefKept := writeBrief(t, home, "d-b")
+	briefOrphan := writeBrief(t, home, "d-c")
 
 	rt.ReleaseRunFiles("d-a")
 	rt.ReleaseRunFiles("../../escape")
@@ -116,9 +122,25 @@ func TestTmuxRuntimeRunFileCleanup(t *testing.T) {
 
 	assertGone(t, gone)
 	assertGone(t, orphan)
-	for _, p := range []string{kept, agentFile} {
+	assertGone(t, briefGone)
+	assertGone(t, briefOrphan)
+	for _, p := range []string{kept, agentFile, briefKept} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("%s removed: %v", p, err)
 		}
 	}
+}
+
+// writeBrief writes a dispatch id's opening-brief file directly (bypassing
+// Launch) so run-file cleanup tests can assert on it independently.
+func writeBrief(t *testing.T, home, id string) string {
+	t.Helper()
+	path := dispatchBriefPath(home, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("brief for "+id), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
