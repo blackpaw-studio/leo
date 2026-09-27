@@ -1227,3 +1227,60 @@ func TestInteractiveReportCodexOverlappingTurnsCloseIndependently(t *testing.T) 
 		t.Fatalf("after stop a record=%+v", rec)
 	}
 }
+
+// A background task's notification can reach the prompt before a prompt
+// the orchestrator just sent. It must not claim that armed turn, or its Stop
+// would report the sent prompt finished before it ever ran.
+func TestInteractiveReportClaudeTaskNotificationNeverClaimsArmedTurn(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := d.Send(context.Background(), id, "do the thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "<task-notification>background command finished</task-notification>")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if st := turnByID(rec, sent.TurnID); st.Delivered || st.Outcome != "" || rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("after notification sent=%+v record=%+v", st, rec)
+	}
+	if err := d.Report(id, claudeHook(t, "stop-2", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.Get(id)
+	if st := turnByID(rec, sent.TurnID); st.Delivered || st.Outcome != "" {
+		t.Fatalf("notification stop closed sent turn=%+v", st)
+	}
+	if err := d.Report(id, claudeHook(t, "submit-3", "UserPromptSubmit", "do the thing")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.Get(id)
+	if st := turnByID(rec, sent.TurnID); !st.Delivered || st.Outcome != "" {
+		t.Fatalf("real submit did not deliver sent turn=%+v", st)
+	}
+	if err := d.Report(id, claudeHook(t, "stop-3", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.Get(id)
+	if st := turnByID(rec, sent.TurnID); st.Outcome != TurnFinished || rec.Status != StatusIdle || rec.Steered {
+		t.Fatalf("after real stop sent=%+v record=%+v", st, rec)
+	}
+}
+
+// Only the whole-prompt envelope is an injection; a human quoting the tag
+// is still steering.
+func TestInteractiveReportClaudeHumanTextStartingWithTagSteers(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "<task-notification> why did that fire?")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if !rec.Steered {
+		t.Fatalf("human text starting with tag did not steer: %+v", rec)
+	}
+}

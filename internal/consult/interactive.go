@@ -294,6 +294,12 @@ func (d *Dispatcher) openTurnLocked(s *runState, source TurnSource, text string,
 			d.closeTurnLocked(s, s.record.Turns[i].TurnID, TurnLost, "")
 		}
 	}
+	return d.appendTurnLocked(s, source, text, held)
+}
+
+// appendTurnLocked opens a turn without expiring undelivered orchestrator
+// turns; openTurnLocked is the default.
+func (d *Dispatcher) appendTurnLocked(s *runState, source TurnSource, text string, held bool) *Turn {
 	t := Turn{TurnID: fmt.Sprintf("%s#%d", s.record.ID, len(s.record.Turns)+1), Source: source, StartedAt: d.now(), Text: text, SlotHeld: held}
 	s.record.Turns = append(s.record.Turns, t)
 	s.record.Status = StatusQueued
@@ -519,37 +525,37 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			fmt.Fprintf(os.Stderr, "dispatch %s: ignoring submit for closed harness turn %s\n", id, hid)
 			return nil
 		}
+		prompt := str(p, "prompt")
+		injected := isHarnessInjection(prompt)
 		var delivered *Turn
-		if s.armedTurn != "" && d.now().Before(s.armedUntil) {
+		if !injected && s.armedTurn != "" && d.now().Before(s.armedUntil) {
 			delivered = d.deliverTurnLocked(s, s.armedTurn, hid)
+		} else if matched := d.matchSubmitLocked(s, prompt, hid, injected); matched != nil {
+			delivered = matched
 		} else {
-			prompt := str(p, "prompt")
-			attributed, matched := false, (*Turn)(nil)
-			if prompt != "" {
-				matched = d.deliverOldestMatchingTurnLocked(s, prompt, hid)
-				attributed = matched != nil
+			// Only a prompt a human typed steers the run; Claude Code's own
+			// injections (background-task notifications) do not.
+			if !injected {
+				s.record.Steered = true
 			}
-			if !attributed {
-				// Only a prompt a human typed steers the run; Claude Code's
-				// own injections (background-task notifications) do not.
-				if !isHarnessInjection(prompt) {
-					s.record.Steered = true
-				}
-				if hid == "" && hasWorkingTurnLocked(s) {
-					// Claude carries no turn id and drains queued prompts
-					// (typed or injected) inside the running turn, before a
-					// single Stop. Fold into the working turn, however long it
-					// was hook-silent: a separate turn would never close
-					// (#211), and closing this one would report it lost while
-					// it is still working.
-					d.persistLocked(s, "")
-					return nil
-				}
-				t := d.openTurnLocked(s, TurnSourceUser, "", false)
-				t.HarnessTurnID = hid
+			if hid == "" && hasWorkingTurnLocked(s) {
+				// Claude carries no turn id and drains queued prompts (typed
+				// or injected) inside the running turn, before a single Stop.
+				// Fold into the working turn, however long it was hook-silent:
+				// a separate turn would never close (#211), and closing this
+				// one would report it lost while it is still working.
+				d.persistLocked(s, "")
+				return nil
+			}
+			var t *Turn
+			if injected {
+				// Claude started a turn on its own; a sent prompt still
+				// waiting to submit keeps waiting rather than being lost.
+				t = d.appendTurnLocked(s, TurnSourceUser, "", false)
 			} else {
-				delivered = matched
+				t = d.openTurnLocked(s, TurnSourceUser, "", false)
 			}
+			t.HarnessTurnID = hid
 		}
 		closeApplied := false
 		if hid != "" {
@@ -657,25 +663,36 @@ func (d *Dispatcher) closeHarnessLocked(s *runState, hid string, o TurnOutcome, 
 	return found
 }
 
-// hasWorkingTurnLocked reports an open turn the harness is executing: a user
-// turn, or an orchestrator turn that was delivered. Armed-but-undelivered
-// orchestrator turns are not running yet.
-// harnessInjectionMarkers open prompts the harness submits on its own, which
-// fire UserPromptSubmit exactly like a typed prompt.
+// harnessInjectionMarkers are the envelope tags of prompts the harness
+// submits on its own, which fire UserPromptSubmit like a typed prompt.
 var harnessInjectionMarkers = []string{
-	"<task-notification>", // Claude Code: a background task finished
+	"task-notification", // Claude Code: a background task finished
 }
 
+// isHarnessInjection reports whether the whole prompt is one injection
+// envelope, so a human quoting a tag still counts as typing.
 func isHarnessInjection(prompt string) bool {
-	prompt = strings.TrimLeft(prompt, " \t\r\n")
+	prompt = strings.TrimSpace(prompt)
 	for _, m := range harnessInjectionMarkers {
-		if strings.HasPrefix(prompt, m) {
+		if strings.HasPrefix(prompt, "<"+m+">") && strings.HasSuffix(prompt, "</"+m+">") {
 			return true
 		}
 	}
 	return false
 }
 
+// matchSubmitLocked attributes a submit to a sent turn by prompt text. A
+// harness injection never claims a sent turn.
+func (d *Dispatcher) matchSubmitLocked(s *runState, prompt, hid string, injected bool) *Turn {
+	if injected || prompt == "" {
+		return nil
+	}
+	return d.deliverOldestMatchingTurnLocked(s, prompt, hid)
+}
+
+// hasWorkingTurnLocked reports an open turn the harness is executing: a user
+// turn, or an orchestrator turn that was delivered. Armed-but-undelivered
+// orchestrator turns are not running yet.
 func hasWorkingTurnLocked(s *runState) bool {
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" && (t.Source == TurnSourceUser || t.Delivered) {
@@ -684,7 +701,17 @@ func hasWorkingTurnLocked(s *runState) bool {
 	}
 	return false
 }
+
+// closeOldestLocked closes the oldest working turn, falling back to the
+// oldest open one: a sent prompt still waiting to submit is not what the
+// harness just stopped on.
 func (d *Dispatcher) closeOldestLocked(s *runState, o TurnOutcome, text string) {
+	for _, t := range s.record.Turns {
+		if t.Outcome == "" && (t.Source == TurnSourceUser || t.Delivered) {
+			d.closeTurnLocked(s, t.TurnID, o, text)
+			return
+		}
+	}
 	for i := range s.record.Turns {
 		if s.record.Turns[i].Outcome == "" {
 			d.closeTurnLocked(s, s.record.Turns[i].TurnID, o, text)
