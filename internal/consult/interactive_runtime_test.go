@@ -208,6 +208,59 @@ func TestInteractiveLaunchClaudePromptIsArgvPositional(t *testing.T) {
 	}
 }
 
+// TestInteractiveLaunchClaudeArgvPromptAtLimit is the "still fits" side of
+// the claudeArgvPromptLimit boundary: a brief exactly at the limit still
+// travels as claude's launch-time positional argument.
+func TestInteractiveLaunchClaudeArgvPromptAtLimit(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	brief := strings.Repeat("a", claudeArgvPromptLimit)
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-atlimit", Template: "claude", Cwd: dir, Name: "work", Prompt: brief}); err != nil {
+		t.Fatal(err)
+	}
+	command := launch[len(launch)-1]
+	if !slices.Contains(shellCommandWords(command), brief) {
+		t.Fatal("a brief exactly at claudeArgvPromptLimit was not delivered as an argv positional")
+	}
+}
+
+// TestInteractiveLaunchClaudeArgvPromptOverLimitFallsBackToPaste is the
+// "too big" side: one byte over claudeArgvPromptLimit must never land in the
+// launch argv at all, so injectOpening's tmux-paste fallback (interactive.go)
+// is what delivers it instead.
+func TestInteractiveLaunchClaudeArgvPromptOverLimitFallsBackToPaste(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	cfg := &config.Config{HomePath: dir, Templates: map[string]config.TemplateConfig{"claude": {Harness: "claude", Model: "sonnet"}}}
+	r := NewInteractiveRuntime("/tmp/leo.yaml", func() (*config.Config, error) { return cfg, nil }, nil, "tmux", "/opt/leo")
+	brief := strings.Repeat("a", claudeArgvPromptLimit+1)
+	var launch []string
+	r.ExecCommandContext = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "new-window") {
+			launch = append([]string(nil), args...)
+			return exec.Command("echo", "%42")
+		}
+		return exec.Command("true")
+	}
+	if _, _, err := r.Launch(context.Background(), LaunchRequest{ID: "d-overlimit", Template: "claude", Cwd: dir, Name: "work", Prompt: brief}); err != nil {
+		t.Fatal(err)
+	}
+	command := launch[len(launch)-1]
+	if strings.Contains(command, brief) {
+		t.Fatal("an oversized brief must not be inlined into launch argv; it must fall back to a tmux paste")
+	}
+}
+
 func TestInteractiveClaudeDispatchLaunchProfile(t *testing.T) {
 	home := t.TempDir()
 	registry := filepath.Join(home, ".claude", "plugins", "installed_plugins.json")

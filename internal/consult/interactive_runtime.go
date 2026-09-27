@@ -24,6 +24,26 @@ const interactiveWaitDelay = 100 * time.Millisecond
 const defaultStartupTimeout = 60 * time.Second
 const defaultStartupPollInterval = 500 * time.Millisecond
 
+// claudeArgvPromptLimit caps how large an opening brief may be before it
+// travels as claude's launch-time positional argument (see
+// TmuxInteractiveRuntime.Launch and injectOpening). macOS/Linux ARG_MAX is
+// measured in single-digit megabytes — this limit exists to keep the tmux
+// launch command (itself shell-quoted and round-tripped through tmux's own
+// control-mode protocol) comfortably small, not to approach an OS ceiling.
+// 64 KiB comfortably fits any real dispatch brief with wide headroom; above
+// it, the opening turn falls back to the existing tmux-paste injection.
+const claudeArgvPromptLimit = 64 * 1024
+
+// claudeDeliversPromptViaArgv reports whether an opening brief of this size
+// is delivered as claude's launch-time positional argument rather than a
+// tmux paste. Both interactive_runtime.go (building the launch spec) and
+// interactive.go (arming turn 1 before Launch, and later deciding whether
+// injectOpening has anything left to do) must agree on this, so it is one
+// pure function shared by both.
+func claudeDeliversPromptViaArgv(harnessName, prompt string) bool {
+	return harnessName == "claude" && len(prompt) <= claudeArgvPromptLimit
+}
+
 // ErrNotReady means a new harness pane did not render an empty composer before
 // the bounded opening-injection wait elapsed.
 type ErrNotReady struct{ Screen string }
@@ -92,12 +112,13 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env)
 	}
 	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
-	if h.Name() == "claude" {
+	if claudeDeliversPromptViaArgv(h.Name(), req.Prompt) {
 		// Claude delivers the opening brief as a plain launch-time argument
 		// instead of a tmux paste: a pasted brief arrives wrapped as
 		// <pasted_content>, which the model can refuse as untrusted (see
-		// injectOpening in interactive.go). Other harnesses keep injecting
-		// the opening turn once the pane's composer is ready.
+		// injectOpening in interactive.go). Other harnesses, and an
+		// oversized claude brief, keep injecting the opening turn once the
+		// pane's composer is ready.
 		spec.Prompt = req.Prompt
 	}
 	args, err := h.Args(spec)

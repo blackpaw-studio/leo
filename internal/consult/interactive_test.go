@@ -1139,6 +1139,32 @@ func TestInteractiveClaudeOpeningNeverPastesViaTmux(t *testing.T) {
 	}
 }
 
+// TestInteractiveClaudeOversizedOpeningFallsBackToPaste is the "too big" side
+// of TestInteractiveClaudeOpeningNeverPastesViaTmux: a brief over
+// claudeArgvPromptLimit must never be armed ahead of Launch (there is no
+// argv delivery to race), and must instead flow through the ordinary
+// tmux-paste opening injection, exactly like a non-claude harness.
+func TestInteractiveClaudeOversizedOpeningFallsBackToPaste(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	big := strings.Repeat("a", claudeArgvPromptLimit+1)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: big, Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	if got := rt.firstInjection(); got != dispatchPreamble+" "+big {
+		t.Fatal("oversized claude brief was not delivered via the tmux-paste fallback")
+	}
+	d.mu.Lock()
+	armedBeforeReport := d.runs[started.ID].armedTurn
+	d.mu.Unlock()
+	if armedBeforeReport == "" {
+		t.Fatal("oversized brief's turn 1 was not armed by injection's own arm callback")
+	}
+}
+
 // TestInteractiveCodexOpeningStillInjects is the control for
 // TestInteractiveClaudeOpeningNeverPastesViaTmux: codex's opening turn keeps
 // going through the tmux-TUI driver's paste-based injection unchanged.
@@ -1214,6 +1240,94 @@ func TestInteractiveClaudeOpeningLateAckDeliversTurn1ByText(t *testing.T) {
 	}
 	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != "" || rec.Steered || rec.Status != StatusRunning {
 		t.Fatalf("late-ack opening submit was not delivered as turn 1: %+v", rec.Turns)
+	}
+}
+
+// findSoleRunID returns the id of the single in-flight run, for use from
+// inside a fake runtime's Launch hook: Start has not returned yet, so the
+// test has no other way to learn the dispatch id it should report against.
+func findSoleRunID(t *testing.T, d *Dispatcher) string {
+	t.Helper()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.runs) != 1 {
+		t.Fatalf("expected exactly one in-flight run, got %d", len(d.runs))
+	}
+	for id := range d.runs {
+		return id
+	}
+	return ""
+}
+
+// TestInteractiveClaudeSubmitDuringLaunchDeliversTurn1 covers claude
+// submitting its argv-delivered opening brief (via the hook's own "leo
+// dispatch report" process) before Launch even returns to startInteractive,
+// let alone before Publish or the async injectOpening goroutine run. Turn 1
+// must already be armed at that point (armed before Launch, not after), so
+// the submit delivers turn 1 instead of being read as unarmed and opening a
+// second, steered turn — which would also flip status to Running before
+// Publish's guard, making Publish reject the pane as already-Queued and get
+// it killed.
+func TestInteractiveClaudeSubmitDuringLaunchDeliversTurn1(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	rt.launchHook = func() {
+		id := findSoleRunID(t, d)
+		if err := d.Report(id, claudeHook(t, "submit-1", "UserPromptSubmit", dispatchPreamble+" hello")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != "" || rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("submit racing launch = %+v", rec.Turns)
+	}
+	if got := rt.killCount(); got != 0 {
+		t.Fatalf("pane killed after a submit that raced launch: %d kills", got)
+	}
+}
+
+// TestInteractiveClaudeSubmitAndStopDuringLaunchFinishesTurn1 extends the
+// above with a same-turn Stop, also fired before Launch returns: claude can
+// answer and go idle faster than tmux confirms the pane. Publish must still
+// accept the record (now Idle, not merely Running) and must not kill the
+// live pane.
+func TestInteractiveClaudeSubmitAndStopDuringLaunchFinishesTurn1(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	rt.launchHook = func() {
+		id := findSoleRunID(t, d)
+		if err := d.Report(id, claudeHook(t, "submit-1", "UserPromptSubmit", dispatchPreamble+" hello")); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.Get(started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Turns) != 1 || !rec.Turns[0].Delivered || rec.Turns[0].Outcome != TurnFinished || rec.Steered || rec.Status != StatusIdle {
+		t.Fatalf("submit+stop racing launch = %+v record=%+v", rec.Turns, rec)
+	}
+	if got := rt.killCount(); got != 0 {
+		t.Fatalf("pane killed after submit+stop that raced launch: %d kills", got)
+	}
+	if rec.PaneID == "" {
+		t.Fatal("record lost its pane after a fast-finishing opening turn")
 	}
 }
 

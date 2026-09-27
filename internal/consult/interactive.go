@@ -159,6 +159,15 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	}
 	d.mu.Lock()
 	t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, true)
+	if claudeDeliversPromptViaArgv(harnessName, prompt) {
+		// Claude submits the argv-delivered opening brief itself, as an
+		// ordinary UserPromptSubmit, which can arrive (via the hook's own
+		// "leo dispatch report" process) before Launch even returns, let
+		// alone before the async injectOpening goroutine below would have
+		// armed it. Arm turn 1 here, under the same lock that opened it, so
+		// no hook can ever observe it unarmed.
+		d.armTurnLocked(s, t.TurnID)
+	}
 	d.persistLocked(s, "status")
 	d.persistLocked(s, "turn")
 	d.mu.Unlock()
@@ -193,7 +202,11 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 	published := d.placement.Publish(placementRecord.ID, func() bool {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if s.record.Status != StatusQueued {
+		// A claude opening turn armed before Launch can already have been
+		// delivered (Running) or even finished (Idle) by the time Launch
+		// returns, if its hook raced ahead of this goroutine. Any
+		// non-terminal, non-settling status still has a live pane to attach.
+		if s.record.Status.Terminal() || s.record.Status == StatusSettling {
 			return false
 		}
 		s.record.PaneID = pane
@@ -221,18 +234,38 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 		}
 		return Started{}, context.Canceled
 	}
-	go d.injectOpening(ctx, s, rt, t.TurnID, pane, prompt)
+	go d.injectOpening(ctx, s, rt, harnessName, t.TurnID, pane, prompt)
 	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Placement: placement.Kind, Pane: pane, Window: window}, nil
 }
 
 // injectOpening deliberately runs after Start returns: the TUI's readiness
 // probe can take a minute, while launch itself is the only synchronous error.
-func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt InteractiveRuntime, turnID, pane, prompt string) {
+func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt InteractiveRuntime, harnessName, turnID, pane, prompt string) {
 	if d.beforeOpeningInject != nil {
 		d.beforeOpeningInject()
 	}
 	if d.afterOpeningInject != nil {
 		defer d.afterOpeningInject()
+	}
+	if claudeDeliversPromptViaArgv(harnessName, prompt) {
+		// Claude's opening brief travels as its launch-time positional
+		// argument (see TmuxInteractiveRuntime.Launch), not a tmux paste: a
+		// pasted brief arrives wrapped as <pasted_content>, which the model
+		// can refuse as untrusted. Claude submits turn 1 itself at startup,
+		// so turn 1 is armed synchronously in startInteractive, before
+		// Launch, rather than here — that hook can race ahead of this
+		// goroutine even being scheduled. There is nothing left to inject;
+		// only reconcile an orphaned pane if the run settled, or moved to a
+		// different pane, in the meantime.
+		d.mu.Lock()
+		settled := s.record.Status.Terminal() || s.record.Status == StatusSettling
+		paneChanged := s.record.PaneID != pane
+		rec := cloneRecord(s.record)
+		d.mu.Unlock()
+		if settled || paneChanged {
+			_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
+		}
+		return
 	}
 	d.mu.Lock()
 	settled := s.record.Status.Terminal() || s.record.Status == StatusSettling
@@ -252,7 +285,11 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 		_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
 		return
 	}
-	arm := func() error {
+	injection := rt.Inject
+	if opening, ok := rt.(openingInteractiveRuntime); ok {
+		injection = opening.InjectOpening
+	}
+	err := injection(ctx, pane, prompt, func() error {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		if s.record.Status.Terminal() || s.record.Status == StatusSettling || turnByID(s.record, turnID).Outcome != "" {
@@ -261,24 +298,7 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 		d.armTurnLocked(s, turnID)
 		d.persistLocked(s, "turn")
 		return nil
-	}
-	var err error
-	if s.record.Harness == "claude" {
-		// Claude's opening brief travels as its launch-time positional
-		// argument (see TmuxInteractiveRuntime.Launch), not a tmux paste:
-		// a pasted brief arrives wrapped as <pasted_content>, which the
-		// model can refuse as untrusted. Claude submits turn 1 itself at
-		// startup, so there is nothing to inject here — only arm the turn
-		// so the resulting UserPromptSubmit hook attributes to it instead
-		// of being read as a steered or lost turn.
-		err = arm()
-	} else {
-		injection := rt.Inject
-		if opening, ok := rt.(openingInteractiveRuntime); ok {
-			injection = opening.InjectOpening
-		}
-		err = injection(ctx, pane, prompt, arm)
-	}
+	})
 	if err == nil {
 		return
 	}
