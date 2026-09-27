@@ -17,6 +17,11 @@ import (
 func TestSweepInteractivePaneAbsenceLiveness(t *testing.T) {
 	t.Run("absent pane closes the run and releases waiters", func(t *testing.T) {
 		d, _, id := releaseState(t, StatusIdle)
+		// A run that's genuinely idle (rather than mid-turn) has already
+		// finished at least one turn; finishInteractiveLocked demotes a
+		// closing idle-with-no-turns record to failed, so give it one to
+		// match the real "idle, then the pane vanished" scenario.
+		d.runs[id].record.Turns = []Turn{{TurnID: "t1", Outcome: TurnFinished}}
 		now := time.Now()
 		d.now = func() time.Time { return now }
 		d.SetInteractiveRuntime(presenceInteractiveRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{}, presence: PaneAbsent})
@@ -47,8 +52,8 @@ func TestSweepInteractivePaneAbsenceLiveness(t *testing.T) {
 		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if got := d.runs[id].record.Status; !got.Terminal() {
-			t.Fatalf("final status = %s, want terminal", got)
+		if got := d.runs[id].record.Status; got != StatusClosed {
+			t.Fatalf("final status = %s, want closed", got)
 		}
 	})
 

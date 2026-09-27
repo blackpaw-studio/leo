@@ -200,19 +200,23 @@ the complete session history.
 
 ## Headless viewer windows
 
-Headless `leo_dispatch` opens a detached viewer window on Leo's dedicated tmux server
-(`tmux -L leo`). If its caller is a live supervised agent, the window is added
-to that agent's `leo-<caller>` session. Otherwise Leo creates or reuses the
-`leo-dispatch` session. The window is named `<label>·<hex4>`, using the run
-name when set or its template otherwise; labels replace whitespace, `:`, and
-`.` with `-` and are truncated to 24 characters. It runs `leo dispatch watch
-<id>` with `remain-on-exit` enabled. The window closes when a successful
-result is collected via `leo_wait`, `leo dispatch run`, or web
+Headless `leo_dispatch` opens a detached viewer on Leo's dedicated tmux server
+(`tmux -L leo`), placed the same way as an interactive dispatch: usually a
+split pane in the caller's own tmux window (subject to the `pane|window`
+placement setting and the pane cap), falling back to a separate window when a
+split isn't possible or the caller can't be resolved. If its caller is a live
+supervised agent, a fallback window is added to that agent's `leo-<caller>`
+session; otherwise Leo creates or reuses the `leo-dispatch` session. Either
+way it's labeled `<label>·<hex4>`, using the run name when set or its
+template otherwise; labels replace whitespace, `:`, and `.` with `-` and are
+truncated to 24 characters. It runs `leo dispatch watch <id>` with
+`remain-on-exit` enabled. The pane or window closes when a successful result
+is collected via `leo_wait`, `leo dispatch run`, or web
 `/api/dispatch/wait`. Failed, canceled, and timed-out runs remain open for
 about one hour for post-mortem inspection. Use `leo dispatch watch <id>` to
 replay the stream anytime. Tmux is observability only: any tmux failure is
 logged and never prevents a dispatch from running. `leo_consult` does not open
-a window.
+a pane or window.
 
 ## Records and limits
 
