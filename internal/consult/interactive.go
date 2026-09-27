@@ -587,7 +587,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 		}
 		text := str(p, "last_assistant_message")
 		if hid == "" {
-			d.closeOldestLocked(s, out, text)
+			d.closeWorkingLocked(s, out, text)
 		} else if !d.closeHarnessLocked(s, hid, out, text) {
 			s.pendingCloses[hid] = pendingClose{out, text, d.now().Add(unmatchedGrace)}
 		}
@@ -702,15 +702,23 @@ func hasWorkingTurnLocked(s *runState) bool {
 	return false
 }
 
-// closeOldestLocked closes the oldest working turn, falling back to the
-// oldest open one: a sent prompt still waiting to submit is not what the
-// harness just stopped on.
-func (d *Dispatcher) closeOldestLocked(s *runState, o TurnOutcome, text string) {
+// closeWorkingLocked handles an id-less close, which Claude fires once the
+// session goes idle: every working turn ends on it, since turns drained in one
+// agent loop share a single Stop. With none working it falls back to the
+// oldest open turn; a sent prompt still waiting to submit is otherwise left
+// pending.
+func (d *Dispatcher) closeWorkingLocked(s *runState, o TurnOutcome, text string) {
+	var working []string
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" && (t.Source == TurnSourceUser || t.Delivered) {
-			d.closeTurnLocked(s, t.TurnID, o, text)
-			return
+			working = append(working, t.TurnID)
 		}
+	}
+	for _, id := range working {
+		d.closeTurnLocked(s, id, o, text)
+	}
+	if len(working) > 0 {
+		return
 	}
 	for i := range s.record.Turns {
 		if s.record.Turns[i].Outcome == "" {

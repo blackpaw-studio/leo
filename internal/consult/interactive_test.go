@@ -1284,3 +1284,31 @@ func TestInteractiveReportClaudeHumanTextStartingWithTagSteers(t *testing.T) {
 		t.Fatalf("human text starting with tag did not steer: %+v", rec)
 	}
 }
+
+// Claude can drain a task-notification and a sent prompt in one agent loop
+// and fire a single id-less Stop. That Stop means the session went idle, so
+// every delivered turn finishes on it.
+func TestInteractiveReportClaudeSingleStopClosesNotificationAndSentTurns(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := d.Send(context.Background(), id, "do the thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "<task-notification>background command finished</task-notification>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(id, claudeHook(t, "submit-3", "UserPromptSubmit", "do the thing")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(id, claudeHook(t, "stop-2", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if len(rec.Turns) != 3 || rec.Turns[2].Outcome != TurnFinished || turnByID(rec, sent.TurnID).Outcome != TurnFinished || rec.Status != StatusIdle || rec.Steered {
+		t.Fatalf("single stop record=%+v", rec)
+	}
+}
