@@ -1131,7 +1131,35 @@ func TestInteractiveReportClaudeSubmitWhileIdleOpensUserTurn(t *testing.T) {
 	}
 }
 
-func TestInteractiveReportClaudeSubmitAfterStallMarksTurnLost(t *testing.T) {
+// A long-running background command leaves the turn hook-silent past
+// stalledAfter; its <task-notification> drains mid-turn as a
+// UserPromptSubmit with no Stop in between. That is Claude Code talking to
+// itself: the running turn keeps going and nobody steered (d-8718bd14921d).
+func TestInteractiveReportClaudeTaskNotificationAfterQuietIsNotATurn(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	now = now.Add(stalledAfter + 4*time.Minute)
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != "" || rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("task-notification submit record=%+v", rec)
+	}
+	now = now.Add(time.Minute)
+	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.Get(id)
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Steered || rec.Status != StatusIdle {
+		t.Fatalf("after stop record=%+v", rec)
+	}
+}
+
+// A human typing mid-turn is real steering, but Claude drains the queued
+// prompt inside the running turn: no Stop comes between, so the running
+// turn must not be marked lost however quiet it was.
+func TestInteractiveReportClaudeHumanSubmitMidTurnSteersWithoutLosingTurn(t *testing.T) {
 	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
 	d, _, id := startClaudeInteractive(t, &now)
 	now = now.Add(stalledAfter)
@@ -1139,8 +1167,37 @@ func TestInteractiveReportClaudeSubmitAfterStallMarksTurnLost(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec, _ := d.Get(id)
-	if len(rec.Turns) != 2 || rec.Turns[0].Outcome != TurnLost || rec.Turns[1].Source != TurnSourceUser || rec.Turns[1].Outcome != "" || !rec.Steered || rec.Status != StatusRunning {
-		t.Fatalf("stalled submit record=%+v", rec)
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != "" || !rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("mid-turn human submit record=%+v", rec)
+	}
+	now = now.Add(time.Second)
+	if err := d.Report(id, claudeHook(t, "submit-3", "UserPromptSubmit", "<task-notification>background command finished</task-notification>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.Get(id)
+	if len(rec.Turns) != 1 || rec.Turns[0].Outcome != TurnFinished || rec.Status != StatusIdle || !rec.Steered {
+		t.Fatalf("after stop record=%+v", rec)
+	}
+}
+
+// A background task finishing after Stop makes Claude start a turn on its
+// own. Track it so the run reads busy, but nobody typed anything.
+func TestInteractiveReportClaudeTaskNotificationWhileIdleDoesNotSteer(t *testing.T) {
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	d, _, id := startClaudeInteractive(t, &now)
+	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "<task-notification>background command finished</task-notification>")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(id)
+	if len(rec.Turns) != 2 || rec.Turns[0].Outcome != TurnFinished || rec.Turns[1].Outcome != "" || rec.Steered || rec.Status != StatusRunning {
+		t.Fatalf("idle task-notification record=%+v", rec)
 	}
 }
 
@@ -1168,30 +1225,5 @@ func TestInteractiveReportCodexOverlappingTurnsCloseIndependently(t *testing.T) 
 	rec, _ = d.Get(started.ID)
 	if rec.Turns[0].Outcome != TurnFinished || rec.Status != StatusIdle {
 		t.Fatalf("after stop a record=%+v", rec)
-	}
-}
-
-func TestInteractiveReportClaudeSubmitAfterStallThenMidTurnSubmitFolds(t *testing.T) {
-	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
-	d, _, id := startClaudeInteractive(t, &now)
-	now = now.Add(stalledAfter)
-	if err := d.Report(id, claudeHook(t, "submit-2", "UserPromptSubmit", "typed by a human")); err != nil {
-		t.Fatal(err)
-	}
-	now = now.Add(time.Second)
-	if err := d.Report(id, claudeHook(t, "submit-3", "UserPromptSubmit", "<task-notification>background command finished</task-notification>")); err != nil {
-		t.Fatal(err)
-	}
-	rec, _ := d.Get(id)
-	if len(rec.Turns) != 2 || rec.Turns[0].Source != TurnSourceOrchestrator || rec.Turns[0].Outcome != TurnLost ||
-		rec.Turns[1].Source != TurnSourceUser || rec.Turns[1].Outcome != "" || rec.Status != StatusRunning {
-		t.Fatalf("stall then mid-turn submit record=%+v", rec)
-	}
-	if err := d.Report(id, claudeHook(t, "stop-1", "Stop", "")); err != nil {
-		t.Fatal(err)
-	}
-	rec, _ = d.Get(id)
-	if len(rec.Turns) != 2 || rec.Turns[1].Outcome != TurnFinished || rec.Status != StatusIdle {
-		t.Fatalf("after stop record=%+v", rec)
 	}
 }

@@ -298,7 +298,6 @@ func (d *Dispatcher) openTurnLocked(s *runState, source TurnSource, text string,
 	s.record.Turns = append(s.record.Turns, t)
 	s.record.Status = StatusQueued
 	if source == TurnSourceUser {
-		s.record.Steered = true
 		s.record.Status = StatusRunning
 		s.record.startActive(d.now())
 	}
@@ -488,7 +487,6 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 	if s.closedHarness == nil {
 		s.closedHarness = map[string]bool{}
 	}
-	priorHook := s.record.HookActivity
 	if r.EventID != "" { // keep a bounded dedup set in pending map namespace
 		key := "@" + r.EventID
 		if _, ok := s.pendingCloses[key]; ok {
@@ -532,20 +530,18 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 				attributed = matched != nil
 			}
 			if !attributed {
-				if hid == "" && !priorHook.IsZero() && d.now().Sub(priorHook) >= stalledAfter {
-					for i := range s.record.Turns {
-						t := &s.record.Turns[i]
-						if t.Source == TurnSourceOrchestrator && t.Delivered && t.Outcome == "" {
-							d.closeTurnLocked(s, t.TurnID, TurnLost, "")
-							break
-						}
-					}
+				// Only a prompt a human typed steers the run; Claude Code's
+				// own injections (background-task notifications) do not.
+				if !isHarnessInjection(prompt) {
+					s.record.Steered = true
 				}
 				if hid == "" && hasWorkingTurnLocked(s) {
-					// Claude carries no turn id, and its background-task
-					// auto-continuation submits mid-turn before a single
-					// Stop. Fold it into the working turn; a separate turn
-					// would never close (#211).
+					// Claude carries no turn id and drains queued prompts
+					// (typed or injected) inside the running turn, before a
+					// single Stop. Fold into the working turn, however long it
+					// was hook-silent: a separate turn would never close
+					// (#211), and closing this one would report it lost while
+					// it is still working.
 					d.persistLocked(s, "")
 					return nil
 				}
@@ -664,6 +660,22 @@ func (d *Dispatcher) closeHarnessLocked(s *runState, hid string, o TurnOutcome, 
 // hasWorkingTurnLocked reports an open turn the harness is executing: a user
 // turn, or an orchestrator turn that was delivered. Armed-but-undelivered
 // orchestrator turns are not running yet.
+// harnessInjectionMarkers open prompts the harness submits on its own, which
+// fire UserPromptSubmit exactly like a typed prompt.
+var harnessInjectionMarkers = []string{
+	"<task-notification>", // Claude Code: a background task finished
+}
+
+func isHarnessInjection(prompt string) bool {
+	prompt = strings.TrimLeft(prompt, " \t\r\n")
+	for _, m := range harnessInjectionMarkers {
+		if strings.HasPrefix(prompt, m) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasWorkingTurnLocked(s *runState) bool {
 	for _, t := range s.record.Turns {
 		if t.Outcome == "" && (t.Source == TurnSourceUser || t.Delivered) {
