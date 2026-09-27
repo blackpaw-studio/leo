@@ -116,8 +116,32 @@ func isolatedLeoTmux(t *testing.T, prefix string) (tmuxPath, socket string) {
 	}
 	socket = fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 	t.Setenv("FAKECLAUDE_TMUX_SOCKET", socket)
-	t.Cleanup(func() { _ = exec.Command(faketmux, tmux.Args("kill-server")...).Run() })
+	t.Cleanup(func() { killTmuxServer(faketmux, socket) })
 	return faketmux, socket
+}
+
+// tmuxSocketPath resolves the control socket path the way tmux itself does:
+// $TMUX_TMPDIR (falling back to /tmp), then a per-uid "tmux-<uid>" directory,
+// then the server name passed to -L.
+func tmuxSocketPath(tmuxTmpDir string, uid int, name string) string {
+	dir := tmuxTmpDir
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, fmt.Sprintf("tmux-%d", uid), name)
+}
+
+// killTmuxServer runs `kill-server` against the named tmux -L server and then
+// removes its socket file. `kill-server` normally cleans up its own socket,
+// but a server that crashed, or was killed out from under it, can leave the
+// file behind; over many e2e runs those accumulate. Tolerates the server or
+// the socket already being gone.
+func killTmuxServer(tmuxPath, socketName string) {
+	_ = exec.Command(tmuxPath, tmux.Args("kill-server")...).Run()
+	path := tmuxSocketPath(os.Getenv("TMUX_TMPDIR"), os.Getuid(), socketName)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "killTmuxServer: removing socket %s: %v\n", path, err)
+	}
 }
 
 func findRepoRoot() string {

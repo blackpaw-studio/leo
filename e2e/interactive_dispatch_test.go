@@ -237,8 +237,9 @@ func newInteractiveE2EWithOptions(t *testing.T, opts interactiveOptions) *intera
 	}
 	_ = tmuxPath // TestMain's wrapper rewrites production's fixed -L leo.
 	tmuxPath = faketmux
-	t.Setenv("FAKECLAUDE_TMUX_SOCKET", fmt.Sprintf("leo-e2e-%d", time.Now().UnixNano()))
-	t.Cleanup(func() { _ = exec.Command(tmuxPath, tmux.Args("kill-server")...).Run() })
+	socketName := fmt.Sprintf("leo-e2e-%d", time.Now().UnixNano())
+	t.Setenv("FAKECLAUDE_TMUX_SOCKET", socketName)
+	t.Cleanup(func() { killTmuxServer(tmuxPath, socketName) })
 
 	ws := mkTempE2EDir(t, "leo-e2e-interactive-*")
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
