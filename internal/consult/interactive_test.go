@@ -1312,3 +1312,33 @@ func TestInteractiveReportClaudeSingleStopClosesNotificationAndSentTurns(t *test
 		t.Fatalf("single stop record=%+v", rec)
 	}
 }
+
+// Codex has no task-notification mechanism: a sent prompt that happens to be
+// the envelope is still the orchestrator's prompt.
+func TestInteractiveReportCodexEnvelopePromptIsDelivered(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &fakeInteractiveRuntime{arm: true, empty: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "codex", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForInjection(t, rt)
+	for _, r := range []HookReport{hookWithPrompt(t, "UserPromptSubmit", "a", rt.firstInjection()), hook(t, "Stop", "a")} {
+		if err := d.Report(started.ID, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	envelope := "<task-notification>done</task-notification>"
+	sent, err := d.Send(context.Background(), started.ID, envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Report(started.ID, hookWithPrompt(t, "UserPromptSubmit", "b", envelope)); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := d.Get(started.ID)
+	if st := turnByID(rec, sent.TurnID); !st.Delivered || st.HarnessTurnID != "b" || len(rec.Turns) != 2 || rec.Steered {
+		t.Fatalf("codex envelope sent=%+v record=%+v", st, rec)
+	}
+}

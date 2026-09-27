@@ -526,7 +526,7 @@ func (d *Dispatcher) Report(id string, r HookReport) error {
 			return nil
 		}
 		prompt := str(p, "prompt")
-		injected := isHarnessInjection(prompt)
+		injected := s.record.Harness == "claude" && isHarnessInjection(prompt)
 		var delivered *Turn
 		if !injected && s.armedTurn != "" && d.now().Before(s.armedUntil) {
 			delivered = d.deliverTurnLocked(s, s.armedTurn, hid)
