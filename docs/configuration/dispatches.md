@@ -127,9 +127,12 @@ in `POST /api/dispatch`, or run `leo dispatch run <template> <prompt> --mode
 interactive`. Headless remains the default. Interactive dispatch is not
 supported by the opencode harness.
 
-Leo opens a real Codex or Claude TUI in a window of the caller's tmux session,
-named `<label>·<hex4>`. The user can watch it and type directly into its
-composer. The opening prompt and each orchestrator follow-up are turns; their
+Leo opens a real Codex or Claude TUI, placed the same way as the viewer
+(usually a split pane in the caller's own tmux window, falling back to a
+separate window when the pane cap is reached or the caller can't be
+resolved), labeled `<label>·<hex4>`. The user can watch it and type directly
+into its composer. `leo_dispatch` reports back exactly where it landed
+(`pane <id> (title <label>)` or `window <label> (pane <id>)`). The opening prompt and each orchestrator follow-up are turns; their
 completion is reported by the harness hooks to `leo dispatch report`.
 Codex uses `user_prompt_submit`, `stop`, `interrupt`, and `session_end` hooks
 installed in `$CODEX_HOME/hooks.json`, with matching trust entries; the hooks

@@ -217,7 +217,7 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 		return Started{}, context.Canceled
 	}
 	go d.injectOpening(ctx, s, rt, t.TurnID, pane, prompt)
-	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Window: window}, nil
+	return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd, Placement: placement.Kind, Pane: pane, Window: window}, nil
 }
 
 // injectOpening deliberately runs after Start returns: the TUI's readiness

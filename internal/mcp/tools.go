@@ -337,7 +337,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 	})
 
 	r.addContext(toolDef{
-		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI in a window of your tmux session that the user can watch and type into; the result comes from the harness's own turn hooks; use leo_send_dispatch for follow-ups. Returns immediately; collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
+		Name: "leo_dispatch", Description: allowNote("Run a subagent on the template's harness/model in your project directory. mode interactive runs a real TUI, usually split as a pane in your current tmux window (falling back to a separate window, or a background session if your caller can't be resolved), that the user can watch and type into; the result comes from the harness's own turn hooks; use leo_send_dispatch for follow-ups. Returns immediately; collect with leo_wait.", "dispatch to these templates", perms.CanConsult),
 		InputSchema: objectSchema(map[string]any{"template": map[string]any{"type": "string"}, "role": map[string]any{"type": "string"}, "prompt": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}, "effort": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []string{"headless", "interactive"}}, "notify": map[string]any{"type": "boolean", "description": "notify the caller when complete; defaults to true"}, "isolation": map[string]any{"type": "string", "enum": []string{"worktree"}, "description": "run from a managed Git worktree created at the current committed HEAD"}, "timeout_seconds": map[string]any{"type": "number", "description": "optional run cap in seconds; unlimited when omitted"}}, "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		template, _ := args["template"].(string)
@@ -392,15 +392,12 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 		if err != nil {
 			return "", err
 		}
-		window := ""
-		if started.Window != "" {
-			window = " · window " + started.Window
-		}
+		placement := formatDispatchPlacement(started)
 		prefix := ""
 		if role != "" {
 			prefix = role + "→" + resolvedTemplate + " · "
 		}
-		return fmt.Sprintf("%s%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", prefix, started.ID, started.Harness, started.Model, started.Cwd, window, started.ID), nil
+		return fmt.Sprintf("%s%s (%s/%s) · %s%s\nwatch: leo dispatch watch %s", prefix, started.ID, started.Harness, started.Model, started.Cwd, placement, started.ID), nil
 	})
 
 	r.addContext(toolDef{
@@ -814,6 +811,27 @@ func (r *registry) callContext(ctx context.Context, name string, raw json.RawMes
 		}
 	}
 	return h(args)
+}
+
+// formatDispatchPlacement describes where an interactive dispatch's TUI
+// actually landed, so the caller doesn't go hunting for a tmux window that
+// was really a split pane (or vice versa). Headless dispatches carry no
+// placement and render nothing.
+func formatDispatchPlacement(started consult.Started) string {
+	switch started.Placement {
+	case "split":
+		if started.Pane == "" {
+			return " · pane (title " + started.Window + ")"
+		}
+		return fmt.Sprintf(" · pane %s (title %s)", started.Pane, started.Window)
+	case "window":
+		if started.Pane == "" {
+			return " · window " + started.Window
+		}
+		return fmt.Sprintf(" · window %s (pane %s)", started.Window, started.Pane)
+	default:
+		return ""
+	}
 }
 
 func stringArg(args map[string]any, key string) (string, error) {
