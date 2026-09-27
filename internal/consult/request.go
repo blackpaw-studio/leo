@@ -45,7 +45,13 @@ type Started struct {
 	Harness string `json:"harness"`
 	Model   string `json:"model"`
 	Cwd     string `json:"cwd"`
-	Window  string `json:"window,omitempty"`
+	// Placement, Pane, and Window describe where an interactive dispatch's
+	// TUI actually landed: Placement is "split" (a pane in the caller's own
+	// tmux window) or "window" (a separate tmux window, the fallback), Pane
+	// is the tmux pane id, and Window is the pane/window label.
+	Placement string `json:"placement,omitempty"`
+	Pane      string `json:"pane,omitempty"`
+	Window    string `json:"window,omitempty"`
 }
 
 func requestKind(req Request) string {

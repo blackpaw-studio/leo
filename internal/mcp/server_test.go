@@ -634,7 +634,7 @@ func TestInteractiveDispatchMCP(t *testing.T) {
 		switch path {
 		case "/api/dispatch":
 			_ = json.Unmarshal(body, &dispatchBody)
-			return 200, `{"ok":true,"data":{"id":"d-test","harness":"codex","model":"gpt","cwd":"/tmp","window":"agent·1234"}}`
+			return 200, `{"ok":true,"data":{"id":"d-test","harness":"codex","model":"gpt","cwd":"/tmp","placement":"split","pane":"%5","window":"agent·1234"}}`
 		case "/api/dispatch/d-test/send":
 			return 200, `{"ok":true,"data":{"turn_id":"d-test#2","delivered":true}}`
 		case "/api/dispatch/wait?id=d-test%232&timeout=1799":
@@ -648,7 +648,7 @@ func TestInteractiveDispatchMCP(t *testing.T) {
 	if dispatchBody["mode"] != "interactive" {
 		t.Fatalf("mode = %#v", dispatchBody["mode"])
 	}
-	if got := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(got, "agent·1234") {
+	if got := resp["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(got, "pane %5 (title agent·1234)") {
 		t.Fatalf("dispatch reply %q", got)
 	}
 	resp = runRequest(t, reg, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "leo_send_dispatch", "arguments": map[string]any{"id": "d-test", "message": "next"}}})
