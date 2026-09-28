@@ -469,6 +469,70 @@ func TestRestartDoesNotReplayOpeningPromptBrief(t *testing.T) {
 	}
 }
 
+// TestSwitchTemplateClearsOpeningBriefID is the regression test for the
+// third security review's finding: SwitchTemplate rebuilds ClaudeArgs
+// promptless for the arriving template (same as Start/Restart) but, unlike
+// them, left the record's OpeningBriefID untouched — next started as a copy
+// of rec (see withTemplate). A later RestoreAgents forwards whatever id the
+// record carries verbatim, so a stale id would replay the DEPARTING
+// template's opening prompt into the arriving one, possibly on a different
+// harness entirely. Simulates "live switch, then restore" end to end: after
+// a live switch, the persisted record must carry neither a brief id nor any
+// argv referencing one, so a restore built straight from that record (the
+// same rec.OpeningBriefID a real RestoreAgents would forward — see
+// internal/service/agents.go) has nothing to replay.
+func TestSwitchTemplateClearsOpeningBriefID(t *testing.T) {
+	home := t.TempDir()
+	cfg := switchCfg(home)
+	id, err := claudeharness.GenerateAgentBriefID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	briefPath := briefPathForTest(t, home, id)
+	if err := claudeharness.WritePrivateBrief(briefPath, "the departing template's opening prompt"); err != nil {
+		t.Fatal(err)
+	}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{"leo-x": {Name: "leo-x", Status: "running"}}}
+	_ = agentstore.Save(home, agentstore.Record{
+		Name:           "leo-x",
+		Template:       "coding",
+		Harness:        "claude",
+		Workspace:      "/w",
+		SessionID:      "coding-session",
+		ClaudeArgs:     []string{"--model", "sonnet", "--session-id", "coding-session"},
+		OpeningBriefID: id,
+	})
+
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	if _, err := m.SwitchTemplate("leo-x", "review"); err != nil {
+		t.Fatalf("SwitchTemplate: %v", err)
+	}
+
+	// The live respawn itself must not carry the departing template's brief.
+	if sup.spawnCall.OpeningBriefID != "" {
+		t.Fatalf("switch spawn carried a stale OpeningBriefID: %q", sup.spawnCall.OpeningBriefID)
+	}
+	for _, a := range sup.spawnCall.ClaudeArgs {
+		if strings.Contains(a, "departing template's opening prompt") {
+			t.Fatalf("switch spawn's ClaudeArgs replayed the departing prompt: %v", sup.spawnCall.ClaudeArgs)
+		}
+	}
+
+	// "Restore" == whatever RestoreAgents would forward from the persisted
+	// record: rec.OpeningBriefID verbatim (see internal/service/agents.go).
+	// It must be empty, or a boot-time restore would replay the stale prompt.
+	rec := loadRec(t, home, "leo-x")
+	if rec.OpeningBriefID != "" {
+		t.Fatalf("stored OpeningBriefID after switch = %q, want empty (a restore would replay it)", rec.OpeningBriefID)
+	}
+
+	// The now-orphaned file is swept, not left behind forever.
+	SweepOpeningPromptBriefs(home)
+	if _, err := os.Stat(briefPath); !os.IsNotExist(err) {
+		t.Errorf("orphaned brief file survived the sweep: stat err = %v", err)
+	}
+}
+
 // TestSweepOpeningPromptBriefsRemovesOrphanKeepsReferenced mirrors
 // TestSweepSettingsSpillsRemovesOrphanAgentFiles for the sibling brief-file
 // mechanism: a file no agentstore record's OpeningBriefID references is
