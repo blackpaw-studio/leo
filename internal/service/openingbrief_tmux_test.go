@@ -8,17 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/blackpaw-studio/leo/internal/harness"
-	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 // TestBuildClaudeShellCmdBriefArgvRoundTripsThroughRealTmux is the ephemeral-
 // agent-spawn counterpart of
 // internal/consult.TestClaudeBriefArgvWordRoundTripsThroughRealTmux: it
 // exercises the actual code path an agent launch uses — buildClaudeShellCmd
-// assembling ClaudeArgs (with a harness.RawArg-wrapped
-// claudeharness.BriefArgvWord standing in for the opening-prompt positional)
+// appending its own $(cat <path>) substitution from ProcessSpec.
+// OpeningBriefPath, after every other argv element has been shell-quoted —
 // into the string tmux new-session runs — against a real, throwaway tmux
 // server. Every other test in this package stubs tmux, so none of them can
 // catch tmux itself rejecting the command or a shell misinterpreting a quote.
@@ -59,8 +56,8 @@ func TestBuildClaudeShellCmdBriefArgvRoundTripsThroughRealTmux(t *testing.T) {
 	}
 	outFile := filepath.Join(dir, "out.txt")
 
-	args := []string{"--model", "sonnet", harness.RawArg(claudeharness.BriefArgvWord(briefPath))}
-	spec := ProcessSpec{Name: "alpha"}
+	args := []string{"--model", "sonnet"}
+	spec := ProcessSpec{Name: "alpha", OpeningBriefPath: briefPath}
 	cmd := buildClaudeShellCmd(standIn, args, spec, "")
 
 	if out, err := exec.Command(tmuxPath, "-S", sock, "new-session", "-d", "-e", "OUTFILE="+outFile, cmd).CombinedOutput(); err != nil {

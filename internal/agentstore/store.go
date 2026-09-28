@@ -144,6 +144,28 @@ type Record struct {
 	// keeps the stored value, so a load-modify-Save that read the record
 	// before the launch can never wipe it.
 	AttentionToken string `json:"attention_token,omitempty"`
+
+	// OpeningBriefPath is the private file a claude ephemeral agent's initial
+	// opening prompt was written to at spawn time (see
+	// claudeharness.AgentBriefPath), or "" when the agent was spawned with no
+	// opening prompt or on a non-claude harness. It is never embedded in
+	// ClaudeArgs as literal argv text: the supervisor appends the
+	// $(cat <path>) substitution itself, from this typed field, after every
+	// ClaudeArgs element has already been shell-quoted — so nothing in
+	// ClaudeArgs (whether hand-authored config or a persisted record) can
+	// ever smuggle an unquoted shell word into the launch command.
+	//
+	// Start/Restart both rebuild ClaudeArgs fresh with no opening prompt and
+	// clear this field to match (a restart/resume never re-sends the opening
+	// prompt — see agent.resolveOpeningPrompt). Reset instead replays the
+	// stored ClaudeArgs verbatim and carries this field forward unchanged, so
+	// resetting an agent re-sends its original opening prompt, exactly like
+	// resetting used to replay the prompt baked into ClaudeArgs before this
+	// field existed. The file itself is removed only on Delete — not on Stop
+	// or a non-live Rename — so a stop-then-reset (or a rename) never loses
+	// the prompt; SweepOpeningPromptBriefs cleans up files a restart/rename
+	// has since orphaned.
+	OpeningBriefPath string `json:"opening_brief_path,omitempty"`
 }
 
 // IsFailedRestore reports whether this record was stopped by the system after

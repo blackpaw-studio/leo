@@ -5,8 +5,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // TestSessionEnvArgs covers the env that reaches a supervised process. Env is
@@ -265,24 +263,70 @@ func TestBuildClaudeShellCmd_ArgsAreShellQuoted(t *testing.T) {
 	}
 }
 
-// TestBuildClaudeShellCmd_RawArgBypassesQuoting locks the tmux-16KiB fix: an
-// argv element wrapped by harness.RawArg (a $(cat <brief file>) command
-// substitution — see claudeharness.BriefArgvWord) must reach the final shell
-// command line verbatim, not wrapped in single quotes, or the substitution
-// would never expand.
-func TestBuildClaudeShellCmd_RawArgBypassesQuoting(t *testing.T) {
-	spec := ProcessSpec{Name: "alpha"}
-	rawWord := `"$(cat '/home/u/.leo/state/agent-briefs/alpha.txt')"`
-	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--model", "sonnet", harness.RawArg(rawWord)}, spec, "")
+// TestBuildClaudeShellCmd_OpeningBriefPathAppendedUnquoted locks the
+// tmux-16KiB fix as it exists after the security review of the first cut:
+// the $(cat <brief file>) substitution comes ONLY from the typed
+// ProcessSpec.OpeningBriefPath field, appended by buildClaudeShellCmd itself
+// as the trailing word — never from a ClaudeArgs element — and it lands in
+// the shell command line unquoted (a shellQuote pass would disable the
+// "$(...)" expansion).
+func TestBuildClaudeShellCmd_OpeningBriefPathAppendedUnquoted(t *testing.T) {
+	spec := ProcessSpec{Name: "alpha", OpeningBriefPath: "/home/u/.leo/state/agent-briefs/alpha.txt"}
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--model", "sonnet", "--name", "alpha"}, spec, "")
 
-	if !strings.Contains(got, rawWord) {
-		t.Errorf("cmd missing unquoted raw word %q\nfull cmd: %s", rawWord, got)
+	wantWord := `"$(cat '/home/u/.leo/state/agent-briefs/alpha.txt')"`
+	if !strings.HasSuffix(got, wantWord) {
+		t.Errorf("cmd does not end with the brief argv word %q\nfull cmd: %s", wantWord, got)
 	}
 	if strings.Contains(got, "'\"$(cat") {
-		t.Errorf("raw word must not be single-quoted\nfull cmd: %s", got)
+		t.Errorf("brief argv word must not be single-quoted\nfull cmd: %s", got)
 	}
-	if strings.Contains(got, "leo-raw-argv") {
-		t.Errorf("sentinel must not leak into the shell command\nfull cmd: %s", got)
+}
+
+// TestBuildClaudeShellCmd_ClaudeArgsAlwaysQuoted is the direct regression
+// test for the security review's HIGH finding: the first cut of this fix
+// carried the brief substitution as a NUL-prefixed sentinel INSIDE a
+// ClaudeArgs element, which buildClaudeShellCmd then emitted unquoted for
+// ANY argv element bearing that prefix — including one loaded from an
+// untrusted agentstore record or a config-derived harness_options value.
+// Every ClaudeArgs element must now be shell-quoted with no exceptions,
+// whether or not it contains shell metacharacters or the old sentinel bytes.
+func TestBuildClaudeShellCmd_ClaudeArgsAlwaysQuoted(t *testing.T) {
+	spec := ProcessSpec{Name: "alpha"}
+	malicious := "\x00leo-raw-argv\x00$(rm -rf /)"
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--allowed-tools", malicious}, spec, "")
+
+	if !strings.Contains(got, shellQuote(malicious)) {
+		t.Errorf("cmd does not contain the fully shell-quoted arg\nfull cmd: %s", got)
+	}
+	if strings.Contains(got, "$(rm -rf /)") && !strings.Contains(got, shellQuote(malicious)) {
+		t.Fatalf("malicious substring appears unquoted\nfull cmd: %s", got)
+	}
+}
+
+// TestValidatedOpeningBriefPath is the choke-point test for the security
+// review's HIGH finding: SpawnAgent must reject (not trust) an
+// OpeningBriefPath outside the agent-briefs dir before it ever reaches
+// ProcessSpec, regardless of whether it came from a fresh spawn or a
+// persisted agentstore record loaded from disk.
+func TestValidatedOpeningBriefPath(t *testing.T) {
+	home := "/home/u/.leo"
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"empty is a no-op", "", ""},
+		{"valid path kept", home + "/state/agent-briefs/alpha.txt", home + "/state/agent-briefs/alpha.txt"},
+		{"path outside the dir dropped", "/etc/passwd", ""},
+		{"traversal dropped", home + "/state/agent-briefs/../../etc/passwd", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validatedOpeningBriefPath(home, "alpha", tt.path); got != tt.want {
+				t.Errorf("validatedOpeningBriefPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
 	}
 }
 

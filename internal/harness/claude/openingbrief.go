@@ -92,6 +92,26 @@ func AgentBriefPath(homePath, agentName string) string {
 	return openingBriefPath(homePath, AgentBriefSpillDir, agentName)
 }
 
+// ValidAgentBriefPath reports whether path is exactly an AgentBriefPath
+// result for some agent name under homePath: an immediate ".txt" file inside
+// <home>/state/agent-briefs, not a path escaping that directory via "../" or
+// an absolute path elsewhere. Defense-in-depth for a persisted
+// OpeningBriefPath field (agentstore.Record round-trips through JSON on
+// disk): the caller building a launch command is only ever safe emitting
+// BriefArgvWord's $(cat <path>) unquoted for a location leo itself controls.
+func ValidAgentBriefPath(homePath, path string) bool {
+	if homePath == "" || path == "" {
+		return false
+	}
+	wantDir := filepath.Clean(filepath.Join(homePath, "state", AgentBriefSpillDir))
+	clean := filepath.Clean(path)
+	if filepath.Dir(clean) != wantDir {
+		return false
+	}
+	base := filepath.Base(clean)
+	return base != "." && base != ".." && strings.HasSuffix(base, ".txt") && len(base) > len(".txt")
+}
+
 // WritePrivateBrief writes brief to path, creating its directory as needed.
 // The brief can carry orchestrator- or user-authored task instructions, so
 // both the directory and the file are owner-only.

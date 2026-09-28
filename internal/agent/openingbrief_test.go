@@ -8,17 +8,15 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
-	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 // TestSpawnOpeningPromptDeliveredViaBriefFile locks the tmux-16KiB-command-
 // limit fix (see claudeharness.ArgvPromptLimit): a claude ephemeral agent's
-// opening prompt must never appear as literal launch-argv text. Instead it is
-// written to a private per-agent brief file and the launch argv carries only
-// a small $(cat ...) command-substitution word (wrapped so the shell-quoting
-// pass in internal/service/process.go emits it unquoted — see
-// harness.SplitRawArg).
+// opening prompt must never appear as literal launch-argv text in ClaudeArgs.
+// Instead it is written to a private per-agent brief file and carried on the
+// typed SpawnRequest/agentstore.Record.OpeningBriefPath field — never inside
+// ClaudeArgs, which stays fully shell-quotable with no exceptions.
 func TestSpawnOpeningPromptDeliveredViaBriefFile(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -47,18 +45,8 @@ func TestSpawnOpeningPromptDeliveredViaBriefFile(t *testing.T) {
 	}
 
 	briefPath := claudeharness.AgentBriefPath(home, rec.Name)
-	var rawWord string
-	for _, a := range sup.spawnCall.ClaudeArgs {
-		if word, raw := harness.SplitRawArg(a); raw {
-			rawWord = word
-		}
-	}
-	if rawWord == "" {
-		t.Fatalf("expected a raw $(cat ...) argv word in ClaudeArgs, got %v", sup.spawnCall.ClaudeArgs)
-	}
-	wantWord := claudeharness.BriefArgvWord(briefPath)
-	if rawWord != wantWord {
-		t.Fatalf("raw argv word = %q, want %q", rawWord, wantWord)
+	if sup.spawnCall.OpeningBriefPath != briefPath {
+		t.Fatalf("SpawnRequest.OpeningBriefPath = %q, want %q", sup.spawnCall.OpeningBriefPath, briefPath)
 	}
 
 	info, err := os.Stat(briefPath)
@@ -76,9 +64,9 @@ func TestSpawnOpeningPromptDeliveredViaBriefFile(t *testing.T) {
 		t.Errorf("brief file content = %q, want %q", content, prompt)
 	}
 
-	// The persisted agentstore record must carry the same raw argv word, not
-	// the literal prompt — Reset replays rec.ClaudeArgs verbatim, so it must
-	// already be safe to re-launch with.
+	// The persisted agentstore record must carry the path on its own typed
+	// field, not the literal prompt — Reset replays it, so it must already
+	// be safe to re-launch with.
 	recs, err := agentstore.Load(agentstore.FilePath(home))
 	if err != nil {
 		t.Fatalf("loading agentstore: %v", err)
@@ -87,23 +75,19 @@ func TestSpawnOpeningPromptDeliveredViaBriefFile(t *testing.T) {
 	if !ok {
 		t.Fatalf("no stored record for %q", rec.Name)
 	}
-	found := false
 	for _, a := range stored.ClaudeArgs {
 		if strings.Contains(a, prompt) {
 			t.Fatalf("stored ClaudeArgs must not contain the literal prompt; got %q", a)
 		}
-		if word, raw := harness.SplitRawArg(a); raw && word == wantWord {
-			found = true
-		}
 	}
-	if !found {
-		t.Errorf("stored ClaudeArgs missing raw brief argv word, got %v", stored.ClaudeArgs)
+	if stored.OpeningBriefPath != briefPath {
+		t.Errorf("stored OpeningBriefPath = %q, want %q", stored.OpeningBriefPath, briefPath)
 	}
 }
 
 // TestSpawnNoPromptWritesNoBriefFile ensures the brief-file mechanism is
 // opt-in: a spawn with no opening prompt must not create any brief file or
-// raw argv word.
+// set OpeningBriefPath.
 func TestSpawnNoPromptWritesNoBriefFile(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -124,10 +108,8 @@ func TestSpawnNoPromptWritesNoBriefFile(t *testing.T) {
 	if _, err := os.Stat(briefPath); !os.IsNotExist(err) {
 		t.Fatalf("expected no brief file, stat err = %v", err)
 	}
-	for _, a := range sup.spawnCall.ClaudeArgs {
-		if _, raw := harness.SplitRawArg(a); raw {
-			t.Fatalf("expected no raw argv word with an empty prompt, got %v", sup.spawnCall.ClaudeArgs)
-		}
+	if sup.spawnCall.OpeningBriefPath != "" {
+		t.Fatalf("expected empty OpeningBriefPath with no prompt, got %q", sup.spawnCall.OpeningBriefPath)
 	}
 }
 
@@ -162,10 +144,12 @@ func TestSpawnOversizedPromptRejected(t *testing.T) {
 	}
 }
 
-// TestStopRemovesOpeningPromptBriefFile confirms a stopped agent's brief file
-// is cleaned up: the supervise loop that could have replayed it is gone once
-// StopAgent succeeds, so nothing needs it any more.
-func TestStopRemovesOpeningPromptBriefFile(t *testing.T) {
+// TestStopKeepsOpeningPromptBriefFile confirms Stop no longer deletes the
+// brief file: Reset replays a record's OpeningBriefPath verbatim, so a
+// stop-then-reset must still find it (this is the MEDIUM finding from the
+// security review of the first cut of this fix — Stop used to delete the
+// file out from under a later Reset).
+func TestStopKeepsOpeningPromptBriefFile(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		HomePath: home,
@@ -189,14 +173,50 @@ func TestStopRemovesOpeningPromptBriefFile(t *testing.T) {
 	if err := m.Stop(rec.Name, StopOptions{}); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	if _, err := os.Stat(briefPath); !os.IsNotExist(err) {
-		t.Fatalf("expected brief file removed after stop, stat err = %v", err)
+	if _, err := os.Stat(briefPath); err != nil {
+		t.Fatalf("expected brief file to survive Stop, stat err = %v", err)
 	}
 }
 
-// TestDeleteRemovesOpeningPromptBriefFile mirrors TestStopRemovesOpeningPromptBriefFile
-// for the permanent-removal path, and tolerates the file already being gone
-// (e.g. a prior Stop already cleaned it up).
+// TestStopThenResetReplaysOpeningPrompt is the end-to-end regression test for
+// the MEDIUM finding: stopping an agent and then resetting it must still
+// deliver the original opening prompt, because Reset (unlike Start/Restart)
+// replays the original ClaudeArgs/OpeningBriefPath rather than rebuilding
+// them promptless.
+func TestStopThenResetReplaysOpeningPrompt(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]config.TemplateConfig{
+			"t": {Workspace: home},
+		},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "t", Repo: "demo", Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	briefPath := claudeharness.AgentBriefPath(home, rec.Name)
+
+	if err := m.Stop(rec.Name, StopOptions{}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if err := m.Reset(rec.Name); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if sup.spawnCall.OpeningBriefPath != briefPath {
+		t.Fatalf("reset after stop: OpeningBriefPath = %q, want %q", sup.spawnCall.OpeningBriefPath, briefPath)
+	}
+	if _, err := os.Stat(briefPath); err != nil {
+		t.Fatalf("brief file gone after stop+reset: %v", err)
+	}
+}
+
+// TestDeleteRemovesOpeningPromptBriefFile is the one path that actually
+// removes the brief file — the agent is gone for good.
 func TestDeleteRemovesOpeningPromptBriefFile(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -218,7 +238,6 @@ func TestDeleteRemovesOpeningPromptBriefFile(t *testing.T) {
 	if err := m.Stop(rec.Name, StopOptions{}); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	// Delete must tolerate the brief file already being gone.
 	if err := m.Delete(context.Background(), rec.Name, DeleteOptions{}); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -227,20 +246,52 @@ func TestDeleteRemovesOpeningPromptBriefFile(t *testing.T) {
 	}
 }
 
-// TestRenameRemovesOldOpeningPromptBriefOnlyWhenNotLive mirrors
-// TestRenameRemovesOldSettingsSpillOnlyWhenNotLive: a live agent's
-// stored ClaudeArgs already reference the OLD name's brief path (rewriteNameArg
-// only rewrites --name, not a raw $(cat ...) argv word baked in at spawn
-// time), so only a non-live rename — about to be started fresh under the new
-// name with no opening prompt — cleans up the old file right away.
-func TestRenameRemovesOldOpeningPromptBriefOnlyWhenNotLive(t *testing.T) {
+// TestDeleteToleratesMissingOpeningPromptBriefFile confirms Delete never
+// fails just because the brief file is already gone (e.g. hand-removed, or a
+// record with no opening prompt at all).
+func TestDeleteToleratesMissingOpeningPromptBriefFile(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath: home,
+		Defaults: config.DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]config.TemplateConfig{
+			"t": {Workspace: home},
+		},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+
+	rec, err := m.Spawn(context.Background(), SpawnSpec{Template: "t", Repo: "demo"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if err := m.Stop(rec.Name, StopOptions{}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if err := m.Delete(context.Background(), rec.Name, DeleteOptions{}); err != nil {
+		t.Fatalf("delete should tolerate a record with no opening-prompt brief: %v", err)
+	}
+}
+
+// TestRenameKeepsOldOpeningPromptBriefFile confirms a rename (live or not)
+// never deletes the brief file: persistRename leaves OpeningBriefPath
+// untouched (only rewriteNameArg touches ClaudeArgs, and only the --name
+// flag value), so a later Reset under the new name can still replay the
+// original prompt.
+func TestRenameKeepsOldOpeningPromptBriefFile(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		home := t.TempDir()
 		briefPath := claudeharness.AgentBriefPath(home, "leo-old")
 		if err := claudeharness.WritePrivateBrief(briefPath, "hello"); err != nil {
 			t.Fatal(err)
 		}
-		_ = agentstore.Save(home, agentstore.Record{Name: "leo-old", Workspace: "/w", Stopped: !live, ClaudeArgs: []string{"--name", "leo-old"}})
+		_ = agentstore.Save(home, agentstore.Record{
+			Name:             "leo-old",
+			Workspace:        "/w",
+			Stopped:          !live,
+			ClaudeArgs:       []string{"--name", "leo-old"},
+			OpeningBriefPath: briefPath,
+		})
 		sup := &fakeSupervisor{ephemeral: map[string]ProcessState{}}
 		if live {
 			sup.ephemeral["leo-old"] = ProcessState{Name: "leo-old", Status: "running"}
@@ -251,20 +302,25 @@ func TestRenameRemovesOldOpeningPromptBriefOnlyWhenNotLive(t *testing.T) {
 			t.Fatalf("Rename (live=%v): %v", live, err)
 		}
 
-		_, err := os.Stat(briefPath)
-		if live && err != nil {
-			t.Fatalf("live rename removed the still-referenced brief file: %v", err)
+		if _, err := os.Stat(briefPath); err != nil {
+			t.Fatalf("rename (live=%v) removed the brief file: %v", live, err)
 		}
-		if !live && !os.IsNotExist(err) {
-			t.Fatalf("non-live rename kept the old brief file: err=%v", err)
+		recs, err := agentstore.Load(agentstore.FilePath(home))
+		if err != nil {
+			t.Fatalf("loading agentstore: %v", err)
+		}
+		if recs["leo-new"].OpeningBriefPath != briefPath {
+			t.Errorf("rename (live=%v): OpeningBriefPath = %q, want %q", live, recs["leo-new"].OpeningBriefPath, briefPath)
 		}
 	}
 }
 
 // TestRestartDoesNotReplayOpeningPromptBrief confirms the existing
-// "restart/resume never resend the opening prompt" invariant extends
-// unchanged to the brief-file mechanism: a restart's re-resolved ClaudeArgs
-// must carry neither the literal prompt nor a raw brief argv word.
+// "restart/resume never resend the opening prompt" invariant: a restart's
+// re-resolved ClaudeArgs must carry neither the literal prompt nor a
+// leftover OpeningBriefPath, and the stored record's OpeningBriefPath is
+// cleared too (so a LATER Reset — after this restart — doesn't try to replay
+// a prompt whose $(cat ...) word the rebuilt ClaudeArgs no longer expects).
 func TestRestartDoesNotReplayOpeningPromptBrief(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -285,12 +341,48 @@ func TestRestartDoesNotReplayOpeningPromptBrief(t *testing.T) {
 	if err := m.Restart(rec.Name); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
+	if sup.spawnCall.OpeningBriefPath != "" {
+		t.Fatalf("restart must not replay OpeningBriefPath, got %q", sup.spawnCall.OpeningBriefPath)
+	}
 	for _, a := range sup.spawnCall.ClaudeArgs {
-		if _, raw := harness.SplitRawArg(a); raw {
-			t.Fatalf("restart must not replay the opening-prompt brief argv word, got %v", sup.spawnCall.ClaudeArgs)
-		}
 		if strings.Contains(a, "hello") {
 			t.Fatalf("restart must not replay the literal opening prompt, got %v", sup.spawnCall.ClaudeArgs)
 		}
+	}
+
+	recs, err := agentstore.Load(agentstore.FilePath(home))
+	if err != nil {
+		t.Fatalf("loading agentstore: %v", err)
+	}
+	if recs[rec.Name].OpeningBriefPath != "" {
+		t.Errorf("stored OpeningBriefPath should be cleared after restart, got %q", recs[rec.Name].OpeningBriefPath)
+	}
+}
+
+// TestSweepOpeningPromptBriefsRemovesOrphanKeepsReferenced mirrors
+// TestSweepSettingsSpillsRemovesOrphanAgentFiles for the sibling brief-file
+// mechanism: a file no agentstore record's OpeningBriefPath references is
+// removed; one that is still referenced is kept.
+func TestSweepOpeningPromptBriefsRemovesOrphanKeepsReferenced(t *testing.T) {
+	home := t.TempDir()
+	referenced := claudeharness.AgentBriefPath(home, "leo-live")
+	orphan := claudeharness.AgentBriefPath(home, "leo-gone")
+	if err := claudeharness.WritePrivateBrief(referenced, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if err := claudeharness.WritePrivateBrief(orphan, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstore.Save(home, agentstore.Record{Name: "leo-live", Workspace: "/w", OpeningBriefPath: referenced}); err != nil {
+		t.Fatal(err)
+	}
+
+	SweepOpeningPromptBriefs(home)
+
+	if _, err := os.Stat(referenced); err != nil {
+		t.Errorf("sweep removed a still-referenced brief file: %v", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("sweep left an orphan brief file in place: err=%v", err)
 	}
 }
