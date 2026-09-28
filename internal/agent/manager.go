@@ -397,10 +397,10 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	// positional (see resolveOpeningPrompt); other harnesses keep the prompt
 	// as-is and deliver it via their tmux-TUI driver's post-launch injection.
 	promptForArgs := spec.Prompt
-	var openingBriefPath string
+	var openingBriefID string
 	if isClaude {
 		var err error
-		openingBriefPath, err = resolveOpeningPrompt(cfg, agentName, spec.Prompt)
+		openingBriefID, err = resolveOpeningPrompt(cfg, agentName, spec.Prompt)
 		if err != nil {
 			return Record{}, err
 		}
@@ -463,21 +463,21 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
 		Harness:          harnessName,
-		OpeningBriefPath: openingBriefPath,
+		OpeningBriefID:   openingBriefID,
 	}); err != nil {
 		log.Printf("agent %q: agentstore.Save failed before spawn: %v — agent will not be restored on daemon restart", agentName, err)
 	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
-		Name:             agentName,
-		ClaudeArgs:       claudeArgs,
-		WorkDir:          workspace,
-		Env:              env,
-		WebPort:          webPort,
-		WebToken:         m.webToken,
-		Harness:          harnessName,
-		OpeningPrompt:    openingPrompt,
-		OpeningBriefPath: openingBriefPath,
+		Name:           agentName,
+		ClaudeArgs:     claudeArgs,
+		WorkDir:        workspace,
+		Env:            env,
+		WebPort:        webPort,
+		WebToken:       m.webToken,
+		Harness:        harnessName,
+		OpeningPrompt:  openingPrompt,
+		OpeningBriefID: openingBriefID,
 	}); err != nil {
 		agentstore.Remove(cfg.HomePath, agentName)
 		return Record{}, fmt.Errorf("spawning agent: %w", err)
@@ -702,10 +702,10 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 
 	// See the identical resolveOpeningPrompt comment in spawnShared.
 	promptForArgs := spec.Prompt
-	var openingBriefPath string
+	var openingBriefID string
 	if isClaude {
 		var err error
-		openingBriefPath, err = resolveOpeningPrompt(cfg, layout.AgentName, spec.Prompt)
+		openingBriefID, err = resolveOpeningPrompt(cfg, layout.AgentName, spec.Prompt)
 		if err != nil {
 			rollbackWorktree()
 			return Record{}, err
@@ -765,21 +765,21 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		SpawnedAt:        time.Now(),
 		IdleSuspendAfter: idleStr,
 		Harness:          harnessName,
-		OpeningBriefPath: openingBriefPath,
+		OpeningBriefID:   openingBriefID,
 	}); err != nil {
 		log.Printf("agent %q: agentstore.Save failed before spawn: %v — agent will not be restored on daemon restart", layout.AgentName, err)
 	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
-		Name:             layout.AgentName,
-		ClaudeArgs:       claudeArgs,
-		WorkDir:          layout.WorktreePath,
-		Env:              env,
-		WebPort:          webPort,
-		WebToken:         m.webToken,
-		Harness:          harnessName,
-		OpeningPrompt:    openingPrompt,
-		OpeningBriefPath: openingBriefPath,
+		Name:           layout.AgentName,
+		ClaudeArgs:     claudeArgs,
+		WorkDir:        layout.WorktreePath,
+		Env:            env,
+		WebPort:        webPort,
+		WebToken:       m.webToken,
+		Harness:        harnessName,
+		OpeningPrompt:  openingPrompt,
+		OpeningBriefID: openingBriefID,
 	}); err != nil {
 		// Reservation protected the name, so a collision here means the
 		// supervisor state changed unexpectedly (e.g. concurrent restore).
@@ -909,7 +909,7 @@ func (m *Manager) Stop(name string, opts StopOptions) error {
 		return fmt.Errorf("loading config to stop agent %q: %w", name, err)
 	}
 	// Deliberately does NOT remove this agent's opening-prompt brief file (if
-	// any): Reset replays the record's OpeningBriefPath verbatim (see
+	// any): Reset replays the record's OpeningBriefID verbatim (see
 	// resolveOpeningPrompt), so a stop-then-reset must still find it. Delete
 	// is the one path that removes it for good.
 	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
@@ -1044,7 +1044,7 @@ func (m *Manager) Start(name string) error {
 	// later Reset would replay a prompt whose $(cat ...) word this record's
 	// own ClaudeArgs no longer carries. The file itself is left alone;
 	// SweepOpeningPromptBriefs (or a subsequent Delete) cleans it up.
-	rec.OpeningBriefPath = ""
+	rec.OpeningBriefID = ""
 	if err := agentstore.Save(cfg.HomePath, rec); err != nil {
 		log.Printf("agent %q started but agentstore.Save failed: %v — flag may persist until next save", rec.Name, err)
 	}
@@ -1120,14 +1120,14 @@ func (m *Manager) Reset(name string) error {
 	}
 
 	if err := m.sup.SpawnAgent(SpawnRequest{
-		Name:             rec.Name,
-		ClaudeArgs:       args,
-		WorkDir:          rec.Workspace,
-		Env:              resetEnv,
-		WebPort:          rec.WebPort,
-		WebToken:         m.webToken,
-		Harness:          rec.Harness,
-		OpeningBriefPath: rec.OpeningBriefPath,
+		Name:           rec.Name,
+		ClaudeArgs:     args,
+		WorkDir:        rec.Workspace,
+		Env:            resetEnv,
+		WebPort:        rec.WebPort,
+		WebToken:       m.webToken,
+		Harness:        rec.Harness,
+		OpeningBriefID: rec.OpeningBriefID,
 	}); err != nil {
 		return fmt.Errorf("respawning %q after reset: %w (re-run 'leo agent reset %s' to retry)", name, err, name)
 	}
@@ -1235,10 +1235,10 @@ func (m *Manager) Restart(name string) error {
 	rec.Env = env
 	rec.SessionID = resumeID
 	rec.SessionPinnedAt = nil
-	// See the identical OpeningBriefPath comment in Start: args was rebuilt
+	// See the identical OpeningBriefID comment in Start: args was rebuilt
 	// fresh with no opening prompt, so the stored brief reference must go
 	// with it.
-	rec.OpeningBriefPath = ""
+	rec.OpeningBriefID = ""
 	// Clear a failed-restore's system-stopped markers now that the recovery
 	// spawn above succeeded. A no-op for the ordinary live-restart path,
 	// where both fields are already zero.
@@ -1542,7 +1542,7 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 	// The agent is gone for good now, so the opening-prompt brief (if any) is
 	// removed here — the one path that actually deletes it (see Stop's
 	// contract, which deliberately leaves it for a later Reset to reuse).
-	removeOpeningPromptBrief(rec.OpeningBriefPath)
+	removeOpeningPromptBrief(cfg.HomePath, rec.OpeningBriefID)
 	// Delete only ever reaches here for a not-live agent (the EphemeralAgents
 	// check above already rejected a live one), verbatim the rationale
 	// announceStoppedIfNotLive documents for Stop: nothing else along this
@@ -1747,7 +1747,7 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		removeSettingsSpill(cfg.HomePath, oldName)
 		// Unlike the settings spill, the opening-prompt brief file (if any) is
 		// deliberately left in place under its original path: persistRename
-		// keeps r.OpeningBriefPath unchanged (only rewriteNameArg touches
+		// keeps r.OpeningBriefID unchanged (only rewriteNameArg touches
 		// ClaudeArgs, and that's just the --name flag value), so a later
 		// Reset under the new name can still replay the original prompt. See
 		// removeOpeningPromptBrief's doc comment for the one path that does

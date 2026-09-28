@@ -1,10 +1,13 @@
 package claude
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 )
@@ -76,7 +79,9 @@ func openingBriefPath(homePath, subdir, id string) string {
 const DispatchBriefSpillDir = "dispatch-briefs"
 
 // DispatchBriefPath is dispatch id's opening-brief file path ("" if
-// unusable).
+// unusable). dispatch ids are leo-generated run identifiers, never persisted
+// as freestanding user input, so this stays the simpler name-derived scheme
+// (unlike AgentBriefPathForID below).
 func DispatchBriefPath(homePath, id string) string {
 	return openingBriefPath(homePath, DispatchBriefSpillDir, id)
 }
@@ -85,31 +90,74 @@ func DispatchBriefPath(homePath, id string) string {
 // opening-prompt brief files.
 const AgentBriefSpillDir = "agent-briefs"
 
-// AgentBriefPath is an ephemeral agent's opening-prompt brief file path (""
-// if unusable). Deterministic from the agent's name, so cleanup (on stop or
-// delete) never needs to persist the path separately.
-func AgentBriefPath(homePath, agentName string) string {
-	return openingBriefPath(homePath, AgentBriefSpillDir, agentName)
+// agentBriefIDPattern is the only shape an opening-prompt brief id may take:
+// exactly 32 lowercase hex characters (128 bits from GenerateAgentBriefID).
+// AgentBriefPathForID refuses anything else before it ever becomes a path,
+// so an id is never interpolated into a path expression unchecked.
+var agentBriefIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// ValidAgentBriefID reports whether id has the exact shape
+// GenerateAgentBriefID produces.
+func ValidAgentBriefID(id string) bool {
+	return agentBriefIDPattern.MatchString(id)
 }
 
-// ValidAgentBriefPath reports whether path is exactly an AgentBriefPath
-// result for some agent name under homePath: an immediate ".txt" file inside
-// <home>/state/agent-briefs, not a path escaping that directory via "../" or
-// an absolute path elsewhere. Defense-in-depth for a persisted
-// OpeningBriefPath field (agentstore.Record round-trips through JSON on
-// disk): the caller building a launch command is only ever safe emitting
-// BriefArgvWord's $(cat <path>) unquoted for a location leo itself controls.
-func ValidAgentBriefPath(homePath, path string) bool {
-	if homePath == "" || path == "" {
-		return false
+// GenerateAgentBriefID returns a fresh random 128-bit id, hex-encoded.
+// Deliberately NOT derived from the agent's name: a rename frees the old
+// name for reuse, and a name-derived id would let a brand-new agent later
+// spawned under that freed name silently collide with (and overwrite, or
+// inherit) the previous occupant's brief file.
+func GenerateAgentBriefID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generating opening-brief id: %w", err)
 	}
-	wantDir := filepath.Clean(filepath.Join(homePath, "state", AgentBriefSpillDir))
-	clean := filepath.Clean(path)
-	if filepath.Dir(clean) != wantDir {
-		return false
+	return hex.EncodeToString(b[:]), nil
+}
+
+// AgentBriefPathForID derives the brief file path for id, rejecting anything
+// that does not match ValidAgentBriefID first — the returned path is always
+// exactly <home>/state/agent-briefs/<id>.txt or an error, never a path built
+// from unchecked input.
+func AgentBriefPathForID(homePath, id string) (string, error) {
+	if homePath == "" {
+		return "", errors.New("no leo home configured")
 	}
-	base := filepath.Base(clean)
-	return base != "." && base != ".." && strings.HasSuffix(base, ".txt") && len(base) > len(".txt")
+	if !ValidAgentBriefID(id) {
+		return "", fmt.Errorf("invalid opening-brief id %q", id)
+	}
+	return filepath.Join(homePath, "state", AgentBriefSpillDir, id+".txt"), nil
+}
+
+// VerifyAgentBriefFile confirms path is safe to read via a shell
+// $(cat <path>) substitution: Lstat (which never follows a symlink) must
+// report a regular file, mode exactly 0600, owned by the current process's
+// uid. Any deviation — a symlink planted at that exact path, a mode loosened
+// by something else, a file owned by another user — is refused rather than
+// trusted, since AgentBriefPathForID's id can originate from a persisted (and
+// therefore untrusted) agentstore record.
+func VerifyAgentBriefFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("stat opening-brief file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("opening-brief file %q is a symlink", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("opening-brief file %q is not a regular file", path)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		return fmt.Errorf("opening-brief file %q has mode %o, want 0600", path, perm)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("opening-brief file %q: cannot determine owner on this platform", path)
+	}
+	if int(stat.Uid) != os.Getuid() {
+		return fmt.Errorf("opening-brief file %q is not owned by the current user", path)
+	}
+	return nil
 }
 
 // WritePrivateBrief writes brief to path, creating its directory as needed.
@@ -152,7 +200,8 @@ func WritePrivateBrief(path, brief string) error {
 }
 
 // RemoveBrief deletes path, tolerating one that is already gone. path=="" is
-// a no-op (matches the "unusable path" contract of the *BriefPath helpers).
+// a no-op. os.Remove unlinks whatever is at path without following it, so a
+// symlink planted there is removed itself, never its target.
 func RemoveBrief(path string) error {
 	if path == "" {
 		return nil

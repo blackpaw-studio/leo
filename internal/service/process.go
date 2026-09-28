@@ -154,14 +154,15 @@ type ProcessSpec struct {
 	// it as a trailing positional arg. Empty for claude, which uses
 	// OpeningBriefPath instead.
 	OpeningPrompt string
-	// OpeningBriefPath is a claude agent's opening-prompt brief file. When
-	// set, buildClaudeShellCmd appends its own $(cat <path>) substitution as
-	// the final shell word, AFTER every ClaudeArgs element has already been
-	// shell-quoted — this is the only argv content ever emitted unquoted, and
-	// it never flows through ClaudeArgs to get there. SpawnAgent validates
-	// this against claudeharness.ValidAgentBriefPath before it ever reaches
-	// ProcessSpec, so a corrupted or hand-edited agentstore record can only
-	// ever point at a file leo itself controls (or get silently dropped).
+	// OpeningBriefPath is a claude agent's opening-prompt brief file, already
+	// derived and safety-checked from daemon.AgentSpawnSpec.OpeningBriefID by
+	// SpawnAgent's resolveOpeningBriefPath before ProcessSpec is ever built —
+	// ProcessSpec itself is not persisted, so it carries the resolved path,
+	// not the id. When set, buildClaudeShellCmd appends its own
+	// $(cat <path>) substitution as the final shell word, AFTER every
+	// ClaudeArgs element has already been shell-quoted — this is the only
+	// argv content ever emitted unquoted, and it never flows through
+	// ClaudeArgs to get there.
 	OpeningBriefPath string
 	// attentionToken is this launch's attention token, exported to the
 	// session as LEO_ATTENTION_TOKEN ("" = launched without hooks). Runtime
@@ -374,6 +375,15 @@ func (s *Supervisor) ReleaseAgent(name string) {
 // The process is not persisted to config — it lives only in memory.
 // Implements daemon.AgentManager.
 func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
+	// Resolved and safety-checked before any state mutation: a spec carrying
+	// an opening-prompt brief id that fails validation must refuse the
+	// launch outright, not silently drop the prompt and proceed (spec.
+	// OpeningBriefID can originate from a persisted, and therefore
+	// untrusted, agentstore record — see resolveOpeningBriefPath).
+	openingBriefPath, err := resolveOpeningBriefPath(s.homePath, spec.Name, spec.OpeningBriefID)
+	if err != nil {
+		return err
+	}
 	hooked := spawnHooked(driverFor(spec.Harness), s.homePath, spec.Name, spec.Adopt)
 	s.mu.Lock()
 	if _, exists := s.states[spec.Name]; exists {
@@ -441,7 +451,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		Harness:          spec.Harness,
 		Kind:             harness.KindAgent,
 		OpeningPrompt:    spec.OpeningPrompt,
-		OpeningBriefPath: validatedOpeningBriefPath(s.homePath, spec.Name, spec.OpeningBriefPath),
+		OpeningBriefPath: openingBriefPath,
 	}
 	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
 	return nil
@@ -900,7 +910,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// arriving over IPC and delete that agent's fresh spill file.
 	agent.SweepSettingsSpills(homePath)
 	// Best-effort: drop opening-prompt brief files an agent record no longer
-	// references — e.g. a Start/Restart cleared OpeningBriefPath after
+	// references — e.g. a Start/Restart cleared OpeningBriefID after
 	// rebuilding ClaudeArgs fresh (see agent.resolveOpeningPrompt).
 	agent.SweepOpeningPromptBriefs(homePath)
 	if err := srv.Start(); err != nil {
@@ -1643,26 +1653,40 @@ var supervisorWebTokenPattern = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
 // otherwise so the pane's exported PATH still gets a chance. An unregistered
 // name falls back to claudePath: config validation rejects those long before
 // a spec reaches the supervisor, and the pane failure is loud either way.
-// validatedOpeningBriefPath is the one choke point every spawn path (fresh
+// resolveOpeningBriefPath is the one choke point every spawn path (fresh
 // spawn, Start, Restart, Reset, and RestoreAgents' boot-time replay) passes
-// through before an OpeningBriefPath reaches ProcessSpec. path may originate
-// from a hand-authored SpawnRequest today, but agentstore.Record.
-// OpeningBriefPath round-trips through JSON on disk, so it must be treated as
-// untrusted input regardless of source: claudeharness.ValidAgentBriefPath
-// confirms it is exactly an AgentBriefPath result for some name — an
-// immediate .txt file inside <home>/state/agent-briefs, not a path escaping
-// that directory via "../" or an absolute path elsewhere. An invalid path is
-// dropped (never trusted, never launched with) and logged rather than
-// failing the spawn outright.
-func validatedOpeningBriefPath(homePath, agentName, path string) string {
-	if path == "" {
-		return ""
+// through before an opening-prompt brief id becomes a path ProcessSpec will
+// hand to buildClaudeShellCmd's unquoted $(cat ...) substitution. id may
+// originate from a hand-authored SpawnRequest today, but agentstore.Record.
+// OpeningBriefID round-trips through JSON on disk, so it is treated as
+// untrusted regardless of source:
+//
+//  1. claudeharness.AgentBriefPathForID rejects anything not matching
+//     ^[0-9a-f]{32}$ before it ever becomes a path — an ID is never
+//     interpolated into a path expression directly.
+//  2. claudeharness.VerifyAgentBriefFile then Lstats the derived path
+//     (never following a symlink) and requires a regular file, mode 0600,
+//     owned by the current process's uid — catching a symlink or a
+//     tampered/mismatched-owner file planted at that exact location.
+//
+// Either failure refuses the spawn outright with a clear error, rather than
+// silently dropping the prompt and launching without it: a caller (or an
+// attacker with write access to agentstore.json) that supplied a bad id gets
+// a loud failure, not an agent that quietly starts without the prompt it was
+// told to carry. An empty id is not an error — most agents have no opening
+// prompt at all.
+func resolveOpeningBriefPath(homePath, agentName, id string) (string, error) {
+	if id == "" {
+		return "", nil
 	}
-	if !claudeharness.ValidAgentBriefPath(homePath, path) {
-		fmt.Fprintf(os.Stderr, "[%s] dropping opening-brief path %q: outside the agent-briefs dir\n", agentName, path)
-		return ""
+	path, err := claudeharness.AgentBriefPathForID(homePath, id)
+	if err != nil {
+		return "", fmt.Errorf("[%s] opening-brief id: %w", agentName, err)
 	}
-	return path
+	if err := claudeharness.VerifyAgentBriefFile(path); err != nil {
+		return "", fmt.Errorf("[%s] opening-brief file failed safety check: %w", agentName, err)
+	}
+	return path, nil
 }
 
 func harnessBinaryPath(harnessName, claudePath string) string {

@@ -145,12 +145,17 @@ type Record struct {
 	// before the launch can never wipe it.
 	AttentionToken string `json:"attention_token,omitempty"`
 
-	// OpeningBriefPath is the private file a claude ephemeral agent's initial
-	// opening prompt was written to at spawn time (see
-	// claudeharness.AgentBriefPath), or "" when the agent was spawned with no
-	// opening prompt or on a non-claude harness. It is never embedded in
-	// ClaudeArgs as literal argv text: the supervisor appends the
-	// $(cat <path>) substitution itself, from this typed field, after every
+	// OpeningBriefID identifies the private file a claude ephemeral agent's
+	// initial opening prompt was written to at spawn time (see
+	// claudeharness.AgentBriefPathForID), or "" when the agent was spawned
+	// with no opening prompt or on a non-claude harness. It is exactly 32 hex
+	// characters — a random id, NOT derived from the agent name, so a rename
+	// followed by a fresh spawn under the freed name can never collide with
+	// (and overwrite) an old brief. It is never embedded in ClaudeArgs as
+	// literal argv text: the supervisor derives the path from this id,
+	// Lstat-verifies it (regular file, mode 0600, owned by the current uid,
+	// never a symlink — see claudeharness.VerifyAgentBriefFile), and only
+	// then appends the $(cat <path>) substitution itself, after every
 	// ClaudeArgs element has already been shell-quoted — so nothing in
 	// ClaudeArgs (whether hand-authored config or a persisted record) can
 	// ever smuggle an unquoted shell word into the launch command.
@@ -162,10 +167,11 @@ type Record struct {
 	// resetting an agent re-sends its original opening prompt, exactly like
 	// resetting used to replay the prompt baked into ClaudeArgs before this
 	// field existed. The file itself is removed only on Delete — not on Stop
-	// or a non-live Rename — so a stop-then-reset (or a rename) never loses
-	// the prompt; SweepOpeningPromptBriefs cleans up files a restart/rename
-	// has since orphaned.
-	OpeningBriefPath string `json:"opening_brief_path,omitempty"`
+	// or Rename (which needs no file handling at all now: the id travels with
+	// the record regardless of name) — so a stop-then-reset never loses the
+	// prompt; SweepOpeningPromptBriefs cleans up files a restart has since
+	// orphaned.
+	OpeningBriefID string `json:"opening_brief_id,omitempty"`
 }
 
 // IsFailedRestore reports whether this record was stopped by the system after

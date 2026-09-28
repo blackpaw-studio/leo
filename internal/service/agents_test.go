@@ -12,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
 
@@ -79,6 +80,83 @@ func TestSpawnAgentSetsEphemeralState(t *testing.T) {
 	}
 	if !state.Ephemeral {
 		t.Error("expected Ephemeral=true")
+	}
+}
+
+// TestSpawnAgentRefusesUnsafeOpeningBrief confirms SpawnAgent refuses the
+// launch outright (no state mutation, nothing scheduled) when
+// OpeningBriefID resolves to a file that fails the Lstat safety check — here
+// a symlink, which a shell $(cat ...) would otherwise happily follow. This is
+// the "refuse to launch with a clear error" behavior the redesigned
+// id+Lstat-verify mechanism requires, as opposed to the earlier design's
+// silent drop-and-continue.
+func TestSpawnAgentRefusesUnsafeOpeningBrief(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	sv.tmuxPath = "false"
+	sv.claudePath = "false"
+	sv.homePath = t.TempDir()
+
+	id, err := claudeharness.GenerateAgentBriefID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := claudeharness.AgentBriefPathForID(sv.homePath, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target.txt")
+	if err := os.WriteFile(target, []byte("attacker-controlled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	err = sv.SpawnAgent(daemon.AgentSpawnSpec{
+		Name:           "symlinked-agent",
+		ClaudeArgs:     []string{"--model", "sonnet"},
+		WorkDir:        t.TempDir(),
+		OpeningBriefID: id,
+	})
+	if err == nil {
+		t.Fatal("expected SpawnAgent to refuse a symlinked opening-brief file")
+	}
+
+	sv.mu.RLock()
+	_, exists := sv.states["symlinked-agent"]
+	sv.mu.RUnlock()
+	if exists {
+		t.Error("SpawnAgent must not register any state for a refused launch")
+	}
+}
+
+// TestSpawnAgentRefusesMalformedOpeningBriefID mirrors the above for an
+// OpeningBriefID that fails ID-shape validation before a path is even
+// derived — e.g. a hand-edited agentstore record.
+func TestSpawnAgentRefusesMalformedOpeningBriefID(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	sv.tmuxPath = "false"
+	sv.claudePath = "false"
+	sv.homePath = t.TempDir()
+
+	err := sv.SpawnAgent(daemon.AgentSpawnSpec{
+		Name:           "tainted-agent",
+		ClaudeArgs:     []string{"--model", "sonnet"},
+		WorkDir:        t.TempDir(),
+		OpeningBriefID: "../../etc/passwd",
+	})
+	if err == nil {
+		t.Fatal("expected SpawnAgent to refuse a malformed opening-brief id")
+	}
+
+	sv.mu.RLock()
+	_, exists := sv.states["tainted-agent"]
+	sv.mu.RUnlock()
+	if exists {
+		t.Error("SpawnAgent must not register any state for a refused launch")
 	}
 }
 

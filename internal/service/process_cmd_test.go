@@ -2,9 +2,12 @@ package service
 
 import (
 	"bytes"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 // TestSessionEnvArgs covers the env that reaches a supervised process. Env is
@@ -304,27 +307,63 @@ func TestBuildClaudeShellCmd_ClaudeArgsAlwaysQuoted(t *testing.T) {
 	}
 }
 
-// TestValidatedOpeningBriefPath is the choke-point test for the security
-// review's HIGH finding: SpawnAgent must reject (not trust) an
-// OpeningBriefPath outside the agent-briefs dir before it ever reaches
-// ProcessSpec, regardless of whether it came from a fresh spawn or a
-// persisted agentstore record loaded from disk.
-func TestValidatedOpeningBriefPath(t *testing.T) {
-	home := "/home/u/.leo"
+// TestResolveOpeningBriefPath is the choke-point test for the redesigned
+// id-based mechanism: SpawnAgent must refuse (not silently drop) an
+// OpeningBriefID that fails either ID-shape validation or the Lstat safety
+// check, before it ever reaches ProcessSpec — regardless of whether the id
+// came from a fresh spawn or a persisted agentstore record loaded from disk.
+func TestResolveOpeningBriefPath(t *testing.T) {
+	home := t.TempDir()
+	briefDir := home + "/state/" + claudeharness.AgentBriefSpillDir
+	if err := os.MkdirAll(briefDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	validID, err := claudeharness.GenerateAgentBriefID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	validPath, err := claudeharness.AgentBriefPathForID(home, validID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := claudeharness.WritePrivateBrief(validPath, "hello"); err != nil {
+		t.Fatal(err)
+	}
+
+	unsafeID, err := claudeharness.GenerateAgentBriefID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsafePath, err := claudeharness.AgentBriefPathForID(home, unsafeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unsafePath, []byte("hi"), 0o644); err != nil { // wrong mode
+		t.Fatal(err)
+	}
+
 	tests := []struct {
-		name string
-		path string
-		want string
+		name    string
+		id      string
+		want    string
+		wantErr bool
 	}{
-		{"empty is a no-op", "", ""},
-		{"valid path kept", home + "/state/agent-briefs/alpha.txt", home + "/state/agent-briefs/alpha.txt"},
-		{"path outside the dir dropped", "/etc/passwd", ""},
-		{"traversal dropped", home + "/state/agent-briefs/../../etc/passwd", ""},
+		{"empty is a no-op", "", "", false},
+		{"valid id with a safe file", validID, validPath, false},
+		{"malformed id rejected", "../../etc/passwd", "", true},
+		{"malformed id with old sentinel bytes rejected", "\x00leo-raw-argv\x00", "", true},
+		{"well-formed id, unsafe file mode refused", unsafeID, "", true},
+		{"well-formed id, missing file refused", "0123456789abcdef0123456789abcdef", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := validatedOpeningBriefPath(home, "alpha", tt.path); got != tt.want {
-				t.Errorf("validatedOpeningBriefPath(%q) = %q, want %q", tt.path, got, tt.want)
+			got, err := resolveOpeningBriefPath(home, "alpha", tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("resolveOpeningBriefPath(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("resolveOpeningBriefPath(%q) = %q, want %q", tt.id, got, tt.want)
 			}
 		})
 	}

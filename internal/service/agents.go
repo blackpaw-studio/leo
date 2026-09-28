@@ -162,15 +162,15 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 		}
 
 		spec := daemon.AgentSpawnSpec{
-			Name:             rec.Name,
-			ClaudeArgs:       args,
-			WorkDir:          rec.Workspace,
-			Env:              rec.Env,
-			WebPort:          rec.WebPort,
-			WebToken:         webToken,
-			Adopt:            adopt,
-			Harness:          rec.Harness,
-			OpeningBriefPath: rec.OpeningBriefPath,
+			Name:           rec.Name,
+			ClaudeArgs:     args,
+			WorkDir:        rec.Workspace,
+			Env:            rec.Env,
+			WebPort:        rec.WebPort,
+			WebToken:       webToken,
+			Adopt:          adopt,
+			Harness:        rec.Harness,
+			OpeningBriefID: rec.OpeningBriefID,
 		}
 		if err := sv.SpawnAgent(spec); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to restore agent %q: %v\n", name, err)
