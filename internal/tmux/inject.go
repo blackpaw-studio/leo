@@ -153,16 +153,16 @@ var execCommand = exec.CommandContext
 // sessionBufferName derives a tmux buffer name unique to the target session
 // so concurrent injection calls into different sessions never share the same
 // staging buffer. Two pump goroutines (one per session) can therefore run
-// set-buffer / paste-buffer in any interleaving without clobbering each
+// load-buffer / paste-buffer in any interleaving without clobbering each
 // other.
 func sessionBufferName(session string) string {
 	return "leo-" + session
 }
 
 // InjectPrompt sends body to the claude running in `session` as a single
-// submission. Uses set-buffer + paste-buffer (-d deletes after paste) to
-// avoid character-by-character races; multi-line bodies preserved; Enter
-// submits.
+// submission. Uses load-buffer (fed via stdin) + paste-buffer (-d deletes
+// after paste) to avoid character-by-character races; multi-line bodies
+// preserved; Enter submits.
 //
 // A freshly booted claude (still loading plugins/MCP servers and wiring up its
 // input handler) renders an input box but silently drops input for a while;
@@ -297,14 +297,8 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 
 	// Phase 2: stage and paste the body exactly once.
 	buf := sessionBufferName(session)
-	for _, args := range [][]string{
-		Args("set-buffer", "-b", buf, "--", body),
-		Args("paste-buffer", "-b", buf, "-t", pane, "-d"),
-	} {
-		cmd := execCommand(ctx, tmuxPath, args...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("tmux %s: %w: %s", args[2], err, string(out))
-		}
+	if err := loadAndPasteOnce(ctx, tmuxPath, buf, pane, body); err != nil {
+		return err
 	}
 
 	// Phase 3: confirm the pasted body actually landed in the pane before
@@ -371,6 +365,27 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 
 	if err := runKey(pane, "Enter"); err != nil {
 		return err
+	}
+	return nil
+}
+
+// loadAndPasteOnce stages body into tmux buffer buf and pastes it into pane
+// exactly once, deleting the buffer afterward (paste-buffer -d).
+//
+// body is fed via stdin to `load-buffer -b <name> -`, not carried as a
+// `set-buffer ... -- <text>` argument: tmux's client-command parser fails
+// (empty buffer, "command too long") once the argument exceeds roughly
+// 16 KiB, silently dropping any prompt bigger than that. load-buffer reading
+// from stdin has no such limit.
+func loadAndPasteOnce(ctx context.Context, tmuxPath, buf, pane, body string) error {
+	loadCmd := execCommand(ctx, tmuxPath, Args("load-buffer", "-b", buf, "-")...)
+	loadCmd.Stdin = strings.NewReader(body)
+	if out, err := loadCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux load-buffer: %w: %s", err, string(out))
+	}
+	pasteCmd := execCommand(ctx, tmuxPath, Args("paste-buffer", "-b", buf, "-t", pane, "-d")...)
+	if out, err := pasteCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux paste-buffer: %w: %s", err, string(out))
 	}
 	return nil
 }

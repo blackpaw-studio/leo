@@ -3,7 +3,9 @@ package tmux
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -85,10 +87,10 @@ func TestInjectIntoUsesNamedBufferAndConfirmsMultilineCollapsedPaste(t *testing.
 	}
 	var buffer string
 	for _, call := range calls {
-		if slices.Contains(call, "set-buffer") {
-			i := slices.Index(call, "set-buffer")
-			if len(call) < i+4 || call[i+1] != "-b" {
-				t.Fatalf("set-buffer call = %#v", call)
+		if slices.Contains(call, "load-buffer") {
+			i := slices.Index(call, "load-buffer")
+			if len(call) < i+4 || call[i+1] != "-b" || call[i+3] != "-" {
+				t.Fatalf("load-buffer call = %#v", call)
 			}
 			buffer = call[i+2]
 		}
@@ -313,12 +315,12 @@ func TestInjectIntoDeletesNamedBufferWhenPasteFails(t *testing.T) {
 	}
 	var buffer string
 	for _, call := range calls {
-		if i := slices.Index(call, "set-buffer"); i >= 0 {
+		if i := slices.Index(call, "load-buffer"); i >= 0 {
 			buffer = call[i+2]
 		}
 	}
 	if buffer == "" {
-		t.Fatal("set-buffer was not called")
+		t.Fatal("load-buffer was not called")
 	}
 	for _, call := range calls {
 		if i := slices.Index(call, "delete-buffer"); i >= 0 && slices.Contains(call, buffer) {
@@ -400,7 +402,7 @@ func TestInjectIntoConfirmsWrappedTailAcrossComposerRows(t *testing.T) {
 // early confirm-loop captures show only its HEAD (the tail-anchored needle
 // is nowhere in them), and Enter must not fire until a later capture shows
 // the whole body, including its tail. Asserts the full ordered tmux call
-// sequence with reflect.DeepEqual: a baseline/classify capture, set-buffer,
+// sequence with reflect.DeepEqual: a baseline/classify capture, load-buffer,
 // paste-buffer, four head-only captures that must not satisfy the confirm
 // loop, one capture whose tail lands, one stability re-check, then Enter.
 func TestInjectIntoWithholdsEnterUntilComposerTailVisible(t *testing.T) {
@@ -420,7 +422,7 @@ func TestInjectIntoWithholdsEnterUntilComposerTailVisible(t *testing.T) {
 	captures := 0
 	execCommand = func(_ context.Context, _ string, args ...string) *exec.Cmd {
 		calls = append(calls, args)
-		if i := slices.Index(args, "set-buffer"); i >= 0 && i+2 < len(args) {
+		if i := slices.Index(args, "load-buffer"); i >= 0 && i+2 < len(args) {
 			buffer = args[i+2]
 		}
 		if slices.Contains(args, "capture-pane") {
@@ -440,14 +442,14 @@ func TestInjectIntoWithholdsEnterUntilComposerTailVisible(t *testing.T) {
 		t.Fatalf("InjectInto: %v", err)
 	}
 	if buffer == "" {
-		t.Fatal("set-buffer was never called")
+		t.Fatal("load-buffer was never called")
 	}
 
 	capturePane := []string{"-L", "leo", "capture-pane", "-p", "-t", "%1"}
 	cp := func() []string { c := make([]string, len(capturePane)); copy(c, capturePane); return c }
 	want := [][]string{
 		cp(), // baseline/classify capture
-		{"-L", "leo", "set-buffer", "-b", buffer, "--", body},
+		{"-L", "leo", "load-buffer", "-b", buffer, "-"},
 		{"-L", "leo", "paste-buffer", "-b", buffer, "-d", "-p", "-t", "%1"},
 		cp(), cp(), cp(), cp(), // four head-only captures: no complete tail, must not match
 		cp(), // tail lands
@@ -671,5 +673,65 @@ func TestInjectIntoPasteFailedNoEnter(t *testing.T) {
 		if slices.Contains(c, "Enter") {
 			t.Fatalf("unexpected Enter: %#v", calls)
 		}
+	}
+}
+
+// TestInjectIntoLoadBufferCarriesLargeTextViaStdin proves InjectInto's fix
+// for the >16 KiB paste bug directly: text reaches tmux on stdin of a
+// `load-buffer -b <name> -` call — never as a `set-buffer ... -- <text>`
+// argument, which tmux's client-command parser truncates/fails above ~16 KiB
+// — and the bytes handed to load-buffer's stdin are byte-for-byte identical
+// to text, for a text well past that threshold. The mocked load-buffer
+// command is a real "tee" writing to a temp file, so the exact bytes
+// production code set as this *exec.Cmd's Stdin (after execCommand
+// returned) land on disk where the test can read them back — proving the
+// real io plumbing, not just argv shape.
+func TestInjectIntoLoadBufferCarriesLargeTextViaStdin(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+
+	text := "start of text\n" + strings.Repeat("y", 20*1024) + "\nend: quotes \" ' backticks ` dollar $ tail"
+	if len(text) <= 16*1024 {
+		t.Fatalf("test text must exceed tmux's ~16KiB set-buffer argument limit, got %d bytes", len(text))
+	}
+
+	dir := t.TempDir()
+	stdinCapture := filepath.Join(dir, "stdin-capture")
+
+	captures := 0
+	loadBufferCalls := 0
+	var calls [][]string
+	execCommand = func(_ context.Context, _ string, args ...string) *exec.Cmd {
+		calls = append(calls, args)
+		if slices.Contains(args, "capture-pane") {
+			captures++
+			if captures == 1 {
+				return exec.Command("echo", "empty")
+			}
+			return exec.Command("echo", "─\n❯ [Pasted text #1 +4 lines]\n─")
+		}
+		if slices.Contains(args, "load-buffer") {
+			loadBufferCalls++
+			return exec.Command("tee", stdinCapture)
+		}
+		return exec.Command("true")
+	}
+	if err := InjectInto(context.Background(), "tmux", "%1", func(string) ComposerState { return ComposerEmpty }, text, nil); err != nil {
+		t.Fatalf("InjectInto: %v", err)
+	}
+	for _, c := range calls {
+		if slices.Contains(c, "set-buffer") {
+			t.Fatalf("expected no set-buffer calls carrying text: %#v", calls)
+		}
+	}
+	if loadBufferCalls != 1 {
+		t.Fatalf("expected exactly 1 load-buffer call, got %d", loadBufferCalls)
+	}
+	captured, err := os.ReadFile(stdinCapture)
+	if err != nil {
+		t.Fatalf("reading captured stdin: %v", err)
+	}
+	if string(captured) != text {
+		t.Fatalf("stdin fed to load-buffer was not byte-exact: got %d bytes, want %d bytes", len(captured), len(text))
 	}
 }

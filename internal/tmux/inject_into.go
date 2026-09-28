@@ -59,8 +59,12 @@ func InjectIntoWith(ctx context.Context, tmuxPath, paneID string, classify Compo
 		return ErrComposerUnknown
 	}
 	buffer := fmt.Sprintf("leo-dispatch-%s-%d", strings.TrimPrefix(paneID, "%"), injectBufferNonce.Add(1))
-	if err := runInjectCommand(ctx, tmuxPath, command, Args("set-buffer", "-b", buffer, "--", text)...); err != nil {
-		return fmt.Errorf("set paste buffer: %w", err)
+	// text is fed via stdin to `load-buffer -b <name> -`, not carried as a
+	// `set-buffer ... -- <text>` argument: tmux's client-command parser fails
+	// (empty buffer, "command too long") once the argument exceeds roughly
+	// 16 KiB, silently dropping any dispatch text bigger than that.
+	if err := runInjectCommandStdin(ctx, tmuxPath, command, text, Args("load-buffer", "-b", buffer, "-")...); err != nil {
+		return fmt.Errorf("load paste buffer: %w", err)
 	}
 	bufferDeleted := false
 	defer func() {
@@ -352,5 +356,17 @@ func runInjectCommand(ctx context.Context, tmuxPath string, command CommandFunc,
 	defer cancel()
 	cmd := command(cctx, tmuxPath, args...)
 	cmd.WaitDelay = injectWaitDelay
+	return cmd.Run()
+}
+
+// runInjectCommandStdin is runInjectCommand with stdin plumbed through to the
+// tmux command — used by load-buffer, which reads its content from stdin
+// rather than an argument (see InjectIntoWith).
+func runInjectCommandStdin(ctx context.Context, tmuxPath string, command CommandFunc, stdin string, args ...string) error {
+	cctx, cancel := context.WithTimeout(ctx, injectCommandTimeout)
+	defer cancel()
+	cmd := command(cctx, tmuxPath, args...)
+	cmd.WaitDelay = injectWaitDelay
+	cmd.Stdin = strings.NewReader(stdin)
 	return cmd.Run()
 }
