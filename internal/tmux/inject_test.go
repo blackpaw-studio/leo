@@ -2,7 +2,9 @@ package tmux
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -70,16 +72,19 @@ func TestInjectPromptCalls(t *testing.T) {
 		t.Fatalf("InjectPrompt: %v", err)
 	}
 	// The body must be staged and pasted exactly once (never stacked).
-	if n := countSub(got, "set-buffer"); n != 1 {
-		t.Fatalf("expected exactly 1 set-buffer, got %d: %#v", n, got)
+	if n := countSub(got, "set-buffer"); n != 0 {
+		t.Fatalf("expected no set-buffer calls (body must go via load-buffer's stdin, not a command argument), got %d: %#v", n, got)
+	}
+	if n := countSub(got, "load-buffer"); n != 1 {
+		t.Fatalf("expected exactly 1 load-buffer, got %d: %#v", n, got)
 	}
 	if n := countSub(got, "paste-buffer"); n != 1 {
 		t.Fatalf("expected exactly 1 paste-buffer, got %d: %#v", n, got)
 	}
-	expectSet := []string{"tmux", "-L", "leo", "set-buffer", "-b", "leo-leo-agent-foo", "--", "hello\nworld"}
+	expectSet := []string{"tmux", "-L", "leo", "load-buffer", "-b", "leo-leo-agent-foo", "-"}
 	expectPaste := []string{"tmux", "-L", "leo", "paste-buffer", "-b", "leo-leo-agent-foo", "-t", testResolvedPane, "-d"}
-	if c := firstSub(got, "set-buffer"); !reflect.DeepEqual(c, expectSet) {
-		t.Fatalf("set-buffer call wrong:\n got %#v\nwant %#v", c, expectSet)
+	if c := firstSub(got, "load-buffer"); !reflect.DeepEqual(c, expectSet) {
+		t.Fatalf("load-buffer call wrong:\n got %#v\nwant %#v", c, expectSet)
 	}
 	if c := firstSub(got, "paste-buffer"); !reflect.DeepEqual(c, expectPaste) {
 		t.Fatalf("paste-buffer call wrong:\n got %#v\nwant %#v", c, expectPaste)
@@ -704,7 +709,7 @@ func TestInjectPromptConfirmRequiresNeedleCountToIncreaseOverBaseline(t *testing
 		cp(), // readiness capture
 		{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "C-u"},
 		cp(), // baseline capture, before set-buffer/paste-buffer
-		{"tmux", "-L", "leo", "set-buffer", "-b", buf, "--", body},
+		{"tmux", "-L", "leo", "load-buffer", "-b", buf, "-"},
 		{"tmux", "-L", "leo", "paste-buffer", "-b", buf, "-t", testResolvedPane, "-d"},
 		cp(), cp(), cp(), cp(), // four head-only confirm-loop captures
 		cp(), // capture whose needle count exceeds the baseline
@@ -843,7 +848,7 @@ func TestInjectPromptConfirmMatchesTailAcrossLineWrap(t *testing.T) {
 		cp(), // readiness capture
 		{"tmux", "-L", "leo", "send-keys", "-t", testResolvedPane, "C-u"},
 		cp(), // baseline capture
-		{"tmux", "-L", "leo", "set-buffer", "-b", buf, "--", body},
+		{"tmux", "-L", "leo", "load-buffer", "-b", buf, "-"},
 		{"tmux", "-L", "leo", "paste-buffer", "-b", buf, "-t", testResolvedPane, "-d"},
 		cp(), // match capture: wrapped tail matches despite the mid-needle newline
 		cp(), // stability re-check: same content, confirms
@@ -1133,5 +1138,68 @@ func TestInjectPromptWaitsThroughMenu(t *testing.T) {
 	last := got[len(got)-1]
 	if last[3] != "send-keys" || last[len(last)-1] != "Enter" {
 		t.Fatalf("last call must be submit Enter, got %#v", last)
+	}
+}
+
+// TestInjectPromptLoadBufferCarriesLargeBodyViaStdin proves the fix for the
+// >16 KiB paste bug directly: the body reaches tmux on stdin of a
+// `load-buffer -b <name> -` call — never as a `set-buffer ... -- <text>`
+// argument, which tmux's client-command parser truncates/fails above ~16 KiB
+// — and the bytes handed to load-buffer's stdin are byte-for-byte identical
+// to the body, for a body well past that threshold. The mocked load-buffer
+// command is a real "tee" writing to a temp file, so the exact bytes
+// production code set as this *exec.Cmd's Stdin (after execCommand
+// returned) land on disk where the test can read them back — proving the
+// real io plumbing, not just argv shape.
+func TestInjectPromptLoadBufferCarriesLargeBodyViaStdin(t *testing.T) {
+	body := "line one\n" + strings.Repeat("x", 20*1024) + "\nline three: quotes \" ' backticks ` dollar $ and tail\n"
+	if len(body) <= 16*1024 {
+		t.Fatalf("test body must exceed tmux's ~16KiB set-buffer argument limit, got %d bytes", len(body))
+	}
+
+	dir := t.TempDir()
+	stdinCapture := filepath.Join(dir, "stdin-capture")
+
+	var got [][]string
+	loadBufferCalls := 0
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		if isListPanes(args) {
+			return exec.Command("printf", "%s", paneListOutput(testResolvedPane))
+		}
+		if len(args) >= 3 && args[2] == "capture-pane" {
+			return exec.Command("printf", "%s", paneWithInput(inputProbe)+body+"\n")
+		}
+		if len(args) >= 3 && args[2] == "load-buffer" {
+			loadBufferCalls++
+			return exec.Command("tee", stdinCapture)
+		}
+		return exec.Command("true")
+	}
+
+	if err := InjectPrompt(context.Background(), "tmux", "leo-agent-foo", body); err != nil {
+		t.Fatalf("InjectPrompt: %v", err)
+	}
+
+	if n := countSub(got, "set-buffer"); n != 0 {
+		t.Fatalf("expected no set-buffer calls carrying the body, got %d", n)
+	}
+	if loadBufferCalls != 1 {
+		t.Fatalf("expected exactly 1 load-buffer call, got %d", loadBufferCalls)
+	}
+	loadArgs := firstSub(got, "load-buffer")
+	wantArgs := []string{"tmux", "-L", "leo", "load-buffer", "-b", "leo-leo-agent-foo", "-"}
+	if !reflect.DeepEqual(loadArgs, wantArgs) {
+		t.Fatalf("load-buffer argv:\n got  %#v\nwant %#v", loadArgs, wantArgs)
+	}
+
+	captured, err := os.ReadFile(stdinCapture)
+	if err != nil {
+		t.Fatalf("reading captured stdin: %v", err)
+	}
+	if string(captured) != body {
+		t.Fatalf("stdin fed to load-buffer was not byte-exact: got %d bytes, want %d bytes", len(captured), len(body))
 	}
 }
