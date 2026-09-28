@@ -393,8 +393,25 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	harnessName := cfg.TemplateHarness(tmpl)
 	isClaude := harnessName == "" || harnessName == "claude"
 
+	// A claude opening prompt never rides BuildTemplateArgs' literal trailing
+	// positional (see resolveOpeningPrompt); other harnesses keep the prompt
+	// as-is and deliver it via their tmux-TUI driver's post-launch injection.
+	promptForArgs := spec.Prompt
+	var rawPromptArg string
+	if isClaude {
+		var err error
+		rawPromptArg, err = resolveOpeningPrompt(cfg, agentName, spec.Prompt)
+		if err != nil {
+			return Record{}, err
+		}
+		promptForArgs = ""
+	}
+
 	sessionID := session.NewID()
-	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, agentName, workspace, spec.Prompt, m.webToken)
+	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, agentName, workspace, promptForArgs, m.webToken)
+	if rawPromptArg != "" {
+		claudeArgs = append(claudeArgs, rawPromptArg)
+	}
 	openingPrompt := ""
 	// storedSessionID seeds agentstore.Record.SessionID, which the tmux-TUI
 	// driver's SessionIDStore (agent.NewAgentIDs) reads back via IDs.Get() to
@@ -664,11 +681,44 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 	}
 	worktreeCreated := true
 
+	// rollbackWorktree removes the worktree created above so disk state stays
+	// consistent with the supervisor whenever a step after worktree creation
+	// fails. Declared here (rather than just before its first historical use
+	// further down) so the opening-prompt resolution below — which can fail
+	// on an oversized prompt — rolls back the worktree exactly like every
+	// other failure after AddWorktreeForBranch.
+	rollbackWorktree := func() {
+		if !worktreeCreated {
+			return
+		}
+		rmCtx, rmCancel := context.WithTimeout(context.Background(), gitFetchTimeout)
+		if rbErr := git.RemoveWorktree(rmCtx, canonical, layout.WorktreePath, true); rbErr != nil {
+			log.Printf("spawn rollback: git worktree remove failed for %s: %v", layout.WorktreePath, rbErr)
+		}
+		rmCancel()
+	}
+
 	harnessName := cfg.TemplateHarness(tmpl)
 	isClaude := harnessName == "" || harnessName == "claude"
 
+	// See the identical resolveOpeningPrompt comment in spawnShared.
+	promptForArgs := spec.Prompt
+	var rawPromptArg string
+	if isClaude {
+		var err error
+		rawPromptArg, err = resolveOpeningPrompt(cfg, layout.AgentName, spec.Prompt)
+		if err != nil {
+			rollbackWorktree()
+			return Record{}, err
+		}
+		promptForArgs = ""
+	}
+
 	sessionID := session.NewID()
-	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, spec.Prompt, m.webToken)
+	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, promptForArgs, m.webToken)
+	if rawPromptArg != "" {
+		claudeArgs = append(claudeArgs, rawPromptArg)
+	}
 	openingPrompt := ""
 	// See the identical storedSessionID comment in spawnShared: a non-claude
 	// harness must NOT have its agentstore SessionID pre-seeded, or its
@@ -692,20 +742,6 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 	// caller env as the top overlay).
 	inherited := pruneEnv(p.inheritEnv, harnessEnv)
 	env := applyPermissions(mergeEnv(mergeEnv(mergeEnv(harnessEnv, tmpl.Env), inherited), spec.Env), tmpl)
-
-	// rollbackWorktree removes the worktree created above so disk state stays
-	// consistent with the supervisor whenever a step after worktree creation
-	// fails.
-	rollbackWorktree := func() {
-		if !worktreeCreated {
-			return
-		}
-		rmCtx, rmCancel := context.WithTimeout(context.Background(), gitFetchTimeout)
-		if rbErr := git.RemoveWorktree(rmCtx, canonical, layout.WorktreePath, true); rbErr != nil {
-			log.Printf("spawn rollback: git worktree remove failed for %s: %v", layout.WorktreePath, rbErr)
-		}
-		rmCancel()
-	}
 
 	idleStr := ""
 	if d := cfg.ResolveIdleSuspend(tmpl, spec.IdleSuspend); d > 0 {
@@ -874,6 +910,12 @@ func (m *Manager) Stop(name string, opts StopOptions) error {
 		}
 		return fmt.Errorf("loading config to stop agent %q: %w", name, err)
 	}
+	// The supervise loop that could have replayed this agent's launch argv
+	// (and the $(cat <brief file>) word in it — see resolveOpeningPrompt) is
+	// gone once we get here, whether because StopAgent just ended it or the
+	// agent was already dormant. Best-effort and idempotent: a missing file
+	// is not an error.
+	removeOpeningPromptBrief(cfg.HomePath, name)
 	stored, err := agentstore.Load(agentstore.FilePath(cfg.HomePath))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		if live {
@@ -1490,6 +1532,9 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 	m.attention.Remove(name)
 	m.surfacedFiles.Remove(name)
 	removeSettingsSpill(cfg.HomePath, name)
+	// Tolerates the file already being gone — Stop already removes it on the
+	// common stop-then-delete path.
+	removeOpeningPromptBrief(cfg.HomePath, name)
 	// Delete only ever reaches here for a not-live agent (the EphemeralAgents
 	// check above already rejected a live one), verbatim the rationale
 	// announceStoppedIfNotLive documents for Stop: nothing else along this
@@ -1692,6 +1737,13 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		// credentials. A live agent keeps its file until the startup
 		// SweepSettingsSpills, since its claude may re-read it.
 		removeSettingsSpill(cfg.HomePath, oldName)
+		// The opening-prompt brief (if any) is keyed by the OLD name too, and
+		// rewriteNameArg above only touches the --name flag value, not a raw
+		// $(cat <old-name's-brief-path>) argv word already baked into
+		// r.ClaudeArgs — so a not-live agent (about to be started fresh under
+		// its new name, never replaying the old opening prompt) has no more
+		// use for it either.
+		removeOpeningPromptBrief(cfg.HomePath, oldName)
 		// After the announce, so consumers see the new name spawn before
 		// its carried attention arrives.
 		m.attention.Move(oldName, newName)

@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 // TestSessionEnvArgs covers the env that reaches a supervised process. Env is
@@ -260,6 +262,27 @@ func TestBuildClaudeShellCmd_ArgsAreShellQuoted(t *testing.T) {
 	}
 	if strings.Contains(got, " hello $USER ") {
 		t.Errorf("unquoted $USER would be shell-expanded\nfull cmd: %s", got)
+	}
+}
+
+// TestBuildClaudeShellCmd_RawArgBypassesQuoting locks the tmux-16KiB fix: an
+// argv element wrapped by harness.RawArg (a $(cat <brief file>) command
+// substitution — see claudeharness.BriefArgvWord) must reach the final shell
+// command line verbatim, not wrapped in single quotes, or the substitution
+// would never expand.
+func TestBuildClaudeShellCmd_RawArgBypassesQuoting(t *testing.T) {
+	spec := ProcessSpec{Name: "alpha"}
+	rawWord := `"$(cat '/home/u/.leo/state/agent-briefs/alpha.txt')"`
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--model", "sonnet", harness.RawArg(rawWord)}, spec, "")
+
+	if !strings.Contains(got, rawWord) {
+		t.Errorf("cmd missing unquoted raw word %q\nfull cmd: %s", rawWord, got)
+	}
+	if strings.Contains(got, "'\"$(cat") {
+		t.Errorf("raw word must not be single-quoted\nfull cmd: %s", got)
+	}
+	if strings.Contains(got, "leo-raw-argv") {
+		t.Errorf("sentinel must not leak into the shell command\nfull cmd: %s", got)
 	}
 }
 

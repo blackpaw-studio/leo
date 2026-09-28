@@ -1746,6 +1746,14 @@ func buildClaudeShellCmd(claudePath string, args []string, spec ProcessSpec, pat
 	quoted := make([]string, 0, len(args)+1)
 	quoted = append(quoted, shellQuote(claudePath))
 	for _, arg := range args {
+		// A harness.RawArg-wrapped element (e.g. a $(cat <brief file>)
+		// command substitution — see claudeharness.BriefArgvWord) must reach
+		// the shell command line verbatim: shellQuote's single quotes would
+		// disable the substitution entirely.
+		if word, raw := harness.SplitRawArg(arg); raw {
+			quoted = append(quoted, word)
+			continue
+		}
 		quoted = append(quoted, shellQuote(arg))
 	}
 	cmd := strings.Join(quoted, " ")
