@@ -24,6 +24,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -150,9 +151,19 @@ type ProcessSpec struct {
 	Kind harness.Kind
 	// OpeningPrompt carries the opening turn for non-claude harnesses, whose
 	// tmux-TUI driver injects it into the pane via Start rather than passing
-	// it as a trailing positional arg. Empty for claude, which keeps the
-	// prompt in ClaudeArgs.
+	// it as a trailing positional arg. Empty for claude, which uses
+	// OpeningBriefPath instead.
 	OpeningPrompt string
+	// OpeningBriefPath is a claude agent's opening-prompt brief file, already
+	// derived and safety-checked from daemon.AgentSpawnSpec.OpeningBriefID by
+	// SpawnAgent's resolveOpeningBriefPath before ProcessSpec is ever built —
+	// ProcessSpec itself is not persisted, so it carries the resolved path,
+	// not the id. When set, buildClaudeShellCmd appends its own
+	// $(cat <path>) substitution as the final shell word, AFTER every
+	// ClaudeArgs element has already been shell-quoted — this is the only
+	// argv content ever emitted unquoted, and it never flows through
+	// ClaudeArgs to get there.
+	OpeningBriefPath string
 	// attentionToken is this launch's attention token, exported to the
 	// session as LEO_ATTENTION_TOKEN ("" = launched without hooks). Runtime
 	// supervisor state, like primaryPane.
@@ -364,6 +375,15 @@ func (s *Supervisor) ReleaseAgent(name string) {
 // The process is not persisted to config — it lives only in memory.
 // Implements daemon.AgentManager.
 func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
+	// Resolved and safety-checked before any state mutation: a spec carrying
+	// an opening-prompt brief id that fails validation must refuse the
+	// launch outright, not silently drop the prompt and proceed (spec.
+	// OpeningBriefID can originate from a persisted, and therefore
+	// untrusted, agentstore record — see resolveOpeningBriefPath).
+	openingBriefPath, err := resolveOpeningBriefPath(s.homePath, spec.Name, spec.OpeningBriefID)
+	if err != nil {
+		return err
+	}
 	hooked := spawnHooked(driverFor(spec.Harness), s.homePath, spec.Name, spec.Adopt)
 	s.mu.Lock()
 	if _, exists := s.states[spec.Name]; exists {
@@ -421,16 +441,17 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 	}
 
 	procSpec := ProcessSpec{
-		Name:          spec.Name,
-		ClaudeArgs:    spec.ClaudeArgs,
-		WorkDir:       spec.WorkDir,
-		Env:           spec.Env,
-		WebPort:       spec.WebPort,
-		WebToken:      spec.WebToken,
-		Adopt:         spec.Adopt,
-		Harness:       spec.Harness,
-		Kind:          harness.KindAgent,
-		OpeningPrompt: spec.OpeningPrompt,
+		Name:             spec.Name,
+		ClaudeArgs:       spec.ClaudeArgs,
+		WorkDir:          spec.WorkDir,
+		Env:              spec.Env,
+		WebPort:          spec.WebPort,
+		WebToken:         spec.WebToken,
+		Adopt:            spec.Adopt,
+		Harness:          spec.Harness,
+		Kind:             harness.KindAgent,
+		OpeningPrompt:    spec.OpeningPrompt,
+		OpeningBriefPath: openingBriefPath,
 	}
 	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
 	return nil
@@ -888,6 +909,10 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// renamed while live. Runs before srv.Start so it can never race a spawn
 	// arriving over IPC and delete that agent's fresh spill file.
 	agent.SweepSettingsSpills(homePath)
+	// Best-effort: drop opening-prompt brief files an agent record no longer
+	// references — e.g. a Start/Restart cleared OpeningBriefID after
+	// rebuilding ClaudeArgs fresh (see agent.resolveOpeningPrompt).
+	agent.SweepOpeningPromptBriefs(homePath)
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: daemon server failed to start: %v\n", err)
 	} else {
@@ -1628,6 +1653,42 @@ var supervisorWebTokenPattern = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
 // otherwise so the pane's exported PATH still gets a chance. An unregistered
 // name falls back to claudePath: config validation rejects those long before
 // a spec reaches the supervisor, and the pane failure is loud either way.
+// resolveOpeningBriefPath is the one choke point every spawn path (fresh
+// spawn, Start, Restart, Reset, and RestoreAgents' boot-time replay) passes
+// through before an opening-prompt brief id becomes a path ProcessSpec will
+// hand to buildClaudeShellCmd's unquoted $(cat ...) substitution. id may
+// originate from a hand-authored SpawnRequest today, but agentstore.Record.
+// OpeningBriefID round-trips through JSON on disk, so it is treated as
+// untrusted regardless of source:
+//
+//  1. claudeharness.AgentBriefPathForID rejects anything not matching
+//     ^[0-9a-f]{32}$ before it ever becomes a path — an ID is never
+//     interpolated into a path expression directly.
+//  2. claudeharness.VerifyAgentBriefFile then Lstats the derived path
+//     (never following a symlink) and requires a regular file, mode 0600,
+//     owned by the current process's uid — catching a symlink or a
+//     tampered/mismatched-owner file planted at that exact location.
+//
+// Either failure refuses the spawn outright with a clear error, rather than
+// silently dropping the prompt and launching without it: a caller (or an
+// attacker with write access to agentstore.json) that supplied a bad id gets
+// a loud failure, not an agent that quietly starts without the prompt it was
+// told to carry. An empty id is not an error — most agents have no opening
+// prompt at all.
+func resolveOpeningBriefPath(homePath, agentName, id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	path, err := claudeharness.AgentBriefPathForID(homePath, id)
+	if err != nil {
+		return "", fmt.Errorf("[%s] opening-brief id: %w", agentName, err)
+	}
+	if err := claudeharness.VerifyAgentBriefFile(path); err != nil {
+		return "", fmt.Errorf("[%s] opening-brief file failed safety check: %w", agentName, err)
+	}
+	return path, nil
+}
+
 func harnessBinaryPath(harnessName, claudePath string) string {
 	if harnessName == "" || harnessName == "claude" {
 		return claudePath
@@ -1743,10 +1804,24 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 // no env except PATH — see sessionEnvArgs for why the rest moved out, and the
 // PATH export below for why that one stayed.
 func buildClaudeShellCmd(claudePath string, args []string, spec ProcessSpec, pathEnv string) string {
-	quoted := make([]string, 0, len(args)+1)
+	quoted := make([]string, 0, len(args)+2)
 	quoted = append(quoted, shellQuote(claudePath))
 	for _, arg := range args {
+		// Every ClaudeArgs element is shell-quoted, with no exceptions —
+		// whether it came from config, an --env override, or a persisted
+		// agentstore record. The one piece of unquoted shell text this
+		// command line ever carries is appended below, from the typed
+		// OpeningBriefPath field, never from ClaudeArgs.
 		quoted = append(quoted, shellQuote(arg))
+	}
+	if spec.OpeningBriefPath != "" {
+		// Deliberately NOT passed through shellQuote: BriefArgvWord's own
+		// quoting keeps the substituted content — and the path itself — safe,
+		// and a further shellQuote pass would wrap the whole thing in single
+		// quotes and disable the "$(...)" expansion entirely. Appended last,
+		// after the ordinary argv (mirroring where a claude opening prompt
+		// has always sat: the trailing positional).
+		quoted = append(quoted, claudeharness.BriefArgvWord(spec.OpeningBriefPath))
 	}
 	cmd := strings.Join(quoted, " ")
 

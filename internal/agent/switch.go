@@ -155,6 +155,14 @@ func (m *Manager) SwitchTemplate(name, template string) (SwitchResult, error) {
 	// id re-arms post-hoc discovery for a fresh conversation.
 	next.ClaudeArgs = args
 	next.Env = env
+	// next started as a copy of rec (see withTemplate), so it still carries
+	// the DEPARTING template's OpeningBriefID — a claude-only field that has
+	// no meaning for the arriving template (which may not even be claude) and
+	// whose brief file a later RestoreAgents/Reset must never replay into the
+	// wrong conversation. Same fix as Start/Restart: clear it here, alongside
+	// the fresh promptless ClaudeArgs rebuild above; SweepOpeningPromptBriefs
+	// cleans up the now-orphaned file.
+	next.OpeningBriefID = ""
 
 	if status == "stopped" {
 		// Nothing to bounce, and no minted session id to keep: the agent will

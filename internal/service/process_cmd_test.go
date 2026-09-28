@@ -2,9 +2,12 @@ package service
 
 import (
 	"bytes"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 )
 
 // TestSessionEnvArgs covers the env that reaches a supervised process. Env is
@@ -260,6 +263,109 @@ func TestBuildClaudeShellCmd_ArgsAreShellQuoted(t *testing.T) {
 	}
 	if strings.Contains(got, " hello $USER ") {
 		t.Errorf("unquoted $USER would be shell-expanded\nfull cmd: %s", got)
+	}
+}
+
+// TestBuildClaudeShellCmd_OpeningBriefPathAppendedUnquoted locks the
+// tmux-16KiB fix as it exists after the security review of the first cut:
+// the $(cat <brief file>) substitution comes ONLY from the typed
+// ProcessSpec.OpeningBriefPath field, appended by buildClaudeShellCmd itself
+// as the trailing word — never from a ClaudeArgs element — and it lands in
+// the shell command line unquoted (a shellQuote pass would disable the
+// "$(...)" expansion).
+func TestBuildClaudeShellCmd_OpeningBriefPathAppendedUnquoted(t *testing.T) {
+	spec := ProcessSpec{Name: "alpha", OpeningBriefPath: "/home/u/.leo/state/agent-briefs/alpha.txt"}
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--model", "sonnet", "--name", "alpha"}, spec, "")
+
+	wantWord := `"$(cat '/home/u/.leo/state/agent-briefs/alpha.txt')"`
+	if !strings.HasSuffix(got, wantWord) {
+		t.Errorf("cmd does not end with the brief argv word %q\nfull cmd: %s", wantWord, got)
+	}
+	if strings.Contains(got, "'\"$(cat") {
+		t.Errorf("brief argv word must not be single-quoted\nfull cmd: %s", got)
+	}
+}
+
+// TestBuildClaudeShellCmd_ClaudeArgsAlwaysQuoted is the direct regression
+// test for the security review's HIGH finding: the first cut of this fix
+// carried the brief substitution as a NUL-prefixed sentinel INSIDE a
+// ClaudeArgs element, which buildClaudeShellCmd then emitted unquoted for
+// ANY argv element bearing that prefix — including one loaded from an
+// untrusted agentstore record or a config-derived harness_options value.
+// Every ClaudeArgs element must now be shell-quoted with no exceptions,
+// whether or not it contains shell metacharacters or the old sentinel bytes.
+func TestBuildClaudeShellCmd_ClaudeArgsAlwaysQuoted(t *testing.T) {
+	spec := ProcessSpec{Name: "alpha"}
+	malicious := "\x00leo-raw-argv\x00$(rm -rf /)"
+	got := buildClaudeShellCmd("/usr/local/bin/claude", []string{"--allowed-tools", malicious}, spec, "")
+
+	if !strings.Contains(got, shellQuote(malicious)) {
+		t.Errorf("cmd does not contain the fully shell-quoted arg\nfull cmd: %s", got)
+	}
+	if strings.Contains(got, "$(rm -rf /)") && !strings.Contains(got, shellQuote(malicious)) {
+		t.Fatalf("malicious substring appears unquoted\nfull cmd: %s", got)
+	}
+}
+
+// TestResolveOpeningBriefPath is the choke-point test for the redesigned
+// id-based mechanism: SpawnAgent must refuse (not silently drop) an
+// OpeningBriefID that fails either ID-shape validation or the Lstat safety
+// check, before it ever reaches ProcessSpec — regardless of whether the id
+// came from a fresh spawn or a persisted agentstore record loaded from disk.
+func TestResolveOpeningBriefPath(t *testing.T) {
+	home := t.TempDir()
+	briefDir := home + "/state/" + claudeharness.AgentBriefSpillDir
+	if err := os.MkdirAll(briefDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	validID, err := claudeharness.GenerateAgentBriefID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	validPath, err := claudeharness.AgentBriefPathForID(home, validID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := claudeharness.WritePrivateBrief(validPath, "hello"); err != nil {
+		t.Fatal(err)
+	}
+
+	unsafeID, err := claudeharness.GenerateAgentBriefID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsafePath, err := claudeharness.AgentBriefPathForID(home, unsafeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unsafePath, []byte("hi"), 0o644); err != nil { // wrong mode
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		id      string
+		want    string
+		wantErr bool
+	}{
+		{"empty is a no-op", "", "", false},
+		{"valid id with a safe file", validID, validPath, false},
+		{"malformed id rejected", "../../etc/passwd", "", true},
+		{"malformed id with old sentinel bytes rejected", "\x00leo-raw-argv\x00", "", true},
+		{"well-formed id, unsafe file mode refused", unsafeID, "", true},
+		{"well-formed id, missing file refused", "0123456789abcdef0123456789abcdef", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveOpeningBriefPath(home, "alpha", tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("resolveOpeningBriefPath(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("resolveOpeningBriefPath(%q) = %q, want %q", tt.id, got, tt.want)
+			}
+		})
 	}
 }
 

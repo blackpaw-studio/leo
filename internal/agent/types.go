@@ -30,8 +30,20 @@ type SpawnRequest struct {
 	// OpeningPrompt carries the agent's opening turn for harnesses whose
 	// driver injects it into the TUI pane after launch (the tmux-TUI driver's
 	// Start call) rather than passing it as a trailing positional claude arg.
-	// Empty for claude, which keeps the prompt in ClaudeArgs.
+	// Empty for claude, which uses OpeningBriefID instead.
 	OpeningPrompt string
+	// OpeningBriefID identifies a claude agent's opening-prompt brief file
+	// (see agentstore.Record.OpeningBriefID): 32 hex characters, NOT derived
+	// from the agent name (so a rename followed by a fresh spawn under the
+	// freed name can never collide with an old brief). The supervisor derives
+	// the actual path from this id (claudeharness.AgentBriefPathForID),
+	// Lstat-verifies it (claudeharness.VerifyAgentBriefFile — regular file,
+	// mode 0600, owned by the current uid, never a symlink), and only then
+	// appends the $(cat <path>) substitution itself, after ClaudeArgs is
+	// fully shell-quoted — ClaudeArgs must never carry anything meant to
+	// bypass that quoting. Empty for a claude agent with no opening prompt,
+	// and always empty for a non-claude harness.
+	OpeningBriefID string
 	// Resumed is set by Manager.Resume to mark this spawn as reviving a
 	// suspended agent rather than creating a new one. The supervisor uses it
 	// to announce the transition as observe.EventAgentStateChanged (status

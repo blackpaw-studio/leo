@@ -88,7 +88,7 @@ func (r *TmuxInteractiveRuntime) SweepRunFiles(keep map[string]bool) {
 		return
 	}
 	sweepGlob(filepath.Join(home, "state", "settings", dispatchSpillPrefix+"*.json"), dispatchSpillPrefix, ".json", "settings spill", keep)
-	sweepGlob(filepath.Join(home, "state", briefSpillDir, "*.txt"), "", ".txt", "opening brief", keep)
+	sweepGlob(filepath.Join(home, "state", claudeharness.DispatchBriefSpillDir, "*.txt"), "", ".txt", "opening brief", keep)
 }
 
 func sweepGlob(pattern, prefix, suffix, what string, keep map[string]bool) {
