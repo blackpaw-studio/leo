@@ -9,18 +9,18 @@ import (
 )
 
 func TestParseTrustedProxies(t *testing.T) {
-	trusted, err := parseTrustedProxies([]string{"10.0.2.9", "10.0.4.4/24"})
+	trusted, err := parseTrustedProxies([]string{"192.0.2.9", "198.51.100.4/24"})
 	if err != nil || len(trusted) != 2 {
 		t.Fatalf("parseTrustedProxies = %v, %v; want two prefixes and nil", trusted, err)
 	}
 	if _, err := parseTrustedProxies([]string{"invalid"}); err == nil {
 		t.Fatal("parseTrustedProxies accepted invalid address")
 	}
-	trusted, err = parseTrustedProxies([]string{"::ffff:10.0.2.0/120"})
+	trusted, err = parseTrustedProxies([]string{"::ffff:192.0.2.0/120"})
 	if err != nil {
 		t.Fatalf("parseTrustedProxies mapped prefix: %v", err)
 	}
-	if got, want := trusted[0].String(), "10.0.2.0/24"; got != want {
+	if got, want := trusted[0].String(), "192.0.2.0/24"; got != want {
 		t.Fatalf("mapped prefix = %q, want %q", got, want)
 	}
 	for _, value := range []string{"0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96", "fe80::1%en0"} {
@@ -49,16 +49,16 @@ func testProxyAuthentication(t *testing.T, middleware func([]string) http.Handle
 		trusted                              []string
 		want                                 int
 	}{
-		{"trusted header", "10.0.2.9:51234", "evan", "", []string{"10.0.2.9"}, http.StatusOK},
-		{"untrusted header", "10.0.2.50:51234", "evan", "", []string{"10.0.2.9"}, http.StatusUnauthorized},
-		{"trusted no header", "10.0.2.9:51234", "", "", []string{"10.0.2.9"}, http.StatusUnauthorized},
-		{"untrusted bearer", "10.0.2.50:51234", "", "token", []string{"10.0.2.9"}, http.StatusOK},
-		{"trusted bearer", "10.0.2.9:51234", "", "token", []string{"10.0.2.9"}, http.StatusOK},
-		{"empty list", "10.0.2.9:51234", "evan", "", nil, http.StatusUnauthorized},
-		{"cidr", "10.0.4.5:1", "evan", "", []string{"10.0.4.0/24"}, http.StatusOK},
-		{"ipv6", "[::1]:1", "evan", "", []string{"::1"}, http.StatusOK},
-		{"mapped ipv4", "[::ffff:10.0.2.9]:1", "evan", "", []string{"10.0.2.9"}, http.StatusOK},
-		{"whitespace header", "10.0.2.9:51234", " \t ", "", []string{"10.0.2.9"}, http.StatusUnauthorized},
+		{"trusted header", "192.0.2.9:51234", "alice", "", []string{"192.0.2.9"}, http.StatusOK},
+		{"untrusted header", "192.0.2.50:51234", "alice", "", []string{"192.0.2.9"}, http.StatusUnauthorized},
+		{"trusted no header", "192.0.2.9:51234", "", "", []string{"192.0.2.9"}, http.StatusUnauthorized},
+		{"untrusted bearer", "192.0.2.50:51234", "", "token", []string{"192.0.2.9"}, http.StatusOK},
+		{"trusted bearer", "192.0.2.9:51234", "", "token", []string{"192.0.2.9"}, http.StatusOK},
+		{"empty list", "192.0.2.9:51234", "alice", "", nil, http.StatusUnauthorized},
+		{"cidr", "198.51.100.5:1", "alice", "", []string{"198.51.100.0/24"}, http.StatusOK},
+		{"ipv6", "[::1]:1", "alice", "", []string{"::1"}, http.StatusOK},
+		{"mapped ipv4", "[::ffff:192.0.2.9]:1", "alice", "", []string{"192.0.2.9"}, http.StatusOK},
+		{"whitespace header", "192.0.2.9:51234", " \t ", "", []string{"192.0.2.9"}, http.StatusUnauthorized},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,9 +71,9 @@ func testProxyAuthentication(t *testing.T, middleware func([]string) http.Handle
 		if err != nil {
 			t.Fatal(err)
 		}
-		h := sessionMiddleware(store, []string{"token"}, mustTrustedProxies(t, []string{"10.0.2.9"}), okHandler())
+		h := sessionMiddleware(store, []string{"token"}, mustTrustedProxies(t, []string{"192.0.2.9"}), okHandler())
 		r := httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
-		r.RemoteAddr = "10.0.2.50:1"
+		r.RemoteAddr = "192.0.2.50:1"
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: id})
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
@@ -82,10 +82,10 @@ func testProxyAuthentication(t *testing.T, middleware func([]string) http.Handle
 		}
 
 		redirectReq := httptest.NewRequest(http.MethodGet, "http://example.test/path", nil)
-		redirectReq.RemoteAddr = "10.0.2.9:1"
+		redirectReq.RemoteAddr = "192.0.2.9:1"
 		redirectReq.Header.Set("Accept", "text/html")
 		redirectW := httptest.NewRecorder()
-		middleware([]string{"10.0.2.9"}).ServeHTTP(redirectW, redirectReq)
+		middleware([]string{"192.0.2.9"}).ServeHTTP(redirectW, redirectReq)
 		if redirectW.Code != http.StatusSeeOther || redirectW.Header().Get("Location") != "/login?redirect=%2Fpath" {
 			t.Fatalf("HTML failure = %d Location %q", redirectW.Code, redirectW.Header().Get("Location"))
 		}

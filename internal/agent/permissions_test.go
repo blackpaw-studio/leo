@@ -49,7 +49,7 @@ func TestBuildTemplateArgsExportsPermissions(t *testing.T) {
 			if !got.DeniesTool("leo_spawn_agent") {
 				t.Errorf("deny_tools did not survive: %+v", got)
 			}
-			if got.AllowsMessage("olympus") || !got.AllowsMessage("scout-leo") {
+			if got.AllowsMessage("infra") || !got.AllowsMessage("scout-leo") {
 				t.Errorf("can_message did not survive: %+v", got)
 			}
 			if !got.AllowsSpawn("codex") || !got.AllowsConsult("fable") {

@@ -67,7 +67,7 @@ func TestClientTokenReachesItsAllowedTarget(t *testing.T) {
 func TestClientTokenCannotMessageOtherAgents(t *testing.T) {
 	s := newClientTokenServer(t)
 
-	for _, target := range []string{"rocket", "olympus", "leo-coding-le", "scout"} {
+	for _, target := range []string{"rocket", "infra", "leo-coding-le", "scout"} {
 		if code := postAsClient(t, s, "/web/agent/"+target+"/message", "docker-scout"); code != http.StatusForbidden {
 			t.Errorf("POST to disallowed target %q = %d, want 403", target, code)
 		}

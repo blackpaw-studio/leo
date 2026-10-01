@@ -16,7 +16,7 @@ const homeIdentityHashLen = 12
 
 // resolveHomePath normalizes home into a form that is stable across
 // equivalent spellings — relative vs. absolute, trailing slashes, and
-// symlinks (e.g. /Users/evan vs a symlinked /home/evan) — so the same
+// symlinks (e.g. /Users/alice vs a symlinked /home/alice) — so the same
 // leo home always hashes to the same identity regardless of how it was
 // invoked. EvalSymlinks requires the path to exist; when it doesn't yet
 // (e.g. first install, before the home directory has been created) we

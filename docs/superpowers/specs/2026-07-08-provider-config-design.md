@@ -6,7 +6,7 @@
 ## Problem
 
 Leo can only run agents on Anthropic models through the stock `claude` CLI.
-Evan wants to experiment with other models (GLM, GPT, etc.) — for hedging,
+The maintainer wants to experiment with other models (GLM, GPT, etc.) — for hedging,
 quality comparison, and as a manual escape hatch when Claude usage limits hit.
 
 ## Decision
@@ -39,7 +39,7 @@ providers:
     default_model: glm-5.2
   openrouter:
     base_url: https://openrouter.ai/api
-    api_key_cmd: op read "op://Olympus/OpenRouter/api-key"
+    api_key_cmd: op read "op://Vault/OpenRouter/api-key"
 ```
 
 Fields per provider:

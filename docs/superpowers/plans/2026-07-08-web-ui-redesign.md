@@ -19,7 +19,7 @@
 - Font: JetBrains Mono woff2 (Regular + Bold) embedded and served from `/static/fonts/`, with `ui-monospace, "SF Mono", Menlo, monospace` fallback. Include the OFL license file.
 - The JSON `/api/*` surface must not change (channel plugins depend on it).
 - Auth (token login, cookie sessions, bearer API) must not change behavior — only the login page gets restyled.
-- Never touch the production daemon during development. Live testing uses an isolated `LEO_HOME` test daemon (see `~/.claude/projects/-Users-evan--leo-agents-leo/memory/reference_isolated_leo_test_daemon.md`): separate home dir + port, e.g. `LEO_HOME=/tmp/leo-webdev leo service start` after seeding a minimal `leo.yaml` there.
+- Never touch the production daemon during development. Live testing uses an isolated `LEO_HOME` test daemon (see the project memory notes on the isolated test daemon): separate home dir + port, e.g. `LEO_HOME=/tmp/leo-webdev leo service start` after seeding a minimal `leo.yaml` there.
 - Every commit: `make test` (`go test -race -cover ./...`) and `make lint` (go vet + staticcheck) must pass.
 - Commit messages end with:
   `Claude-Session: https://claude.ai/code/session_01VS4H83KEDpFSwyEtKpUthV`
@@ -1916,7 +1916,7 @@ git add internal/web/ && git commit -m "feat(web): providers page — full CRUD 
 ```go
 func TestWebConfigSave(t *testing.T) {
 	srv, cookie := newAuthedTestServer(t)
-	form := url.Values{"port": {"8371"}, "bind": {"0.0.0.0"}, "allowed_hosts": {"10.0.4.16, 10.0.2.10"}}
+	form := url.Values{"port": {"8371"}, "bind": {"0.0.0.0"}, "allowed_hosts": {"198.51.100.16, 192.0.2.10"}}
 	form.Add("enabled", "false"); form.Add("enabled", "true")
 	resp := postFormWithCookie(t, srv, "/web/config/web", form, cookie)
 	if resp.StatusCode != 200 { t.Fatalf("save: %d", resp.StatusCode) }

@@ -54,7 +54,7 @@ envelope.
   "name": "den",
   "template": "fable",
   "repo": "blackpaw-studio/leo-den",
-  "workspace": "/Users/evan/.leo/agents/leo-den",
+  "workspace": "/Users/alice/.leo/agents/leo-den",
   "branch": "main",
   "status": "running",
   "activity": "working",
@@ -113,7 +113,7 @@ envelope.
   "started_at": "2026-07-31T18:42:33-04:00",
   "id": "0b6f7c4e-8f7e-4c55-9d7a-1f2e3d4c5b6a",
   "path": "docs/report.md",
-  "abs_path": "/Users/evan/.leo/agents/leo-den/docs/report.md",
+  "abs_path": "/Users/alice/.leo/agents/leo-den/docs/report.md",
   "line": 42,
   "reason": "Benchmarks regressed; see the table",
   "at": "2026-07-31T18:50:12-04:00"

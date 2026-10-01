@@ -111,7 +111,7 @@ func TestSaveViewerDefaultsOperatorOnly(t *testing.T) {
 	w = httptest.NewRecorder()
 	r := viewerRequest("/api/dispatch/viewer/save-default", `{}`, "agent")
 	r.RemoteAddr = "10.1.2.3:1234"
-	r.Header.Set("Remote-User", "evan")
+	r.Header.Set("Remote-User", "alice")
 	s.handleDispatchViewerSaveDefault(w, r)
 	if w.Code != 200 {
 		t.Fatalf("trusted proxy code=%d body=%s", w.Code, w.Body.String())

@@ -183,8 +183,8 @@ func TestTrustedProxyAuthentication_AllowsPublicHostWithoutPort(t *testing.T) {
 	s := New(cfgPath, &mockProcesses{states: map[string]ProcessStateInfo{}}, &mockScheduler{}, &mockReloader{}, nil, Options{
 		Port:           testPort,
 		APIToken:       "tok",
-		AllowedHosts:   []string{"leo.olympus.nyc", "10.0.2.10"},
-		TrustedProxies: []string{"10.0.2.9"},
+		AllowedHosts:   []string{"leo.example.com", "192.0.2.10"},
+		TrustedProxies: []string{"192.0.2.9"},
 	})
 
 	cases := []struct {
@@ -199,32 +199,32 @@ func TestTrustedProxyAuthentication_AllowsPublicHostWithoutPort(t *testing.T) {
 	}{
 		{
 			name:       "trusted proxy authenticates public host",
-			remoteAddr: "10.0.2.9:1",
-			host:       "leo.olympus.nyc",
-			origin:     "https://leo.olympus.nyc",
-			remoteUser: "evan",
+			remoteAddr: "192.0.2.9:1",
+			host:       "leo.example.com",
+			origin:     "https://leo.example.com",
+			remoteUser: "alice",
 			want:       http.StatusOK,
 		},
 		{
 			name:       "trusted proxy without user redirects to login",
-			remoteAddr: "10.0.2.9:1",
-			host:       "leo.olympus.nyc",
-			origin:     "https://leo.olympus.nyc",
+			remoteAddr: "192.0.2.9:1",
+			host:       "leo.example.com",
+			origin:     "https://leo.example.com",
 			want:       http.StatusSeeOther,
 			location:   "/login?redirect=%2Ftasks",
 		},
 		{
 			name:       "untrusted peer cannot use public host without port",
-			remoteAddr: "10.0.2.50:1",
-			host:       "leo.olympus.nyc",
-			origin:     "https://leo.olympus.nyc",
-			remoteUser: "evan",
+			remoteAddr: "192.0.2.50:1",
+			host:       "leo.example.com",
+			origin:     "https://leo.example.com",
+			remoteUser: "alice",
 			want:       http.StatusForbidden,
 		},
 		{
 			name:       "untrusted bearer with listener host succeeds",
-			remoteAddr: "10.0.2.50:1",
-			host:       "10.0.2.10:8370",
+			remoteAddr: "192.0.2.50:1",
+			host:       "192.0.2.10:8370",
 			bearer:     "tok",
 			want:       http.StatusOK,
 		},
@@ -262,10 +262,10 @@ func TestTrustedProxyAuthentication_AllowsPublicHostWithoutPort(t *testing.T) {
 		t.Cleanup(func() { log.SetOutput(originalOutput) })
 
 		req := httptest.NewRequest(http.MethodPost, "/web/config/reload", nil)
-		req.RemoteAddr = "10.0.2.9:1"
-		req.Host = "leo.olympus.nyc"
-		req.Header.Set("Origin", "https://leo.olympus.nyc")
-		req.Header.Set("Remote-User", "evan")
+		req.RemoteAddr = "192.0.2.9:1"
+		req.Host = "leo.example.com"
+		req.Header.Set("Origin", "https://leo.example.com")
+		req.Header.Set("Remote-User", "alice")
 		w := httptest.NewRecorder()
 		s.httpServer.Handler.ServeHTTP(w, req)
 		if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {

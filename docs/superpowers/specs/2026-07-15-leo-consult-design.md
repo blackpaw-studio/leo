@@ -10,7 +10,7 @@ template (any harness/model) and receive its answer as the tool result.
 
 ## Motivation
 
-While working in one agent (e.g. a Claude session), Evan wants a second
+While working in one agent (e.g. a Claude session), the user wants a second
 opinion from a different model — GPT via codex, qwen via LM Studio, opus —
 without leaving the conversation. A "council" (fan the same question out to
 several models and reconcile) should be possible, but is deliberately **not**

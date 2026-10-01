@@ -1,7 +1,7 @@
 # Uniform tmux-TUI drivers — design
 
 **Date:** 2026-07-12
-**Status:** Approved by Evan (approach A: shared TUI driver + per-harness profiles)
+**Status:** Approved by the maintainer (approach A: shared TUI driver + per-harness profiles)
 **Supersedes:** the Plan-3/Plan-4 session-driver split (codex `TurnDriver`, opencode `ServerDriver`). That split shipped in no release; v0.8 is held for this rewrite.
 
 ## Goal
@@ -20,7 +20,7 @@ already the claude pattern. Remote attach delegation (#104) is untouched.
 ## Verified facts (live-tested 2026-07-12 — do not re-derive)
 
 Tested in a scratch tmux server (`tmux -L scratch-tui`, 200x50 panes) on
-Dionysus with codex-cli 0.144.1 and opencode 1.17.7:
+the build host with codex-cli 0.144.1 and opencode 1.17.7:
 
 - **codex TUI in tmux**: renders correctly. Input line marker is `› `
   (U+203A + space). The leo injection protocol works verbatim: probe char `.`
@@ -168,7 +168,7 @@ release note — plan decides). No `leo.yaml` changes required.
   existing seams (`injectPromptFn`, `execCommand`, `supervisedExecFn`,
   `lookPath`); `go test -race ./...`, `make lint`, `make e2e` (build-tagged),
   golangci-lint 2.12.2, gosec (pinned exclude list) all green before push.
-- **Live verification before merge**: on Dionysus, spawn one agent per
+- **Live verification before merge**: on the build host, spawn one agent per
   harness; verify inject (leo_send_message), attach from a remote client,
   restart-with-resume, and idle-suspend/wake for codex and opencode.
 

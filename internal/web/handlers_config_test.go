@@ -536,7 +536,7 @@ func TestConfigFormRendersEverySection(t *testing.T) {
 // optional-true encoding, KindNumber, and KindCSV round trip together.
 func TestWebConfigSave(t *testing.T) {
 	s, dir := newTestServer(t)
-	form := url.Values{"port": {"8371"}, "bind": {"0.0.0.0"}, "allowed_hosts": {"10.0.4.16, 10.0.2.10"}}
+	form := url.Values{"port": {"8371"}, "bind": {"0.0.0.0"}, "allowed_hosts": {"198.51.100.16, 192.0.2.10"}}
 	form.Add("enabled", "false")
 	form.Add("enabled", "true")
 	w := postForm(t, s, "/web/config/web", form)

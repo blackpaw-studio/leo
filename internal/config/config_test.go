@@ -1180,8 +1180,8 @@ func TestValidate_WebTrustedProxies(t *testing.T) {
 		proxies []string
 		wantErr string
 	}{
-		{"ip", []string{"10.0.2.9"}, ""},
-		{"cidr", []string{"10.0.4.0/24"}, ""},
+		{"ip", []string{"192.0.2.9"}, ""},
+		{"cidr", []string{"198.51.100.0/24"}, ""},
 		{"ipv6", []string{"::1"}, ""},
 		{"ipv4 catch-all", []string{"0.0.0.0/0"}, "web.trusted_proxies[0] \"0.0.0.0/0\" must not match every address"},
 		{"ipv6 catch-all", []string{"::/0"}, "web.trusted_proxies[0] \"::/0\" must not match every address"},

@@ -17,7 +17,7 @@
 - Unset `provider` = Anthropic, exactly as today. Zero behavior change for existing configs.
 - Model validation relaxes to "any non-empty string" only when a provider is resolved for that scope; otherwise the existing `sonnet/opus/haiku/sonnet[1m]/opus[1m]` enum applies.
 - Model cascade with a provider: `scope.model` → `provider.default_model` → `defaults.model` → `"sonnet"`. (Sessions keep their existing "empty means no `--model` flag" behavior: `session.model` → `provider.default_model` → empty.)
-- All commands run from the repo root `/Users/evan/.leo/agents/leo`. Test with `go test -race ./internal/<pkg>/`. Full check before finishing: `make test && make lint`.
+- All commands run from the repo root `/Users/alice/.leo/agents/leo`. Test with `go test -race ./internal/<pkg>/`. Full check before finishing: `make test && make lint`.
 - Commit after every task with a conventional-commit message.
 
 ---

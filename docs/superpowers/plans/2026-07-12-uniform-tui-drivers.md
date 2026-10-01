@@ -963,5 +963,5 @@ func attachViaDriver(res config.HostResolution, spec harness.AttachSpec, opts at
 ### Task 11: Integration verification (orchestrator-run, not subagent)
 
 - [ ] Full gates on the branch head; `make e2e`; CI-parity lint (golangci-lint 2.12.2 + pinned gosec).
-- [ ] Live verification on Dionysus against the isolated test daemon (NEVER the production service): spawn one agent per harness; per agent verify — inject via leo_send_message → reply appears in pane; `leo agent logs` shows pane content; `leo agent attach` lands in the TUI with tmux status bar (local + from Evan's laptop); kill the pane process → supervisor respawns with resume tokens and conversation intact; suspend/resume for codex + opencode.
-- [ ] PR with the full-branch diff; Opus code review; Evan merges.
+- [ ] Live verification on the build host against the isolated test daemon (NEVER the production service): spawn one agent per harness; per agent verify — inject via leo_send_message → reply appears in pane; `leo agent logs` shows pane content; `leo agent attach` lands in the TUI with tmux status bar (local + from a remote laptop); kill the pane process → supervisor respawns with resume tokens and conversation intact; suspend/resume for codex + opencode.
+- [ ] PR with the full-branch diff; Opus code review; the maintainer merges.

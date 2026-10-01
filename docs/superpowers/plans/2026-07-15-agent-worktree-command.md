@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- All commands run from repo root: `/Users/evan/.leo/agents/leo`
+- All commands run from repo root: `/Users/alice/.leo/agents/leo`
 - Tests: `go test -race -run <Name> ./internal/<pkg>/` per task; full `make test` + `make lint` at the end.
 - `make e2e` MUST run before push (standing rule: config/argv changes).
 - Conventional commits (`feat:`, `refactor:`, `test:`, `docs:`). No AI attribution.

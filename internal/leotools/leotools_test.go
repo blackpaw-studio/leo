@@ -68,7 +68,7 @@ func TestAllowsMessage(t *testing.T) {
 		{"absent list is unrestricted", nil, "anyone", true},
 		{"empty list is unrestricted", []string{}, "anyone", true},
 		{"exact match", []string{"rocket"}, "rocket", true},
-		{"non-match rejected", []string{"rocket"}, "olympus", false},
+		{"non-match rejected", []string{"rocket"}, "infra", false},
 		{"case sensitive", []string{"rocket"}, "Rocket", false},
 		{"shorthand is not resolved", []string{"rocket"}, "rock", false},
 		{"star glob", []string{"scout-*"}, "scout-leo", true},
@@ -76,7 +76,7 @@ func TestAllowsMessage(t *testing.T) {
 		{"question glob", []string{"agent-?"}, "agent-1", true},
 		{"malformed glob still matches its literal", []string{"[bad"}, "[bad", true},
 		{"malformed glob widens nothing", []string{"[bad"}, "badger", false},
-		{"one of several", []string{"rocket", "olympus"}, "olympus", true},
+		{"one of several", []string{"rocket", "infra"}, "infra", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,7 +131,7 @@ func TestHasGlob(t *testing.T) {
 			t.Errorf("HasGlob(%q) = false, want true", s)
 		}
 	}
-	for _, s := range []string{"rocket", "olympus", "leo-agent"} {
+	for _, s := range []string{"rocket", "infra", "leo-agent"} {
 		if HasGlob(s) {
 			t.Errorf("HasGlob(%q) = true, want false", s)
 		}

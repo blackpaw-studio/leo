@@ -133,4 +133,4 @@ Registry changes:
 
 ## Rollout
 
-Single PR on a feature branch (`feat/harness-plan-5-web-ui`), executed via subagent-driven development per the established Plan 1–4 flow. After merge + install update, the parked migration of the live `~/.leo/leo.yaml` becomes actionable (flag to Evan; do not touch before).
+Single PR on a feature branch (`feat/harness-plan-5-web-ui`), executed via subagent-driven development per the established Plan 1–4 flow. After merge + install update, the parked migration of the live `~/.leo/leo.yaml` becomes actionable (flag to the maintainer; do not touch before).

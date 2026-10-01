@@ -55,7 +55,7 @@ Strictly sequential: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7. (Adapters befo
 - Session drivers: codex TurnDriver / opencode ServerDriver for processes, ephemeral agents, persistent sessions (Plan 4). Non-task kinds on the new harnesses **must fail loudly** — that's in scope here.
 - Web UI `OptionsSchema()` forms and harness dropdown (Plan 5). The web schema registry already excludes `harness`/`harness_options` from generic forms.
 - Builtin messaging-awareness system prompt on codex/opencode (codex `developer_instructions` exists; deferred — MCP tools are self-describing).
-- Migrating Evan's live `~/.leo/leo.yaml` (separate follow-up, gated on his explicit go).
+- Migrating the maintainer's live `~/.leo/leo.yaml` (separate follow-up, gated on their explicit go).
 
 ---
 
@@ -1325,7 +1325,7 @@ git commit -m "docs: codex and opencode task harnesses"
 
 ## Rollout Notes (not tasks)
 
-- **Flag to Evan in the PR:** the brief's `approval (untrusted|on-request|never)` codex option was dropped — re-verification showed `codex exec` has no approval flag at all (hardcoded `never`; `on-failure` deprecated upstream). The adapter rejects the key with a pointed error.
-- **Flag to Evan in the PR:** two deliberate cross-harness behavior changes in the runner (Global Constraints bullet 1): `CLAUDE_CODE_ENTRYPOINT` now injected via the claude adapter's `Env()`, and exit-0-with-error-events now fails the attempt.
+- **Flag to the maintainer in the PR:** the brief's `approval (untrusted|on-request|never)` codex option was dropped — re-verification showed `codex exec` has no approval flag at all (hardcoded `never`; `on-failure` deprecated upstream). The adapter rejects the key with a pointed error.
+- **Flag to the maintainer in the PR:** two deliberate cross-harness behavior changes in the runner (Global Constraints bullet 1): `CLAUDE_CODE_ENTRYPOINT` now injected via the claude adapter's `Env()`, and exit-0-with-error-events now fails the attempt.
 - The local codex binary at `/opt/homebrew/bin/codex` may not be linked (the brew cask install wedged on a Gatekeeper scan mid-session; a working copy is at the scratchpad). Real-smoke e2e locally may need `brew install --cask codex` re-run. Do NOT restart any leo services for any of this.
-- Evan's live config migration (~21 flat keys) remains a separate, explicitly-gated follow-up — not this branch.
+- The maintainer's live config migration (~21 flat keys) remains a separate, explicitly-gated follow-up — not this branch.

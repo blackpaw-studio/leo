@@ -34,7 +34,7 @@ New package `internal/attachprefs` owning one file, `~/.leo/state/attach.json`:
 ```json
 {
   "sort": "recent",
-  "last_attached": { "local/vitals": "2026-09-05T23:10:00Z", "helios/build": "..." }
+  "last_attached": { "local/vitals": "2026-09-05T23:10:00Z", "studio/build": "..." }
 }
 ```
 

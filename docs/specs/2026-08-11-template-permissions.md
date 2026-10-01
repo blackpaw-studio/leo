@@ -41,7 +41,7 @@ templates:
   scout:
     permissions:
       deny_tools:  [leo_spawn_agent, leo_stop_agent, leo_toggle_task]
-      can_message: [rocket, olympus, "scout-*"]
+      can_message: [rocket, infra, "scout-*"]
       can_spawn:   [codex]
       can_consult: [fable, opus]
 ```
@@ -71,7 +71,7 @@ otherwise silently erase on a config round-trip through the web UI.
 
 **Matching** is exact and case-sensitive, with `*`/`?` glob support via
 `path.Match` so generated agent names are addressable (`scout-*` covers
-`scout-leo`, `scout-olympus`). A pattern that fails to compile never matches.
+`scout-leo`, `scout-infra`). A pattern that fails to compile never matches.
 
 `leo_send_message` accepts shorthand names that the daemon resolves; the
 permission check runs against the *literal* argument before that resolution. An
@@ -174,12 +174,12 @@ requires restarting agents spawned from it. Documented, not worked around.
 - **Allowlists are checked in the handler**, before the daemon call:
 
   ```
-  not permitted to message "leo"; allowed targets: rocket, olympus, scout-*
+  not permitted to message "leo"; allowed targets: rocket, infra, scout-*
   ```
 
 - **Narrowed tools advertise their limits.** When an allowlist is set, its
   values are appended to the tool description (`You may only message: rocket,
-  olympus.`) so the model does not have to discover the boundary by failing.
+  infra.`) so the model does not have to discover the boundary by failing.
 
 ### Web UI
 
