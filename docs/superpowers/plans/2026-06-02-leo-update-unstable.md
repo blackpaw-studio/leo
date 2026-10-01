@@ -16,7 +16,7 @@
 
 Run:
 ```bash
-cd /Users/evan/.leo/agents/leo
+cd /Users/alice/.leo/agents/leo
 git checkout -b feat/update-unstable
 ```
 Expected: `Switched to a new branch 'feat/update-unstable'`

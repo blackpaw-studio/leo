@@ -1,6 +1,6 @@
 # Delegation profiles: declarative role → template routing
 
-Status: approved by Evan 2026-09-22 (design decisions below are his calls).
+Status: approved by the maintainer 2026-09-22 (design decisions below are the maintainer's calls).
 
 ## Problem
 
@@ -14,17 +14,17 @@ template name themselves. Consequences:
   (they keep the old CLAUDE.md until restart).
 - Prose and `leo.yaml` templates drift (e.g. a removed template still named in
   instructions).
-- Evan wants to shift routing week to week based on AI usage (Codex vs Claude
+- The maintainer wants to shift routing week to week based on AI usage (Codex vs Claude
   quota), which today means rewriting the ladder by hand.
 
 ## Goal
 
 Agents dispatch by **role**; Leo resolves role → template (+ optional model
-override) at dispatch time from a declarative, profile-based config. Evan
+override) at dispatch time from a declarative, profile-based config. The maintainer
 switches the active profile from the Leo web UI (or CLI) and the next dispatch
 uses it — no instruction edits, no agent restarts.
 
-## Decisions (Evan, 2026-09-22)
+## Decisions (maintainer, 2026-09-22)
 
 1. **Profile switching is manual only.** No automatic switching on usage
    thresholds in this spec.
@@ -150,7 +150,7 @@ In the existing Leo web UI, a **Delegation** page:
   preserving the rest of `leo.yaml` (comments/ordering as well as the current
   config writer does), then reload.
 - Recent dispatches panel: last N dispatches with role → resolved template/model
-  and profile, so Evan can see the effect of a switch.
+  and profile, so the maintainer can see the effect of a switch.
 - Same auth as the rest of the web UI.
 
 ## CLI
@@ -178,7 +178,7 @@ In the existing Leo web UI, a **Delegation** page:
 - Per-agent/per-repo profile override.
 - Opt-in hierarchical role fallback.
 
-## Implementation rulings (Evan, 2026-09-22)
+## Implementation rulings (maintainer, 2026-09-22)
 
 Settled during implementation. Where these differ from the text above, these win.
 

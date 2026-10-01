@@ -923,6 +923,6 @@ git commit -m "docs: harness configuration reference; remove providers docs"
 
 ## Rollout Notes (not tasks)
 
-- **Evan's live `~/.leo/leo.yaml` breaks on upgrade** — flat claude fields and any `provider`/`providers` keys must move under `harness_options` before the new binary loads it. Do this at release time, not merge time: migrate the file alongside deploying the binary (offer to do it, gated on his go — and remember: no service restarts without asking).
+- **The maintainer's live `~/.leo/leo.yaml` breaks on upgrade** — flat claude fields and any `provider`/`providers` keys must move under `harness_options` before the new binary loads it. Do this at release time, not merge time: migrate the file alongside deploying the binary (offer to do it, gated on their go — and remember: no service restarts without asking).
 - Dry-run verification after merge: `bin/leo run <task> --dry-run` against a migrated config must emit identical argv to the pre-break binary.
 - Plan 3 (codex/opencode one-shot adapters) builds directly on `DecodeOptions`/`ValidateModel` and adds `ParseEvents` + per-harness binary threading; the `internal/config/harness.go` blank-import block is where new adapters register.

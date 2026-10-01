@@ -124,8 +124,8 @@ web:
   enabled: true
   bind: 0.0.0.0
   port: 8370
-  allowed_hosts: [leo.olympus.nyc]
-  trusted_proxies: [10.0.2.9, 10.0.4.5]
+  allowed_hosts: [leo.example.com]
+  trusted_proxies: [192.0.2.9, 198.51.100.5]
 ```
 
 Never trust a range that includes untrusted LAN hosts: anyone who can reach the port directly from a trusted address could forge the header.

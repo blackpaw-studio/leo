@@ -111,7 +111,7 @@ web:
   enabled: true
   port: 8370
   bind: 0.0.0.0
-  allowed_hosts: [host.docker.internal, 10.0.2.10]
+  allowed_hosts: [host.docker.internal, 192.0.2.10]
 ```
 
 `leo client add` prints a reminder when the current config would not be
@@ -121,7 +121,7 @@ these before suspecting the token — the response body tells the two apart:
 ```
 HTTP/1.1 403 Forbidden          HTTP/1.1 403 Forbidden
 forbidden host                  {"ok":false,"error":"client \"docker-scout\" is not
-                                 permitted to message \"olympus\""}
+                                 permitted to message \"infra\""}
    ^ Host/bind problem              ^ genuine scope denial
 ```
 
@@ -134,7 +134,7 @@ The boundary was exercised from a real Docker container against a live daemon
 | Request from the container | Result |
 |---|---|
 | `POST /web/agent/rocket/message` (allowed) | reaches the handler |
-| `POST /web/agent/olympus/message` | 403 |
+| `POST /web/agent/infra/message` | 403 |
 | `POST /web/agent/rocket/interrupt` | 403 |
 | `POST /api/agent/spawn`, `GET /api/agent/list`, `GET /api/v1/state` | 403 |
 | `GET /` | 403 |

@@ -9,7 +9,7 @@ Spawning a worktree agent today requires re-specifying the template and the
 full owner/repo even when an existing agent already knows both:
 
 ```
-leo agent spawn claude evandcoleman/chronicle --worktree a11y
+leo agent spawn claude acme/chronicle --worktree a11y
 ```
 
 The operator's mental model is "branch off the chronicle agent". The command

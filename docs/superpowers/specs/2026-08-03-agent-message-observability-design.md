@@ -10,7 +10,7 @@ each agent *is*, never that two of them are talking. The Den kiosk wants to walk
 two characters into a conference room when a pair is actually messaging, and has
 no signal to drive it from.
 
-Requested by Evan via the Den agent; shape agreed with Den before implementation.
+Requested by the maintainer via the Den agent; shape agreed with Den before implementation.
 
 ## Goals
 

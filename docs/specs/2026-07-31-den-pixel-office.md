@@ -31,7 +31,7 @@ primitives.
 ## World design
 
 **Layout — Leo lore.** The office is generated from the API snapshot: one room per distinct
-workspace/project (leo, olympus, …), auto-laid-out on a tile grid with a shared lobby,
+workspace/project (leo, infra, …), auto-laid-out on a tile grid with a shared lobby,
 break room, and a den (couch corner). Persistent/supervised agents are residents with a
 desk in their workspace's room. Oneshot task firings are visitors: a courier character
 walks in the front door, sits at a guest desk for the duration of the run, then leaves.

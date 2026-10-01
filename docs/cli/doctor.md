@@ -96,7 +96,7 @@ child".
 
 | Flag | Description |
 |------|-------------|
-| `--probe-host <host:port>` | Explicit LAN endpoint to test connectivity against (e.g. `10.0.2.9:443`). Defaults to the machine's default gateway on port 80 when unset. |
+| `--probe-host <host:port>` | Explicit LAN endpoint to test connectivity against (e.g. `192.0.2.9:443`). Defaults to the machine's default gateway on port 80 when unset. |
 | `--trigger` | Perform the mDNS consent-raising operations before probing (default `true`). Pass `--trigger=false` to only classify, without attempting to trigger a fresh consent prompt. |
 
 ## Examples
@@ -106,7 +106,7 @@ child".
 leo doctor
 
 # Check against a specific known-reachable LAN host
-leo doctor --probe-host 10.0.2.9:443
+leo doctor --probe-host 192.0.2.9:443
 
 # Classify only, without re-triggering the consent dialog
 leo doctor --trigger=false

@@ -45,9 +45,9 @@ Full-screen (alt-screen) list of all agents: local agents from the daemon
 Row format: status glyph, name, template, host, uptime/state age.
 
 ```
-  ● olympus      infra     local     2d4h
+  ● infra        infra     local     2d4h
   ◌ blog-writer  writer    local     suspended 3h ago
-  ● rocket       assistant hestia    6d1h
+  ● rocket       assistant buildbox  6d1h
 ```
 
 Glyphs: `●` running, `⟳` starting, `◌` suspended, `✖` stopped.

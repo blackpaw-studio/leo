@@ -64,7 +64,7 @@ Strictly sequential: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. (Interface bef
 - Live model-list fetching from harness CLIs.
 - Driver-aware session status (codex thread info, opencode serve health on cards).
 - Renaming `ClaudeArgs` fields/JSON keys (Plan-4 deferral, still parked).
-- Migrating Evan's live `~/.leo/leo.yaml` (parked until this plan lands + install update — his explicit call; **flag to him after merge, do not touch**).
+- Migrating the maintainer's live `~/.leo/leo.yaml` (parked until this plan lands + install update — their explicit call; **flag to the maintainer after merge, do not touch**).
 - opencode stale-port serve crash-loop escape hatch (Plan-4 follow-up, tracked separately).
 
 ---
@@ -1580,4 +1580,4 @@ git commit -m "docs: web UI section for harnesses + stale-reference sweep"
 1. Whole-branch review on Opus (spec compliance + code quality), fix wave if needed.
 2. Optional live smoke on the **isolated test daemon** (separate `LEO_HOME`; NEVER restart production): open the web UI, flip a process to codex, watch the sub-form swap, save, verify YAML. Orchestrator-only.
 3. Push `feat/harness-plan-5-web-ui`, open PR, watch CI (Lint = golangci-lint AND gosec; macos+ubuntu; known flaky tests: `TestRunInterruptStopsImmediatelyWithoutRetryOrNotify`, `TestRunSuperviseLoopRestartsAndCallsOnSessionEnd` — rerun before debugging).
-4. Merge is Evan's call. After merge + install update: **flag the parked live `~/.leo/leo.yaml` migration to Evan — do not touch it.**
+4. Merge is the maintainer's call. After merge + install update: **flag the parked live `~/.leo/leo.yaml` migration to the maintainer — do not touch it.**

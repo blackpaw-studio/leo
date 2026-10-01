@@ -2,7 +2,7 @@
 
 **Status:** Draft — pending implementation plan
 **Date:** 2026-05-17
-**Authors:** Evan Coleman (via brainstorming session)
+**Authors:** maintainer (via brainstorming session)
 
 ## Motivation
 

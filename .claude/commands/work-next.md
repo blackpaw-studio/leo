@@ -104,7 +104,7 @@ Post a comment with the `[plan]` prefix. Structure:
 <how this is verified — unit, integration, manual>
 
 ## Risks / open questions
-<anything the reviewer or Evan should weigh in on>
+<anything the reviewer or the maintainer should weigh in on>
 
 ## Out of scope
 <explicit deferred items>

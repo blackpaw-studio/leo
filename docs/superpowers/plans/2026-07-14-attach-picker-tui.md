@@ -390,7 +390,7 @@ func TestSortAgentsByName(t *testing.T) {
 func TestBuildRowsGroupsHostsAndErrorRows(t *testing.T) {
 	byHost := map[string][]Agent{
 		LocalHost: {{Name: "alpha", Template: "writer", Host: LocalHost, Status: "running"}},
-		"hestia":  {{Name: "rocket", Host: "hestia", Status: "suspended"}},
+		"buildbox":  {{Name: "rocket", Host: "buildbox", Status: "suspended"}},
 	}
 	byHostErr := map[string]error{"down": errBoom}
 	items := buildRows(byHost, byHostErr, map[string]struct{}{}, 0)
@@ -973,9 +973,9 @@ func TestEnterOnRunningSelectsAndQuits(t *testing.T) {
 }
 
 func TestHostFetchFailureRendersErrorRow(t *testing.T) {
-	m := newModel(context.Background(), map[string]Backend{"hestia": &fakeBackend{}})
+	m := newModel(context.Background(), map[string]Backend{"buildbox": &fakeBackend{}})
 	m = sized(m)
-	m = loaded(m, "hestia", nil, errors.New("connection refused"))
+	m = loaded(m, "buildbox", nil, errors.New("connection refused"))
 
 	items := m.list.Items()
 	if len(items) != 1 {
@@ -1529,9 +1529,9 @@ func fakeExec(captured *[]string, stdout string, exitCode int) func(string, ...s
 }
 
 func newTestSSHBackend(exec func(string, ...string) *exec.Cmd) *SSHBackend {
-	b := NewSSHBackend("hestia", "$HOME/.local/bin/leo", "tmux",
+	b := NewSSHBackend("buildbox", "$HOME/.local/bin/leo", "tmux",
 		func(tail ...string) []string {
-			return append([]string{"user@hestia"}, tail...)
+			return append([]string{"user@buildbox"}, tail...)
 		})
 	b.exec = exec
 	return b
@@ -1549,7 +1549,7 @@ func TestSSHBackendListParsesJSON(t *testing.T) {
 	if len(ags) != 2 {
 		t.Fatalf("want 2 agents, got %d", len(ags))
 	}
-	if ags[0].Name != "rocket" || ags[0].Host != "hestia" || ags[0].Template != "assistant" {
+	if ags[0].Name != "rocket" || ags[0].Host != "buildbox" || ags[0].Template != "assistant" {
 		t.Fatalf("agent[0] = %+v", ags[0])
 	}
 	if ags[1].Status != "suspended" {
@@ -1560,8 +1560,8 @@ func TestSSHBackendListParsesJSON(t *testing.T) {
 func TestSSHBackendListFallsBackToTmux(t *testing.T) {
 	// First invocation (leo agent list --json) fails; List retries via tmux.
 	var calls int
-	b := NewSSHBackend("hestia", "$HOME/.local/bin/leo", "tmux",
-		func(tail ...string) []string { return append([]string{"user@hestia"}, tail...) })
+	b := NewSSHBackend("buildbox", "$HOME/.local/bin/leo", "tmux",
+		func(tail ...string) []string { return append([]string{"user@buildbox"}, tail...) })
 	b.exec = func(name string, args ...string) *exec.Cmd {
 		calls++
 		if calls == 1 {

@@ -10,7 +10,7 @@ templates:
     workspace: ~/agents/scout
     permissions:
       deny_tools:  [leo_spawn_agent, leo_stop_agent, leo_toggle_task]
-      can_message: [rocket, olympus, "scout-*"]
+      can_message: [rocket, infra, "scout-*"]
       can_spawn:   [codex]
       can_consult: [fable, opus]
 ```
@@ -111,7 +111,7 @@ to the tool's description so the model sees the boundary instead of finding it
 by failing:
 
 ```
-not permitted to message "leo"; allowed targets: rocket, olympus, scout-*
+not permitted to message "leo"; allowed targets: rocket, infra, scout-*
 ```
 
 ### Empty means unrestricted
@@ -132,7 +132,7 @@ so `can_message: []` could not reliably mean "nobody" — it would quietly becom
 
 Allowlist entries match exactly, or as a glob (`*`, `?`, `[...]`), so generated
 agent names stay addressable — `scout-*` covers `scout-leo` and
-`scout-olympus`. Matching is case-sensitive.
+`scout-infra`. Matching is case-sensitive.
 
 `leo_send_message` accepts shorthand agent names that the daemon resolves, and
 the permission check runs on the **literal argument**, before that resolution.
@@ -141,9 +141,9 @@ Two consequences worth knowing:
 - An allowlist of `[rocket]` rejects `to: "rock"`, even though the daemon
   would have resolved it. Fail-closed, with the allowed targets in the error.
 - An entry authorizes **whatever that string resolves to at send time**, not a
-  fixed agent. `can_message: [olympus]` permits messaging whichever live agent
-  `olympus` resolves to — an exact name, a display name, a repo short, or an
-  `-olympus` suffix. That is the same resolution you would get typing it
+  fixed agent. `can_message: [infra]` permits messaging whichever live agent
+  `infra` resolves to — an exact name, a display name, a repo short, or an
+  `-infra` suffix. That is the same resolution you would get typing it
   yourself, so write entries the way you would address the agent. Ambiguous
   queries are rejected by the daemon rather than delivered to a guess.
 

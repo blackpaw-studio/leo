@@ -60,7 +60,7 @@ Strictly sequential: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9. (C
 - Web UI: harness dropdown, `OptionsSchema()` forms, driver-aware session pages (Plan 5).
 - Idle-suspend for codex/opencode agents — sweep explicitly skips non-claude agents (documented in Task 4); codex has no resident process to suspend and opencode serve panes show no meaningful tmux activity signal.
 - Remote-host (`client.hosts`) attach for opencode beyond plain ssh-exec of the attach argv; `-CC` control mode stays claude/tmux-only.
-- Migrating Evan's live `~/.leo/leo.yaml` (parked until all plans land + install update — his explicit call 2026-07-11).
+- Migrating the maintainer's live `~/.leo/leo.yaml` (parked until all plans land + install update — their explicit call 2026-07-11).
 - Renaming `ClaudeArgs` fields/JSON keys.
 - codex `developer_instructions` config key (still deliberately unused).
 
