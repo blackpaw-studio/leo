@@ -389,8 +389,8 @@ func TestSortAgentsByName(t *testing.T) {
 
 func TestBuildRowsGroupsHostsAndErrorRows(t *testing.T) {
 	byHost := map[string][]Agent{
-		LocalHost: {{Name: "alpha", Template: "writer", Host: LocalHost, Status: "running"}},
-		"buildbox":  {{Name: "rocket", Host: "buildbox", Status: "suspended"}},
+		LocalHost:  {{Name: "alpha", Template: "writer", Host: LocalHost, Status: "running"}},
+		"buildbox": {{Name: "rocket", Host: "buildbox", Status: "suspended"}},
 	}
 	byHostErr := map[string]error{"down": errBoom}
 	items := buildRows(byHost, byHostErr, map[string]struct{}{}, 0)

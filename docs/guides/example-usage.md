@@ -1,6 +1,6 @@
 # Example Usage
 
-This guide shows a real-world Leo setup — the author's personal assistant — as a complete, working example. Use it as a starting point for your own config.
+This guide shows a complete, working Leo setup for a personal assistant. Use it as a starting point for your own config.
 
 The setup combines:
 
