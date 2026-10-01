@@ -69,8 +69,8 @@ func TestBuildRowsStripsLeoPrefixForDisplay(t *testing.T) {
 
 func TestBuildRowsIncludesAgentsAndErrorRows(t *testing.T) {
 	byHost := map[string][]Agent{
-		LocalHost: {{Name: "alpha", Template: "writer", Host: LocalHost, Status: "running"}},
-		"hestia":  {{Name: "rocket", Host: "hestia", Status: "stopped"}},
+		LocalHost:  {{Name: "alpha", Template: "writer", Host: LocalHost, Status: "running"}},
+		"buildbox": {{Name: "rocket", Host: "buildbox", Status: "stopped"}},
 	}
 	byHostErr := map[string]error{"down": errBoom}
 	header, items := buildRows(byHost, byHostErr, map[string]struct{}{}, 0)
@@ -108,7 +108,7 @@ func TestBuildRowsIncludesAgentsAndErrorRows(t *testing.T) {
 }
 
 func TestBuildRowsErrorRowIsSingleLine(t *testing.T) {
-	byHostErr := map[string]error{"hestia": errBoom}
+	byHostErr := map[string]error{"buildbox": errBoom}
 	_, items := buildRows(nil, byHostErr, map[string]struct{}{}, 0)
 	if len(items) != 1 {
 		t.Fatalf("want 1 error row, got %d", len(items))
@@ -174,18 +174,18 @@ func TestColumnWidthsUsesHeaderFloorAndContentMax(t *testing.T) {
 
 	// Content longer than the header text — widths should grow to fit it.
 	byHost2 := map[string][]Agent{
-		LocalHost: {{Name: "alphabet-soup", Template: "writer", Host: LocalHost}},
-		"hestia":  {{Name: "a", Template: "b", Host: "hestia"}},
+		LocalHost:  {{Name: "alphabet-soup", Template: "writer", Host: LocalHost}},
+		"buildbox": {{Name: "a", Template: "b", Host: "buildbox"}},
 	}
-	nameW2, templateW2, hostW2 := columnWidths([]string{LocalHost, "hestia"}, byHost2)
+	nameW2, templateW2, hostW2 := columnWidths([]string{LocalHost, "buildbox"}, byHost2)
 	if nameW2 != len("alphabet-soup") {
 		t.Errorf("nameW2 = %d, want %d (longest name)", nameW2, len("alphabet-soup"))
 	}
 	if templateW2 != len(headerTemplate) {
 		t.Errorf("templateW2 = %d, want header floor %d (longest template %q is shorter)", templateW2, len(headerTemplate), "writer")
 	}
-	if hostW2 != len("hestia") {
-		t.Errorf("hostW2 = %d, want %d (longest host name)", hostW2, len("hestia"))
+	if hostW2 != len("buildbox") {
+		t.Errorf("hostW2 = %d, want %d (longest host name)", hostW2, len("buildbox"))
 	}
 }
 

@@ -262,8 +262,8 @@ func TestResolveDisplayNameBeatsRepoShort(t *testing.T) {
 			"leo-vitals-enhancements": {Status: "running"},
 		},
 		map[string]agentstore.Record{
-			"leo-vitals":              {Name: "leo-vitals", Repo: "evandcoleman/vitals"},
-			"leo-vitals-enhancements": {Name: "leo-vitals-enhancements", Repo: "evandcoleman/vitals"},
+			"leo-vitals":              {Name: "leo-vitals", Repo: "acme/vitals"},
+			"leo-vitals-enhancements": {Name: "leo-vitals-enhancements", Repo: "acme/vitals"},
 		},
 	)
 	rec, err := mgr.Resolve("vitals")

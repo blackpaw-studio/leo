@@ -63,7 +63,7 @@ func TestSelectTreeProbeBinaryRejectsPlatformBinaries(t *testing.T) {
 	for _, path := range []string{
 		"/opt/homebrew/bin/node",
 		"/usr/local/bin/node",
-		"/Users/evan/.local/bin/node",
+		"/Users/alice/.local/bin/node",
 	} {
 		if isPlatformBinary(path) {
 			t.Errorf("isPlatformBinary(%q) = true, want false", path)
@@ -100,11 +100,11 @@ func TestSelectTreeProbeBinaryErrorNamesTheFix(t *testing.T) {
 
 func TestTreeProbeCommandEmbedsHostAndPort(t *testing.T) {
 	for _, name := range []string{"node", "python3"} {
-		cmd, err := treeProbeCommand(probeBinary{Name: name, Path: "/opt/homebrew/bin/" + name}, "10.0.2.9:443")
+		cmd, err := treeProbeCommand(probeBinary{Name: name, Path: "/opt/homebrew/bin/" + name}, "192.0.2.9:443")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if !strings.Contains(cmd, "10.0.2.9") {
+		if !strings.Contains(cmd, "192.0.2.9") {
 			t.Errorf("%s command %q missing host", name, cmd)
 		}
 		if !strings.Contains(cmd, "443") {
@@ -126,7 +126,7 @@ func TestTreeProbeCommandSelfBoundsConnect(t *testing.T) {
 		"python3": "settimeout(3)",
 	}
 	for name, needle := range want {
-		cmd, err := treeProbeCommand(probeBinary{Name: name, Path: "/opt/homebrew/bin/" + name}, "10.0.2.9:443")
+		cmd, err := treeProbeCommand(probeBinary{Name: name, Path: "/opt/homebrew/bin/" + name}, "192.0.2.9:443")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -202,7 +202,7 @@ func TestRunTreeProbeReportsMissingServer(t *testing.T) {
 		runInServer: func(string, string) (string, error) {
 			return "", fmt.Errorf("no tmux server running on leo's socket")
 		},
-	}, "tmux", "10.0.2.9:443")
+	}, "tmux", "192.0.2.9:443")
 
 	if res.State != "" {
 		t.Fatalf("State = %q, want empty (no verdict)", res.State)
@@ -216,7 +216,7 @@ func TestRunTreeProbeReportsMissingBinary(t *testing.T) {
 	res := runTreeProbe(treeProbeDeps{
 		lookPath:    lookPathStub(nil),
 		runInServer: func(string, string) (string, error) { return "OK", nil },
-	}, "tmux", "10.0.2.9:443")
+	}, "tmux", "192.0.2.9:443")
 
 	if res.State != "" {
 		t.Fatalf("State = %q, want empty (no verdict)", res.State)
@@ -234,7 +234,7 @@ func TestRunTreeProbeSuccess(t *testing.T) {
 			gotCmd = cmd
 			return "OK\n", nil
 		},
-	}, "tmux", "10.0.2.9:443")
+	}, "tmux", "192.0.2.9:443")
 
 	if res.State != "granted" {
 		t.Fatalf("State = %q, want granted", res.State)
@@ -242,7 +242,7 @@ func TestRunTreeProbeSuccess(t *testing.T) {
 	if res.Binary != "/opt/homebrew/bin/node" {
 		t.Fatalf("Binary = %q, want the resolved node path", res.Binary)
 	}
-	if !strings.Contains(gotCmd, "10.0.2.9") {
+	if !strings.Contains(gotCmd, "192.0.2.9") {
 		t.Fatalf("probe command %q missing target", gotCmd)
 	}
 	if res.Detail != "OK" {
@@ -254,7 +254,7 @@ func TestRunTreeProbeDenied(t *testing.T) {
 	res := runTreeProbe(treeProbeDeps{
 		lookPath:    lookPathStub(map[string]string{"node": "/opt/homebrew/bin/node"}),
 		runInServer: func(string, string) (string, error) { return "FAIL EHOSTUNREACH\n", nil },
-	}, "tmux", "10.0.2.9:443")
+	}, "tmux", "192.0.2.9:443")
 
 	if res.State != "denied" {
 		t.Fatalf("State = %q, want denied", res.State)

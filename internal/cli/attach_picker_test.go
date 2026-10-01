@@ -79,7 +79,7 @@ func TestRunAttachPickerSkipsLocalWhenDaemonDownButHostsConfigured(t *testing.T)
 		HomePath: t.TempDir(),
 		Client: config.ClientConfig{
 			Hosts: map[string]config.HostConfig{
-				"dionysus": {SSH: "leo@dionysus.example.com"},
+				"devbox": {SSH: "leo@devbox.example.com"},
 			},
 		},
 	}
@@ -92,8 +92,8 @@ func TestRunAttachPickerSkipsLocalWhenDaemonDownButHostsConfigured(t *testing.T)
 	if _, ok := backends[picker.LocalHost]; ok {
 		t.Errorf("backends = %v, want no local backend when the daemon probe failed", backends)
 	}
-	if _, ok := backends["dionysus"]; !ok {
-		t.Errorf("backends = %v, want dionysus SSH backend present", backends)
+	if _, ok := backends["devbox"]; !ok {
+		t.Errorf("backends = %v, want devbox SSH backend present", backends)
 	}
 }
 
@@ -112,7 +112,7 @@ func TestRunAttachPickerIncludesLocalWhenDaemonUp(t *testing.T) {
 		HomePath: t.TempDir(),
 		Client: config.ClientConfig{
 			Hosts: map[string]config.HostConfig{
-				"dionysus": {SSH: "leo@dionysus.example.com"},
+				"devbox": {SSH: "leo@devbox.example.com"},
 			},
 		},
 	}
@@ -125,8 +125,8 @@ func TestRunAttachPickerIncludesLocalWhenDaemonUp(t *testing.T) {
 	if _, ok := backends[picker.LocalHost]; !ok {
 		t.Errorf("backends = %v, want local backend present when the daemon probe succeeded", backends)
 	}
-	if _, ok := backends["dionysus"]; !ok {
-		t.Errorf("backends = %v, want dionysus SSH backend present", backends)
+	if _, ok := backends["devbox"]; !ok {
+		t.Errorf("backends = %v, want devbox SSH backend present", backends)
 	}
 }
 

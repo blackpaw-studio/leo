@@ -45,7 +45,7 @@ func TestTemplateSaveRoundTripsPermissions(t *testing.T) {
 	if !perms.DeniesTool("leo_spawn_agent") || !perms.DeniesTool("leo_stop_agent") {
 		t.Errorf("deny_tools not saved: %+v", perms)
 	}
-	if perms.AllowsMessage("olympus") || !perms.AllowsMessage("scout-leo") {
+	if perms.AllowsMessage("infra") || !perms.AllowsMessage("scout-leo") {
 		t.Errorf("can_message not saved: %+v", perms)
 	}
 	if !perms.AllowsSpawn("coding") || perms.AllowsSpawn("other") {

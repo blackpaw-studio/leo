@@ -16,11 +16,11 @@ func TestParseGatewayLine(t *testing.T) {
 			output: `   route to: default
 destination: default
        mask: default
-    gateway: 10.0.2.1
+    gateway: 192.168.1.1
   interface: en0
       flags: <UP,GATEWAY,DONE,STATIC,PRCLONING>
 `,
-			want: "10.0.2.1",
+			want: "192.168.1.1",
 		},
 		{
 			name: "extra whitespace",

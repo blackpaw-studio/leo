@@ -142,7 +142,7 @@ func defaultGateway() (string, error) {
 }
 
 // parseGatewayLine extracts the gateway IP from `route -n get default`
-// output, e.g. a line like "    gateway: 10.0.2.1".
+// output, e.g. a line like "    gateway: 192.168.1.1".
 func parseGatewayLine(output string) (string, error) {
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)

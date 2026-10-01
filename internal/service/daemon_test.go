@@ -69,7 +69,7 @@ func TestDaemonLabelSpellingVariantsMatch(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	// Symlink alias for realHome, mirroring "/Users/evan" vs a symlinked path.
+	// Symlink alias for realHome, mirroring "/Users/alice" vs a symlinked path.
 	aliasHome := filepath.Join(t.TempDir(), "alias")
 	if err := os.Symlink(realHome, aliasHome); err != nil {
 		t.Fatalf("Symlink: %v", err)

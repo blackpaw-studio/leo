@@ -503,9 +503,9 @@ func TestLifecycleGateDoesNotBlockTemplateSwitch(t *testing.T) {
 }
 
 func TestHostFetchFailureRendersErrorRow(t *testing.T) {
-	m := newModel(context.Background(), map[string]Backend{"hestia": &fakeBackend{}})
+	m := newModel(context.Background(), map[string]Backend{"buildbox": &fakeBackend{}})
 	m = sized(m)
-	m = loaded(m, "hestia", nil, errors.New("connection refused"))
+	m = loaded(m, "buildbox", nil, errors.New("connection refused"))
 
 	items := m.list.Items()
 	if len(items) != 1 {

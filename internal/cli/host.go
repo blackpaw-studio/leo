@@ -136,10 +136,10 @@ exists it prints the path and exits 0 without starting a duplicate.
 Pass --stop (or use 'leo host unforward <name>') to tear down a lingering
 ControlMaster and remove the stale local socket.`,
 		Example: `  # Foreground; leoterm reads the socket path and manages the process
-  leo host forward dionysus --json
+  leo host forward devbox --json
 
   # Tear down the persistent master and stale socket
-  leo host forward dionysus --stop`,
+  leo host forward devbox --stop`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeHostNames,
 		RunE: func(cmd *cobra.Command, args []string) error {

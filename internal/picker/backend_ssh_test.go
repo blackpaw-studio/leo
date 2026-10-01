@@ -23,9 +23,9 @@ func fakeExec(captured *[]string, stdout string, exitCode int) func(string, ...s
 }
 
 func newTestSSHBackend(exec func(string, ...string) *exec.Cmd) *SSHBackend {
-	b := NewSSHBackend("hestia", "$HOME/.local/bin/leo", "tmux",
+	b := NewSSHBackend("buildbox", "$HOME/.local/bin/leo", "tmux",
 		func(tail ...string) []string {
-			return append([]string{"user@hestia"}, tail...)
+			return append([]string{"user@buildbox"}, tail...)
 		})
 	b.exec = exec
 	return b
@@ -43,7 +43,7 @@ func TestSSHBackendListParsesJSON(t *testing.T) {
 	if len(ags) != 2 {
 		t.Fatalf("want 2 agents, got %d", len(ags))
 	}
-	if ags[0].Name != "rocket" || ags[0].Host != "hestia" || ags[0].Template != "assistant" {
+	if ags[0].Name != "rocket" || ags[0].Host != "buildbox" || ags[0].Template != "assistant" {
 		t.Fatalf("agent[0] = %+v", ags[0])
 	}
 	if ags[1].Status != "stopped" {
@@ -54,8 +54,8 @@ func TestSSHBackendListParsesJSON(t *testing.T) {
 func TestSSHBackendListFallsBackToTmux(t *testing.T) {
 	// First invocation (leo agent list --json) fails; List retries via tmux.
 	var calls int
-	b := NewSSHBackend("hestia", "$HOME/.local/bin/leo", "tmux",
-		func(tail ...string) []string { return append([]string{"user@hestia"}, tail...) })
+	b := NewSSHBackend("buildbox", "$HOME/.local/bin/leo", "tmux",
+		func(tail ...string) []string { return append([]string{"user@buildbox"}, tail...) })
 	b.exec = func(name string, args ...string) *exec.Cmd {
 		calls++
 		if calls == 1 {
@@ -120,7 +120,7 @@ func TestSSHBackendSwitchTemplateArgv(t *testing.T) {
 	if err := b.SwitchTemplate(context.Background(), "leo-coding-owner-fetch", "codex"); err != nil {
 		t.Fatalf("SwitchTemplate: %v", err)
 	}
-	want := []string{"ssh", "user@hestia", "$HOME/.local/bin/leo", "agent", "set-template", "'leo-coding-owner-fetch'", "'codex'"}
+	want := []string{"ssh", "user@buildbox", "$HOME/.local/bin/leo", "agent", "set-template", "'leo-coding-owner-fetch'", "'codex'"}
 	if strings.Join(captured, " ") != strings.Join(want, " ") {
 		t.Fatalf("argv =\n  %v\nwant\n  %v", captured, want)
 	}
@@ -135,7 +135,7 @@ func TestSSHBackendTemplatesArgvAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Templates: %v", err)
 	}
-	want := []string{"ssh", "user@hestia", "$HOME/.local/bin/leo", "template", "list", "--json"}
+	want := []string{"ssh", "user@buildbox", "$HOME/.local/bin/leo", "template", "list", "--json"}
 	if strings.Join(captured, " ") != strings.Join(want, " ") {
 		t.Fatalf("argv =\n  %v\nwant\n  %v", captured, want)
 	}

@@ -132,10 +132,10 @@ func TestSendMessageAllowlist(t *testing.T) {
 	perms := leotools.Permissions{CanMessage: []string{"rocket", "scout-*"}}
 	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary", perms)
 
-	if _, err := callTool(reg, "leo_send_message", map[string]any{"to": "olympus", "message": "hi"}); err == nil {
+	if _, err := callTool(reg, "leo_send_message", map[string]any{"to": "infra", "message": "hi"}); err == nil {
 		t.Fatal("expected a rejection for a target outside the allowlist")
 	} else {
-		if !strings.Contains(err.Error(), "olympus") {
+		if !strings.Contains(err.Error(), "infra") {
 			t.Errorf("error should quote the rejected target: %v", err)
 		}
 		if !strings.Contains(err.Error(), "rocket") {
@@ -190,14 +190,14 @@ func TestAllowlistsAreIndependent(t *testing.T) {
 func TestDescriptionsAdvertiseAllowlists(t *testing.T) {
 	daemon := newOKDaemon(t)
 	perms := leotools.Permissions{
-		CanMessage: []string{"rocket", "olympus"},
+		CanMessage: []string{"rocket", "infra"},
 		CanSpawn:   []string{"codex"},
 		CanConsult: []string{"fable"},
 	}
 	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary", perms)
 
 	for tool, want := range map[string]string{
-		"leo_send_message": "rocket, olympus",
+		"leo_send_message": "rocket, infra",
 		"leo_spawn_agent":  "codex",
 		"leo_consult":      "fable",
 	} {
@@ -229,7 +229,7 @@ func TestPermissionsFromEnv(t *testing.T) {
 		if !ok {
 			t.Fatal("a valid payload must parse")
 		}
-		if !perms.DeniesTool("leo_clear") || perms.AllowsMessage("olympus") {
+		if !perms.DeniesTool("leo_clear") || perms.AllowsMessage("infra") {
 			t.Errorf("payload not applied: %+v", perms)
 		}
 	})
