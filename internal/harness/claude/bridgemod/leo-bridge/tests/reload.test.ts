@@ -177,3 +177,28 @@ test('without a launch id nothing counts as handed off', async ($, on) => {
   await h.settle()
   expect(h.submits.length).toBe(1)
 })
+
+// An interrupt acks outside the command chain. Its store write must not
+// land on top of a deliver's in-flight mark made meanwhile, or a reload
+// would find the deliver unmarked and run it twice.
+test('store writes from an interrupt and a deliver never undo each other', async ($, on) => {
+  const feed = new Feed()
+  let hold: Promise<void> | null = null
+  let release: (() => void) | null = null
+  const h = setup(on, {
+    feeds: [feed],
+    submit: () => new Promise(() => {}), // the deliver stays in flight
+    beforeStoreSet: () => hold ?? undefined,
+  })
+  await start($, h)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  hold = new Promise<void>((r) => (release = r))
+  feed.line({ id: 'i1', op: 'interrupt' })
+  await h.settle()
+  hold = null
+  feed.line(deliver('d1', 'go'))
+  await h.settle()
+  release!()
+  await h.settle()
+  expect(h.store.get('acked:' + AGENT)).toMatchObject({ ids: ['i1'], inflight: { launch: LAUNCH, ids: ['d1'] } })
+})

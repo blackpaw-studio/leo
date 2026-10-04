@@ -62,9 +62,12 @@ let idleWaiters = []
 let isSubmitting = false
 let turnStartWaiters = []
 
-// Serial chains: reports keep per-process order; commands run one at a time.
+// Serial chains: reports keep per-process order; commands run one at a time;
+// store entry rewrites never interleave (an interrupt settles off the
+// command chain).
 let reportChain = Promise.resolve()
 let commandChain = Promise.resolve()
+let storeChain = Promise.resolve()
 
 // Ids queued or executing (guards redelivery while in flight) and the
 // persisted list of ids already acked ok (null until loaded from $.store).
@@ -247,10 +250,16 @@ async function loadAcked($) {
   return ackedIds
 }
 
-// Rewrites this key's store entry with change(entry as stored, now). Every
-// write reads the entry first, so a late write from a module a hot reload
-// replaced changes only what it means to.
-async function updateEntry($, change) {
+// Rewrites this key's store entry with change(entry as stored, now), one
+// rewrite at a time. Every write reads the entry first, so a late write from
+// a module a hot reload replaced changes only what it means to.
+function updateEntry($, change) {
+  const written = storeChain.then(() => rewriteEntry($, change))
+  storeChain = written
+  return written
+}
+
+async function rewriteEntry($, change) {
   try {
     const key = ackedKey()
     const now = await $.clock.now()

@@ -69,6 +69,8 @@ export interface HarnessOptions {
   // of the 1-based call count (throwing makes $.process.run reject).
   reportExit?: number | ((call: number) => number)
   usage?: () => unknown
+  // Awaited before each $.store.set lands, so a test can hold one back.
+  beforeStoreSet?: (key: string) => Promise<void> | void
 }
 
 export interface Harness {
@@ -122,7 +124,8 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     return { value: undefined }
   })
   on('store.get', ($: any, e: any) => ({ value: store.get(e.key) }))
-  on('store.set', ($: any, e: any) => {
+  on('store.set', async ($: any, e: any) => {
+    if (opts.beforeStoreSet) await opts.beforeStoreSet(e.key)
     store.set(e.key, e.value)
     return { value: undefined }
   })
