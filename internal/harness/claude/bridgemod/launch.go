@@ -32,6 +32,11 @@ const (
 	// PluginDirFlag loads a plugin directory for one claude session.
 	PluginDirFlag = "--plugin-dir"
 
+	// DefaultConnectTimeout is how long a bridged launch that carries an
+	// opening prompt waits for its mod to connect before relaunching the
+	// legacy way.
+	DefaultConnectTimeout = 20 * time.Second
+
 	// probeTimeout bounds one `claude --version`.
 	probeTimeout = 10 * time.Second
 	// probeRetryAfter is how long a failed probe is trusted before the next

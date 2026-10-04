@@ -22,7 +22,7 @@ import (
 // DefaultBridgeConnectTimeout is how long a bridged claude launch with an
 // opening prompt waits for its mod to connect before the agent is relaunched
 // the legacy way.
-const DefaultBridgeConnectTimeout = 20 * time.Second
+const DefaultBridgeConnectTimeout = bridgemod.DefaultConnectTimeout
 
 // bridgeEnvKeys are the variables the leo-bridge mod reads. leo owns them:
 // a bridged launch sets them, every other launch blanks them.
