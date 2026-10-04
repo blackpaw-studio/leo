@@ -308,6 +308,15 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 		log.Printf("web: peer inbox socket resolution for %s failed: %s; falling back to tmux", strconv.Quote(sessionName), strconv.Quote(err.Error()))
 	}
 
+	// Hold the session's input as every paste into it does, so no other
+	// delivery's text or probe interleaves with this one's.
+	unlock, err := tmux.LockSessionInput(r.Context(), sessionName)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: fmt.Sprintf("waiting for another delivery into %s: %v", sessionName, err)})
+		return
+	}
+	defer unlock()
+
 	tmuxPath := findTmuxPath()
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 func TestWebAgentMessageDeliversClaudeViaPeerInbox(t *testing.T) {
@@ -116,6 +117,45 @@ func TestWebAgentMessageSendsLiteralThenEnter(t *testing.T) {
 	last := calls[len(calls)-1]
 	if last[len(last)-1] != "Enter" {
 		t.Errorf("last call should submit with Enter; got %v", last)
+	}
+}
+
+// The live typed path holds the session's input like every paste does
+// (see tmux.LockSessionInput): it waits, typing nothing, while another
+// paste into the session is under way.
+func TestWebAgentMessageWaitsForAPasteUnderWay(t *testing.T) {
+	s, _ := newTestServer(t)
+	var (
+		mu    sync.Mutex
+		typed bool
+	)
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		if argsContain(args, "send-keys") {
+			mu.Lock()
+			typed = true
+			mu.Unlock()
+		}
+		return exec.Command("true")
+	}
+	unlock, err := tmux.LockSessionInput(context.Background(), "leo-assistant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest("POST", "/web/agent/assistant/message", strings.NewReader(`{"text":"hello"}`)).WithContext(ctx)
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if typed {
+		t.Fatal("typed into a session another paste holds")
+	}
+	if w.Code == http.StatusOK {
+		t.Fatalf("status = %d, want the message refused while the session was held", w.Code)
 	}
 }
 
