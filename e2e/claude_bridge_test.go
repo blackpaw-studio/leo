@@ -4,9 +4,13 @@ package e2e
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +239,71 @@ func TestClaudeBridgeDaemonRestartMidOpening(t *testing.T) {
 	if rec := s.stored(name); rec.OpeningQueuedID != "" || rec.OpeningAckedID == "" {
 		t.Fatalf("after the adopt the opening is not recorded acked: %+v", rec)
 	}
+}
+
+// TestClaudeBridgeDaemonRestartCarriesAQueuedMessage kills the daemon
+// while a message waits behind an agent's running turn. The message is in
+// the agent's outbox, so the restarted daemon queues it again, under its
+// own id, for the adopted session: it runs exactly once, whether the old
+// daemon's mod still held it or not, and leaves the outbox once acked.
+func TestClaudeBridgeDaemonRestartCarriesAQueuedMessage(t *testing.T) {
+	s := newBridgeE2E(t, bridgeOptions{})
+	const name = "bridge-e2e-carry"
+	started := time.Now()
+	s.spawn(name, "Reply with exactly: CARRY-OPENING-OK")
+	s.awaitBridge(name, agent.BridgeConnected)
+	tr := s.transcript(name)
+	tr.await("the opening reply", said("CARRY-OPENING-OK"))
+	pid := s.panePID(name)
+
+	if code, body := s.message(name, `Use the Bash tool in the foreground (not in the background) to run exactly: python3 -c "import time; time.sleep(30)"   then reply with exactly: CARRY-BUSY-DONE`, ""); code != http.StatusOK {
+		t.Fatalf("busy message: %d %s", code, body)
+	}
+	tr.await("the busy turn's tool call", ranTool("time.sleep(30)"))
+	const queued = "Reply with exactly: CARRY-QUEUED-OK"
+	if code, body := s.message(name, queued, ""); code != http.StatusAccepted || !strings.Contains(body, "queued") {
+		t.Fatalf("message to a busy agent: %d %s, want 202 queued", code, body)
+	}
+	s.killService()
+	outboxPath := filepath.Join(s.home, "state", "outbox", name+".json")
+	if data, err := os.ReadFile(outboxPath); err != nil || !strings.Contains(string(data), "CARRY-QUEUED-OK") {
+		t.Fatalf("after the daemon died the queued message is not in the outbox: %q, %v", data, err)
+	}
+
+	s.startService()
+	s.awaitBridge(name, agent.BridgeConnected)
+	busy := tr.await("the busy turn's reply", said("CARRY-BUSY-DONE"))
+	carried := tr.await("the queued message's reply", said("CARRY-QUEUED-OK"))
+	if carried < busy {
+		t.Fatalf("queued reply (line %d) came before the busy turn ended (line %d)", carried, busy)
+	}
+	// Prompts run in order, so a second copy of the queued message would
+	// run before this one does.
+	if code, body := s.message(name, "Reply with exactly: AFTER-CARRY-OK", ""); code/100 != 2 {
+		t.Fatalf("message after the restart: %d %s", code, body)
+	}
+	tr.await("the reply after the restart", said("AFTER-CARRY-OK"))
+	if n := s.promptedSince(queued, started); n != 1 {
+		t.Fatalf("the queued message was prompted %d times across the restart, want once", n)
+	}
+	if got := s.panePID(name); got != pid {
+		t.Fatalf("the adopted session was relaunched: pane pid %s, was %s", got, pid)
+	}
+	awaitGone(t, outboxPath, 30*time.Second)
+}
+
+// awaitGone waits for path to be removed.
+func awaitGone(t *testing.T, path string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	data, _ := os.ReadFile(path)
+	t.Fatalf("%s still holds %s", path, data)
 }
 
 // TestClaudeBridgeAbsentFallback runs claude with a mod that loads but can
