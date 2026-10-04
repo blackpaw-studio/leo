@@ -23,6 +23,9 @@ import (
 const (
 	// DefaultAckTimeout bounds how long Send waits for the mod's ack.
 	DefaultAckTimeout = 30 * time.Second
+	// DefaultSlowAckTimeout bounds compact and clear: compaction summarizes
+	// the conversation with a model call and can legitimately run for minutes.
+	DefaultSlowAckTimeout = 5 * time.Minute
 	// DefaultMaxPending caps one agent's unacked commands, so an agent whose
 	// mod never connects cannot grow the outbox without bound.
 	DefaultMaxPending = 256
@@ -68,30 +71,36 @@ type Options struct {
 	// AckTimeout is how long an idle agent has to ack a command (default
 	// 30s); time spent in a running turn does not count. See Send.
 	AckTimeout time.Duration
-	MaxPending int
+	// SlowAckTimeout replaces AckTimeout for compact and clear (default 5m).
+	SlowAckTimeout time.Duration
+	MaxPending     int
 	// Subscriber, if set, is handed every hello and turn/session event after
-	// the hub state reflects it, outside the hub lock and in report order.
-	// It may read the hub but must not call Apply (that would deadlock).
+	// the hub state reflects it, outside the hub lock and in each agent's
+	// report order. It may read the hub but must not call Apply for the same
+	// agent (that would deadlock) and should not block: a slow call holds up
+	// that agent's later reports.
 	Subscriber Subscriber
 }
 
 // Hub owns every agent's bridge state. It is safe for concurrent use.
 type Hub struct {
-	clock      Clock
-	newID      func() string
-	ackTimeout time.Duration
-	maxPending int
-	sub        Subscriber
+	clock          Clock
+	newID          func() string
+	ackTimeout     time.Duration
+	slowAckTimeout time.Duration
+	maxPending     int
+	sub            Subscriber
 
-	// eventMu serializes hello/event application with its subscriber call,
-	// so subscribers observe events in the same order the state took them.
-	eventMu sync.Mutex
-
-	mu      sync.Mutex
-	agents  map[string]*agentState
-	seq     uint64
-	closed  bool
-	changed chan struct{} // closed and replaced on every state change
+	mu     sync.Mutex
+	agents map[string]*agentState
+	// eventLocks holds one mutex per agent, serializing that agent's
+	// hello/event application with its subscriber call, so subscribers see
+	// an agent's events in the order its state took them — without one slow
+	// subscriber call stalling every other agent's reports. Guarded by mu.
+	eventLocks map[string]*sync.Mutex
+	seq        uint64
+	closed     bool
+	changed    chan struct{} // closed and replaced on every state change
 }
 
 type agentState struct {
@@ -145,13 +154,15 @@ type conn struct {
 // New builds a Hub.
 func New(opts Options) *Hub {
 	h := &Hub{
-		clock:      opts.Clock,
-		newID:      opts.NewID,
-		ackTimeout: opts.AckTimeout,
-		maxPending: opts.MaxPending,
-		sub:        opts.Subscriber,
-		agents:     map[string]*agentState{},
-		changed:    make(chan struct{}),
+		clock:          opts.Clock,
+		newID:          opts.NewID,
+		ackTimeout:     opts.AckTimeout,
+		slowAckTimeout: opts.SlowAckTimeout,
+		maxPending:     opts.MaxPending,
+		sub:            opts.Subscriber,
+		agents:         map[string]*agentState{},
+		eventLocks:     map[string]*sync.Mutex{},
+		changed:        make(chan struct{}),
 	}
 	if h.clock == nil {
 		h.clock = SystemClock()
@@ -161,6 +172,9 @@ func New(opts Options) *Hub {
 	}
 	if h.ackTimeout <= 0 {
 		h.ackTimeout = DefaultAckTimeout
+	}
+	if h.slowAckTimeout <= 0 {
+		h.slowAckTimeout = DefaultSlowAckTimeout
 	}
 	if h.maxPending <= 0 {
 		h.maxPending = DefaultMaxPending
@@ -180,17 +194,24 @@ func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
 }
 
 // Send queues cmd and waits for the mod's ack. It returns nil on ok:true and
-// an ErrRejected error on ok:false (the command is dropped either way). On
-// ack timeout or ctx cancellation the command stays queued for redelivery,
-// so the caller must not retry it by another route.
+// an ErrRejected error on ok:false (the command is dropped either way).
 //
-// The ack timeout is turn-aware. The mod acks a queued command only once
-// Claude is idle, so while the agent's stream is up and a turn is running
-// the clock stands still, and each return to idle restarts it in full: Send
-// fails only after AckTimeout of continuous idleness without an ack. A long
-// turn can therefore hold Send for as long as it runs; bound that with ctx.
-// Interrupt is the exception — the mod runs it at once, mid-turn — so its
-// clock runs from the start regardless.
+// On ack timeout or ctx cancellation a deliver stays queued for redelivery,
+// so the caller must not retry it by another route. Any other op (interrupt,
+// clear, compact) is dropped from the outbox instead: acting on it later,
+// once its sender has given up, would interrupt or wipe unrelated work. One
+// already written to the stream may still run; it is just never resent.
+//
+// The ack timeout is turn-aware and queue-aware. The mod runs deliver,
+// compact and clear one at a time, in order, and acks a deliver only once
+// Claude is idle. So a command's clock stands still while an earlier one of
+// those is still unacked, and (for every op but interrupt) while the agent's
+// stream is up and a turn is running; each return to idle restarts it in
+// full. Send therefore fails only after a full timeout of being free to run
+// without an ack — AckTimeout, or SlowAckTimeout for compact and clear. A
+// long turn can hold Send for as long as it runs; bound that with ctx.
+// Interrupt is the exception — the mod runs it at once, mid-turn and ahead
+// of the queue — so its clock runs from the start regardless.
 func (h *Hub) Send(ctx context.Context, agent string, cmd Command) error {
 	p, err := h.enqueue(agent, cmd)
 	if err != nil {
@@ -200,54 +221,99 @@ func (h *Hub) Send(ctx context.Context, agent string, cmd Command) error {
 }
 
 func (h *Hub) await(ctx context.Context, agent string, p *pending) error {
-	turnAware := p.cmd.Op != OpInterrupt
+	limit := h.ackTimeoutFor(p.cmd.Op)
 	var (
 		timeout    <-chan time.Time
 		armedEpoch uint64
 	)
 	for {
-		paused, epoch, changed := h.ackClock(agent)
+		paused, epoch, changed := h.ackClock(agent, p)
 		switch {
-		case turnAware && paused:
+		case paused:
 			timeout = nil
-		case timeout == nil || (turnAware && epoch != armedEpoch):
-			timeout, armedEpoch = h.clock.After(h.ackTimeout), epoch
+		case timeout == nil || epoch != armedEpoch:
+			timeout, armedEpoch = h.clock.After(limit), epoch
 		}
 		select {
 		case err := <-p.result:
 			return err
 		case <-timeout:
-			return h.abandon(p, fmt.Errorf("%w: agent %s command %s: no ack within %s of the agent being idle",
-				ErrAckTimeout, agent, p.cmd.ID, h.ackTimeout))
+			return h.abandon(agent, p, fmt.Errorf("%w: agent %s command %s: no ack within %s of it being free to run",
+				ErrAckTimeout, agent, p.cmd.ID, limit))
 		case <-changed:
 		case <-ctx.Done():
-			return h.abandon(p, fmt.Errorf("bridge send to %s (command %s): %w", agent, p.cmd.ID, ctx.Err()))
+			return h.abandon(agent, p, fmt.Errorf("bridge send to %s (command %s): %w", agent, p.cmd.ID, ctx.Err()))
 		}
 	}
 }
 
-// ackClock reports whether agent's ack clocks are paused, its idle epoch,
-// and the channel that closes on the next state change.
-func (h *Hub) ackClock(agent string) (paused bool, epoch uint64, changed <-chan struct{}) {
+// ackTimeoutFor is how long op has to be acked once it is free to run.
+func (h *Hub) ackTimeoutFor(op string) time.Duration {
+	if op == OpCompact || op == OpClear {
+		return h.slowAckTimeout
+	}
+	return h.ackTimeout
+}
+
+// isSerial reports whether the mod runs op on its in-order command chain.
+// Interrupt is the one op it runs at once, ahead of the queue.
+func isSerial(op string) bool { return op != OpInterrupt }
+
+// ackClock reports whether p's ack clock is paused, the epoch its running
+// clock was armed under (a change means "restart in full"), and the channel
+// that closes on the next state change. p's clock is paused while an earlier
+// serial command is still unacked and, unless p is an interrupt, while the
+// agent is busy on a live stream.
+func (h *Hub) ackClock(agent string, p *pending) (paused bool, epoch uint64, changed <-chan struct{}) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if st, ok := h.agents[agent]; ok {
-		return st.ackClockPaused, st.idleEpoch, h.changed
+	st, ok := h.agents[agent]
+	if !ok {
+		return false, 0, h.changed
 	}
-	return false, 0, h.changed
+	if isSerial(p.cmd.Op) && queuedBehindLocked(st.outbox, p) {
+		return true, 0, h.changed
+	}
+	if p.cmd.Op == OpInterrupt {
+		return false, 0, h.changed
+	}
+	return st.ackClockPaused, st.idleEpoch, h.changed
+}
+
+// queuedBehindLocked reports whether an earlier serial command than p is
+// still unacked in outbox.
+func queuedBehindLocked(outbox []*pending, p *pending) bool {
+	for _, q := range outbox {
+		if q.seq >= p.seq {
+			return false
+		}
+		if isSerial(q.cmd.Op) {
+			return true
+		}
+	}
+	return false
 }
 
 // abandon stops waiting on p. A resolution that landed before the hub lock
-// was taken wins over cause: the command did settle.
-func (h *Hub) abandon(p *pending, cause error) error {
+// was taken wins over cause: the command did settle. Otherwise a deliver
+// stays queued for redelivery and any other op is dropped (see Send).
+func (h *Hub) abandon(agent string, p *pending, cause error) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	select {
 	case err := <-p.result:
 		return err
 	default:
-		return cause
 	}
+	if p.cmd.Op != OpDeliver {
+		if st, ok := h.agents[agent]; ok {
+			if i := findPending(st.outbox, p.cmd.ID); i >= 0 {
+				st.outbox = without(st.outbox, i)
+				h.notifyLocked()
+			}
+		}
+	}
+	return cause
 }
 
 func (h *Hub) enqueue(agent string, cmd Command) (*pending, error) {
@@ -374,6 +440,7 @@ func (h *Hub) Connected(agent string) bool {
 func (h *Hub) Forget(agent string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	delete(h.eventLocks, agent)
 	st, ok := h.agents[agent]
 	if !ok {
 		return

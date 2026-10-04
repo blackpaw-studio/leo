@@ -241,7 +241,7 @@ func TestSendAckTimeoutKeepsCommandForRedelivery(t *testing.T) {
 func TestSendAckTimeoutIsConfigurable(t *testing.T) {
 	clock := newFakeClock()
 	h := newTestHub(clock, func(o *Options) { o.AckTimeout = 5 * time.Second })
-	done := sendAsync(testCtx(t), h, agentA, Clear())
+	done := sendAsync(testCtx(t), h, agentA, Deliver("hi", false))
 	clock.waitArmed(t)
 	clock.Advance(5 * time.Second)
 	if err := result(t, done); !errors.Is(err, ErrAckTimeout) {
@@ -253,7 +253,7 @@ func TestLateAckAfterTimeoutRemovesCommand(t *testing.T) {
 	clock := newFakeClock()
 	h := newTestHub(clock)
 	s := mustConnect(t, h, agentA)
-	done := sendAsync(testCtx(t), h, agentA, Clear())
+	done := sendAsync(testCtx(t), h, agentA, Deliver("late", false))
 	cmd := mustNext(t, s)
 	clock.waitArmed(t)
 	clock.Advance(DefaultAckTimeout)
@@ -279,7 +279,7 @@ func TestSendPrefersAckRacingTimeout(t *testing.T) {
 		clock := newFakeClock()
 		h := newTestHub(clock)
 		s := mustConnect(t, h, agentA)
-		done := sendAsync(testCtx(t), h, agentA, Clear())
+		done := sendAsync(testCtx(t), h, agentA, Deliver("racing", false))
 		cmd := mustNext(t, s)
 		clock.waitArmed(t)
 		h.mu.Lock()
@@ -312,7 +312,7 @@ func TestSendRejectedAckDropsCommand(t *testing.T) {
 func TestSendContextCancelKeepsCommand(t *testing.T) {
 	h := newTestHub(newFakeClock())
 	ctx, cancel := context.WithCancel(context.Background())
-	done := sendAsync(ctx, h, agentA, Clear())
+	done := sendAsync(ctx, h, agentA, Deliver("cancelled", false))
 	// Wait until Send has queued the command before cancelling.
 	if _, err := h.WaitFor(testCtx(t), agentA, func(s State) bool { return s.Pending == 1 }); err != nil {
 		t.Fatalf("WaitFor pending: %v", err)

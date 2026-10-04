@@ -96,7 +96,7 @@ func TestAckClockRestartsOnEachIdle(t *testing.T) {
 		clock := newFakeClock()
 		h := newTestHub(clock)
 		_ = mustConnect(t, h, agentA)
-		done := sendAsync(context.Background(), h, agentA, Compact(""))
+		done := sendAsync(context.Background(), h, agentA, Deliver("hi", false))
 		synctest.Wait()
 		if n := armedCount(clock); n != 1 {
 			t.Fatalf("armed %d timers for an idle agent, want 1", n)
@@ -134,20 +134,18 @@ func TestAckClockRestartsOnIdleFlipItDidNotWitness(t *testing.T) {
 		_ = mustConnect(t, h, agentA)
 		apply(t, h, agentA, event(EventTurnStart))
 		apply(t, h, agentA, event(EventTurnComplete))
-		done := sendAsync(context.Background(), h, agentA, Clear())
+		done := sendAsync(context.Background(), h, agentA, Deliver("hi", false))
 		synctest.Wait()
 		_ = armedCount(clock)
 		clock.Advance(DefaultAckTimeout - time.Second)
 
-		// Busy then idle again, applied under the hub's event lock so Send
-		// cannot observe the busy moment in between.
-		h.eventMu.Lock()
+		// Busy then idle again, applied under the hub's lock so Send cannot
+		// observe the busy moment in between.
 		h.mu.Lock()
 		h.recordLocked(agentA, h.agents[agentA], event(EventTurnStart))
 		h.recordLocked(agentA, h.agents[agentA], event(EventTurnComplete))
 		h.notifyLocked()
 		h.mu.Unlock()
-		h.eventMu.Unlock()
 		synctest.Wait()
 		if n := armedCount(clock); n != 1 {
 			t.Fatalf("armed %d timers after an unwitnessed busy/idle flip, want 1", n)

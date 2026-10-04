@@ -145,6 +145,9 @@ type Report struct {
 	// hello
 	SessionID     string
 	ClaudeVersion string
+	// Busy is the mod's own view of whether a turn is running; nil when the
+	// hello did not say.
+	Busy *bool
 
 	// ack
 	ID    string
@@ -159,7 +162,7 @@ type Report struct {
 
 // reportKeys is the closed set of keys each report type may carry.
 var reportKeys = map[string]map[string]bool{
-	ReportHello: {"type": true, "session_id": true, "claude_version": true},
+	ReportHello: {"type": true, "session_id": true, "claude_version": true, "busy": true},
 	ReportAck:   {"type": true, "id": true, "ok": true, "error": true},
 	ReportEvent: {"type": true, "name": true, "usage": true, "reason": true},
 }
@@ -210,7 +213,15 @@ func parseHello(fields map[string]json.RawMessage) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	return Report{Type: ReportHello, SessionID: sessionID, ClaudeVersion: version}, nil
+	var busy *bool
+	if raw, present := fields["busy"]; present {
+		var b bool
+		if isNull(raw) || json.Unmarshal(raw, &b) != nil {
+			return Report{}, invalidReport("hello busy must be a boolean")
+		}
+		busy = &b
+	}
+	return Report{Type: ReportHello, SessionID: sessionID, ClaudeVersion: version, Busy: busy}, nil
 }
 
 func parseAck(fields map[string]json.RawMessage) (Report, error) {

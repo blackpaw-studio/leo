@@ -104,6 +104,16 @@ func TestParseReportAccepts(t *testing.T) {
 			want: Report{Type: ReportHello, SessionID: "s-1", ClaudeVersion: "2.1.287"},
 		},
 		{
+			name: "hello saying busy",
+			body: `{"type":"hello","session_id":"s-1","claude_version":"2.1.289","busy":true}`,
+			want: Report{Type: ReportHello, SessionID: "s-1", ClaudeVersion: "2.1.289", Busy: boolPtr(true)},
+		},
+		{
+			name: "hello saying idle",
+			body: `{"type":"hello","session_id":"s-1","claude_version":"2.1.289","busy":false}`,
+			want: Report{Type: ReportHello, SessionID: "s-1", ClaudeVersion: "2.1.289", Busy: boolPtr(false)},
+		},
+		{
 			name: "ack ok",
 			body: `{"type":"ack","id":"c1","ok":true}`,
 			want: Report{Type: ReportAck, ID: "c1", OK: true},
@@ -143,7 +153,8 @@ func TestParseReportAccepts(t *testing.T) {
 			if got.Type != tc.want.Type || got.SessionID != tc.want.SessionID ||
 				got.ClaudeVersion != tc.want.ClaudeVersion || got.ID != tc.want.ID ||
 				got.OK != tc.want.OK || got.Error != tc.want.Error || got.Name != tc.want.Name ||
-				got.Reason != tc.want.Reason || string(got.Usage) != string(tc.want.Usage) {
+				got.Reason != tc.want.Reason || string(got.Usage) != string(tc.want.Usage) ||
+				!sameBoolPtr(got.Busy, tc.want.Busy) {
 				t.Fatalf("ParseReport mismatch\n got: %+v\nwant: %+v", got, tc.want)
 			}
 		})
@@ -167,6 +178,8 @@ func TestParseReportRejects(t *testing.T) {
 		{"hello missing claude_version", `{"type":"hello","session_id":"s"}`},
 		{"hello with ack field", `{"type":"hello","session_id":"s","claude_version":"v","id":"c1"}`},
 		{"hello unknown field", `{"type":"hello","session_id":"s","claude_version":"v","extra":1}`},
+		{"hello busy wrong kind", `{"type":"hello","session_id":"s","claude_version":"v","busy":"yes"}`},
+		{"hello busy null", `{"type":"hello","session_id":"s","claude_version":"v","busy":null}`},
 		{"ack missing id", `{"type":"ack","ok":true}`},
 		{"ack empty id", `{"type":"ack","id":"","ok":true}`},
 		{"ack missing ok", `{"type":"ack","id":"c1"}`},
@@ -197,4 +210,13 @@ func TestParseReportRejects(t *testing.T) {
 func withID(cmd Command, id string) Command {
 	cmd.ID = id
 	return cmd
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func sameBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 )
 
@@ -98,8 +99,9 @@ func (h *Hub) snapshotLocked(agent string) State {
 }
 
 func (h *Hub) applyEvent(agent string, r Report) error {
-	h.eventMu.Lock()
-	defer h.eventMu.Unlock()
+	lock := h.eventLock(agent)
+	lock.Lock()
+	defer lock.Unlock()
 
 	h.mu.Lock()
 	if h.closed {
@@ -116,6 +118,18 @@ func (h *Hub) applyEvent(agent string, r Report) error {
 	return nil
 }
 
+// eventLock returns agent's event mutex, creating it on first use.
+func (h *Hub) eventLock(agent string) *sync.Mutex {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	lock, ok := h.eventLocks[agent]
+	if !ok {
+		lock = &sync.Mutex{}
+		h.eventLocks[agent] = lock
+	}
+	return lock
+}
+
 // recordLocked folds one hello/event report into st and returns the Event
 // describing it.
 func (h *Hub) recordLocked(agent string, st *agentState, r Report) Event {
@@ -123,9 +137,15 @@ func (h *Hub) recordLocked(agent string, st *agentState, r Report) Event {
 	name := r.Name
 	if r.Type == ReportHello {
 		name = ReportHello
-		// A new session cannot have a turn running yet; the same session
-		// re-saying hello (a mod reload) keeps whatever turn is on.
-		if r.SessionID != st.sessionID {
+		// The mod's own word on a running turn wins: it covers a fresh
+		// process resuming the same session after its predecessor died
+		// mid-turn. Without it, a new session cannot have a turn running
+		// yet, and the same session re-saying hello (a mod reload) keeps
+		// whatever turn is on.
+		switch {
+		case r.Busy != nil:
+			st.busy = *r.Busy
+		case r.SessionID != st.sessionID:
 			st.busy = false
 		}
 		st.sessionID, st.claudeVersion, st.helloAt = r.SessionID, r.ClaudeVersion, now
