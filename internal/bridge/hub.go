@@ -99,8 +99,12 @@ type Hub struct {
 	// subscriber call stalling every other agent's reports. Guarded by mu.
 	eventLocks map[string]*sync.Mutex
 	seq        uint64
-	closed     bool
-	changed    chan struct{} // closed and replaced on every state change
+	// lives holds each key's generation, and the tombstone a Forget leaves
+	// until the next Open (see generation.go). Guarded by mu.
+	lives   map[string]*keyLife
+	genSeq  uint64
+	closed  bool
+	changed chan struct{} // closed and replaced on every state change
 }
 
 type agentState struct {
@@ -134,12 +138,31 @@ func (st *agentState) syncAckClock() {
 	st.ackClockPaused = paused
 }
 
-// pending is one unacked command. result receives exactly one resolution
-// (ack, rejection, forget, close), always under Hub.mu.
+// pending is one unacked command. It is resolved exactly once (ack,
+// rejection, forget, close, or an abandoned non-deliver), always under
+// Hub.mu: err is set, then done is closed, so any number of waiters can
+// read err once done is.
 type pending struct {
-	seq    uint64
-	cmd    Command
-	result chan error
+	seq  uint64
+	cmd  Command
+	done chan struct{}
+	err  error
+	// callerID: the caller named the command (see EnqueueTo).
+	callerID bool
+}
+
+func newPending(seq uint64, cmd Command, callerID bool) *pending {
+	return &pending{seq: seq, cmd: cmd, done: make(chan struct{}), callerID: callerID}
+}
+
+// resolveLocked settles p with err; later calls are no-ops.
+func (p *pending) resolveLocked(err error) {
+	select {
+	case <-p.done:
+	default:
+		p.err = err
+		close(p.done)
+	}
 }
 
 // conn is one stream registration. nextSeq is its delivery cursor: a fresh
@@ -161,6 +184,7 @@ func New(opts Options) *Hub {
 		maxPending:     opts.MaxPending,
 		agents:         map[string]*agentState{},
 		eventLocks:     map[string]*sync.Mutex{},
+		lives:          map[string]*keyLife{},
 		changed:        make(chan struct{}),
 	}
 	if h.clock == nil {
@@ -188,7 +212,7 @@ func New(opts Options) *Hub {
 // ack. Use it for commands queued before the mod connects (the opening
 // prompt); everything else should Send.
 func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
-	p, err := h.enqueue(agent, cmd)
+	p, err := h.enqueue(agent, nil, cmd)
 	if err != nil {
 		return "", err
 	}
@@ -215,7 +239,7 @@ func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
 // Interrupt is the exception — the mod runs it at once, mid-turn and ahead
 // of the queue — so its clock runs from the start regardless.
 func (h *Hub) Send(ctx context.Context, agent string, cmd Command) error {
-	p, err := h.enqueue(agent, cmd)
+	p, err := h.enqueue(agent, nil, cmd)
 	if err != nil {
 		return err
 	}
@@ -237,8 +261,8 @@ func (h *Hub) await(ctx context.Context, agent string, p *pending) error {
 			timeout, armedEpoch = h.clock.After(limit), epoch
 		}
 		select {
-		case err := <-p.result:
-			return err
+		case <-p.done:
+			return p.err
 		case <-timeout:
 			return h.abandon(agent, p, fmt.Errorf("%w: agent %s command %s: no ack within %s of it being free to run",
 				ErrAckTimeout, agent, p.cmd.ID, limit))
@@ -298,13 +322,14 @@ func queuedBehindLocked(outbox []*pending, p *pending) bool {
 
 // abandon stops waiting on p. A resolution that landed before the hub lock
 // was taken wins over cause: the command did settle. Otherwise a deliver
-// stays queued for redelivery and any other op is dropped (see Send).
+// stays queued for redelivery and any other op is dropped (see Send),
+// settling with cause for anyone else watching it.
 func (h *Hub) abandon(agent string, p *pending, cause error) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	select {
-	case err := <-p.result:
-		return err
+	case <-p.done:
+		return p.err
 	default:
 	}
 	if p.cmd.Op != OpDeliver {
@@ -314,18 +339,25 @@ func (h *Hub) abandon(agent string, p *pending, cause error) error {
 				h.notifyLocked()
 			}
 		}
+		p.resolveLocked(cause)
 	}
 	return cause
 }
 
-func (h *Hub) enqueue(agent string, cmd Command) (*pending, error) {
+// enqueue queues cmd for agent: for generation *gen when gen is non-nil,
+// else for whatever generation is current. A caller-set cmd.ID is kept
+// (see EnqueueTo); otherwise the hub assigns one.
+func (h *Hub) enqueue(agent string, gen *uint64, cmd Command) (*pending, error) {
 	if agent == "" {
 		return nil, fmt.Errorf("%w: empty name", ErrInvalidAgent)
 	}
 	if err := cmd.Validate(); err != nil {
 		return nil, err
 	}
-	cmd.ID = h.newID()
+	callerID := cmd.ID != ""
+	if !callerID {
+		cmd.ID = h.newID()
+	}
 	if cmd.ID == "" {
 		return nil, fmt.Errorf("%w: id generator returned an empty id", ErrInvalidCommand)
 	}
@@ -335,15 +367,25 @@ func (h *Hub) enqueue(agent string, cmd Command) (*pending, error) {
 	if h.closed {
 		return nil, ErrClosed
 	}
+	life, err := h.lifeLocked(agent)
+	if err != nil {
+		return nil, err
+	}
+	if gen != nil && life.gen != *gen {
+		return nil, fmt.Errorf("%w: agent %s was relaunched", ErrForgotten, agent)
+	}
 	st := h.stateLocked(agent)
+	if i := findPending(st.outbox, cmd.ID); i >= 0 {
+		if q := st.outbox[i]; callerID && q.callerID && q.cmd == cmd {
+			return q, nil
+		}
+		return nil, fmt.Errorf("%w: duplicate id %s", ErrInvalidCommand, cmd.ID)
+	}
 	if len(st.outbox) >= h.maxPending {
 		return nil, fmt.Errorf("%w: agent %s has %d unacked commands", ErrOutboxFull, agent, len(st.outbox))
 	}
-	if findPending(st.outbox, cmd.ID) >= 0 {
-		return nil, fmt.Errorf("%w: duplicate id %s", ErrInvalidCommand, cmd.ID)
-	}
 	h.seq++
-	p := &pending{seq: h.seq, cmd: cmd, result: make(chan error, 1)}
+	p := newPending(h.seq, cmd, callerID)
 	st.outbox = append(st.outbox, p)
 	if st.conn != nil {
 		st.conn.signal()
@@ -374,6 +416,9 @@ func (h *Hub) applyAck(agent string, r Report) error {
 	if h.closed {
 		return ErrClosed
 	}
+	if life, ok := h.lives[agent]; ok && life.forgotten() {
+		return fmt.Errorf("%w: agent %s", ErrForgotten, agent)
+	}
 	h.ackLocked(agent, r.ID, r.OK, r.Error)
 	return nil
 }
@@ -394,7 +439,7 @@ func (h *Hub) ackLocked(agent, id string, ok bool, msg string) {
 	if !ok {
 		outcome = rejection(agent, id, msg)
 	}
-	p.result <- outcome
+	p.resolveLocked(outcome)
 	h.notifyLocked()
 }
 
@@ -415,6 +460,9 @@ func (h *Hub) Connect(agent string) (*Stream, error) {
 	defer h.mu.Unlock()
 	if h.closed {
 		return nil, ErrClosed
+	}
+	if _, err := h.lifeLocked(agent); err != nil {
+		return nil, err
 	}
 	st := h.stateLocked(agent)
 	if st.conn != nil {
@@ -437,19 +485,15 @@ func (h *Hub) Connected(agent string) bool {
 }
 
 // Forget drops everything known about agent: its stream ends and every
-// unacked command is discarded, waking its senders with ErrForgotten. Use it
-// when the agent is stopped, reset or relaunched without the mod.
+// unacked command is discarded, waking its senders with ErrForgotten. The
+// key is then tombstoned: commands, connections and reports for it are
+// refused with ErrForgotten until the next Open, so nothing from the launch
+// that held it — a late report, a send routed just before — reaches a
+// successor. Use it whenever the launch behind the key is over.
 func (h *Hub) Forget(agent string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	delete(h.eventLocks, agent)
-	st, ok := h.agents[agent]
-	if !ok {
-		return
-	}
-	h.dropLocked(agent, st, ErrForgotten)
-	delete(h.agents, agent)
-	h.notifyLocked()
+	h.forgetLocked(agent)
 }
 
 // ForgetUnlessConnected forgets agent, as Forget does, only if its stream is
@@ -458,16 +502,21 @@ func (h *Hub) Forget(agent string) {
 func (h *Hub) ForgetUnlessConnected(agent string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if st, ok := h.agents[agent]; ok && st.conn != nil {
+		return false
+	}
+	h.forgetLocked(agent)
+	return true
+}
+
+func (h *Hub) forgetLocked(agent string) {
+	delete(h.eventLocks, agent)
 	if st, ok := h.agents[agent]; ok {
-		if st.conn != nil {
-			return false
-		}
 		h.dropLocked(agent, st, ErrForgotten)
 		delete(h.agents, agent)
-		h.notifyLocked()
 	}
-	delete(h.eventLocks, agent)
-	return true
+	h.tombstoneLocked(agent)
+	h.notifyLocked()
 }
 
 // AddSubscriber adds sub, alongside Options.Subscriber, for every hello and
@@ -505,7 +554,7 @@ func (h *Hub) dropLocked(agent string, st *agentState, cause error) {
 		st.conn = nil
 	}
 	for _, p := range st.outbox {
-		p.result <- fmt.Errorf("%w: agent %s command %s was not delivered", cause, agent, p.cmd.ID)
+		p.resolveLocked(fmt.Errorf("%w: agent %s command %s was not delivered", cause, agent, p.cmd.ID))
 	}
 	st.outbox = nil
 }

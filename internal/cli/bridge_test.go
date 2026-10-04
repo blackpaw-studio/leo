@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -265,6 +266,19 @@ func TestBridgeReportFailureExitsNonZero(t *testing.T) {
 	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(`{"type":"bogus"}`), io.Discard, "report", "--agent", "leo-alpha")
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("err=%v, want the daemon's rejection", err)
+	}
+}
+
+// The daemon forgot the key: the launch this claude belongs to is over, so
+// the report is moot. Exiting 0 keeps the mod from retrying it for a minute.
+func TestBridgeReportToAGoneKeySucceeds(t *testing.T) {
+	f := &fakeBridge{reportErr: fmt.Errorf("%w: bridge report: daemon returned 410: forgotten", daemon.ErrBridgeGone)}
+	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(`{"type":"event","name":"turn.start"}`), io.Discard, "report", "--agent", "leo-alpha")
+	if err != nil {
+		t.Fatalf("report to a gone key: err=%v, want nil", err)
+	}
+	if f.reports != 1 {
+		t.Fatalf("reports=%d, want 1", f.reports)
 	}
 }
 

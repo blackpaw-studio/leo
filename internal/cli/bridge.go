@@ -103,7 +103,14 @@ more than argv holds.`,
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), bridgeReportTimeout)
 			defer cancel()
-			return deps.postReport(ctx, deps.homeDir(), agent, body)
+			err = deps.postReport(ctx, deps.homeDir(), agent, body)
+			if errors.Is(err, daemon.ErrBridgeGone) {
+				// The launch this report belongs to is over: it is moot,
+				// and failing would only have the mod retry it.
+				fmt.Fprintf(cmd.ErrOrStderr(), "bridge report: dropped: %v\n", err)
+				return nil
+			}
+			return err
 		},
 	}
 }

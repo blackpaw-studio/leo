@@ -310,3 +310,27 @@ func TestServerDefaultsToItsOwnBridge(t *testing.T) {
 		t.Fatal("WithBridge hub was not the one the daemon serves")
 	}
 }
+
+// A report or connection for a forgotten key comes from a launch that is
+// over: the daemon answers 410 Gone, which the client surfaces as
+// ErrBridgeGone so the mod can stop retrying a moot report.
+func TestBridgeRefusesAForgottenKeyWithGone(t *testing.T) {
+	workDir, hub, _ := startBridgeServer(t)
+	hub.Forget(bridgeAgent)
+
+	err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, []byte(`{"type":"event","name":"turn.start"}`))
+	if !errors.Is(err, ErrBridgeGone) {
+		t.Fatalf("report for a forgotten key: err=%v, want ErrBridgeGone", err)
+	}
+	if hub.State(bridgeAgent).Busy {
+		t.Fatal("a forgotten key's late report was applied")
+	}
+	body, err := OpenBridgeStream(bridgeTestCtx(t), workDir, bridgeAgent)
+	if err == nil {
+		body.Close()
+		t.Fatal("OpenBridgeStream connected a forgotten key")
+	}
+	if !errors.Is(err, ErrBridgeGone) {
+		t.Fatalf("stream for a forgotten key: err=%v, want ErrBridgeGone", err)
+	}
+}

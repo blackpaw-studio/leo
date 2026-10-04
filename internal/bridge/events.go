@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -102,7 +103,10 @@ func (h *Hub) snapshotLocked(agent string) State {
 }
 
 func (h *Hub) applyEvent(agent string, r Report) error {
-	lock := h.eventLock(agent)
+	lock, err := h.eventLock(agent)
+	if err != nil {
+		return err
+	}
 	lock.Lock()
 	defer lock.Unlock()
 
@@ -110,6 +114,12 @@ func (h *Hub) applyEvent(agent string, r Report) error {
 	if h.closed {
 		h.mu.Unlock()
 		return ErrClosed
+	}
+	// Re-checked under the event lock: the key may have been forgotten
+	// since, and a dead launch's report must not bring its state back.
+	if _, err := h.lifeLocked(agent); err != nil {
+		h.mu.Unlock()
+		return err
 	}
 	ev := h.recordLocked(agent, h.stateLocked(agent), r)
 	h.notifyLocked()
@@ -122,16 +132,20 @@ func (h *Hub) applyEvent(agent string, r Report) error {
 	return nil
 }
 
-// eventLock returns agent's event mutex, creating it on first use.
-func (h *Hub) eventLock(agent string) *sync.Mutex {
+// eventLock returns agent's event mutex, creating it on first use, or
+// ErrForgotten for a tombstoned key (which must not grow a new one).
+func (h *Hub) eventLock(agent string) (*sync.Mutex, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if life, ok := h.lives[agent]; ok && life.forgotten() {
+		return nil, fmt.Errorf("%w: agent %s", ErrForgotten, agent)
+	}
 	lock, ok := h.eventLocks[agent]
 	if !ok {
 		lock = &sync.Mutex{}
 		h.eventLocks[agent] = lock
 	}
-	return lock
+	return lock, nil
 }
 
 // recordLocked folds one hello/event report into st and returns the Event

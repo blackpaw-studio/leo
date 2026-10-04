@@ -43,7 +43,7 @@ func (s *Server) handleBridgeStream(w http.ResponseWriter, r *http.Request) {
 	}
 	stream, err := s.bridge.Connect(agent)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, bridgeErrorStatus(err, http.StatusServiceUnavailable), err.Error())
 		return
 	}
 	defer stream.Close()
@@ -122,12 +122,22 @@ func (s *Server) handleBridgeReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.bridge.Apply(agent, report); err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, bridge.ErrClosed) {
-			status = http.StatusServiceUnavailable
-		}
-		writeError(w, status, err.Error())
+		writeError(w, bridgeErrorStatus(err, http.StatusBadRequest), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true})
+}
+
+// bridgeErrorStatus maps a hub error to its HTTP status: 410 Gone for a
+// forgotten key (its launch is over; see bridge.Hub.Forget), 503 once the
+// hub has closed, else fallback.
+func bridgeErrorStatus(err error, fallback int) int {
+	switch {
+	case errors.Is(err, bridge.ErrForgotten):
+		return http.StatusGone
+	case errors.Is(err, bridge.ErrClosed):
+		return http.StatusServiceUnavailable
+	default:
+		return fallback
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,11 @@ import (
 // maxErrorBodyBytes bounds how much of a failed response is read for its
 // message.
 const maxErrorBodyBytes = 4 << 10
+
+// ErrBridgeGone: the daemon has forgotten the bridge key (410 Gone), so the
+// launch the caller belongs to is over. A report it refused is moot and
+// need not be retried.
+var ErrBridgeGone = errors.New("leo bridge key is gone")
 
 func bridgePath(agent, leaf string) string {
 	return "/api/bridge/" + url.PathEscape(agent) + "/" + leaf
@@ -37,7 +43,7 @@ func openBridgeStream(ctx context.Context, cli *http.Client, baseURL, agent stri
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, httpStatusError("bridge stream", resp)
+		return nil, bridgeStatusError("bridge stream", resp)
 	}
 	return resp.Body, nil
 }
@@ -60,9 +66,18 @@ func postBridgeReport(ctx context.Context, cli *http.Client, baseURL, agent stri
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return httpStatusError("bridge report", resp)
+		return bridgeStatusError("bridge report", resp)
 	}
 	return nil
+}
+
+// bridgeStatusError is httpStatusError, wrapping ErrBridgeGone for a 410.
+func bridgeStatusError(what string, resp *http.Response) error {
+	err := httpStatusError(what, resp)
+	if resp.StatusCode == http.StatusGone {
+		return fmt.Errorf("%w: %w", ErrBridgeGone, err)
+	}
+	return err
 }
 
 // httpStatusError describes a failed daemon response, preferring the
