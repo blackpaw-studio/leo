@@ -248,6 +248,37 @@ func TestACorruptFileIsMovedAsideLoudly(t *testing.T) {
 	}
 }
 
+// Only a file that reads but does not decode is corrupt. One that cannot be
+// read at all (here a directory where the file should be; a permission or
+// disk error alike) is an error, and stays where it is: moving it aside
+// would hide messages that are likely intact.
+func TestAnUnreadableFileIsAnErrorAndStays(t *testing.T) {
+	var logged []string
+	dir := filepath.Join(t.TempDir(), "outbox")
+	s := New(dir, Options{Logf: func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }})
+	path := filepath.Join(dir, "alpha.json")
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.List("alpha"); err == nil {
+		t.Fatal("an unreadable outbox listed as empty")
+	}
+	if err := s.Append("alpha", entry("c1", "x")); err == nil {
+		t.Fatal("an append went past an unreadable outbox")
+	}
+
+	if aside, _ := filepath.Glob(filepath.Join(dir, "alpha.json.corrupt-*")); len(aside) != 0 {
+		t.Fatalf("moved an unreadable file aside: %v", aside)
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		t.Fatalf("the unreadable path did not stay: %v, %v", info, err)
+	}
+	if len(logged) != 0 {
+		t.Fatalf("logged %q for an I/O error", logged)
+	}
+}
+
 // A write that died before its rename leaves its temp file behind; a new
 // Store over the directory (the next daemon) sweeps them, and only them.
 func TestStrayTempFilesAreSweptOnNew(t *testing.T) {
