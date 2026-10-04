@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/bridge"
@@ -292,6 +293,37 @@ func TestTaskInjectorWaitEndsWithTheInvocation(t *testing.T) {
 	}
 	if p := g.pastes(); len(p) != 0 {
 		t.Fatalf("pasted %q after the invocation ended", p)
+	}
+}
+
+// A loaded machine can leave the wait unscheduled until both the
+// invocation's deadline and the settle deadline have passed. The
+// invocation's end still wins: nothing is pasted into an agent for a call
+// that already ended. route sleeps (fake time) past both deadlines so both
+// are ready when the wait next looks; the scenario repeats because a wait
+// that picked between them at random would pass by luck half the time.
+func TestTaskInjectorInvocationEndBeatsASimultaneousSettle(t *testing.T) {
+	const settle = time.Minute
+	for i := range 64 {
+		synctest.Test(t, func(t *testing.T) {
+			hub := bridge.New(bridge.Options{})
+			defer hub.Close()
+			route := func(string) BridgeRoute {
+				time.Sleep(2 * settle)
+				return BridgeRoute{}
+			}
+			pasted := 0
+			paste := func(context.Context, string, string) error { pasted++; return nil }
+			inject := taskInjector(hub, route, settle, paste, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), settle/2)
+			defer cancel()
+			if _, err := inject(ctx, "leo-alpha", "task"); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("run %d: inject = %v, want the invocation deadline", i, err)
+			}
+			if pasted != 0 {
+				t.Fatalf("run %d: pasted after the invocation ended", i)
+			}
+		})
 	}
 }
 

@@ -552,7 +552,7 @@ func taskBridgeOutcome(key string, err error, isDurable bool) (*harness.Result, 
 // reconnects, which a deliver rides out queued), or a legacy one (the zero
 // Target). A bridged launch whose mod has not connected by the deadline
 // returns its target, unsettled. err is ctx's when the invocation itself
-// ends first.
+// ends first, or has ended by the time the settle deadline passes.
 func awaitTaskBridge(ctx context.Context, hub *bridge.Hub, route func(string) BridgeRoute, session string, settle time.Duration) (target bridge.Target, settled bool, err error) {
 	deadline := time.NewTimer(settle)
 	defer deadline.Stop()
@@ -570,7 +570,10 @@ func awaitTaskBridge(ctx context.Context, hub *bridge.Hub, route func(string) Br
 		case <-ctx.Done():
 			return r.Target, false, ctx.Err()
 		case <-deadline.C:
-			return r.Target, false, nil
+			// select picks at random among ready cases: an invocation that
+			// ended by now still ends the wait, so its caller never pastes
+			// for a call that is already over.
+			return r.Target, false, ctx.Err()
 		case <-time.After(poll):
 		}
 	}
