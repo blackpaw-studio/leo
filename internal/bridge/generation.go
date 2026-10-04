@@ -42,8 +42,9 @@ func (l *keyLife) forgotten() bool { return !l.forgottenAt.IsZero() }
 // Ticket is a command queued by EnqueueTo. Holding one never keeps the
 // command alive or drops it; it only observes how it settles.
 type Ticket struct {
-	ID string
-	p  *pending
+	ID  string
+	key string
+	p   *pending
 }
 
 // Done is closed once the command settles: acked, rejected, forgotten or
@@ -176,17 +177,38 @@ func (h *Hub) Live(agent string) (Target, bool) {
 // a queued id is refused. It fails with ErrForgotten once t's generation is
 // over.
 func (h *Hub) EnqueueTo(t Target, cmd Command) (*Ticket, error) {
-	p, err := h.enqueue(t.Key, &t.Gen, cmd)
+	return h.enqueueTicket(t, cmd, false)
+}
+
+// EnqueueGate queues cmd for generation t, as EnqueueTo does, as a gate:
+// nothing queued behind it reaches the mod until the mod acks it ok. If the
+// mod refuses it, nothing more reaches the mod in this generation, and what
+// waited behind it stays queued, unsent, for the caller to take elsewhere.
+// A launch queues its opening this way: it abandons a launch whose mod
+// refused the opening, and nothing after the opening may have run there.
+func (h *Hub) EnqueueGate(t Target, cmd Command) (*Ticket, error) {
+	return h.enqueueTicket(t, cmd, true)
+}
+
+func (h *Hub) enqueueTicket(t Target, cmd Command, gate bool) (*Ticket, error) {
+	p, err := h.enqueue(t.Key, &t.Gen, cmd, gate)
 	if err != nil {
 		return nil, err
 	}
-	return &Ticket{ID: p.cmd.ID, p: p}, nil
+	return &Ticket{ID: p.cmd.ID, key: t.Key, p: p}, nil
+}
+
+// Await waits for t's command to settle as Send does (the same turn- and
+// queue-aware ack clock), returning nil once it is acked ok. On an ack
+// timeout or ctx's end a deliver stays queued.
+func (h *Hub) Await(ctx context.Context, t *Ticket) error {
+	return h.await(ctx, t.key, t.p)
 }
 
 // SendTo is Send for generation t: it fails with ErrForgotten, queueing
 // nothing, once t's generation is over.
 func (h *Hub) SendTo(ctx context.Context, t Target, cmd Command) error {
-	p, err := h.enqueue(t.Key, &t.Gen, cmd)
+	p, err := h.enqueue(t.Key, &t.Gen, cmd, false)
 	if err != nil {
 		return err
 	}

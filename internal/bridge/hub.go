@@ -133,6 +133,10 @@ type agentState struct {
 	lastTurnComplete time.Time
 	usage            json.RawMessage
 
+	// sealed is set once the mod refuses a gate (see EnqueueGate): nothing
+	// more streams in this generation.
+	sealed bool
+
 	// ackClockPaused is busy && connected: the mod only acks a queued
 	// command once Claude is idle, so ack clocks stand still meanwhile.
 	// idleEpoch counts paused→running flips so a waiting Send restarts its
@@ -166,10 +170,13 @@ type pending struct {
 	ackedIn string
 	// callerID: the caller named the command (see EnqueueTo).
 	callerID bool
+	// gate: nothing behind it streams until it is acked ok (see
+	// EnqueueGate).
+	gate bool
 }
 
-func newPending(seq uint64, cmd Command, callerID bool) *pending {
-	return &pending{seq: seq, cmd: cmd, done: make(chan struct{}), callerID: callerID}
+func newPending(seq uint64, cmd Command, callerID, gate bool) *pending {
+	return &pending{seq: seq, cmd: cmd, done: make(chan struct{}), callerID: callerID, gate: gate}
 }
 
 // resolveLocked settles p with err; later calls are no-ops.
@@ -231,7 +238,7 @@ func New(opts Options) *Hub {
 // opened. Launch code queues with EnqueueTo instead, pinned to its own
 // generation.
 func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
-	p, err := h.enqueue(agent, nil, cmd)
+	p, err := h.enqueue(agent, nil, cmd, false)
 	if err != nil {
 		return "", err
 	}
@@ -258,7 +265,7 @@ func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
 // Interrupt is the exception — the mod runs it at once, mid-turn and ahead
 // of the queue — so its clock runs from the start regardless.
 func (h *Hub) Send(ctx context.Context, agent string, cmd Command) error {
-	p, err := h.enqueue(agent, nil, cmd)
+	p, err := h.enqueue(agent, nil, cmd, false)
 	if err != nil {
 		return err
 	}
@@ -364,9 +371,10 @@ func (h *Hub) abandon(agent string, p *pending, cause error) error {
 }
 
 // enqueue queues cmd for agent: for generation *gen when gen is non-nil,
-// else for whatever generation is current. A caller-set cmd.ID is kept
-// (see EnqueueTo); otherwise the hub assigns one.
-func (h *Hub) enqueue(agent string, gen *uint64, cmd Command) (*pending, error) {
+// else for whatever generation is current; as a gate if gate (see
+// EnqueueGate). A caller-set cmd.ID is kept (see EnqueueTo); otherwise the
+// hub assigns one.
+func (h *Hub) enqueue(agent string, gen *uint64, cmd Command, gate bool) (*pending, error) {
 	if agent == "" {
 		return nil, fmt.Errorf("%w: empty name", ErrInvalidAgent)
 	}
@@ -395,7 +403,7 @@ func (h *Hub) enqueue(agent string, gen *uint64, cmd Command) (*pending, error) 
 	}
 	st := h.stateLocked(agent)
 	if i := findPending(st.outbox, cmd.ID); i >= 0 {
-		if q := st.outbox[i]; callerID && q.callerID && q.cmd == cmd {
+		if q := st.outbox[i]; callerID && q.callerID && q.cmd == cmd && q.gate == gate {
 			return q, nil
 		}
 		return nil, fmt.Errorf("%w: duplicate id %s", ErrInvalidCommand, cmd.ID)
@@ -404,7 +412,7 @@ func (h *Hub) enqueue(agent string, gen *uint64, cmd Command) (*pending, error) 
 		return nil, fmt.Errorf("%w: agent %s has %d unacked commands", ErrOutboxFull, agent, len(st.outbox))
 	}
 	h.seq++
-	p := newPending(h.seq, cmd, callerID)
+	p := newPending(h.seq, cmd, callerID, gate)
 	st.outbox = append(st.outbox, p)
 	if st.conn != nil {
 		st.conn.signal()
@@ -461,9 +469,13 @@ func (h *Hub) ackLocked(agent, id string, ok bool, msg string) {
 	st.outbox = without(st.outbox, i)
 	if !ok {
 		p.resolveLocked(rejection(agent, id, msg))
+		st.sealed = st.sealed || p.gate
 	} else {
 		p.ackedIn = st.sessionID
 		p.resolveLocked(nil)
+	}
+	if st.conn != nil {
+		st.conn.signal() // a gate's ack frees what it held back
 	}
 	h.notifyLocked()
 }
@@ -604,7 +616,9 @@ func (h *Hub) notifyLocked() {
 }
 
 // nextFor returns the next command for c, or a channel to wait on when none
-// is ready. A closed conn reports why it closed.
+// is ready. A closed conn reports why it closed. A gate c has handed out
+// and the mod has not acked holds back everything after it, and a sealed
+// generation hands out nothing more (see EnqueueGate).
 func (h *Hub) nextFor(agent string, c *conn) (Command, <-chan struct{}, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -612,10 +626,16 @@ func (h *Hub) nextFor(agent string, c *conn) (Command, <-chan struct{}, error) {
 		return Command{}, nil, c.err
 	}
 	st := h.agents[agent] // non-nil: removing an agent closes its conn first
+	if st.sealed {
+		return Command{}, c.wake, nil
+	}
 	for _, p := range st.outbox {
 		if p.seq >= c.nextSeq {
 			c.nextSeq = p.seq + 1
 			return p.cmd, nil, nil
+		}
+		if p.gate {
+			break
 		}
 	}
 	return Command{}, c.wake, nil
