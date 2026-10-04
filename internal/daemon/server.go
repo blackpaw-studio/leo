@@ -423,6 +423,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		AllowedHosts:   cfg.Web.AllowedHosts,
 		TrustedProxies: cfg.Web.TrustedProxies,
 		LogPath:        s.logPath,
+		Bridge:         web.BridgeOptions{Router: s.bridgeRouter, Launcher: s.bridgeLauncher},
 		ResolveHandle:  s.resolveHandle,
 		// Consults record to <state>/consults for `leo consult watch`.
 		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),

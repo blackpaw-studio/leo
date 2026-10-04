@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
@@ -175,6 +176,11 @@ type Server struct {
 
 	// consults runs synchronous one-off consultant subagents (leo_consult).
 	consults *consult.Dispatcher
+	// dispatchBridge is non-nil when dispatches can ride the claude mod
+	// bridge; bridgeRouter routes agents to theirs. Both from
+	// Options.Bridge, nil without one.
+	dispatchBridge dispatchBridge
+	bridgeRouter   *bridge.Router
 	// consultIntervals paces the consult runtime loop; zero fields take the
 	// production defaults. updateRoster replaces viewer.UpdateRoster when set.
 	// Both are test seams.
@@ -373,6 +379,9 @@ type Options struct {
 	// ParentContext is the daemon lifetime. Accepted dispatches are canceled
 	// when it ends instead of surviving a daemon shutdown.
 	ParentContext context.Context
+	// Bridge wires the claude mod bridge into agent messaging and dispatch
+	// launches. Optional; the zero value keeps everything on tmux.
+	Bridge BridgeOptions
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is

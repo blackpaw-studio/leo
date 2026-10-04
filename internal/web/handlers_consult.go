@@ -162,9 +162,17 @@ func (s *Server) handleAPIDispatchReport(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, apiResponse{Error: fmt.Sprintf("invalid request: %v", err)})
 		return
 	}
+	id := r.PathValue("id")
+	if s.dispatchBridge != nil && s.dispatchBridge.BridgeOwnsReports(id) {
+		// The bridge reports the same moments as these shell hooks (see
+		// consult.TmuxInteractiveRuntime.DispatchBridgeSubscriber); applying
+		// both would double every turn. Acknowledge so the hook stops.
+		writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: map[string]bool{"accepted": true, "superseded_by_bridge": true}})
+		return
+	}
 	// Reports intentionally acknowledge unknown, duplicate, and terminal runs
 	// so hook retries stop. Dispatcher.Report only returns transport errors.
-	if err := s.consults.Report(r.PathValue("id"), report); err != nil {
+	if err := s.consults.Report(id, report); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
 		return
 	}
