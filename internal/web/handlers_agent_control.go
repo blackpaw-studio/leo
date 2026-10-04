@@ -185,6 +185,13 @@ func (s *Server) publishAgentMessage(from, to string) {
 	})
 }
 
+// sessionInputWait bounds how long the live typed path waits for another
+// delivery into the session to finish: under the MCP client's 30 s timeout
+// and the server's WriteTimeout, so the sender hears "busy" rather than
+// timing out on a message that may still be typed after it left. A var so
+// tests can shorten it.
+var sessionInputWait = 20 * time.Second
+
 // handleWebAgentMessage delivers a free-text message into an agent's live
 // Claude prompt and submits it. Unlike handleWebAgentSendKeys (which types
 // char-by-char to drive slash-command menus), this sends the body verbatim
@@ -309,13 +316,22 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hold the session's input as every paste into it does, so no other
-	// delivery's text or probe interleaves with this one's.
-	unlock, err := tmux.LockSessionInput(r.Context(), sessionName)
+	// delivery's text or probe interleaves with this one's; but wait no
+	// longer than sessionInputWait, and type nothing once the client is
+	// gone (the lock's wait may win a race with its leaving): it would
+	// arrive after the client gave up, beside the retry it sends.
+	lockCtx, cancelLock := context.WithTimeout(r.Context(), sessionInputWait)
+	unlock, err := tmux.LockSessionInput(lockCtx, sessionName)
+	cancelLock()
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: fmt.Sprintf("waiting for another delivery into %s: %v", sessionName, err)})
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: fmt.Sprintf("agent %s is busy: another delivery into it has not finished (%v); try again", name, err)})
 		return
 	}
 	defer unlock()
+	if err := r.Context().Err(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiResponse{Error: fmt.Sprintf("the request ended before agent %s was free: %v", name, err)})
+		return
+	}
 
 	tmuxPath := findTmuxPath()
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
