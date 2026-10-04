@@ -63,8 +63,10 @@ func NewCommandID() string { return "cmd-" + rand.Text() }
 
 // Options configures a Hub. Zero values select the defaults.
 type Options struct {
-	Clock      Clock
-	NewID      func() string
+	Clock Clock
+	NewID func() string
+	// AckTimeout is how long an idle agent has to ack a command (default
+	// 30s); time spent in a running turn does not count. See Send.
 	AckTimeout time.Duration
 	MaxPending int
 	// Subscriber, if set, is handed every hello and turn/session event after
@@ -103,6 +105,24 @@ type agentState struct {
 	busy             bool
 	lastTurnComplete time.Time
 	usage            json.RawMessage
+
+	// ackClockPaused is busy && connected: the mod only acks a queued
+	// command once Claude is idle, so ack clocks stand still meanwhile.
+	// idleEpoch counts paused→running flips so a waiting Send restarts its
+	// clock on each, even one it did not see happen. See syncAckClock.
+	ackClockPaused bool
+	idleEpoch      uint64
+}
+
+// syncAckClock recomputes the ack-clock pause after any change to busy or
+// conn. Busy only counts while connected: a mod that vanished mid-turn
+// will never report the turn's end.
+func (st *agentState) syncAckClock() {
+	paused := st.busy && st.conn != nil
+	if st.ackClockPaused && !paused {
+		st.idleEpoch++
+	}
+	st.ackClockPaused = paused
 }
 
 // pending is one unacked command. result receives exactly one resolution
@@ -163,20 +183,58 @@ func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
 // an ErrRejected error on ok:false (the command is dropped either way). On
 // ack timeout or ctx cancellation the command stays queued for redelivery,
 // so the caller must not retry it by another route.
+//
+// The ack timeout is turn-aware. The mod acks a queued command only once
+// Claude is idle, so while the agent's stream is up and a turn is running
+// the clock stands still, and each return to idle restarts it in full: Send
+// fails only after AckTimeout of continuous idleness without an ack. A long
+// turn can therefore hold Send for as long as it runs; bound that with ctx.
+// Interrupt is the exception — the mod runs it at once, mid-turn — so its
+// clock runs from the start regardless.
 func (h *Hub) Send(ctx context.Context, agent string, cmd Command) error {
 	p, err := h.enqueue(agent, cmd)
 	if err != nil {
 		return err
 	}
-	timeout := h.clock.After(h.ackTimeout)
-	select {
-	case err := <-p.result:
-		return err
-	case <-timeout:
-		return h.abandon(p, fmt.Errorf("%w: agent %s command %s after %s", ErrAckTimeout, agent, p.cmd.ID, h.ackTimeout))
-	case <-ctx.Done():
-		return h.abandon(p, fmt.Errorf("bridge send to %s (command %s): %w", agent, p.cmd.ID, ctx.Err()))
+	return h.await(ctx, agent, p)
+}
+
+func (h *Hub) await(ctx context.Context, agent string, p *pending) error {
+	turnAware := p.cmd.Op != OpInterrupt
+	var (
+		timeout    <-chan time.Time
+		armedEpoch uint64
+	)
+	for {
+		paused, epoch, changed := h.ackClock(agent)
+		switch {
+		case turnAware && paused:
+			timeout = nil
+		case timeout == nil || (turnAware && epoch != armedEpoch):
+			timeout, armedEpoch = h.clock.After(h.ackTimeout), epoch
+		}
+		select {
+		case err := <-p.result:
+			return err
+		case <-timeout:
+			return h.abandon(p, fmt.Errorf("%w: agent %s command %s: no ack within %s of the agent being idle",
+				ErrAckTimeout, agent, p.cmd.ID, h.ackTimeout))
+		case <-changed:
+		case <-ctx.Done():
+			return h.abandon(p, fmt.Errorf("bridge send to %s (command %s): %w", agent, p.cmd.ID, ctx.Err()))
+		}
 	}
+}
+
+// ackClock reports whether agent's ack clocks are paused, its idle epoch,
+// and the channel that closes on the next state change.
+func (h *Hub) ackClock(agent string) (paused bool, epoch uint64, changed <-chan struct{}) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if st, ok := h.agents[agent]; ok {
+		return st.ackClockPaused, st.idleEpoch, h.changed
+	}
+	return false, 0, h.changed
 }
 
 // abandon stops waiting on p. A resolution that landed before the hub lock
@@ -297,6 +355,7 @@ func (h *Hub) Connect(agent string) (*Stream, error) {
 	c := &conn{wake: make(chan struct{}, 1), done: make(chan struct{})}
 	st.conn = c
 	st.connectedAt = h.clock.Now()
+	st.syncAckClock()
 	h.notifyLocked()
 	return &Stream{hub: h, agent: agent, conn: c}, nil
 }
@@ -389,6 +448,7 @@ func (h *Hub) release(agent string, c *conn) {
 	defer h.mu.Unlock()
 	if st, ok := h.agents[agent]; ok && st.conn == c {
 		st.conn = nil
+		st.syncAckClock()
 		h.notifyLocked()
 	}
 	c.closeLocked(ErrStreamClosed)

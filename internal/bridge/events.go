@@ -139,6 +139,7 @@ func (h *Hub) recordLocked(agent string, st *agentState, r Report) Event {
 	case EventSessionEnd:
 		st.busy = false
 	}
+	st.syncAckClock()
 	if r.Usage != nil {
 		st.usage = cloneRaw(r.Usage)
 	}
