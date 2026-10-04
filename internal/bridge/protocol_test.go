@@ -250,3 +250,19 @@ func sameBoolPtr(a, b *bool) bool {
 	}
 	return *a == *b
 }
+
+func TestOpeningIDIsStablePerScopeAndText(t *testing.T) {
+	a := OpeningID("s-1", "brief")
+	if a != OpeningID("s-1", "brief") || !strings.HasPrefix(a, "open-") {
+		t.Fatalf("OpeningID not stable: %q", a)
+	}
+	for _, other := range []string{OpeningID("s-2", "brief"), OpeningID("s-1", "brief2"), OpeningID("s-1b", "rief")} {
+		if other == a {
+			t.Fatalf("OpeningID collided across scope/text: %q", a)
+		}
+	}
+	cmd := Opening("s-1", "brief")
+	if cmd.ID != a || cmd.Op != OpDeliver || !cmd.AsUser || cmd.Text != "brief" {
+		t.Fatalf("Opening = %+v", cmd)
+	}
+}

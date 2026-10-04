@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -13,19 +11,6 @@ import (
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
-
-// openingIDPrefix marks the bridge command id of an opening prompt.
-const openingIDPrefix = "open-"
-
-// openingCommandID is the bridge command id an opening prompt is delivered
-// under: derived from the conversation it opens and its text, so every
-// re-queue of one opening (a relaunch, a daemon restart) is the same command
-// to the mod's dedup — a repeat of one that already ran is only re-acked —
-// while a reset's new conversation gets a new id.
-func openingCommandID(conversation, text string) string {
-	sum := sha256.Sum256([]byte(conversation + "\x00" + text))
-	return openingIDPrefix + hex.EncodeToString(sum[:16])
-}
 
 // conversationArg returns the session args select: --session-id's value
 // (fresh: a spawn or reset starting a new conversation) or --resume's.
@@ -102,9 +87,7 @@ func (o *openingDelivery) command(name string) (bridge.Command, bool) {
 	case len(text) == 0:
 		return bridge.Command{}, false
 	}
-	cmd := bridge.Deliver(string(text), true)
-	cmd.ID = openingCommandID(o.conversation, string(text))
-	return cmd, true
+	return bridge.Opening(o.conversation, string(text)), true
 }
 
 // markAcked records that the mod acked the opening under id.

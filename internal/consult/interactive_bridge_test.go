@@ -593,3 +593,81 @@ func TestDispatchBridgeSubscriberForwardsOwnedDispatchEvents(t *testing.T) {
 		t.Fatalf("usage forwarded = %q, want the turn.complete usage once", got)
 	}
 }
+
+// The opening is queued under an id derived from the dispatch and its
+// text, so any re-queue of it is the same command to the mod's dedup.
+func TestBridgedOpeningHasADeterministicID(t *testing.T) {
+	g := newBridgeRig(t, "2.1.289")
+	g.launch(t, "d-id", "claude", "brief")
+	stream, err := g.hub.Connect("dispatch.d-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd := nextCommand(t, stream); cmd.ID != bridge.OpeningID("dispatch.d-id", "brief") {
+		t.Fatalf("opening id = %q, want %q", cmd.ID, bridge.OpeningID("dispatch.d-id", "brief"))
+	}
+}
+
+// Once a follow-up is queued, the orchestrator's request ending (its HTTP
+// client gave up) does not make it a failure: the deliver stays queued and
+// will run, so Inject reports it accepted. Reporting an error would close
+// the turn as rejected and invite a resend that delivers it twice.
+func TestBridgedInjectCallerGoneLeavesTheDeliverQueued(t *testing.T) {
+	g := newBridgeRig(t, "2.1.289")
+	g.r.SetBridge(InteractiveBridge{Hub: g.hub, Launcher: g.r.bridge.Launcher, ConnectTimeout: time.Second, SendTimeout: 200 * time.Millisecond})
+	g.launch(t, "d-gone", "claude", "brief")
+	g.connectAndAckOpening(t, "dispatch.d-gone")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		_, _ = g.hub.WaitFor(context.Background(), "dispatch.d-gone", func(st bridge.State) bool { return st.Pending == 1 })
+		cancel()
+	}()
+	if err := g.r.Inject(ctx, rigPane, "next", nil); err != nil {
+		t.Fatalf("Inject = %v, want the queued deliver reported accepted", err)
+	}
+	if st := g.hub.State("dispatch.d-gone"); st.Pending != 1 {
+		t.Fatalf("pending = %d, want the deliver still queued", st.Pending)
+	}
+}
+
+// The bridge owns a dispatch's turn reports only while its mod is
+// connected: a mod that died hands them back to the shell hooks.
+func TestBridgeOwnsReportsOnlyWhileConnected(t *testing.T) {
+	g := newBridgeRig(t, "2.1.289")
+	g.launch(t, "d-conn", "claude", "brief")
+	stream := g.connectAndAckOpening(t, "dispatch.d-conn")
+	if err := g.hub.Apply("dispatch.d-conn", bridge.Report{Type: bridge.ReportHello, SessionID: "s", ClaudeVersion: "2.1.289"}); err != nil {
+		t.Fatal(err)
+	}
+	if !g.r.BridgeOwnsReports("d-conn") {
+		t.Fatal("a connected bridge does not own reports")
+	}
+	stream.Close()
+	if g.r.BridgeOwnsReports("d-conn") {
+		t.Fatal("a bridge whose mod is gone still owns reports")
+	}
+	if _, err := g.hub.Connect("dispatch.d-conn"); err != nil {
+		t.Fatal(err)
+	}
+	if !g.r.BridgeOwnsReports("d-conn") {
+		t.Fatal("a reconnected bridge does not own reports")
+	}
+}
+
+// After a fallback the killed bridged claude's late reports are refused, so
+// no orphaned state for its key comes back.
+func TestFallbackRefusesTheKilledClaudesLateReports(t *testing.T) {
+	g := newBridgeRig(t, "2.1.289")
+	g.r.SetBridge(InteractiveBridge{Hub: g.hub, Launcher: g.r.bridge.Launcher, ConnectTimeout: 30 * time.Millisecond})
+	g.launch(t, "d-late", "claude", "brief")
+	if _, _, err := g.r.AwaitOpening(context.Background(), rigPane); err != nil {
+		t.Fatal(err)
+	}
+	err := g.hub.Apply("dispatch.d-late", bridge.Report{Type: bridge.ReportHello, SessionID: "s-dead", ClaudeVersion: "2.1.289"})
+	if !errors.Is(err, bridge.ErrForgotten) {
+		t.Fatalf("late hello: err=%v, want ErrForgotten", err)
+	}
+	if st := g.hub.State("dispatch.d-late"); st.SessionID != "" || st.Connected {
+		t.Fatalf("orphaned state after fallback: %+v", st)
+	}
+}

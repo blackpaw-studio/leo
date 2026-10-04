@@ -130,7 +130,7 @@ func TestOpeningAckIsPersisted(t *testing.T) {
 
 	s := connectWhenOpen(t, f.hub, "alpha")
 	cmd := nextCmd(t, s)
-	if want := openingCommandID("s-1", "the opening"); cmd.ID != want {
+	if want := bridge.OpeningID("s-1", "the opening"); cmd.ID != want {
 		t.Fatalf("opening id = %q, want %q (derived from its conversation and text)", cmd.ID, want)
 	}
 	if got := storedAck(home, "alpha"); got != "" {
@@ -265,7 +265,7 @@ func TestAdoptRequeuesAnUnackedOpening(t *testing.T) {
 
 	s := connectWhenOpen(t, f.hub, "alpha")
 	cmd := nextCmd(t, s)
-	if want := openingCommandID("s-1", "the opening"); cmd.ID != want || cmd.Text != "the opening" {
+	if want := bridge.OpeningID("s-1", "the opening"); cmd.ID != want || cmd.Text != "the opening" {
 		t.Fatalf("adoption queued %+v, want the opening under %s", cmd, want)
 	}
 	ackCmd(t, f.hub, "alpha", cmd, true)
@@ -280,7 +280,7 @@ func TestAdoptSkipsAnAckedOpening(t *testing.T) {
 	sessionUp(t, tmuxPath)
 	home := t.TempDir()
 	agentRecord(t, home, agentstore.Record{Name: "alpha"})
-	_ = agentstore.SetOpeningAcked(home, "alpha", openingCommandID("s-1", "the opening"))
+	_ = agentstore.SetOpeningAcked(home, "alpha", bridge.OpeningID("s-1", "the opening"))
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, adoptSpec(t, "the opening"), withHome(home))
 
 	waitFor(t, "adoption", func() bool { _, ok := f.sv.BridgeKey("alpha"); return ok })

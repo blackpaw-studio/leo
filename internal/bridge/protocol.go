@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,6 +67,24 @@ func Clear() Command { return Command{Op: OpClear} }
 
 // Interrupt aborts the running turn.
 func Interrupt() Command { return Command{Op: OpInterrupt} }
+
+// Opening is the deliver of an opening prompt: text as the user's own
+// prompt, under OpeningID(scope, text).
+func Opening(scope, text string) Command {
+	cmd := Deliver(text, true)
+	cmd.ID = OpeningID(scope, text)
+	return cmd
+}
+
+// OpeningID is the command id an opening prompt is delivered under: derived
+// from its scope (the conversation it opens, or the dispatch it starts) and
+// its text, so every re-queue of one opening — a relaunch, a daemon restart
+// — is the same command to the mod's dedup (a repeat of one that already
+// ran is only re-acked), while a new conversation gets a new id.
+func OpeningID(scope, text string) string {
+	sum := sha256.Sum256([]byte(scope + "\x00" + text))
+	return "open-" + hex.EncodeToString(sum[:16])
+}
 
 // Validate reports whether c is a command the mod can execute. It does not
 // check ID, which the Hub assigns.

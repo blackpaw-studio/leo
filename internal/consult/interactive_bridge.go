@@ -68,7 +68,11 @@ func (b InteractiveBridge) sendTimeout() time.Duration {
 // what it takes to relaunch it the legacy way if the mod never connects.
 type bridgedDispatch struct {
 	id, key, caller string
-	pane            string // "" until the launch returns it
+	// target is the generation of key this dispatch's launch opened, and
+	// since when it started.
+	target bridge.Target
+	since  time.Time
+	pane   string // "" until the launch returns it
 	// respawn is the respawn-pane argv (sans pane) of the legacy relaunch.
 	respawn []string
 	// legacyPaste is whether a legacy relaunch needs the opening pasted
@@ -115,16 +119,23 @@ func (r *TmuxInteractiveRuntime) planDispatchBridge(ctx context.Context, harness
 	return b.Launcher.Plan(ctx, binary, DispatchBridgeKey(id))
 }
 
-// queueBridgedOpening registers dispatch d and queues its opening as the
-// user's own prompt, ahead of the launch, so the mod finds it waiting
-// whenever it connects. false means the bridge could not take it and the
-// launch should go legacy.
+// queueBridgedOpening registers dispatch d, opening a generation of its
+// key, and queues its opening as the user's own prompt (under an id derived
+// from the dispatch and the prompt), ahead of the launch, so the mod finds
+// it waiting whenever it connects. false means the bridge could not take it
+// and the launch should go legacy.
 func (r *TmuxInteractiveRuntime) queueBridgedOpening(d *bridgedDispatch, prompt string) bool {
 	b := r.bridgeWiring()
+	target, err := b.Hub.Open(d.key)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dispatch %s: the leo bridge is unavailable (%v); launching without it\n", d.id, err)
+		return false
+	}
+	d.target, d.since = target, time.Now()
 	if prompt != "" {
-		if _, err := b.Hub.Enqueue(d.key, bridge.Deliver(prompt, true)); err != nil {
+		if _, err := b.Hub.EnqueueTo(target, bridge.Opening(d.key, prompt)); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: queueing the opening on the leo bridge failed (%v); launching without it\n", d.id, err)
-			b.Hub.Forget(d.key)
+			b.Hub.ForgetGen(target)
 			return false
 		}
 	}
@@ -155,7 +166,7 @@ func (r *TmuxInteractiveRuntime) releaseBridge(id string) {
 	hub := r.bridge.Hub
 	r.mu.Unlock()
 	if d != nil && hub != nil {
-		hub.Forget(d.key)
+		hub.ForgetGen(d.target)
 	}
 }
 
@@ -172,36 +183,38 @@ func (r *TmuxInteractiveRuntime) bridgedByPane(pane string) (bridgedDispatch, bo
 }
 
 // liveBridge returns pane's bridged dispatch when the mod carries its turns
-// right now: launched bridged, never fallen back, stream connected.
+// right now: launched bridged, never fallen back, its launch's stream
+// connected.
 func (r *TmuxInteractiveRuntime) liveBridge(pane string) (bridgedDispatch, *bridge.Hub, bool) {
 	d, ok := r.bridgedByPane(pane)
 	hub := r.bridgeWiring().Hub
-	if !ok || d.fellBack || hub == nil || !hub.Connected(d.key) {
+	if !ok || d.fellBack || hub == nil {
 		return d, hub, false
 	}
-	return d, hub, true
+	live, connected := hub.Live(d.key)
+	return d, hub, connected && live == d.target
 }
 
 // BridgeOwnsReports reports whether dispatch id's turn state comes from its
 // bridge rather than the claude shell hooks: launched bridged, not fallen
-// back, and its mod has connected (a stream the opening can only arrive
-// over) or said hello. Both paths report the same moments, so exactly one
-// may drive the dispatcher.
+// back, and its mod connected right now. Both paths report the same
+// moments, so exactly one may drive the dispatcher; a mod that died (its
+// stream gone) hands them back to the hooks.
 func (r *TmuxInteractiveRuntime) BridgeOwnsReports(id string) bool {
 	r.mu.RLock()
 	d := r.bridged[id]
 	owned := d != nil && !d.fellBack
-	key := ""
+	var target bridge.Target
 	if d != nil {
-		key = d.key
+		target = d.target
 	}
 	hub := r.bridge.Hub
 	r.mu.RUnlock()
 	if !owned || hub == nil {
 		return false
 	}
-	st := hub.State(key)
-	return st.Connected || !st.HelloAt.IsZero()
+	live, connected := hub.Live(target.Key)
+	return connected && live == target
 }
 
 // FrameMessage returns message as the dispatch in pane will receive it: a
@@ -232,7 +245,7 @@ func (r *TmuxInteractiveRuntime) AwaitOpening(ctx context.Context, pane string) 
 	}
 	b := r.bridgeWiring()
 	waitCtx, cancel := context.WithTimeout(ctx, b.connectTimeout())
-	_, waitErr := b.Hub.WaitFor(waitCtx, d.key, func(st bridge.State) bool { return st.Connected })
+	_, waitErr := b.Hub.WaitFor(waitCtx, d.key, func(st bridge.State) bool { return st.ConnectedSince(d.target, d.since) })
 	cancel()
 	switch {
 	case waitErr == nil:
@@ -242,8 +255,8 @@ func (r *TmuxInteractiveRuntime) AwaitOpening(ctx context.Context, pane string) 
 	case errors.Is(waitErr, bridge.ErrClosed):
 		return true, false, waitErr
 	}
-	if !b.Hub.ForgetUnlessConnected(d.key) {
-		return true, false, nil // connected at the last moment
+	if !b.Hub.ForgetGenUnlessConnected(d.target) {
+		return true, false, nil // connected at the last moment, or released
 	}
 	if !r.markFellBack(d.id) {
 		return true, false, nil // released meanwhile; nothing to relaunch
@@ -270,21 +283,23 @@ func (r *TmuxInteractiveRuntime) markFellBack(id string) bool {
 }
 
 // deliverOverBridge arms the turn, then sends text as a non-user deliver and
-// waits for the mod's ack. A deliver still unacked at the deadline stays
-// queued and will be submitted once claude is free, so that is reported as
-// accepted (the turn stays open, matched by its text when it starts) rather
-// than as a failure inviting a retry. A rejection or a lost bridge is an
-// error; it never falls back to tmux, which could deliver twice.
+// waits up to timeout for the mod's ack. Once queued, a deliver unacked by
+// then stays queued and will be submitted once claude is free, so that is
+// reported as accepted (the turn stays open, matched by its text when it
+// starts) rather than as a failure inviting a resend that would deliver it
+// twice. The wait is detached from ctx for the same reason: the caller
+// going away does not unqueue the deliver. A rejection or a lost bridge is
+// an error; it never falls back to tmux, which could deliver twice.
 func deliverOverBridge(ctx context.Context, hub *bridge.Hub, d bridgedDispatch, timeout time.Duration, text string, arm func() error) error {
 	if arm != nil {
 		if err := arm(); err != nil {
 			return err
 		}
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, timeout)
+	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	err := hub.Send(sendCtx, d.key, bridge.Deliver(text, false))
-	if err != nil && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+	err := hub.SendTo(sendCtx, d.target, bridge.Deliver(text, false))
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, bridge.ErrAckTimeout) {
 		fmt.Fprintf(os.Stderr, "dispatch %s: leo bridge has not acked the message within %s; it stays queued\n", d.id, timeout)
 		return nil
 	}
