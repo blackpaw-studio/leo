@@ -288,7 +288,7 @@ async function wasHandedOff($, id) {
 }
 
 // Records how command settled in one write: acked if ok, and no longer in
-// flight. One write, so a reload never finds it neither.
+// flight. One write, so a reload never finds it neither acked nor in flight.
 async function settleCommand($, command, ok) {
   const isHandedOff = HANDED_OFF_OPS.includes(command.op) && config.launch !== null
   if (ok) ackedIds = appendAcked(ackedIds ?? [], command.id)
