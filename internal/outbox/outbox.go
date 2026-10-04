@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	// DefaultMaxEntries caps one agent's queued messages, matching the
-	// bridge hub's own per-agent cap.
+	// DefaultMaxEntries caps one agent's queued messages. The daemon sets
+	// it to the bridge hub's per-agent cap, so a launch can carry a full
+	// outbox over at once.
 	DefaultMaxEntries = 256
 	// DefaultMaxBytes caps the text one agent has queued: a few messages at
 	// the web server's 10 MiB request cap, and far more of a usual size.

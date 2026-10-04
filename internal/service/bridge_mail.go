@@ -147,8 +147,10 @@ func (s *Supervisor) forgetMailLocked(store *outbox.Store, name, msgID string) {
 // carryMail queues on target, the generation id's launch just opened, every
 // message id's agent has waiting, in the order they were queued and under
 // their own ids, and returns how many. It runs as the launch opens: behind
-// its opening, before anything can be routed to it. One the hub refuses
-// stays, with all after it, for a later launch.
+// its opening, before anything can be routed to it. The generation holds
+// nothing else yet and its opening takes no slot, so an outbox within the
+// hub's cap (see wireBridge) fits whole. One the hub refuses anyway (the
+// generation already ended) stays, with all after it, for a later launch.
 func (s *Supervisor) carryMail(hub *bridge.Hub, id *procIdentity, target bridge.Target) int {
 	s.mail.mu.Lock()
 	defer s.mail.mu.Unlock()

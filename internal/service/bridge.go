@@ -442,7 +442,9 @@ const devModVersion = "dev"
 // launches stay legacy.
 func wireBridge(sv *Supervisor, homePath, version string, probe bridgemod.VersionProbe) (*bridge.Hub, *bridgemod.Launcher) {
 	hub := bridge.New(bridge.Options{})
-	sv.SetOutbox(outbox.New(filepath.Join(homePath, "state", "outbox"), outbox.Options{}))
+	// The outbox holds no more than the hub's cap: a launch carries it over
+	// whole, behind an opening that takes no slot (see carryMail).
+	sv.SetOutbox(outbox.New(filepath.Join(homePath, "state", "outbox"), outbox.Options{MaxEntries: bridge.DefaultMaxPending}))
 	if version == "" {
 		version = devModVersion
 	}
