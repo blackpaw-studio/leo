@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 // wantFiles is the mod as Claude Code loads it: manifest, hooks.json, and the
@@ -20,6 +21,13 @@ var wantFiles = []string{
 	"hooks/protocol.js",
 	"hooks/register.js",
 }
+
+// wantInstalled is wantFiles plus the completion marker Materialize writes last.
+var wantInstalled = func() []string {
+	files := append([]string{completeMarker}, wantFiles...)
+	sort.Strings(files)
+	return files
+}()
 
 func listFiles(t *testing.T, root string) []string {
 	t.Helper()
@@ -98,8 +106,8 @@ func TestMaterializeWritesTheMod(t *testing.T) {
 	if dir != want {
 		t.Fatalf("dir = %q, want %q", dir, want)
 	}
-	if got := listFiles(t, dir); strings.Join(got, ",") != strings.Join(wantFiles, ",") {
-		t.Fatalf("files = %v, want %v", got, wantFiles)
+	if got := listFiles(t, dir); strings.Join(got, ",") != strings.Join(wantInstalled, ",") {
+		t.Fatalf("files = %v, want %v", got, wantInstalled)
 	}
 	for _, rel := range wantFiles {
 		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
@@ -288,8 +296,8 @@ func TestMaterializeConcurrentCallsAgree(t *testing.T) {
 			t.Fatalf("caller %d got %q, caller 0 got %q", i, dirs[i], dirs[0])
 		}
 	}
-	if got := listFiles(t, dirs[0]); strings.Join(got, ",") != strings.Join(wantFiles, ",") {
-		t.Fatalf("files = %v, want %v", got, wantFiles)
+	if got := listFiles(t, dirs[0]); strings.Join(got, ",") != strings.Join(wantInstalled, ",") {
+		t.Fatalf("files = %v, want %v", got, wantInstalled)
 	}
 	siblings, err := os.ReadDir(filepath.Dir(dirs[0]))
 	if err != nil {
@@ -301,5 +309,89 @@ func TestMaterializeConcurrentCallsAgree(t *testing.T) {
 			names = append(names, s.Name())
 		}
 		t.Errorf("parent holds %v, want only the version dir", names)
+	}
+}
+
+// A dir that lacks the completion marker was left half-written (a crash or
+// power loss after the rename but before its data reached disk). It is not a
+// mod: Materialize replaces it with a fresh, complete copy.
+func TestMaterializeRepairsADirWithoutTheMarker(t *testing.T) {
+	stateDir := t.TempDir()
+	dir, err := Materialize(stateDir, "v1")
+	if err != nil {
+		t.Fatalf("first Materialize: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, completeMarker)); err != nil {
+		t.Fatalf("remove marker: %v", err)
+	}
+	register := filepath.Join(dir, "hooks", "register.js")
+	if err := os.WriteFile(register, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := Materialize(stateDir, "v1")
+	if err != nil {
+		t.Fatalf("second Materialize: %v", err)
+	}
+	if again != dir {
+		t.Fatalf("second dir = %q, want %q", again, dir)
+	}
+	if got := listFiles(t, dir); strings.Join(got, ",") != strings.Join(wantInstalled, ",") {
+		t.Fatalf("files = %v, want %v", got, wantInstalled)
+	}
+	got, err := os.ReadFile(register)
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedded, err := fs.ReadFile(modFS, root+"/hooks/register.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(embedded) {
+		t.Fatalf("hooks/register.js was not rewritten (%d bytes, want %d)", len(got), len(embedded))
+	}
+	siblings, err := os.ReadDir(filepath.Dir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(siblings) != 1 {
+		t.Errorf("parent holds %d entries after the repair, want only the version dir", len(siblings))
+	}
+}
+
+// Temp dirs a crashed install left behind are swept once they are old enough
+// that no live install can still own them; fresh ones are left alone.
+func TestMaterializeSweepsStaleTempDirs(t *testing.T) {
+	stateDir := t.TempDir()
+	dir, err := Materialize(stateDir, "v1")
+	if err != nil {
+		t.Fatalf("first Materialize: %v", err)
+	}
+	parent := filepath.Dir(dir)
+	stale := filepath.Join(parent, ".tmp-v0-crashed")
+	fresh := filepath.Join(parent, ".tmp-v1-inflight")
+	unrelated := filepath.Join(parent, "v0-abcdefabcdef")
+	for _, d := range []string{stale, fresh, unrelated} {
+		if err := os.MkdirAll(filepath.Join(d, "hooks"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-staleTempAge - time.Minute)
+	for _, d := range []string{stale, unrelated} {
+		if err := os.Chtimes(d, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := Materialize(stateDir, "v1"); err != nil {
+		t.Fatalf("second Materialize: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale temp dir survived: %v", err)
+	}
+	for _, keep := range []string{fresh, unrelated, dir} {
+		if _, err := os.Stat(keep); err != nil {
+			t.Errorf("%s was removed: %v", filepath.Base(keep), err)
+		}
 	}
 }
