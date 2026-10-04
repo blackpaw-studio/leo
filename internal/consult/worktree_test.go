@@ -598,3 +598,31 @@ func TestWorktreeCreationUsesRepositoryRootFromSourceSubdirectory(t *testing.T) 
 		t.Fatalf("branch = %q", rec.Branch)
 	}
 }
+
+// A headless run can exit before the dispatcher records its process group
+// (a fast run under load). On macOS getpgid fails for that exited, unreaped
+// child, which left the group unknown and kept a clean worktree; the run was
+// started as its own group's leader, so its pid is the group.
+func TestStartedProcessGroupOfARunThatAlreadyExited(t *testing.T) {
+	cmd := exec.Command("true")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Wait() }()
+	// Wait for the child to exit without reaping it: a zombie.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		out, _ := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(cmd.Process.Pid)).Output()
+		if strings.HasPrefix(strings.TrimSpace(string(out)), "Z") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the child never became a zombie (ps stat %q)", out)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := startedProcessGroup(cmd); got != cmd.Process.Pid {
+		t.Fatalf("startedProcessGroup = %d, want the run's pid %d", got, cmd.Process.Pid)
+	}
+}
