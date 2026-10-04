@@ -501,16 +501,26 @@ func TestStopForgetsTheBridge(t *testing.T) {
 	}
 }
 
-func TestBridgeKeyForSession(t *testing.T) {
+// A session's route is unplanned until its launch decides on the bridge, so
+// a task for a just-spawned agent waits instead of racing into a paste. A
+// session leo does not supervise has nothing to wait for.
+func TestBridgeRouteForSession(t *testing.T) {
 	sv := NewSupervisor(context.Background())
 	id := newProcIdentity("alpha", nil)
-	id.setBridgeKey("alpha")
 	sv.identities["alpha"] = id
-	if key, ok := sv.BridgeKeyForSession(id.SessionName()); !ok || key != "alpha" {
-		t.Fatalf("BridgeKeyForSession = %q, %v", key, ok)
+	if key, planned := sv.BridgeRouteForSession(id.SessionName()); planned || key != "" {
+		t.Fatalf("before the launch is planned: %q, planned=%v", key, planned)
 	}
-	if _, ok := sv.BridgeKeyForSession("leo-nobody"); ok {
-		t.Fatal("resolved an unknown session")
+	id.setBridgeKey("alpha")
+	if key, planned := sv.BridgeRouteForSession(id.SessionName()); !planned || key != "alpha" {
+		t.Fatalf("bridged launch: %q, planned=%v", key, planned)
+	}
+	id.setBridgeKey("")
+	if key, planned := sv.BridgeRouteForSession(id.SessionName()); !planned || key != "" {
+		t.Fatalf("legacy launch: %q, planned=%v", key, planned)
+	}
+	if key, planned := sv.BridgeRouteForSession("leo-nobody"); !planned || key != "" {
+		t.Fatalf("unknown session: %q, planned=%v", key, planned)
 	}
 }
 

@@ -18,6 +18,9 @@ type procIdentity struct {
 	name      string
 	args      []string
 	bridgeKey string // see BridgeKey
+	// bridgePlanned is set once a launch of this identity has decided
+	// whether it loads the bridge; see BridgeRoute.
+	bridgePlanned bool
 	// harness is the launch's harness adapter name ("" means claude); fixed
 	// at spawn.
 	harness string
@@ -99,8 +102,18 @@ func (p *procIdentity) BridgeKey() string {
 	return p.bridgeKey
 }
 
+// BridgeRoute returns BridgeKey and whether any launch has decided on the
+// bridge yet: a just-spawned agent's first launch is planned on the
+// supervise goroutine, after the spawn call returns.
+func (p *procIdentity) BridgeRoute() (key string, planned bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.bridgeKey, p.bridgePlanned
+}
+
 func (p *procIdentity) setBridgeKey(key string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.bridgeKey = key
+	p.bridgePlanned = true
 }

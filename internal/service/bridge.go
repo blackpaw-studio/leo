@@ -79,18 +79,19 @@ func (s *Supervisor) BridgeKey(name string) (string, bool) {
 	return key, key != ""
 }
 
-// BridgeKeyForSession returns the bridge key of the agent running in tmux
-// session, if its launch loaded the bridge.
-func (s *Supervisor) BridgeKeyForSession(session string) (string, bool) {
+// BridgeRouteForSession returns the bridge key of the agent running in tmux
+// session ("" when its launch did not load the bridge) and whether its
+// launch has decided that yet. A session leo does not supervise has nothing
+// to wait for: ("", true).
+func (s *Supervisor) BridgeRouteForSession(session string) (key string, planned bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, id := range s.identities {
 		if id.SessionName() == session {
-			key := id.BridgeKey()
-			return key, key != ""
+			return id.BridgeRoute()
 		}
 	}
-	return "", false
+	return "", true
 }
 
 // BridgeState returns name's bridge state while its mod is connected.
@@ -390,23 +391,66 @@ func wireBridge(sv *Supervisor, homePath, version string, probe bridgemod.Versio
 	return hub, launcher
 }
 
+// DefaultTaskBridgeSettle is how long a persistent task waits for its
+// agent's launch to settle on the bridge: the mod's connect timeout plus
+// room for a launch whose mod never connected to be relaunched legacy.
+const DefaultTaskBridgeSettle = bridgemod.DefaultConnectTimeout + 10*time.Second
+
+// taskBridgePoll is how often a waiting task re-reads its agent's route.
+const taskBridgePoll = 100 * time.Millisecond
+
 // taskInjector delivers a persistent task's prompt to the agent in a tmux
 // session. An agent whose leo bridge is connected gets it as the user's own
 // prompt, verbatim, waiting under the invocation's ctx for the mod to accept
 // it (a busy agent accepts once its turn ends). A bridge error — rejection,
 // a lost bridge, the deadline — is returned, never retried by paste: an
-// unaccepted deliver stays queued and would arrive twice. Anything else is
+// unaccepted deliver stays queued and would arrive twice.
+//
+// The ensure step may have spawned the agent a moment ago, so the injector
+// first waits up to settle for its launch to settle: a bridged launch whose
+// mod has connected, or a legacy one. Anything not bridged by then is
 // pasted the legacy way.
-func taskInjector(hub *bridge.Hub, route func(session string) (string, bool), paste func(ctx context.Context, session, prompt string) error) func(ctx context.Context, session, prompt string) (*harness.Result, error) {
+func taskInjector(hub *bridge.Hub, route func(session string) (key string, planned bool), settle time.Duration, paste func(ctx context.Context, session, prompt string) error) func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 	return func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 		if hub != nil && route != nil {
-			if key, ok := route(session); ok {
-				if hub.Connected(key) {
-					return nil, hub.Send(ctx, key, bridge.Deliver(prompt, true))
-				}
+			key, connected, err := awaitTaskBridge(ctx, hub, route, session, settle)
+			if err != nil {
+				return nil, err
+			}
+			if connected {
+				return nil, hub.Send(ctx, key, bridge.Deliver(prompt, true))
+			}
+			if key != "" {
 				fmt.Fprintf(os.Stderr, "bridge: %s not connected; pasting the task prompt into %s\n", key, session)
 			}
 		}
 		return nil, paste(ctx, session, prompt)
+	}
+}
+
+// awaitTaskBridge waits, up to settle, for session's launch to settle: its
+// bridge key once that mod is connected, or a legacy launch (key ""). A
+// bridged launch whose mod is still not connected at the deadline returns
+// its key, unconnected. err is ctx's when the invocation itself ends first.
+func awaitTaskBridge(ctx context.Context, hub *bridge.Hub, route func(string) (string, bool), session string, settle time.Duration) (key string, connected bool, err error) {
+	deadline := time.NewTimer(settle)
+	defer deadline.Stop()
+	// A short settle (tests) polls proportionally faster.
+	poll := max(min(taskBridgePoll, settle/10), time.Millisecond)
+	for {
+		key, planned := route(session)
+		switch {
+		case key != "" && hub.Connected(key):
+			return key, true, nil
+		case planned && key == "":
+			return "", false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return key, false, ctx.Err()
+		case <-deadline.C:
+			return key, false, nil
+		case <-time.After(poll):
+		}
 	}
 }
