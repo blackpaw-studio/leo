@@ -493,6 +493,10 @@ const taskBridgePoll = 100 * time.Millisecond
 // completes as queued.
 func taskInjector(hub *bridge.Hub, route func(session string) BridgeRoute, settle time.Duration, paste func(ctx context.Context, session, prompt string) error, queue func(session string, t bridge.Target, cmd bridge.Command) (*bridge.Ticket, error)) func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 	return func(ctx context.Context, session, prompt string) (*harness.Result, error) {
+		// A call already over delivers nothing: nobody waits for it.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if hub != nil && route != nil {
 			target, settled, err := awaitTaskBridge(ctx, hub, route, session, settle)
 			if err != nil {
@@ -579,5 +583,15 @@ func awaitTaskBridge(ctx context.Context, hub *bridge.Hub, route func(string) Br
 			return r.Target, false, ctx.Err()
 		case <-time.After(poll):
 		}
+	}
+}
+
+// taskPaste is the persistent-task paste into a session on the tmux at
+// tmuxPath: a readiness-probed paste (see pasteMessage) under the
+// invocation's ctx, so one still waiting for the session's paste lock, or
+// for a cold claude, gives up when the call does instead of landing after.
+func taskPaste(tmuxPath string) func(ctx context.Context, session, prompt string) error {
+	return func(ctx context.Context, session, prompt string) error {
+		return pasteMessage(ctx, tmuxPath, session, prompt)
 	}
 }

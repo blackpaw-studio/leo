@@ -423,3 +423,49 @@ func TestTaskInjectorDurablePromptOutlivesItsLaunch(t *testing.T) {
 		t.Fatal("a kept task prompt was also pasted")
 	}
 }
+
+// An invocation already over pastes nothing, with or without a bridge: its
+// caller has given up, so a late paste would run a prompt nobody waits for
+// (and hold the session's paste lock for no one).
+func TestTaskInjectorNeverPastesForAnEndedCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	g := newInjectRig(t) // leo-beta's launch is legacy: it settles at once
+	if err := g.injector(ctx, "leo-beta", "task"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("bridged daemon: inject = %v, want the call's end", err)
+	}
+	var pastedNoBridge []string
+	noBridge := taskInjector(nil, nil, testTaskSettle, func(_ context.Context, _, prompt string) error {
+		pastedNoBridge = append(pastedNoBridge, prompt)
+		return nil
+	}, nil)
+	if _, err := noBridge(ctx, "leo-beta", "task"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("no bridge: inject = %v, want the call's end", err)
+	}
+	if p := append(g.pastes(), pastedNoBridge...); len(p) != 0 {
+		t.Fatalf("pasted %q for a call that had ended", p)
+	}
+}
+
+// The persistent-task paste runs under the invocation's context, so a paste
+// still waiting (for the session's paste lock, or a cold claude) gives up
+// with the call instead of landing after it.
+func TestTaskPasteRunsUnderTheInvocation(t *testing.T) {
+	orig := pasteMessage
+	t.Cleanup(func() { pasteMessage = orig })
+	var got context.Context
+	pasteMessage = func(ctx context.Context, _, _, _ string) error {
+		got = ctx
+		return nil
+	}
+	type callKey struct{}
+	ctx := context.WithValue(context.Background(), callKey{}, "the call")
+
+	if err := taskPaste("/fake/tmux")(ctx, "leo-alpha", "task"); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Value(callKey{}) != "the call" {
+		t.Fatal("the paste did not run under the invocation's context")
+	}
+}

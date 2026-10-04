@@ -952,9 +952,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// of the sessions->agents collapse); non-claude ephemeral agents don't
 	// yet have a harness-aware injection dispatch table of their own, so
 	// this stays the single fallback for every tmux session.
-	srv.SetInjector(taskInjector(bridgeHub, supervisor.BridgeRouteForSession, DefaultTaskBridgeSettle, func(_ context.Context, tmuxSession, prompt string) error {
-		return tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
-	}, supervisor.QueueDeliverForSession))
+	srv.SetInjector(taskInjector(bridgeHub, supervisor.BridgeRouteForSession, DefaultTaskBridgeSettle, taskPaste(tmuxPath), supervisor.QueueDeliverForSession))
 	srv.SetAborter(func(tmuxSession string) error {
 		return tmux.AbortPrompt(context.Background(), tmuxPath, tmuxSession)
 	})
