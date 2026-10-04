@@ -33,11 +33,12 @@ daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdou
 
 **Mod (`leo-bridge`).**
 - Embedded in the leo binary with `embed.FS`.
-- Leo writes it to `~/.leo/state/mods/leo-bridge/<leo-version>/`. The directory is immutable once written, so a hot reload never sees a half-written mod.
+- Leo writes it to `~/.leo/state/mods/leo-bridge/<leo-version>-<hash12>/`. The directory is immutable once written, so a hot reload never sees a half-written mod. At its first bridged launch a daemon removes older versions' directories, keeping its own and the newest other one; a directory named in a running process's command line (a claude loaded it) is kept, and nothing is removed if the processes cannot be listed.
 - Claude agents are launched with `--plugin-dir <that dir>`.
 - Leo puts these variables in the launch environment, and the mod reads them with `$.env.get`:
   - `LEO_BRIDGE_BIN`: absolute path to leo
   - `LEO_BRIDGE_HOME`: the leo home of the daemon that launched this claude. The mod does not read it; the `leo bridge` processes it spawns inherit it and dial that daemon's socket ahead of `$LEO_HOME` and the default home, so the agents of a daemon run with `-c <config>` (an isolated test daemon, the e2e suite) never reach another daemon.
+  - `LEO_BRIDGE_LAUNCH`: an id fresh for every launch. A hot reload of the mod keeps it, a new process gets another, so the mod can tell what an earlier load of itself already handed this process's engine (see Deduplication).
   - `LEO_BRIDGE_AGENT`: the bridge key leo routes this claude by. For an agent or persistent task it is the agent name at launch (`<name>.<nonce>` if a renamed predecessor still holds that name); for a dispatch it is `dispatch.<dispatch id>`, unique per run. `LEO_PROCESS_NAME` is not used: it is a display name and differs from the key for dispatches.
 - `session.start` starts the pump. Commands are handled in order, one at a time, with a single command in flight.
 - The mod never decides policy. It executes commands and reports events.
@@ -62,14 +63,17 @@ daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdou
 
 **Reports (mod → daemon).**
 - `{"type":"ack","id","ok":bool,"error"?}`
-  - For `deliver`, the ack is sent when `$.prompt.submit` resolves, meaning the prompt was accepted (started, or queued behind the running turn).
-  - For `compact`, the mod waits for idle before calling, because `$.session.compact` rejects while a turn runs.
+  - For `deliver`, the ack is sent when `$.prompt.submit` resolves, which is when the prompt's turn starts. A deliver behind a running turn stays unacked, and is answered as queued, until that turn ends.
+  - For `compact`, the mod waits for idle before calling, because `$.session.compact` rejects while a turn runs. A refused compact is retried once the running turn ends (bounded), including a turn a reloaded mod never saw start.
+  - For `clear`, the ack is ok only if the session id moved on; a hook that answers `/clear` in its place gets `ok:false`.
+  - For `interrupt`, the running turn is aborted. One that arrives while a submit is in flight and no turn runs yet aborts the turn that submit starts, then acks.
+  - A report the daemon does not take is retried with backoff for about a minute, in order.
 - `{"type":"event","name":"turn.start"|"turn.complete"|"session.end","event_id"?, "usage"?, "reason"?, "prompt"?, "message"?}`
   - `prompt` (turn.start only): the text the turn began with. `message` (turn.complete only): the assistant's final visible text, which a dispatch returns as its result. The mod caps each at 1M characters. `reason` on turn.complete is `"aborted"` for an interrupted turn (absent otherwise); the dispatcher closes such a turn as interrupted.
   - `event_id`: `<name>:<turn id>` or `session.end:<session id>`, stable across the mod's retries, so the dispatcher drops a replay.
-- `{"type":"hello","session_id","claude_version","busy"?}`, sent on connect; `busy` says whether a main-loop turn is running.
+- `{"type":"hello","session_id","claude_version","busy"?}`, sent on connect; `busy` says whether a main-loop turn is running. A freshly loaded module (a new process, or a hot reload mid-turn) leaves it out until it sees a turn start or end, and the daemon keeps what it knows.
 
-**Deduplication.** The mod records acked ids in `$.store`, capped at 500 ids. A command whose id was already acked is acked again without running. Delivery is therefore at-least-once on the wire and exactly-once into Claude.
+**Deduplication.** The mod records acked ids in `$.store`, capped at 500 ids, under `acked:<key>` as `{ids, at, inflight}`. A command whose id was already acked is acked again without running. Before handing a `deliver` or `clear` to the engine, the mod also records its id as in flight for its `LEO_BRIDGE_LAUNCH`, and settles it (acked, no longer in flight) in one write. The engine keeps a handed-off prompt across a hot reload of the mod, so a reloaded mod handed such an id again acks it without running it; a new process, whose queue starts empty, runs it. Delivery is therefore at-least-once on the wire and exactly-once into Claude. Each `session.start` prunes other keys' entries left untouched for 7 days, and a dispatch's entry is deleted when its session ends for good (not on `/clear` or resume).
 
 ## Framing
 

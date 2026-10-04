@@ -150,6 +150,9 @@ type LauncherOptions struct {
 	Log io.Writer
 	// Now is the clock for probe retries; time.Now when nil.
 	Now func() time.Time
+	// Processes lists running command lines for PruneMods; ListProcesses
+	// when nil.
+	Processes ProcessLister
 }
 
 // Launcher decides whether a claude launch loads the leo-bridge mod and, if
@@ -162,6 +165,8 @@ type Launcher struct {
 	versions map[string]probeResult // by resolved claude binary
 	probing  map[string]*probeCall  // probes in flight, by resolved binary
 	logged   map[string]bool        // fallback reasons already logged
+
+	pruned sync.Once // earlier versions' mods, once per launcher
 }
 
 type probeResult struct {
@@ -186,6 +191,9 @@ func NewLauncher(opts LauncherOptions) *Launcher {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.Processes == nil {
+		opts.Processes = ListProcesses
 	}
 	return &Launcher{
 		opts:     opts,
@@ -316,6 +324,7 @@ func (l *Launcher) Plan(ctx context.Context, claudePath, key string) (Plan, bool
 		l.logOnce("materialize", "bridge: writing the leo-bridge mod failed (%v); launching without the leo bridge", err)
 		return Plan{}, false
 	}
+	l.pruned.Do(func() { l.pruneMods(context.WithoutCancel(ctx), dir) })
 	return Plan{
 		Key:       key,
 		PluginDir: dir,
@@ -326,6 +335,18 @@ func (l *Launcher) Plan(ctx context.Context, claudePath, key string) (Plan, bool
 			EnvLaunch: rand.Text(),
 		},
 	}, true
+}
+
+// pruneMods removes earlier versions' mods (see PruneMods), logging what it
+// removed or why it could not; it never affects the launch.
+func (l *Launcher) pruneMods(ctx context.Context, current string) {
+	removed, err := PruneMods(ctx, l.opts.StateDir, current, l.opts.Processes)
+	for _, dir := range removed {
+		fmt.Fprintf(l.opts.Log, "bridge: removed the unused leo-bridge mod %s\n", dir)
+	}
+	if err != nil {
+		fmt.Fprintf(l.opts.Log, "bridge: pruning old leo-bridge mods: %v\n", err)
+	}
 }
 
 func (l *Launcher) logOnce(reason, format string, args ...any) {
