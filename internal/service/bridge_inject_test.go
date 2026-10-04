@@ -23,6 +23,9 @@ type injectRig struct {
 	mu     sync.Mutex
 	pasted []string
 	routes map[string]BridgeRoute
+	// queued records the durable queue's calls ("<session>"); nil when the
+	// rig queues in the hub alone.
+	queued []string
 }
 
 // testTaskSettle bounds the rig's wait for a launch to settle on the bridge.
@@ -37,6 +40,18 @@ func newInjectRig(t *testing.T) *injectRig {
 }
 
 func newInjectRigSettling(t *testing.T, settle time.Duration) *injectRig {
+	t.Helper()
+	return newInjectRigWith(t, settle, false)
+}
+
+// newDurableInjectRig is newInjectRig queueing delivers durably, as the
+// daemon does (see Supervisor.QueueDeliverForSession).
+func newDurableInjectRig(t *testing.T) *injectRig {
+	t.Helper()
+	return newInjectRigWith(t, testTaskSettle, true)
+}
+
+func newInjectRigWith(t *testing.T, settle time.Duration, isDurable bool) *injectRig {
 	t.Helper()
 	hub := bridge.New(bridge.Options{})
 	t.Cleanup(hub.Close)
@@ -63,7 +78,16 @@ func newInjectRigSettling(t *testing.T, settle time.Duration) *injectRig {
 		g.pasted = append(g.pasted, session+"|"+prompt)
 		return g.pasteErr
 	}
-	inject := taskInjector(g.hub, route, settle, paste)
+	var queue func(string, bridge.Target, bridge.Command) (*bridge.Ticket, error)
+	if isDurable {
+		queue = func(session string, target bridge.Target, cmd bridge.Command) (*bridge.Ticket, error) {
+			g.mu.Lock()
+			g.queued = append(g.queued, session)
+			g.mu.Unlock()
+			return g.hub.EnqueueTo(target, cmd)
+		}
+	}
+	inject := taskInjector(g.hub, route, settle, paste, queue)
 	g.inject = inject
 	g.injector = func(ctx context.Context, session, prompt string) error {
 		res, err := inject(ctx, session, prompt)
@@ -188,7 +212,7 @@ func TestTaskInjectorPastesWithoutALiveBridge(t *testing.T) {
 
 func TestTaskInjectorWithoutAHubPastes(t *testing.T) {
 	var pasted int
-	inject := taskInjector(nil, nil, time.Minute, func(context.Context, string, string) error { pasted++; return nil })
+	inject := taskInjector(nil, nil, time.Minute, func(context.Context, string, string) error { pasted++; return nil }, nil)
 	if _, err := inject(context.Background(), "leo-alpha", "task"); err != nil || pasted != 1 {
 		t.Fatalf("inject = %v, pasted %d", err, pasted)
 	}
@@ -326,5 +350,44 @@ func TestTaskInjectorIgnoresAPredecessorsMod(t *testing.T) {
 	}
 	if p := g.pastes(); len(p) != 1 {
 		t.Fatalf("pasted = %q; want a paste once the launch never settled", p)
+	}
+}
+
+// A durable task prompt whose launch ends before the mod takes it waits in
+// the agent's outbox for its next launch: the invocation completes as
+// queued, not failed (a retry would run it twice), and is never pasted.
+func TestTaskInjectorDurablePromptOutlivesItsLaunch(t *testing.T) {
+	g := newDurableInjectRig(t)
+	stream, err := g.hub.Connect("alpha", rigLaunch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		res *harness.Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := g.inject(context.Background(), "leo-alpha", "task")
+		done <- outcome{res, err}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := stream.Next(ctx); err != nil {
+		t.Fatal(err)
+	}
+	g.hub.Forget("alpha")
+	got := <-done
+	if got.err != nil || got.res == nil || !strings.Contains(got.res.Text, "queued") {
+		t.Fatalf("inject = %+v, %v; want a queued result", got.res, got.err)
+	}
+	g.mu.Lock()
+	queued := append([]string(nil), g.queued...)
+	g.mu.Unlock()
+	if len(queued) != 1 || queued[0] != "leo-alpha" {
+		t.Fatalf("queued durably %q, want once for leo-alpha", queued)
+	}
+	if len(g.pastes()) != 0 {
+		t.Fatal("a kept task prompt was also pasted")
 	}
 }

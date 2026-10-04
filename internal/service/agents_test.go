@@ -289,6 +289,40 @@ func TestRestoreAgentsDropsWorktreeWithMissingWorkspace(t *testing.T) {
 	}
 }
 
+// mailDroppingSpawner is a spawner that also keeps agents' undelivered
+// messages, as the supervisor does.
+type mailDroppingSpawner struct {
+	fakeAgentSpawner
+	dropped []string
+}
+
+func (m *mailDroppingSpawner) DropAgentMail(name string) { m.dropped = append(m.dropped, name) }
+
+// A worktree agent dropped at restore for its missing workspace is gone for
+// good, so its undelivered messages go with it (and their senders are told).
+func TestRestoreAgentsDroppingAWorktreeDropsItsMail(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:          "leo-coding-owner-repo-feat-y",
+		Template:      "coding",
+		Repo:          "owner/repo",
+		Workspace:     filepath.Join(t.TempDir(), "does-not-exist"),
+		Branch:        "feat/y",
+		CanonicalPath: filepath.Join(t.TempDir(), "canonical-missing"),
+		SpawnedAt:     time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed agentstore: %v", err)
+	}
+
+	spawner := &mailDroppingSpawner{}
+	RestoreAgents(home, "", "", spawner)
+
+	if !slices.Equal(spawner.dropped, []string{rec.Name}) {
+		t.Fatalf("dropped mail of %v, want [%s]", spawner.dropped, rec.Name)
+	}
+}
+
 // fakeAgentSpawner captures SpawnAgent calls so tests can assert what args
 // RestoreAgents passed without spinning up the real supervisor (which would
 // exec tmux).

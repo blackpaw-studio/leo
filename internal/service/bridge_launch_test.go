@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
+	"github.com/blackpaw-studio/leo/internal/outbox"
 )
 
 const testLeoBin = "/opt/leo/bin/leo"
@@ -635,6 +636,19 @@ func TestWireBridge(t *testing.T) {
 	defer hub.Close()
 	if sv.BridgeRouter() == nil || sv.BridgeRouter().Hub != hub {
 		t.Fatal("supervisor not wired to the returned hub")
+	}
+	// Agent delivers are kept in the home's outbox until taken.
+	if !sv.BridgeRouter().IsDurable() {
+		t.Fatal("the wired router does not deliver durably")
+	}
+	sv.mail.mu.Lock()
+	store := sv.mail.store
+	sv.mail.mu.Unlock()
+	if err := store.Append("alpha", outbox.Entry{ID: "c-1", Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := mailStore(home).List("alpha"); len(got) != 1 {
+		t.Fatalf("the wired outbox is not the home's: %+v", got)
 	}
 	plan, ok := launcher.Plan(context.Background(), "/fake/claude", "alpha")
 	if !ok {

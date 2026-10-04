@@ -29,6 +29,12 @@ type adoptionReserver interface {
 	ReleaseAdoption(name string)
 }
 
+// mailDropper is the optional part of an agentSpawner that keeps agents'
+// undelivered messages (see Supervisor.DropAgentMail).
+type mailDropper interface {
+	DropAgentMail(name string)
+}
+
 // restoreSpawn is one agent RestoreAgents is bringing back.
 type restoreSpawn struct {
 	spec       daemon.AgentSpawnSpec
@@ -88,6 +94,9 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			// the `git worktree prune` pass below.
 			fmt.Fprintf(os.Stderr, "restore: dropping worktree record %q (workspace missing: %s)\n", name, rec.Workspace)
 			agentstore.Remove(homePath, name)
+			if d, ok := sv.(mailDropper); ok {
+				d.DropAgentMail(name)
+			}
 			continue
 		}
 

@@ -57,6 +57,14 @@ type Supervisor interface {
 	EphemeralAgents() map[string]ProcessState
 }
 
+// mailKeeper is the part of a Supervisor (service.Supervisor) that keeps
+// agents' undelivered messages: what a stopped agent's rename moves and a
+// deletion drops. A live agent's messages move with RenameAgent.
+type mailKeeper interface {
+	RenameAgentMail(oldName, newName string) error
+	DropAgentMail(name string)
+}
+
 // ConfigLoader returns the current config. It is invoked on every Manager call so
 // the Manager picks up config edits without a restart.
 type ConfigLoader func() (*config.Config, error)
@@ -1600,6 +1608,10 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 	}
 
 	agentstore.Remove(cfg.HomePath, name)
+	// What it never took is dropped, and its senders told.
+	if mail, ok := m.sup.(mailKeeper); ok {
+		mail.DropAgentMail(name)
+	}
 	m.attention.Remove(name)
 	m.surfacedFiles.Remove(name)
 	removeSettingsSpill(cfg.HomePath, name)
@@ -1800,7 +1812,22 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		// happened even if the store write then failed, leaving the agent
 		// under its old name with no compensating event to undo the
 		// announce. See the finding this closes.
+		//
+		// Its undelivered messages move first: a rename they could not
+		// follow would part the agent from them (or hand them to whoever
+		// takes the old name next).
+		mail, keepsMail := m.sup.(mailKeeper)
+		if keepsMail {
+			if err := mail.RenameAgentMail(oldName, newName); err != nil {
+				return Record{}, fmt.Errorf("moving undelivered messages: %w", err)
+			}
+		}
 		if err := persistRename(); err != nil {
+			if keepsMail {
+				if undoErr := mail.RenameAgentMail(newName, oldName); undoErr != nil {
+					return Record{}, fmt.Errorf("persisting rename: %w (and its undelivered messages stayed under %s: %v)", err, newName, undoErr)
+				}
+			}
 			return Record{}, fmt.Errorf("persisting rename: %w", err)
 		}
 		m.announceRename(cfg, rec, oldName, newName)

@@ -941,7 +941,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// this stays the single fallback for every tmux session.
 	srv.SetInjector(taskInjector(bridgeHub, supervisor.BridgeRouteForSession, DefaultTaskBridgeSettle, func(_ context.Context, tmuxSession, prompt string) error {
 		return tmux.InjectPrompt(context.Background(), tmuxPath, tmuxSession, prompt)
-	}))
+	}, supervisor.QueueDeliverForSession))
 	srv.SetAborter(func(tmuxSession string) error {
 		return tmux.AbortPrompt(context.Background(), tmuxPath, tmuxSession)
 	})

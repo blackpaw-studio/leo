@@ -19,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
+	"github.com/blackpaw-studio/leo/internal/outbox"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -435,10 +436,13 @@ const devModVersion = "dev"
 
 // wireBridge builds the claude mod bridge for daemon boot: the hub every
 // mod connects to and the launcher that plans bridged claude launches with
-// the running leo binary, wired into sv. probe nil means the real
-// `claude --version`. Without a resolvable leo binary launches stay legacy.
+// the running leo binary, wired into sv, and the outbox under the home's
+// state dir that keeps agent delivers until their claude takes them. probe
+// nil means the real `claude --version`. Without a resolvable leo binary
+// launches stay legacy.
 func wireBridge(sv *Supervisor, homePath, version string, probe bridgemod.VersionProbe) (*bridge.Hub, *bridgemod.Launcher) {
 	hub := bridge.New(bridge.Options{})
+	sv.SetOutbox(outbox.New(filepath.Join(homePath, "state", "outbox"), outbox.Options{}))
 	if version == "" {
 		version = devModVersion
 	}
@@ -479,7 +483,12 @@ const taskBridgePoll = 100 * time.Millisecond
 // first waits up to settle for its launch to settle: a bridged launch whose
 // mod has connected, or a legacy one. Anything not bridged by then is
 // pasted the legacy way.
-func taskInjector(hub *bridge.Hub, route func(session string) BridgeRoute, settle time.Duration, paste func(ctx context.Context, session, prompt string) error) func(ctx context.Context, session, prompt string) (*harness.Result, error) {
+//
+// queue, if set, queues the deliver durably (see
+// Supervisor.QueueDeliverForSession): one whose launch ends before the mod
+// takes it is kept for the agent's next launch, and the invocation
+// completes as queued.
+func taskInjector(hub *bridge.Hub, route func(session string) BridgeRoute, settle time.Duration, paste func(ctx context.Context, session, prompt string) error, queue func(session string, t bridge.Target, cmd bridge.Command) (*bridge.Ticket, error)) func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 	return func(ctx context.Context, session, prompt string) (*harness.Result, error) {
 		if hub != nil && route != nil {
 			target, settled, err := awaitTaskBridge(ctx, hub, route, session, settle)
@@ -487,7 +496,7 @@ func taskInjector(hub *bridge.Hub, route func(session string) BridgeRoute, settl
 				return nil, err
 			}
 			if settled {
-				return taskBridgeOutcome(target.Key, hub.SendTo(ctx, target, bridge.Deliver(prompt, true)))
+				return sendTaskPrompt(ctx, hub, queue, session, target, prompt)
 			}
 			if target.Key != "" {
 				fmt.Fprintf(os.Stderr, "bridge: %s not connected; pasting the task prompt into %s\n", target.Key, session)
@@ -495,6 +504,20 @@ func taskInjector(hub *bridge.Hub, route func(session string) BridgeRoute, settl
 		}
 		return nil, paste(ctx, session, prompt)
 	}
+}
+
+// sendTaskPrompt delivers a task prompt on target as the user's own and
+// waits for the outcome (see taskBridgeOutcome).
+func sendTaskPrompt(ctx context.Context, hub *bridge.Hub, queue func(string, bridge.Target, bridge.Command) (*bridge.Ticket, error), session string, target bridge.Target, prompt string) (*harness.Result, error) {
+	cmd := bridge.Deliver(prompt, true)
+	if queue == nil {
+		return taskBridgeOutcome(target.Key, hub.SendTo(ctx, target, cmd), false)
+	}
+	ticket, err := queue(session, target, cmd)
+	if err != nil {
+		return nil, err
+	}
+	return taskBridgeOutcome(target.Key, hub.Await(ctx, ticket), true)
 }
 
 // taskBridgeOutcome turns a task deliver's send result into the injector's.
@@ -505,15 +528,20 @@ func taskInjector(hub *bridge.Hub, route func(session string) BridgeRoute, settl
 // it cannot be recalled — the mod may already have handed it to claude. So
 // the invocation completes now as queued, rather than as a failure, and
 // rather than timing out later, which would interrupt the agent's
-// unrelated running turn. Anything else (a refusal, a lost or relaunched
-// bridge) is an error.
-func taskBridgeOutcome(key string, err error) (*harness.Result, error) {
+// unrelated running turn. A durable deliver whose launch ended first (or
+// whose daemon closed the hub) is kept for the agent's next launch, so it
+// is queued too. Anything else (a refusal, a lost or relaunched bridge
+// without an outbox) is an error.
+func taskBridgeOutcome(key string, err error, isDurable bool) (*harness.Result, error) {
 	switch {
 	case err == nil:
 		return nil, nil
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, bridge.ErrAckTimeout):
 		fmt.Fprintf(os.Stderr, "bridge: %s is busy; the task prompt stays queued until its turn ends\n", key)
 		return &harness.Result{Text: "queued: " + key + " was busy; the prompt runs when its current turn ends"}, nil
+	case isDurable && (errors.Is(err, bridge.ErrForgotten) || errors.Is(err, bridge.ErrClosed)):
+		fmt.Fprintf(os.Stderr, "bridge: %s's launch ended before it took the task prompt; it waits for the next launch\n", key)
+		return &harness.Result{Text: "queued: " + key + "'s launch ended first; the prompt runs in its next launch"}, nil
 	default:
 		return nil, err
 	}

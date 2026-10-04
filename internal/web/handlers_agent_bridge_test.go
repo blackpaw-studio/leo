@@ -320,3 +320,60 @@ func TestBridgeSendPrefersAnOutcomeThatBeatTheTimer(t *testing.T) {
 		t.Fatalf("bridgeSend = %v, %v; want accepted, the ack had landed", a.accepted, a.err)
 	}
 }
+
+// durably makes b's router keep delivers as the daemon's does: through
+// Router.Queue, recording who each was queued for and from.
+func (b *bridgedAgent) durably(s *Server) *[]string {
+	queued := &[]string{}
+	var mu sync.Mutex
+	s.bridgeRouter.Queue = func(agent string, t bridge.Target, cmd bridge.Command, from string) (*bridge.Ticket, error) {
+		mu.Lock()
+		*queued = append(*queued, agent+"<"+from)
+		mu.Unlock()
+		return b.hub.EnqueueTo(t, cmd)
+	}
+	return queued
+}
+
+// A message is queued durably, naming its agent and sender.
+func TestWebAgentMessageIsQueuedDurably(t *testing.T) {
+	s, _ := newTestServer(t)
+	b := newBridgedAgent(t, s, "assistant", true)
+	queued := b.durably(s)
+	done := serveAsync(s, "POST", "/web/agent/assistant/message", `{"text":"[message from bob] hi","from":"bob"}`)
+	b.ack(b.next(), true, "")
+	if w := <-done; w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if strings.Join(*queued, ",") != "assistant<bob" {
+		t.Fatalf("queued %q, want once for assistant from bob", *queued)
+	}
+}
+
+// A durable message whose launch ends before the mod takes it is not lost:
+// it waits for the agent's next launch, so it is answered queued (202), not
+// failed, which would invite a resend that delivers it twice.
+func TestWebAgentMessageWhoseLaunchEndsFirstStaysQueued(t *testing.T) {
+	s, _ := newTestServer(t)
+	b := newBridgedAgent(t, s, "assistant", true)
+	b.durably(s)
+	done := serveAsync(s, "POST", "/web/agent/assistant/message", `{"text":"hi"}`)
+	b.next()
+	b.hub.Forget(b.key)
+	w := <-done
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), "queued") {
+		t.Fatalf("status = %d, body = %s; want 202 queued", w.Code, w.Body.String())
+	}
+}
+
+// Without durable delivery the same loss is the sender's error, as before.
+func TestWebAgentMessageWhoseLaunchEndsFirstFailsWithoutAnOutbox(t *testing.T) {
+	s, _ := newTestServer(t)
+	b := newBridgedAgent(t, s, "assistant", true)
+	done := serveAsync(s, "POST", "/web/agent/assistant/message", `{"text":"hi"}`)
+	b.next()
+	b.hub.Forget(b.key)
+	if w := <-done; w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s; want 500", w.Code, w.Body.String())
+	}
+}
