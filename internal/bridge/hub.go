@@ -89,9 +89,9 @@ type Hub struct {
 	ackTimeout     time.Duration
 	slowAckTimeout time.Duration
 	maxPending     int
-	sub            Subscriber
 
 	mu     sync.Mutex
+	subs   []Subscriber // Options.Subscriber, then AddSubscriber's, in order
 	agents map[string]*agentState
 	// eventLocks holds one mutex per agent, serializing that agent's
 	// hello/event application with its subscriber call, so subscribers see
@@ -159,7 +159,6 @@ func New(opts Options) *Hub {
 		ackTimeout:     opts.AckTimeout,
 		slowAckTimeout: opts.SlowAckTimeout,
 		maxPending:     opts.MaxPending,
-		sub:            opts.Subscriber,
 		agents:         map[string]*agentState{},
 		eventLocks:     map[string]*sync.Mutex{},
 		changed:        make(chan struct{}),
@@ -175,6 +174,9 @@ func New(opts Options) *Hub {
 	}
 	if h.slowAckTimeout <= 0 {
 		h.slowAckTimeout = DefaultSlowAckTimeout
+	}
+	if opts.Subscriber != nil {
+		h.subs = []Subscriber{opts.Subscriber}
 	}
 	if h.maxPending <= 0 {
 		h.maxPending = DefaultMaxPending
@@ -448,6 +450,37 @@ func (h *Hub) Forget(agent string) {
 	h.dropLocked(agent, st, ErrForgotten)
 	delete(h.agents, agent)
 	h.notifyLocked()
+}
+
+// ForgetUnlessConnected forgets agent, as Forget does, only if its stream is
+// not connected, reporting whether it did. The check and the forget happen
+// under one lock, so a bridge that connects at the last moment is kept.
+func (h *Hub) ForgetUnlessConnected(agent string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if st, ok := h.agents[agent]; ok {
+		if st.conn != nil {
+			return false
+		}
+		h.dropLocked(agent, st, ErrForgotten)
+		delete(h.agents, agent)
+		h.notifyLocked()
+	}
+	delete(h.eventLocks, agent)
+	return true
+}
+
+// AddSubscriber adds sub, alongside Options.Subscriber, for every hello and
+// turn/session event applied from now on, under the same contract. For
+// subscribers built after the hub, such as the dispatch adapter that lives
+// with the web server. A nil sub is ignored.
+func (h *Hub) AddSubscriber(sub Subscriber) {
+	if sub == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.subs = append(append([]Subscriber(nil), h.subs...), sub)
 }
 
 // Close ends every stream, fails every waiting Send with ErrClosed and

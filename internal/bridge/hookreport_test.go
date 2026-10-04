@@ -10,7 +10,7 @@ import (
 // /api/dispatch/{id}/report today (hook_event_name spelled as Claude spells
 // it, the prompt and last_assistant_message under the hook's own keys, no
 // turn id), so consult.Dispatcher.Report needs no bridge awareness.
-func TestHookReportTranslation(t *testing.T) {
+func TestHookPayloadTranslation(t *testing.T) {
 	cases := []struct {
 		name        string
 		ev          Event
@@ -74,19 +74,19 @@ func TestHookReportTranslation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := HookReport(tc.ev)
+			eventID, raw, ok := HookPayload(tc.ev)
 			if ok != tc.wantOK {
 				t.Fatalf("ok=%v, want %v", ok, tc.wantOK)
 			}
 			if !ok {
 				return
 			}
-			if got.EventID != tc.wantEventID {
-				t.Fatalf("EventID=%q, want %q", got.EventID, tc.wantEventID)
+			if eventID != tc.wantEventID {
+				t.Fatalf("eventID=%q, want %q", eventID, tc.wantEventID)
 			}
 			var payload map[string]any
-			if err := json.Unmarshal(got.Payload, &payload); err != nil {
-				t.Fatalf("payload is not a JSON object: %v (%s)", err, got.Payload)
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatalf("payload is not a JSON object: %v (%s)", err, raw)
 			}
 			if !reflect.DeepEqual(payload, tc.want) {
 				t.Fatalf("payload=%v, want %v", payload, tc.want)

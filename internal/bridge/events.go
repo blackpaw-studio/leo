@@ -23,8 +23,8 @@ type Event struct {
 	At            time.Time
 }
 
-// Subscriber is told about every hello and turn/session event — the seam
-// later phases use to feed consult reports and idle-suspend.
+// Subscriber is told about every hello and turn/session event: the seam
+// that feeds dispatch turn state (see HookPayload).
 type Subscriber interface {
 	OnBridgeEvent(Event)
 }
@@ -113,10 +113,11 @@ func (h *Hub) applyEvent(agent string, r Report) error {
 	}
 	ev := h.recordLocked(agent, h.stateLocked(agent), r)
 	h.notifyLocked()
+	subs := h.subs // AddSubscriber replaces, never mutates, the slice
 	h.mu.Unlock()
 
-	if h.sub != nil {
-		h.sub.OnBridgeEvent(ev)
+	for _, sub := range subs {
+		sub.OnBridgeEvent(ev)
 	}
 	return nil
 }

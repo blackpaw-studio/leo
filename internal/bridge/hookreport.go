@@ -1,10 +1,6 @@
 package bridge
 
-import (
-	"encoding/json"
-
-	"github.com/blackpaw-studio/leo/internal/consult"
-)
+import "encoding/json"
 
 // hookEventNames maps bridge events to the hook_event_name Claude Code's own
 // shell hooks post for the same moment.
@@ -18,10 +14,10 @@ var hookEventNames = map[string]string{
 // the dispatcher's shared dedup set.
 const bridgeEventIDPrefix = "bridge:"
 
-// HookReport translates a bridge event into the consult.HookReport the
-// claude shell turn hooks post to /api/dispatch/{id}/report, so a bridge
-// event can drive consult.Dispatcher.Report unchanged. ok is false for
-// events with no hook counterpart (hello).
+// HookPayload translates a bridge event into the report the claude shell
+// turn hooks post to /api/dispatch/{id}/report (consult.HookReport's EventID
+// and Payload), so a bridge event can drive consult.Dispatcher.Report
+// unchanged. ok is false for events with no hook counterpart (hello).
 //
 // turn.start's prompt and turn.complete's final message travel under the
 // shell hooks' own keys (prompt, last_assistant_message), so a late-acked
@@ -29,34 +25,34 @@ const bridgeEventIDPrefix = "bridge:"
 // subagent's final message, exactly as on the hook path. Like the claude
 // shell hooks, the payload carries no turn id: Claude can drain queued
 // prompts inside one running turn, and an id-less Stop closes them all.
+//
 // The mod retries a report the daemon may already have applied (its reply
-// lost); EventID, derived from the event's stable id, lets the dispatcher
+// lost); eventID, derived from the event's stable id, lets the dispatcher
 // drop the replay. A replayed id-less Stop would otherwise close the next
 // queued turn.
-func HookReport(ev Event) (consult.HookReport, bool) {
+func HookPayload(ev Event) (eventID string, payload json.RawMessage, ok bool) {
 	hookName, ok := hookEventNames[ev.Name]
 	if !ok {
-		return consult.HookReport{}, false
+		return "", nil, false
 	}
-	payload := map[string]string{"hook_event_name": hookName}
+	fields := map[string]string{"hook_event_name": hookName}
 	if ev.SessionID != "" {
-		payload["session_id"] = ev.SessionID
+		fields["session_id"] = ev.SessionID
 	}
 	switch {
 	case ev.Name == EventTurnStart && ev.Prompt != "":
-		payload["prompt"] = ev.Prompt
+		fields["prompt"] = ev.Prompt
 	case ev.Name == EventTurnComplete && ev.Message != "":
-		payload["last_assistant_message"] = ev.Message
+		fields["last_assistant_message"] = ev.Message
 	case ev.Name == EventSessionEnd && ev.Reason != "":
-		payload["reason"] = ev.Reason
+		fields["reason"] = ev.Reason
 	}
-	raw, err := json.Marshal(payload)
+	raw, err := json.Marshal(fields)
 	if err != nil { // unreachable for a map of strings
-		return consult.HookReport{}, false
+		return "", nil, false
 	}
-	report := consult.HookReport{Payload: raw}
 	if ev.EventID != "" {
-		report.EventID = bridgeEventIDPrefix + ev.EventID
+		eventID = bridgeEventIDPrefix + ev.EventID
 	}
-	return report, true
+	return eventID, raw, true
 }
