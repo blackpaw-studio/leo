@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -526,9 +527,21 @@ func TestDispatchBridgeKeys(t *testing.T) {
 }
 
 type reportLog struct {
-	mu   sync.Mutex
-	got  map[string][]HookReport
-	fail error
+	mu    sync.Mutex
+	got   map[string][]HookReport
+	usage map[string][]string
+	fail  error
+}
+
+func (l *reportLog) Report(id string, hr HookReport) error { return l.report(id, hr) }
+
+func (l *reportLog) ApplyBridgeUsage(id string, raw json.RawMessage) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.usage == nil {
+		l.usage = map[string][]string{}
+	}
+	l.usage[id] = append(l.usage[id], string(raw))
 }
 
 func (l *reportLog) report(id string, hr HookReport) error {
@@ -548,7 +561,7 @@ func TestDispatchBridgeSubscriberForwardsOwnedDispatchEvents(t *testing.T) {
 	g := newBridgeRig(t, "2.1.289")
 	g.launch(t, "d-sub", "claude", "brief")
 	var log reportLog
-	g.hub.AddSubscriber(g.r.DispatchBridgeSubscriber(log.report))
+	g.hub.AddSubscriber(g.r.DispatchBridgeSubscriber(&log))
 
 	key := DispatchBridgeKey("d-sub")
 	g.connectAndAckOpening(t, key)
@@ -560,7 +573,7 @@ func TestDispatchBridgeSubscriberForwardsOwnedDispatchEvents(t *testing.T) {
 	}
 	mustApply(key, bridge.Report{Type: bridge.ReportHello, SessionID: "s-1", ClaudeVersion: "2.1.289"})
 	mustApply(key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "brief", EventID: "turn.start:t1"})
-	mustApply(key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnComplete, Message: "done", EventID: "turn.complete:t1"})
+	mustApply(key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnComplete, Message: "done", EventID: "turn.complete:t1", Usage: json.RawMessage(`{"cost":{"usd":0.1}}`)})
 	mustApply("alpha", bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "x"})
 	mustApply(DispatchBridgeKey("d-unknown"), bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "x"})
 
@@ -575,5 +588,8 @@ func TestDispatchBridgeSubscriberForwardsOwnedDispatchEvents(t *testing.T) {
 	}
 	if !strings.Contains(string(second.Payload), `"last_assistant_message":"done"`) {
 		t.Fatalf("turn.complete forwarded as %s", second.Payload)
+	}
+	if got := log.usage["d-sub"]; len(got) != 1 || got[0] != `{"cost":{"usd":0.1}}` {
+		t.Fatalf("usage forwarded = %q, want the turn.complete usage once", got)
 	}
 }

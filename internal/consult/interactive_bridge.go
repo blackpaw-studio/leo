@@ -2,6 +2,7 @@ package consult
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -290,13 +291,20 @@ func deliverOverBridge(ctx context.Context, hub *bridge.Hub, d bridgedDispatch, 
 	return err
 }
 
+// BridgeReportSink is what the dispatch bridge subscriber drives; the
+// Dispatcher is one.
+type BridgeReportSink interface {
+	Report(id string, hr HookReport) error
+	ApplyBridgeUsage(id string, raw json.RawMessage)
+}
+
 // DispatchBridgeSubscriber returns the hub subscriber that drives bridged
-// dispatches' turn state: each turn or session event of a dispatch the
-// bridge owns (see BridgeOwnsReports) goes to report as the claude shell-hook
-// report it stands in for (bridge.HookPayload). report is
-// Dispatcher.Report; it only records state and never sends on the bridge,
-// as a subscriber must not.
-func (r *TmuxInteractiveRuntime) DispatchBridgeSubscriber(report func(id string, hr HookReport) error) bridge.Subscriber {
+// dispatches' state: each turn or session event of a dispatch the bridge
+// owns (see BridgeOwnsReports) goes to the sink as the claude shell-hook
+// report it stands in for (bridge.HookPayload), and a completed turn's
+// session usage goes along with it. The sink only records state and never
+// sends on the bridge, as a subscriber must not.
+func (r *TmuxInteractiveRuntime) DispatchBridgeSubscriber(sink BridgeReportSink) bridge.Subscriber {
 	return bridge.SubscriberFunc(func(ev bridge.Event) {
 		id, ok := DispatchIDFromBridgeKey(ev.Agent)
 		if !ok || !r.BridgeOwnsReports(id) {
@@ -306,8 +314,11 @@ func (r *TmuxInteractiveRuntime) DispatchBridgeSubscriber(report func(id string,
 		if !ok {
 			return
 		}
-		if err := report(id, HookReport{EventID: eventID, Payload: payload}); err != nil {
+		if err := sink.Report(id, HookReport{EventID: eventID, Payload: payload}); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: applying bridge %s: %v\n", id, ev.Name, err)
+		}
+		if ev.Name == bridge.EventTurnComplete && len(ev.Usage) > 0 {
+			sink.ApplyBridgeUsage(id, ev.Usage)
 		}
 	})
 }

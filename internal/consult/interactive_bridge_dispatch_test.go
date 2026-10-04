@@ -170,3 +170,39 @@ func TestInteractiveSendRecordsTheFramedFollowUp(t *testing.T) {
 		t.Fatalf("late framed submit: turn %+v steered=%v", turn, rec.Steered)
 	}
 }
+
+// A bridged dispatch's cost is its claude session's running total, as the
+// mod reports it with each completed turn: each report replaces the last.
+// Token counts are not reported, so the usage is marked incomplete.
+func TestApplyBridgeUsageRecordsTheSessionCost(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &bridgedFakeRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}, bridges: true}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{Template: "claude", Prompt: "hello", Cwd: t.TempDir(), Mode: ModeInteractive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost := func() (*float64, bool) {
+		t.Helper()
+		rec, err := d.Get(started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec.CostUSD, rec.UsageIncomplete
+	}
+	d.ApplyBridgeUsage(started.ID, []byte(`{"startedAt":1,"context":{"tokens":900,"window":200000},"rateLimits":[],"cost":{"usd":0.42}}`))
+	if got, partial := cost(); got == nil || *got != 0.42 || !partial {
+		t.Fatalf("cost = %v partial=%v, want 0.42 partial", got, partial)
+	}
+	d.ApplyBridgeUsage(started.ID, []byte(`{"cost":{"usd":0.5}}`))
+	if got, _ := cost(); got == nil || *got != 0.5 {
+		t.Fatalf("cost = %v, want the running total 0.5", got)
+	}
+	for _, junk := range []string{`{"context":{}}`, `not json`, `{"cost":{"usd":-1}}`, `{"cost":{"usd":"x"}}`} {
+		d.ApplyBridgeUsage(started.ID, []byte(junk))
+		if got, _ := cost(); got == nil || *got != 0.5 {
+			t.Fatalf("after %s cost = %v, want 0.5 kept", junk, got)
+		}
+	}
+	d.ApplyBridgeUsage("d-unknown", []byte(`{"cost":{"usd":1}}`))
+}

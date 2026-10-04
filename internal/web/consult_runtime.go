@@ -64,7 +64,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	s.bridgeRouter = opts.Bridge.Router
 	if hub := opts.Bridge.hub(); hub != nil && opts.Bridge.Launcher != nil {
 		runtime.SetBridge(consult.InteractiveBridge{Hub: hub, Launcher: opts.Bridge.Launcher})
-		hub.AddSubscriber(runtime.DispatchBridgeSubscriber(s.consults.Report))
+		hub.AddSubscriber(runtime.DispatchBridgeSubscriber(s.consults))
 		s.dispatchBridge = runtime
 	}
 	s.consults.SetInteractiveRuntime(runtime)
