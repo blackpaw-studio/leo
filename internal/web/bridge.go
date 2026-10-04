@@ -87,7 +87,7 @@ func (s *Server) bridgeSend(key, what string, cmd bridge.Command, wait time.Dura
 			onAck()
 		}
 		if err != nil && abandoned.Load() {
-			log.Printf("web: %s via leo bridge %s failed after it was queued: %s", what, strconv.Quote(key), strconv.Quote(err.Error()))
+			log.Printf("web: %s via leo bridge %s failed after it was queued: %s", strconv.Quote(what), strconv.Quote(key), strconv.Quote(err.Error()))
 		}
 		result <- err
 	}()

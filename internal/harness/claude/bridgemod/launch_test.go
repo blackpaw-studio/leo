@@ -217,8 +217,10 @@ func TestFailedProbeIsRetriedLater(t *testing.T) {
 		Probe: p.probe, Log: &bytes.Buffer{}, Now: func() time.Time { return now },
 	})
 	ctx := context.Background()
-	if l.Capable(ctx, "/bin/claude") || l.Capable(ctx, "/bin/claude") {
-		t.Fatal("Capable = true with a failing probe")
+	for range 2 {
+		if l.Capable(ctx, "/bin/claude") {
+			t.Fatal("Capable = true with a failing probe")
+		}
 	}
 	if n := p.count("/bin/claude"); n != 1 {
 		t.Fatalf("probed %d times within the retry window, want 1", n)

@@ -21,8 +21,9 @@ const testLeoBin = "/opt/leo/bin/leo"
 
 // statefulTmux writes a tmux stub that logs each call (one line per call,
 // args joined by spaces) and models one session's life: new-session brings
-// it up, kill-session takes it down, has-session reports it. show-environment
-// prints $STUB_SHOWENV, so adoption can recover a launch's bridge key.
+// it up, kill-session takes it down, has-session and display-message's
+// #{pane_dead} report it. show-environment prints showEnv, so adoption can
+// recover a launch's bridge key.
 func statefulTmux(t *testing.T, showEnv string) (tmuxPath, logPath string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -37,6 +38,7 @@ case "$cmd" in
   kill-session) touch '` + dead + `'; exit 0;;
   new-session) rm -f '` + dead + `'; echo '%7'; exit 0;;
   show-environment) [ -n '` + showEnv + `' ] && echo '` + showEnv + `'; exit 0;;
+  display-message) [ -f '` + dead + `' ] && echo 1 || echo 0; exit 0;;
 esac
 exit 0
 `
@@ -346,7 +348,8 @@ func TestAdoptRecoversTheBridgeKey(t *testing.T) {
 	tmuxPath, logPath := statefulTmux(t, "LEO_BRIDGE_AGENT=alpha.0a1b2c")
 	origHas := tmuxHasSession
 	tmuxHasSession = func(_, _ string) bool { return true }
-	defer func() { tmuxHasSession = origHas }()
+	// Registered before startBridged so it runs after the supervisor stops.
+	t.Cleanup(func() { tmuxHasSession = origHas })
 	spec := claudeSpec(t, "alpha")
 	spec.Adopt = true
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec)

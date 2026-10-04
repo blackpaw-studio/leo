@@ -10,12 +10,11 @@ import (
 )
 
 type injectRig struct {
-	hub       *bridge.Hub
-	pasted    []string
-	pasteErr  error
-	keys      map[string]string
-	injector  func(ctx context.Context, session, prompt string) error
-	connected *bridge.Stream
+	hub      *bridge.Hub
+	pasted   []string
+	pasteErr error
+	keys     map[string]string
+	injector func(ctx context.Context, session, prompt string) error
 }
 
 func newInjectRig(t *testing.T) *injectRig {
