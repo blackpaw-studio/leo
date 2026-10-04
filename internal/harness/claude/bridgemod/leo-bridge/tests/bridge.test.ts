@@ -20,7 +20,7 @@ test('spawns the bridge stream and says hello before acks', async ($, on) => {
   const h = setup(on, { feeds: [feed] })
   await start($, h)
   expect(h.spawns).toEqual([[BIN, 'bridge', '--agent', AGENT]])
-  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289' })
+  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289', busy: false })
   expect(h.reportArgv[0]!.slice(0, 4)).toEqual([BIN, 'bridge', 'report', '--agent'])
   expect(h.reportArgv[0]![4]).toBe(AGENT)
   feed.line(deliver('c1', 'hello'))
@@ -272,7 +272,8 @@ test('hello is re-sent when the session id changes (e.g. after /clear)', async (
   await h.settle()
   const types = h.reports.map((r) => (r.type === 'event' ? r.name : r.type))
   expect(types).toEqual(['hello', 'turn.start', 'hello', 'turn.start'])
-  expect(h.reports[2]).toEqual({ type: 'hello', session_id: 'sess-2', claude_version: '2.1.289' })
+  // Re-said from inside turn.start, so the turn is already running.
+  expect(h.reports[2]).toEqual({ type: 'hello', session_id: 'sess-2', claude_version: '2.1.289', busy: true })
 })
 
 test('interrupt while idle acks ok without aborting', async ($, on) => {

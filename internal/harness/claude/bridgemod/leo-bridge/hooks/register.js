@@ -19,6 +19,7 @@ import {
   helloReport,
   nextBackoff,
   parseCommand,
+  REPORT_RETRY_DELAYS_MS,
   splitLines,
 } from './protocol.js'
 
@@ -64,17 +65,34 @@ async function readConfig($) {
 
 // ---- reports -------------------------------------------------------------
 
+// Sends one report, retrying with backoff while the daemon does not take it
+// (down, restarting). Retrying is safe — acks are idempotent and events are
+// state, not counters — and it happens inside the report chain, so later
+// reports wait behind it and per-process order holds.
 async function sendReport($, report) {
   const argv = [config.bin, 'bridge', 'report', '--agent', config.agent, JSON.stringify(report)]
-  try {
-    const result = await $.process.run(argv, { timeoutMs: REPORT_TIMEOUT_MS })
-    if (result.exitCode !== 0) {
-      reportFailed($, 'exit ' + result.exitCode + ': ' + result.stderr.trim())
+  for (let attempt = 0; ; attempt++) {
+    const why = await tryReport($, argv)
+    if (why === null) {
+      isReportFailing = false
       return
     }
-    isReportFailing = false
+    if (attempt >= REPORT_RETRY_DELAYS_MS.length) {
+      reportFailed($, why)
+      return
+    }
+    await $.clock.sleep(REPORT_RETRY_DELAYS_MS[attempt])
+  }
+}
+
+// One report attempt: null on success, else why it failed.
+async function tryReport($, argv) {
+  try {
+    const result = await $.process.run(argv, { timeoutMs: REPORT_TIMEOUT_MS })
+    if (result.exitCode === 0) return null
+    return 'exit ' + result.exitCode + ': ' + result.stderr.trim()
   } catch (err) {
-    reportFailed($, errorText(err))
+    return errorText(err)
   }
 }
 
@@ -101,16 +119,23 @@ async function buildAndSend($, build) {
   }
 }
 
+// Usage is a nice-to-have: a turn.complete without it still ends the turn
+// in the daemon, which a lost turn.complete would leave stuck busy.
 async function turnCompleteReport($) {
-  const usage = await $.session.usage()
-  return eventReport('turn.complete', { usage })
+  try {
+    const usage = await $.session.usage()
+    return eventReport('turn.complete', { usage })
+  } catch (err) {
+    $.ui.log('reading session usage failed: ' + errorText(err))
+    return eventReport('turn.complete')
+  }
 }
 
 async function sendHello($) {
   const sessionId = await $.session.id()
   const version = await $.session.version()
   helloSessionId = sessionId
-  return helloReport(sessionId, version.version)
+  return helloReport(sessionId, version.version, runningTurn !== null)
 }
 
 // Re-says hello when the session id moved since the last one (a /clear or
@@ -332,6 +357,9 @@ export function register(on) {
   })
 
   on('turn.start', async ($, e, next) => {
+    // Defensive: per the v2.1.289 typings only the main loop raises
+    // turn.start, but a subagent's must never pass for the main loop's.
+    if (e.agentId) return next(e)
     markRunning(e.turnId)
     if (config !== null) {
       enqueueReport($, () => helloIfSessionChanged($))

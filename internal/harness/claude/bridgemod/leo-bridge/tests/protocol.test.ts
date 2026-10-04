@@ -89,7 +89,7 @@ test('describeExit names the exit code or signal and keeps stderr', () => {
 })
 
 test('report shapes', () => {
-  expect(helloReport('s', '2.1.289')).toEqual({ type: 'hello', session_id: 's', claude_version: '2.1.289' })
+  expect(helloReport('s', '2.1.289', true)).toEqual({ type: 'hello', session_id: 's', claude_version: '2.1.289', busy: true })
   expect(ackReport('a', true)).toEqual({ type: 'ack', id: 'a', ok: true })
   expect(ackReport('a', true, 'ignored')).toEqual({ type: 'ack', id: 'a', ok: true })
   expect(ackReport('a', false, 'why')).toEqual({ type: 'ack', id: 'a', ok: false, error: 'why' })

@@ -5,6 +5,9 @@ export const ACKED_CAP = 500
 export const BACKOFF_INITIAL_MS = 1000
 export const BACKOFF_MAX_MS = 30_000
 export const BACKOFF_RESET_AFTER_MS = 60_000
+// Waits before each retry of a report the daemon did not take. Acks are
+// idempotent (the mod dedups by id), so a retry is always safe.
+export const REPORT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000]
 
 const OPS = ['deliver', 'compact', 'clear', 'interrupt']
 
@@ -97,9 +100,14 @@ export function nextBackoff(current, livedMs) {
   return { waitMs, next: Math.min(waitMs * 2, BACKOFF_MAX_MS) }
 }
 
-/** @returns {{ type: 'hello', session_id: string, claude_version: string }} */
-export function helloReport(sessionId, claudeVersion) {
-  return { type: 'hello', session_id: sessionId, claude_version: claudeVersion }
+/**
+ * @param {string} sessionId
+ * @param {string} claudeVersion
+ * @param {boolean} busy whether a main-loop turn is running right now
+ * @returns {{ type: 'hello', session_id: string, claude_version: string, busy: boolean }}
+ */
+export function helloReport(sessionId, claudeVersion, busy) {
+  return { type: 'hello', session_id: sessionId, claude_version: claudeVersion, busy }
 }
 
 /** @returns {{ type: 'ack', id: string, ok: boolean, error?: string }} */

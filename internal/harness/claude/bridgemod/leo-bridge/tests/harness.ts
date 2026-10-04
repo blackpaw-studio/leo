@@ -64,13 +64,19 @@ export interface HarnessOptions {
   compact?: (e: { instructions?: string }) => unknown
   abort?: (e: { turnId: string }) => unknown
   command?: (e: { command: string; args?: string }) => unknown
-  reportExit?: number
+  // Exit code of `leo bridge report`: a number for every call, or a function
+  // of the 1-based call count (throwing makes $.process.run reject).
+  reportExit?: number | ((call: number) => number)
+  usage?: () => unknown
 }
 
 export interface Harness {
   clock: ReturnType<typeof mock.clock>
+  // Reports the daemon accepted (exit 0), and every attempt including failed ones.
   reports: Array<Record<string, unknown>>
+  attempts: Array<Record<string, unknown>>
   reportArgv: string[][]
+  reportStdin: Array<string | undefined>
   submits: Array<Record<string, unknown>>
   compacts: Array<Record<string, unknown>>
   aborts: Array<Record<string, unknown>>
@@ -91,7 +97,9 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
   const h: Harness = {
     clock,
     reports: [],
+    attempts: [],
     reportArgv: [],
+    reportStdin: [],
     submits: [],
     compacts: [],
     aborts: [],
@@ -119,19 +127,27 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
   })
   on('session.id', () => ({ value: h.sessionId }))
   on('session.version', () => ({ value: { version: '2.1.289', base: '2.1.289' } }))
-  on('session.usage', () => ({
-    value: {
-      startedAt: 1,
-      context: { tokens: 10, window: 200000, percent: 0 },
-      rateLimits: [],
-      cost: { usd: 0.01 },
-    },
-  }))
+  on('session.usage', () => {
+    if (opts.usage) return { value: opts.usage() }
+    return {
+      value: {
+        startedAt: 1,
+        context: { tokens: 10, window: 200000, percent: 0 },
+        rateLimits: [],
+        cost: { usd: 0.01 },
+      },
+    }
+  })
+  let reportCalls = 0
   on('process.run', ($: any, e: any) => {
+    reportCalls++
     const argv = [...e.argv]
+    const exit = typeof opts.reportExit === 'function' ? opts.reportExit(reportCalls) : (opts.reportExit ?? 0)
     h.reportArgv.push(argv)
-    h.reports.push(JSON.parse(argv[argv.length - 1]))
-    return { value: { exitCode: opts.reportExit ?? 0, stdout: '', stderr: '' } }
+    h.reportStdin.push(e.stdin)
+    h.attempts.push(JSON.parse(e.stdin ?? argv[argv.length - 1]))
+    if (exit === 0) h.reports.push(JSON.parse(e.stdin ?? argv[argv.length - 1]))
+    return { value: { exitCode: exit, stdout: '', stderr: exit === 0 ? '' : 'daemon down' } }
   })
   on('process.spawn', async function* ($: any, e: any) {
     h.spawns.push([...e.argv])
