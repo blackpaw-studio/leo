@@ -1,0 +1,9 @@
+{
+  "name": "leo-bridge",
+  "version": "1.0.0",
+  "description": "Leo agent bridge: delivers leo daemon commands into the session and reports turn events back to the daemon.",
+  "author": { "name": "Blackpaw Studio" },
+  "homepage": "https://github.com/blackpaw-studio/leo",
+  "repository": "https://github.com/blackpaw-studio/leo",
+  "license": "MIT"
+}
