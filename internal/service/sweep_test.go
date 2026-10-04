@@ -71,7 +71,7 @@ func TestSupervisorBridgeStateOnlyWhenConnected(t *testing.T) {
 	t.Cleanup(hub.Close)
 	sv.SetBridge(hub, nil, 0)
 	id := newProcIdentity("alpha", nil)
-	id.setBridgeKey("alpha")
+	id.setBridge(bridge.Target{Key: "alpha"}, time.Time{})
 	sv.mu.Lock()
 	sv.identities["alpha"] = id
 	sv.mu.Unlock()
@@ -106,7 +106,11 @@ func TestSupervisorBridgeStatus(t *testing.T) {
 	add := func(name, harnessName, key string) {
 		id := newProcIdentity(name, nil)
 		id.harness = harnessName
-		id.setBridgeKey(key)
+		if key == "" {
+			id.setLegacy()
+		} else {
+			id.setBridge(bridge.Target{Key: key}, time.Time{})
+		}
 		sv.mu.Lock()
 		sv.identities[name] = id
 		sv.mu.Unlock()

@@ -89,17 +89,33 @@ type bridgeFixture struct {
 	done     chan struct{}
 }
 
+// bridgeTestOpts adjusts startBridged.
+type bridgeTestOpts struct {
+	// backoff is the restart backoff (default an hour: a counted restart
+	// stalls the test unless it asks for one).
+	backoff time.Duration
+	// home is the supervisor's leo home (default a fresh temp dir).
+	home string
+}
+
 // startBridged runs superviseProcess for spec on a supervisor wired to a
 // bridge whose claude probes as version.
-func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Duration, spec ProcessSpec) *bridgeFixture {
+func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Duration, spec ProcessSpec, opts ...func(*bridgeTestOpts)) *bridgeFixture {
 	t.Helper()
+	o := bridgeTestOpts{backoff: time.Hour}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	if o.home == "" {
+		o.home = t.TempDir()
+	}
 	origPoll, origBackoff := sessionPollInterval, initialBackoff
-	sessionPollInterval, initialBackoff = 10*time.Millisecond, time.Hour // a counted restart would stall the test
+	sessionPollInterval, initialBackoff = 10*time.Millisecond, o.backoff
 	t.Cleanup(func() { sessionPollInterval, initialBackoff = origPoll, origBackoff })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sv := NewSupervisor(ctx)
-	sv.homePath = t.TempDir()
+	sv.homePath = o.home
 	sv.tmuxPath = tmuxPath
 	hub := bridge.New(bridge.Options{})
 	launcher := bridgemod.NewLauncher(bridgemod.LauncherOptions{
@@ -445,7 +461,7 @@ func TestAdoptIgnoresAnUnsetOrInvalidKey(t *testing.T) {
 func TestBridgeKeysStayUniqueAcrossRenames(t *testing.T) {
 	sv := NewSupervisor(context.Background())
 	renamed := newProcIdentity("beta", nil)
-	renamed.setBridgeKey("alpha")
+	renamed.setBridge(bridge.Target{Key: "alpha", Gen: 1}, time.Time{})
 	newcomer := newProcIdentity("alpha", nil)
 	sv.identities["beta"] = renamed
 	sv.identities["alpha"] = newcomer
@@ -464,7 +480,7 @@ func TestBridgeKeysStayUniqueAcrossRenames(t *testing.T) {
 	if got := sv.allocBridgeKey("beta", renamed); got != "alpha" {
 		t.Fatalf("relaunch of the renamed identity keyed %q, want its own alpha", got)
 	}
-	newcomer.setBridgeKey(key)
+	newcomer.setBridge(bridge.Target{Key: key, Gen: 2}, time.Time{})
 	if again := sv.allocBridgeKey("alpha", newcomer); again != key {
 		t.Fatalf("relaunch key = %q, want %q", again, key)
 	}
@@ -480,7 +496,11 @@ func TestStopForgetsTheBridge(t *testing.T) {
 	defer hub.Close()
 	sv.SetBridge(hub, nil, time.Minute)
 	id := newProcIdentity("alpha", nil)
-	id.setBridgeKey("alpha.0a1b2c")
+	target, err := hub.Open("alpha.0a1b2c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id.setBridge(target, time.Time{})
 	sv.identities["alpha"] = id
 	sv.states["alpha"] = &ProcessState{Name: "alpha", Status: "running", Ephemeral: true}
 	sent := make(chan error, 1)
@@ -509,19 +529,20 @@ func TestBridgeRouteForSession(t *testing.T) {
 	sv := NewSupervisor(context.Background())
 	id := newProcIdentity("alpha", nil)
 	sv.identities["alpha"] = id
-	if key, planned := sv.BridgeRouteForSession(id.SessionName()); planned || key != "" {
-		t.Fatalf("before the launch is planned: %q, planned=%v", key, planned)
+	if r := sv.BridgeRouteForSession(id.SessionName()); r.Planned || r.Target.Key != "" {
+		t.Fatalf("before the launch is planned: %+v", r)
 	}
-	id.setBridgeKey("alpha")
-	if key, planned := sv.BridgeRouteForSession(id.SessionName()); !planned || key != "alpha" {
-		t.Fatalf("bridged launch: %q, planned=%v", key, planned)
+	since := time.Now()
+	id.setBridge(bridge.Target{Key: "alpha", Gen: 3}, since)
+	if r := sv.BridgeRouteForSession(id.SessionName()); !r.Planned || r.Target != (bridge.Target{Key: "alpha", Gen: 3}) || !r.Since.Equal(since) {
+		t.Fatalf("bridged launch: %+v", r)
 	}
-	id.setBridgeKey("")
-	if key, planned := sv.BridgeRouteForSession(id.SessionName()); !planned || key != "" {
-		t.Fatalf("legacy launch: %q, planned=%v", key, planned)
+	id.setLegacy()
+	if r := sv.BridgeRouteForSession(id.SessionName()); !r.Planned || r.Target.Key != "" {
+		t.Fatalf("legacy launch: %+v", r)
 	}
-	if key, planned := sv.BridgeRouteForSession("leo-nobody"); !planned || key != "" {
-		t.Fatalf("unknown session: %q, planned=%v", key, planned)
+	if r := sv.BridgeRouteForSession("leo-nobody"); !r.Planned || r.Target.Key != "" {
+		t.Fatalf("unknown session: %+v", r)
 	}
 }
 

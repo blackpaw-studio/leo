@@ -10,19 +10,15 @@ import (
 	"github.com/blackpaw-studio/leo/internal/bridge"
 )
 
-type taskRouteState struct {
-	key     string
-	planned bool
-}
-
 type injectRig struct {
 	hub      *bridge.Hub
+	alpha    bridge.Target // the generation leo-alpha's launch opened
 	pasteErr error
 	injector func(ctx context.Context, session, prompt string) error
 
 	mu     sync.Mutex
 	pasted []string
-	routes map[string]taskRouteState
+	routes map[string]BridgeRoute
 }
 
 // testTaskSettle bounds the rig's wait for a launch to settle on the bridge.
@@ -35,19 +31,24 @@ func newInjectRig(t *testing.T) *injectRig {
 
 func newInjectRigSettling(t *testing.T, settle time.Duration) *injectRig {
 	t.Helper()
-	g := &injectRig{hub: bridge.New(bridge.Options{}), routes: map[string]taskRouteState{
-		"leo-alpha": {key: "alpha", planned: true},
-		"leo-beta":  {planned: true},
+	hub := bridge.New(bridge.Options{})
+	t.Cleanup(hub.Close)
+	alpha, err := hub.Open("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &injectRig{hub: hub, alpha: alpha, routes: map[string]BridgeRoute{
+		"leo-alpha": {Target: alpha, Planned: true},
+		"leo-beta":  {Planned: true},
 	}}
-	t.Cleanup(g.hub.Close)
-	route := func(session string) (string, bool) {
+	route := func(session string) BridgeRoute {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		r, ok := g.routes[session]
 		if !ok {
-			return "", true
+			return BridgeRoute{Planned: true}
 		}
-		return r.key, r.planned
+		return r
 	}
 	paste := func(_ context.Context, session, prompt string) error {
 		g.mu.Lock()
@@ -66,7 +67,7 @@ func newInjectRigSettling(t *testing.T, settle time.Duration) *injectRig {
 	return g
 }
 
-func (g *injectRig) setRoute(session string, r taskRouteState) {
+func (g *injectRig) setRoute(session string, r BridgeRoute) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.routes[session] = r
@@ -155,11 +156,11 @@ func TestTaskInjectorWithoutAHubPastes(t *testing.T) {
 // bridge rather than racing into a paste.
 func TestTaskInjectorWaitsForAJustLaunchedBridge(t *testing.T) {
 	g := newInjectRigSettling(t, time.Minute)
-	g.setRoute("leo-alpha", taskRouteState{})
+	g.setRoute("leo-alpha", BridgeRoute{})
 	done := make(chan error, 1)
 	go func() { done <- g.injector(context.Background(), "leo-alpha", "task") }()
 	time.Sleep(20 * time.Millisecond)
-	g.setRoute("leo-alpha", taskRouteState{key: "alpha", planned: true})
+	g.setRoute("leo-alpha", BridgeRoute{Target: g.alpha, Since: time.Now(), Planned: true})
 	time.Sleep(20 * time.Millisecond)
 	stream, err := g.hub.Connect("alpha")
 	if err != nil {
@@ -203,7 +204,7 @@ func TestTaskInjectorPastesALegacyLaunchWithoutWaiting(t *testing.T) {
 // A launch that never settles is pasted into once the wait is over.
 func TestTaskInjectorPastesWhenTheLaunchNeverSettles(t *testing.T) {
 	g := newInjectRig(t)
-	g.setRoute("leo-alpha", taskRouteState{})
+	g.setRoute("leo-alpha", BridgeRoute{})
 	if err := g.injector(context.Background(), "leo-alpha", "task"); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +217,7 @@ func TestTaskInjectorPastesWhenTheLaunchNeverSettles(t *testing.T) {
 // invocation has failed.
 func TestTaskInjectorWaitEndsWithTheInvocation(t *testing.T) {
 	g := newInjectRig(t)
-	g.setRoute("leo-alpha", taskRouteState{})
+	g.setRoute("leo-alpha", BridgeRoute{})
 	ctx, cancel := context.WithTimeout(context.Background(), testTaskSettle/5)
 	defer cancel()
 	if err := g.injector(ctx, "leo-alpha", "task"); !errors.Is(err, context.DeadlineExceeded) {
@@ -224,5 +225,57 @@ func TestTaskInjectorWaitEndsWithTheInvocation(t *testing.T) {
 	}
 	if p := g.pastes(); len(p) != 0 {
 		t.Fatalf("pasted %q after the invocation ended", p)
+	}
+}
+
+// A launch has settled on the bridge once its mod connected since it
+// started, even if the stream is down for a reconnect right now: the task
+// rides the bridge (queued until the mod is back), never a paste.
+func TestTaskInjectorDeliversToAModBetweenReconnects(t *testing.T) {
+	g := newInjectRig(t)
+	g.setRoute("leo-alpha", BridgeRoute{Target: g.alpha, Since: time.Now(), Planned: true})
+	first, err := g.hub.Connect("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	done := make(chan error, 1)
+	go func() { done <- g.injector(context.Background(), "leo-alpha", "task") }()
+	if _, err := g.hub.WaitFor(context.Background(), "alpha", func(st bridge.State) bool { return st.Pending == 1 }); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := g.hub.Connect("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd, err := stream.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.hub.Apply("alpha", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if p := g.pastes(); len(p) != 0 {
+		t.Fatalf("pasted %q to a bridged launch", p)
+	}
+}
+
+// A connection from before the launch started is not this launch's mod.
+func TestTaskInjectorIgnoresAConnectionFromBeforeTheLaunch(t *testing.T) {
+	g := newInjectRig(t)
+	if _, err := g.hub.Connect("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	g.setRoute("leo-alpha", BridgeRoute{Target: g.alpha, Since: time.Now().Add(time.Hour), Planned: true})
+	if err := g.injector(context.Background(), "leo-alpha", "task"); err != nil {
+		t.Fatal(err)
+	}
+	if p := g.pastes(); len(p) != 1 {
+		t.Fatalf("pasted = %q; want a paste once the launch never settled", p)
 	}
 }

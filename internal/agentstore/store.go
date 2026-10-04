@@ -172,6 +172,16 @@ type Record struct {
 	// prompt; SweepOpeningPromptBriefs cleans up files a restart has since
 	// orphaned.
 	OpeningBriefID string `json:"opening_brief_id,omitempty"`
+
+	// OpeningAckedID is the leo bridge command id under which the claude
+	// mod acknowledged this conversation's opening prompt, or "" while it
+	// has not (and for agents launched without the bridge). The supervisor
+	// clears it when a launch starts a fresh conversation and sets it on
+	// the ack, so a restored or adopted agent whose opening already ran
+	// never gets it again, while one whose opening never ran still does.
+	// SetOpeningAcked is its only writer: Save always keeps the stored
+	// value (see AttentionToken).
+	OpeningAckedID string `json:"opening_acked_id,omitempty"`
 }
 
 // IsFailedRestore reports whether this record was stopped by the system after
@@ -189,14 +199,15 @@ func FilePath(homePath string) string {
 	return filepath.Join(homePath, "state", "agents.json")
 }
 
-// Save persists an agent record to agents.json. The stored AttentionToken is
-// kept whatever record carries (see Record.AttentionToken).
+// Save persists an agent record to agents.json. The stored AttentionToken
+// and OpeningAckedID are kept whatever record carries (see their fields).
 func Save(homePath string, record Record) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 	path := FilePath(homePath)
 	records, _ := loadLocked(path)
 	record.AttentionToken = records[record.Name].AttentionToken
+	record.OpeningAckedID = records[record.Name].OpeningAckedID
 	records[record.Name] = record
 	return write(path, records)
 }
@@ -302,6 +313,15 @@ func Update(homePath, name string, mutate func(Record) Record) error {
 func SetAttentionToken(homePath, name, token string) error {
 	return Update(homePath, name, func(r Record) Record {
 		r.AttentionToken = token
+		return r
+	})
+}
+
+// SetOpeningAcked records the bridge command id under which name's opening
+// prompt was acked ("" to clear it). It errors if name is absent.
+func SetOpeningAcked(homePath, name, id string) error {
+	return Update(homePath, name, func(r Record) Record {
+		r.OpeningAckedID = id
 		return r
 	})
 }

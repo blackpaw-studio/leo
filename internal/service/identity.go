@@ -3,8 +3,10 @@ package service
 import (
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -14,13 +16,11 @@ import (
 // it on every poll/iteration so a live RenameAgent is picked up without a
 // process restart.
 type procIdentity struct {
-	mu        sync.RWMutex
-	name      string
-	args      []string
-	bridgeKey string // see BridgeKey
-	// bridgePlanned is set once a launch of this identity has decided
-	// whether it loads the bridge; see BridgeRoute.
-	bridgePlanned bool
+	mu   sync.RWMutex
+	name string
+	args []string
+	// bridge is how the live launch uses the leo bridge; see BridgeRoute.
+	bridge BridgeRoute
 	// harness is the launch's harness adapter name ("" means claude); fixed
 	// at spawn.
 	harness string
@@ -93,27 +93,46 @@ var tmuxHasSession = func(tmuxPath, session string) bool {
 	return exec.Command(tmuxPath, tmux.Args("has-session", "-t", tmux.Target(session))...).Run() == nil
 }
 
+// BridgeRoute is how one launch of an identity uses the leo bridge.
+type BridgeRoute struct {
+	// Target is the generation of the bridge key the launch's claude mod
+	// connects under; the zero Target for a legacy launch.
+	Target bridge.Target
+	// Since is when the launch started (zero for a session adopted from a
+	// previous daemon): its mod has settled once it connected since.
+	Since time.Time
+	// Planned is set once a launch has decided on the bridge: a
+	// just-spawned agent's first launch is planned on the supervise
+	// goroutine, after the spawn call returns.
+	Planned bool
+}
+
 // BridgeKey returns the key the live launch's claude mod connects under
 // ("" when the launch did not load the bridge). Fixed per launch: a rename
 // cannot change the environment of a running claude.
 func (p *procIdentity) BridgeKey() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.bridgeKey
+	return p.bridge.Target.Key
 }
 
-// BridgeRoute returns BridgeKey and whether any launch has decided on the
-// bridge yet: a just-spawned agent's first launch is planned on the
-// supervise goroutine, after the spawn call returns.
-func (p *procIdentity) BridgeRoute() (key string, planned bool) {
+// BridgeRoute returns how the live launch uses the bridge.
+func (p *procIdentity) BridgeRoute() BridgeRoute {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.bridgeKey, p.bridgePlanned
+	return p.bridge
 }
 
-func (p *procIdentity) setBridgeKey(key string) {
+// setBridge records a bridged launch of target started at since.
+func (p *procIdentity) setBridge(target bridge.Target, since time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.bridgeKey = key
-	p.bridgePlanned = true
+	p.bridge = BridgeRoute{Target: target, Since: since, Planned: true}
+}
+
+// setLegacy records a launch without the bridge.
+func (p *procIdentity) setLegacy() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bridge = BridgeRoute{Planned: true}
 }

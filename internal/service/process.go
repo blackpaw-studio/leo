@@ -1148,13 +1148,14 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	// cleared so an in-loop restart never replays it.
 	openingPrompt := spec.OpeningPrompt
 	// forceLegacy turns the bridge off for the rest of this loop once a
-	// bridged launch's mod failed to connect in time (see watchBridgeLaunch).
+	// bridged launch failed it: its mod did not connect in time, it refused
+	// the opening (see watchBridgeLaunch), or the launch ended before its mod
+	// ever connected — a claude that cannot load the mod must not crash-loop
+	// with it.
 	forceLegacy := false
-	// openingHandled: the claude opening brief already went out other than
-	// on argv (the bridge, a paste, or a bridged launch adopted from the
-	// previous daemon), so no later launch may carry it again. A pure legacy
-	// loop never sets it and keeps its historical argv behavior.
-	openingHandled := false
+	// opening tracks the claude opening brief across launches: delivered
+	// over the bridge only once the mod acks it (see openingDelivery).
+	opening := newOpeningDelivery(homePath, spec, id)
 
 	for {
 		// Snapshot identity for this iteration. The tmux session name is also
@@ -1209,10 +1210,19 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// The surviving claude's mod reconnects under the key it was
 			// launched with, which only its session environment still knows.
 			if key, ok := tmuxSessionBridgeKey(tmuxPath, sessionName); ok && harnessName == "claude" {
-				id.setBridgeKey(key)
-				openingHandled = true
+				bl = sv.adoptBridge(id, key)
+				if bl.bridged && opening.pending() {
+					// The previous daemon may have gone before the mod acked
+					// the opening. Queued again under its id, it either runs
+					// now or, if it already ran, is only re-acked.
+					bl, _ = sv.queueOpening(id, bl, opening)
+				}
 			} else {
-				id.setBridgeKey("")
+				id.setLegacy()
+			}
+			launchCtx, endLaunch = context.WithCancel(ctx)
+			if bl.bridged {
+				go sv.watchBridgeLaunch(launchCtx, id, bl, opening, tmuxPath, &fellBack)
 			}
 			// Attention does not survive a daemon restart; an agent launched
 			// with hooks is unknown until its next hook fires, which carries
@@ -1250,8 +1260,13 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			if !hooked && spec.Kind == harness.KindAgent {
 				_ = persistAttentionToken(homePath, name, "")
 			}
-			bl = sv.planBridgeLaunch(ctx, binPath, harnessName, id, spec, !openingHandled, forceLegacy)
-			launchArgs, launchSpec, pasteBrief := bridgeLaunchSpec(bl, launchArgs, spec, openingHandled)
+			// The opening is queued before the session exists, so nothing
+			// sent to the new claude can overtake it.
+			bl = sv.planBridgeLaunch(ctx, binPath, harnessName, id, forceLegacy, startTime)
+			if bl.bridged && opening.pending() {
+				bl, _ = sv.queueOpening(id, bl, opening)
+			}
+			launchArgs, launchSpec, pasteBrief := bridgeLaunchSpec(bl, launchArgs, spec, opening.done())
 			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, launchSpec, os.Getenv("PATH"))
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
 			// persists a pane's start command, so an interpolated credential
@@ -1280,6 +1295,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 			out, err := createCmd.Output()
 			if err != nil {
+				sv.endBridgedLaunch(bl, opening)
 				sv.endLaunchToken(homePath, name, spec.attentionToken)
 				sv.setState(name, id, "restarting")
 				fmt.Fprintf(os.Stderr, "[%s] tmux new-session failed: %v, retrying in %s\n", name, err, backoff)
@@ -1295,6 +1311,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			primaryPane := strings.TrimSpace(string(out))
 			if err := setTmuxPrimaryPane(tmuxPath, sessionName, primaryPane); err != nil {
 				killSession(tmuxPath, sessionName, name)
+				sv.endBridgedLaunch(bl, opening)
 				sv.endLaunchToken(homePath, name, spec.attentionToken)
 				sv.setState(name, id, "restarting")
 				fmt.Fprintf(os.Stderr, "[%s] tmux primary-pane setup failed: %v, retrying in %s\n", name, err, backoff)
@@ -1312,11 +1329,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
 			launchCtx, endLaunch = context.WithCancel(ctx)
 			if bl.bridged {
-				openingHandled = openingHandled || bl.opening != ""
-				go sv.watchBridgeLaunch(launchCtx, id, bl, tmuxPath, &fellBack)
+				go sv.watchBridgeLaunch(launchCtx, id, bl, opening, tmuxPath, &fellBack)
 			}
 			if pasteBrief != "" {
-				openingHandled = true
+				opening.pasted.Store(true)
 				go pasteOversizedOpening(launchCtx, tmuxPath, id, pasteBrief)
 			}
 			if spec.Kind == harness.KindAgent {
@@ -1367,7 +1383,6 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 		ended := waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey, sv.shuttingDown)
 		endLaunch()
-		_ = launchCtx
 		// This launch is over for this daemon either way; its late hooks
 		// must go nowhere. The stored token stays on a shutdown (the
 		// session survives for adopt); StopAgent clears it on a stop.
@@ -1387,13 +1402,16 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		default:
 		}
 
-		// The bridged launch's mod never connected, so its opening prompt
-		// never ran and nothing else has: relaunch at once the legacy way,
-		// the opening back on argv. Not a crash: no restart is counted and
-		// no backoff is served.
+		// The launch is over: nothing it left queued may reach the next one.
+		bridgeConnected := sv.endBridgedLaunch(bl, opening)
+
+		// The bridged launch's mod never connected (or refused the opening),
+		// so its opening prompt never ran and nothing else has: relaunch at
+		// once the legacy way, the opening back on argv. Not a crash: no
+		// restart is counted and no backoff is served.
 		if fellBack.Load() {
 			sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
-			forceLegacy, openingHandled = true, false
+			forceLegacy = true
 			currentArgs = argsAfterBridgeFallback(currentArgs, spec.WorkDir)
 			id.setArgs(currentArgs)
 			fmt.Fprintf(os.Stderr, "[%s] relaunching without the leo bridge\n", name)
@@ -1401,7 +1419,12 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		}
 
 		// Neither ctx nor a stop asked for this exit: the harness died on
-		// its own.
+		// its own. One that died before its mod ever connected may be
+		// choking on the mod itself; it must not crash-loop with it.
+		if bl.bridged && !bridgeConnected && !forceLegacy {
+			forceLegacy = true
+			fmt.Fprintf(os.Stderr, "[%s] claude exited before its leo bridge connected; relaunching without the bridge\n", name)
+		}
 		sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
 		sv.markAttention(name, id, observe.AttentionErrored)
 		sv.setState(name, id, "restarting")
