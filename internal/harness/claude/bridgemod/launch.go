@@ -155,6 +155,7 @@ type Launcher struct {
 
 	mu       sync.Mutex
 	versions map[string]probeResult // by resolved claude binary
+	probing  map[string]*probeCall  // probes in flight, by resolved binary
 	logged   map[string]bool        // fallback reasons already logged
 }
 
@@ -162,6 +163,12 @@ type probeResult struct {
 	version Version
 	err     error
 	at      time.Time
+}
+
+// probeCall is one probe in flight; res is set before done is closed.
+type probeCall struct {
+	done chan struct{}
+	res  probeResult
 }
 
 // NewLauncher builds a Launcher.
@@ -175,35 +182,85 @@ func NewLauncher(opts LauncherOptions) *Launcher {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Launcher{opts: opts, versions: map[string]probeResult{}, logged: map[string]bool{}}
+	return &Launcher{
+		opts:     opts,
+		versions: map[string]probeResult{},
+		probing:  map[string]*probeCall{},
+		logged:   map[string]bool{},
+	}
 }
 
 // ClaudeVersion returns the release of the claude at claudePath, probing it
 // once per resolved binary. Claude updates itself by repointing a symlink at
 // a new versioned file, so keying by the resolved path notices an update
 // without probing on every launch. A failed probe is retried after
-// probeRetryAfter.
+// probeRetryAfter. Callers asking at once share one probe, which runs to
+// the end whether or not they wait for it: ctx only bounds this caller's
+// wait.
 func (l *Launcher) ClaudeVersion(ctx context.Context, claudePath string) (Version, error) {
 	if l == nil {
 		return Version{}, errors.New("bridgemod: no launcher")
 	}
-	key := resolveBinary(claudePath)
-	l.mu.Lock()
-	cached, ok := l.versions[key]
-	l.mu.Unlock()
-	if ok && (cached.err == nil || l.opts.Now().Sub(cached.at) < probeRetryAfter) {
+	call, cached, ok := l.cachedOrProbe(resolveBinary(claudePath), claudePath)
+	if ok {
 		return cached.version, cached.err
 	}
+	select {
+	case <-call.done:
+		return call.res.version, call.res.err
+	case <-ctx.Done():
+		return Version{}, ctx.Err()
+	}
+}
+
+// cachedOrProbe returns key's cached result while it is trusted (ok), else
+// the probe of key in flight, starting one if none is.
+func (l *Launcher) cachedOrProbe(key, claudePath string) (*probeCall, probeResult, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if cached, ok := l.versions[key]; ok && (cached.err == nil || l.opts.Now().Sub(cached.at) < probeRetryAfter) {
+		return nil, cached, true
+	}
+	if call, ok := l.probing[key]; ok {
+		return call, probeResult{}, false
+	}
+	call := &probeCall{done: make(chan struct{})}
+	l.probing[key] = call
+	go l.runProbe(key, claudePath, call)
+	return call, probeResult{}, false
+}
+
+// runProbe probes claudePath for every caller waiting on call. It is
+// detached from any one caller's ctx, so a canceled launch neither fails the
+// probe for the others nor leaves a failure cached; Probe bounds itself.
+func (l *Launcher) runProbe(key, claudePath string, call *probeCall) {
 	res := probeResult{at: l.opts.Now()}
-	raw, err := l.opts.Probe(ctx, claudePath)
+	raw, err := l.opts.Probe(context.Background(), claudePath)
 	if err == nil {
 		res.version, err = ParseVersion(raw)
 	}
 	res.err = err
 	l.mu.Lock()
-	l.versions[key] = res
+	call.res = l.recordLocked(key, res)
+	delete(l.probing, key)
 	l.mu.Unlock()
-	return res.version, res.err
+	close(call.done)
+}
+
+func (l *Launcher) record(key string, res probeResult) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.recordLocked(key, res)
+}
+
+// recordLocked caches res for key and returns what key now holds: a
+// failure never replaces a success, since that binary is known to answer.
+func (l *Launcher) recordLocked(key string, res probeResult) probeResult {
+	if prev, ok := l.versions[key]; ok && prev.err == nil && res.err != nil {
+		return prev
+	}
+	l.versions[key] = res
+	return res
 }
 
 // Capable reports whether the claude at claudePath can load the mod.
@@ -272,10 +329,18 @@ func (l *Launcher) logOnce(reason, format string, args ...any) {
 }
 
 // resolveBinary follows symlinks to the file that actually runs, falling
-// back to the path itself when it cannot be resolved.
+// back to the path itself when it cannot be resolved. A bare command name
+// ("claude", as dispatches launch it) is looked up in PATH first, as exec
+// would run it.
 func resolveBinary(path string) string {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+	target := path
+	if !strings.ContainsRune(path, filepath.Separator) {
+		if found, err := exec.LookPath(path); err == nil {
+			target = found
+		}
+	}
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
 		return resolved
 	}
-	return path
+	return target
 }

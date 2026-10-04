@@ -287,3 +287,150 @@ func TestProbeClaudeVersionRunsTheBinary(t *testing.T) {
 		t.Fatal("ProbeClaudeVersion of a missing binary succeeded")
 	}
 }
+
+// gatedProbe blocks every probe until release is closed, honouring the
+// probe's ctx as the real one does (exec.CommandContext kills the child).
+type gatedProbe struct {
+	countingProbe
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newGatedProbe(answers map[string]string) *gatedProbe {
+	return &gatedProbe{
+		countingProbe: countingProbe{answers: answers},
+		started:       make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+}
+
+func (p *gatedProbe) probe(ctx context.Context, claudePath string) (string, error) {
+	p.mu.Lock()
+	if p.calls == nil {
+		p.calls = map[string]int{}
+	}
+	p.calls[claudePath]++
+	p.mu.Unlock()
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.answers[claudePath], nil
+}
+
+// Launches that need the same claude's version at once share one probe
+// rather than each running `claude --version`.
+func TestConcurrentProbesOfOneBinaryShareOneRun(t *testing.T) {
+	p := newGatedProbe(map[string]string{"/bin/claude": "2.1.289 (Claude Code)"})
+	l := newTestLauncher(t, p.probe, &bytes.Buffer{})
+	const callers = 4
+	type result struct {
+		v   Version
+		err error
+	}
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			v, err := l.ClaudeVersion(context.Background(), "/bin/claude")
+			results <- result{v, err}
+		}()
+	}
+	<-p.started
+	// Give every caller the chance to start a probe of its own.
+	time.Sleep(50 * time.Millisecond)
+	close(p.release)
+	for range callers {
+		r := <-results
+		if r.err != nil || r.v != (Version{2, 1, 289}) {
+			t.Fatalf("ClaudeVersion = %v, %v", r.v, r.err)
+		}
+	}
+	if n := p.count("/bin/claude"); n != 1 {
+		t.Fatalf("probed %d times for concurrent callers, want 1", n)
+	}
+}
+
+// A caller that gives up on the probe (its launch was canceled) must not
+// leave a failure behind: the probe finishes for whoever asks next, and its
+// success is what is cached.
+func TestACanceledCallerDoesNotCacheAFailedProbe(t *testing.T) {
+	p := newGatedProbe(map[string]string{"/bin/claude": "2.1.289 (Claude Code)"})
+	l := newTestLauncher(t, p.probe, &bytes.Buffer{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := l.ClaudeVersion(ctx, "/bin/claude")
+		done <- err
+	}()
+	<-p.started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled caller got %v, want context.Canceled", err)
+	}
+	close(p.release)
+	v, err := l.ClaudeVersion(context.Background(), "/bin/claude")
+	if err != nil || v != (Version{2, 1, 289}) {
+		t.Fatalf("after a canceled caller: %v, %v; want 2.1.289", v, err)
+	}
+	if n := p.count("/bin/claude"); n != 1 {
+		t.Fatalf("probed %d times, want the one probe to have served both callers", n)
+	}
+}
+
+// A failed probe never replaces a success: whichever finished last, the
+// binary is known to answer.
+func TestAProbeFailureNeverReplacesASuccess(t *testing.T) {
+	l := newTestLauncher(t, (&countingProbe{}).probe, &bytes.Buffer{})
+	now := time.Now()
+	l.record("/bin/claude", probeResult{version: Version{2, 1, 289}, at: now})
+	l.record("/bin/claude", probeResult{err: errors.New("killed"), at: now.Add(time.Second)})
+	v, err := l.ClaudeVersion(context.Background(), "/bin/claude")
+	if err != nil || v != (Version{2, 1, 289}) {
+		t.Fatalf("ClaudeVersion = %v, %v; want the recorded success", v, err)
+	}
+}
+
+// A bare command name (dispatches launch "claude" from PATH) is resolved
+// through PATH before its symlinks, so an update is noticed there too.
+func TestBareClaudeIsResolvedThroughPATH(t *testing.T) {
+	dir := t.TempDir()
+	v1, v2 := filepath.Join(dir, "2.1.289"), filepath.Join(dir, "2.1.290")
+	for _, f := range []string{v1, v2} {
+		if err := os.WriteFile(f, nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(bin, "claude")
+	if err := os.Symlink(v1, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	p := &countingProbe{answers: map[string]string{"claude": "2.1.289 (Claude Code)"}}
+	l := newTestLauncher(t, p.probe, &bytes.Buffer{})
+	ctx := context.Background()
+	if _, err := l.ClaudeVersion(ctx, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(v2, link); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.answers["claude"] = "2.1.290 (Claude Code)"
+	p.mu.Unlock()
+	v, err := l.ClaudeVersion(ctx, "claude")
+	if err != nil || v != (Version{2, 1, 290}) {
+		t.Fatalf("after the update: %v, %v; want 2.1.290", v, err)
+	}
+}
