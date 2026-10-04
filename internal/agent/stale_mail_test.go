@@ -16,10 +16,12 @@ import (
 // under the names in stale, as a deleted agent's whose drop failed.
 type staleMailSupervisor struct {
 	capturingSupervisor
-	stale func(name string) bool
+	stale   func(name string) bool
+	checked []string
 }
 
 func (s *staleMailSupervisor) CheckNoAgentMail(name string) error {
+	s.checked = append(s.checked, name)
 	if s.stale(name) {
 		return fmt.Errorf("%s: %w", name, outbox.ErrNameHasMessages)
 	}
@@ -75,5 +77,11 @@ func TestSpawningAWorktreeAgentOverAStaleOutboxIsRefused(t *testing.T) {
 		if len(c.args) >= 2 && c.args[0] == "worktree" && c.args[1] == "add" {
 			t.Fatalf("made a worktree for a refused spawn: %v", c.args)
 		}
+	}
+	if len(sup.checked) != 1 || len(sup.releaseCalls) != 1 || sup.releaseCalls[0] != sup.checked[0] {
+		t.Fatalf("checked %v and released %v, want the refused name's reservation given back", sup.checked, sup.releaseCalls)
+	}
+	if len(sup.reservations) != 0 {
+		t.Fatalf("reservations %v outlive a refused spawn", sup.reservations)
 	}
 }

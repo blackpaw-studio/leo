@@ -360,6 +360,10 @@ func (s *Supervisor) renameMailLocked(oldName, newName string) error {
 	return s.mail.store.Rename(oldName, newName)
 }
 
+// agent.Manager finds CheckNoAgentMail by an optional-interface assertion,
+// so a signature drift would silently switch the guard off: keep it pinned.
+var _ interface{ CheckNoAgentMail(string) error } = (*Supervisor)(nil)
+
 // CheckNoAgentMail fails with outbox.ErrNameHasMessages if name's outbox
 // holds messages: agent.Manager checks it before spawning a brand-new agent
 // under name, which must not inherit a former holder's messages (a deleted
