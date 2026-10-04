@@ -46,11 +46,13 @@ func TestClaudeBriefArgvWordRoundTripsThroughRealTmux(t *testing.T) {
 	}
 
 	// A stand-in for the claude binary: writes its first argument's exact
-	// bytes to $OUTFILE. The launch command below reproduces the same shape
+	// bytes to $OUTFILE, renaming it into place so the poll below never reads
+	// a file the shell created but printf has not filled yet (it did, under
+	// load). The launch command below reproduces the same shape
 	// TmuxInteractiveRuntime.Launch builds: `env KEY=VAL binary <argv...>`,
 	// with claudeBriefArgvWord in the trailing positional slot.
 	standIn := filepath.Join(dir, "standin.sh")
-	if err := os.WriteFile(standIn, []byte("#!/bin/sh\nprintf '%s' \"$1\" > \"$OUTFILE\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(standIn, []byte("#!/bin/sh\nprintf '%s' \"$1\" > \"$OUTFILE.tmp\" && mv \"$OUTFILE.tmp\" \"$OUTFILE\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	outFile := filepath.Join(dir, "out.txt")
