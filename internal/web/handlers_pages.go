@@ -258,6 +258,7 @@ func (s *Server) buildAgentsData(r *http.Request) (any, error) {
 				StartedAt: a.StartedAt,
 				Restarts:  a.Restarts,
 				Branch:    a.Branch,
+				Bridge:    a.Bridge,
 			})
 		}
 	}

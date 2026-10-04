@@ -173,11 +173,11 @@ func newAgentListCmd() *cobra.Command {
 				return nil
 			}
 			tw := tabwriter.NewWriter(agentStdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tTEMPLATE\tBRANCH\tWORKSPACE\tSTATUS\tRESTARTS")
+			fmt.Fprintln(tw, "NAME\tTEMPLATE\tBRANCH\tWORKSPACE\tSTATUS\tRESTARTS\tBRIDGE")
 			for _, r := range records {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\n",
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
 					r.Name, dashIfEmpty(r.Template), dashIfEmpty(r.Branch),
-					dashIfEmpty(r.Workspace), dashIfEmpty(r.Status), r.Restarts)
+					dashIfEmpty(r.Workspace), dashIfEmpty(r.Status), r.Restarts, dashIfEmpty(r.Bridge))
 			}
 			return tw.Flush()
 		},

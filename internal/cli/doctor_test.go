@@ -197,8 +197,10 @@ func TestRunDoctorCallsReportServiceHealth(t *testing.T) {
 	origCollision := checkLegacyLabelCollisionFn
 	origLocalNetwork := checkLocalNetworkFn
 	origTmuxTree := reportTmuxTreeFn
+	origBridgeDeps := bridgeDoctorDepsFn
 	origCfgFile := cfgFile
 	defer func() {
+		bridgeDoctorDepsFn = origBridgeDeps
 		checkServiceDriftFn = origDrift
 		checkLegacyLabelCollisionFn = origCollision
 		checkLocalNetworkFn = origLocalNetwork
@@ -223,6 +225,7 @@ func TestRunDoctorCallsReportServiceHealth(t *testing.T) {
 		return LocalNetworkStatus{State: "n/a", Detail: "stubbed for smoke test"}
 	}
 	reportTmuxTreeFn = func() tmuxTreeReport { return tmuxTreeReport{Line: "stubbed"} }
+	bridgeDoctorDepsFn = func() bridgeDoctorDeps { return doctorBridgeDeps("2.1.289", nil, nil, false) }
 
 	output := captureColorOutput(t, func() {
 		if err := runDoctor("", false); err != nil {
@@ -233,7 +236,7 @@ func TestRunDoctorCallsReportServiceHealth(t *testing.T) {
 	if gotHome != home {
 		t.Errorf("reportServiceHealth (via runDoctor) received home = %q, want %q", gotHome, home)
 	}
-	if !doctorContainsAll(output, "drift detected", "smoke-test drift detail") {
+	if !doctorContainsAll(output, "drift detected", "smoke-test drift detail", "leo bridge: on") {
 		t.Errorf("output = %q, want it to include reportServiceHealth's drift output", output)
 	}
 }

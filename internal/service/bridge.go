@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
@@ -100,6 +101,23 @@ func (s *Supervisor) BridgeState(name string) (bridge.State, bool) {
 	}
 	st := w.hub.State(key)
 	return st, st.Connected
+}
+
+// BridgeStatus is name's leo bridge as the agent list shows it:
+// agent.BridgeConnected while its mod is connected, agent.BridgeAbsent for
+// any other live claude agent (launched legacy, or its mod gone), and ""
+// for other harnesses and unknown names.
+func (s *Supervisor) BridgeStatus(name string) string {
+	s.mu.RLock()
+	id, ok := s.identities[name]
+	s.mu.RUnlock()
+	if !ok || (id.harness != "" && id.harness != "claude") {
+		return ""
+	}
+	if _, live := s.BridgeState(name); live {
+		return agent.BridgeConnected
+	}
+	return agent.BridgeAbsent
 }
 
 // BridgeRouter routes agent names to their live bridges; nil without a hub.

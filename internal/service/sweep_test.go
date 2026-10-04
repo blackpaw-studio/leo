@@ -97,3 +97,36 @@ func TestParseIdle(t *testing.T) {
 		t.Fatal("24h should parse")
 	}
 }
+
+func TestSupervisorBridgeStatus(t *testing.T) {
+	sv := NewSupervisor(context.Background())
+	hub := bridge.New(bridge.Options{})
+	t.Cleanup(hub.Close)
+	sv.SetBridge(hub, nil, 0)
+	add := func(name, harnessName, key string) {
+		id := newProcIdentity(name, nil)
+		id.harness = harnessName
+		id.setBridgeKey(key)
+		sv.mu.Lock()
+		sv.identities[name] = id
+		sv.mu.Unlock()
+	}
+	add("bridged", "claude", "bridged")
+	add("legacy", "claude", "")
+	add("implicit", "", "")
+	add("codex", "codex", "")
+	if _, err := hub.Connect("bridged"); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"bridged": "connected", "legacy": "absent", "implicit": "absent", "codex": "", "unknown": "",
+	} {
+		if got := sv.BridgeStatus(name); got != want {
+			t.Errorf("BridgeStatus(%s) = %q, want %q", name, got, want)
+		}
+	}
+	hub.Forget("bridged")
+	if got := sv.BridgeStatus("bridged"); got != "absent" {
+		t.Errorf("BridgeStatus after forget = %q, want absent", got)
+	}
+}

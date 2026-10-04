@@ -419,6 +419,7 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		Ephemeral: true,
 	}
 	id := newProcIdentity(spec.Name, spec.ClaudeArgs)
+	id.harness = spec.Harness
 	s.identities[spec.Name] = id
 	spawnedAt := s.states[spec.Name].StartedAt
 	s.surfacedFiles.Reset(spec.Name, spawnedAt)
@@ -943,6 +944,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// A bridged claude gets its opening prompt over the bridge, so a
 		// spawn need not hold it to the argv limit.
 		agentMgr.SetBridgeCapable(supervisor.BridgeCapable)
+		agentMgr.SetBridgeStatus(supervisor.BridgeStatus)
 		srv.SetAgentManager(agentMgr)
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets

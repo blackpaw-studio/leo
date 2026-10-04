@@ -87,6 +87,8 @@ type Manager struct {
 	// the leo bridge, which delivers the opening prompt instead of argv.
 	// nil means never. See SetBridgeCapable.
 	bridgeCapable func() bool
+	// bridgeStatus reads a live agent's Record.Bridge; nil leaves it empty.
+	bridgeStatus func(name string) string
 }
 
 // SetBridgeCapable tells the Manager how to learn whether claude launches
@@ -94,6 +96,12 @@ type Manager struct {
 // the argv limit (see resolveOpeningPrompt).
 func (m *Manager) SetBridgeCapable(capable func() bool) {
 	m.bridgeCapable = capable
+}
+
+// SetBridgeStatus tells the Manager how to read a live agent's bridge
+// status (Record.Bridge) for List.
+func (m *Manager) SetBridgeStatus(status func(name string) string) {
+	m.bridgeStatus = status
 }
 
 // openingPromptLimit is the largest claude opening prompt a spawn accepts
@@ -233,7 +241,16 @@ type Record struct {
 	// this agent again (an idle sweep, or a manual stop that requested it);
 	// false means it stays dormant until an operator runs Start explicitly.
 	WakeOnMessage bool `json:"wake_on_message,omitempty"`
+	// Bridge is a live claude agent's leo bridge: BridgeConnected or
+	// BridgeAbsent. Empty for other harnesses and stopped agents.
+	Bridge string `json:"bridge,omitempty"`
 }
+
+// Bridge statuses reported in Record.Bridge.
+const (
+	BridgeConnected = "connected"
+	BridgeAbsent    = "absent"
+)
 
 // DeleteOptions tunes Manager.Delete.
 type DeleteOptions struct {
@@ -866,6 +883,9 @@ func (m *Manager) List() []Record {
 			Status:    state.Status,
 			StartedAt: state.StartedAt,
 			Restarts:  state.Restarts,
+		}
+		if m.bridgeStatus != nil {
+			r.Bridge = m.bridgeStatus(name)
 		}
 		mergeStored(&r, stored)
 		out = append(out, r)

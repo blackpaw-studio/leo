@@ -18,6 +18,9 @@ type procIdentity struct {
 	name      string
 	args      []string
 	bridgeKey string // see BridgeKey
+	// harness is the launch's harness adapter name ("" means claude); fixed
+	// at spawn.
+	harness string
 }
 
 func newProcIdentity(name string, args []string) *procIdentity {

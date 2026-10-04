@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"syscall"
@@ -34,6 +35,9 @@ var checkLegacyLabelCollisionFn = service.LegacyBaseLabelCollision
 var (
 	checkLocalNetworkFn = checkLocalNetwork
 	reportTmuxTreeFn    = reportTmuxTree
+	// bridgeDoctorDepsFn supplies reportBridge's claude probe and daemon
+	// calls; the smoke test stubs it.
+	bridgeDoctorDepsFn = defaultBridgeDoctorDeps
 )
 
 // LocalNetworkStatus is the structured result of the macOS Local Network
@@ -107,6 +111,7 @@ func runDoctor(probeHost string, trigger bool) error {
 		warn.Printf("Config: %s\n", err)
 	} else {
 		reportServiceHealth(cfg.HomePath)
+		reportBridge(context.Background(), cfg.HomePath, bridgeDoctorDepsFn())
 	}
 
 	status := checkLocalNetworkFn(probeHost, trigger)

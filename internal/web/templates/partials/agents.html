@@ -44,6 +44,7 @@
                 {{if .Branch}}branch: {{.Branch}} &middot; {{end}}
                 {{if uptime .StartedAt}}{{uptime .StartedAt}}{{end}}
                 {{if gt .Restarts 0}}&middot; {{.Restarts}} restart{{if gt .Restarts 1}}s{{end}}{{end}}
+                {{if .Bridge}}&middot; bridge: {{.Bridge}}{{end}}
             </div>
             <div class="process-actions">
                 <form class="agent-rename" hx-post="/web/agent/{{.Name}}/rename" hx-target="#agents-content" hx-swap="outerHTML"

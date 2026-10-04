@@ -1949,3 +1949,26 @@ func assertContainsFlag(t *testing.T, args []string, flag, value string) {
 	}
 	t.Errorf("expected args to contain %s %s, got %v", flag, value, args)
 }
+
+// A live agent's bridge status comes from the supervisor; a stopped one has
+// none.
+func TestListReportsLiveAgentsBridgeStatus(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{
+		"leo-a": {Name: "leo-a", Status: "running"},
+		"leo-b": {Name: "leo-b", Status: "running"},
+	}}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-c", Workspace: "/w", Stopped: true})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetBridgeStatus(func(name string) string {
+		return map[string]string{"leo-a": BridgeConnected, "leo-c": BridgeConnected}[name]
+	})
+	got := map[string]string{}
+	for _, r := range m.List() {
+		got[r.Name] = r.Bridge
+	}
+	if got["leo-a"] != BridgeConnected || got["leo-b"] != "" || got["leo-c"] != "" {
+		t.Fatalf("bridge statuses = %v", got)
+	}
+}
