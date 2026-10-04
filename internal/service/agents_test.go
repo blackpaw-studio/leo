@@ -53,11 +53,51 @@ func TestSpawnAgentNoContext(t *testing.T) {
 	}
 }
 
+// stopLoops cancels sv's context and waits out every supervise loop
+// SpawnAgent started. Every test that spawns defers it, so no loop outlives
+// its test: none writes into the test's removed temp dirs, or reads a
+// package seam (initialBackoff, sessionPollInterval) a later test sets.
+func stopLoops(cancel context.CancelFunc, sv *Supervisor) {
+	cancel()
+	sv.Wait()
+}
+
+// Wait returns only once the loop SpawnAgent started has returned: here the
+// loop is blocked in a tmux new-session when its context ends, and records
+// stopped only after that process is killed and reaped.
+func TestWaitReturnsOnceSpawnedLoopsHaveReturned(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	sv.tmuxPath = filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\ncase \"$*\" in *new-session*) : > " + started + "; exec sleep 30;; esac\nexit 0\n"
+	if err := os.WriteFile(sv.tmuxPath, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture, needs +x
+		t.Fatal(err)
+	}
+	sv.claudePath = "false"
+	sv.homePath = t.TempDir()
+	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "waited", WorkDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "new-session to block", func() bool { _, err := os.Stat(started); return err == nil })
+
+	stopLoops(cancel, sv)
+
+	sv.mu.RLock()
+	status := sv.states["waited"].Status
+	sv.mu.RUnlock()
+	if status != "stopped" {
+		t.Fatalf("status after Wait = %q, want stopped: Wait returned before the loop did", status)
+	}
+}
+
 func TestSpawnAgentSetsEphemeralState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	sv.tmuxPath = "false" // will fail immediately, that's fine
 	sv.claudePath = "false"
 	sv.homePath = t.TempDir()

@@ -105,8 +105,8 @@ func waitAttention(t *testing.T, store *observe.AttentionStore, name string, wan
 
 func TestUnexpectedExitMarksTrackedAgentErrored(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	store := observe.NewAttentionStore(nil)
 	sv.SetAttention(store)
 
@@ -134,8 +134,8 @@ func TestUnexpectedExitMarksTrackedAgentErrored(t *testing.T) {
 
 func TestUnexpectedExitLeavesUntrackedAgentAbsent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	store := observe.NewAttentionStore(nil)
 	sv.SetAttention(store)
 
@@ -150,8 +150,8 @@ func TestUnexpectedExitLeavesUntrackedAgentAbsent(t *testing.T) {
 
 func TestStopAgentMarksTrackedAgentUnknown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	store := observe.NewAttentionStore(nil)
 	sv.SetAttention(store)
 	spawnFakehook(t, sv, "tracked", true)
@@ -175,8 +175,8 @@ func TestStopAgentMarksTrackedAgentUnknown(t *testing.T) {
 
 func TestStopAgentLeavesUntrackedAgentAbsent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	store := observe.NewAttentionStore(nil)
 	sv.SetAttention(store)
 	spawnFakehook(t, sv, "untracked", false)
@@ -192,6 +192,7 @@ func TestStopAgentLeavesUntrackedAgentAbsent(t *testing.T) {
 func TestDaemonShutdownDoesNotMarkErrored(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	store := observe.NewAttentionStore(nil)
 	sv.SetAttention(store)
 	origPoll := sessionPollInterval

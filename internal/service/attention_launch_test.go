@@ -74,7 +74,11 @@ type launchFixture struct {
 	sv      *Supervisor
 	store   *observe.AttentionStore
 	logPath string
+	cancel  context.CancelFunc
 }
+
+// stop ends the fixture's supervise loops and waits them out.
+func (f launchFixture) stop() { stopLoops(f.cancel, f.sv) }
 
 func newLaunchFixture(t *testing.T, drv harness.SessionDriver, rec agentstore.Record) launchFixture {
 	t.Helper()
@@ -102,11 +106,12 @@ func newLaunchFixture(t *testing.T, drv harness.SessionDriver, rec agentstore.Re
 			t.Fatal(err)
 		}
 	}
+	f := launchFixture{sv: sv, store: store, logPath: logPath, cancel: cancel}
 	t.Cleanup(func() {
 		_ = sv.StopAgent(rec.Name, false)
-		cancel()
+		f.stop()
 	})
-	return launchFixture{sv: sv, store: store, logPath: logPath}
+	return f
 }
 
 func (f launchFixture) spawn(t *testing.T, spec daemon.AgentSpawnSpec) {
@@ -118,6 +123,8 @@ func (f launchFixture) spawn(t *testing.T, spec daemon.AgentSpawnSpec) {
 	if err := f.sv.SpawnAgent(spec); err != nil {
 		t.Fatalf("SpawnAgent: %v", err)
 	}
+	// Registered after spec's WorkDir, so the loop is gone before it is.
+	t.Cleanup(f.stop)
 }
 
 // storedToken waits for name's record to carry a non-empty attention token.
@@ -330,6 +337,7 @@ func TestClaudeAgentLaunchCarriesOneMergedSettings(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	defer f.stop()
 
 	logged := waitForLog(t, f.logPath, "new-session")
 
@@ -463,8 +471,8 @@ func (d *laterHookedDriver) AttentionSupported() bool { return false }
 // starts it unknown.
 func TestFirstHookedRestartStartsUnknown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	pub := &recordingPublisher{}
 	sv.SetAttention(observe.NewAttentionStore(pub))
 	testFakeDriver = &laterHookedDriver{}

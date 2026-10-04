@@ -156,8 +156,8 @@ func TestIncrementRestartsPublishesAgentStateChanged(t *testing.T) {
 func TestSpawnAgentPublishesAgentSpawned(t *testing.T) {
 	// Arrange
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	sv.tmuxPath = "false"
 	sv.claudePath = "false"
 	sv.homePath = t.TempDir()
@@ -205,8 +205,8 @@ func TestSpawnAgentPublishesAgentSpawned(t *testing.T) {
 // note on agent_spawned completeness.
 func TestSpawnAgentPublishesAgentSpawnedWithTemplateFields(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	sv.tmuxPath = "false"
 	sv.claudePath = "false"
 	home := t.TempDir()
@@ -257,8 +257,8 @@ func TestSpawnAgentPublishesAgentSpawnedWithTemplateFields(t *testing.T) {
 // degrade to zero-valued fields, not fail the spawn.
 func TestSpawnAgentPublishesAgentSpawnedGracefullyWithoutRecordOrConfig(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	sv.tmuxPath = "false"
 	sv.claudePath = "false"
 	sv.homePath = t.TempDir()
@@ -338,8 +338,8 @@ func TestStopAgentPublishesAgentStopped(t *testing.T) {
 func TestSpawnAgentResumedPublishesAgentStateChanged(t *testing.T) {
 	// Arrange
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	sv.tmuxPath = "false"
 	sv.claudePath = "false"
 	sv.homePath = t.TempDir()

@@ -218,6 +218,8 @@ type Supervisor struct {
 	// mail keeps agent delivers until their claude takes them — see
 	// SetOutbox.
 	mail agentMail
+	// loops counts the supervise loops SpawnAgent started — see Wait.
+	loops sync.WaitGroup
 }
 
 // NewSupervisor creates a new process supervisor. The context parameter is
@@ -469,8 +471,19 @@ func (s *Supervisor) SpawnAgent(spec daemon.AgentSpawnSpec) error {
 		OpeningPrompt:    spec.OpeningPrompt,
 		OpeningBriefPath: openingBriefPath,
 	}
-	go superviseProcess(childCtx, s.tmuxPath, s.claudePath, procSpec, s.homePath, s, id)
+	// Read here, as the go statement this replaced did, not in the loop.
+	tmuxPath, claudePath, homePath := s.tmuxPath, s.claudePath, s.homePath
+	s.loops.Go(func() {
+		superviseProcess(childCtx, tmuxPath, claudePath, procSpec, homePath, s, id)
+	})
 	return nil
+}
+
+// Wait blocks until every supervise loop SpawnAgent started has returned.
+// It stops none of them: cancel the Supervisor's context (or stop each
+// agent) first. Nothing may SpawnAgent once Wait has begun.
+func (s *Supervisor) Wait() {
+	s.loops.Wait()
 }
 
 // StopAgent stops an ephemeral process and cleans up its tmux session,
