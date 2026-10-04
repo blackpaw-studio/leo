@@ -24,6 +24,7 @@ func TestReportBridge(t *testing.T) {
 	agents := []agent.Record{
 		{Name: "alpha", Status: "running", Bridge: agent.BridgeConnected},
 		{Name: "beta", Status: "running", Bridge: agent.BridgeAbsent},
+		{Name: "gamma", Status: "running", Bridge: agent.BridgeAbsent, BridgePending: 2},
 		{Name: "codex-one", Status: "running"},
 	}
 	cases := []struct {
@@ -33,9 +34,14 @@ func TestReportBridge(t *testing.T) {
 		dontWant []string
 	}{
 		{
-			name:     "tested claude, agents listed",
-			deps:     doctorBridgeDeps("2.1.289", nil, agents, true),
-			want:     []string{"2.1.289", "leo bridge: on", "alpha", "connected", "beta", "absent"},
+			name: "tested claude, agents listed",
+			deps: doctorBridgeDeps("2.1.289", nil, agents, true),
+			want: []string{
+				"2.1.289", "leo bridge: on", "alpha", "connected", "beta", "absent",
+				// Queued commands on an absent bridge never reach the agent and
+				// keep the idle sweep from suspending it: doctor says so.
+				"gamma: bridge absent, 2 pending", "not idle-suspended",
+			},
 			dontWant: []string{"codex-one", "newer than"},
 		},
 		{

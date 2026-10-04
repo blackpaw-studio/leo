@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -140,21 +141,34 @@ func TestSupervisorBridgeStatus(t *testing.T) {
 		sv.mu.Unlock()
 	}
 	add("bridged", "claude", "bridged")
+	add("waiting", "claude", "waiting")
 	add("legacy", "claude", "")
 	add("implicit", "", "")
 	add("codex", "codex", "")
 	if _, err := hub.Connect("bridged", "launch-1"); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{
-		"bridged": "connected", "legacy": "absent", "implicit": "absent", "codex": "", "unknown": "",
+	for _, key := range []string{"bridged", "waiting"} {
+		if _, err := hub.Enqueue(key, bridge.Deliver("hi", false)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	absent := agent.BridgeStatus{State: agent.BridgeAbsent}
+	for name, want := range map[string]agent.BridgeStatus{
+		"bridged": {State: agent.BridgeConnected},
+		// Its mod is away with a command queued: the list says how many.
+		"waiting":  {State: agent.BridgeAbsent, Pending: 1},
+		"legacy":   absent,
+		"implicit": absent,
+		"codex":    {},
+		"unknown":  {},
 	} {
 		if got := sv.BridgeStatus(name); got != want {
-			t.Errorf("BridgeStatus(%s) = %q, want %q", name, got, want)
+			t.Errorf("BridgeStatus(%s) = %+v, want %+v", name, got, want)
 		}
 	}
 	hub.Forget("bridged")
-	if got := sv.BridgeStatus("bridged"); got != "absent" {
-		t.Errorf("BridgeStatus after forget = %q, want absent", got)
+	if got := sv.BridgeStatus("bridged"); got != absent {
+		t.Errorf("BridgeStatus after forget = %+v, want absent", got)
 	}
 }

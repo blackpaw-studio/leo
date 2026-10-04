@@ -55,11 +55,21 @@ func reportBridge(ctx context.Context, home string, deps bridgeDoctorDeps) {
 			info.Println("Agent bridges:")
 			header = true
 		}
-		if r.Bridge == agent.BridgeConnected {
-			success.Printf("  %s: bridge %s\n", r.Name, r.Bridge)
-		} else {
-			warn.Printf("  %s: bridge %s\n", r.Name, r.Bridge)
-		}
+		reportAgentBridge(r)
+	}
+}
+
+// reportAgentBridge prints one live claude agent's bridge. Commands queued
+// on an absent bridge wait for its mod, and the idle sweep keeps the agent
+// up rather than drop them: said outright, as it fails safe but silent.
+func reportAgentBridge(r agent.Record) {
+	if r.Bridge == agent.BridgeConnected {
+		success.Printf("  %s: bridge %s\n", r.Name, r.Bridge)
+		return
+	}
+	warn.Printf("  %s: bridge %s\n", r.Name, r.BridgeSummary())
+	if r.Bridge == agent.BridgeAbsent && r.BridgePending > 0 {
+		warn.Println("    its queued commands wait for the mod to reconnect; it is not idle-suspended meanwhile")
 	}
 }
 

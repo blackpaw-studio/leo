@@ -177,7 +177,7 @@ func newAgentListCmd() *cobra.Command {
 			for _, r := range records {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
 					r.Name, dashIfEmpty(r.Template), dashIfEmpty(r.Branch),
-					dashIfEmpty(r.Workspace), dashIfEmpty(r.Status), r.Restarts, dashIfEmpty(r.Bridge))
+					dashIfEmpty(r.Workspace), dashIfEmpty(r.Status), r.Restarts, dashIfEmpty(r.BridgeSummary()))
 			}
 			return tw.Flush()
 		},

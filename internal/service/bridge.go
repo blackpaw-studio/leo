@@ -107,19 +107,21 @@ func (s *Supervisor) BridgeState(name string) (bridge.State, bool) {
 
 // BridgeStatus is name's leo bridge as the agent list shows it:
 // agent.BridgeConnected while its mod is connected, agent.BridgeAbsent for
-// any other live claude agent (launched legacy, or its mod gone), and ""
-// for other harnesses and unknown names.
-func (s *Supervisor) BridgeStatus(name string) string {
+// any other live claude agent (launched legacy, or its mod gone), with the
+// commands queued for it while absent, and empty for other harnesses and
+// unknown names.
+func (s *Supervisor) BridgeStatus(name string) agent.BridgeStatus {
 	s.mu.RLock()
 	id, ok := s.identities[name]
 	s.mu.RUnlock()
 	if !ok || (id.harness != "" && id.harness != "claude") {
-		return ""
+		return agent.BridgeStatus{}
 	}
-	if _, live := s.BridgeState(name); live {
-		return agent.BridgeConnected
+	st, live := s.BridgeState(name)
+	if live {
+		return agent.BridgeStatus{State: agent.BridgeConnected}
 	}
-	return agent.BridgeAbsent
+	return agent.BridgeStatus{State: agent.BridgeAbsent, Pending: st.Pending}
 }
 
 // BridgeRouter routes agent names to their live bridges; nil without a hub.

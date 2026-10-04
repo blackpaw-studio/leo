@@ -1249,6 +1249,7 @@ func TestAgentListTableShowsTheBridge(t *testing.T) {
 			{Name: "alpha", Status: "running", Bridge: agent.BridgeConnected},
 			{Name: "beta", Status: "running", Bridge: agent.BridgeAbsent},
 			{Name: "gamma", Status: "running"},
+			{Name: "delta", Status: "running", Bridge: agent.BridgeAbsent, BridgePending: 3},
 		}, nil
 	}
 	t.Cleanup(func() { agentListFn = oldList })
@@ -1261,14 +1262,14 @@ func TestAgentListTableShowsTheBridge(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 4 || !strings.Contains(lines[0], "BRIDGE") {
+	if len(lines) != 5 || !strings.Contains(lines[0], "BRIDGE") {
 		t.Fatalf("table = %q", buf.String())
 	}
-	want := map[string]string{"alpha": "connected", "beta": "absent", "gamma": "-"}
+	want := map[string]string{"alpha": "connected", "beta": "absent", "gamma": "-", "delta": "absent, 3 pending"}
 	for _, line := range lines[1:] {
-		fields := strings.Fields(line)
-		if got := fields[len(fields)-1]; got != want[fields[0]] {
-			t.Errorf("%s bridge = %q, want %q (%q)", fields[0], got, want[fields[0]], line)
+		name := strings.Fields(line)[0]
+		if !strings.HasSuffix(line, " "+want[name]) {
+			t.Errorf("%s bridge: want %q at the end of %q", name, want[name], line)
 		}
 	}
 }

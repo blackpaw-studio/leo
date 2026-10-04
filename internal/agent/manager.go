@@ -87,8 +87,9 @@ type Manager struct {
 	// the leo bridge, which delivers the opening prompt instead of argv.
 	// nil means never. See SetBridgeCapable.
 	bridgeCapable func() bool
-	// bridgeStatus reads a live agent's Record.Bridge; nil leaves it empty.
-	bridgeStatus func(name string) string
+	// bridgeStatus reads a live agent's Record.Bridge and BridgePending;
+	// nil leaves them empty.
+	bridgeStatus func(name string) BridgeStatus
 }
 
 // SetBridgeCapable tells the Manager how to learn whether claude launches
@@ -99,8 +100,8 @@ func (m *Manager) SetBridgeCapable(capable func() bool) {
 }
 
 // SetBridgeStatus tells the Manager how to read a live agent's bridge
-// status (Record.Bridge) for List.
-func (m *Manager) SetBridgeStatus(status func(name string) string) {
+// status (Record.Bridge and BridgePending) for List.
+func (m *Manager) SetBridgeStatus(status func(name string) BridgeStatus) {
 	m.bridgeStatus = status
 }
 
@@ -244,6 +245,10 @@ type Record struct {
 	// Bridge is a live claude agent's leo bridge: BridgeConnected or
 	// BridgeAbsent. Empty for other harnesses and stopped agents.
 	Bridge string `json:"bridge,omitempty"`
+	// BridgePending counts the commands queued for an absent bridge: they
+	// wait for its mod to connect, and keep the idle sweep from suspending
+	// the agent (that would drop them). Zero while connected.
+	BridgePending int `json:"bridge_pending,omitempty"`
 }
 
 // Bridge statuses reported in Record.Bridge.
@@ -251,6 +256,23 @@ const (
 	BridgeConnected = "connected"
 	BridgeAbsent    = "absent"
 )
+
+// BridgeStatus is a live agent's leo bridge as List reports it: State is
+// Record.Bridge, Pending Record.BridgePending.
+type BridgeStatus struct {
+	State   string
+	Pending int
+}
+
+// BridgeSummary is r's bridge as the agent list and doctor show it: the
+// status, and for an absent bridge with commands queued, how many, so an
+// agent stuck waiting on its mod is not silent.
+func (r Record) BridgeSummary() string {
+	if r.Bridge == BridgeAbsent && r.BridgePending > 0 {
+		return fmt.Sprintf("%s, %d pending", r.Bridge, r.BridgePending)
+	}
+	return r.Bridge
+}
 
 // DeleteOptions tunes Manager.Delete.
 type DeleteOptions struct {
@@ -885,7 +907,8 @@ func (m *Manager) List() []Record {
 			Restarts:  state.Restarts,
 		}
 		if m.bridgeStatus != nil {
-			r.Bridge = m.bridgeStatus(name)
+			st := m.bridgeStatus(name)
+			r.Bridge, r.BridgePending = st.State, st.Pending
 		}
 		mergeStored(&r, stored)
 		out = append(out, r)
