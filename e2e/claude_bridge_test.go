@@ -194,6 +194,49 @@ func TestClaudeBridgeDispatchOversizedOpening(t *testing.T) {
 	t.Fatal("the oversized opening's turn never finished")
 }
 
+// TestClaudeBridgeDaemonRestartMidOpening kills the daemon (a crash, or a
+// kickstart -k) after an agent's session started but before its mod acked
+// the opening. The restarted daemon must adopt the live session, never kill
+// it, and queue the opening again: it runs exactly once.
+func TestClaudeBridgeDaemonRestartMidOpening(t *testing.T) {
+	s := newBridgeE2E(t, bridgeOptions{})
+	const name = "bridge-e2e-adopt"
+	const opening = "Reply with exactly: ADOPT-OPENING-OK"
+	started := time.Now()
+	s.spawn(name, opening)
+	pid := s.awaitPanePID(name)
+	s.killService()
+	if rec := s.stored(name); rec.OpeningQueuedID == "" || rec.OpeningAckedID != "" {
+		t.Fatalf("the daemon died after the opening was acked (record %+v): nothing left to adopt mid-opening", rec)
+	}
+
+	s.startService()
+	s.awaitBridge(name, agent.BridgeConnected)
+	// Found by its prompt, not the record's session id: the restore resolves
+	// that from the newest transcript in the (shared) workspace, which the
+	// adopted claude has not written yet.
+	tr := s.transcriptPrompted(opening, started)
+	tr.await("the opening reply", said("ADOPT-OPENING-OK"))
+	// Prompts run in order, so a second copy of the opening would run
+	// before this one does.
+	if code, body := s.message(name, "Reply with exactly: AFTER-ADOPT-OK", ""); code/100 != 2 {
+		t.Fatalf("message after the adopt: %d %s", code, body)
+	}
+	tr.await("the reply after the adopt", said("AFTER-ADOPT-OK"))
+	if n := s.promptedSince(opening, started); n != 1 {
+		t.Fatalf("the opening was prompted %d times across the restart, want once", n)
+	}
+	if got := s.panePID(name); got != pid {
+		t.Fatalf("the adopted session was relaunched: pane pid %s, was %s", got, pid)
+	}
+	if strings.Contains(s.serviceLog(), "relaunching without") {
+		t.Fatal("the adopted session fell back from the bridge")
+	}
+	if rec := s.stored(name); rec.OpeningQueuedID != "" || rec.OpeningAckedID == "" {
+		t.Fatalf("after the adopt the opening is not recorded acked: %+v", rec)
+	}
+}
+
 // TestClaudeBridgeAbsentFallback runs claude with a mod that loads but can
 // never reach leo: the agent is relaunched without the bridge, its opening
 // prompt back on argv, and messages fall back to the legacy path.

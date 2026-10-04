@@ -20,9 +20,11 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 	"github.com/blackpaw-studio/leo/internal/session"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 // The real-claude bridge suite runs the installed claude (haiku) under a
@@ -134,6 +136,8 @@ type bridgeE2E struct {
 	cfgPath string
 	port    int
 	token   string
+	// bin holds the tmux (and a broken bridge's claude) the daemon runs.
+	bin     string
 	service *exec.Cmd
 	output  *lockedBuffer
 }
@@ -185,27 +189,84 @@ templates:
 		t.Fatal(err)
 	}
 
-	s := &bridgeE2E{t: t, home: home, ws: ws, cfgPath: cfgPath, port: port, output: &lockedBuffer{}}
-	cmd := exec.Command(leoBin, "service", "--supervised", "-c", cfgPath)
-	cmd.Dir = home
-	cmd.Env = append(withUser(os.Environ()), "PATH="+bin+":"+os.Getenv("PATH"))
-	cmd.Stdout, cmd.Stderr = s.output, s.output
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting service: %v", err)
-	}
-	s.service = cmd
+	s := &bridgeE2E{t: t, home: home, ws: ws, cfgPath: cfgPath, port: port, bin: bin, output: &lockedBuffer{}}
+	s.startService()
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("panes:\n%s", capturePanes(socket))
 		}
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		s.killService()
 		if t.Failed() {
 			t.Logf("service output:\n%s\nservice.log:\n%s", s.output.String(), s.serviceLog())
 		}
 	})
-	s.awaitReady()
 	return s
+}
+
+// startService starts the daemon and waits until it serves requests.
+func (s *bridgeE2E) startService() {
+	s.t.Helper()
+	cmd := exec.Command(leoBin, "service", "--supervised", "-c", s.cfgPath)
+	cmd.Dir = s.home
+	cmd.Env = append(withUser(os.Environ()), "PATH="+s.bin+":"+os.Getenv("PATH"))
+	cmd.Stdout, cmd.Stderr = s.output, s.output
+	if err := cmd.Start(); err != nil {
+		s.t.Fatalf("starting service: %v", err)
+	}
+	s.service = cmd
+	s.awaitReady()
+}
+
+// killService SIGKILLs the daemon, as a crash or `launchctl kickstart -k`
+// does: its agents' tmux sessions live on for the next daemon to adopt.
+func (s *bridgeE2E) killService() {
+	if s.service == nil {
+		return
+	}
+	_ = s.service.Process.Kill()
+	_ = s.service.Wait()
+	s.service = nil
+}
+
+// panePID is the pid of the process running in agent name's tmux pane: it
+// changes if the session is killed and relaunched.
+func (s *bridgeE2E) panePID(name string) string {
+	s.t.Helper()
+	out, err := exec.Command(faketmux, tmux.Args("list-panes", "-a", "-F", "#{session_name} #{pane_pid}")...).Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if session, pid, ok := strings.Cut(line, " "); ok && session == agent.SessionName(name) {
+			return pid
+		}
+	}
+	return ""
+}
+
+// awaitPanePID waits for agent name's tmux session and returns its pane's
+// pid.
+func (s *bridgeE2E) awaitPanePID(name string) string {
+	s.t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if pid := s.panePID(name); pid != "" {
+			return pid
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	s.t.Fatalf("agent %s never got a tmux session", name)
+	return ""
+}
+
+// stored is agent name's agentstore record.
+func (s *bridgeE2E) stored(name string) agentstore.Record {
+	s.t.Helper()
+	recs, err := agentstore.Load(agentstore.FilePath(s.home))
+	if err != nil {
+		s.t.Fatalf("loading agentstore: %v", err)
+	}
+	return recs[name]
 }
 
 // capturePanes renders every pane on the test's tmux server, for a failed
@@ -330,6 +391,55 @@ func (s *bridgeE2E) transcript(name string) *transcript {
 		s.t.Fatal(err)
 	}
 	return &transcript{t: s.t, path: path}
+}
+
+// transcriptsSince are the workspace's claude transcripts written after
+// since.
+func (s *bridgeE2E) transcriptsSince(since time.Time) []*transcript {
+	s.t.Helper()
+	probe, err := session.JSONLPath(s.ws, "probe")
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(probe))
+	var out []*transcript
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) != ".jsonl" {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.ModTime().After(since) {
+			out = append(out, &transcript{t: s.t, path: filepath.Join(filepath.Dir(probe), e.Name())})
+		}
+	}
+	return out
+}
+
+// transcriptPrompted waits for the transcript, written after since, that
+// was prompted with needle.
+func (s *bridgeE2E) transcriptPrompted(needle string, since time.Time) *transcript {
+	s.t.Helper()
+	deadline := time.Now().Add(bridgeTurnTimeout)
+	for time.Now().Before(deadline) {
+		for _, tr := range s.transcriptsSince(since) {
+			if tr.count(prompted(needle)) > 0 {
+				return tr
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	s.t.Fatalf("no transcript written after %s was prompted with %q", since, needle)
+	return nil
+}
+
+// promptedSince counts the prompts carrying needle across every transcript
+// written after since.
+func (s *bridgeE2E) promptedSince(needle string, since time.Time) int {
+	s.t.Helper()
+	n := 0
+	for _, tr := range s.transcriptsSince(since) {
+		n += tr.count(prompted(needle))
+	}
+	return n
 }
 
 // transcript reads a claude session JSONL.
@@ -491,7 +601,7 @@ func (s *bridgeE2E) bridgeStreams(name string) []string {
 	var pids []string
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Fields(line)
-		if len(f) == 5 && filepath.Base(f[1]) == "leo" && f[2] == "bridge" && f[3] == "--agent" && f[4] == name {
+		if len(f) >= 5 && filepath.Base(f[1]) == "leo" && f[2] == "bridge" && f[3] == "--agent" && f[4] == name {
 			pids = append(pids, f[0])
 		}
 	}
