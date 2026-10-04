@@ -71,7 +71,11 @@ func (s *Supervisor) renameAdoptionLocked(oldName, newName string) {
 // adopted session, whose mod reconnects under both. A key another agent's
 // launch already holds is never taken from it: the session is adopted
 // legacy instead, and the holder keeps its generation and its messages.
-func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation string) bridgeLaunch {
+// The opening the session's launch queued and never saw acked (see
+// requeueAdoptedOpening; opening may be nil), then the agent's undelivered
+// messages, are queued before the identity takes the key, so nothing a
+// sender routes to the session overtakes them.
+func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation string, opening *openingDelivery) bridgeLaunch {
 	w := s.bridgeWiring()
 	if w == nil {
 		id.setLegacy()
@@ -93,10 +97,18 @@ func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation str
 		s.ReleaseAdoption(id.Name())
 		return bridgeLaunch{}
 	}
+	bl := bridgeLaunch{plan: bridgemod.Plan{Key: key, Launch: launch}, bridged: true, adopted: true, target: target, conversation: conversation}
+	if opening != nil {
+		if bl = s.requeueAdoptedOpening(id, bl, opening); !bl.bridged {
+			s.ReleaseAdoption(id.Name())
+			return bl
+		}
+	}
+	bl.carried = s.carryMail(w.hub, id, target)
 	id.setBridge(target)
 	// The identity holds the key now.
 	s.ReleaseAdoption(id.Name())
-	return bridgeLaunch{plan: bridgemod.Plan{Key: key, Launch: launch}, bridged: true, adopted: true, target: target, conversation: conversation}
+	return bl
 }
 
 // bridgeTarget returns the generation of agent name's live launch, if it

@@ -125,12 +125,19 @@ func (s *Supervisor) BridgeStatus(name string) agent.BridgeStatus {
 }
 
 // BridgeRouter routes agent names to their live bridges; nil without a hub.
+// With an outbox (see SetOutbox) its delivers are durable.
 func (s *Supervisor) BridgeRouter() *bridge.Router {
 	w := s.bridgeWiring()
 	if w == nil {
 		return nil
 	}
-	return &bridge.Router{Hub: w.hub, Targets: s.bridgeTarget}
+	router := &bridge.Router{Hub: w.hub, Targets: s.bridgeTarget}
+	s.mail.mu.Lock()
+	if s.mail.store != nil {
+		router.Queue = s.QueueDeliver
+	}
+	s.mail.mu.Unlock()
+	return router
 }
 
 // BridgeCapable reports whether a claude agent launched now would load the
@@ -239,6 +246,9 @@ type bridgeLaunch struct {
 	// ticket settles with its ack.
 	opening string
 	ticket  *bridge.Ticket
+	// carried counts the undelivered messages earlier launches left that
+	// were queued for this one (see carryMail).
+	carried int
 }
 
 // planBridgeLaunch decides how this launch of id, into conversation, uses
@@ -348,13 +358,14 @@ func briefExceedsArgv(path string) bool {
 // watchBridgeLaunch follows a bridged launch (or adopted session) until its
 // mod has connected, and its opening's ack (see trackOpeningAck). If a
 // launch's mod does not connect within the connect timeout while its
-// opening is still unacked, nothing has run yet: the launch's generation is
-// forgotten, fellBack is set and the session killed, so the supervise loop
-// relaunches the legacy way with the opening on argv. An adopted session is
-// live and is never killed: its mod reconnects on its own backoff and finds
-// the opening still queued. Without an opening to deliver a missing bridge
-// is only logged; call sites fall back to tmux on their own. ctx ends with
-// the launch.
+// opening is still unacked, or with messages carried over for it, nothing
+// has run yet: the launch's generation is forgotten, fellBack is set and the
+// session killed, so the supervise loop relaunches the legacy way with the
+// opening on argv and the messages pasted. An adopted session is live and
+// is never killed: its mod reconnects on its own backoff and finds the
+// opening still queued. With nothing to deliver a missing bridge is only
+// logged; call sites fall back to tmux on their own. ctx ends with the
+// launch.
 func (s *Supervisor) watchBridgeLaunch(ctx context.Context, id *procIdentity, bl bridgeLaunch, opening *openingDelivery, tmuxPath string, fellBack *atomic.Bool) {
 	w := s.bridgeWiring()
 	if w == nil {
@@ -372,7 +383,7 @@ func (s *Supervisor) watchBridgeLaunch(ctx context.Context, id *procIdentity, bl
 	case err == nil || ctx.Err() != nil:
 	case bl.adopted:
 		fmt.Fprintf(os.Stderr, "[%s] warning: the adopted session's leo bridge has not reconnected after %s; waiting for it\n", id.Name(), w.connectTimeout)
-	case bl.ticket == nil || isAcked(bl.ticket):
+	case (bl.ticket == nil || isAcked(bl.ticket)) && bl.carried == 0:
 		fmt.Fprintf(os.Stderr, "[%s] warning: leo bridge not connected after %s; messages fall back to tmux\n", id.Name(), w.connectTimeout)
 	default:
 		fmt.Fprintf(os.Stderr, "[%s] leo bridge not connected after %s\n", id.Name(), w.connectTimeout)

@@ -54,7 +54,7 @@ func TestAdoptedKeysAreReservedAheadOfFreshLaunches(t *testing.T) {
 	}
 
 	beta := addIdentity(sv, "beta")
-	bl := sv.adoptBridge(beta, "alpha", "launch-old", "")
+	bl := sv.adoptBridge(beta, "alpha", "launch-old", "", nil)
 	if !bl.bridged || beta.BridgeKey() != "alpha" {
 		t.Fatalf("beta's adoption: %+v, key %q", bl, beta.BridgeKey())
 	}
@@ -99,7 +99,7 @@ func TestAdoptionNeverTakesAKeyAnotherAgentHolds(t *testing.T) {
 	}
 
 	beta := addIdentity(sv, "beta")
-	if bl := sv.adoptBridge(beta, "alpha", "launch-old", ""); bl.bridged || beta.BridgeKey() != "" {
+	if bl := sv.adoptBridge(beta, "alpha", "launch-old", "", nil); bl.bridged || beta.BridgeKey() != "" {
 		t.Fatalf("beta adopted the key alpha holds: %+v", bl)
 	}
 	if target, ok := sv.BridgeRouter().Route("alpha"); !ok || target != own {

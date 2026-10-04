@@ -260,7 +260,7 @@ func (s *Supervisor) queueOpening(id *procIdentity, bl bridgeLaunch, opening *op
 		scope = bl.plan.Launch
 	}
 	cmd := bridge.Opening(scope, opening.text)
-	bl, ok := s.enqueueOpening(id, bl, cmd)
+	bl, ok := s.enqueueOpening(id, bl, cmd, true)
 	if ok && opening.record != nil {
 		opening.record.queued(bl.plan.Launch, cmd.ID)
 	}
@@ -279,13 +279,21 @@ func (s *Supervisor) requeueAdoptedOpening(id *procIdentity, bl bridgeLaunch, op
 	}
 	cmd := bridge.Deliver(opening.text, true)
 	cmd.ID = q.id
-	bl, _ = s.enqueueOpening(id, bl, cmd)
+	bl, _ = s.enqueueOpening(id, bl, cmd, false)
 	return bl
 }
 
-func (s *Supervisor) enqueueOpening(id *procIdentity, bl bridgeLaunch, cmd bridge.Command) (bridgeLaunch, bool) {
+// enqueueOpening queues cmd, bl's opening, on bl's generation: as a gate
+// for a launch, which a refusal abandons, so nothing behind the opening can
+// have run there (see bridge.Hub.EnqueueGate); plainly for an adopted
+// session, which is never abandoned.
+func (s *Supervisor) enqueueOpening(id *procIdentity, bl bridgeLaunch, cmd bridge.Command, gate bool) (bridgeLaunch, bool) {
 	w := s.bridgeWiring()
-	ticket, err := w.hub.EnqueueTo(bl.target, cmd)
+	enqueue := w.hub.EnqueueTo
+	if gate {
+		enqueue = w.hub.EnqueueGate
+	}
+	ticket, err := enqueue(bl.target, cmd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] queueing the opening prompt on the bridge: %v; launching without the bridge\n", id.Name(), err)
 		w.hub.ForgetGen(bl.target)

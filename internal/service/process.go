@@ -215,6 +215,9 @@ type Supervisor struct {
 	// is about to adopt to the agent adopting it — see ReserveAdoptions.
 	// Guarded by mu.
 	adoptionKeys map[string]string
+	// mail keeps agent delivers until their claude takes them — see
+	// SetOutbox.
+	mail agentMail
 }
 
 // NewSupervisor creates a new process supervisor. The context parameter is
@@ -618,17 +621,31 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 		return fmt.Errorf("agent %q has no identity handle", oldName)
 	}
 
+	// The agent's undelivered messages move with the name, under the mail
+	// lock, so a deliver settling meanwhile clears them under one name or
+	// the other, never neither.
+	s.mail.mu.Lock()
+	if err := s.renameMailLocked(oldName, newName); err != nil {
+		s.mail.mu.Unlock()
+		s.mu.Unlock()
+		return fmt.Errorf("moving undelivered messages: %w", err)
+	}
 	// Hold the identity write-lock across the tmux rename + name swap so the
 	// watcher's RLock observes either (old,old) or (new,new), never a crossed
 	// state. tmux rename-session keeps the running pane alive.
 	id.mu.Lock()
 	if err := tmuxRenameSession(s.tmuxPath, agent.SessionName(oldName), agent.SessionName(newName)); err != nil {
 		id.mu.Unlock()
+		if undoErr := s.renameMailLocked(newName, oldName); undoErr != nil {
+			fmt.Fprintf(os.Stderr, "[%s] warning: undelivered messages left under %s after a failed rename: %v\n", oldName, newName, undoErr)
+		}
+		s.mail.mu.Unlock()
 		s.mu.Unlock()
 		return fmt.Errorf("renaming tmux session: %w", err)
 	}
 	id.renameLocked(newName)
 	id.mu.Unlock()
+	s.mail.mu.Unlock()
 	s.renameAdoptionLocked(oldName, newName)
 
 	st.Name = newName
@@ -1194,6 +1211,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// settleArgvOpening finishes watching the transcript for an
 			// opening this launch carried on argv; see watchTranscript.
 			settleArgvOpening = func() {}
+			// settleMail waits out a legacy launch's paste of the messages
+			// earlier launches left undelivered; see pasteMail.
+			settleMail = func() {}
 		)
 
 		startTime := time.Now()
@@ -1220,14 +1240,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			// token it was launched with, which only its session
 			// environment still knows.
 			if key, launch, ok := tmuxSessionBridge(tmuxPath, sessionName); ok && harnessName == "claude" {
-				bl = sv.adoptBridge(id, key, launch, conversationArg(currentArgs))
-				if bl.bridged {
-					// The previous daemon may have gone before the mod acked
-					// the opening its launch queued. Queued again under its
-					// id, it either runs now or, if it already ran, is only
-					// re-acked.
-					bl = sv.requeueAdoptedOpening(id, bl, opening)
-				}
+				// The previous daemon may have gone before the mod acked
+				// the opening its launch queued, or messages queued for
+				// the agent. Queued again under their ids, each either runs
+				// now or, if it already ran, is only re-acked.
+				bl = sv.adoptBridge(id, key, launch, conversationArg(currentArgs), opening)
 			} else {
 				id.setLegacy()
 				sv.ReleaseAdoption(name)
@@ -1240,6 +1257,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				// opening on argv; that daemon may have died before it saw
 				// the opening run.
 				settleArgvOpening = opening.watchTranscript(launchCtx, spec.WorkDir, conversationArg(currentArgs))
+				settleMail = sv.pasteMail(launchCtx, id, tmuxPath, nil)
 			}
 			// Attention does not survive a daemon restart; an agent launched
 			// with hooks is unknown until its next hook fires, which carries
@@ -1286,6 +1304,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			bl = sv.planBridgeLaunch(ctx, binPath, harnessName, id, forceLegacy, conversation)
 			if bl.bridged && opening.bridgeable(conversation) {
 				bl, _ = sv.queueOpening(id, bl, opening)
+			}
+			// What earlier launches left undelivered queues behind the
+			// opening, before the mod can connect and anyone route to it.
+			if bl.bridged {
+				bl.carried = sv.carryMail(sv.bridgeWiring().hub, id, bl.target)
 			}
 			launchArgs, launchSpec, pasteBrief := bridgeLaunchSpec(bl, launchArgs, spec, opening.has(conversation))
 			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, launchSpec, os.Getenv("PATH"))
@@ -1352,11 +1375,20 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			if bl.bridged {
 				go sv.watchBridgeLaunch(launchCtx, id, bl, opening, tmuxPath, &fellBack)
 			}
+			var pasteOpening func()
 			switch {
 			case pasteBrief != "":
-				go pasteOversizedOpening(launchCtx, tmuxPath, id, pasteBrief, opening, conversation)
+				pasteOpening = func() { pasteOversizedOpening(launchCtx, tmuxPath, id, pasteBrief, opening, conversation) }
 			case launchSpec.OpeningBriefPath != "":
 				settleArgvOpening = opening.watchTranscript(launchCtx, spec.WorkDir, conversation)
+			}
+			switch {
+			case !bl.bridged:
+				// Without the bridge, what earlier launches left undelivered
+				// is pasted, after the opening.
+				settleMail = sv.pasteMail(launchCtx, id, tmuxPath, pasteOpening)
+			case pasteOpening != nil:
+				go pasteOpening()
 			}
 			if spec.Kind == harness.KindAgent {
 				if hooked {
@@ -1427,8 +1459,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 
 		// The launch is over: what it delivered is settled before the next
 		// launch decides what to deliver, and nothing it left queued may
-		// reach the next one.
+		// reach the next one but by the outbox.
 		settleArgvOpening()
+		settleMail()
 		bridgeConnected := sv.endBridgedLaunch(bl, opening)
 
 		// The bridged launch's mod never connected (or refused the opening),

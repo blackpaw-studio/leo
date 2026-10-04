@@ -143,6 +143,9 @@ type bridgeTestOpts struct {
 	home string
 	// adoptions are reserved before the loop starts, as RestoreAgents does.
 	adoptions []string
+	// isDurable keeps agent delivers in an outbox under home, as the
+	// daemon does (see mailStore).
+	isDurable bool
 }
 
 // startBridged runs superviseProcess for spec on a supervisor wired to a
@@ -174,6 +177,9 @@ func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Du
 		Log:        &bytes.Buffer{},
 	})
 	sv.SetBridge(hub, launcher, connectTimeout)
+	if o.isDurable {
+		sv.SetOutbox(mailStore(o.home))
+	}
 	if o.adoptions != nil {
 		sv.ReserveAdoptions(o.adoptions)
 	}

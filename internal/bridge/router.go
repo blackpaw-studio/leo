@@ -8,7 +8,26 @@ type Router struct {
 	Hub *Hub
 	// Targets maps an agent name to its live launch's generation.
 	Targets func(agent string) (target Target, ok bool)
+	// Queue, if set, queues a deliver from agent from ("" for none) for
+	// agent's generation t durably: kept until the mod acks it, and carried
+	// over to the agent's next launch should t end first. Without it a
+	// deliver is queued in the hub alone (see Deliver).
+	Queue func(agent string, t Target, cmd Command, from string) (*Ticket, error)
 }
+
+// Deliver queues cmd, a deliver from agent from, for agent's generation t
+// (from Route). The ticket settles with the mod's ack.
+func (r *Router) Deliver(agent string, t Target, cmd Command, from string) (*Ticket, error) {
+	if r.Queue != nil {
+		return r.Queue(agent, t, cmd, from)
+	}
+	return r.Hub.EnqueueTo(t, cmd)
+}
+
+// IsDurable reports whether Deliver keeps a deliver past its generation:
+// one whose generation ends (ErrForgotten) or whose daemon closes the hub
+// (ErrClosed) first is not lost but waits for the agent's next launch.
+func (r *Router) IsDurable() bool { return r != nil && r.Queue != nil }
 
 // Key returns agent's bridge key whether or not its bridge is connected.
 func (r *Router) Key(agent string) (string, bool) {
