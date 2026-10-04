@@ -8,6 +8,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -58,7 +59,11 @@ func sweepIdleAgents(ctx context.Context, sup *Supervisor, mgr *agent.Manager, t
 		if !ok {
 			continue // no tmux session metadata — leave it alone
 		}
-		if shouldSuspend(now, act, idle) {
+		var bst *bridge.State
+		if st, live := sup.BridgeState(name); live {
+			bst = &st
+		}
+		if shouldSuspend(now, act, bst, idle) {
 			if err := mgr.Stop(name, agent.StopOptions{WakeOnMessage: true}); err != nil {
 				fmt.Fprintf(os.Stderr, "idle-sweep: stop %q failed: %v\n", name, err)
 			} else {
@@ -69,13 +74,27 @@ func sweepIdleAgents(ctx context.Context, sup *Supervisor, mgr *agent.Manager, t
 }
 
 // shouldSuspend reports whether an agent should be suspended now: idle-suspend
-// must be enabled, no client attached, and the session inactive for at least the
-// idle interval.
-func shouldSuspend(now time.Time, act tmux.SessionActivity, idle time.Duration) bool {
+// must be enabled, no client attached, and the agent idle for at least the
+// idle interval. bst is the agent's connected bridge, if any; then idle means
+// no turn running and none finished (or, before any turn, the mod connected)
+// for the interval, whatever the pane does — a claude TUI redraws without
+// working and sits silent through a long tool call. Without one, idle is the
+// tmux session's inactivity.
+func shouldSuspend(now time.Time, act tmux.SessionActivity, bst *bridge.State, idle time.Duration) bool {
 	if idle <= 0 || act.Attached > 0 {
 		return false
 	}
-	return now.Sub(act.LastActivity) >= idle
+	if bst == nil {
+		return now.Sub(act.LastActivity) >= idle
+	}
+	if bst.Busy {
+		return false
+	}
+	since := bst.LastTurnComplete
+	if since.IsZero() {
+		since = bst.ConnectedAt
+	}
+	return now.Sub(since) >= idle
 }
 
 // parseIdle parses a stored idle-interval string. Empty, invalid, or

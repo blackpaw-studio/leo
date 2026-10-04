@@ -14,6 +14,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -88,6 +89,17 @@ func (s *Supervisor) BridgeKeyForSession(session string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// BridgeState returns name's bridge state while its mod is connected.
+func (s *Supervisor) BridgeState(name string) (bridge.State, bool) {
+	w := s.bridgeWiring()
+	key, ok := s.BridgeKey(name)
+	if w == nil || !ok {
+		return bridge.State{}, false
+	}
+	st := w.hub.State(key)
+	return st, st.Connected
 }
 
 // BridgeRouter routes agent names to their live bridges; nil without a hub.
@@ -322,4 +334,25 @@ func wireBridge(sv *Supervisor, homePath, version string, probe bridgemod.Versio
 	})
 	sv.SetBridge(hub, launcher, 0)
 	return hub, launcher
+}
+
+// taskInjector delivers a persistent task's prompt to the agent in a tmux
+// session. An agent whose leo bridge is connected gets it as the user's own
+// prompt, verbatim, waiting under the invocation's ctx for the mod to accept
+// it (a busy agent accepts once its turn ends). A bridge error — rejection,
+// a lost bridge, the deadline — is returned, never retried by paste: an
+// unaccepted deliver stays queued and would arrive twice. Anything else is
+// pasted the legacy way.
+func taskInjector(hub *bridge.Hub, route func(session string) (string, bool), paste func(ctx context.Context, session, prompt string) error) func(ctx context.Context, session, prompt string) (*harness.Result, error) {
+	return func(ctx context.Context, session, prompt string) (*harness.Result, error) {
+		if hub != nil && route != nil {
+			if key, ok := route(session); ok {
+				if hub.Connected(key) {
+					return nil, hub.Send(ctx, key, bridge.Deliver(prompt, true))
+				}
+				fmt.Fprintf(os.Stderr, "bridge: %s not connected; pasting the task prompt into %s\n", key, session)
+			}
+		}
+		return nil, paste(ctx, session, prompt)
+	}
 }
