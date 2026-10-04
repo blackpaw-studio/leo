@@ -271,6 +271,61 @@ func TestBridgedOpeningFallsBackToLegacyWhenTheModNeverConnects(t *testing.T) {
 	}
 }
 
+// The bridged claude may already have written its --session-id transcript
+// (startup hook output, the mod's own log lines), and claude refuses a
+// --session-id whose transcript exists. The legacy relaunch then resumes
+// that session instead of crash-looping into a counted restart.
+func TestBridgeFallbackResumesASessionTheBridgedLaunchWrote(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		written bool
+		want    string
+	}{
+		{"transcript written", true, "'--resume' 's-1'"},
+		{"no transcript", false, "'--session-id' 's-1'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := bridgedSessionWritten
+			var asked []string
+			var mu sync.Mutex
+			bridgedSessionWritten = func(cwd, id string) bool {
+				mu.Lock()
+				asked = append(asked, cwd+"|"+id)
+				mu.Unlock()
+				return tc.written
+			}
+			t.Cleanup(func() { bridgedSessionWritten = orig })
+			tmuxPath, logPath := statefulTmux(t, "")
+			spec := claudeSpec(t, "alpha")
+			spec.OpeningBriefPath = writeBrief(t, "the opening")
+			f := startBridged(t, tmuxPath, "2.1.289", 50*time.Millisecond, spec)
+
+			lines := waitForNewSessions(t, logPath, 2)
+			if !strings.Contains(lines[1], tc.want) || strings.Count(lines[1], "'s-1'") != 1 {
+				t.Fatalf("legacy relaunch should carry %s once:\n%s", tc.want, lines[1])
+			}
+			mu.Lock()
+			gotAsked := append([]string(nil), asked...)
+			mu.Unlock()
+			if len(gotAsked) == 0 || gotAsked[0] != spec.WorkDir+"|s-1" {
+				t.Fatalf("transcript lookups = %v, want the workspace and s-1", gotAsked)
+			}
+			f.sv.mu.RLock()
+			idn := f.sv.identities["alpha"]
+			f.sv.mu.RUnlock()
+			if args := strings.Join(idn.Args(), " "); !strings.Contains(args, strings.ReplaceAll(tc.want, "'", "")) {
+				t.Fatalf("stored args %q do not carry %s", args, tc.want)
+			}
+			f.sv.mu.RLock()
+			restarts := f.sv.states["alpha"].Restarts
+			f.sv.mu.RUnlock()
+			if restarts != 0 {
+				t.Fatalf("fallback counted %d restarts, want 0", restarts)
+			}
+		})
+	}
+}
+
 // A bridge that connects in time keeps the bridged launch.
 func TestBridgedOpeningKeepsALaunchWhoseModConnects(t *testing.T) {
 	tmuxPath, logPath := statefulTmux(t, "")

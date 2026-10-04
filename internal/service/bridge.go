@@ -18,6 +18,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
+	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -257,6 +258,41 @@ func bridgeLaunchSpec(bl bridgeLaunch, args []string, spec ProcessSpec, openingH
 		pasteBrief = path
 	}
 	return launchArgs, launchSpec, pasteBrief
+}
+
+// bridgedSessionWritten reports whether claude has written the transcript of
+// session id for workspace cwd. A test seam.
+var bridgedSessionWritten = func(cwd, id string) bool {
+	path, err := session.JSONLPath(cwd, id)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
+	return err == nil
+}
+
+// argsAfterBridgeFallback returns the args for the legacy relaunch that
+// follows a bridged launch whose mod never connected. That claude ran under
+// --session-id <id> and may already have written the session's transcript
+// (startup hook output, the mod's own log lines); claude refuses a
+// --session-id whose transcript exists, so the relaunch resumes it instead
+// of quick-exiting into a counted restart.
+func argsAfterBridgeFallback(args []string, cwd string) []string {
+	id := sessionIDArg(args)
+	if id == "" || !bridgedSessionWritten(cwd, id) {
+		return args
+	}
+	return agent.ResumeArgs(args, id)
+}
+
+// sessionIDArg returns the value of args' --session-id, or "".
+func sessionIDArg(args []string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--session-id" {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 // briefExceedsArgv reports whether the brief at path is too large for a
