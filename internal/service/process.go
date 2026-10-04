@@ -20,6 +20,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
@@ -884,7 +885,12 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
-	srv := daemon.New(sockPath, configPath, supervisor)
+	// The claude mod bridge hub: served on the socket's /api/bridge/*
+	// routes and reachable through srv.Bridge() by the call sites that
+	// deliver through it. Subscribers (consult turn state, idle-suspend)
+	// are added here as those call sites move onto the bridge.
+	bridgeHub := bridge.New(bridge.Options{})
+	srv := daemon.New(sockPath, configPath, supervisor, daemon.WithBridge(bridgeHub))
 	srv.SetParentContext(ctx)
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.
