@@ -378,10 +378,13 @@ func TestFailedTokenPersistLaunchesUnhooked(t *testing.T) {
 	if strings.Contains(logged, "--hooked") || strings.Contains(logged, "LEO_ATTENTION_TOKEN") {
 		t.Fatalf("launch hooked despite the failed persist:\n%s", logged)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if att, ok := f.store.Get("recordless"); ok {
-		t.Fatalf("attention = %+v, want absent", att)
-	}
+	// The spawn preset unknown (the driver supports hooks); the launch drops
+	// it once new-session returns, which a loaded machine can delay well
+	// past the log line, so wait for the drop rather than guess its timing.
+	waitFor(t, "the unhooked launch to drop the preset attention", func() bool {
+		_, ok := f.store.Get("recordless")
+		return !ok
+	})
 	_ = f.sv.StopAgent("recordless", false)
 }
 
