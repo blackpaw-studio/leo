@@ -140,9 +140,8 @@ func withHome(home string) func(*bridgeTestOpts) {
 
 // tmuxCalls counts the logged tmux calls of verb.
 func tmuxCalls(logPath, verb string) int {
-	b, _ := os.ReadFile(logPath)
 	n := 0
-	for _, line := range strings.Split(string(b), "\n") {
+	for _, line := range strings.Split(loggedLines(logPath), "\n") {
 		if strings.Contains(" "+line+" ", " "+verb+" ") {
 			n++
 		}

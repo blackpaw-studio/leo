@@ -101,14 +101,14 @@ func waitForLog(t *testing.T, logPath, want string) string {
 	t.Helper()
 	deadline := time.After(5 * time.Second)
 	for {
-		b, _ := os.ReadFile(logPath)
-		logged := string(b)
+		logged := loggedLines(logPath)
 		if strings.Contains(logged, want) {
 			return logged
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("%q not seen within deadline; tmux log:\n%s", want, logged)
+			b, _ := os.ReadFile(logPath)
+			t.Fatalf("%q not seen within deadline; tmux log:\n%s", want, b)
 		case <-time.After(20 * time.Millisecond):
 		}
 	}

@@ -92,8 +92,7 @@ func TestSuperviseProcessUsesHarnessBinary(t *testing.T) {
 	var logged string
 	deadline := time.After(5 * time.Second)
 	for {
-		b, _ := os.ReadFile(logPath)
-		logged = string(b)
+		logged = loggedLines(logPath)
 		if strings.Contains(logged, "new-session") {
 			break
 		}

@@ -87,11 +87,21 @@ func sessionEnv(t *testing.T, tmuxPath, name string) string {
 	return ""
 }
 
+// loggedLines returns logPath's complete lines: everything up to its last
+// newline. The stubs log with echo, which writes a long line in chunks (1
+// KiB in bash), so a read can land mid-line; that tail is not a call yet.
+func loggedLines(logPath string) string {
+	b, _ := os.ReadFile(logPath)
+	if i := bytes.LastIndexByte(b, '\n'); i >= 0 {
+		return string(b[:i+1])
+	}
+	return ""
+}
+
 // newSessionLines returns the logged tmux new-session invocations.
 func newSessionLines(logPath string) []string {
-	b, _ := os.ReadFile(logPath)
 	var out []string
-	for _, line := range strings.Split(string(b), "\n") {
+	for _, line := range strings.Split(loggedLines(logPath), "\n") {
 		if strings.Contains(line, " new-session ") {
 			out = append(out, line)
 		}
