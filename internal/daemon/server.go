@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
@@ -103,6 +104,19 @@ type Server struct {
 	observeClock      httpapi.Clock
 	leoVersion        string
 	parentContext     context.Context
+
+	// bridge is the claude mod bridge hub served on /api/bridge/*. Injected
+	// with WithBridge so the service can share it with the call sites that
+	// deliver through it; New builds a private one otherwise.
+	bridge *bridge.Hub
+}
+
+// Option configures a Server at construction.
+type Option func(*Server)
+
+// WithBridge serves hub on the bridge routes instead of a private one.
+func WithBridge(hub *bridge.Hub) Option {
+	return func(s *Server) { s.bridge = hub }
 }
 
 // SetObservability wires the observability event bus, run log, activity
@@ -135,7 +149,7 @@ func (s *Server) SetSurfacedFiles(store *observe.SurfacedFileStore) {
 func (s *Server) ConfigWriter() *config.Writer { return s.configWriter }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
-func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
+func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Option) *Server {
 	leoPath, err := exec.LookPath("leo")
 	if err != nil {
 		leoPath = "leo"
@@ -149,6 +163,12 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 		router:        newSessionRouter(),
 		parentContext: context.Background(),
 		configWriter:  config.NewWriter(),
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if s.bridge == nil {
+		s.bridge = bridge.New(bridge.Options{})
 	}
 
 	// The injector is intentionally NOT wired here: deciding how to inject
@@ -209,6 +229,12 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
 	mux.HandleFunc("GET /agents/{name}/attach-spec", s.handleAgentAttachSpec)
+
+	// Claude mod bridge: the mod's `leo bridge` process holds the command
+	// stream open and posts acks/events back. The 0600 socket is the auth,
+	// as for every route on this mux.
+	mux.HandleFunc("GET /api/bridge/{agent}/stream", s.handleBridgeStream)
+	mux.HandleFunc("POST /api/bridge/{agent}/report", s.handleBridgeReport)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -434,6 +460,10 @@ func (s *Server) Shutdown() error {
 	if s.router != nil {
 		s.router.Stop()
 	}
+
+	// End bridge streams first: an open stream is an active request, which
+	// httpServer.Shutdown would otherwise wait out for its full grace.
+	s.bridge.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
