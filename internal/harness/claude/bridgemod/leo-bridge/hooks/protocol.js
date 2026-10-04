@@ -3,9 +3,10 @@
 
 export const ACKED_CAP = 500
 // Each claude process keeps the ids it acked under ACKED_KEY_PREFIX + its
-// bridge key. An entry left unwritten this long belongs to a process long
-// gone (a dispatch killed before its session ended); the next session.start
-// of any bridged claude prunes it, so the store does not grow without end.
+// bridge key, restamped as it starts and after every turn. An entry left
+// untouched this long belongs to a process long gone (a dispatch killed
+// before its session ended); the next session.start of any bridged claude
+// prunes it, so the store does not grow without end.
 export const ACKED_KEY_PREFIX = 'acked:'
 export const ACKED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 // Dispatch bridge keys start with this (consult.DispatchBridgeKey). A
@@ -16,7 +17,10 @@ export const DISPATCH_KEY_PREFIX = 'dispatch.'
 // few a reload can catch in flight matter.
 export const INFLIGHT_CAP = 50
 export const BACKOFF_INITIAL_MS = 1000
-export const BACKOFF_MAX_MS = 30_000
+// Kept short: a daemon restart cuts the stream, and the restarted daemon
+// waits on the mod to reconnect for anything it queued meanwhile. A failed
+// connect costs one short-lived `leo bridge` child.
+export const BACKOFF_MAX_MS = 5000
 export const BACKOFF_RESET_AFTER_MS = 60_000
 // Waits before each retry of a report the daemon did not take, backing off
 // to about a minute in all: long enough to ride out a daemon restart. Acks
@@ -143,6 +147,16 @@ export function ackedEntry(ids, at, inflight = null) {
  */
 export function withAcked(value, id, now) {
   return ackedEntry(appendAcked(ackedFromStore(value), id), now, inflightOf(value))
+}
+
+/**
+ * The entry restamped now, holding what it held: a live process touches its
+ * entry so another's prune never takes it for one long gone.
+ * @param {unknown} value the entry as stored
+ * @param {number} now
+ */
+export function touchedEntry(value, now) {
+  return ackedEntry(ackedFromStore(value), now, inflightOf(value))
 }
 
 /**

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { MAX_REPORT_TEXT_CHARS, REPORT_RETRY_DELAYS_MS, reportText } from '../hooks/protocol.js'
-import { advance, AGENT, BIN, events, Feed, setup, start } from './harness.ts'
+import { advance, AGENT, BIN, events, Feed, LAUNCH, REPORT_ARGV, setup, start } from './harness.ts'
 
 // leo sets LEO_BRIDGE_AGENT to the bridge key it routes by: the agent name
 // for agents, a dispatch-unique key for dispatches. LEO_PROCESS_NAME is the
@@ -9,15 +9,20 @@ test('the bridge key comes from LEO_BRIDGE_AGENT, not LEO_PROCESS_NAME', async (
   const feed = new Feed()
   const h = setup(on, {
     feeds: [feed],
-    env: { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: 'dispatch.d-0123456789ab', LEO_PROCESS_NAME: 'leo-other' },
+    env: {
+      LEO_BRIDGE_BIN: BIN,
+      LEO_BRIDGE_AGENT: 'dispatch.d-0123456789ab',
+      LEO_BRIDGE_LAUNCH: LAUNCH,
+      LEO_PROCESS_NAME: 'leo-other',
+    },
   })
   await start($, h)
-  expect(h.spawns).toEqual([[BIN, 'bridge', '--agent', 'dispatch.d-0123456789ab']])
-  expect(h.reportArgv[0]).toEqual([BIN, 'bridge', 'report', '--agent', 'dispatch.d-0123456789ab'])
+  expect(h.spawns).toEqual([[BIN, 'bridge', '--agent', 'dispatch.d-0123456789ab', '--launch', LAUNCH]])
+  expect(h.reportArgv[0]).toEqual([BIN, 'bridge', 'report', '--agent', 'dispatch.d-0123456789ab', '--launch', LAUNCH])
 })
 
 test('LEO_PROCESS_NAME alone leaves the bridge disabled', async ($, on) => {
-  const h = setup(on, { env: { LEO_BRIDGE_BIN: BIN, LEO_PROCESS_NAME: AGENT } })
+  const h = setup(on, { env: { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_LAUNCH: LAUNCH, LEO_PROCESS_NAME: AGENT } })
   await start($, h)
   expect(h.spawns).toEqual([])
   expect(h.logs.length).toBe(1)
@@ -31,7 +36,7 @@ test('reports travel on stdin; argv carries no payload', async ($, on) => {
   await start($, h)
   await $.turn.start({ text: 'x'.repeat(200_000), turnId: 't1' })
   await h.settle()
-  for (const argv of h.reportArgv) expect(argv).toEqual([BIN, 'bridge', 'report', '--agent', AGENT])
+  for (const argv of h.reportArgv) expect(argv).toEqual(REPORT_ARGV)
   for (const stdin of h.reportStdin) expect(typeof stdin).toBe('string')
   expect(JSON.parse(h.reportStdin[0]!)).toMatchObject({ type: 'hello' })
 })

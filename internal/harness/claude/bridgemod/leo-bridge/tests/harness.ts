@@ -6,6 +6,10 @@ export const BIN = '/opt/leo/bin/leo'
 export const AGENT = 'worker'
 export const LAUNCH = 'launch-1'
 export const ENV = { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: AGENT, LEO_BRIDGE_LAUNCH: LAUNCH }
+// What `leo bridge` and `leo bridge report` are spawned with: the key and the
+// launch, so the daemon can refuse a launch that is not the key's current one.
+export const STREAM_ARGV = [BIN, 'bridge', '--agent', AGENT, '--launch', LAUNCH]
+export const REPORT_ARGV = [BIN, 'bridge', 'report', '--agent', AGENT, '--launch', LAUNCH]
 
 type Chunk = { stream: 'stdout' | 'stderr'; text: string }
 

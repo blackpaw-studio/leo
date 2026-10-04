@@ -1,8 +1,11 @@
 // leo-bridge: runs inside Claude Code. It streams commands from the leo daemon
-// (`leo bridge --agent <key>`, one JSON command per stdout line), executes
-// them in order, and reports acks and turn events back via
-// `leo bridge report --agent <key>` with the JSON report on stdin. It never
-// decides policy. <key> is $LEO_BRIDGE_AGENT, the name leo routes by.
+// (`leo bridge --agent <key> --launch <launch>`, one JSON command per stdout
+// line), executes them in order, and reports acks and turn events back via
+// `leo bridge report --agent <key> --launch <launch>` with the JSON report on
+// stdin. It never decides policy. <key> is $LEO_BRIDGE_AGENT, the name leo
+// routes by; <launch> is $LEO_BRIDGE_LAUNCH, the token leo minted for this
+// claude process, so the daemon can refuse a process that is no longer the
+// key's current one.
 //
 // Mods API rules this file follows: every `$.ns.method` call is spelled in
 // full, event names are string literals, and `$` is only passed to top-level
@@ -29,6 +32,7 @@ import {
   REPORT_RETRY_DELAYS_MS,
   reportText,
   splitLines,
+  touchedEntry,
   withAcked,
   withInflight,
 } from './protocol.js'
@@ -85,15 +89,22 @@ function ackedKey() {
   return ACKED_KEY_PREFIX + config.agent
 }
 
-// launch names this claude process (leo sets it per launch): what an
+// launch names this claude process (leo sets it per launch): the daemon
+// takes a stream or report only from the key's current launch, and what an
 // earlier load of the mod handed the engine is this process's only while
-// it matches. Null when unset, and then nothing counts as handed off.
+// it matches. Null (bridge disabled) unless all three are set.
 async function readConfig($) {
   const bin = await $.env.get('LEO_BRIDGE_BIN')
   const agent = await $.env.get('LEO_BRIDGE_AGENT')
   const launch = await $.env.get('LEO_BRIDGE_LAUNCH')
-  if (!bin || !agent) return null
-  return { bin, agent, launch: launch || null }
+  if (!bin || !agent || !launch) return null
+  return { bin, agent, launch }
+}
+
+// `leo bridge` argv naming this process's key and launch; sub is a
+// subcommand ('report') or none for the stream.
+function bridgeArgv(...sub) {
+  return [config.bin, 'bridge', ...sub, '--agent', config.agent, '--launch', config.launch]
 }
 
 // ---- reports -------------------------------------------------------------
@@ -104,7 +115,7 @@ async function readConfig($) {
 // reports wait behind it and per-process order holds. The JSON goes on stdin:
 // a prompt or answer can be far larger than argv allows.
 async function sendReport($, report) {
-  const argv = [config.bin, 'bridge', 'report', '--agent', config.agent]
+  const argv = bridgeArgv('report')
   const body = JSON.stringify(report)
   for (let attempt = 0; ; attempt++) {
     const why = await tryReport($, argv, body)
@@ -272,8 +283,13 @@ async function rewriteEntry($, change) {
 // Records, before its engine call, that command id is being handed to the
 // engine by this launch.
 async function markHandedOff($, id) {
-  if (config.launch === null) return
   await updateEntry($, (entry, now) => withInflight(entry, config.launch, id, true, now))
+}
+
+// Restamps this process's entry: it is alive, whatever another's prune
+// makes of its age.
+function touchEntry($) {
+  return updateEntry($, touchedEntry)
 }
 
 // Whether an earlier load of the mod in this process handed command id to
@@ -290,7 +306,7 @@ async function wasHandedOff($, id) {
 // Records how command settled in one write: acked if ok, and no longer in
 // flight. One write, so a reload never finds it neither acked nor in flight.
 async function settleCommand($, command, ok) {
-  const isHandedOff = HANDED_OFF_OPS.includes(command.op) && config.launch !== null
+  const isHandedOff = HANDED_OFF_OPS.includes(command.op)
   if (ok) ackedIds = appendAcked(ackedIds ?? [], command.id)
   if (!ok && !isHandedOff) return
   await updateEntry($, (entry, now) => {
@@ -316,9 +332,17 @@ async function pruneAcked($) {
 }
 
 // A dispatch's claude never comes back once its session ends for good, so
-// its acked entry goes with it; an agent's is kept for its next resume.
-async function forgetDispatchAcked($, reason) {
-  if (!config.agent.startsWith(DISPATCH_KEY_PREFIX) || !isFinalSessionEnd(reason)) return
+// its acked entry goes with it; an agent's is kept for its next resume. The
+// delete waits its turn on the store chain, so a rewrite still landing (the
+// last turn's restamp) cannot bring the entry back.
+function forgetDispatchAcked($, reason) {
+  if (!config.agent.startsWith(DISPATCH_KEY_PREFIX) || !isFinalSessionEnd(reason)) return Promise.resolve()
+  const deleted = storeChain.then(() => deleteEntry($))
+  storeChain = deleted
+  return deleted
+}
+
+async function deleteEntry($) {
   try {
     await $.store.delete(ackedKey())
   } catch (err) {
@@ -463,7 +487,7 @@ function receiveLine($, line) {
 // ---- the stream pump -----------------------------------------------------
 
 async function runStream($) {
-  const argv = [config.bin, 'bridge', '--agent', config.agent]
+  const argv = bridgeArgv()
   const stream = $.process.spawn({ argv })
   await enqueueReport($, () => sendHello($))
   let carry = ''
@@ -513,9 +537,10 @@ async function onSessionStart($) {
   isStarted = true
   config = await readConfig($)
   if (config === null) {
-    $.ui.log('LEO_BRIDGE_BIN or LEO_BRIDGE_AGENT is unset; bridge disabled')
+    $.ui.log('LEO_BRIDGE_BIN, LEO_BRIDGE_AGENT or LEO_BRIDGE_LAUNCH is unset; bridge disabled')
     return
   }
+  touchEntry($)
   $.clock.after(0, () => pruneAcked($))
   $.clock.after(0, () => pump($))
 }
@@ -542,7 +567,10 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     markIdle()
-    if (config !== null) enqueueReport($, () => turnCompleteReport($, e))
+    if (config !== null) {
+      enqueueReport($, () => turnCompleteReport($, e))
+      touchEntry($)
+    }
     return next(e)
   })
 

@@ -2,7 +2,7 @@
 // state resets; the engine, its queued prompts and the process live on) and
 // in the gaps between a command and the turn it starts.
 import { expect, test } from 'claude-code/testing'
-import { acks, advance, AGENT, BIN, Feed, LAUNCH, setup, start } from './harness.ts'
+import { acks, advance, AGENT, Feed, LAUNCH, setup, start } from './harness.ts'
 
 const NOW = 1_000_000
 const deliver = (id: string, text: string) => ({ id, op: 'deliver', text, as_user: false })
@@ -162,20 +162,6 @@ test('a deliver is recorded in flight while the engine holds it', async ($, on) 
   release!()
   await h.settle()
   expect(h.store.get('acked:' + AGENT)).toMatchObject({ ids: ['d1'], inflight: { launch: LAUNCH, ids: [] } })
-})
-
-test('without a launch id nothing counts as handed off', async ($, on) => {
-  const feed = new Feed()
-  const entry = { ids: [], at: NOW, inflight: { launch: LAUNCH, ids: ['d1'] } }
-  const h = setup(on, {
-    feeds: [feed],
-    env: { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: AGENT },
-    store: { ['acked:' + AGENT]: entry },
-  })
-  await start($, h)
-  feed.line(deliver('d1', 'go'))
-  await h.settle()
-  expect(h.submits.length).toBe(1)
 })
 
 // An interrupt acks outside the command chain. Its store write must not

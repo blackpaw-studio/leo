@@ -10,6 +10,7 @@ import {
   parseCommand,
   REPORT_RETRY_DELAYS_MS,
   splitLines,
+  touchedEntry,
 } from '../hooks/protocol.js'
 
 // A report the daemon does not take (down, restarting) is retried with
@@ -79,17 +80,26 @@ test('ackedFromStore tolerates junk', () => {
   expect(ackedFromStore(['a', 2, 'b'])).toEqual(['a', 'b'])
 })
 
-test('nextBackoff doubles to a 30s cap and resets after a 60s stream', () => {
+// A daemon restart cuts the stream; once the daemon is back the mod must be
+// on it within a few seconds, so the backoff stays short.
+test('nextBackoff doubles to a 5s cap and resets after a 60s stream', () => {
   const waits: number[] = []
   let backoff = 1000
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 6; i++) {
     const plan = nextBackoff(backoff, 10)
     waits.push(plan.waitMs)
     backoff = plan.next
   }
-  expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000])
-  expect(nextBackoff(30000, 60_001)).toEqual({ waitMs: 1000, next: 2000 })
-  expect(nextBackoff(30000, 60_000).waitMs).toBe(30000)
+  expect(waits).toEqual([1000, 2000, 4000, 5000, 5000, 5000])
+  expect(nextBackoff(5000, 60_001)).toEqual({ waitMs: 1000, next: 2000 })
+  expect(nextBackoff(5000, 60_000).waitMs).toBe(5000)
+})
+
+test('touchedEntry restamps an entry and keeps what it holds', () => {
+  const entry = { ids: ['a'], at: 1, inflight: { launch: 'l', ids: ['b'] } }
+  expect(touchedEntry(entry, 9)).toEqual({ ids: ['a'], at: 9, inflight: { launch: 'l', ids: ['b'] } })
+  expect(touchedEntry(['a'], 9)).toEqual({ ids: ['a'], at: 9 })
+  expect(touchedEntry(undefined, 9)).toEqual({ ids: [], at: 9 })
 })
 
 test('describeExit names the exit code or signal and keeps stderr', () => {

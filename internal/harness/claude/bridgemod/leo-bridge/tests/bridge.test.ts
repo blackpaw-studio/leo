@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { acks, advance, AGENT, BIN, events, Feed, setup, start } from './harness.ts'
+import { acks, advance, AGENT, BIN, events, Feed, LAUNCH, REPORT_ARGV, setup, start, STREAM_ARGV } from './harness.ts'
 
 const deliver = (id: string, text: string, asUser = false) => ({ id, op: 'deliver', text, as_user: asUser })
 
@@ -15,15 +15,27 @@ test('missing env: no stream, no reports, logs once', async ($, on) => {
   expect(h.logs[0]).toContain('LEO_BRIDGE_BIN')
 })
 
+// leo mints a launch token per claude launch; the daemon refuses a stream or
+// report without the key's current one, so without it there is no bridge.
+test('missing launch: the bridge is disabled', async ($, on) => {
+  const h = setup(on, { env: { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: AGENT } })
+  await start($, h)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await h.settle()
+  expect(h.spawns).toEqual([])
+  expect(h.reports).toEqual([])
+  expect(h.logs.length).toBe(1)
+  expect(h.logs[0]).toContain('LEO_BRIDGE_LAUNCH')
+})
+
 test('spawns the bridge stream and says hello before acks', async ($, on) => {
   const feed = new Feed()
   const h = setup(on, { feeds: [feed] })
   await start($, h)
-  expect(h.spawns).toEqual([[BIN, 'bridge', '--agent', AGENT]])
+  expect(h.spawns).toEqual([STREAM_ARGV])
   // A fresh module cannot tell whether a turn runs, so it leaves busy out.
   expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289' })
-  expect(h.reportArgv[0]!.slice(0, 4)).toEqual([BIN, 'bridge', 'report', '--agent'])
-  expect(h.reportArgv[0]![4]).toBe(AGENT)
+  expect(h.reportArgv[0]).toEqual(REPORT_ARGV)
   feed.line(deliver('c1', 'hello'))
   await h.settle()
   expect(h.reports.map((r) => r.type)).toEqual(['hello', 'ack'])
@@ -337,7 +349,7 @@ test('session.end is reported with its reason', async ($, on) => {
 
 // Each mock-clock move costs ~1 s of real time in the kit, so the timing
 // tests get a longer budget; the backoff arithmetic itself (doubling, the
-// 30 s cap) is covered quickly by protocol.test.ts.
+// 5 s cap) is covered quickly by protocol.test.ts.
 test('a dead stream respawns with doubling backoff and says hello again', { timeoutMs: 20_000 }, async ($, on) => {
   const feeds = [new Feed(), new Feed(), new Feed()]
   const h = setup(on, { feeds })
