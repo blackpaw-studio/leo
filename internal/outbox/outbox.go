@@ -38,6 +38,8 @@ var (
 	ErrDuplicate = errors.New("message already queued")
 	// ErrInvalidAgent: the name cannot be a file name in the store.
 	ErrInvalidAgent = errors.New("invalid outbox agent name")
+	// ErrNameHasMessages: a rename's new name has messages queued already.
+	ErrNameHasMessages = errors.New("the new name has undelivered messages queued")
 )
 
 // Entry is one queued message: a bridge deliver and who sent it.
@@ -165,13 +167,17 @@ func (s *Store) Drop(agent string) ([]Entry, error) {
 	return entries, s.writeLocked(agent, nil)
 }
 
-// Rename moves oldAgent's entries to newAgent, which must have none of its
-// own. An agent with nothing queued renames trivially.
+// Rename moves oldAgent's entries to newAgent. It refuses
+// (ErrNameHasMessages) if newAgent has entries of its own, even when
+// oldAgent has none: they were queued for whoever held that name before (a
+// deleted agent whose drop failed), so merging would hand them to the wrong
+// agent, and the agent's own would be mixed with them. They stay for a
+// person to deal with, and the error names their file.
 func (s *Store) Rename(oldAgent, newAgent string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.readLocked(oldAgent)
-	if err != nil || len(entries) == 0 {
+	if err != nil {
 		return err
 	}
 	existing, err := s.readLocked(newAgent)
@@ -179,7 +185,11 @@ func (s *Store) Rename(oldAgent, newAgent string) error {
 		return err
 	}
 	if len(existing) > 0 {
-		return fmt.Errorf("outbox rename %s to %s: %s has %d messages queued", oldAgent, newAgent, newAgent, len(existing))
+		path, _ := s.path(newAgent)
+		return fmt.Errorf("outbox rename %s to %s: %w: %d in %s", oldAgent, newAgent, ErrNameHasMessages, len(existing), path)
+	}
+	if len(entries) == 0 {
+		return nil
 	}
 	if err := s.writeLocked(newAgent, entries); err != nil {
 		return err

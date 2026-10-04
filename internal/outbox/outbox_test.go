@@ -145,6 +145,33 @@ func TestDropAndRename(t *testing.T) {
 	}
 }
 
+// A rename onto a name that already has messages queued is refused, even
+// for an agent with none of its own: they were queued for whoever held the
+// name before (a deleted agent whose drop failed), and must reach neither
+// the renamed agent nor oblivion. They stay where they are.
+func TestARenameNeverInheritsAnotherAgentsMessages(t *testing.T) {
+	s, _ := newStore(t, Options{})
+	if err := s.Append("delta", entry("d1", "for the old delta")); err != nil {
+		t.Fatal(err)
+	}
+	for _, from := range []string{"empty", "busy"} {
+		if from == "busy" {
+			if err := s.Append("busy", entry("b1", "x")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.Rename(from, "delta"); !errors.Is(err, ErrNameHasMessages) {
+			t.Fatalf("renaming %s onto delta: err=%v, want ErrNameHasMessages", from, err)
+		}
+	}
+	if got := ids(mustList(t, s, "delta")); got != "d1" {
+		t.Fatalf("delta holds %q after the refusals", got)
+	}
+	if got := ids(mustList(t, s, "busy")); got != "b1" {
+		t.Fatalf("busy holds %q after the refusal", got)
+	}
+}
+
 // Agent names become file names: anything that could leave the directory
 // is refused.
 func TestAgentNamesCannotEscapeTheDirectory(t *testing.T) {
