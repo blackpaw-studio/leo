@@ -38,7 +38,10 @@ func (f SubscriberFunc) OnBridgeEvent(ev Event) { f(ev) }
 
 // State is a point-in-time copy of one agent's bridge state.
 type State struct {
-	Agent       string
+	Agent string
+	// Gen is the key's current generation (see Target); 0 while the key is
+	// forgotten.
+	Gen         uint64
 	Connected   bool
 	ConnectedAt time.Time // of the current or most recent stream
 
@@ -84,12 +87,17 @@ func (h *Hub) WaitFor(ctx context.Context, agent string, pred func(State) bool) 
 }
 
 func (h *Hub) snapshotLocked(agent string) State {
+	var gen uint64
+	if life, ok := h.lives[agent]; ok && !life.forgotten() {
+		gen = life.gen
+	}
 	st, ok := h.agents[agent]
 	if !ok {
-		return State{Agent: agent}
+		return State{Agent: agent, Gen: gen}
 	}
 	return State{
 		Agent:            agent,
+		Gen:              gen,
 		Connected:        st.conn != nil,
 		ConnectedAt:      st.connectedAt,
 		SessionID:        st.sessionID,

@@ -235,3 +235,64 @@ func TestTombstonesExpire(t *testing.T) {
 		t.Fatalf("Enqueue after the tombstone expired: %v", err)
 	}
 }
+
+// A launch that is over forgets only its own generation: a successor that
+// already reopened the key (a stop and respawn racing the old loop) keeps
+// its state.
+func TestForgetGenSparesASuccessor(t *testing.T) {
+	h := newTestHub(newFakeClock())
+	old, _ := h.Open(agentA)
+	h.Forget(agentA)
+	successor, _ := h.Open(agentA)
+	_ = mustConnect(t, h, agentA)
+
+	if h.ForgetGen(old) {
+		t.Fatal("ForgetGen forgot a generation that was already over")
+	}
+	if h.ForgetGenUnlessConnected(old) {
+		t.Fatal("ForgetGenUnlessConnected forgot a generation that was already over")
+	}
+	if !h.Connected(agentA) {
+		t.Fatal("the successor's stream was dropped")
+	}
+	if h.ForgetGenUnlessConnected(successor) {
+		t.Fatal("ForgetGenUnlessConnected forgot a connected generation")
+	}
+	if !h.ForgetGen(successor) {
+		t.Fatal("ForgetGen refused the current generation")
+	}
+	if _, err := h.Enqueue(agentA, Clear()); !errors.Is(err, ErrForgotten) {
+		t.Fatalf("after ForgetGen: err=%v, want ErrForgotten", err)
+	}
+}
+
+// ConnectedSince is the settle predicate: this generation's mod connected or
+// said hello at or after since, whether or not the stream is up right now.
+func TestStateConnectedSince(t *testing.T) {
+	clock := newFakeClock()
+	h := newTestHub(clock)
+	target, _ := h.Open(agentA)
+	launched := clock.Now()
+	if h.State(agentA).ConnectedSince(target, launched) {
+		t.Fatal("connected before any connection")
+	}
+	clock.Advance(time.Second)
+	s := mustConnect(t, h, agentA)
+	s.Close()
+	st := h.State(agentA)
+	if st.Connected {
+		t.Fatal("stream still connected after Close")
+	}
+	if !st.ConnectedSince(target, launched) {
+		t.Fatalf("a mod that connected after the launch must count: %+v", st)
+	}
+	if st.ConnectedSince(target, clock.Now().Add(time.Second)) {
+		t.Fatal("a connection before since counted")
+	}
+	if st.ConnectedSince(Target{Key: agentA, Gen: target.Gen + 1}, launched) {
+		t.Fatal("another generation's connection counted")
+	}
+	if !st.ConnectedSince(target, time.Time{}) {
+		t.Fatal("the zero since must accept any connection of the generation")
+	}
+}

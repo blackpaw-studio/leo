@@ -124,6 +124,51 @@ func (h *Hub) SendTo(ctx context.Context, t Target, cmd Command) error {
 	return h.await(ctx, t.Key, p)
 }
 
+// ForgetGen forgets t's key, as Forget does, only while t is still its
+// current generation, reporting whether it did. A launch that is over uses
+// it, so a successor that has already reopened the key keeps its state.
+func (h *Hub) ForgetGen(t Target) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.isCurrentLocked(t) {
+		return false
+	}
+	h.forgetLocked(t.Key)
+	return true
+}
+
+// ForgetGenUnlessConnected is ForgetGen that also keeps a connected stream,
+// checked under the same lock (see ForgetUnlessConnected).
+func (h *Hub) ForgetGenUnlessConnected(t Target) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.isCurrentLocked(t) {
+		return false
+	}
+	if st, ok := h.agents[t.Key]; ok && st.conn != nil {
+		return false
+	}
+	h.forgetLocked(t.Key)
+	return true
+}
+
+func (h *Hub) isCurrentLocked(t Target) bool {
+	life, ok := h.lives[t.Key]
+	return ok && !life.forgotten() && life.gen == t.Gen
+}
+
+// ConnectedSince reports whether st is generation t's and its mod connected
+// or said hello at or after since (the zero time accepts any). The stream
+// need not be up right now: a mod between reconnects still has the launch.
+func (st State) ConnectedSince(t Target, since time.Time) bool {
+	if st.Agent != t.Key || st.Gen != t.Gen || st.Gen == 0 {
+		return false
+	}
+	return atOrAfter(st.ConnectedAt, since) || atOrAfter(st.HelloAt, since)
+}
+
+func atOrAfter(at, since time.Time) bool { return !at.IsZero() && !at.Before(since) }
+
 // lifeLocked returns agent's live generation, starting one for a key the
 // hub has never seen, or ErrForgotten while the key is tombstoned.
 func (h *Hub) lifeLocked(agent string) (*keyLife, error) {
