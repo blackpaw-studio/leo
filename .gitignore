@@ -24,3 +24,7 @@ coverage.html
 !.claude/commands/
 .superpowers/
 .worktrees/
+
+# Claude Code mod: typings and tsconfig generated when the mod is loaded
+internal/harness/claude/bridgemod/leo-bridge/.claude-plugin/types/
+internal/harness/claude/bridgemod/leo-bridge/tsconfig.json
