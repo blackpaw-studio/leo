@@ -38,6 +38,12 @@ const (
 	// load handed the engine is still queued only while it matches.
 	EnvLaunch = "LEO_BRIDGE_LAUNCH"
 
+	// StaleLaunchExitCode is how `leo bridge` exits when the daemon refuses
+	// its launch for good (409: a successor holds the key, or nobody adopts
+	// the session): the mod stops reconnecting until it reloads. Mirrored by
+	// STALE_LAUNCH_EXIT_CODE in leo-bridge/hooks/protocol.js.
+	StaleLaunchExitCode = 3
+
 	// PluginDirFlag loads a plugin directory for one claude session.
 	PluginDirFlag = "--plugin-dir"
 

@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { STALE_LAUNCH_EXIT_CODE } from '../hooks/protocol.js'
 import { acks, advance, AGENT, BIN, events, Feed, LAUNCH, REPORT_ARGV, setup, start, STREAM_ARGV } from './harness.ts'
 
 const deliver = (id: string, text: string, asUser = false) => ({ id, op: 'deliver', text, as_user: asUser })
@@ -368,6 +369,35 @@ test('a dead stream respawns with doubling backoff and says hello again', { time
   expect(h.reports.filter((r) => r.type === 'hello').length).toBe(3)
   // One log line per failure streak, naming how the child ended.
   expect(h.logs).toEqual(['bridge stream ended: exit 0; reconnecting'])
+})
+
+// `leo bridge` exits STALE_LAUNCH_EXIT_CODE when the daemon refuses this
+// launch for good (a successor holds the key, or nobody adopts the
+// session): the mod stops reconnecting and reporting until it reloads.
+test('a launch the daemon refuses for good stops the bridge', { timeoutMs: 20_000 }, async ($, on) => {
+  const feeds = [new Feed(), new Feed()]
+  const h = setup(on, { feeds })
+  await start($, h)
+  const sent = h.attempts.length
+  feeds[0]!.end(STALE_LAUNCH_EXIT_CODE)
+  await advance(h, 10_000)
+  expect(h.spawns.length).toBe(1)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' })
+  await h.settle()
+  expect(h.attempts.length).toBe(sent)
+  expect(h.logs.filter((l) => l.includes('no longer')).length).toBe(1)
+})
+
+// Any other failure (the daemon down, or not done adopting this session
+// after a restart) is retried.
+test('a stream that fails otherwise reconnects', { timeoutMs: 20_000 }, async ($, on) => {
+  const feeds = [new Feed(), new Feed()]
+  const h = setup(on, { feeds })
+  await start($, h)
+  feeds[0]!.end(1)
+  await advance(h, 1000)
+  expect(h.spawns.length).toBe(2)
 })
 
 test('backoff resets after a stream that lived over 60s', { timeoutMs: 20_000 }, async ($, on) => {

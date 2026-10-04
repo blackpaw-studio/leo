@@ -32,6 +32,7 @@ import {
   REPORT_RETRY_DELAYS_MS,
   reportText,
   splitLines,
+  STALE_LAUNCH_EXIT_CODE,
   touchedEntry,
   withAcked,
   withInflight,
@@ -53,6 +54,10 @@ const HANDED_OFF_OPS = ['deliver', 'clear']
 // Bridge identity, read from the environment at session.start; null = disabled.
 let config = null
 let isStarted = false
+// Set once the daemon refuses this launch for good (a successor holds the
+// key, or no daemon adopted this session): the mod neither reconnects nor
+// reports until a reload resets it.
+let isDormant = false
 
 // The main loop's running turn id, or null when idle, and who waits for the
 // turn to end. isTurnKnown is false until this module sees a turn start or
@@ -84,6 +89,10 @@ let isReportFailing = false
 
 // The session id the last hello carried (null until the first hello).
 let helloSessionId = null
+
+function isBridging() {
+  return config !== null && !isDormant
+}
 
 function ackedKey() {
   return ACKED_KEY_PREFIX + config.agent
@@ -486,6 +495,8 @@ function receiveLine($, line) {
 
 // ---- the stream pump -----------------------------------------------------
 
+// Resolves with why the stream ended, and whether the daemon refused this
+// launch for good.
 async function runStream($) {
   const argv = bridgeArgv()
   const stream = $.process.spawn({ argv })
@@ -502,7 +513,8 @@ async function runStream($) {
     split.lines.forEach((line) => receiveLine($, line))
   }
   // A partial last line is dropped: the daemon redelivers anything unacked.
-  return describeExit(await stream.result, stderr)
+  const result = await stream.result
+  return { why: describeExit(result, stderr), isStale: result?.code === STALE_LAUNCH_EXIT_CODE }
 }
 
 function streamEnded($, why) {
@@ -517,7 +529,9 @@ async function pump($) {
     const startedAt = await $.clock.now()
     let why = ''
     try {
-      why = await runStream($)
+      const ended = await runStream($)
+      if (ended.isStale) return goDormant($)
+      why = ended.why
     } catch (err) {
       why = errorText(err)
     }
@@ -528,6 +542,11 @@ async function pump($) {
     await $.clock.sleep(plan.waitMs)
     backoff = plan.next
   }
+}
+
+function goDormant($) {
+  isDormant = true
+  $.ui.log('this claude is no longer ' + config.agent + "'s current leo launch; the bridge stays off until the mod reloads")
 }
 
 // ---- hooks ---------------------------------------------------------------
@@ -556,7 +575,7 @@ export function register(on) {
     // turn.start, but a subagent's must never pass for the main loop's.
     if (e.agentId) return next(e)
     markRunning(e.turnId)
-    if (config !== null) {
+    if (isBridging()) {
       enqueueReport($, () => helloIfSessionChanged($))
       const fields = { event_id: eventId('turn.start', e.turnId), prompt: reportText(e.text) }
       enqueueReport($, () => eventReport('turn.start', defined(fields)))
@@ -567,7 +586,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     markIdle()
-    if (config !== null) {
+    if (isBridging()) {
       enqueueReport($, () => turnCompleteReport($, e))
       touchEntry($)
     }
@@ -575,7 +594,9 @@ export function register(on) {
   })
 
   on('session.end', async ($, e, next) => {
-    if (config !== null) {
+    // A dormant process leaves the acked entry alone: a successor under the
+    // same key may be using it.
+    if (isBridging()) {
       // session.end hooks share a 1.5 s budget: wait briefly, then move on.
       const fields = { event_id: eventId('session.end', e.sessionId), reason: e.reason }
       const sent = enqueueReport($, () => eventReport('session.end', defined(fields)))

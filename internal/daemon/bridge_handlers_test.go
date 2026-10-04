@@ -380,3 +380,32 @@ func TestBridgeRefusesAStaleLaunchWithConflict(t *testing.T) {
 	}
 	_ = openStream(t, workDir, hub, bridgeAgent, "launch-successor")
 }
+
+// A key no launch opened may be a surviving session the daemon has not
+// adopted yet: its mod gets 503 (ErrBridgeNotReady) and retries, never a
+// 409 that would make it drop a report or stop. Once the daemon has said
+// which keys it adopts, any other unopened key is a 409.
+func TestBridgeTellsAModAwaitingAdoptionToRetry(t *testing.T) {
+	workDir, hub, _ := startBridgeServer(t)
+	const key = "leo-surviving"
+	expect := func(want error, status string) {
+		t.Helper()
+		err := PostBridgeReport(bridgeTestCtx(t), workDir, key, "launch-old", []byte(`{"type":"event","name":"turn.start"}`))
+		if !errors.Is(err, want) || !strings.Contains(err.Error(), status) {
+			t.Fatalf("report: err=%v, want %v (%s)", err, want, status)
+		}
+		body, err := OpenBridgeStream(bridgeTestCtx(t), workDir, key, "launch-old")
+		if err == nil {
+			body.Close()
+			t.Fatal("OpenBridgeStream connected an unopened key")
+		}
+		if !errors.Is(err, want) {
+			t.Fatalf("stream: err=%v, want %v", err, want)
+		}
+	}
+	expect(ErrBridgeNotReady, "503")
+	hub.AwaitAdoption([]string{key})
+	expect(ErrBridgeNotReady, "503")
+	hub.EndAdoption(key)
+	expect(ErrBridgeStale, "409")
+}

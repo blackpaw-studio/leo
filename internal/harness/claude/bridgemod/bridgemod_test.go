@@ -1,6 +1,7 @@
 package bridgemod
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -403,5 +404,18 @@ func TestMaterializeSweepsStaleTempDirs(t *testing.T) {
 func TestModNameMatchesTheBridgeUnwrap(t *testing.T) {
 	if Name != bridge.ModName {
 		t.Fatalf("bridgemod.Name = %q, bridge.ModName = %q", Name, bridge.ModName)
+	}
+}
+
+// The mod stops reconnecting when `leo bridge` exits StaleLaunchExitCode:
+// both sides must agree on the number.
+func TestTheModKnowsTheStaleLaunchExitCode(t *testing.T) {
+	protocol, err := fs.ReadFile(modFS, root+"/hooks/protocol.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("export const STALE_LAUNCH_EXIT_CODE = %d\n", StaleLaunchExitCode)
+	if !strings.Contains(string(protocol), want) {
+		t.Fatalf("protocol.js lacks %q", want)
 	}
 }

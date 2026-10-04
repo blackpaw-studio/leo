@@ -15,8 +15,11 @@ type Chunk = { stream: 'stdout' | 'stderr'; text: string }
 
 // A controllable child-process output stream. Each `$.process.spawn` the mod
 // makes takes the next Feed; the test pushes text and ends it.
+// The end of a child's output, with the code it exited with.
+type End = { exit: number }
+
 export class Feed {
-  private items: Array<Chunk | null> = []
+  private items: Array<Chunk | End> = []
   private wake: (() => void) | null = null
   ended = false
 
@@ -29,8 +32,8 @@ export class Feed {
     this.push(JSON.stringify(obj) + '\n')
   }
 
-  end(): void {
-    this.items = [...this.items, null]
+  end(exit = 0): void {
+    this.items = [...this.items, { exit }]
     this.notify()
   }
 
@@ -50,9 +53,9 @@ export class Feed {
       }
       const [head, ...rest] = this.items
       this.items = rest
-      if (head === null) {
+      if ('exit' in head) {
         this.ended = true
-        return { value: { code: 0, signal: null } }
+        return { value: { code: head.exit, signal: null } }
       }
       yield head
     }

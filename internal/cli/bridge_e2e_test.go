@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 )
 
 // startBridgeDaemon runs a real daemon on a short /tmp home (macOS caps unix
@@ -129,5 +131,29 @@ func TestBridgeReportFromAStaleLaunchAgainstRealDaemonIsDropped(t *testing.T) {
 	}
 	if hub.State("leo-e2e").Busy {
 		t.Fatal("the stale launch's turn.start was applied")
+	}
+}
+
+// Against a real daemon: a stale launch's stream exits with the code that
+// stops the mod; a key awaiting adoption exits 1 so the mod retries.
+func TestBridgeStreamAgainstRealDaemonSaysWhetherToRetry(t *testing.T) {
+	home, hub := startBridgeDaemon(t)
+	run := func(agent, launch string) error {
+		deps := defaultBridgeDeps()
+		deps.homeDir = func() string { return home }
+		cmd := newBridgeCmdWith(deps)
+		cmd.SetArgs([]string{"--agent", agent, "--launch", launch})
+		cmd.SetOut(io.Discard)
+		return cmd.Execute()
+	}
+	if err := run("leo-e2e", "launch-before"); ExitCode(err) != bridgemod.StaleLaunchExitCode {
+		t.Fatalf("a stale launch's stream: err=%v (exit %d), want exit %d", err, ExitCode(err), bridgemod.StaleLaunchExitCode)
+	}
+	if err := run("leo-surviving", "launch-old"); ExitCode(err) != 1 || !errors.Is(err, daemon.ErrBridgeNotReady) {
+		t.Fatalf("a key awaiting adoption: err=%v (exit %d), want ErrBridgeNotReady exiting 1", err, ExitCode(err))
+	}
+	hub.AwaitAdoption(nil)
+	if err := run("leo-surviving", "launch-old"); ExitCode(err) != bridgemod.StaleLaunchExitCode {
+		t.Fatalf("a key nobody adopts: err=%v (exit %d), want exit %d", err, ExitCode(err), bridgemod.StaleLaunchExitCode)
 	}
 }

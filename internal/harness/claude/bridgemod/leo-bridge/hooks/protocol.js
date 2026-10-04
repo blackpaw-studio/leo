@@ -22,6 +22,11 @@ export const BACKOFF_INITIAL_MS = 1000
 // connect costs one short-lived `leo bridge` child.
 export const BACKOFF_MAX_MS = 5000
 export const BACKOFF_RESET_AFTER_MS = 60_000
+// `leo bridge` exits with this when the daemon refuses this launch for good:
+// another launch holds the key, or no daemon adopted the session. Retrying
+// cannot help, so the mod stops bridging until it reloads. Mirrored by
+// bridgemod.StaleLaunchExitCode on the Go side.
+export const STALE_LAUNCH_EXIT_CODE = 3
 // Waits before each retry of a report the daemon did not take, backing off
 // to about a minute in all: long enough to ride out a daemon restart. Acks
 // are idempotent (the mod dedups by id) and events carry ids, so a retry is

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 )
 
 // fakeBridge records what the bridge command asked of the daemon.
@@ -205,6 +206,31 @@ func TestBridgeStreamConnectFailureExitsNonZero(t *testing.T) {
 	}
 }
 
+// A launch the daemon will never take again (409) exits with the code the
+// mod reads as "stop reconnecting"; a daemon that has not adopted the
+// session yet (503), or any other failure, exits 1 and the mod retries.
+func TestBridgeStreamExitCodeSaysWhetherToRetry(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		code int
+	}{
+		"stale launch":   {fmt.Errorf("%w: daemon returned 409", daemon.ErrBridgeStale), bridgemod.StaleLaunchExitCode},
+		"not adopted":    {fmt.Errorf("%w: daemon returned 503", daemon.ErrBridgeNotReady), 1},
+		"daemon is down": {errors.New("connecting to daemon: refused"), 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeBridge{streamErr: tc.err}
+			err := runBridgeCmd(t, f.deps(nil), io.Discard, "--agent", "leo-alpha")
+			if err == nil {
+				t.Fatal("the stream exited 0")
+			}
+			if got := ExitCode(err); got != tc.code {
+				t.Fatalf("ExitCode(%v) = %d, want %d", err, got, tc.code)
+			}
+		})
+	}
+}
+
 // A stream cut mid-command must never hand the mod half a JSON line.
 func TestBridgeStreamDropsTruncatedCommand(t *testing.T) {
 	f := &fakeBridge{streamBody: streamOf("{\"id\":\"c1\"}\n{\"id\":\"c2\"")}
@@ -328,8 +354,8 @@ func TestBridgeReportToAGoneKeySucceeds(t *testing.T) {
 	}
 }
 
-// A launch that is not its key's current one (a predecessor's, or one a
-// restarted daemon has not adopted yet) gets 409: its report is moot, and
+// A launch that is not its key's current one (a predecessor's, or one no
+// daemon is adopting) gets 409: its report is moot, and
 // retrying it could land it on the successor. Exiting 0 drops it.
 func TestBridgeReportFromAStaleLaunchIsDropped(t *testing.T) {
 	f := &fakeBridge{reportErr: fmt.Errorf("%w: bridge report: daemon returned 409: not current", daemon.ErrBridgeStale)}
@@ -339,6 +365,16 @@ func TestBridgeReportFromAStaleLaunchIsDropped(t *testing.T) {
 	}
 	if f.reports != 1 {
 		t.Fatalf("reports=%d, want 1", f.reports)
+	}
+}
+
+// A report the daemon cannot place yet (it has not adopted the session)
+// fails, so the mod retries it, rather than being dropped.
+func TestBridgeReportAwaitingAdoptionFailsForARetry(t *testing.T) {
+	f := &fakeBridge{reportErr: fmt.Errorf("%w: bridge report: daemon returned 503", daemon.ErrBridgeNotReady)}
+	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(`{"type":"event","name":"turn.start"}`), io.Discard, "report", "--agent", "leo-alpha")
+	if !errors.Is(err, daemon.ErrBridgeNotReady) || ExitCode(err) != 1 {
+		t.Fatalf("report awaiting adoption: err=%v (exit %d), want ErrBridgeNotReady exiting 1", err, ExitCode(err))
 	}
 }
 

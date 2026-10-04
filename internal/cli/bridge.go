@@ -194,11 +194,17 @@ func resolveBridgeLaunch(flag string, getenv func(string) string) (string, error
 
 // runBridgeStream copies the command stream of agent's launch to out. A
 // clean end of stream exits 0, as does hanging up on a vanished parent; a
-// failed connect, read or write is an error.
+// failed connect, read or write is an error, and a launch the daemon
+// refuses for good exits bridgemod.StaleLaunchExitCode.
 func runBridgeStream(ctx context.Context, deps bridgeDeps, agent, launch string, out io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	body, err := deps.openStream(ctx, deps.homeDir(), agent, launch)
+	if errors.Is(err, daemon.ErrBridgeStale) {
+		// The daemon will never take this launch again: tell the mod to
+		// stop reconnecting.
+		return exitCodeError{code: bridgemod.StaleLaunchExitCode, err: fmt.Errorf("bridge: %w", err)}
+	}
 	if err != nil {
 		return fmt.Errorf("bridge: %w", err)
 	}

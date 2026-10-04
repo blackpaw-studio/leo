@@ -134,14 +134,18 @@ func (s *Server) handleBridgeReport(w http.ResponseWriter, r *http.Request) {
 
 // bridgeErrorStatus maps a hub error to its HTTP status: 410 Gone for a
 // forgotten key (its launch is over; see bridge.Hub.Forget), 409 Conflict
-// for a launch that is not the key's current one (see bridge.Hub.Open), 400
-// for a malformed launch, 503 once the hub has closed, else fallback.
+// for a launch that is not the key's current one (see bridge.Hub.Open), 503
+// for a key a restarted daemon has yet to adopt or once the hub has closed
+// (both retried), 400 for a malformed launch, else fallback.
 func bridgeErrorStatus(err error, fallback int) int {
 	switch {
 	case errors.Is(err, bridge.ErrForgotten):
 		return http.StatusGone
 	case errors.Is(err, bridge.ErrStaleLaunch):
 		return http.StatusConflict
+	case errors.Is(err, bridge.ErrNotOpen):
+		// Not adopted yet: the mod retries.
+		return http.StatusServiceUnavailable
 	case errors.Is(err, bridge.ErrInvalidLaunch):
 		return http.StatusBadRequest
 	case errors.Is(err, bridge.ErrClosed):

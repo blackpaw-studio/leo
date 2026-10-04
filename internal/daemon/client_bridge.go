@@ -22,10 +22,14 @@ var (
 	// and need not be retried.
 	ErrBridgeGone = errors.New("leo bridge key is gone")
 	// ErrBridgeStale: the caller's launch is not its key's current one (409
-	// Conflict): the key was opened for a successor, or a restarted daemon
-	// has not adopted the session yet. A report it refused is moot and must
-	// not be retried, or it could land on the successor.
+	// Conflict): the key was opened for a successor, or the daemon is not
+	// adopting the session. A report it refused is moot and must not be
+	// retried, or it could land on the successor; the mod stops connecting.
 	ErrBridgeStale = errors.New("leo bridge launch is not current")
+	// ErrBridgeNotReady: the daemon cannot take the caller yet (503),
+	// typically because, just restarted, it has not adopted the caller's
+	// session; or its bridge is shutting down. Retry.
+	ErrBridgeNotReady = errors.New("leo bridge not ready")
 )
 
 // bridgePath is the URL path of leaf for agent's launch.
@@ -80,8 +84,8 @@ func postBridgeReport(ctx context.Context, cli *http.Client, baseURL, agent, lau
 	return nil
 }
 
-// bridgeStatusError is httpStatusError, wrapping ErrBridgeGone for a 410
-// and ErrBridgeStale for a 409.
+// bridgeStatusError is httpStatusError, wrapping ErrBridgeGone for a 410,
+// ErrBridgeStale for a 409 and ErrBridgeNotReady for a 503.
 func bridgeStatusError(what string, resp *http.Response) error {
 	err := httpStatusError(what, resp)
 	switch resp.StatusCode {
@@ -89,6 +93,8 @@ func bridgeStatusError(what string, resp *http.Response) error {
 		return fmt.Errorf("%w: %w", ErrBridgeGone, err)
 	case http.StatusConflict:
 		return fmt.Errorf("%w: %w", ErrBridgeStale, err)
+	case http.StatusServiceUnavailable:
+		return fmt.Errorf("%w: %w", ErrBridgeNotReady, err)
 	}
 	return err
 }
