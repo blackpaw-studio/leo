@@ -12,13 +12,20 @@ import (
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	"github.com/blackpaw-studio/leo/internal/session"
 )
 
-// argvOpeningSettle is how long a legacy launch that carries the opening on
-// argv must run before the opening counts as delivered to its conversation:
-// a claude that exits sooner may not have submitted it. A var so tests can
-// shorten it.
-var argvOpeningSettle = quickExitThreshold
+// An opening that rides argv counts as delivered to its conversation once
+// the conversation's claude transcript shows it prompted: the ground truth,
+// which neither a claude stuck at a dialog (never submitted) nor one that
+// ran it and died at once (submitted) can fool. The transcript is checked
+// every openingTranscriptPoll while the launch runs and once more when it
+// ends. Vars so tests can point and pace them.
+var (
+	openingTranscriptPath = session.JSONLPath
+	openingTranscriptPoll = 2 * time.Second
+)
 
 // conversationArg returns the conversation args select: --session-id's
 // value (a fresh conversation under a known id) or --resume's. "" when
@@ -58,8 +65,10 @@ type openingDelivery struct {
 	// queued is what the record said a bridged launch queued, as the loop
 	// started: the opening an adopted session may still need.
 	queued queuedOpening
-	// argvSettle is argvOpeningSettle as the loop started.
-	argvSettle time.Duration
+	// transcriptPath and transcriptPoll are openingTranscriptPath and
+	// openingTranscriptPoll as the loop started.
+	transcriptPath func(workDir, conversation string) (string, error)
+	transcriptPoll time.Duration
 
 	mu   sync.Mutex
 	have map[string]bool // opening ids of conversations that have it
@@ -96,7 +105,12 @@ func (r agentOpeningRecord) queued(launch, id string) {
 // newOpeningDelivery sets up spec's opening from what the agent's record
 // says was delivered and queued.
 func newOpeningDelivery(homePath string, spec ProcessSpec, id *procIdentity) *openingDelivery {
-	o := &openingDelivery{briefPath: spec.OpeningBriefPath, argvSettle: argvOpeningSettle, have: map[string]bool{}}
+	o := &openingDelivery{
+		briefPath:      spec.OpeningBriefPath,
+		transcriptPath: openingTranscriptPath,
+		transcriptPoll: openingTranscriptPoll,
+		have:           map[string]bool{},
+	}
 	if spec.OpeningBriefPath == "" {
 		return o
 	}
@@ -185,17 +199,51 @@ func isAcked(t *bridge.Ticket) bool {
 	}
 }
 
-// deliveredOnArgv records conversation as having the opening a legacy
-// launch carried on argv once the launch has held up past
-// argvOpeningSettle. ctx ends with the launch.
-func (o *openingDelivery) deliveredOnArgv(ctx context.Context, conversation string) {
-	if conversation == "" || o.text == "" {
-		return
+// watchTranscript records conversation as having the opening once its
+// transcript, in workDir's claude project, shows the opening prompted: a
+// legacy launch carried it on argv, or an adopted legacy session did. It
+// checks while ctx (the launch) runs; the returned settle, called once the
+// launch is over, waits for that and checks one last time, so a claude
+// that ran the opening and died at once has it recorded before the next
+// launch is planned. Nothing is watched for a conversation nobody knows
+// the id of, or one that has the opening already.
+func (o *openingDelivery) watchTranscript(ctx context.Context, workDir, conversation string) (settle func()) {
+	if conversation == "" || o.text == "" || o.has(conversation) {
+		return func() {}
 	}
-	select {
-	case <-time.After(o.argvSettle):
-		o.delivered(conversation, "")
-	case <-ctx.Done():
+	path, err := o.transcriptPath(workDir, conversation)
+	if err != nil {
+		return func() {}
+	}
+	watch := claudeharness.NewPromptWatch(path, o.text)
+	seen := func() bool {
+		ok, err := watch.Seen()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: checking %s for the opening prompt: %v\n", path, err)
+		}
+		if ok {
+			o.delivered(conversation, "")
+		}
+		return ok
+	}
+	done := make(chan struct{})
+	var found bool
+	go func() {
+		defer close(done)
+		for !seen() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(o.transcriptPoll):
+			}
+		}
+		found = true
+	}()
+	return func() {
+		<-done
+		if !found {
+			seen()
+		}
 	}
 }
 

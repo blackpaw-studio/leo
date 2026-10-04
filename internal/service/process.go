@@ -1185,6 +1185,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			fellBack  atomic.Bool
 			launchCtx context.Context
 			endLaunch context.CancelFunc
+			// settleArgvOpening finishes watching the transcript for an
+			// opening this launch carried on argv; see watchTranscript.
+			settleArgvOpening = func() {}
 		)
 
 		startTime := time.Now()
@@ -1225,6 +1228,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			launchCtx, endLaunch = context.WithCancel(ctx)
 			if bl.bridged {
 				go sv.watchBridgeLaunch(launchCtx, id, bl, opening, tmuxPath, &fellBack)
+			} else {
+				// A legacy session the previous daemon launched carried its
+				// opening on argv; that daemon may have died before it saw
+				// the opening run.
+				settleArgvOpening = opening.watchTranscript(launchCtx, spec.WorkDir, conversationArg(currentArgs))
 			}
 			// Attention does not survive a daemon restart; an agent launched
 			// with hooks is unknown until its next hook fires, which carries
@@ -1338,7 +1346,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			case pasteBrief != "":
 				go pasteOversizedOpening(launchCtx, tmuxPath, id, pasteBrief, opening, conversation)
 			case launchSpec.OpeningBriefPath != "":
-				go opening.deliveredOnArgv(launchCtx, conversation)
+				settleArgvOpening = opening.watchTranscript(launchCtx, spec.WorkDir, conversation)
 			}
 			if spec.Kind == harness.KindAgent {
 				if hooked {
@@ -1407,7 +1415,10 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		default:
 		}
 
-		// The launch is over: nothing it left queued may reach the next one.
+		// The launch is over: what it delivered is settled before the next
+		// launch decides what to deliver, and nothing it left queued may
+		// reach the next one.
+		settleArgvOpening()
 		bridgeConnected := sv.endBridgedLaunch(bl, opening)
 
 		// The bridged launch's mod never connected (or refused the opening),

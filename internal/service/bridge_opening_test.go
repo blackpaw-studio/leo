@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -411,26 +412,110 @@ func TestRejectedOpeningFallsBackEvenWithTheStreamDown(t *testing.T) {
 	}
 }
 
-// An opening a legacy launch carries on argv counts as delivered to that
-// conversation once the launch has outlived the quick-exit window, so a
-// later bridged --resume of it does not deliver it again.
-func TestArgvOpeningIsRecordedForItsConversation(t *testing.T) {
-	orig := argvOpeningSettle
-	argvOpeningSettle = 20 * time.Millisecond
-	t.Cleanup(func() { argvOpeningSettle = orig })
+// transcripts points the supervisor's opening transcript lookups at dir
+// (<conversation>.jsonl), checked every poll, for the rest of the test.
+func transcripts(t *testing.T, poll time.Duration) string {
+	t.Helper()
+	dir := t.TempDir()
+	origPath, origPoll := openingTranscriptPath, openingTranscriptPoll
+	openingTranscriptPath = func(_, conversation string) (string, error) {
+		return filepath.Join(dir, conversation+".jsonl"), nil
+	}
+	openingTranscriptPoll = poll
+	t.Cleanup(func() { openingTranscriptPath, openingTranscriptPoll = origPath, origPoll })
+	return dir
+}
+
+// prompted appends a user prompt of text to conversation's transcript in
+// dir, as claude does when it submits it.
+func prompted(t *testing.T, dir, conversation, text string) {
+	t.Helper()
+	line, err := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, conversation+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An opening a legacy launch carries on argv counts as delivered to its
+// conversation once the conversation's transcript shows it was prompted,
+// not before (claude can sit at a dialog and never submit it), so a later
+// bridged --resume of it does not deliver it again.
+func TestArgvOpeningIsRecordedOnceItsTranscriptShowsIt(t *testing.T) {
+	dir := transcripts(t, 10*time.Millisecond)
 	tmuxPath, logPath := statefulTmux(t, "")
 	home := t.TempDir()
 	agentRecord(t, home, agentstore.Record{Name: "alpha"})
 	spec := claudeSpec(t, "alpha")
-	spec.OpeningBriefPath = writeBrief(t, "the opening")
+	spec.OpeningBriefPath = writeBrief(t, "the opening\n")
 	_ = startBridged(t, tmuxPath, "2.1.286", time.Minute, spec, withHome(home))
 
 	line := waitForNewSessions(t, logPath, 1)[0]
 	if !strings.Contains(line, claudeharness.BriefArgvWord(spec.OpeningBriefPath)) {
 		t.Fatalf("the legacy launch must carry the opening on argv:\n%s", line)
 	}
-	want := bridge.OpeningID("s-1", "the opening")
+	time.Sleep(100 * time.Millisecond)
+	if got := storedAck(home, "alpha"); got != "" {
+		t.Fatalf("recorded %q before the transcript showed the opening", got)
+	}
+	prompted(t, dir, "s-1", "the opening")
+	want := bridge.OpeningID("s-1", "the opening\n")
 	waitFor(t, "the argv delivery to be recorded", func() bool { return storedAck(home, "alpha") == want })
+}
+
+// A claude that ran the opening and died at once must not get it again
+// when it is relaunched into the same conversation; one that died before
+// submitting it must.
+func TestAQuickExitRelaunchCarriesTheOpeningOnlyIfItNeverRan(t *testing.T) {
+	for name, ran := range map[string]bool{"ran": true, "never ran": false} {
+		t.Run(name, func(t *testing.T) {
+			// Polled never: only the check at the launch's end can see it.
+			dir := transcripts(t, time.Hour)
+			tmuxPath, logPath := statefulTmux(t, "")
+			home := t.TempDir()
+			agentRecord(t, home, agentstore.Record{Name: "alpha"})
+			spec := claudeSpec(t, "alpha")
+			spec.OpeningBriefPath = writeBrief(t, "the opening")
+			_ = startBridged(t, tmuxPath, "2.1.286", time.Minute, spec, withHome(home), withBackoff(time.Millisecond))
+			waitForNewSessions(t, logPath, 1)
+			if ran {
+				prompted(t, dir, "s-1", "the opening")
+			}
+			endSession(t, tmuxPath)
+
+			relaunch := waitForNewSessions(t, logPath, 2)[1]
+			carries := strings.Contains(relaunch, claudeharness.BriefArgvWord(spec.OpeningBriefPath))
+			if carries == ran {
+				t.Fatalf("relaunch carries the opening = %v after it ran = %v:\n%s", carries, ran, relaunch)
+			}
+		})
+	}
+}
+
+// A restarted daemon adopting a legacy session the previous one launched
+// (its opening on argv) records the opening once the transcript shows it:
+// the previous daemon may have died before it could.
+func TestAdoptedLegacySessionRecordsTheOpeningItsTranscriptShows(t *testing.T) {
+	dir := transcripts(t, 10*time.Millisecond)
+	tmuxPath, logPath := statefulTmux(t, "")
+	sessionUp(t, tmuxPath)
+	home := t.TempDir()
+	agentRecord(t, home, agentstore.Record{Name: "alpha"})
+	prompted(t, dir, "s-1", "the opening")
+	_ = startBridged(t, tmuxPath, "2.1.289", time.Minute, adoptSpec(t, "the opening"), withHome(home))
+
+	want := bridge.OpeningID("s-1", "the opening")
+	waitFor(t, "the adopted session's opening to be recorded", func() bool { return storedAck(home, "alpha") == want })
+	if n := len(newSessionLines(logPath)); n != 0 {
+		t.Fatalf("adoption launched %d sessions", n)
+	}
 }
 
 // adoptSpec is an agent the previous daemon launched bridged, resumed as a
