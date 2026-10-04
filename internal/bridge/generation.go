@@ -238,15 +238,18 @@ func (h *Hub) ForgetGen(t Target) bool {
 	return true
 }
 
-// ForgetGenUnlessConnected is ForgetGen that also keeps a connected stream,
-// checked under the same lock (see ForgetUnlessConnected).
-func (h *Hub) ForgetGenUnlessConnected(t Target) bool {
+// ForgetGenUnlessEverConnected is ForgetGen for a launch falling back from
+// the bridge: it keeps a generation whose mod has ever connected or said
+// hello, checked under the same lock, even if its stream is down right
+// now (a reload, a reconnect). That mod may already have been handed what
+// the generation queued, and run it, so a fallback would deliver it twice.
+func (h *Hub) ForgetGenUnlessEverConnected(t Target) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.isCurrentLocked(t) {
 		return false
 	}
-	if st, ok := h.agents[t.Key]; ok && st.conn != nil {
+	if st, ok := h.agents[t.Key]; ok && (st.conn != nil || !st.connectedAt.IsZero() || !st.helloAt.IsZero()) {
 		return false
 	}
 	h.forgetLocked(t.Key)

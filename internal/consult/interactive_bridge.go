@@ -272,8 +272,8 @@ func (r *TmuxInteractiveRuntime) AwaitOpening(ctx context.Context, pane string) 
 	case errors.Is(waitErr, bridge.ErrClosed):
 		return true, false, waitErr
 	}
-	if !b.Hub.ForgetGenUnlessConnected(d.target) {
-		return true, false, nil // connected at the last moment, or released
+	if !b.Hub.ForgetGenUnlessEverConnected(d.target) {
+		return true, false, nil // connected (if only for a moment), or released
 	}
 	if !r.markFellBack(d.id) {
 		return true, false, nil // released meanwhile; nothing to relaunch
