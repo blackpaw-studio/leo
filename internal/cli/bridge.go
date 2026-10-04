@@ -234,17 +234,30 @@ func bridgeHomeDir(cfgPath string, getenv func(string) string) string {
 // watchParent closes the returned channel once this process is re-parented,
 // which is how an exited parent shows up on unix.
 func watchParent(ctx context.Context) <-chan struct{} {
+	return watchParentWith(ctx, os.Getppid, bridgeParentPollInterval)
+}
+
+// orphanPPID is the parent an orphan is re-parented to: init (launchd).
+const orphanPPID = 1
+
+func watchParentWith(ctx context.Context, getppid func() int, every time.Duration) <-chan struct{} {
 	gone := make(chan struct{})
-	parent := os.Getppid()
+	parent := getppid()
+	if parent == orphanPPID {
+		// The parent died before we looked: nothing spawns `leo bridge`
+		// under init, so there is no re-parent left to wait for.
+		close(gone)
+		return gone
+	}
 	go func() {
-		ticker := time.NewTicker(bridgeParentPollInterval)
+		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if os.Getppid() != parent {
+				if getppid() != parent {
 					close(gone)
 					return
 				}

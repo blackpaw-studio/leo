@@ -346,3 +346,43 @@ func TestBridgeCommandIsHiddenAndRegistered(t *testing.T) {
 		t.Fatalf("bridge report not registered: %v", err)
 	}
 }
+
+// A `leo bridge` whose claude died before it got to look is already
+// orphaned: it starts out re-parented to init, so there is no change of
+// parent to wait for.
+func TestWatchParentSeesAParentGoneBeforeTheWatchStarted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gone := watchParentWith(ctx, func() int { return 1 }, time.Hour)
+	select {
+	case <-gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a process already re-parented to init was not reported gone")
+	}
+}
+
+func TestWatchParentSeesAReparent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	ppid := 4242
+	getppid := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return ppid
+	}
+	gone := watchParentWith(ctx, getppid, time.Millisecond)
+	select {
+	case <-gone:
+		t.Fatal("reported gone while the parent is still there")
+	case <-time.After(20 * time.Millisecond):
+	}
+	mu.Lock()
+	ppid = 1
+	mu.Unlock()
+	select {
+	case <-gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a re-parent was not reported")
+	}
+}
