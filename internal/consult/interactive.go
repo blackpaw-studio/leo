@@ -887,15 +887,17 @@ done:
 const undeliveredPreviewRunes = 200
 
 // endedTurnText is the result text of turn t, still open when dispatch id
-// ends: a follow-up its claude never took says so, quoting how it began,
-// since nothing else would tell the orchestrator it never ran (dispatches
-// do not outlive their launch, so it is not kept for another). Any other
-// turn keeps the text it has ("" leaves it as is).
+// ends: a follow-up its session was never seen to start says so, quoting
+// how it began, since nothing else would tell the orchestrator (dispatches
+// do not outlive their launch, so it is not kept for another). It does not
+// claim the follow-up never ran: a paste can land unseen, and the bridge's
+// ack is not followed here. Any other turn keeps the text it has ("" leaves
+// it as is).
 func endedTurnText(id string, t Turn) string {
 	if t.Source != TurnSourceOrchestrator || t.Delivered {
 		return ""
 	}
-	return fmt.Sprintf("not delivered: dispatch %s ended before its session took this follow-up, so it never ran. It began: %q", id, previewRunes(t.Text, undeliveredPreviewRunes))
+	return fmt.Sprintf("dispatch %s ended, and this follow-up was never seen to start: it may not have run. It began: %q", id, previewRunes(t.Text, undeliveredPreviewRunes))
 }
 
 // previewRunes is text cut to at most n runes, marked when cut.
