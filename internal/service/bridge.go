@@ -397,9 +397,11 @@ func (s *Supervisor) fallBackFromBridge(id *procIdentity, target bridge.Target, 
 	if w == nil {
 		return
 	}
-	forgot := w.hub.ForgetGenUnlessConnected(target)
+	var forgot bool
 	if force {
 		forgot = w.hub.ForgetGen(target)
+	} else {
+		forgot = w.hub.ForgetGenUnlessConnected(target)
 	}
 	if !forgot {
 		return

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +59,37 @@ func helloAs(t *testing.T, hub *bridge.Hub, key, launch, session string) {
 	if err := hub.Apply(key, launch, bridge.Report{Type: bridge.ReportHello, SessionID: session, ClaudeVersion: "2.1.289"}); err != nil {
 		t.Fatalf("hello: %v", err)
 	}
+}
+
+// drainCmds returns what s holds right now without waiting for more.
+func drainCmds(s *bridge.Stream) []bridge.Command {
+	var out []bridge.Command
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		cmd, err := s.Next(ctx)
+		cancel()
+		if err != nil {
+			return out
+		}
+		out = append(out, cmd)
+	}
+}
+
+// runsOf counts how many of handed carrying text the mod runs: the first
+// command under each id; a repeat id is only re-acked.
+func runsOf(handed []bridge.Command, text string) int {
+	seen := map[string]bool{}
+	runs := 0
+	for _, c := range handed {
+		if seen[c.ID] {
+			continue
+		}
+		seen[c.ID] = true
+		if c.Text == text {
+			runs++
+		}
+	}
+	return runs
 }
 
 // endSession makes the stub tmux report the session gone, as a claude exit,
@@ -331,6 +361,26 @@ func TestRejectedOpeningFallsBackToLegacy(t *testing.T) {
 	}
 }
 
+// The mod's stream can drop between handing over the opening and its
+// refusal landing (reports travel apart from the stream): the launch must
+// still be abandoned for a legacy relaunch that carries the opening.
+func TestRejectedOpeningFallsBackEvenWithTheStreamDown(t *testing.T) {
+	tmuxPath, logPath := statefulTmux(t, "")
+	spec := claudeSpec(t, "alpha")
+	spec.OpeningBriefPath = writeBrief(t, "the opening")
+	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec)
+	waitForNewSessions(t, logPath, 1)
+	s, launch := connectMod(t, f.hub, tmuxPath, "alpha")
+	opening := nextCmd(t, s)
+	s.Close()
+	ackCmd(t, f.hub, "alpha", launch, opening, false)
+
+	lines := waitForNewSessions(t, logPath, 2)
+	if strings.Contains(lines[1], "--plugin-dir") || !strings.Contains(lines[1], claudeharness.BriefArgvWord(spec.OpeningBriefPath)) {
+		t.Fatalf("a rejected opening must relaunch legacy with it on argv:\n%s", lines[1])
+	}
+}
+
 // An opening a legacy launch carries on argv counts as delivered to that
 // conversation once the launch has outlived the quick-exit window, so a
 // later bridged --resume of it does not deliver it again.
@@ -472,14 +522,11 @@ func TestDaemonRestartMidOpeningRunsItOnceWithoutAKill(t *testing.T) {
 	before := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home))
 	waitForNewSessions(t, logPath, 1)
 
-	// The mod's dedup store: it outlives the daemon, as $.store does.
-	var mu sync.Mutex
-	ran := map[string]int{}
+	// Every command the mod is handed, across both daemons.
+	var handed []bridge.Command
 	s, launch := connectMod(t, before.hub, tmuxPath, "alpha")
 	opening := nextCmd(t, s)
-	mu.Lock()
-	ran[opening.ID]++
-	mu.Unlock()
+	handed = append(handed, opening)
 	before.die() // the ack never reaches it
 
 	sessionsBefore, killsBefore := len(newSessionLines(logPath)), tmuxCalls(logPath, "kill-session")
@@ -493,24 +540,21 @@ func TestDaemonRestartMidOpeningRunsItOnceWithoutAKill(t *testing.T) {
 		t.Fatalf("the surviving session's mod reconnected as launch %q, want %q", launch2, launch)
 	}
 	again := nextCmd(t, s2)
-	if again.ID != opening.ID {
-		t.Fatalf("the adopted session got %+v, want the opening again under %s", again, opening.ID)
-	}
-	mu.Lock()
-	isRepeat := ran[again.ID] > 0
-	if !isRepeat {
-		ran[again.ID]++
-	}
-	mu.Unlock()
+	handed = append(handed, again)
 	helloAs(t, after.hub, "alpha", launch2, "s-1")
 	ackCmd(t, after.hub, "alpha", launch2, again, true)
 	waitFor(t, "the ack to be recorded", func() bool { return storedAck(home, "alpha") == opening.ID })
 
 	time.Sleep(100 * time.Millisecond) // past the connect timeout
-	mu.Lock()
-	defer mu.Unlock()
-	if ran[opening.ID] != 1 {
-		t.Fatalf("the opening ran %d times, want exactly once", ran[opening.ID])
+	handed = append(handed, drainCmds(s2)...)
+	// The mod runs a command once per id ($.store outlives the daemon); a
+	// repeat under its id is only re-acked. The daemon must hand the opening
+	// again (it never saw the ack) under the same id, so it runs once.
+	if len(handed) != 2 {
+		t.Fatalf("the mod was handed %d commands, want the opening and its re-queue: %+v", len(handed), handed)
+	}
+	if runs := runsOf(handed, "the opening"); runs != 1 {
+		t.Fatalf("the opening ran %d times after the mod's dedup, want exactly once: %+v", runs, handed)
 	}
 	if n := len(newSessionLines(logPath)) - sessionsBefore; n != 0 {
 		t.Fatalf("the restarted daemon launched %d sessions", n)
