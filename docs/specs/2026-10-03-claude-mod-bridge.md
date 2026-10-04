@@ -26,9 +26,9 @@ Spike evidence (2026-10-01, Claude Code v2.1.287): `$.process.spawn` streams ind
 ## Architecture
 
 ```
-daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdout JSONL──> mod
+daemon ──(unix socket stream)──> `leo bridge --agent <key> --launch <launch>` ──stdout JSONL──> mod
   ^                                                                       │
-  └──────── `leo bridge report` (process.run, JSON on stdin) <────────────┘
+  └──────── `leo bridge report` (process.run, JSON on stdin) <──────────────────────────┘
 ```
 
 **Mod (`leo-bridge`).**
@@ -38,17 +38,19 @@ daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdou
 - Leo puts these variables in the launch environment, and the mod reads them with `$.env.get`:
   - `LEO_BRIDGE_BIN`: absolute path to leo
   - `LEO_BRIDGE_HOME`: the leo home of the daemon that launched this claude. The mod does not read it; the `leo bridge` processes it spawns inherit it and dial that daemon's socket ahead of `$LEO_HOME` and the default home, so the agents of a daemon run with `-c <config>` (an isolated test daemon, the e2e suite) never reach another daemon.
-  - `LEO_BRIDGE_LAUNCH`: an id fresh for every launch. A hot reload of the mod keeps it, a new process gets another, so the mod can tell what an earlier load of itself already handed this process's engine (see Deduplication).
+  - `LEO_BRIDGE_LAUNCH`: a token fresh for every launch (`[A-Za-z0-9_-]`, at most 64 chars). The mod passes it on its stream connect and on every report, and the daemon takes either only from the key's current launch (see Generations). A hot reload of the mod keeps it, a new process gets another, so the mod can also tell what an earlier load of itself already handed this process's engine (see Deduplication). The mod stays disabled unless `LEO_BRIDGE_BIN`, `LEO_BRIDGE_AGENT` and `LEO_BRIDGE_LAUNCH` are all set.
   - `LEO_BRIDGE_AGENT`: the bridge key leo routes this claude by. For an agent or persistent task it is the agent name at launch (`<name>.<nonce>` if a renamed predecessor still holds that name); for a dispatch it is `dispatch.<dispatch id>`, unique per run. `LEO_PROCESS_NAME` is not used: it is a display name and differs from the key for dispatches.
-- `session.start` starts the pump. Commands are handled in order, one at a time, with a single command in flight.
+- `session.start` starts the pump. Commands are handled in order, one at a time, with a single command in flight. When the stream ends the pump reconnects after 1 s, doubling to a 5 s cap (reset by a stream that lived over 60 s), so it is back within seconds of a daemon restart.
 - The mod never decides policy. It executes commands and reports events.
 
 **`leo bridge` subcommand.**
-- `leo bridge --agent <name>`: opens a streaming request to the daemon over the unix socket. It writes one JSON command per line to stdout and exits when the daemon closes the stream.
-- `leo bridge report --agent <key>`: a single POST that carries one ack, hello or event, read from stdin (a report can carry a whole prompt or final message, beyond what argv holds; the daemon caps a report at 16 MiB).
+- `leo bridge --agent <key> --launch <launch>`: opens a streaming request to the daemon over the unix socket. It writes one JSON command per line to stdout and exits when the daemon closes the stream. A refused launch (409) fails the connect; the mod retries on its backoff, since a restarting daemon refuses until it has re-adopted the session.
+- `leo bridge report --agent <key> --launch <launch>`: a single POST that carries one ack, hello or event, read from stdin (a report can carry a whole prompt or final message, beyond what argv holds; the daemon caps a report at 16 MiB). A report from a launch that is over (410) or not the key's current one (409) is dropped: the command exits 0, so the mod does not retry it.
+- Both take `--agent`/`--launch`, else `$LEO_BRIDGE_AGENT`/`$LEO_BRIDGE_LAUNCH`.
 
 **Daemon (`internal/bridge`).** Keeps the following per agent:
-- **Connection registry.** At most one live stream per agent. A new connection replaces the old one.
+- **Generations.** Each launch opens a generation bound to its launch token (`Open(key, launch)`), which always starts a new one: the previous generation's stream is closed and its unacked commands fail as forgotten. A stream connect or report naming any other launch is refused with 409, and a key no launch has opened refuses every mod, so a dying predecessor can never take its successor's stream or opening, mark it busy, reject its commands, or forget its generation. Mods never create generations.
+- **Connection registry.** At most one live stream per agent, from its current launch. A reconnect of that launch replaces the old stream.
 - **Outbox.** Commands that have not been acked, kept in memory with stable ids.
 - **Redelivery.** On reconnect, every unacked command is resent in order. This closes the reload race found in the spike.
 - **Lookup.** `Connected(agent) bool`, which the injection call sites use to choose between the bridge and tmux.
@@ -73,7 +75,7 @@ daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdou
   - `event_id`: `<name>:<turn id>` or `session.end:<session id>`, stable across the mod's retries, so the dispatcher drops a replay.
 - `{"type":"hello","session_id","claude_version","busy"?}`, sent on connect; `busy` says whether a main-loop turn is running. A freshly loaded module (a new process, or a hot reload mid-turn) leaves it out until it sees a turn start or end, and the daemon keeps what it knows.
 
-**Deduplication.** The mod records acked ids in `$.store`, capped at 500 ids, under `acked:<key>` as `{ids, at, inflight}`. A command whose id was already acked is acked again without running. Before handing a `deliver` or `clear` to the engine, the mod also records its id as in flight for its `LEO_BRIDGE_LAUNCH`, and settles it (acked, no longer in flight) in one write. The engine keeps a handed-off prompt across a hot reload of the mod, so a reloaded mod handed such an id again acks it without running it; a new process, whose queue starts empty, runs it. Delivery is therefore at-least-once on the wire and exactly-once into Claude. Each `session.start` prunes other keys' entries left untouched for 7 days, and a dispatch's entry is deleted when its session ends for good (not on `/clear` or resume).
+**Deduplication.** The mod records acked ids in `$.store`, capped at 500 ids, under `acked:<key>` as `{ids, at, inflight}`. A command whose id was already acked is acked again without running. Before handing a `deliver` or `clear` to the engine, the mod also records its id as in flight for its `LEO_BRIDGE_LAUNCH`, and settles it (acked, no longer in flight) in one write. The engine keeps a handed-off prompt across a hot reload of the mod, so a reloaded mod handed such an id again acks it without running it; a new process, whose queue starts empty, runs it. Delivery is therefore at-least-once on the wire and exactly-once into Claude. A process restamps its own entry on `session.start` and after every main-loop `turn.complete`; each `session.start` prunes other keys' entries left untouched for 7 days, so a live but idle agent's entry survives. A dispatch's entry is deleted when its session ends for good (not on `/clear` or resume), queued behind any restamp still being written.
 
 ## Framing
 
@@ -92,11 +94,15 @@ Each injection call site checks `bridge.Connected(agent)`:
 - **Connected:** the command goes through the bridge. The call returns once the ack arrives, or fails after a 30 s ack timeout. On timeout, the command stays in the outbox for redelivery and the caller gets an error. There is no tmux retry, so a message is never delivered twice.
 - **Not connected:** today's path runs unchanged (inbox socket or tmux paste), and a warning is logged.
 
-`leo doctor` and the agent list show the bridge state for each claude agent as `bridge: connected | absent`.
+`leo doctor` and the agent list show the bridge state for each claude agent as `bridge: connected | absent`, and an absent bridge with commands queued as `absent, N pending`: those commands wait for the mod, and the idle sweep does not suspend the agent meanwhile (that would drop them).
 
 The opening prompt is a special case because it is assembled before launch. When the claude version supports mods, the prompt is not put on argv. Instead it is queued as the first outbox command. If the bridge has not connected within 20 s of launch, the daemon kills the session and relaunches the agent the legacy way: no `--plugin-dir`, and the opening prompt on argv or in a brief file. Nothing has run yet, so a relaunch is safe. Pasting the prompt instead would bring back the refusal problem that brief files exist to avoid.
 
-Shell turn hooks are dropped for claude agents whose bridge is connected. The daemon ignores shell-hook reports for a dispatch once that dispatch's bridge has said hello, so state is never counted twice. The hooks stay installed as the fallback.
+Whether a launch needs the opening is decided per conversation. Its id is `OpeningID(conversation, text)`, where the conversation is the launch's `--session-id` or `--resume` value; the agent record keeps the id of the latest conversation to get it. A launch with neither flag starts a fresh conversation and always gets the opening; a resumed one gets it only if that conversation never did. A mod's ack records the conversation its hello named; an opening carried on argv is recorded once the launch has held up for the quick-exit threshold, and a pasted one once the paste succeeds, so a later bridged `--resume` of the same conversation does not deliver it again.
+
+A daemon restart does not end the agents' tmux sessions: the restarted daemon adopts them. It reads the key and launch token from the session's environment and re-opens that launch's generation. An adopted session is live and is never killed or relaunched: there is no connect timeout, and a refused opening is only logged. Before a bridged launch starts, the record also keeps the opening it queued (`{launch, id}`); when the adopted session's launch matches, the opening is queued again under the same id and waits for the mod to reconnect. If the mod already ran it, its dedup turns the repeat into a re-ack, so the opening runs exactly once.
+
+Shell turn hooks are dropped for claude agents whose bridge is connected. The bridge owns a dispatch's reports from its launch's hello until that launch's final `session.end` (not `/clear` or resume) or the generation is forgotten, whatever reconnect gaps fall between; the daemon ignores shell-hook reports for that span, so state is never counted twice. The hooks stay installed as the fallback.
 
 ## Removed / kept
 
