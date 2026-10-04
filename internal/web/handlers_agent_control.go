@@ -38,12 +38,12 @@ var (
 // POST /web/agent/{name}/interrupt
 func (s *Server) handleWebAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if key, ok := s.bridgeRoute(name, "interrupt"); ok {
+	if target, ok := s.bridgeRoute(name, "interrupt"); ok {
 		// The mod interrupts the running turn itself: no Escape burst, and
 		// a failure is reported rather than retried through tmux.
 		ctx, cancel := context.WithTimeout(r.Context(), bridgeInterruptTimeout)
 		defer cancel()
-		if err := s.bridgeRouter.Hub.Send(ctx, key, bridge.Interrupt()); err != nil {
+		if err := s.bridgeRouter.Hub.SendTo(ctx, target, bridge.Interrupt()); err != nil {
 			s.renderFlashStatus(w, http.StatusBadGateway, "error", fmt.Sprintf("Interrupting %s failed: %v", name, err))
 			return
 		}
@@ -148,8 +148,8 @@ func (s *Server) handleWebAgentClear(w http.ResponseWriter, r *http.Request) {
 // is typed into the pane, which interrupts the turn.
 func (s *Server) agentSlashCommand(w http.ResponseWriter, r *http.Request, verb string, cmd bridge.Command) {
 	name := r.PathValue("name")
-	if key, ok := s.bridgeRoute(name, verb); ok {
-		accepted, err := s.bridgeSend(key, verb+" of "+name, cmd, bridgeControlWait, nil)
+	if target, ok := s.bridgeRoute(name, verb); ok {
+		accepted, err := s.bridgeSend(target, verb+" of "+name, cmd, bridgeControlWait, nil)
 		switch {
 		case err != nil:
 			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("%s: %v", verb, err)})
@@ -289,8 +289,8 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if key, ok := s.bridgeRoute(name, "message"); ok {
-		s.deliverAgentMessageOverBridge(w, key, name, req.From, req.Text)
+	if target, ok := s.bridgeRoute(name, "message"); ok {
+		s.deliverAgentMessageOverBridge(w, target, name, req.From, req.Text)
 		return
 	}
 

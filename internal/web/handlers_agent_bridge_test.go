@@ -273,3 +273,43 @@ func TestAgentTokenMayCompactAndClear(t *testing.T) {
 		}
 	}
 }
+
+// An ack that settled the send by the time the wait ran out is an answer,
+// not a "queued": the timer firing must not hide it.
+func TestBridgeSendPrefersAnOutcomeThatBeatTheTimer(t *testing.T) {
+	s, _ := newTestServer(t)
+	b := newBridgedAgent(t, s, "assistant", true)
+	timer := make(chan time.Time, 1)
+	orig := bridgeSendTimer
+	bridgeSendTimer = func(time.Duration) (<-chan time.Time, func() bool) { return timer, func() bool { return true } }
+	t.Cleanup(func() { bridgeSendTimer = orig })
+
+	target, ok := s.bridgeRouter.Route("assistant")
+	if !ok {
+		t.Fatal("no route")
+	}
+	returned := make(chan struct{})
+	type answer struct {
+		accepted bool
+		err      error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		defer close(returned)
+		// onAck runs once the send has settled: the wait runs out right
+		// then, and the caller answers before the sender finishes up.
+		accepted, err := s.bridgeSend(target, "test", bridge.Deliver("hi", true), time.Hour, func() {
+			timer <- time.Now()
+			select {
+			case <-returned:
+			case <-time.After(5 * time.Second):
+			}
+		})
+		got <- answer{accepted, err}
+	}()
+	b.ack(b.next(), true, "")
+	a := <-got
+	if a.err != nil || !a.accepted {
+		t.Fatalf("bridgeSend = %v, %v; want accepted, the ack had landed", a.accepted, a.err)
+	}
+}

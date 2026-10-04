@@ -19,13 +19,15 @@ func (r *Router) Key(agent string) (string, bool) {
 	return key, ok && key != ""
 }
 
-// Route returns agent's bridge key when its mod is connected right now.
-func (r *Router) Route(agent string) (string, bool) {
+// Route returns the generation of agent's bridge key whose mod is connected
+// right now. Sending to it with Hub.SendTo fails, instead of reaching a
+// relaunch, if the agent is relaunched in between.
+func (r *Router) Route(agent string) (Target, bool) {
 	key, ok := r.Key(agent)
-	if !ok || !r.Connected(key) {
-		return "", false
+	if !ok || r.Hub == nil {
+		return Target{}, false
 	}
-	return key, true
+	return r.Hub.Live(key)
 }
 
 // Connected reports whether key's stream is connected.

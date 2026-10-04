@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/bridge"
@@ -58,48 +58,72 @@ var (
 // past it; compact and clear are dropped (see bridge.Hub.Send).
 const bridgeBackgroundWait = time.Hour
 
-// bridgeRoute returns agent name's bridge key if its mod is connected now.
-// An agent launched with the bridge whose mod is not connected is logged:
-// the caller falls back to tmux.
-func (s *Server) bridgeRoute(name, what string) (string, bool) {
-	if key, ok := s.bridgeRouter.Route(name); ok {
-		return key, true
+// bridgeSendTimer starts bridgeSend's wait. A test seam.
+var bridgeSendTimer = func(d time.Duration) (<-chan time.Time, func() bool) {
+	t := time.NewTimer(d)
+	return t.C, t.Stop
+}
+
+// bridgeRoute returns the live generation of agent name's bridge if its mod
+// is connected now. An agent launched with the bridge whose mod is not
+// connected is logged: the caller falls back to tmux.
+func (s *Server) bridgeRoute(name, what string) (bridge.Target, bool) {
+	if target, ok := s.bridgeRouter.Route(name); ok {
+		return target, true
 	}
 	if key, known := s.bridgeRouter.Key(name); known {
 		log.Printf("web: %s for %s: leo bridge %s not connected; falling back to tmux", what, strconv.Quote(name), strconv.Quote(key))
 	}
-	return "", false
+	return bridge.Target{}, false
 }
 
-// bridgeSend sends cmd to key and waits up to wait for the mod's ack.
+// bridgeSendOutcome is how a bridgeSend settled, and whether its caller
+// stopped waiting first; one lock orders the two.
+type bridgeSendOutcome struct {
+	mu        sync.Mutex
+	settled   bool
+	err       error
+	abandoned bool
+}
+
+// bridgeSend sends cmd to target and waits up to wait for the mod's ack.
 // accepted is false when the wait ran out first: the send carries on in the
 // background, onAck (may be nil) runs if and when the ack arrives, and a
-// later failure is logged.
-func (s *Server) bridgeSend(key, what string, cmd bridge.Command, wait time.Duration, onAck func()) (accepted bool, err error) {
+// later failure is logged. A send that settled by the time the wait ran out
+// is answered with its outcome.
+func (s *Server) bridgeSend(target bridge.Target, what string, cmd bridge.Command, wait time.Duration, onAck func()) (accepted bool, err error) {
 	hub := s.bridgeRouter.Hub
-	result := make(chan error, 1)
-	var abandoned atomic.Bool
+	out := &bridgeSendOutcome{}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ctx, cancel := context.WithTimeout(context.Background(), bridgeBackgroundWait)
 		defer cancel()
-		err := hub.Send(ctx, key, cmd)
+		err := hub.SendTo(ctx, target, cmd)
+		out.mu.Lock()
+		out.settled, out.err = true, err
+		abandoned := out.abandoned
+		out.mu.Unlock()
 		if err == nil && onAck != nil {
 			onAck()
 		}
-		if err != nil && abandoned.Load() {
-			log.Printf("web: %s via leo bridge %s failed after it was queued: %s", strconv.Quote(what), strconv.Quote(key), strconv.Quote(err.Error()))
+		if err != nil && abandoned {
+			log.Printf("web: %s via leo bridge %s failed after it was queued: %s", strconv.Quote(what), strconv.Quote(target.Key), strconv.Quote(err.Error()))
 		}
-		result <- err
 	}()
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
+	timeout, stop := bridgeSendTimer(wait)
+	defer stop()
 	select {
-	case err := <-result:
-		return err == nil, err
-	case <-timer.C:
-		abandoned.Store(true)
+	case <-done:
+	case <-timeout:
+	}
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	if !out.settled {
+		out.abandoned = true
 		return false, nil
 	}
+	return out.err == nil, out.err
 }
 
 // agentMessageCommand is the deliver a message to an agent becomes: from
@@ -118,8 +142,8 @@ func agentMessageCommand(from, text string) bridge.Command {
 // and writes the response: 200 once accepted, 202 while still queued
 // behind a running turn, 500 on rejection or a lost bridge — never a tmux
 // retry, which could deliver it twice.
-func (s *Server) deliverAgentMessageOverBridge(w http.ResponseWriter, key, name, from, text string) {
-	accepted, err := s.bridgeSend(key, "message to "+name, agentMessageCommand(from, text), bridgeMessageWait, func() {
+func (s *Server) deliverAgentMessageOverBridge(w http.ResponseWriter, target bridge.Target, name, from, text string) {
+	accepted, err := s.bridgeSend(target, "message to "+name, agentMessageCommand(from, text), bridgeMessageWait, func() {
 		s.publishAgentMessage(from, name)
 	})
 	switch {

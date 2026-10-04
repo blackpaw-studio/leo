@@ -74,12 +74,12 @@ func TestRouterRoutesOnlyKnownConnectedAgents(t *testing.T) {
 		t.Fatal("routed an agent whose bridge is not connected")
 	}
 	_ = mustConnect(t, h, "leo-alpha")
-	if key, ok := r.Route("leo-alpha"); !ok || key != "leo-alpha" {
-		t.Fatalf("Route(leo-alpha) = %q, %v; want leo-alpha, true", key, ok)
+	if target, ok := r.Route("leo-alpha"); !ok || target.Key != "leo-alpha" || target.Gen == 0 {
+		t.Fatalf("Route(leo-alpha) = %+v, %v; want leo-alpha's live generation", target, ok)
 	}
 	_ = mustConnect(t, h, "leo-old.ab12")
-	if key, ok := r.Route("leo-renamed"); !ok || key != "leo-old.ab12" {
-		t.Fatalf("Route(leo-renamed) = %q, %v; want its launch key", key, ok)
+	if target, ok := r.Route("leo-renamed"); !ok || target.Key != "leo-old.ab12" {
+		t.Fatalf("Route(leo-renamed) = %+v, %v; want its launch key", target, ok)
 	}
 	if _, ok := r.Route("leo-unknown"); ok {
 		t.Fatal("routed an agent with no bridge key")
