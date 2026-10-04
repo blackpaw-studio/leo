@@ -51,7 +51,7 @@ daemon ──(unix socket stream)──> `leo bridge --agent <key> --launch <lau
 **Daemon (`internal/bridge`).** Keeps the following per agent:
 - **Generations.** Each launch opens a generation bound to its launch token (`Open(key, launch)`), which always starts a new one: the previous generation's stream is closed and its unacked commands fail as forgotten. A stream connect or report naming any other launch is refused with 409, and a key no launch has opened refuses every mod, so a dying predecessor can never take its successor's stream or opening, mark it busy, reject its commands, or forget its generation. Mods never create generations.
 - **Connection registry.** At most one live stream per agent, from its current launch. A reconnect of that launch replaces the old stream.
-- **Outbox.** Commands that have not been acked, kept in memory with stable ids.
+- **Queue.** Commands that have not been acked, kept in memory with stable ids. A deliver also lives in the agent's durable outbox until acked (see Undelivered messages).
 - **Redelivery.** On reconnect, every unacked command is resent in order. This closes the reload race found in the spike.
 - **Lookup.** `Connected(agent) bool`, which the injection call sites use to choose between the bridge and tmux. The router resolves an agent to the generation its own launch opened and routes only while that generation is still the key's live one, so an agent that does not hold its key (a fresh launch keyed `<name>.<nonce>` while a renamed agent's session holds `<name>`) never receives the other's commands.
 - **Adoption wait.** A restarted daemon refuses unopened keys with a retryable 503 until its restore settles. Before any agent launches, the restore reserves every key it is about to adopt (read from the surviving sessions' environments) for the agent adopting it: no fresh launch allocates a reserved key, and a key stays awaited, still 503, until its agent opens it or gives the reservation up (its session is gone or is adopted legacy). A rename carries the reservation. After that an unopened key answers 409. An adoption whose key another agent already holds is adopted legacy instead.
@@ -92,7 +92,7 @@ Delivered text is framed by where it comes from:
 ## Fallback
 
 Each injection call site checks `bridge.Connected(agent)`:
-- **Connected:** the command goes through the bridge. The call returns once the ack arrives, or fails after a 30 s ack timeout. On timeout, the command stays in the outbox for redelivery and the caller gets an error. There is no tmux retry, so a message is never delivered twice.
+- **Connected:** the command goes through the bridge. The call returns once the ack arrives. One still unacked when the caller's wait runs out stays queued for redelivery and is answered as queued (a web message 202, a task prompt a queued result), not as an error inviting a resend. There is no tmux retry, so a message is never delivered twice.
 - **Not connected:** today's path runs unchanged (inbox socket or tmux paste), and a warning is logged.
 
 `leo doctor` and the agent list show the bridge state for each claude agent as `bridge: connected | absent`, and an absent bridge with commands queued as `absent, N pending`: those commands wait for the mod, and the idle sweep does not suspend the agent meanwhile (that would drop them).
@@ -104,6 +104,20 @@ Whether a launch needs the opening is decided per conversation. Its id is `Openi
 A daemon restart does not end the agents' tmux sessions: the restarted daemon adopts them. It reads the key and launch token from the session's environment and re-opens that launch's generation. An adopted session is live and is never killed or relaunched: there is no connect timeout, and a refused opening is only logged. Before a bridged launch starts, the record also keeps the opening it queued (`{launch, id}`); when the adopted session's launch matches, the opening is queued again under the same id and waits for the mod to reconnect. If the mod already ran it, its dedup turns the repeat into a re-ack, so the opening runs exactly once. An adopted legacy session's opening is recorded from its transcript, as for any argv launch. Acks and fallbacks write to the agent's record under its name at the time of the write, so a rename while the opening is pending loses nothing.
 
 Shell turn hooks are dropped for claude agents whose bridge is connected. The bridge owns a dispatch's reports from its launch's hello until that launch's final `session.end` (not `/clear` or resume) or the generation is forgotten, whatever reconnect gaps fall between; the daemon ignores shell-hook reports for that span, so state is never counted twice. The hooks stay installed as the fallback.
+
+## Undelivered messages
+
+Every `deliver` leo accepts for an agent (agent messages, persistent-task prompts) is written to the agent's outbox, `~/.leo/state/outbox/<agent>.json`, before the hub queues it, and removed once the mod acks it, ok or not (a refusal is answered to its sender or logged). Control commands (interrupt, compact, clear) are not kept: they belong to the launch they were sent to.
+
+- **Storage.** The file is rewritten whole on each change (temp file, fsync, rename), is 0600, and is removed when empty. An agent holds at most 256 messages and 32 MiB of text; a message past either cap is refused to its sender (a web message gets 500), never dropped. A corrupt file is an error, never read as empty. Records written before the outbox existed need no migration.
+- **Carry-over.** When a launch ends with messages unacked, the agent's next launch (crash relaunch, legacy fallback, wake from suspend, or adoption by a restarted daemon) takes them in their original order and under their original ids, so the mod's dedup turns a repeat of one it already took into a re-ack: each runs exactly once.
+  - A fresh bridged launch queues them behind its opening. The opening is queued as a gate: nothing behind it reaches the mod until the mod acks it ok, and a refused opening seals the generation. A legacy relaunch can then take them without delivering any twice.
+  - An adopted session queues them after its requeued opening, before its generation is routable, so no new message overtakes them.
+  - A launch carrying messages whose mod never connects falls back to legacy, as one with a pending opening does. An adopted session never does.
+  - A legacy launch pastes them into its session in order, after its oversized opening if it has one, and removes each once pasted. The next launch waits for that to stop, so a message is pasted or carried, never both.
+  - A sender whose message's launch ended first is answered as queued: a web message gets 202, a task prompt a queued result.
+- **Rename and removal.** An agent's outbox moves with a rename, live or stopped. Deleting an agent, or a restore dropping a worktree agent whose workspace is gone, drops its messages with a log line and tells each sending agent what never arrived: over its bridge, by a tmux paste, or, when it is dormant, through its own outbox.
+- **Dispatches keep no outbox.** A dispatch outlives neither its claude nor its daemon, so a follow-up has no next launch to go to. One still undelivered when the dispatch ends closes with a turn result that says it never ran and quotes how it began.
 
 ## Removed / kept
 
@@ -119,7 +133,8 @@ Shell turn hooks are dropped for claude agents whose bridge is connected. The br
   - the `compact` wait-for-idle path
   - reports are well-formed
 - **Go unit tests:**
-  - outbox ordering, redelivery on reconnect, ack timeout
+  - queue ordering, redelivery on reconnect, ack timeout
+  - the durable outbox: atomic writes, caps, carry-over on crash relaunch, adoption and legacy fallback (exactly once, behind the opening), removal notices
   - the connection-replace race
   - fallback selection at each call site
   - framing per source
@@ -130,10 +145,13 @@ Shell turn hooks are dropped for claude agents whose bridge is connected. The br
   - compact, interrupt
   - a forced mod reload mid-stream with no loss and no duplicate
   - bridge absent (`--safe-mode`) falls back to tmux
+  - a daemon restart mid-opening, and one while a message waits behind a running turn: each runs exactly once
 - **Live verification** on the isolated test daemon before merge. Production restarts only with Evan's go-ahead.
 
 ## Open risks
 
 - **API churn.** The mods API may change between Claude Code releases. The mod is pinned to the types of the tested version, and `leo doctor` warns when the claude version is newer than the tested version.
 - **Startup dialogs.** It is not yet known whether `$.prompt.submit` waits behind a blocking startup dialog. The opening-prompt step of the e2e suite covers this. If it does not wait, `DialogKey` stays active for claude.
+- **Legacy paste has no dedup.** A message the mod took but had not acked when its launch ended, carried to a legacy launch (an adoption or wake that comes back without the bridge), is pasted again. A fallback from a mod that never connected or refused the opening is safe: the gate kept everything behind the opening from it.
+- **Key change.** A relaunch under a different bridge key (`<name>.<nonce>`) does not see the predecessor's `acked:<key>` entry, so a message the predecessor took but never acked runs again there.
 - **Untested built-in.** `$.command.run({command:'clear'})` running a built-in command is unverified. If it doesn't work, `clear` stays on tmux keys.
