@@ -203,6 +203,36 @@ func TestOpeningAckIsPersisted(t *testing.T) {
 	}
 }
 
+// An agent renamed while live keeps its launch: its opening's ack lands in
+// the record under the name the agent has when it lands, not the one it
+// had at launch.
+func TestOpeningAckFollowsALiveRename(t *testing.T) {
+	tmuxPath, logPath := statefulTmux(t, "")
+	home := t.TempDir()
+	agentRecord(t, home, agentstore.Record{Name: "alpha"})
+	spec := claudeSpec(t, "alpha")
+	spec.OpeningBriefPath = writeBrief(t, "the opening")
+	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home))
+	waitForNewSessions(t, logPath, 1)
+	s, launch := connectMod(t, f.hub, tmuxPath, "alpha")
+	cmd := nextCmd(t, s)
+
+	waitFor(t, "the agent to run", func() bool { return f.sv.EphemeralAgents()["alpha"].Status == "running" })
+	if err := f.sv.RenameAgent("alpha", "beta"); err != nil {
+		t.Fatal(err)
+	}
+	// agent.Manager.Rename re-keys the record once the supervisor has.
+	if err := agentstore.Rename(home, "alpha", "beta", func(r agentstore.Record) agentstore.Record { r.Name = "beta"; return r }); err != nil {
+		t.Fatal(err)
+	}
+	helloAs(t, f.hub, "alpha", launch, "s-1")
+	ackCmd(t, f.hub, "alpha", launch, cmd, true)
+	waitFor(t, "the ack under the new name", func() bool { return storedAck(home, "beta") == cmd.ID })
+	if rec := storedRecord(home, "beta"); rec.OpeningQueuedID != "" {
+		t.Fatalf("the renamed record still has the opening queued: %+v", rec)
+	}
+}
+
 // A launch with no session flag starts a conversation whose id nobody knows
 // yet: its opening is queued under its launch, and the ack records the
 // session the mod's hello named, so a later --resume of that session knows

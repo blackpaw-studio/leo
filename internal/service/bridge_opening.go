@@ -71,18 +71,25 @@ type openingRecord interface {
 	queued(launch, id string)
 }
 
-// agentOpeningRecord persists to name's agentstore record in home.
-type agentOpeningRecord struct{ home, name string }
+// agentOpeningRecord persists to the agentstore record in home of the
+// agent id names when it writes: a live rename moves the record, and the
+// launch's later writes follow it.
+type agentOpeningRecord struct {
+	home string
+	id   *procIdentity
+}
 
 func (r agentOpeningRecord) delivered(id, launch string) {
-	if err := agentstore.SetOpeningAcked(r.home, r.name, id, launch); err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] warning: recording the opening prompt's delivery: %v\n", r.name, err)
+	name := r.id.Name()
+	if err := agentstore.SetOpeningAcked(r.home, name, id, launch); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] warning: recording the opening prompt's delivery: %v\n", name, err)
 	}
 }
 
 func (r agentOpeningRecord) queued(launch, id string) {
-	if err := agentstore.SetOpeningQueued(r.home, r.name, launch, id); err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] warning: recording the queued opening prompt (an adopted session could not get it again): %v\n", r.name, err)
+	name := r.id.Name()
+	if err := agentstore.SetOpeningQueued(r.home, name, launch, id); err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] warning: recording the queued opening prompt (an adopted session could not get it again): %v\n", name, err)
 	}
 }
 
@@ -101,7 +108,7 @@ func newOpeningDelivery(homePath string, spec ProcessSpec, id *procIdentity) *op
 	if spec.Kind != harness.KindAgent {
 		return o
 	}
-	o.record = agentOpeningRecord{home: homePath, name: id.Name()}
+	o.record = agentOpeningRecord{home: homePath, id: id}
 	if recs, err := agentstore.Load(agentstore.FilePath(homePath)); err == nil {
 		rec := recs[spec.Name]
 		if rec.OpeningAckedID != "" {
