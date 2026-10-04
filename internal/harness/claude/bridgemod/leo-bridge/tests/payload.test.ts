@@ -47,6 +47,21 @@ test('turn.start carries the prompt; turn.complete carries the final message', a
   expect(completeEv).toMatchObject({ type: 'event', name: 'turn.complete', message: 'the answer' })
 })
 
+// An interrupted turn still completes; leo closes it as interrupted rather
+// than finished, so the report says so.
+test('an aborted turn.complete says reason aborted; a finished one has no reason', async ($, on) => {
+  const h = setup(on)
+  await start($, h)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.turn.complete({ turnId: 't1', answer: 'partial', durationMs: 5, isAborted: true, reason: 'aborted' })
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await $.turn.complete({ turnId: 't2', answer: 'done', durationMs: 5, isAborted: false, reason: 'answer' })
+  await h.settle()
+  const [, aborted, , finished] = events(h)
+  expect(aborted).toMatchObject({ name: 'turn.complete', reason: 'aborted', message: 'partial' })
+  expect(finished!.reason).toBeUndefined()
+})
+
 test('missing prompt or answer text is left out, not sent as junk', async ($, on) => {
   const h = setup(on)
   await start($, h)

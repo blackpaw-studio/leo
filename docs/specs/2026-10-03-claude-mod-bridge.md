@@ -64,7 +64,7 @@ daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdou
   - For `deliver`, the ack is sent when `$.prompt.submit` resolves, meaning the prompt was accepted (started, or queued behind the running turn).
   - For `compact`, the mod waits for idle before calling, because `$.session.compact` rejects while a turn runs.
 - `{"type":"event","name":"turn.start"|"turn.complete"|"session.end","event_id"?, "usage"?, "reason"?, "prompt"?, "message"?}`
-  - `prompt` (turn.start only): the text the turn began with. `message` (turn.complete only): the assistant's final visible text, which a dispatch returns as its result. The mod caps each at 1M characters.
+  - `prompt` (turn.start only): the text the turn began with. `message` (turn.complete only): the assistant's final visible text, which a dispatch returns as its result. The mod caps each at 1M characters. `reason` on turn.complete is `"aborted"` for an interrupted turn (absent otherwise); the dispatcher closes such a turn as interrupted.
   - `event_id`: `<name>:<turn id>` or `session.end:<session id>`, stable across the mod's retries, so the dispatcher drops a replay.
 - `{"type":"hello","session_id","claude_version","busy"?}`, sent on connect; `busy` says whether a main-loop turn is running.
 

@@ -49,6 +49,12 @@ func TestHookPayloadTranslation(t *testing.T) {
 			want:   map[string]any{"hook_event_name": "Stop", "session_id": "s-1", "last_assistant_message": "final words"},
 		},
 		{
+			name:   "an aborted turn.complete is an Interrupt, keeping its partial message",
+			ev:     Event{Agent: agentA, Name: EventTurnComplete, SessionID: "s-1", Reason: TurnAborted, Message: "partial"},
+			wantOK: true,
+			want:   map[string]any{"hook_event_name": "Interrupt", "session_id": "s-1", "last_assistant_message": "partial"},
+		},
+		{
 			name:        "the event id becomes the report's dedup id",
 			ev:          Event{Agent: agentA, Name: EventTurnComplete, SessionID: "s-1", EventID: "turn.complete:t1"},
 			wantOK:      true,

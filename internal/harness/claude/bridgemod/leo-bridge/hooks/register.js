@@ -133,7 +133,11 @@ function defined(fields) {
 // Usage is a nice-to-have: a turn.complete without it still ends the turn
 // in the daemon, which a lost turn.complete would leave stuck busy.
 async function turnCompleteReport($, e) {
-  const fields = { event_id: eventId('turn.complete', e.turnId), message: reportText(e.answer) }
+  const fields = {
+    event_id: eventId('turn.complete', e.turnId),
+    message: reportText(e.answer),
+    reason: e.isAborted === true ? 'aborted' : undefined,
+  }
   try {
     const usage = await $.session.usage()
     return eventReport('turn.complete', defined({ ...fields, usage }))

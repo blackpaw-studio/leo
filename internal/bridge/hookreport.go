@@ -10,6 +10,10 @@ var hookEventNames = map[string]string{
 	EventSessionEnd:   "SessionEnd",
 }
 
+// TurnAborted is turn.complete's reason when the turn was interrupted
+// rather than finished.
+const TurnAborted = "aborted"
+
 // bridgeEventIDPrefix keeps bridge event ids apart from shell-hook ones in
 // the dispatcher's shared dedup set.
 const bridgeEventIDPrefix = "bridge:"
@@ -17,7 +21,9 @@ const bridgeEventIDPrefix = "bridge:"
 // HookPayload translates a bridge event into the report the claude shell
 // turn hooks post to /api/dispatch/{id}/report (consult.HookReport's EventID
 // and Payload), so a bridge event can drive consult.Dispatcher.Report
-// unchanged. ok is false for events with no hook counterpart (hello).
+// unchanged. ok is false for events with no hook counterpart (hello). An
+// aborted turn.complete becomes an Interrupt, which Claude's shell hooks
+// never report, so an interrupted turn closes as interrupted.
 //
 // turn.start's prompt and turn.complete's final message travel under the
 // shell hooks' own keys (prompt, last_assistant_message), so a late-acked
@@ -34,6 +40,10 @@ func HookPayload(ev Event) (eventID string, payload json.RawMessage, ok bool) {
 	hookName, ok := hookEventNames[ev.Name]
 	if !ok {
 		return "", nil, false
+	}
+	if ev.Name == EventTurnComplete && ev.Reason == TurnAborted {
+		// The dispatcher's own name for a turn that ended early.
+		hookName = "Interrupt"
 	}
 	fields := map[string]string{"hook_event_name": hookName}
 	if ev.SessionID != "" {
