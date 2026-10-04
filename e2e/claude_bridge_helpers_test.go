@@ -25,8 +25,12 @@ import (
 )
 
 // The real-claude bridge suite runs the installed claude (haiku) under a
-// real `leo service`, so it costs a few cents of model usage per run. It
-// skips when claude is missing, predates the mods API, or is not logged in.
+// real `leo service`, so it costs a few cents of model usage per run. It is
+// opt-in (realClaudeEnv=1) and skips when claude is missing, predates the
+// mods API, or is not logged in.
+
+// realClaudeEnv opts a run into the real-claude bridge suite.
+const realClaudeEnv = "LEO_E2E_CLAUDE"
 
 const (
 	bridgeTemplate = "bridged"
@@ -38,6 +42,9 @@ const (
 // load the leo-bridge mod and is logged in.
 func realClaude(t *testing.T) string {
 	t.Helper()
+	if os.Getenv(realClaudeEnv) != "1" {
+		t.Skipf("set %s=1 to run the real-claude bridge suite (it uses model credits)", realClaudeEnv)
+	}
 	path, err := exec.LookPath("claude")
 	if err != nil {
 		t.Skip("claude is not installed")

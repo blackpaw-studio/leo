@@ -34,8 +34,12 @@ clean:
 test:
 	go test -race -cover ./...
 
+# The suite runs fakes by default. LEO_E2E_CLAUDE=1 adds the real-claude
+# bridge tests (installed, logged-in claude; costs model usage). E2E_RUN
+# narrows the run to tests matching a -run pattern. Run it isolated, as
+# e2e/README.md describes.
 e2e:
-	go test -tags=e2e -v -count=1 -timeout 30m ./e2e/...
+	go test -tags=e2e -v -count=1 -timeout 30m $(if $(E2E_RUN),-run '$(E2E_RUN)') ./e2e/...
 
 lint: $(TOOLBIN)/.golangci-$(GOLANGCI_VERSION) $(TOOLBIN)/.gosec-$(GOSEC_VERSION)
 	$(TOOLBIN)/golangci-lint run
