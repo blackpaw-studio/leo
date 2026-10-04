@@ -454,6 +454,9 @@ func TestEachPlanNamesItsLaunch(t *testing.T) {
 	if a == "" || b == "" || a == b {
 		t.Fatalf("launch ids %q and %q: want two distinct ids", a, b)
 	}
+	if first.Launch != a || second.Launch != b {
+		t.Fatalf("Plan.Launch = %q, %q; want the env's %q, %q", first.Launch, second.Launch, a, b)
+	}
 	if !slices.Contains(EnvKeys, EnvLaunch) {
 		t.Fatalf("EnvKeys = %v lacks %s, so other launches would not blank it", EnvKeys, EnvLaunch)
 	}

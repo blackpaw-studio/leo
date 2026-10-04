@@ -31,6 +31,10 @@ const MaxBridgeReportBytes = maxBridgeReportBytes
 // deliver through the claude mod bridge.
 func (s *Server) Bridge() *bridge.Hub { return s.bridge }
 
+// bridgeLaunchParam is the query parameter naming the launch (the mod's
+// LEO_BRIDGE_LAUNCH) a stream or report comes from.
+const bridgeLaunchParam = "launch"
+
 // handleBridgeStream holds agent's command stream open, writing one JSON
 // command per line and flushing each. It ends when a newer connection
 // replaces it, the hub closes (daemon shutdown), or the client goes away;
@@ -41,7 +45,7 @@ func (s *Server) handleBridgeStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid agent name %q", agent))
 		return
 	}
-	stream, err := s.bridge.Connect(agent)
+	stream, err := s.bridge.Connect(agent, r.URL.Query().Get(bridgeLaunchParam))
 	if err != nil {
 		writeError(w, bridgeErrorStatus(err, http.StatusServiceUnavailable), err.Error())
 		return
@@ -121,7 +125,7 @@ func (s *Server) handleBridgeReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.bridge.Apply(agent, report); err != nil {
+	if err := s.bridge.Apply(agent, r.URL.Query().Get(bridgeLaunchParam), report); err != nil {
 		writeError(w, bridgeErrorStatus(err, http.StatusBadRequest), err.Error())
 		return
 	}
@@ -129,12 +133,17 @@ func (s *Server) handleBridgeReport(w http.ResponseWriter, r *http.Request) {
 }
 
 // bridgeErrorStatus maps a hub error to its HTTP status: 410 Gone for a
-// forgotten key (its launch is over; see bridge.Hub.Forget), 503 once the
-// hub has closed, else fallback.
+// forgotten key (its launch is over; see bridge.Hub.Forget), 409 Conflict
+// for a launch that is not the key's current one (see bridge.Hub.Open), 400
+// for a malformed launch, 503 once the hub has closed, else fallback.
 func bridgeErrorStatus(err error, fallback int) int {
 	switch {
 	case errors.Is(err, bridge.ErrForgotten):
 		return http.StatusGone
+	case errors.Is(err, bridge.ErrStaleLaunch):
+		return http.StatusConflict
+	case errors.Is(err, bridge.ErrInvalidLaunch):
+		return http.StatusBadRequest
 	case errors.Is(err, bridge.ErrClosed):
 		return http.StatusServiceUnavailable
 	default:

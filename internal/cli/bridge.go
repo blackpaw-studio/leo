@@ -11,14 +11,19 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 	"github.com/spf13/cobra"
 )
 
-// bridgeAgentEnv names the variable leo sets at launch to the bridge key.
-const bridgeAgentEnv = "LEO_BRIDGE_AGENT"
+// bridgeAgentEnv names the variable leo sets at launch to the bridge key,
+// and bridgeLaunchEnv the one naming the launch.
+const (
+	bridgeAgentEnv  = bridgemod.EnvAgent
+	bridgeLaunchEnv = bridgemod.EnvLaunch
+)
 
 const (
 	// bridgeReportTimeout bounds one report, so a wedged daemon cannot stall
@@ -32,8 +37,8 @@ const (
 // bridgeDeps are the effects of `leo bridge`, injected so the command can be
 // driven without a daemon or a parent process.
 type bridgeDeps struct {
-	openStream func(ctx context.Context, home, agent string) (io.ReadCloser, error)
-	postReport func(ctx context.Context, home, agent string, body []byte) error
+	openStream func(ctx context.Context, home, agent, launch string) (io.ReadCloser, error)
+	postReport func(ctx context.Context, home, agent, launch string, body []byte) error
 	getenv     func(string) string
 	// homeDir resolves the leo home whose daemon socket to use.
 	homeDir func() string
@@ -53,11 +58,30 @@ func defaultBridgeDeps() bridgeDeps {
 
 func newBridgeCmd() *cobra.Command { return newBridgeCmdWith(defaultBridgeDeps()) }
 
+// bridgeFlags are `leo bridge`'s identity flags, shared with `report`.
+type bridgeFlags struct{ agent, launch string }
+
+// resolve picks the bridge key and launch from the flags, else the
+// environment leo set at launch.
+func (f *bridgeFlags) resolve(getenv func(string) string) (agent, launch string, err error) {
+	agent, err = resolveBridgeAgent(f.agent, getenv)
+	if err != nil {
+		return "", "", err
+	}
+	launch, err = resolveBridgeLaunch(f.launch, getenv)
+	if err != nil {
+		return "", "", err
+	}
+	return agent, launch, nil
+}
+
 // newBridgeCmdWith builds `leo bridge`, the claude mod's link to the daemon:
 // bare, it streams the agent's commands to stdout as JSON lines; `report`
-// posts one ack/hello/event, read from stdin, back.
+// posts one ack/hello/event, read from stdin, back. Both name the launch
+// they belong to, so the daemon refuses a launch that is not the key's
+// current one.
 func newBridgeCmdWith(deps bridgeDeps) *cobra.Command {
-	var agentFlag string
+	flags := &bridgeFlags{}
 	cmd := &cobra.Command{
 		Use:    "bridge",
 		Hidden: true,
@@ -71,19 +95,20 @@ Claude Code mod; not for interactive use.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			agent, err := resolveBridgeAgent(agentFlag, deps.getenv)
+			agent, launch, err := flags.resolve(deps.getenv)
 			if err != nil {
 				return err
 			}
-			return runBridgeStream(cmd.Context(), deps, agent, cmd.OutOrStdout())
+			return runBridgeStream(cmd.Context(), deps, agent, launch, cmd.OutOrStdout())
 		},
 	}
-	cmd.PersistentFlags().StringVar(&agentFlag, "agent", "", "bridge key (default $LEO_BRIDGE_AGENT)")
-	cmd.AddCommand(newBridgeReportCmd(deps, &agentFlag))
+	cmd.PersistentFlags().StringVar(&flags.agent, "agent", "", "bridge key (default $"+bridgeAgentEnv+")")
+	cmd.PersistentFlags().StringVar(&flags.launch, "launch", "", "launch token (default $"+bridgeLaunchEnv+")")
+	cmd.AddCommand(newBridgeReportCmd(deps, flags))
 	return cmd
 }
 
-func newBridgeReportCmd(deps bridgeDeps, agentFlag *string) *cobra.Command {
+func newBridgeReportCmd(deps bridgeDeps, flags *bridgeFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:    "report",
 		Hidden: true,
@@ -93,7 +118,7 @@ travels on stdin because it can carry a whole prompt or final message, far
 more than argv holds.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			agent, err := resolveBridgeAgent(*agentFlag, deps.getenv)
+			agent, launch, err := flags.resolve(deps.getenv)
 			if err != nil {
 				return err
 			}
@@ -103,10 +128,11 @@ more than argv holds.`,
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), bridgeReportTimeout)
 			defer cancel()
-			err = deps.postReport(ctx, deps.homeDir(), agent, body)
-			if errors.Is(err, daemon.ErrBridgeGone) {
-				// The launch this report belongs to is over: it is moot,
-				// and failing would only have the mod retry it.
+			err = deps.postReport(ctx, deps.homeDir(), agent, launch, body)
+			if errors.Is(err, daemon.ErrBridgeGone) || errors.Is(err, daemon.ErrBridgeStale) {
+				// The launch this report belongs to is over, or is not the
+				// key's current one: the report is moot, and failing would
+				// only have the mod retry it.
 				fmt.Fprintf(cmd.ErrOrStderr(), "bridge report: dropped: %v\n", err)
 				return nil
 			}
@@ -149,13 +175,30 @@ func resolveBridgeAgent(flag string, getenv func(string) string) (string, error)
 	return agent, nil
 }
 
-// runBridgeStream copies agent's command stream to out. A clean end of
-// stream exits 0, as does hanging up on a vanished parent; a failed connect,
-// read or write is an error.
-func runBridgeStream(ctx context.Context, deps bridgeDeps, agent string, out io.Writer) error {
+// resolveBridgeLaunch picks --launch, else $LEO_BRIDGE_LAUNCH (the token
+// leo minted for this claude's launch), and validates it as the daemon
+// does.
+func resolveBridgeLaunch(flag string, getenv func(string) string) (string, error) {
+	launch := flag
+	if launch == "" {
+		launch = getenv(bridgeLaunchEnv)
+	}
+	if launch == "" {
+		return "", errors.New("bridge: no launch: pass --launch or set " + bridgeLaunchEnv)
+	}
+	if err := bridge.ValidateLaunch(launch); err != nil {
+		return "", fmt.Errorf("bridge: %w", err)
+	}
+	return launch, nil
+}
+
+// runBridgeStream copies the command stream of agent's launch to out. A
+// clean end of stream exits 0, as does hanging up on a vanished parent; a
+// failed connect, read or write is an error.
+func runBridgeStream(ctx context.Context, deps bridgeDeps, agent, launch string, out io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	body, err := deps.openStream(ctx, deps.homeDir(), agent)
+	body, err := deps.openStream(ctx, deps.homeDir(), agent, launch)
 	if err != nil {
 		return fmt.Errorf("bridge: %w", err)
 	}

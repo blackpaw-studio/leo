@@ -234,7 +234,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	var bd *bridgedDispatch
 	if bridged {
 		bd = &bridgedDispatch{
-			id: req.ID, key: bridgePlan.Key, caller: req.Caller,
+			id: req.ID, key: bridgePlan.Key, launch: bridgePlan.Launch, caller: req.Caller,
 			respawn:     append([]string{"-c", req.Cwd}, append(envArgs(env), strings.Join(words, " "))...),
 			legacyPaste: briefPath == "" && req.Prompt != "",
 		}

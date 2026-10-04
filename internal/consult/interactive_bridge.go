@@ -68,10 +68,10 @@ func (b InteractiveBridge) sendTimeout() time.Duration {
 // what it takes to relaunch it the legacy way if the mod never connects.
 type bridgedDispatch struct {
 	id, key, caller string
-	// target is the generation of key this dispatch's launch opened, and
-	// since when it started.
+	// launch is the launch token its claude was handed; target the
+	// generation of key opened for it.
+	launch string
 	target bridge.Target
-	since  time.Time
 	pane   string // "" until the launch returns it
 	// respawn is the respawn-pane argv (sans pane) of the legacy relaunch.
 	respawn []string
@@ -79,6 +79,10 @@ type bridgedDispatch struct {
 	// (it was too large for argv).
 	legacyPaste bool
 	fellBack    bool
+	// ownsReports: the launch's mod said hello and its session has not
+	// ended for good, so its reports, not the shell hooks', drive the
+	// dispatch (see BridgeOwnsReports).
+	ownsReports bool
 }
 
 // bridgeEnvKeys are the variables the leo-bridge mod reads. A bridged launch
@@ -126,12 +130,12 @@ func (r *TmuxInteractiveRuntime) planDispatchBridge(ctx context.Context, harness
 // and the launch should go legacy.
 func (r *TmuxInteractiveRuntime) queueBridgedOpening(d *bridgedDispatch, prompt string) bool {
 	b := r.bridgeWiring()
-	target, err := b.Hub.Open(d.key)
+	target, err := b.Hub.Open(d.key, d.launch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: the leo bridge is unavailable (%v); launching without it\n", d.id, err)
 		return false
 	}
-	d.target, d.since = target, time.Now()
+	d.target = target
 	if prompt != "" {
 		if _, err := b.Hub.EnqueueTo(target, bridge.Opening(d.key, prompt)); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: queueing the opening on the leo bridge failed (%v); launching without it\n", d.id, err)
@@ -196,25 +200,38 @@ func (r *TmuxInteractiveRuntime) liveBridge(pane string) (bridgedDispatch, *brid
 }
 
 // BridgeOwnsReports reports whether dispatch id's turn state comes from its
-// bridge rather than the claude shell hooks: launched bridged, not fallen
-// back, and its mod connected right now. Both paths report the same
-// moments, so exactly one may drive the dispatcher; a mod that died (its
-// stream gone) hands them back to the hooks.
+// bridge rather than the claude shell hooks. Both report the same moments,
+// so exactly one may drive the dispatcher, and which one must not flip
+// while the launch runs: the bridge owns them from its mod's hello until
+// that launch's session ends for good (not a /clear or resume), or its
+// generation is forgotten (released, or relaunched without the bridge).
+// A gap between stream reconnects keeps them with the bridge: the mod's
+// reports travel on their own and still arrive.
 func (r *TmuxInteractiveRuntime) BridgeOwnsReports(id string) bool {
 	r.mu.RLock()
+	defer r.mu.RUnlock()
 	d := r.bridged[id]
-	owned := d != nil && !d.fellBack
-	var target bridge.Target
-	if d != nil {
-		target = d.target
-	}
-	hub := r.bridge.Hub
-	r.mu.RUnlock()
-	if !owned || hub == nil {
+	return d != nil && !d.fellBack && d.ownsReports
+}
+
+// claimReport folds ev, from dispatch id's bridge, into who owns its
+// reports, and reports whether the bridge owns ev itself: a hello starts
+// ownership, and a final session.end is the bridge's last report.
+func (r *TmuxInteractiveRuntime) claimReport(id string, ev bridge.Event) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d := r.bridged[id]
+	if d == nil || d.fellBack || ev.Gen != d.target.Gen {
 		return false
 	}
-	live, connected := hub.Live(target.Key)
-	return connected && live == target
+	if ev.Name == bridge.ReportHello {
+		d.ownsReports = true
+	}
+	owned := d.ownsReports
+	if ev.Name == bridge.EventSessionEnd && bridge.IsFinalSessionEnd(ev.Reason) {
+		d.ownsReports = false
+	}
+	return owned
 }
 
 // FrameMessage returns message as the dispatch in pane will receive it: a
@@ -245,7 +262,7 @@ func (r *TmuxInteractiveRuntime) AwaitOpening(ctx context.Context, pane string) 
 	}
 	b := r.bridgeWiring()
 	waitCtx, cancel := context.WithTimeout(ctx, b.connectTimeout())
-	_, waitErr := b.Hub.WaitFor(waitCtx, d.key, func(st bridge.State) bool { return st.ConnectedSince(d.target, d.since) })
+	_, waitErr := b.Hub.WaitFor(waitCtx, d.key, func(st bridge.State) bool { return st.HasConnected(d.target) })
 	cancel()
 	switch {
 	case waitErr == nil:
@@ -314,15 +331,16 @@ type BridgeReportSink interface {
 }
 
 // DispatchBridgeSubscriber returns the hub subscriber that drives bridged
-// dispatches' state: each turn or session event of a dispatch the bridge
-// owns (see BridgeOwnsReports) goes to the sink as the claude shell-hook
-// report it stands in for (bridge.HookPayload), and a completed turn's
-// session usage goes along with it. The sink only records state and never
-// sends on the bridge, as a subscriber must not.
+// dispatches' state: a hello hands a dispatch's reports to its bridge (see
+// BridgeOwnsReports), then each turn or session event of it goes to the
+// sink as the claude shell-hook report it stands in for
+// (bridge.HookPayload), and a completed turn's session usage goes along
+// with it. The sink only records state and never sends on the bridge, as a
+// subscriber must not.
 func (r *TmuxInteractiveRuntime) DispatchBridgeSubscriber(sink BridgeReportSink) bridge.Subscriber {
 	return bridge.SubscriberFunc(func(ev bridge.Event) {
 		id, ok := DispatchIDFromBridgeKey(ev.Agent)
-		if !ok || !r.BridgeOwnsReports(id) {
+		if !ok || !r.claimReport(id, ev) {
 			return
 		}
 		eventID, payload, ok := bridge.HookPayload(ev)

@@ -6,26 +6,32 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 )
 
-// connectWhenOpen connects to key's stream once the current launch has
-// opened it (a key between launches refuses with ErrForgotten).
-func connectWhenOpen(t *testing.T, hub *bridge.Hub, key string) *bridge.Stream {
+// connectMod connects key's stream as the mod of the claude in the stub
+// session does: under the launch token that session's environment carries.
+// It retries while the hub has not opened that launch yet (a supervisor
+// between launches, or not yet adopting), and returns the launch.
+func connectMod(t *testing.T, hub *bridge.Hub, tmuxPath, key string) (*bridge.Stream, string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		s, err := hub.Connect(key)
+		launch := sessionEnv(t, tmuxPath, bridgemod.EnvLaunch)
+		s, err := hub.Connect(key, launch)
 		if err == nil {
-			return s
+			return s, launch
 		}
-		if !errors.Is(err, bridge.ErrForgotten) || time.Now().After(deadline) {
-			t.Fatalf("Connect(%s): %v", key, err)
+		retry := launch == "" || errors.Is(err, bridge.ErrInvalidLaunch) || errors.Is(err, bridge.ErrForgotten) || errors.Is(err, bridge.ErrStaleLaunch)
+		if !retry || time.Now().After(deadline) {
+			t.Fatalf("Connect(%s, %q): %v", key, launch, err)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -42,10 +48,17 @@ func nextCmd(t *testing.T, s *bridge.Stream) bridge.Command {
 	return cmd
 }
 
-func ackCmd(t *testing.T, hub *bridge.Hub, key string, cmd bridge.Command, ok bool) {
+func ackCmd(t *testing.T, hub *bridge.Hub, key, launch string, cmd bridge.Command, ok bool) {
 	t.Helper()
-	if err := hub.Apply(key, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: ok, Error: map[bool]string{false: "dropped"}[ok]}); err != nil {
+	if err := hub.Apply(key, launch, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: ok, Error: map[bool]string{false: "dropped"}[ok]}); err != nil {
 		t.Fatalf("ack %s: %v", cmd.ID, err)
+	}
+}
+
+func helloAs(t *testing.T, hub *bridge.Hub, key, launch, session string) {
+	t.Helper()
+	if err := hub.Apply(key, launch, bridge.Report{Type: bridge.ReportHello, SessionID: session, ClaudeVersion: "2.1.289"}); err != nil {
+		t.Fatalf("hello: %v", err)
 	}
 }
 
@@ -79,10 +92,12 @@ func agentRecord(t *testing.T, home string, rec agentstore.Record) {
 	}
 }
 
-func storedAck(home, name string) string {
+func storedRecord(home, name string) agentstore.Record {
 	recs, _ := agentstore.Load(agentstore.FilePath(home))
-	return recs[name].OpeningAckedID
+	return recs[name]
 }
+
+func storedAck(home, name string) string { return storedRecord(home, name).OpeningAckedID }
 
 func withBackoff(d time.Duration) func(*bridgeTestOpts) {
 	return func(o *bridgeTestOpts) { o.backoff = d }
@@ -92,6 +107,18 @@ func withHome(home string) func(*bridgeTestOpts) {
 	return func(o *bridgeTestOpts) { o.home = home }
 }
 
+// tmuxCalls counts the logged tmux calls of verb.
+func tmuxCalls(logPath, verb string) int {
+	b, _ := os.ReadFile(logPath)
+	n := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.Contains(" "+line+" ", " "+verb+" ") {
+			n++
+		}
+	}
+	return n
+}
+
 // The opening is queued before tmux creates the session, so nothing sent to
 // the new agent (a persistent task, a message) can overtake it.
 func TestOpeningIsQueuedBeforeTheSessionExists(t *testing.T) {
@@ -99,8 +126,8 @@ func TestOpeningIsQueuedBeforeTheSessionExists(t *testing.T) {
 	dir := filepath.Dir(tmuxPath)
 	// new-session reports in, then holds until the test lets it go.
 	script, _ := os.ReadFile(tmuxPath)
-	held := strings.Replace(string(script), "new-session) rm -f",
-		"new-session) touch '"+dir+"/started'; while [ ! -f '"+dir+"/go' ]; do sleep 0.01; done; rm -f", 1)
+	held := strings.Replace(string(script), "new-session)\n",
+		"new-session)\n    touch '"+dir+"/started'; while [ ! -f '"+dir+"/go' ]; do sleep 0.01; done\n", 1)
 	if err := os.WriteFile(tmuxPath, []byte(held), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +144,9 @@ func TestOpeningIsQueuedBeforeTheSessionExists(t *testing.T) {
 	waitForNewSessions(t, logPath, 1)
 }
 
-// The opening counts as delivered only once the mod acks it, and the ack is
-// recorded on the agent so it survives a daemon restart.
+// A bridged launch records the opening it queued and the launch it went to
+// before the session starts; the mod's ack records the conversation it
+// landed in and settles the queued record.
 func TestOpeningAckIsPersisted(t *testing.T) {
 	tmuxPath, logPath := statefulTmux(t, "")
 	home := t.TempDir()
@@ -128,16 +156,105 @@ func TestOpeningAckIsPersisted(t *testing.T) {
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home))
 	waitForNewSessions(t, logPath, 1)
 
-	s := connectWhenOpen(t, f.hub, "alpha")
+	s, launch := connectMod(t, f.hub, tmuxPath, "alpha")
 	cmd := nextCmd(t, s)
 	if want := bridge.OpeningID("s-1", "the opening"); cmd.ID != want {
 		t.Fatalf("opening id = %q, want %q (derived from its conversation and text)", cmd.ID, want)
 	}
-	if got := storedAck(home, "alpha"); got != "" {
-		t.Fatalf("recorded %q before any ack", got)
+	rec := storedRecord(home, "alpha")
+	if rec.OpeningAckedID != "" || rec.OpeningQueuedLaunch != launch || rec.OpeningQueuedID != cmd.ID {
+		t.Fatalf("before the ack: %+v, want the opening queued for launch %s", rec, launch)
 	}
-	ackCmd(t, f.hub, "alpha", cmd, true)
+	helloAs(t, f.hub, "alpha", launch, "s-1")
+	ackCmd(t, f.hub, "alpha", launch, cmd, true)
 	waitFor(t, "the ack to be recorded", func() bool { return storedAck(home, "alpha") == cmd.ID })
+	if rec := storedRecord(home, "alpha"); rec.OpeningQueuedLaunch != "" || rec.OpeningQueuedID != "" {
+		t.Fatalf("the acked opening is still recorded as queued: %+v", rec)
+	}
+}
+
+// A launch with no session flag starts a conversation whose id nobody knows
+// yet: its opening is queued under its launch, and the ack records the
+// session the mod's hello named, so a later --resume of that session knows
+// the opening already ran there.
+func TestOpeningAckRecordsTheConversationItLandedIn(t *testing.T) {
+	tmuxPath, logPath := statefulTmux(t, "")
+	home := t.TempDir()
+	agentRecord(t, home, agentstore.Record{Name: "alpha"})
+	spec := claudeSpec(t, "alpha")
+	spec.ClaudeArgs = []string{"--name", "alpha"}
+	spec.OpeningBriefPath = writeBrief(t, "the opening")
+	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home))
+	waitForNewSessions(t, logPath, 1)
+
+	s, launch := connectMod(t, f.hub, tmuxPath, "alpha")
+	cmd := nextCmd(t, s)
+	if want := bridge.OpeningID(launch, "the opening"); cmd.ID != want {
+		t.Fatalf("opening id = %q, want %q (scoped by the launch)", cmd.ID, want)
+	}
+	helloAs(t, f.hub, "alpha", launch, "s-new")
+	ackCmd(t, f.hub, "alpha", launch, cmd, true)
+	want := bridge.OpeningID("s-new", "the opening")
+	waitFor(t, "the ack to be recorded", func() bool { return storedAck(home, "alpha") == want })
+}
+
+// A restore that resumes no conversation (NoResume, after a poisoned
+// transcript) starts a fresh one, which has not had its opening, whatever
+// the record says an earlier conversation got.
+func TestNoResumeRestoreDeliversTheOpeningDespiteAnEarlierAck(t *testing.T) {
+	for _, stale := range []string{bridge.OpeningID("alpha", "the opening"), bridge.OpeningID("s-1", "the opening")} {
+		t.Run(stale, func(t *testing.T) {
+			tmuxPath, logPath := statefulTmux(t, "")
+			home := t.TempDir()
+			agentRecord(t, home, agentstore.Record{Name: "alpha"})
+			if err := agentstore.SetOpeningAcked(home, "alpha", stale, ""); err != nil {
+				t.Fatal(err)
+			}
+			spec := claudeSpec(t, "alpha")
+			spec.ClaudeArgs = []string{"--name", "alpha"} // what RestoreAgents passes under NoResume
+			spec.OpeningBriefPath = writeBrief(t, "the opening")
+			f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home))
+			waitForNewSessions(t, logPath, 1)
+
+			s, _ := connectMod(t, f.hub, tmuxPath, "alpha")
+			if cmd := nextCmd(t, s); cmd.Text != "the opening" {
+				t.Fatalf("a fresh conversation got %+v, want its opening", cmd)
+			}
+		})
+	}
+}
+
+// A resumed conversation gets its opening only if it is not the one the
+// record says received it.
+func TestResumeDeliversTheOpeningOnlyToAConversationWithoutIt(t *testing.T) {
+	for _, tc := range []struct {
+		name, acked string
+		want        int
+	}{
+		{"the conversation that got it", bridge.OpeningID("s-1", "the opening"), 0},
+		{"another conversation", bridge.OpeningID("s-0", "the opening"), 1},
+		{"no record", "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmuxPath, logPath := statefulTmux(t, "")
+			home := t.TempDir()
+			agentRecord(t, home, agentstore.Record{Name: "alpha"})
+			if err := agentstore.SetOpeningAcked(home, "alpha", tc.acked, ""); err != nil {
+				t.Fatal(err)
+			}
+			spec := claudeSpec(t, "alpha")
+			spec.ClaudeArgs = []string{"--name", "alpha", "--resume", "s-1"}
+			spec.OpeningBriefPath = writeBrief(t, "the opening")
+			f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home))
+			line := waitForNewSessions(t, logPath, 1)[0]
+			if got := f.hub.State("alpha").Pending; got != tc.want {
+				t.Fatalf("pending=%d, want %d", got, tc.want)
+			}
+			if strings.Contains(line, "$(cat") {
+				t.Fatalf("a bridged launch put the brief on argv:\n%s", line)
+			}
+		})
+	}
 }
 
 // A launch that dies before the ack has not handled the opening: the next
@@ -151,7 +268,7 @@ func TestUnackedOpeningIsRequeuedAfterACrash(t *testing.T) {
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withBackoff(time.Millisecond))
 	waitForNewSessions(t, logPath, 1)
 
-	s := connectWhenOpen(t, f.hub, "alpha")
+	s, _ := connectMod(t, f.hub, tmuxPath, "alpha")
 	first := nextCmd(t, s)
 	stale := make(chan error, 1)
 	go func() {
@@ -167,7 +284,7 @@ func TestUnackedOpeningIsRequeuedAfterACrash(t *testing.T) {
 	if err := <-stale; !errors.Is(err, bridge.ErrForgotten) {
 		t.Fatalf("the first launch's queued message: err=%v, want ErrForgotten", err)
 	}
-	s2 := connectWhenOpen(t, f.hub, "alpha")
+	s2, _ := connectMod(t, f.hub, tmuxPath, "alpha")
 	again := nextCmd(t, s2)
 	if again.ID != first.ID || again.Text != "the opening" {
 		t.Fatalf("relaunch queued %+v, want the opening again under id %s", again, first.ID)
@@ -205,8 +322,8 @@ func TestRejectedOpeningFallsBackToLegacy(t *testing.T) {
 	spec.OpeningBriefPath = writeBrief(t, "the opening")
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec)
 	waitForNewSessions(t, logPath, 1)
-	s := connectWhenOpen(t, f.hub, "alpha")
-	ackCmd(t, f.hub, "alpha", nextCmd(t, s), false)
+	s, launch := connectMod(t, f.hub, tmuxPath, "alpha")
+	ackCmd(t, f.hub, "alpha", launch, nextCmd(t, s), false)
 
 	lines := waitForNewSessions(t, logPath, 2)
 	if strings.Contains(lines[1], "--plugin-dir") || !strings.Contains(lines[1], claudeharness.BriefArgvWord(spec.OpeningBriefPath)) {
@@ -214,29 +331,30 @@ func TestRejectedOpeningFallsBackToLegacy(t *testing.T) {
 	}
 }
 
-// A launch that starts a fresh conversation (a spawn or reset) has not run
-// its opening, whatever an earlier conversation's record says.
-func TestFreshConversationClearsAStaleAck(t *testing.T) {
+// An opening a legacy launch carries on argv counts as delivered to that
+// conversation once the launch has outlived the quick-exit window, so a
+// later bridged --resume of it does not deliver it again.
+func TestArgvOpeningIsRecordedForItsConversation(t *testing.T) {
+	orig := argvOpeningSettle
+	argvOpeningSettle = 20 * time.Millisecond
+	t.Cleanup(func() { argvOpeningSettle = orig })
 	tmuxPath, logPath := statefulTmux(t, "")
 	home := t.TempDir()
 	agentRecord(t, home, agentstore.Record{Name: "alpha"})
-	if err := agentstore.SetOpeningAcked(home, "alpha", "open-earlier-conversation"); err != nil {
-		t.Fatal(err)
-	}
-	spec := claudeSpec(t, "alpha") // --session-id s-1: a fresh conversation
+	spec := claudeSpec(t, "alpha")
 	spec.OpeningBriefPath = writeBrief(t, "the opening")
-	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home))
-	waitForNewSessions(t, logPath, 1)
-	if got := f.hub.State("alpha").Pending; got != 1 {
-		t.Fatalf("pending=%d, want the opening queued", got)
+	_ = startBridged(t, tmuxPath, "2.1.286", time.Minute, spec, withHome(home))
+
+	line := waitForNewSessions(t, logPath, 1)[0]
+	if !strings.Contains(line, claudeharness.BriefArgvWord(spec.OpeningBriefPath)) {
+		t.Fatalf("the legacy launch must carry the opening on argv:\n%s", line)
 	}
-	if got := storedAck(home, "alpha"); got != "" {
-		t.Fatalf("stale ack %q kept for a fresh conversation", got)
-	}
+	want := bridge.OpeningID("s-1", "the opening")
+	waitFor(t, "the argv delivery to be recorded", func() bool { return storedAck(home, "alpha") == want })
 }
 
-// adoptSpec is an agent the previous daemon launched bridged under key,
-// resumed as a restore does.
+// adoptSpec is an agent the previous daemon launched bridged, resumed as a
+// restore does.
 func adoptSpec(t *testing.T, brief string) ProcessSpec {
 	t.Helper()
 	spec := claudeSpec(t, "alpha")
@@ -245,6 +363,10 @@ func adoptSpec(t *testing.T, brief string) ProcessSpec {
 	spec.OpeningBriefPath = writeBrief(t, brief)
 	return spec
 }
+
+// adoptedEnv is the environment of a session the previous daemon launched
+// bridged under key alpha and launch launch-old.
+const adoptedEnv = "LEO_BRIDGE_AGENT=alpha\nLEO_BRIDGE_LAUNCH=launch-old"
 
 // sessionUp makes the stub tmux report a live session, as one that
 // survived the previous daemon.
@@ -255,53 +377,145 @@ func sessionUp(t *testing.T, tmuxPath string) {
 	}
 }
 
-// After a daemon restart, an adopted claude whose opening was never acked
-// gets it queued again under the same id, and the adoption waits for the
-// mod like a launch does.
-func TestAdoptRequeuesAnUnackedOpening(t *testing.T) {
-	tmuxPath, logPath := statefulTmux(t, "LEO_BRIDGE_AGENT=alpha")
+// queuedFor records that launch queued the opening under id, as the
+// previous daemon did before it died.
+func queuedFor(t *testing.T, home, launch, id string) {
+	t.Helper()
+	agentRecord(t, home, agentstore.Record{Name: "alpha"})
+	if err := agentstore.SetOpeningQueued(home, "alpha", launch, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// After a daemon restart, an adopted claude whose launch queued an opening
+// that was never acked gets it queued again under the id its launch used,
+// even though the restore's args name another scope; nothing is launched.
+func TestAdoptRequeuesTheOpeningItsLaunchQueued(t *testing.T) {
+	tmuxPath, logPath := statefulTmux(t, adoptedEnv)
 	sessionUp(t, tmuxPath)
 	home := t.TempDir()
-	agentRecord(t, home, agentstore.Record{Name: "alpha"})
+	queuedFor(t, home, "launch-old", "open-from-the-launch")
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, adoptSpec(t, "the opening"), withHome(home))
 
-	s := connectWhenOpen(t, f.hub, "alpha")
+	s, launch := connectMod(t, f.hub, tmuxPath, "alpha")
 	cmd := nextCmd(t, s)
-	if want := bridge.OpeningID("s-1", "the opening"); cmd.ID != want || cmd.Text != "the opening" {
-		t.Fatalf("adoption queued %+v, want the opening under %s", cmd, want)
+	if cmd.ID != "open-from-the-launch" || cmd.Text != "the opening" || !cmd.AsUser {
+		t.Fatalf("adoption queued %+v, want the opening under its launch's id", cmd)
 	}
-	ackCmd(t, f.hub, "alpha", cmd, true)
-	waitFor(t, "the ack to be recorded", func() bool { return storedAck(home, "alpha") == cmd.ID })
+	helloAs(t, f.hub, "alpha", launch, "s-1")
+	ackCmd(t, f.hub, "alpha", launch, cmd, true)
+	want := bridge.OpeningID("s-1", "the opening")
+	waitFor(t, "the ack to be recorded", func() bool { return storedAck(home, "alpha") == want })
 	if n := len(newSessionLines(logPath)); n != 0 {
 		t.Fatalf("adoption launched %d sessions", n)
 	}
 }
 
-func TestAdoptSkipsAnAckedOpening(t *testing.T) {
-	tmuxPath, _ := statefulTmux(t, "LEO_BRIDGE_AGENT=alpha")
+// What another launch queued is not the adopted launch's to deliver: it had
+// none queued, or its opening rode argv.
+func TestAdoptQueuesNothingAnotherLaunchQueued(t *testing.T) {
+	tmuxPath, _ := statefulTmux(t, adoptedEnv)
 	sessionUp(t, tmuxPath)
 	home := t.TempDir()
-	agentRecord(t, home, agentstore.Record{Name: "alpha"})
-	_ = agentstore.SetOpeningAcked(home, "alpha", bridge.OpeningID("s-1", "the opening"))
+	queuedFor(t, home, "launch-other", "open-other")
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, adoptSpec(t, "the opening"), withHome(home))
 
 	waitFor(t, "adoption", func() bool { _, ok := f.sv.BridgeKey("alpha"); return ok })
 	time.Sleep(50 * time.Millisecond)
 	if got := f.hub.State("alpha").Pending; got != 0 {
-		t.Fatalf("an acked opening was queued again (pending=%d)", got)
+		t.Fatalf("pending=%d, want nothing queued for the adopted launch", got)
 	}
 }
 
-// An adopted claude whose mod never reconnects, with its opening unacked,
-// falls back like a launch: killed and relaunched legacy, opening on argv.
-func TestAdoptedSessionWhoseModNeverConnectsFallsBack(t *testing.T) {
-	tmuxPath, logPath := statefulTmux(t, "LEO_BRIDGE_AGENT=alpha")
-	sessionUp(t, tmuxPath)
-	spec := adoptSpec(t, "the opening")
-	_ = startBridged(t, tmuxPath, "2.1.289", 50*time.Millisecond, spec)
+// An adopted session is live: however long its mod takes to come back (its
+// reconnect backoff), and whatever it answers, it is never killed or
+// relaunched. Its opening stays queued until the mod takes it.
+func TestAdoptedSessionIsNeverKilled(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ok   bool
+	}{{"mod reconnects late and acks", true}, {"mod refuses the opening", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmuxPath, logPath := statefulTmux(t, adoptedEnv)
+			sessionUp(t, tmuxPath)
+			home := t.TempDir()
+			queuedFor(t, home, "launch-old", "open-from-the-launch")
+			f := startBridged(t, tmuxPath, "2.1.289", 30*time.Millisecond, adoptSpec(t, "the opening"), withHome(home))
 
-	lines := waitForNewSessions(t, logPath, 1)
-	if strings.Contains(lines[0], "--plugin-dir") || !strings.Contains(lines[0], claudeharness.BriefArgvWord(spec.OpeningBriefPath)) {
-		t.Fatalf("fallback from the adopted session must be legacy with the opening on argv:\n%s", lines[0])
+			waitFor(t, "adoption", func() bool { _, ok := f.sv.BridgeKey("alpha"); return ok })
+			time.Sleep(200 * time.Millisecond) // well past the connect timeout
+			if got := f.hub.State("alpha").Pending; got != 1 {
+				t.Fatalf("pending=%d past the connect timeout, want the opening still queued", got)
+			}
+			s, launch := connectMod(t, f.hub, tmuxPath, "alpha")
+			ackCmd(t, f.hub, "alpha", launch, nextCmd(t, s), tc.ok)
+			time.Sleep(100 * time.Millisecond)
+			if n := tmuxCalls(logPath, "kill-session") + len(newSessionLines(logPath)); n != 0 {
+				b, _ := os.ReadFile(logPath)
+				t.Fatalf("the adopted session was killed or relaunched; tmux log:\n%s", b)
+			}
+		})
+	}
+}
+
+// The daemon dies after the mod took the opening but before its ack got
+// through. The restarted daemon adopts the surviving session and queues the
+// opening again under the same id; the mod, which already ran it, only
+// re-acks. The opening runs exactly once and nothing is killed.
+func TestDaemonRestartMidOpeningRunsItOnceWithoutAKill(t *testing.T) {
+	tmuxPath, logPath := statefulTmux(t, "")
+	home := t.TempDir()
+	agentRecord(t, home, agentstore.Record{Name: "alpha"})
+	brief := writeBrief(t, "the opening")
+	spec := claudeSpec(t, "alpha")
+	spec.OpeningBriefPath = brief
+	before := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home))
+	waitForNewSessions(t, logPath, 1)
+
+	// The mod's dedup store: it outlives the daemon, as $.store does.
+	var mu sync.Mutex
+	ran := map[string]int{}
+	s, launch := connectMod(t, before.hub, tmuxPath, "alpha")
+	opening := nextCmd(t, s)
+	mu.Lock()
+	ran[opening.ID]++
+	mu.Unlock()
+	before.die() // the ack never reaches it
+
+	sessionsBefore, killsBefore := len(newSessionLines(logPath)), tmuxCalls(logPath, "kill-session")
+	restored := spec
+	restored.ClaudeArgs = []string{"--name", "alpha", "--resume", "s-1"}
+	restored.Adopt = true
+	after := startBridged(t, tmuxPath, "2.1.289", 30*time.Millisecond, restored, withHome(home))
+
+	s2, launch2 := connectMod(t, after.hub, tmuxPath, "alpha")
+	if launch2 != launch {
+		t.Fatalf("the surviving session's mod reconnected as launch %q, want %q", launch2, launch)
+	}
+	again := nextCmd(t, s2)
+	if again.ID != opening.ID {
+		t.Fatalf("the adopted session got %+v, want the opening again under %s", again, opening.ID)
+	}
+	mu.Lock()
+	isRepeat := ran[again.ID] > 0
+	if !isRepeat {
+		ran[again.ID]++
+	}
+	mu.Unlock()
+	helloAs(t, after.hub, "alpha", launch2, "s-1")
+	ackCmd(t, after.hub, "alpha", launch2, again, true)
+	waitFor(t, "the ack to be recorded", func() bool { return storedAck(home, "alpha") == opening.ID })
+
+	time.Sleep(100 * time.Millisecond) // past the connect timeout
+	mu.Lock()
+	defer mu.Unlock()
+	if ran[opening.ID] != 1 {
+		t.Fatalf("the opening ran %d times, want exactly once", ran[opening.ID])
+	}
+	if n := len(newSessionLines(logPath)) - sessionsBefore; n != 0 {
+		t.Fatalf("the restarted daemon launched %d sessions", n)
+	}
+	if n := tmuxCalls(logPath, "kill-session") - killsBefore; n != 0 {
+		t.Fatalf("the restarted daemon killed the session %d times", n)
 	}
 }

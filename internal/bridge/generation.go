@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -12,6 +13,9 @@ import (
 // report within about a minute).
 const TombstoneTTL = time.Hour
 
+// maxLaunchLen bounds a launch token. leo mints 26-character ones.
+const maxLaunchLen = 64
+
 // Target is one launch generation of an agent's bridge key. A launch that
 // reuses a key (a relaunch of the same agent) opens a new generation, so a
 // command routed to the old launch can be refused instead of reaching the
@@ -21,9 +25,14 @@ type Target struct {
 	Gen uint64
 }
 
-// keyLife is a key's current generation and whether it is tombstoned.
+// keyLife is a key's current generation, the launch it is bound to, and
+// whether it is tombstoned.
 type keyLife struct {
 	gen uint64
+	// launch is the token (LEO_BRIDGE_LAUNCH) of the claude process the
+	// generation belongs to: only its mod may connect or report. Empty for
+	// a tombstone left on a key nobody opened.
+	launch string
 	// forgottenAt is when the key was forgotten; zero while it is live.
 	forgottenAt time.Time
 }
@@ -40,6 +49,18 @@ type Ticket struct {
 // Done is closed once the command settles: acked, rejected, forgotten or
 // dropped by Close.
 func (t *Ticket) Done() <-chan struct{} { return t.p.done }
+
+// AckedIn is the session the mod's latest hello named when it acked the
+// command ok: the conversation a deliver landed in. "" until then, or when
+// the mod never said hello.
+func (t *Ticket) AckedIn() string {
+	select {
+	case <-t.p.done:
+		return t.p.ackedIn
+	default:
+		return ""
+	}
+}
 
 // Err is how the command settled: nil once acked ok, else why not. Only
 // meaningful after Done is closed.
@@ -63,13 +84,21 @@ func (t *Ticket) Wait(ctx context.Context) error {
 	}
 }
 
-// Open starts a new generation for agent's key ahead of a launch that
-// connects under it, lifting the tombstone a Forget left. On a key that is
-// live already (a surviving claude whose mod reconnected to a restarted
-// daemon first) it keeps that state and returns the current generation.
-func (h *Hub) Open(agent string) (Target, error) {
+// Open starts a new generation of agent's key, bound to launch: the token
+// (LEO_BRIDGE_LAUNCH) of the one claude process whose mod may connect and
+// report under it. It lifts the tombstone a
+// Forget left. Whatever generation the key had is over, as if forgotten:
+// its stream ends, its unacked commands fail with ErrForgotten and its turn
+// state is dropped, so a predecessor's mod cannot keep the key, and a
+// predecessor's ForgetGen cannot end this generation. A launch about to
+// start opens a fresh token; a restarted daemon adopting a surviving
+// session opens the token that session was launched with.
+func (h *Hub) Open(agent, launch string) (Target, error) {
 	if agent == "" {
 		return Target{}, fmt.Errorf("%w: empty name", ErrInvalidAgent)
+	}
+	if err := ValidateLaunch(launch); err != nil {
+		return Target{}, err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -77,15 +106,29 @@ func (h *Hub) Open(agent string) (Target, error) {
 		return Target{}, ErrClosed
 	}
 	h.pruneTombstonesLocked()
-	life, ok := h.lives[agent]
-	switch {
-	case !ok:
-		life = &keyLife{gen: h.nextGenLocked()}
-		h.lives[agent] = life
-	case life.forgotten():
-		life.gen, life.forgottenAt = h.nextGenLocked(), time.Time{}
+	if st, ok := h.agents[agent]; ok {
+		h.dropLocked(agent, st, ErrForgotten)
+		delete(h.agents, agent)
 	}
+	life := &keyLife{gen: h.nextGenLocked(), launch: launch}
+	h.lives[agent] = life
+	h.notifyLocked()
 	return Target{Key: agent, Gen: life.gen}, nil
+}
+
+// ValidateLaunch checks a launch token: non-empty, at most 64 letters,
+// digits, '-' or '_'. It travels in a URL query and a log line.
+func ValidateLaunch(launch string) error {
+	if launch == "" || len(launch) > maxLaunchLen {
+		return fmt.Errorf("%w: %q", ErrInvalidLaunch, launch)
+	}
+	for _, r := range launch {
+		isWord := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
+		if !isWord {
+			return fmt.Errorf("%w: %q", ErrInvalidLaunch, launch)
+		}
+	}
+	return nil
 }
 
 // Live returns agent's current generation while its mod is connected.
@@ -157,29 +200,43 @@ func (h *Hub) isCurrentLocked(t Target) bool {
 	return ok && !life.forgotten() && life.gen == t.Gen
 }
 
-// ConnectedSince reports whether st is generation t's and its mod connected
-// or said hello at or after since (the zero time accepts any). The stream
-// need not be up right now: a mod between reconnects still has the launch.
-func (st State) ConnectedSince(t Target, since time.Time) bool {
+// HasConnected reports whether st is generation t's and its mod has
+// connected or said hello. The stream need not be up right now: a mod
+// between reconnects still has the launch. A generation's state only ever
+// holds its own launch's (see Open), so nothing earlier can count.
+func (st State) HasConnected(t Target) bool {
 	if st.Agent != t.Key || st.Gen != t.Gen || st.Gen == 0 {
 		return false
 	}
-	return atOrAfter(st.ConnectedAt, since) || atOrAfter(st.HelloAt, since)
+	return !st.ConnectedAt.IsZero() || !st.HelloAt.IsZero()
 }
 
-func atOrAfter(at, since time.Time) bool { return !at.IsZero() && !at.Before(since) }
-
-// lifeLocked returns agent's live generation, starting one for a key the
-// hub has never seen, or ErrForgotten while the key is tombstoned.
+// lifeLocked returns agent's live generation: ErrNotOpen for a key nobody
+// opened, ErrForgotten while it is tombstoned.
 func (h *Hub) lifeLocked(agent string) (*keyLife, error) {
 	life, ok := h.lives[agent]
-	if !ok {
-		life = &keyLife{gen: h.nextGenLocked()}
-		h.lives[agent] = life
-		return life, nil
-	}
-	if life.forgotten() {
+	switch {
+	case !ok:
+		return nil, fmt.Errorf("%w: agent %s", ErrNotOpen, agent)
+	case life.forgotten():
 		return nil, fmt.Errorf("%w: agent %s", ErrForgotten, agent)
+	}
+	return life, nil
+}
+
+// launchLocked returns agent's live generation if launch is the one it is
+// bound to: what a mod's stream or report must match. ErrForgotten while
+// the key is tombstoned; ErrStaleLaunch for any other launch, and for a key
+// nobody opened (a restarted daemon has not adopted the session yet).
+func (h *Hub) launchLocked(agent, launch string) (*keyLife, error) {
+	life, err := h.lifeLocked(agent)
+	switch {
+	case errors.Is(err, ErrNotOpen):
+		return nil, fmt.Errorf("%w: agent %s has no open launch", ErrStaleLaunch, agent)
+	case err != nil:
+		return nil, err
+	case life.launch != launch:
+		return nil, fmt.Errorf("%w: agent %s launch %s", ErrStaleLaunch, agent, launch)
 	}
 	return life, nil
 }

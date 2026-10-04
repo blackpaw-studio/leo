@@ -1207,15 +1207,17 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				spec.primaryPane = primaryPane
 			}
 			fmt.Fprintf(os.Stdout, "[%s] adopted existing tmux session '%s', claude already running\n", name, sessionName)
-			// The surviving claude's mod reconnects under the key it was
-			// launched with, which only its session environment still knows.
-			if key, ok := tmuxSessionBridgeKey(tmuxPath, sessionName); ok && harnessName == "claude" {
-				bl = sv.adoptBridge(id, key)
-				if bl.bridged && opening.pending() {
+			// The surviving claude's mod reconnects under the key and launch
+			// token it was launched with, which only its session
+			// environment still knows.
+			if key, launch, ok := tmuxSessionBridge(tmuxPath, sessionName); ok && harnessName == "claude" {
+				bl = sv.adoptBridge(id, key, launch, conversationArg(currentArgs))
+				if bl.bridged {
 					// The previous daemon may have gone before the mod acked
-					// the opening. Queued again under its id, it either runs
-					// now or, if it already ran, is only re-acked.
-					bl, _ = sv.queueOpening(id, bl, opening)
+					// the opening its launch queued. Queued again under its
+					// id, it either runs now or, if it already ran, is only
+					// re-acked.
+					bl = sv.requeueAdoptedOpening(id, bl, opening)
 				}
 			} else {
 				id.setLegacy()
@@ -1262,11 +1264,12 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			}
 			// The opening is queued before the session exists, so nothing
 			// sent to the new claude can overtake it.
-			bl = sv.planBridgeLaunch(ctx, binPath, harnessName, id, forceLegacy, startTime)
-			if bl.bridged && opening.pending() {
+			conversation := conversationArg(currentArgs)
+			bl = sv.planBridgeLaunch(ctx, binPath, harnessName, id, forceLegacy, conversation)
+			if bl.bridged && opening.bridgeable(conversation) {
 				bl, _ = sv.queueOpening(id, bl, opening)
 			}
-			launchArgs, launchSpec, pasteBrief := bridgeLaunchSpec(bl, launchArgs, spec, opening.done())
+			launchArgs, launchSpec, pasteBrief := bridgeLaunchSpec(bl, launchArgs, spec, opening.has(conversation))
 			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, launchSpec, os.Getenv("PATH"))
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
 			// persists a pane's start command, so an interpolated credential
@@ -1331,9 +1334,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			if bl.bridged {
 				go sv.watchBridgeLaunch(launchCtx, id, bl, opening, tmuxPath, &fellBack)
 			}
-			if pasteBrief != "" {
-				opening.pasted.Store(true)
-				go pasteOversizedOpening(launchCtx, tmuxPath, id, pasteBrief)
+			switch {
+			case pasteBrief != "":
+				go pasteOversizedOpening(launchCtx, tmuxPath, id, pasteBrief, opening, conversation)
+			case launchSpec.OpeningBriefPath != "":
+				go opening.deliveredOnArgv(launchCtx, conversation)
 			}
 			if spec.Kind == harness.KindAgent {
 				if hooked {

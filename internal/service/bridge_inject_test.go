@@ -28,6 +28,9 @@ type injectRig struct {
 // testTaskSettle bounds the rig's wait for a launch to settle on the bridge.
 const testTaskSettle = 50 * time.Millisecond
 
+// rigLaunch is the launch the rig opens alpha's key for.
+const rigLaunch = "launch-1"
+
 func newInjectRig(t *testing.T) *injectRig {
 	t.Helper()
 	return newInjectRigSettling(t, testTaskSettle)
@@ -37,7 +40,7 @@ func newInjectRigSettling(t *testing.T, settle time.Duration) *injectRig {
 	t.Helper()
 	hub := bridge.New(bridge.Options{})
 	t.Cleanup(hub.Close)
-	alpha, err := hub.Open("alpha")
+	alpha, err := hub.Open("alpha", rigLaunch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +91,7 @@ func (g *injectRig) pastes() []string {
 // prompt, verbatim, and the injection returns once the mod accepts it.
 func TestTaskInjectorDeliversOverALiveBridge(t *testing.T) {
 	g := newInjectRig(t)
-	stream, err := g.hub.Connect("alpha")
+	stream, err := g.hub.Connect("alpha", rigLaunch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +106,7 @@ func TestTaskInjectorDeliversOverALiveBridge(t *testing.T) {
 	if cmd.Op != bridge.OpDeliver || !cmd.AsUser || cmd.Text != "run the nightly report\nnow" {
 		t.Fatalf("deliver = %+v", cmd)
 	}
-	if err := g.hub.Apply("alpha", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
+	if err := g.hub.Apply("alpha", rigLaunch, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -120,10 +123,10 @@ func TestTaskInjectorDeliversOverALiveBridge(t *testing.T) {
 // the agent's unrelated running turn — and the prompt is never pasted too.
 func TestTaskInjectorBusyPastTheDeadlineIsQueuedNotFailed(t *testing.T) {
 	g := newInjectRig(t)
-	if _, err := g.hub.Connect("alpha"); err != nil {
+	if _, err := g.hub.Connect("alpha", rigLaunch); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.hub.Apply("alpha", bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart}); err != nil {
+	if err := g.hub.Apply("alpha", rigLaunch, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -146,7 +149,7 @@ func TestTaskInjectorBusyPastTheDeadlineIsQueuedNotFailed(t *testing.T) {
 // A refusal or a lost bridge is a real failure.
 func TestTaskInjectorBridgeRejectionIsAnError(t *testing.T) {
 	g := newInjectRig(t)
-	stream, err := g.hub.Connect("alpha")
+	stream, err := g.hub.Connect("alpha", rigLaunch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +161,7 @@ func TestTaskInjectorBridgeRejectionIsAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.hub.Apply("alpha", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: false, Error: "dropped"}); err != nil {
+	if err := g.hub.Apply("alpha", rigLaunch, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: false, Error: "dropped"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; !errors.Is(err, bridge.ErrRejected) {
@@ -200,9 +203,9 @@ func TestTaskInjectorWaitsForAJustLaunchedBridge(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- g.injector(context.Background(), "leo-alpha", "task") }()
 	time.Sleep(20 * time.Millisecond)
-	g.setRoute("leo-alpha", BridgeRoute{Target: g.alpha, Since: time.Now(), Planned: true})
+	g.setRoute("leo-alpha", BridgeRoute{Target: g.alpha, Planned: true})
 	time.Sleep(20 * time.Millisecond)
-	stream, err := g.hub.Connect("alpha")
+	stream, err := g.hub.Connect("alpha", rigLaunch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +218,7 @@ func TestTaskInjectorWaitsForAJustLaunchedBridge(t *testing.T) {
 	if cmd.Op != bridge.OpDeliver || cmd.Text != "task" {
 		t.Fatalf("deliver = %+v", cmd)
 	}
-	if err := g.hub.Apply("alpha", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
+	if err := g.hub.Apply("alpha", rigLaunch, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -273,8 +276,8 @@ func TestTaskInjectorWaitEndsWithTheInvocation(t *testing.T) {
 // rides the bridge (queued until the mod is back), never a paste.
 func TestTaskInjectorDeliversToAModBetweenReconnects(t *testing.T) {
 	g := newInjectRig(t)
-	g.setRoute("leo-alpha", BridgeRoute{Target: g.alpha, Since: time.Now(), Planned: true})
-	first, err := g.hub.Connect("alpha")
+	g.setRoute("leo-alpha", BridgeRoute{Target: g.alpha, Planned: true})
+	first, err := g.hub.Connect("alpha", rigLaunch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +287,7 @@ func TestTaskInjectorDeliversToAModBetweenReconnects(t *testing.T) {
 	if _, err := g.hub.WaitFor(context.Background(), "alpha", func(st bridge.State) bool { return st.Pending == 1 }); err != nil {
 		t.Fatal(err)
 	}
-	stream, err := g.hub.Connect("alpha")
+	stream, err := g.hub.Connect("alpha", rigLaunch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +297,7 @@ func TestTaskInjectorDeliversToAModBetweenReconnects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.hub.Apply("alpha", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
+	if err := g.hub.Apply("alpha", rigLaunch, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -305,13 +308,19 @@ func TestTaskInjectorDeliversToAModBetweenReconnects(t *testing.T) {
 	}
 }
 
-// A connection from before the launch started is not this launch's mod.
-func TestTaskInjectorIgnoresAConnectionFromBeforeTheLaunch(t *testing.T) {
+// A predecessor launch's mod cannot settle its successor's launch: it is
+// refused, and the successor's launch, whose mod never connected, is pasted
+// into once the wait is over.
+func TestTaskInjectorIgnoresAPredecessorsMod(t *testing.T) {
 	g := newInjectRig(t)
-	if _, err := g.hub.Connect("alpha"); err != nil {
+	successor, err := g.hub.Open("alpha", "launch-2")
+	if err != nil {
 		t.Fatal(err)
 	}
-	g.setRoute("leo-alpha", BridgeRoute{Target: g.alpha, Since: time.Now().Add(time.Hour), Planned: true})
+	if _, err := g.hub.Connect("alpha", rigLaunch); !errors.Is(err, bridge.ErrStaleLaunch) {
+		t.Fatalf("the predecessor connected: err=%v, want ErrStaleLaunch", err)
+	}
+	g.setRoute("leo-alpha", BridgeRoute{Target: successor, Planned: true})
 	if err := g.injector(context.Background(), "leo-alpha", "task"); err != nil {
 		t.Fatal(err)
 	}

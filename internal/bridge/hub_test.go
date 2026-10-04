@@ -11,12 +11,18 @@ import (
 
 const agentA = "leo-alpha"
 
+// newTestHub builds a hub with agentA's key already open under testLaunch,
+// as a launch's would be before its mod connects.
 func newTestHub(clock Clock, opts ...func(*Options)) *Hub {
 	o := Options{Clock: clock, NewID: seqIDs()}
 	for _, fn := range opts {
 		fn(&o)
 	}
-	return New(o)
+	h := New(o)
+	if _, err := h.Open(agentA, testLaunch); err != nil {
+		panic(err)
+	}
+	return h
 }
 
 func TestEnqueueValidates(t *testing.T) {
@@ -34,6 +40,7 @@ func TestEnqueueValidates(t *testing.T) {
 
 func TestEnqueueRejectsDuplicateID(t *testing.T) {
 	h := New(Options{Clock: newFakeClock(), NewID: func() string { return "same" }})
+	mustOpen(t, h, agentA)
 	if _, err := h.Enqueue(agentA, Clear()); err != nil {
 		t.Fatalf("first enqueue: %v", err)
 	}
@@ -297,7 +304,7 @@ func TestSendRejectedAckDropsCommand(t *testing.T) {
 	s := mustConnect(t, h, agentA)
 	done := sendAsync(testCtx(t), h, agentA, Compact(""))
 	cmd := mustNext(t, s)
-	if err := h.Apply(agentA, Report{Type: ReportAck, ID: cmd.ID, OK: false, Error: "turn running"}); err != nil {
+	if err := h.Apply(agentA, testLaunch, Report{Type: ReportAck, ID: cmd.ID, OK: false, Error: "turn running"}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	err := result(t, done)
@@ -344,7 +351,7 @@ func TestSendSurvivesStreamReplacement(t *testing.T) {
 
 func TestAckForUnknownIDIsIgnored(t *testing.T) {
 	h := newTestHub(newFakeClock())
-	if err := h.Apply(agentA, Report{Type: ReportAck, ID: "nope", OK: true}); err != nil {
+	if err := h.Apply(agentA, testLaunch, Report{Type: ReportAck, ID: "nope", OK: true}); err != nil {
 		t.Fatalf("unknown ack must be accepted and ignored, got %v", err)
 	}
 }
@@ -388,7 +395,7 @@ func TestCloseEndsStreamsAndRefusesWork(t *testing.T) {
 	if _, err := s.Next(testCtx(t)); !errors.Is(err, ErrClosed) {
 		t.Fatalf("stream Next err=%v, want ErrClosed", err)
 	}
-	if _, err := h.Connect(agentA); !errors.Is(err, ErrClosed) {
+	if _, err := h.Connect(agentA, testLaunch); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Connect err=%v, want ErrClosed", err)
 	}
 	if _, err := h.Enqueue(agentA, Clear()); !errors.Is(err, ErrClosed) {
@@ -431,6 +438,7 @@ func TestWaitForHonorsContext(t *testing.T) {
 func TestConcurrentSendsAcrossReconnects(t *testing.T) {
 	const senders = 40
 	h := New(Options{Clock: newFakeClock()}) // default random ids
+	mustOpen(t, h, agentA)
 	ctx := testCtx(t)
 	modCtx, stopMod := context.WithCancel(ctx)
 	var modWG sync.WaitGroup
@@ -438,7 +446,7 @@ func TestConcurrentSendsAcrossReconnects(t *testing.T) {
 	go func() {
 		defer modWG.Done()
 		for round := 0; modCtx.Err() == nil; round++ {
-			s, err := h.Connect(agentA)
+			s, err := h.Connect(agentA, testLaunch)
 			if err != nil {
 				return
 			}
@@ -453,7 +461,7 @@ func TestConcurrentSendsAcrossReconnects(t *testing.T) {
 				if (round+i)%2 != 0 {
 					break
 				}
-				_ = h.Apply(agentA, Report{Type: ReportAck, ID: cmd.ID, OK: true})
+				_ = h.Apply(agentA, testLaunch, Report{Type: ReportAck, ID: cmd.ID, OK: true})
 			}
 			// Deliberately not s.Close(): a reload's old stream lingers
 			// until the replacement Connect ends it.

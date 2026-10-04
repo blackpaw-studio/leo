@@ -43,6 +43,13 @@ var (
 	ErrStreamClosed   = errors.New("bridge stream closed")
 	ErrForgotten      = errors.New("bridge agent forgotten")
 	ErrClosed         = errors.New("bridge closed")
+	// ErrNotOpen: nothing can be queued for a key no launch opened.
+	ErrNotOpen = errors.New("bridge agent not open")
+	// ErrStaleLaunch: a mod's stream or report named a launch other than
+	// its key's current one (a predecessor's, or one a restarted daemon has
+	// not adopted yet). It is refused; a report it carried is moot.
+	ErrStaleLaunch   = errors.New("bridge launch is not current")
+	ErrInvalidLaunch = errors.New("invalid bridge launch")
 )
 
 // Clock is the hub's time source.
@@ -147,6 +154,9 @@ type pending struct {
 	cmd  Command
 	done chan struct{}
 	err  error
+	// ackedIn is the session the command was acked ok in (see
+	// Ticket.AckedIn); set with err.
+	ackedIn string
 	// callerID: the caller named the command (see EnqueueTo).
 	callerID bool
 }
@@ -208,9 +218,10 @@ func New(opts Options) *Hub {
 	return h
 }
 
-// Enqueue queues cmd for agent and returns its id without waiting for the
-// ack. Use it for commands queued before the mod connects (the opening
-// prompt); everything else should Send.
+// Enqueue queues cmd for agent's current generation and returns its id
+// without waiting for the ack. It fails with ErrNotOpen for a key no launch
+// opened. Launch code queues with EnqueueTo instead, pinned to its own
+// generation.
 func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
 	p, err := h.enqueue(agent, nil, cmd)
 	if err != nil {
@@ -394,30 +405,35 @@ func (h *Hub) enqueue(agent string, gen *uint64, cmd Command) (*pending, error) 
 	return p, nil
 }
 
-// Apply records one decoded report from agent's mod. Acks for unknown ids
-// (already settled, or another daemon's) are ignored.
-func (h *Hub) Apply(agent string, r Report) error {
+// Apply records one decoded report from the mod of agent's launch. A launch
+// other than the key's current one is refused with ErrStaleLaunch (see
+// Open), so a dying predecessor's late report changes nothing. Acks for
+// unknown ids (already settled, or another daemon's) are ignored.
+func (h *Hub) Apply(agent, launch string, r Report) error {
 	if agent == "" {
 		return fmt.Errorf("%w: empty name", ErrInvalidAgent)
 	}
+	if err := ValidateLaunch(launch); err != nil {
+		return err
+	}
 	switch r.Type {
 	case ReportAck:
-		return h.applyAck(agent, r)
+		return h.applyAck(agent, launch, r)
 	case ReportHello, ReportEvent:
-		return h.applyEvent(agent, r)
+		return h.applyEvent(agent, launch, r)
 	default:
 		return fmt.Errorf("%w: unknown type %q", ErrInvalidReport, r.Type)
 	}
 }
 
-func (h *Hub) applyAck(agent string, r Report) error {
+func (h *Hub) applyAck(agent, launch string, r Report) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
 		return ErrClosed
 	}
-	if life, ok := h.lives[agent]; ok && life.forgotten() {
-		return fmt.Errorf("%w: agent %s", ErrForgotten, agent)
+	if _, err := h.launchLocked(agent, launch); err != nil {
+		return err
 	}
 	h.ackLocked(agent, r.ID, r.OK, r.Error)
 	return nil
@@ -435,11 +451,12 @@ func (h *Hub) ackLocked(agent, id string, ok bool, msg string) {
 	}
 	p := st.outbox[i]
 	st.outbox = without(st.outbox, i)
-	var outcome error
 	if !ok {
-		outcome = rejection(agent, id, msg)
+		p.resolveLocked(rejection(agent, id, msg))
+	} else {
+		p.ackedIn = st.sessionID
+		p.resolveLocked(nil)
 	}
-	p.resolveLocked(outcome)
 	h.notifyLocked()
 }
 
@@ -450,18 +467,23 @@ func rejection(agent, id, msg string) error {
 	return fmt.Errorf("%w: agent %s command %s: %s", ErrRejected, agent, id, msg)
 }
 
-// Connect registers a new stream for agent, ending any previous one with
-// ErrStreamReplaced. The new stream starts with every unacked command.
-func (h *Hub) Connect(agent string) (*Stream, error) {
+// Connect registers a new stream for the mod of agent's launch, ending any
+// previous one with ErrStreamReplaced. The new stream starts with every
+// unacked command. A launch other than the key's current one is refused
+// with ErrStaleLaunch (see Open).
+func (h *Hub) Connect(agent, launch string) (*Stream, error) {
 	if agent == "" {
 		return nil, fmt.Errorf("%w: empty name", ErrInvalidAgent)
+	}
+	if err := ValidateLaunch(launch); err != nil {
+		return nil, err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
 		return nil, ErrClosed
 	}
-	if _, err := h.lifeLocked(agent); err != nil {
+	if _, err := h.launchLocked(agent, launch); err != nil {
 		return nil, err
 	}
 	st := h.stateLocked(agent)
@@ -487,9 +509,8 @@ func (h *Hub) Connected(agent string) bool {
 // Forget drops everything known about agent: its stream ends and every
 // unacked command is discarded, waking its senders with ErrForgotten. The
 // key is then tombstoned: commands, connections and reports for it are
-// refused with ErrForgotten until the next Open, so nothing from the launch
-// that held it — a late report, a send routed just before — reaches a
-// successor. Use it whenever the launch behind the key is over.
+// refused with ErrForgotten until the next Open. Use it whenever the launch
+// behind the key is over.
 func (h *Hub) Forget(agent string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

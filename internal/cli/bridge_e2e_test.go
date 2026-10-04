@@ -16,7 +16,8 @@ import (
 )
 
 // startBridgeDaemon runs a real daemon on a short /tmp home (macOS caps unix
-// socket paths at 104 bytes) and returns that home and its hub.
+// socket paths at 104 bytes) and returns that home and its hub, with
+// leo-e2e's key open under launch launch-e2e.
 func startBridgeDaemon(t *testing.T) (string, *bridge.Hub) {
 	t.Helper()
 	home, err := os.MkdirTemp("/tmp", "leo-br-*")
@@ -28,6 +29,9 @@ func startBridgeDaemon(t *testing.T) (string, *bridge.Hub) {
 		t.Fatalf("state dir: %v", err)
 	}
 	hub := bridge.New(bridge.Options{})
+	if _, err := hub.Open("leo-e2e", "launch-e2e"); err != nil {
+		t.Fatal(err)
+	}
 	srv := daemon.New(daemon.SockPath(home), filepath.Join(home, "leo.yaml"), nil, daemon.WithBridge(hub))
 	if err := srv.Start(); err != nil {
 		t.Fatalf("daemon Start: %v", err)
@@ -56,7 +60,7 @@ func TestBridgeAgainstRealDaemon(t *testing.T) {
 	exited := make(chan error, 1)
 	go func() {
 		cmd := newBridgeCmdWith(deps)
-		cmd.SetArgs([]string{"--agent", "leo-e2e"})
+		cmd.SetArgs([]string{"--agent", "leo-e2e", "--launch", "launch-e2e"})
 		cmd.SetOut(stdoutW)
 		exited <- cmd.ExecuteContext(ctx)
 		_ = stdoutW.Close()
@@ -77,7 +81,7 @@ func TestBridgeAgainstRealDaemon(t *testing.T) {
 	}
 
 	report := newBridgeCmdWith(deps)
-	report.SetArgs([]string{"report", "--agent", "leo-e2e"})
+	report.SetArgs([]string{"report", "--agent", "leo-e2e", "--launch", "launch-e2e"})
 	report.SetIn(strings.NewReader(`{"type":"ack","id":"` + cmd.ID + `","ok":true}`))
 	if err := report.ExecuteContext(ctx); err != nil {
 		t.Fatalf("bridge report: %v", err)
@@ -102,10 +106,28 @@ func TestBridgeReportAgainstRealDaemonRejectsBadReport(t *testing.T) {
 	deps := defaultBridgeDeps()
 	deps.homeDir = func() string { return home }
 	cmd := newBridgeCmdWith(deps)
-	cmd.SetArgs([]string{"report", "--agent", "leo-e2e"})
+	cmd.SetArgs([]string{"report", "--agent", "leo-e2e", "--launch", "launch-e2e"})
 	cmd.SetIn(strings.NewReader(`{"type":"bogus"}`))
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("a report the daemon rejects must exit non-zero with its status, got %v", err)
+	}
+}
+
+// A predecessor launch's report reaches the daemon, is refused with 409,
+// and exits 0 so the mod drops it rather than retrying it onto the
+// successor.
+func TestBridgeReportFromAStaleLaunchAgainstRealDaemonIsDropped(t *testing.T) {
+	home, hub := startBridgeDaemon(t)
+	deps := defaultBridgeDeps()
+	deps.homeDir = func() string { return home }
+	cmd := newBridgeCmdWith(deps)
+	cmd.SetArgs([]string{"report", "--agent", "leo-e2e", "--launch", "launch-before"})
+	cmd.SetIn(strings.NewReader(`{"type":"event","name":"turn.start"}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("a stale launch's report must be dropped with exit 0, got %v", err)
+	}
+	if hub.State("leo-e2e").Busy {
+		t.Fatal("the stale launch's turn.start was applied")
 	}
 }

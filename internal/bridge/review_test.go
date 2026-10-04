@@ -195,14 +195,15 @@ func TestSlowSubscriberStallsOnlyItsOwnAgent(t *testing.T) {
 		rec.OnBridgeEvent(ev)
 	})
 	h := newTestHub(newFakeClock(), func(o *Options) { o.Subscriber = sub })
-	go func() { _ = h.Apply(agentA, event(EventTurnStart)) }()
+	mustOpen(t, h, agentB)
+	go func() { _ = h.Apply(agentA, testLaunch, event(EventTurnStart)) }()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("subscriber never saw agent A's event")
 	}
 	applied := make(chan error, 1)
-	go func() { applied <- h.Apply(agentB, event(EventTurnStart)) }()
+	go func() { applied <- h.Apply(agentB, testLaunch, event(EventTurnStart)) }()
 	select {
 	case err := <-applied:
 		if err != nil {

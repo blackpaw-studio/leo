@@ -14,14 +14,21 @@ import (
 	"github.com/blackpaw-studio/leo/internal/bridge"
 )
 
-const bridgeAgent = "leo-alpha"
+const (
+	bridgeAgent  = "leo-alpha"
+	bridgeLaunch = "launch-test"
+)
 
 // startBridgeServer starts a daemon whose bridge hub is the one returned, so
 // a test can drive the outbox directly and observe it over the socket.
+// bridgeAgent's key is open under bridgeLaunch, as a launch's would be.
 func startBridgeServer(t *testing.T, configure ...func(*Server)) (string, *bridge.Hub, *Server) {
 	t.Helper()
 	workDir := tmpWorkDir(t)
 	hub := bridge.New(bridge.Options{})
+	if _, err := hub.Open(bridgeAgent, bridgeLaunch); err != nil {
+		t.Fatal(err)
+	}
 	s := New(SockPath(workDir), "/tmp/leo.yaml", nil, WithBridge(hub))
 	for _, fn := range configure {
 		fn(s)
@@ -42,10 +49,14 @@ func bridgeTestCtx(t *testing.T) context.Context {
 
 // openStream opens agent's stream through the production client and waits
 // until the hub has registered it.
-func openStream(t *testing.T, workDir string, hub *bridge.Hub, agent string) *bufio.Reader {
+func openStream(t *testing.T, workDir string, hub *bridge.Hub, agent string, launch ...string) *bufio.Reader {
 	t.Helper()
 	ctx := bridgeTestCtx(t)
-	body, err := OpenBridgeStream(ctx, workDir, agent)
+	l := bridgeLaunch
+	if len(launch) > 0 {
+		l = launch[0]
+	}
+	body, err := OpenBridgeStream(ctx, workDir, agent, l)
 	if err != nil {
 		t.Fatalf("OpenBridgeStream: %v", err)
 	}
@@ -95,7 +106,7 @@ func TestBridgeStreamFlushesEachCommandImmediately(t *testing.T) {
 
 func TestBridgeStreamContentType(t *testing.T) {
 	workDir, _, _ := startBridgeServer(t)
-	req, _ := http.NewRequestWithContext(bridgeTestCtx(t), http.MethodGet, "http://daemon/api/bridge/"+bridgeAgent+"/stream", nil)
+	req, _ := http.NewRequestWithContext(bridgeTestCtx(t), http.MethodGet, "http://daemon/api/bridge/"+bridgeAgent+"/stream?launch="+bridgeLaunch, nil)
 	resp, err := newUnixClientNoTimeout(SockPath(workDir)).Do(req)
 	if err != nil {
 		t.Fatalf("GET stream: %v", err)
@@ -110,7 +121,7 @@ func TestBridgeStreamEndsWhenReplaced(t *testing.T) {
 	workDir, hub, _ := startBridgeServer(t)
 	old := openStream(t, workDir, hub, bridgeAgent)
 	ctx := bridgeTestCtx(t)
-	newer, err := OpenBridgeStream(ctx, workDir, bridgeAgent)
+	newer, err := OpenBridgeStream(ctx, workDir, bridgeAgent, bridgeLaunch)
 	if err != nil {
 		t.Fatalf("second OpenBridgeStream: %v", err)
 	}
@@ -132,7 +143,7 @@ func TestBridgeStreamEndsWhenReplaced(t *testing.T) {
 func TestBridgeStreamUnregistersOnClientDisconnect(t *testing.T) {
 	workDir, hub, _ := startBridgeServer(t)
 	ctx, cancel := context.WithCancel(bridgeTestCtx(t))
-	body, err := OpenBridgeStream(ctx, workDir, bridgeAgent)
+	body, err := OpenBridgeStream(ctx, workDir, bridgeAgent, bridgeLaunch)
 	if err != nil {
 		t.Fatalf("OpenBridgeStream: %v", err)
 	}
@@ -212,7 +223,7 @@ func TestBridgeReportAckSettlesSend(t *testing.T) {
 	if err := json.Unmarshal([]byte(readLine(t, r)), &cmd); err != nil || cmd.ID == "" {
 		t.Fatalf("stream line has no command id (err %v)", err)
 	}
-	if err := PostBridgeReport(ctx, workDir, bridgeAgent, []byte(`{"type":"ack","id":"`+cmd.ID+`","ok":true}`)); err != nil {
+	if err := PostBridgeReport(ctx, workDir, bridgeAgent, bridgeLaunch, []byte(`{"type":"ack","id":"`+cmd.ID+`","ok":true}`)); err != nil {
 		t.Fatalf("PostBridgeReport: %v", err)
 	}
 	select {
@@ -227,7 +238,7 @@ func TestBridgeReportAckSettlesSend(t *testing.T) {
 
 func TestBridgeReportEventUpdatesState(t *testing.T) {
 	workDir, hub, _ := startBridgeServer(t)
-	if err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, []byte(`{"type":"event","name":"turn.start"}`)); err != nil {
+	if err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch, []byte(`{"type":"event","name":"turn.start"}`)); err != nil {
 		t.Fatalf("PostBridgeReport: %v", err)
 	}
 	if !hub.State(bridgeAgent).Busy {
@@ -242,7 +253,7 @@ func TestBridgeReportAcceptsLargeTurnText(t *testing.T) {
 	workDir, hub, _ := startBridgeServer(t)
 	message := strings.Repeat("m", 4<<20)
 	body := `{"type":"event","name":"turn.complete","message":"` + message + `"}`
-	if err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, []byte(body)); err != nil {
+	if err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch, []byte(body)); err != nil {
 		t.Fatalf("PostBridgeReport of a %d-byte report: %v", len(body), err)
 	}
 	if hub.State(bridgeAgent).LastTurnComplete.IsZero() {
@@ -252,22 +263,26 @@ func TestBridgeReportAcceptsLargeTurnText(t *testing.T) {
 
 func TestBridgeReportRejectsBadRequests(t *testing.T) {
 	workDir, _, _ := startBridgeServer(t)
+	turnStart := `{"type":"event","name":"turn.start"}`
 	cases := []struct {
 		name   string
 		agent  string
+		launch string
 		body   string
 		status int
 	}{
-		{"unknown type", bridgeAgent, `{"type":"bogus"}`, http.StatusBadRequest},
-		{"not json", bridgeAgent, `nope`, http.StatusBadRequest},
-		{"unknown field", bridgeAgent, `{"type":"event","name":"turn.start","x":1}`, http.StatusBadRequest},
-		{"invalid agent", "bad%20name", `{"type":"event","name":"turn.start"}`, http.StatusBadRequest},
-		{"oversized", bridgeAgent, `{"type":"event","name":"turn.complete","usage":{"pad":"` + strings.Repeat("x", int(MaxBridgeReportBytes)) + `"}}`, http.StatusRequestEntityTooLarge},
+		{"unknown type", bridgeAgent, bridgeLaunch, `{"type":"bogus"}`, http.StatusBadRequest},
+		{"not json", bridgeAgent, bridgeLaunch, `nope`, http.StatusBadRequest},
+		{"unknown field", bridgeAgent, bridgeLaunch, `{"type":"event","name":"turn.start","x":1}`, http.StatusBadRequest},
+		{"invalid agent", "bad%20name", bridgeLaunch, turnStart, http.StatusBadRequest},
+		{"no launch", bridgeAgent, "", turnStart, http.StatusBadRequest},
+		{"invalid launch", bridgeAgent, "a%2Fb", turnStart, http.StatusBadRequest},
+		{"oversized", bridgeAgent, bridgeLaunch, `{"type":"event","name":"turn.complete","usage":{"pad":"` + strings.Repeat("x", int(MaxBridgeReportBytes)) + `"}}`, http.StatusRequestEntityTooLarge},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req, _ := http.NewRequestWithContext(bridgeTestCtx(t), http.MethodPost,
-				"http://daemon/api/bridge/"+tc.agent+"/report", strings.NewReader(tc.body))
+				"http://daemon/api/bridge/"+tc.agent+"/report?launch="+tc.launch, strings.NewReader(tc.body))
 			resp, err := newUnixClient(SockPath(workDir)).Do(req)
 			if err != nil {
 				t.Fatalf("POST: %v", err)
@@ -282,7 +297,7 @@ func TestBridgeReportRejectsBadRequests(t *testing.T) {
 
 func TestPostBridgeReportSurfacesDaemonError(t *testing.T) {
 	workDir, _, _ := startBridgeServer(t)
-	err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, []byte(`{"type":"bogus"}`))
+	err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch, []byte(`{"type":"bogus"}`))
 	if err == nil || !strings.Contains(err.Error(), "unknown type") || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("err=%v, want the daemon's 400 message", err)
 	}
@@ -290,7 +305,7 @@ func TestPostBridgeReportSurfacesDaemonError(t *testing.T) {
 
 func TestOpenBridgeStreamSurfacesDaemonError(t *testing.T) {
 	workDir, _, _ := startBridgeServer(t)
-	body, err := OpenBridgeStream(bridgeTestCtx(t), workDir, "bad name")
+	body, err := OpenBridgeStream(bridgeTestCtx(t), workDir, "bad name", bridgeLaunch)
 	if err == nil {
 		body.Close()
 		t.Fatal("OpenBridgeStream accepted an invalid agent")
@@ -318,14 +333,14 @@ func TestBridgeRefusesAForgottenKeyWithGone(t *testing.T) {
 	workDir, hub, _ := startBridgeServer(t)
 	hub.Forget(bridgeAgent)
 
-	err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, []byte(`{"type":"event","name":"turn.start"}`))
+	err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch, []byte(`{"type":"event","name":"turn.start"}`))
 	if !errors.Is(err, ErrBridgeGone) {
 		t.Fatalf("report for a forgotten key: err=%v, want ErrBridgeGone", err)
 	}
 	if hub.State(bridgeAgent).Busy {
 		t.Fatal("a forgotten key's late report was applied")
 	}
-	body, err := OpenBridgeStream(bridgeTestCtx(t), workDir, bridgeAgent)
+	body, err := OpenBridgeStream(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch)
 	if err == nil {
 		body.Close()
 		t.Fatal("OpenBridgeStream connected a forgotten key")
@@ -333,4 +348,35 @@ func TestBridgeRefusesAForgottenKeyWithGone(t *testing.T) {
 	if !errors.Is(err, ErrBridgeGone) {
 		t.Fatalf("stream for a forgotten key: err=%v, want ErrBridgeGone", err)
 	}
+}
+
+// A report or connection from any launch but the key's current one (a
+// relaunched agent's predecessor, or a session a restarted daemon has not
+// adopted yet) gets 409 Conflict, which the client surfaces as
+// ErrBridgeStale: the report is moot and must not be retried.
+func TestBridgeRefusesAStaleLaunchWithConflict(t *testing.T) {
+	workDir, hub, _ := startBridgeServer(t)
+	if _, err := hub.Open(bridgeAgent, "launch-successor"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch, []byte(`{"type":"event","name":"turn.start"}`))
+	if !errors.Is(err, ErrBridgeStale) || !strings.Contains(err.Error(), "409") {
+		t.Fatalf("report from the predecessor: err=%v, want ErrBridgeStale (409)", err)
+	}
+	if hub.State(bridgeAgent).Busy {
+		t.Fatal("the predecessor's report marked the successor busy")
+	}
+	body, err := OpenBridgeStream(bridgeTestCtx(t), workDir, bridgeAgent, bridgeLaunch)
+	if err == nil {
+		body.Close()
+		t.Fatal("OpenBridgeStream connected the predecessor")
+	}
+	if !errors.Is(err, ErrBridgeStale) {
+		t.Fatalf("stream for the predecessor: err=%v, want ErrBridgeStale", err)
+	}
+	if hub.Connected(bridgeAgent) {
+		t.Fatal("the predecessor holds the successor's stream")
+	}
+	_ = openStream(t, workDir, hub, bridgeAgent, "launch-successor")
 }

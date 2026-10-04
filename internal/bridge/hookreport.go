@@ -14,6 +14,11 @@ var hookEventNames = map[string]string{
 // rather than finished.
 const TurnAborted = "aborted"
 
+// IsFinalSessionEnd reports whether a session.end with reason leaves the
+// claude process for good: not a /clear or a resume, after which the same
+// process goes on under another session.
+func IsFinalSessionEnd(reason string) bool { return reason != "clear" && reason != "resume" }
+
 // bridgeEventIDPrefix keeps bridge event ids apart from shell-hook ones in
 // the dispatcher's shared dedup set.
 const bridgeEventIDPrefix = "bridge:"

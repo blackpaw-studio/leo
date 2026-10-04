@@ -87,14 +87,18 @@ func TestSupervisorBridgeStateOnlyWhenConnected(t *testing.T) {
 	t.Cleanup(hub.Close)
 	sv.SetBridge(hub, nil, 0)
 	id := newProcIdentity("alpha", nil)
-	id.setBridge(bridge.Target{Key: "alpha"}, time.Time{})
+	target, err := hub.Open("alpha", "launch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id.setBridge(target)
 	sv.mu.Lock()
 	sv.identities["alpha"] = id
 	sv.mu.Unlock()
 	if _, ok := sv.BridgeState("alpha"); ok {
 		t.Fatal("BridgeState before the mod connected")
 	}
-	if _, err := hub.Connect("alpha"); err != nil {
+	if _, err := hub.Connect("alpha", "launch-1"); err != nil {
 		t.Fatal(err)
 	}
 	if st, ok := sv.BridgeState("alpha"); !ok || !st.Connected {
@@ -125,7 +129,11 @@ func TestSupervisorBridgeStatus(t *testing.T) {
 		if key == "" {
 			id.setLegacy()
 		} else {
-			id.setBridge(bridge.Target{Key: key}, time.Time{})
+			target, err := hub.Open(key, "launch-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			id.setBridge(target)
 		}
 		sv.mu.Lock()
 		sv.identities[name] = id
@@ -135,7 +143,7 @@ func TestSupervisorBridgeStatus(t *testing.T) {
 	add("legacy", "claude", "")
 	add("implicit", "", "")
 	add("codex", "codex", "")
-	if _, err := hub.Connect("bridged"); err != nil {
+	if _, err := hub.Connect("bridged", "launch-1"); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{

@@ -12,7 +12,9 @@ import (
 // ReportHello or one of the Event* names. SessionID and ClaudeVersion come
 // from the agent's latest hello (the event's own, for a hello).
 type Event struct {
-	Agent         string
+	Agent string
+	// Gen is the generation (see Target) whose launch reported it.
+	Gen           uint64
 	Name          string
 	SessionID     string
 	ClaudeVersion string
@@ -110,7 +112,7 @@ func (h *Hub) snapshotLocked(agent string) State {
 	}
 }
 
-func (h *Hub) applyEvent(agent string, r Report) error {
+func (h *Hub) applyEvent(agent, launch string, r Report) error {
 	lock, err := h.eventLock(agent)
 	if err != nil {
 		return err
@@ -123,13 +125,16 @@ func (h *Hub) applyEvent(agent string, r Report) error {
 		h.mu.Unlock()
 		return ErrClosed
 	}
-	// Re-checked under the event lock: the key may have been forgotten
-	// since, and a dead launch's report must not bring its state back.
-	if _, err := h.lifeLocked(agent); err != nil {
+	// Checked under the event lock: the key may have been forgotten or
+	// reopened for another launch since, and a dead launch's report must
+	// not bring its state back or reach its successor.
+	life, err := h.launchLocked(agent, launch)
+	if err != nil {
 		h.mu.Unlock()
 		return err
 	}
 	ev := h.recordLocked(agent, h.stateLocked(agent), r)
+	ev.Gen = life.gen
 	h.notifyLocked()
 	subs := h.subs // AddSubscriber replaces, never mutates, the slice
 	h.mu.Unlock()

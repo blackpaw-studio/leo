@@ -182,19 +182,28 @@ func (s *Supervisor) forgetBridge(id *procIdentity) {
 	}
 }
 
-// tmuxSessionBridgeKey reads the bridge key a running session was launched
-// with from its environment; ok is false when unset or unusable.
-func tmuxSessionBridgeKey(tmuxPath, session string) (string, bool) {
-	out, err := exec.Command(tmuxPath, tmux.Args("show-environment", "-t", tmux.Target(session), bridgemod.EnvAgent)...).Output() // #nosec G204 -- fixed tmux argv
+// tmuxSessionBridge reads the bridge key and launch token a running
+// session was launched with from its environment: what its claude's mod
+// connects and reports under. ok is false when either is unset or unusable.
+func tmuxSessionBridge(tmuxPath, session string) (key, launch string, ok bool) {
+	key, ok = tmuxSessionEnv(tmuxPath, session, bridgemod.EnvAgent)
+	if !ok || !config.ValidName(key) {
+		return "", "", false
+	}
+	launch, ok = tmuxSessionEnv(tmuxPath, session, bridgemod.EnvLaunch)
+	if !ok || launch == "" {
+		return "", "", false
+	}
+	return key, launch, true
+}
+
+// tmuxSessionEnv reads name from session's environment.
+func tmuxSessionEnv(tmuxPath, session, name string) (string, bool) {
+	out, err := exec.Command(tmuxPath, tmux.Args("show-environment", "-t", tmux.Target(session), name)...).Output() // #nosec G204 -- fixed tmux argv
 	if err != nil {
 		return "", false
 	}
-	line := strings.TrimSpace(string(out))
-	key, found := strings.CutPrefix(line, bridgemod.EnvAgent+"=")
-	if !found || !config.ValidName(key) {
-		return "", false
-	}
-	return key, true
+	return strings.CutPrefix(strings.TrimSpace(string(out)), name+"=")
 }
 
 // bridgeLaunch is how one claude launch (or adopted session) uses the
@@ -202,10 +211,14 @@ func tmuxSessionBridgeKey(tmuxPath, session string) (string, bool) {
 type bridgeLaunch struct {
 	plan    bridgemod.Plan
 	bridged bool
-	// target is the generation of the bridge key this launch opened.
+	// adopted: a live session a previous daemon launched. It is never
+	// killed or relaunched for the bridge's sake.
+	adopted bool
+	// target is the generation of the bridge key opened for this launch.
 	target bridge.Target
-	// since is when the launch started; zero for an adopted session.
-	since time.Time
+	// conversation is the one the launch's args name ("" for a fresh one
+	// nobody knows the id of yet).
+	conversation string
 	// opening is the opening prompt the bridge delivers as this launch's
 	// first user prompt ("" for none); the launch then omits it from argv.
 	// ticket settles with its ack.
@@ -213,10 +226,10 @@ type bridgeLaunch struct {
 	ticket  *bridge.Ticket
 }
 
-// planBridgeLaunch decides how this launch of id, starting at since, uses
-// the bridge, opening a new generation of its key for a bridged one, and
-// records the outcome on id.
-func (s *Supervisor) planBridgeLaunch(ctx context.Context, claudePath, harnessName string, id *procIdentity, forceLegacy bool, since time.Time) bridgeLaunch {
+// planBridgeLaunch decides how this launch of id, into conversation, uses
+// the bridge, opening a new generation of its key bound to the launch's
+// fresh token for a bridged one, and records the outcome on id.
+func (s *Supervisor) planBridgeLaunch(ctx context.Context, claudePath, harnessName string, id *procIdentity, forceLegacy bool, conversation string) bridgeLaunch {
 	w := s.bridgeWiring()
 	if w == nil || w.launcher == nil || forceLegacy || harnessName != "claude" {
 		id.setLegacy()
@@ -227,33 +240,34 @@ func (s *Supervisor) planBridgeLaunch(ctx context.Context, claudePath, harnessNa
 		id.setLegacy()
 		return bridgeLaunch{}
 	}
-	target, err := w.hub.Open(plan.Key)
+	target, err := w.hub.Open(plan.Key, plan.Launch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] warning: leo bridge unavailable (%v); launching without it\n", id.Name(), err)
 		id.setLegacy()
 		return bridgeLaunch{}
 	}
-	id.setBridge(target, since)
-	return bridgeLaunch{plan: plan, bridged: true, target: target, since: since}
+	id.setBridge(target)
+	return bridgeLaunch{plan: plan, bridged: true, target: target, conversation: conversation}
 }
 
 // adoptBridge takes over the bridge of a session the previous daemon
-// launched under key: a new generation of the key in this daemon's hub
-// (keeping a stream its mod already reopened), recorded on id.
-func (s *Supervisor) adoptBridge(id *procIdentity, key string) bridgeLaunch {
+// launched under key and launch: a generation of the key in this daemon's
+// hub bound to that launch, so the surviving claude's mod (and only it) can
+// reconnect, recorded on id.
+func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation string) bridgeLaunch {
 	w := s.bridgeWiring()
 	if w == nil {
 		id.setLegacy()
 		return bridgeLaunch{}
 	}
-	target, err := w.hub.Open(key)
+	target, err := w.hub.Open(key, launch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] warning: adopting the leo bridge %s: %v\n", id.Name(), key, err)
 		id.setLegacy()
 		return bridgeLaunch{}
 	}
-	id.setBridge(target, time.Time{})
-	return bridgeLaunch{plan: bridgemod.Plan{Key: key}, bridged: true, target: target}
+	id.setBridge(target)
+	return bridgeLaunch{plan: bridgemod.Plan{Key: key, Launch: launch}, bridged: true, adopted: true, target: target, conversation: conversation}
 }
 
 // endBridgedLaunch retires a bridged launch that is over: it reports
@@ -265,9 +279,9 @@ func (s *Supervisor) endBridgedLaunch(bl bridgeLaunch, opening *openingDelivery)
 	if !bl.bridged || w == nil {
 		return false
 	}
-	connected = w.hub.State(bl.target.Key).ConnectedSince(bl.target, bl.since)
+	connected = w.hub.State(bl.target.Key).HasConnected(bl.target)
 	w.hub.ForgetGen(bl.target)
-	opening.settle(bl.ticket)
+	opening.settle(bl)
 	return connected
 }
 
@@ -337,13 +351,15 @@ func briefExceedsArgv(path string) bool {
 }
 
 // watchBridgeLaunch follows a bridged launch (or adopted session) until its
-// mod has connected, and its opening's ack (see trackOpeningAck). If the
-// mod does not connect within the connect timeout while the opening is
-// still unacked, nothing has run yet: the launch's generation is forgotten,
-// fellBack is set and the session killed, so the supervise loop relaunches
-// the legacy way with the opening on argv. Without an opening to deliver a
-// missing bridge is only logged; call sites fall back to tmux on their own.
-// ctx ends with the launch.
+// mod has connected, and its opening's ack (see trackOpeningAck). If a
+// launch's mod does not connect within the connect timeout while its
+// opening is still unacked, nothing has run yet: the launch's generation is
+// forgotten, fellBack is set and the session killed, so the supervise loop
+// relaunches the legacy way with the opening on argv. An adopted session is
+// live and is never killed: its mod reconnects on its own backoff and finds
+// the opening still queued. Without an opening to deliver a missing bridge
+// is only logged; call sites fall back to tmux on their own. ctx ends with
+// the launch.
 func (s *Supervisor) watchBridgeLaunch(ctx context.Context, id *procIdentity, bl bridgeLaunch, opening *openingDelivery, tmuxPath string, fellBack *atomic.Bool) {
 	w := s.bridgeWiring()
 	if w == nil {
@@ -355,17 +371,18 @@ func (s *Supervisor) watchBridgeLaunch(ctx context.Context, id *procIdentity, bl
 	waitCtx, cancel := context.WithTimeout(ctx, w.connectTimeout)
 	defer cancel()
 	_, err := w.hub.WaitFor(waitCtx, bl.target.Key, func(st bridge.State) bool {
-		return st.ConnectedSince(bl.target, bl.since)
+		return st.HasConnected(bl.target)
 	})
-	if err == nil || ctx.Err() != nil {
-		return
-	}
-	if bl.ticket == nil || opening.acked.Load() {
+	switch {
+	case err == nil || ctx.Err() != nil:
+	case bl.adopted:
+		fmt.Fprintf(os.Stderr, "[%s] warning: the adopted session's leo bridge has not reconnected after %s; waiting for it\n", id.Name(), w.connectTimeout)
+	case bl.ticket == nil || isAcked(bl.ticket):
 		fmt.Fprintf(os.Stderr, "[%s] warning: leo bridge not connected after %s; messages fall back to tmux\n", id.Name(), w.connectTimeout)
-		return
+	default:
+		fmt.Fprintf(os.Stderr, "[%s] leo bridge not connected after %s\n", id.Name(), w.connectTimeout)
+		s.fallBackFromBridge(id, bl.target, tmuxPath, fellBack, false)
 	}
-	fmt.Fprintf(os.Stderr, "[%s] leo bridge not connected after %s\n", id.Name(), w.connectTimeout)
-	s.fallBackFromBridge(id, bl.target, tmuxPath, fellBack, false)
 }
 
 // fallBackFromBridge abandons a bridged launch: its generation is forgotten
@@ -390,13 +407,17 @@ func (s *Supervisor) fallBackFromBridge(id *procIdentity, target bridge.Target, 
 }
 
 // pasteOversizedOpening delivers an opening brief too large for argv to the
-// legacy claude in id's session by tmux paste.
-func pasteOversizedOpening(ctx context.Context, tmuxPath string, id *procIdentity, briefPath string) {
+// legacy claude in id's session by tmux paste, recording conversation as
+// having it once the paste went through.
+func pasteOversizedOpening(ctx context.Context, tmuxPath string, id *procIdentity, briefPath string, opening *openingDelivery, conversation string) {
 	text, err := os.ReadFile(briefPath)
 	if err == nil {
 		err = pasteOpeningPrompt(ctx, tmuxPath, id.SessionName(), string(text))
 	}
-	if err != nil && ctx.Err() == nil {
+	switch {
+	case err == nil:
+		opening.delivered(conversation, "")
+	case ctx.Err() == nil:
 		fmt.Fprintf(os.Stderr, "[%s] pasting the opening prompt: %v\n", id.Name(), err)
 	}
 }
@@ -491,11 +512,11 @@ func taskBridgeOutcome(key string, err error) (*harness.Result, error) {
 }
 
 // awaitTaskBridge waits, up to settle, for session's launch to settle: a
-// bridged launch whose mod has connected since it started (settled; it may
-// be between reconnects, which a deliver rides out queued), or a legacy one
-// (the zero Target). A bridged launch whose mod has not connected by the
-// deadline returns its target, unsettled. err is ctx's when the invocation
-// itself ends first.
+// bridged launch whose mod has connected (settled; it may be between
+// reconnects, which a deliver rides out queued), or a legacy one (the zero
+// Target). A bridged launch whose mod has not connected by the deadline
+// returns its target, unsettled. err is ctx's when the invocation itself
+// ends first.
 func awaitTaskBridge(ctx context.Context, hub *bridge.Hub, route func(string) BridgeRoute, session string, settle time.Duration) (target bridge.Target, settled bool, err error) {
 	deadline := time.NewTimer(settle)
 	defer deadline.Stop()
@@ -504,7 +525,7 @@ func awaitTaskBridge(ctx context.Context, hub *bridge.Hub, route func(string) Br
 	for {
 		r := route(session)
 		switch {
-		case r.Target.Key != "" && hub.State(r.Target.Key).ConnectedSince(r.Target, r.Since):
+		case r.Target.Key != "" && hub.State(r.Target.Key).HasConnected(r.Target):
 			return r.Target, true, nil
 		case r.Planned && r.Target.Key == "":
 			return bridge.Target{}, false, nil

@@ -9,7 +9,7 @@ import (
 
 func apply(t *testing.T, h *Hub, agent string, r Report) {
 	t.Helper()
-	if err := h.Apply(agent, r); err != nil {
+	if err := h.Apply(agent, launchOf(t, h, agent), r); err != nil {
 		t.Fatalf("Apply(%+v): %v", r, err)
 	}
 }
@@ -149,14 +149,14 @@ func TestSubscriberMayReadHub(t *testing.T) {
 
 func TestApplyRejectsBadInput(t *testing.T) {
 	h := newTestHub(newFakeClock())
-	if err := h.Apply("", event(EventTurnStart)); !errors.Is(err, ErrInvalidAgent) {
+	if err := h.Apply("", testLaunch, event(EventTurnStart)); !errors.Is(err, ErrInvalidAgent) {
 		t.Fatalf("empty agent err=%v, want ErrInvalidAgent", err)
 	}
-	if err := h.Apply(agentA, Report{Type: "bogus"}); !errors.Is(err, ErrInvalidReport) {
+	if err := h.Apply(agentA, testLaunch, Report{Type: "bogus"}); !errors.Is(err, ErrInvalidReport) {
 		t.Fatalf("bogus type err=%v, want ErrInvalidReport", err)
 	}
 	h.Close()
-	if err := h.Apply(agentA, event(EventTurnStart)); !errors.Is(err, ErrClosed) {
+	if err := h.Apply(agentA, testLaunch, event(EventTurnStart)); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed hub err=%v, want ErrClosed", err)
 	}
 }

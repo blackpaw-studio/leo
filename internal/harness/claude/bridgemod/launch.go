@@ -297,6 +297,10 @@ func (l *Launcher) Capable(ctx context.Context, claudePath string) bool {
 type Plan struct {
 	// Key is the bridge key the mod connects under (LEO_BRIDGE_AGENT).
 	Key string
+	// Launch is the token naming this launch's claude process
+	// (LEO_BRIDGE_LAUNCH), fresh per Plan: the hub generation opened for
+	// the launch accepts only its mod (see bridge.Hub.Open).
+	Launch string
 	// PluginDir is the materialized mod passed with --plugin-dir.
 	PluginDir string
 	// Env holds the launch's EnvKeys: LEO_BRIDGE_BIN, LEO_BRIDGE_AGENT,
@@ -325,14 +329,16 @@ func (l *Launcher) Plan(ctx context.Context, claudePath, key string) (Plan, bool
 		return Plan{}, false
 	}
 	l.pruned.Do(func() { l.pruneMods(context.WithoutCancel(ctx), dir) })
+	launch := rand.Text()
 	return Plan{
 		Key:       key,
+		Launch:    launch,
 		PluginDir: dir,
 		Env: map[string]string{
 			EnvBin:    l.opts.LeoBin,
 			EnvAgent:  key,
 			EnvHome:   l.opts.LeoHome,
-			EnvLaunch: rand.Text(),
+			EnvLaunch: launch,
 		},
 	}, true
 }

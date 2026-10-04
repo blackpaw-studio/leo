@@ -3,7 +3,6 @@ package service
 import (
 	"os/exec"
 	"sync"
-	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/bridge"
@@ -96,11 +95,9 @@ var tmuxHasSession = func(tmuxPath, session string) bool {
 // BridgeRoute is how one launch of an identity uses the leo bridge.
 type BridgeRoute struct {
 	// Target is the generation of the bridge key the launch's claude mod
-	// connects under; the zero Target for a legacy launch.
+	// connects under; the zero Target for a legacy launch. Its mod has
+	// settled once it connected (bridge.State.HasConnected).
 	Target bridge.Target
-	// Since is when the launch started (zero for a session adopted from a
-	// previous daemon): its mod has settled once it connected since.
-	Since time.Time
 	// Planned is set once a launch has decided on the bridge: a
 	// just-spawned agent's first launch is planned on the supervise
 	// goroutine, after the spawn call returns.
@@ -123,11 +120,11 @@ func (p *procIdentity) BridgeRoute() BridgeRoute {
 	return p.bridge
 }
 
-// setBridge records a bridged launch of target started at since.
-func (p *procIdentity) setBridge(target bridge.Target, since time.Time) {
+// setBridge records a bridged launch of target.
+func (p *procIdentity) setBridge(target bridge.Target) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.bridge = BridgeRoute{Target: target, Since: since, Planned: true}
+	p.bridge = BridgeRoute{Target: target, Planned: true}
 }
 
 // setLegacy records a launch without the bridge.

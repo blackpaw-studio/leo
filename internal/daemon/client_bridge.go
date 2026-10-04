@@ -16,24 +16,33 @@ import (
 // message.
 const maxErrorBodyBytes = 4 << 10
 
-// ErrBridgeGone: the daemon has forgotten the bridge key (410 Gone), so the
-// launch the caller belongs to is over. A report it refused is moot and
-// need not be retried.
-var ErrBridgeGone = errors.New("leo bridge key is gone")
+var (
+	// ErrBridgeGone: the daemon has forgotten the bridge key (410 Gone), so
+	// the launch the caller belongs to is over. A report it refused is moot
+	// and need not be retried.
+	ErrBridgeGone = errors.New("leo bridge key is gone")
+	// ErrBridgeStale: the caller's launch is not its key's current one (409
+	// Conflict): the key was opened for a successor, or a restarted daemon
+	// has not adopted the session yet. A report it refused is moot and must
+	// not be retried, or it could land on the successor.
+	ErrBridgeStale = errors.New("leo bridge launch is not current")
+)
 
-func bridgePath(agent, leaf string) string {
-	return "/api/bridge/" + url.PathEscape(agent) + "/" + leaf
+// bridgePath is the URL path of leaf for agent's launch.
+func bridgePath(agent, launch, leaf string) string {
+	return "/api/bridge/" + url.PathEscape(agent) + "/" + leaf + "?" + url.Values{bridgeLaunchParam: {launch}}.Encode()
 }
 
-// OpenBridgeStream opens agent's bridge command stream on the workspace
-// daemon. The returned body yields one JSON command per line until the
-// daemon ends the stream (EOF); cancel ctx or close the body to disconnect.
-func OpenBridgeStream(ctx context.Context, workDir, agent string) (io.ReadCloser, error) {
-	return openBridgeStream(ctx, newUnixClientNoTimeout(SockPath(workDir)), "http://daemon", agent)
+// OpenBridgeStream opens the bridge command stream of agent's launch on the
+// workspace daemon. The returned body yields one JSON command per line
+// until the daemon ends the stream (EOF); cancel ctx or close the body to
+// disconnect.
+func OpenBridgeStream(ctx context.Context, workDir, agent, launch string) (io.ReadCloser, error) {
+	return openBridgeStream(ctx, newUnixClientNoTimeout(SockPath(workDir)), "http://daemon", agent, launch)
 }
 
-func openBridgeStream(ctx context.Context, cli *http.Client, baseURL, agent string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+bridgePath(agent, "stream"), nil)
+func openBridgeStream(ctx context.Context, cli *http.Client, baseURL, agent, launch string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+bridgePath(agent, launch, "stream"), nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating bridge stream request: %w", err)
 	}
@@ -48,14 +57,14 @@ func openBridgeStream(ctx context.Context, cli *http.Client, baseURL, agent stri
 	return resp.Body, nil
 }
 
-// PostBridgeReport posts one raw report body for agent to the workspace
-// daemon, returning the daemon's message on any non-2xx status.
-func PostBridgeReport(ctx context.Context, workDir, agent string, body []byte) error {
-	return postBridgeReport(ctx, newUnixClient(SockPath(workDir)), "http://daemon", agent, body)
+// PostBridgeReport posts one raw report body from agent's launch to the
+// workspace daemon, returning the daemon's message on any non-2xx status.
+func PostBridgeReport(ctx context.Context, workDir, agent, launch string, body []byte) error {
+	return postBridgeReport(ctx, newUnixClient(SockPath(workDir)), "http://daemon", agent, launch, body)
 }
 
-func postBridgeReport(ctx context.Context, cli *http.Client, baseURL, agent string, body []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+bridgePath(agent, "report"), bytes.NewReader(body))
+func postBridgeReport(ctx context.Context, cli *http.Client, baseURL, agent, launch string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+bridgePath(agent, launch, "report"), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("creating bridge report request: %w", err)
 	}
@@ -71,11 +80,15 @@ func postBridgeReport(ctx context.Context, cli *http.Client, baseURL, agent stri
 	return nil
 }
 
-// bridgeStatusError is httpStatusError, wrapping ErrBridgeGone for a 410.
+// bridgeStatusError is httpStatusError, wrapping ErrBridgeGone for a 410
+// and ErrBridgeStale for a 409.
 func bridgeStatusError(what string, resp *http.Response) error {
 	err := httpStatusError(what, resp)
-	if resp.StatusCode == http.StatusGone {
+	switch resp.StatusCode {
+	case http.StatusGone:
 		return fmt.Errorf("%w: %w", ErrBridgeGone, err)
+	case http.StatusConflict:
+		return fmt.Errorf("%w: %w", ErrBridgeStale, err)
 	}
 	return err
 }

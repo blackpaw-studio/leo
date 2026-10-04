@@ -21,14 +21,17 @@ const testLeoBin = "/opt/leo/bin/leo"
 
 // statefulTmux writes a tmux stub that logs each call (one line per call,
 // args joined by spaces) and models one session's life: new-session brings
-// it up, kill-session takes it down, has-session and display-message's
-// #{pane_dead} report it. show-environment prints showEnv, so adoption can
-// recover a launch's bridge key.
-func statefulTmux(t *testing.T, showEnv string) (tmuxPath, logPath string) {
+// it up with the environment its -e arguments set, kill-session takes it
+// down, has-session and display-message's #{pane_dead} report it, and
+// show-environment reads its environment back. sessionEnv seeds that
+// environment (newline-separated NAME=value lines), as a session that
+// survived the previous daemon carries it.
+func statefulTmux(t *testing.T, sessionEnv string) (tmuxPath, logPath string) {
 	t.Helper()
 	dir := t.TempDir()
 	logPath = filepath.Join(dir, "tmux.log")
 	dead := filepath.Join(dir, "dead")
+	env := filepath.Join(dir, "env")
 	script := `#!/bin/sh
 echo "$@" >> '` + logPath + `'
 cmd="$1"
@@ -36,8 +39,20 @@ cmd="$1"
 case "$cmd" in
   has-session) [ -f '` + dead + `' ] && exit 1; exit 0;;
   kill-session) touch '` + dead + `'; exit 0;;
-  new-session) rm -f '` + dead + `'; echo '%7'; exit 0;;
-  show-environment) [ -n '` + showEnv + `' ] && echo '` + showEnv + `'; exit 0;;
+  new-session)
+    rm -f '` + dead + `'
+    : > '` + env + `.new'
+    prev=
+    for a in "$@"; do
+      [ "$prev" = "-e" ] && printf '%s\n' "$a" >> '` + env + `.new'
+      prev="$a"
+    done
+    mv '` + env + `.new' '` + env + `'
+    echo '%7'; exit 0;;
+  show-environment)
+    for a in "$@"; do name="$a"; done
+    grep "^$name=" '` + env + `' || exit 1
+    exit 0;;
   display-message) [ -f '` + dead + `' ] && echo 1 || echo 0; exit 0;;
 esac
 exit 0
@@ -49,7 +64,26 @@ exit 0
 	if err := os.WriteFile(dead, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(env, []byte(sessionEnv+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return tmuxPath, logPath
+}
+
+// sessionEnv returns name's value in the stub tmux session's environment
+// ("" when unset): what its launch set, or what it was seeded with.
+func sessionEnv(t *testing.T, tmuxPath, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(tmuxPath), "env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, name+"="); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // newSessionLines returns the logged tmux new-session invocations.
@@ -87,6 +121,17 @@ type bridgeFixture struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	done     chan struct{}
+	// stopLoop ends the supervise loop without shutting the supervisor
+	// down, so its session survives as a SIGKILLed daemon's does.
+	stopLoop context.CancelFunc
+}
+
+// die models the daemon being killed mid-launch: its supervise loop and hub
+// stop, the tmux session lives on.
+func (f *bridgeFixture) die() {
+	f.stopLoop()
+	<-f.done
+	f.hub.Close()
 }
 
 // bridgeTestOpts adjusts startBridged.
@@ -133,10 +178,20 @@ func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Du
 	sv.states[spec.Name] = &ProcessState{Name: spec.Name, Status: "starting", Ephemeral: true}
 	sv.mu.Unlock()
 
-	f := &bridgeFixture{sv: sv, hub: hub, launcher: launcher, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	loopCtx, stopLoop := context.WithCancel(context.Background())
+	f := &bridgeFixture{sv: sv, hub: hub, launcher: launcher, ctx: ctx, cancel: cancel, done: make(chan struct{}), stopLoop: stopLoop}
 	go func() {
 		defer close(f.done)
-		superviseProcess(ctx, tmuxPath, "/fake/claude", spec, sv.homePath, sv, id)
+		defer stopLoop()
+		// The loop ends with ctx (a supervisor shutdown) or loopCtx (die).
+		go func() {
+			select {
+			case <-ctx.Done():
+				stopLoop()
+			case <-loopCtx.Done():
+			}
+		}()
+		superviseProcess(loopCtx, tmuxPath, "/fake/claude", spec, sv.homePath, sv, id)
 	}()
 	t.Cleanup(func() { cancel(); <-f.done; hub.Close() })
 	return f
@@ -236,10 +291,7 @@ func TestBridgedOpeningPromptIsQueuedNotOnArgv(t *testing.T) {
 	if strings.Contains(line, "$(cat") {
 		t.Fatalf("bridged launch still puts the brief on argv:\n%s", line)
 	}
-	stream, err := f.hub.Connect("alpha")
-	if err != nil {
-		t.Fatal(err)
-	}
+	stream, _ := connectMod(t, f.hub, tmuxPath, "alpha")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd, err := stream.Next(ctx)
@@ -350,9 +402,7 @@ func TestBridgedOpeningKeepsALaunchWhoseModConnects(t *testing.T) {
 	spec.OpeningBriefPath = writeBrief(t, "the opening")
 	f := startBridged(t, tmuxPath, "2.1.289", 300*time.Millisecond, spec)
 	waitForNewSessions(t, logPath, 1)
-	if _, err := f.hub.Connect("alpha"); err != nil {
-		t.Fatal(err)
-	}
+	_, _ = connectMod(t, f.hub, tmuxPath, "alpha")
 	time.Sleep(500 * time.Millisecond)
 	if n := len(newSessionLines(logPath)); n != 1 {
 		t.Fatalf("%d launches; a connected bridge must not be relaunched", n)
@@ -414,10 +464,11 @@ func TestLegacyLaunchPastesAnOversizedOpening(t *testing.T) {
 	}
 }
 
-// After a daemon restart the surviving claude keeps the key it was launched
-// with; adoption reads it back from the session environment.
+// After a daemon restart the surviving claude keeps the key and launch it
+// was launched with; adoption reads them back from the session environment
+// and opens the key for that launch, so its mod (and only it) reconnects.
 func TestAdoptRecoversTheBridgeKey(t *testing.T) {
-	tmuxPath, logPath := statefulTmux(t, "LEO_BRIDGE_AGENT=alpha.0a1b2c")
+	tmuxPath, logPath := statefulTmux(t, "LEO_BRIDGE_AGENT=alpha.0a1b2c\nLEO_BRIDGE_LAUNCH=launch-old")
 	origHas := tmuxHasSession
 	tmuxHasSession = func(_, _ string) bool { return true }
 	// Registered before startBridged so it runs after the supervisor stops.
@@ -443,16 +494,34 @@ func TestAdoptRecoversTheBridgeKey(t *testing.T) {
 	if n := len(newSessionLines(logPath)); n != 0 {
 		t.Fatalf("adoption launched %d sessions", n)
 	}
+	if _, err := f.hub.Connect("alpha.0a1b2c", "launch-new"); !errors.Is(err, bridge.ErrStaleLaunch) {
+		t.Fatalf("another launch connected to the adopted key: err=%v, want ErrStaleLaunch", err)
+	}
+	if _, err := f.hub.Connect("alpha.0a1b2c", "launch-old"); err != nil {
+		t.Fatalf("the adopted session's mod could not reconnect: %v", err)
+	}
 }
 
-func TestAdoptIgnoresAnUnsetOrInvalidKey(t *testing.T) {
-	for _, env := range []string{"", "-LEO_BRIDGE_AGENT", "LEO_BRIDGE_AGENT=", "LEO_BRIDGE_AGENT=bad key"} {
+func TestAdoptIgnoresAnUnsetOrInvalidBridge(t *testing.T) {
+	for _, env := range []string{
+		"",
+		"LEO_BRIDGE_LAUNCH=launch-old",
+		"-LEO_BRIDGE_AGENT\nLEO_BRIDGE_LAUNCH=launch-old",
+		"LEO_BRIDGE_AGENT=\nLEO_BRIDGE_LAUNCH=launch-old",
+		"LEO_BRIDGE_AGENT=bad key\nLEO_BRIDGE_LAUNCH=launch-old",
+		"LEO_BRIDGE_AGENT=alpha",
+		"LEO_BRIDGE_AGENT=alpha\nLEO_BRIDGE_LAUNCH=",
+	} {
 		t.Run(env, func(t *testing.T) {
 			tmuxPath, _ := statefulTmux(t, env)
-			if key, ok := tmuxSessionBridgeKey(tmuxPath, "leo-alpha"); ok {
-				t.Fatalf("recovered key %q from %q", key, env)
+			if key, launch, ok := tmuxSessionBridge(tmuxPath, "leo-alpha"); ok {
+				t.Fatalf("recovered %q/%q from %q", key, launch, env)
 			}
 		})
+	}
+	tmuxPath, _ := statefulTmux(t, "LEO_BRIDGE_AGENT=alpha\nLEO_BRIDGE_LAUNCH=launch-old")
+	if key, launch, ok := tmuxSessionBridge(tmuxPath, "leo-alpha"); !ok || key != "alpha" || launch != "launch-old" {
+		t.Fatalf("tmuxSessionBridge = %q, %q, %v", key, launch, ok)
 	}
 }
 
@@ -461,7 +530,7 @@ func TestAdoptIgnoresAnUnsetOrInvalidKey(t *testing.T) {
 func TestBridgeKeysStayUniqueAcrossRenames(t *testing.T) {
 	sv := NewSupervisor(context.Background())
 	renamed := newProcIdentity("beta", nil)
-	renamed.setBridge(bridge.Target{Key: "alpha", Gen: 1}, time.Time{})
+	renamed.setBridge(bridge.Target{Key: "alpha", Gen: 1})
 	newcomer := newProcIdentity("alpha", nil)
 	sv.identities["beta"] = renamed
 	sv.identities["alpha"] = newcomer
@@ -480,7 +549,7 @@ func TestBridgeKeysStayUniqueAcrossRenames(t *testing.T) {
 	if got := sv.allocBridgeKey("beta", renamed); got != "alpha" {
 		t.Fatalf("relaunch of the renamed identity keyed %q, want its own alpha", got)
 	}
-	newcomer.setBridge(bridge.Target{Key: key, Gen: 2}, time.Time{})
+	newcomer.setBridge(bridge.Target{Key: key, Gen: 2})
 	if again := sv.allocBridgeKey("alpha", newcomer); again != key {
 		t.Fatalf("relaunch key = %q, want %q", again, key)
 	}
@@ -496,11 +565,11 @@ func TestStopForgetsTheBridge(t *testing.T) {
 	defer hub.Close()
 	sv.SetBridge(hub, nil, time.Minute)
 	id := newProcIdentity("alpha", nil)
-	target, err := hub.Open("alpha.0a1b2c")
+	target, err := hub.Open("alpha.0a1b2c", "launch-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id.setBridge(target, time.Time{})
+	id.setBridge(target)
 	sv.identities["alpha"] = id
 	sv.states["alpha"] = &ProcessState{Name: "alpha", Status: "running", Ephemeral: true}
 	sent := make(chan error, 1)
@@ -532,9 +601,8 @@ func TestBridgeRouteForSession(t *testing.T) {
 	if r := sv.BridgeRouteForSession(id.SessionName()); r.Planned || r.Target.Key != "" {
 		t.Fatalf("before the launch is planned: %+v", r)
 	}
-	since := time.Now()
-	id.setBridge(bridge.Target{Key: "alpha", Gen: 3}, since)
-	if r := sv.BridgeRouteForSession(id.SessionName()); !r.Planned || r.Target != (bridge.Target{Key: "alpha", Gen: 3}) || !r.Since.Equal(since) {
+	id.setBridge(bridge.Target{Key: "alpha", Gen: 3})
+	if r := sv.BridgeRouteForSession(id.SessionName()); !r.Planned || r.Target != (bridge.Target{Key: "alpha", Gen: 3}) {
 		t.Fatalf("bridged launch: %+v", r)
 	}
 	id.setLegacy()

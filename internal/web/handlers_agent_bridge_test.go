@@ -13,6 +13,9 @@ import (
 	"github.com/blackpaw-studio/leo/internal/bridge"
 )
 
+// testBridgeLaunch is the launch a bridgedAgent's key is open under.
+const testBridgeLaunch = "launch-test"
+
 // bridgedAgent routes agent name to a hub whose mod (the test) holds the
 // stream open, and fails the test on any tmux exec.
 type bridgedAgent struct {
@@ -29,9 +32,12 @@ func newBridgedAgent(t *testing.T, s *Server, name string, connected bool) *brid
 	t.Helper()
 	b := &bridgedAgent{t: t, hub: bridge.New(bridge.Options{}), key: name + ".k1"}
 	t.Cleanup(b.hub.Close)
+	if _, err := b.hub.Open(b.key, testBridgeLaunch); err != nil {
+		t.Fatal(err)
+	}
 	s.bridgeRouter = &bridge.Router{Hub: b.hub, Keys: func(n string) (string, bool) { return b.key, n == name }}
 	if connected {
-		stream, err := b.hub.Connect(b.key)
+		stream, err := b.hub.Connect(b.key, testBridgeLaunch)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,7 +69,7 @@ func (b *bridgedAgent) next() bridge.Command {
 
 func (b *bridgedAgent) ack(cmd bridge.Command, ok bool, msg string) {
 	b.t.Helper()
-	if err := b.hub.Apply(b.key, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: ok, Error: msg}); err != nil {
+	if err := b.hub.Apply(b.key, testBridgeLaunch, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: ok, Error: msg}); err != nil {
 		b.t.Fatal(err)
 	}
 }

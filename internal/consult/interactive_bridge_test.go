@@ -102,16 +102,56 @@ func (g *bridgeRig) launch(t *testing.T, id, template, prompt string) {
 	}
 }
 
-// connect opens key's stream and acks the queued opening deliver, leaving a
-// connected, idle bridge.
-func (g *bridgeRig) connectAndAckOpening(t *testing.T, key string) *bridge.Stream {
+// launchOf returns the launch token (LEO_BRIDGE_LAUNCH) the launch that
+// set key as its bridge key handed its claude: what that claude's mod
+// connects and reports under.
+func (g *bridgeRig) launchOf(t *testing.T, key string) string {
 	t.Helper()
-	stream, err := g.hub.Connect(key)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i := len(g.calls) - 1; i >= 0; i-- {
+		if agent, _ := envArg(g.calls[i], bridgemod.EnvAgent); agent == key {
+			if launch, ok := envArg(g.calls[i], bridgemod.EnvLaunch); ok && launch != "" {
+				return launch
+			}
+		}
+	}
+	t.Fatalf("no launch set %s=%s", bridgemod.EnvAgent, key)
+	return ""
+}
+
+// apply posts r as key's launch's mod would.
+func (g *bridgeRig) apply(t *testing.T, key string, r bridge.Report) error {
+	t.Helper()
+	return g.hub.Apply(key, g.launchOf(t, key), r)
+}
+
+// connect opens key's stream as its launch's mod would.
+func (g *bridgeRig) connect(t *testing.T, key string) *bridge.Stream {
+	t.Helper()
+	stream, err := g.hub.Connect(key, g.launchOf(t, key))
 	if err != nil {
 		t.Fatal(err)
 	}
+	return stream
+}
+
+// hello says hello on key as its launch's mod would.
+func (g *bridgeRig) hello(t *testing.T, key, session string) {
+	t.Helper()
+	if err := g.apply(t, key, bridge.Report{Type: bridge.ReportHello, SessionID: session, ClaudeVersion: "2.1.289"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// connectAndAckOpening opens key's stream, says hello and acks the queued
+// opening deliver, leaving a connected, idle bridge.
+func (g *bridgeRig) connectAndAckOpening(t *testing.T, key string) *bridge.Stream {
+	t.Helper()
+	stream := g.connect(t, key)
+	g.hello(t, key, "s-"+key)
 	cmd := nextCommand(t, stream)
-	if err := g.hub.Apply(key, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
+	if err := g.apply(t, key, bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
 		t.Fatal(err)
 	}
 	return stream
@@ -172,7 +212,7 @@ func TestBridgedClaudeDispatchLaunch(t *testing.T) {
 		t.Fatalf("bridged launch put the brief on argv: %q", command)
 	}
 
-	stream, err := g.hub.Connect("dispatch.d-bridge")
+	stream, err := g.hub.Connect("dispatch.d-bridge", g.launchOf(t, "dispatch.d-bridge"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,9 +287,10 @@ func TestFailedBridgedLaunchDropsTheQueuedOpening(t *testing.T) {
 func TestAwaitOpeningKeepsAConnectedBridge(t *testing.T) {
 	g := newBridgeRig(t, "2.1.289")
 	g.launch(t, "d-ok", "claude", "brief")
+	launch := g.launchOf(t, "dispatch.d-ok")
 	go func() {
 		time.Sleep(20 * time.Millisecond)
-		_, _ = g.hub.Connect("dispatch.d-ok")
+		_, _ = g.hub.Connect("dispatch.d-ok", launch)
 	}()
 	handled, paste, err := g.r.AwaitOpening(context.Background(), rigPane)
 	if !handled || paste || err != nil {
@@ -379,7 +420,7 @@ func TestBridgedInjectDeliversOverTheBridge(t *testing.T) {
 	if cmd.Op != bridge.OpDeliver || cmd.Text != "next step" || cmd.AsUser {
 		t.Fatalf("deliver = %+v, want the text as a non-user message", cmd)
 	}
-	if err := g.hub.Apply("dispatch.d-send", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
+	if err := g.apply(t, "dispatch.d-send", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -400,7 +441,7 @@ func TestBridgedInjectRejectionIsAnErrorNotAPaste(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- g.r.Inject(context.Background(), rigPane, "next", nil) }()
 	cmd := nextCommand(t, stream)
-	_ = g.hub.Apply("dispatch.d-rej", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: false, Error: "composer busy"})
+	_ = g.apply(t, "dispatch.d-rej", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: false, Error: "composer busy"})
 	if err := <-done; !errors.Is(err, bridge.ErrRejected) {
 		t.Fatalf("Inject = %v, want ErrRejected", err)
 	}
@@ -479,8 +520,8 @@ func TestFrameMessageWithoutACallerNamesTheOrchestrator(t *testing.T) {
 	}
 }
 
-// Shell-hook reports give way to the bridge once its stream is up; release
-// and kill both forget the bridge.
+// Shell-hook reports give way to the bridge once its mod says hello;
+// release and kill both forget the bridge.
 func TestBridgeOwnsReportsUntilReleasedOrKilled(t *testing.T) {
 	for _, end := range []struct {
 		name string
@@ -491,13 +532,14 @@ func TestBridgeOwnsReportsUntilReleasedOrKilled(t *testing.T) {
 	} {
 		t.Run(end.name, func(t *testing.T) {
 			g := newBridgeRig(t, "2.1.289")
+			g.hub.AddSubscriber(g.r.DispatchBridgeSubscriber(&reportLog{}))
 			g.launch(t, "d-own", "claude", "brief")
 			if g.r.BridgeOwnsReports("d-own") {
 				t.Fatal("bridge owns reports before it ever connected")
 			}
 			g.connectAndAckOpening(t, "dispatch.d-own")
 			if !g.r.BridgeOwnsReports("d-own") {
-				t.Fatal("connected bridge does not own reports")
+				t.Fatal("a bridge whose mod said hello does not own reports")
 			}
 			if err := end.do(g.r); err != nil {
 				t.Fatal(err)
@@ -555,8 +597,8 @@ func (l *reportLog) report(id string, hr HookReport) error {
 }
 
 // The bridge subscriber feeds a bridged dispatch's turn events to the
-// dispatcher as the hook reports they stand in for; agents' events, hellos,
-// and dispatches the bridge does not own are dropped.
+// dispatcher as the hook reports they stand in for; hellos, and reports for
+// keys no dispatch launch opened, are dropped.
 func TestDispatchBridgeSubscriberForwardsOwnedDispatchEvents(t *testing.T) {
 	g := newBridgeRig(t, "2.1.289")
 	g.launch(t, "d-sub", "claude", "brief")
@@ -565,17 +607,19 @@ func TestDispatchBridgeSubscriberForwardsOwnedDispatchEvents(t *testing.T) {
 
 	key := DispatchBridgeKey("d-sub")
 	g.connectAndAckOpening(t, key)
-	mustApply := func(agent string, r bridge.Report) {
+	mustApply := func(r bridge.Report) {
 		t.Helper()
-		if err := g.hub.Apply(agent, r); err != nil {
+		if err := g.apply(t, key, r); err != nil {
 			t.Fatal(err)
 		}
 	}
-	mustApply(key, bridge.Report{Type: bridge.ReportHello, SessionID: "s-1", ClaudeVersion: "2.1.289"})
-	mustApply(key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "brief", EventID: "turn.start:t1"})
-	mustApply(key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnComplete, Message: "done", EventID: "turn.complete:t1", Usage: json.RawMessage(`{"cost":{"usd":0.1}}`)})
-	mustApply("alpha", bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "x"})
-	mustApply(DispatchBridgeKey("d-unknown"), bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "x"})
+	mustApply(bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "brief", EventID: "turn.start:t1"})
+	mustApply(bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnComplete, Message: "done", EventID: "turn.complete:t1", Usage: json.RawMessage(`{"cost":{"usd":0.1}}`)})
+	for _, other := range []string{"alpha", DispatchBridgeKey("d-unknown")} {
+		if err := g.hub.Apply(other, "launch-x", bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "x"}); err == nil {
+			t.Fatalf("a report for %s, which no launch opened, was applied", other)
+		}
+	}
 
 	log.mu.Lock()
 	defer log.mu.Unlock()
@@ -599,7 +643,7 @@ func TestDispatchBridgeSubscriberForwardsOwnedDispatchEvents(t *testing.T) {
 func TestBridgedOpeningHasADeterministicID(t *testing.T) {
 	g := newBridgeRig(t, "2.1.289")
 	g.launch(t, "d-id", "claude", "brief")
-	stream, err := g.hub.Connect("dispatch.d-id")
+	stream, err := g.hub.Connect("dispatch.d-id", g.launchOf(t, "dispatch.d-id"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,27 +674,49 @@ func TestBridgedInjectCallerGoneLeavesTheDeliverQueued(t *testing.T) {
 	}
 }
 
-// The bridge owns a dispatch's turn reports only while its mod is
-// connected: a mod that died hands them back to the shell hooks.
-func TestBridgeOwnsReportsOnlyWhileConnected(t *testing.T) {
+// The bridge owns a dispatch's turn reports for its launch's whole life:
+// from its mod's hello until that launch's session ends for good. A gap
+// between stream reconnects (the mod's reports still flow) or a /clear does
+// not hand them to the shell hooks, so no turn is reported twice or lost.
+func TestBridgeOwnsReportsFromHelloUntilTheSessionEnds(t *testing.T) {
 	g := newBridgeRig(t, "2.1.289")
 	g.launch(t, "d-conn", "claude", "brief")
-	stream := g.connectAndAckOpening(t, "dispatch.d-conn")
-	if err := g.hub.Apply("dispatch.d-conn", bridge.Report{Type: bridge.ReportHello, SessionID: "s", ClaudeVersion: "2.1.289"}); err != nil {
-		t.Fatal(err)
-	}
-	if !g.r.BridgeOwnsReports("d-conn") {
-		t.Fatal("a connected bridge does not own reports")
-	}
-	stream.Close()
+	var log reportLog
+	g.hub.AddSubscriber(g.r.DispatchBridgeSubscriber(&log))
+	key := DispatchBridgeKey("d-conn")
+	stream := g.connect(t, key)
 	if g.r.BridgeOwnsReports("d-conn") {
-		t.Fatal("a bridge whose mod is gone still owns reports")
+		t.Fatal("the bridge owns reports before its mod said hello")
 	}
-	if _, err := g.hub.Connect("dispatch.d-conn"); err != nil {
+	g.hello(t, key, "s-1")
+	if !g.r.BridgeOwnsReports("d-conn") {
+		t.Fatal("the bridge does not own reports after its mod's hello")
+	}
+
+	stream.Close()
+	if !g.r.BridgeOwnsReports("d-conn") {
+		t.Fatal("a reconnect gap handed reports back to the shell hooks")
+	}
+	if err := g.apply(t, key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart, Prompt: "p", EventID: "turn.start:t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.apply(t, key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventSessionEnd, Reason: "clear", EventID: "session.end:s-1"}); err != nil {
 		t.Fatal(err)
 	}
 	if !g.r.BridgeOwnsReports("d-conn") {
-		t.Fatal("a reconnected bridge does not own reports")
+		t.Fatal("a /clear handed reports back to the shell hooks")
+	}
+
+	if err := g.apply(t, key, bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventSessionEnd, Reason: "prompt_input_exit", EventID: "session.end:s-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if g.r.BridgeOwnsReports("d-conn") {
+		t.Fatal("the bridge still owns reports after its session ended for good")
+	}
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if got := len(log.got["d-conn"]); got != 3 {
+		t.Fatalf("forwarded %d reports, want the gap's turn.start and both session ends: %v", got, log.got)
 	}
 }
 
@@ -663,7 +729,7 @@ func TestFallbackRefusesTheKilledClaudesLateReports(t *testing.T) {
 	if _, _, err := g.r.AwaitOpening(context.Background(), rigPane); err != nil {
 		t.Fatal(err)
 	}
-	err := g.hub.Apply("dispatch.d-late", bridge.Report{Type: bridge.ReportHello, SessionID: "s-dead", ClaudeVersion: "2.1.289"})
+	err := g.apply(t, "dispatch.d-late", bridge.Report{Type: bridge.ReportHello, SessionID: "s-dead", ClaudeVersion: "2.1.289"})
 	if !errors.Is(err, bridge.ErrForgotten) {
 		t.Fatalf("late hello: err=%v, want ErrForgotten", err)
 	}

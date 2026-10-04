@@ -139,9 +139,41 @@ func mustNext(t *testing.T, s *Stream) Command {
 	return cmd
 }
 
+// testLaunch is the launch token the test helpers open keys under.
+const testLaunch = "launch-test"
+
+// mustOpen opens a new generation of agent's key under testLaunch.
+func mustOpen(t *testing.T, h *Hub, agent string) Target {
+	t.Helper()
+	target, err := h.Open(agent, testLaunch)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", agent, err)
+	}
+	return target
+}
+
+// launchOf returns the launch agent's current generation is bound to,
+// opening the key under testLaunch first if the hub has never seen it, so
+// tests about something else need no ceremony. A forgotten key stays
+// forgotten.
+func launchOf(t *testing.T, h *Hub, agent string) string {
+	t.Helper()
+	h.mu.Lock()
+	life, ok := h.lives[agent]
+	h.mu.Unlock()
+	if !ok {
+		mustOpen(t, h, agent)
+		return testLaunch
+	}
+	if life.launch == "" {
+		return testLaunch
+	}
+	return life.launch
+}
+
 func mustConnect(t *testing.T, h *Hub, agent string) *Stream {
 	t.Helper()
-	s, err := h.Connect(agent)
+	s, err := h.Connect(agent, launchOf(t, h, agent))
 	if err != nil {
 		t.Fatalf("Connect(%q): %v", agent, err)
 	}
@@ -150,7 +182,7 @@ func mustConnect(t *testing.T, h *Hub, agent string) *Stream {
 
 func ack(t *testing.T, h *Hub, agent, id string) {
 	t.Helper()
-	if err := h.Apply(agent, Report{Type: ReportAck, ID: id, OK: true}); err != nil {
+	if err := h.Apply(agent, launchOf(t, h, agent), Report{Type: ReportAck, ID: id, OK: true}); err != nil {
 		t.Fatalf("ack %s: %v", id, err)
 	}
 }

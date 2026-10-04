@@ -17,41 +17,56 @@ import (
 
 // fakeBridge records what the bridge command asked of the daemon.
 type fakeBridge struct {
-	mu          sync.Mutex
-	streamBody  io.ReadCloser
-	streamErr   error
-	streamAgent string
-	streamHome  string
-	reportAgent string
-	reportHome  string
-	reportBody  []byte
-	reportErr   error
-	reports     int
-	parentGone  chan struct{}
+	mu           sync.Mutex
+	streamBody   io.ReadCloser
+	streamErr    error
+	streamAgent  string
+	streamLaunch string
+	streamHome   string
+	reportAgent  string
+	reportLaunch string
+	reportHome   string
+	reportBody   []byte
+	reportErr    error
+	reports      int
+	parentGone   chan struct{}
 }
+
+// testLaunch is the LEO_BRIDGE_LAUNCH the fake environment carries unless a
+// test sets its own.
+const testLaunch = "launch-env"
 
 func (f *fakeBridge) deps(env map[string]string) bridgeDeps {
 	if f.parentGone == nil {
 		f.parentGone = make(chan struct{})
 	}
+	getenv := func(k string) string {
+		if v, ok := env[k]; ok {
+			return v
+		}
+		if k == "LEO_BRIDGE_LAUNCH" {
+			return testLaunch
+		}
+		return ""
+	}
 	return bridgeDeps{
-		openStream: func(_ context.Context, home, agent string) (io.ReadCloser, error) {
+		openStream: func(_ context.Context, home, agent, launch string) (io.ReadCloser, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			f.streamHome, f.streamAgent = home, agent
+			f.streamHome, f.streamAgent, f.streamLaunch = home, agent, launch
 			if f.streamErr != nil {
 				return nil, f.streamErr
 			}
 			return f.streamBody, nil
 		},
-		postReport: func(_ context.Context, home, agent string, body []byte) error {
+		postReport: func(_ context.Context, home, agent, launch string, body []byte) error {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			f.reports++
-			f.reportHome, f.reportAgent, f.reportBody = home, agent, append([]byte(nil), body...)
+			f.reportHome, f.reportAgent, f.reportLaunch, f.reportBody = home, agent, launch, append([]byte(nil), body...)
 			return f.reportErr
 		},
-		getenv:     func(k string) string { return env[k] },
+		getenv:     getenv,
 		homeDir:    func() string { return "/leo-home" },
 		parentGone: func(context.Context) <-chan struct{} { return f.parentGone },
 	}
@@ -102,8 +117,39 @@ func TestBridgeStreamCopiesEachLineAndExitsCleanly(t *testing.T) {
 	if out.flushes != len(want) {
 		t.Fatalf("flushes=%d, want one per line", out.flushes)
 	}
-	if f.streamAgent != "leo-alpha" || f.streamHome != "/leo-home" {
-		t.Fatalf("connected as %q in %q, want leo-alpha in /leo-home", f.streamAgent, f.streamHome)
+	if f.streamAgent != "leo-alpha" || f.streamLaunch != testLaunch || f.streamHome != "/leo-home" {
+		t.Fatalf("connected as %q/%q in %q, want leo-alpha/%s in /leo-home", f.streamAgent, f.streamLaunch, f.streamHome, testLaunch)
+	}
+}
+
+// The mod's stream and reports name the launch they belong to
+// (LEO_BRIDGE_LAUNCH, or --launch), so the daemon can refuse a predecessor.
+func TestBridgeNamesTheLaunch(t *testing.T) {
+	env := map[string]string{"LEO_BRIDGE_AGENT": "leo-alpha", "LEO_BRIDGE_LAUNCH": "launch-7"}
+	f := &fakeBridge{streamBody: streamOf("")}
+	if err := runBridgeCmd(t, f.deps(env), io.Discard); err != nil {
+		t.Fatalf("bridge: %v", err)
+	}
+	if f.streamLaunch != "launch-7" {
+		t.Fatalf("stream launch = %q, want LEO_BRIDGE_LAUNCH", f.streamLaunch)
+	}
+	if err := runBridgeCmdWithStdin(t, f.deps(env), strings.NewReader(`{"type":"event","name":"turn.start"}`), io.Discard, "report", "--launch", "launch-8"); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if f.reportLaunch != "launch-8" {
+		t.Fatalf("report launch = %q, want --launch over the environment", f.reportLaunch)
+	}
+}
+
+func TestBridgeRequiresAValidLaunch(t *testing.T) {
+	for _, env := range []map[string]string{{"LEO_BRIDGE_LAUNCH": ""}, {"LEO_BRIDGE_LAUNCH": "bad launch"}} {
+		f := &fakeBridge{streamBody: streamOf("")}
+		if err := runBridgeCmd(t, f.deps(env), io.Discard, "--agent", "leo-alpha"); err == nil || f.streamAgent != "" {
+			t.Fatalf("env %v: stream err=%v connected=%v; want refused", env, err, f.streamAgent != "")
+		}
+		if err := runBridgeCmdWithStdin(t, f.deps(env), strings.NewReader(`{"type":"event","name":"turn.start"}`), io.Discard, "report", "--agent", "leo-alpha"); err == nil || f.reports != 0 {
+			t.Fatalf("env %v: report err=%v posted=%d; want refused", env, err, f.reports)
+		}
 	}
 }
 
@@ -276,6 +322,20 @@ func TestBridgeReportToAGoneKeySucceeds(t *testing.T) {
 	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(`{"type":"event","name":"turn.start"}`), io.Discard, "report", "--agent", "leo-alpha")
 	if err != nil {
 		t.Fatalf("report to a gone key: err=%v, want nil", err)
+	}
+	if f.reports != 1 {
+		t.Fatalf("reports=%d, want 1", f.reports)
+	}
+}
+
+// A launch that is not its key's current one (a predecessor's, or one a
+// restarted daemon has not adopted yet) gets 409: its report is moot, and
+// retrying it could land it on the successor. Exiting 0 drops it.
+func TestBridgeReportFromAStaleLaunchIsDropped(t *testing.T) {
+	f := &fakeBridge{reportErr: fmt.Errorf("%w: bridge report: daemon returned 409: not current", daemon.ErrBridgeStale)}
+	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(`{"type":"event","name":"turn.start"}`), io.Discard, "report", "--agent", "leo-alpha")
+	if err != nil {
+		t.Fatalf("report from a stale launch: err=%v, want nil", err)
 	}
 	if f.reports != 1 {
 		t.Fatalf("reports=%d, want 1", f.reports)
