@@ -37,6 +37,12 @@ func TestHookPayloadTranslation(t *testing.T) {
 			want:   map[string]any{"hook_event_name": "SessionEnd", "session_id": "s-1", "reason": "prompt_input_exit"},
 		},
 		{
+			name:   "turn.start carries a framed deliver as leo sent it, not as Claude wrapped it",
+			ev:     Event{Agent: agentA, Name: EventTurnStart, SessionID: "s-1", Prompt: pluginWrapped("From orch via leo:\n\nnext")},
+			wantOK: true,
+			want:   map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": "From orch via leo:\n\nnext"},
+		},
+		{
 			name:   "turn.start carries the prompt like the shell hook",
 			ev:     Event{Agent: agentA, Name: EventTurnStart, SessionID: "s-1", Prompt: "brief text"},
 			wantOK: true,

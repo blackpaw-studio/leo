@@ -11,6 +11,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/bridge"
 )
 
 // wantFiles is the mod as Claude Code loads it: manifest, hooks.json, and the
@@ -393,5 +395,13 @@ func TestMaterializeSweepsStaleTempDirs(t *testing.T) {
 		if _, err := os.Stat(keep); err != nil {
 			t.Errorf("%s was removed: %v", filepath.Base(keep), err)
 		}
+	}
+}
+
+// The daemon unwraps a non-user deliver's turn.start by the plugin name
+// Claude shows, so the two must not drift.
+func TestModNameMatchesTheBridgeUnwrap(t *testing.T) {
+	if Name != bridge.ModName {
+		t.Fatalf("bridgemod.Name = %q, bridge.ModName = %q", Name, bridge.ModName)
 	}
 }

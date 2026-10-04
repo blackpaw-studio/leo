@@ -27,7 +27,8 @@ const bridgeEventIDPrefix = "bridge:"
 //
 // turn.start's prompt and turn.complete's final message travel under the
 // shell hooks' own keys (prompt, last_assistant_message), so a late-acked
-// orchestrator turn is matched by its text and a dispatch's result is the
+// orchestrator turn is matched by its text (the prompt as leo sent it, out
+// of the envelope Claude wraps a non-user deliver in) and a dispatch's result is the
 // subagent's final message, exactly as on the hook path. Like the claude
 // shell hooks, the payload carries no turn id: Claude can drain queued
 // prompts inside one running turn, and an id-less Stop closes them all.
@@ -51,7 +52,7 @@ func HookPayload(ev Event) (eventID string, payload json.RawMessage, ok bool) {
 	}
 	switch {
 	case ev.Name == EventTurnStart && ev.Prompt != "":
-		fields["prompt"] = ev.Prompt
+		fields["prompt"] = UnwrapPluginPrompt(ev.Prompt)
 	case ev.Name == EventTurnComplete && ev.Message != "":
 		fields["last_assistant_message"] = ev.Message
 	case ev.Name == EventSessionEnd && ev.Reason != "":
