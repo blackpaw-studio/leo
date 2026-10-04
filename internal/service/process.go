@@ -940,6 +940,9 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
 		obs.wireManager(agentMgr)
+		// A bridged claude gets its opening prompt over the bridge, so a
+		// spawn need not hold it to the argv limit.
+		agentMgr.SetBridgeCapable(supervisor.BridgeCapable)
 		srv.SetAgentManager(agentMgr)
 		// The ensure-exists task-delivery path (config.ResolveTaskTarget +
 		// runPersistent) needs the same agent.Manager to spawn/resume targets

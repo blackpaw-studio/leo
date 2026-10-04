@@ -38,18 +38,18 @@ import (
 // ORIGINAL record's OpeningBriefID forward unchanged, since Reset replays
 // the original spawn's ClaudeArgs verbatim too).
 //
-// Returns briefID == "" when prompt is empty (no brief needed at all). An
-// oversized prompt (above claudeharness.ArgvPromptLimit) is rejected outright
-// with a clear error: unlike interactive dispatch's injectOpening, an
-// ephemeral claude agent has no tmux-paste-injection fallback once launched,
-// so silently truncating or dropping the prompt would be worse than failing
-// the spawn.
-func resolveOpeningPrompt(cfg *config.Config, agentName, prompt string) (briefID string, err error) {
+// Returns briefID == "" when prompt is empty (no brief needed at all). A
+// prompt over limit is rejected outright with a clear error rather than
+// truncated or dropped. limit is claudeharness.ArgvPromptLimit for a legacy
+// launch, or MaxBridgedOpeningBytes when the leo bridge will deliver the
+// prompt (if that bridge then fails to connect, the supervisor pastes a
+// brief too large for argv; see service.bridgeLaunchSpec).
+func resolveOpeningPrompt(cfg *config.Config, agentName, prompt string, limit int) (briefID string, err error) {
 	if prompt == "" {
 		return "", nil
 	}
-	if !claudeharness.DeliversPromptViaArgv(prompt) {
-		return "", fmt.Errorf("opening prompt is %d bytes, exceeding the %d byte launch-time limit for a claude agent", len(prompt), claudeharness.ArgvPromptLimit)
+	if len(prompt) > limit {
+		return "", fmt.Errorf("opening prompt is %d bytes, exceeding the %d byte launch-time limit for a claude agent", len(prompt), limit)
 	}
 	id, err := claudeharness.GenerateAgentBriefID()
 	if err != nil {
@@ -66,6 +66,11 @@ func resolveOpeningPrompt(cfg *config.Config, agentName, prompt string) (briefID
 	}
 	return id, nil
 }
+
+// MaxBridgedOpeningBytes caps a claude opening prompt the leo bridge
+// delivers. Far past any useful prompt; it only bounds what a spawn holds
+// in memory and on disk.
+const MaxBridgedOpeningBytes = 4 << 20
 
 // removeOpeningPromptBrief deletes id's brief file, if any, after validating
 // id — Delete's only call site, so a hand-edited or corrupted agentstore

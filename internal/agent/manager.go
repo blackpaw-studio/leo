@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -82,6 +83,26 @@ type Manager struct {
 	// surfacedFiles holds files agents surfaced to the user. Delete and
 	// Rename clear them (a renamed agent starts with none). nil-safe.
 	surfacedFiles *observe.SurfacedFileStore
+	// bridgeCapable reports whether a claude agent launched now would load
+	// the leo bridge, which delivers the opening prompt instead of argv.
+	// nil means never. See SetBridgeCapable.
+	bridgeCapable func() bool
+}
+
+// SetBridgeCapable tells the Manager how to learn whether claude launches
+// load the leo bridge; when they do, a claude opening prompt is not held to
+// the argv limit (see resolveOpeningPrompt).
+func (m *Manager) SetBridgeCapable(capable func() bool) {
+	m.bridgeCapable = capable
+}
+
+// openingPromptLimit is the largest claude opening prompt a spawn accepts
+// now: argv's, unless the bridge will deliver it.
+func (m *Manager) openingPromptLimit() int {
+	if m.bridgeCapable != nil && m.bridgeCapable() {
+		return MaxBridgedOpeningBytes
+	}
+	return claudeharness.ArgvPromptLimit
 }
 
 // SetAttention wires the attention store. Optional; daemon boot is the only
@@ -400,7 +421,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	var openingBriefID string
 	if isClaude {
 		var err error
-		openingBriefID, err = resolveOpeningPrompt(cfg, agentName, spec.Prompt)
+		openingBriefID, err = resolveOpeningPrompt(cfg, agentName, spec.Prompt, m.openingPromptLimit())
 		if err != nil {
 			return Record{}, err
 		}
@@ -705,7 +726,7 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 	var openingBriefID string
 	if isClaude {
 		var err error
-		openingBriefID, err = resolveOpeningPrompt(cfg, layout.AgentName, spec.Prompt)
+		openingBriefID, err = resolveOpeningPrompt(cfg, layout.AgentName, spec.Prompt, m.openingPromptLimit())
 		if err != nil {
 			rollbackWorktree()
 			return Record{}, err
