@@ -16,10 +16,16 @@ const (
 	// bridgeWriteTimeout bounds one command write, so a mod that stops
 	// reading cannot pin its handler forever.
 	bridgeWriteTimeout = 30 * time.Second
-	// maxBridgeReportBytes caps a report body. Reports are small (an ack,
-	// or an event with a usage object); the socket mux has no global cap.
-	maxBridgeReportBytes int64 = 64 << 10
+	// maxBridgeReportBytes caps a report body. Most reports are small, but
+	// turn.start echoes the prompt and turn.complete the final message
+	// (the mod caps each at 1M chars, at most ~6 MiB of escaped JSON); the
+	// socket mux has no global cap.
+	maxBridgeReportBytes int64 = 16 << 20
 )
+
+// MaxBridgeReportBytes is the largest report body the daemon takes;
+// `leo bridge report` refuses anything larger before posting.
+const MaxBridgeReportBytes = maxBridgeReportBytes
 
 // Bridge returns the hub served on /api/bridge/*, for the call sites that
 // deliver through the claude mod bridge.

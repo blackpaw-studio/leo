@@ -8,6 +8,20 @@ export const BACKOFF_RESET_AFTER_MS = 60_000
 // Waits before each retry of a report the daemon did not take. Acks are
 // idempotent (the mod dedups by id), so a retry is always safe.
 export const REPORT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000]
+// Caps a prompt or answer echoed in a report, keeping every report well
+// under the daemon's body limit.
+export const MAX_REPORT_TEXT_CHARS = 1_000_000
+
+/**
+ * A prompt or answer as a report carries it: strings capped at
+ * MAX_REPORT_TEXT_CHARS, anything else dropped.
+ * @param {unknown} value
+ * @returns {string | undefined}
+ */
+export function reportText(value) {
+  if (typeof value !== 'string') return undefined
+  return value.length > MAX_REPORT_TEXT_CHARS ? value.slice(0, MAX_REPORT_TEXT_CHARS) : value
+}
 
 const OPS = ['deliver', 'compact', 'clear', 'interrupt']
 
@@ -118,6 +132,18 @@ export function ackReport(id, ok, error) {
 /** @returns {{ type: 'event', name: string }} */
 export function eventReport(name, extra = {}) {
   return { type: 'event', name, ...extra }
+}
+
+/**
+ * The id the daemon deduplicates an event by: the event name and the turn or
+ * session it belongs to, so a retried report carries the same one. Undefined
+ * when there is nothing stable to derive it from.
+ * @param {string} name
+ * @param {unknown} scope a turn id (turn events) or session id (session.end)
+ * @returns {string | undefined}
+ */
+export function eventId(name, scope) {
+  return typeof scope === 'string' && scope !== '' ? name + ':' + scope : undefined
 }
 
 /**

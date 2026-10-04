@@ -14,16 +14,25 @@ var hookEventNames = map[string]string{
 	EventSessionEnd:   "SessionEnd",
 }
 
+// bridgeEventIDPrefix keeps bridge event ids apart from shell-hook ones in
+// the dispatcher's shared dedup set.
+const bridgeEventIDPrefix = "bridge:"
+
 // HookReport translates a bridge event into the consult.HookReport the
 // claude shell turn hooks post to /api/dispatch/{id}/report, so a bridge
 // event can drive consult.Dispatcher.Report unchanged. ok is false for
 // events with no hook counterpart (hello).
 //
-// The payload carries no turn id and no prompt or last-assistant text,
-// because the bridge protocol has none: turn.start therefore matches only
-// an armed orchestrator turn, and turn.complete closes the working turns
-// without recording their text. EventID stays empty — each bridge event is
-// posted exactly once, so there is no retry to deduplicate.
+// turn.start's prompt and turn.complete's final message travel under the
+// shell hooks' own keys (prompt, last_assistant_message), so a late-acked
+// orchestrator turn is matched by its text and a dispatch's result is the
+// subagent's final message, exactly as on the hook path. Like the claude
+// shell hooks, the payload carries no turn id: Claude can drain queued
+// prompts inside one running turn, and an id-less Stop closes them all.
+// The mod retries a report the daemon may already have applied (its reply
+// lost); EventID, derived from the event's stable id, lets the dispatcher
+// drop the replay. A replayed id-less Stop would otherwise close the next
+// queued turn.
 func HookReport(ev Event) (consult.HookReport, bool) {
 	hookName, ok := hookEventNames[ev.Name]
 	if !ok {
@@ -33,12 +42,21 @@ func HookReport(ev Event) (consult.HookReport, bool) {
 	if ev.SessionID != "" {
 		payload["session_id"] = ev.SessionID
 	}
-	if ev.Name == EventSessionEnd && ev.Reason != "" {
+	switch {
+	case ev.Name == EventTurnStart && ev.Prompt != "":
+		payload["prompt"] = ev.Prompt
+	case ev.Name == EventTurnComplete && ev.Message != "":
+		payload["last_assistant_message"] = ev.Message
+	case ev.Name == EventSessionEnd && ev.Reason != "":
 		payload["reason"] = ev.Reason
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil { // unreachable for a map of strings
 		return consult.HookReport{}, false
 	}
-	return consult.HookReport{Payload: raw}, true
+	report := consult.HookReport{Payload: raw}
+	if ev.EventID != "" {
+		report.EventID = bridgeEventIDPrefix + ev.EventID
+	}
+	return report, true
 }

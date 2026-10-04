@@ -4,7 +4,7 @@ import { acks, advance, AGENT, BIN, events, Feed, setup, start } from './harness
 const deliver = (id: string, text: string, asUser = false) => ({ id, op: 'deliver', text, as_user: asUser })
 
 test('missing env: no stream, no reports, logs once', async ($, on) => {
-  const h = setup(on, { env: { LEO_PROCESS_NAME: AGENT } })
+  const h = setup(on, { env: { LEO_BRIDGE_AGENT: AGENT } })
   await start($, h)
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' })
@@ -308,10 +308,12 @@ test('turn events are reported; turn.complete carries usage', async ($, on) => {
   await $.turn.complete({ turnId: 't1', answer: 'done', durationMs: 5, isAborted: false, reason: 'answer' })
   await h.settle()
   expect(events(h)).toEqual([
-    { type: 'event', name: 'turn.start' },
+    { type: 'event', name: 'turn.start', event_id: 'turn.start:t1', prompt: 'go' },
     {
       type: 'event',
       name: 'turn.complete',
+      event_id: 'turn.complete:t1',
+      message: 'done',
       usage: { startedAt: 1, context: { tokens: 10, window: 200000, percent: 0 }, rateLimits: [], cost: { usd: 0.01 } },
     },
   ])
@@ -322,7 +324,7 @@ test('session.end is reported with its reason', async ($, on) => {
   await start($, h)
   await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} as any })
   await h.settle()
-  expect(events(h)).toEqual([{ type: 'event', name: 'session.end', reason: 'clear' }])
+  expect(events(h)).toEqual([{ type: 'event', name: 'session.end', event_id: 'session.end:sess-1', reason: 'clear' }])
 })
 
 // Each mock-clock move costs ~1 s of real time in the kit, so the timing

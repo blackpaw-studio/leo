@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,9 @@ import (
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/spf13/cobra"
 )
+
+// bridgeAgentEnv names the variable leo sets at launch to the bridge key.
+const bridgeAgentEnv = "LEO_BRIDGE_AGENT"
 
 const (
 	// bridgeReportTimeout bounds one report, so a wedged daemon cannot stall
@@ -50,7 +54,7 @@ func newBridgeCmd() *cobra.Command { return newBridgeCmdWith(defaultBridgeDeps()
 
 // newBridgeCmdWith builds `leo bridge`, the claude mod's link to the daemon:
 // bare, it streams the agent's commands to stdout as JSON lines; `report`
-// posts one ack/hello/event back.
+// posts one ack/hello/event, read from stdin, back.
 func newBridgeCmdWith(deps bridgeDeps) *cobra.Command {
 	var agentFlag string
 	cmd := &cobra.Command{
@@ -73,38 +77,63 @@ Claude Code mod; not for interactive use.`,
 			return runBridgeStream(cmd.Context(), deps, agent, cmd.OutOrStdout())
 		},
 	}
-	cmd.PersistentFlags().StringVar(&agentFlag, "agent", "", "agent name (default $LEO_PROCESS_NAME)")
+	cmd.PersistentFlags().StringVar(&agentFlag, "agent", "", "bridge key (default $LEO_BRIDGE_AGENT)")
 	cmd.AddCommand(newBridgeReportCmd(deps, &agentFlag))
 	return cmd
 }
 
 func newBridgeReportCmd(deps bridgeDeps, agentFlag *string) *cobra.Command {
 	return &cobra.Command{
-		Use:    "report <json>",
+		Use:    "report",
 		Hidden: true,
-		Short:  "Post one bridge report (ack, hello or event) to the leo daemon",
-		Args:   cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Short:  "Post one bridge report (ack, hello or event), read from stdin, to the leo daemon",
+		Long: `Reads one JSON report from stdin and posts it to the leo daemon. The report
+travels on stdin because it can carry a whole prompt or final message, far
+more than argv holds.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			agent, err := resolveBridgeAgent(*agentFlag, deps.getenv)
+			if err != nil {
+				return err
+			}
+			body, err := readBridgeReport(cmd.InOrStdin())
 			if err != nil {
 				return err
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), bridgeReportTimeout)
 			defer cancel()
-			return deps.postReport(ctx, deps.homeDir(), agent, []byte(args[0]))
+			return deps.postReport(ctx, deps.homeDir(), agent, body)
 		},
 	}
 }
 
-// resolveBridgeAgent picks --agent, else $LEO_PROCESS_NAME, and validates it
-// with the same rule the daemon applies.
+// readBridgeReport reads the whole report from r, refusing an empty one and
+// anything past the daemon's limit rather than posting it to be rejected.
+func readBridgeReport(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, daemon.MaxBridgeReportBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("bridge report: reading stdin: %w", err)
+	}
+	if int64(len(body)) > daemon.MaxBridgeReportBytes {
+		return nil, fmt.Errorf("bridge report: report exceeds %d bytes", daemon.MaxBridgeReportBytes)
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, errors.New("bridge report: no report on stdin")
+	}
+	return body, nil
+}
+
+// resolveBridgeAgent picks --agent, else $LEO_BRIDGE_AGENT (the key leo
+// routes this claude by), and validates it with the same rule the daemon
+// applies. $LEO_PROCESS_NAME is deliberately not consulted: it names the
+// process for display and differs from the key for dispatches.
 func resolveBridgeAgent(flag string, getenv func(string) string) (string, error) {
 	agent := flag
 	if agent == "" {
-		agent = getenv("LEO_PROCESS_NAME")
+		agent = getenv(bridgeAgentEnv)
 	}
 	if agent == "" {
-		return "", errors.New("bridge: no agent: pass --agent or set LEO_PROCESS_NAME")
+		return "", errors.New("bridge: no agent: pass --agent or set " + bridgeAgentEnv)
 	}
 	if !config.ValidName(agent) {
 		return "", fmt.Errorf("bridge: invalid agent name %q", agent)

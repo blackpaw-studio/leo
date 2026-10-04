@@ -155,16 +155,28 @@ type Report struct {
 	Error string
 
 	// event
-	Name   string
-	Usage  json.RawMessage // a JSON object, or nil when absent
-	Reason string
+	Name    string
+	Usage   json.RawMessage // a JSON object, or nil when absent
+	Reason  string
+	Prompt  string // turn.start: the prompt the turn began with
+	Message string // turn.complete: the assistant's final message
+	// EventID is stable across the mod's retries of one event, so a replay
+	// can be told from a new event; empty when the mod had none to give.
+	EventID string
 }
 
 // reportKeys is the closed set of keys each report type may carry.
 var reportKeys = map[string]map[string]bool{
 	ReportHello: {"type": true, "session_id": true, "claude_version": true, "busy": true},
 	ReportAck:   {"type": true, "id": true, "ok": true, "error": true},
-	ReportEvent: {"type": true, "name": true, "usage": true, "reason": true},
+	ReportEvent: {"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true},
+}
+
+// eventOnlyKeys are event keys valid for a single event name: the prompt a
+// turn began with, and the final message it ended on.
+var eventOnlyKeys = map[string]string{
+	"prompt":  EventTurnStart,
+	"message": EventTurnComplete,
 }
 
 var eventNames = map[string]bool{
@@ -249,7 +261,24 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 	if !eventNames[name] {
 		return Report{}, invalidReport("unknown event %q", name)
 	}
+	for key, only := range eventOnlyKeys {
+		if _, present := fields[key]; present && name != only {
+			return Report{}, invalidReport("key %q is only valid for %s events", key, only)
+		}
+	}
 	reason, err := stringField(fields, "reason", false)
+	if err != nil {
+		return Report{}, err
+	}
+	prompt, err := stringField(fields, "prompt", false)
+	if err != nil {
+		return Report{}, err
+	}
+	message, err := stringField(fields, "message", false)
+	if err != nil {
+		return Report{}, err
+	}
+	eventID, err := stringField(fields, "event_id", false)
 	if err != nil {
 		return Report{}, err
 	}
@@ -260,7 +289,7 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 		}
 		usage = append(json.RawMessage(nil), raw...)
 	}
-	return Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason}, nil
+	return Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID}, nil
 }
 
 // decodeObject decodes exactly one JSON object, rejecting trailing values.

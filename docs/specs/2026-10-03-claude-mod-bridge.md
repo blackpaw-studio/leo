@@ -28,7 +28,7 @@ Spike evidence (2026-10-01, Claude Code v2.1.287): `$.process.spawn` streams ind
 ```
 daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdout JSONL──> mod
   ^                                                                       │
-  └──────────── `leo bridge report <json>` (process.run) <────────────────┘
+  └──────── `leo bridge report` (process.run, JSON on stdin) <────────────┘
 ```
 
 **Mod (`leo-bridge`).**
@@ -37,14 +37,13 @@ daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdou
 - Claude agents are launched with `--plugin-dir <that dir>`.
 - Leo puts these variables in the launch environment, and the mod reads them with `$.env.get`:
   - `LEO_BRIDGE_BIN`: absolute path to leo
-  - `LEO_PROCESS_NAME`: the agent name, already set today
-  - `LEO_DISPATCH_ID`: already set today for dispatches
+  - `LEO_BRIDGE_AGENT`: the bridge key leo routes this claude by. For an agent or persistent task it is the agent name at launch (`<name>.<nonce>` if a renamed predecessor still holds that name); for a dispatch it is `dispatch.<dispatch id>`, unique per run. `LEO_PROCESS_NAME` is not used: it is a display name and differs from the key for dispatches.
 - `session.start` starts the pump. Commands are handled in order, one at a time, with a single command in flight.
 - The mod never decides policy. It executes commands and reports events.
 
 **`leo bridge` subcommand.**
 - `leo bridge --agent <name>`: opens a streaming request to the daemon over the unix socket. It writes one JSON command per line to stdout and exits when the daemon closes the stream.
-- `leo bridge report <json>`: a single POST that carries acks and events.
+- `leo bridge report --agent <key>`: a single POST that carries one ack, hello or event, read from stdin (a report can carry a whole prompt or final message, beyond what argv holds; the daemon caps a report at 16 MiB).
 
 **Daemon (`internal/bridge`).** Keeps the following per agent:
 - **Connection registry.** At most one live stream per agent. A new connection replaces the old one.
@@ -64,8 +63,10 @@ daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdou
 - `{"type":"ack","id","ok":bool,"error"?}`
   - For `deliver`, the ack is sent when `$.prompt.submit` resolves, meaning the prompt was accepted (started, or queued behind the running turn).
   - For `compact`, the mod waits for idle before calling, because `$.session.compact` rejects while a turn runs.
-- `{"type":"event","name":"turn.start"|"turn.complete"|"session.end", "usage"?, "reason"?}`
-- `{"type":"hello","session_id","claude_version"}`, sent on connect.
+- `{"type":"event","name":"turn.start"|"turn.complete"|"session.end","event_id"?, "usage"?, "reason"?, "prompt"?, "message"?}`
+  - `prompt` (turn.start only): the text the turn began with. `message` (turn.complete only): the assistant's final visible text, which a dispatch returns as its result. The mod caps each at 1M characters.
+  - `event_id`: `<name>:<turn id>` or `session.end:<session id>`, stable across the mod's retries, so the dispatcher drops a replay.
+- `{"type":"hello","session_id","claude_version","busy"?}`, sent on connect; `busy` says whether a main-loop turn is running.
 
 **Deduplication.** The mod records acked ids in `$.store`, capped at 500 ids. A command whose id was already acked is acked again without running. Delivery is therefore at-least-once on the wire and exactly-once into Claude.
 

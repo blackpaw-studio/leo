@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/blackpaw-studio/leo/internal/daemon"
 )
 
 // fakeBridge records what the bridge command asked of the daemon.
@@ -56,8 +58,14 @@ func (f *fakeBridge) deps(env map[string]string) bridgeDeps {
 
 func runBridgeCmd(t *testing.T, deps bridgeDeps, out io.Writer, args ...string) error {
 	t.Helper()
+	return runBridgeCmdWithStdin(t, deps, strings.NewReader(""), out, args...)
+}
+
+func runBridgeCmdWithStdin(t *testing.T, deps bridgeDeps, in io.Reader, out io.Writer, args ...string) error {
+	t.Helper()
 	cmd := newBridgeCmdWith(deps)
 	cmd.SetArgs(args)
+	cmd.SetIn(in)
 	cmd.SetOut(out)
 	cmd.SetErr(io.Discard)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -110,14 +118,14 @@ func TestBridgeStreamCopiesLongLinesWhole(t *testing.T) {
 	}
 }
 
-func TestBridgeStreamAgentDefaultsToProcessName(t *testing.T) {
+func TestBridgeStreamAgentDefaultsToBridgeAgent(t *testing.T) {
 	f := &fakeBridge{streamBody: streamOf("")}
-	env := map[string]string{"LEO_PROCESS_NAME": "leo-from-env"}
+	env := map[string]string{"LEO_BRIDGE_AGENT": "dispatch.d-0123456789ab", "LEO_PROCESS_NAME": "leo-display"}
 	if err := runBridgeCmd(t, f.deps(env), io.Discard); err != nil {
 		t.Fatalf("bridge: %v", err)
 	}
-	if f.streamAgent != "leo-from-env" {
-		t.Fatalf("agent=%q, want LEO_PROCESS_NAME", f.streamAgent)
+	if f.streamAgent != "dispatch.d-0123456789ab" {
+		t.Fatalf("agent=%q, want LEO_BRIDGE_AGENT", f.streamAgent)
 	}
 	f = &fakeBridge{streamBody: streamOf("")}
 	if err := runBridgeCmd(t, f.deps(env), io.Discard, "--agent", "leo-flag"); err != nil {
@@ -129,9 +137,11 @@ func TestBridgeStreamAgentDefaultsToProcessName(t *testing.T) {
 }
 
 func TestBridgeStreamRequiresValidAgent(t *testing.T) {
+	// LEO_PROCESS_NAME is a display name, never a bridge key.
+	env := map[string]string{"LEO_PROCESS_NAME": "leo-display"}
 	for _, args := range [][]string{{}, {"--agent", "bad name"}, {"--agent", "../x"}} {
 		f := &fakeBridge{streamBody: streamOf("")}
-		if err := runBridgeCmd(t, f.deps(nil), io.Discard, args...); err == nil {
+		if err := runBridgeCmd(t, f.deps(env), io.Discard, args...); err == nil {
 			t.Fatalf("args %q: want an error", args)
 		}
 		if f.streamAgent != "" {
@@ -212,10 +222,11 @@ func TestBridgeStreamHangsUpWhenParentGone(t *testing.T) {
 	}
 }
 
-func TestBridgeReportPostsArgumentVerbatim(t *testing.T) {
+func TestBridgeReportPostsStdinVerbatim(t *testing.T) {
 	f := &fakeBridge{}
-	body := `{"type":"ack","id":"c1","ok":true}`
-	if err := runBridgeCmd(t, f.deps(nil), io.Discard, "report", "--agent", "leo-alpha", body); err != nil {
+	body := `{"type":"event","name":"turn.complete","message":"line 1\nline 2"}`
+	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(body), io.Discard, "report", "--agent", "leo-alpha")
+	if err != nil {
 		t.Fatalf("report: %v", err)
 	}
 	if string(f.reportBody) != body || f.reportAgent != "leo-alpha" || f.reportHome != "/leo-home" {
@@ -223,40 +234,65 @@ func TestBridgeReportPostsArgumentVerbatim(t *testing.T) {
 	}
 }
 
-func TestBridgeReportAgentDefaultsToProcessName(t *testing.T) {
+// A report can carry a whole prompt or final message, well past what argv
+// can hold; stdin takes it whole.
+func TestBridgeReportPostsLargeStdin(t *testing.T) {
 	f := &fakeBridge{}
-	env := map[string]string{"LEO_PROCESS_NAME": "leo-from-env"}
-	if err := runBridgeCmd(t, f.deps(env), io.Discard, "report", `{"type":"event","name":"turn.start"}`); err != nil {
+	body := `{"type":"event","name":"turn.start","prompt":"` + strings.Repeat("p", 2<<20) + `"}`
+	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(body), io.Discard, "report", "--agent", "leo-alpha")
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(f.reportBody) != len(body) {
+		t.Fatalf("posted %d bytes, want %d", len(f.reportBody), len(body))
+	}
+}
+
+func TestBridgeReportAgentDefaultsToBridgeAgent(t *testing.T) {
+	f := &fakeBridge{}
+	env := map[string]string{"LEO_BRIDGE_AGENT": "leo-from-env", "LEO_PROCESS_NAME": "leo-display"}
+	err := runBridgeCmdWithStdin(t, f.deps(env), strings.NewReader(`{"type":"event","name":"turn.start"}`), io.Discard, "report")
+	if err != nil {
 		t.Fatalf("report: %v", err)
 	}
 	if f.reportAgent != "leo-from-env" {
-		t.Fatalf("agent=%q, want LEO_PROCESS_NAME", f.reportAgent)
+		t.Fatalf("agent=%q, want LEO_BRIDGE_AGENT", f.reportAgent)
 	}
 }
 
 func TestBridgeReportFailureExitsNonZero(t *testing.T) {
 	f := &fakeBridge{reportErr: errors.New("bridge report: daemon returned 400: unknown type")}
-	err := runBridgeCmd(t, f.deps(nil), io.Discard, "report", "--agent", "leo-alpha", `{"type":"bogus"}`)
+	err := runBridgeCmdWithStdin(t, f.deps(nil), strings.NewReader(`{"type":"bogus"}`), io.Discard, "report", "--agent", "leo-alpha")
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("err=%v, want the daemon's rejection", err)
 	}
 }
 
-func TestBridgeReportArgValidation(t *testing.T) {
-	cases := [][]string{
-		{"report", "--agent", "leo-alpha"},
-		{"report", "--agent", "leo-alpha", "{}", "{}"},
-		{"report", `{"type":"ack"}`},
-		{"report", "--agent", "bad name", `{"type":"ack"}`},
+func TestBridgeReportInputValidation(t *testing.T) {
+	report := `{"type":"ack","id":"c1","ok":true}`
+	cases := []struct {
+		name  string
+		env   map[string]string
+		stdin string
+		args  []string
+	}{
+		{"empty stdin", nil, "", []string{"report", "--agent", "leo-alpha"}},
+		{"blank stdin", nil, " \n\t", []string{"report", "--agent", "leo-alpha"}},
+		{"payload as an argument", nil, "", []string{"report", "--agent", "leo-alpha", report}},
+		{"no agent", map[string]string{"LEO_PROCESS_NAME": "leo-display"}, report, []string{"report"}},
+		{"invalid agent", nil, report, []string{"report", "--agent", "bad name"}},
+		{"oversized stdin", nil, strings.Repeat("x", int(daemon.MaxBridgeReportBytes)+1), []string{"report", "--agent", "leo-alpha"}},
 	}
-	for _, args := range cases {
-		f := &fakeBridge{}
-		if err := runBridgeCmd(t, f.deps(nil), io.Discard, args...); err == nil {
-			t.Fatalf("args %q: want an error", args)
-		}
-		if f.reports != 0 {
-			t.Fatalf("args %q: posted despite invalid input", args)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeBridge{}
+			if err := runBridgeCmdWithStdin(t, f.deps(tc.env), strings.NewReader(tc.stdin), io.Discard, tc.args...); err == nil {
+				t.Fatal("want an error")
+			}
+			if f.reports != 0 {
+				t.Fatal("posted despite invalid input")
+			}
+		})
 	}
 }
 

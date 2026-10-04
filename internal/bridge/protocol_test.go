@@ -143,6 +143,26 @@ func TestParseReportAccepts(t *testing.T) {
 			body: `{"type":"event","name":"session.end","reason":"prompt_input_exit"}`,
 			want: Report{Type: ReportEvent, Name: EventSessionEnd, Reason: "prompt_input_exit"},
 		},
+		{
+			name: "turn.start with its prompt",
+			body: `{"type":"event","name":"turn.start","prompt":"do the thing\nnow"}`,
+			want: Report{Type: ReportEvent, Name: EventTurnStart, Prompt: "do the thing\nnow"},
+		},
+		{
+			name: "turn.start with an empty prompt (a continuation)",
+			body: `{"type":"event","name":"turn.start","prompt":""}`,
+			want: Report{Type: ReportEvent, Name: EventTurnStart},
+		},
+		{
+			name: "turn.start with an event id",
+			body: `{"type":"event","name":"turn.start","event_id":"turn.start:t1"}`,
+			want: Report{Type: ReportEvent, Name: EventTurnStart, EventID: "turn.start:t1"},
+		},
+		{
+			name: "turn.complete with its final message and usage",
+			body: `{"type":"event","name":"turn.complete","message":"all done","usage":{"u":1}}`,
+			want: Report{Type: ReportEvent, Name: EventTurnComplete, Message: "all done", Usage: json.RawMessage(`{"u":1}`)},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,7 +174,8 @@ func TestParseReportAccepts(t *testing.T) {
 				got.ClaudeVersion != tc.want.ClaudeVersion || got.ID != tc.want.ID ||
 				got.OK != tc.want.OK || got.Error != tc.want.Error || got.Name != tc.want.Name ||
 				got.Reason != tc.want.Reason || string(got.Usage) != string(tc.want.Usage) ||
-				!sameBoolPtr(got.Busy, tc.want.Busy) {
+				!sameBoolPtr(got.Busy, tc.want.Busy) || got.Prompt != tc.want.Prompt ||
+				got.Message != tc.want.Message || got.EventID != tc.want.EventID {
 				t.Fatalf("ParseReport mismatch\n got: %+v\nwant: %+v", got, tc.want)
 			}
 		})
@@ -192,6 +213,15 @@ func TestParseReportRejects(t *testing.T) {
 		{"event usage scalar", `{"type":"event","name":"turn.complete","usage":3}`},
 		{"event reason wrong kind", `{"type":"event","name":"session.end","reason":5}`},
 		{"event with hello field", `{"type":"event","name":"turn.start","session_id":"s"}`},
+		{"prompt on turn.complete", `{"type":"event","name":"turn.complete","prompt":"p"}`},
+		{"prompt on session.end", `{"type":"event","name":"session.end","prompt":"p"}`},
+		{"message on turn.start", `{"type":"event","name":"turn.start","message":"m"}`},
+		{"message on session.end", `{"type":"event","name":"session.end","message":"m"}`},
+		{"prompt wrong kind", `{"type":"event","name":"turn.start","prompt":7}`},
+		{"prompt null", `{"type":"event","name":"turn.start","prompt":null}`},
+		{"message wrong kind", `{"type":"event","name":"turn.complete","message":{"text":"m"}}`},
+		{"event id wrong kind", `{"type":"event","name":"turn.start","event_id":1}`},
+		{"event id on an ack", `{"type":"ack","id":"c1","ok":true,"event_id":"x"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,7 +77,8 @@ func TestBridgeAgainstRealDaemon(t *testing.T) {
 	}
 
 	report := newBridgeCmdWith(deps)
-	report.SetArgs([]string{"report", "--agent", "leo-e2e", `{"type":"ack","id":"` + cmd.ID + `","ok":true}`})
+	report.SetArgs([]string{"report", "--agent", "leo-e2e"})
+	report.SetIn(strings.NewReader(`{"type":"ack","id":"` + cmd.ID + `","ok":true}`))
 	if err := report.ExecuteContext(ctx); err != nil {
 		t.Fatalf("bridge report: %v", err)
 	}
@@ -100,8 +102,10 @@ func TestBridgeReportAgainstRealDaemonRejectsBadReport(t *testing.T) {
 	deps := defaultBridgeDeps()
 	deps.homeDir = func() string { return home }
 	cmd := newBridgeCmdWith(deps)
-	cmd.SetArgs([]string{"report", "--agent", "leo-e2e", `{"type":"bogus"}`})
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("a report the daemon rejects must exit non-zero")
+	cmd.SetArgs([]string{"report", "--agent", "leo-e2e"})
+	cmd.SetIn(strings.NewReader(`{"type":"bogus"}`))
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "400") {
+		t.Fatalf("a report the daemon rejects must exit non-zero with its status, got %v", err)
 	}
 }

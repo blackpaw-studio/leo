@@ -1,7 +1,8 @@
 // leo-bridge: runs inside Claude Code. It streams commands from the leo daemon
-// (`leo bridge --agent <name>`, one JSON command per stdout line), executes
+// (`leo bridge --agent <key>`, one JSON command per stdout line), executes
 // them in order, and reports acks and turn events back via
-// `leo bridge report --agent <name> <json>`. It never decides policy.
+// `leo bridge report --agent <key>` with the JSON report on stdin. It never
+// decides policy. <key> is $LEO_BRIDGE_AGENT, the name leo routes by.
 //
 // Mods API rules this file follows: every `$.ns.method` call is spelled in
 // full, event names are string literals, and `$` is only passed to top-level
@@ -15,11 +16,13 @@ import {
   BACKOFF_RESET_AFTER_MS,
   describeExit,
   errorText,
+  eventId,
   eventReport,
   helloReport,
   nextBackoff,
   parseCommand,
   REPORT_RETRY_DELAYS_MS,
+  reportText,
   splitLines,
 } from './protocol.js'
 
@@ -58,7 +61,7 @@ function ackedKey() {
 
 async function readConfig($) {
   const bin = await $.env.get('LEO_BRIDGE_BIN')
-  const agent = await $.env.get('LEO_PROCESS_NAME')
+  const agent = await $.env.get('LEO_BRIDGE_AGENT')
   if (!bin || !agent) return null
   return { bin, agent }
 }
@@ -68,11 +71,13 @@ async function readConfig($) {
 // Sends one report, retrying with backoff while the daemon does not take it
 // (down, restarting). Retrying is safe — acks are idempotent and events are
 // state, not counters — and it happens inside the report chain, so later
-// reports wait behind it and per-process order holds.
+// reports wait behind it and per-process order holds. The JSON goes on stdin:
+// a prompt or answer can be far larger than argv allows.
 async function sendReport($, report) {
-  const argv = [config.bin, 'bridge', 'report', '--agent', config.agent, JSON.stringify(report)]
+  const argv = [config.bin, 'bridge', 'report', '--agent', config.agent]
+  const body = JSON.stringify(report)
   for (let attempt = 0; ; attempt++) {
-    const why = await tryReport($, argv)
+    const why = await tryReport($, argv, body)
     if (why === null) {
       isReportFailing = false
       return
@@ -86,9 +91,9 @@ async function sendReport($, report) {
 }
 
 // One report attempt: null on success, else why it failed.
-async function tryReport($, argv) {
+async function tryReport($, argv, body) {
   try {
-    const result = await $.process.run(argv, { timeoutMs: REPORT_TIMEOUT_MS })
+    const result = await $.process.run(argv, { timeoutMs: REPORT_TIMEOUT_MS, stdin: body })
     if (result.exitCode === 0) return null
     return 'exit ' + result.exitCode + ': ' + result.stderr.trim()
   } catch (err) {
@@ -119,15 +124,22 @@ async function buildAndSend($, build) {
   }
 }
 
+// Only keys with a value: a report never carries an explicit undefined.
+function defined(fields) {
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined))
+}
+
+// The final assistant message is what a dispatch returns as its result.
 // Usage is a nice-to-have: a turn.complete without it still ends the turn
 // in the daemon, which a lost turn.complete would leave stuck busy.
-async function turnCompleteReport($) {
+async function turnCompleteReport($, e) {
+  const fields = { event_id: eventId('turn.complete', e.turnId), message: reportText(e.answer) }
   try {
     const usage = await $.session.usage()
-    return eventReport('turn.complete', { usage })
+    return eventReport('turn.complete', defined({ ...fields, usage }))
   } catch (err) {
     $.ui.log('reading session usage failed: ' + errorText(err))
-    return eventReport('turn.complete')
+    return eventReport('turn.complete', defined(fields))
   }
 }
 
@@ -344,7 +356,7 @@ async function onSessionStart($) {
   isStarted = true
   config = await readConfig($)
   if (config === null) {
-    $.ui.log('LEO_BRIDGE_BIN or LEO_PROCESS_NAME is unset; bridge disabled')
+    $.ui.log('LEO_BRIDGE_BIN or LEO_BRIDGE_AGENT is unset; bridge disabled')
     return
   }
   $.clock.after(0, () => pump($))
@@ -363,7 +375,8 @@ export function register(on) {
     markRunning(e.turnId)
     if (config !== null) {
       enqueueReport($, () => helloIfSessionChanged($))
-      enqueueReport($, () => eventReport('turn.start'))
+      const fields = { event_id: eventId('turn.start', e.turnId), prompt: reportText(e.text) }
+      enqueueReport($, () => eventReport('turn.start', defined(fields)))
     }
     return next(e)
   })
@@ -371,14 +384,15 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     markIdle()
-    if (config !== null) enqueueReport($, () => turnCompleteReport($))
+    if (config !== null) enqueueReport($, () => turnCompleteReport($, e))
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
     if (config !== null) {
       // session.end hooks share a 1.5 s budget: wait briefly, then move on.
-      const sent = enqueueReport($, () => eventReport('session.end', { reason: e.reason }))
+      const fields = { event_id: eventId('session.end', e.sessionId), reason: e.reason }
+      const sent = enqueueReport($, () => eventReport('session.end', defined(fields)))
       await Promise.race([sent, $.clock.sleep(SESSION_END_WAIT_MS)])
     }
     return next(e)

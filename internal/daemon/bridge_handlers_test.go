@@ -235,6 +235,21 @@ func TestBridgeReportEventUpdatesState(t *testing.T) {
 	}
 }
 
+// A turn.complete carries the agent's whole final message and a turn.start
+// its whole prompt (an opening brief can pass 96 KiB), so reports of a few
+// MiB must go through.
+func TestBridgeReportAcceptsLargeTurnText(t *testing.T) {
+	workDir, hub, _ := startBridgeServer(t)
+	message := strings.Repeat("m", 4<<20)
+	body := `{"type":"event","name":"turn.complete","message":"` + message + `"}`
+	if err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, []byte(body)); err != nil {
+		t.Fatalf("PostBridgeReport of a %d-byte report: %v", len(body), err)
+	}
+	if hub.State(bridgeAgent).LastTurnComplete.IsZero() {
+		t.Fatal("the large turn.complete was not applied")
+	}
+}
+
 func TestBridgeReportRejectsBadRequests(t *testing.T) {
 	workDir, _, _ := startBridgeServer(t)
 	cases := []struct {
@@ -247,7 +262,7 @@ func TestBridgeReportRejectsBadRequests(t *testing.T) {
 		{"not json", bridgeAgent, `nope`, http.StatusBadRequest},
 		{"unknown field", bridgeAgent, `{"type":"event","name":"turn.start","x":1}`, http.StatusBadRequest},
 		{"invalid agent", "bad%20name", `{"type":"event","name":"turn.start"}`, http.StatusBadRequest},
-		{"oversized", bridgeAgent, `{"type":"event","name":"turn.complete","usage":{"pad":"` + strings.Repeat("x", 64<<10) + `"}}`, http.StatusRequestEntityTooLarge},
+		{"oversized", bridgeAgent, `{"type":"event","name":"turn.complete","usage":{"pad":"` + strings.Repeat("x", int(MaxBridgeReportBytes)) + `"}}`, http.StatusRequestEntityTooLarge},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

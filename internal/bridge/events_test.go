@@ -160,3 +160,23 @@ func TestApplyRejectsBadInput(t *testing.T) {
 		t.Fatalf("closed hub err=%v, want ErrClosed", err)
 	}
 }
+
+// turn.start's prompt and turn.complete's final message reach subscribers
+// verbatim; the dispatch adapter returns the final message as the result.
+func TestSubscriberSeesPromptAndFinalMessage(t *testing.T) {
+	rec := &recorder{}
+	h := newTestHub(newFakeClock(), func(o *Options) { o.Subscriber = rec })
+	apply(t, h, agentA, hello("s-1"))
+	apply(t, h, agentA, Report{Type: ReportEvent, Name: EventTurnStart, Prompt: "the brief"})
+	apply(t, h, agentA, Report{Type: ReportEvent, Name: EventTurnComplete, Message: "the result", EventID: "turn.complete:t1"})
+	got := rec.snapshot()
+	if len(got) != 3 {
+		t.Fatalf("got %d events, want 3", len(got))
+	}
+	if got[1].Prompt != "the brief" || got[1].Message != "" {
+		t.Fatalf("turn.start event = %+v, want prompt only", got[1])
+	}
+	if got[2].Message != "the result" || got[2].Prompt != "" || got[2].EventID != "turn.complete:t1" {
+		t.Fatalf("turn.complete event = %+v, want message only", got[2])
+	}
+}

@@ -8,13 +8,15 @@ import (
 
 // The translation must reproduce what Claude Code's own shell hooks post to
 // /api/dispatch/{id}/report today (hook_event_name spelled as Claude spells
-// it, no turn id), so consult.Dispatcher.Report needs no bridge awareness.
+// it, the prompt and last_assistant_message under the hook's own keys, no
+// turn id), so consult.Dispatcher.Report needs no bridge awareness.
 func TestHookReportTranslation(t *testing.T) {
 	cases := []struct {
-		name   string
-		ev     Event
-		wantOK bool
-		want   map[string]any
+		name        string
+		ev          Event
+		wantOK      bool
+		want        map[string]any
+		wantEventID string
 	}{
 		{
 			name:   "turn.start is UserPromptSubmit",
@@ -33,6 +35,25 @@ func TestHookReportTranslation(t *testing.T) {
 			ev:     Event{Agent: agentA, Name: EventSessionEnd, SessionID: "s-1", Reason: "prompt_input_exit"},
 			wantOK: true,
 			want:   map[string]any{"hook_event_name": "SessionEnd", "session_id": "s-1", "reason": "prompt_input_exit"},
+		},
+		{
+			name:   "turn.start carries the prompt like the shell hook",
+			ev:     Event{Agent: agentA, Name: EventTurnStart, SessionID: "s-1", Prompt: "brief text"},
+			wantOK: true,
+			want:   map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": "brief text"},
+		},
+		{
+			name:   "turn.complete carries the final message as last_assistant_message",
+			ev:     Event{Agent: agentA, Name: EventTurnComplete, SessionID: "s-1", Message: "final words"},
+			wantOK: true,
+			want:   map[string]any{"hook_event_name": "Stop", "session_id": "s-1", "last_assistant_message": "final words"},
+		},
+		{
+			name:        "the event id becomes the report's dedup id",
+			ev:          Event{Agent: agentA, Name: EventTurnComplete, SessionID: "s-1", EventID: "turn.complete:t1"},
+			wantOK:      true,
+			want:        map[string]any{"hook_event_name": "Stop", "session_id": "s-1"},
+			wantEventID: "bridge:turn.complete:t1",
 		},
 		{
 			name:   "session id omitted before any hello",
@@ -60,8 +81,8 @@ func TestHookReportTranslation(t *testing.T) {
 			if !ok {
 				return
 			}
-			if got.EventID != "" {
-				t.Fatalf("EventID=%q; bridge reports are posted once, so no dedup id is needed", got.EventID)
+			if got.EventID != tc.wantEventID {
+				t.Fatalf("EventID=%q, want %q", got.EventID, tc.wantEventID)
 			}
 			var payload map[string]any
 			if err := json.Unmarshal(got.Payload, &payload); err != nil {

@@ -4,7 +4,7 @@ import { mock } from 'claude-code/testing'
 
 export const BIN = '/opt/leo/bin/leo'
 export const AGENT = 'worker'
-export const ENV = { LEO_BRIDGE_BIN: BIN, LEO_PROCESS_NAME: AGENT }
+export const ENV = { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: AGENT }
 
 type Chunk = { stream: 'stdout' | 'stderr'; text: string }
 
@@ -143,10 +143,13 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     reportCalls++
     const argv = [...e.argv]
     const exit = typeof opts.reportExit === 'function' ? opts.reportExit(reportCalls) : (opts.reportExit ?? 0)
+    // The hook sees $.process.run(argv, init) as { argv, init }; the report
+    // JSON is init.stdin.
+    const stdin: string | undefined = e.init?.stdin
     h.reportArgv.push(argv)
-    h.reportStdin.push(e.stdin)
-    h.attempts.push(JSON.parse(e.stdin ?? argv[argv.length - 1]))
-    if (exit === 0) h.reports.push(JSON.parse(e.stdin ?? argv[argv.length - 1]))
+    h.reportStdin.push(stdin)
+    h.attempts.push(JSON.parse(stdin ?? 'null'))
+    if (exit === 0) h.reports.push(JSON.parse(stdin ?? 'null'))
     return { value: { exitCode: exit, stdout: '', stderr: exit === 0 ? '' : 'daemon down' } }
   })
   on('process.spawn', async function* ($: any, e: any) {
