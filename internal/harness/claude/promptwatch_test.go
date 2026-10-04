@@ -47,8 +47,11 @@ func TestPromptWatchFindsAUserPrompt(t *testing.T) {
 				t.Fatal("an assistant line counted as the prompt")
 			}
 			appendTranscript(t, path, line+"\n")
-			if !seen(t, w) || !seen(t, w) {
-				t.Fatal("the user prompt was not seen, or not kept seen")
+			if !seen(t, w) {
+				t.Fatal("the user prompt was not seen")
+			}
+			if !seen(t, w) {
+				t.Fatal("the user prompt was not kept seen")
 			}
 		})
 	}
