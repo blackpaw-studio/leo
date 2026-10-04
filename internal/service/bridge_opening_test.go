@@ -154,7 +154,9 @@ func TestUnackedOpeningIsRequeuedAfterACrash(t *testing.T) {
 	s := connectWhenOpen(t, f.hub, "alpha")
 	first := nextCmd(t, s)
 	stale := make(chan error, 1)
-	go func() { stale <- f.hub.Send(context.Background(), "alpha", bridge.Deliver("for the first claude", false)) }()
+	go func() {
+		stale <- f.hub.Send(context.Background(), "alpha", bridge.Deliver("for the first claude", false))
+	}()
 	waitFor(t, "the stale message to queue", func() bool { return f.hub.State("alpha").Pending == 2 })
 	endSession(t, tmuxPath)
 
