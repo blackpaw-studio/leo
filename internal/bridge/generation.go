@@ -112,8 +112,34 @@ func (h *Hub) Open(agent, launch string) (Target, error) {
 	}
 	life := &keyLife{gen: h.nextGenLocked(), launch: launch}
 	h.lives[agent] = life
+	delete(h.awaiting, agent)
 	h.notifyLocked()
 	return Target{Key: agent, Gen: life.gen}, nil
+}
+
+// AwaitAdoption settles which keys no launch has opened that a mod may
+// still name and be told to retry (ErrNotOpen): keys, those of the
+// surviving sessions a restarted daemon is about to adopt. Until it is
+// called every unopened key is (the daemon has not restored its agents
+// yet); after, any other unopened key is ErrStaleLaunch, so the mod of a
+// session nobody will adopt (a dispatch's, or one adopted legacy) stops
+// reconnecting. Open, or EndAdoption, ends a key's wait.
+func (h *Hub) AwaitAdoption(keys []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.isAdoptionSettled = true
+	for _, key := range keys {
+		if _, opened := h.lives[key]; !opened {
+			h.awaiting[key] = true
+		}
+	}
+}
+
+// EndAdoption gives up waiting for key: the daemon will not adopt it.
+func (h *Hub) EndAdoption(key string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.awaiting, key)
 }
 
 // ValidateLaunch checks a launch token: non-empty, at most 64 letters,
@@ -226,11 +252,14 @@ func (h *Hub) lifeLocked(agent string) (*keyLife, error) {
 
 // launchLocked returns agent's live generation if launch is the one it is
 // bound to: what a mod's stream or report must match. ErrForgotten while
-// the key is tombstoned; ErrStaleLaunch for any other launch, and for a key
-// nobody opened (a restarted daemon has not adopted the session yet).
+// the key is tombstoned; ErrStaleLaunch for any other launch. A key nobody
+// opened is ErrNotOpen while its adoption may still come (see
+// AwaitAdoption), else ErrStaleLaunch.
 func (h *Hub) launchLocked(agent, launch string) (*keyLife, error) {
 	life, err := h.lifeLocked(agent)
 	switch {
+	case errors.Is(err, ErrNotOpen) && (!h.isAdoptionSettled || h.awaiting[agent]):
+		return nil, err
 	case errors.Is(err, ErrNotOpen):
 		return nil, fmt.Errorf("%w: agent %s has no open launch", ErrStaleLaunch, agent)
 	case err != nil:

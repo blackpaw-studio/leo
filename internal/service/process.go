@@ -211,6 +211,10 @@ type Supervisor struct {
 	// bridge is the claude mod bridge (nil: every launch is legacy) — see
 	// SetBridge.
 	bridge *supervisorBridge
+	// adoptionKeys maps the bridge key of each surviving session a restart
+	// is about to adopt to the agent adopting it — see ReserveAdoptions.
+	// Guarded by mu.
+	adoptionKeys map[string]string
 }
 
 // NewSupervisor creates a new process supervisor. The context parameter is
@@ -224,6 +228,7 @@ func NewSupervisor(ctx context.Context) *Supervisor {
 		cancels:      make(map[string]context.CancelFunc),
 		reservations: make(map[string]struct{}),
 		identities:   make(map[string]*procIdentity),
+		adoptionKeys: make(map[string]string),
 		ctx:          ctx,
 	}
 }
@@ -624,6 +629,7 @@ func (s *Supervisor) RenameAgent(oldName, newName string) error {
 	}
 	id.renameLocked(newName)
 	id.mu.Unlock()
+	s.renameAdoptionLocked(oldName, newName)
 
 	st.Name = newName
 	s.states[newName] = st
@@ -1224,6 +1230,7 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				}
 			} else {
 				id.setLegacy()
+				sv.ReleaseAdoption(name)
 			}
 			launchCtx, endLaunch = context.WithCancel(ctx)
 			if bl.bridged {
@@ -1270,6 +1277,9 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			if !hooked && spec.Kind == harness.KindAgent {
 				_ = persistAttentionToken(homePath, name, "")
 			}
+			// A session restored to be adopted is gone: what it reserved is
+			// this launch's to take, or anyone's.
+			sv.ReleaseAdoption(name)
 			// The opening is queued before the session exists, so nothing
 			// sent to the new claude can overtake it.
 			conversation := conversationArg(currentArgs)

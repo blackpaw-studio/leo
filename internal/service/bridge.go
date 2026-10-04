@@ -130,7 +130,7 @@ func (s *Supervisor) BridgeRouter() *bridge.Router {
 	if w == nil {
 		return nil
 	}
-	return &bridge.Router{Hub: w.hub, Keys: s.BridgeKey}
+	return &bridge.Router{Hub: w.hub, Targets: s.bridgeTarget}
 }
 
 // BridgeCapable reports whether a claude agent launched now would load the
@@ -142,7 +142,8 @@ func (s *Supervisor) BridgeCapable() bool {
 
 // allocBridgeKey picks the key name's launch connects under: the name
 // itself, unless another live identity's claude (renamed away since its
-// launch) still holds it, then name.<random>. Dots never appear in agent
+// launch) still holds it, or a surviving session another agent is about
+// to adopt connects under it, then name.<random>. Dots never appear in agent
 // names, so a suffixed key cannot collide with a plain one. A relaunch of
 // the same identity keeps its key.
 func (s *Supervisor) allocBridgeKey(name string, id *procIdentity) string {
@@ -164,7 +165,19 @@ func (s *Supervisor) allocBridgeKey(name string, id *procIdentity) string {
 	}
 }
 
+// bridgeKeyTakenLocked reports whether key is another agent's: held by
+// another identity's launch, or reserved for another agent's adoption.
+// Caller holds s.mu.
 func (s *Supervisor) bridgeKeyTakenLocked(key string, self *procIdentity) bool {
+	if owner, ok := s.adoptionKeys[key]; ok && owner != self.Name() {
+		return true
+	}
+	return s.bridgeKeyHeldLocked(key, self)
+}
+
+// bridgeKeyHeldLocked reports whether another identity's launch holds key.
+// Caller holds s.mu.
+func (s *Supervisor) bridgeKeyHeldLocked(key string, self *procIdentity) bool {
 	for _, other := range s.identities {
 		if other != self && other.BridgeKey() == key {
 			return true
@@ -250,26 +263,6 @@ func (s *Supervisor) planBridgeLaunch(ctx context.Context, claudePath, harnessNa
 	}
 	id.setBridge(target)
 	return bridgeLaunch{plan: plan, bridged: true, target: target, conversation: conversation}
-}
-
-// adoptBridge takes over the bridge of a session the previous daemon
-// launched under key and launch: a generation of the key in this daemon's
-// hub bound to that launch, so the surviving claude's mod (and only it) can
-// reconnect, recorded on id.
-func (s *Supervisor) adoptBridge(id *procIdentity, key, launch, conversation string) bridgeLaunch {
-	w := s.bridgeWiring()
-	if w == nil {
-		id.setLegacy()
-		return bridgeLaunch{}
-	}
-	target, err := w.hub.Open(key, launch)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] warning: adopting the leo bridge %s: %v\n", id.Name(), key, err)
-		id.setLegacy()
-		return bridgeLaunch{}
-	}
-	id.setBridge(target)
-	return bridgeLaunch{plan: bridgemod.Plan{Key: key, Launch: launch}, bridged: true, adopted: true, target: target, conversation: conversation}
 }
 
 // endBridgedLaunch retires a bridged launch that is over: it reports

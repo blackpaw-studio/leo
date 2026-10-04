@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -1194,5 +1198,67 @@ func TestRestoreAgentsHonorsSessionPinned(t *testing.T) {
 	}
 	if after.SessionID != "reviews-own-session" {
 		t.Errorf("SessionID = %q, want reviews-own-session", after.SessionID)
+	}
+}
+
+// reservingSpawner is a fakeAgentSpawner that also takes RestoreAgents'
+// bridge reservations, logging every call in order.
+type reservingSpawner struct {
+	log      []string
+	failName string
+}
+
+func (r *reservingSpawner) SpawnAgent(spec daemon.AgentSpawnSpec) error {
+	r.log = append(r.log, "spawn "+spec.Name)
+	if spec.Name == r.failName {
+		return errors.New("spawn failed")
+	}
+	return nil
+}
+
+func (r *reservingSpawner) ReserveAdoptions(names []string) {
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	r.log = append(r.log, "reserve "+strings.Join(sorted, ","))
+}
+
+func (r *reservingSpawner) ReleaseAdoption(name string) {
+	r.log = append(r.log, "release "+name)
+}
+
+// The sessions about to be adopted reserve their bridge keys before any
+// agent is spawned (a spawn may launch fresh and allocate a key at once),
+// and one whose spawn fails gives its reservation back.
+func TestRestoreAgentsReservesAdoptionsBeforeSpawning(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"a", "b", "c"} {
+		if err := agentstore.Save(home, agentstore.Record{Name: name, Workspace: t.TempDir(), SessionID: "sid-" + name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	origHas := tmuxHasSession
+	tmuxHasSession = func(_, session string) bool { return session == "leo-a" || session == "leo-c" }
+	defer func() { tmuxHasSession = origHas }()
+
+	spawner := &reservingSpawner{failName: "c"}
+	RestoreAgents(home, "tmux", "", spawner)
+	if len(spawner.log) == 0 || spawner.log[0] != "reserve a,c" {
+		t.Fatalf("calls = %v, want the live sessions reserved first", spawner.log)
+	}
+	spawnC := slices.Index(spawner.log, "spawn c")
+	if releaseC := slices.Index(spawner.log, "release c"); spawnC < 0 || releaseC < spawnC {
+		t.Fatalf("calls = %v, want c's reservation released after its spawn failed", spawner.log)
+	}
+	if slices.Contains(spawner.log, "release a") {
+		t.Fatalf("calls = %v: a spawned fine and keeps its reservation for its loop", spawner.log)
+	}
+}
+
+// With nothing to restore the hub still learns that no adoption is coming.
+func TestRestoreAgentsSettlesAdoptionWithNothingToRestore(t *testing.T) {
+	spawner := &reservingSpawner{}
+	RestoreAgents(t.TempDir(), "tmux", "", spawner)
+	if len(spawner.log) != 1 || spawner.log[0] != "reserve " {
+		t.Fatalf("calls = %v, want one empty reservation", spawner.log)
 	}
 }

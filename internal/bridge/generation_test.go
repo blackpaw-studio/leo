@@ -199,22 +199,48 @@ func TestConnectAndApplyRefuseAStaleLaunch(t *testing.T) {
 // A mod never creates a generation: until the daemon opens its key (a
 // restarted daemon adopting the session), its stream and reports are
 // refused, and nothing can be queued for a key nobody opened.
-func TestAnUnopenedKeyRefusesMods(t *testing.T) {
+// A key no launch opened is one a restarting daemon may not have adopted
+// yet: its mod is told to retry (ErrNotOpen) until the daemon has said
+// which keys it is adopting. From then on only those are; any other is a
+// launch that is not coming back (ErrStaleLaunch), so its mod can stop.
+func TestAnUnopenedKeyIsRetryableOnlyUntilItsAdoptionIsSettled(t *testing.T) {
 	h := newTestHub(newFakeClock())
-	const key = "leo-never-opened"
-	if _, err := h.Connect(key, "launch-1"); !errors.Is(err, ErrStaleLaunch) {
-		t.Fatalf("Connect: err=%v, want ErrStaleLaunch", err)
+	refusal := func(key string) []error {
+		_, connErr := h.Connect(key, "launch-1")
+		return []error{
+			connErr,
+			h.Apply(key, "launch-1", hello("s-1")),
+			h.Apply(key, "launch-1", Report{Type: ReportAck, ID: "c1", OK: true}),
+		}
 	}
-	if err := h.Apply(key, "launch-1", hello("s-1")); !errors.Is(err, ErrStaleLaunch) {
-		t.Fatalf("hello: err=%v, want ErrStaleLaunch", err)
+	expect := func(key string, want error) {
+		t.Helper()
+		for i, err := range refusal(key) {
+			if !errors.Is(err, want) {
+				t.Fatalf("%s call %d: err=%v, want %v", key, i, err, want)
+			}
+		}
 	}
-	if err := h.Apply(key, "launch-1", Report{Type: ReportAck, ID: "c1", OK: true}); !errors.Is(err, ErrStaleLaunch) {
-		t.Fatalf("ack: err=%v, want ErrStaleLaunch", err)
+	expect("leo-awaited", ErrNotOpen)
+	expect("leo-gone", ErrNotOpen)
+
+	h.AwaitAdoption([]string{"leo-awaited", "leo-abandoned"})
+	expect("leo-awaited", ErrNotOpen)
+	expect("leo-gone", ErrStaleLaunch)
+	h.EndAdoption("leo-abandoned")
+	expect("leo-abandoned", ErrStaleLaunch)
+
+	target := mustOpen(t, h, "leo-awaited")
+	if _, err := h.Connect("leo-awaited", testLaunch); err != nil {
+		t.Fatalf("the adopted launch's connect: %v", err)
 	}
-	if _, err := h.Enqueue(key, Clear()); !errors.Is(err, ErrNotOpen) {
+	h.ForgetGen(target)
+	expect("leo-awaited", ErrForgotten)
+
+	if _, err := h.Enqueue("leo-gone", Clear()); !errors.Is(err, ErrNotOpen) {
 		t.Fatalf("Enqueue: err=%v, want ErrNotOpen", err)
 	}
-	if st := h.State(key); st.Gen != 0 || st.SessionID != "" {
+	if st := h.State("leo-gone"); st.Gen != 0 || st.SessionID != "" {
 		t.Fatalf("an unopened key grew state: %+v", st)
 	}
 }

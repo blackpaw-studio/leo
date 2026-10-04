@@ -43,11 +43,13 @@ var (
 	ErrStreamClosed   = errors.New("bridge stream closed")
 	ErrForgotten      = errors.New("bridge agent forgotten")
 	ErrClosed         = errors.New("bridge closed")
-	// ErrNotOpen: nothing can be queued for a key no launch opened.
+	// ErrNotOpen: no launch opened the key. Nothing can be queued for it;
+	// a mod naming it may be a surviving session a restarting daemon has not
+	// adopted yet, and should retry (see AwaitAdoption).
 	ErrNotOpen = errors.New("bridge agent not open")
 	// ErrStaleLaunch: a mod's stream or report named a launch other than
-	// its key's current one (a predecessor's, or one a restarted daemon has
-	// not adopted yet). It is refused; a report it carried is moot.
+	// its key's current one (a predecessor's), or a key the daemon is not
+	// adopting. It is refused for good; a report it carried is moot.
 	ErrStaleLaunch   = errors.New("bridge launch is not current")
 	ErrInvalidLaunch = errors.New("invalid bridge launch")
 )
@@ -108,10 +110,15 @@ type Hub struct {
 	seq        uint64
 	// lives holds each key's generation, and the tombstone a Forget leaves
 	// until the next Open (see generation.go). Guarded by mu.
-	lives   map[string]*keyLife
-	genSeq  uint64
-	closed  bool
-	changed chan struct{} // closed and replaced on every state change
+	lives  map[string]*keyLife
+	genSeq uint64
+	// isAdoptionSettled is set once the daemon has said which keys it is
+	// adopting (awaiting holds those not opened yet): see AwaitAdoption.
+	// Guarded by mu.
+	isAdoptionSettled bool
+	awaiting          map[string]bool
+	closed            bool
+	changed           chan struct{} // closed and replaced on every state change
 }
 
 type agentState struct {
@@ -195,6 +202,7 @@ func New(opts Options) *Hub {
 		agents:         map[string]*agentState{},
 		eventLocks:     map[string]*sync.Mutex{},
 		lives:          map[string]*keyLife{},
+		awaiting:       map[string]bool{},
 		changed:        make(chan struct{}),
 	}
 	if h.clock == nil {

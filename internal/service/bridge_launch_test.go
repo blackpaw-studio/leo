@@ -141,6 +141,8 @@ type bridgeTestOpts struct {
 	backoff time.Duration
 	// home is the supervisor's leo home (default a fresh temp dir).
 	home string
+	// adoptions are reserved before the loop starts, as RestoreAgents does.
+	adoptions []string
 }
 
 // startBridged runs superviseProcess for spec on a supervisor wired to a
@@ -172,6 +174,9 @@ func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Du
 		Log:        &bytes.Buffer{},
 	})
 	sv.SetBridge(hub, launcher, connectTimeout)
+	if o.adoptions != nil {
+		sv.ReserveAdoptions(o.adoptions)
+	}
 	id := newProcIdentity(spec.Name, spec.ClaudeArgs)
 	sv.mu.Lock()
 	sv.identities[spec.Name] = id

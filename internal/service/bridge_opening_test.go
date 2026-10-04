@@ -29,7 +29,7 @@ func connectMod(t *testing.T, hub *bridge.Hub, tmuxPath, key string) (*bridge.St
 		if err == nil {
 			return s, launch
 		}
-		retry := launch == "" || errors.Is(err, bridge.ErrInvalidLaunch) || errors.Is(err, bridge.ErrForgotten) || errors.Is(err, bridge.ErrStaleLaunch)
+		retry := launch == "" || errors.Is(err, bridge.ErrInvalidLaunch) || errors.Is(err, bridge.ErrForgotten) || errors.Is(err, bridge.ErrStaleLaunch) || errors.Is(err, bridge.ErrNotOpen)
 		if !retry || time.Now().After(deadline) {
 			t.Fatalf("Connect(%s, %q): %v", key, launch, err)
 		}

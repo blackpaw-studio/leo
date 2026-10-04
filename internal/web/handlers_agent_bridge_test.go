@@ -32,10 +32,11 @@ func newBridgedAgent(t *testing.T, s *Server, name string, connected bool) *brid
 	t.Helper()
 	b := &bridgedAgent{t: t, hub: bridge.New(bridge.Options{}), key: name + ".k1"}
 	t.Cleanup(b.hub.Close)
-	if _, err := b.hub.Open(b.key, testBridgeLaunch); err != nil {
+	target, err := b.hub.Open(b.key, testBridgeLaunch)
+	if err != nil {
 		t.Fatal(err)
 	}
-	s.bridgeRouter = &bridge.Router{Hub: b.hub, Keys: func(n string) (string, bool) { return b.key, n == name }}
+	s.bridgeRouter = &bridge.Router{Hub: b.hub, Targets: func(n string) (bridge.Target, bool) { return target, n == name }}
 	if connected {
 		stream, err := b.hub.Connect(b.key, testBridgeLaunch)
 		if err != nil {

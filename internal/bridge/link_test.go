@@ -67,14 +67,17 @@ func TestForgetUnlessConnected(t *testing.T) {
 
 func TestRouterRoutesOnlyKnownConnectedAgents(t *testing.T) {
 	h := newTestHub(newFakeClock())
-	keys := map[string]string{"leo-alpha": "leo-alpha", "leo-renamed": "leo-old.ab12"}
-	r := &Router{Hub: h, Keys: func(name string) (string, bool) { k, ok := keys[name]; return k, ok }}
+	targets := map[string]Target{
+		"leo-alpha":   mustOpen(t, h, "leo-alpha"),
+		"leo-renamed": mustOpen(t, h, "leo-old.ab12"),
+	}
+	r := &Router{Hub: h, Targets: func(name string) (Target, bool) { tg, ok := targets[name]; return tg, ok }}
 
 	if _, ok := r.Route("leo-alpha"); ok {
 		t.Fatal("routed an agent whose bridge is not connected")
 	}
 	_ = mustConnect(t, h, "leo-alpha")
-	if target, ok := r.Route("leo-alpha"); !ok || target.Key != "leo-alpha" || target.Gen == 0 {
+	if target, ok := r.Route("leo-alpha"); !ok || target != targets["leo-alpha"] {
 		t.Fatalf("Route(leo-alpha) = %+v, %v; want leo-alpha's live generation", target, ok)
 	}
 	_ = mustConnect(t, h, "leo-old.ab12")
@@ -86,6 +89,24 @@ func TestRouterRoutesOnlyKnownConnectedAgents(t *testing.T) {
 	}
 	if key, ok := r.Key("leo-renamed"); !ok || key != "leo-old.ab12" {
 		t.Fatalf("Key(leo-renamed) = %q, %v", key, ok)
+	}
+}
+
+// An agent is routed only to its own launch's generation: if another
+// launch has opened its key since (a renamed agent's surviving session
+// adopted under it), the agent's messages must not reach that one.
+func TestRouterNeverRoutesToAnotherLaunchsGeneration(t *testing.T) {
+	h := newTestHub(newFakeClock())
+	own := mustOpen(t, h, "leo-alpha")
+	r := &Router{Hub: h, Targets: func(string) (Target, bool) { return own, true }}
+	if _, err := h.Open("leo-alpha", "launch-other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Connect("leo-alpha", "launch-other"); err != nil {
+		t.Fatal(err)
+	}
+	if target, ok := r.Route("leo-alpha"); ok {
+		t.Fatalf("routed to %+v, another launch's generation", target)
 	}
 }
 

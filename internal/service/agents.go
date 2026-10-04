@@ -21,6 +21,21 @@ type agentSpawner interface {
 	SpawnAgent(spec daemon.AgentSpawnSpec) error
 }
 
+// adoptionReserver is the optional part of an agentSpawner that holds the
+// bridge keys of the sessions about to be adopted (see
+// Supervisor.ReserveAdoptions).
+type adoptionReserver interface {
+	ReserveAdoptions(names []string)
+	ReleaseAdoption(name string)
+}
+
+// restoreSpawn is one agent RestoreAgents is bringing back.
+type restoreSpawn struct {
+	spec       daemon.AgentSpawnSpec
+	rec        agentstore.Record
+	isWorktree bool
+}
+
 // RestoreAgents respawns ephemeral agents from a previous daemon run, using
 // each record's SessionID to pass `--resume <sid>` so claude rehydrates the
 // prior conversation.
@@ -54,11 +69,12 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 	path := agentstore.FilePath(homePath)
 	records, err := agentstore.Load(path)
 	if err != nil || len(records) == 0 {
+		reserveAdoptions(sv, nil)
 		return 0
 	}
 
-	restored := 0
 	canonicals := make(map[string]struct{})
+	var spawns []restoreSpawn
 
 	for name, rec := range records {
 		isWorktree := rec.Branch != ""
@@ -172,29 +188,65 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner) int {
 			Harness:        rec.Harness,
 			OpeningBriefID: rec.OpeningBriefID,
 		}
-		if err := sv.SpawnAgent(spec); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to restore agent %q: %v\n", name, err)
-			if !isWorktree {
-				// Keep the record instead of deleting it: a transient
-				// boot-time spawn failure (tmux server hiccup, etc.) must
-				// not permanently destroy the agent's identity. Mark it
-				// stopped-by-the-system so it is visible and recoverable via
-				// `leo agent restart`.
-				markFailedRestore(homePath, rec, fmt.Sprintf("restore spawn failed: %v", err))
-			}
-			continue
+		spawns = append(spawns, restoreSpawn{spec: spec, rec: rec, isWorktree: isWorktree})
+	}
+
+	// Every surviving session's bridge key is held before the first spawn:
+	// a spawn may launch fresh at once and allocate a key.
+	reserveAdoptions(sv, spawns)
+	restored := 0
+	for _, p := range spawns {
+		if spawnRestored(homePath, sv, p) {
+			restored++
 		}
-		if rec.Stopped {
-			// A retried failed-restore record that just came back healthy —
-			// clear the system-stopped markers so it stops being flagged as
-			// stuck/recoverable now that it is genuinely running again.
-			clearFailedRestore(homePath, rec)
-		}
-		restored++
 	}
 
 	pruneCanonicalWorktrees(canonicals)
 	return restored
+}
+
+// reserveAdoptions hands sv, if it reserves adoptions, the agents of spawns
+// that adopt their surviving session.
+func reserveAdoptions(sv agentSpawner, spawns []restoreSpawn) {
+	r, ok := sv.(adoptionReserver)
+	if !ok {
+		return
+	}
+	var names []string
+	for _, p := range spawns {
+		if p.spec.Adopt {
+			names = append(names, p.spec.Name)
+		}
+	}
+	r.ReserveAdoptions(names)
+}
+
+// spawnRestored spawns one restored agent, reporting whether it came back.
+// A failed spawn gives its adoption reservation back.
+func spawnRestored(homePath string, sv agentSpawner, p restoreSpawn) bool {
+	name, rec := p.spec.Name, p.rec
+	if err := sv.SpawnAgent(p.spec); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to restore agent %q: %v\n", name, err)
+		if r, ok := sv.(adoptionReserver); ok && p.spec.Adopt {
+			r.ReleaseAdoption(name)
+		}
+		if !p.isWorktree {
+			// Keep the record instead of deleting it: a transient
+			// boot-time spawn failure (tmux server hiccup, etc.) must not
+			// permanently destroy the agent's identity. Mark it
+			// stopped-by-the-system so it is visible and recoverable via
+			// `leo agent restart`.
+			markFailedRestore(homePath, rec, fmt.Sprintf("restore spawn failed: %v", err))
+		}
+		return false
+	}
+	if rec.Stopped {
+		// A retried failed-restore record that just came back healthy —
+		// clear the system-stopped markers so it stops being flagged as
+		// stuck/recoverable now that it is genuinely running again.
+		clearFailedRestore(homePath, rec)
+	}
+	return true
 }
 
 // workspaceMissing reports whether rec's workspace directory is confirmed
