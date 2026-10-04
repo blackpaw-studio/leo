@@ -15,12 +15,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
-	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/env"
@@ -173,6 +173,9 @@ type ProcessSpec struct {
 	// recovered during adoption. It is intentionally private: it is runtime
 	// supervisor state, not caller configuration.
 	primaryPane string
+	// bridgeEnv is this launch's leo-bridge environment (LEO_BRIDGE_BIN,
+	// LEO_BRIDGE_AGENT); nil for a legacy launch, which blanks them.
+	bridgeEnv map[string]string
 }
 
 // ProcessState tracks the runtime state of a supervised process.
@@ -205,6 +208,9 @@ type Supervisor struct {
 	// surfacedFiles is the per-agent surfaced-file store, reset to each new
 	// incarnation (StartedAt) — see SetSurfacedFiles.
 	surfacedFiles *observe.SurfacedFileStore
+	// bridge is the claude mod bridge (nil: every launch is legacy) — see
+	// SetBridge.
+	bridge *supervisorBridge
 }
 
 // NewSupervisor creates a new process supervisor. The context parameter is
@@ -545,6 +551,7 @@ func (s *Supervisor) stopAgentProcess(name string) error {
 		return fmt.Errorf("%q is not an ephemeral agent", name)
 	}
 	cancel, hasCancel := s.cancels[name]
+	id := s.identities[name]
 	s.mu.Unlock()
 
 	if hasCancel {
@@ -558,6 +565,8 @@ func (s *Supervisor) stopAgentProcess(name string) error {
 	// forgets the agent entirely while its session keeps running and answering
 	// on its channels.
 	killSession(s.tmuxPath, agent.SessionName(name), name)
+	// Its claude is gone: queued commands must not reach a successor.
+	s.forgetBridge(id)
 
 	s.mu.Lock()
 	delete(s.states, name)
@@ -821,7 +830,7 @@ func RunSupervised(opts RunSupervisedOptions) error {
 // RunSupervisedOptions.ConfigPath. sessionEnvArgs still blanks them per
 // session as defence in depth.
 func scrubDispatchIdentity() error {
-	for _, k := range dispatchIdentityEnvKeys {
+	for _, k := range append(append([]string(nil), dispatchIdentityEnvKeys...), bridgeEnvKeys...) {
 		if err := os.Unsetenv(k); err != nil {
 			return fmt.Errorf("scrubbing inherited %s: %w", k, err)
 		}
@@ -885,12 +894,14 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 
 	// Start daemon IPC server with process state provider
 	sockPath := filepath.Join(homePath, "state", "leo.sock")
-	// The claude mod bridge hub: served on the socket's /api/bridge/*
-	// routes and reachable through srv.Bridge() by the call sites that
-	// deliver through it. Subscribers (consult turn state, idle-suspend)
-	// are added here as those call sites move onto the bridge.
-	bridgeHub := bridge.New(bridge.Options{})
-	srv := daemon.New(sockPath, configPath, supervisor, daemon.WithBridge(bridgeHub))
+	// The claude mod bridge: the hub is served on the socket's
+	// /api/bridge/* routes and reachable through srv.Bridge() by the call
+	// sites that deliver through it; the launcher plans bridged claude
+	// launches for the supervisor and for dispatches.
+	bridgeHub, bridgeLauncher := wireBridge(supervisor, homePath, opts.Version, nil)
+	srv := daemon.New(sockPath, configPath, supervisor,
+		daemon.WithBridge(bridgeHub),
+		daemon.WithBridgeLaunches(bridgeLauncher, supervisor.BridgeRouter()))
 	srv.SetParentContext(ctx)
 	// Threaded into web.New's extra Options by StartWeb — see
 	// daemon.Server.SetObservability's doc comment.
@@ -1131,6 +1142,14 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 	// driver's Start on the first successful launch (create or adopt), then
 	// cleared so an in-loop restart never replays it.
 	openingPrompt := spec.OpeningPrompt
+	// forceLegacy turns the bridge off for the rest of this loop once a
+	// bridged launch's mod failed to connect in time (see watchBridgeLaunch).
+	forceLegacy := false
+	// openingHandled: the claude opening brief already went out other than
+	// on argv (the bridge, a paste, or a bridged launch adopted from the
+	// previous daemon), so no later launch may carry it again. A pure legacy
+	// loop never sets it and keeps its historical argv behavior.
+	openingHandled := false
 
 	for {
 		// Snapshot identity for this iteration. The tmux session name is also
@@ -1152,6 +1171,16 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		doAdopt := adopt && tmuxHasSession(tmuxPath, sessionName)
 		adopt = false
 
+		// Per-launch bridge state: the plan, the context its watchers run
+		// under (ended once this launch's session is over), and whether the
+		// mod failed to connect so the launch must be redone legacy-style.
+		var (
+			bl        bridgeLaunch
+			fellBack  atomic.Bool
+			launchCtx = ctx
+			endLaunch = func() {}
+		)
+
 		startTime := time.Now()
 		if doAdopt {
 			// Re-attach to the session that outlived the previous daemon
@@ -1172,6 +1201,14 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 				spec.primaryPane = primaryPane
 			}
 			fmt.Fprintf(os.Stdout, "[%s] adopted existing tmux session '%s', claude already running\n", name, sessionName)
+			// The surviving claude's mod reconnects under the key it was
+			// launched with, which only its session environment still knows.
+			if key, ok := tmuxSessionBridgeKey(tmuxPath, sessionName); ok && harnessName == "claude" {
+				id.setBridgeKey(key)
+				openingHandled = true
+			} else {
+				id.setBridgeKey("")
+			}
 			// Attention does not survive a daemon restart; an agent launched
 			// with hooks is unknown until its next hook fires, which carries
 			// the token persisted at launch.
@@ -1208,11 +1245,13 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			if !hooked && spec.Kind == harness.KindAgent {
 				_ = persistAttentionToken(homePath, name, "")
 			}
-			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, spec, os.Getenv("PATH"))
+			bl = sv.planBridgeLaunch(ctx, binPath, harnessName, id, spec, !openingHandled, forceLegacy)
+			launchArgs, launchSpec, pasteBrief := bridgeLaunchSpec(bl, launchArgs, spec, openingHandled)
+			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, launchSpec, os.Getenv("PATH"))
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
 			// persists a pane's start command, so an interpolated credential
 			// stays readable for the life of the session. See sessionEnvArgs.
-			envArgs := sessionEnvArgs(tmuxPath, spec, os.Stderr)
+			envArgs := sessionEnvArgs(tmuxPath, launchSpec, os.Stderr)
 
 			// Kill any stale tmux session with our name
 			exec.Command(tmuxPath, tmux.Args("kill-session", "-t", tmux.Target(sessionName))...).Run()
@@ -1266,6 +1305,15 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			spec.primaryPane = primaryPane
 
 			fmt.Fprintf(os.Stdout, "[%s] tmux session '%s' created, claude running\n", name, sessionName)
+			launchCtx, endLaunch = context.WithCancel(ctx)
+			if bl.bridged {
+				openingHandled = openingHandled || bl.opening != ""
+				go sv.watchBridgeLaunch(launchCtx, id, bl, tmuxPath, &fellBack)
+			}
+			if pasteBrief != "" {
+				openingHandled = true
+				go pasteOversizedOpening(launchCtx, tmuxPath, id, pasteBrief)
+			}
 			if spec.Kind == harness.KindAgent {
 				if hooked {
 					// Every launch, resumed or not, knows nothing until a hook
@@ -1313,6 +1361,8 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		}
 
 		ended := waitForSessionEnd(ctx, tmuxPath, id, spec, startTime, paneKey, sv.shuttingDown)
+		endLaunch()
+		_ = launchCtx
 		// This launch is over for this daemon either way; its late hooks
 		// must go nowhere. The stored token stays on a shutdown (the
 		// session survives for adopt); StopAgent clears it on a stop.
@@ -1330,6 +1380,17 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			sv.setState(name, id, "stopped")
 			return
 		default:
+		}
+
+		// The bridged launch's mod never connected, so its opening prompt
+		// never ran and nothing else has: relaunch at once the legacy way,
+		// the opening back on argv. Not a crash: no restart is counted and
+		// no backoff is served.
+		if fellBack.Load() {
+			sv.endLaunchToken(homePath, id.Name(), spec.attentionToken)
+			forceLegacy, openingHandled = true, false
+			fmt.Fprintf(os.Stderr, "[%s] relaunching without the leo bridge\n", name)
+			continue
 		}
 
 		// Neither ctx nor a stop asked for this exit: the harness died on
@@ -1767,6 +1828,12 @@ func sessionEnvArgs(tmuxPath string, spec ProcessSpec, warnOut io.Writer) []stri
 	// run. Blank rather than omit: omission leaves the inherited value alone.
 	for _, k := range dispatchIdentityEnvKeys {
 		env[k] = ""
+	}
+	// The bridge variables are leo's: a bridged launch sets them, any other
+	// launch blanks them, so neither config nor an inherited daemon env can
+	// point a mod at some other agent's bridge.
+	for _, k := range bridgeEnvKeys {
+		env[k] = spec.bridgeEnv[k]
 	}
 	env["LEO_PROCESS_NAME"] = spec.Name
 	env["LEO_TMUX_PATH"] = tmuxPath

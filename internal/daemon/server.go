@@ -18,6 +18,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
@@ -109,6 +110,11 @@ type Server struct {
 	// with WithBridge so the service can share it with the call sites that
 	// deliver through it; New builds a private one otherwise.
 	bridge *bridge.Hub
+	// bridgeLauncher plans bridged claude dispatch launches and
+	// bridgeRouter routes agent names to their live bridges; both handed to
+	// the web server by StartWeb. Either may be nil (no bridge use).
+	bridgeLauncher *bridgemod.Launcher
+	bridgeRouter   *bridge.Router
 }
 
 // Option configures a Server at construction.
@@ -117,6 +123,13 @@ type Option func(*Server)
 // WithBridge serves hub on the bridge routes instead of a private one.
 func WithBridge(hub *bridge.Hub) Option {
 	return func(s *Server) { s.bridge = hub }
+}
+
+// WithBridgeLaunches hands the web server what it needs to drive claude
+// agents and dispatches through the bridge: the launcher for dispatch
+// launches and the router from agent names to bridge keys.
+func WithBridgeLaunches(launcher *bridgemod.Launcher, router *bridge.Router) Option {
+	return func(s *Server) { s.bridgeLauncher, s.bridgeRouter = launcher, router }
 }
 
 // SetObservability wires the observability event bus, run log, activity

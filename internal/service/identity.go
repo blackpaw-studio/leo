@@ -14,9 +14,10 @@ import (
 // it on every poll/iteration so a live RenameAgent is picked up without a
 // process restart.
 type procIdentity struct {
-	mu   sync.RWMutex
-	name string
-	args []string
+	mu        sync.RWMutex
+	name      string
+	args      []string
+	bridgeKey string // see BridgeKey
 }
 
 func newProcIdentity(name string, args []string) *procIdentity {
@@ -84,4 +85,19 @@ var tmuxRenameSession = func(tmuxPath, oldName, newName string) error {
 
 var tmuxHasSession = func(tmuxPath, session string) bool {
 	return exec.Command(tmuxPath, tmux.Args("has-session", "-t", tmux.Target(session))...).Run() == nil
+}
+
+// BridgeKey returns the key the live launch's claude mod connects under
+// ("" when the launch did not load the bridge). Fixed per launch: a rename
+// cannot change the environment of a running claude.
+func (p *procIdentity) BridgeKey() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.bridgeKey
+}
+
+func (p *procIdentity) setBridgeKey(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bridgeKey = key
 }
