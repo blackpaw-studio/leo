@@ -1183,8 +1183,8 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 		var (
 			bl        bridgeLaunch
 			fellBack  atomic.Bool
-			launchCtx = ctx
-			endLaunch = func() {}
+			launchCtx context.Context
+			endLaunch context.CancelFunc
 		)
 
 		startTime := time.Now()
