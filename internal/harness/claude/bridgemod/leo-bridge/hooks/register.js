@@ -48,6 +48,9 @@ let ackedIds = null
 let isStreamFailing = false
 let isReportFailing = false
 
+// The session id the last hello carried (null until the first hello).
+let helloSessionId = null
+
 function ackedKey() {
   return 'acked:' + config.agent
 }
@@ -92,7 +95,7 @@ function enqueueReport($, build) {
 async function buildAndSend($, build) {
   try {
     const report = await build()
-    await sendReport($, report)
+    if (report !== null) await sendReport($, report)
   } catch (err) {
     reportFailed($, errorText(err))
   }
@@ -106,7 +109,17 @@ async function turnCompleteReport($) {
 async function sendHello($) {
   const sessionId = await $.session.id()
   const version = await $.session.version()
+  helloSessionId = sessionId
   return helloReport(sessionId, version.version)
+}
+
+// Re-says hello when the session id moved since the last one (a /clear or
+// resume keeps the process but starts a new session); null sends nothing.
+async function helloIfSessionChanged($) {
+  if (helloSessionId === null) return null
+  const sessionId = await $.session.id()
+  if (sessionId === helloSessionId) return null
+  return sendHello($)
 }
 
 // ---- turn state ----------------------------------------------------------
@@ -224,15 +237,19 @@ async function handleCommand($, command) {
   enqueueReport($, () => ackReport(command.id, result.ok, result.error))
 }
 
+// deliver/compact/clear run strictly in order on commandChain; interrupt runs
+// at once so it can abort a turn that queued commands are waiting behind.
 function enqueueCommand($, command) {
   if (pendingIds.has(command.id)) return
   pendingIds = new Set([...pendingIds, command.id])
-  commandChain = commandChain
-    .then(() => handleCommand($, command))
+  const run = () => handleCommand($, command)
+  const started = command.op === 'interrupt' ? run() : commandChain.then(run)
+  const finished = started
     .catch((err) => $.ui.log('command ' + command.id + ' failed: ' + errorText(err)))
     .then(() => {
       pendingIds = new Set([...pendingIds].filter((id) => id !== command.id))
     })
+  if (command.op !== 'interrupt') commandChain = finished
 }
 
 function receiveLine($, line) {
@@ -316,7 +333,10 @@ export function register(on) {
 
   on('turn.start', async ($, e, next) => {
     markRunning(e.turnId)
-    if (config !== null) enqueueReport($, () => eventReport('turn.start'))
+    if (config !== null) {
+      enqueueReport($, () => helloIfSessionChanged($))
+      enqueueReport($, () => eventReport('turn.start'))
+    }
     return next(e)
   })
 

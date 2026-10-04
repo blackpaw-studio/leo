@@ -219,6 +219,62 @@ test('interrupt aborts the running turn by id', async ($, on) => {
   expect(acks(h)).toEqual([{ type: 'ack', id: 'i1', ok: true }])
 })
 
+test('interrupt jumps ahead of a deliver that is waiting for idle', async ($, on) => {
+  const feed = new Feed()
+  let release: (() => void) | null = null
+  const h = setup(on, {
+    feeds: [feed],
+    // $.prompt.submit waits for the running turn to end before it resolves.
+    submit: async (e) => {
+      await new Promise<void>((r) => (release = r))
+      return { text: e.text }
+    },
+  })
+  await start($, h)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  feed.line(deliver('d1', 'queued behind the turn'))
+  feed.line({ id: 'k1', op: 'compact' })
+  feed.line({ id: 'i1', op: 'interrupt' })
+  await h.settle()
+  expect(h.aborts).toEqual([{ turnId: 't1' }])
+  expect(acks(h)).toEqual([{ type: 'ack', id: 'i1', ok: true }])
+  // The serialized commands still run afterwards, in order.
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 5, isAborted: true, reason: 'aborted' })
+  release!()
+  await h.settle()
+  expect(acks(h).map((a) => a.id)).toEqual(['i1', 'd1', 'k1'])
+})
+
+test('a repeated interrupt id is re-acked without aborting again', async ($, on) => {
+  const feed = new Feed()
+  const h = setup(on, { feeds: [feed] })
+  await start($, h)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  feed.line({ id: 'i1', op: 'interrupt' })
+  await h.settle()
+  feed.line({ id: 'i1', op: 'interrupt' })
+  await h.settle()
+  expect(h.aborts.length).toBe(1)
+  expect(acks(h)).toEqual([
+    { type: 'ack', id: 'i1', ok: true },
+    { type: 'ack', id: 'i1', ok: true },
+  ])
+})
+
+test('hello is re-sent when the session id changes (e.g. after /clear)', async ($, on) => {
+  const h = setup(on)
+  await start($, h)
+  await $.turn.start({ text: 'a', turnId: 't1' })
+  await h.settle()
+  expect(h.reports.filter((r) => r.type === 'hello').length).toBe(1)
+  h.sessionId = 'sess-2'
+  await $.turn.start({ text: 'b', turnId: 't2' })
+  await h.settle()
+  const types = h.reports.map((r) => (r.type === 'event' ? r.name : r.type))
+  expect(types).toEqual(['hello', 'turn.start', 'hello', 'turn.start'])
+  expect(h.reports[2]).toEqual({ type: 'hello', session_id: 'sess-2', claude_version: '2.1.289' })
+})
+
 test('interrupt while idle acks ok without aborting', async ($, on) => {
   const feed = new Feed()
   const h = setup(on, { feeds: [feed] })

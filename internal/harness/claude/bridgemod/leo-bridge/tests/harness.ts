@@ -76,6 +76,7 @@ export interface Harness {
   aborts: Array<Record<string, unknown>>
   commands: Array<Record<string, unknown>>
   spawns: string[][]
+  sessionId: string
   logs: string[]
   store: Map<string, unknown>
   feeds: Feed[]
@@ -96,6 +97,7 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     aborts: [],
     commands: [],
     spawns: [],
+    sessionId: 'sess-1',
     logs: [],
     store,
     feeds,
@@ -115,7 +117,7 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     store.set(e.key, e.value)
     return { value: undefined }
   })
-  on('session.id', () => ({ value: 'sess-1' }))
+  on('session.id', () => ({ value: h.sessionId }))
   on('session.version', () => ({ value: { version: '2.1.289', base: '2.1.289' } }))
   on('session.usage', () => ({
     value: {
