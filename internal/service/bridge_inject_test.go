@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/bridge"
+	"github.com/blackpaw-studio/leo/internal/harness"
 )
 
 type injectRig struct {
@@ -15,6 +17,8 @@ type injectRig struct {
 	alpha    bridge.Target // the generation leo-alpha's launch opened
 	pasteErr error
 	injector func(ctx context.Context, session, prompt string) error
+	// inject is the injector itself, result included.
+	inject func(ctx context.Context, session, prompt string) (*harness.Result, error)
 
 	mu     sync.Mutex
 	pasted []string
@@ -57,6 +61,7 @@ func newInjectRigSettling(t *testing.T, settle time.Duration) *injectRig {
 		return g.pasteErr
 	}
 	inject := taskInjector(g.hub, route, settle, paste)
+	g.inject = inject
 	g.injector = func(ctx context.Context, session, prompt string) error {
 		res, err := inject(ctx, session, prompt)
 		if res != nil {
@@ -109,20 +114,55 @@ func TestTaskInjectorDeliversOverALiveBridge(t *testing.T) {
 	}
 }
 
-// A bridge that does not ack within the invocation's deadline is an error;
-// the prompt is never pasted as well (it stays queued on the bridge).
-func TestTaskInjectorBridgeTimeoutIsAnErrorNotAPaste(t *testing.T) {
+// An agent busy past the invocation's deadline has not failed the task: the
+// deliver stays queued and runs when the turn ends. The invocation completes
+// as queued — not failed, and not left to time out, which would interrupt
+// the agent's unrelated running turn — and the prompt is never pasted too.
+func TestTaskInjectorBusyPastTheDeadlineIsQueuedNotFailed(t *testing.T) {
 	g := newInjectRig(t)
 	if _, err := g.hub.Connect("alpha"); err != nil {
 		t.Fatal(err)
 	}
+	if err := g.hub.Apply("alpha", bridge.Report{Type: bridge.ReportEvent, Name: bridge.EventTurnStart}); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	if err := g.injector(ctx, "leo-alpha", "task"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("inject = %v, want the deadline", err)
+	res, err := g.inject(ctx, "leo-alpha", "task")
+	if err != nil {
+		t.Fatalf("inject = %v, want the task reported queued", err)
+	}
+	if res == nil || res.IsError || !strings.Contains(res.Text, "queued") {
+		t.Fatalf("result = %+v, want a successful queued result", res)
+	}
+	if got := g.hub.State("alpha").Pending; got != 1 {
+		t.Fatalf("pending=%d, want the deliver still queued", got)
 	}
 	if len(g.pastes()) != 0 {
-		t.Fatal("a timed-out bridge deliver fell back to tmux")
+		t.Fatal("a queued bridge deliver fell back to tmux")
+	}
+}
+
+// A refusal or a lost bridge is a real failure.
+func TestTaskInjectorBridgeRejectionIsAnError(t *testing.T) {
+	g := newInjectRig(t)
+	stream, err := g.hub.Connect("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- g.injector(context.Background(), "leo-alpha", "task") }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd, err := stream.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.hub.Apply("alpha", bridge.Report{Type: bridge.ReportAck, ID: cmd.ID, OK: false, Error: "dropped"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, bridge.ErrRejected) {
+		t.Fatalf("inject = %v, want the rejection", err)
 	}
 }
 

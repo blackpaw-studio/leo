@@ -27,7 +27,7 @@ func TestShouldSuspend(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := shouldSuspend(now, c.act, nil, c.idle); got != c.want {
+			if got := shouldSuspend(now, c.act, nil, 0, c.idle); got != c.want {
 				t.Fatalf("shouldSuspend = %v, want %v", got, c.want)
 			}
 		})
@@ -58,10 +58,26 @@ func TestShouldSuspendWithAConnectedBridge(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			st := c.st
-			if got := shouldSuspend(now, c.act, &st, idle); got != c.want {
+			if got := shouldSuspend(now, c.act, &st, st.Pending, idle); got != c.want {
 				t.Fatalf("shouldSuspend = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// Commands still queued on the bridge (a message waiting for the turn to
+// end, a deliver waiting for the mod to reconnect) mean work is coming:
+// stopping the agent would drop them.
+func TestShouldSuspendKeepsAnAgentWithQueuedCommands(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	idle := 30 * time.Minute
+	quietPane := tmux.SessionActivity{LastActivity: now.Add(-2 * time.Hour)}
+	connected := bridge.State{Connected: true, LastTurnComplete: now.Add(-2 * time.Hour), Pending: 1}
+	if shouldSuspend(now, quietPane, &connected, connected.Pending, idle) {
+		t.Fatal("suspended a connected agent with a queued command")
+	}
+	if shouldSuspend(now, quietPane, nil, 1, idle) {
+		t.Fatal("suspended an agent whose mod is reconnecting with a queued command")
 	}
 }
 

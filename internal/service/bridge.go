@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -440,9 +441,10 @@ const taskBridgePoll = 100 * time.Millisecond
 // taskInjector delivers a persistent task's prompt to the agent in a tmux
 // session. An agent whose leo bridge is connected gets it as the user's own
 // prompt, verbatim, waiting under the invocation's ctx for the mod to accept
-// it (a busy agent accepts once its turn ends). A bridge error — rejection,
-// a lost bridge, the deadline — is returned, never retried by paste: an
-// unaccepted deliver stays queued and would arrive twice.
+// it (a busy agent accepts once its turn ends; past the deadline it is
+// reported queued, see taskBridgeOutcome). A bridge error — rejection, a
+// lost bridge — is returned, never retried by paste: an unaccepted deliver
+// may still run and would arrive twice.
 //
 // The ensure step may have spawned the agent a moment ago, so the injector
 // first waits up to settle for its launch to settle: a bridged launch whose
@@ -456,13 +458,35 @@ func taskInjector(hub *bridge.Hub, route func(session string) BridgeRoute, settl
 				return nil, err
 			}
 			if settled {
-				return nil, hub.SendTo(ctx, target, bridge.Deliver(prompt, true))
+				return taskBridgeOutcome(target.Key, hub.SendTo(ctx, target, bridge.Deliver(prompt, true)))
 			}
 			if target.Key != "" {
 				fmt.Fprintf(os.Stderr, "bridge: %s not connected; pasting the task prompt into %s\n", target.Key, session)
 			}
 		}
 		return nil, paste(ctx, session, prompt)
+	}
+}
+
+// taskBridgeOutcome turns a task deliver's send result into the injector's.
+// Acked (the turn started) is fire-and-forget delivery: nil, nil, and the
+// task's report closes the invocation. A deliver still unacked when the
+// invocation's deadline (or the ack timeout) ran out has not failed: the
+// agent is busy, the deliver stays queued and runs when its turn ends, and
+// it cannot be recalled — the mod may already have handed it to claude. So
+// the invocation completes now as queued, rather than as a failure, and
+// rather than timing out later, which would interrupt the agent's
+// unrelated running turn. Anything else (a refusal, a lost or relaunched
+// bridge) is an error.
+func taskBridgeOutcome(key string, err error) (*harness.Result, error) {
+	switch {
+	case err == nil:
+		return nil, nil
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, bridge.ErrAckTimeout):
+		fmt.Fprintf(os.Stderr, "bridge: %s is busy; the task prompt stays queued until its turn ends\n", key)
+		return &harness.Result{Text: "queued: " + key + " was busy; the prompt runs when its current turn ends"}, nil
+	default:
+		return nil, err
 	}
 }
 
