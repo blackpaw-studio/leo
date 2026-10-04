@@ -9,35 +9,58 @@
 // functions of this file. Module state resets on hot reload.
 
 import {
+  ACKED_KEY_PREFIX,
   ackedFromStore,
   ackReport,
   appendAcked,
   BACKOFF_INITIAL_MS,
   BACKOFF_RESET_AFTER_MS,
   describeExit,
+  DISPATCH_KEY_PREFIX,
   errorText,
   eventId,
   eventReport,
   helloReport,
+  inflightIds,
+  isAckedEntryStale,
+  isFinalSessionEnd,
   nextBackoff,
   parseCommand,
   REPORT_RETRY_DELAYS_MS,
   reportText,
   splitLines,
+  withAcked,
+  withInflight,
 } from './protocol.js'
 
 const REPORT_TIMEOUT_MS = 15_000
 const SESSION_END_WAIT_MS = 1000
 const COMPACT_ATTEMPTS = 5
+// How long a failed compact waits before its next try: briefly while the
+// mod knows no turn runs, else until the running turn ends (bounded, in
+// case the failure was something else).
 const COMPACT_RETRY_MS = 250
+const COMPACT_TURN_WAIT_MS = 60_000
+
+// Ops whose engine call queues the work: the engine runs it even if this
+// module is hot-reloaded before the call returns.
+const HANDED_OFF_OPS = ['deliver', 'clear']
 
 // Bridge identity, read from the environment at session.start; null = disabled.
 let config = null
 let isStarted = false
 
-// The main loop's running turn id, or null when idle, and who waits for idle.
+// The main loop's running turn id, or null when idle, and who waits for the
+// turn to end. isTurnKnown is false until this module sees a turn start or
+// end: a module loaded by a hot reload mid-turn cannot tell that turn runs.
 let runningTurn = null
+let isTurnKnown = false
 let idleWaiters = []
+
+// Whether a deliver's $.prompt.submit is in flight (it resolves once its
+// turn starts), and the interrupts waiting for the turn it starts.
+let isSubmitting = false
+let turnStartWaiters = []
 
 // Serial chains: reports keep per-process order; commands run one at a time.
 let reportChain = Promise.resolve()
@@ -56,14 +79,18 @@ let isReportFailing = false
 let helloSessionId = null
 
 function ackedKey() {
-  return 'acked:' + config.agent
+  return ACKED_KEY_PREFIX + config.agent
 }
 
+// launch names this claude process (leo sets it per launch): what an
+// earlier load of the mod handed the engine is this process's only while
+// it matches. Null when unset, and then nothing counts as handed off.
 async function readConfig($) {
   const bin = await $.env.get('LEO_BRIDGE_BIN')
   const agent = await $.env.get('LEO_BRIDGE_AGENT')
+  const launch = await $.env.get('LEO_BRIDGE_LAUNCH')
   if (!bin || !agent) return null
-  return { bin, agent }
+  return { bin, agent, launch: launch || null }
 }
 
 // ---- reports -------------------------------------------------------------
@@ -151,7 +178,7 @@ async function sendHello($) {
   const sessionId = await $.session.id()
   const version = await $.session.version()
   helloSessionId = sessionId
-  return helloReport(sessionId, version.version, runningTurn !== null)
+  return helloReport(sessionId, version.version, isTurnKnown ? runningTurn !== null : undefined)
 }
 
 // Re-says hello when the session id moved since the last one (a /clear or
@@ -167,10 +194,13 @@ async function helloIfSessionChanged($) {
 
 function markRunning(turnId) {
   runningTurn = turnId
+  isTurnKnown = true
+  settleTurnStartWaiters(turnId)
 }
 
 function markIdle() {
   runningTurn = null
+  isTurnKnown = true
   const waiters = idleWaiters
   idleWaiters = []
   waiters.forEach((resolve) => resolve())
@@ -178,9 +208,28 @@ function markIdle() {
 
 function waitForIdle() {
   if (runningTurn === null) return Promise.resolve()
+  return nextTurnEnd()
+}
+
+// Resolves at the next main-loop turn.complete, whatever the mod knows now.
+function nextTurnEnd() {
   return new Promise((resolve) => {
     idleWaiters = [...idleWaiters, resolve]
   })
+}
+
+// Resolves with the id of the next main-loop turn to start, or null if the
+// submit in flight settles without starting one.
+function nextTurnStart() {
+  return new Promise((resolve) => {
+    turnStartWaiters = [...turnStartWaiters, resolve]
+  })
+}
+
+function settleTurnStartWaiters(turnId) {
+  const waiters = turnStartWaiters
+  turnStartWaiters = []
+  waiters.forEach((resolve) => resolve(turnId))
 }
 
 // ---- commands ------------------------------------------------------------
@@ -198,21 +247,93 @@ async function loadAcked($) {
   return ackedIds
 }
 
-async function rememberAcked($, id) {
-  const next = appendAcked(ackedIds ?? [], id)
-  ackedIds = next
+// Rewrites this key's store entry with change(entry as stored, now). Every
+// write reads the entry first, so a late write from a module a hot reload
+// replaced changes only what it means to.
+async function updateEntry($, change) {
   try {
-    await $.store.set(ackedKey(), next)
+    const key = ackedKey()
+    const now = await $.clock.now()
+    await $.store.set(key, change(await $.store.get(key), now))
   } catch (err) {
     $.ui.log('saving acked ids failed: ' + errorText(err))
   }
 }
 
+// Records, before its engine call, that command id is being handed to the
+// engine by this launch.
+async function markHandedOff($, id) {
+  if (config.launch === null) return
+  await updateEntry($, (entry, now) => withInflight(entry, config.launch, id, true, now))
+}
+
+// Whether an earlier load of the mod in this process handed command id to
+// the engine and never settled it: a hot reload caught it in flight.
+async function wasHandedOff($, id) {
+  try {
+    return inflightIds(await $.store.get(ackedKey()), config.launch).includes(id)
+  } catch (err) {
+    $.ui.log('reading acked ids failed: ' + errorText(err))
+    return false
+  }
+}
+
+// Records how command settled in one write: acked if ok, and no longer in
+// flight. One write, so a reload never finds it neither.
+async function settleCommand($, command, ok) {
+  const isHandedOff = HANDED_OFF_OPS.includes(command.op) && config.launch !== null
+  if (ok) ackedIds = appendAcked(ackedIds ?? [], command.id)
+  if (!ok && !isHandedOff) return
+  await updateEntry($, (entry, now) => {
+    const acked = ok ? withAcked(entry, command.id, now) : entry
+    return isHandedOff ? withInflight(acked, config.launch, command.id, false, now) : acked
+  })
+}
+
+// Deletes other processes' acked entries left unwritten past
+// ACKED_MAX_AGE_MS. This process's own entry stays, however old: it is in
+// use.
+async function pruneAcked($) {
+  try {
+    const now = await $.clock.now()
+    const own = ackedKey()
+    const keys = (await $.store.keys()).filter((key) => key.startsWith(ACKED_KEY_PREFIX) && key !== own)
+    for (const key of keys) {
+      if (isAckedEntryStale(await $.store.get(key), now)) await $.store.delete(key)
+    }
+  } catch (err) {
+    $.ui.log('pruning acked ids failed: ' + errorText(err))
+  }
+}
+
+// A dispatch's claude never comes back once its session ends for good, so
+// its acked entry goes with it; an agent's is kept for its next resume.
+async function forgetDispatchAcked($, reason) {
+  if (!config.agent.startsWith(DISPATCH_KEY_PREFIX) || !isFinalSessionEnd(reason)) return
+  try {
+    await $.store.delete(ackedKey())
+  } catch (err) {
+    $.ui.log('deleting acked ids failed: ' + errorText(err))
+  }
+}
+
 async function runDeliver($, command) {
   const args = command.asUser ? { text: command.text, asUser: true } : { text: command.text }
-  const result = await $.prompt.submit(args)
-  if (result && typeof result.drop === 'string') return { ok: false, error: result.drop }
-  return { ok: true }
+  await markHandedOff($, command.id)
+  isSubmitting = true
+  try {
+    const result = await $.prompt.submit(args)
+    if (result && typeof result.drop === 'string') {
+      settleTurnStartWaiters(null)
+      return { ok: false, error: result.drop }
+    }
+    return { ok: true }
+  } catch (err) {
+    settleTurnStartWaiters(null)
+    throw err
+  } finally {
+    isSubmitting = false
+  }
 }
 
 async function runCompact($, command) {
@@ -225,25 +346,41 @@ async function runCompact($, command) {
       if (result && typeof result.skip === 'string') return { ok: false, error: result.skip }
       return { ok: true }
     } catch (err) {
-      // compact rejects while a turn runs; a turn may have started between
-      // our idle check and the call (e.g. a just-delivered prompt).
       lastError = err
-      if (runningTurn === null) await $.clock.sleep(COMPACT_RETRY_MS)
+      await waitBeforeCompactRetry($)
     }
   }
   return { ok: false, error: errorText(lastError) }
 }
 
-async function runClear($) {
+// compact rejects while a turn runs. One may have started between the idle
+// check and the call (a just-delivered prompt), or be running unseen (this
+// module was loaded by a hot reload mid-turn): either way the retry waits
+// for that turn to end, not a fixed beat.
+async function waitBeforeCompactRetry($) {
+  const isIdle = isTurnKnown && runningTurn === null
+  await Promise.race([nextTurnEnd(), $.clock.sleep(isIdle ? COMPACT_RETRY_MS : COMPACT_TURN_WAIT_MS)])
+}
+
+// A clear took only if the session it ran in ended: the id moves on. A hook
+// may answer /clear in its place, and then nothing was cleared.
+async function runClear($, command) {
   // Verified live on v2.1.289: a mod's command.run reaches the built-in
   // /clear (context wiped, session.end reason 'clear', the pump survives).
   await waitForIdle()
-  await $.command.run({ command: 'clear', args: '' })
-  return { ok: true }
+  const before = await $.session.id()
+  await markHandedOff($, command.id)
+  const result = await $.command.run({ command: 'clear', args: '' })
+  if ((await $.session.id()) !== before) return { ok: true }
+  const said = result && typeof result.text === 'string' ? result.text.trim() : ''
+  return { ok: false, error: '/clear left the session as it was' + (said ? ': ' + said : '') }
 }
 
+// An interrupt aborts the running turn. One that lands while a submit is in
+// flight with no turn running yet aborts the turn that submit starts, once
+// it starts (or acks if the submit is dropped and starts none).
 async function runInterrupt($) {
-  const turnId = runningTurn
+  const turnId = runningTurn ?? (isSubmitting ? await nextTurnStart() : null)
   if (turnId === null) return { ok: true }
   try {
     await $.turn.abort({ turnId })
@@ -259,7 +396,7 @@ async function execute($, command) {
   try {
     if (command.op === 'deliver') return await runDeliver($, command)
     if (command.op === 'compact') return await runCompact($, command)
-    if (command.op === 'clear') return await runClear($)
+    if (command.op === 'clear') return await runClear($, command)
     if (command.op === 'interrupt') return await runInterrupt($)
     return { ok: false, error: 'unknown op: ' + command.op }
   } catch (err) {
@@ -273,8 +410,15 @@ async function handleCommand($, command) {
     enqueueReport($, () => ackReport(command.id, true))
     return
   }
+  if (HANDED_OFF_OPS.includes(command.op) && (await wasHandedOff($, command.id))) {
+    // The engine still holds it and runs it: running it again would run it
+    // twice. It counts as accepted now.
+    await settleCommand($, command, true)
+    enqueueReport($, () => ackReport(command.id, true))
+    return
+  }
   const result = await execute($, command)
-  if (result.ok) await rememberAcked($, command.id)
+  await settleCommand($, command, result.ok)
   enqueueReport($, () => ackReport(command.id, result.ok, result.error))
 }
 
@@ -363,6 +507,7 @@ async function onSessionStart($) {
     $.ui.log('LEO_BRIDGE_BIN or LEO_BRIDGE_AGENT is unset; bridge disabled')
     return
   }
+  $.clock.after(0, () => pruneAcked($))
   $.clock.after(0, () => pump($))
 }
 
@@ -397,7 +542,8 @@ export function register(on) {
       // session.end hooks share a 1.5 s budget: wait briefly, then move on.
       const fields = { event_id: eventId('session.end', e.sessionId), reason: e.reason }
       const sent = enqueueReport($, () => eventReport('session.end', defined(fields)))
-      await Promise.race([sent, $.clock.sleep(SESSION_END_WAIT_MS)])
+      const forgotten = forgetDispatchAcked($, e.reason)
+      await Promise.race([Promise.all([sent, forgotten]), $.clock.sleep(SESSION_END_WAIT_MS)])
     }
     return next(e)
   })

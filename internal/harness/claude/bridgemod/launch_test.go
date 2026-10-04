@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -127,9 +128,9 @@ func TestPlanForACapableClaude(t *testing.T) {
 	if !strings.Contains(plan.PluginDir, "v0.31.0-test-") {
 		t.Fatalf("PluginDir %q is not versioned by the leo version", plan.PluginDir)
 	}
-	want := map[string]string{EnvBin: "/opt/leo/bin/leo", EnvAgent: "leo-alpha", EnvHome: "/srv/leo-home"}
-	if len(plan.Env) != len(want) || plan.Env[EnvBin] != want[EnvBin] || plan.Env[EnvAgent] != want[EnvAgent] || plan.Env[EnvHome] != want[EnvHome] {
-		t.Fatalf("Env = %v, want %v", plan.Env, want)
+	want := map[string]string{EnvBin: "/opt/leo/bin/leo", EnvAgent: "leo-alpha", EnvHome: "/srv/leo-home", EnvLaunch: plan.Env[EnvLaunch]}
+	if len(plan.Env) != len(want) || plan.Env[EnvBin] != want[EnvBin] || plan.Env[EnvAgent] != want[EnvAgent] || plan.Env[EnvHome] != want[EnvHome] || plan.Env[EnvLaunch] == "" {
+		t.Fatalf("Env = %v, want %v and a launch id", plan.Env, want)
 	}
 	for _, k := range EnvKeys {
 		if _, ok := plan.Env[k]; !ok {
@@ -432,5 +433,28 @@ func TestBareClaudeIsResolvedThroughPATH(t *testing.T) {
 	v, err := l.ClaudeVersion(ctx, "claude")
 	if err != nil || v != (Version{2, 1, 290}) {
 		t.Fatalf("after the update: %v, %v; want 2.1.290", v, err)
+	}
+}
+
+// Each launch is named afresh: the mod tells a hot reload of itself (same
+// launch: the engine still holds what it handed over) from a new process
+// (whose prompt queue starts empty) by it.
+func TestEachPlanNamesItsLaunch(t *testing.T) {
+	p := &countingProbe{answers: map[string]string{"/bin/claude": "2.1.289"}}
+	l := newTestLauncher(t, p.probe, &bytes.Buffer{})
+	first, ok := l.Plan(context.Background(), "/bin/claude", "leo-alpha")
+	if !ok {
+		t.Fatal("Plan refused")
+	}
+	second, ok := l.Plan(context.Background(), "/bin/claude", "leo-alpha")
+	if !ok {
+		t.Fatal("Plan refused")
+	}
+	a, b := first.Env[EnvLaunch], second.Env[EnvLaunch]
+	if a == "" || b == "" || a == b {
+		t.Fatalf("launch ids %q and %q: want two distinct ids", a, b)
+	}
+	if !slices.Contains(EnvKeys, EnvLaunch) {
+		t.Fatalf("EnvKeys = %v lacks %s, so other launches would not blank it", EnvKeys, EnvLaunch)
 	}
 }

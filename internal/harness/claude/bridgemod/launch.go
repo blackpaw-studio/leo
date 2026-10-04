@@ -2,6 +2,7 @@ package bridgemod
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,10 @@ const (
 	// launched this claude; the mod's link dials that daemon's socket
 	// rather than whatever LEO_HOME or the default home would resolve.
 	EnvHome = "LEO_BRIDGE_HOME"
+	// EnvLaunch names the variable carrying an id unique to the launch. The
+	// mod's hot reloads keep it, a new process gets another: what an earlier
+	// load handed the engine is still queued only while it matches.
+	EnvLaunch = "LEO_BRIDGE_LAUNCH"
 
 	// PluginDirFlag loads a plugin directory for one claude session.
 	PluginDirFlag = "--plugin-dir"
@@ -127,7 +132,7 @@ func ProbeClaudeVersion(ctx context.Context, claudePath string) (string, error) 
 // EnvKeys are the variables a bridged launch sets for the mod. leo owns
 // them: every other launch blanks them, so nothing inherited can point a mod
 // anywhere.
-var EnvKeys = []string{EnvBin, EnvAgent, EnvHome}
+var EnvKeys = []string{EnvBin, EnvAgent, EnvHome, EnvLaunch}
 
 // LauncherOptions configures a Launcher.
 type LauncherOptions struct {
@@ -286,8 +291,8 @@ type Plan struct {
 	Key string
 	// PluginDir is the materialized mod passed with --plugin-dir.
 	PluginDir string
-	// Env holds the launch's EnvKeys: LEO_BRIDGE_BIN, LEO_BRIDGE_AGENT and
-	// LEO_BRIDGE_HOME.
+	// Env holds the launch's EnvKeys: LEO_BRIDGE_BIN, LEO_BRIDGE_AGENT,
+	// LEO_BRIDGE_HOME and LEO_BRIDGE_LAUNCH (fresh per Plan).
 	Env map[string]string
 }
 
@@ -314,7 +319,12 @@ func (l *Launcher) Plan(ctx context.Context, claudePath, key string) (Plan, bool
 	return Plan{
 		Key:       key,
 		PluginDir: dir,
-		Env:       map[string]string{EnvBin: l.opts.LeoBin, EnvAgent: key, EnvHome: l.opts.LeoHome},
+		Env: map[string]string{
+			EnvBin:    l.opts.LeoBin,
+			EnvAgent:  key,
+			EnvHome:   l.opts.LeoHome,
+			EnvLaunch: rand.Text(),
+		},
 	}, true
 }
 

@@ -4,7 +4,8 @@ import { mock } from 'claude-code/testing'
 
 export const BIN = '/opt/leo/bin/leo'
 export const AGENT = 'worker'
-export const ENV = { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: AGENT }
+export const LAUNCH = 'launch-1'
+export const ENV = { LEO_BRIDGE_BIN: BIN, LEO_BRIDGE_AGENT: AGENT, LEO_BRIDGE_LAUNCH: LAUNCH }
 
 type Chunk = { stream: 'stdout' | 'stderr'; text: string }
 
@@ -125,6 +126,11 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     store.set(e.key, e.value)
     return { value: undefined }
   })
+  on('store.delete', ($: any, e: any) => {
+    store.delete(e.key)
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }))
   on('session.id', () => ({ value: h.sessionId }))
   on('session.version', () => ({ value: { version: '2.1.289', base: '2.1.289' } }))
   on('session.usage', () => {

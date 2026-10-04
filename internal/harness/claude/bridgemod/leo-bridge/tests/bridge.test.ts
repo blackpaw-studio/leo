@@ -20,7 +20,8 @@ test('spawns the bridge stream and says hello before acks', async ($, on) => {
   const h = setup(on, { feeds: [feed] })
   await start($, h)
   expect(h.spawns).toEqual([[BIN, 'bridge', '--agent', AGENT]])
-  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289', busy: false })
+  // A fresh module cannot tell whether a turn runs, so it leaves busy out.
+  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289' })
   expect(h.reportArgv[0]!.slice(0, 4)).toEqual([BIN, 'bridge', 'report', '--agent'])
   expect(h.reportArgv[0]![4]).toBe(AGENT)
   feed.line(deliver('c1', 'hello'))
@@ -114,7 +115,7 @@ test('dedup: a repeated id is re-acked without executing', async ($, on) => {
     { type: 'ack', id: 'c1', ok: true },
     { type: 'ack', id: 'c1', ok: true },
   ])
-  expect(h.store.get('acked:' + AGENT)).toEqual(['c1'])
+  expect(h.store.get('acked:' + AGENT)).toMatchObject({ ids: ['c1'] })
 })
 
 test('dedup: ids acked by an earlier process are honoured from the store', async ($, on) => {
@@ -134,7 +135,7 @@ test('dedup: the acked list keeps only the last 500 ids', async ($, on) => {
   await start($, h)
   feed.line(deliver('new', 'x'))
   await h.settle()
-  const list = h.store.get('acked:' + AGENT) as string[]
+  const list = (h.store.get('acked:' + AGENT) as { ids: string[] }).ids
   expect(list.length).toBe(500)
   expect(list[0]).toBe('id1')
   expect(list[499]).toBe('new')
@@ -196,7 +197,14 @@ test('a subagent turn.complete does not end the main turn', async ($, on) => {
 
 test('clear runs the built-in /clear once the running turn ends', async ($, on) => {
   const feed = new Feed()
-  const h = setup(on, { feeds: [feed] })
+  // The built-in /clear ends the session; the process goes on under a new one.
+  const h = setup(on, {
+    feeds: [feed],
+    command: () => {
+      h.sessionId = 'sess-2'
+      return {}
+    },
+  })
   await start($, h)
   await $.turn.start({ text: 'work', turnId: 't1' })
   feed.line({ id: 'x1', op: 'clear' })

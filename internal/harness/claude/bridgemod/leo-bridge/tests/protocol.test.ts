@@ -8,8 +8,19 @@ import {
   helloReport,
   nextBackoff,
   parseCommand,
+  REPORT_RETRY_DELAYS_MS,
   splitLines,
 } from '../hooks/protocol.js'
+
+// A report the daemon does not take (down, restarting) is retried with
+// backoff for about a minute before it is dropped: long enough to ride out a
+// daemon restart.
+test('report retries back off and span about a minute', () => {
+  const total = REPORT_RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0)
+  expect(total).toBeGreaterThanOrEqual(55_000)
+  expect(total).toBeLessThanOrEqual(65_000)
+  REPORT_RETRY_DELAYS_MS.slice(1).forEach((ms, i) => expect(ms).toBeGreaterThanOrEqual(REPORT_RETRY_DELAYS_MS[i]!))
+})
 
 test('splitLines carries a partial line across chunks', () => {
   const a = splitLines('', '{"id":"1"')
@@ -90,6 +101,7 @@ test('describeExit names the exit code or signal and keeps stderr', () => {
 
 test('report shapes', () => {
   expect(helloReport('s', '2.1.289', true)).toEqual({ type: 'hello', session_id: 's', claude_version: '2.1.289', busy: true })
+  expect(helloReport('s', '2.1.289', undefined)).toEqual({ type: 'hello', session_id: 's', claude_version: '2.1.289' })
   expect(ackReport('a', true)).toEqual({ type: 'ack', id: 'a', ok: true })
   expect(ackReport('a', true, 'ignored')).toEqual({ type: 'ack', id: 'a', ok: true })
   expect(ackReport('a', false, 'why')).toEqual({ type: 'ack', id: 'a', ok: false, error: 'why' })

@@ -2,12 +2,27 @@
 // report shapes, and respawn backoff. Nothing here touches the mods API.
 
 export const ACKED_CAP = 500
+// Each claude process keeps the ids it acked under ACKED_KEY_PREFIX + its
+// bridge key. An entry left unwritten this long belongs to a process long
+// gone (a dispatch killed before its session ended); the next session.start
+// of any bridged claude prunes it, so the store does not grow without end.
+export const ACKED_KEY_PREFIX = 'acked:'
+export const ACKED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+// Dispatch bridge keys start with this (consult.DispatchBridgeKey). A
+// dispatch's claude never resumes once its session ends, so its entry goes
+// with it.
+export const DISPATCH_KEY_PREFIX = 'dispatch.'
+// Caps the ids an acked entry records as handed to the engine; only the
+// few a reload can catch in flight matter.
+export const INFLIGHT_CAP = 50
 export const BACKOFF_INITIAL_MS = 1000
 export const BACKOFF_MAX_MS = 30_000
 export const BACKOFF_RESET_AFTER_MS = 60_000
-// Waits before each retry of a report the daemon did not take. Acks are
-// idempotent (the mod dedups by id), so a retry is always safe.
-export const REPORT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000]
+// Waits before each retry of a report the daemon did not take, backing off
+// to about a minute in all: long enough to ride out a daemon restart. Acks
+// are idempotent (the mod dedups by id) and events carry ids, so a retry is
+// always safe; later reports wait behind it, so order holds.
+export const REPORT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15_000, 15_000, 15_000]
 // Caps a prompt or answer echoed in a report, keeping every report well
 // under the daemon's body limit.
 export const MAX_REPORT_TEXT_CHARS = 1_000_000
@@ -95,12 +110,100 @@ export function appendAcked(list, id, cap = ACKED_CAP) {
 }
 
 /**
- * Normalizes whatever the store held under the acked key into a string list.
+ * The acked ids in whatever the store held under an acked key: an
+ * ackedEntry, or the bare list earlier mods wrote.
  * @param {unknown} value
  * @returns {string[]}
  */
 export function ackedFromStore(value) {
-  return Array.isArray(value) ? value.filter((x) => typeof x === 'string') : []
+  const ids = Array.isArray(value) ? value : isRecord(value) && Array.isArray(value.ids) ? value.ids : []
+  return ids.filter((x) => typeof x === 'string')
+}
+
+/**
+ * The store entry for a bridge key's acked ids, stamped with when it was
+ * written, and the ids its current launch handed the engine and has not
+ * settled yet (see withInflight).
+ * @param {readonly string[]} ids
+ * @param {number} at milliseconds since the epoch
+ * @param {{ launch: string, ids: readonly string[] } | null} [inflight]
+ * @returns {{ ids: string[], at: number, inflight?: { launch: string, ids: string[] } }}
+ */
+export function ackedEntry(ids, at, inflight = null) {
+  const entry = { ids: [...ids], at }
+  return inflight === null ? entry : { ...entry, inflight: { launch: inflight.launch, ids: [...inflight.ids] } }
+}
+
+/**
+ * The entry with id appended to its acked ids and stamped now; what it
+ * records in flight is kept.
+ * @param {unknown} value the entry as stored
+ * @param {string} id
+ * @param {number} now
+ */
+export function withAcked(value, id, now) {
+  return ackedEntry(appendAcked(ackedFromStore(value), id), now, inflightOf(value))
+}
+
+/**
+ * The ids launch handed the engine and has not settled, per the entry;
+ * none for another launch's record, or without a launch id.
+ * @param {unknown} value the entry as stored
+ * @param {string | null} launch
+ * @returns {string[]}
+ */
+export function inflightIds(value, launch) {
+  const inflight = inflightOf(value)
+  return launch && inflight !== null && inflight.launch === launch ? inflight.ids : []
+}
+
+/**
+ * The entry with id recorded as handed to launch's engine (isHandedOff) or
+ * no longer; another launch's record is replaced, since a new process
+ * starts with an empty prompt queue.
+ * @param {unknown} value the entry as stored
+ * @param {string} launch
+ * @param {string} id
+ * @param {boolean} isHandedOff
+ * @param {number} now
+ */
+export function withInflight(value, launch, id, isHandedOff, now) {
+  const held = inflightIds(value, launch).filter((x) => x !== id)
+  const ids = isHandedOff ? appendAcked(held, id, INFLIGHT_CAP) : held
+  return ackedEntry(ackedFromStore(value), now, { launch, ids })
+}
+
+function inflightOf(value) {
+  if (!isRecord(value) || !isRecord(value.inflight)) return null
+  const { launch, ids } = value.inflight
+  if (typeof launch !== 'string' || !Array.isArray(ids)) return null
+  return { launch, ids: ids.filter((x) => typeof x === 'string') }
+}
+
+/**
+ * Whether an acked entry is past ACKED_MAX_AGE_MS at now. One without a
+ * time cannot be dated, so it counts as stale.
+ * @param {unknown} value
+ * @param {number} now
+ * @returns {boolean}
+ */
+export function isAckedEntryStale(value, now) {
+  if (!isRecord(value) || typeof value.at !== 'number') return true
+  return now - value.at > ACKED_MAX_AGE_MS
+}
+
+/**
+ * Whether a session.end leaves the process for good: not a /clear or a
+ * resume, after which the same process goes on under another session.
+ * @param {unknown} reason
+ * @returns {boolean}
+ */
+export function isFinalSessionEnd(reason) {
+  return reason !== 'clear' && reason !== 'resume'
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 /**
@@ -117,11 +220,14 @@ export function nextBackoff(current, livedMs) {
 /**
  * @param {string} sessionId
  * @param {string} claudeVersion
- * @param {boolean} busy whether a main-loop turn is running right now
- * @returns {{ type: 'hello', session_id: string, claude_version: string, busy: boolean }}
+ * @param {boolean | undefined} busy whether a main-loop turn is running right
+ *   now; undefined (left out, so the daemon keeps what it knows) when the
+ *   mod cannot tell
+ * @returns {{ type: 'hello', session_id: string, claude_version: string, busy?: boolean }}
  */
 export function helloReport(sessionId, claudeVersion, busy) {
-  return { type: 'hello', session_id: sessionId, claude_version: claudeVersion, busy }
+  const hello = { type: 'hello', session_id: sessionId, claude_version: claudeVersion }
+  return busy === undefined ? hello : { ...hello, busy }
 }
 
 /** @returns {{ type: 'ack', id: string, ok: boolean, error?: string }} */

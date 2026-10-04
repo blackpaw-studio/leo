@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -426,3 +427,114 @@ func ranTool(needle string) func(transcriptLine) bool {
 
 // compacted matches claude's compaction boundary.
 func compacted(l transcriptLine) bool { return l.Subtype == "compact_boundary" }
+
+// count is how many lines match.
+func (tr *transcript) count(match func(transcriptLine) bool) int {
+	n := 0
+	for _, l := range tr.lines() {
+		if match(l) {
+			n++
+		}
+	}
+	return n
+}
+
+// prompted matches a user prompt line carrying needle.
+func prompted(needle string) func(transcriptLine) bool {
+	return func(l transcriptLine) bool {
+		return l.Type == "user" && strings.Contains(string(l.Message.Content), needle)
+	}
+}
+
+// modDir is the leo-bridge mod the daemon materialized for its launches.
+func (s *bridgeE2E) modDir() string {
+	s.t.Helper()
+	parent := filepath.Join(s.home, "state", "mods", bridgemod.Name)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			dirs = append(dirs, filepath.Join(parent, e.Name()))
+		}
+	}
+	if len(dirs) != 1 {
+		s.t.Fatalf("materialized mods = %v, want one", dirs)
+	}
+	return dirs[0]
+}
+
+// reloadMod saves the mod's hooks module, which a --plugin-dir claude
+// reloads on the spot.
+func (s *bridgeE2E) reloadMod() {
+	s.t.Helper()
+	path := filepath.Join(s.modDir(), "hooks", "register.js")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := fmt.Fprintf(f, "\n// e2e reload %d\n", time.Now().UnixNano()); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+// bridgeStreams are the pids of agent name's running `leo bridge` streams.
+func (s *bridgeE2E) bridgeStreams(name string) []string {
+	s.t.Helper()
+	out, err := exec.Command("ps", "-A", "-o", "pid=", "-o", "command=").Output()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var pids []string
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 5 && filepath.Base(f[1]) == "leo" && f[2] == "bridge" && f[3] == "--agent" && f[4] == name {
+			pids = append(pids, f[0])
+		}
+	}
+	return pids
+}
+
+// awaitReplacedBridgeStream waits until agent name runs exactly one `leo
+// bridge` stream and it is none of old: the reloaded mod's, with nothing of
+// the old module's left to execute commands a second time.
+func (s *bridgeE2E) awaitReplacedBridgeStream(name string, old []string) []string {
+	s.t.Helper()
+	deadline := time.Now().Add(bridgeTurnTimeout)
+	for time.Now().Before(deadline) {
+		now := s.bridgeStreams(name)
+		if len(now) == 1 && !slices.Contains(old, now[0]) {
+			return now
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	s.t.Fatalf("agent %s did not end up on one new bridge stream after the reload (streams %v, old %v)", name, s.bridgeStreams(name), old)
+	return nil
+}
+
+// transcriptAfter waits for a claude session transcript other than tr's,
+// in the same project, first written after since: the session a /clear
+// started.
+func (s *bridgeE2E) transcriptAfter(tr *transcript, since time.Time) *transcript {
+	s.t.Helper()
+	dir := filepath.Dir(tr.path)
+	deadline := time.Now().Add(bridgeTurnTimeout)
+	for time.Now().Before(deadline) {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			path := filepath.Join(dir, e.Name())
+			if path == tr.path || filepath.Ext(path) != ".jsonl" {
+				continue
+			}
+			if info, err := e.Info(); err == nil && info.ModTime().After(since) {
+				return &transcript{t: s.t, path: path}
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	s.t.Fatalf("no new transcript in %s after %s", dir, since)
+	return nil
+}

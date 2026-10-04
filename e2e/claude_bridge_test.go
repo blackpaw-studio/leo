@@ -82,6 +82,69 @@ func TestClaudeBridgeAgent(t *testing.T) {
 		}
 		tr.await("a compaction", compacted)
 	})
+
+	// The mod acks a clear only once the session it ran in has ended, so a
+	// clear that took must not read as refused.
+	t.Run("clear", func(t *testing.T) {
+		before := time.Now()
+		if code, body := s.call(http.MethodPost, "/web/agent/"+name+"/clear", nil); code/100 != 2 {
+			t.Fatalf("clear: %d %s", code, body)
+		}
+		if code, body := s.message(name, "Reply with exactly: AFTER-CLEAR-OK", ""); code/100 != 2 {
+			t.Fatalf("message after the clear: %d %s", code, body)
+		}
+		s.transcriptAfter(tr, before).with(t).await("the reply in the cleared session", said("AFTER-CLEAR-OK"))
+		if tr.index(said("AFTER-CLEAR-OK")) >= 0 {
+			t.Fatal("the reply after the clear landed in the session the clear should have ended")
+		}
+		if out := s.output.String() + s.serviceLog(); strings.Contains(out, "clear of "+name) {
+			t.Fatalf("the clear was reported failed:\n%s", out)
+		}
+	})
+}
+
+// TestClaudeBridgeModReloadMidStream reloads the mod (as saving its
+// --plugin-dir does) while a message waits behind a running turn in the
+// mod's hands: the message must run exactly once, and the reloaded mod must
+// keep delivering.
+func TestClaudeBridgeModReloadMidStream(t *testing.T) {
+	s := newBridgeE2E(t, bridgeOptions{})
+	const name = "bridge-e2e-reload"
+	s.spawn(name, "Reply with exactly: OPENING-OK")
+	s.awaitBridge(name, agent.BridgeConnected)
+	tr := s.transcript(name)
+	tr.await("the opening reply", said("OPENING-OK"))
+	streams := s.bridgeStreams(name)
+	if len(streams) != 1 {
+		t.Fatalf("bridge streams before the reload = %v, want one", streams)
+	}
+
+	if code, body := s.message(name, `Use the Bash tool in the foreground (not in the background) to run exactly: python3 -c "import time; time.sleep(25)"   then reply with exactly: RELOAD-BUSY-DONE`, ""); code != http.StatusOK {
+		t.Fatalf("busy message: %d %s", code, body)
+	}
+	tr.await("the busy turn's tool call", ranTool("time.sleep(25)"))
+	const queued = "Reply with exactly: RELOAD-QUEUED-OK"
+	if code, body := s.message(name, queued, ""); code != http.StatusAccepted {
+		t.Fatalf("message to a busy agent: %d %s, want 202 queued", code, body)
+	}
+	s.reloadMod()
+	reloaded := s.awaitReplacedBridgeStream(name, streams)
+
+	busy := tr.await("the busy turn's reply", said("RELOAD-BUSY-DONE"))
+	reply := tr.await("the queued message's reply", said("RELOAD-QUEUED-OK"))
+	if reply < busy {
+		t.Fatalf("queued reply (line %d) came before the busy turn ended (line %d)", reply, busy)
+	}
+	// Prompts run in order, so a duplicate of the queued message would run
+	// before this one does.
+	if code, body := s.message(name, "Reply with exactly: AFTER-RELOAD-OK", ""); code/100 != 2 {
+		t.Fatalf("message after the reload: %d %s", code, body)
+	}
+	tr.await("the reply after the reload", said("AFTER-RELOAD-OK"))
+	if n := tr.count(prompted(queued)); n != 1 {
+		t.Fatalf("the queued message was prompted %d times across the reload, want once", n)
+	}
+	t.Logf("bridge streams: before the reload %v, after %v", streams, reloaded)
 }
 
 // TestClaudeBridgeDispatchOversizedOpening dispatches a brief larger than

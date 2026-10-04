@@ -66,7 +66,7 @@ test('hello says whether a main-loop turn is running', { timeoutMs: 10_000 }, as
   const feeds = [new Feed(), new Feed()]
   const h = setup(on, { feeds })
   await start($, h)
-  expect(h.reports[0]).toMatchObject({ type: 'hello', busy: false })
+  expect(h.reports[0]).toEqual({ type: 'hello', session_id: 'sess-1', claude_version: '2.1.289' })
   await $.turn.start({ text: 'work', turnId: 't1' })
   feeds[0]!.end()
   await advance(h, 1000)

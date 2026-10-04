@@ -186,6 +186,7 @@ func TestSessionEnvArgsBlanksDispatchIdentity(t *testing.T) {
 		"-e", "LEO_BRIDGE_AGENT=",
 		"-e", "LEO_BRIDGE_BIN=",
 		"-e", "LEO_BRIDGE_HOME=",
+		"-e", "LEO_BRIDGE_LAUNCH=",
 		"-e", "LEO_CONFIG=",
 		"-e", "LEO_DISPATCH_ID=",
 		"-e", "LEO_PROCESS_NAME=alpha",
