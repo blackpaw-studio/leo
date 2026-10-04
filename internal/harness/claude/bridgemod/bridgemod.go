@@ -3,13 +3,18 @@
 package bridgemod
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 )
 
 // Name is the mod's plugin name, as its manifest declares it.
@@ -32,8 +37,9 @@ const (
 //go:embed leo-bridge/.claude-plugin/plugin.json leo-bridge/hooks
 var modFS embed.FS
 
-// Materialize writes the embedded mod to <stateDir>/mods/leo-bridge/<version>/
-// and returns that directory.
+// Materialize writes the embedded mod to
+// <stateDir>/mods/leo-bridge/<version>-<hash12>/ and returns that directory,
+// where hash12 is the first 12 hex chars of a SHA-256 over the embedded files.
 //
 // A version directory is immutable once written: when it already exists it
 // is returned untouched, so a running claude never sees its mod change under
@@ -48,8 +54,14 @@ func Materialize(stateDir, version string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	hash, err := contentHash()
+	if err != nil {
+		return "", err
+	}
+	// The content hash keeps a reused version string (dev, -dirty builds)
+	// from resolving to a stale copy of a changed mod.
 	parent := filepath.Join(stateDir, "mods", Name)
-	target := filepath.Join(parent, v)
+	target := filepath.Join(parent, v+"-"+hash)
 
 	done, err := installed(target)
 	if err != nil {
@@ -78,6 +90,49 @@ func Materialize(stateDir, version string) (string, error) {
 		return "", fmt.Errorf("bridgemod: install %s: %w", target, err)
 	}
 	return target, nil
+}
+
+// hashLen is how many hex characters of the content hash name a mod dir.
+const hashLen = 12
+
+// contentHash is the embedded mod's hash, computed once per process.
+var contentHash = sync.OnceValues(func() (string, error) {
+	return hashTree(modFS, root)
+})
+
+// hashTree returns the first hashLen hex chars of a SHA-256 over every file
+// under dir, in sorted path order. Each file contributes its path relative to
+// dir, a NUL, its length as 8 big-endian bytes, then its content, so no two
+// different trees share an encoding.
+func hashTree(fsys fs.FS, dir string) (string, error) {
+	var files []string
+	err := fs.WalkDir(fsys, dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			files = append(files, p)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("bridgemod: list embedded mod: %w", err)
+	}
+	sort.Strings(files)
+	h := sha256.New()
+	for _, p := range files {
+		data, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return "", fmt.Errorf("bridgemod: read embedded %s: %w", p, err)
+		}
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(data)))
+		h.Write([]byte(strings.TrimPrefix(p, dir+"/")))
+		h.Write([]byte{0})
+		h.Write(size[:])
+		h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:hashLen], nil
 }
 
 // installed reports whether target already holds a materialized mod.

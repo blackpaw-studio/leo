@@ -4,10 +4,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 )
 
 // wantFiles is the mod as Claude Code loads it: manifest, hooks.json, and the
@@ -88,7 +90,11 @@ func TestMaterializeWritesTheMod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Materialize: %v", err)
 	}
-	want := filepath.Join(stateDir, "mods", Name, "v1.2.3")
+	hash, err := contentHash()
+	if err != nil {
+		t.Fatalf("contentHash: %v", err)
+	}
+	want := filepath.Join(stateDir, "mods", Name, "v1.2.3-"+hash)
 	if dir != want {
 		t.Fatalf("dir = %q, want %q", dir, want)
 	}
@@ -122,6 +128,57 @@ func TestMaterializeWritesTheMod(t *testing.T) {
 	}
 	if len(siblings) != 1 {
 		t.Errorf("parent holds %d entries, want only the version dir", len(siblings))
+	}
+}
+
+func TestContentHashIsStableAndShort(t *testing.T) {
+	a, err := contentHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := contentHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Fatalf("contentHash changed between calls: %q vs %q", a, b)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{12}$`).MatchString(a) {
+		t.Fatalf("contentHash = %q, want 12 lowercase hex chars", a)
+	}
+}
+
+func TestHashTreeTracksPathsAndContent(t *testing.T) {
+	base := fstest.MapFS{
+		"m/a.js":   {Data: []byte("one")},
+		"m/b/c.js": {Data: []byte("two")},
+	}
+	h0, err := hashTree(base, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		fsys fstest.MapFS
+		same bool
+	}{
+		{name: "identical", fsys: fstest.MapFS{"m/a.js": {Data: []byte("one")}, "m/b/c.js": {Data: []byte("two")}}, same: true},
+		{name: "content changed", fsys: fstest.MapFS{"m/a.js": {Data: []byte("one!")}, "m/b/c.js": {Data: []byte("two")}}},
+		{name: "file renamed", fsys: fstest.MapFS{"m/a2.js": {Data: []byte("one")}, "m/b/c.js": {Data: []byte("two")}}},
+		{name: "file added", fsys: fstest.MapFS{"m/a.js": {Data: []byte("one")}, "m/b/c.js": {Data: []byte("two")}, "m/d.js": {Data: nil}}},
+		// Boundaries between path and content must not be ambiguous.
+		{name: "bytes shifted between files", fsys: fstest.MapFS{"m/a.js": {Data: []byte("onetwo")}, "m/b/c.js": {Data: nil}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, err := hashTree(tt.fsys, "m")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (h == h0) != tt.same {
+				t.Fatalf("hash equal = %v, want %v", h == h0, tt.same)
+			}
+		})
 	}
 }
 
@@ -177,11 +234,15 @@ func TestMaterializeErrors(t *testing.T) {
 	if err := os.WriteFile(fileAsState, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	hash, err := contentHash()
+	if err != nil {
+		t.Fatal(err)
+	}
 	fileAsTarget := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(fileAsTarget, "mods", Name), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fileAsTarget, "mods", Name, "v1"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(fileAsTarget, "mods", Name, "v1-"+hash), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
