@@ -856,7 +856,7 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 			if status == StatusCanceled || status == StatusTimeout {
 				o = TurnInterrupted
 			}
-			d.closeTurnLocked(s, t.TurnID, o, "")
+			d.closeTurnLocked(s, t.TurnID, o, endedTurnText(s.record.ID, t))
 		}
 	}
 	if status == StatusClosed {
@@ -880,6 +880,31 @@ done:
 		close(s.done)
 	}
 	s.killPending = true
+}
+
+// undeliveredPreviewRunes bounds how much of an undelivered follow-up its
+// notice quotes.
+const undeliveredPreviewRunes = 200
+
+// endedTurnText is the result text of turn t, still open when dispatch id
+// ends: a follow-up its claude never took says so, quoting how it began,
+// since nothing else would tell the orchestrator it never ran (dispatches
+// do not outlive their launch, so it is not kept for another). Any other
+// turn keeps the text it has ("" leaves it as is).
+func endedTurnText(id string, t Turn) string {
+	if t.Source != TurnSourceOrchestrator || t.Delivered {
+		return ""
+	}
+	return fmt.Sprintf("not delivered: dispatch %s ended before its session took this follow-up, so it never ran. It began: %q", id, previewRunes(t.Text, undeliveredPreviewRunes))
+}
+
+// previewRunes is text cut to at most n runes, marked when cut.
+func previewRunes(text string, n int) string {
+	runes := []rune(text)
+	if len(runes) <= n {
+		return text
+	}
+	return string(runes[:n]) + "…"
 }
 
 // Sweep advances time-based interactive transitions. It is intentionally

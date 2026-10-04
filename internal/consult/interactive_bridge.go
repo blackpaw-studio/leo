@@ -306,7 +306,11 @@ func (r *TmuxInteractiveRuntime) markFellBack(id string) bool {
 // starts) rather than as a failure inviting a resend that would deliver it
 // twice. The wait is detached from ctx for the same reason: the caller
 // going away does not unqueue the deliver. A rejection or a lost bridge is
-// an error; it never falls back to tmux, which could deliver twice.
+// an error; it never falls back to tmux, which could deliver twice. A
+// dispatch has no next launch to carry a still-queued deliver to (it does
+// not outlive its claude, nor its daemon), so one its claude never took
+// when the dispatch ends is reported in its turn's result instead (see
+// endedTurnText).
 func deliverOverBridge(ctx context.Context, hub *bridge.Hub, d bridgedDispatch, timeout time.Duration, text string, arm func() error) error {
 	if arm != nil {
 		if err := arm(); err != nil {
