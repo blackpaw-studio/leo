@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -37,6 +38,18 @@ var (
 // POST /web/agent/{name}/interrupt
 func (s *Server) handleWebAgentInterrupt(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if key, ok := s.bridgeRoute(name, "interrupt"); ok {
+		// The mod interrupts the running turn itself: no Escape burst, and
+		// a failure is reported rather than retried through tmux.
+		ctx, cancel := context.WithTimeout(r.Context(), bridgeInterruptTimeout)
+		defer cancel()
+		if err := s.bridgeRouter.Hub.Send(ctx, key, bridge.Interrupt()); err != nil {
+			s.renderFlashStatus(w, http.StatusBadGateway, "error", fmt.Sprintf("Interrupting %s failed: %v", name, err))
+			return
+		}
+		s.renderFlash(w, "success", fmt.Sprintf("Interrupted %s", name))
+		return
+	}
 	sessionName := agent.SessionName(name)
 
 	tmuxPath := findTmuxPath()
@@ -88,25 +101,69 @@ func (s *Server) handleWebAgentSendKeys(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if err := s.typeKeys(sessionName, req.Keys); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, apiResponse{OK: true})
+}
+
+// typeKeys types keys into session's pane, splitting multi-char literals
+// into individual keystrokes (see handleWebAgentSendKeys).
+func (s *Server) typeKeys(sessionName string, keys []string) error {
 	tmuxPath := findTmuxPath()
 	pane := s.resolvePaneTarget(tmuxPath, sessionName)
-	for _, key := range req.Keys {
+	for _, key := range keys {
 		if needsCharSplit(key) {
 			for _, ch := range key {
 				if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, string(ch))...).Run(); err != nil {
-					writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
-					return
+					return fmt.Errorf("send-keys failed: %w", err)
 				}
 				time.Sleep(30 * time.Millisecond)
 			}
 			continue
 		}
 		if err := s.execCommand(tmuxPath, tmux.Args("send-keys", "-t", pane, key)...).Run(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("send-keys failed: %v", err)})
-			return
+			return fmt.Errorf("send-keys failed: %w", err)
 		}
 	}
+	return nil
+}
 
+// handleWebAgentCompact compacts an agent's conversation.
+// POST /web/agent/{name}/compact
+func (s *Server) handleWebAgentCompact(w http.ResponseWriter, r *http.Request) {
+	s.agentSlashCommand(w, r, "compact", bridge.Compact(""))
+}
+
+// handleWebAgentClear clears an agent's conversation.
+// POST /web/agent/{name}/clear
+func (s *Server) handleWebAgentClear(w http.ResponseWriter, r *http.Request) {
+	s.agentSlashCommand(w, r, "clear", bridge.Clear())
+}
+
+// agentSlashCommand runs /<verb> in an agent's claude. Over a live bridge
+// the mod runs it once the current turn ends, so it is queued and answered
+// 202 (an agent asks for this on itself, mid-turn); otherwise the command
+// is typed into the pane, which interrupts the turn.
+func (s *Server) agentSlashCommand(w http.ResponseWriter, r *http.Request, verb string, cmd bridge.Command) {
+	name := r.PathValue("name")
+	if key, ok := s.bridgeRoute(name, verb); ok {
+		accepted, err := s.bridgeSend(key, verb+" of "+name, cmd, bridgeControlWait, nil)
+		switch {
+		case err != nil:
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("%s: %v", verb, err)})
+		case !accepted:
+			writeJSON(w, http.StatusAccepted, apiResponse{OK: true, Data: map[string]bool{"queued": true}})
+		default:
+			writeJSON(w, http.StatusOK, apiResponse{OK: true})
+		}
+		return
+	}
+	if err := s.typeKeys(agent.SessionName(name), []string{"/" + verb, "Enter"}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, apiResponse{OK: true})
 }
 
@@ -229,6 +286,11 @@ func (s *Server) handleWebAgentMessage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, apiResponse{
 			Error: fmt.Sprintf("no such agent %q; running: %s", name, strings.Join(names, ", ")),
 		})
+		return
+	}
+
+	if key, ok := s.bridgeRoute(name, "message"); ok {
+		s.deliverAgentMessageOverBridge(w, key, name, req.From, req.Text)
 		return
 	}
 

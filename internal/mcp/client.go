@@ -108,8 +108,10 @@ func (c *daemonClient) doContext(ctx context.Context, method, path string, body 
 	return env.Data, nil
 }
 
-func (c *daemonClient) sendKeys(agentName string, keys []string) error {
-	_, err := c.do(http.MethodPost, "/web/agent/"+agentName+"/send", map[string]any{"keys": keys})
+// agentCommand asks the daemon to run /<verb> (clear or compact) in an
+// agent's claude.
+func (c *daemonClient) agentCommand(agentName, verb string) error {
+	_, err := c.do(http.MethodPost, "/web/agent/"+agentName+"/"+verb, nil)
 	return err
 }
 

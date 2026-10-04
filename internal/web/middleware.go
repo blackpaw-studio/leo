@@ -129,13 +129,14 @@ func checkOrigin(origin string, port int, allowed map[string]struct{}, requirePo
 
 // agentCallableBrowserSuffixes are the /web/agent/{name}/… routes the in-agent
 // MCP server drives: leo_send_message posts /message, leo_interrupt posts
-// /interrupt, and key sends post /send. They live on the browser mux for the
-// UI's benefit, but agents legitimately need them.
+// /interrupt, leo_compact and leo_clear post /compact and /clear, and key
+// sends post /send. They live on the browser mux for the UI's benefit, but
+// agents legitimately need them.
 //
 // Everything else on that mux — the config editor above all, which renders
 // template env values in full — stays operator-only, so an agent cannot turn
 // its own token into a full UI session.
-var agentCallableBrowserSuffixes = []string{"/message", "/send", "/interrupt"}
+var agentCallableBrowserSuffixes = []string{"/message", "/send", "/interrupt", "/compact", "/clear"}
 
 // agentCallableBrowserPath reports whether a browser-mux path is one the agent
 // token may reach.

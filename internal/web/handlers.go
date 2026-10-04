@@ -592,7 +592,14 @@ func appendReloadWarning(typ, msg, warn string) (string, string) {
 }
 
 func (s *Server) renderFlash(w http.ResponseWriter, typ, msg string) {
+	s.renderFlashStatus(w, http.StatusOK, typ, msg)
+}
+
+// renderFlashStatus renders a flash with an explicit HTTP status, for API
+// callers (the MCP server) that judge success by status alone.
+func (s *Server) renderFlashStatus(w http.ResponseWriter, status int, typ, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
 	s.templates.ExecuteTemplate(w, "flash.html", flashData{Type: typ, Message: msg}) //nolint:errcheck
 }
 

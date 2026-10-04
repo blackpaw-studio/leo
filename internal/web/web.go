@@ -552,6 +552,8 @@ func New(configPath string, processes ProcessStateProvider, scheduler SchedulerP
 	mux.HandleFunc("POST /web/agent/{name}/send", s.handleWebAgentSendKeys)
 	mux.HandleFunc("POST /web/agent/{name}/interrupt", s.handleWebAgentInterrupt)
 	mux.HandleFunc("POST /web/agent/{name}/message", s.handleWebAgentMessage)
+	mux.HandleFunc("POST /web/agent/{name}/compact", s.handleWebAgentCompact)
+	mux.HandleFunc("POST /web/agent/{name}/clear", s.handleWebAgentClear)
 
 	// Agent + task management (JSON API — used by channel plugins and external
 	// clients). Registered on a sub-mux so we can wrap /api/* in bearer auth
