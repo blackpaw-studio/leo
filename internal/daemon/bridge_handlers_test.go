@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -201,13 +202,17 @@ func TestBridgeShutdownEndsStreams(t *testing.T) {
 func TestBridgeReportAckSettlesSend(t *testing.T) {
 	workDir, hub, _ := startBridgeServer(t)
 	r := openStream(t, workDir, hub, bridgeAgent)
+	ctx := bridgeTestCtx(t)
 	done := make(chan error, 1)
-	go func() { done <- hub.Send(bridgeTestCtx(t), bridgeAgent, bridge.Deliver("hi", false)) }()
+	go func() { done <- hub.Send(ctx, bridgeAgent, bridge.Deliver("hi", false)) }()
 
-	line := readLine(t, r)
-	id := line[strings.Index(line, `"id":"`)+6:]
-	id = id[:strings.Index(id, `"`)]
-	if err := PostBridgeReport(bridgeTestCtx(t), workDir, bridgeAgent, []byte(`{"type":"ack","id":"`+id+`","ok":true}`)); err != nil {
+	var cmd struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(readLine(t, r)), &cmd); err != nil || cmd.ID == "" {
+		t.Fatalf("stream line has no command id (err %v)", err)
+	}
+	if err := PostBridgeReport(ctx, workDir, bridgeAgent, []byte(`{"type":"ack","id":"`+cmd.ID+`","ok":true}`)); err != nil {
 		t.Fatalf("PostBridgeReport: %v", err)
 	}
 	select {

@@ -69,6 +69,7 @@ func newRootCmd() *cobra.Command {
 		newChannelsCmd(),
 		newWebCmd(),
 		newInternalCmd(),
+		newBridgeCmd(),
 	)
 
 	return cmd
