@@ -177,7 +177,7 @@ func (h *Hub) Live(agent string) (Target, bool) {
 // a queued id is refused. It fails with ErrForgotten once t's generation is
 // over.
 func (h *Hub) EnqueueTo(t Target, cmd Command) (*Ticket, error) {
-	return h.enqueueTicket(t, cmd, false)
+	return h.enqueueTicket(t, cmd, queueAs{})
 }
 
 // EnqueueGate queues cmd for generation t, as EnqueueTo does, as a gate:
@@ -186,12 +186,22 @@ func (h *Hub) EnqueueTo(t Target, cmd Command) (*Ticket, error) {
 // waited behind it stays queued, unsent, for the caller to take elsewhere.
 // A launch queues its opening this way: it abandons a launch whose mod
 // refused the opening, and nothing after the opening may have run there.
+// A gate is the generation's opening (see EnqueueOpening).
 func (h *Hub) EnqueueGate(t Target, cmd Command) (*Ticket, error) {
-	return h.enqueueTicket(t, cmd, true)
+	return h.enqueueTicket(t, cmd, queueAs{gate: true, opening: true})
 }
 
-func (h *Hub) enqueueTicket(t Target, cmd Command, gate bool) (*Ticket, error) {
-	p, err := h.enqueue(t.Key, &t.Gen, cmd, gate)
+// EnqueueOpening queues cmd, the opening prompt of t's launch, as EnqueueTo
+// does, except that it takes no slot under the agent's cap: the launch can
+// still carry over, behind it, as many undelivered messages as the cap
+// holds. A generation has one opening; another under a different id is
+// refused (ErrInvalidCommand).
+func (h *Hub) EnqueueOpening(t Target, cmd Command) (*Ticket, error) {
+	return h.enqueueTicket(t, cmd, queueAs{opening: true})
+}
+
+func (h *Hub) enqueueTicket(t Target, cmd Command, as queueAs) (*Ticket, error) {
+	p, err := h.enqueue(t.Key, &t.Gen, cmd, as)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +218,7 @@ func (h *Hub) Await(ctx context.Context, t *Ticket) error {
 // SendTo is Send for generation t: it fails with ErrForgotten, queueing
 // nothing, once t's generation is over.
 func (h *Hub) SendTo(ctx context.Context, t Target, cmd Command) error {
-	p, err := h.enqueue(t.Key, &t.Gen, cmd, false)
+	p, err := h.enqueue(t.Key, &t.Gen, cmd, queueAs{})
 	if err != nil {
 		return err
 	}
@@ -228,15 +238,18 @@ func (h *Hub) ForgetGen(t Target) bool {
 	return true
 }
 
-// ForgetGenUnlessConnected is ForgetGen that also keeps a connected stream,
-// checked under the same lock (see ForgetUnlessConnected).
-func (h *Hub) ForgetGenUnlessConnected(t Target) bool {
+// ForgetGenUnlessEverConnected is ForgetGen for a launch falling back from
+// the bridge: it keeps a generation whose mod has ever connected or said
+// hello, checked under the same lock, even if its stream is down right
+// now (a reload, a reconnect). That mod may already have been handed what
+// the generation queued, and run it, so a fallback would deliver it twice.
+func (h *Hub) ForgetGenUnlessEverConnected(t Target) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.isCurrentLocked(t) {
 		return false
 	}
-	if st, ok := h.agents[t.Key]; ok && st.conn != nil {
+	if st, ok := h.agents[t.Key]; ok && (st.conn != nil || !st.connectedAt.IsZero() || !st.helloAt.IsZero()) {
 		return false
 	}
 	h.forgetLocked(t.Key)

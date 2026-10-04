@@ -417,14 +417,14 @@ func TestForgetGenSparesASuccessor(t *testing.T) {
 	if h.ForgetGen(old) {
 		t.Fatal("ForgetGen forgot a generation that was already over")
 	}
-	if h.ForgetGenUnlessConnected(old) {
-		t.Fatal("ForgetGenUnlessConnected forgot a generation that was already over")
+	if h.ForgetGenUnlessEverConnected(old) {
+		t.Fatal("ForgetGenUnlessEverConnected forgot a generation that was already over")
 	}
 	if !h.Connected(agentA) {
 		t.Fatal("the successor's stream was dropped")
 	}
-	if h.ForgetGenUnlessConnected(successor) {
-		t.Fatal("ForgetGenUnlessConnected forgot a connected generation")
+	if h.ForgetGenUnlessEverConnected(successor) {
+		t.Fatal("ForgetGenUnlessEverConnected forgot a connected generation")
 	}
 	if !h.ForgetGen(successor) {
 		t.Fatal("ForgetGen refused the current generation")

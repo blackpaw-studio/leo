@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	// DefaultMaxEntries caps one agent's queued messages, matching the
-	// bridge hub's own per-agent cap.
+	// DefaultMaxEntries caps one agent's queued messages. The daemon sets
+	// it to the bridge hub's per-agent cap, so a launch can carry a full
+	// outbox over at once.
 	DefaultMaxEntries = 256
 	// DefaultMaxBytes caps the text one agent has queued: a few messages at
 	// the web server's 10 MiB request cap, and far more of a usual size.
@@ -37,6 +38,8 @@ var (
 	ErrDuplicate = errors.New("message already queued")
 	// ErrInvalidAgent: the name cannot be a file name in the store.
 	ErrInvalidAgent = errors.New("invalid outbox agent name")
+	// ErrNameHasMessages: a rename's new name has messages queued already.
+	ErrNameHasMessages = errors.New("the new name has undelivered messages queued")
 )
 
 // Entry is one queued message: a bridge deliver and who sent it.
@@ -56,6 +59,9 @@ type Entry struct {
 type Options struct {
 	MaxEntries int
 	MaxBytes   int64
+	// Logf reports what the store does on its own: moving a corrupt file
+	// aside. nil writes to stderr.
+	Logf func(format string, args ...any)
 }
 
 // Store holds every agent's queued messages under one directory. It is
@@ -64,6 +70,7 @@ type Store struct {
 	dir        string
 	maxEntries int
 	maxBytes   int64
+	logf       func(format string, args ...any)
 	mu         sync.Mutex
 }
 
@@ -72,16 +79,38 @@ type file struct {
 	Entries []Entry `json:"entries"`
 }
 
-// New returns the store kept in dir, created on first write.
+// New returns the store kept in dir, created on first write. It sweeps
+// the temp files of writes that died before their rename (a crashed
+// daemon's): nothing else writes in dir, and no write of this store has
+// begun yet.
 func New(dir string, opts Options) *Store {
-	s := &Store{dir: dir, maxEntries: opts.MaxEntries, maxBytes: opts.MaxBytes}
+	s := &Store{dir: dir, maxEntries: opts.MaxEntries, maxBytes: opts.MaxBytes, logf: opts.Logf}
 	if s.maxEntries <= 0 {
 		s.maxEntries = DefaultMaxEntries
 	}
 	if s.maxBytes <= 0 {
 		s.maxBytes = DefaultMaxBytes
 	}
+	if s.logf == nil {
+		s.logf = func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
+	}
+	s.sweepStrayWrites()
 	return s
+}
+
+// tempPattern matches the temp files writeFileAtomic creates in the dir.
+const tempPattern = ".*.json.*.tmp"
+
+func (s *Store) sweepStrayWrites() {
+	strays, err := filepath.Glob(filepath.Join(s.dir, tempPattern))
+	if err != nil {
+		return
+	}
+	for _, path := range strays {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			s.logf("outbox: removing the stray write %s: %v", path, err)
+		}
+	}
 }
 
 // Append queues e last for agent. It fails with ErrFull rather than exceed
@@ -138,13 +167,17 @@ func (s *Store) Drop(agent string) ([]Entry, error) {
 	return entries, s.writeLocked(agent, nil)
 }
 
-// Rename moves oldAgent's entries to newAgent, which must have none of its
-// own. An agent with nothing queued renames trivially.
+// Rename moves oldAgent's entries to newAgent. It refuses
+// (ErrNameHasMessages) if newAgent has entries of its own, even when
+// oldAgent has none: they were queued for whoever held that name before (a
+// deleted agent whose drop failed), so merging would hand them to the wrong
+// agent, and the agent's own would be mixed with them. They stay for a
+// person to deal with, and the error names their file.
 func (s *Store) Rename(oldAgent, newAgent string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.readLocked(oldAgent)
-	if err != nil || len(entries) == 0 {
+	if err != nil {
 		return err
 	}
 	existing, err := s.readLocked(newAgent)
@@ -152,7 +185,11 @@ func (s *Store) Rename(oldAgent, newAgent string) error {
 		return err
 	}
 	if len(existing) > 0 {
-		return fmt.Errorf("outbox rename %s to %s: %s has %d messages queued", oldAgent, newAgent, newAgent, len(existing))
+		path, _ := s.path(newAgent)
+		return fmt.Errorf("outbox rename %s to %s: %w: %d in %s", oldAgent, newAgent, ErrNameHasMessages, len(existing), path)
+	}
+	if len(entries) == 0 {
+		return nil
 	}
 	if err := s.writeLocked(newAgent, entries); err != nil {
 		return err
@@ -182,9 +219,23 @@ func (s *Store) readLocked(agent string) ([]Entry, error) {
 	}
 	var f file
 	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("reading the outbox of %s: %w", agent, err)
+		return nil, s.moveAsideLocked(agent, path, err)
 	}
 	return f.Entries, nil
+}
+
+// moveAsideLocked sets agent's corrupt file (cause says why) aside, whole,
+// as <file>.corrupt-<time>, so the agent goes on with an empty outbox
+// instead of being stuck behind it, and logs where it went: its messages
+// are recoverable only by hand. A file that cannot be moved stays an error,
+// never overwritten.
+func (s *Store) moveAsideLocked(agent, path string, cause error) error {
+	aside := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+	if err := os.Rename(path, aside); err != nil {
+		return fmt.Errorf("the outbox of %s is corrupt (%v) and could not be moved aside: %w", agent, cause, err)
+	}
+	s.logf("outbox: ERROR: the outbox of %s was corrupt (%v); moved it to %s and continuing with an empty one. Its undelivered messages are only in that file now.", agent, cause, aside)
+	return nil
 }
 
 // writeLocked stores entries as agent's file, or removes the file when

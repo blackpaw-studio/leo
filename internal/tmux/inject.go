@@ -191,8 +191,15 @@ func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttemp
 	return injectPromptProfile(ctx, tmuxPath, session, body, ClaudeProfile(), maxAttempts, poll)
 }
 
-// injectPromptProfile is the profile-parameterized inner form.
+// injectPromptProfile is the profile-parameterized inner form. It holds
+// session's paste lock throughout (see sessionPasteLocks), waiting for any
+// other paste into the session to submit first.
 func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p Profile, maxAttempts int, poll time.Duration) error {
+	release, err := pasteLocks.acquire(ctx, session)
+	if err != nil {
+		return err
+	}
+	defer release()
 	runKey := func(pane string, keys ...string) error {
 		args := append([]string{"send-keys", "-t", pane}, keys...)
 		cmd := execCommand(ctx, tmuxPath, Args(args...)...)

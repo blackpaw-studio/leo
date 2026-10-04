@@ -7,10 +7,9 @@ import (
 	"os"
 	"sync"
 	"time"
-	"unicode/utf8"
 
-	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/bridge"
+	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/outbox"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
@@ -19,13 +18,6 @@ import (
 // readiness-probed tmux paste into its session. A package var so tests can
 // observe it.
 var pasteMessage = tmux.InjectPrompt
-
-// noticeDeliverTimeout bounds a notice's paste into a running agent that
-// has no bridge (a cold claude can take a minute to accept input).
-const noticeDeliverTimeout = 3 * time.Minute
-
-// noticePreviewRunes is how much of an undelivered message a notice quotes.
-const noticePreviewRunes = 200
 
 // agentMail is the durable side of the delivers leo queues for agents'
 // claudes. Each goes into its agent's outbox before the hub, leaves it on
@@ -37,10 +29,44 @@ const noticePreviewRunes = 200
 // and renames, so each message is in exactly one place: queued on the live
 // generation, or waiting in the outbox for the next one. Lock order:
 // Supervisor.mu, then mu, then a procIdentity's.
+//
+// A message's ack is applied (the message leaves the outbox, or stays) once,
+// by whichever comes first: its settle goroutine, or the next launch's
+// carry or paste, or a deletion, finding its ticket settled. So a message
+// acked just as its launch ended is never carried, pasted or reported lost
+// for want of a goroutine that has yet to run.
 type agentMail struct {
 	mu    sync.Mutex
 	store *outbox.Store
+	// queued holds, by message id, each queued message's ticket on the hub
+	// until its ack is applied.
+	queued map[string]queuedMail
+	// beforeSettle, if set, runs as a settle goroutine wakes, before it
+	// applies its ack: a test seam.
+	beforeSettle func()
 }
+
+// queuedMail is a message on the hub, awaiting its ack.
+type queuedMail struct {
+	ticket *bridge.Ticket
+	// from is the agent that sent it ("" for a human or a task).
+	from string
+	// carried: an earlier launch's, queued again for this one; nobody
+	// waits on its ticket.
+	carried bool
+}
+
+// settlement is how applying a message's ack went.
+type settlement int
+
+const (
+	// settledPending: the message is not queued, or not acked yet.
+	settledPending settlement = iota
+	// settledTaken: acked, ok or refused; it left the outbox.
+	settledTaken
+	// settledKept: its launch ended first; it stays for the next one.
+	settledKept
+)
 
 // SetOutbox keeps agent delivers in store until their claude takes them;
 // nil keeps them in the hub alone, lost with their launch.
@@ -114,27 +140,73 @@ func (s *Supervisor) queueDeliver(hub *bridge.Hub, id *procIdentity, target brid
 		s.forgetMailLocked(store, name, cmd.ID)
 		return nil, err
 	}
-	go s.settleMail(id, ticket, false)
+	s.trackMailLocked(id, queuedMail{ticket: ticket, from: from})
 	return ticket, nil
 }
 
-// settleMail takes ticket's message out of id's outbox once the mod acks
-// it, ok or refused. One forgotten with its launch, or closed with the
-// daemon, stays for the next launch. A refusal nobody waits for (a
-// carried message) is logged.
-func (s *Supervisor) settleMail(id *procIdentity, ticket *bridge.Ticket, carried bool) {
-	<-ticket.Done()
-	err := ticket.Err()
-	if err != nil && !errors.Is(err, bridge.ErrRejected) {
-		return
+// trackMailLocked records q as its message's live ticket, superseding any
+// earlier launch's, and starts the goroutine that applies its ack.
+func (s *Supervisor) trackMailLocked(id *procIdentity, q queuedMail) {
+	if s.mail.queued == nil {
+		s.mail.queued = map[string]queuedMail{}
 	}
-	if err != nil && carried {
-		fmt.Fprintf(os.Stderr, "[%s] the leo bridge refused carried message %s: %v\n", id.Name(), ticket.ID, err)
+	s.mail.queued[q.ticket.ID] = q
+	go s.settleMail(id, q.ticket)
+}
+
+// settleMail applies ticket's ack once it settles (see applyAckLocked),
+// unless a carry, paste or deletion applied it first.
+func (s *Supervisor) settleMail(id *procIdentity, ticket *bridge.Ticket) {
+	<-ticket.Done()
+	s.mail.mu.Lock()
+	hook := s.mail.beforeSettle
+	s.mail.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	s.mail.mu.Lock()
-	defer s.mail.mu.Unlock()
+	_, announce := s.applyAckLocked(id.Name(), ticket.ID)
+	s.mail.mu.Unlock()
+	s.announce(announce)
+}
+
+// applyAckLocked applies the ack of agent name's message msgID if its
+// ticket has settled, once: acked ok or refused, it leaves the outbox (a
+// refusal nobody waits for, a carried message's, is logged); forgotten with
+// its launch, or closed with the daemon, it stays for the next launch. The
+// returned announcement (nil for none) is the message's, for a carried
+// message another agent sent and claude took: publish it once unlocked.
+func (s *Supervisor) applyAckLocked(name, msgID string) (settlement, *observe.Event) {
+	q, ok := s.mail.queued[msgID]
+	if !ok {
+		return settledPending, nil
+	}
+	select {
+	case <-q.ticket.Done():
+	default:
+		return settledPending, nil
+	}
+	delete(s.mail.queued, msgID)
+	err := q.ticket.Err()
+	if err != nil && !errors.Is(err, bridge.ErrRejected) {
+		return settledKept, nil
+	}
+	if err != nil && q.carried {
+		fmt.Fprintf(os.Stderr, "[%s] the leo bridge refused carried message %s: %v\n", name, msgID, err)
+	}
 	if store := s.mail.store; store != nil {
-		s.forgetMailLocked(store, id.Name(), ticket.ID)
+		s.forgetMailLocked(store, name, msgID)
+	}
+	if err != nil || !q.carried || q.from == "" {
+		return settledTaken, nil
+	}
+	return settledTaken, &observe.Event{Type: observe.EventAgentMessage, Payload: &observe.AgentMessagePayload{From: q.from, To: name}}
+}
+
+// announce publishes ev, if any.
+func (s *Supervisor) announce(ev *observe.Event) {
+	if ev != nil {
+		s.publish(*ev)
 	}
 }
 
@@ -147,8 +219,10 @@ func (s *Supervisor) forgetMailLocked(store *outbox.Store, name, msgID string) {
 // carryMail queues on target, the generation id's launch just opened, every
 // message id's agent has waiting, in the order they were queued and under
 // their own ids, and returns how many. It runs as the launch opens: behind
-// its opening, before anything can be routed to it. One the hub refuses
-// stays, with all after it, for a later launch.
+// its opening, before anything can be routed to it. The generation holds
+// nothing else yet and its opening takes no slot, so an outbox within the
+// hub's cap (see wireBridge) fits whole. One the hub refuses anyway (the
+// generation already ended) stays, with all after it, for a later launch.
 func (s *Supervisor) carryMail(hub *bridge.Hub, id *procIdentity, target bridge.Target) int {
 	s.mail.mu.Lock()
 	defer s.mail.mu.Unlock()
@@ -157,7 +231,12 @@ func (s *Supervisor) carryMail(hub *bridge.Hub, id *procIdentity, target bridge.
 		return 0
 	}
 	name := id.Name()
-	entries, err := store.List(name)
+	entries, announcements, err := s.undeliveredLocked(name)
+	defer func() {
+		for _, ev := range announcements {
+			go s.announce(ev)
+		}
+	}()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] warning: reading undelivered messages: %v\n", name, err)
 		return 0
@@ -169,13 +248,54 @@ func (s *Supervisor) carryMail(hub *bridge.Hub, id *procIdentity, target bridge.
 			fmt.Fprintf(os.Stderr, "[%s] warning: carrying undelivered message %s over: %v; it and %d after it wait for the next launch\n", name, e.ID, err, len(entries)-carried-1)
 			break
 		}
-		go s.settleMail(id, ticket, true)
+		s.trackMailLocked(id, queuedMail{ticket: ticket, from: e.From, carried: true})
 		carried++
 	}
 	if carried > 0 {
 		fmt.Fprintf(os.Stderr, "[%s] carried %d undelivered message(s) over to this launch\n", name, carried)
 	}
 	return carried
+}
+
+// undeliveredLocked lists what agent name still has to be delivered: its
+// outbox, less what an earlier launch's claude took (its ack applied here
+// if its settle goroutine has not run yet; see agentMail), up to the first
+// message still queued on a live launch, which stays, with all after it,
+// in order. That cannot happen to a launch's carry or paste: every launch
+// before it is over, its generation forgotten and its tickets settled. The
+// announcements of what was found taken are returned for publishing once
+// unlocked.
+func (s *Supervisor) undeliveredLocked(name string) ([]outbox.Entry, []*observe.Event, error) {
+	entries, err := s.mail.store.List(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	var (
+		pending       []outbox.Entry
+		announcements []*observe.Event
+	)
+	for i, e := range entries {
+		got, ev := s.applyAckLocked(name, e.ID)
+		if ev != nil {
+			announcements = append(announcements, ev)
+		}
+		switch {
+		case got == settledTaken:
+			continue
+		case got == settledPending && s.isQueuedLocked(e.ID):
+			fmt.Fprintf(os.Stderr, "[%s] warning: undelivered message %s is still queued on an earlier launch; it and %d after it wait\n", name, e.ID, len(entries)-i-1)
+			return pending, announcements, nil
+		}
+		pending = append(pending, e)
+	}
+	return pending, announcements, nil
+}
+
+// isQueuedLocked reports whether message msgID has a ticket awaiting its
+// ack.
+func (s *Supervisor) isQueuedLocked(msgID string) bool {
+	_, ok := s.mail.queued[msgID]
+	return ok
 }
 
 // pasteMail delivers, without the bridge, every message id's agent has
@@ -194,11 +314,21 @@ func (s *Supervisor) pasteMail(ctx context.Context, id *procIdentity, tmuxPath s
 		}
 		s.mail.mu.Lock()
 		store := s.mail.store
+		var (
+			entries       []outbox.Entry
+			announcements []*observe.Event
+			err           error
+		)
+		if store != nil {
+			entries, announcements, err = s.undeliveredLocked(id.Name())
+		}
 		s.mail.mu.Unlock()
+		for _, ev := range announcements {
+			s.announce(ev)
+		}
 		if store == nil {
 			return
 		}
-		entries, err := store.List(id.Name())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[%s] warning: reading undelivered messages: %v\n", id.Name(), err)
 			return
@@ -237,122 +367,4 @@ func (s *Supervisor) RenameAgentMail(oldName, newName string) error {
 	s.mail.mu.Lock()
 	defer s.mail.mu.Unlock()
 	return s.renameMailLocked(oldName, newName)
-}
-
-// DropAgentMail forgets what agent name never took, for it was deleted.
-// Every agent that sent some is told, where it can be reached: at once if
-// it is running, else in its own outbox for its next launch. Messages from
-// a human or a task are only logged.
-func (s *Supervisor) DropAgentMail(name string) {
-	s.mail.mu.Lock()
-	store := s.mail.store
-	var (
-		dropped []outbox.Entry
-		err     error
-	)
-	if store != nil {
-		dropped, err = store.Drop(name)
-	}
-	s.mail.mu.Unlock()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] warning: dropping undelivered messages: %v\n", name, err)
-		return
-	}
-	if len(dropped) == 0 {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "[%s] dropped %d undelivered message(s): the agent was deleted\n", name, len(dropped))
-	for _, n := range undeliveredNotices(name, dropped) {
-		s.notifyAgent(n.to, n.text)
-	}
-}
-
-type notice struct{ to, text string }
-
-// undeliveredNotices words, per sending agent in the order they first
-// sent, what it is told about its messages to deleted agent name.
-func undeliveredNotices(name string, dropped []outbox.Entry) []notice {
-	var (
-		order []string
-		bySrc = map[string][]outbox.Entry{}
-	)
-	for _, e := range dropped {
-		if e.From == "" {
-			continue
-		}
-		if _, seen := bySrc[e.From]; !seen {
-			order = append(order, e.From)
-		}
-		bySrc[e.From] = append(bySrc[e.From], e)
-	}
-	notices := make([]notice, 0, len(order))
-	for _, from := range order {
-		sent := bySrc[from]
-		text := fmt.Sprintf("leo: %d message(s) you sent to agent %s were never delivered: %s was deleted before it took them. The first began: %q",
-			len(sent), name, name, preview(sent[0].Text))
-		notices = append(notices, notice{to: from, text: text})
-	}
-	return notices
-}
-
-func preview(text string) string {
-	if utf8.RuneCountInString(text) <= noticePreviewRunes {
-		return text
-	}
-	return string([]rune(text)[:noticePreviewRunes]) + "…"
-}
-
-// notifyAgent tells agent name text where it can be reached: over its live
-// bridge (durably), by paste into a running agent without one, or, for a
-// stopped agent, in its outbox for its next launch. An agent leo does not
-// know is only logged.
-func (s *Supervisor) notifyAgent(name, text string) {
-	cmd := bridge.Deliver(text, false)
-	if router := s.BridgeRouter(); router != nil {
-		if target, ok := router.Route(name); ok {
-			if _, err := s.QueueDeliver(name, target, cmd, ""); err == nil {
-				return
-			}
-		}
-	}
-	s.mu.RLock()
-	id, live := s.identities[name]
-	parent := s.ctx
-	s.mu.RUnlock()
-	if live {
-		if parent == nil {
-			parent = context.Background()
-		}
-		go func() {
-			ctx, cancel := context.WithTimeout(parent, noticeDeliverTimeout)
-			defer cancel()
-			if err := pasteMessage(ctx, s.tmuxPath, id.SessionName(), text); err != nil {
-				fmt.Fprintf(os.Stderr, "[%s] could not deliver a leo notice (%v): %s\n", name, err, text)
-			}
-		}()
-		return
-	}
-	if !s.agentRecorded(name) {
-		fmt.Fprintf(os.Stderr, "[%s] no such agent to tell: %s\n", name, text)
-		return
-	}
-	s.mail.mu.Lock()
-	defer s.mail.mu.Unlock()
-	if s.mail.store == nil {
-		return
-	}
-	entry := outbox.Entry{ID: bridge.NewCommandID(), Text: text, QueuedAt: time.Now().UTC()}
-	if err := s.mail.store.Append(name, entry); err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] could not keep a leo notice for its next launch (%v): %s\n", name, err, text)
-	}
-}
-
-// agentRecorded reports whether name has an agent record.
-func (s *Supervisor) agentRecorded(name string) bool {
-	recs, err := agentstore.Load(agentstore.FilePath(s.homePath))
-	if err != nil {
-		return false
-	}
-	_, ok := recs[name]
-	return ok
 }

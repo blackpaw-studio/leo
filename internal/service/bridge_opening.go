@@ -286,10 +286,11 @@ func (s *Supervisor) requeueAdoptedOpening(id *procIdentity, bl bridgeLaunch, op
 // enqueueOpening queues cmd, bl's opening, on bl's generation: as a gate
 // for a launch, which a refusal abandons, so nothing behind the opening can
 // have run there (see bridge.Hub.EnqueueGate); plainly for an adopted
-// session, which is never abandoned.
+// session, which is never abandoned. Either way it takes no slot under the
+// agent's cap, so a full outbox is carried over whole behind it.
 func (s *Supervisor) enqueueOpening(id *procIdentity, bl bridgeLaunch, cmd bridge.Command, gate bool) (bridgeLaunch, bool) {
 	w := s.bridgeWiring()
-	enqueue := w.hub.EnqueueTo
+	enqueue := w.hub.EnqueueOpening
 	if gate {
 		enqueue = w.hub.EnqueueGate
 	}

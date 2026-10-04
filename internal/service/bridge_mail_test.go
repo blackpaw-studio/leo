@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,9 +16,19 @@ import (
 	"github.com/blackpaw-studio/leo/internal/outbox"
 )
 
-// mailStore is the outbox a daemon with leo home home keeps.
+// mailStores holds the one Store per outbox dir that mailStore hands out.
+var mailStores sync.Map
+
+// mailStore is the outbox a daemon with leo home home keeps. Like the
+// daemon, a test keeps one Store per dir: a new one sweeps the dir's
+// unfinished writes, which may be another Store's in flight.
 func mailStore(home string) *outbox.Store {
-	return outbox.New(filepath.Join(home, "state", "outbox"), outbox.Options{})
+	dir := filepath.Join(home, "state", "outbox")
+	if s, ok := mailStores.Load(dir); ok {
+		return s.(*outbox.Store)
+	}
+	s, _ := mailStores.LoadOrStore(dir, outbox.New(dir, outbox.Options{}))
+	return s.(*outbox.Store)
 }
 
 func durable(o *bridgeTestOpts) { o.isDurable = true }
@@ -171,6 +182,46 @@ func TestCarriedMessagesQueueBehindThePendingOpening(t *testing.T) {
 	a, b := nextCmd(t, s), nextCmd(t, s)
 	if a.ID != "c-1" || a.Text != "first" || a.AsUser || b.ID != "c-2" || !b.AsUser {
 		t.Fatalf("after the opening: %+v, %+v; want the carried messages in order", a, b)
+	}
+}
+
+// An outbox filled to its cap is carried over whole, behind the opening:
+// the opening takes no slot, so the last message is not held back while
+// its sender was told it is queued.
+func TestAFullOutboxIsCarriedWholeBehindTheOpening(t *testing.T) {
+	tmuxPath, logPath := statefulTmux(t, "")
+	home := t.TempDir()
+	full := make([]outbox.Entry, outbox.DefaultMaxEntries)
+	for i := range full {
+		full[i] = outbox.Entry{ID: fmt.Sprintf("c-%d", i), Text: fmt.Sprintf("message %d", i)}
+	}
+	seedMail(t, home, "alpha", full...)
+	spec := claudeSpec(t, "alpha")
+	spec.OpeningBriefPath = writeBrief(t, "the opening")
+	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, spec, withHome(home), durable)
+	waitForNewSessions(t, logPath, 1)
+
+	if got, want := f.hub.State("alpha").Pending, len(full)+1; got != want {
+		t.Fatalf("pending=%d, want the opening and all %d carried messages", got, len(full))
+	}
+}
+
+// So is an adopted session's, behind the opening queued again for it.
+func TestAnAdoptionCarriesAFullOutboxWholeBehindTheOpening(t *testing.T) {
+	tmuxPath, _ := statefulTmux(t, adoptedEnv)
+	sessionUp(t, tmuxPath)
+	home := t.TempDir()
+	queuedFor(t, home, "launch-old", "open-from-the-launch")
+	full := make([]outbox.Entry, outbox.DefaultMaxEntries)
+	for i := range full {
+		full[i] = outbox.Entry{ID: fmt.Sprintf("c-%d", i), Text: fmt.Sprintf("message %d", i)}
+	}
+	seedMail(t, home, "alpha", full...)
+	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, adoptSpec(t, "the opening"), withHome(home), durable)
+
+	waitFor(t, "adoption", func() bool { _, ok := f.sv.BridgeKey("alpha"); return ok })
+	if got, want := f.hub.State("alpha").Pending, len(full)+1; got != want {
+		t.Fatalf("pending=%d, want the opening and all %d carried messages", got, len(full))
 	}
 }
 

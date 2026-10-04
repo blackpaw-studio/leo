@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// A follow-up the dispatch's claude never took, still pending when the
-// dispatch ends, reads as a notice in its turn result, not as the bare
-// message, so its orchestrator knows it never ran. A turn claude did take
+// A follow-up never seen to start, still pending when the dispatch ends,
+// reads as a notice in its turn result, not as the bare message, so its
+// orchestrator knows to check whether it ran. A turn claude did take
 // keeps its own text.
 func TestAnUndeliveredFollowUpEndsWithANotice(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
@@ -40,8 +40,10 @@ func TestAnUndeliveredFollowUpEndsWithANotice(t *testing.T) {
 		t.Fatalf("follow-up turn after the dispatch ended: %+v", turn)
 	}
 	body := interactiveEntry(rec, sent.TurnID, time.Now()).Text
-	if !strings.Contains(body, "not delivered") || !strings.Contains(body, followUp) {
-		t.Fatalf("follow-up turn result = %q, want a not-delivered notice quoting it", body)
+	// Its session never reported it starting, which is all leo knows: it
+	// may have run unseen, so the notice claims no more than that.
+	if !strings.Contains(body, "was never seen to start") || strings.Contains(body, "never ran") || !strings.Contains(body, followUp) {
+		t.Fatalf("follow-up turn result = %q, want a never-seen-to-start notice quoting it", body)
 	}
 }
 

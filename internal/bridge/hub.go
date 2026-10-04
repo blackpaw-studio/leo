@@ -170,13 +170,34 @@ type pending struct {
 	ackedIn string
 	// callerID: the caller named the command (see EnqueueTo).
 	callerID bool
+	queueAs
+}
+
+// queueAs is how a command is queued.
+type queueAs struct {
 	// gate: nothing behind it streams until it is acked ok (see
 	// EnqueueGate).
 	gate bool
+	// opening: its generation's opening, which takes no slot under the
+	// agent's cap (see EnqueueOpening).
+	opening bool
 }
 
-func newPending(seq uint64, cmd Command, callerID, gate bool) *pending {
-	return &pending{seq: seq, cmd: cmd, done: make(chan struct{}), callerID: callerID, gate: gate}
+func newPending(seq uint64, cmd Command, callerID bool, as queueAs) *pending {
+	return &pending{seq: seq, cmd: cmd, done: make(chan struct{}), callerID: callerID, queueAs: as}
+}
+
+// openingAndLoad returns outbox's opening (nil without one) and how many
+// of its commands count against the cap: every one but the opening.
+func openingAndLoad(outbox []*pending) (opening *pending, load int) {
+	for _, p := range outbox {
+		if p.opening {
+			opening = p
+			continue
+		}
+		load++
+	}
+	return opening, load
 }
 
 // resolveLocked settles p with err; later calls are no-ops.
@@ -238,7 +259,7 @@ func New(opts Options) *Hub {
 // opened. Launch code queues with EnqueueTo instead, pinned to its own
 // generation.
 func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
-	p, err := h.enqueue(agent, nil, cmd, false)
+	p, err := h.enqueue(agent, nil, cmd, queueAs{})
 	if err != nil {
 		return "", err
 	}
@@ -265,7 +286,7 @@ func (h *Hub) Enqueue(agent string, cmd Command) (string, error) {
 // Interrupt is the exception — the mod runs it at once, mid-turn and ahead
 // of the queue — so its clock runs from the start regardless.
 func (h *Hub) Send(ctx context.Context, agent string, cmd Command) error {
-	p, err := h.enqueue(agent, nil, cmd, false)
+	p, err := h.enqueue(agent, nil, cmd, queueAs{})
 	if err != nil {
 		return err
 	}
@@ -371,10 +392,10 @@ func (h *Hub) abandon(agent string, p *pending, cause error) error {
 }
 
 // enqueue queues cmd for agent: for generation *gen when gen is non-nil,
-// else for whatever generation is current; as a gate if gate (see
-// EnqueueGate). A caller-set cmd.ID is kept (see EnqueueTo); otherwise the
-// hub assigns one.
-func (h *Hub) enqueue(agent string, gen *uint64, cmd Command, gate bool) (*pending, error) {
+// else for whatever generation is current; as a gate and/or the opening as
+// as says (see EnqueueGate, EnqueueOpening). A caller-set cmd.ID is kept
+// (see EnqueueTo); otherwise the hub assigns one.
+func (h *Hub) enqueue(agent string, gen *uint64, cmd Command, as queueAs) (*pending, error) {
 	if agent == "" {
 		return nil, fmt.Errorf("%w: empty name", ErrInvalidAgent)
 	}
@@ -403,16 +424,20 @@ func (h *Hub) enqueue(agent string, gen *uint64, cmd Command, gate bool) (*pendi
 	}
 	st := h.stateLocked(agent)
 	if i := findPending(st.outbox, cmd.ID); i >= 0 {
-		if q := st.outbox[i]; callerID && q.callerID && q.cmd == cmd && q.gate == gate {
+		if q := st.outbox[i]; callerID && q.callerID && q.cmd == cmd && q.queueAs == as {
 			return q, nil
 		}
 		return nil, fmt.Errorf("%w: duplicate id %s", ErrInvalidCommand, cmd.ID)
 	}
-	if len(st.outbox) >= h.maxPending {
-		return nil, fmt.Errorf("%w: agent %s has %d unacked commands", ErrOutboxFull, agent, len(st.outbox))
+	opening, load := openingAndLoad(st.outbox)
+	switch {
+	case as.opening && opening != nil:
+		return nil, fmt.Errorf("%w: agent %s has opening %s queued already", ErrInvalidCommand, agent, opening.cmd.ID)
+	case !as.opening && load >= h.maxPending:
+		return nil, fmt.Errorf("%w: agent %s has %d unacked commands", ErrOutboxFull, agent, load)
 	}
 	h.seq++
-	p := newPending(h.seq, cmd, callerID, gate)
+	p := newPending(h.seq, cmd, callerID, as)
 	st.outbox = append(st.outbox, p)
 	if st.conn != nil {
 		st.conn.signal()

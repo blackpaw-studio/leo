@@ -394,9 +394,10 @@ func (s *Supervisor) watchBridgeLaunch(ctx context.Context, id *procIdentity, bl
 
 // fallBackFromBridge abandons a bridged launch: its generation is forgotten
 // (dropping what it had queued) and its session killed, for the supervise
-// loop to relaunch legacy-style. Unless force, a mod that connected at the
-// last moment keeps the launch. A generation already over is left alone:
-// its launch has ended or been abandoned already.
+// loop to relaunch legacy-style. Unless force, a mod that has connected at
+// all keeps the launch, even one whose stream is down at the moment: it may
+// have been handed what was queued, and run it. A generation already over
+// is left alone: its launch has ended or been abandoned already.
 func (s *Supervisor) fallBackFromBridge(id *procIdentity, target bridge.Target, tmuxPath string, fellBack *atomic.Bool, force bool) {
 	w := s.bridgeWiring()
 	if w == nil {
@@ -406,7 +407,7 @@ func (s *Supervisor) fallBackFromBridge(id *procIdentity, target bridge.Target, 
 	if force {
 		forgot = w.hub.ForgetGen(target)
 	} else {
-		forgot = w.hub.ForgetGenUnlessConnected(target)
+		forgot = w.hub.ForgetGenUnlessEverConnected(target)
 	}
 	if !forgot {
 		return
@@ -442,7 +443,9 @@ const devModVersion = "dev"
 // launches stay legacy.
 func wireBridge(sv *Supervisor, homePath, version string, probe bridgemod.VersionProbe) (*bridge.Hub, *bridgemod.Launcher) {
 	hub := bridge.New(bridge.Options{})
-	sv.SetOutbox(outbox.New(filepath.Join(homePath, "state", "outbox"), outbox.Options{}))
+	// The outbox holds no more than the hub's cap: a launch carries it over
+	// whole, behind an opening that takes no slot (see carryMail).
+	sv.SetOutbox(outbox.New(filepath.Join(homePath, "state", "outbox"), outbox.Options{MaxEntries: bridge.DefaultMaxPending}))
 	if version == "" {
 		version = devModVersion
 	}
