@@ -2,6 +2,8 @@ package outbox
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,21 +185,69 @@ func TestFilesArePrivateAndWrittenWhole(t *testing.T) {
 	}
 }
 
-// A file that does not parse is an error, never silently emptied: the
-// next append refuses rather than overwrite what it cannot read.
-func TestACorruptFileIsAnErrorNotAnEmptyOutbox(t *testing.T) {
-	s, dir := newStore(t, Options{})
+// A corrupt file must not block its agent forever: it is moved aside,
+// whole, where it can be recovered by hand, the move is logged loudly, and
+// the agent continues with an empty outbox.
+func TestACorruptFileIsMovedAsideLoudly(t *testing.T) {
+	var logged []string
+	dir := filepath.Join(t.TempDir(), "outbox")
+	s := New(dir, Options{Logf: func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }})
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "alpha.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.List("alpha"); err == nil {
-		t.Fatal("a corrupt file listed as empty")
+
+	if got := mustList(t, s, "alpha"); len(got) != 0 {
+		t.Fatalf("listed %s from a corrupt file", ids(got))
 	}
-	if err := s.Append("alpha", entry("c1", "x")); err == nil {
-		t.Fatal("an append overwrote a corrupt file")
+
+	aside, _ := filepath.Glob(filepath.Join(dir, "alpha.json.corrupt-*"))
+	if len(aside) != 1 {
+		t.Fatalf("moved aside: %v, want one copy", aside)
+	}
+	if data, err := os.ReadFile(aside[0]); err != nil || string(data) != "{not json" {
+		t.Fatalf("the copy aside holds %q, %v; want the corrupt file whole", data, err)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "alpha") || !strings.Contains(logged[0], aside[0]) {
+		t.Fatalf("logged %q, want the agent and where its file went", logged)
+	}
+	if err := s.Append("alpha", entry("c1", "x")); err != nil {
+		t.Fatalf("appending after the move: %v", err)
+	}
+	if got := ids(mustList(t, s, "alpha")); got != "c1" {
+		t.Fatalf("after the move the outbox holds %q", got)
+	}
+}
+
+// A write that died before its rename leaves its temp file behind; a new
+// Store over the directory (the next daemon) sweeps them, and only them.
+func TestStrayTempFilesAreSweptOnNew(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "outbox")
+	s := New(dir, Options{})
+	if err := s.Append("alpha", entry("c1", "x")); err != nil {
+		t.Fatal(err)
+	}
+	strays := []string{".alpha.json.123.tmp", ".beta.json.456.tmp"}
+	for _, name := range append(strays, "notes.txt") {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	New(dir, Options{})
+
+	for _, name := range strays {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s survived the sweep: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "notes.txt")); err != nil {
+		t.Fatalf("the sweep took a file that is not a stray write: %v", err)
+	}
+	if got := ids(mustList(t, s, "alpha")); got != "c1" {
+		t.Fatalf("the sweep touched a live outbox: %q", got)
 	}
 }
 

@@ -16,9 +16,19 @@ import (
 	"github.com/blackpaw-studio/leo/internal/outbox"
 )
 
-// mailStore is the outbox a daemon with leo home home keeps.
+// mailStores holds the one Store per outbox dir that mailStore hands out.
+var mailStores sync.Map
+
+// mailStore is the outbox a daemon with leo home home keeps. Like the
+// daemon, a test keeps one Store per dir: a new one sweeps the dir's
+// unfinished writes, which may be another Store's in flight.
 func mailStore(home string) *outbox.Store {
-	return outbox.New(filepath.Join(home, "state", "outbox"), outbox.Options{})
+	dir := filepath.Join(home, "state", "outbox")
+	if s, ok := mailStores.Load(dir); ok {
+		return s.(*outbox.Store)
+	}
+	s, _ := mailStores.LoadOrStore(dir, outbox.New(dir, outbox.Options{}))
+	return s.(*outbox.Store)
 }
 
 func durable(o *bridgeTestOpts) { o.isDurable = true }
