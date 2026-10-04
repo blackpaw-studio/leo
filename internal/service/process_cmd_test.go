@@ -185,6 +185,7 @@ func TestSessionEnvArgsBlanksDispatchIdentity(t *testing.T) {
 	want := []string{
 		"-e", "LEO_BRIDGE_AGENT=",
 		"-e", "LEO_BRIDGE_BIN=",
+		"-e", "LEO_BRIDGE_HOME=",
 		"-e", "LEO_CONFIG=",
 		"-e", "LEO_DISPATCH_ID=",
 		"-e", "LEO_PROCESS_NAME=alpha",
@@ -437,11 +438,11 @@ func TestSupervisorEnvKeyPatternMatchesConfig(t *testing.T) {
 func TestSessionEnvArgsCarryTheBridgeEnv(t *testing.T) {
 	spec := ProcessSpec{
 		Name:      "alpha",
-		Env:       map[string]string{"LEO_BRIDGE_AGENT": "leo-other"},
-		bridgeEnv: map[string]string{"LEO_BRIDGE_AGENT": "alpha", "LEO_BRIDGE_BIN": "/opt/leo/bin/leo"},
+		Env:       map[string]string{"LEO_BRIDGE_AGENT": "leo-other", "LEO_BRIDGE_HOME": "/other"},
+		bridgeEnv: map[string]string{"LEO_BRIDGE_AGENT": "alpha", "LEO_BRIDGE_BIN": "/opt/leo/bin/leo", "LEO_BRIDGE_HOME": "/srv/leo"},
 	}
 	got := strings.Join(sessionEnvArgs("/t", spec, nil), " ")
-	for _, want := range []string{"-e LEO_BRIDGE_AGENT=alpha", "-e LEO_BRIDGE_BIN=/opt/leo/bin/leo"} {
+	for _, want := range []string{"-e LEO_BRIDGE_AGENT=alpha", "-e LEO_BRIDGE_BIN=/opt/leo/bin/leo", "-e LEO_BRIDGE_HOME=/srv/leo"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("session env args lack %q: %s", want, got)
 		}

@@ -80,7 +80,7 @@ type bridgedDispatch struct {
 // bridgeEnvKeys are the variables the leo-bridge mod reads. A bridged launch
 // sets them; every other launch blanks them, so a dispatch opened in an
 // agent's tmux session never inherits that agent's bridge key.
-var bridgeEnvKeys = []string{bridgemod.EnvBin, bridgemod.EnvAgent}
+var bridgeEnvKeys = bridgemod.EnvKeys
 
 // SetBridge wires the claude mod bridge into dispatch launches. Safe to call
 // before the runtime is in use; the zero InteractiveBridge disables it.

@@ -104,6 +104,7 @@ func newTestLauncher(t *testing.T, probe VersionProbe, log *bytes.Buffer) *Launc
 		StateDir:   t.TempDir(),
 		LeoVersion: "v0.31.0-test",
 		LeoBin:     "/opt/leo/bin/leo",
+		LeoHome:    "/srv/leo-home",
 		Probe:      probe,
 		Log:        log,
 	})
@@ -126,9 +127,17 @@ func TestPlanForACapableClaude(t *testing.T) {
 	if !strings.Contains(plan.PluginDir, "v0.31.0-test-") {
 		t.Fatalf("PluginDir %q is not versioned by the leo version", plan.PluginDir)
 	}
-	want := map[string]string{EnvBin: "/opt/leo/bin/leo", EnvAgent: "leo-alpha"}
-	if len(plan.Env) != len(want) || plan.Env[EnvBin] != want[EnvBin] || plan.Env[EnvAgent] != want[EnvAgent] {
+	want := map[string]string{EnvBin: "/opt/leo/bin/leo", EnvAgent: "leo-alpha", EnvHome: "/srv/leo-home"}
+	if len(plan.Env) != len(want) || plan.Env[EnvBin] != want[EnvBin] || plan.Env[EnvAgent] != want[EnvAgent] || plan.Env[EnvHome] != want[EnvHome] {
 		t.Fatalf("Env = %v, want %v", plan.Env, want)
+	}
+	for _, k := range EnvKeys {
+		if _, ok := plan.Env[k]; !ok {
+			t.Errorf("EnvKeys lists %s, which a bridged launch does not set", k)
+		}
+	}
+	if len(EnvKeys) != len(plan.Env) {
+		t.Errorf("EnvKeys = %v; a bridged launch sets %v", EnvKeys, plan.Env)
 	}
 	args := plan.Args([]string{"--session-id", "s1", "--name", "alpha"})
 	wantArgs := []string{"--plugin-dir", plan.PluginDir, "--session-id", "s1", "--name", "alpha"}

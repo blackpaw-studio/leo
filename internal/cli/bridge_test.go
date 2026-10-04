@@ -305,6 +305,14 @@ func TestBridgeHomeDir(t *testing.T) {
 	if got := bridgeHomeDir("", env(map[string]string{"LEO_HOME": "/elsewhere"})); got != "/elsewhere" {
 		t.Fatalf("LEO_HOME: got %q", got)
 	}
+	// The launching daemon names its home in the bridged claude's env; it
+	// wins over LEO_HOME, which may name some other daemon.
+	if got := bridgeHomeDir("", env(map[string]string{"LEO_BRIDGE_HOME": "/launcher", "LEO_HOME": "/elsewhere"})); got != "/launcher" {
+		t.Fatalf("LEO_BRIDGE_HOME: got %q", got)
+	}
+	if got := bridgeHomeDir(cfg, env(map[string]string{"LEO_BRIDGE_HOME": "/launcher"})); got != filepath.Dir(cfg) {
+		t.Fatalf("--config must still win: got %q", got)
+	}
 	if got := bridgeHomeDir("", env(nil)); got == "" {
 		t.Fatal("default home must not be empty")
 	}

@@ -28,8 +28,8 @@ import (
 const DefaultBridgeConnectTimeout = bridgemod.DefaultConnectTimeout
 
 // bridgeEnvKeys are the variables the leo-bridge mod reads. leo owns them:
-// a bridged launch sets them, every other launch blanks them.
-var bridgeEnvKeys = []string{bridgemod.EnvBin, bridgemod.EnvAgent}
+// a bridged launch sets them and every other launch blanks them.
+var bridgeEnvKeys = bridgemod.EnvKeys
 
 // pasteOpeningPrompt delivers an opening prompt too large for argv to a
 // legacy claude by tmux paste. A package var so tests can observe it.
@@ -385,6 +385,7 @@ func wireBridge(sv *Supervisor, homePath, version string, probe bridgemod.Versio
 		StateDir:   filepath.Join(homePath, "state"),
 		LeoVersion: version,
 		LeoBin:     leoBin,
+		LeoHome:    homePath,
 		Probe:      probe,
 	})
 	sv.SetBridge(hub, launcher, 0)

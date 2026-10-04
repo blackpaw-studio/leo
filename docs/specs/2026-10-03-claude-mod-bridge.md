@@ -37,6 +37,7 @@ daemon ──(unix socket stream)──> `leo bridge --agent <name>` ──stdou
 - Claude agents are launched with `--plugin-dir <that dir>`.
 - Leo puts these variables in the launch environment, and the mod reads them with `$.env.get`:
   - `LEO_BRIDGE_BIN`: absolute path to leo
+  - `LEO_BRIDGE_HOME`: the leo home of the daemon that launched this claude. The mod does not read it; the `leo bridge` processes it spawns inherit it and dial that daemon's socket ahead of `$LEO_HOME` and the default home, so the agents of a daemon run with `-c <config>` (an isolated test daemon, the e2e suite) never reach another daemon.
   - `LEO_BRIDGE_AGENT`: the bridge key leo routes this claude by. For an agent or persistent task it is the agent name at launch (`<name>.<nonce>` if a renamed predecessor still holds that name); for a dispatch it is `dispatch.<dispatch id>`, unique per run. `LEO_PROCESS_NAME` is not used: it is a display name and differs from the key for dispatches.
 - `session.start` starts the pump. Commands are handled in order, one at a time, with a single command in flight.
 - The mod never decides policy. It executes commands and reports events.

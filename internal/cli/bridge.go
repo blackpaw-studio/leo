@@ -13,6 +13,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
+	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 	"github.com/spf13/cobra"
 )
 
@@ -205,14 +206,17 @@ func copyBridgeLines(r io.Reader, out io.Writer) error {
 }
 
 // bridgeHomeDir resolves the leo home whose socket `leo bridge` talks to:
-// the --config file's directory, else $LEO_HOME, else the default home —
-// the same resolution the claude Stop hook uses (reportHomeDir).
+// the --config file's directory, else $LEO_BRIDGE_HOME (the home of the
+// daemon that launched this claude), else $LEO_HOME, else the default home.
 func bridgeHomeDir(cfgPath string, getenv func(string) string) string {
 	if cfgPath != "" {
 		if abs, err := filepath.Abs(cfgPath); err == nil {
 			return filepath.Dir(abs)
 		}
 		return filepath.Dir(cfgPath)
+	}
+	if home := getenv(bridgemod.EnvHome); home != "" {
+		return home
 	}
 	if home := getenv("LEO_HOME"); home != "" {
 		return home

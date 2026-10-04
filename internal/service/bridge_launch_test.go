@@ -106,6 +106,7 @@ func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Du
 		StateDir:   filepath.Join(sv.homePath, "state"),
 		LeoVersion: "vtest",
 		LeoBin:     testLeoBin,
+		LeoHome:    sv.homePath,
 		Probe:      func(context.Context, string) (string, error) { return version + " (Claude Code)", nil },
 		Log:        &bytes.Buffer{},
 	})
@@ -152,7 +153,7 @@ func TestBridgedClaudeLaunchLoadsTheMod(t *testing.T) {
 	f := startBridged(t, tmuxPath, "2.1.289", time.Minute, claudeSpec(t, "alpha"))
 
 	line := waitForNewSessions(t, logPath, 1)[0]
-	for _, want := range []string{"-e LEO_BRIDGE_AGENT=alpha ", "-e LEO_BRIDGE_BIN=" + testLeoBin + " ", "'--plugin-dir' '"} {
+	for _, want := range []string{"-e LEO_BRIDGE_AGENT=alpha ", "-e LEO_BRIDGE_BIN=" + testLeoBin + " ", "-e LEO_BRIDGE_HOME=" + f.sv.homePath + " ", "'--plugin-dir' '"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("new-session lacks %q:\n%s", want, line)
 		}
@@ -180,7 +181,7 @@ func TestOldClaudeLaunchesLegacy(t *testing.T) {
 	if strings.Contains(line, "--plugin-dir") {
 		t.Fatalf("legacy launch carries --plugin-dir:\n%s", line)
 	}
-	for _, want := range []string{"-e LEO_BRIDGE_AGENT= ", "-e LEO_BRIDGE_BIN= "} {
+	for _, want := range []string{"-e LEO_BRIDGE_AGENT= ", "-e LEO_BRIDGE_BIN= ", "-e LEO_BRIDGE_HOME= "} {
 		if !strings.Contains(line, want) {
 			t.Errorf("legacy launch does not blank %q:\n%s", want, line)
 		}
@@ -545,6 +546,11 @@ func TestWireBridge(t *testing.T) {
 	exe, _ := os.Executable()
 	if plan.Env[bridgemod.EnvBin] != exe {
 		t.Fatalf("LEO_BRIDGE_BIN = %q, want the running executable %q", plan.Env[bridgemod.EnvBin], exe)
+	}
+	// The mod's link dials this daemon, not whichever LEO_HOME or default
+	// home its environment would otherwise resolve.
+	if plan.Env[bridgemod.EnvHome] != home {
+		t.Fatalf("LEO_BRIDGE_HOME = %q, want the daemon's home %q", plan.Env[bridgemod.EnvHome], home)
 	}
 	// An unversioned dev build still gets a mod directory.
 	_, dev := wireBridge(NewSupervisor(context.Background()), t.TempDir(), "", probe)

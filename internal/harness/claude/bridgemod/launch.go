@@ -28,6 +28,10 @@ const (
 	EnvBin = "LEO_BRIDGE_BIN"
 	// EnvAgent names the variable carrying the key the mod connects under.
 	EnvAgent = "LEO_BRIDGE_AGENT"
+	// EnvHome names the variable carrying the leo home of the daemon that
+	// launched this claude; the mod's link dials that daemon's socket
+	// rather than whatever LEO_HOME or the default home would resolve.
+	EnvHome = "LEO_BRIDGE_HOME"
 
 	// PluginDirFlag loads a plugin directory for one claude session.
 	PluginDirFlag = "--plugin-dir"
@@ -120,6 +124,11 @@ func ProbeClaudeVersion(ctx context.Context, claudePath string) (string, error) 
 	return string(out), nil
 }
 
+// EnvKeys are the variables a bridged launch sets for the mod. leo owns
+// them: every other launch blanks them, so nothing inherited can point a mod
+// anywhere.
+var EnvKeys = []string{EnvBin, EnvAgent, EnvHome}
+
 // LauncherOptions configures a Launcher.
 type LauncherOptions struct {
 	// StateDir is leo's state directory; the mod is materialized under it.
@@ -128,6 +137,8 @@ type LauncherOptions struct {
 	LeoVersion string
 	// LeoBin is the absolute leo executable the mod runs (LEO_BRIDGE_BIN).
 	LeoBin string
+	// LeoHome is the launching daemon's leo home (LEO_BRIDGE_HOME).
+	LeoHome string
 	// Probe reads a claude's version; ProbeClaudeVersion when nil.
 	Probe VersionProbe
 	// Log receives one line per fallback decision; os.Stderr when nil.
@@ -218,7 +229,8 @@ type Plan struct {
 	Key string
 	// PluginDir is the materialized mod passed with --plugin-dir.
 	PluginDir string
-	// Env holds LEO_BRIDGE_BIN and LEO_BRIDGE_AGENT for the launch.
+	// Env holds the launch's EnvKeys: LEO_BRIDGE_BIN, LEO_BRIDGE_AGENT and
+	// LEO_BRIDGE_HOME.
 	Env map[string]string
 }
 
@@ -245,7 +257,7 @@ func (l *Launcher) Plan(ctx context.Context, claudePath, key string) (Plan, bool
 	return Plan{
 		Key:       key,
 		PluginDir: dir,
-		Env:       map[string]string{EnvBin: l.opts.LeoBin, EnvAgent: key},
+		Env:       map[string]string{EnvBin: l.opts.LeoBin, EnvAgent: key, EnvHome: l.opts.LeoHome},
 	}, true
 }
 
