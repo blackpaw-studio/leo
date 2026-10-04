@@ -360,6 +360,22 @@ func (s *Supervisor) renameMailLocked(oldName, newName string) error {
 	return s.mail.store.Rename(oldName, newName)
 }
 
+// CheckNoAgentMail fails with outbox.ErrNameHasMessages if name's outbox
+// holds messages: agent.Manager checks it before spawning a brand-new agent
+// under name, which must not inherit a former holder's messages (a deleted
+// agent's whose drop failed), as a rename onto name may not either.
+func (s *Supervisor) CheckNoAgentMail(name string) error {
+	s.mail.mu.Lock()
+	defer s.mail.mu.Unlock()
+	if s.mail.store == nil {
+		return nil
+	}
+	if err := s.mail.store.CheckEmpty(name); err != nil {
+		return fmt.Errorf("agent name %s: %w", name, err)
+	}
+	return nil
+}
+
 // RenameAgentMail moves the waiting messages of an agent that is not
 // running from oldName to newName: agent.Manager's rename of a stopped
 // agent. A live agent's move with its rename (see RenameAgent).

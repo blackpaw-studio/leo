@@ -159,5 +159,5 @@ Every `deliver` leo accepts for an agent (agent messages, persistent-task prompt
 - **Pane pastes are not under the session lock.** Dispatch follow-ups and completion notices paste by pane (`InjectInto`, with a buffer of their own), so one into an orchestrator agent's pane can still interleave with a paste into that agent's session.
 - **Carried pastes and new legacy messages can reorder.** A legacy launch pastes carried messages one at a time; a new message to the agent can take the session's lock between two of them.
 - **Unannounced carried deliveries.** A carried message from a human or a task is not announced when taken: the outbox cannot tell a human's message from a task prompt.
-- **A stale outbox under a free name.** If dropping a deleted agent's messages fails, its file stays; a rename onto that name is refused, but a new agent spawned under it would be handed them on its first launch.
+- **A stale outbox under a free name.** If dropping a deleted agent's messages fails, its file stays. Neither a rename onto that name nor a new agent spawned under it is allowed (`outbox.ErrNameHasMessages` names the file) until a person moves or deletes it; the messages are never handed to a different agent.
 - **Untested built-in.** `$.command.run({command:'clear'})` running a built-in command is unverified. If it doesn't work, `clear` stays on tmux keys.

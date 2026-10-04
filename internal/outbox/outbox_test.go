@@ -172,6 +172,24 @@ func TestARenameNeverInheritsAnotherAgentsMessages(t *testing.T) {
 	}
 }
 
+// A name with messages queued is not free for a brand-new agent: they
+// were a former holder's, and its first launch would carry them.
+func TestCheckEmptyRefusesANameWithMessages(t *testing.T) {
+	s, _ := newStore(t, Options{})
+	if err := s.CheckEmpty("fresh"); err != nil {
+		t.Fatalf("a name with nothing queued: %v", err)
+	}
+	if err := s.Append("stale", entry("s1", "for the old holder")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckEmpty("stale"); !errors.Is(err, ErrNameHasMessages) {
+		t.Fatalf("a name with messages queued: err=%v, want ErrNameHasMessages", err)
+	}
+	if got := ids(mustList(t, s, "stale")); got != "s1" {
+		t.Fatalf("the check touched the outbox: %q", got)
+	}
+}
+
 // Agent names become file names: anything that could leave the directory
 // is refused.
 func TestAgentNamesCannotEscapeTheDirectory(t *testing.T) {

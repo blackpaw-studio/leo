@@ -65,6 +65,24 @@ type mailKeeper interface {
 	DropAgentMail(name string)
 }
 
+// staleMailGuard is the part of a Supervisor that says whether a name's
+// outbox still holds messages (see service.Supervisor.CheckNoAgentMail).
+type staleMailGuard interface {
+	CheckNoAgentMail(name string) error
+}
+
+// checkNoStaleMail refuses a brand-new agent the name agentName while its
+// outbox holds a former holder's messages: its first launch would carry
+// them. As for a rename onto such a name, they stay for a person to deal
+// with (outbox.ErrNameHasMessages names their file).
+func (m *Manager) checkNoStaleMail(agentName string) error {
+	guard, ok := m.sup.(staleMailGuard)
+	if !ok {
+		return nil
+	}
+	return guard.CheckNoAgentMail(agentName)
+}
+
 // ConfigLoader returns the current config. It is invoked on every Manager call so
 // the Manager picks up config edits without a restart.
 type ConfigLoader func() (*config.Config, error)
@@ -452,6 +470,9 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		}
 	}
 	defer release()
+	if err := m.checkNoStaleMail(agentName); err != nil {
+		return Record{}, err
+	}
 
 	workspace, _, err := ResolveWorkspace(tmpl, spec.Template, spec.Repo, spec.Name)
 	if err != nil {
@@ -723,6 +744,9 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		}
 	}
 	defer release()
+	if err := m.checkNoStaleMail(agentName); err != nil {
+		return Record{}, err
+	}
 
 	canonical, err := p.canonical()
 	if err != nil {

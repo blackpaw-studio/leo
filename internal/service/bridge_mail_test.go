@@ -369,3 +369,21 @@ func TestAgentDeletionTellsTheSenders(t *testing.T) {
 		t.Fatalf("a notice was queued for an agent that does not exist: %+v", got)
 	}
 }
+
+// A brand-new agent may not take a name whose outbox still holds a former
+// holder's messages; with no outbox kept, any name is free.
+func TestCheckNoAgentMailGuardsAStaleName(t *testing.T) {
+	home := t.TempDir()
+	sv := NewSupervisor(context.Background())
+	if err := sv.CheckNoAgentMail("alpha"); err != nil {
+		t.Fatalf("without an outbox: %v", err)
+	}
+	sv.SetOutbox(mailStore(home))
+	seedMail(t, home, "alpha", outbox.Entry{ID: "s-1", Text: "for the old alpha"})
+	if err := sv.CheckNoAgentMail("alpha"); !errors.Is(err, outbox.ErrNameHasMessages) {
+		t.Fatalf("a stale name: err=%v, want outbox.ErrNameHasMessages", err)
+	}
+	if err := sv.CheckNoAgentMail("beta"); err != nil {
+		t.Fatalf("a free name: %v", err)
+	}
+}

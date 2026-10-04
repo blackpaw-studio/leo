@@ -180,13 +180,8 @@ func (s *Store) Rename(oldAgent, newAgent string) error {
 	if err != nil {
 		return err
 	}
-	existing, err := s.readLocked(newAgent)
-	if err != nil {
-		return err
-	}
-	if len(existing) > 0 {
-		path, _ := s.path(newAgent)
-		return fmt.Errorf("outbox rename %s to %s: %w: %d in %s", oldAgent, newAgent, ErrNameHasMessages, len(existing), path)
+	if err := s.checkEmptyLocked(newAgent); err != nil {
+		return fmt.Errorf("outbox rename %s to %s: %w", oldAgent, newAgent, err)
 	}
 	if len(entries) == 0 {
 		return nil
@@ -195,6 +190,27 @@ func (s *Store) Rename(oldAgent, newAgent string) error {
 		return err
 	}
 	return s.writeLocked(oldAgent, nil)
+}
+
+// CheckEmpty fails with ErrNameHasMessages, naming their file, if agent
+// has messages queued: a name a brand-new agent may not take, for its first
+// launch would carry them (see Rename).
+func (s *Store) CheckEmpty(agent string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.checkEmptyLocked(agent)
+}
+
+func (s *Store) checkEmptyLocked(agent string) error {
+	entries, err := s.readLocked(agent)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	path, _ := s.path(agent)
+	return fmt.Errorf("%w: %d in %s", ErrNameHasMessages, len(entries), path)
 }
 
 func (s *Store) path(agent string) (string, error) {
