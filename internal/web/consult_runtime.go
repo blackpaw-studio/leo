@@ -53,7 +53,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	viewer.PersistIntent = s.consults.PersistViewerRecord
 	viewer.ClosePane = s.consults.CloseRecordedPane
 	s.consults.SetCloseFinishedViewer(viewer.CloseFinished)
-	s.consults.SetNotificationDelivery(consult.NewTmuxNotificationDelivery(findTmuxPath(), s.execCommandContext))
+	s.consults.SetNotificationDelivery(s.notificationDelivery(opts.Bridge.Router))
 	interactiveLeoPath, err := os.Executable()
 	if err != nil {
 		interactiveLeoPath, _ = filepath.Abs(s.leoPath)

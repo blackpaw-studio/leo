@@ -280,7 +280,7 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	if message == "" {
 		message = completionNotification(rec, item.key, turnNotificationStatus(rec, item.key))
 	}
-	err := delivery.Deliver(ctx, rec, message)
+	err := deliverNotificationLine(ctx, delivery, rec, item.key, message)
 	d.mu.Lock()
 	n = item.state.record.Notifications[item.key]
 	switch {
