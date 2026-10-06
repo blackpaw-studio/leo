@@ -1005,6 +1005,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}
+	// Unconditional — even with nothing restored, or an IPC server that
+	// failed to start — so /health never reports not-ready forever.
+	// `leo update` and `leo service restart` wait on this before asking the
+	// daemon about agents (daemon.WaitReady).
+	srv.MarkReady()
 
 	// opencode has no per-invocation system-prompt flag, so Leo's nudge is
 	// delivered via opencode's global AGENTS.md instead. Only touch that

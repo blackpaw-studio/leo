@@ -20,6 +20,18 @@ type versionData struct {
 	Version string `json:"version"`
 }
 
+// healthData is the /health payload. Ready flips true only once the daemon
+// has finished restoring agents (see Server.MarkReady); /health itself
+// answers 200 from the moment the socket binds, so liveness probes that only
+// read the status are unaffected by a slow restore.
+type healthData struct {
+	Version string `json:"version"`
+	Ready   bool   `json:"ready"`
+	// PID identifies this daemon boot, so a caller that restarted the
+	// daemon can tell the new process from the old one still answering.
+	PID int `json:"pid"`
+}
+
 type localStateData struct {
 	Agents []observe.Agent `json:"agents"`
 }

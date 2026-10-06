@@ -33,15 +33,11 @@ func maybeRestartStaleAgents(ctx context.Context, homePath string) {
 		warn.Printf("Could not check agents for pending changes: %v\n", err)
 		return
 	}
-	// Total running count is context only ("3 of 9"), so a failure to fetch
+	// Total live count is context only ("3 of 9"), so a failure to fetch
 	// it degrades the header rather than the feature.
 	running := 0
 	if recs, err := daemon.AgentList(ctx, homePath); err == nil {
-		for _, r := range recs {
-			if r.Status == "running" {
-				running++
-			}
-		}
+		running = countLiveAgents(recs)
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -51,6 +47,20 @@ func maybeRestartStaleAgents(ctx context.Context, homePath string) {
 	}); err != nil {
 		warn.Printf("Restarting agents: %v\n", err)
 	}
+}
+
+// countLiveAgents counts the agents the supervisor holds — the same set
+// StaleAgents checks — so the "N of M" header stays consistent. Right after a
+// daemon restart many are still "starting", so counting only "running" would
+// undercount; only dormant (stopped) records are left out.
+func countLiveAgents(recs []agent.Record) int {
+	n := 0
+	for _, r := range recs {
+		if r.Status != "stopped" {
+			n++
+		}
+	}
+	return n
 }
 
 // promptStaleAgentRestart renders the drift report and, when the operator

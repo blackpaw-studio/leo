@@ -98,14 +98,12 @@ func TestLocalMetadataRoutesUseExactEnvelopeShapes(t *testing.T) {
 	s := New(filepath.Join(dir, "leo.sock"), cfgPath, nil)
 	s.SetObservability(nil, nil, nil, nil, "v-test")
 
-	for _, path := range []string{"/health", "/version"} {
-		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
-		if got, want := w.Body.String(), "{\"ok\":true,\"data\":{\"version\":\"v-test\"}}\n"; got != want {
-			t.Fatalf("%s = %s, want %s", path, got, want)
-		}
-	}
 	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/version", nil))
+	if got, want := w.Body.String(), "{\"ok\":true,\"data\":{\"version\":\"v-test\"}}\n"; got != want {
+		t.Fatalf("/version = %s, want %s", got, want)
+	}
+	w = httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/templates", nil))
 	if got, want := w.Body.String(), "{\"ok\":true,\"data\":[{\"name\":\"coding\",\"model\":\"opus\",\"agent\":\"reviewer\",\"workspace\":\"/work\"}]}\n"; got != want {
 		t.Fatalf("/templates = %s, want %s", got, want)

@@ -3,13 +3,13 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prompt"
-	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/update"
 	"github.com/spf13/cobra"
 )
@@ -254,9 +254,15 @@ func maybeRestartDaemon() error {
 	if !prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
 		return nil
 	}
-	info.Println("Restarting daemon...")
-	if err := service.RestartDaemon(cfg.HomePath); err != nil {
-		return fmt.Errorf("restarting daemon: %w", err)
+	info.Println("Restarting daemon (waiting for agents to restore)...")
+	err = restartDaemonAndWait(context.Background(), cfg.HomePath, defaultDaemonRestartDeps)
+	if errors.Is(err, errDaemonNotReady) {
+		success.Println("Daemon restarted")
+		warn.Printf("Could not check agents for pending changes: %v\n", err)
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 	success.Println("Daemon restarted")
 
