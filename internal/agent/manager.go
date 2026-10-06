@@ -1393,7 +1393,7 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 	// The stored launch is replayed as is, except its leo MCP server, which
 	// moves to mcp's binary (a record may predate that, or name another leo).
 	fallback := func() ([]string, map[string]string) {
-		args, env, err := mcp.MigrateLaunch(rec.Harness, rec.ClaudeArgs, rec.Env)
+		args, env, err := mcp.MigrateLaunch(cfg, rec.Harness, rec.ClaudeArgs, rec.Env)
 		if err != nil {
 			log.Printf("[agent:%s] migrating its leo MCP server: %v", rec.Name, err)
 		}

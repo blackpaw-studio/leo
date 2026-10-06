@@ -8,13 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/blackpaw-studio/leo/internal/config"
 	codexharness "github.com/blackpaw-studio/leo/internal/harness/codex"
 )
-
-// configFileName is the basename of the leo-managed claude MCP config
-// (ConfigPath). Only a --mcp-config naming this file is rewritten; a
-// user's own MCP config is never touched.
-const configFileName = "leo-mcp.json"
 
 // openCodeConfigEnv carries opencode's per-spawn config overlay.
 const openCodeConfigEnv = "OPENCODE_CONFIG_CONTENT"
@@ -33,8 +29,18 @@ const openCodeConfigEnv = "OPENCODE_CONFIG_CONTENT"
 //   - opencode: the leo server's command in OPENCODE_CONFIG_CONTENT.
 //
 // The zero Server is a no-op: with no resolved binary there is nothing
-// better to point at.
-func (s Server) MigrateLaunch(harnessName string, args []string, env map[string]string) ([]string, map[string]string, error) {
+// better to point at. On error (a malformed leo entry) it returns copies of
+// the launch exactly as given, never a partial migration, so the caller can
+// log the error and launch unmigrated.
+func (s Server) MigrateLaunch(cfg *config.Config, harnessName string, args []string, env map[string]string) ([]string, map[string]string, error) {
+	migratedArgs, migratedEnv, err := s.migrateLaunch(cfg, harnessName, args, env)
+	if err != nil {
+		return append([]string(nil), args...), copyEnv(env), err
+	}
+	return migratedArgs, migratedEnv, nil
+}
+
+func (s Server) migrateLaunch(cfg *config.Config, harnessName string, args []string, env map[string]string) ([]string, map[string]string, error) {
 	outArgs := append([]string(nil), args...)
 	outEnv := copyEnv(env)
 	if s.Bin == "" {
@@ -42,7 +48,11 @@ func (s Server) MigrateLaunch(harnessName string, args []string, env map[string]
 	}
 	switch harnessName {
 	case "", "claude":
-		return outArgs, outEnv, s.migrateClaudeArgs(outArgs)
+		managed := ""
+		if cfg != nil {
+			managed = ConfigPath(cfg)
+		}
+		return outArgs, outEnv, s.migrateClaudeArgs(outArgs, managed)
 	case "codex":
 		for i, a := range outArgs {
 			if strings.HasPrefix(a, codexharness.LeoMCPCommandKey) {
@@ -66,8 +76,10 @@ func (s Server) MigrateLaunch(harnessName string, args []string, env map[string]
 }
 
 // migrateClaudeArgs rewrites, in place, every inline --mcp-config value and
-// the leo-managed config file a --mcp-config names.
-func (s Server) migrateClaudeArgs(args []string) error {
+// the managed config file (managedPath, the file EnsureConfig writes) when a
+// --mcp-config names it. A user's own file is never touched, even one named
+// leo-mcp.json.
+func (s Server) migrateClaudeArgs(args []string, managedPath string) error {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] != "--mcp-config" {
 			continue
@@ -80,7 +92,7 @@ func (s Server) migrateClaudeArgs(args []string) error {
 				return fmt.Errorf("migrate inline --mcp-config: %w", err)
 			}
 			args[i+1] = string(migrated)
-		case filepath.Base(value) == configFileName:
+		case managedPath != "" && filepath.Clean(value) == filepath.Clean(managedPath):
 			if err := s.migrateClaudeConfigFile(value); err != nil {
 				return err
 			}
@@ -105,7 +117,11 @@ func (s Server) migrateClaudeConfigFile(path string) error {
 	if bytes.Equal(migrated, raw) {
 		return nil
 	}
-	if err := writeFileAtomic(path, migrated, 0o644); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if err := writeFileAtomic(path, migrated, info.Mode().Perm()); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
@@ -113,24 +129,32 @@ func (s Server) migrateClaudeConfigFile(path string) error {
 
 // setLeoServer decodes doc, applies set to doc[serversKey]["leo"], and
 // re-encodes it. Every other value is carried as raw JSON so it survives
-// unchanged. A doc without a leo server is returned as is.
+// unchanged. A doc with no leo server is returned as is; a level that is
+// null or not an object is an error.
 func setLeoServer(doc []byte, serversKey string, set func(map[string]json.RawMessage) error) ([]byte, error) {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(doc, &top); err != nil {
+	top, err := jsonObject(doc, "config")
+	if err != nil {
 		return nil, err
 	}
-	var servers map[string]json.RawMessage
-	if raw, ok := top[serversKey]; !ok || json.Unmarshal(raw, &servers) != nil {
+	rawServers, ok := top[serversKey]
+	if !ok {
 		return doc, nil
 	}
-	var leo map[string]json.RawMessage
-	if raw, ok := servers["leo"]; !ok || json.Unmarshal(raw, &leo) != nil {
+	servers, err := jsonObject(rawServers, serversKey)
+	if err != nil {
+		return nil, err
+	}
+	rawLeo, ok := servers["leo"]
+	if !ok {
 		return doc, nil
+	}
+	leo, err := jsonObject(rawLeo, serversKey+".leo")
+	if err != nil {
+		return nil, err
 	}
 	if err := set(leo); err != nil {
 		return nil, err
 	}
-	var err error
 	if servers["leo"], err = json.Marshal(leo); err != nil {
 		return nil, err
 	}
@@ -145,6 +169,16 @@ func setLeoServer(doc []byte, serversKey string, set func(map[string]json.RawMes
 		out = append(out, '\n')
 	}
 	return out, nil
+}
+
+// jsonObject decodes raw as a JSON object, rejecting null and every
+// non-object value (json.Unmarshal would turn null into a nil map).
+func jsonObject(raw json.RawMessage, what string) (map[string]json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return nil, fmt.Errorf("%s is not a JSON object", what)
+	}
+	return obj, nil
 }
 
 // setCommandString sets a claude MCP entry's command to s.Bin.

@@ -156,3 +156,14 @@ func TestResolveRestartArgsFallbackMigratesLegacyLeoMCP(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveRestartArgsFallbackKeepsStoredLaunchOnMalformedLeoEntry(t *testing.T) {
+	rec := agentstore.Record{
+		Name: "x", Workspace: "/tmp/ws",
+		ClaudeArgs: []string{"--mcp-config", `{"mcpServers":{"leo":{"command":"leo"}}}`, "--mcp-config", `{"mcpServers":{"leo":null}}`},
+	}
+	args, _ := resolveRestartArgs(&config.Config{HomePath: t.TempDir()}, rec, "tok", leomcp.Server{Bin: testLeoBin})
+	if !reflect.DeepEqual(args, rec.ClaudeArgs) {
+		t.Errorf("args = %q, want stored %q", args, rec.ClaudeArgs)
+	}
+}

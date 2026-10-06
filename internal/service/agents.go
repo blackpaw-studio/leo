@@ -10,6 +10,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/agentstore"
+	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
@@ -181,9 +182,10 @@ func RestoreAgents(homePath, tmuxPath, webToken string, sv agentSpawner, mcp leo
 
 		// A record persisted before the leo MCP server ran the daemon's own
 		// binary still launches a bare "leo" from PATH; point it at mcp.
-		migratedArgs, migratedEnv, err := mcp.MigrateLaunch(rec.Harness, rec.ClaudeArgs, rec.Env)
+		migratedArgs, migratedEnv, err := mcp.MigrateLaunch(&config.Config{HomePath: homePath}, rec.Harness, rec.ClaudeArgs, rec.Env)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "restore: agent %q: migrating its leo MCP server: %v\n", name, err)
+			// MigrateLaunch returned the stored launch unchanged.
+			fmt.Fprintf(os.Stderr, "restore: agent %q: leo MCP server left unmigrated: %v\n", name, err)
 		}
 		rec.ClaudeArgs, rec.Env = migratedArgs, migratedEnv
 

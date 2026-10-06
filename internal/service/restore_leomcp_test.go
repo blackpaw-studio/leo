@@ -80,3 +80,32 @@ func TestRestoreAgentsMigratesLegacyLeoMCPCommand(t *testing.T) {
 		t.Errorf("opencode env lost KEEP: %v", envs["o"])
 	}
 }
+
+// TestRestoreAgentsLaunchesUnmigratedOnMalformedLeoEntry: a leo entry that
+// cannot be migrated neither panics nor blocks the restore; the agent is
+// relaunched with its stored argv/env.
+func TestRestoreAgentsLaunchesUnmigratedOnMalformedLeoEntry(t *testing.T) {
+	home := t.TempDir()
+	recs := []agentstore.Record{
+		// A migratable entry first: a partial migration must not leak out.
+		{Name: "c", ClaudeArgs: []string{"--mcp-config", `{"mcpServers":{"leo":{"command":"leo"}}}`, "--strict-mcp-config", "--mcp-config", `{"mcpServers":{"leo":null}}`, "--model", "sonnet"}},
+		{Name: "o", Harness: "opencode", ClaudeArgs: []string{"--model", "a/b"}, Env: map[string]string{"OPENCODE_CONFIG_CONTENT": `{"mcp":{"leo":"x"}}`}},
+	}
+	for _, rec := range recs {
+		rec.Workspace, rec.SpawnedAt, rec.NoResume = t.TempDir(), time.Now(), true
+		if err := agentstore.Save(home, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spawner := &fakeAgentSpawner{}
+	if n := RestoreAgents(home, "", "tok", spawner, leomcp.Server{Bin: restoreLeoBin}); n != 2 {
+		t.Fatalf("restored %d, want 2", n)
+	}
+	for _, c := range spawner.calls {
+		for _, rec := range recs {
+			if rec.Name == c.Name && (!reflect.DeepEqual(c.ClaudeArgs, rec.ClaudeArgs) || !reflect.DeepEqual(c.Env, rec.Env)) {
+				t.Errorf("%s relaunched as %q %v, want stored %q %v", c.Name, c.ClaudeArgs, c.Env, rec.ClaudeArgs, rec.Env)
+			}
+		}
+	}
+}

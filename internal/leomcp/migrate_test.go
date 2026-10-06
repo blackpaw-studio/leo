@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/blackpaw-studio/leo/internal/config"
 )
 
 const migrateBin = `/opt/my "dev" leo/bin/leo`
@@ -23,7 +26,7 @@ func TestMigrateLaunchCodexRewritesOnlyTheLeoCommand(t *testing.T) {
 	}
 	env := map[string]string{"FOO": "bar"}
 
-	gotArgs, gotEnv, err := Server{Bin: migrateBin}.MigrateLaunch("codex", args, env)
+	gotArgs, gotEnv, err := Server{Bin: migrateBin}.MigrateLaunch(&config.Config{}, "codex", args, env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +48,7 @@ func TestMigrateLaunchOpencodeRewritesOnlyTheLeoCommand(t *testing.T) {
 	env := map[string]string{"OPENCODE_CONFIG_CONTENT": content, "FOO": "bar"}
 	args := []string{"--model", "x/y"}
 
-	gotArgs, gotEnv, err := Server{Bin: migrateBin}.MigrateLaunch("opencode", args, env)
+	gotArgs, gotEnv, err := Server{Bin: migrateBin}.MigrateLaunch(&config.Config{}, "opencode", args, env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +90,7 @@ func TestMigrateLaunchClaudeRewritesConfigFileAndInlineConfig(t *testing.T) {
 	args := []string{"--mcp-config", userCfg, "--mcp-config", path, "--strict-mcp-config", "--mcp-config", inline, "--model", "sonnet"}
 
 	for _, name := range []string{"", "claude"} {
-		gotArgs, _, err := Server{Bin: migrateBin}.MigrateLaunch(name, args, nil)
+		gotArgs, _, err := Server{Bin: migrateBin}.MigrateLaunch(&config.Config{HomePath: dir}, name, args, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +115,7 @@ func TestMigrateLaunchClaudeRewritesConfigFileAndInlineConfig(t *testing.T) {
 
 func TestMigrateLaunchZeroServerIsNoop(t *testing.T) {
 	args := []string{"-c", `mcp_servers.leo.command="leo"`}
-	gotArgs, _, err := Server{}.MigrateLaunch("codex", args, nil)
+	gotArgs, _, err := Server{}.MigrateLaunch(&config.Config{}, "codex", args, nil)
 	if err != nil || !reflect.DeepEqual(gotArgs, args) {
 		t.Errorf("got %q, %v; want unchanged", gotArgs, err)
 	}
@@ -131,4 +134,82 @@ func leoCommand(t *testing.T, raw []byte) []string {
 	}
 	leo := parsed.MCPServers["leo"]
 	return append([]string{leo.Command}, leo.Args...)
+}
+
+// TestMigrateLaunchLeavesAUserLeoMCPJSONAlone: only the managed file (the
+// path EnsureConfig writes) is rewritten, never a same-named user file.
+func TestMigrateLaunchLeavesAUserLeoMCPJSONAlone(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	userFile := filepath.Join(project, "leo-mcp.json")
+	userJSON := `{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}`
+	if err := os.WriteFile(userFile, []byte(userJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--mcp-config", userFile}
+	gotArgs, _, err := Server{Bin: migrateBin}.MigrateLaunch(&config.Config{HomePath: home}, "claude", args, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotArgs, args) {
+		t.Errorf("args = %q, want unchanged", gotArgs)
+	}
+	if raw, _ := os.ReadFile(userFile); string(raw) != userJSON {
+		t.Errorf("user leo-mcp.json rewritten: %s", raw)
+	}
+}
+
+func TestMigrateLaunchKeepsTheManagedFileMode(t *testing.T) {
+	home := t.TempDir()
+	path := ConfigPath(&config.Config{HomePath: home})
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A path spelled differently still names the managed file.
+	spelled := filepath.Join(home, "state", ".", "leo-mcp.json")
+	if _, _, err := (Server{Bin: migrateBin}).MigrateLaunch(&config.Config{HomePath: home}, "claude", []string{"--mcp-config", spelled}, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := leoCommand(t, raw); got[0] != migrateBin {
+		t.Fatalf("managed file not migrated: %s", raw)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// TestMigrateLaunchMalformedLeoEntryErrors: a null or non-object value at
+// any level is a migration error, never a panic.
+func TestMigrateLaunchMalformedLeoEntryErrors(t *testing.T) {
+	for _, doc := range []string{
+		`{"mcpServers":{"leo":null}}`,
+		`{"mcpServers":{"leo":"leo"}}`,
+		`{"mcpServers":{"leo":[1]}}`,
+		`{"mcpServers":null}`,
+		`{"mcpServers":"x"}`,
+		`null`,
+	} {
+		t.Run(doc, func(t *testing.T) {
+			// Only a value starting with "{" is taken for inline JSON.
+			if strings.HasPrefix(doc, "{") {
+				if _, _, err := (Server{Bin: migrateBin}).MigrateLaunch(&config.Config{}, "claude", []string{"--mcp-config", doc}, nil); err == nil {
+					t.Error("inline: want a migration error")
+				}
+			}
+			content := strings.Replace(doc, "mcpServers", "mcp", 1)
+			if _, _, err := (Server{Bin: migrateBin}).MigrateLaunch(&config.Config{}, "opencode", nil, map[string]string{"OPENCODE_CONFIG_CONTENT": content}); err == nil {
+				t.Error("opencode: want a migration error")
+			}
+		})
+	}
 }
