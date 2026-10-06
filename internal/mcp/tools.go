@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -307,8 +308,14 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 			"template": map[string]any{"type": "string", "description": "Template name from leo.yaml supplying harness/model/env."},
 			"prompt":   map[string]any{"type": "string", "description": "Self-contained question for the consultant."},
 			"model":    map[string]any{"type": "string", "description": "Optional model override, validated against the template's harness."},
-		}, "template", "prompt"),
+			"fork":     map[string]any{"type": "boolean", "description": forkConsultDescription},
+		}, "prompt"),
 	}, func(ctx context.Context, args map[string]any) (string, error) {
+		// A bridged claude session's leo-bridge mod answers a fork consult
+		// itself; one that reaches the server had no mod to answer it.
+		if fork, _ := args["fork"].(bool); fork {
+			return "", errors.New("fork consult needs a bridged claude session")
+		}
 		template, err := stringArg(args, "template")
 		if err != nil {
 			return "", err
@@ -581,6 +588,10 @@ const consultDescription = "Run a one-off consultant subagent for a second opini
 	"The template determines the harness and model; `model` optionally overrides the template's model. " +
 	"The prompt must be self-contained: the consultant sees none of your conversation, only files in your workspace. " +
 	"Waits for and returns the consultant's answer directly. For delegated implementation, review, or exploration that should continue asynchronously, use leo_dispatch and then leo_wait instead."
+
+// forkConsultDescription is leo_consult's fork argument description.
+const forkConsultDescription = "true asks a fork of yourself instead of a template: same model, sees this whole conversation, no tools, cheapest; " +
+	"use for a sanity check of your own plan. template and model are ignored. Needs a leo-bridged claude session."
 
 const surfaceFileDescription = "Push a file to the user's attention — a result, a diff, a report, or a line that needs their eyes. " +
 	"The file appears in Leo's observability state and event stream for dashboards to show. " +
