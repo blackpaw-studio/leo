@@ -248,9 +248,18 @@ func (d *Dispatcher) SweepNotifications(ctx context.Context) {
 }
 
 func (d *Dispatcher) deliverNotification(ctx context.Context, delivery NotificationDelivery, item pendingNotification) {
+	if claim := item.record.Notifications[item.key]; claim.Disposition == NotificationClaimed {
+		// A claim a restart interrupted: only a bridge claim is safe to
+		// send again (its outbox id dedups); any other may have been sent.
+		if claim.Transport == NotificationTransportBridge {
+			d.redeliverBridgeClaim(ctx, delivery, item, claim)
+		}
+		return
+	}
 	if !delivery.Ready(ctx, item.record) {
 		return
 	}
+	transport := notificationTransport(ctx, delivery, item.record)
 	d.mu.Lock()
 	n := item.state.record.Notifications[item.key]
 	if n.Disposition != NotificationPending {
@@ -264,7 +273,7 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 		d.mu.Unlock()
 		return
 	}
-	n.Disposition, n.ClaimedAt = NotificationClaimed, d.now()
+	n.Disposition, n.ClaimedAt, n.Transport = NotificationClaimed, d.now(), transport
 	item.state.record.Notifications[item.key] = n
 	if err := d.persistNotificationRecordLocked(item.state); err != nil {
 		n.Disposition, n.FailedAt = NotificationFailed, d.now()
@@ -276,22 +285,51 @@ func (d *Dispatcher) deliverNotification(ctx context.Context, delivery Notificat
 	}
 	rec := cloneRecord(item.state.record)
 	d.mu.Unlock()
-	message := n.Message
-	if message == "" {
-		message = completionNotification(rec, item.key, turnNotificationStatus(rec, item.key))
-	}
-	err := deliverNotificationLine(ctx, delivery, rec, item.key, message)
+	err := deliverNotificationLine(ctx, delivery, rec, transport, item.key, notificationMessage(rec, item.key, n))
 	d.mu.Lock()
 	n = item.state.record.Notifications[item.key]
 	switch {
 	case err == nil:
 		n.Disposition, n.DeliveredAt = NotificationDelivered, d.now()
 	case errors.Is(err, ErrNotificationNotSent):
-		n.Disposition, n.ClaimedAt = NotificationPending, time.Time{}
+		// Nothing was sent or queued, so the next sweep may pick again.
+		n.Disposition, n.ClaimedAt, n.Transport = NotificationPending, time.Time{}, ""
 	default:
 		n.Disposition, n.FailedAt = NotificationFailed, d.now()
 	}
 	item.state.record.Notifications[item.key] = n
 	_ = d.persistNotificationRecordLocked(item.state)
 	d.mu.Unlock()
+}
+
+// redeliverBridgeClaim queues a bridge claim a restart interrupted again,
+// under the same outbox id: queued already, it is the same message. It
+// stays claimed for the bridge until the caller's bridge takes it (or the
+// claim expires), never falling back to a transport that could send it
+// twice.
+func (d *Dispatcher) redeliverBridgeClaim(ctx context.Context, delivery NotificationDelivery, item pendingNotification, claim Notification) {
+	err := deliverNotificationLine(ctx, delivery, item.record, NotificationTransportBridge, item.key, notificationMessage(item.record, item.key, claim))
+	if errors.Is(err, ErrNotificationNotSent) {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := item.state.record.Notifications[item.key]
+	if n.Disposition != NotificationClaimed || n.Transport != NotificationTransportBridge {
+		return
+	}
+	if err == nil {
+		n.Disposition, n.DeliveredAt = NotificationDelivered, d.now()
+	} else {
+		n.Disposition, n.FailedAt = NotificationFailed, d.now()
+	}
+	item.state.record.Notifications[item.key] = n
+	_ = d.persistNotificationRecordLocked(item.state)
+}
+
+func notificationMessage(rec Record, key string, n Notification) string {
+	if n.Message != "" {
+		return n.Message
+	}
+	return completionNotification(rec, key, turnNotificationStatus(rec, key))
 }

@@ -21,11 +21,12 @@ type bridgedCaller struct {
 	box    *outbox.Store
 	stream *bridge.Stream
 	panes  map[string]string // agent → primary pane
+	owners map[string]string // bridge key → agent holding it now
 }
 
 func newBridgedCaller(t *testing.T, name, pane string) *bridgedCaller {
 	t.Helper()
-	c := &bridgedCaller{hub: bridge.New(bridge.Options{}), box: outbox.New(t.TempDir(), outbox.Options{}), panes: map[string]string{name: pane}}
+	c := &bridgedCaller{hub: bridge.New(bridge.Options{}), box: outbox.New(t.TempDir(), outbox.Options{}), panes: map[string]string{name: pane}, owners: map[string]string{name: name}}
 	t.Cleanup(c.hub.Close)
 	target, err := c.hub.Open(name, notifyLaunch)
 	if err != nil {
@@ -53,7 +54,16 @@ func (c *bridgedCaller) delivery(fallback NotificationDelivery) *BridgeNotificat
 			return pane, nil
 		}
 		return "", errors.New("no such agent")
+	}, func(key string) (string, bool) {
+		owner, ok := c.owners[key]
+		return owner, ok
 	}, fallback)
+}
+
+// send delivers line the way the sweep does: over the transport the
+// delivery picks for rec.
+func send(d *BridgeNotificationDelivery, rec Record, key, line string) error {
+	return d.DeliverVia(context.Background(), rec, d.NotificationTransport(context.Background(), rec), key, line)
 }
 
 func (c *bridgedCaller) next(t *testing.T) bridge.Command {
@@ -90,7 +100,7 @@ func TestBridgedCallerNotificationGoesThroughTheOutbox(t *testing.T) {
 	if !delivery.Ready(context.Background(), rec) {
 		t.Fatal("a bridged caller is not ready")
 	}
-	if err := delivery.DeliverNotification(context.Background(), rec, "d-7#2", "[leo] dispatch d-7#2 done"); err != nil {
+	if err := send(delivery, rec, "d-7#2", "[leo] dispatch d-7#2 done"); err != nil {
 		t.Fatalf("DeliverNotification: %v", err)
 	}
 	cmd := c.next(t)
@@ -113,7 +123,7 @@ func TestBridgedNotificationRedeliveryIsDeduplicated(t *testing.T) {
 	delivery := c.delivery(&fakeNotificationDelivery{ready: true})
 	rec := notifyRecord()
 	for range 2 {
-		if err := delivery.DeliverNotification(context.Background(), rec, "d-7#2", "line"); err != nil {
+		if err := send(delivery, rec, "d-7#2", "line"); err != nil {
 			t.Fatalf("DeliverNotification: %v", err)
 		}
 	}
@@ -144,7 +154,7 @@ func TestUnbridgedCallerNotificationFallsBack(t *testing.T) {
 			if delivery.Ready(context.Background(), rec) {
 				t.Fatal("Ready did not defer to the fallback")
 			}
-			if err := delivery.DeliverNotification(context.Background(), rec, "d-7#1", "line"); err != nil {
+			if err := send(delivery, rec, "d-7#1", "line"); err != nil {
 				t.Fatalf("DeliverNotification: %v", err)
 			}
 			if len(fallback.calls) != 1 || fallback.calls[0] != rec.CallerPaneID+"\x00line" {
@@ -164,7 +174,7 @@ func TestBridgedNotificationQueueFailureIsNotSent(t *testing.T) {
 	c.router.Queue = func(string, bridge.Target, bridge.Command, string) (*bridge.Ticket, error) {
 		return nil, outbox.ErrFull
 	}
-	err := c.delivery(&fakeNotificationDelivery{}).DeliverNotification(context.Background(), notifyRecord(), "d-7#2", "line")
+	err := send(c.delivery(&fakeNotificationDelivery{}), notifyRecord(), "d-7#2", "line")
 	if !errors.Is(err, ErrNotificationNotSent) {
 		t.Fatalf("err = %v, want ErrNotificationNotSent", err)
 	}
@@ -175,7 +185,9 @@ type keyedFakeDelivery struct {
 	keys []string
 }
 
-func (f *keyedFakeDelivery) DeliverNotification(_ context.Context, r Record, key, line string) error {
+func (f *keyedFakeDelivery) NotificationTransport(context.Context, Record) string { return "" }
+
+func (f *keyedFakeDelivery) DeliverVia(_ context.Context, r Record, _, key, line string) error {
 	f.keys = append(f.keys, key)
 	return f.Deliver(context.Background(), r, line)
 }
@@ -191,5 +203,130 @@ func TestSweepNotificationsPassesTheKeyToAKeyedDelivery(t *testing.T) {
 	d.SweepNotifications(context.Background())
 	if len(f.keys) != 1 || f.keys[0] != "d-x#3" || s.record.Notifications["d-x#3"].Disposition != NotificationDelivered {
 		t.Fatalf("keys=%v ledger=%+v", f.keys, s.record.Notifications)
+	}
+}
+
+// A caller that recorded its bridge key is routed by that key to whoever
+// holds it now: a renamed agent's outbox, with no pane check needed.
+func TestNotificationRoutesByCallerBridgeKeyAfterARename(t *testing.T) {
+	c := newBridgedCaller(t, "orch", "%4")
+	c.owners = map[string]string{"orch": "orch-renamed"}
+	var queuedFor []string
+	durable := c.router.Queue
+	c.router.Queue = func(agent string, t bridge.Target, cmd bridge.Command, from string) (*bridge.Ticket, error) {
+		queuedFor = append(queuedFor, agent)
+		return durable(agent, t, cmd, from)
+	}
+	fallback := &fakeNotificationDelivery{ready: true}
+	rec := Record{ID: "d-7", Caller: "orch", CallerBridgeKey: "orch", CallerPaneID: "%99", CallerHarness: "claude", Notify: true}
+	if err := send(c.delivery(fallback), rec, "d-7#2", "line"); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if cmd := c.next(t); cmd.ID != "notify-d-7-2" {
+		t.Fatalf("command = %+v", cmd)
+	}
+	if len(queuedFor) != 1 || queuedFor[0] != "orch-renamed" || len(fallback.calls) != 0 {
+		t.Fatalf("queued for %v, fallback %v; want the key's current owner's outbox", queuedFor, fallback.calls)
+	}
+}
+
+// A bridged dispatch that dispatches again is the caller: its key routes to
+// its own bridge (dispatches keep no outbox), not its orchestrator's.
+func TestNotificationRoutesToACallingDispatchByItsBridgeKey(t *testing.T) {
+	c := newBridgedCaller(t, "orch", "%4")
+	key := DispatchBridgeKey("d-parent")
+	if _, err := c.hub.Open(key, "launch-parent"); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := c.hub.Connect(key, "launch-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := &fakeNotificationDelivery{ready: true}
+	rec := Record{ID: "d-7", Caller: "orch", CallerBridgeKey: key, CallerPaneID: "%12", CallerHarness: "claude", Notify: true}
+	if err := send(c.delivery(fallback), rec, "d-7#1", "line"); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd, err := stream.Next(ctx)
+	if err != nil || cmd.ID != "notify-d-7-1" {
+		t.Fatalf("dispatch's bridge got %+v, %v", cmd, err)
+	}
+	if st := c.hub.State("orch"); st.Pending != 0 || len(fallback.calls) != 0 {
+		t.Fatalf("orch pending %d, fallback %v; want neither", st.Pending, fallback.calls)
+	}
+}
+
+// A recorded key whose bridge is not connected falls back, as an
+// unbridged caller does.
+func TestNotificationWithADisconnectedCallerBridgeKeyFallsBack(t *testing.T) {
+	c := newBridgedCaller(t, "orch", "%4")
+	fallback := &fakeNotificationDelivery{ready: true}
+	rec := Record{ID: "d-7", Caller: "orch", CallerBridgeKey: "gone", CallerPaneID: "%4", CallerHarness: "claude"}
+	if err := send(c.delivery(fallback), rec, "d-7#1", "line"); err != nil || len(fallback.calls) != 1 {
+		t.Fatalf("err %v fallback %v; want the fallback used", err, fallback.calls)
+	}
+}
+
+// The daemon restarts after persisting a bridge claim but before queueing
+// the deliver: the restored claim is retried on the bridge under the same
+// outbox id, and delivered exactly once.
+func TestRestoredBridgeClaimIsDeliveredExactlyOnce(t *testing.T) {
+	c := newBridgedCaller(t, "orch", "%4")
+	d := NewDispatcher(NewFileRecorder(t.TempDir()))
+	d.SetNotificationDelivery(c.delivery(&fakeNotificationDelivery{ready: true}))
+	rec := notifyRecord()
+	rec.Kind, rec.Status = "dispatch", StatusDone
+	rec.Notifications = map[string]Notification{"d-7#2": {Disposition: NotificationClaimed, Transport: NotificationTransportBridge, ClaimedAt: d.now(), Message: "line"}}
+	d.restorePendingNotifications(rec)
+	d.SweepNotifications(context.Background())
+	d.SweepNotifications(context.Background())
+	if cmd := c.next(t); cmd.ID != "notify-d-7-2" || cmd.Text != "line" {
+		t.Fatalf("command = %+v", cmd)
+	}
+	if entries, _ := c.box.List("orch"); len(entries) != 1 {
+		t.Fatalf("outbox = %+v, want one entry", entries)
+	}
+	got, err := d.Get("d-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := got.Notifications["d-7#2"]; n.Disposition != NotificationDelivered {
+		t.Fatalf("notification = %+v, want delivered", n)
+	}
+}
+
+// A claim records the transport it was made for, so a restart knows which
+// claims are safe to retry.
+func TestBridgeClaimRecordsItsTransport(t *testing.T) {
+	c := newBridgedCaller(t, "orch", "%4")
+	d := NewDispatcher(nil)
+	d.SetNotificationDelivery(c.delivery(&fakeNotificationDelivery{ready: true}))
+	rec := notifyRecord()
+	rec.Kind, rec.Status = "dispatch", StatusDone
+	rec.Notifications = map[string]Notification{"d-7#2": {Disposition: NotificationPending, Message: "line"}}
+	h := &durableTestHandle{}
+	d.runs["d-7"] = &runState{record: rec, handle: h}
+	d.SweepNotifications(context.Background())
+	if n := h.rec.Notifications["d-7#2"]; n.Disposition != NotificationDelivered || n.Transport != NotificationTransportBridge {
+		t.Fatalf("notification = %+v, want delivered over the bridge", n)
+	}
+}
+
+// A restored bridge claim whose caller's bridge is not back yet stays
+// claimed for the bridge: falling back could deliver it twice.
+func TestRestoredBridgeClaimWaitsForTheBridge(t *testing.T) {
+	c := newBridgedCaller(t, "orch", "%4")
+	fallback := &fakeNotificationDelivery{ready: true}
+	d := NewDispatcher(nil)
+	d.SetNotificationDelivery(c.delivery(fallback))
+	rec := Record{ID: "d-7", Kind: "dispatch", Caller: "other", CallerPaneID: "%9", CallerHarness: "claude", Notify: true, Status: StatusDone,
+		Notifications: map[string]Notification{"d-7#2": {Disposition: NotificationClaimed, Transport: NotificationTransportBridge, ClaimedAt: d.now(), Message: "line"}}}
+	s := &runState{record: rec, handle: &durableTestHandle{}}
+	d.runs["d-7"] = s
+	d.SweepNotifications(context.Background())
+	if n := s.record.Notifications["d-7#2"]; n.Disposition != NotificationClaimed || len(fallback.calls) != 0 {
+		t.Fatalf("notification = %+v fallback %v; want still claimed, nothing sent", n, fallback.calls)
 	}
 }

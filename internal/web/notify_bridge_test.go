@@ -55,3 +55,22 @@ func TestNotificationDeliveryPrefersTheBridge(t *testing.T) {
 		t.Fatal("the bridge delivery does not fall back to the tmux one")
 	}
 }
+
+// A bridge key's owner is the agent holding it now: a renamed agent keeps
+// the key its claude launched under.
+func TestBridgeKeyOwnerFindsTheAgentHoldingTheKey(t *testing.T) {
+	keys := map[string]bridge.Target{"orch-renamed": {Key: "orch", Gen: 1}, "other": {Key: "other", Gen: 2}}
+	s := &Server{
+		processes:    &mockProcesses{states: map[string]ProcessStateInfo{"orch-renamed": {}, "other": {}}},
+		bridgeRouter: &bridge.Router{Targets: func(name string) (bridge.Target, bool) { t, ok := keys[name]; return t, ok }},
+	}
+	if owner, ok := s.bridgeKeyOwner("orch"); !ok || owner != "orch-renamed" {
+		t.Fatalf("bridgeKeyOwner(orch) = %q, %v; want orch-renamed", owner, ok)
+	}
+	if owner, ok := s.bridgeKeyOwner("nobody"); ok {
+		t.Fatalf("bridgeKeyOwner(nobody) = %q, want none", owner)
+	}
+	if _, ok := (&Server{}).bridgeKeyOwner("orch"); ok {
+		t.Fatal("a server without processes or router found an owner")
+	}
+}

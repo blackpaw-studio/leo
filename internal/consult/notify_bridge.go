@@ -10,18 +10,34 @@ import (
 	"github.com/blackpaw-studio/leo/internal/outbox"
 )
 
-// keyedNotificationDelivery is a NotificationDelivery that also wants the
-// notification's key: the sweep calls DeliverNotification in place of
-// Deliver.
-type keyedNotificationDelivery interface {
-	DeliverNotification(ctx context.Context, rec Record, key, line string) error
+// NotificationTransportBridge marks a notification claimed for a caller's
+// leo bridge: it is queued under its deterministic outbox id, so a claim a
+// restart interrupted can be queued again without delivering twice.
+const NotificationTransportBridge = "bridge"
+
+// transportNotificationDelivery is a NotificationDelivery that picks a
+// transport per caller ("" for the legacy one, or
+// NotificationTransportBridge) before the claim, and sends over the one the
+// claim recorded.
+type transportNotificationDelivery interface {
+	NotificationTransport(ctx context.Context, rec Record) string
+	DeliverVia(ctx context.Context, rec Record, transport, key, line string) error
 }
 
-// deliverNotificationLine hands line to delivery, with its key when the
-// delivery takes one.
-func deliverNotificationLine(ctx context.Context, delivery NotificationDelivery, rec Record, key, line string) error {
-	if keyed, ok := delivery.(keyedNotificationDelivery); ok {
-		return keyed.DeliverNotification(ctx, rec, key, line)
+// notificationTransport is the transport delivery picks for rec; "" for a
+// delivery with one transport only.
+func notificationTransport(ctx context.Context, delivery NotificationDelivery, rec Record) string {
+	if t, ok := delivery.(transportNotificationDelivery); ok {
+		return t.NotificationTransport(ctx, rec)
+	}
+	return ""
+}
+
+// deliverNotificationLine sends line over transport, with its key, when
+// the delivery picks transports; else as Deliver does.
+func deliverNotificationLine(ctx context.Context, delivery NotificationDelivery, rec Record, transport, key, line string) error {
+	if t, ok := delivery.(transportNotificationDelivery); ok {
+		return t.DeliverVia(ctx, rec, transport, key, line)
 	}
 	return delivery.Deliver(ctx, rec, line)
 }
@@ -43,46 +59,79 @@ func NotificationCommandID(id, key string) string {
 }
 
 // BridgeNotificationDelivery sends a completion notification to a caller
-// agent whose leo bridge is connected as a bridge deliver, queued in its
+// whose leo bridge is connected as a bridge deliver, queued in its owner's
 // durable outbox; every other caller goes through Fallback (the peer inbox
 // for claude, tmux for the other harnesses).
 type BridgeNotificationDelivery struct {
-	// Route resolves rec's caller to the agent and live bridge generation
-	// its notifications go to; ok is false when it has none of its own.
+	// Route resolves rec's caller to its live bridge generation and the
+	// agent whose outbox keeps its messages ("" for a dispatch, which keeps
+	// none); ok is false when the caller has no connected bridge.
 	Route func(ctx context.Context, rec Record) (agent string, target bridge.Target, ok bool)
-	// Queue queues cmd for agent's generation target, durably when the
-	// daemon keeps outboxes.
+	// Queue queues cmd for target, in agent's outbox when agent is set.
 	Queue    func(agent string, target bridge.Target, cmd bridge.Command) error
 	Fallback NotificationDelivery
 }
 
-// NewBridgeNotificationDelivery routes through router. A caller counts as
-// bridged only while its mod is connected and rec's caller pane is the
-// agent's own primary pane (primaryPane): a dispatch inherits its
-// orchestrator's process name, so the name alone could hand a nested
-// dispatch's notification to the orchestrator.
-func NewBridgeNotificationDelivery(router *bridge.Router, primaryPane func(ctx context.Context, agent string) (string, error), fallback NotificationDelivery) *BridgeNotificationDelivery {
+// NewBridgeNotificationDelivery routes through router. A record carrying
+// the caller's bridge key routes on it: to that key's live generation, and
+// the outbox of the agent keyOwner says holds the key now (a renamed
+// caller's included), or the bridge alone for a calling dispatch. A legacy
+// record without a key counts as bridged only while its caller agent's mod
+// is connected and its caller pane is that agent's own primary pane
+// (primaryPane): a dispatch inherits its orchestrator's process name, so
+// the name alone could hand a nested dispatch's notification to the
+// orchestrator.
+func NewBridgeNotificationDelivery(router *bridge.Router, primaryPane func(ctx context.Context, agent string) (string, error), keyOwner func(key string) (agent string, ok bool), fallback NotificationDelivery) *BridgeNotificationDelivery {
 	return &BridgeNotificationDelivery{
 		Route: func(ctx context.Context, rec Record) (string, bridge.Target, bool) {
-			if rec.Caller == "" || rec.CallerPaneID == "" {
-				return "", bridge.Target{}, false
+			if rec.CallerBridgeKey != "" {
+				return routeByBridgeKey(router, keyOwner, rec.CallerBridgeKey)
 			}
-			target, ok := router.Route(rec.Caller)
-			if !ok {
-				return "", bridge.Target{}, false
-			}
-			pane, err := primaryPane(ctx, rec.Caller)
-			if err != nil || pane != rec.CallerPaneID {
-				return "", bridge.Target{}, false
-			}
-			return rec.Caller, target, true
+			return routeByCallerPane(ctx, router, primaryPane, rec)
 		},
 		Queue: func(agent string, target bridge.Target, cmd bridge.Command) error {
+			if agent == "" {
+				_, err := router.Hub.EnqueueTo(target, cmd)
+				return err
+			}
 			_, err := router.Deliver(agent, target, cmd, "")
 			return err
 		},
 		Fallback: fallback,
 	}
+}
+
+func routeByBridgeKey(router *bridge.Router, keyOwner func(string) (string, bool), key string) (string, bridge.Target, bool) {
+	if router == nil || router.Hub == nil {
+		return "", bridge.Target{}, false
+	}
+	target, ok := router.Hub.Live(key)
+	if !ok {
+		return "", bridge.Target{}, false
+	}
+	if _, isDispatch := DispatchIDFromBridgeKey(key); isDispatch {
+		return "", target, true
+	}
+	agent, ok := keyOwner(key)
+	if !ok {
+		return "", bridge.Target{}, false
+	}
+	return agent, target, true
+}
+
+func routeByCallerPane(ctx context.Context, router *bridge.Router, primaryPane func(context.Context, string) (string, error), rec Record) (string, bridge.Target, bool) {
+	if rec.Caller == "" || rec.CallerPaneID == "" {
+		return "", bridge.Target{}, false
+	}
+	target, ok := router.Route(rec.Caller)
+	if !ok {
+		return "", bridge.Target{}, false
+	}
+	pane, err := primaryPane(ctx, rec.Caller)
+	if err != nil || pane != rec.CallerPaneID {
+		return "", bridge.Target{}, false
+	}
+	return rec.Caller, target, true
 }
 
 // Ready is always true for a bridged caller: the mod submits the deliver
@@ -95,19 +144,33 @@ func (b *BridgeNotificationDelivery) Ready(ctx context.Context, rec Record) bool
 }
 
 // Deliver has no key to derive a command id from, so it always takes the
-// fallback; the sweep calls DeliverNotification.
+// fallback; the sweep calls DeliverVia.
 func (b *BridgeNotificationDelivery) Deliver(ctx context.Context, rec Record, line string) error {
 	return b.Fallback.Deliver(ctx, rec, line)
 }
 
-// DeliverNotification queues line for a bridged caller under key's
-// command id, or hands it to the fallback. Once queued it counts as
-// delivered: the outbox keeps it until the mod takes it, across a relaunch
-// of the caller. One already queued under that id is the same message.
-func (b *BridgeNotificationDelivery) DeliverNotification(ctx context.Context, rec Record, key, line string) error {
+// NotificationTransport picks the bridge for a caller whose bridge is
+// connected now, else the fallback.
+func (b *BridgeNotificationDelivery) NotificationTransport(ctx context.Context, rec Record) string {
+	if _, _, ok := b.Route(ctx, rec); ok {
+		return NotificationTransportBridge
+	}
+	return ""
+}
+
+// DeliverVia sends line over the transport its claim recorded. Over the
+// bridge it is queued under key's command id and counts as delivered once
+// queued: the outbox keeps it until the mod takes it, across a relaunch of
+// the caller, and one already queued under that id is the same message. A
+// bridge claim never falls back: the deliver may be queued already, so a
+// caller whose bridge is gone gets ErrNotificationNotSent until it is back.
+func (b *BridgeNotificationDelivery) DeliverVia(ctx context.Context, rec Record, transport, key, line string) error {
+	if transport != NotificationTransportBridge {
+		return b.Fallback.Deliver(ctx, rec, line)
+	}
 	agent, target, ok := b.Route(ctx, rec)
 	if !ok {
-		return b.Fallback.Deliver(ctx, rec, line)
+		return fmt.Errorf("%w: the caller's leo bridge is not connected", ErrNotificationNotSent)
 	}
 	cmd := bridge.Deliver(line, false)
 	cmd.ID = NotificationCommandID(rec.ID, key)
@@ -116,6 +179,6 @@ func (b *BridgeNotificationDelivery) DeliverNotification(ctx context.Context, re
 	case err == nil, errors.Is(err, outbox.ErrDuplicate):
 		return nil
 	default:
-		return fmt.Errorf("%w: queueing on %s's leo bridge: %v", ErrNotificationNotSent, agent, err)
+		return fmt.Errorf("%w: queueing on the caller's leo bridge: %v", ErrNotificationNotSent, err)
 	}
 }

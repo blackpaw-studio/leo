@@ -19,7 +19,7 @@ func (s *Server) notificationDelivery(router *bridge.Router) consult.Notificatio
 	if router == nil {
 		return legacy
 	}
-	return consult.NewBridgeNotificationDelivery(router, s.agentPrimaryPane, legacy)
+	return consult.NewBridgeNotificationDelivery(router, s.agentPrimaryPane, s.bridgeKeyOwner, legacy)
 }
 
 // agentPrimaryPane returns the pane agent name's harness runs in, as its
@@ -35,4 +35,18 @@ func (s *Server) agentPrimaryPane(ctx context.Context, name string) (string, err
 		return "", fmt.Errorf("%s has no primary pane recorded", session)
 	}
 	return pane, nil
+}
+
+// bridgeKeyOwner returns the agent whose launch holds bridge key key now,
+// whatever it has been renamed to since: whose outbox keeps its messages.
+func (s *Server) bridgeKeyOwner(key string) (string, bool) {
+	if s.processes == nil || s.bridgeRouter == nil {
+		return "", false
+	}
+	for name := range s.processes.States() {
+		if held, ok := s.bridgeRouter.Key(name); ok && held == key {
+			return name, true
+		}
+	}
+	return "", false
 }
