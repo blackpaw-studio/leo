@@ -78,6 +78,8 @@ export interface HarnessOptions {
   usage?: () => unknown
   // Awaited before each $.store.set lands, so a test can hold one back.
   beforeStoreSet?: (key: string) => Promise<void> | void
+  // Answers a tool call the plugin passes on (the engine running the tool).
+  toolCall?: (e: Record<string, unknown>) => unknown
 }
 
 export interface Harness {
@@ -96,6 +98,10 @@ export interface Harness {
   logs: string[]
   store: Map<string, unknown>
   feeds: Feed[]
+  statuses: Array<string | undefined>
+  toasts: string[]
+  invalidates: string[]
+  toolCalls: Array<Record<string, unknown>>
   settle: () => Promise<void>
 }
 
@@ -119,6 +125,10 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
     logs: [],
     store,
     feeds,
+    statuses: [],
+    toasts: [],
+    invalidates: [],
+    toolCalls: [],
     settle: flush,
   }
 
@@ -129,6 +139,30 @@ export function setup(on: any, opts: HarnessOptions = {}): Harness {
   on('ui.log', ($: any, e: any) => {
     h.logs.push(e.text)
     return { value: undefined }
+  })
+  on('ui.status', ($: any, e: any) => {
+    h.statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.toast', ($: any, e: any) => {
+    h.toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.invalidate', ($: any, e: any) => {
+    h.invalidates.push(e.event)
+    return { value: undefined }
+  })
+  // The engine's own drawing of a component a test mounts.
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return (globalThis as any).h(Text, null, 'engine band')
+  })
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'core prompt', scope: 'shared' }] }))
+  on('agent.offer', () => ({ isOffered: true }))
+  on('tool.call', ($: any, e: any) => {
+    h.toolCalls.push({ ...e })
+    if (opts.toolCall) return opts.toolCall(e)
+    return { result: 'ran', text: 'ran' }
   })
   on('store.get', ($: any, e: any) => ({ value: store.get(e.key) }))
   on('store.set', async ($: any, e: any) => {

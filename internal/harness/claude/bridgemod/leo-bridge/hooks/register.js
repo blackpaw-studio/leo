@@ -37,6 +37,25 @@ import {
   withAcked,
   withInflight,
 } from './protocol.js'
+import {
+  AGENT_DENY_TEXT,
+  cancelRequest,
+  DELEGATION_SECTION_ID,
+  delegationNote,
+  FALLBACK_DISPATCH_FAILED,
+  FALLBACK_NO_STATE,
+  FALLBACK_STREAM_DOWN,
+  isAgentHidden,
+  isFailedCall,
+  isRunning,
+  isTerminal,
+  NO_DELEGATION,
+  parseStateLine,
+  rosterRowText,
+  sameDelegationText,
+  STATE_WAIT_MS,
+  statusLine,
+} from './roster.js'
 
 const REPORT_TIMEOUT_MS = 15_000
 const SESSION_END_WAIT_MS = 1000
@@ -46,6 +65,9 @@ const COMPACT_ATTEMPTS = 5
 // case the failure was something else).
 const COMPACT_RETRY_MS = 250
 const COMPACT_TURN_WAIT_MS = 60_000
+const ROSTER_TICK_MS = 1000
+const TOAST_MS = 5000
+const NOTE_FAILED = 'adding the delegation note failed: '
 
 // Ops whose engine call queues the work: the engine runs it even if this
 // module is hot-reloaded before the call returns.
@@ -89,6 +111,17 @@ let isReportFailing = false
 
 // The session id the last hello carried (null until the first hello).
 let helloSessionId = null
+
+// The daemon's latest state snapshot and when it arrived, or null before
+// the first; why delegation is not enforced (a FALLBACK_* reason) or null;
+// the delegation the model's system prompt was composed with (null until
+// the first compose); the status line last set; the redraw ticker.
+let roster = null
+let stateChain = Promise.resolve()
+let fallback = null
+let toldDelegation = null
+let shownStatus = undefined
+let ticker = null
 
 function isBridging() {
   return config !== null && !isDormant
@@ -480,6 +513,11 @@ function enqueueCommand($, command) {
 }
 
 function receiveLine($, line) {
+  const state = parseStateLine(line)
+  if (state !== null) {
+    stateChain = stateChain.then(() => applyState($, state))
+    return
+  }
   const parsed = parseCommand(line)
   if (parsed.kind === 'garbage') {
     $.ui.log('skipped a bad command line: ' + parsed.error)
@@ -538,6 +576,7 @@ async function pump($) {
     const lived = (await $.clock.now()) - startedAt
     if (lived > BACKOFF_RESET_AFTER_MS) isStreamFailing = false
     streamEnded($, why)
+    setFallback($, FALLBACK_STREAM_DOWN)
     const plan = nextBackoff(backoff, lived)
     await $.clock.sleep(plan.waitMs)
     backoff = plan.next
@@ -546,7 +585,109 @@ async function pump($) {
 
 function goDormant($) {
   isDormant = true
+  setFallback($, FALLBACK_STREAM_DOWN)
   $.ui.log('this claude is no longer ' + config.agent + "'s current leo launch; the bridge stays off until the mod reloads")
+}
+
+// ---- delegation and roster -----------------------------------------------
+
+// A snapshot replaces the last whole, and clears any fallback: leo answers.
+async function applyState($, state) {
+  try {
+    const previous = roster === null ? null : roster.state.delegation
+    roster = { state, receivedAt: await $.clock.now() }
+    fallback = null
+    if (!sameDelegationText(previous, state.delegation)) await delegationChanged($, state.delegation)
+    refreshRoster($)
+  } catch (err) {
+    $.ui.log('applying leo state failed: ' + errorText(err))
+  }
+}
+
+// The engine keeps the system prompt it composed first (verified live on
+// 2.1.292: neither a re-fired prompt.compose nor an invalidate reaches the
+// model), so a change after that first compose also goes in as a note.
+async function delegationChanged($, delegation) {
+  await $.ui.invalidate('prompt.section')
+  if (toldDelegation === null || sameDelegationText(toldDelegation, delegation)) return
+  toldDelegation = delegation
+  await addNote($, delegationNote(delegation))
+}
+
+async function addNote($, text) {
+  try {
+    const appended = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
+    if (typeof appended?.deny === 'string') $.ui.log(NOTE_FAILED + appended.deny)
+  } catch (err) {
+    $.ui.log(NOTE_FAILED + errorText(err))
+  }
+}
+
+function setFallback($, why) {
+  fallback = why
+  refreshStatus($)
+}
+
+function clearDispatchFallback($) {
+  if (fallback === FALLBACK_DISPATCH_FAILED) setFallback($, null)
+}
+
+function noStateYet($) {
+  if (roster === null && fallback === null) setFallback($, FALLBACK_NO_STATE)
+}
+
+function refreshStatus($) {
+  const text = statusLine(roster === null ? null : roster.state, fallback)
+  if (text === shownStatus) return
+  shownStatus = text
+  $.ui.status(text)
+}
+
+// Redraws the band now, and every second while a dispatch runs so its
+// elapsed time counts between snapshots.
+function refreshRoster($) {
+  refreshStatus($)
+  $.ui.invalidate('ui.render')
+  const isTicking = isRunning(roster.state.dispatches)
+  if (isTicking && ticker === null) ticker = $.clock.every(ROSTER_TICK_MS, () => $.ui.invalidate('ui.render'))
+  if (!isTicking && ticker !== null) {
+    ticker.cancel()
+    ticker = null
+  }
+}
+
+function isFallback() {
+  return fallback !== null
+}
+
+function rosterDispatches() {
+  return roster === null ? [] : roster.state.dispatches
+}
+
+async function drawRoster($, e) {
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const now = await $.clock.now()
+  const rows = rosterDispatches().map((d) => {
+    const text = h(Text, null, rosterRowText(d, roster.receivedAt, now))
+    if (isTerminal(d.status)) return h(Box, { flexDirection: 'row' }, text)
+    const cancel = h(Button, { key: 'cancel-' + d.id, label: 'Cancel', onPress: () => cancelDispatch($, d) })
+    return h(Box, { flexDirection: 'row', columnGap: 2 }, text, cancel)
+  })
+  return h(Box, { flexDirection: 'column' }, ...rows)
+}
+
+// One try, not the retrying report chain: the person is waiting on it.
+async function cancelDispatch($, d) {
+  const label = d.name || d.role || d.id
+  const why = isBridging() ? await tryReport($, bridgeArgv('report'), JSON.stringify(cancelRequest(d.id))) : 'leo bridge is off'
+  $.ui.toast(why === null ? 'leo: canceling ' + label : 'leo: cancel failed for ' + label + ': ' + why, { timeoutMs: TOAST_MS })
+}
+
+function withDelegationSection(composed) {
+  const delegation = roster === null ? null : roster.state.delegation
+  if (delegation === null || !delegation.enabled || delegation.section === '') return composed
+  const section = { id: DELEGATION_SECTION_ID, text: delegation.section, scope: 'session' }
+  return { ...composed, sections: [...composed.sections, section] }
 }
 
 // ---- hooks ---------------------------------------------------------------
@@ -562,6 +703,7 @@ async function onSessionStart($) {
   touchEntry($)
   $.clock.after(0, () => pruneAcked($))
   $.clock.after(0, () => pump($))
+  $.clock.after(STATE_WAIT_MS, () => noStateYet($))
 }
 
 export function register(on) {
@@ -604,5 +746,37 @@ export function register(on) {
       await Promise.race([Promise.all([sent, forgotten]), $.clock.sleep(SESSION_END_WAIT_MS)])
     }
     return next(e)
+  })
+
+  on('prompt.compose', async ($, e, next) => {
+    const composed = withDelegationSection(await next(e))
+    // A /context measure is not the prompt the model gets.
+    if (toldDelegation === null && !e.traits.includes('analysis')) {
+      toldDelegation = roster === null ? NO_DELEGATION : roster.state.delegation
+    }
+    return composed
+  })
+
+  on('agent.offer', async ($, e, next) => {
+    if (isAgentHidden(roster?.state, isFallback(), e.agent, false)) return { isOffered: false }
+    return next(e)
+  })
+
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    if (isAgentHidden(roster?.state, isFallback(), e.subagent_type ?? '', true)) return { deny: AGENT_DENY_TEXT }
+    return next(e)
+  })
+
+  // LEO_DISPATCH_TOOL, spelled out: a matcher takes literals.
+  on('tool.call', { tool: 'mcp__leo__leo_dispatch' }, async ($, e, next) => {
+    const result = await next(e)
+    if (isFailedCall(result)) setFallback($, FALLBACK_DISPATCH_FAILED)
+    else clearDispatchFallback($)
+    return result
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (rosterDispatches().length === 0 || e.props.hasSurvey) return next(e)
+    return drawRoster($, e)
   })
 }
