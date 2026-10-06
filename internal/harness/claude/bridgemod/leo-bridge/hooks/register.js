@@ -57,6 +57,9 @@ import {
   sameDelegationText,
   STATE_WAIT_MS,
   statusLine,
+  TOLD_KEY_PREFIX,
+  toldEntry,
+  toldFromEntry,
 } from './roster.js'
 
 const REPORT_TIMEOUT_MS = 15_000
@@ -70,6 +73,7 @@ const COMPACT_TURN_WAIT_MS = 60_000
 const ROSTER_TICK_MS = 1000
 const TOAST_MS = 5000
 const NOTE_FAILED = 'adding the delegation note failed: '
+const GUARD_FAILED = 'delegation guard failed, allowing: '
 
 // Ops whose engine call queues the work: the engine runs it even if this
 // module is hot-reloaded before the call returns.
@@ -116,12 +120,17 @@ let helloSessionId = null
 
 // The daemon's latest state snapshot and when it arrived, or null before
 // the first; why delegation is not enforced (a FALLBACK_* reason) or null;
-// the delegation the model's system prompt was composed with (null until
-// the first compose); the status line last set; the redraw ticker.
+// what the model was last told ({ session, delegation }, read from $.store
+// once: undefined until then, null for nothing) and the chain that keeps
+// its read-and-writes in order; the status line last set; the redraw ticker.
 let roster = null
 let stateChain = Promise.resolve()
 let fallback = null
-let toldDelegation = null
+// Bumped when a stream opens and when it ends: a snapshot clears the
+// fallback only while the stream it came from is still the one up.
+let streamEpoch = 0
+let told = undefined
+let toldChain = Promise.resolve()
 let shownStatus = undefined
 let ticker = null
 
@@ -394,6 +403,11 @@ async function deleteEntry($) {
   } catch (err) {
     $.ui.log('deleting acked ids failed: ' + errorText(err))
   }
+  try {
+    await $.store.delete(toldKey())
+  } catch (err) {
+    $.ui.log('deleting the told delegation failed: ' + errorText(err))
+  }
 }
 
 async function runDeliver($, command) {
@@ -516,10 +530,10 @@ function enqueueCommand($, command) {
   if (command.op !== 'interrupt') commandChain = finished
 }
 
-function receiveLine($, line) {
+function receiveLine($, line, epoch) {
   const state = parseStateLine(line)
   if (state !== null) {
-    stateChain = stateChain.then(() => applyState($, state))
+    stateChain = stateChain.then(() => applyState($, state, epoch))
     return
   }
   const parsed = parseCommand(line)
@@ -541,6 +555,7 @@ function receiveLine($, line) {
 // launch for good.
 async function runStream($) {
   const argv = bridgeArgv()
+  const epoch = ++streamEpoch
   const stream = $.process.spawn({ argv })
   await enqueueReport($, () => sendHello($))
   let carry = ''
@@ -552,7 +567,7 @@ async function runStream($) {
     }
     const split = splitLines(carry, chunk.text)
     carry = split.carry
-    split.lines.forEach((line) => receiveLine($, line))
+    split.lines.forEach((line) => receiveLine($, line, epoch))
   }
   // A partial last line is dropped: the daemon redelivers anything unacked.
   const result = await stream.result
@@ -580,7 +595,7 @@ async function pump($) {
     const lived = (await $.clock.now()) - startedAt
     if (lived > BACKOFF_RESET_AFTER_MS) isStreamFailing = false
     streamEnded($, why)
-    setFallback($, FALLBACK_STREAM_DOWN)
+    streamDown($)
     const plan = nextBackoff(backoff, lived)
     await $.clock.sleep(plan.waitMs)
     backoff = plan.next
@@ -589,19 +604,27 @@ async function pump($) {
 
 function goDormant($) {
   isDormant = true
-  setFallback($, FALLBACK_STREAM_DOWN)
+  streamDown($)
   $.ui.log('this claude is no longer ' + config.agent + "'s current leo launch; the bridge stays off until the mod reloads")
 }
 
 // ---- delegation and roster -----------------------------------------------
 
+function streamDown($) {
+  streamEpoch++
+  setFallback($, FALLBACK_STREAM_DOWN)
+}
+
 // A snapshot replaces the last whole, and clears any fallback: leo answers.
-async function applyState($, state) {
+// One applied after its stream ended (it waited behind an earlier one) is
+// still the latest word on the roster, but says nothing of leo being up.
+async function applyState($, state, epoch) {
   try {
     const previous = roster === null ? null : roster.state.delegation
     roster = { state, receivedAt: await $.clock.now() }
-    fallback = null
-    if (!sameDelegationText(previous, state.delegation)) await delegationChanged($, state.delegation)
+    if (epoch === streamEpoch) fallback = null
+    if (!sameDelegationText(previous, state.delegation)) $.ui.invalidate('prompt.section')
+    await noteIfToldOtherwise($, state.delegation)
     refreshRoster($)
   } catch (err) {
     $.ui.log('applying leo state failed: ' + errorText(err))
@@ -610,12 +633,44 @@ async function applyState($, state) {
 
 // The engine keeps the system prompt it composed first (verified live on
 // 2.1.292: neither a re-fired prompt.compose nor an invalidate reaches the
-// model), so a change after that first compose also goes in as a note.
-async function delegationChanged($, delegation) {
-  await $.ui.invalidate('prompt.section')
-  if (toldDelegation === null || sameDelegationText(toldDelegation, delegation)) return
-  toldDelegation = delegation
-  await addNote($, delegationNote(delegation))
+// model), so a policy other than what the model was told goes in as a
+// note. Compared with what it was told, not the last snapshot: a reloaded
+// module has no last snapshot.
+async function noteIfToldOtherwise($, delegation) {
+  await withTold($, async (current) => {
+    if (current === null || sameDelegationText(current, delegation)) return
+    await saveTold($, delegation)
+    await addNote($, delegationNote(delegation))
+  })
+}
+
+// What the model was told is per session and outlives a hot reload (the
+// engine keeps its prompt and notes): it lives in $.store under this key.
+function toldKey() {
+  return TOLD_KEY_PREFIX + config.agent
+}
+
+// Runs fn with what this session's model was last told (null: nothing
+// yet), after every earlier read-and-write of it.
+function withTold($, fn) {
+  const done = toldChain.then(async () => fn(await readTold($)))
+  toldChain = done.catch((err) => $.ui.log('tracking the told delegation failed: ' + errorText(err)))
+  return toldChain
+}
+
+async function readTold($) {
+  const session = await $.session.id()
+  if (told === undefined) {
+    const stored = toldFromEntry(await $.store.get(toldKey()), session)
+    told = stored === null ? null : { session, delegation: stored }
+  }
+  return told !== null && told.session === session ? told.delegation : null
+}
+
+async function saveTold($, delegation) {
+  const session = await $.session.id()
+  told = { session, delegation }
+  await $.store.set(toldKey(), toldEntry(session, delegation))
 }
 
 async function addNote($, text) {
@@ -685,6 +740,16 @@ async function cancelDispatch($, d) {
   const label = d.name || d.role || d.id
   const why = isBridging() ? await tryReport($, bridgeArgv('report'), JSON.stringify(cancelRequest(d.id))) : 'leo bridge is off'
   $.ui.toast(why === null ? 'leo: canceling ' + label : 'leo: cancel failed for ' + label + ': ' + why, { timeoutMs: TOAST_MS })
+}
+
+// The delegation guards fail open, on purpose: a broken guard lets the
+// call through, as leo being down does, instead of blocking every native
+// agent. next is replay-safe here: a guard that had called it gets that
+// answer back, nothing beneath running twice. A re-entry ran no guard and
+// may make no $ calls, so it passes without a log.
+function guardFailed($, e, next) {
+  if (next.error.kind !== 're-entry') $.ui.log(GUARD_FAILED + (next.error.message ?? next.error.kind))
+  return next(e)
 }
 
 function withDelegationSection(composed) {
@@ -789,9 +854,11 @@ export function register(on) {
 
   on('prompt.compose', async ($, e, next) => {
     const composed = withDelegationSection(await next(e))
-    // A /context measure is not the prompt the model gets.
-    if (toldDelegation === null && !e.traits.includes('analysis')) {
-      toldDelegation = roster === null ? NO_DELEGATION : roster.state.delegation
+    // A /context measure is not the prompt the model gets; a compose after
+    // the session's first (a hot reload, a later turn) is not kept either.
+    if (isBridging() && !e.traits.includes('analysis')) {
+      const delegation = roster === null ? NO_DELEGATION : roster.state.delegation
+      await withTold($, (current) => (current === null ? saveTold($, delegation) : undefined))
     }
     return composed
   })
@@ -799,12 +866,12 @@ export function register(on) {
   on('agent.offer', async ($, e, next) => {
     if (isAgentHidden(roster?.state, isFallback(), e.agent, false)) return { isOffered: false }
     return next(e)
-  })
+  }).catch(guardFailed)
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     if (isAgentHidden(roster?.state, isFallback(), e.subagent_type ?? '', true)) return { deny: AGENT_DENY_TEXT }
     return next(e)
-  })
+  }).catch(guardFailed)
 
   // LEO_DISPATCH_TOOL, spelled out: a matcher takes literals.
   on('tool.call', { tool: 'mcp__leo__leo_dispatch' }, async ($, e, next) => {
@@ -812,7 +879,7 @@ export function register(on) {
     if (isFailedCall(result)) setFallback($, FALLBACK_DISPATCH_FAILED)
     else clearDispatchFallback($)
     return result
-  })
+  }).catch(guardFailed)
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (rosterDispatches().length === 0 || e.props.hasSurvey) return next(e)
