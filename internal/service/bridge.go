@@ -19,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/outbox"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -296,11 +297,14 @@ func (s *Supervisor) endBridgedLaunch(bl bridgeLaunch, opening *openingDelivery)
 // goes. The brief leaves argv when the bridge delivers it, when it was
 // already handled by an earlier launch, or when it is too large for argv,
 // in which case pasteBrief names it for a paste once the session is up.
-func bridgeLaunchSpec(bl bridgeLaunch, args []string, spec ProcessSpec, openingHandled bool) (launchArgs []string, launchSpec ProcessSpec, pasteBrief string) {
+//
+// cfg is the current config, which legacy delegation blocks are matched
+// against (see leomcp.StripDelegationBlock); nil matches none.
+func bridgeLaunchSpec(bl bridgeLaunch, args []string, spec ProcessSpec, openingHandled bool, cfg *config.Config) (launchArgs []string, launchSpec ProcessSpec, pasteBrief string) {
 	launchArgs, launchSpec = args, spec
 	launchSpec.bridgeEnv = nil
 	if bl.bridged {
-		launchArgs = bl.plan.Args(args)
+		launchArgs = bl.plan.Args(withoutDelegationBlock(args, cfg))
 		launchSpec.bridgeEnv = bl.plan.Env
 	}
 	if bl.opening != "" || openingHandled {
@@ -312,6 +316,42 @@ func bridgeLaunchSpec(bl bridgeLaunch, args []string, spec ProcessSpec, openingH
 	}
 	return launchArgs, launchSpec, pasteBrief
 }
+
+// withoutDelegationBlock returns args with the delegation block taken out
+// of every --append-system-prompt value: a bridged claude gets delegation
+// live from the leo-bridge mod, which follows the operator's toggle, while
+// argv would freeze it at launch. A value left empty drops its flag.
+func withoutDelegationBlock(args []string, cfg *config.Config) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != appendSystemPromptFlag || i+1 >= len(args) {
+			out = append(out, args[i])
+			continue
+		}
+		i++
+		if prompt := leomcp.StripDelegationBlock(args[i], cfg); prompt != "" {
+			out = append(out, appendSystemPromptFlag, prompt)
+		}
+	}
+	return out
+}
+
+// launchConfig reads the current config for a launch of agent name; nil
+// (warned) when there is none to read.
+func (s *Supervisor) launchConfig(name string) *config.Config {
+	if s.configPath == "" {
+		return nil
+	}
+	cfg, err := config.Load(s.configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] warning: reading %s for the launch: %v\n", name, s.configPath, err)
+		return nil
+	}
+	return cfg
+}
+
+// appendSystemPromptFlag is the claude flag the nudge rides on.
+const appendSystemPromptFlag = "--append-system-prompt"
 
 // bridgedSessionWritten reports whether claude has written the transcript of
 // session id for workspace cwd. A test seam.

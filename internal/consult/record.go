@@ -135,6 +135,7 @@ type Record struct {
 	CallerHarness    string                  `json:"caller_harness,omitempty"`
 	CallerSessionID  string                  `json:"caller_session_id,omitempty"`
 	CallerWindowID   string                  `json:"caller_window_id,omitempty"`
+	CallerBridgeKey  string                  `json:"caller_bridge_key,omitempty"`
 	InputTokens      *int64                  `json:"input_tokens,omitempty"`
 	OutputTokens     *int64                  `json:"output_tokens,omitempty"`
 	CostUSD          *float64                `json:"cost_usd,omitempty"`

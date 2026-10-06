@@ -77,6 +77,39 @@ test('a dispatch\'s entry is deleted when its session finally ends', async ($, o
   expect(h.store.has('acked:' + DISPATCH)).toBe(false)
 })
 
+// The cleanup runs behind a told write still landing, never ahead of it,
+// or the write would bring the entry back.
+test('a dispatch\'s told cleanup waits for a told write in flight', async ($, on) => {
+  let release: (() => void) | null = null
+  const feed = new Feed()
+  const h = setup(on, {
+    feeds: [feed],
+    env: DISPATCH_ENV,
+    beforeStoreSet: (key) => (key.startsWith('told:') && release === null ? new Promise<void>((r) => (release = r)) : undefined),
+  })
+  await start($, h)
+  const composed = $.prompt.compose({ model: 'opus', promptModel: 'opus', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+  await h.settle()
+  expect(release).not.toBeNull()
+  const ended = $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-1', resume: {} as any })
+  await h.settle()
+  release!()
+  await composed
+  await ended
+  await h.settle()
+  expect([...h.store.keys()].filter((k) => k.startsWith('told:'))).toEqual([])
+})
+
+test('a dispatch\'s told delegation goes with it, every session\'s', async ($, on) => {
+  const told = (session: string) => ({ session, enabled: false, section: '', at: 1_000_000 })
+  const store = { ['told:' + DISPATCH + ':sess-0']: told('sess-0'), ['told:' + DISPATCH + ':sess-1']: told('sess-1'), ['told:worker:sess-1']: told('sess-1') }
+  const h = setup(on, { feeds: [new Feed()], env: DISPATCH_ENV, store })
+  await start($, h)
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-1', resume: {} as any })
+  await h.settle()
+  expect([...h.store.keys()].filter((k) => k.startsWith('told:'))).toEqual(['told:worker:sess-1'])
+})
+
 test('a dispatch keeps its entry across /clear and a resume', async ($, on) => {
   const feed = new Feed()
   const h = setup(on, { feeds: [feed], env: DISPATCH_ENV })
@@ -120,4 +153,22 @@ test('a dispatch\'s entry stays deleted behind a restamp still landing', async (
   await ended
   await h.settle()
   expect(h.store.has('acked:' + DISPATCH)).toBe(false)
+})
+
+// The cleanup must not hang on reading the baseline first: a failed
+// restamp ahead of it would leave every entry behind.
+test('a dispatch\'s told cleanup runs even when the baseline cannot be restamped', async ($, on) => {
+  const told = (session: string) => ({ session, enabled: false, section: '', at: 1 })
+  const h = setup(on, {
+    feeds: [new Feed()],
+    env: DISPATCH_ENV,
+    store: { ['told:' + DISPATCH + ':sess-1']: told('sess-1') },
+    beforeStoreSet: (key) => {
+      if (key.startsWith('told:')) throw new Error('store down')
+    },
+  })
+  await start($, h)
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-1', resume: {} as any })
+  await h.settle()
+  expect([...h.store.keys()].filter((k) => k.startsWith('told:'))).toEqual([])
 })

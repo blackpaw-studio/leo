@@ -220,6 +220,9 @@ func (c *daemonClient) dispatch(ctx context.Context, request consult.Request) (c
 	if request.Notify != nil {
 		body["notify"] = *request.Notify
 	}
+	if request.CallerBridgeKey != "" {
+		body["caller_bridge_key"] = request.CallerBridgeKey
+	}
 	if request.Isolation != "" {
 		body["isolation"] = request.Isolation
 	}

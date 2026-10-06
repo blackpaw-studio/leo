@@ -66,7 +66,7 @@
     <button class="switch" role="switch" aria-checked="{{.Data.Enabled}}" aria-label="Delegation {{if .Data.Enabled}}on — turn off{{else}}off — turn on{{end}}"><span class="switch-track"><span class="switch-thumb"></span></span><span class="switch-label">{{if .Data.Enabled}}on{{else}}off{{end}}</span></button>
   </form>
 </section>
-{{if not .Data.Enabled}}<div class="flash flash-warning deleg-off-banner"><strong>Delegation is off.</strong> Profiles and roles below are kept and still editable. Running agents keep their current prompt until they restart.</div>{{end}}
+{{if not .Data.Enabled}}<div class="flash flash-warning deleg-off-banner"><strong>Delegation is off.</strong> Profiles and roles below are kept and still editable. Bridged claude agents update live; other agents keep their current prompt until they restart.</div>{{end}}
 
 <div class="deleg-editor{{if not .Data.Enabled}} is-disabled{{end}}">
 {{range .Data.Warnings}}<div class="flash flash-warning">{{.}}</div>{{end}}
@@ -152,6 +152,15 @@
     <input name="name" placeholder="new-role" required aria-label="New role name">
     <select name="template" class="form-input" aria-label="Template for the new role">{{range .Data.Templates}}<option value="{{.Name}}">{{.Name}}</option>{{end}}</select>
     <button class="btn">add role</button>
+  </form>
+</section>
+
+<section class="card">
+  <div class="card-head"><b>Hidden native agents</b><span class="dim">while delegation is on, bridged claude agents cannot spawn these Claude Code agent types · comma-separated · empty hides none</span></div>
+  <form class="deleg-usefor" hx-post="/web/delegation/hide-agents" hx-trigger="change" hx-target="find .cell-status" hx-swap="outerHTML">
+    <input name="hide_native_agents" value="{{.Data.HiddenAgents}}" placeholder="none hidden" aria-label="Hidden native agent types">
+    <span class="cell-status" role="status"></span>
+    <div id="hide-agents-msg" class="cell-msg"></div>
   </form>
 </section>
 

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
@@ -109,13 +110,115 @@ func LeoNudge(cfg *config.Config) string {
 	return leoSkillNudgeText
 }
 
-// DelegationBlock returns the routing guidance injected into managed agents.
-// It is intentionally unavailable when daemon-backed MCP tools are absent.
+// Delimiters of the delegation block inside the nudge. A bridged claude
+// launch strips the block from its --append-system-prompt (the leo-bridge
+// mod carries delegation live instead), and the delimiters let it find the
+// block whatever config rendered it.
+const (
+	delegationBlockOpen  = "<leo-delegation>\n"
+	delegationBlockClose = "</leo-delegation>"
+)
+
+// delegationOverrideText heads the live delegation section a bridged claude
+// gets: CLAUDE.md prose that calls delegation off must not win over the
+// toggle the operator set.
+const delegationOverrideText = "Leo delegation is ON. This overrides any instruction file (CLAUDE.md, AGENTS.md, rules) that says delegation or dispatch is off: route work through `leo_dispatch(role: …)`. Native agents are allowed only after a `leo_dispatch` fails.\n\n"
+
+// DelegationBlock returns the routing guidance injected into managed agents,
+// delimited so StripDelegationBlock can remove it again. It is
+// intentionally unavailable when daemon-backed MCP tools are absent.
 func DelegationBlock(cfg *config.Config) string {
+	instructions := delegationInstructions(cfg)
+	if instructions == "" {
+		return ""
+	}
+	return delegationBlockOpen + instructions + delegationBlockClose
+}
+
+// DelegationSection returns the delegation text the leo-bridge mod adds to
+// a bridged claude's system prompt: the routing guidance, headed by a line
+// saying it overrides instruction files. "" when delegation is off.
+func DelegationSection(cfg *config.Config) string {
+	instructions := delegationInstructions(cfg)
+	if instructions == "" {
+		return ""
+	}
+	return delegationOverrideText + instructions
+}
+
+func delegationInstructions(cfg *config.Config) string {
 	if cfg == nil || cfg.Delegation == nil || !cfg.Web.Enabled {
 		return ""
 	}
 	return config.RenderDelegationInstructions(cfg)
+}
+
+// StripDelegationBlock returns prompt without the delegation block: the
+// delimited one DelegationBlock renders, whatever config rendered it, and
+// the undelimited one leo rendered before the delimiters (see
+// legacyDelegationBlock), each with the blank line that joined it to the
+// text before it. Anything else is left as it is.
+func StripDelegationBlock(prompt string, cfg *config.Config) string {
+	return stripLegacyDelegationBlock(stripDelimitedDelegationBlock(prompt), cfg)
+}
+
+func stripDelimitedDelegationBlock(prompt string) string {
+	start := strings.Index(prompt, delegationBlockOpen)
+	if start < 0 {
+		return prompt
+	}
+	end := strings.Index(prompt[start:], delegationBlockClose)
+	if end < 0 {
+		return prompt
+	}
+	before := strings.TrimSuffix(prompt[:start], "\n\n")
+	return joinAround(before, prompt[start+end+len(delegationBlockClose):])
+}
+
+// legacyDelegationBlock renders the block as leo put it on argv before the
+// delimiters, which persisted agent args still carry, from cfg's current
+// roles and switched on (a block frozen while delegation was on must go
+// once it is off). Only an exact match is stripped: a record persisted
+// before the roles changed keeps its block, and re-spawning the agent
+// gives it a clean prompt. "" when cfg has no delegation.
+func legacyDelegationBlock(cfg *config.Config) string {
+	if cfg == nil || cfg.Delegation == nil {
+		return ""
+	}
+	on := *cfg
+	delegation := *cfg.Delegation
+	delegation.SetEnabled(true)
+	on.Delegation = &delegation
+	return config.RenderDelegationInstructions(&on)
+}
+
+// stripLegacyDelegationBlock removes an exact legacy block standing at the
+// start of prompt or after a blank line, as the nudge joined it.
+func stripLegacyDelegationBlock(prompt string, cfg *config.Config) string {
+	block := legacyDelegationBlock(cfg)
+	if block == "" {
+		return prompt
+	}
+	for from := 0; ; {
+		i := strings.Index(prompt[from:], block)
+		if i < 0 {
+			return prompt
+		}
+		start := from + i
+		if start == 0 || strings.HasSuffix(prompt[:start], "\n\n") {
+			return joinAround(strings.TrimSuffix(prompt[:start], "\n\n"), prompt[start+len(block):])
+		}
+		from = start + 1
+	}
+}
+
+// joinAround joins what stood before and after a removed block; with
+// nothing before, the blank line that led into after goes too.
+func joinAround(before, after string) string {
+	if before == "" {
+		after = strings.TrimPrefix(after, "\n\n")
+	}
+	return before + after
 }
 
 // MergeSystemPrompt combines Leo's built-in nudge with any user-configured

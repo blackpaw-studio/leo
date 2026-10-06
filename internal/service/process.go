@@ -1326,7 +1326,11 @@ func superviseProcess(ctx context.Context, tmuxPath, claudePath string, spec Pro
 			if bl.bridged {
 				bl.carried = sv.carryMail(sv.bridgeWiring().hub, id, bl.target)
 			}
-			launchArgs, launchSpec, pasteBrief := bridgeLaunchSpec(bl, launchArgs, spec, opening.has(conversation))
+			var launchCfg *config.Config
+			if bl.bridged {
+				launchCfg = sv.launchConfig(id.Name())
+			}
+			launchArgs, launchSpec, pasteBrief := bridgeLaunchSpec(bl, launchArgs, spec, opening.has(conversation), launchCfg)
 			claudeCmd := buildClaudeShellCmd(binPath, launchArgs, launchSpec, os.Getenv("PATH"))
 			// Env rides as `-e KEY=VALUE` argv, never inside claudeCmd: tmux
 			// persists a pane's start command, so an interpolated credential

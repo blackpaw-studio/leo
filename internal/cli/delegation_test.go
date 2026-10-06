@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/blackpaw-studio/leo/internal/config"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 func delegationCLIConfig() *config.Config {
@@ -63,7 +64,8 @@ func TestDelegationRenderResolveAndAbsentConfig(t *testing.T) {
 	cfgFile = path
 	t.Cleanup(func() { cfgFile = old })
 	out, _, err := delegationCommand(t, "render")
-	if err != nil || out.String() != config.RenderDelegationInstructions(delegationCLIConfig()) {
+	// render prints what is injected: the instructions inside their delimiters.
+	if err != nil || out.String() != leomcp.DelegationBlock(delegationCLIConfig()) {
 		t.Fatalf("render=%q err=%v", out, err)
 	}
 	out, _, err = delegationCommand(t, "resolve", "implement")

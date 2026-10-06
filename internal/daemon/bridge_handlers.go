@@ -36,7 +36,7 @@ func (s *Server) Bridge() *bridge.Hub { return s.bridge }
 const bridgeLaunchParam = "launch"
 
 // handleBridgeStream holds agent's command stream open, writing one JSON
-// command per line and flushing each. It ends when a newer connection
+// command (or state snapshot) per line and flushing each. It ends when a newer connection
 // replaces it, the hub closes (daemon shutdown), or the client goes away;
 // unacked commands stay queued for the next connection either way.
 func (s *Server) handleBridgeStream(w http.ResponseWriter, r *http.Request) {
@@ -65,23 +65,15 @@ func (s *Server) handleBridgeStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for {
-		cmd, err := stream.Next(r.Context())
+		line, err := stream.NextLine(r.Context())
 		if err == nil {
-			err = writeBridgeCommand(rc, w, cmd)
+			err = writeBridgeLine(rc, w, line)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bridge: %s stream ended: %v\n", agent, err)
 			return
 		}
 	}
-}
-
-func writeBridgeCommand(rc *http.ResponseController, w io.Writer, cmd bridge.Command) error {
-	line, err := cmd.MarshalLine()
-	if err != nil {
-		return err
-	}
-	return writeBridgeLine(rc, w, line)
 }
 
 // writeBridgeLine writes line (none, to flush headers only) and flushes it
@@ -126,7 +118,13 @@ func (s *Server) handleBridgeReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.bridge.Apply(agent, r.URL.Query().Get(bridgeLaunchParam), report); err != nil {
-		writeError(w, bridgeErrorStatus(err, http.StatusBadRequest), err.Error())
+		fallback := http.StatusBadRequest
+		if report.Type == bridge.ReportRequest {
+			// A request that got past the launch check failed in its
+			// handler: the daemon's fault, not the report's.
+			fallback = http.StatusInternalServerError
+		}
+		writeError(w, bridgeErrorStatus(err, fallback), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, Response{OK: true})
@@ -150,6 +148,10 @@ func bridgeErrorStatus(err error, fallback int) int {
 		return http.StatusBadRequest
 	case errors.Is(err, bridge.ErrClosed):
 		return http.StatusServiceUnavailable
+	case errors.Is(err, bridge.ErrRequestDenied):
+		return http.StatusForbidden
+	case errors.Is(err, bridge.ErrRequestUnavailable):
+		return http.StatusNotImplemented
 	default:
 		return fallback
 	}

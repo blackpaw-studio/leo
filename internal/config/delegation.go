@@ -52,6 +52,34 @@ type DelegationConfig struct {
 	Roles         map[string]RoleSpec `yaml:"roles,omitempty"`
 	ActiveProfile string              `yaml:"active_profile"`
 	Profiles      map[string]Profile  `yaml:"profiles"`
+	// HideNativeAgents lists the Claude Code agent types (bare names, no
+	// plugin prefix) a bridged claude agent may not spawn while delegation
+	// is on. Absent means DefaultHiddenNativeAgents; an explicit empty list
+	// hides none.
+	HideNativeAgents *[]string `yaml:"hide_native_agents,omitempty"`
+}
+
+// DefaultHiddenNativeAgents is the hide list used when the config sets none:
+// the native agents that duplicate what delegation roles route.
+var DefaultHiddenNativeAgents = []string{"implementer", "implementer-hard", "code-reviewer", "Explore", "Plan", "general-purpose"}
+
+// HiddenNativeAgents returns the agent types hidden while delegation is on:
+// the configured list, or DefaultHiddenNativeAgents when none is set. Nil
+// for a nil config.
+func (d *DelegationConfig) HiddenNativeAgents() []string {
+	if d == nil {
+		return nil
+	}
+	if d.HideNativeAgents == nil {
+		return append([]string(nil), DefaultHiddenNativeAgents...)
+	}
+	return append([]string{}, (*d.HideNativeAgents)...)
+}
+
+// SetHiddenNativeAgents records the hide list explicitly (empty hides none).
+func (d *DelegationConfig) SetHiddenNativeAgents(names []string) {
+	list := append([]string{}, names...)
+	d.HideNativeAgents = &list
 }
 
 // IsEnabled reports whether delegation is configured and switched on.
@@ -224,6 +252,13 @@ func (c *Config) validateDelegation() []string {
 	for _, role := range sortedRoleNames(d.Roles) {
 		if !ValidName(role) {
 			errs = append(errs, fmt.Sprintf("delegation.roles.%q is not a valid name", role))
+		}
+	}
+	if d.HideNativeAgents != nil {
+		for _, name := range *d.HideNativeAgents {
+			if !ValidName(name) {
+				errs = append(errs, fmt.Sprintf("delegation.hide_native_agents %q is not a valid agent type", name))
+			}
 		}
 	}
 	for _, profileName := range sortedProfileNames(d.Profiles) {

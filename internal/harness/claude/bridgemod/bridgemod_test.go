@@ -17,12 +17,13 @@ import (
 )
 
 // wantFiles is the mod as Claude Code loads it: manifest, hooks.json, and the
-// hooks module with its helper. Tests and generated typings are not shipped.
+// hooks module with its helpers. Tests and generated typings are not shipped.
 var wantFiles = []string{
 	".claude-plugin/plugin.json",
 	"hooks/hooks.json",
 	"hooks/protocol.js",
 	"hooks/register.js",
+	"hooks/roster.js",
 }
 
 // wantInstalled is wantFiles plus the completion marker Materialize writes last.

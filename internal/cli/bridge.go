@@ -112,7 +112,7 @@ func newBridgeReportCmd(deps bridgeDeps, flags *bridgeFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:    "report",
 		Hidden: true,
-		Short:  "Post one bridge report (ack, hello or event), read from stdin, to the leo daemon",
+		Short:  "Post one bridge report (ack, hello, event or request), read from stdin, to the leo daemon",
 		Long: `Reads one JSON report from stdin and posts it to the leo daemon. The report
 travels on stdin because it can carry a whole prompt or final message, far
 more than argv holds.`,

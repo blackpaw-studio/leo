@@ -13,13 +13,17 @@ import (
 // is how often the roster refreshes when no record is roster-eligible.
 type consultLoopIntervals struct {
 	sweep, roster, rosterIdle, viewer time.Duration
+	// bridgeState paces the state pushed to bridged claudes' mods: at most
+	// one snapshot per key per tick.
+	bridgeState time.Duration
 }
 
 var defaultConsultLoopIntervals = consultLoopIntervals{
-	sweep:      5 * time.Second,
-	roster:     time.Second,
-	rosterIdle: 5 * time.Second,
-	viewer:     10 * time.Second,
+	sweep:       5 * time.Second,
+	roster:      time.Second,
+	rosterIdle:  5 * time.Second,
+	viewer:      10 * time.Second,
+	bridgeState: time.Second,
 }
 
 // withDefaults fills zero fields from defaultConsultLoopIntervals.
@@ -32,10 +36,11 @@ func (i consultLoopIntervals) withDefaults() consultLoopIntervals {
 	}
 	d := defaultConsultLoopIntervals
 	return consultLoopIntervals{
-		sweep:      pick(i.sweep, d.sweep),
-		roster:     pick(i.roster, d.roster),
-		rosterIdle: pick(i.rosterIdle, d.rosterIdle),
-		viewer:     pick(i.viewer, d.viewer),
+		sweep:       pick(i.sweep, d.sweep),
+		roster:      pick(i.roster, d.roster),
+		rosterIdle:  pick(i.rosterIdle, d.rosterIdle),
+		viewer:      pick(i.viewer, d.viewer),
+		bridgeState: pick(i.bridgeState, d.bridgeState),
 	}
 }
 
@@ -53,7 +58,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	viewer.PersistIntent = s.consults.PersistViewerRecord
 	viewer.ClosePane = s.consults.CloseRecordedPane
 	s.consults.SetCloseFinishedViewer(viewer.CloseFinished)
-	s.consults.SetNotificationDelivery(consult.NewTmuxNotificationDelivery(findTmuxPath(), s.execCommandContext))
+	s.consults.SetNotificationDelivery(s.notificationDelivery(opts.Bridge.Router))
 	interactiveLeoPath, err := os.Executable()
 	if err != nil {
 		interactiveLeoPath, _ = filepath.Abs(s.leoPath)
@@ -62,10 +67,14 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	runtime.ExecCommandContext = s.execCommandContext
 	runtime.AgentToken = s.agentToken
 	s.bridgeRouter = opts.Bridge.Router
+	var pusher *consult.StatePusher
 	if hub := opts.Bridge.hub(); hub != nil && opts.Bridge.Launcher != nil {
 		runtime.SetBridge(consult.InteractiveBridge{Hub: hub, Launcher: opts.Bridge.Launcher})
 		hub.AddSubscriber(runtime.DispatchBridgeSubscriber(s.consults))
 		s.dispatchBridge = runtime
+		hub.SetRequestHandler(s.consults.BridgeRequestHandler())
+		delegation := &delegationSource{path: s.configPath, load: s.loadConfig}
+		pusher = &consult.StatePusher{Hub: hub, Records: s.consults.RunRecords, Delegation: delegation.Get, Now: time.Now}
 	}
 	s.consults.SetInteractiveRuntime(runtime)
 	s.consults.MarkInterrupted()
@@ -91,10 +100,12 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		dispatcherTicker := time.NewTicker(intervals.sweep)
 		rosterTicker := time.NewTicker(intervals.roster)
 		viewerTicker := time.NewTicker(intervals.viewer)
+		stateTicker := time.NewTicker(intervals.bridgeState)
 		lastRosterUpdate := time.Now()
 		defer dispatcherTicker.Stop()
 		defer rosterTicker.Stop()
 		defer viewerTicker.Stop()
+		defer stateTicker.Stop()
 		for {
 			select {
 			case <-loopCtx.Done():
@@ -110,6 +121,10 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 			case now := <-viewerTicker.C:
 				viewer.Sweep(s.consults.Records(), now)
 				s.consults.Prune()
+			case <-stateTicker.C:
+				if pusher != nil {
+					pusher.Tick()
+				}
 			}
 		}
 	}()

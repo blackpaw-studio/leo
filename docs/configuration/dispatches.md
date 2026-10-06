@@ -40,6 +40,14 @@ the orchestrator. The subagent should report files to its orchestrator instead.
 waits and returns the consultant's final answer directly. Consults get an
 advisory preamble: inspect and answer, but do not modify files.
 
+`leo_consult(prompt, fork: true)` asks a fork of the caller instead: the same
+model, over the caller's whole conversation, with no tools. It is the cheapest
+consult (the conversation is served from the prompt cache) and suits a sanity
+check of the caller's own plan; `template` and `model` are ignored. Only a
+bridged claude session can fork: its leo-bridge mod answers the call in-session,
+so a fork consult never reaches the daemon and leaves no consult record. Any
+other caller gets "fork consult needs a bridged claude session".
+
 `leo_dispatch(template? | role?, prompt, model?, effort?, cwd?, name?, mode?, timeout_seconds?, notify?, isolation?)`
 starts work asynchronously and immediately returns an ID. Use it for
 implementation, review, or exploration that can proceed while the caller does
@@ -67,6 +75,11 @@ caller to collect the result with `leo_wait`.
 Delivery is best-effort and at most once. Leo durably claims a notification
 before writing to the caller, so a daemon crash can lose a claimed notification
 rather than risk sending it twice. Collection remains available in that case.
+A claude caller agent with a connected leo bridge gets the notification as a
+bridge message kept in its outbox until its claude takes it, under the id
+`notify-<dispatch-id>-<turn>` so a repeat is recognized and runs once; other
+claude callers get it through the peer inbox, and codex or opencode callers by
+tmux.
 
 `timeout_seconds` is an optional dispatch run cap; dispatches are unlimited
 when it is omitted. `leo_wait(ids, timeout_seconds?)` waits for one or more
@@ -118,7 +131,9 @@ usage and cost (including separately reported cache input), Codex reports
 completed-turn usage without double-counting cached input, and OpenCode only
 reports tokens from completed steps (reasoning output is included). Leo never
 estimates Codex or OpenCode cost. Interactive runs leave usage unknown because
-their hooks do not provide a complete native event stream.
+their hooks do not provide a complete native event stream, except bridged claude
+runs: their leo-bridge mod reports each turn's tokens (input including cache
+reads and writes) and the session's running cost.
 
 ## Interactive mode
 
