@@ -27,6 +27,9 @@ type versionData struct {
 type healthData struct {
 	Version string `json:"version"`
 	Ready   bool   `json:"ready"`
+	// PID identifies this daemon boot, so a caller that restarted the
+	// daemon can tell the new process from the old one still answering.
+	PID int `json:"pid"`
 }
 
 type localStateData struct {

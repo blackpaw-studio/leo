@@ -1,8 +1,9 @@
 # Local observability routes
 
-Leo exposes four unauthenticated, read-only routes on its local Unix socket:
+Leo exposes five unauthenticated, read-only routes on its local Unix socket:
 
-- `GET /health` returns `{"ok":true,"data":{"version":"..."}}`. `GET /version` is an alias with the same response.
+- `GET /health` returns `{"ok":true,"data":{"version":"...","ready":false,"pid":1234}}`. It answers 200 as soon as the socket binds; `ready` flips true only once boot has finished restoring agents, and `pid` identifies the daemon process so a caller that restarted it can tell the new daemon from the old one. `leo update` and `leo service restart` wait on both (`daemon.WaitReady`).
+- `GET /version` returns `{"ok":true,"data":{"version":"..."}}`.
 - `GET /events` streams the same local SSE events as the web API: a `hello` frame first, named event frames, and a `: ping` heartbeat every 20 seconds.
 - `GET /state` returns `{"ok":true,"data":{"agents":[...]}}`; agent rows match `/api/v1/state.data.agents`.
 - `GET /templates` returns the same sorted rows as `leo template list --json`, wrapped in the daemon response envelope.

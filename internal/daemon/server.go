@@ -121,6 +121,8 @@ type Server struct {
 	// restored agents; until then agent queries (e.g. /agents/stale) answer
 	// from a partially populated supervisor.
 	ready atomic.Bool
+	// pid is this daemon's boot identity reported on /health.
+	pid int
 }
 
 // Option configures a Server at construction.
@@ -182,6 +184,7 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 		router:        newSessionRouter(),
 		parentContext: context.Background(),
 		configWriter:  config.NewWriter(),
+		pid:           os.Getpid(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -554,7 +557,7 @@ func (s *Server) MarkReady() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load()})
+	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load(), PID: s.pid})
 }
 
 type taskEnqueueReq struct {

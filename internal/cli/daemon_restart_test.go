@@ -18,23 +18,39 @@ func TestRestartDaemonAndWait(t *testing.T) {
 		wantWaited   bool
 		wantNotReady bool
 		wantErr      error
+		prevPID      int
+		prevKnown    bool
+		wantExcluded int
 	}{
 		{name: "ready", wantWaited: true},
+		{name: "excludes the pre-restart daemon", prevPID: 42, prevKnown: true, wantWaited: true, wantExcluded: 42},
+		{name: "no pre-restart daemon: nothing excluded", prevPID: 42, prevKnown: false, wantWaited: true, wantExcluded: 0},
 		{name: "restart fails: no wait, not a readiness warning", restartErr: restartErr, wantErr: restartErr},
 		{name: "never ready: classified as not-ready", waitErr: waitErr, wantWaited: true, wantNotReady: true, wantErr: waitErr},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			waited := false
+			restarted := false
 			deps := daemonRestartDeps{
+				currentPID: func(_ context.Context, home string) (int, bool) {
+					if restarted {
+						t.Error("identity read after restart; it must name the old daemon")
+					}
+					return tt.prevPID, tt.prevKnown
+				},
 				restart: func(home string) error {
 					if home != "/home/leo" {
 						t.Errorf("restart home = %q", home)
 					}
+					restarted = true
 					return tt.restartErr
 				},
-				waitReady: func(_ context.Context, home string, timeout time.Duration) error {
+				waitReady: func(_ context.Context, home string, timeout time.Duration, previousPID int) error {
 					waited = true
+					if previousPID != tt.wantExcluded {
+						t.Errorf("previousPID = %d, want %d", previousPID, tt.wantExcluded)
+					}
 					if home != "/home/leo" || timeout != daemonReadyTimeout {
 						t.Errorf("waitReady(%q, %s)", home, timeout)
 					}

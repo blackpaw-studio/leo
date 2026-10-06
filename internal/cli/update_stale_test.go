@@ -154,3 +154,18 @@ func contains(hay []string, needle string) bool {
 	}
 	return false
 }
+
+func TestCountLiveAgents_MatchesStaleScope(t *testing.T) {
+	// StaleAgents covers every agent the supervisor holds — including ones
+	// still "starting" right after a daemon restart — so the "N of M"
+	// denominator must count those too; only dormant records are excluded.
+	recs := []agent.Record{
+		{Name: "a", Status: "running"},
+		{Name: "b", Status: "starting"},
+		{Name: "c", Status: "stopped"},
+		{Name: "d", Status: "exited"},
+	}
+	if got := countLiveAgents(recs); got != 3 {
+		t.Fatalf("countLiveAgents = %d, want 3", got)
+	}
+}

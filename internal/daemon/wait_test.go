@@ -15,15 +15,27 @@ import (
 
 // fakeDaemon answers /health on the workspace socket the way a real daemon
 // does, with a readiness flag the test flips to stand in for agent restore
-// finishing. Must be called from the test goroutine.
+// finishing. It reports fakeDaemonPID. Must be called from the test goroutine.
 func fakeDaemon(t *testing.T, workDir string, ready *atomic.Bool) {
+	t.Helper()
+	var pid atomic.Int64
+	pid.Store(fakeDaemonPID)
+	fakeDaemonWithPID(t, workDir, ready, &pid)
+}
+
+// fakeDaemonPID is the boot identity fakeDaemon reports.
+const fakeDaemonPID = 4242
+
+// fakeDaemonWithPID is fakeDaemon with a boot identity the test can change,
+// standing in for the old process still answering after a restart returned.
+func fakeDaemonWithPID(t *testing.T, workDir string, ready *atomic.Bool, pid *atomic.Int64) {
 	t.Helper()
 	ln, err := net.Listen("unix", SockPath(workDir))
 	if err != nil {
 		t.Fatalf("listening: %v", err)
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeData(w, http.StatusOK, healthData{Version: "v-test", Ready: ready.Load()})
+		writeData(w, http.StatusOK, healthData{Version: "v-test", Ready: ready.Load(), PID: int(pid.Load())})
 	})}
 	t.Cleanup(func() { _ = srv.Close() })
 	go func() { _ = srv.Serve(ln) }()
@@ -33,7 +45,7 @@ func fakeDaemon(t *testing.T, workDir string, ready *atomic.Bool) {
 // free to bring the fake daemon up (testing.T must only be used from there).
 func waitAsync(workDir string, timeout time.Duration) <-chan error {
 	done := make(chan error, 1)
-	go func() { done <- WaitReady(context.Background(), workDir, timeout) }()
+	go func() { done <- WaitReady(context.Background(), workDir, timeout, 0) }()
 	return done
 }
 
@@ -123,7 +135,7 @@ func TestWaitReady_TimeoutWhileNotReadySaysSo(t *testing.T) {
 	workDir := tmpWorkDir(t)
 	fakeDaemon(t, workDir, readyFlag(false))
 
-	err := WaitReady(context.Background(), workDir, 400*time.Millisecond)
+	err := WaitReady(context.Background(), workDir, 400*time.Millisecond, 0)
 	if err == nil {
 		t.Fatal("WaitReady returned nil while daemon never became ready")
 	}
@@ -136,7 +148,7 @@ func TestWaitReady_TimesOutWhenDaemonNeverComesUp(t *testing.T) {
 	workDir := tmpWorkDir(t)
 
 	start := time.Now()
-	err := WaitReady(context.Background(), workDir, 400*time.Millisecond)
+	err := WaitReady(context.Background(), workDir, 400*time.Millisecond, 0)
 	if err == nil {
 		t.Fatal("WaitReady returned nil with no daemon listening")
 	}
@@ -148,6 +160,7 @@ func TestWaitReady_TimesOutWhenDaemonNeverComesUp(t *testing.T) {
 func TestHealth_ReportsReadyOnlyAfterMarkReady(t *testing.T) {
 	s := New(filepath.Join(t.TempDir(), "leo.sock"), "/nonexistent/leo.yaml", nil)
 	s.SetObservability(nil, nil, nil, nil, "v-test")
+	s.pid = 77
 
 	get := func() (int, string) {
 		w := httptest.NewRecorder()
@@ -158,13 +171,62 @@ func TestHealth_ReportsReadyOnlyAfterMarkReady(t *testing.T) {
 	// Liveness callers (IsRunning, SocketHealthy) only look at the status,
 	// so /health stays 200 while agents are still being restored.
 	code, body := get()
-	if code != http.StatusOK || body != "{\"ok\":true,\"data\":{\"version\":\"v-test\",\"ready\":false}}\n" {
+	if code != http.StatusOK || body != "{\"ok\":true,\"data\":{\"version\":\"v-test\",\"ready\":false,\"pid\":77}}\n" {
 		t.Fatalf("before MarkReady: %d %s", code, body)
 	}
 
 	s.MarkReady()
 	code, body = get()
-	if code != http.StatusOK || body != "{\"ok\":true,\"data\":{\"version\":\"v-test\",\"ready\":true}}\n" {
+	if code != http.StatusOK || body != "{\"ok\":true,\"data\":{\"version\":\"v-test\",\"ready\":true,\"pid\":77}}\n" {
 		t.Fatalf("after MarkReady: %d %s", code, body)
+	}
+}
+
+func TestWaitReady_IgnoresPreviousDaemonStillAnswering(t *testing.T) {
+	workDir := tmpWorkDir(t)
+	const oldPID, newPID = 100, 200
+	var pid atomic.Int64
+	pid.Store(oldPID)
+	// kickstart -k can return while the old process still serves the
+	// socket; it reports ready, but it is not the daemon we restarted into.
+	fakeDaemonWithPID(t, workDir, readyFlag(true), &pid)
+
+	done := make(chan error, 1)
+	go func() { done <- WaitReady(context.Background(), workDir, 5*time.Second, oldPID) }()
+	select {
+	case err := <-done:
+		t.Fatalf("WaitReady accepted the previous daemon: %v", err)
+	case <-time.After(600 * time.Millisecond):
+	}
+
+	pid.Store(newPID)
+	if err := awaitResult(t, done, 5*time.Second); err != nil {
+		t.Fatalf("WaitReady: %v", err)
+	}
+}
+
+func TestWaitReady_TimeoutOnPreviousDaemonSaysSo(t *testing.T) {
+	workDir := tmpWorkDir(t)
+	fakeDaemon(t, workDir, readyFlag(true))
+
+	err := WaitReady(context.Background(), workDir, 400*time.Millisecond, fakeDaemonPID)
+	if err == nil {
+		t.Fatal("WaitReady returned nil while only the previous daemon answered")
+	}
+	if !strings.Contains(err.Error(), "previous daemon") {
+		t.Fatalf("error %q should say only the previous daemon answered", err)
+	}
+}
+
+func TestDaemonPID(t *testing.T) {
+	workDir := tmpWorkDir(t)
+	if _, ok := DaemonPID(context.Background(), workDir); ok {
+		t.Fatal("DaemonPID reported a daemon with nothing listening")
+	}
+
+	fakeDaemon(t, workDir, readyFlag(false))
+	got, ok := DaemonPID(context.Background(), workDir)
+	if !ok || got != fakeDaemonPID {
+		t.Fatalf("DaemonPID = %d, %v; want %d, true", got, ok, fakeDaemonPID)
 	}
 }
