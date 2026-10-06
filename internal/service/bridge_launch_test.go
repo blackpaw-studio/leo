@@ -157,6 +157,9 @@ type bridgeTestOpts struct {
 	// isDurable keeps agent delivers in an outbox under home, as the
 	// daemon does (see mailStore).
 	isDurable bool
+	// configPath is the leo.yaml the supervisor reads at launch (default
+	// none).
+	configPath string
 }
 
 // startBridged runs superviseProcess for spec on a supervisor wired to a
@@ -177,6 +180,7 @@ func startBridged(t *testing.T, tmuxPath, version string, connectTimeout time.Du
 	ctx, cancel := context.WithCancel(context.Background())
 	sv := NewSupervisor(ctx)
 	sv.homePath = o.home
+	sv.configPath = o.configPath
 	sv.tmuxPath = tmuxPath
 	hub := bridge.New(bridge.Options{})
 	launcher := bridgemod.NewLauncher(bridgemod.LauncherOptions{

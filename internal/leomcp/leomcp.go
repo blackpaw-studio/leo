@@ -153,25 +153,19 @@ func delegationInstructions(cfg *config.Config) string {
 	return config.RenderDelegationInstructions(cfg)
 }
 
-// The fixed opening and closing text of the delegation block as leo
-// rendered it before the delimiters (config.RenderDelegationInstructions,
-// joined to the nudge by a blank line), which persisted agent args still
-// carry. Between them stand the "- role" lines, each use_for verbatim and
-// so possibly spanning lines.
-const (
-	legacyDelegationHead = "Delegation roles:\n"
-	legacyDelegationTail = "Dispatch with `leo_dispatch(role: …)`; do not pick templates or models yourself.\n" +
-		"Call `leo_delegation` if a role you expect is missing.\n"
-)
+// StripDelegationBlock returns prompt without the delegation block: the
+// delimited one DelegationBlock renders, whatever config rendered it, and
+// the undelimited one leo rendered before the delimiters (see
+// legacyDelegationBlock), each with the blank line that joined it to the
+// text before it. Anything else is left as it is.
+func StripDelegationBlock(prompt string, cfg *config.Config) string {
+	return stripLegacyDelegationBlock(stripDelimitedDelegationBlock(prompt), cfg)
+}
 
-// StripDelegationBlock returns prompt without the delegation block
-// DelegationBlock rendered — delimited, or the legacy undelimited form —
-// and without the blank line that joined it to the text before it. A
-// prompt without a whole block is returned unchanged.
-func StripDelegationBlock(prompt string) string {
+func stripDelimitedDelegationBlock(prompt string) string {
 	start := strings.Index(prompt, delegationBlockOpen)
 	if start < 0 {
-		return stripLegacyDelegationBlock(prompt)
+		return prompt
 	}
 	end := strings.Index(prompt[start:], delegationBlockClose)
 	if end < 0 {
@@ -181,24 +175,41 @@ func StripDelegationBlock(prompt string) string {
 	return joinAround(before, prompt[start+end+len(delegationBlockClose):])
 }
 
-// stripLegacyDelegationBlock removes the legacy block: the first closing
-// text, back to the nearest opening before it that starts the prompt or
-// follows a blank line, with role lines (or nothing) between. Anything
-// else is user text and stays.
-func stripLegacyDelegationBlock(prompt string) string {
-	tail := strings.Index(prompt, legacyDelegationTail)
-	if tail < 0 {
+// legacyDelegationBlock renders the block as leo put it on argv before the
+// delimiters, which persisted agent args still carry, from cfg's current
+// roles and switched on (a block frozen while delegation was on must go
+// once it is off). Only an exact match is stripped: a record persisted
+// before the roles changed keeps its block, and re-spawning the agent
+// gives it a clean prompt. "" when cfg has no delegation.
+func legacyDelegationBlock(cfg *config.Config) string {
+	if cfg == nil || cfg.Delegation == nil {
+		return ""
+	}
+	on := *cfg
+	delegation := *cfg.Delegation
+	delegation.SetEnabled(true)
+	on.Delegation = &delegation
+	return config.RenderDelegationInstructions(&on)
+}
+
+// stripLegacyDelegationBlock removes an exact legacy block standing at the
+// start of prompt or after a blank line, as the nudge joined it.
+func stripLegacyDelegationBlock(prompt string, cfg *config.Config) string {
+	block := legacyDelegationBlock(cfg)
+	if block == "" {
 		return prompt
 	}
-	head := strings.LastIndex(prompt[:tail], legacyDelegationHead)
-	if head < 0 || (head > 0 && !strings.HasSuffix(prompt[:head], "\n\n")) {
-		return prompt
+	for from := 0; ; {
+		i := strings.Index(prompt[from:], block)
+		if i < 0 {
+			return prompt
+		}
+		start := from + i
+		if start == 0 || strings.HasSuffix(prompt[:start], "\n\n") {
+			return joinAround(strings.TrimSuffix(prompt[:start], "\n\n"), prompt[start+len(block):])
+		}
+		from = start + 1
 	}
-	roles := prompt[head+len(legacyDelegationHead) : tail]
-	if roles != "" && (!strings.HasPrefix(roles, "- ") || !strings.HasSuffix(roles, "\n")) {
-		return prompt
-	}
-	return joinAround(strings.TrimSuffix(prompt[:head], "\n\n"), prompt[tail+len(legacyDelegationTail):])
 }
 
 // joinAround joins what stood before and after a removed block; with

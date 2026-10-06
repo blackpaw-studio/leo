@@ -115,8 +115,16 @@ change the guidance. One-off dispatches and consults do **not** receive this
 block.
 
 Daemon config reload replaces an existing managed OpenCode agent's `AGENTS.md`
-block. Existing Claude and Codex agents need a restart to receive changed role
-guidance. `leo delegation use` reloads a running daemon after saving; if the
+block. Claude agents running with the leo-bridge mod get the guidance live
+from the mod instead of their launch argv, so a change reaches them without a
+restart. Other Claude agents and Codex agents need a restart to receive
+changed role guidance.
+
+An agent saved by an older leo carries the guidance in its stored launch
+args without the `<leo-delegation>` delimiters. On a bridged launch leo
+removes that older block only when the current roles render it exactly; if
+the roles changed since, the stale block stays. Re-spawning such an agent
+(`leo agent stop` then spawn it again) gives it a clean prompt. `leo delegation use` reloads a running daemon after saving; if the
 daemon is not running, the new profile applies when it starts.
 
 ## CLI, MCP, and web UI
