@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
+	"unicode"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
@@ -12,6 +14,8 @@ import (
 type delegationPageData struct {
 	Config    *config.DelegationConfig
 	Enabled   bool
+	// HiddenAgents is the hide list as the field shows it: comma-separated.
+	HiddenAgents string
 	Templates []delegationTemplate
 	Profiles  []delegationProfileRow
 	Rows      []delegationRow
@@ -112,7 +116,7 @@ func (s *Server) buildDelegationData(_ *http.Request) (any, error) {
 		}
 		rows = append(rows, row)
 	}
-	return delegationPageData{Config: d, Enabled: d.IsEnabled(), Templates: templates, Profiles: profiles, Rows: rows, Warnings: cfg.DelegationWarnings(), Records: records}, nil
+	return delegationPageData{Config: d, Enabled: d.IsEnabled(), HiddenAgents: strings.Join(d.HiddenNativeAgents(), ", "), Templates: templates, Profiles: profiles, Rows: rows, Warnings: cfg.DelegationWarnings(), Records: records}, nil
 }
 
 func delegationTemplates(cfg *config.Config) []delegationTemplate {
@@ -253,6 +257,27 @@ func (s *Server) handleDelegationUseFor(w http.ResponseWriter, r *http.Request) 
 		return nil
 	})
 	s.renderDelegationStatus(w, useForStatusID(role), warn, errMsg)
+}
+
+// hideAgentsStatusID addresses the hide list field's status slot.
+const hideAgentsStatusID = "hide-agents"
+
+// handleDelegationHideAgents autosaves the native agent types bridged
+// claude agents may not spawn while delegation is on. Names are separated
+// by commas or spaces; an empty field hides none.
+func (s *Server) handleDelegationHideAgents(w http.ResponseWriter, r *http.Request) {
+	names := strings.FieldsFunc(r.FormValue("hide_native_agents"), func(c rune) bool {
+		return c == ',' || unicode.IsSpace(c)
+	})
+	warn, errMsg := s.mutateConfig(func(cfg *config.Config) error {
+		d, err := requireDelegation(cfg)
+		if err != nil {
+			return err
+		}
+		d.SetHiddenNativeAgents(names)
+		return nil
+	})
+	s.renderDelegationStatus(w, hideAgentsStatusID, warn, errMsg)
 }
 
 // handleDelegationEnabled flips the global delegation switch. Profiles and
