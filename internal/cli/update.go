@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prompt"
@@ -234,6 +235,9 @@ func prereleaseOptions(allowUnsigned bool) update.PrereleaseOptions {
 // maybeRestartDaemon offers to bounce the daemon after a binary swap so
 // the new binary actually serves new requests. Same prompt the stable
 // update path uses — factored out so both paths stay in sync.
+// daemonReadyTimeout bounds the wait for a restarted daemon to answer.
+const daemonReadyTimeout = 30 * time.Second
+
 func maybeRestartDaemon() error {
 	cfg, err := loadConfig()
 	if err != nil || cfg.IsClientOnly() {
@@ -259,6 +263,13 @@ func maybeRestartDaemon() error {
 		return fmt.Errorf("restarting daemon: %w", err)
 	}
 	success.Println("Daemon restarted")
+
+	// kickstart/systemctl return before the new daemon binds its socket;
+	// asking it anything sooner fails with "no such file or directory".
+	if err := daemon.WaitHealthy(context.Background(), cfg.HomePath, daemonReadyTimeout); err != nil {
+		warn.Printf("Could not check agents for pending changes: %v\n", err)
+		return nil
+	}
 
 	// Only now, with the new binary serving, is it worth asking which agents
 	// are still running the old wiring: restoring the daemon respawns agents
