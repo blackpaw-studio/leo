@@ -12,15 +12,15 @@ import (
 )
 
 type delegationPageData struct {
-	Config    *config.DelegationConfig
-	Enabled   bool
+	Config  *config.DelegationConfig
+	Enabled bool
 	// HiddenAgents is the hide list as the field shows it: comma-separated.
 	HiddenAgents string
-	Templates []delegationTemplate
-	Profiles  []delegationProfileRow
-	Rows      []delegationRow
-	Warnings  []string
-	Records   []any
+	Templates    []delegationTemplate
+	Profiles     []delegationProfileRow
+	Rows         []delegationRow
+	Warnings     []string
+	Records      []any
 }
 
 // delegationTemplate is a template choice plus the model a role inherits

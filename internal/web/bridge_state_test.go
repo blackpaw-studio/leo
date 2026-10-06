@@ -49,7 +49,8 @@ func TestDelegationSourceRereadsOnlyAChangedFile(t *testing.T) {
 		loads++
 		return bridgeDelegationConfig(enabled), nil
 	}}
-	if !src.Get().Enabled || !src.Get().Enabled || loads != 1 {
+	first, second := src.Get(), src.Get()
+	if !first.Enabled || !second.Enabled || loads != 1 {
 		t.Fatalf("loads = %d, want 1 for an unchanged file", loads)
 	}
 	enabled = false

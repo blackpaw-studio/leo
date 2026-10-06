@@ -34,7 +34,6 @@ func postRequest(t *testing.T, workDir string) *http.Response {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
-	t.Cleanup(func() { resp.Body.Close() })
 	return resp
 }
 
@@ -53,7 +52,9 @@ func TestBridgeRequestStatuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			workDir, hub, _ := startBridgeServer(t)
 			hub.SetRequestHandler(tc.handler)
-			if resp := postRequest(t, workDir); resp.StatusCode != tc.status {
+			resp := postRequest(t, workDir)
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.status {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.status)
 			}
 		})

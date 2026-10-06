@@ -33,7 +33,11 @@ func firstLaunchText(t *testing.T, logPath string) string {
 		t.Fatal(err)
 	}
 	log := string(b)
-	return log[strings.Index(log, "new-session"):]
+	i := strings.Index(log, "new-session")
+	if i < 0 {
+		t.Fatalf("no new-session in tmux log:\n%s", log)
+	}
+	return log[i:]
 }
 
 // A bridged claude gets delegation live from the mod, so its launch argv
