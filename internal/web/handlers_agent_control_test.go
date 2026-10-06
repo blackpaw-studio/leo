@@ -14,6 +14,7 @@ import (
 
 	"github.com/blackpaw-studio/leo/internal/agent"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
 func TestWebAgentMessageDeliversClaudeViaPeerInbox(t *testing.T) {
@@ -116,6 +117,76 @@ func TestWebAgentMessageSendsLiteralThenEnter(t *testing.T) {
 	last := calls[len(calls)-1]
 	if last[len(last)-1] != "Enter" {
 		t.Errorf("last call should submit with Enter; got %v", last)
+	}
+}
+
+// recordTyping stubs s's tmux, reporting whether anything was typed.
+func recordTyping(s *Server) (typed func() bool) {
+	var (
+		mu    sync.Mutex
+		isSet bool
+	)
+	s.execCommand = func(name string, args ...string) *exec.Cmd {
+		if argsContain(args, "send-keys") {
+			mu.Lock()
+			isSet = true
+			mu.Unlock()
+		}
+		if argsContain(args, "capture-pane") {
+			return exec.Command("echo", "❯ hello")
+		}
+		return exec.Command("true")
+	}
+	return func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return isSet
+	}
+}
+
+// The live typed path holds the session's input like every paste does
+// (see tmux.LockSessionInput): it waits, typing nothing, while another
+// paste into the session is under way, and answers 503 busy once its own
+// wait (shorter than its client's) runs out.
+func TestWebAgentMessageWaitsForAPasteUnderWay(t *testing.T) {
+	s, _ := newTestServer(t)
+	typed := recordTyping(s)
+	orig := sessionInputWait
+	sessionInputWait = 50 * time.Millisecond
+	t.Cleanup(func() { sessionInputWait = orig })
+	unlock, err := tmux.LockSessionInput(context.Background(), "leo-assistant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	req := httptest.NewRequest("POST", "/web/agent/assistant/message", strings.NewReader(`{"text":"hello"}`))
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, req)
+
+	if typed() {
+		t.Fatal("typed into a session another paste holds")
+	}
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "busy") {
+		t.Fatalf("status = %d %s, want 503 busy", w.Code, w.Body.String())
+	}
+}
+
+// A client that gave up before the session was free gets no late message:
+// one typed after it stopped waiting would arrive as a duplicate of the
+// retry it is about to send. Repeated, since a free lock and a done request
+// race in the lock's select.
+func TestWebAgentMessageTypesNothingForAClientThatLeft(t *testing.T) {
+	s, _ := newTestServer(t)
+	typed := recordTyping(s)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 64 {
+		req := httptest.NewRequest("POST", "/web/agent/assistant/message", strings.NewReader(`{"text":"hello"}`)).WithContext(ctx)
+		s.httpServer.Handler.ServeHTTP(httptest.NewRecorder(), req)
+		if typed() {
+			t.Fatal("typed a message for a client that had already given up")
+		}
 	}
 }
 

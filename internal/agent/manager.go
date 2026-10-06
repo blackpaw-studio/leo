@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -56,6 +57,32 @@ type Supervisor interface {
 	EphemeralAgents() map[string]ProcessState
 }
 
+// mailKeeper is the part of a Supervisor (service.Supervisor) that keeps
+// agents' undelivered messages: what a stopped agent's rename moves and a
+// deletion drops. A live agent's messages move with RenameAgent.
+type mailKeeper interface {
+	RenameAgentMail(oldName, newName string) error
+	DropAgentMail(name string)
+}
+
+// staleMailGuard is the part of a Supervisor that says whether a name's
+// outbox still holds messages (see service.Supervisor.CheckNoAgentMail).
+type staleMailGuard interface {
+	CheckNoAgentMail(name string) error
+}
+
+// checkNoStaleMail refuses a brand-new agent the name agentName while its
+// outbox holds a former holder's messages: its first launch would carry
+// them. As for a rename onto such a name, they stay for a person to deal
+// with (outbox.ErrNameHasMessages names their file).
+func (m *Manager) checkNoStaleMail(agentName string) error {
+	guard, ok := m.sup.(staleMailGuard)
+	if !ok {
+		return nil
+	}
+	return guard.CheckNoAgentMail(agentName)
+}
+
 // ConfigLoader returns the current config. It is invoked on every Manager call so
 // the Manager picks up config edits without a restart.
 type ConfigLoader func() (*config.Config, error)
@@ -82,6 +109,35 @@ type Manager struct {
 	// surfacedFiles holds files agents surfaced to the user. Delete and
 	// Rename clear them (a renamed agent starts with none). nil-safe.
 	surfacedFiles *observe.SurfacedFileStore
+	// bridgeCapable reports whether a claude agent launched now would load
+	// the leo bridge, which delivers the opening prompt instead of argv.
+	// nil means never. See SetBridgeCapable.
+	bridgeCapable func() bool
+	// bridgeStatus reads a live agent's Record.Bridge and BridgePending;
+	// nil leaves them empty.
+	bridgeStatus func(name string) BridgeStatus
+}
+
+// SetBridgeCapable tells the Manager how to learn whether claude launches
+// load the leo bridge; when they do, a claude opening prompt is not held to
+// the argv limit (see resolveOpeningPrompt).
+func (m *Manager) SetBridgeCapable(capable func() bool) {
+	m.bridgeCapable = capable
+}
+
+// SetBridgeStatus tells the Manager how to read a live agent's bridge
+// status (Record.Bridge and BridgePending) for List.
+func (m *Manager) SetBridgeStatus(status func(name string) BridgeStatus) {
+	m.bridgeStatus = status
+}
+
+// openingPromptLimit is the largest claude opening prompt a spawn accepts
+// now: argv's, unless the bridge will deliver it.
+func (m *Manager) openingPromptLimit() int {
+	if m.bridgeCapable != nil && m.bridgeCapable() {
+		return MaxBridgedOpeningBytes
+	}
+	return claudeharness.ArgvPromptLimit
 }
 
 // SetAttention wires the attention store. Optional; daemon boot is the only
@@ -212,6 +268,36 @@ type Record struct {
 	// this agent again (an idle sweep, or a manual stop that requested it);
 	// false means it stays dormant until an operator runs Start explicitly.
 	WakeOnMessage bool `json:"wake_on_message,omitempty"`
+	// Bridge is a live claude agent's leo bridge: BridgeConnected or
+	// BridgeAbsent. Empty for other harnesses and stopped agents.
+	Bridge string `json:"bridge,omitempty"`
+	// BridgePending counts the commands queued for an absent bridge: they
+	// wait for its mod to connect, and keep the idle sweep from suspending
+	// the agent (that would drop them). Zero while connected.
+	BridgePending int `json:"bridge_pending,omitempty"`
+}
+
+// Bridge statuses reported in Record.Bridge.
+const (
+	BridgeConnected = "connected"
+	BridgeAbsent    = "absent"
+)
+
+// BridgeStatus is a live agent's leo bridge as List reports it: State is
+// Record.Bridge, Pending Record.BridgePending.
+type BridgeStatus struct {
+	State   string
+	Pending int
+}
+
+// BridgeSummary is r's bridge as the agent list and doctor show it: the
+// status, and for an absent bridge with commands queued, how many, so an
+// agent stuck waiting on its mod is not silent.
+func (r Record) BridgeSummary() string {
+	if r.Bridge == BridgeAbsent && r.BridgePending > 0 {
+		return fmt.Sprintf("%s, %d pending", r.Bridge, r.BridgePending)
+	}
+	return r.Bridge
 }
 
 // DeleteOptions tunes Manager.Delete.
@@ -384,6 +470,9 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 		}
 	}
 	defer release()
+	if err := m.checkNoStaleMail(agentName); err != nil {
+		return Record{}, err
+	}
 
 	workspace, _, err := ResolveWorkspace(tmpl, spec.Template, spec.Repo, spec.Name)
 	if err != nil {
@@ -400,7 +489,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	var openingBriefID string
 	if isClaude {
 		var err error
-		openingBriefID, err = resolveOpeningPrompt(cfg, agentName, spec.Prompt)
+		openingBriefID, err = resolveOpeningPrompt(cfg, agentName, spec.Prompt, m.openingPromptLimit())
 		if err != nil {
 			return Record{}, err
 		}
@@ -655,6 +744,9 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 		}
 	}
 	defer release()
+	if err := m.checkNoStaleMail(agentName); err != nil {
+		return Record{}, err
+	}
 
 	canonical, err := p.canonical()
 	if err != nil {
@@ -705,7 +797,7 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 	var openingBriefID string
 	if isClaude {
 		var err error
-		openingBriefID, err = resolveOpeningPrompt(cfg, layout.AgentName, spec.Prompt)
+		openingBriefID, err = resolveOpeningPrompt(cfg, layout.AgentName, spec.Prompt, m.openingPromptLimit())
 		if err != nil {
 			rollbackWorktree()
 			return Record{}, err
@@ -845,6 +937,10 @@ func (m *Manager) List() []Record {
 			Status:    state.Status,
 			StartedAt: state.StartedAt,
 			Restarts:  state.Restarts,
+		}
+		if m.bridgeStatus != nil {
+			st := m.bridgeStatus(name)
+			r.Bridge, r.BridgePending = st.State, st.Pending
 		}
 		mergeStored(&r, stored)
 		out = append(out, r)
@@ -1536,6 +1632,10 @@ func (m *Manager) Delete(ctx context.Context, name string, opts DeleteOptions) e
 	}
 
 	agentstore.Remove(cfg.HomePath, name)
+	// What it never took is dropped, and its senders told.
+	if mail, ok := m.sup.(mailKeeper); ok {
+		mail.DropAgentMail(name)
+	}
 	m.attention.Remove(name)
 	m.surfacedFiles.Remove(name)
 	removeSettingsSpill(cfg.HomePath, name)
@@ -1736,7 +1836,22 @@ func (m *Manager) Rename(query, rawNewName string) (Record, error) {
 		// happened even if the store write then failed, leaving the agent
 		// under its old name with no compensating event to undo the
 		// announce. See the finding this closes.
+		//
+		// Its undelivered messages move first: a rename they could not
+		// follow would part the agent from them (or hand them to whoever
+		// takes the old name next).
+		mail, keepsMail := m.sup.(mailKeeper)
+		if keepsMail {
+			if err := mail.RenameAgentMail(oldName, newName); err != nil {
+				return Record{}, fmt.Errorf("moving undelivered messages: %w", err)
+			}
+		}
 		if err := persistRename(); err != nil {
+			if keepsMail {
+				if undoErr := mail.RenameAgentMail(newName, oldName); undoErr != nil {
+					return Record{}, fmt.Errorf("persisting rename: %w (and its undelivered messages stayed under %s: %v)", err, newName, undoErr)
+				}
+			}
 			return Record{}, fmt.Errorf("persisting rename: %w", err)
 		}
 		m.announceRename(cfg, rec, oldName, newName)

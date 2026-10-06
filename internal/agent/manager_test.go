@@ -1949,3 +1949,51 @@ func assertContainsFlag(t *testing.T, args []string, flag, value string) {
 	}
 	t.Errorf("expected args to contain %s %s, got %v", flag, value, args)
 }
+
+// A live agent's bridge status comes from the supervisor; a stopped one has
+// none.
+func TestListReportsLiveAgentsBridgeStatus(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home}
+	sup := &capturingSupervisor{agents: map[string]ProcessState{
+		"leo-a": {Name: "leo-a", Status: "running"},
+		"leo-b": {Name: "leo-b", Status: "running"},
+	}}
+	_ = agentstore.Save(home, agentstore.Record{Name: "leo-c", Workspace: "/w", Stopped: true})
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetBridgeStatus(func(name string) BridgeStatus {
+		return map[string]BridgeStatus{
+			"leo-a": {State: BridgeConnected},
+			"leo-b": {State: BridgeAbsent, Pending: 2},
+			"leo-c": {State: BridgeConnected},
+		}[name]
+	})
+	got := map[string]string{}
+	for _, r := range m.List() {
+		got[r.Name] = r.BridgeSummary()
+	}
+	if got["leo-a"] != BridgeConnected || got["leo-b"] != "absent, 2 pending" || got["leo-c"] != "" {
+		t.Fatalf("bridge statuses = %v", got)
+	}
+}
+
+// An absent bridge with commands queued is an agent the idle sweep will
+// never suspend and that gets nothing until its mod is back: the summary
+// says so rather than leave it silent.
+func TestRecordBridgeSummary(t *testing.T) {
+	for _, tc := range []struct {
+		rec  Record
+		want string
+	}{
+		{Record{}, ""},
+		{Record{Bridge: BridgeConnected}, "connected"},
+		{Record{Bridge: BridgeConnected, BridgePending: 3}, "connected"},
+		{Record{Bridge: BridgeAbsent}, "absent"},
+		{Record{Bridge: BridgeAbsent, BridgePending: 1}, "absent, 1 pending"},
+		{Record{Bridge: BridgeAbsent, BridgePending: 12}, "absent, 12 pending"},
+	} {
+		if got := tc.rec.BridgeSummary(); got != tc.want {
+			t.Errorf("BridgeSummary(%+v) = %q, want %q", tc.rec, got, tc.want)
+		}
+	}
+}

@@ -44,11 +44,11 @@ func freeTCPPort(t *testing.T) int {
 // passed to web.New, or a goroutine never started).
 func TestObservabilityWiringEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	fakeTmux := writeFakeTmuxScript(t)
 
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	sv.tmuxPath = fakeTmux
 	sv.homePath = t.TempDir()
 	t.Cleanup(func() { run.SetPublisher(nil) })

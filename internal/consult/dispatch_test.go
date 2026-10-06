@@ -163,6 +163,10 @@ func TestWaitAggregatesMixedStatuses(t *testing.T) {
 	if _, err := d.Cancel(canceled.ID); err != nil {
 		t.Fatal(err)
 	}
+	// The aggregate wait below runs out on the still-running dispatch; the
+	// done one must have finished by then, and under load a process spawn
+	// alone can outlast that budget, so let it finish first.
+	waitForDispatchStatus(t, d, done.ID, StatusDone)
 
 	entries := d.Wait(context.Background(), []string{done.ID, running.ID, canceled.ID}, 100*time.Millisecond)
 	if entries[0].Status != StatusDone || entries[1].Status != StatusRunning || entries[2].Status != StatusCanceled {
@@ -172,6 +176,22 @@ func TestWaitAggregatesMixedStatuses(t *testing.T) {
 		t.Fatalf("running entry has error: %+v", entries[1])
 	}
 	_, _ = d.Cancel(running.ID)
+}
+
+// waitForDispatchStatus polls dispatch id until it reaches want.
+func waitForDispatchStatus(t *testing.T, d *Dispatcher, id string, want Status) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec, err := d.Get(id)
+		if err == nil && rec.Status == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dispatch %s never reached %s (last %+v, %v)", id, want, rec.Status, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func TestWaitTimeoutAndUnknownID(t *testing.T) {

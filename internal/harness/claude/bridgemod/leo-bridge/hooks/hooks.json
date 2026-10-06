@@ -1,0 +1,4 @@
+{
+  "description": "Leo bridge mod: command pump and turn event reports",
+  "modules": ["./register.js"]
+}

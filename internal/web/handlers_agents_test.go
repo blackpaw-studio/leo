@@ -919,3 +919,21 @@ func TestDeleteConfirmTextTemplateFunc(t *testing.T) {
 		t.Errorf("expected worktree delete confirm text, got %q", body)
 	}
 }
+
+func TestAgentsPageShowsTheBridge(t *testing.T) {
+	s, _, svc := newTestServerWithAgents(t)
+	svc.records = []agent.Record{
+		{Name: "leo-alpha", Status: "running", Bridge: agent.BridgeConnected},
+		{Name: "leo-beta", Status: "running"},
+		{Name: "leo-gamma", Status: "running", Bridge: agent.BridgeAbsent, BridgePending: 2},
+	}
+	w := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(w, httptest.NewRequest("GET", "/agents", nil))
+	body := w.Body.String()
+	if strings.Count(body, "bridge: connected") != 1 || strings.Count(body, "bridge: absent") != 1 {
+		t.Fatalf("bridge badges wrong in %q", body)
+	}
+	if !strings.Contains(body, "bridge: absent, 2 pending") {
+		t.Fatalf("an absent bridge's queued commands are not shown in %q", body)
+	}
+}

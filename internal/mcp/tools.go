@@ -127,21 +127,21 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.add(toolDef{
 		Name:        "leo_clear",
-		Description: "Clear the supervised Claude's conversation context. Sends '/clear' + Enter via tmux. NOTE: this interrupts the current turn — reply via the channel BEFORE calling this tool, never after.",
+		Description: "Clear the supervised Claude's conversation context. With the leo bridge it runs once the current turn ends; without it, '/clear' + Enter is typed via tmux, which interrupts the current turn. Either way, reply via the channel BEFORE calling this tool, never after.",
 		InputSchema: emptyArgs,
 	}, func(args map[string]any) (string, error) {
-		if err := client.sendKeys(processName, []string{"/clear", "Enter"}); err != nil {
+		if err := client.agentCommand(processName, "clear"); err != nil {
 			return "", err
 		}
-		return "Cleared context for process " + processName, nil
+		return "Clearing context for process " + processName, nil
 	})
 
 	r.add(toolDef{
 		Name:        "leo_compact",
-		Description: "Compact the supervised Claude's conversation context. Sends '/compact' + Enter via tmux. NOTE: this interrupts the current turn — reply via the channel BEFORE calling this tool, never after.",
+		Description: "Compact the supervised Claude's conversation context. With the leo bridge it runs once the current turn ends; without it, '/compact' + Enter is typed via tmux, which interrupts the current turn. Either way, reply via the channel BEFORE calling this tool, never after.",
 		InputSchema: emptyArgs,
 	}, func(args map[string]any) (string, error) {
-		if err := client.sendKeys(processName, []string{"/compact", "Enter"}); err != nil {
+		if err := client.agentCommand(processName, "compact"); err != nil {
 			return "", err
 		}
 		return "Compacting context for process " + processName, nil
@@ -149,7 +149,7 @@ func newRegistry(client *daemonClient, processName string, perms leotools.Permis
 
 	r.add(toolDef{
 		Name:        "leo_interrupt",
-		Description: "Interrupt the current operation in the supervised Claude (sends Escape repeatedly via tmux). Use for the /stop slash command.",
+		Description: "Interrupt the current operation in the supervised Claude (through the leo bridge when it has one, else Escape sent repeatedly via tmux). Use for the /stop slash command.",
 		InputSchema: emptyArgs,
 	}, func(args map[string]any) (string, error) {
 		if err := client.interrupt(processName); err != nil {

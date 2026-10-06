@@ -48,9 +48,17 @@ func TestBuildClaudeShellCmdBriefArgvRoundTripsThroughRealTmux(t *testing.T) {
 
 	// A stand-in for the claude binary: writes its last argument's exact
 	// bytes to $OUTFILE, mirroring claude treating a bare positional as its
-	// opening turn.
+	// opening turn. The poll below treats the file's existence as
+	// completion, so the stand-in renames it into place only once every
+	// byte is written. It writes slowly on purpose — a first chunk, a
+	// pause, then the rest — so dropping that rename fails every run, not
+	// one in fifty under load.
 	standIn := filepath.Join(dir, "standin.sh")
-	standInScript := "#!/bin/sh\nfor last in \"$@\"; do :; done\nprintf '%s' \"$last\" > \"$OUTFILE\"\n"
+	standInScript := "#!/bin/sh\nfor last in \"$@\"; do :; done\n" +
+		"printf '%s' \"$last\" | head -c 4096 > \"$OUTFILE.tmp\"\n" +
+		"sleep 0.1\n" +
+		"printf '%s' \"$last\" | tail -c +4097 >> \"$OUTFILE.tmp\"\n" +
+		"mv \"$OUTFILE.tmp\" \"$OUTFILE\"\n"
 	if err := os.WriteFile(standIn, []byte(standInScript), 0o755); err != nil {
 		t.Fatal(err)
 	}

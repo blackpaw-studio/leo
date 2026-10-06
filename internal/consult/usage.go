@@ -1,10 +1,48 @@
 package consult
 
 import (
+	"encoding/json"
 	"math"
 
 	"github.com/blackpaw-studio/leo/internal/harness"
 )
+
+// bridgeSessionUsage is the part of the leo-bridge mod's session usage
+// ($.session.usage()) a dispatch record carries: the session's running cost.
+type bridgeSessionUsage struct {
+	Cost *struct {
+		USD *float64 `json:"usd"`
+	} `json:"cost"`
+}
+
+// ApplyBridgeUsage records a bridged interactive dispatch's session usage
+// as reported with a completed turn. The cost is the claude session's
+// running total, so it replaces the previous report rather than adding to
+// it; token counts are not reported, so the usage is marked incomplete.
+// Usage without a valid cost, or for an unknown or settled run, is ignored.
+func (d *Dispatcher) ApplyBridgeUsage(id string, raw json.RawMessage) {
+	var u bridgeSessionUsage
+	if json.Unmarshal(raw, &u) != nil || u.Cost == nil || u.Cost.USD == nil {
+		return
+	}
+	usd := *u.Cost.USD
+	if usd < 0 || math.IsNaN(usd) || math.IsInf(usd, 0) {
+		return
+	}
+	_, s, err := d.lookup(id)
+	if err != nil || s == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if s.record.Mode != ModeInteractive || s.record.Status.Terminal() {
+		return
+	}
+	if len(s.record.UsageInvocations) == 0 {
+		d.beginUsageInvocationLocked(s)
+	}
+	d.applyUsageLocked(s, &harness.Usage{CostUSD: harness.Float64(usd), Incomplete: true}, false)
+}
 
 func (d *Dispatcher) beginUsageInvocationLocked(state *runState) {
 	state.record.UsageInvocations = append(state.record.UsageInvocations, InvocationUsage{})

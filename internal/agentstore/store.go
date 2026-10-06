@@ -172,6 +172,26 @@ type Record struct {
 	// prompt; SweepOpeningPromptBriefs cleans up files a restart has since
 	// orphaned.
 	OpeningBriefID string `json:"opening_brief_id,omitempty"`
+
+	// OpeningAckedID is bridge.OpeningID(conversation, brief) for the
+	// conversation that last received this agent's opening prompt: the
+	// session the leo bridge mod acked it in, or the one a legacy launch
+	// carried it into on argv. "" while none has. A launch that resumes that
+	// conversation does not get the opening again; any other conversation,
+	// and every launch that starts a fresh one, still does. SetOpeningAcked
+	// is its only writer: Save always keeps the stored value (see
+	// AttentionToken).
+	OpeningAckedID string `json:"opening_acked_id,omitempty"`
+
+	// OpeningQueuedLaunch and OpeningQueuedID name the opening the agent's
+	// latest bridged launch queued and its mod has not acked yet: the
+	// launch token (LEO_BRIDGE_LAUNCH) it went to and its command id. A
+	// restarted daemon adopting that launch's surviving session queues it
+	// again under the same id, so the mod's dedup turns a repeat into a
+	// re-ack. SetOpeningQueued and SetOpeningAcked are their only writers:
+	// Save always keeps the stored values.
+	OpeningQueuedLaunch string `json:"opening_queued_launch,omitempty"`
+	OpeningQueuedID     string `json:"opening_queued_id,omitempty"`
 }
 
 // IsFailedRestore reports whether this record was stopped by the system after
@@ -189,14 +209,18 @@ func FilePath(homePath string) string {
 	return filepath.Join(homePath, "state", "agents.json")
 }
 
-// Save persists an agent record to agents.json. The stored AttentionToken is
-// kept whatever record carries (see Record.AttentionToken).
+// Save persists an agent record to agents.json. The stored AttentionToken
+// and opening delivery state are kept whatever record carries (see their
+// fields).
 func Save(homePath string, record Record) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 	path := FilePath(homePath)
 	records, _ := loadLocked(path)
-	record.AttentionToken = records[record.Name].AttentionToken
+	stored := records[record.Name]
+	record.AttentionToken = stored.AttentionToken
+	record.OpeningAckedID = stored.OpeningAckedID
+	record.OpeningQueuedLaunch, record.OpeningQueuedID = stored.OpeningQueuedLaunch, stored.OpeningQueuedID
 	records[record.Name] = record
 	return write(path, records)
 }
@@ -302,6 +326,29 @@ func Update(homePath, name string, mutate func(Record) Record) error {
 func SetAttentionToken(homePath, name, token string) error {
 	return Update(homePath, name, func(r Record) Record {
 		r.AttentionToken = token
+		return r
+	})
+}
+
+// SetOpeningAcked records that name's opening prompt reached a conversation
+// (id is its bridge.OpeningID), and, when launch is the one the queued
+// opening went to, that it is no longer queued. A legacy delivery passes an
+// empty launch. It errors if name is absent.
+func SetOpeningAcked(homePath, name, id, launch string) error {
+	return Update(homePath, name, func(r Record) Record {
+		r.OpeningAckedID = id
+		if launch != "" && r.OpeningQueuedLaunch == launch {
+			r.OpeningQueuedLaunch, r.OpeningQueuedID = "", ""
+		}
+		return r
+	})
+}
+
+// SetOpeningQueued records that launch, about to start, has name's opening
+// queued under id. It errors if name is absent.
+func SetOpeningQueued(homePath, name, launch, id string) error {
+	return Update(homePath, name, func(r Record) Record {
+		r.OpeningQueuedLaunch, r.OpeningQueuedID = launch, id
 		return r
 	})
 }

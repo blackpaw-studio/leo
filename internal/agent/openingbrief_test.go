@@ -600,3 +600,46 @@ func TestSweepOpeningPromptBriefsRemovesOrphanKeepsReferenced(t *testing.T) {
 		t.Errorf("sweep removed an invalid-name entry it should have left alone: %v", err)
 	}
 }
+
+// When claude launches with the leo bridge, the opening prompt is delivered
+// over the bridge rather than argv, so the argv limit no longer applies.
+func TestSpawnOversizedPromptAcceptedWhenTheBridgeCarriesIt(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath:  home,
+		Defaults:  config.DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]config.TemplateConfig{"t": {Workspace: home}},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetBridgeCapable(func() bool { return true })
+
+	big := strings.Repeat("b", claudeharness.ArgvPromptLimit*2)
+	if _, err := m.Spawn(context.Background(), SpawnSpec{Template: "t", Repo: "demo", Prompt: big}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if sup.spawnCall == nil || sup.spawnCall.OpeningBriefID == "" {
+		t.Fatal("no opening brief handed to the supervisor")
+	}
+	got, err := os.ReadFile(briefPathForTest(t, home, sup.spawnCall.OpeningBriefID))
+	if err != nil || string(got) != big {
+		t.Fatalf("brief holds %d bytes (err %v), want the whole %d-byte prompt", len(got), err, len(big))
+	}
+}
+
+// Even over the bridge an opening prompt is bounded.
+func TestSpawnRejectsAnOpeningPastTheBridgeLimit(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		HomePath:  home,
+		Defaults:  config.DefaultsConfig{Model: "sonnet"},
+		Templates: map[string]config.TemplateConfig{"t": {Workspace: home}},
+	}
+	sup := &capturingSupervisor{}
+	m := New(func() (*config.Config, error) { return cfg, nil }, sup, "", "tok")
+	m.SetBridgeCapable(func() bool { return true })
+	_, err := m.Spawn(context.Background(), SpawnSpec{Template: "t", Repo: "demo", Prompt: strings.Repeat("b", MaxBridgedOpeningBytes+1)})
+	if err == nil || sup.spawnCall != nil {
+		t.Fatalf("err=%v spawned=%v; want a rejection before spawning", err, sup.spawnCall != nil)
+	}
+}

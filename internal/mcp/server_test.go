@@ -262,45 +262,43 @@ func TestToolsListContainsCanonicalCommands(t *testing.T) {
 	}
 }
 
-func TestToolCallClearSendsKeystrokes(t *testing.T) {
-	daemon := newFakeDaemon(func(method, path string, body []byte) (int, string) {
-		return http.StatusOK, `{"ok":true}`
-	})
-	defer daemon.close()
-	reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary", leotools.Permissions{})
+// leo_clear and leo_compact ask the daemon to run the command, which goes
+// through the agent's leo bridge when it has one and types it otherwise.
+func TestToolCallClearAndCompactPostTheirVerb(t *testing.T) {
+	for _, tc := range []struct{ tool, path string }{
+		{"leo_clear", "/web/agent/primary/clear"},
+		{"leo_compact", "/web/agent/primary/compact"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			daemon := newFakeDaemon(func(method, path string, body []byte) (int, string) {
+				return http.StatusAccepted, `{"ok":true,"data":{"queued":true}}`
+			})
+			defer daemon.close()
+			reg := newRegistry(newDaemonClient(daemon.port(), ""), "primary", leotools.Permissions{})
 
-	resp := runRequest(t, reg, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      3,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "leo_clear",
-			"arguments": map[string]any{},
-		},
-	})
-	result, ok := resp["result"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing result: %+v", resp)
-	}
-	if isErr, _ := result["isError"].(bool); isErr {
-		t.Errorf("tool call should not be an error: %+v", result)
-	}
-
-	if len(daemon.calls) != 1 {
-		t.Fatalf("expected 1 daemon call, got %d", len(daemon.calls))
-	}
-	c := daemon.calls[0]
-	if c.Method != http.MethodPost || c.Path != "/web/agent/primary/send" {
-		t.Errorf("wrong call: %+v", c)
-	}
-	var sent struct {
-		Keys []string `json:"keys"`
-	}
-	if err := json.Unmarshal([]byte(c.Body), &sent); err != nil {
-		t.Fatalf("decode sent body: %v", err)
-	}
-	if len(sent.Keys) != 2 || sent.Keys[0] != "/clear" || sent.Keys[1] != "Enter" {
-		t.Errorf("expected keys=[/clear, Enter], got %v", sent.Keys)
+			resp := runRequest(t, reg, map[string]any{
+				"jsonrpc": "2.0",
+				"id":      3,
+				"method":  "tools/call",
+				"params": map[string]any{
+					"name":      tc.tool,
+					"arguments": map[string]any{},
+				},
+			})
+			result, ok := resp["result"].(map[string]any)
+			if !ok {
+				t.Fatalf("missing result: %+v", resp)
+			}
+			if isErr, _ := result["isError"].(bool); isErr {
+				t.Errorf("tool call should not be an error: %+v", result)
+			}
+			if len(daemon.calls) != 1 {
+				t.Fatalf("expected 1 daemon call, got %d", len(daemon.calls))
+			}
+			if c := daemon.calls[0]; c.Method != http.MethodPost || c.Path != tc.path {
+				t.Errorf("wrong call: %+v", c)
+			}
+		})
 	}
 }
 

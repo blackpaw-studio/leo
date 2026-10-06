@@ -1232,3 +1232,44 @@ func TestAgentListJSONUsesSeam(t *testing.T) {
 		t.Fatalf("unexpected decoded records: %+v", got)
 	}
 }
+
+func TestAgentListTableShowsTheBridge(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{HomePath: home, Defaults: config.DefaultsConfig{Model: "sonnet", MaxTurns: 10}}
+	path := home + "/leo.yaml"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	oldCfgFile := cfgFile
+	cfgFile = path
+	t.Cleanup(func() { cfgFile = oldCfgFile })
+	oldList := agentListFn
+	agentListFn = func(ctx context.Context, homePath string) ([]agent.Record, error) {
+		return []agent.Record{
+			{Name: "alpha", Status: "running", Bridge: agent.BridgeConnected},
+			{Name: "beta", Status: "running", Bridge: agent.BridgeAbsent},
+			{Name: "gamma", Status: "running"},
+			{Name: "delta", Status: "running", Bridge: agent.BridgeAbsent, BridgePending: 3},
+		}, nil
+	}
+	t.Cleanup(func() { agentListFn = oldList })
+	var buf bytes.Buffer
+	oldOut := agentStdout
+	agentStdout = &buf
+	t.Cleanup(func() { agentStdout = oldOut })
+
+	if err := newAgentListCmd().Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 5 || !strings.Contains(lines[0], "BRIDGE") {
+		t.Fatalf("table = %q", buf.String())
+	}
+	want := map[string]string{"alpha": "connected", "beta": "absent", "gamma": "-", "delta": "absent, 3 pending"}
+	for _, line := range lines[1:] {
+		name := strings.Fields(line)[0]
+		if !strings.HasSuffix(line, " "+want[name]) {
+			t.Errorf("%s bridge: want %q at the end of %q", name, want[name], line)
+		}
+	}
+}

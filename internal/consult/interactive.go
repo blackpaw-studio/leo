@@ -45,6 +45,25 @@ type openingInteractiveRuntime interface {
 	InjectOpening(ctx context.Context, paneID string, text string, arm func() error) error
 }
 
+// bridgeOpeningRuntime is a runtime that can carry a claude dispatch over
+// the leo-bridge mod (see TmuxInteractiveRuntime).
+type bridgeOpeningRuntime interface {
+	// BridgesOpening reports whether a launch of harnessName will deliver
+	// its opening over the bridge, which claude then submits itself.
+	BridgesOpening(ctx context.Context, harnessName string) bool
+	// AwaitOpening settles a launched pane's opening: handled is false for
+	// a pane the bridge does not carry; paste says the opening still needs
+	// a paste (the bridge never connected and the legacy relaunch could
+	// not carry it on argv).
+	AwaitOpening(ctx context.Context, paneID string) (handled, paste bool, err error)
+}
+
+// messageFramer rewrites a follow-up into the text the pane will actually
+// receive, which is what its submit will echo back.
+type messageFramer interface {
+	FrameMessage(paneID, message string) string
+}
+
 // paneAliveRuntime distinguishes a missing pane from an unavailable tmux
 // probe. Existing runtimes can keep the simpler Alive method; callers that
 // make destructive decisions use this richer optional capability.
@@ -157,15 +176,20 @@ func (d *Dispatcher) startInteractive(ctx context.Context, s *runState, req Requ
 		d.mu.Unlock()
 		return Started{ID: s.record.ID, Harness: harnessName, Model: model, Cwd: req.Cwd}, nil
 	}
+	bridgesOpening := false
+	if b, ok := rt.(bridgeOpeningRuntime); ok {
+		bridgesOpening = b.BridgesOpening(ctx, harnessName)
+	}
 	d.mu.Lock()
 	t := d.openTurnLocked(s, TurnSourceOrchestrator, prompt, true)
-	if claudeDeliversPromptViaArgv(harnessName, prompt) {
-		// Claude submits the argv-delivered opening brief itself, as an
-		// ordinary UserPromptSubmit, which can arrive (via the hook's own
-		// "leo dispatch report" process) before Launch even returns, let
+	if bridgesOpening || claudeDeliversPromptViaArgv(harnessName, prompt) {
+		// Claude submits an argv- or bridge-delivered opening brief itself,
+		// as an ordinary UserPromptSubmit, which can arrive (via the hook's
+		// own "leo dispatch report" process) before Launch even returns, let
 		// alone before the async injectOpening goroutine below would have
 		// armed it. Arm turn 1 here, under the same lock that opened it, so
-		// no hook can ever observe it unarmed.
+		// no hook can ever observe it unarmed. A bridged launch that falls
+		// back to a paste is armed again by that paste.
 		d.armTurnLocked(s, t.TurnID)
 	}
 	d.persistLocked(s, "status")
@@ -247,24 +271,7 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 	if d.afterOpeningInject != nil {
 		defer d.afterOpeningInject()
 	}
-	if claudeDeliversPromptViaArgv(harnessName, prompt) {
-		// Claude's opening brief travels as its launch-time positional
-		// argument (see TmuxInteractiveRuntime.Launch), not a tmux paste: a
-		// pasted brief arrives wrapped as <pasted_content>, which the model
-		// can refuse as untrusted. Claude submits turn 1 itself at startup,
-		// so turn 1 is armed synchronously in startInteractive, before
-		// Launch, rather than here — that hook can race ahead of this
-		// goroutine even being scheduled. There is nothing left to inject;
-		// only reconcile an orphaned pane if the run settled, or moved to a
-		// different pane, in the meantime.
-		d.mu.Lock()
-		settled := s.record.Status.Terminal() || s.record.Status == StatusSettling
-		paneChanged := s.record.PaneID != pane
-		rec := cloneRecord(s.record)
-		d.mu.Unlock()
-		if settled || paneChanged {
-			_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
-		}
+	if !d.openingNeedsPaste(ctx, s, rt, harnessName, turnID, pane, prompt) {
 		return
 	}
 	d.mu.Lock()
@@ -302,19 +309,67 @@ func (d *Dispatcher) injectOpening(ctx context.Context, s *runState, rt Interact
 	if err == nil {
 		return
 	}
+	d.failOpening(s, turnID, err)
+}
+
+// openingNeedsPaste settles every opening that is not a tmux paste and
+// reports whether one is still needed. Claude submits an opening that rode
+// the bridge or its launch-time argv (see TmuxInteractiveRuntime.Launch)
+// itself: a pasted brief arrives wrapped as <pasted_content>, which the
+// model can refuse as untrusted. Turn 1 of those was armed synchronously in
+// startInteractive, before Launch, since claude's submit can race ahead of
+// this goroutine even being scheduled. A bridged launch whose mod never
+// connects is relaunched the legacy way, which may still need the paste.
+func (d *Dispatcher) openingNeedsPaste(ctx context.Context, s *runState, rt InteractiveRuntime, harnessName, turnID, pane, prompt string) bool {
+	if b, ok := rt.(bridgeOpeningRuntime); ok {
+		handled, paste, err := b.AwaitOpening(ctx, pane)
+		switch {
+		case !handled:
+		case err != nil:
+			d.failOpening(s, turnID, err)
+			return false
+		case paste:
+			return true
+		default:
+			d.reconcileOpeningPane(s, rt, pane)
+			return false
+		}
+	}
+	if claudeDeliversPromptViaArgv(harnessName, prompt) {
+		d.reconcileOpeningPane(s, rt, pane)
+		return false
+	}
+	return true
+}
+
+// reconcileOpeningPane closes pane if the run settled, or moved to a
+// different pane, while its opening was on its way.
+func (d *Dispatcher) reconcileOpeningPane(s *runState, rt InteractiveRuntime, pane string) {
 	d.mu.Lock()
-	// Opening injection is asynchronous. A late error belongs only to the
-	// opening turn; never let it settle a run that has since advanced.
+	settled := s.record.Status.Terminal() || s.record.Status == StatusSettling
+	paneChanged := s.record.PaneID != pane
+	rec := cloneRecord(s.record)
+	d.mu.Unlock()
+	if settled || paneChanged {
+		_, _ = d.closeRecordedPane(rec, pane, rt.Kill, runtimeLayout(rt))
+	}
+}
+
+// failOpening fails the run over its opening turn's delivery error. Opening
+// delivery is asynchronous: a late error belongs only to the opening turn
+// and never settles a run that has since advanced.
+func (d *Dispatcher) failOpening(s *runState, turnID string, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if !s.record.Status.Terminal() && s.record.Status != StatusSettling &&
 		len(s.record.Turns) > 0 &&
 		s.record.Turns[len(s.record.Turns)-1].TurnID == turnID &&
 		s.record.Turns[len(s.record.Turns)-1].Outcome == "" {
 		d.closeTurnLocked(s, turnID, TurnRejected, err.Error())
 		d.finishInteractiveLocked(s, StatusFailed)
-	} else {
-		fmt.Fprintf(os.Stderr, "dispatch %s: ignoring late opening injection error: %v\n", s.record.ID, err)
+		return
 	}
-	d.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "dispatch %s: ignoring late opening injection error: %v\n", s.record.ID, err)
 }
 
 func (d *Dispatcher) trySlot() bool {
@@ -441,6 +496,11 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	if s.releasing {
 		d.mu.Unlock()
 		return SendResult{}, errors.New("dispatch is being released")
+	}
+	if f, ok := d.interactiveRuntime.(messageFramer); ok {
+		// Record what the pane will receive: its submit echoes that text,
+		// which a late ack is matched by.
+		message = f.FrameMessage(s.record.PaneID, message)
 	}
 	if !d.trySlot() {
 		t := d.openTurnLocked(s, TurnSourceOrchestrator, message, false)
@@ -796,7 +856,7 @@ func (d *Dispatcher) finishInteractiveLocked(s *runState, status Status) {
 			if status == StatusCanceled || status == StatusTimeout {
 				o = TurnInterrupted
 			}
-			d.closeTurnLocked(s, t.TurnID, o, "")
+			d.closeTurnLocked(s, t.TurnID, o, endedTurnText(s.record.ID, t))
 		}
 	}
 	if status == StatusClosed {
@@ -820,6 +880,33 @@ done:
 		close(s.done)
 	}
 	s.killPending = true
+}
+
+// undeliveredPreviewRunes bounds how much of an undelivered follow-up its
+// notice quotes.
+const undeliveredPreviewRunes = 200
+
+// endedTurnText is the result text of turn t, still open when dispatch id
+// ends: a follow-up its session was never seen to start says so, quoting
+// how it began, since nothing else would tell the orchestrator (dispatches
+// do not outlive their launch, so it is not kept for another). It does not
+// claim the follow-up never ran: a paste can land unseen, and the bridge's
+// ack is not followed here. Any other turn keeps the text it has ("" leaves
+// it as is).
+func endedTurnText(id string, t Turn) string {
+	if t.Source != TurnSourceOrchestrator || t.Delivered {
+		return ""
+	}
+	return fmt.Sprintf("dispatch %s ended, and this follow-up was never seen to start: it may not have run. It began: %q", id, previewRunes(t.Text, undeliveredPreviewRunes))
+}
+
+// previewRunes is text cut to at most n runes, marked when cut.
+func previewRunes(text string, n int) string {
+	runes := []rune(text)
+	if len(runes) <= n {
+		return text
+	}
+	return string(runes[:n]) + "…"
 }
 
 // Sweep advances time-based interactive transitions. It is intentionally

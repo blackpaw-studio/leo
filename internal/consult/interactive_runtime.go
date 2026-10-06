@@ -89,6 +89,8 @@ type TmuxInteractiveRuntime struct {
 	mu                   sync.RWMutex
 	classifiers          map[string]tmux.ComposerClassifier
 	placements           map[string]string
+	bridge               InteractiveBridge
+	bridged              map[string]*bridgedDispatch // by dispatch id
 }
 
 type PanePresence uint8
@@ -140,6 +142,10 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	// to a private file instead, and the launch command below embeds only a
 	// $(cat ...) command substitution referencing it (see
 	// claudeArgvPromptLimit for why).
+	// A claude new enough for mods may instead carry the opening over the
+	// leo bridge (see queueBridgedOpening). The brief file is written all
+	// the same: the legacy relaunch, if the mod never connects, reads it.
+	bridgePlan, bridged := r.planDispatchBridge(ctx, h.Name(), h.Binary(), req.ID)
 	var briefPath string
 	if claudeDeliversPromptViaArgv(h.Name(), req.Prompt) {
 		briefPath = dispatchBriefPath(cfg.HomePath, req.ID)
@@ -202,6 +208,9 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	if r.AgentToken != "" {
 		env["LEO_API_TOKEN"] = r.AgentToken
 	}
+	for _, k := range bridgeEnvKeys {
+		env[k] = ""
+	}
 	session := ""
 	if r.resolveCallerSession != nil && req.Caller != "" {
 		if candidate, live := r.resolveCallerSession(req.Caller); live && r.run(ctx, "has-session", "-t", tmux.Target(candidate)) == nil {
@@ -215,19 +224,35 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		}
 	}
 	label := viewerWindowName(Record{ID: req.ID, Name: req.Name, Template: req.Template})
-	command := make([]string, 0, len(args)+3)
-	command = append(command, "env", dispatchIDEnv+"="+req.ID, h.Binary())
-	command = append(command, args...)
-	words := make([]string, len(command))
-	for i, word := range command {
-		words[i] = shellQuote(word)
-	}
+	words := launchCommandWords(req.ID, h.Binary(), args)
 	if briefPath != "" {
 		// Appended after the per-word shellQuote pass on purpose: shellQuote
 		// wraps its input in single quotes, which would disable the
 		// "$(...)" expansion this word depends on (see claudeBriefArgvWord).
 		words = append(words, claudeBriefArgvWord(briefPath))
 	}
+	var bd *bridgedDispatch
+	if bridged {
+		bd = &bridgedDispatch{
+			id: req.ID, key: bridgePlan.Key, launch: bridgePlan.Launch, caller: req.Caller,
+			respawn:     append([]string{"-c", req.Cwd}, append(envArgs(env), strings.Join(words, " "))...),
+			legacyPaste: briefPath == "" && req.Prompt != "",
+		}
+		if r.queueBridgedOpening(bd, req.Prompt) {
+			words = launchCommandWords(req.ID, h.Binary(), bridgePlan.Args(args))
+			for k, v := range bridgePlan.Env {
+				env[k] = v
+			}
+		} else {
+			bd = nil
+		}
+	}
+	launched := false
+	defer func() {
+		if bd != nil && !launched {
+			r.releaseBridge(req.ID)
+		}
+	}()
 	argv := []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", label, "-c", req.Cwd}
 	if req.Placement.Kind == "split" {
 		argv = []string{"split-window", "-d", "-P", "-F", "#{pane_id}", "-t", req.Placement.Target, "-c", req.Cwd}
@@ -237,9 +262,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		// pane and unset the window-level option once it is in place.
 		_ = r.run(ctx, "set-window-option", "-t", req.CallerWindowID, "remain-on-exit", "on")
 	}
-	for _, k := range sortedKeys(env) {
-		argv = append(argv, "-e", k+"="+env[k])
-	}
+	argv = append(argv, envArgs(env)...)
 	argv = append(argv, strings.Join(words, " "))
 	out, err := r.output(ctx, argv...)
 	if err != nil && req.Placement.Kind == "split" {
@@ -248,9 +271,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		// unset it here to avoid leaving it on the caller's window.
 		_ = r.run(ctx, "set-window-option", "-u", "-t", req.CallerWindowID, "remain-on-exit")
 		argv = []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-t", tmux.Target(session), "-n", label, "-c", req.Cwd}
-		for _, k := range sortedKeys(env) {
-			argv = append(argv, "-e", k+"="+env[k])
-		}
+		argv = append(argv, envArgs(env)...)
 		argv = append(argv, strings.Join(words, " "))
 		out, err = r.output(ctx, argv...)
 		if err == nil {
@@ -288,7 +309,33 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 	}
 	r.placements[pane] = req.Placement.Kind
 	r.mu.Unlock()
+	launched = true
+	if bd != nil {
+		r.bridgeLaunched(req.ID, pane)
+	}
 	return pane, label, nil
+}
+
+// launchCommandWords is the shell-quoted `env LEO_DISPATCH_ID=<id> <binary>
+// <args...>` a dispatch pane runs.
+func launchCommandWords(id, binary string, args []string) []string {
+	command := make([]string, 0, len(args)+3)
+	command = append(command, "env", dispatchIDEnv+"="+id, binary)
+	command = append(command, args...)
+	words := make([]string, len(command))
+	for i, word := range command {
+		words[i] = shellQuote(word)
+	}
+	return words
+}
+
+// envArgs renders env as tmux -e flags in key order.
+func envArgs(env map[string]string) []string {
+	out := make([]string, 0, 2*len(env))
+	for _, k := range sortedKeys(env) {
+		out = append(out, "-e", k+"="+env[k])
+	}
+	return out
 }
 
 func (r *TmuxInteractiveRuntime) ViewerKind(pane string) string {
@@ -297,7 +344,17 @@ func (r *TmuxInteractiveRuntime) ViewerKind(pane string) string {
 	return r.placements[pane]
 }
 
+// Inject delivers a follow-up. A dispatch whose bridge is live gets it over
+// the bridge (see deliverOverBridge); any other pane, or a bridged one whose
+// mod is not connected, gets a tmux paste.
 func (r *TmuxInteractiveRuntime) Inject(ctx context.Context, paneID, text string, arm func() error) error {
+	d, hub, live := r.liveBridge(paneID)
+	if live {
+		return deliverOverBridge(ctx, hub, d, r.bridgeWiring().sendTimeout(), text, arm)
+	}
+	if d.key != "" && !d.fellBack {
+		fmt.Fprintf(os.Stderr, "dispatch %s: leo bridge not connected; pasting the message through tmux\n", d.id)
+	}
 	return r.inject(ctx, paneID, text, arm)
 }
 
@@ -384,6 +441,9 @@ func (r *TmuxInteractiveRuntime) Kill(paneID string) error {
 		delete(r.classifiers, paneID)
 		delete(r.placements, paneID)
 		r.mu.Unlock()
+		if d, ok := r.bridgedByPane(paneID); ok {
+			r.releaseBridge(d.id)
+		}
 	}
 	return err
 }

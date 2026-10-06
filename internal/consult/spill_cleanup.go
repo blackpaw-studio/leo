@@ -63,8 +63,9 @@ func (r *TmuxInteractiveRuntime) spillHome() string {
 
 // ReleaseRunFiles removes run id's settings spill file and, if it used
 // argv-delivered claude opening (see claudeDeliversPromptViaArgv), its
-// opening-brief file.
+// opening-brief file. A bridged run's bridge is forgotten too.
 func (r *TmuxInteractiveRuntime) ReleaseRunFiles(id string) {
+	r.releaseBridge(id)
 	home := r.spillHome()
 	removeIfExists(dispatchSpillPath(home, id), "settings spill", id)
 	removeIfExists(dispatchBriefPath(home, id), "opening brief", id)

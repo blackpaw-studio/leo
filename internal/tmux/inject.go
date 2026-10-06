@@ -36,6 +36,13 @@ var (
 	submitConfirmPoll     = 200 * time.Millisecond
 )
 
+// submitCommitTimeout bounds the paste, confirm wait and Enter that run on
+// once a body is being pasted, after the call's own ctx may have ended (see
+// injectPromptProfile): well above the confirm budget, it only gives up on a
+// wedged tmux, so the session's paste lock is never held forever. A var so
+// tests can shrink it.
+var submitCommitTimeout = 30 * time.Second
+
 // submitConfirmNeedleRunes bounds how much of body's last non-empty line we
 // look for in the pane before submitting with Enter — long enough to be
 // distinctive, short enough to survive an input-line wrapping the pasted
@@ -191,9 +198,16 @@ func injectPrompt(ctx context.Context, tmuxPath, session, body string, maxAttemp
 	return injectPromptProfile(ctx, tmuxPath, session, body, ClaudeProfile(), maxAttempts, poll)
 }
 
-// injectPromptProfile is the profile-parameterized inner form.
+// injectPromptProfile is the profile-parameterized inner form. It holds
+// session's paste lock throughout (see sessionPasteLocks), waiting for any
+// other paste into the session to submit first.
 func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p Profile, maxAttempts int, poll time.Duration) error {
-	runKey := func(pane string, keys ...string) error {
+	release, err := pasteLocks.acquire(ctx, session)
+	if err != nil {
+		return err
+	}
+	defer release()
+	runKey := func(ctx context.Context, pane string, keys ...string) error {
 		args := append([]string{"send-keys", "-t", pane}, keys...)
 		cmd := execCommand(ctx, tmuxPath, Args(args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -229,7 +243,7 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 			continue
 		}
 		pane = resolved
-		if err := runKey(pane, "-l", inputProbe); err != nil {
+		if err := runKey(ctx, pane, "-l", inputProbe); err != nil {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -243,7 +257,7 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 		case <-time.After(poll):
 		}
 		st := paneInputStateAt(ctx, tmuxPath, pane, p)
-		if err := runKey(pane, "C-u"); err != nil {
+		if err := runKey(ctx, pane, "C-u"); err != nil {
 			return err
 		}
 		switch st {
@@ -295,9 +309,19 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 		}
 	}
 
-	// Phase 2: stage and paste the body exactly once.
+	// Phase 2: stage and paste the body exactly once. The paste is the
+	// commit point: a call that has ended by now delivers nothing, but from
+	// here on the paste, the confirm wait and the Enter run under submitCtx,
+	// which ctx ending (a task timeout, a caller giving up) does not stop. A
+	// pasted body left unsubmitted would sit in the composer, and the next
+	// paste would land on top of it. submitCommitTimeout still bounds them.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	submitCtx, cancelSubmit := context.WithTimeout(context.WithoutCancel(ctx), submitCommitTimeout)
+	defer cancelSubmit()
 	buf := sessionBufferName(session)
-	if err := loadAndPasteOnce(ctx, tmuxPath, buf, pane, body); err != nil {
+	if err := loadAndPasteOnce(submitCtx, tmuxPath, buf, pane, body); err != nil {
 		return err
 	}
 
@@ -323,7 +347,7 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 		matched := false
 		var lastNormalized string
 		for attempt := 0; attempt < submitConfirmAttempts; attempt++ {
-			out, err := execCommand(ctx, tmuxPath, Args("capture-pane", "-p", "-t", pane)...).Output()
+			out, err := execCommand(submitCtx, tmuxPath, Args("capture-pane", "-p", "-t", pane)...).Output()
 			normalized := ""
 			count := 0
 			if err == nil {
@@ -344,8 +368,8 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 				break
 			}
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-submitCtx.Done():
+				return submitCtx.Err()
 			case <-time.After(submitConfirmPoll):
 			}
 		}
@@ -356,14 +380,14 @@ func injectPromptProfile(ctx context.Context, tmuxPath, session, body string, p 
 		// a coincidental early match.
 		for i := 0; i < submitConfirmFallbackDelays; i++ {
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-submitCtx.Done():
+				return submitCtx.Err()
 			case <-time.After(submitConfirmPoll):
 			}
 		}
 	}
 
-	if err := runKey(pane, "Enter"); err != nil {
+	if err := runKey(submitCtx, pane, "Enter"); err != nil {
 		return err
 	}
 	return nil

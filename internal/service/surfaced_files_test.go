@@ -64,8 +64,8 @@ func TestIncrementRestartsResetsSurfacedFiles(t *testing.T) {
 
 func TestSpawnAgentResetsSurfacedFiles(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	store := seededSurfaceStore(t, "spawned")
 	sv.SetSurfacedFiles(store)
 

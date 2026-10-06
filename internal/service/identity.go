@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -17,6 +18,11 @@ type procIdentity struct {
 	mu   sync.RWMutex
 	name string
 	args []string
+	// bridge is how the live launch uses the leo bridge; see BridgeRoute.
+	bridge BridgeRoute
+	// harness is the launch's harness adapter name ("" means claude); fixed
+	// at spawn.
+	harness string
 }
 
 func newProcIdentity(name string, args []string) *procIdentity {
@@ -84,4 +90,46 @@ var tmuxRenameSession = func(tmuxPath, oldName, newName string) error {
 
 var tmuxHasSession = func(tmuxPath, session string) bool {
 	return exec.Command(tmuxPath, tmux.Args("has-session", "-t", tmux.Target(session))...).Run() == nil
+}
+
+// BridgeRoute is how one launch of an identity uses the leo bridge.
+type BridgeRoute struct {
+	// Target is the generation of the bridge key the launch's claude mod
+	// connects under; the zero Target for a legacy launch. Its mod has
+	// settled once it connected (bridge.State.HasConnected).
+	Target bridge.Target
+	// Planned is set once a launch has decided on the bridge: a
+	// just-spawned agent's first launch is planned on the supervise
+	// goroutine, after the spawn call returns.
+	Planned bool
+}
+
+// BridgeKey returns the key the live launch's claude mod connects under
+// ("" when the launch did not load the bridge). Fixed per launch: a rename
+// cannot change the environment of a running claude.
+func (p *procIdentity) BridgeKey() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.bridge.Target.Key
+}
+
+// BridgeRoute returns how the live launch uses the bridge.
+func (p *procIdentity) BridgeRoute() BridgeRoute {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.bridge
+}
+
+// setBridge records a bridged launch of target.
+func (p *procIdentity) setBridge(target bridge.Target) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bridge = BridgeRoute{Target: target, Planned: true}
+}
+
+// setLegacy records a launch without the bridge.
+func (p *procIdentity) setLegacy() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.bridge = BridgeRoute{Planned: true}
 }

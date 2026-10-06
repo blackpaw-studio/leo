@@ -244,6 +244,7 @@ type agentData struct {
 	StartedAt time.Time
 	Restarts  int
 	Branch    string
+	Bridge    string // agent.Record.BridgeSummary
 }
 
 // handleWebAgentSpawn spawns an agent via the web UI (form post).

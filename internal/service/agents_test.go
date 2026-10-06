@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,11 +53,51 @@ func TestSpawnAgentNoContext(t *testing.T) {
 	}
 }
 
+// stopLoops cancels sv's context and waits out every supervise loop
+// SpawnAgent started. Every test that spawns defers it, so no loop outlives
+// its test: none writes into the test's removed temp dirs, or reads a
+// package seam (initialBackoff, sessionPollInterval) a later test sets.
+func stopLoops(cancel context.CancelFunc, sv *Supervisor) {
+	cancel()
+	sv.Wait()
+}
+
+// Wait returns only once the loop SpawnAgent started has returned: here the
+// loop is blocked in a tmux new-session when its context ends, and records
+// stopped only after that process is killed and reaped.
+func TestWaitReturnsOnceSpawnedLoopsHaveReturned(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	sv.tmuxPath = filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\ncase \"$*\" in *new-session*) : > " + started + "; exec sleep 30;; esac\nexit 0\n"
+	if err := os.WriteFile(sv.tmuxPath, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture, needs +x
+		t.Fatal(err)
+	}
+	sv.claudePath = "false"
+	sv.homePath = t.TempDir()
+	if err := sv.SpawnAgent(daemon.AgentSpawnSpec{Name: "waited", WorkDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "new-session to block", func() bool { _, err := os.Stat(started); return err == nil })
+
+	stopLoops(cancel, sv)
+
+	sv.mu.RLock()
+	status := sv.states["waited"].Status
+	sv.mu.RUnlock()
+	if status != "stopped" {
+		t.Fatalf("status after Wait = %q, want stopped: Wait returned before the loop did", status)
+	}
+}
+
 func TestSpawnAgentSetsEphemeralState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	sv := NewSupervisor(ctx)
+	defer stopLoops(cancel, sv)
 	sv.tmuxPath = "false" // will fail immediately, that's fine
 	sv.claudePath = "false"
 	sv.homePath = t.TempDir()
@@ -282,6 +326,40 @@ func TestRestoreAgentsDropsWorktreeWithMissingWorkspace(t *testing.T) {
 	}
 	if _, ok := stored[rec.Name]; ok {
 		t.Fatalf("expected record dropped, still present: %+v", stored)
+	}
+}
+
+// mailDroppingSpawner is a spawner that also keeps agents' undelivered
+// messages, as the supervisor does.
+type mailDroppingSpawner struct {
+	fakeAgentSpawner
+	dropped []string
+}
+
+func (m *mailDroppingSpawner) DropAgentMail(name string) { m.dropped = append(m.dropped, name) }
+
+// A worktree agent dropped at restore for its missing workspace is gone for
+// good, so its undelivered messages go with it (and their senders are told).
+func TestRestoreAgentsDroppingAWorktreeDropsItsMail(t *testing.T) {
+	home := t.TempDir()
+	rec := agentstore.Record{
+		Name:          "leo-coding-owner-repo-feat-y",
+		Template:      "coding",
+		Repo:          "owner/repo",
+		Workspace:     filepath.Join(t.TempDir(), "does-not-exist"),
+		Branch:        "feat/y",
+		CanonicalPath: filepath.Join(t.TempDir(), "canonical-missing"),
+		SpawnedAt:     time.Now(),
+	}
+	if err := agentstore.Save(home, rec); err != nil {
+		t.Fatalf("seed agentstore: %v", err)
+	}
+
+	spawner := &mailDroppingSpawner{}
+	RestoreAgents(home, "", "", spawner)
+
+	if !slices.Equal(spawner.dropped, []string{rec.Name}) {
+		t.Fatalf("dropped mail of %v, want [%s]", spawner.dropped, rec.Name)
 	}
 }
 
@@ -1194,5 +1272,67 @@ func TestRestoreAgentsHonorsSessionPinned(t *testing.T) {
 	}
 	if after.SessionID != "reviews-own-session" {
 		t.Errorf("SessionID = %q, want reviews-own-session", after.SessionID)
+	}
+}
+
+// reservingSpawner is a fakeAgentSpawner that also takes RestoreAgents'
+// bridge reservations, logging every call in order.
+type reservingSpawner struct {
+	log      []string
+	failName string
+}
+
+func (r *reservingSpawner) SpawnAgent(spec daemon.AgentSpawnSpec) error {
+	r.log = append(r.log, "spawn "+spec.Name)
+	if spec.Name == r.failName {
+		return errors.New("spawn failed")
+	}
+	return nil
+}
+
+func (r *reservingSpawner) ReserveAdoptions(names []string) {
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	r.log = append(r.log, "reserve "+strings.Join(sorted, ","))
+}
+
+func (r *reservingSpawner) ReleaseAdoption(name string) {
+	r.log = append(r.log, "release "+name)
+}
+
+// The sessions about to be adopted reserve their bridge keys before any
+// agent is spawned (a spawn may launch fresh and allocate a key at once),
+// and one whose spawn fails gives its reservation back.
+func TestRestoreAgentsReservesAdoptionsBeforeSpawning(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"a", "b", "c"} {
+		if err := agentstore.Save(home, agentstore.Record{Name: name, Workspace: t.TempDir(), SessionID: "sid-" + name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	origHas := tmuxHasSession
+	tmuxHasSession = func(_, session string) bool { return session == "leo-a" || session == "leo-c" }
+	defer func() { tmuxHasSession = origHas }()
+
+	spawner := &reservingSpawner{failName: "c"}
+	RestoreAgents(home, "tmux", "", spawner)
+	if len(spawner.log) == 0 || spawner.log[0] != "reserve a,c" {
+		t.Fatalf("calls = %v, want the live sessions reserved first", spawner.log)
+	}
+	spawnC := slices.Index(spawner.log, "spawn c")
+	if releaseC := slices.Index(spawner.log, "release c"); spawnC < 0 || releaseC < spawnC {
+		t.Fatalf("calls = %v, want c's reservation released after its spawn failed", spawner.log)
+	}
+	if slices.Contains(spawner.log, "release a") {
+		t.Fatalf("calls = %v: a spawned fine and keeps its reservation for its loop", spawner.log)
+	}
+}
+
+// With nothing to restore the hub still learns that no adoption is coming.
+func TestRestoreAgentsSettlesAdoptionWithNothingToRestore(t *testing.T) {
+	spawner := &reservingSpawner{}
+	RestoreAgents(t.TempDir(), "tmux", "", spawner)
+	if len(spawner.log) != 1 || spawner.log[0] != "reserve " {
+		t.Fatalf("calls = %v, want one empty reservation", spawner.log)
 	}
 }

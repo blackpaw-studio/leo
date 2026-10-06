@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/blackpaw-studio/leo/internal/agent"
+	"github.com/blackpaw-studio/leo/internal/bridge"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/consult"
 	"github.com/blackpaw-studio/leo/internal/cron"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/observe/httpapi"
@@ -103,6 +105,31 @@ type Server struct {
 	observeClock      httpapi.Clock
 	leoVersion        string
 	parentContext     context.Context
+
+	// bridge is the claude mod bridge hub served on /api/bridge/*. Injected
+	// with WithBridge so the service can share it with the call sites that
+	// deliver through it; New builds a private one otherwise.
+	bridge *bridge.Hub
+	// bridgeLauncher plans bridged claude dispatch launches and
+	// bridgeRouter routes agent names to their live bridges; both handed to
+	// the web server by StartWeb. Either may be nil (no bridge use).
+	bridgeLauncher *bridgemod.Launcher
+	bridgeRouter   *bridge.Router
+}
+
+// Option configures a Server at construction.
+type Option func(*Server)
+
+// WithBridge serves hub on the bridge routes instead of a private one.
+func WithBridge(hub *bridge.Hub) Option {
+	return func(s *Server) { s.bridge = hub }
+}
+
+// WithBridgeLaunches hands the web server what it needs to drive claude
+// agents and dispatches through the bridge: the launcher for dispatch
+// launches and the router from agent names to bridge keys.
+func WithBridgeLaunches(launcher *bridgemod.Launcher, router *bridge.Router) Option {
+	return func(s *Server) { s.bridgeLauncher, s.bridgeRouter = launcher, router }
 }
 
 // SetObservability wires the observability event bus, run log, activity
@@ -135,7 +162,7 @@ func (s *Server) SetSurfacedFiles(store *observe.SurfacedFileStore) {
 func (s *Server) ConfigWriter() *config.Writer { return s.configWriter }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
-func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
+func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Option) *Server {
 	leoPath, err := exec.LookPath("leo")
 	if err != nil {
 		leoPath = "leo"
@@ -149,6 +176,12 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 		router:        newSessionRouter(),
 		parentContext: context.Background(),
 		configWriter:  config.NewWriter(),
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if s.bridge == nil {
+		s.bridge = bridge.New(bridge.Options{})
 	}
 
 	// The injector is intentionally NOT wired here: deciding how to inject
@@ -209,6 +242,12 @@ func New(sockPath, configPath string, processes ProcessStateProvider) *Server {
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 	mux.HandleFunc("GET /agents/{name}/session", s.handleAgentSession)
 	mux.HandleFunc("GET /agents/{name}/attach-spec", s.handleAgentAttachSpec)
+
+	// Claude mod bridge: the mod's `leo bridge` process holds the command
+	// stream open and posts acks/events back. The 0600 socket is the auth,
+	// as for every route on this mux.
+	mux.HandleFunc("GET /api/bridge/{agent}/stream", s.handleBridgeStream)
+	mux.HandleFunc("POST /api/bridge/{agent}/report", s.handleBridgeReport)
 
 	s.httpServer = &http.Server{
 		Handler:      mux,
@@ -384,6 +423,7 @@ func (s *Server) StartWeb(cfg *config.Config, agentSvc web.AgentService) error {
 		AllowedHosts:   cfg.Web.AllowedHosts,
 		TrustedProxies: cfg.Web.TrustedProxies,
 		LogPath:        s.logPath,
+		Bridge:         web.BridgeOptions{Router: s.bridgeRouter, Launcher: s.bridgeLauncher},
 		ResolveHandle:  s.resolveHandle,
 		// Consults record to <state>/consults for `leo consult watch`.
 		ConsultRecorder: consult.NewFileRecorder(cfg.StatePath()),
@@ -434,6 +474,10 @@ func (s *Server) Shutdown() error {
 	if s.router != nil {
 		s.router.Stop()
 	}
+
+	// End bridge streams first: an open stream is an active request, which
+	// httpServer.Shutdown would otherwise wait out for its full grace.
+	s.bridge.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
