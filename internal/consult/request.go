@@ -29,6 +29,9 @@ type Request struct {
 	CallerHarness   string
 	CallerSessionID string
 	CallerWindowID  string
+	// CallerBridgeKey is the bridge key of the claude that asked
+	// ($LEO_BRIDGE_AGENT), so its mod can be shown the dispatch. Optional.
+	CallerBridgeKey string
 }
 
 type Result struct {

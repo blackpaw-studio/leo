@@ -264,6 +264,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		Prompt: req.Prompt, Status: StatusQueued, StartedAt: d.now(), Mode: mode,
 		Notify: notify, Isolation: req.Isolation, SourceCwd: req.Cwd,
 		CallerPaneID: req.CallerPaneID, CallerHarness: req.CallerHarness, CallerSessionID: req.CallerSessionID, CallerWindowID: req.CallerWindowID,
+		CallerBridgeKey: req.CallerBridgeKey,
 	}
 	handle, err := d.recorder.Open(rec)
 	if err != nil {
