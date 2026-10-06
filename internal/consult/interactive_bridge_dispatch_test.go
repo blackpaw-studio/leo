@@ -173,7 +173,7 @@ func TestInteractiveSendRecordsTheFramedFollowUp(t *testing.T) {
 
 // A bridged dispatch's cost is its claude session's running total, as the
 // mod reports it with each completed turn: each report replaces the last.
-// Token counts are not reported, so the usage is marked incomplete.
+// Until the turns report their token counts, the usage is marked incomplete.
 func TestApplyBridgeUsageRecordsTheSessionCost(t *testing.T) {
 	d := NewDispatcher(newFakeRecorder())
 	rt := &bridgedFakeRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}, bridges: true}
