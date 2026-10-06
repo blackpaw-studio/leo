@@ -18,11 +18,13 @@ import {
   appendAcked,
   BACKOFF_INITIAL_MS,
   BACKOFF_RESET_AFTER_MS,
+  CONSULT_TOOL,
   describeExit,
   DISPATCH_KEY_PREFIX,
   errorText,
   eventId,
   eventReport,
+  forkConsultAnswer,
   helloReport,
   inflightIds,
   isAckedEntryStale,
@@ -34,6 +36,7 @@ import {
   splitLines,
   STALE_LAUNCH_EXIT_CODE,
   touchedEntry,
+  turnTokens,
   withAcked,
   withInflight,
 } from './protocol.js'
@@ -182,11 +185,13 @@ function defined(fields) {
 // The final assistant message is what a dispatch returns as its result.
 // Usage is a nice-to-have: a turn.complete without it still ends the turn
 // in the daemon, which a lost turn.complete would leave stuck busy.
-async function turnCompleteReport($, e) {
+// tokens is the turn's own usage (TurnUsage) as the engine reported it.
+async function turnCompleteReport($, e, tokens) {
   const fields = {
     event_id: eventId('turn.complete', e.turnId),
     message: reportText(e.answer),
     reason: e.isAborted === true ? 'aborted' : undefined,
+    tokens: turnTokens(tokens),
   }
   try {
     const usage = await $.session.usage()
@@ -549,6 +554,21 @@ function goDormant($) {
   $.ui.log('this claude is no longer ' + config.agent + "'s current leo launch; the bridge stays off until the mod reloads")
 }
 
+// ---- fork consult --------------------------------------------------------
+
+// Asks the session's own model the consult's prompt over this conversation
+// (same model, no tools, the transcript served from the prompt cache).
+async function forkConsult($, e) {
+  const prompt = typeof e.prompt === 'string' ? e.prompt : ''
+  if (prompt.trim() === '') return { deny: 'fork consult needs a prompt' }
+  try {
+    const [fork, model] = await Promise.all([$.model.fork({ prompt }), $.session.model()])
+    return forkConsultAnswer(fork, model)
+  } catch (err) {
+    return { deny: 'fork consult failed: ' + errorText(err) }
+  }
+}
+
 // ---- hooks ---------------------------------------------------------------
 
 async function onSessionStart($) {
@@ -586,11 +606,31 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e)
     markIdle()
-    if (isBridging()) {
-      enqueueReport($, () => turnCompleteReport($, e))
-      touchEntry($)
+    if (!isBridging()) return next(e)
+    // The report is queued now, so it keeps its place among this process's
+    // reports, and is built once next(e) says what the turn cost.
+    let settleUsage = () => {}
+    const usage = new Promise((resolve) => {
+      settleUsage = resolve
+    })
+    enqueueReport($, async () => turnCompleteReport($, e, await usage))
+    touchEntry($)
+    try {
+      const result = await next(e)
+      settleUsage(result?.usage ?? e.usage)
+      return result
+    } catch (err) {
+      settleUsage(e.usage)
+      throw err
     }
-    return next(e)
+  })
+
+  // A fork consult is answered here, in the session, and never reaches the
+  // leo daemon (whose handler refuses one): see forkConsult.
+  on('tool.call', { tool: CONSULT_TOOL }, async ($, e, next) => {
+    if (e.fork !== true) return next(e)
+    if (e.agentId) return { deny: 'fork consult is only available on the main conversation; use leo_consult with a template here' }
+    return forkConsult($, e)
   })
 
   on('session.end', async ($, e, next) => {
