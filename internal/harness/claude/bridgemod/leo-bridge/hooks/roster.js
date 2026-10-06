@@ -59,9 +59,12 @@ export function parseStateLine(line) {
 // The $.store key prefix for what the model was last told about delegation.
 export const TOLD_KEY_PREFIX = 'told:'
 
-/** The stored form of what session was told: the policy as the model read it. */
-export function toldEntry(session, delegation) {
-  return { session, enabled: delegation.enabled, section: delegation.section }
+/**
+ * The stored form of what session was told: the policy as the model read
+ * it, and when it was written (at, ms) so stale entries can be pruned.
+ */
+export function toldEntry(session, delegation, at) {
+  return { session, enabled: delegation.enabled, section: delegation.section, at }
 }
 
 /**

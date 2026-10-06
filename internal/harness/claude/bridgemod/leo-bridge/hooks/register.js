@@ -404,7 +404,8 @@ async function deleteEntry($) {
     $.ui.log('deleting acked ids failed: ' + errorText(err))
   }
   try {
-    await $.store.delete(toldKey())
+    const prefix = toldKeyPrefix()
+    for (const key of (await $.store.keys()).filter((k) => k.startsWith(prefix))) await $.store.delete(key)
   } catch (err) {
     $.ui.log('deleting the told delegation failed: ' + errorText(err))
   }
@@ -637,49 +638,73 @@ async function applyState($, state, epoch) {
 // note. Compared with what it was told, not the last snapshot: a reloaded
 // module has no last snapshot.
 async function noteIfToldOtherwise($, delegation) {
-  await withTold($, async (current) => {
+  await withTold($, async (current, session) => {
     if (current === null || sameDelegationText(current, delegation)) return
-    await saveTold($, delegation)
-    await addNote($, delegationNote(delegation))
+    // Told only once the note is in: a failed one is retried next snapshot.
+    if (await addNote($, delegationNote(delegation))) await saveTold($, session, delegation)
   })
 }
 
-// What the model was told is per session and outlives a hot reload (the
-// engine keeps its prompt and notes): it lives in $.store under this key.
-function toldKey() {
-  return TOLD_KEY_PREFIX + config.agent
+// What the model was told outlives a hot reload (the engine keeps its
+// prompt and notes) and belongs to one session: a /clear starts another
+// and a resume comes back. Each lives in $.store under its own key.
+function toldKeyPrefix() {
+  return TOLD_KEY_PREFIX + config.agent + ':'
+}
+
+function toldKey(session) {
+  return toldKeyPrefix() + session
 }
 
 // Runs fn with what this session's model was last told (null: nothing
-// yet), after every earlier read-and-write of it.
+// yet) and the session's id, after every earlier read-and-write of it.
 function withTold($, fn) {
-  const done = toldChain.then(async () => fn(await readTold($)))
+  const done = toldChain.then(async () => {
+    const session = await $.session.id()
+    return fn(await readTold($, session), session)
+  })
   toldChain = done.catch((err) => $.ui.log('tracking the told delegation failed: ' + errorText(err)))
   return toldChain
 }
 
-async function readTold($) {
-  const session = await $.session.id()
-  if (told === undefined) {
-    const stored = toldFromEntry(await $.store.get(toldKey()), session)
-    told = stored === null ? null : { session, delegation: stored }
+// The cache holds one session's; another session's is read afresh.
+async function readTold($, session) {
+  if (told === undefined || told.session !== session) {
+    told = { session, delegation: toldFromEntry(await $.store.get(toldKey(session)), session) }
   }
-  return told !== null && told.session === session ? told.delegation : null
+  return told.delegation
 }
 
-async function saveTold($, delegation) {
-  const session = await $.session.id()
+async function saveTold($, session, delegation) {
   told = { session, delegation }
-  await $.store.set(toldKey(), toldEntry(session, delegation))
+  await $.store.set(toldKey(session), toldEntry(session, delegation, await $.clock.now()))
 }
 
+// Deletes told entries, any agent's, left unwritten past ACKED_MAX_AGE_MS,
+// save this session's. A live session elsewhere keeps its own in memory.
+async function pruneTold($) {
+  try {
+    const now = await $.clock.now()
+    const own = toldKey(await $.session.id())
+    const keys = (await $.store.keys()).filter((key) => key.startsWith(TOLD_KEY_PREFIX) && key !== own)
+    for (const key of keys) {
+      if (isAckedEntryStale(await $.store.get(key), now)) await $.store.delete(key)
+    }
+  } catch (err) {
+    $.ui.log('pruning told delegations failed: ' + errorText(err))
+  }
+}
+
+// Whether the note went in.
 async function addNote($, text) {
   try {
     const appended = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
-    if (typeof appended?.deny === 'string') $.ui.log(NOTE_FAILED + appended.deny)
+    if (typeof appended?.deny !== 'string') return true
+    $.ui.log(NOTE_FAILED + appended.deny)
   } catch (err) {
     $.ui.log(NOTE_FAILED + errorText(err))
   }
+  return false
 }
 
 function setFallback($, why) {
@@ -786,6 +811,7 @@ async function onSessionStart($) {
   }
   touchEntry($)
   $.clock.after(0, () => pruneAcked($))
+  $.clock.after(0, () => pruneTold($))
   $.clock.after(0, () => pump($))
   $.clock.after(STATE_WAIT_MS, () => noStateYet($))
 }
@@ -858,7 +884,7 @@ export function register(on) {
     // the session's first (a hot reload, a later turn) is not kept either.
     if (isBridging() && !e.traits.includes('analysis')) {
       const delegation = roster === null ? NO_DELEGATION : roster.state.delegation
-      await withTold($, (current) => (current === null ? saveTold($, delegation) : undefined))
+      await withTold($, (current, session) => (current === null ? saveTold($, session, delegation) : undefined))
     }
     return composed
   })

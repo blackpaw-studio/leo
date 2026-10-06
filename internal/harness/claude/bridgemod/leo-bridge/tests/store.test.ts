@@ -77,6 +77,16 @@ test('a dispatch\'s entry is deleted when its session finally ends', async ($, o
   expect(h.store.has('acked:' + DISPATCH)).toBe(false)
 })
 
+test('a dispatch\'s told delegation goes with it, every session\'s', async ($, on) => {
+  const told = (session: string) => ({ session, enabled: false, section: '', at: 1_000_000 })
+  const store = { ['told:' + DISPATCH + ':sess-0']: told('sess-0'), ['told:' + DISPATCH + ':sess-1']: told('sess-1'), ['told:worker:sess-1']: told('sess-1') }
+  const h = setup(on, { feeds: [new Feed()], env: DISPATCH_ENV, store })
+  await start($, h)
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-1', resume: {} as any })
+  await h.settle()
+  expect([...h.store.keys()].filter((k) => k.startsWith('told:'))).toEqual(['told:worker:sess-1'])
+})
+
 test('a dispatch keeps its entry across /clear and a resume', async ($, on) => {
   const feed = new Feed()
   const h = setup(on, { feeds: [feed], env: DISPATCH_ENV })

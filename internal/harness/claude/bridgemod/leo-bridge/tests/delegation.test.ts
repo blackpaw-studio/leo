@@ -147,50 +147,96 @@ test('a stream that drops falls back until the next state', async ($, on) => {
 })
 
 // A hot reload resets the module, but the engine keeps the system prompt
-// (and any note) the model was given: what the model was told outlives it.
-const TOLD_KEY = 'told:' + AGENT
-const toldEntry = (session: string, d: { enabled: boolean; section: string }) => ({ session, enabled: d.enabled, section: d.section })
+// (and any note) the model was given: what the model was told outlives it,
+// per session, since a /clear starts another and a resume returns.
+const NOW = 1_000_000
+const toldKey = (session: string) => 'told:' + AGENT + ':' + session
+const toldEntry = (session: string, d: { enabled: boolean; section: string }, at = NOW) => ({ session, enabled: d.enabled, section: d.section, at })
+const told = (...entries: Array<[string, { enabled: boolean; section: string }]>) =>
+  Object.fromEntries(entries.map(([session, d]) => [toldKey(session), toldEntry(session, d)]))
 
 test('what the model was told is stored per session when the prompt is composed', async ($, on) => {
   const { h } = await started($, on)
   await compose($)
   await h.settle()
-  expect(h.store.get(TOLD_KEY)).toEqual(toldEntry('sess-1', ON))
+  expect(h.store.get(toldKey('sess-1'))).toMatchObject(toldEntry('sess-1', ON))
 })
 
-test('after a reload, ON then OFF sends exactly one note', async ($, on) => {
+test('a /clear into another session and a resume keep each session\'s baseline', async ($, on) => {
+  const { h, feed } = await started($, on)
+  await compose($)
+  h.sessionId = 'sess-2'
+  feed.line(stateLine(OFF))
+  await h.settle()
+  await compose($)
+  await h.settle()
+  expect(h.store.get(toldKey('sess-2'))).toMatchObject(toldEntry('sess-2', OFF))
+  h.sessionId = 'sess-1'
+  feed.line(stateLine({ ...OFF, hide_agents: ['Plan'] }))
+  await h.settle()
+  expect(notes(h)).toHaveLength(1)
+  expect(h.store.get(toldKey('sess-1'))).toMatchObject(toldEntry('sess-1', ON))
+})
+
+test('after a reload, a resumed session keeps its baseline beside another\'s', async ($, on) => {
   const feed = new Feed()
-  const h = setup(on, { feeds: [feed], store: { [TOLD_KEY]: toldEntry('sess-1', ON) } })
+  const h = setup(on, { feeds: [feed], store: told(['sess-1', ON], ['sess-2', OFF]) })
   await start($, h)
   feed.line(stateLine(ON))
   feed.line(stateLine(OFF))
   await h.settle()
   expect(notes(h)).toHaveLength(1)
-  expect(h.store.get(TOLD_KEY)).toEqual(toldEntry('sess-1', OFF))
 })
 
 // The reloaded module composes again, but the engine keeps its first
 // prompt: that compose must not pass for what the model was told.
 test('a compose after a reload does not overwrite what the model was told', async ($, on) => {
   const feed = new Feed()
-  const h = setup(on, { feeds: [feed], store: { [TOLD_KEY]: toldEntry('sess-1', ON) } })
+  const h = setup(on, { feeds: [feed], store: told(['sess-1', ON]) })
   await start($, h)
   feed.line(stateLine(OFF))
   await h.settle()
   await compose($)
+  await h.settle()
   expect(notes(h)).toHaveLength(1)
-  feed.line(stateLine(ON))
+  expect(h.store.get(toldKey('sess-1'))).toMatchObject(toldEntry('sess-1', ON))
+})
+
+// The policy counts as told only once its note is in: a refused or failed
+// append leaves the baseline, and the next snapshot tries again. (The kit
+// fails every plugin append, so each attempt here is one that failed.)
+test('a note that fails is retried on the next snapshot', async ($, on) => {
+  const { h, feed } = await started($, on)
+  await compose($)
+  feed.line(stateLine(OFF))
+  await h.settle()
+  expect(notes(h)).toHaveLength(1)
+  expect(h.store.get(toldKey('sess-1'))).toMatchObject(toldEntry('sess-1', ON))
+  feed.line(stateLine(OFF, [{ id: 'd1', status: 'running' }]))
   await h.settle()
   expect(notes(h)).toHaveLength(2)
 })
 
 test('what another session was told does not count for this one', async ($, on) => {
   const feed = new Feed()
-  const h = setup(on, { feeds: [feed], store: { [TOLD_KEY]: toldEntry('sess-0', ON) } })
+  const h = setup(on, { feeds: [feed], store: told(['sess-0', ON]) })
   await start($, h)
   feed.line(stateLine(OFF))
   await h.settle()
   expect(notes(h)).toHaveLength(0)
+})
+
+test('session.start prunes told entries untouched for seven days, never this session\'s', async ($, on) => {
+  const old = NOW - 8 * 24 * 60 * 60 * 1000
+  const store = {
+    [toldKey('sess-1')]: toldEntry('sess-1', ON, old),
+    [toldKey('sess-0')]: toldEntry('sess-0', ON, old),
+    ['told:other:sess-9']: { ...toldEntry('sess-9', ON), at: old },
+    [toldKey('sess-2')]: toldEntry('sess-2', ON),
+  }
+  const h = setup(on, { feeds: [new Feed()], store })
+  await start($, h)
+  expect([...h.store.keys()].filter((k) => k.startsWith('told:')).sort()).toEqual([toldKey('sess-1'), toldKey('sess-2')])
 })
 
 // A snapshot read off a stream that has since dropped is stale: applying it
@@ -201,8 +247,8 @@ test('a snapshot applied after its stream dropped keeps native agents allowed', 
   const feed = new Feed()
   const h = setup(on, {
     feeds: [feed],
-    beforeStoreSet: (key) => {
-      if (key !== TOLD_KEY || !isArmed || release !== null) return undefined
+    beforeSessionId: () => {
+      if (!isArmed || release !== null) return undefined
       return new Promise<void>((r) => (release = r))
     },
   })
@@ -212,8 +258,8 @@ test('a snapshot applied after its stream dropped keeps native agents allowed', 
   await compose($)
   await h.settle()
   isArmed = true
-  // The first change stalls writing what the model is told; the second waits
-  // behind it, and the stream drops meanwhile.
+  // The first change stalls reading what the model was told; the second
+  // waits behind it, and the stream drops meanwhile.
   feed.line(stateLine(ON))
   feed.line(stateLine({ ...ON, section: 'Delegation roles:\n- review' }))
   feed.end(1)
