@@ -76,3 +76,29 @@ func TestLegacyLaunchKeepsTheDelegationBlockOnArgv(t *testing.T) {
 		t.Fatalf("legacy argv lost the delegation block:\n%s", line)
 	}
 }
+
+// An agent record persisted before the delimiters carries the block bare;
+// restored onto a bridged launch it must lose it all the same, or the
+// frozen block outlives delegation being turned off.
+func TestBridgedLaunchDropsALegacyRecordsUndelimitedBlock(t *testing.T) {
+	tmuxPath, logPath := statefulTmux(t, "")
+	spec := claudeSpec(t, "alpha")
+	legacy := "Load leo_skill for leo operations.\n\nDelegation roles:\n- implement: write code\n" +
+		"Dispatch with `leo_dispatch(role: …)`; do not pick templates or models yourself.\n" +
+		"Call `leo_delegation` if a role you expect is missing.\n\n\nuser instruction"
+	spec.ClaudeArgs = append(spec.ClaudeArgs, "--append-system-prompt", legacy)
+	startBridged(t, tmuxPath, "2.1.289", time.Minute, spec)
+
+	line := firstLaunchText(t, logPath)
+	if !strings.Contains(line, "--plugin-dir") {
+		t.Fatalf("expected a bridged launch:\n%s", line)
+	}
+	if strings.Contains(line, "Delegation roles:") {
+		t.Fatalf("bridged argv kept the legacy block:\n%s", line)
+	}
+	for _, want := range []string{"leo_skill", "user instruction"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("bridged argv lost %q:\n%s", want, line)
+		}
+	}
+}
