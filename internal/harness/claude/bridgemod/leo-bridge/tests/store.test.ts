@@ -154,3 +154,21 @@ test('a dispatch\'s entry stays deleted behind a restamp still landing', async (
   await h.settle()
   expect(h.store.has('acked:' + DISPATCH)).toBe(false)
 })
+
+// The cleanup must not hang on reading the baseline first: a failed
+// restamp ahead of it would leave every entry behind.
+test('a dispatch\'s told cleanup runs even when the baseline cannot be restamped', async ($, on) => {
+  const told = (session: string) => ({ session, enabled: false, section: '', at: 1 })
+  const h = setup(on, {
+    feeds: [new Feed()],
+    env: DISPATCH_ENV,
+    store: { ['told:' + DISPATCH + ':sess-1']: told('sess-1') },
+    beforeStoreSet: (key) => {
+      if (key.startsWith('told:')) throw new Error('store down')
+    },
+  })
+  await start($, h)
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-1', resume: {} as any })
+  await h.settle()
+  expect([...h.store.keys()].filter((k) => k.startsWith('told:'))).toEqual([])
+})

@@ -249,6 +249,18 @@ test('one session.start prunes at most 200 told entries', async ($, on) => {
   expect([...h.store.keys()].filter((k) => k.startsWith('told:'))).toHaveLength(5)
 })
 
+// Each start looks at the next window of entries, so stale ones behind 200
+// fresh ones are reached too.
+test('the prune window moves on from where the last start left it', async ($, on) => {
+  const fresh = Array.from({ length: 200 }, (_, i) => [toldKey('fresh-' + i), toldEntry('fresh-' + i, ON)])
+  const stale = Array.from({ length: 5 }, (_, i) => [toldKey('stale-' + i), toldEntry('stale-' + i, ON, NOW - 31 * DAY)])
+  const h = setup(on, { feeds: [new Feed()], store: { ...Object.fromEntries([...fresh, ...stale]), 'prune:told': 200 } })
+  await start($, h)
+  expect([...h.store.keys()].filter((k) => k.includes(':stale-'))).toEqual([])
+  expect([...h.store.keys()].filter((k) => k.startsWith('told:'))).toHaveLength(200)
+  expect(h.store.get('prune:told')).toBe(195)
+})
+
 // A live session's baseline must not age out under it: reading it, writing
 // it and each turn's end restamp it, at most hourly.
 test('the session\'s told entry is restamped when read and on turns, at most hourly', async ($, on) => {

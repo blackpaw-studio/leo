@@ -80,6 +80,9 @@ const GUARD_FAILED = 'delegation guard failed, allowing: '
 const TOLD_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 const TOLD_RESTAMP_MS = 60 * 60 * 1000
 const TOLD_PRUNE_LIMIT = 200
+// Where the next session.start's prune window begins among the told keys,
+// so successive starts reach every entry.
+const TOLD_PRUNE_CURSOR_KEY = 'prune:told'
 
 // Ops whose engine call queues the work: the engine runs it even if this
 // module is hot-reloaded before the call returns.
@@ -406,8 +409,10 @@ function forgetDispatchAcked($, reason) {
   const deleted = storeChain.then(() => deleteEntry($))
   storeChain = deleted
   // Told writes run on toldChain: the cleanup queues there, behind any
-  // still landing, so none can bring an entry back.
-  const forgotten = withTold($, () => forgetTold($))
+  // still landing, so none can bring an entry back; not behind a read of
+  // the baseline, whose failure must not skip it.
+  const forgotten = toldChain.then(() => forgetTold($))
+  toldChain = forgotten
   return Promise.all([deleted, forgotten])
 }
 
@@ -720,12 +725,25 @@ async function pruneTold($) {
     const now = await $.clock.now()
     const own = toldKey(await $.session.id())
     const keys = (await $.store.keys()).filter((key) => key.startsWith(TOLD_KEY_PREFIX) && key !== own)
-    for (const key of keys.slice(0, TOLD_PRUNE_LIMIT)) {
+    const cursor = await $.store.get(TOLD_PRUNE_CURSOR_KEY)
+    const window = pruneWindow(keys, Number.isInteger(cursor) ? cursor : 0, TOLD_PRUNE_LIMIT)
+    // Fewer keys than the limit are all looked at: no window to move on.
+    if (keys.length > TOLD_PRUNE_LIMIT) await $.store.set(TOLD_PRUNE_CURSOR_KEY, window.next)
+    for (const key of window.keys) {
       if (isToldEntryStale(await $.store.get(key), now)) await $.store.delete(key)
     }
   } catch (err) {
     $.ui.log('pruning told delegations failed: ' + errorText(err))
   }
+}
+
+// The limit keys from cursor on, wrapping round, and where the window after
+// this one begins (as counted before any of these are deleted).
+function pruneWindow(keys, cursor, limit) {
+  if (keys.length === 0) return { keys: [], next: 0 }
+  const start = cursor % keys.length
+  const window = [...keys.slice(start), ...keys.slice(0, start)].slice(0, limit)
+  return { keys: window, next: (start + window.length) % keys.length }
 }
 
 function isToldEntryStale(value, now) {
