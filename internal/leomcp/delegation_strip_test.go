@@ -97,3 +97,29 @@ func TestStripDelegationBlockKeepsTextThatOnlyResemblesTheLegacyBlock(t *testing
 		}
 	}
 }
+
+// roles.*.use_for is rendered verbatim, newlines and blank lines included.
+func TestStripDelegationBlockRemovesALegacyBlockWithMultilineUseFor(t *testing.T) {
+	cfg := &config.Config{Web: config.WebConfig{Enabled: true}, Delegation: &config.DelegationConfig{
+		Roles: map[string]config.RoleSpec{
+			"implement": {UseFor: "write code\n  and its tests\n\n- not a role, still use_for"},
+			"review":    {UseFor: "read diffs"},
+		},
+		ActiveProfile: "p", Profiles: map[string]config.Profile{"p": {}},
+	}}
+	block := config.RenderDelegationInstructions(cfg)
+	const nudge = "Load leo_skill for leo operations."
+	old := nudge + "\n\n" + block + "\n\nuser instruction"
+	if got, want := StripDelegationBlock(old), nudge+"\n\nuser instruction"; got != want {
+		t.Fatalf("stripped = %q, want %q", got, want)
+	}
+}
+
+// User text that opens like the legacy block, ahead of the real one, stays.
+func TestStripDelegationBlockKeepsALookAlikeAheadOfTheLegacyBlock(t *testing.T) {
+	const lookAlike = "my notes\n\nDelegation roles:\n- implement\nhand-written, not leo's"
+	old := lookAlike + "\n\n" + legacyBlock + "\n\nuser instruction"
+	if got, want := StripDelegationBlock(old), lookAlike+"\n\nuser instruction"; got != want {
+		t.Fatalf("stripped = %q, want %q", got, want)
+	}
+}

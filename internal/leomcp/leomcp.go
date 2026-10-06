@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -154,14 +153,16 @@ func delegationInstructions(cfg *config.Config) string {
 	return config.RenderDelegationInstructions(cfg)
 }
 
-// legacyDelegationBlock matches the block as leo rendered it before the
-// delimiters (config.RenderDelegationInstructions joined by a blank line),
-// which persisted agent args still carry: the header at the start of the
-// prompt or after a blank line, one "- role" line each, and the two fixed
-// closing lines, newline included.
-var legacyDelegationBlock = regexp.MustCompile(`(?:^|\n\n)` + regexp.QuoteMeta("Delegation roles:\n") + `(?:- [^\n]*\n)*` +
-	regexp.QuoteMeta("Dispatch with `leo_dispatch(role: …)`; do not pick templates or models yourself.\n"+
-		"Call `leo_delegation` if a role you expect is missing.\n"))
+// The fixed opening and closing text of the delegation block as leo
+// rendered it before the delimiters (config.RenderDelegationInstructions,
+// joined to the nudge by a blank line), which persisted agent args still
+// carry. Between them stand the "- role" lines, each use_for verbatim and
+// so possibly spanning lines.
+const (
+	legacyDelegationHead = "Delegation roles:\n"
+	legacyDelegationTail = "Dispatch with `leo_dispatch(role: …)`; do not pick templates or models yourself.\n" +
+		"Call `leo_delegation` if a role you expect is missing.\n"
+)
 
 // StripDelegationBlock returns prompt without the delegation block
 // DelegationBlock rendered — delimited, or the legacy undelimited form —
@@ -180,12 +181,24 @@ func StripDelegationBlock(prompt string) string {
 	return joinAround(before, prompt[start+end+len(delegationBlockClose):])
 }
 
+// stripLegacyDelegationBlock removes the legacy block: the first closing
+// text, back to the nearest opening before it that starts the prompt or
+// follows a blank line, with role lines (or nothing) between. Anything
+// else is user text and stays.
 func stripLegacyDelegationBlock(prompt string) string {
-	loc := legacyDelegationBlock.FindStringIndex(prompt)
-	if loc == nil {
+	tail := strings.Index(prompt, legacyDelegationTail)
+	if tail < 0 {
 		return prompt
 	}
-	return joinAround(prompt[:loc[0]], prompt[loc[1]:])
+	head := strings.LastIndex(prompt[:tail], legacyDelegationHead)
+	if head < 0 || (head > 0 && !strings.HasSuffix(prompt[:head], "\n\n")) {
+		return prompt
+	}
+	roles := prompt[head+len(legacyDelegationHead) : tail]
+	if roles != "" && (!strings.HasPrefix(roles, "- ") || !strings.HasSuffix(roles, "\n")) {
+		return prompt
+	}
+	return joinAround(strings.TrimSuffix(prompt[:head], "\n\n"), prompt[tail+len(legacyDelegationTail):])
 }
 
 // joinAround joins what stood before and after a removed block; with
