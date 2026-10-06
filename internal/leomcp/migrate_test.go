@@ -213,3 +213,31 @@ func TestMigrateLaunchMalformedLeoEntryErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestMigrateLaunchFailureLeavesTheManagedFileUntouched: the file is only
+// written once every change validated, so a malformed inline config after
+// a valid managed file leaves the file and the launch as they were.
+func TestMigrateLaunchFailureLeavesTheManagedFileUntouched(t *testing.T) {
+	home := t.TempDir()
+	path := ConfigPath(&config.Config{HomePath: home})
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"mcpServers":{"leo":{"command":"leo","args":["mcp-server"]}}}` + "\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--mcp-config", path, "--strict-mcp-config", "--mcp-config", `{"mcpServers":{"leo":null}}`}
+	env := map[string]string{"KEEP": "1"}
+
+	gotArgs, gotEnv, err := Server{Bin: migrateBin}.MigrateLaunch(&config.Config{HomePath: home}, "claude", args, env)
+	if err == nil {
+		t.Fatal("want a migration error")
+	}
+	if !reflect.DeepEqual(gotArgs, args) || !reflect.DeepEqual(gotEnv, env) {
+		t.Errorf("got %q %v, want the original launch", gotArgs, gotEnv)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != legacy {
+		t.Errorf("managed file migrated despite the failure: %s", raw)
+	}
+}
