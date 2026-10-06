@@ -24,7 +24,19 @@ const (
 	ReportHello = "hello"
 	ReportAck   = "ack"
 	ReportEvent = "event"
+	// ReportRequest asks the daemon to act on the agent's behalf (see
+	// Hub.SetRequestHandler).
+	ReportRequest = "request"
 )
+
+// Request ops a ReportRequest may carry.
+const (
+	// RequestDispatchCancel cancels one of the reporting agent's own
+	// dispatches.
+	RequestDispatchCancel = "dispatch.cancel"
+)
+
+var requestOps = map[string]bool{RequestDispatchCancel: true}
 
 // Event names carried by a ReportEvent.
 const (
@@ -183,13 +195,18 @@ type Report struct {
 	// EventID is stable across the mod's retries of one event, so a replay
 	// can be told from a new event; empty when the mod had none to give.
 	EventID string
+
+	// request
+	Op         string
+	DispatchID string
 }
 
 // reportKeys is the closed set of keys each report type may carry.
 var reportKeys = map[string]map[string]bool{
-	ReportHello: {"type": true, "session_id": true, "claude_version": true, "busy": true},
-	ReportAck:   {"type": true, "id": true, "ok": true, "error": true},
-	ReportEvent: {"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true},
+	ReportHello:   {"type": true, "session_id": true, "claude_version": true, "busy": true},
+	ReportAck:     {"type": true, "id": true, "ok": true, "error": true},
+	ReportEvent:   {"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true},
+	ReportRequest: {"type": true, "op": true, "dispatch_id": true},
 }
 
 // eventOnlyKeys are event keys valid for a single event name: the prompt a
@@ -231,6 +248,8 @@ func ParseReport(body []byte) (Report, error) {
 		return parseHello(fields)
 	case ReportAck:
 		return parseAck(fields)
+	case ReportRequest:
+		return parseRequest(fields)
 	default:
 		return parseEvent(fields)
 	}
@@ -271,6 +290,21 @@ func parseAck(fields map[string]json.RawMessage) (Report, error) {
 		return Report{}, err
 	}
 	return Report{Type: ReportAck, ID: id, OK: ok, Error: msg}, nil
+}
+
+func parseRequest(fields map[string]json.RawMessage) (Report, error) {
+	op, err := stringField(fields, "op", true)
+	if err != nil {
+		return Report{}, err
+	}
+	if !requestOps[op] {
+		return Report{}, invalidReport("unknown request op %q", op)
+	}
+	dispatchID, err := stringField(fields, "dispatch_id", true)
+	if err != nil {
+		return Report{}, err
+	}
+	return Report{Type: ReportRequest, Op: op, DispatchID: dispatchID}, nil
 }
 
 func parseEvent(fields map[string]json.RawMessage) (Report, error) {

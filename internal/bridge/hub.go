@@ -118,7 +118,9 @@ type Hub struct {
 	isAdoptionSettled bool
 	awaiting          map[string]bool
 	closed            bool
-	changed           chan struct{} // closed and replaced on every state change
+	// requests serves mods' request reports (see SetRequestHandler).
+	requests RequestHandler
+	changed  chan struct{} // closed and replaced on every state change
 }
 
 type agentState struct {
@@ -132,6 +134,11 @@ type agentState struct {
 	busy             bool
 	lastTurnComplete time.Time
 	usage            json.RawMessage
+
+	// stateLine is the agent's latest state line (see SetState), and
+	// stateSeq counts its replacements, so each stream sends the newest once.
+	stateLine []byte
+	stateSeq  uint64
 
 	// sealed is set once the mod refuses a gate (see EnqueueGate): nothing
 	// more streams in this generation.
@@ -214,9 +221,11 @@ func (p *pending) resolveLocked(err error) {
 // conn starts at zero, which is what makes reconnects redeliver.
 type conn struct {
 	nextSeq uint64
-	wake    chan struct{}
-	done    chan struct{}
-	err     error // why done was closed; set under Hub.mu
+	// stateSeq is the agent's stateSeq this stream last sent.
+	stateSeq uint64
+	wake     chan struct{}
+	done     chan struct{}
+	err      error // why done was closed; set under Hub.mu
 }
 
 // New builds a Hub.
@@ -462,6 +471,8 @@ func (h *Hub) Apply(agent, launch string, r Report) error {
 		return h.applyAck(agent, launch, r)
 	case ReportHello, ReportEvent:
 		return h.applyEvent(agent, launch, r)
+	case ReportRequest:
+		return h.applyRequest(agent, launch, r)
 	default:
 		return fmt.Errorf("%w: unknown type %q", ErrInvalidReport, r.Type)
 	}
