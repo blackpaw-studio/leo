@@ -65,3 +65,35 @@ func TestDelegationSectionSaysItOverridesInstructionFiles(t *testing.T) {
 		t.Fatalf("web-disabled delegation rendered %q", got)
 	}
 }
+
+// legacyBlock is the delegation block as leo rendered it into
+// --append-system-prompt before the delimiters, which persisted agent
+// records still carry.
+const legacyBlock = "Delegation roles:\n- implement: write code\n- review\n" +
+	"Dispatch with `leo_dispatch(role: …)`; do not pick templates or models yourself.\n" +
+	"Call `leo_delegation` if a role you expect is missing.\n"
+
+func TestStripDelegationBlockRemovesTheLegacyUndelimitedBlock(t *testing.T) {
+	const nudge = "Use leo_send_message to reach other agents. Load leo_skill for leo operations."
+	cases := map[string]struct{ old, want string }{
+		"nudge alone":            {nudge + "\n\n" + legacyBlock, nudge},
+		"user prompt after it":   {nudge + "\n\n" + legacyBlock + "\n\nuser instruction", nudge + "\n\nuser instruction"},
+		"block alone, then user": {legacyBlock + "\n\nuser instruction", "user instruction"},
+	}
+	for name, tc := range cases {
+		if got := StripDelegationBlock(tc.old); got != tc.want {
+			t.Errorf("%s: stripped = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestStripDelegationBlockKeepsTextThatOnlyResemblesTheLegacyBlock(t *testing.T) {
+	for _, s := range []string{
+		"my notes\n\nDelegation roles:\n- implement\nhand-written, not leo's\n",
+		"inline Delegation roles:\n- implement\n" + strings.TrimPrefix(legacyBlock, "Delegation roles:\n- implement: write code\n- review\n"),
+	} {
+		if got := StripDelegationBlock(s); got != s {
+			t.Errorf("StripDelegationBlock(%q) = %q", s, got)
+		}
+	}
+}

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { AGENT_DENY_TEXT, DELEGATION_SECTION_ID, LEO_DISPATCH_TOOL } from '../hooks/roster.js'
-import { advance, Feed, setup, start } from './harness.ts'
+import { advance, AGENT, Feed, setup, start } from './harness.ts'
 
 const ON = { enabled: true, section: 'Delegation roles:\n- implement', hide_agents: ['implementer', 'Explore', 'Plan'] }
 const OFF = { enabled: false, section: '', hide_agents: [] }
@@ -144,4 +144,91 @@ test('a stream that drops falls back until the next state', async ($, on) => {
   second.line(stateLine(ON))
   await h.settle()
   expect(await callAgent($, 'Explore')).toEqual({ deny: AGENT_DENY_TEXT })
+})
+
+// A hot reload resets the module, but the engine keeps the system prompt
+// (and any note) the model was given: what the model was told outlives it.
+const TOLD_KEY = 'told:' + AGENT
+const toldEntry = (session: string, d: { enabled: boolean; section: string }) => ({ session, enabled: d.enabled, section: d.section })
+
+test('what the model was told is stored per session when the prompt is composed', async ($, on) => {
+  const { h } = await started($, on)
+  await compose($)
+  await h.settle()
+  expect(h.store.get(TOLD_KEY)).toEqual(toldEntry('sess-1', ON))
+})
+
+test('after a reload, ON then OFF sends exactly one note', async ($, on) => {
+  const feed = new Feed()
+  const h = setup(on, { feeds: [feed], store: { [TOLD_KEY]: toldEntry('sess-1', ON) } })
+  await start($, h)
+  feed.line(stateLine(ON))
+  feed.line(stateLine(OFF))
+  await h.settle()
+  expect(notes(h)).toHaveLength(1)
+  expect(h.store.get(TOLD_KEY)).toEqual(toldEntry('sess-1', OFF))
+})
+
+// The reloaded module composes again, but the engine keeps its first
+// prompt: that compose must not pass for what the model was told.
+test('a compose after a reload does not overwrite what the model was told', async ($, on) => {
+  const feed = new Feed()
+  const h = setup(on, { feeds: [feed], store: { [TOLD_KEY]: toldEntry('sess-1', ON) } })
+  await start($, h)
+  feed.line(stateLine(OFF))
+  await h.settle()
+  await compose($)
+  expect(notes(h)).toHaveLength(1)
+  feed.line(stateLine(ON))
+  await h.settle()
+  expect(notes(h)).toHaveLength(2)
+})
+
+test('what another session was told does not count for this one', async ($, on) => {
+  const feed = new Feed()
+  const h = setup(on, { feeds: [feed], store: { [TOLD_KEY]: toldEntry('sess-0', ON) } })
+  await start($, h)
+  feed.line(stateLine(OFF))
+  await h.settle()
+  expect(notes(h)).toHaveLength(0)
+})
+
+// A snapshot read off a stream that has since dropped is stale: applying it
+// must not take back the fallback the drop set.
+test('a snapshot applied after its stream dropped keeps native agents allowed', async ($, on) => {
+  let isArmed = false
+  let release: (() => void) | null = null
+  const feed = new Feed()
+  const h = setup(on, {
+    feeds: [feed],
+    beforeStoreSet: (key) => {
+      if (key !== TOLD_KEY || !isArmed || release !== null) return undefined
+      return new Promise<void>((r) => (release = r))
+    },
+  })
+  await start($, h)
+  feed.line(stateLine(OFF))
+  await h.settle()
+  await compose($)
+  await h.settle()
+  isArmed = true
+  // The first change stalls writing what the model is told; the second waits
+  // behind it, and the stream drops meanwhile.
+  feed.line(stateLine(ON))
+  feed.line(stateLine({ ...ON, section: 'Delegation roles:\n- review' }))
+  feed.end(1)
+  await h.settle()
+  expect(release).not.toBeNull()
+  release!()
+  await h.settle()
+  expect(await callAgent($, 'Explore')).toMatchObject({ result: 'ran' })
+  expect(h.statuses.at(-1)).toContain('native agents allowed: leo bridge down')
+})
+
+// A broken guard must not block all delegation: it logs and lets the call
+// through, as leo being down does.
+test('a guard that throws logs and allows the agent', async ($, on) => {
+  const { h } = await started($, on)
+  expect(await callAgent($, 42 as any)).toMatchObject({ result: 'ran' })
+  expect(h.logs.some((l: string) => l.startsWith('delegation guard failed'))).toBe(true)
 })

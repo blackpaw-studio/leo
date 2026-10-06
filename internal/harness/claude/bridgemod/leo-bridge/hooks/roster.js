@@ -56,6 +56,25 @@ export function parseStateLine(line) {
   }
 }
 
+// The $.store key prefix for what the model was last told about delegation.
+export const TOLD_KEY_PREFIX = 'told:'
+
+/** The stored form of what session was told: the policy as the model read it. */
+export function toldEntry(session, delegation) {
+  return { session, enabled: delegation.enabled, section: delegation.section }
+}
+
+/**
+ * What a stored entry says session was told, or null when it holds nothing
+ * for that session (another session's, a junk value, none).
+ * @param {unknown} value
+ * @param {string} session
+ */
+export function toldFromEntry(value, session) {
+  if (!isRecord(value) || value.session !== session || typeof value.section !== 'string') return null
+  return { enabled: value.enabled === true, section: value.section }
+}
+
 // What the model was told before any state arrived: no delegation section.
 export const NO_DELEGATION = Object.freeze({ enabled: false, section: '', hideAgents: [] })
 

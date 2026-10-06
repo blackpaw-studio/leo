@@ -135,10 +135,12 @@ type agentState struct {
 	lastTurnComplete time.Time
 	usage            json.RawMessage
 
-	// stateLine is the agent's latest state line (see SetState), and
+	// state is the agent's latest snapshot and stateAt when it was set (see
+	// SetState), and
 	// stateSeq counts its replacements, so each stream sends the newest once.
-	stateLine []byte
-	stateSeq  uint64
+	state    *StateSnapshot
+	stateAt  time.Time
+	stateSeq uint64
 
 	// sealed is set once the mod refuses a gate (see EnqueueGate): nothing
 	// more streams in this generation.

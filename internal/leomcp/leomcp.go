@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
@@ -153,20 +154,43 @@ func delegationInstructions(cfg *config.Config) string {
 	return config.RenderDelegationInstructions(cfg)
 }
 
-// StripDelegationBlock returns prompt without the delimited delegation block
-// DelegationBlock rendered, and without the blank line that joined it to
-// the text before it. A prompt without a whole block is returned unchanged.
+// legacyDelegationBlock matches the block as leo rendered it before the
+// delimiters (config.RenderDelegationInstructions joined by a blank line),
+// which persisted agent args still carry: the header at the start of the
+// prompt or after a blank line, one "- role" line each, and the two fixed
+// closing lines, newline included.
+var legacyDelegationBlock = regexp.MustCompile(`(?:^|\n\n)` + regexp.QuoteMeta("Delegation roles:\n") + `(?:- [^\n]*\n)*` +
+	regexp.QuoteMeta("Dispatch with `leo_dispatch(role: …)`; do not pick templates or models yourself.\n"+
+		"Call `leo_delegation` if a role you expect is missing.\n"))
+
+// StripDelegationBlock returns prompt without the delegation block
+// DelegationBlock rendered — delimited, or the legacy undelimited form —
+// and without the blank line that joined it to the text before it. A
+// prompt without a whole block is returned unchanged.
 func StripDelegationBlock(prompt string) string {
 	start := strings.Index(prompt, delegationBlockOpen)
 	if start < 0 {
-		return prompt
+		return stripLegacyDelegationBlock(prompt)
 	}
 	end := strings.Index(prompt[start:], delegationBlockClose)
 	if end < 0 {
 		return prompt
 	}
 	before := strings.TrimSuffix(prompt[:start], "\n\n")
-	after := prompt[start+end+len(delegationBlockClose):]
+	return joinAround(before, prompt[start+end+len(delegationBlockClose):])
+}
+
+func stripLegacyDelegationBlock(prompt string) string {
+	loc := legacyDelegationBlock.FindStringIndex(prompt)
+	if loc == nil {
+		return prompt
+	}
+	return joinAround(prompt[:loc[0]], prompt[loc[1]:])
+}
+
+// joinAround joins what stood before and after a removed block; with
+// nothing before, the blank line that led into after goes too.
+func joinAround(before, after string) string {
 	if before == "" {
 		after = strings.TrimPrefix(after, "\n\n")
 	}
