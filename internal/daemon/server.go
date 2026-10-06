@@ -136,8 +136,9 @@ func WithBridge(hub *bridge.Hub) Option {
 	return func(s *Server) { s.bridge = hub }
 }
 
-// WithLeoMCP sets the leo binary dispatches launch as their leo MCP server
-// (the daemon's own executable; see leomcp.ResolveServer).
+// WithLeoMCP sets the daemon's own leo binary (see leomcp.ResolveServer):
+// the leo MCP server dispatches launch, and the `leo run` that cron and the
+// web UI's manual runs exec.
 func WithLeoMCP(s leomcp.Server) Option {
 	return func(srv *Server) { srv.leoMCP = s }
 }
@@ -180,15 +181,9 @@ func (s *Server) ConfigWriter() *config.Writer { return s.configWriter }
 
 // New creates a new daemon server. The processes provider is optional (may be nil).
 func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Option) *Server {
-	leoPath, err := exec.LookPath("leo")
-	if err != nil {
-		leoPath = "leo"
-	}
-
 	s := &Server{
 		sockPath:      sockPath,
 		configPath:    configPath,
-		scheduler:     cron.New(leoPath, configPath),
 		processes:     processes,
 		router:        newSessionRouter(),
 		parentContext: context.Background(),
@@ -198,6 +193,9 @@ func New(sockPath, configPath string, processes ProcessStateProvider, opts ...Op
 	for _, opt := range opts {
 		opt(s)
 	}
+	// Cron fires `leo run` from the daemon's own binary (WithLeoMCP), so an
+	// isolated daemon never runs tasks through whichever leo is on PATH.
+	s.scheduler = cron.New(s.leoMCP.Executable(), configPath)
 	if s.bridge == nil {
 		s.bridge = bridge.New(bridge.Options{})
 	}

@@ -50,7 +50,8 @@ func ResolveServer(executable func() (string, error), warn io.Writer) Server {
 	return Server{Bin: bin}
 }
 
-// Executable returns the leo binary the MCP server launches.
+// Executable returns the leo binary: the MCP server agents launch, and the
+// leo the daemon execs for `leo run`.
 func (s Server) Executable() string {
 	if s.Bin == "" {
 		return FallbackBin

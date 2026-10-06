@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"sort"
 	"time"
 
@@ -497,7 +496,7 @@ func (s *Server) handleAPITaskRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command(s.leoPath, "run", name, "--config", s.configPath)
+	cmd := s.execCommand(s.leoPath, "run", name, "--config", s.configPath)
 	if err := cmd.Start(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Error: fmt.Sprintf("starting task: %v", err)})
 		return
