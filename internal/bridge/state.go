@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // OpState marks a state line on the stream: a full snapshot of what the mod
@@ -56,6 +57,26 @@ type DispatchState struct {
 	CostUSD       *float64 `json:"cost_usd,omitempty"`
 }
 
+// DispatchRunning is the status whose working time keeps counting.
+const DispatchRunning = "running"
+
+// agedAt returns s as of elapsed after it was taken: each running
+// dispatch's working time moved on by elapsed. s itself is left alone.
+func (s StateSnapshot) agedAt(elapsed time.Duration) StateSnapshot {
+	if elapsed <= 0 {
+		return s
+	}
+	dispatches := make([]DispatchState, len(s.Dispatches))
+	for i, d := range s.Dispatches {
+		if d.Status == DispatchRunning {
+			d.ActiveSeconds += elapsed.Seconds()
+		}
+		dispatches[i] = d
+	}
+	s.Dispatches = dispatches
+	return s
+}
+
 // stateLine encodes s as one NDJSON line: {"op":"state", ...s}.
 func stateLine(s StateSnapshot) ([]byte, error) {
 	if s.Dispatches == nil {
@@ -79,11 +100,12 @@ func stateLine(s StateSnapshot) ([]byte, error) {
 
 // SetState makes s agent's state: every stream of the key's current
 // generation gets it next (ahead of queued commands), a later reconnect
-// starts with it, and a newer SetState replaces it before it is sent. It
-// fails with ErrNotOpen for a key no launch opened.
+// starts with it, and a newer SetState replaces it before it is sent. A
+// line is encoded when it is sent, running dispatches aged by the time
+// since SetState, so a replay never sets the mod's clock back. It fails
+// with ErrNotOpen for a key no launch opened.
 func (h *Hub) SetState(agent string, s StateSnapshot) error {
-	line, err := stateLine(s)
-	if err != nil {
+	if _, err := stateLine(s); err != nil {
 		return err
 	}
 	h.mu.Lock()
@@ -95,7 +117,8 @@ func (h *Hub) SetState(agent string, s StateSnapshot) error {
 		return err
 	}
 	st := h.stateLocked(agent)
-	st.stateLine = line
+	st.state = &s
+	st.stateAt = h.clock.Now()
 	st.stateSeq++
 	if st.conn != nil {
 		st.conn.signal()
@@ -177,15 +200,18 @@ func (s *Stream) NextLine(ctx context.Context) ([]byte, error) {
 // not sent, or else what nextFor gives.
 func (h *Hub) nextLineFor(agent string, c *conn) (line []byte, cmd Command, wait <-chan struct{}, err error) {
 	h.mu.Lock()
+	var state *StateSnapshot
+	var age time.Duration
 	if c.err == nil {
 		if st := h.agents[agent]; st != nil && st.stateSeq > c.stateSeq {
 			c.stateSeq = st.stateSeq
-			line = st.stateLine
+			state, age = st.state, h.clock.Now().Sub(st.stateAt)
 		}
 	}
 	h.mu.Unlock()
-	if line != nil {
-		return line, Command{}, nil, nil
+	if state != nil {
+		line, err = stateLine(state.agedAt(age))
+		return line, Command{}, nil, err
 	}
 	cmd, wait, err = h.nextFor(agent, c)
 	return nil, cmd, wait, err

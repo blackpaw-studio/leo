@@ -221,3 +221,29 @@ func TestApplyRequestPassesTheHandlersRefusal(t *testing.T) {
 		t.Fatalf("err = %v, want ErrRequestDenied", err)
 	}
 }
+
+// A reconnect replays the latest state, but the working time of a running
+// dispatch moves on meanwhile: the mod counts from when a line arrives, so
+// a replay of the stored seconds would set its clock back.
+func TestStateReplayAgesRunningDispatches(t *testing.T) {
+	clock := newFakeClock()
+	h := newTestHub(clock)
+	snap := testSnapshot(true)
+	snap.Dispatches = append(snap.Dispatches, DispatchState{ID: "d2", Status: "idle", ActiveSeconds: 7})
+	if err := h.SetState(agentA, snap); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(30 * time.Second)
+	s, err := h.Connect(agentA, testLaunch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got := nextLine(t, s)["dispatches"].([]any)
+	if running := got[0].(map[string]any)["active_seconds"]; running != 33.0 {
+		t.Errorf("running active_seconds = %v, want 33 (3 stored + 30 since)", running)
+	}
+	if idle := got[1].(map[string]any)["active_seconds"]; idle != 7.0 {
+		t.Errorf("idle active_seconds = %v, want 7: an idle dispatch's clock stands still", idle)
+	}
+}
