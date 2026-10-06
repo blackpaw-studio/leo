@@ -74,6 +74,12 @@ const ROSTER_TICK_MS = 1000
 const TOAST_MS = 5000
 const NOTE_FAILED = 'adding the delegation note failed: '
 const GUARD_FAILED = 'delegation guard failed, allowing: '
+// A told entry left unwritten this long is pruned; a live session's is
+// restamped at most this often so it never gets there; one session.start
+// prunes at most this many.
+const TOLD_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+const TOLD_RESTAMP_MS = 60 * 60 * 1000
+const TOLD_PRUNE_LIMIT = 200
 
 // Ops whose engine call queues the work: the engine runs it even if this
 // module is hot-reloaded before the call returns.
@@ -131,6 +137,11 @@ let fallback = null
 let streamEpoch = 0
 let told = undefined
 let toldChain = Promise.resolve()
+// When this module last wrote the session's told entry ({ session, at }),
+// so restamps run at most hourly; and whether a dispatch's final end
+// deleted its entries, after which none is written again.
+let toldStamped = null
+let isToldForgotten = false
 let shownStatus = undefined
 let ticker = null
 
@@ -394,7 +405,10 @@ function forgetDispatchAcked($, reason) {
   if (!config.agent.startsWith(DISPATCH_KEY_PREFIX) || !isFinalSessionEnd(reason)) return Promise.resolve()
   const deleted = storeChain.then(() => deleteEntry($))
   storeChain = deleted
-  return deleted
+  // Told writes run on toldChain: the cleanup queues there, behind any
+  // still landing, so none can bring an entry back.
+  const forgotten = withTold($, () => forgetTold($))
+  return Promise.all([deleted, forgotten])
 }
 
 async function deleteEntry($) {
@@ -403,6 +417,10 @@ async function deleteEntry($) {
   } catch (err) {
     $.ui.log('deleting acked ids failed: ' + errorText(err))
   }
+}
+
+async function forgetTold($) {
+  isToldForgotten = true
   try {
     const prefix = toldKeyPrefix()
     for (const key of (await $.store.keys()).filter((k) => k.startsWith(prefix))) await $.store.delete(key)
@@ -667,32 +685,51 @@ function withTold($, fn) {
   return toldChain
 }
 
-// The cache holds one session's; another session's is read afresh.
+// The cache holds one session's; another session's is read afresh. A
+// read restamps the entry (at most hourly) so a live session's never ages.
 async function readTold($, session) {
   if (told === undefined || told.session !== session) {
     told = { session, delegation: toldFromEntry(await $.store.get(toldKey(session)), session) }
   }
+  if (told.delegation !== null) await restampTold($, session, told.delegation)
   return told.delegation
 }
 
 async function saveTold($, session, delegation) {
   told = { session, delegation }
-  await $.store.set(toldKey(session), toldEntry(session, delegation, await $.clock.now()))
+  await writeTold($, session, delegation, await $.clock.now())
 }
 
-// Deletes told entries, any agent's, left unwritten past ACKED_MAX_AGE_MS,
-// save this session's. A live session elsewhere keeps its own in memory.
+async function restampTold($, session, delegation) {
+  const now = await $.clock.now()
+  if (toldStamped !== null && toldStamped.session === session && now - toldStamped.at < TOLD_RESTAMP_MS) return
+  await writeTold($, session, delegation, now)
+}
+
+async function writeTold($, session, delegation, now) {
+  if (isToldForgotten) return
+  await $.store.set(toldKey(session), toldEntry(session, delegation, now))
+  toldStamped = { session, at: now }
+}
+
+// Deletes told entries, any agent's, left unwritten past TOLD_MAX_AGE_MS,
+// save this session's, looking at no more than TOLD_PRUNE_LIMIT of them
+// (the rest wait for a later start). A live session restamps its own.
 async function pruneTold($) {
   try {
     const now = await $.clock.now()
     const own = toldKey(await $.session.id())
     const keys = (await $.store.keys()).filter((key) => key.startsWith(TOLD_KEY_PREFIX) && key !== own)
-    for (const key of keys) {
-      if (isAckedEntryStale(await $.store.get(key), now)) await $.store.delete(key)
+    for (const key of keys.slice(0, TOLD_PRUNE_LIMIT)) {
+      if (isToldEntryStale(await $.store.get(key), now)) await $.store.delete(key)
     }
   } catch (err) {
     $.ui.log('pruning told delegations failed: ' + errorText(err))
   }
+}
+
+function isToldEntryStale(value, now) {
+  return typeof value?.at !== 'number' || now - value.at > TOLD_MAX_AGE_MS
 }
 
 // Whether the note went in.
@@ -847,6 +884,8 @@ export function register(on) {
     })
     enqueueReport($, async () => turnCompleteReport($, e, await usage))
     touchEntry($)
+    // Reading what the session was told restamps its entry (at most hourly).
+    withTold($, () => undefined)
     try {
       const result = await next(e)
       settleUsage(result?.usage ?? e.usage)

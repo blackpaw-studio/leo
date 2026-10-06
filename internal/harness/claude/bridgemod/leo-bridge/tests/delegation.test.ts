@@ -226,17 +226,47 @@ test('what another session was told does not count for this one', async ($, on) 
   expect(notes(h)).toHaveLength(0)
 })
 
-test('session.start prunes told entries untouched for seven days, never this session\'s', async ($, on) => {
-  const old = NOW - 8 * 24 * 60 * 60 * 1000
+const DAY = 24 * 60 * 60 * 1000
+const HOUR = 60 * 60 * 1000
+const complete = (turnId: string) => ({ turnId, answer: '', durationMs: 5, isAborted: false, reason: 'answer' as const })
+
+test('session.start prunes told entries untouched for 30 days, never this session\'s', async ($, on) => {
   const store = {
-    [toldKey('sess-1')]: toldEntry('sess-1', ON, old),
-    [toldKey('sess-0')]: toldEntry('sess-0', ON, old),
-    ['told:other:sess-9']: { ...toldEntry('sess-9', ON), at: old },
-    [toldKey('sess-2')]: toldEntry('sess-2', ON),
+    [toldKey('sess-1')]: toldEntry('sess-1', ON, NOW - 40 * DAY),
+    [toldKey('sess-0')]: toldEntry('sess-0', ON, NOW - 31 * DAY),
+    ['told:other:sess-9']: { ...toldEntry('sess-9', ON), at: NOW - 31 * DAY },
+    [toldKey('sess-2')]: toldEntry('sess-2', ON, NOW - 8 * DAY),
   }
   const h = setup(on, { feeds: [new Feed()], store })
   await start($, h)
   expect([...h.store.keys()].filter((k) => k.startsWith('told:')).sort()).toEqual([toldKey('sess-1'), toldKey('sess-2')])
+})
+
+test('one session.start prunes at most 200 told entries', async ($, on) => {
+  const store = Object.fromEntries(Array.from({ length: 205 }, (_, i) => [toldKey('old-' + i), toldEntry('old-' + i, ON, NOW - 31 * DAY)]))
+  const h = setup(on, { feeds: [new Feed()], store })
+  await start($, h)
+  expect([...h.store.keys()].filter((k) => k.startsWith('told:'))).toHaveLength(5)
+})
+
+// A live session's baseline must not age out under it: reading it, writing
+// it and each turn's end restamp it, at most hourly.
+test('the session\'s told entry is restamped when read and on turns, at most hourly', async ($, on) => {
+  const feed = new Feed()
+  const h = setup(on, { feeds: [feed], store: { [toldKey('sess-1')]: toldEntry('sess-1', ON, NOW - 2 * HOUR) } })
+  await start($, h)
+  feed.line(stateLine(ON))
+  await h.settle()
+  expect((h.store.get(toldKey('sess-1')) as any).at).toBe(NOW)
+  await advance(h, HOUR / 2)
+  await $.turn.complete(complete('t1'))
+  await h.settle()
+  expect((h.store.get(toldKey('sess-1')) as any).at).toBe(NOW)
+  await advance(h, HOUR)
+  await $.turn.complete(complete('t2'))
+  await h.settle()
+  expect((h.store.get(toldKey('sess-1')) as any).at).toBe(NOW + HOUR / 2 + HOUR)
+  expect(h.store.get(toldKey('sess-1'))).toMatchObject({ session: 'sess-1', enabled: true, section: ON.section })
 })
 
 // A snapshot read off a stream that has since dropped is stale: applying it
