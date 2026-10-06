@@ -20,9 +20,10 @@ type Event struct {
 	ClaudeVersion string
 	Usage         json.RawMessage
 	Reason        string
-	Prompt        string // turn.start
-	Message       string // turn.complete
-	EventID       string // stable across retries of one event; may be empty
+	Prompt        string      // turn.start
+	Message       string      // turn.complete
+	EventID       string      // stable across retries of one event; may be empty
+	Tokens        *TurnTokens // turn.complete: the turn's own token counts
 	At            time.Time
 }
 
@@ -204,6 +205,7 @@ func (h *Hub) recordLocked(agent string, st *agentState, r Report) Event {
 		Prompt:        r.Prompt,
 		Message:       r.Message,
 		EventID:       r.EventID,
+		Tokens:        cloneTokens(r.Tokens),
 		At:            now,
 	}
 }

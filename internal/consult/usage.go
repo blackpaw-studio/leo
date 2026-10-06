@@ -18,8 +18,9 @@ type bridgeSessionUsage struct {
 // ApplyBridgeUsage records a bridged interactive dispatch's session usage
 // as reported with a completed turn. The cost is the claude session's
 // running total, so it replaces the previous report rather than adding to
-// it; token counts are not reported, so the usage is marked incomplete.
-// Usage without a valid cost, or for an unknown or settled run, is ignored.
+// it; the token counts come with each turn instead (ApplyBridgeTokens), and
+// until they do the usage is marked incomplete. Usage without a valid cost,
+// or for an unknown or settled run, is ignored.
 func (d *Dispatcher) ApplyBridgeUsage(id string, raw json.RawMessage) {
 	var u bridgeSessionUsage
 	if json.Unmarshal(raw, &u) != nil || u.Cost == nil || u.Cost.USD == nil {
@@ -38,10 +39,8 @@ func (d *Dispatcher) ApplyBridgeUsage(id string, raw json.RawMessage) {
 	if s.record.Mode != ModeInteractive || s.record.Status.Terminal() {
 		return
 	}
-	if len(s.record.UsageInvocations) == 0 {
-		d.beginUsageInvocationLocked(s)
-	}
-	d.applyUsageLocked(s, &harness.Usage{CostUSD: harness.Float64(usd), Incomplete: true}, false)
+	s.bridgedUsage.cost = harness.Float64(usd)
+	d.applyBridgedUsageLocked(s)
 }
 
 func (d *Dispatcher) beginUsageInvocationLocked(state *runState) {

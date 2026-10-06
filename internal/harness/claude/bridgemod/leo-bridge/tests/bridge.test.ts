@@ -335,6 +335,7 @@ test('turn events are reported; turn.complete carries usage', async ($, on) => {
       name: 'turn.complete',
       event_id: 'turn.complete:t1',
       message: 'done',
+      tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
       usage: { startedAt: 1, context: { tokens: 10, window: 200000, percent: 0 }, rateLimits: [], cost: { usd: 0.01 } },
     },
   ])

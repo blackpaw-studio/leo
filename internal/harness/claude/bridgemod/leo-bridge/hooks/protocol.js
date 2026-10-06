@@ -289,3 +289,53 @@ export function errorText(err) {
   if (err instanceof Error) return err.message
   return String(err)
 }
+
+// The MCP tool a fork consult rides on: leo's MCP server registers as
+// `leo`, so claude lists leo_consult under this name.
+export const CONSULT_TOOL = 'mcp__leo__leo_consult'
+
+/**
+ * A count the engine reported, or zero for one it left out or garbled.
+ * @param {unknown} value
+ * @returns {number}
+ */
+function tokenCount(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+/**
+ * The token counts a turn.complete report carries, from the engine's
+ * TurnUsage. The engine leaves usage out when nothing counted (an
+ * interrupt, an API error), so a turn without it counts as zero.
+ * @param {unknown} usage
+ * @returns {{ input: number, output: number, cache_read: number, cache_creation: number, model?: string }}
+ */
+export function turnTokens(usage) {
+  const u = isRecord(usage) ? usage : {}
+  const tokens = {
+    input: tokenCount(u.input_tokens),
+    output: tokenCount(u.output_tokens),
+    cache_read: tokenCount(u.cache_read_input_tokens),
+    cache_creation: tokenCount(u.cache_creation_input_tokens),
+  }
+  return typeof u.model === 'string' && u.model !== '' ? { ...tokens, model: u.model } : tokens
+}
+
+/**
+ * How the mod answers a fork consult's tool call, from $.model.fork's
+ * result: the reply under a header naming the model and its tokens
+ * (in/out/cache-read), or a deny (an error result for the model) naming why
+ * there is none.
+ * @param {unknown} fork
+ * @param {string} model the main loop's model, which the fork ran on
+ * @returns {{ result: string } | { deny: string }}
+ */
+export function forkConsultAnswer(fork, model) {
+  if (isRecord(fork) && fork.isAnswered === true && typeof fork.text === 'string') {
+    const t = turnTokens(fork.usage)
+    return { result: `[consult · fork/${model}] tokens ${t.input}/${t.output}/${t.cache_read}\n${fork.text}` }
+  }
+  const reason = isRecord(fork) && typeof fork.reason === 'string' ? fork.reason : 'no reply'
+  const detail = isRecord(fork) && reason === 'api-error' ? ` (${fork.status ?? 'no status'} ${fork.error ?? 'unknown'})` : ''
+  return { deny: `fork consult failed: ${reason}${detail}` }
+}

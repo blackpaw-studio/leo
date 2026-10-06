@@ -334,6 +334,13 @@ type BridgeReportSink interface {
 	ApplyBridgeUsage(id string, raw json.RawMessage)
 }
 
+// BridgeTokenSink is a BridgeReportSink that also takes each completed
+// turn's own token counts (nil when the mod reported none); the Dispatcher
+// is one. The subscriber hands them over ahead of the turn's session usage.
+type BridgeTokenSink interface {
+	ApplyBridgeTokens(id, eventID string, tokens *bridge.TurnTokens)
+}
+
 // DispatchBridgeSubscriber returns the hub subscriber that drives bridged
 // dispatches' state: a hello hands a dispatch's reports to its bridge (see
 // BridgeOwnsReports), then each turn or session event of it goes to the
@@ -353,6 +360,9 @@ func (r *TmuxInteractiveRuntime) DispatchBridgeSubscriber(sink BridgeReportSink)
 		}
 		if err := sink.Report(id, HookReport{EventID: eventID, Payload: payload}); err != nil {
 			fmt.Fprintf(os.Stderr, "dispatch %s: applying bridge %s: %v\n", id, ev.Name, err)
+		}
+		if tokenSink, ok := sink.(BridgeTokenSink); ok && ev.Name == bridge.EventTurnComplete {
+			tokenSink.ApplyBridgeTokens(id, ev.EventID, ev.Tokens)
 		}
 		if ev.Name == bridge.EventTurnComplete && len(ev.Usage) > 0 {
 			sink.ApplyBridgeUsage(id, ev.Usage)

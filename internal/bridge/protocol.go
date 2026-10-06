@@ -199,13 +199,17 @@ type Report struct {
 	// request
 	Op         string
 	DispatchID string
+
+	// Tokens (turn.complete) is the turn's own token counts; nil when the
+	// mod sent none.
+	Tokens *TurnTokens
 }
 
 // reportKeys is the closed set of keys each report type may carry.
 var reportKeys = map[string]map[string]bool{
 	ReportHello:   {"type": true, "session_id": true, "claude_version": true, "busy": true},
 	ReportAck:     {"type": true, "id": true, "ok": true, "error": true},
-	ReportEvent:   {"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true},
+	ReportEvent:   {"type": true, "name": true, "event_id": true, "usage": true, "reason": true, "prompt": true, "message": true, "tokens": true},
 	ReportRequest: {"type": true, "op": true, "dispatch_id": true},
 }
 
@@ -214,6 +218,7 @@ var reportKeys = map[string]map[string]bool{
 var eventOnlyKeys = map[string]string{
 	"prompt":  EventTurnStart,
 	"message": EventTurnComplete,
+	"tokens":  EventTurnComplete,
 }
 
 var eventNames = map[string]bool{
@@ -343,7 +348,11 @@ func parseEvent(fields map[string]json.RawMessage) (Report, error) {
 		}
 		usage = append(json.RawMessage(nil), raw...)
 	}
-	return Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID}, nil
+	tokens, err := parseTokens(fields)
+	if err != nil {
+		return Report{}, err
+	}
+	return Report{Type: ReportEvent, Name: name, Usage: usage, Reason: reason, Prompt: prompt, Message: message, EventID: eventID, Tokens: tokens}, nil
 }
 
 // decodeObject decodes exactly one JSON object, rejecting trailing values.
