@@ -19,6 +19,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/claude/bridgemod"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/outbox"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -300,7 +301,7 @@ func bridgeLaunchSpec(bl bridgeLaunch, args []string, spec ProcessSpec, openingH
 	launchArgs, launchSpec = args, spec
 	launchSpec.bridgeEnv = nil
 	if bl.bridged {
-		launchArgs = bl.plan.Args(args)
+		launchArgs = bl.plan.Args(withoutDelegationBlock(args))
 		launchSpec.bridgeEnv = bl.plan.Env
 	}
 	if bl.opening != "" || openingHandled {
@@ -312,6 +313,28 @@ func bridgeLaunchSpec(bl bridgeLaunch, args []string, spec ProcessSpec, openingH
 	}
 	return launchArgs, launchSpec, pasteBrief
 }
+
+// withoutDelegationBlock returns args with the delegation block taken out
+// of every --append-system-prompt value: a bridged claude gets delegation
+// live from the leo-bridge mod, which follows the operator's toggle, while
+// argv would freeze it at launch. A value left empty drops its flag.
+func withoutDelegationBlock(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != appendSystemPromptFlag || i+1 >= len(args) {
+			out = append(out, args[i])
+			continue
+		}
+		i++
+		if prompt := leomcp.StripDelegationBlock(args[i]); prompt != "" {
+			out = append(out, appendSystemPromptFlag, prompt)
+		}
+	}
+	return out
+}
+
+// appendSystemPromptFlag is the claude flag the nudge rides on.
+const appendSystemPromptFlag = "--append-system-prompt"
 
 // bridgedSessionWritten reports whether claude has written the transcript of
 // session id for workspace cwd. A test seam.

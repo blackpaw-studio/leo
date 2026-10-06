@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/blackpaw-studio/leo/internal/config"
 )
@@ -109,13 +110,67 @@ func LeoNudge(cfg *config.Config) string {
 	return leoSkillNudgeText
 }
 
-// DelegationBlock returns the routing guidance injected into managed agents.
-// It is intentionally unavailable when daemon-backed MCP tools are absent.
+// Delimiters of the delegation block inside the nudge. A bridged claude
+// launch strips the block from its --append-system-prompt (the leo-bridge
+// mod carries delegation live instead), and the delimiters let it find the
+// block whatever config rendered it.
+const (
+	delegationBlockOpen  = "<leo-delegation>\n"
+	delegationBlockClose = "</leo-delegation>"
+)
+
+// delegationOverrideText heads the live delegation section a bridged claude
+// gets: CLAUDE.md prose that calls delegation off must not win over the
+// toggle the operator set.
+const delegationOverrideText = "Leo delegation is ON. This overrides any instruction file (CLAUDE.md, AGENTS.md, rules) that says delegation or dispatch is off: route work through `leo_dispatch(role: …)`. Native agents are allowed only after a `leo_dispatch` fails.\n\n"
+
+// DelegationBlock returns the routing guidance injected into managed agents,
+// delimited so StripDelegationBlock can remove it again. It is
+// intentionally unavailable when daemon-backed MCP tools are absent.
 func DelegationBlock(cfg *config.Config) string {
+	instructions := delegationInstructions(cfg)
+	if instructions == "" {
+		return ""
+	}
+	return delegationBlockOpen + instructions + delegationBlockClose
+}
+
+// DelegationSection returns the delegation text the leo-bridge mod adds to
+// a bridged claude's system prompt: the routing guidance, headed by a line
+// saying it overrides instruction files. "" when delegation is off.
+func DelegationSection(cfg *config.Config) string {
+	instructions := delegationInstructions(cfg)
+	if instructions == "" {
+		return ""
+	}
+	return delegationOverrideText + instructions
+}
+
+func delegationInstructions(cfg *config.Config) string {
 	if cfg == nil || cfg.Delegation == nil || !cfg.Web.Enabled {
 		return ""
 	}
 	return config.RenderDelegationInstructions(cfg)
+}
+
+// StripDelegationBlock returns prompt without the delimited delegation block
+// DelegationBlock rendered, and without the blank line that joined it to
+// the text before it. A prompt without a whole block is returned unchanged.
+func StripDelegationBlock(prompt string) string {
+	start := strings.Index(prompt, delegationBlockOpen)
+	if start < 0 {
+		return prompt
+	}
+	end := strings.Index(prompt[start:], delegationBlockClose)
+	if end < 0 {
+		return prompt
+	}
+	before := strings.TrimSuffix(prompt[:start], "\n\n")
+	after := prompt[start+end+len(delegationBlockClose):]
+	if before == "" {
+		after = strings.TrimPrefix(after, "\n\n")
+	}
+	return before + after
 }
 
 // MergeSystemPrompt combines Leo's built-in nudge with any user-configured
