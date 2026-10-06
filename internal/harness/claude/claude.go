@@ -29,7 +29,7 @@ type Options struct {
 	EnabledPlugins     []string // plugin IDs disabled when Plugins is none
 	StrictMCPConfig    string   // inline Leo-only config when MCP is none
 	MCPConfigPath      string   // user MCP config; empty when absent or serverless
-	LeoMCPArgs         []string // precomputed leomcp.AppendArg(nil, cfg); nil when gated off
+	LeoMCPArgs         []string // precomputed leomcp.Server.AppendArg(nil, cfg); nil when gated off
 	// LeoMCPToolTimeout is leo's per-tool MCP ceiling (leomcp.ToolTimeout).
 	// Applied only when the leo bridge is actually wired (LeoMCPArgs
 	// non-empty), since Claude Code's knob is process-global.

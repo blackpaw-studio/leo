@@ -1006,7 +1006,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	}
 
 	// Restore ephemeral agents from previous run
-	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor)
+	restored := RestoreAgents(homePath, tmuxPath, webToken, supervisor, leoMCP)
 	if restored > 0 {
 		fmt.Fprintf(os.Stdout, "restored %d ephemeral agent(s)\n", restored)
 	}

@@ -1390,7 +1390,15 @@ func (m *Manager) Restart(name string) error {
 // it after the merge (see applyPermissions), so a restriction removed from
 // config cannot survive in a stored layer.
 func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken string, mcp leomcp.Server) (args []string, env map[string]string) {
-	fallback := func() ([]string, map[string]string) { return rec.ClaudeArgs, rec.Env }
+	// The stored launch is replayed as is, except its leo MCP server, which
+	// moves to mcp's binary (a record may predate that, or name another leo).
+	fallback := func() ([]string, map[string]string) {
+		args, env, err := mcp.MigrateLaunch(rec.Harness, rec.ClaudeArgs, rec.Env)
+		if err != nil {
+			log.Printf("[agent:%s] migrating its leo MCP server: %v", rec.Name, err)
+		}
+		return args, env
+	}
 
 	if rec.Template == "" {
 		return fallback()

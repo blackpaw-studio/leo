@@ -56,7 +56,7 @@ func (b *LeoMCPBridge) configArgs() []string {
 		return nil
 	}
 	args := []string{
-		"-c", fmt.Sprintf("mcp_servers.leo.command=%s", tomlString(b.Command)),
+		"-c", LeoMCPCommandArg(b.Command),
 		"-c", fmt.Sprintf("mcp_servers.leo.args=%s", tomlStringArray(b.Args)),
 		"-c", fmt.Sprintf("mcp_servers.leo.env_vars=%s", tomlStringArray(b.EnvVars)),
 		"-c", fmt.Sprintf("mcp_servers.leo.default_tools_approval_mode=%s", tomlString(b.ApprovalMode)),
@@ -66,6 +66,15 @@ func (b *LeoMCPBridge) configArgs() []string {
 	}
 	return args
 }
+
+// LeoMCPCommandKey prefixes the -c override naming the leo MCP server's
+// command.
+const LeoMCPCommandKey = "mcp_servers.leo.command="
+
+// LeoMCPCommandArg renders the -c override value that runs bin as the leo
+// MCP server. leomcp.MigrateLaunch uses it to rewrite persisted launches
+// byte-for-byte as a fresh launch would render them.
+func LeoMCPCommandArg(bin string) string { return LeoMCPCommandKey + tomlString(bin) }
 
 // tomlString renders s as a TOML basic string, escaping backslashes, quotes,
 // and the control characters (newline, tab, carriage return) TOML basic

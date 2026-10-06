@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackpaw-studio/leo/internal/agentstore"
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
@@ -119,5 +120,39 @@ func TestManagerSpawnLaunchesInjectedLeoMCPBin(t *testing.T) {
 	}
 	if got, want := claudeMCPCommand(t, sup.spawnCall.ClaudeArgs), []string{testLeoBin, "mcp-server"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("spawned leo MCP command = %q, want %q", got, want)
+	}
+}
+
+// TestResolveRestartArgsFallbackMigratesLegacyLeoMCP covers every fallback
+// that replays stored argv/env (ad-hoc agent, deleted template, harness
+// changed): the leo MCP command still moves to the injected binary.
+func TestResolveRestartArgsFallbackMigratesLegacyLeoMCP(t *testing.T) {
+	legacy := agentstore.Record{
+		Name: "x", Harness: "codex", Workspace: "/tmp/ws",
+		ClaudeArgs: []string{"-a", "never", "-c", `mcp_servers.leo.command="leo"`},
+		Env:        map[string]string{"KEEP": "1"},
+	}
+	cfg := &config.Config{HomePath: t.TempDir(), Templates: map[string]config.TemplateConfig{
+		"claude-now": {},
+	}}
+	cases := map[string]agentstore.Record{"ad-hoc": legacy}
+	deleted := legacy
+	deleted.Template = "gone"
+	cases["deleted template"] = deleted
+	changed := legacy
+	changed.Template = "claude-now"
+	cases["harness changed"] = changed
+
+	want := []string{"-a", "never", "-c", `mcp_servers.leo.command="/opt/my \"dev\" leo/bin/leo"`}
+	for name, rec := range cases {
+		t.Run(name, func(t *testing.T) {
+			args, env := resolveRestartArgs(cfg, rec, "tok", leomcp.Server{Bin: testLeoBin})
+			if !reflect.DeepEqual(args, want) {
+				t.Errorf("args = %q, want %q", args, want)
+			}
+			if env["KEEP"] != "1" {
+				t.Errorf("env = %v, want KEEP kept", env)
+			}
+		})
 	}
 }
