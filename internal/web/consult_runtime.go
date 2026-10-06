@@ -52,6 +52,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	viewer.ExecCommand = s.execCommand
 	viewer.ExecCommandContext = s.execCommandContext
 	s.consults = consult.NewDispatcherWithOnStart(opts.ConsultRecorder, opts.ParentContext, viewer.OnStart, viewer.Close)
+	s.consults.LeoMCP = opts.LeoMCP
 	viewer.Coordinator = s.consults.PlacementCoordinator()
 	viewer.Records = s.consults.Records
 	viewer.PersistRecord = s.consults.PersistViewerRecord
@@ -66,6 +67,7 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 	runtime := consult.NewInteractiveRuntime(s.configPath, s.loadConfig, resolveCallerSession, findTmuxPath(), interactiveLeoPath)
 	runtime.ExecCommandContext = s.execCommandContext
 	runtime.AgentToken = s.agentToken
+	runtime.LeoMCP = opts.LeoMCP
 	s.bridgeRouter = opts.Bridge.Router
 	var pusher *consult.StatePusher
 	if hub := opts.Bridge.hub(); hub != nil && opts.Bridge.Launcher != nil {

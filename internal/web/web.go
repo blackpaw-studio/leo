@@ -24,6 +24,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/peerinbox"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -382,6 +383,9 @@ type Options struct {
 	// Bridge wires the claude mod bridge into agent messaging and dispatch
 	// launches. Optional; the zero value keeps everything on tmux.
 	Bridge BridgeOptions
+	// LeoMCP is the leo binary dispatches launch as their leo MCP server.
+	// The zero value runs the bare "leo" from PATH.
+	LeoMCP leomcp.Server
 }
 
 // New creates a new web UI server. agentSvc may be nil if agent spawning is

@@ -16,6 +16,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
 	"github.com/blackpaw-studio/leo/internal/harness/codex"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/tmux"
 )
 
@@ -82,15 +83,18 @@ type TmuxInteractiveRuntime struct {
 	resolveCallerSession func(string) (string, bool)
 	tmuxPath, leoPath    string
 	AgentToken           string
-	ExecCommandContext   func(context.Context, string, ...string) *exec.Cmd
-	Timeout              time.Duration
-	StartupTimeout       time.Duration
-	StartupPollInterval  time.Duration
-	mu                   sync.RWMutex
-	classifiers          map[string]tmux.ComposerClassifier
-	placements           map[string]string
-	bridge               InteractiveBridge
-	bridged              map[string]*bridgedDispatch // by dispatch id
+	// LeoMCP is the leo binary interactive dispatches launch as their leo
+	// MCP server. The zero value runs the bare "leo" from PATH.
+	LeoMCP              leomcp.Server
+	ExecCommandContext  func(context.Context, string, ...string) *exec.Cmd
+	Timeout             time.Duration
+	StartupTimeout      time.Duration
+	StartupPollInterval time.Duration
+	mu                  sync.RWMutex
+	classifiers         map[string]tmux.ComposerClassifier
+	placements          map[string]string
+	bridge              InteractiveBridge
+	bridged             map[string]*bridgedDispatch // by dispatch id
 }
 
 type PanePresence uint8
@@ -130,7 +134,7 @@ func (r *TmuxInteractiveRuntime) Launch(ctx context.Context, req LaunchRequest) 
 		return "", "", err
 	}
 	if claudeOpts, ok := opts.(claudeharness.Options); ok && req.Dispatched {
-		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env)
+		opts = resolveClaudeDispatchProfile(cfg, tmpl, "dispatch", claudeOpts, tmpl.Env, r.LeoMCP)
 	}
 	spec := harness.LaunchSpec{Kind: harness.KindAgent, Name: req.Name, Model: req.Model, Effort: req.Effort, MaxTurns: cfg.TemplateMaxTurns(tmpl), Workspace: req.Cwd, Options: opts, Dispatched: req.Dispatched}
 	// Claude delivers the opening brief as a launch-time argv positional

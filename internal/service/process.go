@@ -936,7 +936,11 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 	// sites that deliver through it; the launcher plans bridged claude
 	// launches for the supervisor and for dispatches.
 	bridgeHub, bridgeLauncher := wireBridge(supervisor, homePath, opts.Version, nil)
+	// Resolved once: every agent, task and dispatch this daemon launches runs
+	// this same binary's MCP server, never whichever leo is first on PATH.
+	leoMCP := leomcp.ResolveServer(serviceExecutable, os.Stderr)
 	srv := daemon.New(sockPath, configPath, supervisor,
+		daemon.WithLeoMCP(leoMCP),
 		daemon.WithBridge(bridgeHub),
 		daemon.WithBridgeLaunches(bridgeLauncher, supervisor.BridgeRouter()))
 	srv.SetParentContext(ctx)
@@ -974,6 +978,7 @@ func defaultSupervisedExec(opts RunSupervisedOptions) error {
 		// Build the agent.Manager shared by web, daemon, and CLI handlers.
 		cfgLoader := func() (*config.Config, error) { return config.Load(configPath) }
 		agentMgr := agent.New(cfgLoader, supervisor, tmuxPath, webToken)
+		agentMgr.SetLeoMCP(leoMCP)
 		obs.wireManager(agentMgr)
 		// A bridged claude gets its opening prompt over the bridge, so a
 		// spawn need not hold it to the argv limit.

@@ -59,7 +59,7 @@ func (m *Manager) StaleAgents() []StaleAgent {
 		if !ok {
 			continue
 		}
-		newArgs, newEnv := resolveRestartArgs(cfg, rec, m.webToken)
+		newArgs, newEnv := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP)
 		// resolveRestartArgs returns the record's own args verbatim when it
 		// can't re-resolve. Comparing identical slices reports no drift, so
 		// those records fall out here without a special case.

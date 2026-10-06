@@ -23,6 +23,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/git"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 	"github.com/blackpaw-studio/leo/internal/tmux"
@@ -96,6 +97,9 @@ type Manager struct {
 	// SpawnRequest so the supervisor can export LEO_API_TOKEN for the
 	// agent's MCP server.
 	webToken string
+	// leoMCP is the leo binary agents launch as their leo MCP server. The
+	// zero value runs the bare "leo" from the agent's PATH.
+	leoMCP leomcp.Server
 	// publisher announces the lifecycle transitions Manager itself decides
 	// never to forward to sup (a stopped/suspended agent has no live process
 	// for sup.StopAgent/RenameAgent to act on, so those calls — and their
@@ -155,6 +159,13 @@ func (m *Manager) SetSurfacedFiles(store *observe.SurfacedFileStore) {
 // SetPublisher wires an observe.Publisher into the Manager, for lifecycle
 // transitions that happen purely against the agentstore (no live sup call).
 // Optional; daemon boot is the only production caller.
+// SetLeoMCP sets the leo binary agents launch as their leo MCP server —
+// the daemon's own executable, so an agent never runs a different leo's
+// MCP server than the daemon that spawned it.
+func (m *Manager) SetLeoMCP(s leomcp.Server) {
+	m.leoMCP = s
+}
+
 func (m *Manager) SetPublisher(p observe.Publisher) {
 	m.publisher = p
 }
@@ -497,7 +508,7 @@ func (m *Manager) spawnShared(cfg *config.Config, tmpl config.TemplateConfig, sp
 	}
 
 	sessionID := session.NewID()
-	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, agentName, workspace, promptForArgs, m.webToken)
+	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, agentName, workspace, promptForArgs, m.webToken, m.leoMCP)
 	openingPrompt := ""
 	// storedSessionID seeds agentstore.Record.SessionID, which the tmux-TUI
 	// driver's SessionIDStore (agent.NewAgentIDs) reads back via IDs.Get() to
@@ -806,7 +817,7 @@ func (m *Manager) spawnWorktreeCore(ctx context.Context, cfg *config.Config, tmp
 	}
 
 	sessionID := session.NewID()
-	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, promptForArgs, m.webToken)
+	claudeArgs, harnessEnv := BuildTemplateArgs(cfg, tmpl, layout.AgentName, layout.WorktreePath, promptForArgs, m.webToken, m.leoMCP)
 	openingPrompt := ""
 	// See the identical storedSessionID comment in spawnShared: a non-claude
 	// harness must NOT have its agentstore SessionID pre-seeded, or its
@@ -1106,7 +1117,7 @@ func (m *Manager) Start(name string) error {
 	// edit must apply today's wiring, not replay what was frozen at spawn.
 	// resolveRestartArgs falls back to the stored args/env whenever it can't
 	// re-resolve (ad-hoc agent, deleted template, changed harness).
-	resolvedArgs, resolvedEnv := resolveRestartArgs(cfg, rec, m.webToken)
+	resolvedArgs, resolvedEnv := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP)
 	args := resolvedArgs
 	if isClaude {
 		args = ResumeArgs(resolvedArgs, resumeID)
@@ -1310,7 +1321,7 @@ func (m *Manager) Restart(name string) error {
 	resumeID := ResumeIDFor(rec)
 	isClaude := rec.Harness == "" || rec.Harness == "claude"
 
-	args, env := resolveRestartArgs(cfg, rec, m.webToken)
+	args, env := resolveRestartArgs(cfg, rec, m.webToken, m.leoMCP)
 	if isClaude {
 		args = ResumeArgs(args, resumeID)
 	}
@@ -1378,7 +1389,7 @@ func (m *Manager) Restart(name string) error {
 // dropped": leo derives it from the template on every launch and normalizes
 // it after the merge (see applyPermissions), so a restriction removed from
 // config cannot survive in a stored layer.
-func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken string) (args []string, env map[string]string) {
+func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken string, mcp leomcp.Server) (args []string, env map[string]string) {
 	fallback := func() ([]string, map[string]string) { return rec.ClaudeArgs, rec.Env }
 
 	if rec.Template == "" {
@@ -1392,7 +1403,7 @@ func resolveRestartArgs(cfg *config.Config, rec agentstore.Record, webToken stri
 		return fallback()
 	}
 
-	newArgs, newEnv, ok := resolveTemplateWiring(cfg, rec, tmpl, webToken, keepUnattributedEnv)
+	newArgs, newEnv, ok := resolveTemplateWiring(cfg, rec, tmpl, webToken, mcp, keepUnattributedEnv)
 	if !ok {
 		// BuildTemplateArgs already logged the failure; keep the agent alive
 		// on its last-known-good args rather than respawning it broken.
@@ -1440,10 +1451,10 @@ const (
 // env key that didn't exist yet at spawn time must still be able to win here),
 // then rec.SpawnEnv (the caller's explicit --env overrides) always winning on
 // top, with applyPermissions normalizing LEO_PERMISSIONS from tmpl.
-func resolveTemplateWiring(cfg *config.Config, rec agentstore.Record, tmpl config.TemplateConfig, webToken string, policy envPolicy) ([]string, map[string]string, bool) {
+func resolveTemplateWiring(cfg *config.Config, rec agentstore.Record, tmpl config.TemplateConfig, webToken string, mcp leomcp.Server, policy envPolicy) ([]string, map[string]string, bool) {
 	// Empty prompt: these paths rejoin or restart an existing agent, they
 	// never re-send an opening prompt.
-	newArgs, newHarnessEnv := BuildTemplateArgs(cfg, tmpl, rec.Name, rec.Workspace, "", webToken)
+	newArgs, newHarnessEnv := BuildTemplateArgs(cfg, tmpl, rec.Name, rec.Workspace, "", webToken, mcp)
 	if newArgs == nil {
 		return nil, nil, false
 	}

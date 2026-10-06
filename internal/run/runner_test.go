@@ -15,6 +15,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	"github.com/blackpaw-studio/leo/internal/history"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
@@ -152,7 +153,7 @@ func TestBuildArgs(t *testing.T) {
 
 	cfg := makeTestConfig(dir, true)
 	task := config.TaskConfig{Model: "opus", MaxTurns: 20}
-	args, _ := buildArgs(cfg, task, "mytask", "test prompt", "", nil)
+	args, _ := buildArgs(cfg, task, "mytask", "test prompt", "", nil, leomcp.Server{})
 
 	argsStr := strings.Join(args, " ")
 
@@ -186,7 +187,7 @@ func TestBuildArgsWithoutBypassPermissions(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil, leomcp.Server{})
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--dangerously-skip-permissions") {
@@ -205,7 +206,7 @@ func TestBuildArgsWithoutMCPConfig(t *testing.T) {
 
 	cfg := makeTestConfig(dir, false)
 
-	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil, leomcp.Server{})
 	argsStr := strings.Join(args, " ")
 
 	for i := 0; i < len(args)-1; i++ {
@@ -225,7 +226,7 @@ func TestBuildArgsWithSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "session-abc-123", nil)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "session-abc-123", nil, leomcp.Server{})
 	argsStr := strings.Join(args, " ")
 
 	if !strings.Contains(argsStr, "--resume session-abc-123") {
@@ -237,7 +238,7 @@ func TestBuildArgsWithoutSessionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := makeTestConfig(dir, false)
 
-	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "test prompt", "", nil, leomcp.Server{})
 	argsStr := strings.Join(args, " ")
 
 	if strings.Contains(argsStr, "--resume") {
@@ -258,7 +259,7 @@ func TestBuildArgsIncludesDevChannels(t *testing.T) {
 		},
 	}
 
-	args, _ := buildArgs(cfg, task, "mytask", "test prompt", "", nil)
+	args, _ := buildArgs(cfg, task, "mytask", "test prompt", "", nil, leomcp.Server{})
 
 	count := 0
 	for i, a := range args {
@@ -361,9 +362,9 @@ func TestPreview(t *testing.T) {
 		},
 	}
 
-	prompt, args, err := Preview(cfg, "heartbeat", nil)
+	prompt, args, err := Preview(cfg, "heartbeat", nil, leomcp.Server{})
 	if err != nil {
-		t.Fatalf("Preview() error: %v", err)
+		t.Fatalf("Preview(, leomcp.Server{}) error: %v", err)
 	}
 
 	if !strings.Contains(prompt, "Check inbox") {
@@ -379,7 +380,7 @@ func TestPreview(t *testing.T) {
 func TestPreviewTaskNotFound(t *testing.T) {
 	cfg := &config.Config{Tasks: map[string]config.TaskConfig{}}
 
-	_, _, err := Preview(cfg, "nonexistent", nil)
+	_, _, err := Preview(cfg, "nonexistent", nil, leomcp.Server{})
 	if err == nil {
 		t.Fatal("expected error for nonexistent task")
 	}
@@ -390,7 +391,7 @@ func TestRunTaskNotFound(t *testing.T) {
 		Tasks: map[string]config.TaskConfig{},
 	}
 
-	err := Run(cfg, "nonexistent", nil)
+	err := Run(cfg, "nonexistent", nil, leomcp.Server{})
 	if err == nil {
 		t.Fatal("expected error for nonexistent task")
 	}
@@ -421,9 +422,9 @@ func TestRunSuccess(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err != nil {
-		t.Fatalf("Run() error: %v", err)
+		t.Fatalf("Run(, leomcp.Server{}) error: %v", err)
 	}
 
 	// Verify log was written; logs now go to state/logs/mytask-*.log
@@ -464,9 +465,9 @@ func TestRunCommandError(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err == nil {
-		t.Fatal("Run() should return error when command fails")
+		t.Fatal("Run(, leomcp.Server{}) should return error when command fails")
 	}
 	if !strings.Contains(err.Error(), "claude exited with error") {
 		t.Errorf("error = %q, want to contain 'claude exited with error'", err.Error())
@@ -498,9 +499,9 @@ func TestRunMissingPromptFile(t *testing.T) {
 	pub := &recordingPublisher{}
 	SetPublisher(pub)
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err == nil {
-		t.Fatal("Run() should return error for missing prompt file")
+		t.Fatal("Run(, leomcp.Server{}) should return error for missing prompt file")
 	}
 	if !strings.Contains(err.Error(), "assembling prompt") {
 		t.Errorf("error = %q, want to contain 'assembling prompt'", err.Error())
@@ -569,9 +570,9 @@ func TestRunNotifyOnFailInvokesChannelChild(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err == nil {
-		t.Fatal("Run() should return error when main command fails")
+		t.Fatal("Run(, leomcp.Server{}) should return error when main command fails")
 	}
 	if invocations < 2 {
 		t.Errorf("expected at least 2 exec invocations (main + notify), got %d", invocations)
@@ -612,7 +613,7 @@ func TestRunNotifyOnFailSkippedWithoutChannels(t *testing.T) {
 		},
 	}
 
-	_ = Run(cfg, "mytask", nil)
+	_ = Run(cfg, "mytask", nil, leomcp.Server{})
 	if invocations != 1 {
 		t.Errorf("expected exactly 1 exec invocation (no notify without channels), got %d", invocations)
 	}
@@ -669,9 +670,9 @@ func TestRunStaleSessionFallbackRealWorldOutput(t *testing.T) {
 		t.Fatalf("seeding stale session: %v", err)
 	}
 
-	err := Run(cfg, "mytask", sessions)
+	err := Run(cfg, "mytask", sessions, leomcp.Server{})
 	if err != nil {
-		t.Fatalf("Run() should succeed after stale-session fallback, got: %v", err)
+		t.Fatalf("Run(, leomcp.Server{}) should succeed after stale-session fallback, got: %v", err)
 	}
 	if invocations != 2 {
 		t.Fatalf("expected 2 exec invocations (resume + fresh retry), got %d", invocations)
@@ -800,9 +801,9 @@ func TestRunConcurrencyGuard(t *testing.T) {
 	lockPath := filepath.Join(stateDir, "mytask.lock")
 	os.WriteFile(lockPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0600)
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err == nil {
-		t.Fatal("Run() should fail when task is already running")
+		t.Fatal("Run(, leomcp.Server{}) should fail when task is already running")
 	}
 	if !strings.Contains(err.Error(), "already running") {
 		t.Errorf("error = %q, want to contain 'already running'", err.Error())
@@ -814,7 +815,7 @@ func TestRunConcurrencyGuard(t *testing.T) {
 
 func TestBuildArgsInjectsMessagingAwareness(t *testing.T) {
 	cfg := &config.Config{HomePath: t.TempDir(), Web: config.WebConfig{Enabled: true}}
-	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "sess-1", nil)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "sess-1", nil, leomcp.Server{})
 
 	found := false
 	for i := 0; i < len(args)-1; i++ {
@@ -899,7 +900,7 @@ func TestBuildArgsWiresLeoMCPWithoutToken(t *testing.T) {
 	// No api.token file written.
 
 	leoEnv := leoMCPEnv(cfg, "mytask")
-	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv, leomcp.Server{})
 	found := false
 	for i, a := range args {
 		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
@@ -920,7 +921,7 @@ func TestBuildArgsIncludesLeoMCPWithToken(t *testing.T) {
 	os.WriteFile(filepath.Join(cfg.StatePath(), "agent.token"), []byte("tok123"), 0600)
 
 	leoEnv := leoMCPEnv(cfg, "mytask")
-	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv)
+	args, _ := buildArgs(cfg, config.TaskConfig{}, "mytask", "do the thing", "", leoEnv, leomcp.Server{})
 	found := false
 	for i, a := range args {
 		if a == "--mcp-config" && i+1 < len(args) && strings.HasSuffix(args[i+1], "leo-mcp.json") {
@@ -932,7 +933,7 @@ func TestBuildArgsIncludesLeoMCPWithToken(t *testing.T) {
 	}
 }
 
-// TestRunPassesLeoMCPEnvToExecuteCommand verifies Run() injects
+// TestRunPassesLeoMCPEnvToExecuteCommand verifies Run(, leomcp.Server{}) injects
 // LEO_PROCESS_NAME/LEO_WEB_PORT/LEO_API_TOKEN into the spawned claude's
 // environment when the leo MCP gate passes.
 func TestRunPassesLeoMCPEnvToExecuteCommand(t *testing.T) {
@@ -961,9 +962,9 @@ func TestRunPassesLeoMCPEnvToExecuteCommand(t *testing.T) {
 		return exec.Command("sh", "-c", "env")
 	}
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err != nil {
-		t.Fatalf("Run() error: %v", err)
+		t.Fatalf("Run(, leomcp.Server{}) error: %v", err)
 	}
 
 	logFiles, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
@@ -1030,8 +1031,8 @@ func TestRunInjectsTaskEnvWithLeoMCPPrecedence(t *testing.T) {
 		return exec.Command("sh", "-c", "env")
 	}
 
-	if err := Run(cfg, "mytask", nil); err != nil {
-		t.Fatalf("Run() error: %v", err)
+	if err := Run(cfg, "mytask", nil, leomcp.Server{}); err != nil {
+		t.Fatalf("Run(, leomcp.Server{}) error: %v", err)
 	}
 
 	logFiles, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
@@ -1094,8 +1095,8 @@ func TestRunTaskEnvOverridesHarnessEnv(t *testing.T) {
 		return exec.Command("sh", "-c", "env")
 	}
 
-	if err := Run(cfg, "mytask", nil); err != nil {
-		t.Fatalf("Run() error: %v", err)
+	if err := Run(cfg, "mytask", nil, leomcp.Server{}); err != nil {
+		t.Fatalf("Run(, leomcp.Server{}) error: %v", err)
 	}
 
 	logFiles, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "mytask-*.log"))
@@ -1249,9 +1250,9 @@ func TestRunChannelMCPInitFailureRetriesAndRecordsHistory(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err == nil {
-		t.Fatal("Run() should return error when channel MCP init keeps failing")
+		t.Fatal("Run(, leomcp.Server{}) should return error when channel MCP init keeps failing")
 	}
 	if !errors.Is(err, errChannelMCPInit) {
 		t.Errorf("expected error to wrap errChannelMCPInit, got: %v", err)
@@ -1307,9 +1308,9 @@ func TestRunChannelMCPInitNonMatchingServerNoAbort(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err != nil {
-		t.Fatalf("Run() should succeed when the failed MCP server doesn't match a configured channel: %v", err)
+		t.Fatalf("Run(, leomcp.Server{}) should succeed when the failed MCP server doesn't match a configured channel: %v", err)
 	}
 	if invocations != 1 {
 		t.Errorf("invocations = %d, want 1 (no channel-init abort/retry)", invocations)
@@ -1688,9 +1689,9 @@ func TestRunStaleSessionInAttemptRetryTimeoutReason(t *testing.T) {
 		t.Fatalf("seeding stale session: %v", err)
 	}
 
-	err := Run(cfg, "mytask", sessions)
+	err := Run(cfg, "mytask", sessions, leomcp.Server{})
 	if err == nil {
-		t.Fatal("Run() should return an error when the in-attempt retry times out")
+		t.Fatal("Run(, leomcp.Server{}) should return an error when the in-attempt retry times out")
 	}
 
 	hist := history.NewStore(cfg.HomePath)
@@ -1751,9 +1752,9 @@ func TestRunChannelInitExhaustionDoesNotClearSession(t *testing.T) {
 		t.Fatalf("seeding session: %v", err)
 	}
 
-	err := Run(cfg, "mytask", sessions)
+	err := Run(cfg, "mytask", sessions, leomcp.Server{})
 	if err == nil {
-		t.Fatal("Run() should return an error when channel MCP init keeps failing")
+		t.Fatal("Run(, leomcp.Server{}) should return an error when channel MCP init keeps failing")
 	}
 
 	// 1 initial + maxChannelInitAttempts channel-init retries (all attempt 1)
@@ -1777,7 +1778,7 @@ func TestRunChannelInitExhaustionDoesNotClearSession(t *testing.T) {
 // notify-on-fail child, all *after* the user had already asked the task to
 // stop.
 //
-// This drives Run() end-to-end (not just executeCommand) with a fake child
+// This drives Run(, leomcp.Server{}) end-to-end (not just executeCommand) with a fake child
 // that sleeps and traps nothing, so the only thing that can end it is the
 // forwarded signal. The real test process is never signaled — signalNotifyFn
 // is faked to hand back the channel executeCommand registers, and the test
@@ -1790,11 +1791,11 @@ func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
 	defer func() { signalNotifyFn = origNotify }()
 
 	// Captures the channel executeCommand registers via signalNotifyFn, so
-	// the test can push a fake signal into it once Run() is underway.
+	// the test can push a fake signal into it once Run(, leomcp.Server{}) is underway.
 	//
 	// Buffered well beyond the one registration this test expects: the stub
 	// runs inside executeCommand *before* cmd.Wait(), so if a regression ever
-	// caused an extra spawn, a tight buffer would block there and strand Run()
+	// caused an extra spawn, a tight buffer would block there and strand Run(, leomcp.Server{})
 	// entirely — turning a clear "invocations = 2, want 1" failure into an
 	// opaque timeout that says nothing about the actual defect.
 	registered := make(chan chan<- os.Signal, 8)
@@ -1838,7 +1839,7 @@ func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
 
 	runErrCh := make(chan error, 1)
 	go func() {
-		runErrCh <- Run(cfg, "mytask", sessions)
+		runErrCh <- Run(cfg, "mytask", sessions, leomcp.Server{})
 	}()
 
 	var sigCh chan<- os.Signal
@@ -1853,11 +1854,11 @@ func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
 	select {
 	case runErr = <-runErrCh:
 	case <-time.After(10 * time.Second):
-		t.Fatal("Run() did not return after the interrupt — retry loop likely did not break immediately")
+		t.Fatal("Run(, leomcp.Server{}) did not return after the interrupt — retry loop likely did not break immediately")
 	}
 
 	if runErr == nil {
-		t.Fatal("expected Run() to return an error after an interrupt")
+		t.Fatal("expected Run(, leomcp.Server{}) to return an error after an interrupt")
 	}
 	if !strings.Contains(runErr.Error(), "interrupted") {
 		t.Errorf("expected error to mention interruption, got: %v", runErr)
@@ -1885,7 +1886,7 @@ func TestRunInterruptStopsImmediatelyWithoutRetryOrNotify(t *testing.T) {
 	}
 }
 
-// TestRunPrereqCheckFailsFast verifies Run() fails immediately with the
+// TestRunPrereqCheckFailsFast verifies Run(, leomcp.Server{}) fails immediately with the
 // documented message — and never invokes execCommand — when the resolved
 // harness's binary isn't on PATH.
 func TestRunPrereqCheckFailsFast(t *testing.T) {
@@ -1916,7 +1917,7 @@ func TestRunPrereqCheckFailsFast(t *testing.T) {
 		},
 	}
 
-	err := Run(cfg, "mytask", nil)
+	err := Run(cfg, "mytask", nil, leomcp.Server{})
 	if err == nil {
 		t.Fatal("expected error when harness binary is not on PATH")
 	}
@@ -1958,9 +1959,9 @@ func TestRunHarnessReportedErrorWithExitZero(t *testing.T) {
 
 	sessions := session.NewStore(dir)
 
-	err := Run(cfg, "mytask", sessions)
+	err := Run(cfg, "mytask", sessions, leomcp.Server{})
 	if err == nil {
-		t.Fatal("Run() should return an error when the harness reports a fatal error despite exit 0")
+		t.Fatal("Run(, leomcp.Server{}) should return an error when the harness reports a fatal error despite exit 0")
 	}
 	if !strings.Contains(err.Error(), "harness reported error:") {
 		t.Errorf("error = %q, want to contain 'harness reported error:'", err.Error())
@@ -2042,9 +2043,9 @@ func TestRunCodexStaleThreadRetryClearsSession(t *testing.T) {
 		t.Fatalf("seeding stale session: %v", err)
 	}
 
-	err := Run(cfg, "mytask", sessions)
+	err := Run(cfg, "mytask", sessions, leomcp.Server{})
 	if err != nil {
-		t.Fatalf("Run() should succeed after the in-place stale-thread retry, got: %v", err)
+		t.Fatalf("Run(, leomcp.Server{}) should succeed after the in-place stale-thread retry, got: %v", err)
 	}
 	if len(allArgs) != 2 {
 		t.Fatalf("expected 2 exec invocations (resume + fresh retry), got %d", len(allArgs))
@@ -2091,8 +2092,8 @@ func TestRunCodexPersistsThreadID(t *testing.T) {
 	}
 
 	sessions := session.NewStore(dir)
-	if err := Run(cfg, "mytask", sessions); err != nil {
-		t.Fatalf("Run() error: %v", err)
+	if err := Run(cfg, "mytask", sessions, leomcp.Server{}); err != nil {
+		t.Fatalf("Run(, leomcp.Server{}) error: %v", err)
 	}
 
 	sid, _, err := sessions.Get("task:mytask")

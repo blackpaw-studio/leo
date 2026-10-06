@@ -116,7 +116,7 @@ func resolveTask(cfg *config.Config, taskName string) (config.TaskConfig, error)
 }
 
 // Preview returns the assembled prompt and CLI args without executing.
-func Preview(cfg *config.Config, taskName string, sessions *session.Store) (string, []string, error) {
+func Preview(cfg *config.Config, taskName string, sessions *session.Store, mcp leomcp.Server) (string, []string, error) {
 	task, err := resolveTask(cfg, taskName)
 	if err != nil {
 		return "", nil, err
@@ -138,12 +138,12 @@ func Preview(cfg *config.Config, taskName string, sessions *session.Store) (stri
 
 	leoEnv := leoMCPEnv(cfg, taskName)
 
-	args, _ := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv)
+	args, _ := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv, mcp)
 	return prompt, args, nil
 }
 
 // Run executes a scheduled task.
-func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
+func Run(cfg *config.Config, taskName string, sessions *session.Store, mcp leomcp.Server) error {
 	task, err := resolveTask(cfg, taskName)
 	if err != nil {
 		return err
@@ -265,7 +265,7 @@ func Run(cfg *config.Config, taskName string, sessions *session.Store) error {
 		}
 		isChannelInitRetry = false
 
-		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, task.Env, leoEnv, channelPrefixes, sessions, h)
+		ar := runTaskAttempt(cfg, task, taskName, prompt, sessionID, taskWorkspace, timeout, task.Env, leoEnv, channelPrefixes, sessions, h, mcp)
 		lastLogContent = string(ar.output)
 
 		// A harness that exits 0 while its own stream reports a fatal error
@@ -395,8 +395,8 @@ type attemptResult struct {
 // is the base, taskEnv may deliberately override it (e.g. claude's
 // CLAUDE_CODE_ENTRYPOINT), and leoEnv wins on collision last so a task can
 // never shadow the leo MCP wiring.
-func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, taskEnv, leoEnv map[string]string, channelPrefixes []string, sessions *session.Store, h harness.Harness) attemptResult {
-	args, harnessEnv := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv)
+func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID, taskWorkspace string, timeout time.Duration, taskEnv, leoEnv map[string]string, channelPrefixes []string, sessions *session.Store, h harness.Harness, mcp leomcp.Server) attemptResult {
+	args, harnessEnv := buildArgs(cfg, task, taskName, prompt, sessionID, leoEnv, mcp)
 	spawnEnv := mergeEnvMaps(harnessEnv, taskEnv, leoEnv)
 
 	// Per-attempt timeout so each retry gets the full timeout
@@ -414,7 +414,7 @@ func runTaskAttempt(cfg *config.Config, task config.TaskConfig, taskName, prompt
 			}
 		}
 
-		args, harnessEnv = buildArgs(cfg, task, taskName, prompt, "", leoEnv)
+		args, harnessEnv = buildArgs(cfg, task, taskName, prompt, "", leoEnv, mcp)
 		spawnEnv = mergeEnvMaps(harnessEnv, taskEnv, leoEnv)
 		output, execErr = executeCommand(ctx, h.Binary(), taskWorkspace, args, task.Channels, task.DevChannels, spawnEnv, channelPrefixes)
 		result, _ = h.ParseEvents(bytes.NewReader(output))
@@ -1016,7 +1016,7 @@ func mergeEnvMaps(maps ...map[string]string) map[string]string {
 // LEO_* vars from leoMCPEnv, always non-nil now — the leo MCP server is
 // always wired in for every harness, with LEO_WEB_PORT/LEO_API_TOKEN simply
 // absent/empty when web is disabled or no token is available.
-func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoEnv map[string]string) ([]string, map[string]string) {
+func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, sessionID string, leoEnv map[string]string, mcp leomcp.Server) ([]string, map[string]string) {
 	h, err := harness.Get(cfg.TaskHarness(task))
 	if err != nil {
 		log.Printf("[task:%s] resolving harness: %v", taskName, err)
@@ -1051,13 +1051,13 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 			mcpConfig = p
 		}
 		opts.MCPConfigPath = mcpConfig
-		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+		opts.LeoMCPArgs = mcp.AppendArg(nil, cfg)
 		opts.LeoMCPToolTimeout = leomcp.ToolTimeout
 		spec.Options = opts
 	case codexharness.Options:
 		opts.LeoMCP = &codexharness.LeoMCPBridge{
-			Command:      "leo",
-			Args:         []string{"mcp-server"},
+			Command:      mcp.Executable(),
+			Args:         mcp.Args(),
 			EnvVars:      []string{"LEO_PROCESS_NAME", "LEO_WEB_PORT", "LEO_API_TOKEN"},
 			ApprovalMode: "approve",
 			ToolTimeout:  leomcp.ToolTimeout,
@@ -1065,7 +1065,7 @@ func buildArgs(cfg *config.Config, task config.TaskConfig, taskName, prompt, ses
 		spec.Options = opts
 	case opencodeharness.Options:
 		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-			Command:     []string{"leo", "mcp-server"},
+			Command:     mcp.Command(),
 			Env:         leoEnv,
 			ToolTimeout: leomcp.ToolTimeout,
 		}

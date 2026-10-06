@@ -12,6 +12,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/harness"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 	"github.com/blackpaw-studio/leo/internal/observe"
 	"github.com/blackpaw-studio/leo/internal/session"
 )
@@ -98,7 +99,7 @@ func TestRunPersistentDispatchSelected(t *testing.T) {
 			"t1": {Runtime: "persistent", PromptFile: "_", Workspace: "/tmp"},
 		},
 	}
-	_ = Run(cfg, "t1", nil)
+	_ = Run(cfg, "t1", nil, leomcp.Server{})
 	if !called {
 		t.Fatalf("expected runPersistent dispatch")
 	}
@@ -401,7 +402,7 @@ func TestRunPersistentAgentTaskPersistsSessionIDToAgentstore(t *testing.T) {
 // TestRunPersistentPublishesStartedThenSucceeded verifies that persistent
 // task firings — dispatched through the daemon's session router rather than
 // the oneshot claude -p path — are just as visible to the observability API:
-// the same task_run_started/succeeded events Run() publishes, carrying the
+// the same task_run_started/succeeded events Run(, leomcp.Server{}) publishes, carrying the
 // resolved Workspace/Model/Harness for this firing.
 func TestRunPersistentPublishesStartedThenSucceeded(t *testing.T) {
 	home := shortTempDir(t)

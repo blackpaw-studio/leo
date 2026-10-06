@@ -22,6 +22,7 @@ import (
 	"github.com/blackpaw-studio/leo/internal/config"
 	"github.com/blackpaw-studio/leo/internal/harness"
 	claudeharness "github.com/blackpaw-studio/leo/internal/harness/claude"
+	"github.com/blackpaw-studio/leo/internal/leomcp"
 )
 
 // dispatchIDEnv names the variable every dispatched or consulted run
@@ -73,6 +74,9 @@ type Dispatcher struct {
 	beforeSendInjectable func()
 	notificationDelivery NotificationDelivery
 	closeFinishedViewer  func(Record, func(string) error) (Record, error)
+	// LeoMCP is the leo binary headless dispatches launch as their leo MCP
+	// server. The zero value runs the bare "leo" from PATH.
+	LeoMCP leomcp.Server
 }
 
 func (d *Dispatcher) SetCloseFinishedViewer(fn func(Record, func(string) error) (Record, error)) {
@@ -237,7 +241,7 @@ func (d *Dispatcher) Start(_ context.Context, cfg *config.Config, req Request) (
 		return Started{}, invalidf("template %q harness_options: %v", req.Template, err)
 	}
 	if opts, ok := decoded.(claudeharness.Options); ok {
-		decoded = resolveClaudeDispatchProfile(cfg, tmpl, requestKind(req), opts, tmpl.Env)
+		decoded = resolveClaudeDispatchProfile(cfg, tmpl, requestKind(req), opts, tmpl.Env, d.LeoMCP)
 	}
 	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
 		return Started{}, invalidf("cwd must be an existing absolute directory")

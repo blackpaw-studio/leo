@@ -26,7 +26,7 @@ import (
 // leoMCPEnv and cli's processLeoMCPEnv); webToken/cfg.WebPort() may be empty
 // or zero when web is disabled, in which case the leo MCP server self-selects
 // local-only mode at runtime (only leo_skill is served).
-func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) (harness.Harness, harness.LaunchSpec, error) {
+func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string, mcp leomcp.Server) (harness.Harness, harness.LaunchSpec, error) {
 	// Defense in depth: Config.Validate() also rejects these, but skip
 	// anything unsafe here in case spawn-time receives an unvalidated
 	// config. Log noisily so the silent drop isn't invisible.
@@ -90,13 +90,13 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 			opts.RemoteControl = v
 		}
 		opts.MCPConfigPath = mcpConfig
-		opts.LeoMCPArgs = leomcp.AppendArg(nil, cfg)
+		opts.LeoMCPArgs = mcp.AppendArg(nil, cfg)
 		opts.LeoMCPToolTimeout = leomcp.ToolTimeout
 		spec.Options = opts
 	case codexharness.Options:
 		opts.LeoMCP = &codexharness.LeoMCPBridge{
-			Command:      "leo",
-			Args:         []string{"mcp-server"},
+			Command:      mcp.Executable(),
+			Args:         mcp.Args(),
 			EnvVars:      leoMCPEnvVars(tmpl),
 			ApprovalMode: "approve",
 			ToolTimeout:  leomcp.ToolTimeout,
@@ -104,7 +104,7 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 		spec.Options = opts
 	case opencodeharness.Options:
 		opts.LeoMCP = &opencodeharness.LeoMCPBridge{
-			Command: []string{"leo", "mcp-server"},
+			Command: mcp.Command(),
 			Env: mergeEnv(map[string]string{
 				"LEO_PROCESS_NAME": agentName,
 				"LEO_WEB_PORT":     strconv.Itoa(cfg.WebPort()),
@@ -140,8 +140,8 @@ func resolveTemplateLaunch(cfg *config.Config, tmpl config.TemplateConfig, agent
 // (mergeEnv(mergeEnv(harnessEnv, tmpl.Env), spec.Env)), so caller-provided
 // env always wins on collision. Nil for claude/codex, whose bridges ride argv
 // or env-var *names* the supervisor already exports.
-func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string) ([]string, map[string]string) {
-	h, spec, err := resolveTemplateLaunch(cfg, tmpl, agentName, workspace, prompt, webToken)
+func BuildTemplateArgs(cfg *config.Config, tmpl config.TemplateConfig, agentName, workspace, prompt, webToken string, mcp leomcp.Server) ([]string, map[string]string) {
+	h, spec, err := resolveTemplateLaunch(cfg, tmpl, agentName, workspace, prompt, webToken, mcp)
 	if err != nil {
 		log.Printf("[agent:%s] %v", agentName, err)
 		return nil, nil
