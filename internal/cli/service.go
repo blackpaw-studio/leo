@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -203,9 +204,12 @@ func newServiceRestartCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Println("Restarting daemon...")
-			if err := service.RestartDaemon(cfg.HomePath); err != nil {
-				return fmt.Errorf("restarting daemon: %w", err)
+			fmt.Println("Restarting daemon (waiting for agents to restore)...")
+			err = restartDaemonAndWait(cmd.Context(), cfg.HomePath, defaultDaemonRestartDeps)
+			if errors.Is(err, errDaemonNotReady) {
+				warn.Printf("%v\n", err)
+			} else if err != nil {
+				return err
 			}
 
 			status, _ := service.DaemonStatus(cfg.HomePath)

@@ -3,14 +3,13 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/blackpaw-studio/leo/internal/daemon"
 	"github.com/blackpaw-studio/leo/internal/prompt"
-	"github.com/blackpaw-studio/leo/internal/service"
 	"github.com/blackpaw-studio/leo/internal/update"
 	"github.com/spf13/cobra"
 )
@@ -235,9 +234,6 @@ func prereleaseOptions(allowUnsigned bool) update.PrereleaseOptions {
 // maybeRestartDaemon offers to bounce the daemon after a binary swap so
 // the new binary actually serves new requests. Same prompt the stable
 // update path uses — factored out so both paths stay in sync.
-// daemonReadyTimeout bounds the wait for a restarted daemon to answer.
-const daemonReadyTimeout = 30 * time.Second
-
 func maybeRestartDaemon() error {
 	cfg, err := loadConfig()
 	if err != nil || cfg.IsClientOnly() {
@@ -258,18 +254,17 @@ func maybeRestartDaemon() error {
 	if !prompt.YesNo(reader, "\nDaemon is running. Restart it now?", true) {
 		return nil
 	}
-	info.Println("Restarting daemon...")
-	if err := service.RestartDaemon(cfg.HomePath); err != nil {
-		return fmt.Errorf("restarting daemon: %w", err)
-	}
-	success.Println("Daemon restarted")
-
-	// kickstart/systemctl return before the new daemon binds its socket;
-	// asking it anything sooner fails with "no such file or directory".
-	if err := daemon.WaitHealthy(context.Background(), cfg.HomePath, daemonReadyTimeout); err != nil {
+	info.Println("Restarting daemon (waiting for agents to restore)...")
+	err = restartDaemonAndWait(context.Background(), cfg.HomePath, defaultDaemonRestartDeps)
+	if errors.Is(err, errDaemonNotReady) {
+		success.Println("Daemon restarted")
 		warn.Printf("Could not check agents for pending changes: %v\n", err)
 		return nil
 	}
+	if err != nil {
+		return err
+	}
+	success.Println("Daemon restarted")
 
 	// Only now, with the new binary serving, is it worth asking which agents
 	// are still running the old wiring: restoring the daemon respawns agents

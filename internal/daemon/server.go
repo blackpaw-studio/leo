@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -115,6 +116,11 @@ type Server struct {
 	// the web server by StartWeb. Either may be nil (no bridge use).
 	bridgeLauncher *bridgemod.Launcher
 	bridgeRouter   *bridge.Router
+
+	// ready is reported on /health and set by MarkReady once startup has
+	// restored agents; until then agent queries (e.g. /agents/stale) answer
+	// from a partially populated supervisor.
+	ready atomic.Bool
 }
 
 // Option configures a Server at construction.
@@ -540,8 +546,15 @@ func (s *Server) SetLogPath(path string) {
 	s.logPath = path
 }
 
+// MarkReady records that startup has finished restoring agents, so /health
+// reports ready. The boot path must call it once restore returns — whether
+// or not anything was restored — or WaitReady callers time out.
+func (s *Server) MarkReady() {
+	s.ready.Store(true)
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeData(w, http.StatusOK, versionData{Version: s.leoVersion})
+	writeData(w, http.StatusOK, healthData{Version: s.leoVersion, Ready: s.ready.Load()})
 }
 
 type taskEnqueueReq struct {
