@@ -322,9 +322,7 @@ func (d *Dispatcher) publishPane(s *runState, rt InteractiveRuntime, placement V
 		d.persistLocked(s, "")
 		// The opening turn can finish before Launch returns, when there
 		// was no pane yet to hide.
-		if s.record.Status == StatusIdle {
-			d.scheduleHideLocked(s)
-		}
+		d.nudgePaneLocked(s)
 		return true
 	})
 	if published {
@@ -473,11 +471,13 @@ func (d *Dispatcher) appendTurnLocked(s *runState, source TurnSource, text strin
 	if source == TurnSourceUser {
 		s.record.Status = StatusRunning
 		s.record.startActive(d.now())
-		if s.hidesPending > 0 {
-			// Typed into the pane before the pending hide moved it away.
-			d.scheduleShowLocked(s)
-		}
+		// A user-typed turn keeps the pane where the user typed it, even if
+		// a hide is already queued or under way.
+		s.paneWant = s.record.ViewerKind
+	} else {
+		s.paneWant = "split"
 	}
+	d.nudgePaneLocked(s)
 	return &s.record.Turns[len(s.record.Turns)-1]
 }
 func (d *Dispatcher) expireArmedLocked(s *runState) {
@@ -522,9 +522,10 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 		}
 		// Panes show only while the orchestrator has work in them; a turn
 		// the user typed never moves one.
-		if t.Source == TurnSourceOrchestrator && oldStatus != StatusIdle && s.record.Status == StatusIdle {
-			d.scheduleHideLocked(s)
+		if t.Source == TurnSourceOrchestrator && !d.hasOpenTurnLocked(s) {
+			s.paneWant = viewerHidden
 		}
+		d.nudgePaneLocked(s)
 		if !d.hasWorkingTurnLocked(s) {
 			s.record.foldActive(boundary)
 		}
@@ -538,6 +539,15 @@ func (d *Dispatcher) closeTurnLocked(s *runState, id string, outcome TurnOutcome
 			d.persistLocked(s, "status")
 		}
 		return true
+	}
+	return false
+}
+
+func (d *Dispatcher) hasOpenTurnLocked(s *runState) bool {
+	for _, t := range s.record.Turns {
+		if t.Outcome == "" {
+			return true
+		}
 	}
 	return false
 }
@@ -611,7 +621,7 @@ func (d *Dispatcher) Send(ctx context.Context, id, message string) (SendResult, 
 	pane := s.record.PaneID
 	rt := d.interactiveRuntime
 	d.persistLocked(s, "turn")
-	shown := d.scheduleShowLocked(s)
+	shown := d.nudgePaneLocked(s)
 	d.mu.Unlock()
 	if rt == nil {
 		d.mu.Lock()

@@ -23,6 +23,7 @@ type movingRuntime struct {
 	events   []string
 	showErr  error
 	hideHook func()
+	showHook func()
 }
 
 func (r *movingRuntime) HidePane(_ context.Context, pane, name string) (string, error) {
@@ -36,6 +37,9 @@ func (r *movingRuntime) HidePane(_ context.Context, pane, name string) (string, 
 }
 
 func (r *movingRuntime) ShowPane(_ context.Context, pane, targetPane, window string) error {
+	if r.showHook != nil {
+		r.showHook()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, "show "+pane+" "+targetPane+" "+window)

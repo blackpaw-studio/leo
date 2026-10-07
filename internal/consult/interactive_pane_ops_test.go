@@ -143,3 +143,76 @@ func TestInteractiveCancelBoundsWaitBehindHungPaneOp(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// waitForSettledHidden waits for the pane to be recorded hidden with a hide
+// as the last pane move, i.e. placement converged on hidden.
+func waitForSettledHidden(t *testing.T, d *Dispatcher, rt *movingRuntime, id string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		rec, _ := d.Get(id)
+		moves := []string{}
+		for _, e := range rt.log() {
+			if strings.HasPrefix(e, "hide") || strings.HasPrefix(e, "show") {
+				moves = append(moves, e)
+			}
+		}
+		if rec.ViewerKind == viewerHidden && len(moves) > 0 && strings.HasPrefix(moves[len(moves)-1], "hide") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("viewer kind = %q, moves = %v; want the pane hidden again", rec.ViewerKind, moves)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A permission prompt that lands while a rejoin's join-pane is running
+// must not leave the needs_input pane in the caller's window. The rejoin
+// here is a user turn typed while the pane was being hidden.
+func TestInteractiveNeedsInputDuringShowEndsHidden(t *testing.T) {
+	d := NewDispatcher(newFakeRecorder())
+	rt := &movingRuntime{fakeInteractiveRuntime: &fakeInteractiveRuntime{arm: true, empty: true}}
+	d.SetInteractiveRuntime(rt)
+	started, err := d.Start(context.Background(), testConfig(), Request{
+		Template: "codex", Name: "impl", Prompt: "x", Cwd: t.TempDir(), Mode: ModeInteractive,
+		CallerPaneID: "%0", CallerSessionID: "leo-orch", CallerWindowID: "@1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := started.ID
+	waitForInjection(t, rt.fakeInteractiveRuntime)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt.hideHook = func() {
+		rt.hideHook = nil
+		_ = d.Report(id, hook(t, "UserPromptSubmit", "u"))
+	}
+	rt.showHook = func() {
+		rt.showHook = nil
+		go d.RequestPermission(ctx, id, permissionPayload(t, "Bash", map[string]any{"command": "ls"}), time.Minute)
+		waitForStatus(t, d, id, StatusNeedsInput)
+	}
+	_ = d.Report(id, hook(t, "UserPromptSubmit", "a"))
+	_ = d.Report(id, hook(t, "Stop", "a"))
+	waitForEvents(t, rt, "show", 1)
+	waitForSettledHidden(t, d, rt, id)
+}
+
+// An orchestrator turn that ends while a rejoin's join-pane is running must
+// still get its pane hidden, though the record said hidden when it ended.
+func TestInteractiveTurnEndingDuringShowEndsHidden(t *testing.T) {
+	d, rt, id := startSplitCodex(t)
+	waitForHidden(t, d, id)
+	rt.showHook = func() {
+		rt.showHook = nil
+		d.mu.Lock()
+		s := d.runs[id]
+		d.closeTurnLocked(s, s.record.Turns[len(s.record.Turns)-1].TurnID, TurnRejected, "ended mid-show")
+		d.mu.Unlock()
+	}
+	go func() { _, _ = d.Send(context.Background(), id, "next") }()
+	waitForEvents(t, rt, "show", 1)
+	waitForSettledHidden(t, d, rt, id)
+}

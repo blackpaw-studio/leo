@@ -177,6 +177,7 @@ func (d *Dispatcher) refreshNeedsInputLocked(s *runState) {
 	}
 	if s.record.Status != old {
 		d.persistLocked(s, "status")
+		d.nudgePaneLocked(s)
 	} else {
 		d.persistLocked(s, "")
 	}

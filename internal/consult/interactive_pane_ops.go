@@ -3,7 +3,7 @@ package consult
 import "time"
 
 // paneOp is one pane-affecting step for an interactive run: publishing its
-// launched pane, hiding, showing, or killing it. A run's ops execute one at
+// launched pane, reconciling its placement (hide/show), or killing it. A run's ops execute one at
 // a time, in the order they were queued, and each decides what to do from
 // the run's state when it executes, never from a snapshot taken when it was
 // queued. Status transitions (hooks, Send, Cancel) only change state and
@@ -19,8 +19,7 @@ type paneOpKind uint8
 
 const (
 	paneOpPublish paneOpKind = iota
-	paneOpHide
-	paneOpShow
+	paneOpReconcile
 	paneOpKill
 )
 

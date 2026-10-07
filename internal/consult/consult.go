@@ -122,10 +122,14 @@ type runState struct {
 	// killRequested marks a cancellation whose kill is queued: any later op
 	// kills the run's pane rather than publish or show it.
 	killRequested bool
-	// hidesPending counts queued or running hides. A user turn that starts
-	// while one is pending typed into a pane still in the caller's window,
-	// so it queues a rejoin.
-	hidesPending int
+	// paneWant is where the latest turn event put a managed pane: "split"
+	// while an orchestrator turn works in it, viewerHidden once that work
+	// ends, and wherever the pane was when a user typed a turn into it
+	// (user-typed turns never move a pane). Empty until a turn sets it.
+	paneWant string
+	// reconcileQueued is the done channel of a queued, not yet started,
+	// placement reconcile, which further nudges coalesce into.
+	reconcileQueued <-chan struct{}
 	// permissions are the run's pending PermissionRequest hooks, oldest
 	// first; permissionSeq numbers their request ids.
 	permissions   []*permissionRequest

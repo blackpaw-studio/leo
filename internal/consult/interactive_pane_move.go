@@ -19,49 +19,95 @@ type paneMoverRuntime interface {
 	ShowPane(ctx context.Context, pane, targetPane, window string) error
 }
 
-// scheduleHideLocked queues a hide once an orchestrator turn has left the
-// run idle. The hide itself decides, when it runs, whether to move anything.
-func (d *Dispatcher) scheduleHideLocked(s *runState) {
-	if s.record.ViewerKind != "split" || s.record.PaneID == "" || s.releasing {
-		return
+// maxReconcileSteps bounds one reconcile's moves, so state that keeps
+// flipping cannot spin the worker; the next nudge picks it up again.
+const maxReconcileSteps = 8
+
+// nudgePaneLocked asks s's pane-op worker to reconcile the pane's placement
+// with the run's state, coalescing with a reconcile already queued. The
+// returned channel closes once that reconcile has run.
+func (d *Dispatcher) nudgePaneLocked(s *runState) <-chan struct{} {
+	if _, ok := d.interactiveRuntime.(paneMoverRuntime); !ok || !managedPlacement(s.record.ViewerKind) {
+		done := make(chan struct{})
+		close(done)
+		return done
 	}
-	if _, ok := d.interactiveRuntime.(paneMoverRuntime); !ok {
-		return
+	if s.reconcileQueued != nil {
+		return s.reconcileQueued
 	}
-	s.hidesPending++
-	d.enqueuePaneOpLocked(s, paneOpHide, func() { d.hidePane(s) })
+	s.reconcileQueued = d.enqueuePaneOpLocked(s, paneOpReconcile, func() { d.reconcilePane(s) })
+	return s.reconcileQueued
 }
 
-// scheduleShowLocked queues a rejoin of a hidden pane.
-func (d *Dispatcher) scheduleShowLocked(s *runState) <-chan struct{} {
-	return d.enqueuePaneOpLocked(s, paneOpShow, func() { d.showPane(s) })
+// managedPlacement reports whether a pane with this ViewerKind is moved
+// between the caller's window and a background one: a split pane is, a
+// window-placed one (or one whose rejoin failed) never is.
+func managedPlacement(kind string) bool {
+	return kind == "split" || kind == viewerHidden
+}
+
+// desiredPlacementLocked is where s's pane should be now. A pane waiting on
+// the orchestrator's permission decision is hidden; otherwise it goes where
+// the run's latest turn put it (see paneWant). Unmanaged, dying, or
+// releasing panes stay as they are.
+func (d *Dispatcher) desiredPlacementLocked(s *runState) string {
+	actual := s.record.ViewerKind
+	if !managedPlacement(actual) || s.record.PaneID == "" || s.killRequested || s.releasing ||
+		s.record.Status.Terminal() || s.record.Status == StatusSettling {
+		return actual
+	}
+	if s.record.Status == StatusNeedsInput {
+		return viewerHidden
+	}
+	if s.paneWant == "" {
+		return actual
+	}
+	return s.paneWant
+}
+
+// reconcilePane moves s's pane, one tmux step at a time, until its recorded
+// placement matches the desired one, re-reading the run's state before each
+// step. A failed step stops it; the next nudge tries again.
+func (d *Dispatcher) reconcilePane(s *runState) {
+	d.mu.Lock()
+	s.reconcileQueued = nil
+	d.mu.Unlock()
+	for range maxReconcileSteps {
+		d.mu.Lock()
+		want, actual := d.desiredPlacementLocked(s), s.record.ViewerKind
+		d.mu.Unlock()
+		if want == actual {
+			return
+		}
+		moved := false
+		if want == viewerHidden {
+			moved = d.hidePane(s)
+		} else {
+			moved = d.showPane(s)
+		}
+		if !moved {
+			return
+		}
+	}
+	d.mu.Lock()
+	fmt.Fprintf(os.Stderr, "dispatch %s: pane placement still changing after %d moves\n", s.record.ID, maxReconcileSteps)
+	d.mu.Unlock()
 }
 
 // hidePane breaks the run's pane out of the caller's window into a
-// background window named like the run's viewer, if the run is still idle
-// on a split pane. It runs as a pane op: a turn that starts meanwhile
-// queues its own rejoin behind it (see appendTurnLocked and Send).
-func (d *Dispatcher) hidePane(s *runState) {
+// background window named like the run's viewer, and records where it went.
+func (d *Dispatcher) hidePane(s *runState) bool {
 	d.mu.Lock()
-	mover, ok := d.interactiveRuntime.(paneMoverRuntime)
-	pane := s.record.PaneID
-	if !ok || s.releasing || s.killRequested || s.record.Status != StatusIdle || pane == "" || s.record.ViewerKind != "split" {
-		s.hidesPending--
-		d.mu.Unlock()
-		return
-	}
-	id, name, callerWindow := s.record.ID, viewerWindowName(s.record), s.record.CallerWindowID
+	mover, _ := d.interactiveRuntime.(paneMoverRuntime)
+	id, pane, name, callerWindow := s.record.ID, s.record.PaneID, viewerWindowName(s.record), s.record.CallerWindowID
 	layout := runtimeLayout(d.interactiveRuntime)
 	d.mu.Unlock()
 	window, err := mover.HidePane(d.daemonCtx, pane, name)
-	d.mu.Lock()
-	// From here a turn typed in the pane was typed in its background window.
-	s.hidesPending--
 	if err != nil {
-		d.mu.Unlock()
 		fmt.Fprintf(os.Stderr, "dispatch %s: hiding idle pane: %v\n", id, err)
-		return
+		return false
 	}
+	d.mu.Lock()
 	if s.record.PaneID == pane {
 		s.record.ViewerKind, s.record.ViewerWindowID = viewerHidden, window
 		d.persistLocked(s, "")
@@ -70,22 +116,16 @@ func (d *Dispatcher) hidePane(s *runState) {
 	if callerWindow != "" {
 		_ = layout(callerWindow)
 	}
+	return true
 }
 
-// showPane returns a hidden pane below its caller, where it launched, if
-// the run has work in it now: a queued or running turn. An idle run, one
-// waiting on the orchestrator's permission decision, or one being torn down
-// stays where it is. When rejoining is impossible (the caller is gone) the
-// pane stays in its background window, which then is simply its window.
-func (d *Dispatcher) showPane(s *runState) {
+// showPane returns a hidden pane below its caller, where it launched. When
+// that is impossible (the caller is gone) the pane stays in its background
+// window, which then is simply its window and is no longer moved.
+func (d *Dispatcher) showPane(s *runState) bool {
 	d.mu.Lock()
-	mover, ok := d.interactiveRuntime.(paneMoverRuntime)
-	pane, status := s.record.PaneID, s.record.Status
-	if !ok || pane == "" || s.record.ViewerKind != viewerHidden || s.killRequested || s.releasing || (status != StatusQueued && status != StatusRunning) {
-		d.mu.Unlock()
-		return
-	}
-	id, target, window := s.record.ID, s.record.CallerPaneID, s.record.CallerWindowID
+	mover, _ := d.interactiveRuntime.(paneMoverRuntime)
+	id, pane, target, window := s.record.ID, s.record.PaneID, s.record.CallerPaneID, s.record.CallerWindowID
 	d.mu.Unlock()
 	err := errors.New("no caller pane recorded")
 	if target != "" {
@@ -93,14 +133,16 @@ func (d *Dispatcher) showPane(s *runState) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if s.record.PaneID != pane || s.record.ViewerKind != viewerHidden {
-		return
+	if s.record.PaneID != pane {
+		return false
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch %s: leaving pane in its own window: %v\n", id, err)
 		s.record.ViewerKind = "window"
-	} else {
-		s.record.ViewerKind, s.record.ViewerWindowID = "split", ""
+		d.persistLocked(s, "")
+		return false
 	}
+	s.record.ViewerKind, s.record.ViewerWindowID = "split", ""
 	d.persistLocked(s, "")
+	return true
 }
