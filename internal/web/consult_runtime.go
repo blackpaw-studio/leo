@@ -79,8 +79,8 @@ func (s *Server) setupConsultRuntime(opts Options, resolveCallerSession func(str
 		hub.SetRequestHandler(s.consults.BridgeRequestHandler())
 		delegation := &delegationSource{path: s.configPath, load: s.loadConfig}
 		pusher = &consult.StatePusher{Hub: hub, Records: s.consults.RunRecords, Delegation: delegation.Get, Now: time.Now}
-	}
-	if hub := opts.Bridge.hub(); hub != nil {
+		// The tmux roster leaves out what a bridged caller's band shows, so
+		// only while the pusher feeds those bands state.
 		viewer.BridgeConnected = hub.Connected
 	}
 	if hub := opts.Bridge.hub(); hub != nil && s.bridgeFeed == nil {
