@@ -350,8 +350,19 @@ export const MAX_SUMMARY_CHARS = 200
 
 const PATH_TOOLS = ['Read', 'Edit', 'Write']
 const PATTERN_TOOLS = ['Grep', 'Glob']
-// scheme://[userinfo@]host — the host alone, never credentials or a path.
-const URL_HOST = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(\[[^\]/?#]*\]|[^:/?#]+)/i
+/**
+ * The hostname of url, parsed as a URL so userinfo (which may itself hold
+ * '@' or ':') never leaks; undefined when url has no host or does not parse.
+ * @param {string} url
+ * @returns {string | undefined}
+ */
+function urlHost(url) {
+  try {
+    return new URL(url).hostname || undefined
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * @param {unknown} value
@@ -387,7 +398,7 @@ function toolSummary(tool, input, home) {
   if (tool === 'Bash') return typeof input.command === 'string' ? input.command.trim().split(/\s+/)[0] : undefined
   if (PATH_TOOLS.includes(tool)) return typeof input.file_path === 'string' ? abbreviateHome(input.file_path, home) : undefined
   if (PATTERN_TOOLS.includes(tool)) return typeof input.pattern === 'string' ? input.pattern : undefined
-  if (tool === 'WebFetch') return typeof input.url === 'string' ? URL_HOST.exec(input.url)?.[1] : undefined
+  if (tool === 'WebFetch') return typeof input.url === 'string' ? urlHost(input.url) : undefined
   return undefined
 }
 

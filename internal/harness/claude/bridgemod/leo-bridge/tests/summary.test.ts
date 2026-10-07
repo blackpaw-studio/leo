@@ -33,6 +33,14 @@ test('WebFetch summarizes as the host, never credentials, path or query', () => 
   expect(fetch('not a url')).toEqual({ tool: 'WebFetch' })
 })
 
+test('WebFetch never leaks userinfo that contains @ or :', () => {
+  const fetch = (url: unknown) => toolActivity('WebFetch', { url, prompt: 'p' }, HOME)
+  expect(fetch('https://user:@password@example.com/path')).toEqual({ tool: 'WebFetch', summary: 'example.com' })
+  expect(fetch('https://a@b:c@d@example.com')).toEqual({ tool: 'WebFetch', summary: 'example.com' })
+  expect(fetch('https://[::1]:8080/x')).toEqual({ tool: 'WebFetch', summary: '[::1]' })
+  expect(fetch('https://user:pw@/nohost')).toEqual({ tool: 'WebFetch' })
+})
+
 test('MCP and other tools carry only the tool name', () => {
   expect(toolActivity('mcp__leo__leo_dispatch', { prompt: 'secret' }, HOME)).toEqual({ tool: 'mcp__leo__leo_dispatch' })
   expect(toolActivity('Agent', { prompt: 'secret', description: 'd' }, HOME)).toEqual({ tool: 'Agent' })
